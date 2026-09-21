@@ -3,7 +3,7 @@
 
 `[SPEC-SC-030]` specifies `duration_ms` as **decoded, not header-claimed**, and
 the migrated library violates it: 29.2% of files differ from their decoded
-length by more than 5 s, and one overstates by 38.4 minutes `[GDE-FEX-106]`.
+length by more than 5 s, and one overstates by 38.4 minutes `[LOG-FEX-106]`.
 
 Not cosmetic. Segmentation used an inflated value to invent a **phantom
 passage** in a tail that does not exist, and the player uses `duration_ms` for

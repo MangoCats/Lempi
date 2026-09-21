@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Classify lowlevel features into the 71-dimension flavor vector.
 
-The production path for route 2 `[GDE-FEX-102]`: load the 18 Gaia chains once,
+The production path for route 2 `[LOG-FEX-102]`: load the 18 Gaia chains once,
 then map any lowlevel JSON — from the archive or from our own extractor — to
 the same highlevel values AcousticBrainz publishes, verified to within 0.0072.
 
@@ -45,7 +45,7 @@ class Chain:
         )
         pr = self.model.probability(x)
         # Label VALUE indexes the sorted class names, not label position
-        # [GDE-FEX-102] -- the bug that made six classifiers look broken.
+        # [LOG-FEX-102] -- the bug that made six classifiers look broken.
         return {self.classes[i]: pr.get(i, 0.0) for i in range(len(self.classes))}
 
 

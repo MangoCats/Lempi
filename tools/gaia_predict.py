@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Apply a Gaia chain to lowlevel features, and check it against the reference.
 
-Route 2 `[GDE-FEX-067]`. The predictor and its verification are one tool on
+Route 2 `[LOG-FEX-067]`. The predictor and its verification are one tool on
 purpose: every number this produces is compared against AcousticBrainz's own
 published output for the same recording before it is believed `[GDE-FEX-090]`.
 A transform chain that is subtly wrong still emits plausible probabilities, so
@@ -76,7 +76,7 @@ def flatten_strings(doc: dict) -> dict[str, str]:
 
 
 def enumerate_string(maps: dict, name: str, value: str) -> float:
-    """The stored code for a string value `[GDE-FEX-097]`.
+    """The stored code for a string value `[LOG-FEX-097]`.
 
     The maps are read from the chain, never assumed. They are arbitrary and
     differ per descriptor -- `key_key` codes G# as 0 and A# as 4, while
@@ -96,9 +96,10 @@ def build_vector(
 ) -> list[float]:
     """Normalised feature vector, in `order`.
 
-    Each normalize step is `y = a·x + b` per component `[GDE-FEX-069]`, and
-    where a chain has **two** they **compose in sequence** — they are not
-    alternatives to choose between. `.lowlevel.spectral_spread.var` reads
+    Each normalize step is `y = a·x + b` per component `[LOG-FEX-069]`, and
+    where a chain has **two** they **compose in sequence** `[LOG-FEX-094]` —
+    they are not alternatives to choose between, which is the correction 094
+    made to 069's original reading. `.lowlevel.spectral_spread.var` reads
     2.197e12 raw; step 0 takes it to 0.0064 and step 1 to 0.5016, which is
     inside the support vectors' observed [0, 11]. Applying only the second to
     the raw value yields 5.6e11, every kernel value underflows to zero, and the
@@ -126,7 +127,7 @@ def build_vector(
                     a, b = cc["a"], cc["b"]
                     j = i if i < len(a) else 0
                     v = a[j] * v + b[j]
-                # gaussianize sits BETWEEN the two normalizes [GDE-FEX-098].
+                # gaussianize sits BETWEEN the two normalizes [LOG-FEX-098].
                 if si == 0 and gauss:
                     table = gauss.get(f"{name}[{i}]")
                     if table:
@@ -141,7 +142,7 @@ GAUSS_OUTLIERS = 1
 
 
 def gaussianize_value(v: float, table: list[float]) -> float:
-    """Gaia's `distribute` applier, transcribed `[GDE-FEX-101]`.
+    """Gaia's `distribute` applier, transcribed `[LOG-FEX-101]`.
 
         rank    = lower_bound(distribution, v)
         rank    = clamp(rank, outliers, nPoints - outliers)
@@ -269,7 +270,7 @@ class SvmModel:
             return math.exp(-self.gamma * s)
         # polynomial: under the beta1 models actually in production, danceability,
         # mood_aggressive and mood_happy use this, not danceability alone
-        # [GDE-FEX-100] (supersedes the beta5-specific claim in [GDE-FEX-068])
+        # [LOG-FEX-100] (supersedes the beta5-specific claim in [LOG-FEX-068])
         dot = sum(v * (x[k - 1] if k - 1 < len(x) else 0.0) for k, v in sv.items())
         return (self.gamma * dot + self.coef0) ** self.degree
 
@@ -357,7 +358,7 @@ def enumerated_descriptors(hist: Path) -> list[str]:
     """The string descriptors the `enumerate` step converts.
 
     Taken from the chain rather than hardcoded: beta1 converts four, beta5
-    eight `[GDE-FEX-092]`, and the difference is exactly the version trap.
+    eight `[LOG-FEX-092]`, and the difference is exactly the version trap.
     """
     coeffs = gh.normalize_coeffs(hist)[0]
     for i in range(14):
@@ -378,7 +379,7 @@ def verify(classifier: str, limit: int = 60) -> tuple[int, int, float, float]:
     sorted at index i corresponds to model label `i`. Comparing against
     `label[i]` instead made every classifier whose labels read `[1, 0]` appear
     catastrophically wrong -- six of them -- while the chain was correct
-    `[GDE-FEX-102]`.
+    `[LOG-FEX-102]`.
     """
     hist = SVM_DIR / f"{classifier}.history"
     steps = gh.normalize_coeffs(hist)

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """
-Persistence for the Stage B distilled classifiers [GDE-FEX-065].
+Persistence for the Stage B distilled classifiers [LOG-FEX-065].
 
 Design constraints, in priority order:
 

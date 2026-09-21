@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Read Gaia .history transformation chains [GDE-FEX-065] route 2.
+"""Read Gaia .history transformation chains [LOG-FEX-067].
 
 A .history file is a Qt QDataStream serialisation of the transformation chain
 AcousticBrainz applied between lowlevel features and a highlevel verdict:
@@ -117,7 +117,7 @@ T_MAP, T_LIST, T_STRING, T_STRINGLIST = 8, 9, 10, 11
 
 
 def read_variant(r: Reader, depth: int = 0):
-    """One QVariant: quint32 type, quint8 isNull, then the payload.
+    """One QVariant: quint32 type, quint8 isNull, then the payload `[LOG-FEX-069]`.
 
     Only the types Gaia's parameter tree actually uses. An unknown type raises
     rather than guessing — a wrong guess here would produce plausible numbers,
@@ -148,7 +148,7 @@ def read_variant(r: Reader, depth: int = 0):
 
 
 # NOTE: the record framing is only understood as far as the first step
-# [GDE-FEX-070a]. Each record begins QString name, QString applier, then TWO
+# [LOG-FEX-070a]. Each record begins QString name, QString applier, then TWO
 # QVariantMaps -- but after those comes an empty map and a region that could be
 # a QByteArray of applier state or a mis-framed string, and choosing between
 # them by inspection is guesswork. A sequential reader built on a guess would
@@ -178,7 +178,7 @@ def read_param_at(path: Path, name: str, occurrence: int = 0):
 
 
 def class_mapping(path: Path) -> list[str]:
-    """The classifier's class names, in label order `[GDE-FEX-103]`.
+    """The classifier's class names, in label order `[LOG-FEX-103]`.
 
     Stored plainly as a `classMapping` QStringList beside `className`. Index i
     is model label value i -- which is the mapping that, guessed positionally,
@@ -197,7 +197,7 @@ def gaussianize_tables(path: Path) -> dict[str, list[float]]:
     values for that component, after the preceding normalize. There is no count
     prefix; the first four bytes are the first value.
 
-    Empty when the chain has no gaussianize step `[GDE-FEX-098]`.
+    Empty when the chain has no gaussianize step `[LOG-FEX-098]`.
     """
     data = path.read_bytes()
     marker = struct.pack(">I", 22) + "gaussianize".encode("utf-16-be")
@@ -238,7 +238,7 @@ def enum_maps(path: Path) -> dict[str, dict[str, int]]:
 
     Not a `QVariant`: a bare `quint32` count followed by that many
     `(QString, quint32)` pairs. Reading it as a variant is what made the codes
-    look unreadable `[GDE-FEX-096]`.
+    look unreadable `[LOG-FEX-096]`.
 
     Taken from the LAST occurrence of each descriptor, which is the copy
     immediately preceding `svmtrain` — the one the model was trained against.
@@ -328,7 +328,7 @@ def svm_summary(model: str) -> dict:
 # Transformation names seen in these chains. This set must NEVER be used to
 # filter what is reported: an earlier version did exactly that, and a
 # `gaussianize` step -- the one transformation that actually mattered -- was
-# silently absent from every printed chain for six commits `[GDE-FEX-098]`.
+# silently absent from every printed chain for six commits `[LOG-FEX-098]`.
 # Unknown names are the interesting ones; they are flagged, not dropped.
 KNOWN = {
     "remove",

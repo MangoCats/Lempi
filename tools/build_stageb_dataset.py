@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """
-[GDE-FEX-065] Route 3, step 1: build the paired lowlevel -> highlevel dataset.
+[LOG-FEX-065] Route 3, step 1: build the paired lowlevel -> highlevel dataset.
 
 We do not need to *be* Gaia, we need to *predict what Gaia predicted*. The paired
 AcousticBrainz sample dumps give ~88k recordings with both the lowlevel feature

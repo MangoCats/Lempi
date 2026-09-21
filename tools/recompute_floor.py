@@ -9,7 +9,7 @@ are wrong with that as a reference for Lempi:
   1. beta -- a characteristic's natural spread -- is a property of the corpus
      being searched. Ours is not the average corpus [SPEC-FD-051].
   2. The floor is single-vs-single, but the dump holds a mean of 77 submissions
-     per library recording [GDE-FEX-057]. Averaging those cancels most encoding
+     per library recording [LOG-FEX-057]. Averaging those cancels most encoding
      noise, so the honest reference is submission-vs-consensus, which is
      STRICTER. Current ratios are therefore flattering by an unmeasured margin.
 
@@ -32,7 +32,7 @@ import numpy as np
 DB = "data/flavor.db"
 
 
-# Recordings carry a mean of 77 submissions [GDE-FEX-057]; loading all 43.7M
+# Recordings carry a mean of 77 submissions [LOG-FEX-057]; loading all 43.7M
 # values as nested dicts would need many GB. Cap submissions per recording --
 # the consensus of 8 is already far less noisy than any single one, which is the
 # whole point, and the marginal gain from 77 is small next to the memory cost.

@@ -16,7 +16,7 @@ worst case 32.8 minutes. Every one of those 1,695 is *also* invisible to
 stored value in all 1,695, because that same bitrate-estimate method is
 almost certainly what produced it in the first place. A repair that
 checks a number against the method that generated it can never disagree
-with it `[REQ-LIB-145]`, `[GDE-FEX-106]`.
+with it `[REQ-LIB-145]`, `[LOG-FEX-106]`.
 
 `probe_duration_ms` actually decodes the file and reads ffmpeg's own
 `-progress` accounting instead. Costs low-single-digit seconds on a

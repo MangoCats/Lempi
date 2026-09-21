@@ -42,7 +42,21 @@ import unicodedata
 # two appliance documents -- matched nothing, so governance never saw them. Two
 # duplicate definitions were added to PI003 in front of a passing check, which
 # is worse than no check at all, because a green run was read as agreement.
-TAG = re.compile(r"\[([A-Z][A-Z0-9]{1,5}-[A-Z0-9]{2,10}-[0-9]{2,4})\]")
+#
+# **A trailing letter is a sub-tag, and was invisible until 2026-09-21.**
+# `[LOG-FEX-070a]`, `[LOG-FEX-090a]`, `[IMPL-BOS-090b]` and `[IMPL-MPD-010a]`
+# are real, bolded definitions -- a finding split after its neighbour was
+# already numbered -- and the regex ended at the digits, so all eight
+# occurrences were unreachable by every check here. One of them,
+# `[GDE-FEX-070a]` in `tools/gaia_history.py`, was ALSO mis-prefixed, and was
+# therefore wrong in two ways that no check could see.
+#
+# `x` is excluded because in this tree a trailing `x` is a wildcard digit, not
+# a sub-tag: `[IMPL-BOS-07x]` means "the 070-series notes below", and BOSE002
+# uses it that way twice. Measured before choosing the class -- `x` appears
+# only in those two wildcard references, and `a`/`b` only in the eight real
+# sub-tags, so the split is the tree's own usage rather than a guess.
+TAG = re.compile(r"\[([A-Z][A-Z0-9]{1,5}-[A-Z0-9]{2,10}-[0-9]{2,4}[a-wyz]?)\]")
 
 # Peel leading markdown one token at a time. '*' counts as a bullet only when
 # followed by whitespace, so '**' (bold) survives to mark a definition.
@@ -187,6 +201,18 @@ KNOWN_ABSENT_PATHS = {
 EXAMPLE_TAGS = {"REQ-AUD-010", "REQ-DB-020", "SPEC-AUD-020", "SPEC-AUD-040",
                 "SPEC-PD-010", "ENT-TRACK-010", "ENT-PASSAGE-010",
                 "UT-AUD-001", "UT-DB-001", "GOV-DOC-010"}
+
+# Tags THIS FILE's own comments name as history -- a tag that was merged away,
+# one that once meant two different things, one that was mis-prefixed. Each is
+# cited to explain why a check exists, and none is a live reference.
+#
+# Registered rather than de-bracketed, because the brackets are how a reader
+# recognises the thing being discussed. Without this the checker fails on its
+# own prose the moment its scan reaches `tools/`, which is the next step of
+# this work: `[GDE-FEX-070a]` was added to these comments by the very commit
+# that taught the regex to see sub-tags.
+SELF_CITED_AS_HISTORY = {"REQ-PD-050", "PI3-FOUND-080", "GDE-FEX-070a"}
+EXAMPLE_TAGS |= SELF_CITED_AS_HISTORY
 
 
 def strip_code(text):

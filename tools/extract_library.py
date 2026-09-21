@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Extract lowlevel features and classify them into flavor `[GDE-FEX-102]`.
+"""Extract lowlevel features and classify them into flavor `[LOG-FEX-102]`.
 
 Two stages, deliberately separate:
 
@@ -49,7 +49,7 @@ WHOLE_FILE_SLACK_MS = 5_000
 
 # The published Windows extractor is a 32-bit build, and dies with rc=3 on a
 # WAV over roughly 265 MB -- about 25 minutes of stereo 44.1 kHz
-# `[GDE-FEX-107]`. A longer passage is analysed as a CENTRED window of this
+# `[LOG-FEX-107]`. A longer passage is analysed as a CENTRED window of this
 # length, and tagged distinctly so the approximation is visible `[REQ-VIS-120]`
 # rather than passing as a full-length measurement.
 MAX_ANALYSIS_MS = 20 * 60 * 1000
@@ -83,7 +83,7 @@ def extract_one(path: str, start_ms: int = 0, end_ms: int = -1,
     """Extract lowlevel features for one passage. `None` if it fails.
 
     A passage that is not the whole file is **decoded to a temporary WAV first**
-    `[GDE-FEX-105]`. The extractor accepts `startTime`/`endTime` in a profile,
+    `[LOG-FEX-105]`. The extractor accepts `startTime`/`endTime` in a profile,
     but on a 192-minute MP3 that cost 169-230 s for a 4-minute window and
     *failed outright* at non-zero offsets (rc=1, rc=4). ffmpeg cuts the same
     window in 1.5 s and the extractor then sees a short file: 32.5 s total.
@@ -100,7 +100,7 @@ def extract_one(path: str, start_ms: int = 0, end_ms: int = -1,
     # The stored duration can be badly wrong on VBR MP3 -- 29% of files differ
     # from the decoded length by more than 5 s, and one file overstates by 38
     # MINUTES, leaving a "passage" entirely past the end of the audio
-    # `[GDE-FEX-106]`. Ask the file, and skip what is not there.
+    # `[LOG-FEX-106]`. Ask the file, and skip what is not there.
     real_ms = probe_duration_ms(str(src))
     if real_ms and end_ms > 0:
         if start_ms >= real_ms - 1000:
@@ -164,7 +164,7 @@ def main() -> int:
     # One passage, not the whole library or a folder -- for refreshing a
     # single passage's own flavor after its boundaries change, without
     # re-running extraction over everything else that is already cached
-    # and unaffected `[GDE-FEX-105]`.
+    # and unaffected `[LOG-FEX-105]`.
     passage_id = int(args[args.index("--passage") + 1]) if "--passage" in args else None
 
     # Catalogue-only, and it writes -- library half as `main`.
@@ -178,7 +178,7 @@ def main() -> int:
     done = {(r[0], r[1], r[2]) for r in
             con.execute("SELECT audio_md5, start_ms, end_ms FROM lowlevel_cache")}
 
-    # Per PASSAGE, not per file [GDE-FEX-105]: one feature vector for a
+    # Per PASSAGE, not per file [LOG-FEX-105]: one feature vector for a
     # 40-track compilation describes the average of 40 songs, which is wrong
     # flavor for every one of them.
     sql = ("SELECT f.audio_md5, f.path, pr.mbid, p.start_ms, p.end_ms, f.duration_ms "

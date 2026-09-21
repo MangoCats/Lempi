@@ -143,7 +143,7 @@ def decode_pcm(path: str, start_ms: int, end_ms: int,
                sample_rate: int = SAMPLE_RATE, timeout: float = 120.0) -> np.ndarray | None:
     """Mono PCM, normalized to `[-1, 1]` -- the amplitude envelope needs
     overall level, not channels. Reuses the exact `ffmpeg -ss/-t` slicing
-    `extract_library.py` already established `[GDE-FEX-105]`, piped to
+    `extract_library.py` already established `[LOG-FEX-105]`, piped to
     stdout instead of a temp WAV since nothing downstream needs a file.
     """
     if not FFMPEG:

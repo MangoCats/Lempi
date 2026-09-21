@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """
-[GDE-FEX-065] Route 3, step 2: distil AcousticBrainz's highlevel classifiers.
+[LOG-FEX-065] Route 3, step 2: distil AcousticBrainz's highlevel classifiers.
 
 Trains a model mapping lowlevel features -> the 71 highlevel dimensions, using
 AcousticBrainz's own outputs as labels. Evaluated per [GDE-FEX-090] Stage B: the
