@@ -56,7 +56,7 @@ CODESPAN_INNER = re.compile(r"`([^`\n]*)`")
 # deliberately narrow: a prefix like `src/` or `go/` would also match paths
 # GUIDE001/GUIDE002 cite *about a predecessor repository on its own disposal
 # path*, where "does not exist here" is the point being made, not an error.
-PATH_PREFIXES = ("player", "tools", "sql", "LempiPi", "BosePi", "SmartPC",
+PATH_PREFIXES = ("player", "tools", "sql", "LempiPi", "LempiPlay3", "BosePi", "SmartPC",
                   "sendspin", "docs", "build")
 CODE_PATH = re.compile(r"\b(?:%s)(?:/[\w.\-]+)+" % "|".join(PATH_PREFIXES))
 

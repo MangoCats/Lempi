@@ -1,0 +1,27 @@
+[Unit]
+Description=Lempi framebuffer/touch UI (SPEC036)
+After=lempi.service
+Wants=lempi.service
+
+[Service]
+# fbcon still owns a blinking text cursor on tty1 even with getty@tty1
+# disabled -- that's a property of the VT itself, not of anything that
+# reads from it. Turned off here, not in cmdline.txt/config.txt: this
+# unit is the thing that actually owns the display, and a live `setterm`
+# call carries none of the boot-hang risk `console=` edits turned out to
+# have. The leading `+` runs this one line as root regardless of the
+# unit's own User=pi, since /dev/tty1 isn't pi-writable; `|| true` means
+# a tty1 that isn't ready yet never blocks fbui from starting.
+ExecStartPre=+/bin/sh -c 'TERM=linux setterm -cursor off > /dev/tty1 2>/dev/null || true'
+# Named, not positional. The bare-URL form still works and warns that it
+# will stop working [GDE-CLI-040]; the value is the same either way, so this
+# is the spelling changing, not the behaviour. Left explicit rather than
+# relying on the default, because a unit should say what it connects to.
+ExecStart=/usr/local/bin/fbui --url ws://127.0.0.1:5720/ws
+Restart=always
+RestartSec=3
+User=pi
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

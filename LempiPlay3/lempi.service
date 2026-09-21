@@ -1,0 +1,24 @@
+[Unit]
+Description=Lempi
+After=local-fs.target sound.target
+
+[Service]
+# Rewritten 2026-09-21 when the project's names changed. Only names and paths
+# moved; the invocation shape is deliberately identical to the unit this
+# replaces, so any behaviour difference is attributable to that alone.
+#
+# The database override this used to carry is GONE rather than carried
+# forward. It named the pre-split monolith, kept as a rollback, which was
+# deleted 2026-09-21 after every one of its 38 tables and 1,109,356 rows was
+# verified present in the two halves. Renaming a pointer to a deleted file
+# would have produced a setting that looks deliberate and resolves to nothing
+# `[LP3-REP-020]`.
+ExecStartPre=/usr/local/bin/lempi-db-recover
+ExecStart=/usr/local/bin/lempi /var/lempi/listener.db --library /srv/library/library.db --port 5720
+Restart=always
+RestartSec=2
+User=pi
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

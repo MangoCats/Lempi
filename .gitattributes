@@ -14,3 +14,15 @@
 # a different machine either.
 *.sh            text eol=lf
 LempiPi/lempi-*    text eol=lf
+
+# The same argument, for the files systemd and its neighbours read. Every
+# `.service`, `.timer` and `.conf` in this tree is consumed on the Pi and
+# nowhere else: systemd drop-ins, mpd configs, pipewire and tmpfiles
+# fragments. Checked 2026-09-21 and every one of them was already CRLF in a
+# Windows checkout, having been committed without a rule -- systemd happens
+# to strip the trailing carriage return, which is why nothing had broken and
+# why nobody had noticed. That is tolerance, not correctness, and it is not
+# shared by everything else that reads these files.
+*.service       text eol=lf
+*.timer         text eol=lf
+*.conf          text eol=lf
