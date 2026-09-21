@@ -2880,9 +2880,33 @@ impl Drop for Engine {
     }
 }
 
+/// An `Instant` `secs` in the past -- or, on a machine that has not been up
+/// that long, the earliest one this process can name.
+///
+/// `Instant` counts from boot, and `Instant - Duration` **panics** on
+/// underflow rather than saturating. Six tests below set `echo_last_trim` in
+/// the past this way, and on 2026-09-21 the 3600 s one failed on a machine
+/// six minutes into its uptime: `overflow when subtracting duration from
+/// instant`, which reads as an engine fault rather than as a test that cannot
+/// run here. The 2 s and 10 s sites have the same defect and were passing on
+/// nothing but uptime.
+///
+/// Saturating to *now* is the safe direction. Where the value is only
+/// decoration -- `due_trim` returns `None` at the rate floor before it ever
+/// reads `echo_last_trim` -- nothing changes. Where the elapsed time is what
+/// the assertion turns on, a saturated clock reports "not due" and the test
+/// **fails**, loudly, instead of passing for a reason nobody chose
+/// `[GDE-ECHO-547]`.
+#[cfg(test)]
+fn ago(secs: u64) -> std::time::Instant {
+    std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(secs))
+        .unwrap_or_else(std::time::Instant::now)
+}
+
 #[cfg(test)]
 mod depth_tests {
-    use super::{Command, Engine};
+    use super::{ago, Command, Engine};
 
     /// `[SPEC-DLY-030]`: a node cannot sound before it submits, so a trim
     /// more negative than the measured delay is impossible rather than small.
@@ -2913,13 +2937,13 @@ mod depth_tests {
         // The clock starts with the rate: nothing is due in the first instant.
         assert_eq!(e.due_trim(), None, "an arriving rate is not a debt to pay at once");
         // ...but once an interval has passed, it is, and this node is behind.
-        e.echo_last_trim = Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
+        e.echo_last_trim = Some(ago(2));
         assert_eq!(e.due_trim(), Some(true), "behind: drop a frame to catch up");
 
         // The other way round.
         h.send(Command::SetEchoRate(-13.92));
         e.tick();
-        e.echo_last_trim = Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
+        e.echo_last_trim = Some(ago(2));
         assert_eq!(e.due_trim(), Some(false), "ahead: repeat a frame to wait");
     }
 
@@ -3222,7 +3246,7 @@ mod depth_tests {
         e.out_rate = 44_100;
         h.send(Command::SetEchoRate(0.2));
         e.tick();
-        e.echo_last_trim = Some(std::time::Instant::now() - std::time::Duration::from_secs(3600));
+        e.echo_last_trim = Some(ago(3600));
         assert_eq!(e.due_trim(), None);
     }
 
@@ -3678,7 +3702,7 @@ than one mix block");
         // frame -- the half of the actuator that never fired.
         h.send(Command::SetEchoRate(-13.92));
         e.drain_commands();
-        e.echo_last_trim = Some(std::time::Instant::now() - std::time::Duration::from_secs(10));
+        e.echo_last_trim = Some(ago(10));
         assert_eq!(e.due_trim(), Some(false), "ahead: repeat a frame to wait");
         drain(&ring);
         let trimmed = e.mix_and_submit();
@@ -4008,7 +4032,7 @@ than one mix block");
         // this test did when it was written, while carrying a comment
         // claiming the function could not be exercised at all. It can: the
         // hook exists `[GDE-ARC-065]`.
-        let mut run = |e: &mut Engine, n: usize| {
+        let run = |e: &mut Engine, n: usize| {
             for i in 0..n { e.tick(); drain(&ring); ring.clock.tick_for_test(2_048, 2_040 + (i as u64 % 2)); }
         };
         run(&mut e, 400);
@@ -4080,7 +4104,7 @@ than one mix block");
 
         h.send(Command::SetEchoRate(-13.92));
         e.drain_commands();
-        e.echo_last_trim = Some(std::time::Instant::now() - std::time::Duration::from_secs(10));
+        e.echo_last_trim = Some(ago(10));
         assert_eq!(e.due_trim(), Some(false), "ahead: repeat a frame to wait");
 
         let before = ring.state.lock().unwrap().ring.len();
@@ -4182,7 +4206,7 @@ than one mix block");
         e.drain_commands();
         let owed = e.echo_debt_frames;
         assert!(owed < 0, "a node ahead owes a negative debt");
-        e.echo_last_trim = Some(std::time::Instant::now() - std::time::Duration::from_secs(10));
+        e.echo_last_trim = Some(ago(10));
         assert_eq!(e.due_trim(), Some(false));
 
         // Nothing is playing, so the mixer produces no frames at all and there

@@ -21,8 +21,6 @@
 
 use std::collections::HashMap;
 
-use rusqlite::Connection;
-
 use crate::db::{DbError, QualifyingConn};
 
 /// Classes must sum to 1.0 within this `[SPEC-FD-100]`.
@@ -450,6 +448,10 @@ impl FlavorSchema {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the fixtures open a bare connection; the module itself works
+    // through `QualifyingConn`. Imported here rather than at file scope so a
+    // non-test build does not carry an unused import.
+    use rusqlite::Connection;
 
     fn fixture() -> QualifyingConn {
         let c = QualifyingConn::wrap_unsplit(Connection::open_in_memory().unwrap());

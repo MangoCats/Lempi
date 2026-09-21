@@ -11,7 +11,6 @@
 
 use std::collections::HashMap;
 
-use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::db::QualifyingConn;
@@ -1114,6 +1113,10 @@ fn map_query(conn: &QualifyingConn, sql: &str) -> Result<HashMap<String, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the fixtures open a bare connection; the module itself works
+    // through `QualifyingConn`. Imported here rather than at file scope so a
+    // non-test build does not carry an unused import.
+    use rusqlite::Connection;
 
     const NOW: i64 = 1_000_000_000;
     const DAY: i64 = 86_400;

@@ -1317,9 +1317,21 @@ async fn main() {
     let http_addr = http_addr_from_ws_url(&url);
     let mut page = Page::NowPlaying;
     let mut last: Option<ClientSnapshot> = None;
-    // Set in the past so the very first snapshot always redraws regardless
-    // of the 5-second position-only throttle below.
-    let mut last_position_redraw = std::time::Instant::now() - std::time::Duration::from_secs(5);
+    // Set in the past so the 5-second position-only throttle below is already
+    // expired when the first snapshot arrives. Belt-and-braces: `last` is
+    // `None` for that snapshot and the match below redraws unconditionally on
+    // it anyway.
+    //
+    // `checked_sub`, not `-`: `Instant` counts from boot, and `Instant -
+    // Duration` panics on underflow rather than saturating, so the plain
+    // subtraction is a panic in any process that starts within five seconds of
+    // boot. `fbui.service` starts at boot, on a node built around audio at
+    // power-on, which makes that window narrow but real -- and the same
+    // construct did fire in the engine's own tests on 2026-09-21. Saturating
+    // to now costs at most one throttled position redraw.
+    let mut last_position_redraw = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(5))
+        .unwrap_or_else(std::time::Instant::now);
     // Keyed by passage_id, not refetched on every push -- `None` inside
     // the tuple is cached too, so a passage confirmed to have no art (most
     // of this all-radio sample library) is not re-requested on every

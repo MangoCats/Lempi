@@ -7,6 +7,15 @@ After=local-fs.target sound.target
 # moved; the invocation shape is deliberately identical to the unit this
 # replaces, so any behaviour difference is attributable to that alone.
 #
+# Corrected 2026-09-21: "identical shape" had carried the bare-argument form
+# across with everything else. It still runs -- the player reads it and prints
+# the corrected line on stderr `[GDE-CLI-040]` -- but `fbui.service` beside
+# this one had already moved to the named spelling, and the crate's own
+# `every_exec_start_in_the_repository_is_a_current_lempi_command_line` fails
+# on any ExecStart that has not. Two units in one folder disagreeing about a
+# deprecation is the kind of thing that gets copied forward, so the value is
+# unchanged and only the spelling moves.
+#
 # The database override this used to carry is GONE rather than carried
 # forward. It named the pre-split monolith, kept as a rollback, which was
 # deleted 2026-09-21 after every one of its 38 tables and 1,109,356 rows was
@@ -14,7 +23,7 @@ After=local-fs.target sound.target
 # would have produced a setting that looks deliberate and resolves to nothing
 # `[LP3-REP-020]`.
 ExecStartPre=/usr/local/bin/lempi-db-recover
-ExecStart=/usr/local/bin/lempi /var/lempi/listener.db --library /srv/library/library.db --port 5720
+ExecStart=/usr/local/bin/lempi --listener /var/lempi/listener.db --library /srv/library/library.db --port 5720
 Restart=always
 RestartSec=2
 User=pi
