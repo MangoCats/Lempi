@@ -1,7 +1,7 @@
 # Lempi
 
 > **Continuous Radio-Style Music Player Engine**  
-> *"Born wise, ready to play, singing seamless melodies into the world."*
+> *"Your favourite song, and the one after it, without being asked."*
 
 ---
 
@@ -15,13 +15,15 @@ Lempi is built for both dedicated, low-power embedded appliances (such as a Rasp
 
 ## ⚡ Core Philosophy & Inspiration
 
-Lempi draws its name and spiritual concept from **Väinämöinen**, the elemental bard and hero of the Finnish epic *Kalevala*:
+**Lempi** is poetic-archaic Finnish for *love*, and in compounds `lempi-` is the ordinary Finnish prefix for **favourite** — *lempilaulu*, favourite song; *lempimusiikki*, favourite music. For a player whose whole job is learning which passages this listener loves and putting them in the stream, that is the most exact word the language offers. It is also the root of `lemmikki`, the everyday word for a pet animal, and the Kalevala line runs through it: Lemminkäinen, the reckless singer-hero of Sibelius's four legends, is *son of Lempi*. The library builder it depends on, **Vipunen**, is named from the same tradition.
 
-1. **The Eternal Sage (Instant-On readiness)**:  
-   Väinämöinen was born wise and ancient, ready to act without delay. Lempi is engineered for **instant readiness** upon power-on. On embedded hardware, the primary goal is getting the first song playing immediately, with web management services launching asynchronously as network services become available.
+The name describes the design, and the design has two pillars:
 
-2. **The Singing Sorcerer (Automated Music Stream)**:  
-   Rather than asking the user to manually control every track, Lempi acts as an automated digital shaman. It reads the context of the moment—listener preferences, play history, time of day, day of week, and day of year—along with high-level audio characteristics to curate a continuous, harmonious stream of sound.
+1. **Instant readiness**:  
+   Lempi is engineered to play on power-on. On embedded hardware the primary goal is getting the first song playing immediately, with web management services launching asynchronously as network services become available.
+
+2. **An automated stream, not a playlist**:  
+   Rather than asking the user to control every track, Lempi reads the context of the moment—listener preferences, play history, time of day, day of week, and day of year—along with high-level audio characteristics, and curates a continuous stream from it.
 
 Lempi is the third attempt at this idea, not the first. **MuLibPlay** — a Qt5 C++ player — has run this listener's library continuously since 2020 and is the benchmark every measured decision here is checked against. **McRhythm** was an ambitious, stalled six-microservice rewrite; its requirements were the most refined in the lineage and are inherited deliberately, while its architecture is explicitly rejected. An earlier **Lempi v1** attempt also failed, on measured grounds (whole-file decode, silently-inherited descriptors). None of this is a clean slate: it is a rearchitecture built on three prior systems' evidence. See [GUIDE001: Project Lineage & Lessons Learned](docs/GUIDE001-lineage-and-lessons.md) for the measurements behind every claim in this paragraph.
 

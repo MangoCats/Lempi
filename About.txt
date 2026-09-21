@@ -1,11 +1,34 @@
-## ⚡ Instant Power-Up: The "Eternal" Sage
-In the Finnish epic Kalevala, Väinämöinen is described as being born wise and already ancient. He did not need time to grow or learn; he existed from the very creation of the world. For a device or application, this inspires the concept of instant-on capability. The player doesn't need a lengthy loading screen or setup process—much like the mythical hero, it is born "old and wise," ready to perform the second it is turned on.
+## 🎵 The Name: Your Favourite, Without Being Asked
+"Lempi" is poetic-archaic Finnish for love, from a Proto-Finnic root that
+probably meant heat or burning. In compounds it is the ordinary Finnish prefix
+for "favourite": lempilaulu is a favourite song, lempimusiikki favourite music,
+lempilaulaja a favourite singer. For a player whose entire job is learning which
+passages this listener loves and putting them into the stream, that is the most
+exact word available in the language — and it is opaque in English, where it
+reads simply as a soft two-syllable name.
 
-## 📻 Automated Selection: The Singing Sorcerer
-Väinämöinen does not just play music; his songs possess magical power. He can sing his enemies into the earth, shape landscapes, and control the elements purely through the right combination of words and melodies.
+Two other threads run through the same word. It is the root of lemmikki, the
+everyday Finnish word for a pet animal. And the Kalevala connection is in the
+family tree rather than bolted on: Lemminkäinen, the reckless singer-hero of
+Sibelius's four legends, is son of Lempi. The library builder this player
+depends on, Vipunen, takes its name from the same epic.
 
-* The Radio Effect: An automated player that perfectly selects songs mimics this effortless sorcery. Instead of the user manually scrolling through menus, the application acts as the digital shaman.
-* The Divine Playlist: It reads the "vibes" of the environment and automatically manifests the perfect stream of music, channeling Väinämöinen’s ability to command the world through song.
+## ⚡ Instant Power-Up
+A music player should not make you wait to hear music. Lempi is built so that
+the first passage starts at power-on, not after a loading screen, a scan, or a
+network handshake. On the embedded appliances this runs on, getting audio out
+of the speaker is the first thing that happens; the web interface and the
+management services come up afterwards, asynchronously, as the network becomes
+available. Nothing that can be deferred is allowed to delay sound.
 
-By combining the lightning-fast readiness of an ancient elemental force with the spellbinding automation of a master bard, the "Lempi" player transforms a piece of audio software into a seamless, magical experience.
+## 📻 Automated Selection
+The player is not a playlist. Instead of asking the listener to scroll through
+menus and assemble an order, it reads the context of the moment — stated
+preferences, play history, time of day, day of week, day of year — alongside
+high-level audio characteristics of the passages themselves, and builds a
+continuous stream from that.
 
+The two ideas are the same idea. A player that knows your favourites is only
+useful if it is already playing them when you walk into the room, and a player
+that starts instantly is only pleasant if what it starts is something you wanted
+to hear.

@@ -151,7 +151,7 @@ node keeps working through §4's shim and says so in its journal every start.
 | `bose` | `/etc/systemd/system/lempi.service` — tracked here as [`BosePi/lempi-bose.service`](../BosePi/lempi-bose.service), already updated | ☐ |
 | `lempipi` | base unit `/etc/systemd/system/lempi.service`, written by [`LempiPi/setup-lempipi.sh`](../LempiPi/setup-lempipi.sh), already updated | ☐ |
 | `lempipi` | drop-in `/etc/systemd/system/lempi.service.d/mpd-guest.conf` — tracked as [`LempiPi/lempi-mpd-guest.conf`](../LempiPi/lempi-mpd-guest.conf), already updated | ☐ |
-| `lp3-wifi` | `/etc/systemd/system/lempi.service`, **not tracked anywhere here** | ☐ |
+| `lp3-wifi` | `/etc/systemd/system/lempi.service` — tracked here as [`LempiPlay3/lempi.service`](../LempiPlay3/lempi.service) since 2026-09-21 `[LP3-REP-010]` | ☐ |
 
 **lempipi reports two `ExecStart` lines because it has two.** The drop-in
 blanks the base unit's with an empty `ExecStart=` and supplies its own; the

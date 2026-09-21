@@ -38,7 +38,7 @@ The ground-up re-think, re-specification and re-implementation plan for Lempi, d
 
 Not six services. Not one monolith. The split follows the one boundary that physically exists — *what must run on a 512 MB appliance, and what never will*:
 
-> **Vipunen** — in the *Kalevala*, the mill forged by Ilmarinen the smith that ground out flour, salt and gold: abundance from raw material. A separate artifact, made by a different hand, that Väinämöinen nonetheless depends on and ultimately sails to reclaim. The naming carries the architecture: Vipunen grinds raw audio into descriptive wealth, and it is its own entity — eventually a separate repository, already a separate licence, separate platform — that Lempi consumes but never contains. *Both still live in this one repository today; splitting it is a deliberately deferred step, not yet taken — see `LICENSING.md`'s own "Status" section.*
+> **Vipunen** — in the *Kalevala*, Antero Vipunen is the ancient giant who had swallowed all the world's songs; the bard descends into his belly to take the words he lacks. The naming carries the architecture: the knowledge is already latent in the raw audio, and Vipunen is the separate being you go into to bring it out. It is its own entity — eventually a separate repository, already a separate licence, separate platform — that Lempi consumes but never contains. *Both still live in this one repository today; splitting it is a deliberately deferred step, not yet taken — see `LICENSING.md`'s own "Status" section.*
 
 | | **`lempi`** (player) | **`vipunen`** (library builder) |
 | :--- | :--- | :--- |

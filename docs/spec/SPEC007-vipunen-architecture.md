@@ -2,7 +2,7 @@
 
 **Design Specification — Tier 2 · PROVISIONAL**
 
-Structure of **Vipunen**, the library builder that turns raw audio into everything `lempi.db` needs. Named for the *Kalevala*'s mill that ground abundance from raw material — a separate artifact that Väinämöinen depends on but never contains `[GDE-ARC-010]`.
+Structure of **Vipunen**, the library builder that turns raw audio into everything `lempi.db` needs. Named for the *Kalevala*'s Antero Vipunen, the ancient giant who had swallowed the world's songs and had to be entered to give them up — a separate being the bard depends on but never contains `[GDE-ARC-010]`.
 
 > **Status.** §§1–5 rest on measured results and are stable. **§6 remains provisional on segmentation**, now specified and partly built — [SPEC024](SPEC024-dao-segmentation-cascade.md)'s four cascade stages (grid search, DP assembly, RMS fallback, extra-track merging) replace the threshold-sweep-only tool that shipped before, but the automatic MusicBrainz edition search that would drive the cascade without a human supplying the expected track count is still deferred (SPEC024 §8), which is why this section stays PROVISIONAL rather than settling. The per-passage extraction question that previously gated it has been **measured and resolved** `[SPEC-SA-090]`. **Amplitude (`[SPEC-SA-075]`) is no longer unbuilt** — `tools/analyze_amplitude.py`, 2026-08-30 — but stays under the same PROVISIONAL heading: a real implementation, not yet independently re-verified against Lempi's own library the way `[SPEC-SA-070]`'s own figures still need to be.
 

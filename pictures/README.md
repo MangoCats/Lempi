@@ -4,12 +4,17 @@
 made.** These are raw candidates kept so that a later pass at an application
 icon or logo starts from something rather than a blank page.
 
-Both land on the same idea, and it is the one the project is named for:
-[README](../README.md) and [About.txt](../About.txt) take **Väinämöinen** — the
-Kalevala's bearded "eternal sage" and "singing sorcerer", born old and wise —
-as the whole concept behind an instant-on player that chooses the music itself.
-A grey-bearded wizard is that figure; putting him behind a pair of decks is the
-"digital shaman" idea About.txt describes, drawn literally.
+Both land on the same idea: the Kalevala's bearded sage-bard, the "eternal
+sage" and "singing sorcerer" born old and wise, behind a pair of decks — an
+instant-on player that chooses the music itself, drawn literally.
+
+**They predate the current reading of the name and were never adopted.**
+[README](../README.md) and [About.txt](../About.txt) now take the name from what
+it means rather than from a figure: `lempi-` is the Finnish prefix for
+*favourite*, and the Kalevala line runs through Lemminkäinen, *son of Lempi* —
+a young singer-hero, not a grey-bearded one. These stay as raw material because
+a candidate drawn for one reading is still a drawing, and nothing here has been
+chosen.
 
 | file | what it is | size |
 | :--- | :--- | :--- |
