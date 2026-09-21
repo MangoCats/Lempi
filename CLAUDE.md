@@ -38,10 +38,13 @@ will not, and the error it produces does not point at the cause.
 ## 3. Documentation has enforced governance
 
 Run [`tools/check_docs.py`](tools/check_docs.py) before committing any
-documentation change; CI runs it with `--strict` on every push. It fails on
-dangling tags, identifier collisions, unresolvable links, and cited file paths
-that do not exist — so a rename and its documentation citations **must land in
-one commit**.
+documentation change; CI runs it with `--strict` on every push. It **fails**
+on dangling tags, identifier collisions and unresolvable links. A cited file
+path that no longer exists, a tag defined twice, and an over-length document
+are **warnings**, and `--strict` exits 0 on them — so a rename and its
+documentation citations still **must land in one commit**, but nothing
+mechanical will stop you if they do not. Read the warnings; they are where
+the drift shows up first.
 
 - Every requirement/spec/finding carries a bracketed tag `[GOV-DOC-010]`.
   A tag at the start of a line reads as its *definition*; cite one mid-line.

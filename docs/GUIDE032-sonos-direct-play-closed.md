@@ -1,4 +1,4 @@
-# GUIDE016: Sonos Direct Play, and Why It Stopped
+# GUIDE032: Sonos Direct Play, and Why It Stopped
 
 **Development Guidance — investigation closed 2026-09-20; the work itself ran 2026-08-24 to 2026-08-29**
 

@@ -1,4 +1,4 @@
-# IMPL006: Rebuilding the Appliance from the Repository
+# IMPL012: Rebuilding the Appliance from the Repository
 
 **Implementation Guide — a fresh card, and nothing but this tree**
 

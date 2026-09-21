@@ -43,7 +43,7 @@ Lempi is the third attempt at this idea, not the first. **MuLibPlay** — a Qt5 
 
 ## 📚 Documentation Index
 
-Detailed architectural and design specifications are organized in the [`docs/`](file:///c:/Users/Mango%20Cat/Dev/Lempi/docs) folder. *(Index rebuilt 2026-08-30 — the previous version linked seven files describing a pre-rearchitecture plan that was never built; see `[GDE-DIS-010]` in GUIDE002.)*
+Detailed architectural and design specifications are organized in the [`docs/`](docs/) folder. *(Index rebuilt 2026-08-30 — the previous version linked seven files describing a pre-rearchitecture plan that was never built; see `[GDE-DIS-010]` in GUIDE002.)*
 
 **Start here:**
 - 🚀 **[HOWTO.md](HOWTO.md)** — build and run Lempi and Vipunen locally, today.
@@ -68,7 +68,7 @@ Detailed architectural and design specifications are organized in the [`docs/`](
 - 📱 **[GUIDE004: Phone Port Strategy](docs/GUIDE004-phone-port-strategy.md)** · 🌐 **[GUIDE005: Flavor Without Vipunen](docs/GUIDE005-flavor-service.md)** · 🔌 **[GUIDE006: The Director as a Guest](docs/GUIDE006-director-as-a-guest.md)** · 📊 **[GUIDE007: External Backends](docs/GUIDE007-external-backends-investigation.md)**
 - 📊 **[LOG001: Feature Extraction Iteration Log](docs/LOG001-extraction-iterations.md)** — dated record of every extraction attempt, its measured result, and why it plateaued.
 
-**Current specifications (`docs/spec/`, ~22 documents):** start from [REQ002: Functional Requirements](docs/spec/REQ002-functional-requirements.md) (what Lempi and Vipunen must do) and [SPEC008: Database Schema](docs/spec/SPEC008-database-schema.md) (the `lempi.db` DDL), then follow their own cross-links — [SPEC009 Program Director](docs/spec/SPEC009-program-director.md), [SPEC007 Vipunen Architecture](docs/spec/SPEC007-vipunen-architecture.md) *(provisional)*, [SPEC006 Data Flow & Portability](docs/spec/SPEC006-data-flow-and-portability.md), [SPEC005 Flavor Distance](docs/spec/SPEC005-flavor-distance.md), and onward through SPEC010–SPEC022 (identification review, the audio path supervisor, library relink, the Vipunen console, the MPD backend, waveform editing). GOV001's master index is the fastest way to jump straight to a tag.
+**Current specifications (`docs/spec/`, 43 documents):** start from [REQ002: Functional Requirements](docs/spec/REQ002-functional-requirements.md) (what Lempi and Vipunen must do) and [SPEC008: Database Schema](docs/spec/SPEC008-database-schema.md) (the `lempi.db` DDL), then follow their own cross-links — [SPEC009 Program Director](docs/spec/SPEC009-program-director.md), [SPEC007 Vipunen Architecture](docs/spec/SPEC007-vipunen-architecture.md) *(provisional)*, [SPEC006 Data Flow & Portability](docs/spec/SPEC006-data-flow-and-portability.md), [SPEC005 Flavor Distance](docs/spec/SPEC005-flavor-distance.md), and onward through SPEC042 (identification review, the audio path supervisor, library relink, the Vipunen console, the MPD backend, waveform editing, domain vocabulary, DAO segmentation, CD ripping, listener preferences and their sync, play frequency, Wi-Fi, mesh library sync, echo mode and node delay, the peer registry, and the framebuffer touch UI). GOV001's master index is the fastest way to jump straight to a tag.
 
 **Architecture and appliance:**
 - 🏛️ **[System Architecture & Audio Pipeline](docs/architecture.md)** — describes what is actually built: the two-binary split, the backend seam, the audio path, the data model.

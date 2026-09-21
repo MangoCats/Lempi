@@ -20,7 +20,7 @@ To ensure that both human contributors and AI coding assistants can quickly insp
    - Material copied from predecessor projects lives only under `docs/inherited/`, carries an `MCR-` (or equivalent) filename prefix, and opens with a banner stating its class.
    - This is required because McRhythm and Lempi both number `SPEC003`–`SPEC006` with different meanings. See [inherited/README.md](inherited/README.md) `[INH-HAZ-010]`.
    - **`[GOV-DOC-040]` Enforced by `tools/check_docs.py`**, which also fails on new identifier collisions, dangling tags and unresolvable links. Run it before committing documentation changes. *(Since 2026-09-02, also enforced in CI — [`.github/workflows/check-docs.yml`](../.github/workflows/check-docs.yml) runs it with `--strict` on every push and pull request to `main`, so a doc/code drift that fails it can't land silently.)*
-   - **Searches over `REQ`/`ENT` must be scoped**: `grep -rn "REQ-AUD" docs/ --exclude-dir=inherited`. Inherited material defines 651 tags of its own `[INH-HAZ-020]`.
+   - **Searches over `REQ`/`ENT` must be scoped**: `grep -rn "REQ-AUD" docs/ --exclude-dir=inherited`. Inherited material carries 827 distinct tags of its own — counted 2026-09-21 with `check_docs.py`'s own `tags_in(skip_banner=True)`, the same set the checker excludes from Lempi's `[INH-HAZ-020]`. The 651 in `[INH-HAZ-020]`'s own sentence is the 2026-08-30 measurement that found the seven collisions and stays as that measurement, not as a current count.
 
 3. **Unique Grep-Searchable Identifiers**:
    - All requirements, design specs, entity definitions, and test cases MUST be assigned a unique, bracketed identifier tag (e.g., `[REQ-AUD-010]`, `[SPEC-AUD-020]`, `[UT-AUD-001]`).
