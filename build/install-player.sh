@@ -16,8 +16,8 @@
 # binary back if it cannot `[SPEC-APS-140]`.
 set -uo pipefail
 
-HOST="${1:-pi@lempipi}"
 . "$(dirname "$0")/lib-defaults.sh"
+HOST="${1:-$(lempi_appliance)}"
 PORT=$(lempi_port)
 BIN=player/target/aarch64-unknown-linux-gnu/release/lempi
 REMOTE=/usr/local/bin/lempi

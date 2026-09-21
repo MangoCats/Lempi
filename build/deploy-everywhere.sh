@@ -68,7 +68,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 # reads the snapshot over the same WebSocket and tolerates fields it does not
 # know, so it survives a `lempi` newer than itself -- but it does drift, and
 # nothing here updates it.
-APPLIANCES="pi@lempipi pi@bose pi@lp3-wifi"
+APPLIANCES=$(. "$ROOT/build/lib-defaults.sh"; lempi_fleet)
 # `host:path` -- a source host needs its checkout named, since unlike an
 # appliance's `/usr/local/bin/lempi` there is no conventional location.
 #
@@ -142,7 +142,7 @@ port=$(lempi_port)
 local_build=$(curl -s --max-time 3 "http://localhost:$port/build" 2>/dev/null)
 
 # Width of the widest label, so the report lines up however the hosts are
-# named -- `pi@lempipi` and `pi@bose` are not the same length.
+# named -- `pi@lempi02w` and `pi@bose` are not the same length.
 width=5
 for host in $HOSTS; do
     name=${host#*@}

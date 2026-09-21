@@ -26,3 +26,35 @@ lempi_port() {
     # working and silently drops the fallback.
     echo "${LEMPI_PORT:-$LEMPI_DEFAULT_PORT}"
 }
+
+# ---- who the fleet is -------------------------------------------------------
+#
+# These were hardcoded in three scripts, and it cost exactly what hardcoding a
+# name costs. `deploy-appliance.sh`, `install-player.sh` and
+# `deploy-everywhere.sh` each carried `pi@lempipi` as a default target for a
+# name that has never resolved: the node answered to one name before the
+# project was renamed and to `lempi02w` after, and `lempipi` was only ever the
+# name the documentation used. Three copies meant nothing noticed.
+#
+# The names live here now, once, and every one of them is overridable. A second
+# machine, a test rig, or a node reached by address instead of name needs an
+# environment variable rather than an edit:
+#
+#     LEMPI_APPLIANCE=pi@192.168.67.20 build/deploy-appliance.sh
+#     LEMPI_FLEET="pi@bose" build/deploy-everywhere.sh
+#
+# `lempipi` remains what the prose calls the first appliance, and that is fine:
+# a document naming a machine is a label, not a connection. Only these values
+# are dialled.
+
+# The default single target: the Pi Zero 2W with the Bluetooth speaker.
+lempi_appliance() {
+    echo "${LEMPI_APPLIANCE:-pi@lempi02w}"
+}
+
+# Every appliance a fleet-wide deploy touches, in the order it should touch
+# them. `bose` is second because its overlay root makes it the most likely to
+# teach something, and the framebuffer node is last because it is the newest.
+lempi_fleet() {
+    echo "${LEMPI_FLEET:-pi@lempi02w pi@bose pi@lp3-wifi}"
+}

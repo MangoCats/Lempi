@@ -1,7 +1,9 @@
 #!/bin/bash
 # Build Lempi for an APPLIANCE and install it there, in one command.
 #
-#   build/deploy-appliance.sh                     latest, to pi@lempipi
+#   build/deploy-appliance.sh                     latest, to the default appliance
+#                                                 (`lempi_appliance` in lib-defaults.sh,
+#                                                  or $LEMPI_APPLIANCE)
 #   build/deploy-appliance.sh pi@bose             latest, to a named appliance
 #   build/deploy-appliance.sh <tag>               a tag, without touching your checkout
 #   build/deploy-appliance.sh <tag> pi@bose       a tag, to a named appliance
@@ -41,7 +43,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/.." && pwd)"
 REF="${1:-}"
-HOST="${2:-pi@lempipi}"
+. "$(dirname "$0")/lib-defaults.sh"
+HOST="${2:-$(lempi_appliance)}"
 # A lone argument that looks like `user@host` is a host, not a ref -- so
 # "deploy latest, elsewhere" doesn't need the awkward `deploy.sh "" pi@x`.
 case "$REF" in *@*) HOST="$REF"; REF="" ;; esac
