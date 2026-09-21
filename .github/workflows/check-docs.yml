@@ -15,10 +15,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
-      # [GOV-DOC-040]: tag collisions, dangling tags, unresolvable links are
-      # errors and fail the build; a doc-cited path that doesn't exist in the
-      # tree, an over-length doc, and a tag defined twice are warnings and do
-      # not. See tools/check_docs.py's own module docstring for the full list.
+      # [GOV-DOC-040]: errors, which fail the build -- tag collisions,
+      # dangling tags, unresolvable links, a `#fragment` naming no section,
+      # a document number used twice in one folder, a heading disagreeing
+      # with its filename, an over-length document, and a code-scan pattern
+      # matching no file. Warnings, which do not -- a doc-cited path missing
+      # from the tree, a tag defined twice, and the registered debt in
+      # check_docs.py's own OUTSTANDING sets. See its module docstring.
       - run: python tools/check_docs.py --strict
       # [GOV-FBN-010]: a retired project name belongs in exactly one file.
       # The guard reads its search terms out of that file at run time, and

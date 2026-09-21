@@ -2,7 +2,7 @@
 
 **Implementation Specification — Tier 2 · DESIGNED, NOT YET BUILT**
 
-Everything needed to actually build the split [PI001 §5](PI001-image-and-partitions.md#5-the-database-split)
+Everything needed to actually build the split [PI023 §5](PI023-the-database-split-on-disk.md#5-the-database-split)
 has described since early in the project and neither appliance has built:
 one `lempi.db` becoming two files, `library.db` (B) and `listener.db` (C).
 This document is what PI001 left as "design, not code" made concrete enough
@@ -10,10 +10,10 @@ to implement — the exact tables, the exact call sites in the player today,
 the migration procedure, and what a review against synchronization, RAM,
 backup, and MPD turned up.
 
-> **Related:** [PI001 §5](PI001-image-and-partitions.md#5-the-database-split) ·
+> **Related:** [PI023 §5](PI023-the-database-split-on-disk.md#5-the-database-split) ·
 > [SPEC008 schema](../docs/spec/SPEC008-database-schema.md) ·
 > [SPEC035 mesh sync](../docs/spec/SPEC035-mesh-library-sync.md) ·
-> [BOSE002 `[IMPL-BOS-078]`](../BosePi/BOSE002-image-build.md#L110), the
+> [BOSE006 `[IMPL-BOS-078]`](../BosePi/BOSE006-what-lands-where.md#3-what-lands-where), the
 > reason `bose` did *not* build this and put the whole file on C instead
 
 ---

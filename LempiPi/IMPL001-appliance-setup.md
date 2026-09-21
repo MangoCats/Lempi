@@ -225,7 +225,7 @@ WantedBy=multi-user.target
 > positional argument until the whole fleet moved to named options `[GDE-CLI-020]`,
 > and the old form is still read and warns `[GDE-CLI-040]`. The MPD guest path (used on
 > `bose`, not here) adds `--mpd HOST:PORT --mpd-root DIR`
-> `[BosePi/BOSE003](../BosePi/BOSE003-build-procedure.md)`. This document's
+> [BosePi/BOSE003](../BosePi/BOSE003-build-procedure.md). This document's
 > `--device` framing above is corrected to match the real flag name, but the
 > `--db`/`--music`/`--output` shape was never real for this binary — recorded
 > per this project's own discipline of not silently overwriting a decision

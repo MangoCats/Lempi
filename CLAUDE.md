@@ -39,12 +39,14 @@ will not, and the error it produces does not point at the cause.
 
 Run [`tools/check_docs.py`](tools/check_docs.py) before committing any
 documentation change; CI runs it with `--strict` on every push. It **fails**
-on dangling tags, identifier collisions and unresolvable links. A cited file
-path that no longer exists, a tag defined twice, and an over-length document
-are **warnings**, and `--strict` exits 0 on them — so a rename and its
-documentation citations still **must land in one commit**, but nothing
-mechanical will stop you if they do not. Read the warnings; they are where
-the drift shows up first.
+on dangling tags, identifier collisions, unresolvable links, a `#fragment`
+naming no section, a document number used twice in one folder, a heading
+that disagrees with its filename, an over-length document, and a code-scan
+pattern that matches no file. A cited file path that no longer exists and a
+tag defined twice are **warnings** — so a rename and its documentation
+citations still **must land in one commit**, but for a path inside backticks
+nothing mechanical will stop you. Read the warnings; they are where the
+drift shows up first.
 
 - Every requirement/spec/finding carries a bracketed tag `[GOV-DOC-010]`.
   A tag at the start of a line reads as its *definition*; cite one mid-line.

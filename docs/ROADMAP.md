@@ -43,13 +43,13 @@ folded into one spec.
 | Deploy script naming and target signposting (renamed 2026-09-11; config persistence built; appliances built without `vipunen-support` from 2026-09-12 `[GDE-DEP-098]`) — **open: a worktree cross-compile cannot stamp its commit `[GDE-DEP-100]`, and the final cross-check misreports why `[GDE-DEP-110]`** | [GUIDE011](GUIDE011-deploy-script-naming.md) | [§7 Configuration, and what is still open](GUIDE011-deploy-script-naming.md#7-configuration-and-what-is-still-open) |
 | External backends | [GUIDE007](GUIDE007-external-backends-investigation.md) | [§7 Open](GUIDE007-external-backends-investigation.md#7-open) |
 | Echo drift measurement (Phase 1 campaign, t0 taken 2026-09-12, second reads due 2026-09-13) | [LOG006](LOG006-echo-drift-measurement.md) | [§4 Open](LOG006-echo-drift-measurement.md#4-open) |
-| Echo playback — two or more instances, one programme, each from its own files (investigated 2026-09-11, not yet built) | [GUIDE008](GUIDE008-echo-playback-investigation.md) · [GUIDE009](GUIDE009-echo-playback-plan.md) · [GUIDE010](GUIDE010-echo-node-capabilities.md) · [GUIDE013](GUIDE013-audio-stack-reporting.md) · [LOG006](LOG006-echo-drift-measurement.md) | [GUIDE009 §10 Explicitly not in v1](GUIDE009-echo-playback-plan.md#10-explicitly-not-in-v1) |
+| Echo playback — two or more instances, one programme, each from its own files (investigated 2026-09-11, not yet built) | [GUIDE008](GUIDE008-echo-playback-investigation.md) · [GUIDE009](GUIDE009-echo-playback-plan.md) · [GUIDE010](GUIDE010-echo-node-capabilities.md) · [GUIDE013](GUIDE013-audio-stack-reporting.md) · [LOG006](LOG006-echo-drift-measurement.md) | [GUIDE016 §6 Explicitly not in v1](GUIDE016-echo-playback-plan-build.md#6-explicitly-not-in-v1) |
 | Same-song blocking across different recordings (**built 2026-09-12** — three identity tiers, passage → recording MBID → work MBID, covers included; [SPEC037](spec/SPEC037-eligibility-and-frequency.md) `[SPEC-DIR-119]`) | [GUIDE012](GUIDE012-work-based-song-blocking.md) | [§7 Open](GUIDE012-work-based-song-blocking.md#7-open) |
-| Appliance setup | [LempiPi/IMPL001](../LempiPi/IMPL001-appliance-setup.md) | [§9 Open](../LempiPi/IMPL001-appliance-setup.md#9-open) |
+| Appliance setup | [LempiPi/IMPL001](../LempiPi/IMPL001-appliance-setup.md) | [IMPL012 §9 Open](../LempiPi/IMPL012-rebuilding-from-the-repository.md#9-open) |
 | Image & partitions | [LempiPi/PI001](../LempiPi/PI001-image-and-partitions.md) | [§7 What is not yet decided](../LempiPi/PI001-image-and-partitions.md#7-what-is-not-yet-decided) |
 | Appliance characterisation | [LempiPi/PI006](../LempiPi/PI006-appliance-characterisation.md) | [§9 What was not measured](../LempiPi/PI006-appliance-characterisation.md#9-what-was-not-measured) |
 | MPD on the appliance | [LempiPi/PI007](../LempiPi/PI007-mpd-on-the-appliance.md) | [§4 What was not measured](../LempiPi/PI007-mpd-on-the-appliance.md#4-what-was-not-measured) |
-| The second appliance, `bose` (build started 2026-09-06, in progress) | [BosePi/](../BosePi/) | [BOSE003 §4 Open](../BosePi/BOSE003-build-procedure.md#4-open-and-to-be-measured-before-it-is-claimed) |
+| The second appliance, `bose` (build started 2026-09-06, in progress) | [BosePi/](../BosePi/) | [BOSE007 §4 Open](../BosePi/BOSE007-migrating-the-library.md#4-open-and-to-be-measured-before-it-is-claimed) |
 
 ## 2. Sendspin — a whole directory of "watch, don't build yet"
 
@@ -109,7 +109,7 @@ their synthetic unit tests, remain unrun.
 
 **Does a reopened Bluetooth output stream actually hold indefinitely, or does
 the 700 ms settle merely push the failure further out?** Investigated
-2026-08-16 in [PI003 §4a](../LempiPi/PI003-choosing-a-speaker.md#4a-the-reopened-stream-and-feeding-silence-while-paused);
+2026-08-16 in [PI022 §4a](../LempiPi/PI022-the-players-speaker-contract.md#4a-the-reopened-stream-and-feeding-silence-while-paused);
 the incident and what was tried is recorded in
 [PI008 §2](../LempiPi/PI008-appliance-bringup-history.md#2-a-reopened-stream-dies-a-fresh-one-does-not).
 

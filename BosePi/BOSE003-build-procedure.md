@@ -200,7 +200,7 @@ against the new card in the reader:
 >
 > None of this changes what the steps are *for* — only what carries them out.
 > Recorded here rather than silently fixed, per the same discipline
-> [PI001 §5b](../LempiPi/PI001-image-and-partitions.md#5b-appliance-settings)
+> [PI024 §5b](../LempiPi/PI024-appliance-settings.md#5b-appliance-settings)
 > already models.
 
 Then swap the cards and boot. From here **[`provision-bose.sh`](provision-bose.sh)** runs on
