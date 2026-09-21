@@ -1,0 +1,122 @@
+<h2>Starting From Nothing</h2>
+
+<p>This tier walks through bringing up a Lempi/Vipunen system that has
+<em>no</em> library yet — no database, no music in it, nothing scheduled.
+If you already have a working library and just want to add more music to
+it, see <strong>Importing &amp; Refining Music</strong> instead; this page
+is specifically the very first time.</p>
+
+<h3>If Lempi runs on a Raspberry Pi appliance, not your desktop</h3>
+<p>Skip this section entirely if you're running Lempi on the same computer
+you're reading this on — go straight to the next section. This one is
+specifically for a dedicated Raspberry Pi appliance, and covers the two
+things that are different about it: getting it onto your Wi-Fi, and
+finding it once it's there.</p>
+<ol>
+  <li><strong>Get it onto your Wi-Fi, one of two ways.</strong> If you
+    already know the network name and password it should join: write the
+    memory card with Raspberry Pi Imager, open its advanced options (the
+    gear icon) before writing, and fill in a hostname, SSH access if
+    you'll ever need it, and the Wi-Fi network's name, password, and
+    country — the appliance joins it automatically on first boot, no
+    screen or keyboard involved. Otherwise — moving an already-running
+    appliance into a new home, for instance, where you don't want to
+    re-flash the card just to change networks — join the appliance's
+    <em>own</em> network first: while it's still reachable on its current
+    one, open Settings → Wi-Fi and turn on the access-point toggle before
+    you move it. Once it's in its new home and your phone or laptop joins
+    that broadcast network, the same Settings panel lets you scan for and
+    connect to the real one from there. This has to be turned on
+    <em>before</em> the move — the appliance doesn't broadcast its own
+    network on its own if it simply can't find any it already knows, so
+    reaching Settings at all still means getting it onto some network
+    first, by whichever of these two ways actually applies to your
+    situation. See <strong>Advanced Features</strong> for exactly how
+    that panel works.</li>
+  <li><strong>Give it music.</strong> Vipunen (the library-building side)
+    only ever runs on an ordinary desktop, never on the appliance itself —
+    so building or adding to a library still means following the rest of
+    this guide (or <strong>Importing &amp; Refining Music</strong>) on a
+    desktop first, then getting the resulting library onto the appliance.
+    Whoever set up the appliance's software has the details of exactly how
+    that library gets copied over for your setup.</li>
+  <li><strong>Find it on your network.</strong> Once it's powered on and
+    joined your Wi-Fi, you need its address to open it in a browser. The
+    most reliable way: open your Wi-Fi router's own admin page (often
+    something like <code>192.168.1.1</code> or <code>192.168.0.1</code> —
+    check the router itself if you're not sure) and look at its list of
+    connected devices for the hostname you chose. Occasionally, right
+    after the very first boot, <code>http://&lt;hostname&gt;.local:5720/</code>
+    will also work directly — worth a try first — but appliances are
+    commonly hardened shortly after first boot in a way that stops this
+    from working reliably afterward, so the router's device list is the
+    method to fall back on, not a last resort.</li>
+  <li><strong>Open it in a browser.</strong> Whatever address you found,
+    the page is at that address followed by <code>:5720</code> — for
+    example <code>http://192.168.1.42:5720/</code>. Bookmark it; the
+    appliance keeps the same address as long as your router keeps giving
+    it the same one, which is the ordinary case on a home network.</li>
+</ol>
+
+<h3>Before this page: getting the software itself</h3>
+<p>Getting the Lempi player and Vipunen tools built and runnable on your own
+machine is a one-time, fairly technical step (it involves a compiler and a
+command line) that's already documented precisely — this guide won't
+repeat it, since a running Lempi is what serves this very page. See
+<code>HOWTO.md</code> in the project for that: how to build the player,
+and how to run Vipunen's console once you have it. Come back here once you
+can run both.</p>
+
+<h3>1. Create an empty library</h3>
+<p>A library is a single database file. An empty one is valid — Vipunen and
+Lempi will both open it and run fine, there's simply nothing in it yet to
+play. <code>HOWTO.md</code> has the exact one-line command that builds this
+empty file from the project's own schema; run it once to get a
+<code>lempi.db</code> to work with.</p>
+
+<h3>2. Point Vipunen at your music folder</h3>
+<p>Start Vipunen's console against that new, empty database, telling it
+where your actual music files live. Vipunen won't touch anything yet — this
+just lets its <strong>Folder</strong> page compare what's on disk against
+what the (currently empty) library knows about, and lets the
+<strong>Jobs</strong> page's "propose" step find real files to work with.</p>
+
+<h3>3. Bring in your first folder of music</h3>
+<p>Follow the steps in <strong>Importing &amp; Refining Music</strong>'s
+"Adding a folder of music" section: propose, review what it found, then
+confirm. Start with one small, ordinary folder of tagged song files the
+first time through, rather than a huge collection or an unusual case like
+a whole-album capture — it's the fastest way to see the whole pipeline
+work end to end before doing it at scale.</p>
+
+<h3>4. Start Lempi pointed at the same library</h3>
+<p>Once at least one folder has been inducted, start the Lempi player
+against that same database file. Open its web page and you should see
+your inducted music available to browse and queue.</p>
+
+<h3>What a brand-new system actually looks like</h3>
+<p>A few things are worth expecting rather than being surprised by, the
+first time:</p>
+<ul>
+  <li><strong>The queue may start empty</strong>, and <strong>Play
+    History</strong> (if you're on the Lempi skin) will be completely
+    empty too — there's nothing to show yet.</li>
+  <li><strong>Automatic selection has very little to go on at first.</strong>
+    The Program Director (see the Appendix) leans on your actual listening
+    history and each track's own flavor to make good choices — with a
+    freshly-inducted library it will play essentially at random for a
+    while, and get more deliberate the more you listen.</li>
+  <li><strong>Nothing is scheduled yet.</strong> Named "programs" that
+    change what plays at different times of day (see <strong>Advanced
+    Features</strong>) aren't something you define in the web UI today —
+    if this matters to you before you have any set up, that's worth
+    knowing going in rather than discovering later.</li>
+  <li><strong>Preference tuning starts at the defaults</strong> for
+    everything, until you use the preference panel described in
+    <strong>Preference Tuning</strong> to change anything.</li>
+</ul>
+
+<p class="note">From here, everything else in this guide applies normally —
+Quick Start for day-to-day listening, Preference Tuning to start shaping
+what plays, and Importing &amp; Refining Music again whenever you add more
+to the library.</p>

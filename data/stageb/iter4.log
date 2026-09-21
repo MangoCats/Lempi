@@ -1,0 +1,13 @@
+fitting dedicated MLPs for 7: gender, mood_electronic, mood_happy, mood_relaxed, timbre, tonal_atonal, voice_instrumental
+
+characteristic          prev best  ded.MLP  new best   floor  vs floor
+gender                      0.390    0.337     0.337   0.196     1.72x  <- mlp-dedicated  (904s)
+mood_electronic             0.149    0.123     0.123   0.227     0.54x  <- mlp-dedicated  (823s)
+mood_happy                  0.147    0.076     0.076   0.218     0.35x  <- mlp-dedicated  (822s)
+mood_relaxed                0.221    0.170     0.170   0.220     0.77x  <- mlp-dedicated  (555s)
+timbre                      0.189    0.152     0.152   0.216     0.70x  <- mlp-dedicated  (660s)
+tonal_atonal                0.155    0.140     0.140   0.218     0.64x  <- mlp-dedicated  (317s)
+voice_instrumental          0.230    0.209     0.209   0.234     0.89x  <- mlp-dedicated  (281s)
+
+median err/beta: iter1 0.223 -> iter3 0.192 -> iter4 0.174   (floor 0.210)
+characteristics at or below their own floor: 10/18

@@ -1,0 +1,132 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Vipunen — system</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/console.css">
+<header>
+  <h1>Vipunen</h1>
+  <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/export">export</a><a href="/flags">flags</a><a href="/mesh">mesh</a><a href="/system" class="on">system</a></nav>
+  <span class="ro">library read-only</span>
+</header>
+<main>
+  <h2>This instance</h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    Which running process this page is actually talking to, and what it was
+    built from — read once at startup, not live, the same way a compiled
+    program's own version string wouldn't change while it runs.
+  </p>
+  <div id="build"><p class="empty">loading…</p></div>
+
+  <h2>Shut down</h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    Stops this console process. Refused while a job is running — a
+    remote-push briefly stops {{PEER_NAME}}'s own player mid-sync, and killing
+    this process in the middle of that would leave it stopped with nothing
+    left running to restart it.
+  </p>
+  <div class="controls">
+    <button class="chip danger" id="shutdown">shut down this instance</button>
+  </div>
+  <div id="shutdown-result"></div>
+</main>
+<script src="/console.js"></script>
+<script>
+function agoText(iso) {
+  if (!iso) return '';
+  // `started_at` comes from Python's `time.strftime()` with no explicit
+  // `gmtime()` -- local time, the same naive-local convention `jobs.py`'s
+  // own `now()` already uses for every job timestamp in this console. No
+  // offset, no 'Z': a bare "YYYY-MM-DDTHH:MM:SS" is spec'd (ECMA-262) to
+  // parse as *local* time, which is what actually matches how this string
+  // was produced. Appending 'Z' here previously forced a UTC reading of an
+  // already-local value -- off by exactly this machine's own UTC offset
+  // (4 hours on EDT), which is the bug that was reported.
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0 || Number.isNaN(ms)) return '';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  return `${h}h ago`;
+}
+
+async function load() {
+  const box = document.getElementById('build');
+  let d;
+  try {
+    d = await S.get('/api/system');
+  } catch (e) { return S.fail('#build', e); }
+
+  const b = d.build || { available: false };
+  const rows = [
+    ['pid', d.pid],
+    ['started', `${d.started_at} (${agoText(d.started_at)})`],
+    ['port', d.port],
+    ['database', d.db_path],
+    ['roots', (d.roots || []).join(', ') || S.el('span', { class: 'pill warn', text: 'none configured' })],
+  ];
+  if (b.available) {
+    rows.push(
+      ['commit', S.el('span', {},
+        S.el('span', { class: 'pill', text: b.commit_short }), ' ',
+        S.el('span', { style: 'color:var(--dim)', text: b.commit }))],
+      ['branch', b.branch],
+      ['commit date', `${b.commit_date} — ${b.commit_subject}`],
+      ['working tree', b.dirty === null
+        ? S.el('span', { class: 'pill warn', text: 'unknown' })
+        : b.dirty
+          ? S.el('span', { class: 'pill warn',
+              title: 'this process may be running code that was never committed',
+              text: `${b.dirty_files} uncommitted file(s)` })
+          : S.el('span', { class: 'pill ok', text: 'clean' })],
+    );
+  } else {
+    rows.push(['commit', S.el('span', { class: 'pill warn',
+      text: 'not a git checkout, or git is not on PATH' })]);
+  }
+  box.replaceChildren(kv(rows));
+
+  const sbox = document.getElementById('shutdown-result');
+  if (d.active_job) {
+    sbox.replaceChildren(S.el('p', { class: 'empty' },
+      S.el('span', { class: 'pill warn', text: 'a job is running' }),
+      ` — ${d.active_job.kind} (job ${d.active_job.job_id}), state ${d.active_job.state}. `,
+      'Shutdown is refused until it finishes.'));
+  } else {
+    sbox.replaceChildren();
+  }
+}
+
+// Same shape as profile.html's own kv() -- small enough not to share, and
+// this page has no other use for it.
+function kv(pairs) {
+  const dl = S.el('dl', { class: 'kv' });
+  for (const [k, v] of pairs) {
+    if (v === undefined) continue;
+    dl.append(S.el('dt', { text: k }), S.el('dd', {}, v ?? S.el('span', { class: 'pill', text: 'null' })));
+  }
+  return dl;
+}
+
+load();
+
+document.getElementById('shutdown').onclick = async () => {
+  if (!confirm('Shut down this Vipunen console instance now?')) return;
+  const box = document.getElementById('shutdown-result');
+  box.replaceChildren(S.el('p', { class: 'empty', text: 'shutting down…' }));
+  try {
+    const r = await (await fetch('/api/system/shutdown', { method: 'POST' })).json();
+    if (r.error) return S.fail('#shutdown-result', new Error(r.error));
+    box.replaceChildren(S.el('p', {},
+      S.el('span', { class: 'pill ok', text: 'stopped' }),
+      ' — this page will no longer reach it.'));
+  } catch (e) {
+    // The connection dropping IS the success case here -- the server just
+    // stopped accepting it.
+    box.replaceChildren(S.el('p', {},
+      S.el('span', { class: 'pill ok', text: 'stopped' }),
+      ' — the connection closed, which is what shutting down looks like.'));
+  }
+};
+</script>

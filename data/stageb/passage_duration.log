@@ -1,0 +1,73 @@
+tracks: 10   durations: full + [180, 90, 45, 20, 12]
+reference floor (median AB self-error/beta): 0.210
+
+[1/10] Disc 1 - 1 - Hells Bells.mp3  312s
+       180s  distance 0.4827  = 2.29x floor
+        90s  distance 0.4565  = 2.17x floor
+        45s  distance 0.6125  = 2.91x floor
+        20s  distance 0.6301  = 2.99x floor
+        12s  distance 0.7369  = 3.50x floor
+[2/10] Disc 1 - 6 - Back in Black.mp3  256s
+       180s  distance 0.2726  = 1.30x floor
+        90s  distance 0.3445  = 1.64x floor
+        45s  distance 0.5309  = 2.52x floor
+        20s  distance 0.5008  = 2.38x floor
+        12s  distance 0.7304  = 3.47x floor
+[3/10] Disc 1 - 10 - Rock and Roll Ain't Noise Poll  266s
+       180s  distance 0.7116  = 3.38x floor
+        90s  distance 0.7569  = 3.60x floor
+        45s  distance 0.8026  = 3.81x floor
+        20s  distance 0.8754  = 4.16x floor
+        12s  distance 0.7929  = 3.77x floor
+[4/10] Disc 1 - 4 - Givin the Dog a Bone.mp3  212s
+       180s  distance 0.2693  = 1.28x floor
+        90s  distance 0.4274  = 2.03x floor
+        45s  distance 0.4638  = 2.20x floor
+        20s  distance 0.6145  = 2.92x floor
+        12s  distance 0.6750  = 3.21x floor
+[5/10] Disc 1 - 8 - Have a Drink on Me.mp3  238s
+       180s  distance 0.1867  = 0.89x floor
+        90s  distance 0.2781  = 1.32x floor
+        45s  distance 0.3856  = 1.83x floor
+        20s  distance 0.6018  = 2.86x floor
+        12s  distance 0.4597  = 2.18x floor
+[6/10] Disc 1 - 9 - Shake a Leg.mp3  246s
+       180s  distance 0.2201  = 1.05x floor
+        90s  distance 0.5023  = 2.39x floor
+        45s  distance 0.5367  = 2.55x floor
+        20s  distance 0.5506  = 2.62x floor
+        12s  distance 0.5455  = 2.59x floor
+[7/10] Disc 1 - 5 - Let Me Put My Love Into You.mp3  255s
+       180s  distance 0.2221  = 1.06x floor
+        90s  distance 0.2813  = 1.34x floor
+        45s  distance 0.4215  = 2.00x floor
+        20s  distance 0.4448  = 2.11x floor
+        12s  distance 0.4634  = 2.20x floor
+[8/10] Disc 1 - 3 - What Do You Do for Money Honey.  216s
+       180s  distance 0.1509  = 0.72x floor
+        90s  distance 0.2823  = 1.34x floor
+        45s  distance 0.4330  = 2.06x floor
+        20s  distance 0.4635  = 2.20x floor
+        12s  distance 0.5396  = 2.56x floor
+[9/10] Disc 1 - 7 - You Shook Me All Night Long.mp3  210s
+       180s  distance 0.1238  = 0.59x floor
+        90s  distance 0.2398  = 1.14x floor
+        45s  distance 0.3347  = 1.59x floor
+        20s  distance 0.3634  = 1.73x floor
+        12s  distance 0.4395  = 2.09x floor
+[10/10] 01-Spark.mp3  254s
+       180s  distance 0.3473  = 1.65x floor
+        90s  distance 0.5526  = 2.63x floor
+        45s  distance 0.4433  = 2.11x floor
+        20s  distance 0.5494  = 2.61x floor
+        12s  distance 0.5509  = 2.62x floor
+
+=== flavor distance from full-length, by slice duration ===
+ duration   n   median  vs floor  failures
+     180s  10   0.2457     1.17x         0
+      90s  10   0.3859     1.83x         0
+      45s  10   0.4535     2.15x         0
+      20s  10   0.5500     2.61x         0
+      12s  10   0.5482     2.60x         0
+
+elapsed 1403s

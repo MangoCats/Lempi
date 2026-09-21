@@ -1,0 +1,78 @@
+#!/bin/sh
+# Record what the player is doing for the first minutes after boot.
+#
+# **Why this exists `[PI3-FOUND-170]`.** Startup stutter on this appliance was
+# being diagnosed over ssh, and ssh is not free here: the Pi Zero 2W puts
+# Wi-Fi and Bluetooth on one chip behind one antenna, so every `journalctl`
+# dump competes with the A2DP stream it is being used to investigate. An
+# observer that has to be connected to observe cannot answer this question.
+#
+# **Why it looks like this now `[PI3-FOUND-240]`.** The first version walked
+# every process in `/proc` on each pass to find the player, which cost about
+# 5% of one core on this hardware and made it a plausible suspect in the very
+# stutters it was watching for. It was disabled, the stutters continued
+# unchanged at their steady fifteen-second spacing, and that cleared it -- but
+# an instrument that has to be alibied is a bad instrument. So the player is
+# located once, and each pass now reads three small files belonging to it.
+#
+# `/proc/<pid>/io` is the point of the rewrite: `read_bytes` counts bytes
+# actually fetched from the block device, not from the page cache. A periodic
+# stutter with no CPU, memory or swap signature is most likely waiting on the
+# SD card, and this is the only counter that says so directly.
+set -u
+OUT="${LEMPI_SAMPLE_OUT:-/var/log/lempi-startup.log}"
+SECONDS_TO_RUN="${LEMPI_SAMPLE_SECS:-240}"
+
+# **Appended, not truncated.** Comparing two power-cycle modes -- speaker
+# switched off (which cuts the Pi's supply) against the Pi alone -- needs both
+# runs side by side, and truncating per boot forced a round trip between them.
+# Each boot opens with a marker carrying the wall clock, so runs stay
+# distinguishable even though this appliance has no RTC and its early
+# timestamps are wrong until NTP lands.
+touch "$OUT" 2>/dev/null || exit 0
+echo "# boot $(date 2>/dev/null) --------------------------------" >> "$OUT"
+echo "# mono load1 lempi_jiffies read_kb write_kb rchar_kb wifi_dbm" >> "$OUT"
+
+# Found once, not once a second. If the player restarts mid-sample the reads
+# below simply fail and the row carries -1, which is a truer record than
+# silently following a different process.
+pid=""
+i=0
+while [ -z "$pid" ] && [ "$i" -lt 60 ]; do
+    for p in /proc/[0-9]*; do
+        if [ "$(cat "$p/comm" 2>/dev/null)" = lempi ]; then
+            pid=${p#/proc/}
+            break
+        fi
+    done
+    [ -n "$pid" ] || sleep 1
+    i=$((i + 1))
+done
+[ -n "$pid" ] || exit 0
+
+# **One subprocess a second, and not one more `[PI3-FOUND-240]`.** The first
+# rewrite still spawned seven -- two `cut`s and five `awk`s -- which measured
+# at about a tenth of a core here and left the instrument arguable again.
+# `read` is a shell builtin and costs no process at all; the remaining `awk`
+# reads both of the player's files in a single pass.
+i=0
+while [ "$i" -lt "$SECONDS_TO_RUN" ]; do
+    read -r mono _ < /proc/uptime || mono=-1
+    read -r load _ < /proc/loadavg || load=-1
+
+    # utime+stime are fields 14/15 of `stat`. `read_bytes` is traffic that
+    # actually reached the block device; `rchar` counts reads the page cache
+    # may have served, so the gap between them is what caching saved.
+    stats=$(awk 'FILENAME ~ /stat$/ && FNR==1 { j = $14 + $15 }
+                 /^read_bytes:/  { r = $2 }
+                 /^write_bytes:/ { w = $2 }
+                 /^rchar:/       { c = $2 }
+                 FILENAME ~ /wireless$/ && FNR==3 { lvl = $4 + 0 }
+                 END { printf "%d %d %d %d %d", j, r/1024, w/1024, c/1024, lvl }' \
+            "/proc/$pid/stat" "/proc/$pid/io" /proc/net/wireless 2>/dev/null)
+
+    echo "$mono $load ${stats:--1 -1 -1 -1 -1}" >> "$OUT"
+    i=$((i + 1))
+    sleep 1
+done
+exit 0

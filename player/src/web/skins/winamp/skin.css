@@ -1,0 +1,142 @@
+/* A WinAmp-like skin: the 1990s skinned-player idiom, drawn in CSS rather than
+   bitmaps -- a bevelled grey chassis, a black LCD panel with green figures, and
+   a separate playlist window below the main one.
+
+   It is deliberately the awkward case for the skinning contract. Where the
+   other two are documents, this one is a fixed-width appliance with its own
+   type, its own geometry and a scrolling title, and it needed nothing from
+   core.js that the others did not. That is the test the contract had to pass. */
+
+:root {
+  --chassis: #3d3d47;
+  --bevel-hi: #6e6e7c;
+  --bevel-lo: #1c1c22;
+  --lcd-bg: #0b0f0b;
+  --lcd: #22dd22;
+}
+
+body { background: #101014; color: #d8d8dc;
+       font: 11px/1.4 "Lucida Console", "DejaVu Sans Mono", monospace; }
+
+.wa { width: 320px; margin: 1.5rem auto; }
+
+.window {
+  background: var(--chassis);
+  border-top: 2px solid var(--bevel-hi);
+  border-left: 2px solid var(--bevel-hi);
+  border-right: 2px solid var(--bevel-lo);
+  border-bottom: 2px solid var(--bevel-lo);
+  margin-bottom: 6px;
+}
+.titlebar {
+  background: linear-gradient(#5a5a6a, #33333d);
+  color: #c8c8d4; font-size: 10px; letter-spacing: .18em;
+  padding: 3px 6px; text-transform: uppercase;
+  border-bottom: 1px solid var(--bevel-lo);
+}
+.body { padding: 6px; }
+
+/* The LCD: inset, black, and green. Everything numeric lives in here. */
+.lcd {
+  background: var(--lcd-bg); color: var(--lcd);
+  border-top: 2px solid var(--bevel-lo);
+  border-left: 2px solid var(--bevel-lo);
+  border-right: 2px solid var(--bevel-hi);
+  border-bottom: 2px solid var(--bevel-hi);
+  padding: 4px 6px;
+}
+.lcdrow { display: flex; gap: 6px; align-items: stretch; }
+.lcdmain { flex: 1; min-width: 0; }
+/* Small, square and pixelated: art scaled down in this idiom should look like a
+   thumbnail from the period rather than a smooth photograph. */
+#art img { object-fit: cover; }
+#art { width: 58px; height: 58px; flex: none;
+       image-rendering: pixelated; border: 1px solid #143d19; }
+.readout { display: flex; align-items: baseline; gap: 8px; }
+#time { font-size: 19px; letter-spacing: .06em; }
+.stat { font-size: 9px; opacity: .75; letter-spacing: .1em; text-transform: uppercase; }
+
+/* The title scrolls when it is too long, which is the one visual habit of this
+   idiom that is genuinely useful rather than nostalgic. */
+.marquee { overflow: hidden; white-space: nowrap; margin-top: 2px; }
+.marquee span { display: inline-block; }
+.marquee.roll span { animation: roll 12s linear infinite; }
+@keyframes roll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+.bar { height: 6px; background: #05170a; margin-top: 4px; border: 1px solid #0d2a12; }
+.bar div { height: 100%; width: 0; background: var(--lcd); transition: width .5s linear; }
+
+.row { display: flex; align-items: center; gap: 4px; margin-top: 6px; }
+
+/* Small square transport keys, bevelled the same way as the chassis. */
+.wa button {
+  font: inherit; font-size: 12px; color: #d8d8dc; background: var(--chassis);
+  border-top: 2px solid var(--bevel-hi); border-left: 2px solid var(--bevel-hi);
+  border-right: 2px solid var(--bevel-lo); border-bottom: 2px solid var(--bevel-lo);
+  width: 26px; height: 22px; cursor: pointer; padding: 0;
+}
+.wa button:active { border-color: var(--bevel-lo) var(--bevel-hi) var(--bevel-hi) var(--bevel-lo); }
+
+.wa input[type=range] {
+  -webkit-appearance: none; appearance: none; height: 14px;
+  background: transparent; flex: 1; margin: 0;
+}
+.wa input[type=range]::-webkit-slider-runnable-track {
+  height: 4px; background: #1b1b22; border: 1px solid var(--bevel-lo);
+}
+.wa input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 9px; height: 14px;
+  margin-top: -6px; background: #9a9aa8;
+  border-top: 1px solid var(--bevel-hi); border-left: 1px solid var(--bevel-hi);
+  border-right: 1px solid var(--bevel-lo); border-bottom: 1px solid var(--bevel-lo);
+}
+.wa input[type=range]::-moz-range-track { height: 4px; background: #1b1b22; }
+.wa input[type=range]::-moz-range-thumb {
+  width: 9px; height: 14px; border-radius: 0; background: #9a9aa8;
+  border: 1px solid var(--bevel-lo);
+}
+#volnum { color: var(--lcd); font-size: 10px; min-width: 7ch; text-align: right; }
+
+/* The playlist window: its own black panel, green mono, numbered rows. */
+.playlist { background: var(--lcd-bg); color: var(--lcd); padding: 4px 6px;
+            min-height: 60px; }
+.playlist ol { margin: 0; padding-left: 0; list-style: none; }
+.playlist li { display: flex; align-items: center; gap: 4px; padding: 1px 0; }
+.playlist .qtitle { flex: 1; min-width: 0; white-space: nowrap;
+                    overflow: hidden; text-overflow: ellipsis; }
+.playlist li:first-child { color: #b6ffb6; }
+.playlist .dur { opacity: .6; }
+.playlist .empty { list-style: none; margin-left: -2.4ch; opacity: .5; }
+.qedit { display: flex; gap: 2px; flex: none; }
+.qedit button { font: inherit; font-size: 10px; line-height: 1; width: 16px;
+                height: 16px; min-width: 0; padding: 0; color: var(--lcd);
+                background: transparent; border: 1px solid #143d19; }
+/* The press, acknowledged. This skin already flips its bevel while a button is
+   held -- but that is the browser reporting a finger, not the player reporting
+   a command, and the two looked identical while the command was being dropped.
+   The LCD lighting up is the panel's own idiom for "this registered", and it
+   clears when the snapshot carrying the change rebuilds the row rather than on
+   a timer. Refused, or never answered, goes amber -- the one warning colour
+   that reads against green without pretending to be part of the display. */
+.qedit button.acked { background: var(--lcd); color: var(--lcd-bg); border-color: var(--lcd); }
+.qedit button.failed { background: #b06000; color: #1a0d00; border-color: #ffa030; }
+/* Nowhere to go: the first entry cannot move sooner, nor the last later. */
+.qedit button:disabled { opacity: .3; cursor: default; }
+
+.wa select {
+  font: inherit; font-size: 10px; background: var(--chassis); color: #d8d8dc;
+  border-top: 1px solid var(--bevel-hi); border-left: 1px solid var(--bevel-hi);
+  border-right: 1px solid var(--bevel-lo); border-bottom: 1px solid var(--bevel-lo);
+}
+.why { font-size: 9px; color: #8a8a96; padding: 4px 6px; line-height: 1.5; }
+.wa label { font-size: 9px; text-transform: uppercase; letter-spacing: .1em; opacity: .8; }
+.wa input[type=number] { font: inherit; font-size: 10px; width: 4ch;
+  background: var(--lcd-bg); color: var(--lcd); border: 1px solid var(--bevel-lo); }
+
+/* Provenance [REQ-VIS-120], as another reading on the LCD -- which is what
+   this idiom does with every other fact it knows. Full green for the claim
+   that came from MusicBrainz, half-lit for the ones that did not. */
+.src { font-family: inherit; font-size: 9px; letter-spacing: .06em;
+       margin-left: 3px; padding: 0 2px; border: 1px solid;
+       color: var(--lcd); opacity: .45; white-space: nowrap; }
+.src[data-src="musicbrainz"] { opacity: 1; }

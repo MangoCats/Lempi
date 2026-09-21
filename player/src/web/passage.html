@@ -1,0 +1,70 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lempi — Passage</title>
+<style>
+  /* One passage's own facts, reached from a browse row's info link
+     [REQ-VIS-270] -- the appliance-side sibling of Vipunen's profile page,
+     built the same way browse.html is: a bare, class-based baseline the
+     chosen skin's own stylesheet then dresses.
+
+     A key/value list, not a table: the same "narrow screen, one thing per
+     line" reasoning browse.html's own rows comment already gives, and there
+     is no row here that benefits from column alignment across a phone's
+     own width. */
+  html, body { margin: 0; padding: 0; background: #141416; color: #eee;
+               font: 16px/1.5 system-ui, sans-serif; }
+  .passage { max-width: 44rem; margin: 0 auto; padding: .75rem; }
+  .passage header { display: flex; align-items: center; gap: .5rem;
+                    flex-wrap: wrap; margin-bottom: .5rem; }
+  .passage h1 { font-size: .7rem; letter-spacing: .14em; text-transform: uppercase;
+                font-weight: 600; margin: 0; opacity: .6; flex: 1; }
+  .passage a.back { font-size: .8125rem; }
+
+  .who h2 { margin: 0 0 .1rem; font-size: 1.25rem; }
+  .who p { margin: 0 0 .9rem; opacity: .75; font-size: .9375rem; }
+
+  dl.facts { display: grid; grid-template-columns: auto 1fr; gap: .3rem .8rem;
+             margin: 0 0 1rem; font-size: .875rem; }
+  dl.facts dt { opacity: .6; white-space: nowrap; }
+  dl.facts dd { margin: 0; overflow-wrap: anywhere; }
+
+  h2.section { font-size: .6875rem; letter-spacing: .1em; text-transform: uppercase;
+               opacity: .55; margin: 1.1rem 0 .4rem; }
+  .card { border: 1px solid rgba(128,128,128,.28); border-radius: 6px;
+          padding: .55rem .65rem; margin-bottom: .5rem; font-size: .875rem; }
+  .card .weight { opacity: .6; font-size: .8125rem; }
+  .card .artists { margin-top: .15rem; opacity: .8; }
+  .pill { display: inline-block; font-size: .6875rem; letter-spacing: .04em;
+          text-transform: uppercase; padding: .05rem .4rem; border-radius: 3px;
+          border: 1px solid currentColor; opacity: .75; }
+  .sibling { display: inline-block; margin: .2rem 0 .6rem; }
+  .empty { opacity: .6; font-size: .875rem; }
+</style>
+
+<div class="passage">
+  <header>
+    <h1>Lempi — Passage</h1>
+    <a class="back" href="/browse">← browse</a>
+    <a class="back" href="/">player</a>
+  </header>
+  <div class="who">
+    <h2 id="title">…</h2>
+    <p id="subtitle"></p>
+  </div>
+  <p class="sibling" id="sibling" hidden></p>
+
+  <h2 class="section">Span &amp; playback</h2>
+  <dl class="facts" id="span"></dl>
+
+  <h2 class="section">File</h2>
+  <dl class="facts" id="file"></dl>
+
+  <h2 class="section">Recording(s)</h2>
+  <div id="recordings"></div>
+
+  <p class="empty" id="note"></p>
+</div>
+
+<script src="/core.js"></script>
+<script src="/passage.js"></script>

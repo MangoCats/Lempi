@@ -1,0 +1,361 @@
+/* Lempi's own look: quiet, typographic, and honest about being a web
+   page rather than pretending to be a hi-fi. The reference skin --
+   whatever a new skin needs from `core.js`, this one uses first. */
+:root { color-scheme: light dark; --fg: #111; --dim: #667; --bg: #fbfbfa; --line: #dcdcd8; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #eee; --dim: #99a; --bg: #141416; --line: #2c2c30; }
+  }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 34rem; margin: 0 auto; padding: 2rem 1.25rem; }
+  .np { display: flex; gap: 1rem; align-items: flex-start; }
+  .np > div { flex: 1; min-width: 0; }
+  #art img { object-fit: cover; }
+  #art { width: 84px; height: 84px; border-radius: 4px;
+         border: 1px solid var(--line); flex: none; }
+  #title { font-size: 1.4rem; font-weight: 600; min-height: 2.1rem;
+           overflow-wrap: anywhere; }
+  #byline { color: var(--dim); font-size: .9375rem; overflow-wrap: anywhere; }
+  #plays { color: var(--dim); font-size: .8125rem; opacity: .8; margin-top: .15rem; }
+  /* The bar is 4px of ink but a much larger target: padding gives the click
+     somewhere to land without changing how the line looks [REQ-VIS-225]. */
+  #bar { height: 4px; background: var(--line); border-radius: 2px; margin: .9rem 0 .4rem;
+         background-clip: content-box; padding: 9px 0; box-sizing: content-box; }
+  #bar.seekable { cursor: pointer; }
+  #bar.seekable:hover #fill { filter: brightness(1.25); }
+  #fill { height: 4px; width: 0; background: currentColor; border-radius: 2px;
+          transition: width .5s linear; }
+  /* Monospaced, because a path and two timecodes are read by scanning for a
+     difference, not by reading prose. Wraps rather than truncates: a path
+     cut short is the half a listener does not need. */
+  .source { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: .75rem; color: var(--dim); line-height: 1.45;
+            margin: .35rem 0 .1rem; overflow-wrap: anywhere; }
+  #srcspan { opacity: .85; }
+  /* Small and quiet: it sits beside a diagnostic, not beside the music. */
+  .restart { font-size: .6875rem; padding: .05rem .35rem; margin: 0 .25rem 0 .1rem;
+             border: 1px solid var(--line); border-radius: 3px;
+             background: transparent; color: var(--dim); cursor: pointer; }
+  .restart:hover { color: inherit; border-color: currentColor; }
+  #undersince { color: var(--dim); font-size: .75rem; margin-left: .3rem; }
+  /* A setting that does nothing until the player is restarted is worth a
+     glance rather than a paragraph, so it gets an edge and not a colour. */
+  .setting p.needs-restart { border-left: 2px solid currentColor; padding-left: .5rem;
+                             opacity: .95; }
+  .setting p.no-restart { opacity: .75; }
+  #time { font-variant-numeric: tabular-nums; color: var(--dim); font-size: .875rem; }
+  .controls { display: flex; gap: .5rem; margin: 1.5rem 0; }
+  button { font: inherit; padding: .5rem 1.1rem; border: 1px solid var(--line);
+           background: transparent; color: inherit; border-radius: 6px; cursor: pointer; }
+  button:hover { border-color: var(--dim); }
+  /* Skip, acknowledged -- the same inversion, and the same 700 ms, as the
+     queue verbs `[REQ-VIS-185]`. One gesture should not report itself two ways
+     depending on which control took it. Ink and paper simply trade places, so
+     the dark theme gets black on white and the light theme white on black
+     without either being spelled out twice.
+     Play and Pause are deliberately left alone: this skin chooses not to
+     invert them, and the transport's state is legible elsewhere on the page. */
+  [data-cmd].acked { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  [data-cmd].failed { background: #9b2226; color: #fff; border-color: #9b2226; }
+  /* Two equal columns, so Underruns starts exactly at the half-way point
+     however wide the page is. */
+  .status { display: grid; grid-template-columns: 1fr 1fr; gap: .3rem 1rem;
+            font-size: .8125rem; color: var(--dim); margin: .5rem 0 0; }
+  .status b { font-weight: 600; color: var(--fg);
+              font-variant-numeric: tabular-nums; }
+  section { border-top: 1px solid var(--line); margin-top: 1.75rem; padding-top: 1.25rem; }
+  h2 { font-size: .75rem; letter-spacing: .14em; text-transform: uppercase;
+       color: var(--dim); font-weight: 600; margin: 0 0 .6rem; }
+  #why { font-size: .875rem; color: var(--dim); }
+  h3 { font-size: .8125rem; color: var(--dim); font-weight: 600; margin: 1.1rem 0 .4rem; }
+  #terms { width: 100%; border-collapse: collapse; font-size: .875rem; }
+  #terms td { padding: .22rem 0; border-bottom: 1px solid var(--line); }
+  #terms td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  #terms tr.total td { font-weight: 600; border-bottom: none; color: var(--fg); }
+  #terms td:first-child { color: var(--dim); }
+  #terms .inert td { opacity: .45; }
+  #losers ol { margin: 0; padding-left: 1.2rem; font-size: .875rem; color: var(--dim); }
+  #losers li { padding: .12rem 0; }
+  #losers .w { font-variant-numeric: tabular-nums; opacity: .75; }
+  #stages { font-size: .75rem; color: var(--dim); opacity: .7; margin: 1rem 0 0; }
+  #link { opacity: .55; font-size: .8125rem; margin-top: 2rem; }
+  #vol { display: flex; align-items: center; gap: .5rem; margin-left: auto; }
+  /* The settings screen. A label, its control, and a line saying what the
+     control does -- room the strip under the transport never had. */
+  #panel-settings h2 { font-size: .75rem; letter-spacing: .12em;
+                       text-transform: uppercase; color: var(--dim);
+                       font-weight: 600; margin: 0 0 1.2rem; }
+  .setting { display: grid; grid-template-columns: 10rem auto;
+             gap: .2rem .8rem; align-items: baseline;
+             padding: .8rem 0; border-bottom: 1px solid var(--line); }
+  .setting > label { font-weight: 600; }
+  .setting input { width: 4.5rem; font: inherit; padding: .25rem .4rem;
+                   color: inherit; background: transparent;
+                   border: 1px solid var(--line); border-radius: 6px; }
+  .setting p { grid-column: 2; margin: .15rem 0 0; font-size: .8125rem;
+               color: var(--dim); }
+  #volume { width: 7rem; accent-color: currentColor; }
+  /* Wide enough for "-72.0 dB" so the readout cannot shuffle the header. */
+  #volnum { font-variant-numeric: tabular-nums; color: var(--dim);
+            font-size: .8125rem; min-width: 4.4rem; text-align: right; }
+  select { font: inherit; font-size: .875rem; padding: .25rem .4rem; color: inherit;
+           background: transparent; border: 1px solid var(--line); border-radius: 6px; }
+  /* The POPUP is not the box. A transparent select with inherited colour looks
+     right closed -- the page paints behind it -- and in dark mode paints near
+     white text onto the system's light popup, where it cannot be read. The
+     dropdown then appears to hold only the selected item. Options carry the
+     skin's own colours so the list is legible wherever the browser draws it. */
+  select option { background: var(--bg); color: var(--fg); }
+  /* A copy affordance sitting beside text it copies `[REQ-VIS-200]`. */
+  .copy { font: inherit; font-size: .8125rem; line-height: 1; cursor: pointer;
+          color: var(--dim); background: transparent; border: 1px solid transparent;
+          border-radius: 4px; padding: .1rem .25rem; margin-left: .35rem; }
+  .copy:hover { color: var(--fg); border-color: var(--line); }
+  #progmode { font-size: .75rem; opacity: .7; }
+  /* No list markers: the controls lead the row now, and a number in front of
+     them would put two unrelated things in the same column. */
+  #queue { margin: 0; padding-left: 0; list-style: none;
+           font-size: .875rem; color: var(--dim); }
+  #queue li { display: flex; align-items: center; gap: .5rem;
+              padding: .16rem 0; }
+  #queue .qtitle { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  #queue li:first-child { color: var(--fg); }
+  #queue .dur { font-variant-numeric: tabular-nums; opacity: .6; }
+  #queue .empty { list-style: none; margin-left: -1.4rem; opacity: .6; }
+  /* Queue editing: present but quiet, and never smaller than a fingertip. */
+  .qedit { display: flex; gap: .15rem; flex: none; }
+  .qedit button { font: inherit; font-size: .75rem; line-height: 1;
+                  min-width: 1.8rem; min-height: 1.8rem; padding: 0;
+                  border-radius: 4px; opacity: .55; }
+  .qedit button:hover { opacity: 1; }
+  /* The press, acknowledged. An inversion rather than a colour: this skin has
+     no accent to spend, and ink-on-paper becoming paper-on-ink is the loudest
+     thing it can say without acquiring one. Both themes get it for free, since
+     the two tokens simply trade places. It clears when the snapshot carrying
+     the change rebuilds the row -- so the flash ends on the engine agreeing,
+     not on a timer -- and turns red if the request was refused. */
+  .qedit button.acked { opacity: 1; background: var(--fg); color: var(--bg);
+                        border-color: var(--fg); }
+  .qedit button.failed { opacity: 1; background: #9b2226; color: #fff;
+                         border-color: #9b2226; }
+  /* Nowhere to go: the first entry cannot move sooner, nor the last later. */
+  .qedit button:disabled { opacity: .18; cursor: default; }
+  .qedit button:disabled:hover { opacity: .18; border-color: var(--line); }
+
+/* The listener-preference panel [REQ-VIS-285], [REQ-VIS-290] -- an in-page
+   block, not a dialog, styled the same way `.setting`'s own rows already
+   are: a border, the same label/dim/line palette, and no bespoke button
+   look at all -- the bare `button{}` rule above already gives Save/Cancel/
+   Reset the exact shape every other button on this page has. */
+/* No horizontal padding on the panel itself -- `#bar`/`.controls` reach
+   `main`'s own edges with none of their own, and the slider is what has to
+   match that width exactly. Padding instead lives on the text rows
+   (`.pref-heading`, `.pref-error`, `.pref-field-head`, `.pref-actions`),
+   which still want to sit clear of the border. */
+.pref-panel:not([hidden]) { border: 1px solid var(--line); border-radius: 6px;
+    padding: .8rem 0; margin: .75rem 0; }
+.pref-heading { font-size: .8125rem; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--dim); font-weight: 600; margin: 0 0 .8rem; padding: 0 1rem; }
+/* "by <artist> from <album>" [SPEC-PREF-090] -- mixed case and not
+   letter-spaced, deliberately unlike `.pref-heading` above it: the title is
+   what is being edited, and these two only say which one it is. */
+.pref-subject { color: var(--dim); font-size: .8125rem; margin: -.6rem 0 .8rem;
+    padding: 0 1rem; }
+.pref-error { color: #c0392b; font-size: .875rem; margin: 0 0 .6rem; padding: 0 1rem; }
+/* Label, readout and Reset share a row; the slider itself gets a full-width
+   row of its own underneath, flush with the panel's own edges -- the same
+   width `#bar` and the volume row already span [REQ-VIS-290]. */
+.pref-field { padding: .5rem 0; border-bottom: 1px solid var(--line); font-size: .875rem; }
+.pref-field:last-of-type { border-bottom: none; }
+.pref-field-head { display: flex; align-items: center; gap: .5rem; padding: 0 1rem; }
+.pref-field label { font-weight: 600; margin-right: auto; }
+.pref-field input[type=range] { width: 100%; display: block; margin: .4rem 0 0;
+    accent-color: currentColor; }
+.pref-readout { color: var(--dim); font-variant-numeric: tabular-nums;
+    white-space: nowrap; font-size: .8125rem; }
+.pref-reset { font-size: .75rem; padding: .2rem .5rem; }
+/* The specials [SPEC-PREF-080] reuse `.pref-field` wholesale, so they need
+   no styling of their own -- only the rule that divides them from the three
+   tuning sliders above, and the heading that names them. The top border is
+   here rather than on `.pref-field:last-of-type`, which stays borderless:
+   `last-of-type` is scoped to `.pref-specials` for these rows, so the last
+   special closes the panel as cleanly as Preference used to. */
+.pref-specials { border-top: 1px solid var(--line); margin-top: .5rem;
+    padding-top: .5rem; }
+.pref-section { font-size: .8125rem; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--dim); font-weight: 600; margin: 0 0 .2rem; padding: 0 1rem; }
+.pref-actions { margin-top: .8rem; padding: 0 1rem; text-align: right; }
+.pref-actions button { margin-left: .5rem; }
+
+/* Play frequency [REQ-VIS-300] -- underneath the preference panel, same
+   border/radius/margin as `.pref-panel` itself so the two read as one
+   family; the table inside borrows `#histtable`'s own look rather than
+   inventing a second one. */
+.freq-panel:not([hidden]) { border: 1px solid var(--line); border-radius: 6px;
+    padding: .8rem 1rem; margin: .75rem 0; }
+.freq-heading { font-size: .8125rem; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--dim); font-weight: 600; margin: 0 0 .8rem; }
+.freq-table { width: 100%; border-collapse: collapse; font-size: .8125rem; }
+.freq-table th, .freq-table td { padding: .35rem .5rem; border-bottom: 1px solid var(--line);
+    text-align: right; font-variant-numeric: tabular-nums; }
+.freq-table th:first-child, .freq-table td:first-child { text-align: left;
+    font-variant-numeric: normal; }
+.freq-table thead th { color: var(--dim); font-weight: 600; }
+.freq-table tbody tr:last-child th, .freq-table tbody tr:last-child td { border-bottom: none; }
+
+/* Title/artist reaching the preference panel [REQ-VIS-285]: an underline
+   is the only signal, no color of its own -- it is still the same text it
+   was, just clickable. */
+.pref-link { cursor: pointer; text-decoration: underline dotted;
+    text-underline-offset: 2px; color: inherit; }
+.pref-link:visited, .pref-link:hover, .pref-link:active { color: inherit; }
+
+/* The picker every skin carries. Kept out of the way; it is a preference,
+   not a control. */
+.skinbar { display: flex; justify-content: flex-end; gap: .4rem;
+           align-items: center; font-size: .75rem; color: var(--dim);
+           margin-top: 2rem; }
+/* The gear goes hard left on that same bottom edge; everything else stays
+   right, which is where it already was. */
+#gear { margin-right: auto; font-size: 1.1rem; line-height: 1;
+        padding: .3rem .5rem; cursor: pointer; color: var(--dim);
+        background: transparent; border: 1px solid transparent;
+        border-radius: 6px; }
+#gear:hover { color: var(--fg); border-color: var(--line); }
+/* Development mode [PI-SET-016]. Two signals rather than one: a notation
+   beside the gear that names it, and a ground shifted from grey to wine so
+   the state is legible from across the room and cannot be left on by
+   forgetting. The badge says which mode; the colour says there is one. */
+#devmode { color: #e8b4b8; border: 1px solid currentColor; border-radius: 999px;
+           padding: .1rem .5rem; font-size: .6875rem; font-weight: 600;
+           letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+body.dev { --bg: #2a1418; --line: #4a2830; }
+@media (prefers-color-scheme: light) {
+  body.dev { --bg: #f6eaec; --line: #d8bcc2; }
+}
+#gear[aria-expanded="true"] { color: var(--fg); border-color: var(--line);
+                              background: var(--line); }
+#histbtn { font-size: 1rem; line-height: 1; padding: .3rem .5rem; cursor: pointer;
+           color: var(--dim); background: transparent; border: 1px solid transparent;
+           border-radius: 6px; margin-right: .3rem; }
+#histbtn:hover { color: var(--fg); border-color: var(--line); }
+#histbtn[aria-expanded="true"] { color: var(--fg); border-color: var(--line);
+                                 background: var(--line); }
+
+/* The history panel: a table, not a now-playing card, so it earns room the
+   rest of the app has no use for -- twice the width, and every pixel of
+   height the viewport can spare, rather than the fixed scroller a card-shaped
+   page would need `[REQ-VIS-250]`. Scoped to whichever moment the panel is
+   actually shown, the same `:has()` technique review.html already uses, so
+   Settings and the now-playing card keep their narrower, centred shape. */
+body:has(#panel-history:not([hidden])) main {
+  max-width: 68rem; min-height: 100vh; box-sizing: border-box;
+  display: flex; flex-direction: column;
+}
+/* `:not([hidden])`, not a bare `#panel-history`: an ID selector's own
+   specificity beats the browser's `[hidden] { display: none }` regardless of
+   source order, so an unconditional `display: flex` here was overriding
+   `hidden` outright and leaving the panel on screen -- narrow, since the
+   `:has()` width rule above correctly never saw it as un-hidden -- at the
+   bottom of whichever page was actually showing. */
+#panel-history:not([hidden]) { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+#panel-history h2 { font-size: .75rem; letter-spacing: .12em;
+                    text-transform: uppercase; color: var(--dim);
+                    font-weight: 600; margin: 0 0 1.2rem; }
+.histbar { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+           font-size: .875rem; color: var(--dim); margin-bottom: .9rem; }
+.histpage { margin-left: auto; font-variant-numeric: tabular-nums; }
+.histnav { display: flex; gap: .3rem; }
+.histnav button { padding: .3rem .7rem; font-size: .8125rem; }
+.histnav button:disabled { opacity: .4; cursor: default; }
+.histnav button:disabled:hover { border-color: var(--line); }
+/* Scrolls on its own, so paging the table never scrolls the page it sits in
+   out from under the controls above it. `flex: 1` (with the panel above it
+   also a flex column) is what actually fills the available height; the
+   `min-height` is only the floor for a browser too old for `:has()`, where
+   that flex context never forms. */
+.histscroll { flex: 1; min-height: 16rem; overflow-y: auto; overflow-x: auto;
+              border: 1px solid var(--line); border-radius: 6px; }
+#histtable { width: 100%; border-collapse: collapse; font-size: .8125rem; }
+#histtable th { position: sticky; top: 0; background: var(--bg); text-align: left;
+                font-size: .6875rem; letter-spacing: .06em; text-transform: uppercase;
+                color: var(--dim); font-weight: 600; padding: .5rem .6rem;
+                border-bottom: 1px solid var(--line); }
+#histtable td { padding: .4rem .6rem; border-bottom: 1px solid var(--line);
+                overflow-wrap: anywhere; }
+#histtable tr:last-child td { border-bottom: none; }
+#histtable td:first-child { color: var(--dim); white-space: nowrap; }
+#histtable td:nth-child(5) { text-align: right; font-variant-numeric: tabular-nums;
+                             white-space: nowrap; }
+#histtable tr.empty td { text-align: center; color: var(--dim); padding: 1.5rem 0; }
+/* Result carries its own word as well as its colour `[REQ-VIS-250]`, the same
+   reasoning as the speaker states above -- colour is a second channel, not
+   the only one. Second-to-last now that the flag column sits after it. */
+#histtable td:nth-last-child(2) { font-weight: 600; white-space: nowrap; }
+#histtable tr.hit td:nth-last-child(2) { color: #4c9a5a; }
+#histtable tr.miss td:nth-last-child(2) { color: var(--dim); font-weight: 400; }
+/* The flag checkbox, on at any time from this page alone `[REQ-VIS-265]`. */
+#histtable td:last-child { text-align: center; }
+#histtable td:last-child input[type=checkbox] { width: 1.1rem; height: 1.1rem; cursor: pointer; }
+#histtable td:last-child input[disabled] { cursor: default; opacity: .35; }
+
+/* Provenance [REQ-VIS-120]. Small, raised and dim: present at every glance,
+   but never competing with the name it qualifies. MusicBrainz is the claim
+   worth trusting, so it is the one drawn in ink; a name taken from a filename
+   is a guess and is drawn as one. */
+.src { font-size: .625rem; font-weight: 600; letter-spacing: .04em;
+       vertical-align: super; margin-left: .28em; padding: .05em .3em;
+       border-radius: 3px; border: 1px solid var(--line); color: var(--dim);
+       white-space: nowrap; }
+.src[data-src="musicbrainz"] { color: var(--bg); background: var(--dim);
+                               border-color: var(--dim); }
+.src[data-src="filename"], .src[data-src="unknown"] { opacity: .7;
+                               border-style: dashed; }
+
+/* Picking a track to explain [REQ-VIS-100]. The playing row and every queued
+   row are selectable; exactly one is marked, and the panel below describes it.
+   A left rule rather than a fill: the mark has to survive on the now-playing
+   block, which already carries cover art and three lines of type. */
+#nowrow, #queue li:not(.empty) { cursor: pointer;
+    border-left: 3px solid transparent; padding-left: .5rem; }
+#nowrow.picked, #queue li.picked { border-left-color: currentColor;
+    background: color-mix(in srgb, currentColor 6%, transparent); }
+#nowrow:hover, #queue li:not(.empty):hover {
+    background: color-mix(in srgb, currentColor 4%, transparent); }
+
+/* One control set, on the heading row, at the right. The heading keeps its
+   own bottom margin so the queue does not shift when the controls appear and
+   disappear -- a list that jumps as you pick rows is its own small fault. */
+.qhead { display: flex; align-items: baseline; gap: .6rem; }
+.qhead h2 { margin-right: auto; }
+.qpick { font-size: .8125rem; color: var(--dim); }
+/* `hidden` must win over the flex display the buttons inside would otherwise
+   impose through their own layout. */
+.qpick[hidden] { display: none; }
+
+/* ----------------------------------------------------------- speakers
+   The list carries a state per row `[PI3-UI-010]`. Colour is a second
+   channel rather than the only one: every row also says its state in
+   words, because "connected but silent" is exactly the distinction a
+   colour-blind listener would otherwise lose. */
+#bt-list { list-style: none; margin: .5rem 0 0; padding: 0; }
+#bt-list li {
+  display: flex; align-items: center; gap: .5rem;
+  padding: .4rem .5rem; margin-bottom: .25rem;
+  border-left: 3px solid var(--dim, #555); border-radius: 3px;
+  background: rgba(255, 255, 255, .04);
+}
+#bt-list .btname  { flex: 1; font-weight: 600; }
+#bt-list .btstate { opacity: .75; font-size: .85em; }
+#bt-list li.playing   { border-left-color: #4caf50; }
+#bt-list li.connected { border-left-color: #e0a030; }
+#bt-list li.stale     { border-left-color: #c05050; }
+#bt-list li.found,
+#bt-list li.paired    { border-left-color: #6080b0; }
+#bt-list button { font-size: .85em; padding: .2rem .5rem; }
+#bt-list .btforget { opacity: .6; }
+#bt-list .btforget:hover { opacity: 1; }
+/* The confirm step is a question, not a status line: it gets the weight of
+   one so nobody misses that the appliance is waiting on them. */
+#bt-confirm { border: 1px solid #e0a030; border-radius: 4px; padding: .5rem; }
+#bt-countdown { opacity: .8; font-size: .9em; }

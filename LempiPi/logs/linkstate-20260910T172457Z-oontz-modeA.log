@@ -1,0 +1,261 @@
+=== fresh boot ===
+--- gate ---
+Sep 10 17:24:05 LempiPiHost lempi-wait-sink[486]: lempi-wait-sink: no real sink after 5s; starting anyway
+Sep 10 17:24:05 LempiPiHost systemd[1]: Started lempi.service - Lempi.
+Sep 10 17:24:00 LempiPiHost systemd[1]: Starting lempi-speaker.service - Keep the Lempi speaker connected...
+Sep 10 17:24:04 LempiPiHost lempi-speaker[465]: connected 08:EB:ED:26:14:12 after 3s and asked the player to reopen
+Sep 10 17:24:04 LempiPiHost systemd[1]: Finished lempi-speaker.service - Keep the Lempi speaker connected.
+----
+uptime 29.86
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000080feffffffffff3f
+afh_channels 54
+link_quality 85
+rssi -6
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 39.37
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000080bcdddefffbff3f
+afh_channels 47
+link_quality 92
+rssi 0
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 49.03
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000080985ddafdfb1f1f
+afh_channels 38
+link_quality 255
+rssi 0
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 58.58
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000080985ddafdfb1f1f
+afh_channels 38
+link_quality 255
+rssi 0
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 67.99
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000080985ddafdfb1f1f
+afh_channels 38
+link_quality 255
+rssi -1
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 77.35
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 0000809b048a8de00700
+afh_channels 20
+link_quality 255
+rssi 0
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 86.68
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000080fbcd0b03300000
+afh_channels 20
+link_quality 255
+rssi 0
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 96.01
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000080f8cd0b0330c000
+afh_channels 20
+link_quality 255
+rssi 0
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 105.35
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000080fecdbbffffff3d
+afh_channels 48
+link_quality 255
+rssi 0
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 114.69
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 00000000cf030330c03f
+afh_channels 20
+link_quality 255
+rssi -4
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 123.99
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 00008000cf030330403f
+afh_channels 20
+link_quality 255
+rssi -4
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 133.31
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 0000000000c0ff7f4003
+afh_channels 20
+link_quality 255
+rssi 0
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 142.64
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000080133a7f0000500b
+afh_channels 20
+link_quality 255
+rssi -1
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 151.95
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000080b23bffffffff3f
+afh_channels 48
+link_quality 255
+rssi -1
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 161.27
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 0000000100dcff0f0003
+afh_channels 20
+link_quality 255
+rssi -1
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 170.61
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 0000000400dcff0f0003
+afh_channels 20
+link_quality 255
+rssi 0
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 179.97
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 0000800c0000f3ef0f00
+afh_channels 20
+link_quality 255
+rssi 0
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 189.29
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 0000000c0000ffcf0f00
+afh_channels 20
+link_quality 255
+rssi -3
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 198.63
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 0000000c0000ffcf0f00
+afh_channels 20
+link_quality 255
+rssi -5
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 207.96
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 0000000c00407fcf0f00
+afh_channels 20
+link_quality 255
+rssi -7
+state "active"
+volume 
+configuration 4 17 21 2 45
+----
+uptime 217.27
+con 	> ACL 08:EB:ED:26:14:12 handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000080081d7f7fffff3f
+afh_channels 42
+link_quality 255
+rssi -4
+state "active"
+volume 
+configuration 4 17 21 2 45
+
+[exited with code 0]

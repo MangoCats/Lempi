@@ -1,0 +1,8 @@
+training student (shared MLP) ...
+test recordings with 2 submissions: 1,716
+
+Retrieval of the same recording's other submission among 500 candidates, 1500 queries
+provenance regime                  top-1   top-5     MRR  medRank
+A  all-teacher (dump only)         77.9%   81.2%   0.796      1.0
+B  all-student (local only)        76.7%   81.1%   0.789      1.0
+C  mixed (student vs dump lib)     69.6%   77.3%   0.733      1.0

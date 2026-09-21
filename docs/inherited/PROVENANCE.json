@@ -1,0 +1,120 @@
+{
+ "imported": "2026-08-09",
+ "note": "sha256 of the SOURCE file as it stood at import. Our local copies differ (banner added, links rewired per [INH-HAZ-050]) so they cannot be compared directly. This records what was imported, so drift in the source repository is detectable later even though the copies are not byte-identical.",
+ "files": {
+  "MCR-REQ001-requirements.md": {
+   "source_repo": "McRhythm",
+   "source_path": "docs/REQ001-requirements.md",
+   "source_sha256": "e22a9d69593612b46377edc7e16dce7139a04bbac742971084b063f55cc1ba5a",
+   "class": "active"
+  },
+  "MCR-REQ002-entity_definitions.md": {
+   "source_repo": "McRhythm",
+   "source_path": "docs/REQ002-entity_definitions.md",
+   "source_sha256": "35c0dda8559f85f4723bcea3a772f76938da412a911b2a31bb5271a5ce763049",
+   "class": "active"
+  },
+  "MCR-SPEC003-musical_flavor.md": {
+   "source_repo": "McRhythm",
+   "source_path": "docs/SPEC003-musical_flavor.md",
+   "source_sha256": "8761a6defe0b6c85c5daefe03269df8b875fa47ea7735f758bd9c97e6c18861f",
+   "class": "active"
+  },
+  "MCR-SPEC004-musical_taste.md": {
+   "source_repo": "McRhythm",
+   "source_path": "docs/SPEC004-musical_taste.md",
+   "source_sha256": "52302326874385d7f945cb1bfc8d6fba78bcf5ca8fbd869ae21c0d1ddf055a3b",
+   "class": "active"
+  },
+  "MCR-SPEC005-program_director.md": {
+   "source_repo": "McRhythm",
+   "source_path": "docs/SPEC005-program_director.md",
+   "source_sha256": "66dff61bb0c83c7f9f40bda832d77e4962f419bbf2c36a7dc8f553ec7f8d62c5",
+   "class": "active"
+  },
+  "MCR-SPEC006-like_dislike.md": {
+   "source_repo": "McRhythm",
+   "source_path": "docs/SPEC006-like_dislike.md",
+   "source_sha256": "1518e3104d8e16e33bb0af4729ea1cec03dae6ff41cac44a7cd4847a2abfc4a2",
+   "class": "active"
+  },
+  "MCR-SPEC016-decoder_buffer_design.md": {
+   "source_repo": "McRhythm",
+   "source_path": "docs/SPEC016-decoder_buffer_design.md",
+   "source_sha256": "5968aa4f2161fa69156b1d5e8552914a19709226237a760709431cbe978809f9",
+   "class": "active"
+  },
+  "MCR-SPEC022-performance_targets.md": {
+   "source_repo": "McRhythm",
+   "source_path": "docs/SPEC022-performance_targets.md",
+   "source_sha256": "ab31c793f5b681fb72457a968b3ce13b8e7cb85cbc78bf55a39088de12fae095",
+   "class": "active"
+  },
+  "MCR-SPEC033-album_matching.md": {
+   "source_repo": "McRhythm",
+   "source_path": "docs/SPEC033-album_matching.md",
+   "source_sha256": "7166767ab9948a1c6560f8595ddce3aa1b3643ca0ed3ac5b7548f9e4424e57b8",
+   "class": "active"
+  },
+  "MCR-IMPL005-audio_file_segmentation.md": {
+   "source_repo": "McRhythm",
+   "source_path": "docs/IMPL005-audio_file_segmentation.md",
+   "source_sha256": "87543292d2d2b20cec1748c1f86a55d49eecbc28c4365ad6fab5895190cfbcf6",
+   "class": "active"
+  },
+  "MCR-PCH001_project_charter.md": {
+   "source_repo": "McRhythm",
+   "source_path": "docs/PCH001_project_charter.md",
+   "source_sha256": "8709b99ba7d656c94f1166a0ec27a464979f3cd6bc9a5d890edbb8b9fc520d1f",
+   "class": "active"
+  },
+  "MCR-STAGE6_FULL_TEST_RESULTS_20260109.md": {
+   "source_repo": "McRhythm",
+   "source_path": "STAGE6_FULL_TEST_RESULTS_20260109.md",
+   "source_sha256": "65f7e2923c4f43e9ce7b54f8453297bdd572848f44403aa0781951505122e2d2",
+   "class": "evidence"
+  },
+  "MCR-acousticbrainz_coverage_report.md": {
+   "source_repo": "McRhythm",
+   "source_path": "acousticbrainz_coverage_report.md",
+   "source_sha256": "ed01d7f42c1ad82f69f777528ad30ad1f0688c59cd529aab9ca3ddae1654fbd4",
+   "class": "evidence"
+  },
+  "MCR-TECHNICAL_DEBT_ANALYSIS.md": {
+   "source_repo": "McRhythm",
+   "source_path": "TECHNICAL_DEBT_ANALYSIS.md",
+   "source_sha256": "8bf5219798ab162d257006e7901370c74eea68c8671ba397e17a523e7afcb26c",
+   "class": "evidence"
+  },
+  "musicdirector.cpp": {
+   "source_repo": "MuLibPlay",
+   "source_path": "musicdirector.cpp",
+   "source_sha256": "369bf017b5928e15ec7ce660b4b38a31655bd7851f9fd4fe847d5187d3d6a61d",
+   "class": "active"
+  },
+  "musicdirector.h": {
+   "source_repo": "MuLibPlay",
+   "source_path": "musicdirector.h",
+   "source_sha256": "a569df06537c17dc029d29eda80ee20093836bbb76bd96f2e13b7f8496276252",
+   "class": "active"
+  },
+  "MCR-SPEC025-amplitude_analysis.md": {
+   "source_repo": "McRhythm",
+   "source_path": "docs/SPEC025-amplitude_analysis.md",
+   "source_sha256": "7361382f30743ffb8ce5e3b223ae74247b91ca0aad70ce5b4c2c16c68e36528a",
+   "class": "active"
+  },
+  "MCR-SPEC002-crossfade.md": {
+   "source_repo": "McRhythm",
+   "source_path": "docs/SPEC002-crossfade.md",
+   "source_sha256": "d9247295f21906319dd6039f198f67a5a27605328085634753f9e1d1503eebae",
+   "class": "active"
+  },
+  "MCR-IMPL009-amplitude_analyzer_implementation.md": {
+   "source_repo": "McRhythm",
+   "source_path": "docs/IMPL009-amplitude_analyzer_implementation.md",
+   "source_sha256": "3d3b416f53fe66f6475d51e700bf65529cea887bc507cc8c8febe26354eb41f7",
+   "class": "active"
+  }
+ }
+}

@@ -1,0 +1,428 @@
+<main>
+  <div id="panel-main">
+  <!-- The playing track is a selectable row like the queued ones: the panel
+       below explains whichever is picked, and "the one playing" has to be
+       reachable again after picking something else. -->
+  <div class="np" id="nowrow">
+    <div id="art"></div>
+    <div>
+      <div id="title">—</div>
+      <div id="byline"></div>
+      <div id="plays"></div>
+    </div>
+  </div>
+  <div id="bar" title="Click to move within the track"><div id="fill"></div></div>
+  <div id="time">0:00 / 0:00</div>
+
+  <div class="controls">
+    <button data-cmd="play">Play</button>
+    <button data-cmd="pause">Pause</button>
+    <button data-cmd="skip">Skip</button>
+    <label id="vol"><input type="range" id="volume" min="0" max="1" step="any" value="1"><span id="volnum">0.0 dB</span></label>
+  </div>
+  <!-- Under the transport, because both describe what the transport is doing.
+       Two equal columns, so Underruns begins at the half-way mark. -->
+  <div class="status">
+    <div><span>State</span> <b id="state">—</b></div>
+    <div><span>Underruns</span> <button type="button" class="restart" id="underreset"
+            title="Start the count again from now">Restart</button>
+        <b id="under">—</b> <small id="undersince"></small></div>
+  </div>
+  <!-- What is actually being decoded, under the two things that describe the
+       transport [REQ-VIS-235]. Everything above names what Lempi believes it
+       is playing; this names the bytes. -->
+  <div class="source" id="source" hidden>
+    <div id="srcpath"></div>
+    <div id="srcspan"></div>
+  </div>
+  <section>
+    <!-- One control set for whichever row is picked, rather than a set on
+         every row, and it rides the heading rather than taking a line of its
+         own: the row it acts on is the one highlighted, so naming it again
+         here said nothing the queue was not already showing. Hidden until
+         something is picked, because controls that act on nothing are worse
+         than absent ones. -->
+    <div class="qhead">
+      <h2>Up next</h2>
+      <span class="qpick" id="qpick" hidden></span>
+    </div>
+    <ol id="queue"><li class="empty">nothing queued</li></ol>
+  </section>
+
+  <!-- Filled in and toggled by core.js's Lempi.editPreference -- an in-page
+       panel, not a dialog, so it closes straight back into this same flow
+       on Cancel or Save [REQ-VIS-285]. -->
+  <div id="pref-panel" class="pref-panel" hidden></div>
+  <!-- Filled in and toggled by core.js's Lempi.loadFreqPanel, opened from
+       inside editPreference above once its own fetch resolves -- never
+       delaying the preference panel itself [REQ-VIS-300]. -->
+  <div id="freq-panel" class="freq-panel" hidden></div>
+
+  <section>
+    <h2>Why <span id="whotitle">this passage</span>?</h2>
+    <div id="why">Waiting for a selection…</div>
+    <table id="terms" hidden>
+      <tbody></tbody>
+    </table>
+    <div id="losers" hidden>
+      <h3>It beat</h3>
+      <ol></ol>
+    </div>
+    <p id="stages"></p>
+  </section>
+
+  </div><!-- /panel-main -->
+
+  <!-- Its own screen rather than a strip under the transport: these are
+       set once and then left alone, and they were taking the eye every
+       time it went to the queue. -->
+  <section id="panel-settings" hidden>
+    <h2>Settings</h2>
+    <!-- This node's place in a fleet [SPEC-DLY-120], [SPEC-ECHO-010]. Two
+         controls that are only useful together, so they sit together. -->
+    <div class="setting">
+      <label for="echotrim">Speaker delay</label>
+      <span><input type="number" id="echotrim" step="1"> ms
+            <button type="button" id="echotrimreset">Default</button></span>
+      <p id="echotrimnote"></p>
+    </div>
+    <div class="setting">
+      <label for="echofollow">Follow another player</label>
+      <span><input type="text" id="echofollow" placeholder="none &mdash; play independently"
+                   spellcheck="false" autocapitalize="none"></span>
+      <p id="echofollownote">The name of a player on this network, e.g.
+         <code>bose</code>. Leave empty to play this node's own programme.</p>
+    </div>
+    <div class="setting">
+      <label for="echojoin">Get in step</label>
+      <span><select id="echojoin">
+        <option value="1">straight away, and stay there</option>
+        <option value="0">at that player's next track</option>
+      </select></span>
+      <p><b>Straight away</b> cuts whatever is playing here, the way a skip
+         does, so you hear at once whether it worked — and from then on any
+         drift is corrected continuously, by dropping or repeating single
+         frames, which is inaudible. <b>At the next track</b> disturbs nothing
+         now, but that track may be minutes off and alignment is then only
+         corrected at each track change, half a second at a time.</p>
+      <p>Either way, being exactly in step needs both players' clocks
+         disciplined by chrony against the same server. A node on
+         <code>systemd-timesyncd</code> will be corrected towards its own
+         clock error instead.</p>
+    </div>
+    <div class="setting">
+      <label for="skipfade">Skip fade</label>
+      <span><input type="number" id="skipfade" step="0.1"> s</span>
+      <p>How long the outgoing track takes to fade when you skip.</p>
+    </div>
+    <div class="setting">
+      <label for="skiplead">Next starts at</label>
+      <span><input type="number" id="skiplead" step="0.1"> s</span>
+      <p id="skipoverlap"></p>
+    </div>
+    <div class="setting">
+      <label for="resumesave">Save position every</label>
+      <span><input type="number" id="resumesave" step="0.5"> s</span>
+      <p>How often the playback position is written to disk. Longer means
+         fewer writes on an appliance's flash; at worst this much position is
+         lost to a power cut. Track changes and pause are always saved at once.</p>
+    </div>
+    <div class="setting">
+      <label for="skipsuppress">Hold a skipped track out for</label>
+      <span><input type="number" id="skipsuppress" step="1"> h</span>
+      <p>A track you skip is held out of selection for this long. It is not
+         counted as played. Zero turns it off.</p>
+    </div>
+    <div class="setting">
+      <label for="dequeuesuppress">Hold a removed track out for</label>
+      <span><input type="number" id="dequeuesuppress" step="1"> h</span>
+      <p>A track you take out of the queue before it played is held out for
+         this long &mdash; less than a skip, because declining to hear
+         something now says less than stopping it once it had started. Where
+         both apply, the longer remaining window wins.</p>
+    </div>
+    <div class="setting">
+      <label for="queuedepth">Keep queued ahead</label>
+      <span><input type="number" id="queuedepth" step="1"> passages</span>
+      <p>How many passages the Program Director keeps ahead. At or above this
+         it adds nothing, so anything you queue yourself simply stands.</p>
+    </div>
+    <div class="setting">
+      <label for="sampleinterval">Guest sampling interval</label>
+      <span><input type="number" id="sampleinterval" step="0.5"> s</span>
+      <p>How often a guest backend such as MPD is asked where playback has
+         reached. Lempi's own engine never polls &mdash; it knows. This also
+         bounds how late a passage can end when the guest will not honour its
+         span.</p>
+    </div>
+    <div class="setting">
+      <label for="backend">Playing through</label>
+      <span>
+        <select id="backend">
+          <option value="lempi">Lempi (gain, crossfades)</option>
+          <option value="mpd">MPD (spans only)</option>
+        </select>
+        <small id="switchstatus"></small>
+      </span>
+      <p>Which player is sounding. A guest such as MPD brings its own client
+         apps; Lempi's own engine keeps per-passage gain and crossfades, which
+         a guest cannot express. The queue moves across either way.</p>
+    </div>
+    <div class="setting">
+      <label for="cuesheets">Name capture tracks for guests</label>
+      <span><input type="checkbox" id="cuesheets"> write cue sheets
+        <small id="cuestatus"></small></span>
+      <p>A whole-side capture holds one set of tags, so a guest such as MPD
+         names every track inside it after the file &mdash; about a third of
+         this library. Ticking this writes a <code>.cue</code> file beside each
+         capture, which guests read to get the real titles.
+         <strong>This writes files into your music folder</strong>, which
+         nothing else in Lempi does; it is why the choice is yours and the
+         default is off. Existing sheets Lempi did not write are left alone,
+         and unticking leaves written ones in place.</p>
+      <p class="needs-restart"><strong>Needs a restart.</strong> The sheets are
+         written the moment you tick, but Lempi reads which passages have a cue
+         track only when it starts and hands that list to the guest &mdash; so
+         titles keep coming out wrong until you use <em>Restart Lempi</em> below.
+         MPD also needs a database update before it can see the new files at
+         all.</p>
+    </div>
+    <div class="setting">
+      <label for="covers">Album art for captures</label>
+      <span><input type="checkbox" id="covers"> write cover images
+        <small id="coversstatus"></small></span>
+      <p>A capture has no art of its own, so a guest shows whatever it finds for
+         the artist &mdash; one cover on every album. Ticking this writes
+         <code>cover.jpg</code> beside each capture that is <em>alone</em> in its
+         folder, using the art Lempi already holds. A capture sharing a folder
+         with others is skipped: one folder has room for one cover, and giving
+         several albums the same picture is the problem rather than the fix.
+         <strong>This writes files into your music folder.</strong> A folder that
+         already has a cover is never touched, whoever put it there.</p>
+      <p class="no-restart">No restart needed: a guest reads the folder when it
+         is asked for a picture. A client that has already cached the wrong one
+         may need its own refresh.</p>
+    </div>
+    <div class="setting">
+      <label for="lyricscache">Per-song lyrics for a local client</label>
+      <span><input type="checkbox" id="lyricscache"> write into its cache
+        <small id="lyricsstatus"></small></span>
+      <p>A lyrics file beside a capture would hold every song in it at once, so
+         per-song words go where a client keys them by artist and title &mdash;
+         its own cache. Ticking this writes one file per song Lempi has words
+         for. <strong>This writes into another application&rsquo;s data
+         folder</strong>, and it only helps a client running on <em>this</em>
+         machine: a phone in another room keeps its own cache and will not see
+         these. A file already there is never replaced.</p>
+      <p class="no-restart">Lempi needs no restart. <em>The client</em> may:
+         Cantata showed these only after it was restarted, since it reads its
+         cache as it draws a track.</p>
+    </div>
+    <div class="setting">
+      <label for="lyricssidecar">Lyrics beside the audio</label>
+      <span><input type="checkbox" id="lyricssidecar"> write into the music folder
+        <small id="sidecarstatus"></small></span>
+      <p>The companion to the setting above, and the one that reaches a client
+         on <em>another</em> machine &mdash; provided that client can read your
+         music folder, since it builds this path from its own Music Folder
+         setting. <strong>This writes files into your music folder.</strong>
+         Captures are deliberately skipped: a client tries this file
+         <em>before</em> the cache, so one written beside a capture would
+         replace each song&rsquo;s own words with all twelve at once. A file
+         already there is never replaced.</p>
+      <p class="no-restart">Lempi needs no restart. A client reads these beside
+         the audio as it plays a track, so it may need to move off the track and
+         back before it notices one.</p>
+    </div>
+    <div class="setting">
+      <label>Server build</label>
+      <span><small id="buildtext" title="The version and the commit it was built from.">&mdash;</small><button type="button" class="copy" id="buildcopy" title="Copy the server build to the clipboard">&#x29C9;</button></span>
+      <p>The version and the commit this server was built from. <code>+dirty</code>
+         means the source tree had uncommitted changes, so the hash names where
+         the build started rather than what was compiled.</p>
+    </div>
+    <div class="setting">
+      <label>Branch</label>
+      <span><small id="branchtext">&mdash;</small></span>
+      <p>The branch this build was compiled from.</p>
+    </div>
+    <div class="setting">
+      <label>Commit date</label>
+      <span><small id="commitdatetext">&mdash;</small></span>
+      <p>When the commit this build came from was made, and its subject line.</p>
+    </div>
+    <div class="setting">
+      <label>Working tree</label>
+      <span><small id="workingtreetext">&mdash;</small></span>
+      <p>Whether the source tree had uncommitted changes at build time, and how
+         many files. A build from a dirty tree carries <code>+dirty</code> in
+         its Server build hash above, since the commit alone no longer names
+         what was actually compiled.</p>
+    </div>
+    <div class="setting" id="radios">
+      <label>Radios</label>
+      <span id="radio-controls"></span>
+      <p id="radio-hint">Whether the aerials are switched on at all.</p>
+    </div>
+    <div class="setting" id="wifi-row">
+      <label>Wi-Fi</label>
+      <span id="wifi-current">&mdash;</span>
+      <p>Move this appliance onto a new Wi-Fi network, or have it serve
+         its own so a phone can reach it directly &mdash; useful moving it
+         into a new home before it has ever seen the network there.
+         <strong>Changing this can disconnect this very page.</strong> A
+         five-minute safety timer reverts automatically unless you confirm
+         you can still reach the appliance on whatever network it
+         switches to.</p>
+      <ul id="wifi-known-list" aria-live="polite"></ul>
+      <span>
+        <button type="button" id="wifi-scan-btn">Scan for networks</button>
+      </span>
+      <ul id="wifi-scan-list" aria-live="polite"></ul>
+      <div id="wifi-connect-form" hidden>
+        <label for="wifi-connect-password">Password for <b id="wifi-connect-ssid"></b></label>
+        <span>
+          <input type="password" id="wifi-connect-password" placeholder="leave blank if open">
+          <button type="button" class="copy" id="wifi-connect-password-toggle"
+                  title="Show password" aria-pressed="false">👁</button>
+          <button type="button" id="wifi-connect-go">Connect</button>
+          <button type="button" id="wifi-connect-cancel">Cancel</button>
+        </span>
+      </div>
+      <hr>
+      <label for="ap-ssid">This appliance's own network</label>
+      <span id="ap-controls">
+        <input type="text" id="ap-ssid" placeholder="Lempi" size="12">
+        <input type="password" id="ap-password" placeholder="Lempi321 (default)" size="14">
+        <button type="button" class="copy" id="ap-password-toggle"
+                title="Show password" aria-pressed="false">👁</button>
+        <button type="button" id="ap-start-btn">Start</button>
+        <button type="button" id="ap-stop-btn" hidden>Stop, return to Wi-Fi</button>
+      </span>
+      <p id="ap-hint">Off by default. When on, reach this page from a phone
+         joined to that network at <code>http://lempi:5720/</code>.</p>
+    </div>
+    <div class="setting" id="wifi-confirm" hidden>
+      <label>Keep this network?</label>
+      <span>
+        <button type="button" id="wifi-confirm-yes">Yes, keep it</button>
+      </span>
+      <p id="wifi-confirm-countdown"></p>
+    </div>
+    <div class="setting" id="led-row">
+      <label for="led-mode">Status LED</label>
+      <span>
+        <select id="led-mode">
+          <option value="on">Always on</option>
+          <option value="wifi">Live Wi-Fi indicator</option>
+          <option value="off">Always off</option>
+          <option value="default">Leave to the system</option>
+        </select>
+        <input type="range" id="led-brightness" min="1" max="100" value="100" hidden>
+        <small id="led-brightness-label" hidden></small>
+      </span>
+      <p>The small light on the appliance itself. "Live Wi-Fi indicator"
+         shows whether Wi-Fi is switched on, same as it always has.
+         "Always on" lets you set a brightness &mdash; below full, this LED
+         has no true dimmer of its own, so it blinks very fast to look
+         dimmer rather than glowing steadily at reduced power. Has no
+         effect on playback either way. The choice is remembered and
+         reapplied on every restart, including a full power cycle.</p>
+    </div>
+    <div class="setting" id="speakers">
+      <label>Speaker</label>
+      <span>
+        <button type="button" id="bt-scan">Find a speaker</button>
+      </span>
+      <p id="bt-hint">Where the music is playing.</p>
+      <ul id="bt-list" aria-live="polite"></ul>
+    </div>
+    <div class="setting" id="bt-confirm" hidden>
+      <label>Can you hear it?</label>
+      <span>
+        <button type="button" id="bt-yes">Yes, keep it</button>
+        <button type="button" id="bt-no">No, go back</button>
+      </span>
+      <p id="bt-countdown"></p>
+    </div>
+    <div class="setting">
+      <label for="prog">Programme</label>
+      <span><select id="prog"></select></span>
+      <p id="progmode"></p>
+    </div>
+    <div class="setting" id="restart">
+      <label>Restart the player</label>
+      <span><button type="button" id="rs-ask">Restart Lempi</button></span>
+      <p id="rs-hint">Stops and starts the player, leaving the machine running.
+         Where you were is saved first and picked up again on the way back.
+         Settings that only take effect at startup &mdash; the ones marked below
+         &mdash; need this before they do anything.</p>
+    </div>
+    <div class="setting" id="rs-confirm" hidden>
+      <label>Really restart?</label>
+      <span>
+        <button type="button" id="rs-yes">Yes, restart</button>
+        <button type="button" id="rs-no">Cancel</button>
+      </span>
+      <p>The music stops for a few seconds while the library is reopened.</p>
+    </div>
+    <div class="setting" id="power">
+      <label>Shut down</label>
+      <span><button type="button" id="pw-ask">Shut down the appliance</button></span>
+      <p id="pw-hint">Stops the music and powers the machine off properly.
+         Turning it back on needs a hand at the plug.</p>
+    </div>
+    <div class="setting" id="pw-confirm" hidden>
+      <label>Really shut down?</label>
+      <span>
+        <button type="button" id="pw-yes">Yes, shut down</button>
+        <button type="button" id="pw-no">Cancel</button>
+      </span>
+      <p>Nothing on this page can switch it back on.</p>
+    </div>
+  </section>
+
+  <!-- A third panel, the same shape as Settings: driven by its own fetch
+       rather than the socket's snapshot, since a page of history is not
+       "what is true right now" [REQ-VIS-250]. -->
+  <section id="panel-history" hidden>
+    <h2>Play history</h2>
+    <div class="histbar">
+      <label for="histsize">Show</label>
+      <select id="histsize">
+        <option value="10">10</option>
+        <option value="100" selected>100</option>
+        <option value="1000">1000</option>
+      </select>
+      <span>per page</span>
+      <span class="histpage" id="histpage"></span>
+      <span class="histnav">
+        <button type="button" id="histprev">‹ Prev</button>
+        <button type="button" id="histnext">Next ›</button>
+      </span>
+    </div>
+    <div class="histscroll">
+      <table id="histtable">
+        <thead><tr>
+          <th>When</th><th>Title</th><th>Artist</th><th>Album</th>
+          <th>Played</th><th>Result</th><th>Flag for review</th>
+        </tr></thead>
+        <tbody><tr class="empty"><td colspan="7">Nothing played yet.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div id="link">Connecting…</div>
+
+  <div class="skinbar">
+    <button type="button" id="gear" aria-expanded="false"
+            title="Settings">⚙</button>
+    <button type="button" id="histbtn" aria-expanded="false"
+            title="Play history">🕘</button>
+    <!-- Development mode is visible, not remembered [PI-SET-016]. -->
+    <span id="devmode" hidden>diagnostics on</span>
+    <a href="/browse">Browse the library →</a>
+    <a href="/guide" target="_blank">Help</a>
+    <label for="skinpick">Skin</label>
+    <select id="skinpick" data-skins></select></div>
+</main>

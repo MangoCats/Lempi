@@ -1,0 +1,154 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lempi — Edit boundaries</title>
+<style>
+  /* Waveform boundary editing [REQ-LIB-175], [SPEC021].
+
+     One canvas, six draggable markers, a gain field and a preview
+     transport -- the interaction model of SPEC021 §4. Nothing is written
+     until "Save edit" is pressed, and that writes a draft to `boundary_reviews`,
+     never `passages` itself `[SPEC-SUI-140]`.
+
+     A zoomable/pannable viewport, precise numeric fields and undo were added
+     `[SPEC-SUI-217..220]` after using this against a real multi-minute file
+     surfaced that a single fixed-width canvas and a 10px-tolerance drag were
+     not enough to place a point with any confidence.
+
+     Fade-in/fade-out markers and curve pickers were added `[SPEC-SUI-226]`
+     -- a passage's own volume envelope, independent of lead (which only
+     times when a crossfade with a neighbour is permitted, never itself a
+     gain ramp during ordinary playback). Drawn in their own violet shading,
+     a second independent layer beside lead's amber one -- the two overlap
+     legitimately, and letting the canvas's own alpha blending show that is
+     simpler and more honest than hand-computing a third blended state. */
+  html, body { margin: 0; padding: 0; background: #141416; color: #eee;
+               font: 16px/1.5 system-ui, sans-serif; }
+  .edit { max-width: 60rem; margin: 0 auto; padding: .75rem; }
+  .edit header { display: flex; align-items: center; gap: .5rem;
+                 flex-wrap: wrap; margin-bottom: .5rem; }
+  .edit h1 { font-size: .7rem; letter-spacing: .14em; text-transform: uppercase;
+             font-weight: 600; margin: 0; flex: 1; opacity: .6; }
+  .edit a.back { font-size: .8125rem; }
+
+  .facts { display: flex; flex-wrap: wrap; gap: .3rem 1rem; font-size: .8125rem;
+           opacity: .8; margin: 0 0 .6rem; font-variant-numeric: tabular-nums; }
+  .facts b { font-weight: 600; opacity: 1; }
+  /* Same amber as the lead-in/lead-out markers and `.note.warn` -- a
+     boundary/window concern reads through one color across the page. */
+  .facts b.win { color: #fb6; }
+
+  /* The view controls sit above the canvas, not below it, so what the
+     canvas is currently showing is read before the canvas itself `[SPEC-SUI-218]`. */
+  .viewbar { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap;
+             margin: 0 0 .4rem; }
+  .viewbar .spacer { flex: 1; }
+  .viewbar small { font-size: .75rem; opacity: .7; font-variant-numeric: tabular-nums; }
+
+  /* One canvas: peaks in the middle, boundaries drawn on top of them rather
+     than beside them, so "what will play" and "what does this look like" are
+     one picture `[SPEC021 §4]`. Grab cursor by default -- the canvas is a
+     click-to-jump/drag-to-pan surface first, markers second. */
+  #wave { display: block; width: 100%; height: 220px; border-radius: 6px;
+          background: #0b0b0c; border: 1px solid rgba(128,128,128,.28);
+          touch-action: none; cursor: grab; }
+  #wave.panning { cursor: grabbing; }
+  #wave.onhandle { cursor: ew-resize; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: .3rem 1rem; font-size: .75rem;
+            opacity: .7; margin: .5rem 0 0; }
+  .legend .swatch { display: inline-block; width: .7rem; height: .7rem;
+                     border-radius: 2px; margin-right: .3rem; vertical-align: -1px; }
+
+  /* The transport and the gain field, side by side under the waveform --
+     one is a position, the other is not, and drawing gain as a marker on the
+     canvas would invite confusing loudness with placement `[SPEC021 §4]`. */
+  .transport { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+               margin: .6rem 0 0; }
+  .transport button, .viewbar button { font: inherit; min-height: 2.4rem; padding: 0 .9rem;
+                       cursor: pointer; background: transparent; color: inherit;
+                       border: 1px solid currentColor; border-radius: 4px; }
+  .transport label, .precise label { font-size: .8125rem; opacity: .8; display: flex;
+                      align-items: center; gap: .35rem; }
+  .transport input[type=number], .precise input[type=number] {
+                       font: inherit; width: 5rem; padding: .3rem .4rem;
+                       background: transparent; color: inherit; border-radius: 4px;
+                       border: 1px solid rgba(128,128,128,.45); }
+  .precise select { font: inherit; padding: .3rem .4rem; background: #141416;
+                     color: inherit; border-radius: 4px;
+                     border: 1px solid rgba(128,128,128,.45); }
+  .transport .spacer { flex: 1; }
+  #commit[disabled], #undo[disabled] { opacity: .35; cursor: default; }
+
+  /* The precise fields answer "how do I place these exactly" directly,
+     beside the drag-based way rather than instead of it `[SPEC-SUI-219]`. */
+  .precise { display: flex; align-items: center; gap: .8rem 1.2rem; flex-wrap: wrap;
+             margin: .5rem 0 0; }
+
+  .note { font-size: .875rem; opacity: .75; margin: 1rem .2rem; }
+  .note.bad { opacity: 1; }
+  .note.good { opacity: 1; color: #8c8; }
+  .note.quiet { opacity: .55; margin-top: .4rem; }
+  /* Same amber as the lead-in/lead-out markers -- a boundary-timing concern
+     reads through the same color it is drawn in on the canvas above. */
+  .note.warn { opacity: 1; color: #fb6; }
+</style>
+
+<div class="edit">
+  <header>
+    <h1>Lempi — Edit boundaries</h1>
+    <a class="back" href="/">← player</a>
+  </header>
+  <p class="facts" id="facts"></p>
+  <div class="viewbar">
+    <button type="button" id="zoomout" title="See a wider span" disabled>− Zoom out</button>
+    <button type="button" id="zoomin" title="See a narrower span" disabled>+ Zoom in</button>
+    <button type="button" id="zoompassage" disabled>Whole passage</button>
+    <button type="button" id="zoomfile" disabled
+            title="Reaches the edge of what was actually decoded -- the whole file for an ordinary passage, a bounded window around it for a large multi-track capture">Zoom out</button>
+    <span class="spacer"></span>
+    <small id="viewrange"></small>
+  </div>
+  <canvas id="wave" width="1200" height="220"></canvas>
+  <p class="legend">
+    <span><span class="swatch" style="background:#6cf"></span>start / end</span>
+    <span><span class="swatch" style="background:#fb6"></span>lead-in / lead-out</span>
+    <span><span class="swatch" style="background:#a78bfa"></span>fade-in / fade-out</span>
+    <span><span class="swatch" style="background:#fff"></span>playhead</span>
+    <span>drag a knob to move it · drag empty space to pan · click empty space to jump · wheel to zoom</span>
+  </p>
+  <div class="transport">
+    <button id="play" disabled>Play</button>
+    <label>gain <input type="number" id="gain" step="0.1" disabled> dB</label>
+    <span class="spacer"></span>
+    <button id="undo" disabled title="Undo the last change">Undo</button>
+    <button id="commit" disabled>Save edit</button>
+  </div>
+  <div class="precise">
+    <label>start <input type="number" id="startms" step="1" disabled> ms</label>
+    <label>end <input type="number" id="endms" step="1" disabled> ms</label>
+    <label>lead-in <input type="number" id="leadinms" step="1" min="0" disabled> ms</label>
+    <label>lead-out <input type="number" id="leadoutms" step="1" min="0" disabled> ms</label>
+  </div>
+  <div class="precise">
+    <label>fade-in <input type="number" id="fadeinms" step="1" min="0" disabled> ms</label>
+    <label><select id="fadeincurve" disabled>
+        <option value="linear">linear</option>
+        <option value="cosine">cosine</option>
+        <option value="exponential">exponential</option>
+      </select></label>
+    <label>fade-out <input type="number" id="fadeoutms" step="1" min="0" disabled> ms</label>
+    <label><select id="fadeoutcurve" disabled>
+        <option value="linear">linear</option>
+        <option value="cosine">cosine</option>
+        <option value="exponential">exponential</option>
+      </select></label>
+  </div>
+  <p class="note" id="note"></p>
+  <p class="note" id="flavornote"></p>
+  <p class="note quiet" id="pausenote"></p>
+</div>
+
+<script src="/core.js"></script>
+<script src="/fade.js"></script>
+<script src="/edit.js"></script>

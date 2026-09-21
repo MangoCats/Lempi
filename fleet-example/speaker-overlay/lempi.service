@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: MIT
+#
+# An appliance with an OVERLAY ROOT. Generic example -- `speaker-a` is not a
+# real host and 13491 is not the default port.
+#
+# What makes this shape different: an ordinary write to `/` lands in a tmpfs
+# upper layer, survives a service restart, passes every check, and is gone at
+# the next reboot [IMPL-BOS-185]. Installing THIS FILE is therefore not a
+# copy; see README.md beside it.
+#
+# Audio does not wait for the network: no After=network-online.target. The MPD
+# guest here is local, so nothing waits on that either.
+[Unit]
+Description=Lempi
+After=sound.target mpd.service
+Wants=sound.target
+Requires=mpd.service
+
+[Service]
+Type=simple
+# Reports what is present and repairs nothing, so the log says whether
+# recovery is armed rather than leaving it to be inferred [PI-PRE-010].
+ExecStartPre=/usr/local/bin/lempi-preflight
+ExecStartPre=/usr/local/bin/lempi-db-recover
+#
+# Every option is named [GDE-CLI-020]. The two halves of a split database
+# [IMPL-DBSPLIT-025]: --listener is plays and preferences, --library is the
+# catalogue. /srv/library is read-only in normal operation, which is why the
+# catalogue lives there and the listener half does not.
+#
+# --device is load-bearing on a board with more than one sink: with no
+# --device the player opens ALSA's first enumerated device, which is often
+# the onboard jack with nothing plugged into it -- playing perfectly into
+# nothing and reporting itself healthy [IMPL-AUD-010]. Run
+# `lempi --list-devices` on the box to see what the names actually are.
+ExecStart=/usr/local/bin/lempi --listener /var/lempi/listener.db --library /srv/library/library.db --port 13491 --device hifiberry --mpd 127.0.0.1:6600 --mpd-root /srv/library/audio
+Restart=always
+RestartSec=2
+User=pi
+Nice=-5
+MemoryMax=200M
+
+[Install]
+WantedBy=multi-user.target

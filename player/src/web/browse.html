@@ -1,0 +1,121 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lempi — Browse</title>
+<style>
+  /* One browse page for every skin rather than three. It loads the chosen
+     skin's stylesheet, so it inherits that skin's ground, type and buttons;
+     what is here is only the layout a listing needs, and all of it is
+     class-based so a skin can override any part.
+
+     Built for a phone first, which is how MuLibPlay's browse pages were used:
+     one-handed, at arm's length, tapping rather than pointing. Nothing here
+     depends on hover, and no tap target is smaller than a fingertip. */
+  html, body { margin: 0; padding: 0; background: #141416; color: #eee;
+               font: 16px/1.5 system-ui, sans-serif; }
+  .browse { max-width: 60rem; margin: 0 auto; padding: .75rem; }
+
+  .browse header { display: flex; align-items: center; gap: .5rem;
+                   flex-wrap: wrap; margin-bottom: .5rem; }
+  .browse h1 { font-size: .7rem; letter-spacing: .14em; text-transform: uppercase;
+               font-weight: 600; margin: 0; opacity: .6; flex: 1; }
+  .browse a.back { font-size: .8125rem; }
+
+  /* Axis buttons: full-width thirds on a phone, so they cannot be mis-tapped. */
+  .tabs { display: flex; gap: .35rem; width: 100%; }
+  .tabs button { flex: 1; min-height: 2.75rem; font: inherit; cursor: pointer; }
+  .tabs button[aria-selected="true"] { outline: 2px solid currentColor;
+                                       font-weight: 600; }
+
+  .browse input[type=search] { font: inherit; padding: .55rem .6rem; width: 100%;
+                               box-sizing: border-box; background: transparent;
+                               color: inherit; border: 1px solid currentColor;
+                               border-radius: 4px; margin-top: .4rem; }
+
+  /* The alphabet. Sticky, because the whole point is to jump while scrolled. */
+  .az { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap;
+        gap: .15rem; padding: .35rem 0; margin-bottom: .25rem;
+        background: inherit; backdrop-filter: blur(6px); }
+  .az button { font: inherit; font-size: .8125rem; min-width: 1.9rem;
+               min-height: 1.9rem; padding: 0; cursor: pointer;
+               background: transparent; color: inherit;
+               border: 1px solid rgba(128,128,128,.35); border-radius: 4px; }
+  .az button[disabled] { opacity: .25; }
+
+  .crumbs { font-size: .875rem; opacity: .8; margin: .1rem 0 .4rem;
+            min-height: 1.4rem; }
+  .crumbs a { cursor: pointer; text-decoration: underline; }
+
+  /* Rows, not a table: a table cannot reflow on a narrow screen without
+     either scrolling sideways or crushing the names, and the name is the
+     thing being looked for. */
+  .rows { list-style: none; margin: 0; padding: 0; }
+  .rows li { display: flex; align-items: center; gap: .6rem; min-height: 2.9rem;
+             padding: .35rem .4rem; border-bottom: 1px solid rgba(128,128,128,.22);
+             cursor: pointer; }
+  .rows .name { flex: 1; min-width: 0; }
+  .rows .name b { font-weight: 600; display: block; overflow-wrap: anywhere; }
+  .rows .name span { font-size: .8125rem; opacity: .65;
+                     display: block; overflow-wrap: anywhere; }
+  .rows .num { font-size: .8125rem; opacity: .65; text-align: right;
+               white-space: pre-line; font-variant-numeric: tabular-nums;
+               line-height: 1.25; }
+  .rows .letter { padding: .3rem .4rem; font-size: .75rem; letter-spacing: .12em;
+                  opacity: .5; border: none; cursor: default; min-height: 0;
+                  position: sticky; top: 2.9rem; background: inherit; }
+  /* One set of verbs for the whole list, sized for a thumb. */
+  .verbs { display: flex; align-items: center; gap: .4rem; margin: .5rem 0 .25rem; }
+  .verbs button { font: inherit; min-height: 2.6rem; min-width: 4.2rem;
+                  cursor: pointer; background: transparent; color: inherit;
+                  border: 1px solid currentColor; border-radius: 4px; }
+  .verbs button[disabled] { opacity: .35; cursor: default; }
+  #picked { font-size: .8125rem; opacity: .7; }
+  /* Big enough to hit, and the whole row works too. */
+  .rows .pick { flex: none; width: 1.25rem; height: 1.25rem; margin: 0 .2rem 0 0; }
+  /* A passage's own facts [REQ-VIS-270], its own tap target so it does not
+     also tick the row's checkbox. */
+  .rows .info { flex: none; min-width: 2.2rem; min-height: 2.2rem;
+                display: flex; align-items: center; justify-content: center;
+                font-size: 1.1rem; text-decoration: none; color: inherit;
+                opacity: .6; }
+  .rows .info:hover, .rows .info:focus { opacity: 1; }
+  .note { font-size: .8125rem; opacity: .7; margin: .75rem .2rem; }
+  .note.bad { opacity: 1; }
+</style>
+
+<div class="browse">
+  <header>
+    <h1>Lempi — Browse</h1>
+    <!-- Reviewing ids is library housekeeping, so it hangs off browsing
+         rather than off the player, where it would be clutter above the
+         music. -->
+    <a class="back" href="/review">review ids</a>
+    <!-- Hidden until `browse.js` confirms Vipunen is actually reachable or
+         launchable from here [REQ-VIS-320] -- a build without
+         --features vipunen-support has no route to ask, so this never
+         un-hides there; on one that does, it still means nothing until a
+         local console.py and a Python are actually found. -->
+    <a class="back" id="vipunen-link" href="#" target="_blank" hidden>launch Vipunen</a>
+    <a class="back" href="/">← player</a>
+  </header>
+  <div class="tabs">
+    <button data-kind="artists">Artist</button>
+    <button data-kind="albums">Album</button>
+    <button data-kind="tracks">Track</button>
+  </div>
+  <input type="search" id="q" placeholder="filter…" autocomplete="off">
+
+  <div class="verbs" id="verbs" hidden>
+    <button type="button" id="v-now" disabled>Now</button>
+    <button type="button" id="v-next" disabled>Next</button>
+    <button type="button" id="v-last" disabled>Last</button>
+    <span id="picked"></span>
+  </div>
+  <div class="crumbs" id="crumbs"></div>
+  <div class="az" id="az"></div>
+  <ul class="rows" id="rows"></ul>
+  <p class="note" id="note"></p>
+</div>
+
+<script src="/core.js"></script>
+<script src="/browse.js"></script>

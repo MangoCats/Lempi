@@ -1,0 +1,188 @@
+<h2>Advanced Features</h2>
+
+<p>Everything below exists somewhere in Lempi or Vipunen today. Quite a lot
+of it — settings, Bluetooth, play history, the full "why did it pick this"
+breakdown — only exists in the <strong>Lempi</strong> skin; the table at
+the bottom of this page says exactly what's where.</p>
+
+<h3>Settings (Lempi skin only)</h3>
+<p>The gear icon opens a settings panel with a run of fields that shape
+playback behavior:</p>
+<ul>
+  <li><strong>Skip fade</strong> — how long a manual skip fades out over,
+    rather than cutting instantly.</li>
+  <li><strong>Next starts at</strong> — how much lead-in time the next
+    track gets before the current one actually ends.</li>
+  <li><strong>Save position every…</strong> — how often the current
+    playback position is written down, so a restart resumes close to where
+    it left off.</li>
+  <li><strong>Hold a skipped/removed track out for…</strong> — two
+    separate windows: how long a track you skip, or a track you remove
+    from the queue, is held back from being offered again. This is
+    distinct from the Cooldown dial in Preference Tuning, and shorter.</li>
+  <li><strong>Keep queued ahead</strong> — how many tracks Lempi tries to
+    keep lined up in the queue at once.</li>
+  <li><strong>Guest sampling interval</strong> — only relevant if another
+    playback backend (like MPD) is attached alongside Lempi.</li>
+  <li><strong>Playing through</strong> — which backend is actually driving
+    audio right now, if more than one is available; hidden entirely when
+    there's only the one.</li>
+  <li><strong>Status LED</strong> — on a Raspberry Pi appliance, controls
+    the small light on the device itself. Four choices: <em>Always
+    on</em> (the default, with its own brightness slider), <em>Live
+    Wi-Fi indicator</em> (the light reflects whether Wi-Fi is currently
+    switched on — useful on an appliance, since it's the only sign of
+    life if the network drops), <em>Always off</em>, or <em>Leave to the
+    system</em> (Lempi doesn't manage it at all). Below full brightness,
+    "Always on" blinks very fast to look dimmer rather than glowing at
+    reduced power — this LED has no true hardware dimmer. Has no effect
+    on playback either way, and the choice is remembered and reapplied
+    automatically at every restart, including a full power cycle.</li>
+  <li>Four file-writing toggles, each with its own on-screen explanation:
+    naming capture tracks for other clients (cue sheets), saving album art
+    for captures, keeping per-song lyrics for a local client, and keeping
+    lyrics files beside the audio itself. Some of these only take effect
+    after a restart — the panel says which.</li>
+</ul>
+<p>The same panel also shows the exact build you're running (with a
+copy-to-clipboard button), which branch and commit it came from, and
+whether the working copy has uncommitted changes — useful when reporting a
+problem or checking whether an update actually landed.</p>
+
+<h3>Bluetooth and other radios (Lempi skin only)</h3>
+<p>The same settings panel lists every radio the device has (Bluetooth,
+Wi-Fi, mobile) with on/off switches — a radio carrying your only route to
+this page can't be switched off from here, for the obvious reason. The
+speaker chooser scans for, pairs with, connects to ("use this one"), or
+forgets a Bluetooth speaker. After connecting, a "can you hear it?" check
+gives you thirty seconds to confirm before automatically reverting if you
+don't — so a bad connection can't strand you silently.</p>
+
+<h3>Moving to a new Wi-Fi network, or the appliance's own (Lempi skin
+only, Raspberry Pi appliance only)</h3>
+<p>The same settings panel's <strong>Wi-Fi</strong> section is for moving
+a Pi appliance into a new home. It shows every network it already knows
+(each with a toggle for whether it should connect automatically, and a
+button to forget it), a <strong>scan</strong> button to find nearby
+networks and connect to a new one by name and password, and a toggle to
+have the appliance broadcast its <em>own</em> network instead — useful the
+moment it arrives somewhere with no Wi-Fi of its own yet, since you can
+join its network directly from a phone and configure the real one from
+there. While that's on, reach this same page from anywhere joined to it at
+plain <code>http://lempi/</code> — no IP address, and no port number to
+remember either; <code>http://lempi:5720/</code> still works too, the
+same address the appliance answers to on any other network.</p>
+<p class="note">Both of these can disconnect the very page you're looking
+at — switching networks, or turning the appliance's own network on or
+off, are both real interruptions of whatever is currently connecting you
+to it. That's why every one of these actions shows a <strong>"Keep this
+network?"</strong> banner with a countdown afterward: if you don't
+confirm within five minutes (because, for instance, the new network
+didn't actually work, or you haven't reconnected your own device yet),
+the appliance automatically reverts to whatever was working before —
+never silently choosing to strand itself on a network nobody can reach it
+on.</p>
+<p class="note">The appliance's own network has no internet connection
+behind it — there's nothing to share one with. A phone joined to it may
+still quietly send web traffic over mobile data instead, since it looks
+like a Wi-Fi with no internet, and the page will simply fail to load with
+no obvious reason why. If that happens: turn off mobile data on the phone
+before joining, or look for a "connect without internet" option on the
+network in the phone's Wi-Fi settings — either one is enough.</p>
+
+<h3>Play History (Lempi skin only)</h3>
+<p>The clock icon opens a page of everything that's actually played or
+been skipped, most recent first, with a page-size choice (10 / 100 / 1000
+rows). Each row shows when, title and artist (both clickable into the
+preference panel), album, how much of it played, and whether it counted as
+a play or a skip. A checkbox per row lets you <strong>flag it for
+review</strong> — this doesn't change anything about playback; it puts the
+track on a worklist inside Vipunen's own console (the "Flags" page) so you
+or whoever curates the library later knows something about it seemed
+worth a second look. Once whatever needed a look has been dealt with,
+that same Flags page has its own <strong>unflag</strong> button on every
+row — no need to open the track's own profile page first — which clears
+it there and, if a remote is configured, on the remote too, in one
+click.</p>
+
+<h3>"Why this passage?" and program schedules</h3>
+<p>Every skin shows at least a one-line summary of why the current track
+was picked. The <strong>Lempi</strong> skin alone shows the full
+breakdown: a table of every factor that adjusted the odds (how the exact
+math works is in the <strong>Appendix</strong>), and an "It beat" list of
+the other tracks that were in the running but lost, each clickable into
+its own preference panel. In the Lempi skin you can also click any queued
+(not-yet-playing) track to see its own explanation instead of the current
+track's.</p>
+
+<p>A <strong>program</strong> is a named block that steers what kind of
+music plays at a given time of day — the Lempi and WinAmp skins show a
+dropdown of the available programs plus "Automatic (by time of day)";
+MuLibPlay instead shows a row of program buttons and an "Autoselect by
+clock time" checkbox that does the same thing. Picking a program by hand
+overrides the schedule until you switch back to automatic; it takes effect
+on the <em>next</em> track chosen, not instantly. <strong>There is
+currently no way to create a new program or change what one sounds like
+from the web interface</strong> — you can only choose among whatever
+programs already exist. See the Appendix for what a program actually
+consists of.</p>
+
+<h3>Restarting or shutting down</h3>
+<p>The settings panel's restart and shutdown buttons both ask for
+confirmation before acting. <strong>Shutdown is one-way from the web
+interface</strong> — nothing on this page can turn the appliance back on
+once it's off; you'll need physical access to it.</p>
+
+<h3>Sending music to another Lempi</h3>
+<p>Vipunen's <strong>Export</strong> page bundles up matching tracks (search
+by artist/album/title) plus everything Vipunen knows about them into a
+folder, for a Lempi installation that doesn't have that music yet. It
+doesn't copy your whole library — just what matches — and it shows you the
+exact commands to actually move that bundle to the other machine and tell
+it to notice the new music; it doesn't run those commands for you.</p>
+
+<h3>Keeping two libraries in sync</h3>
+<p>Vipunen's <strong>Flags</strong> page also has a "sync with a remote"
+section, once you've told it about another library (a host and file path):
+</p>
+<ul>
+  <li><strong>Pull flags from remote</strong> — brings in anything flagged
+    for review on the other system.</li>
+  <li><strong>Push edits to remote</strong> — sends identification and
+    boundary corrections you've applied locally to the other system,
+    briefly interrupting its playback while it applies them (never
+    automatic, always something you choose to do).</li>
+  <li><strong>Sync preferences</strong> — reconciles your Preference
+    Tuning dials (Cooldown/Recovery/Preference) between the two systems,
+    for whichever artists/recordings both actually know about, the newer
+    change winning on each side.</li>
+</ul>
+
+<h3>Skin capability matrix</h3>
+<p>What each skin actually offers — if something in this guide isn't where
+you expect it, this is almost always why:</p>
+<table>
+<tr><th>Feature</th><th>Lempi</th><th>MuLibPlay</th><th>WinAmp</th></tr>
+<tr><td>Play / pause / skip / volume</td><td>✓</td><td>✓</td><td>✓</td></tr>
+<tr><td>Click-to-seek progress bar</td><td>✓</td><td>✓</td><td>—</td></tr>
+<tr><td>Preference panel &amp; play frequency</td><td>✓</td><td>✓</td><td>—</td></tr>
+<tr><td>Full "why" breakdown &amp; "It beat" list</td><td>✓</td><td>one-line summary</td><td>one-line summary</td></tr>
+<tr><td>Pick a queued track to explain</td><td>✓</td><td>—</td><td>—</td></tr>
+<tr><td>Settings panel</td><td>✓</td><td>—</td><td>—</td></tr>
+<tr><td>Bluetooth &amp; radios</td><td>✓</td><td>—</td><td>—</td></tr>
+<tr><td>Play History</td><td>✓</td><td>—</td><td>—</td></tr>
+<tr><td>Restart / shutdown</td><td>✓</td><td>—</td><td>—</td></tr>
+<tr><td>Lyrics</td><td>—</td><td>✓</td><td>—</td></tr>
+<tr><td>Back cover art</td><td>—</td><td>✓</td><td>—</td></tr>
+<tr><td>Program override</td><td>dropdown</td><td>buttons + checkbox</td><td>dropdown</td></tr>
+<tr><td>Browse the library</td><td>✓</td><td>✓ (dedicated buttons too)</td><td>✓</td></tr>
+</table>
+<p class="note">MuLibPlay is the default for a browser that has never
+chosen a skin — worth remembering if a feature described elsewhere in this
+guide seems to be missing.</p>
+<p class="note">The lyrics window (MuLibPlay skin, when the library has
+words for what's playing) scrolls itself gradually across the middle of
+the song, aiming to reach the last line a little before it ends — a rough
+guess, not exact timing, since the words aren't stored with timestamps.
+Grabbing the scrollbar by hand takes over completely until the next
+track, exactly as if the auto-scroll weren't there at all.</p>

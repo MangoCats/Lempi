@@ -1,0 +1,98 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Vipunen — library</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/console.css">
+<header>
+  <h1>Vipunen</h1>
+  <nav><a href="/" class="on">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/export">export</a><a href="/flags">flags</a><a href="/mesh">mesh</a><a href="/system">system</a></nav>
+  <span class="ro" title="the console opens the library mode=ro; only the stages it runs write">library read-only</span>
+</header>
+<main>
+  <div class="tiles" id="tiles"></div>
+
+  <h2>Stage coverage <small>— what has run, over how much</small></h2>
+  <div class="cov" id="cov"></div>
+
+  <div class="controls">
+    <input type="search" id="q" placeholder="title, artist, album…" autocomplete="off">
+    <button class="chip on" data-facet="">all</button>
+    <button class="chip" data-facet="unidentified">no MusicBrainz id</button>
+    <button class="chip" data-facet="unchecked">id never checked</button>
+    <button class="chip" data-facet="no-flavor">no flavor</button>
+  </div>
+  <div id="rows"></div>
+</main>
+<script src="/console.js"></script>
+<script>
+let facet = '', q = '';
+
+async function head() {
+  const d = await S.get('/api/totals');
+  const t = d.totals;
+  document.getElementById('tiles').replaceChildren(...[
+    ['files', t.files], ['radio passages', t.radio], ['recordings', t.recordings],
+    ['no MusicBrainz id', t.unidentified, true],
+    ['id never checked', t.unchecked, true],
+    ['no flavor', t.no_flavor, true],
+  ].map(([label, n, warn]) =>
+    S.el('div', { class: 'tile' + (warn && n ? ' warn' : '') },
+      S.el('b', { text: S.n(n) }), S.el('span', { text: label }))));
+
+  const c = d.coverage, cov = document.getElementById('cov');
+  cov.replaceChildren();
+  for (const [label, n] of [['flavor', c.with_flavor], ['id checked', c.id_checked],
+                            ['MusicBrainz id', c.identified], ['lead-in / out', c.amplitude]]) {
+    const pct = c.radio ? (100 * n / c.radio) : 0;
+    cov.append(
+      S.el('div', { text: label }),
+      S.el('div', { class: 'bar' }, S.el('i', { style: `width:${pct.toFixed(1)}%` })),
+      S.el('div', { class: 'n', text: `${S.n(n)} / ${S.n(c.radio)}` }));
+  }
+}
+
+async function rows() {
+  const box = document.getElementById('rows');
+  try {
+    const d = await S.get(`/api/library?q=${encodeURIComponent(q)}&facet=${facet}`);
+    if (!d.length) {
+      box.replaceChildren(S.el('p', { class: 'empty',
+        text: 'Nothing matches. That is a result, not a failure.' }));
+      return;
+    }
+    const head = S.el('tr', {}, ...['artist', 'title', 'album', 'length', 'flavor', 'id', 'check']
+      .map(h => S.el('th', { class: /length|flavor/.test(h) ? 'num' : '', text: h })));
+    const body = d.map(r => {
+      const mb = S.isMbid(r.mbid);
+      return S.el('tr', {},
+        S.el('td', { text: r.artist || '—' }),
+        S.el('td', {}, S.el('a', { href: `/profile/${r.passage_id}`, text: r.title || '(untitled)' })),
+        S.el('td', { text: r.album || '—' }),
+        S.el('td', { class: 'num', text: S.clock(r.len_ms) }),
+        S.el('td', { class: 'num', text: r.flavor ? `${r.flavor}` : '—' }),
+        S.el('td', {}, S.el('span', {
+          class: 'pill ' + (mb ? 'ok' : ''),
+          title: mb ? r.mbid : 'no MusicBrainz entry exists for this audio',
+          text: mb ? 'mbid' : 'local',
+        })),
+        S.el('td', {}, S.el('span', {
+          class: 'pill ' + ({ confirmed: 'ok', contradicted: 'bad', unmatched: '' }[r.verdict] ?? 'warn'),
+          text: r.verdict || 'unchecked',
+        })));
+    });
+    box.replaceChildren(S.el('table', {}, S.el('thead', {}, head), S.el('tbody', {}, ...body)));
+  } catch (e) { S.fail('#rows', e); }
+}
+
+document.querySelectorAll('.chip').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === b));
+  facet = b.dataset.facet; rows();
+});
+let timer;
+document.getElementById('q').oninput = e => {
+  clearTimeout(timer); q = e.target.value;
+  timer = setTimeout(rows, 200);
+};
+head().catch(e => S.fail('#rows', e));
+rows();
+</script>

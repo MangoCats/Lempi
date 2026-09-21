@@ -1,0 +1,108 @@
+#!/bin/sh
+# Give the controller this room's interference map at boot, instead of making
+# it learn the room again every time.
+#
+# **Why `[PI3-FOUND-510]`.** The speaker keeps its adapted channel map while it
+# stays powered and loses it when a mode A cycle cuts its supply. Measured:
+# a mode B boot came up with the low band already excluded and ran at 100.1%
+# of clean; a mode A boot came up with all 79 channels enabled, spent 225 s
+# wandering between 41 and 50, and ran at 87.9% while stuttering. The Pi was
+# power-cycled in both, so the adapted map in mode B came from the speaker.
+#
+# The host does not have to depend on the speaker's memory. It can write its
+# own classification down to its controller, and the controller ANDs that with
+# what it learns. So: save a map once while the link is settled and sounding
+# right, and hand it back on every boot.
+#
+#   lempi-afh-seed save     # capture the live map, when it is known good
+#   lempi-afh-seed apply    # hand the saved map to the controller
+#   lempi-afh-seed boot     # apply repeatedly across the boot window
+#   lempi-afh-seed show     # decode whatever is saved, in MHz
+#
+# **This is an experiment, not a fix `[PI3-FOUND-520]`.** Six theories have
+# been withdrawn from PI011 and the seventh is not entitled to more faith than
+# its evidence. Its prediction is that a mode A boot with a seeded map reads
+# closer to 100% than to 88% on `lempi-hci-capture` and does not stutter. If
+# it stutters at 88% anyway, the hop map was a bystander and this comes back
+# out.
+#
+# **The risk, since it is real.** A saved map is a claim about one room. In a
+# different room, or after the interference moves, it excludes channels that
+# were fine -- which costs hop diversity for no benefit. Hence `save` refusing
+# anything degenerate, `apply` re-validating before it writes, and the whole
+# thing being a unit that is off unless somebody turns it on.
+set -u
+. "${LEMPI_COMMON:-/usr/local/lib/lempi-common.sh}" 2>/dev/null ||
+    . "$(dirname "$0")/lempi-common.sh"
+
+MAP_FILE="${LEMPI_AFH_MAP:-/var/lempi/afh-map}"
+# The specification requires at least 20 channels left usable; a controller
+# will reject anything tighter, and a map that tight is a bug upstream of here.
+MIN_CHANNELS=20
+
+valid() {
+    case "$1" in
+        [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+        *) echo "lempi-afh-seed: not a 10-octet map: '$1'" >&2; return 1 ;;
+    esac
+    n=$(lempi_afh_channels "$1")
+    if [ "$n" -lt "$MIN_CHANNELS" ]; then
+        echo "lempi-afh-seed: only $n channels usable, need $MIN_CHANNELS" >&2
+        return 1
+    fi
+    return 0
+}
+
+case "${1:-}" in
+save)
+    S="${2:-$(lempi_speaker)}"
+    [ -n "${S:-}" ] || { echo "lempi-afh-seed: no speaker address" >&2; exit 1; }
+    MAP=$(hcitool afh "$S" 2>/dev/null | sed -n 's/^AFH map: 0x//p')
+    [ -n "${MAP:-}" ] || { echo "lempi-afh-seed: no live link to read" >&2; exit 1; }
+    valid "$MAP" || exit 1
+    mkdir -p "$(dirname "$MAP_FILE")" 2>/dev/null
+    printf '%s\n' "$MAP" > "$MAP_FILE" || exit 1
+    echo "saved $MAP ($(lempi_afh_channels "$MAP") channels) to $MAP_FILE"
+    ;;
+apply)
+    [ -f "$MAP_FILE" ] || { echo "lempi-afh-seed: nothing saved yet" >&2; exit 0; }
+    MAP=$(tr -d ' \n\r' < "$MAP_FILE")
+    valid "$MAP" || exit 1
+    # Octet 9's top bit is reserved and must be zero, so it is cleared here
+    # rather than trusted to have been zero in whatever was saved.
+    BYTES=$(lempi_afh_bytes "$MAP")
+    # OGF 0x03 OCF 0x003f: HCI_Set_AFH_Host_Channel_Classification.
+    if hcitool cmd 0x03 0x003f $BYTES >/dev/null 2>&1; then
+        echo "applied $MAP ($(lempi_afh_channels "$MAP") channels)"
+    else
+        echo "lempi-afh-seed: controller rejected the classification" >&2
+        exit 1
+    fi
+    ;;
+boot)
+    # Applied more than once on purpose. BlueZ powers the adapter up after
+    # this service is ordered to start, and a controller reset clears any host
+    # classification, so a single write at boot can be thrown away seconds
+    # later without saying so. Seven passes at ten seconds covers the window
+    # in which the link actually comes up, which measured at 25-35 s
+    # `[PI3-FOUND-510]`. The specification's limit is one write per second and
+    # this is well inside it.
+    n=0
+    while [ "$n" -lt 7 ]; do
+        "$0" apply || true
+        n=$((n + 1))
+        [ "$n" -lt 7 ] && sleep 10
+    done
+    ;;
+show)
+    [ -f "$MAP_FILE" ] || { echo "nothing saved"; exit 0; }
+    MAP=$(tr -d ' \n\r' < "$MAP_FILE")
+    echo "map $MAP -- $(lempi_afh_channels "$MAP") of 79 channels"
+    lempi_afh_excluded "$MAP"
+    ;;
+*)
+    echo "usage: lempi-afh-seed save|apply|boot|show" >&2
+    exit 2
+    ;;
+esac
+exit 0

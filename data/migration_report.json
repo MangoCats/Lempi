@@ -1,0 +1,47 @@
+{
+ "started": "2026-08-09T17:46:32",
+ "files": {
+  "mulib": 5615,
+  "migrated": 5597,
+  "unresolved": 18
+ },
+ "recordings": 7912,
+ "artists": 470,
+ "flavor_values": 177364,
+ "occasion_values": 400,
+ "passages": {
+  "mulib_cuts": 16232,
+  "migrated": 16172,
+  "skipped": 60
+ },
+ "play_history_dangling": 0,
+ "play_history": 37134,
+ "programs": 8,
+ "program_seeds": 49,
+ "preferences": 3261,
+ "flavor_constants": 18,
+ "dead_fields_dropped": [
+  "tempo",
+  "intensity",
+  "keyMood",
+  "darkLight",
+  "genre",
+  "themes",
+  "quality",
+  "jts",
+  "popularity",
+  "venue",
+  "lyrics",
+  "profanity",
+  "ukChart",
+  "usChart",
+  "usChartPeak"
+ ],
+ "unresolved_examples": [
+  "/home/mike/Albums/Biophilia.mp3",
+  "/home/mike/Music/Various Artists/I Am Sam: Music From and Inspired by the Motion Picture/01 - Two of Us.mp3",
+  "/home/mike/Music/Various Artists/I Am Sam: Music From and Inspired by the Motion Picture/02 - Blackbird.mp3",
+  "/home/mike/Music/Various Artists/I Am Sam: Music From and Inspired by the Motion Picture/03 - Across the Universe.mp3",
+  "/home/mike/Music/Various Artists/I Am Sam: Music From and Inspired by the Motion Picture/04 - I\u2019m Looking Through You.mp3"
+ ]
+}

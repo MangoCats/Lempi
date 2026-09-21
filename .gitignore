@@ -1,0 +1,115 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Lempi runtime data & local databases
+*.db
+*.db-wal
+*.db-shm
+lempi.db
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Rust target directory (for Phase 6 Rust engine)
+/target/
+
+# LempiPi/deploy.sh's own scratch: a build script handed into the aarch64
+# container (has to live inside the repo so Windows/Docker path translation
+# works), and the binary a worktree build hands back out.
+/.lempi-deploy-build.sh
+/.deploy-out/
+
+# Vipunen / feature-extraction working data.
+# Large, re-derivable artifacts stay out; measured RESULTS stay in.
+data/*
+!data/README.md
+!data/reliability.json
+!data/stageb/
+data/stageb/*
+!data/stageb/*.json
+!data/stageb/*.log
+data/lempi_new.db
+data/*.log
+!data/migration_report.json
+data/missing_files.json
+player/target/
+data/essentia/svm_beta1/
+
+# Credentials. Never committed, never in a commit message, never in a log line.
+# An AcoustID application key is not a password, but it is tied to an account
+# and this repository is public: a key in history is a key that has to be
+# rotated, and rewriting history to remove one is worse than never adding it.
+secrets/
+*.key
+.env
+
+# Build-time only: the skin check renders into jsdom. Never shipped.
+node_modules/
+
+# Third-party model weights: 4.6 MB of ONNX, fetched by scratch/download_models.py.
+# Binary blobs age badly in a repository and these are reproducible.
+models/
+
+# Compiled output. The Go binaries are 34 MB of a closed evaluation.
+__pycache__/
+*.pyc
+go/lempi.exe
+go/lempi-arm64
+
+# Working files: test database copies, captured logs, protocol probes, an MPD
+# build. 6.1 GB of it, none reproducible from the repository and none belonging
+# in one. Ignored mainly so that `git add -A` cannot stage a gigabyte of
+# somebody's listening history by accident.
+scratch/
+
+# Vipunen console job output: bundle exports, remote-pull/push work dirs
+# (flags.json, patch.sql, a compare-copy database) [SPEC-SUI-080]. Runtime
+# state beside the tools it runs from, the same "none reproducible, none
+# belonging in one" reasoning as scratch/ above -- and some of it can carry
+# real listener data (a flagged track's own title/artist), not just paths.
+/out/
+
+# Per-run logs from the BosePi build scripts (lib.sh's LOG_FILE) -- one file
+# per invocation, timestamped, never meant to be reproducible or reviewed
+# after the fact from git history.
+/BosePi/logs/
+
+# Personal launcher for a plain desktop/dev Lempi instance (not an
+# appliance build) -- hardcodes wherever *this* machine's own database and
+# music actually live, which is different per machine and never meant to
+# be shared or committed.
+/run-local.sh
+
+# This fleet's own roster: hostnames, paths and unit files.
+# Operational fact about these machines, not part of the project.
+fleet/

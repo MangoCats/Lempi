@@ -1,0 +1,523 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Vipunen — profile</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/console.css">
+<header>
+  <h1>Vipunen</h1>
+  <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/export">export</a><a href="/flags">flags</a><a href="/mesh">mesh</a><a href="/system">system</a></nav>
+  <span class="ro">library read-only</span>
+</header>
+<main id="main"><p class="empty">loading…</p></main>
+<script src="/console.js"></script>
+<script>
+// A profile is the whole derivation, not the metadata [SPEC-SUI-040]. Every
+// value carries the source that produced it, per characteristic, because that
+// is how it is stored [SPEC-SC-060] -- an aggregate "flavor: yes" would hide a
+// mixture that measurably costs retrieval accuracy.
+const pid = Number(location.pathname.split('/').pop());
+
+function kv(pairs) {
+  const dl = S.el('dl', { class: 'kv' });
+  for (const [k, v] of pairs) {
+    if (v === undefined) continue;
+    dl.append(S.el('dt', { text: k }), S.el('dd', {}, v ?? S.el('span', { class: 'pill', text: 'null' })));
+  }
+  return dl;
+}
+
+// The handoff `[SPEC-SUI-140]`, `[SPEC-SUI-150]`, `[SPEC-SUI-170]`. Vipunen asks
+// the operating system to ensure a co-resident player is there -- never Lempi
+// itself `[SPEC-SUI-025]` -- then embeds its own page for this exact passage.
+// `[SPEC-SUI-155]`: embed it where it embeds, link it where it does not.
+// Detecting a blocked frame from script is unreliable across browsers, so the
+// new-tab link is offered unconditionally alongside the frame rather than
+// only after a failure is inferred -- cheap, and correct either way.
+//
+// One function, two callers: id review and the waveform editor are the same
+// handoff shape aimed at a different Lempi route `[SPEC-SUI-135]` -- a
+// second mechanism would just be this one, copied.
+function handoffBox(passageId, route, label) {
+  const box = S.el('div', { class: 'handoff' },
+    S.el('p', { class: 'empty', text: 'Starting the local player…' }));
+
+  (async () => {
+    let r;
+    try {
+      r = await S.get('/api/handoff/ensure');
+    } catch (e) {
+      box.replaceChildren(S.el('p', { class: 'err' },
+        `Could not reach Vipunen's own server to ask: ${e.message}`));
+      return;
+    }
+    if (!r.ok) {
+      box.replaceChildren(S.el('p', { class: 'err' }, r.error));
+      return;
+    }
+    const url = `http://localhost:${r.port}${route}`;
+    box.replaceChildren(
+      S.el('p', {},
+        S.el('a', { href: url, target: '_blank', rel: 'noopener' }, 'Open in a new tab ↗'),
+        r.started ? S.el('span', { class: 'pill ok', style: 'margin-left:.6rem',
+                                    text: 'started a local Lempi' }) : null),
+      S.el('iframe', {
+        src: url, class: 'handoff-frame', title: `Lempi — ${label}`,
+        // Cross-origin, deliberately [SPEC-SUI-145]: Vipunen cannot see inside
+        // this frame, and does not ask to. The round trip closes through the
+        // shared database on the next scan, not through the browser.
+      }));
+  })();
+
+  return box;
+}
+
+// The targeted remote read `[SPEC-DF-116..118]`: at open time, not push
+// time, and never a database copy -- a `remote_peek.py` subprocess per
+// identity this page can hand off (id review, boundary editing). Returns
+// synchronously, like `handoffBox`, so the rest of the page never waits on
+// a flaky Pi Zero's own WiFi to render.
+function remoteBasisBox(pid) {
+  const box = S.el('div', {});
+
+  (async () => {
+    let d;
+    try {
+      d = await S.get(`/api/profile/${pid}/remote`);
+    } catch (e) {
+      box.replaceChildren(S.el('p', { class: 'err', text: `Could not check {{PEER_NAME}}: ${e.message}` }));
+      return;
+    }
+    if (!d.remote) return;                 // no remote configured -- nothing to say
+    if (!d.reachable) {
+      box.replaceChildren(S.el('p', { class: 'empty' },
+        S.el('span', { class: 'pill warn', text: 'could not reach {{PEER_NAME}}' }),
+        ' — editing against the local baseline only.'));
+      return;
+    }
+    const diverged = Object.entries(d.checks || {}).filter(([, c]) => c.diverged);
+    if (!diverged.length) return;          // in agreement -- nothing extra to show
+
+    const LABEL = { id_review: 'recording id', boundary_review: 'boundary' };
+    const describe = (kind, v) => v == null ? '(none)' : kind === 'id_review'
+      ? (v.mbid || '(none)')
+      : `${v.start_ms}–${v.end_ms}, lead-in ${v.lead_in_ms}, lead-out ${v.lead_out_ms}, gain ${v.gain_db}`;
+
+    box.replaceChildren(S.el('div', { class: 'diverge' },
+      S.el('p', { class: 'empty', style: 'padding:.2rem 0 .3rem' },
+        'Diverged on {{PEER_NAME}} since this library last saw it — offered here, before editing, '
+        + 'rather than only caught at push time.'),
+      ...diverged.map(([kind, c]) => {
+        const row = S.el('div', { class: 'row' },
+          S.el('span', {}, S.el('b', { text: LABEL[kind] || kind }),
+            ': here — ', describe(kind, c.local), ', {{PEER_NAME}} — ', describe(kind, c.current)),
+          S.el('button', { class: 'chip' }, "accept {{PEER_NAME}}'s value"));
+        row.querySelector('button').onclick = async () => {
+          row.replaceChildren(S.el('span', { class: 'empty', text: 'accepting…' }));
+          try {
+            const r = await (await fetch(`/api/profile/${pid}/accept-remote`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ kind, value: c.current }),
+            })).json();
+            if (r.error) throw new Error(r.error);
+            location.reload();   // simplest correct thing -- everything above was read at open time
+          } catch (e) {
+            row.replaceChildren(S.el('span', { class: 'err', text: e.message }));
+          }
+        };
+        return row;
+      })));
+  })();
+
+  return box;
+}
+
+// Whether this passage is flagged "for review" `[REQ-VIS-265]`, agreeing
+// or not between the local library, {{PEER_NAME}}, and what this page already
+// shows -- plus a one-click way to clear it everywhere. "Shown" is never
+// its own live check: this page only ever renders a passage from its own
+// local database, so whatever is on screen already *is* the local reading.
+// The only genuinely open question is whether {{PEER_NAME}} still agrees
+// `[SPEC-DF-115]` -- so the local/shown reading is one dot, and {{PEER_NAME}}'s
+// is the other; if they ever disagree, only {{PEER_NAME}}'s turns yellow.
+function flagSyncBox(pid) {
+  const box = S.el('div', {});
+
+  const dot = (state, symbol, label) => S.el('span', { class: 'cell' },
+    S.el('span', { class: `dot ${state}`, text: symbol }), S.el('span', { class: 'label', text: label }));
+
+  async function render() {
+    // Whether a remote is configured at all, so "no remote configured" and
+    // "configured but unreachable" read differently even though `/flag`
+    // alone reports `remote: null` for both -- one extra, tiny request,
+    // not worth folding into `/flag` itself for a distinction only the
+    // label needs.
+    let remoteConfigured = false;
+    try { remoteConfigured = !!(await S.get('/api/remote')).remote; } catch { /* stays false */ }
+
+    let d;
+    try {
+      d = await S.get(`/api/profile/${pid}/flag`);
+    } catch (e) { return S.fail(box, e); }
+
+    const remoteKnown = d.remote !== null;
+    const agree = !remoteKnown || d.remote === d.local;
+    const anyFlagged = d.local || (remoteKnown && d.remote);
+
+    const {{PEER_NAME}}Dot = remoteKnown
+      ? dot(agree ? 'sync' : 'desync', d.remote ? '⚑' : '·', `{{PEER_NAME}}: ${d.remote ? 'flagged' : 'not flagged'}`)
+      : dot('unknown', '?', remoteConfigured ? '{{PEER_NAME}}: could not reach it' : '{{PEER_NAME}}: no remote configured');
+
+    const row = S.el('div', { class: 'flagsync' },
+      dot('sync', d.local ? '⚑' : '·', `shown / local: ${d.local ? 'flagged' : 'not flagged'}`),
+      {{PEER_NAME}}Dot);
+    if (anyFlagged) {
+      const btn = S.el('button', { class: 'chip' }, 'unflag');
+      btn.onclick = async () => {
+        btn.disabled = true;
+        btn.textContent = 'clearing…';
+        try {
+          const r = await (await fetch(`/api/profile/${pid}/unflag`, { method: 'POST' })).json();
+          if (r.error) throw new Error(r.error);
+          await render();
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = 'unflag';
+          S.fail(box, e);
+        }
+      };
+      row.append(btn);
+    } else {
+      row.append(S.el('span', { class: 'label', text: '— nothing to clear' }));
+    }
+    box.replaceChildren(row);
+  }
+
+  render();
+  return box;
+}
+
+// A candidate release the folder-level score named, rendered whether it is
+// the top pick or an alternative -- one shape, styled differently
+// [SPEC-SUI-215]. `best` only affects the border; every candidate gets its
+// own "use this release" button, since the algorithm's own top guess is a
+// starting point, not a decision [SPEC-SA-080]'s own "automation sets the
+// default; it does not remove the decision" already argued for boundaries,
+// and applies just as much to an album.
+function candidateCard(pid, folder, c, best) {
+  const pct = Math.round(c.score * 100);
+  const card = S.el('div', { class: 'candidate' + (best ? ' best' : '') },
+    S.el('h3', {},
+      S.el('a', { href: `https://musicbrainz.org/release/${c.mbid}`, target: '_blank', rel: 'noopener' },
+        c.title || '(untitled)'),
+      ' ', S.el('span', { class: 'pill', text: `${c.matches.length}/${c.track_count} tracks` }),
+      ' ', S.el('span', { class: 'pill ' + (pct >= 70 ? 'ok' : pct >= 35 ? 'warn' : 'bad'),
+                          text: `${pct}% fit` })),
+    S.el('p', { class: 'meta' }, `${c.artist || 'unknown artist'} — ${c.date || 'no date'} — ${c.mbid}`));
+
+  if (c.matches.length) {
+    card.append(S.el('table', {},
+      S.el('thead', {}, S.el('tr', {}, ...['file', 'matched to', 'similarity', 'Δ duration']
+        .map(h => S.el('th', { text: h })))),
+      S.el('tbody', {}, ...c.matches.map(m => S.el('tr', {},
+        S.el('td', { text: m.file.split(/[\\/]/).pop() }),
+        S.el('td', { text: `#${m.track_position} ${m.track_title}` }),
+        S.el('td', { class: 'num', text: m.similarity.toFixed(2) }),
+        S.el('td', { class: 'num', text: m.duration_delta_ms == null ? '—' : `${Math.round(m.duration_delta_ms / 1000)}s` }))))));
+  }
+  if (c.unmatched_files.length) {
+    card.append(S.el('p', { class: 'meta' },
+      'not matched: ', c.unmatched_files.map(f => f.split(/[\\/]/).pop()).join(', ')));
+  }
+
+  const btn = S.el('button', { class: 'chip' }, 'use this release');
+  const result = S.el('div', {});
+  card.append(S.el('div', { class: 'controls', style: 'margin-top:.4rem' }, btn), result);
+  btn.onclick = async () => {
+    result.replaceChildren(S.el('p', { class: 'empty', text: 'applying…' }));
+    let r;
+    try {
+      r = await (await fetch('/api/release/accept', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder, release_mbid: c.mbid }),
+      })).json();
+    } catch (e) { return S.fail(result, e); }
+    if (r.error) return S.fail(result, new Error(r.error));
+    S.watchJob(r.job_id, result, job => {
+      // A newly-assigned recording changes the "Recording" section and the
+      // "no MusicBrainz entry" pill above it -- reload rather than patch.
+      if (job.state === 'done') location.reload();
+    });
+  };
+  return card;
+}
+
+function releaseSuggestBox(pid, folder) {
+  const box = S.el('div', {});
+  const controls = S.el('div', { class: 'controls' },
+    S.el('input', { type: 'search', id: 'release-query',
+                    placeholder: 'blank guesses from file tags, or paste a musicbrainz.org release id/URL',
+                    style: 'min-width:24rem' }),
+    S.el('button', { class: 'chip', id: 'suggest-release' }, 'suggest a MusicBrainz release'));
+  const result = S.el('div', { id: 'release-result' });
+  box.append(controls, result);
+
+  const run = async () => {
+    result.replaceChildren(S.el('p', { class: 'empty', text: 'starting…' }));
+    const query = document.getElementById('release-query').value.trim();
+    let r;
+    try {
+      r = await (await fetch('/api/release/suggest', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder, query: query || undefined }),
+      })).json();
+    } catch (e) { return S.fail('#release-result', e); }
+    if (r.error) return S.fail('#release-result', new Error(r.error));
+    S.watchJob(r.job_id, result, job => {
+      if (job.state !== 'done' || !job.result || !job.result.ok) return;
+      const cands = job.result.candidates || [];
+      document.getElementById('release-query').value = job.result.query || '';
+      const list = S.el('div', {});
+      if (!cands.length) {
+        list.append(S.el('p', { class: 'empty',
+          text: 'Nothing found. Try a different search above.' }));
+      } else {
+        list.append(...cands.map((c, i) => candidateCard(pid, folder, c, i === 0)));
+      }
+      result.append(list);
+    });
+  };
+  controls.querySelector('#suggest-release').onclick = run;
+  return box;
+}
+
+(async () => {
+  const m = document.getElementById('main');
+  try {
+    const d = await S.get(`/api/profile/${pid}`);
+    const p = d.passage, t = d.tags || {};
+    document.title = `Vipunen — ${t.title || 'passage ' + pid}`;
+    m.replaceChildren();
+
+    m.append(S.el('h2', {}, `${t.title || '(untitled)'} `,
+      S.el('small', { text: `— passage ${pid}, ${t.artist || 'no artist'}` })));
+
+    // A saved-but-not-yet-applied edit `[REQ-VIS-275]` -- blatant on
+    // purpose, and first, above everything else this page shows: this is
+    // exactly the state that looked identical to "already pushed" from this
+    // very page until it wasn't. `boundary_src`'s own "manual" pill below
+    // only ever means an edit already folded in, so it cannot say this.
+    const PENDING_LABEL = { id: 'recording id', boundary: 'boundary', artist: 'artist credit' };
+    const pendingKinds = Object.keys(d.pending || {});
+    if (pendingKinds.length) {
+      m.append(S.el('div', { class: 'caveat' },
+        S.el('p', { style: 'margin:0 0 .3rem' },
+          S.el('b', { text: '⚠ Saved here, not yet applied to the library: ' }),
+          pendingKinds.map(k => PENDING_LABEL[k] || k).join(', ') + '.'),
+        S.el('p', { style: 'margin:0' },
+          'Lempi’s editor records a draft and changes nothing else — it cannot be ',
+          'pushed anywhere, and nothing else on this page reflects it, until a separate, ',
+          'deliberate step folds it in. ',
+          S.el('a', { href: '/flags#apply' }, 'Review and apply them'),
+          ' — you are shown the exact before/after first, and the player is ',
+          'paused while the library is rewritten. By hand it is still ',
+          S.el('span', { style: 'font-family:var(--mono)', text: pendingKinds.includes('boundary')
+            ? 'python tools/apply_boundary_reviews.py <db> --commit'
+            : 'python tools/apply_reviews.py <db> --commit' }),
+          pendingKinds.length > 1 ? ' (both tools, if more than one kind is pending).' : '.')));
+    }
+
+    // Flagged "for review" `[REQ-VIS-265]`, and whether local and {{PEER_NAME}}
+    // still agree on that -- next to the pending-edit banner above, not
+    // buried below, since both answer the same question a naive glance at
+    // this page cannot: is what I am looking at actually current everywhere.
+    m.append(flagSyncBox(pid));
+
+    // The folder this passage's own file lives in -- the scope both the
+    // reanalyze button and the release-suggestion section below act on.
+    // Last path segment stripped, `\` or `/`, since library paths are
+    // Windows-real (`C:\...\Album\NN - Title.mp3`) but nothing here assumes
+    // one separator only.
+    const folder = p.path.replace(/[\\/][^\\/]*$/, '');
+
+    m.append(S.el('div', { class: 'controls' },
+      S.el('button', { class: 'chip', id: 'reanalyze' },
+        `reanalyze this folder (${folder})`)));
+    m.append(S.el('div', { id: 'reanalyze-result' }));
+    document.getElementById('reanalyze').onclick = async () => {
+      const box = document.getElementById('reanalyze-result');
+      box.replaceChildren(S.el('p', { class: 'empty', text: 'starting…' }));
+      let r;
+      try {
+        r = await (await fetch('/api/reanalyze', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder }),
+        })).json();
+      } catch (e) { return S.fail('#reanalyze-result', e); }
+      if (r.error) return S.fail('#reanalyze-result', new Error(r.error));
+      // `--recheck` [SPEC-SUI-214] means this can genuinely change what this
+      // very page shows (a fresh id, newly-cached flavor) -- reload once
+      // finished rather than trying to patch each section by hand. Only on
+      // a clean finish: a failure's own log is worth reading, not discarding.
+      S.watchJob(r.job_id, box, job => { if (job.state === 'done') location.reload(); });
+    };
+
+    // [SPEC-SA-075] -- built, but deliberately never run silently by induct
+    // or reanalyze (see jobs.py's own SKIPPED entry): offered here as its
+    // own explicit action instead.
+    m.append(S.el('div', { class: 'controls' },
+      S.el('button', { class: 'chip', id: 'analyze-amplitude' },
+        `analyze amplitude for this folder (${folder})`)));
+    m.append(S.el('div', { id: 'amplitude-result' }));
+    document.getElementById('analyze-amplitude').onclick = async () => {
+      const box = document.getElementById('amplitude-result');
+      box.replaceChildren(S.el('p', { class: 'empty', text: 'starting…' }));
+      let r;
+      try {
+        r = await (await fetch('/api/analyze-amplitude', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder }),
+        })).json();
+      } catch (e) { return S.fail('#amplitude-result', e); }
+      if (r.error) return S.fail('#amplitude-result', new Error(r.error));
+      // Changes this page's own "lead in / out" row directly.
+      S.watchJob(r.job_id, box, job => { if (job.state === 'done') location.reload(); });
+    };
+
+    // A short-run replacement for AcoustID fingerprinting when it comes up
+    // unmatched [SPEC-SUI-215] -- searches by the folder's own tags, scores
+    // each candidate release against the folder's actual files, and applies
+    // nothing until a specific release is picked.
+    m.append(S.el('h2', {}, 'Suggest a MusicBrainz release for this folder'));
+    m.append(releaseSuggestBox(pid, folder));
+
+    m.append(kv([
+      ['audio_md5', p.audio_md5],
+      ['path', p.path],
+      ['format / duration', `${p.format}, ${S.clock(p.duration_ms)} (${S.n(p.duration_ms)} ms)`],
+      ['span', `${S.n(p.start_ms)} → ${S.n(p.end_ms)} ms, kind = ${p.kind}`],
+      // NULL means not analysed, which is not zero [SPEC-PL-030].
+      ['lead in / out', p.lead_in_ms === null && p.lead_out_ms === null
+        ? S.el('span', { class: 'pill warn', title: 'amplitude analysis has not run',
+                         text: 'not analysed' })
+        : `${p.lead_in_ms} / ${p.lead_out_ms} ms`],
+      // Directly under lead in/out, not after gain -- lead and fade are the
+      // two edges of a passage's own boundary, and this row order (and its
+      // wording) now matches Lempi's own passage page [REQ-VIS-270] so the
+      // two are easily side by side comparable. Unlike lead, fade is never
+      // "not analysed": every passage always has one, defaulted at ingest.
+      ['fade in / out', `${p.fade_in_ms} ms ${p.fade_in_curve} / ${p.fade_out_ms} ms ${p.fade_out_curve}`],
+      ['gain', p.gain_db === null
+        ? S.el('span', { class: 'pill warn', text: 'not analysed' }) : `${p.gain_db} dB`],
+      ['boundary_src', S.el('span', { class: 'pill', text: p.boundary_src })],
+      ['lowlevel cache', d.cached
+        ? S.el('span', { class: 'pill ok', text: 'cached for this exact span' })
+        : S.el('span', { class: 'pill warn', text: 'absent' })],
+      ['id check', d.check && d.check.verdict
+        ? S.el('span', { class: 'pill ' + (d.check.verdict === 'confirmed' ? 'ok'
+              : d.check.verdict === 'contradicted' ? 'bad' : ''), text: d.check.verdict })
+        : S.el('span', { class: 'pill warn', text: 'never checked' })],
+    ]));
+
+    for (const r of d.recordings) {
+      const mb = S.isMbid(r.credit.mbid);
+      m.append(S.el('h2', {}, 'Recording ',
+        S.el('small', { text: `— weight ${r.credit.weight}, via ${r.credit.source}` })));
+      m.append(kv([
+        ['mbid', mb
+          ? S.el('a', { href: `https://musicbrainz.org/recording/${r.credit.mbid}`,
+                        target: '_blank', rel: 'noopener' }, r.credit.mbid)
+          : S.el('span', {}, S.el('span', { class: 'pill', text: r.credit.mbid }),
+              ' — no MusicBrainz entry exists for this audio, so no id was invented')],
+        ['title', r.recording ? r.recording.title : null],
+        ['artists', r.artists.length
+          ? r.artists.map(a => a.name || a.artist_mbid).join(', ')
+          : S.el('span', { class: 'pill warn',
+              title: 'the name comes from the file tag, which is why tags travel [SPEC-PL-050]',
+              text: 'none — name is from the file tag' })],
+        ['flavor', `${r.flavor.length} values`
+          + (r.flavor.length === 71 ? ' (complete)' : '')],
+        ['flavor sources', r.flavor_sources.length
+          ? r.flavor_sources.map(s => S.el('span', { class: 'pill', text: s }))
+          : S.el('span', { class: 'pill warn', text: 'none' })],
+      ]));
+      if (r.flavor.length) {
+        const box = S.el('div', { class: 'flavor' });
+        for (const v of r.flavor) {
+          box.append(S.el('div', { class: 'row' },
+            S.el('span', { text: `${v.characteristic} · ${v.class}` }),
+            S.el('span', { title: `source ${v.source}, accuracy ${v.accuracy ?? 'null'}`,
+                           text: v.value.toFixed(4) })));
+        }
+        m.append(box);
+      }
+    }
+
+    // Scoped to this one passage, not the folder [GDE-FEX-105] -- flavor is
+    // per-passage, and refreshing it after a boundary edit should not mean
+    // re-running extraction over everything else in the folder that is
+    // already cached and unaffected `[SPEC-SUI-223]`. `d.cached` above
+    // already answers whether this passage's own span is current; framed
+    // here rather than repeated, since the button is the next step either
+    // way.
+    m.append(S.el('div', { class: 'controls' },
+      S.el('button', { class: 'chip', id: 'analyze-flavor' },
+        d.cached ? 're-analyze flavor for this passage'
+                 : 're-analyze flavor for this passage (not cached for its current span)')));
+    m.append(S.el('div', { id: 'flavor-result' }));
+    document.getElementById('analyze-flavor').onclick = async () => {
+      const box = document.getElementById('flavor-result');
+      box.replaceChildren(S.el('p', { class: 'empty', text: 'starting…' }));
+      let r;
+      try {
+        r = await (await fetch('/api/analyze-flavor', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ passage_id: pid }),
+        })).json();
+      } catch (e) { return S.fail('#flavor-result', e); }
+      if (r.error) return S.fail('#flavor-result', new Error(r.error));
+      // New flavor values, and `d.cached` above both change -- reload
+      // rather than patch, the same reasoning `reanalyze`'s own handler
+      // already uses.
+      S.watchJob(r.job_id, box, job => { if (job.state === 'done') location.reload(); });
+    };
+
+    // Offered *before* the handoff, not after and not only at push time
+    // [SPEC-DF-116..118] -- accepting it is a small local write, so whatever
+    // Lempi's own editor captures as its baseline a moment later already
+    // matches what {{PEER_NAME}} had.
+    m.append(remoteBasisBox(pid));
+
+    // Where a capability is naturally Lempi's, it is built there and
+    // *presented* through Vipunen's workflow [SPEC-SUI-140]: id review and
+    // boundary editing both play the passage, and Vipunen has no audio path to
+    // give them [SPEC-SA-100]. This is the handoff, not a reimplementation.
+    m.append(S.el('h2', {}, 'Review in Lempi'));
+    m.append(handoffBox(pid, `/review?passage=${pid}`, 'review'));
+
+    // The waveform/boundary editor `[SPEC021]` -- the second case
+    // `[SPEC-SUI-135]` names, reached the same way `[SPEC-SUI-150]` deep-links
+    // review: by passage_id, valid only for the co-resident player named above.
+    m.append(S.el('h2', {}, 'Edit boundaries in Lempi'));
+    m.append(handoffBox(pid, `/edit/${pid}`, 'edit boundaries'));
+
+    // The rejected candidates, beside the chosen one. Written by every stage
+    // since the migration and read by nothing until now [SPEC-SUI-045].
+    m.append(S.el('h2', {}, 'Ingest decisions ',
+      S.el('small', { text: `— ${d.decisions.length}` })));
+    if (!d.decisions.length) {
+      m.append(S.el('p', { class: 'empty',
+        text: 'No stage recorded a decision for this audio.' }));
+    } else {
+      m.append(S.el('table', {},
+        S.el('thead', {}, S.el('tr', {}, ...['stage', 'outcome', 'confidence', 'detail', 'when']
+          .map(h => S.el('th', { text: h })))),
+        S.el('tbody', {}, ...d.decisions.map(x => S.el('tr', {},
+          S.el('td', {}, S.el('span', { class: 'pill', text: x.stage })),
+          S.el('td', { text: x.outcome }),
+          S.el('td', { class: 'num', text: x.confidence ?? '—' }),
+          S.el('td', { style: 'font:12px var(--mono);word-break:break-all', text: x.detail || '' }),
+          S.el('td', { class: 'num', text: S.when(x.decided_at) }))))));
+    }
+  } catch (e) { S.fail('#main', e); }
+})();
+</script>

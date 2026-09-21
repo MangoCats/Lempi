@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Vipunen — folder</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/console.css">
+<header>
+  <h1>Vipunen</h1>
+  <nav><a href="/">library</a><a href="/folder" class="on">folder</a><a href="/jobs">jobs</a><a href="/export">export</a><a href="/flags">flags</a><a href="/mesh">mesh</a><a href="/system">system</a></nav>
+  <span class="ro">library read-only</span>
+</header>
+<main>
+  <p class="caveat" id="caveat">walking…</p>
+  <div class="tiles" id="tiles"></div>
+  <div id="detail"></div>
+</main>
+<script src="/console.js"></script>
+<script>
+// Two axes, never one status word [SPEC-SUI-055]. And every verdict this page
+// can reach without hashing is provisional, which the labels say out loud
+// rather than implying: `assumed` is not `verified` [SPEC-SUI-060].
+async function load(refresh) {
+  const box = document.getElementById('detail');
+  try {
+    const d = await S.get('/api/folder/scan' + (refresh ? '?refresh=1' : ''));
+
+    document.getElementById('caveat').replaceChildren(
+      S.el('b', { text: 'Cheap pass. ' }),
+      document.createTextNode(
+        `${S.n(d.on_disk)} files walked in ${(d.walked_ms / 1000).toFixed(1)} s, ` +
+        `compared on size and mtime only. Nothing was hashed, so ${S.n(d.verified)} files are ` +
+        `verified — only a hash separates a moved file from an unknown one, or a retag ` +
+        `from corruption. Resolving those is a job.`));
+
+    document.getElementById('tiles').replaceChildren(...[
+      ['on disk', d.on_disk, ''],
+      ['library rows', d.rows, ''],
+      ['assumed here', d.assumed_here, ''],
+      ['changed on disk', d.changed, 'warn'],
+      ['unclaimed by path', d.unclaimed.length, 'warn'],
+      ['rows with no file', d.missing.length, 'warn'],
+    ].map(([label, n, cls]) =>
+      S.el('div', { class: 'tile' + (cls && n ? ' ' + cls : '') },
+        S.el('b', { text: S.n(n) }), S.el('span', { text: label }))));
+
+    box.replaceChildren();
+    if (d.roots.length === 0) {
+      box.append(S.el('p', { class: 'empty',
+        text: 'No audio root configured. Start the console with --root.' }));
+    }
+    section(box, 'Unclaimed by path', d.unclaimed,
+      'No row holds this path. Its hash may still match a row whose own path is stale — ' +
+      'that would make it moved, not new, and only a hash can tell. Induct is stage 3.');
+    section(box, 'Rows with no file at their path', d.missing,
+      'The database expects audio here and there is none. Missing is a state, not an error ' +
+      '— a target holding a subset of the library is a normal deployment.');
+    box.append(S.el('p', {},
+      S.el('button', { class: 'chip', id: 'again', text: 're-walk' })));
+    document.getElementById('again').onclick = () => load(true);
+  } catch (e) { S.fail('#detail', e); }
+}
+
+function section(box, title, items, why) {
+  box.append(S.el('h2', {}, title,
+    S.el('small', { text: ` — ${S.n(items.length)}` })));
+  box.append(S.el('p', { class: 'empty', style: 'font-size:.85rem;padding:.2rem 0', text: why }));
+  if (!items.length) {
+    box.append(S.el('p', { class: 'empty', text: 'none' }));
+    return;
+  }
+  box.append(S.el('div', { class: 'list' },
+    ...items.slice(0, 500).map(p => S.el('div', { text: p })),
+    items.length > 500 ? S.el('div', { text: `… and ${S.n(items.length - 500)} more` }) : null));
+}
+
+load(false);
+</script>

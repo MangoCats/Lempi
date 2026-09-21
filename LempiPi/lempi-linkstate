@@ -1,0 +1,93 @@
+#!/bin/sh
+# Read everything Bluetooth will tell us about the state of the link and of
+# the speaker at the other end of it. One shot, read-only, about a second.
+#
+# **Why this exists.** The stutter and the connected-but-silent fault are both
+# in the speaker `[PI3-FOUND-480]`, and `lempi-hci-capture` says only *that*
+# audio is or is not getting out. This says what the link looks like while it
+# happens. Run it immediately after a boot, in each power-cycle mode, and
+# diff.
+#
+# **The two fields nothing has ever checked.**
+#
+# `role` is not `direction`. PI011's mode comparison recorded `<` outgoing
+# against `>` incoming and treated that as the role; it is not. Whoever
+# initiates starts as CENTRAL, but either end may request a role switch
+# afterwards and BlueZ commonly allows one. So a mode A link may have been
+# running with this Pi as PERIPHERAL on every boot, unnoticed.
+#
+# `afh` is the channel map, and **the CENTRAL is the device that sets it**.
+# Measured on a healthy outbound link: 0x000000fcffffffffff3f -- channels
+# 26-77 enabled, 0-25 and 78 excluded, which at 2402 + k MHz is a refusal to
+# hop anywhere in 2402-2427. That is a WiFi exclusion zone. This Pi knows
+# where its own WiFi radio is and the speaker does not, so when the Pi is
+# CENTRAL the speaker is handed a map that avoids a transmitter sitting inches
+# away, and when the speaker is CENTRAL that protection does not exist.
+#
+# That is a hypothesis, not a finding, and five have been withdrawn from PI011
+# already. It predicts: a stuttering boot reads PERIPHERAL, or shows the low
+# channels enabled, or both. A stuttering boot that reads CENTRAL with the
+# same 52-channel map kills it outright. Either way this is the script that
+# settles it.
+set -u
+
+. "${LEMPI_COMMON:-/usr/local/lib/lempi-common.sh}" 2>/dev/null ||
+    . "$(dirname "$0")/lempi-common.sh"
+S="${1:-$(lempi_speaker)}"
+[ -n "${S:-}" ] || { echo "lempi-linkstate: no speaker address" >&2; exit 1; }
+
+printf 'uptime %s\n' "$(cut -d' ' -f1 /proc/uptime)"
+printf 'speaker %s\n' "$S"
+
+# Direction and role in one line: `<`/`>` is who dialled, CENTRAL/PERIPHERAL
+# is who runs the piconet. They are independent and only the second one sets
+# the hop map.
+CON=$(hcitool con 2>/dev/null | grep -i "$S")
+printf 'con %s\n' "${CON:-none}"
+case "$CON" in
+    *CENTRAL*|*MASTER*)     printf 'role CENTRAL\n' ;;
+    *PERIPHERAL*|*SLAVE*)   printf 'role PERIPHERAL\n' ;;
+    *)                      printf 'role unknown\n' ;;
+esac
+case "$CON" in
+    *'< ACL'*) printf 'direction outbound\n' ;;
+    *'> ACL'*) printf 'direction inbound\n' ;;
+    *)         printf 'direction unknown\n' ;;
+esac
+
+# The hop map, and a count of how many channels it actually leaves in play.
+AFH=$(hcitool afh "$S" 2>/dev/null | sed -n 's/^AFH map: 0x//p')
+printf 'afh %s\n' "${AFH:-none}"
+if [ -n "${AFH:-}" ]; then
+    # Hex parsed by hand: strtonum is a gawk extension and this appliance
+    # runs mawk, where it returns nothing at all rather than failing loudly.
+    printf 'afh_channels %s\n' "$(lempi_afh_channels "$AFH")"
+fi
+
+# Controller-side quality. Link quality is a BER-derived figure, not a level,
+# so it is not the signal-strength measure that was tried and refuted.
+printf 'link_quality %s\n' "$(hcitool lq "$S" 2>/dev/null | sed -n 's/^Link quality: //p')"
+printf 'rssi %s\n' "$(hcitool rssi "$S" 2>/dev/null | sed -n 's/^RSSI return value: //p')"
+printf 'tx_power %s\n' "$(hcitool tpl "$S" 2>/dev/null | sed -n 's/^Current transmit power level: //p')"
+printf 'supervision_timeout %s\n' "$(hcitool lst "$S" 2>/dev/null | sed -n 's/^Link supervision timeout: //p')"
+
+# What this appliance has written into the speaker: the negotiated codec, and
+# the AVRCP absolute volume, which the speaker keeps across a reboot of this
+# machine and which is the first thing to read on a connected-but-silent
+# fault.
+FD=$(busctl --list tree org.bluez 2>/dev/null |
+    grep "$(printf '%s' "$S" | tr ':' '_')" | grep '/fd[0-9]*$' | head -1)
+printf 'transport %s\n' "${FD:-none}"
+if [ -n "${FD:-}" ]; then
+    for prop in State Volume Configuration Codec; do
+        printf '%s %s\n' "$(printf '%s' "$prop" | tr 'A-Z' 'a-z')" \
+            "$(busctl get-property org.bluez "$FD" org.bluez.MediaTransport1 \
+                "$prop" 2>/dev/null | sed 's/^[a-z]* //')"
+    done
+fi
+
+# The other half of the coexistence question: where this Pi's own WiFi is
+# sitting, since that is what the exclusion zone above is presumed to avoid.
+printf 'wifi %s\n' "$(iw dev wlan0 info 2>/dev/null |
+    sed -n 's/^[[:space:]]*channel /channel /p' | head -1)"
+exit 0

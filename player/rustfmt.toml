@@ -1,0 +1,27 @@
+# This repository is HAND-FORMATTED. `cargo fmt` is off limits.
+#
+# `disable_all_formatting` makes `cargo fmt` a no-op rather than merely asking
+# people not to run it. Measured 2026-09-11, before this file existed:
+# `cargo fmt --check` wanted to rewrite **959 diff lines** across the crate.
+# A single unaware `cargo fmt` therefore produces an enormous, purely
+# mechanical diff that buries whatever real change it is mixed with, and
+# rewraps comments whose line breaks were chosen to make an argument readable.
+#
+# This is not a style preference dressed up as a rule. The code here carries
+# unusually long explanatory comments -- measurements, dated findings, the
+# reason a constant is the value it is -- and their wrapping is part of how
+# they read. rustfmt does not know that and reflows them.
+#
+# Written because it actually happened: an agent working on Vipunen
+# functionality ran `cargo fmt` on 2026-09-11 and reformatted
+# `player/src/web/vipunen.rs`. It broke nothing -- the change was pure rewrapping
+# -- but it was invisible to that agent that a convention existed at all,
+# because until now the rule lived only in one contributor's head. A
+# convention that only one participant can see is not a convention.
+#
+# **For feedback on the code, use `cargo clippy`, not `cargo fmt`.** Clippy
+# reports real problems and changes nothing on its own.
+#
+# If you genuinely need to reformat something, do it by hand, in the smallest
+# diff that does the job, and keep the surrounding comment wrapping intact.
+disable_all_formatting = true

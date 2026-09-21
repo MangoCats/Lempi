@@ -1,0 +1,130 @@
+#!/bin/sh
+# Block until PipeWire has somewhere audible to send audio.
+#
+# Bluetooth is the slow case: BlueZ has to auto-connect a trusted device after
+# the radio comes up, which takes several seconds after the graph is ready.
+# Exits 0 regardless -- a player with no speaker should still come up and say
+# so in its interface, which is more use than a service that refuses to run.
+#
+# **`[PI3-FOUND-110]` The gate this replaces never actually held.** Its first
+# condition was `... | grep -qv 'Dummy Output'`, read as "a sink that is not
+# the dummy exists". `grep -v` succeeds when ANY line fails to match, and the
+# block it was fed begins with the `├─ Sinks:` header -- so the condition was
+# true on every machine in every state, including one whose only sink was the
+# dummy. Measured 2026-09-08 on lempipi, whose HDMI and headphone outputs are
+# both switched off at the kernel command line and which therefore has no
+# hardware sink at all until Bluetooth arrives: it reported "real sink present
+# after 3s" and released the player onto a dummy, 30 s before the speaker
+# existed. The player then opened its output onto nothing audible and stayed
+# there. Every layer above reported success.
+#
+# Naming a sink is also not enough on its own: the point of waiting is the
+# CHOSEN speaker, and any other real sink satisfying the wait is how the
+# player ends up bound to the wrong one. So the speaker gets first refusal,
+# and anything real is accepted only once its grace period has passed --
+# which keeps a speakerless appliance booting promptly.
+# **`[PI3-FOUND-150]` Waiting here is only free until it stops overlapping
+# with something.** The player does not touch its output when it starts: it
+# backs up listener state, builds the library index -- 8330 passages off a
+# 1.1 GB database on a Pi Zero 2W, about twenty seconds -- and only then opens
+# a device. So the twenty seconds after `lempi` starts are twenty seconds in
+# which Bluetooth may finish settling at no cost at all, and every second
+# spent waiting *before* starting it is a second added to the total rather
+# than hidden inside it. Measured on a power cycle: this gate waited its full
+# 45 s, gave up, and only then let a twenty-second library load begin --
+# ninety-five seconds to audio, of which about forty-five were spent
+# deliberately doing nothing.
+#
+# **`[PI3-FOUND-260]` That reasoning was true for about a day, and cutting the
+# deadline to 15 s on the strength of it was a mistake.** The twenty seconds
+# were never the library load: they were contention, and once `mpd` was made
+# to yield `[PI3-FOUND-210]` the same work measured 120 ms. So there is no
+# longer a slow start for a wait to hide inside -- the player is ready in
+# under two seconds, and every second this gate spends is simply a second of
+# waiting.
+#
+# But waiting is not what it costs. Measured on the boot after the cut: the
+# speaker took 63 s to answer (it had been taken by another device
+# `[PI3-FOUND-090]`), this gate gave up at 15 s, and the player opened onto a
+# dummy and played into it for twenty-seven seconds before `lempi-speaker`
+# reconnected and asked for a reopen. That boot recorded 26.45 s of underrun,
+# against 2.79 s on a boot where the speaker was present before the player
+# started. Starting early buys nothing and costs a reopen; starting late
+# costs only silence that was silent anyway.
+#
+# So the deadline goes back up. It still exits the instant the speaker's sink
+# appears -- which on a healthy boot is a few seconds -- and it still gives
+# that speaker first refusal over any other. It simply no longer gives up
+# early on a machine whose speaker is routinely slow to answer, which is this
+# one, by design `[PI3-FOUND-090]`.
+#
+# **`[PI3-FOUND-550]` Five seconds, because the gate holds the controls too.**
+# The deadline was 60 s on the reasoning of `[PI3-FOUND-260]`: starting before
+# the speaker exists costs a reopen and 26 s of underrun, starting after costs
+# only silence that was silent anyway. That reasoning is still true about
+# *audio*, and it was the wrong thing to optimise. This runs as an
+# `ExecStartPre`, so every second it waits is a second the listener cannot
+# reach the web interface -- including the interface's speaker picker, which is
+# the one control that could resolve the situation the appliance is stuck in
+# `[PI3-FOUND-540]`. On 2026-09-10 that cost 143 s with the chosen speaker
+# switched off, and the listener's judgement was direct: five seconds is
+# acceptable, 140 is not.
+#
+# So the gate now buys a fast start when the speaker is already there and gets
+# out of the way when it is not. The audio is no longer its problem: the
+# keeper connects the speaker and asks the player to reopen, and if the
+# remembered speaker never answers it falls back to another known one
+# `[PI3-FOUND-560]`.
+set -u
+DEADLINE=${LEMPI_SINK_WAIT:-5}
+SPEAKER_GRACE=${LEMPI_SPEAKER_WAIT:-3}
+# The listener-side file, not the pre-split one `[PI3-FOUND-280]`: the
+# speaker this gate waits for is whichever the listener last chose, and that
+# choice is recorded in `listener.db` since `[IMPL-DBSPLIT-025]`. Reading the
+# old path here meant waiting for the speaker they used to have.
+. "${LEMPI_COMMON:-/usr/local/lib/lempi-common.sh}" 2>/dev/null ||
+    . "$(dirname "$0")/lempi-common.sh"
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+
+# Every sink PipeWire currently offers, one name per line, dummy excluded.
+# Parsed from the numbered rows only, so no header or box-drawing line can be
+# mistaken for a sink -- the whole of `[PI3-FOUND-110]`.
+
+# The speaker the listener chose, by the name PipeWire will give its sink
+# [PI3-AIM-020]. Absent is fine and common: it just means anything real will
+# do.
+WANT=""
+ADDR=$(lempi_speaker)
+[ -n "${ADDR:-}" ] && WANT=$(lempi_alias "$ADDR")
+
+# **`[PI3-FOUND-540]` Counted in seconds, not in passes.** This loop used to
+# increment a counter once per iteration and call that a second, but each pass
+# also runs `wpctl status`, which on a Pi Zero 2W during boot costs well over a
+# second on its own. Measured 2026-09-10 on a boot whose chosen speaker was
+# switched off: the gate reported "no real sink after 60s" after **143
+# seconds**, and since it is an `ExecStartPre` it held the web interface down
+# for all of it -- so the listener could not reach the page that would have let
+# them pick a speaker that was actually present. The deadline now measures
+# elapsed wall-clock time, which is what every comment here always claimed it
+# did.
+started=$(date +%s)
+i=0
+while [ "$i" -lt "$DEADLINE" ]; do
+    sinks=$(lempi_sinks)
+    if [ -n "$sinks" ]; then
+        if [ -n "$WANT" ] && echo "$sinks" | grep -qxF "$WANT"; then
+            echo "lempi-wait-sink: $WANT present after ${i}s"
+            exit 0
+        fi
+        # Something real, but not the speaker. Worth having, but not worth
+        # binding to while the speaker may still be seconds away.
+        if [ -z "$WANT" ] || [ "$i" -ge "$SPEAKER_GRACE" ]; then
+            echo "lempi-wait-sink: real sink present after ${i}s ($(echo "$sinks" | tr '\n' ' '))"
+            exit 0
+        fi
+    fi
+    sleep 1
+    i=$(( $(date +%s) - started ))
+done
+echo "lempi-wait-sink: no real sink after ${DEADLINE}s; starting anyway" >&2
+exit 0

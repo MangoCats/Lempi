@@ -1,0 +1,19 @@
+#!/bin/sh
+printf '%s\n' "sqlite3 $*" >> "$VT_STATE/calls"
+case "$*" in
+    *INSERT*|*UPDATE*)
+        # **Writes succeed even when reads fail, on purpose.** The fault of
+        # PI3-FOUND-700 is a transient read failure followed by a perfectly
+        # good write that destroys the listener's choice. A stub failing both
+        # together lets that bug pass -- and did, until this line was split.
+        [ -f "$VT_STATE/db_write_fails" ] && exit 1
+        printf '%s\n' "WROTE $*" >> "$VT_STATE/db_writes"
+        exit 0 ;;
+    *SELECT*)
+        # A database that cannot be read exits non-zero, exactly as the real
+        # one does -- which is the distinction PI3-FOUND-700 turns on.
+        [ -f "$VT_STATE/db_fails" ] && exit 1
+        cat "$VT_STATE/db_speaker" 2>/dev/null
+        exit 0 ;;
+esac
+exit 0

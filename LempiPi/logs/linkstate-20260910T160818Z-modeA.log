@@ -1,0 +1,286 @@
+=== pi answered, sampling link state ===
+----
+uptime 29.27
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh ffffffffffffffffff7f
+afh_channels 79
+link_quality 255
+rssi 0
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 38.64
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000c0fffffeffbc3f
+afh_channels 44
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 48.25
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000080acbffbdeffbc3f
+afh_channels 44
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 57.61
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000acbdfbdeffbc3f
+afh_channels 42
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 66.95
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000acbdfbdeffbc3f
+afh_channels 42
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 76.28
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000acbdfbdeffbc3f
+afh_channels 42
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 85.57
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000acbdfbdfffff3f
+afh_channels 46
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 94.89
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000acbdfbdfffff3f
+afh_channels 46
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 104.22
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000acafbbdfffff3f
+afh_channels 45
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 113.55
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000ecefbbffffff3f
+afh_channels 48
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 122.86
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000ecefbbffffff3f
+afh_channels 48
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 132.19
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000ecefbbffffff3f
+afh_channels 48
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 141.51
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000fcefafffffff3f
+afh_channels 49
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 150.85
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000fcefafffffff3f
+afh_channels 49
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 160.20
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000fcefafffffff1f
+afh_channels 48
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 169.53
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000fcffefffffff1f
+afh_channels 50
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 178.85
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000ecd7ef7fffff1f
+afh_channels 46
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 188.17
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000acd7ef7fffff1f
+afh_channels 45
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 197.49
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000a4d7eb7dffff17
+afh_channels 41
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 206.82
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000a4d7eb7dffff17
+afh_channels 41
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 216.16
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000a4d7eb7dffff17
+afh_channels 41
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+----
+uptime 225.45
+con 	< ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction outbound
+afh 000000a4dffbfdffff17
+afh_channels 44
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+wifi channel 1 (2412 MHz), width: 20 MHz, center1: 2412 MHz
+
+[exited with code 0]

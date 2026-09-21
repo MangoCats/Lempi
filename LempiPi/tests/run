@@ -1,0 +1,117 @@
+#!/bin/sh
+# Run the appliance's shell helpers against stubbed hardware.
+#
+# **Why `[PI3-AIM-100]`.** The player carries 467 test functions; the scripts
+# that decide which speaker plays carried none, and on 2026-09-10 five real
+# faults shipped from them in a single evening -- a guard listing UUIDs nobody
+# asks for `[PI3-FOUND-660]`, an `exit 0` that made the connect path
+# unreachable `[PI3-FOUND-700]`, an adoption that overwrote the listener's
+# choice on a failed database read, a viability rule that let an intruder win
+# by breaking the incumbent `[PI3-FOUND-640]`, and an awk continuation that
+# was two backslashes instead of one. Every one of them is mechanical, and
+# every one is caught below.
+#
+# **How.** These scripts reach the world through five commands --
+# `bluetoothctl`, `wpctl`, `curl`, `sqlite3`, `hcitool`. `tests/stubs` holds
+# fakes that answer from a fixture directory and record every invocation, and
+# `PATH` puts them first. So the assertions are about *decisions* -- what was
+# connected, disconnected, trusted, written -- not about hardware. No adapter,
+# no speaker, no audio: this runs anywhere.
+#
+# **What it cannot cover, and must not pretend to.** BlueZ's own semantics. A
+# stub encodes what its author believed, and the belief that an agent gets
+# consulted for a trusted device was exactly the one that cost an evening
+# `[PI3-FOUND-680]`. Whether audio is audible, and at what rate, stays with
+# the listener's ear and `lempi-hci-capture`.
+#
+#     LempiPi/tests/run            # everything
+#     LempiPi/tests/run speaker    # one group
+set -u
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+PI="$(dirname "$HERE")"
+export LEMPI_COMMON="$PI/lempi-common.sh"
+ORIG_PATH="$PATH"
+PASS=0
+FAIL=0
+ONLY="${1:-}"
+
+# --- harness -------------------------------------------------------------
+setup() {
+    VT_STATE="$(mktemp -d)"
+    export VT_STATE
+    export LEMPI_RUN_DIR="$VT_STATE/run"
+    mkdir -p "$LEMPI_RUN_DIR"
+    : > "$VT_STATE/calls"
+    : > "$VT_STATE/connected"
+    : > "$VT_STATE/paired"
+    : > "$VT_STATE/reachable"
+    : > "$VT_STATE/db_writes"
+    : > "$VT_STATE/routed"
+    # From the pristine PATH every time. Prepending to the live one made it
+    # accumulate across cases -- stubs:stubs:stubs:... -- so a test that tried
+    # to strip the stub directory off still got a stub, and its fixtures were
+    # never built. The failures that followed looked like product bugs.
+    PATH="$HERE/stubs:$ORIG_PATH"
+    export PATH
+}
+
+teardown() { rm -rf "$VT_STATE"; }
+
+# A paired speaker the fixture knows about.
+speaker() { # addr alias connected trusted
+    printf 'Device %s %s\n' "$1" "$2" >> "$VT_STATE/paired"
+    [ "$3" = yes ] && printf 'Device %s %s\n' "$1" "$2" >> "$VT_STATE/connected"
+    cat > "$VT_STATE/info.$1" <<EOF
+	Alias: $2
+	Paired: yes
+	Bonded: yes
+	Trusted: $4
+	Connected: $3
+	UUID: Audio Sink                (0000110b-0000-1000-8000-00805f9b34fb)
+EOF
+}
+
+sinks() { # names...
+    # Real box-drawing characters, as `wpctl` emits them. Written literally
+    # rather than with printf's \xNN, which is a bashism: dash prints the
+    # escape verbatim, and the digits inside it then break the very parser
+    # these fixtures exist to exercise.
+    {
+        printf ' ├─ Sinks:\n'
+        n=40
+        for s in "$@"; do
+            printf ' │  *  %d. %s   [vol: 0.50]\n' "$n" "$s"
+            n=$((n + 1))
+        done
+        printf ' ├─ Sink endpoints:\n'
+    } > "$VT_STATE/sinks"
+}
+
+ok()   { PASS=$((PASS + 1)); printf '  ok   %s\n' "$1"; }
+bad()  { FAIL=$((FAIL + 1)); printf '  FAIL %s\n     %s\n' "$1" "$2"; }
+
+# Assertions read the recorded calls, so they describe behaviour.
+called()     { grep -qF "$1" "$VT_STATE/calls"; }
+assert_called()     { if called "$1"; then ok "$2"; else bad "$2" "expected a call matching: $1"; fi; }
+assert_not_called() { if called "$1"; then bad "$2" "unexpected call: $1"; else ok "$2"; fi; }
+assert_eq()  { if [ "$1" = "$2" ]; then ok "$3"; else bad "$3" "expected '$2', got '$1'"; fi; }
+assert_in()  { case "$1" in *"$2"*) ok "$3" ;; *) bad "$3" "expected output to contain '$2', got: $1" ;; esac; }
+assert_not_in() { case "$1" in *"$2"*) bad "$3" "output should not contain '$2'" ;; *) ok "$3" ;; esac; }
+
+group() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
+
+OONTZ=08:EB:ED:26:14:12
+MIDDL=20:64:DE:CF:F3:AD
+
+. "$HERE/cases-common.sh"
+. "$HERE/cases-speaker.sh"
+. "$HERE/cases-waitsink.sh"
+. "$HERE/cases-dbrecover.sh"
+. "$HERE/cases-btctl.sh"
+. "$HERE/cases-btwatch.sh"
+. "$HERE/cases-units.sh"
+. "$HERE/cases-hci.sh"
+
+printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+[ "$FAIL" -eq 0 ]

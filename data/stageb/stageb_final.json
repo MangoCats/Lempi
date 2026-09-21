@@ -1,0 +1,168 @@
+{
+ "per_characteristic": {
+  "danceability": {
+   "iter1_mlp": 0.22464214081097542,
+   "iter3_gbm": 0.2217581494361742,
+   "best": 0.20335779779518343,
+   "winner": "mlp-dedicated",
+   "floor": 0.24904576180584598,
+   "vs_floor": 0.8165479160160111,
+   "iter5_mlp_dedicated": 0.20335779779518343
+  },
+  "gender": {
+   "iter1_mlp": 0.3917132524898984,
+   "iter3_gbm": 0.3896816625330578,
+   "best": 0.3374493059489586,
+   "winner": "mlp-dedicated",
+   "floor": 0.19581571978666173,
+   "vs_floor": 1.723300388327375,
+   "iter4_mlp_dedicated": 0.3374493059489586
+  },
+  "genre_dortmund": {
+   "iter1_mlp": 0.2951637345287132,
+   "iter3_gbm": 0.169835508827197,
+   "best": 0.15214230500546966,
+   "winner": "mlp-dedicated",
+   "floor": 0.1199535876603739,
+   "vs_floor": 1.268343098134189,
+   "iter5_mlp_dedicated": 0.15214230500546966
+  },
+  "genre_electronic": {
+   "iter1_mlp": 0.19013786556296236,
+   "iter3_gbm": 0.13004403535828052,
+   "best": 0.10441354154915101,
+   "winner": "mlp-dedicated",
+   "floor": 0.11982422347253358,
+   "vs_floor": 0.871389261062768,
+   "iter5_mlp_dedicated": 0.10441354154915101
+  },
+  "genre_rosamerica": {
+   "iter1_mlp": 0.2194734222906851,
+   "iter3_gbm": 0.19547924257631152,
+   "best": 0.1582202833610795,
+   "winner": "mlp-dedicated",
+   "floor": 0.13107638224771712,
+   "vs_floor": 1.2070846070657029,
+   "iter5_mlp_dedicated": 0.1582202833610795
+  },
+  "genre_tzanetakis": {
+   "iter1_mlp": 0.6043475674787094,
+   "iter3_gbm": 0.45996624206205744,
+   "best": 0.45996624206205744,
+   "winner": "gbm",
+   "floor": 0.18059160615263453,
+   "vs_floor": 2.5469967949302017
+  },
+  "ismir04_rhythm": {
+   "iter1_mlp": 0.2469018353870996,
+   "iter3_gbm": 0.22743783822482716,
+   "best": 0.14906792156144688,
+   "winner": "mlp-dedicated",
+   "floor": 0.20577719616434775,
+   "vs_floor": 0.7244141933122222,
+   "iter5_mlp_dedicated": 0.14906792156144688
+  },
+  "mood_acoustic": {
+   "iter1_mlp": 0.14681390106897263,
+   "iter3_gbm": 0.13904304524673827,
+   "best": 0.13405490481088567,
+   "winner": "mlp-dedicated",
+   "floor": 0.13369439043101425,
+   "vs_floor": 1.0026965557695364,
+   "iter5_mlp_dedicated": 0.13405490481088567
+  },
+  "mood_aggressive": {
+   "iter1_mlp": 0.22859972907746043,
+   "iter3_gbm": 0.21242770394602195,
+   "best": 0.18367051936267165,
+   "winner": "mlp-dedicated",
+   "floor": 0.20995058646885903,
+   "vs_floor": 0.8748273698674075,
+   "iter5_mlp_dedicated": 0.18367051936267165
+  },
+  "mood_electronic": {
+   "iter1_mlp": 0.14940227829729455,
+   "iter3_gbm": 0.16482347197415048,
+   "best": 0.12292284659443659,
+   "winner": "mlp-dedicated",
+   "floor": 0.22706381015380211,
+   "vs_floor": 0.5413581605592479,
+   "iter4_mlp_dedicated": 0.12292284659443659
+  },
+  "mood_happy": {
+   "iter1_mlp": 0.1470832854561409,
+   "iter3_gbm": 0.2270562403271523,
+   "best": 0.07578132361111985,
+   "winner": "mlp-dedicated",
+   "floor": 0.2175990289295833,
+   "vs_floor": 0.34826131340707067,
+   "iter4_mlp_dedicated": 0.07578132361111985
+  },
+  "mood_party": {
+   "iter1_mlp": 0.23737051030213968,
+   "iter3_gbm": 0.2221736697477455,
+   "best": 0.2221736697477455,
+   "winner": "gbm",
+   "floor": 0.2477699619247746,
+   "vs_floor": 0.8966933199723363,
+   "iter5_mlp_dedicated": 0.2248600559597045
+  },
+  "mood_relaxed": {
+   "iter1_mlp": 0.22092943241721044,
+   "iter3_gbm": 0.24160628510636872,
+   "best": 0.16985702104538772,
+   "winner": "mlp-dedicated",
+   "floor": 0.21981690659192335,
+   "vs_floor": 0.7727204593990439,
+   "iter4_mlp_dedicated": 0.16985702104538772
+  },
+  "mood_sad": {
+   "iter1_mlp": 0.12280357201031959,
+   "iter3_gbm": 0.11907487736764319,
+   "best": 0.07683369287526688,
+   "winner": "mlp-dedicated",
+   "floor": 0.12061087771915248,
+   "vs_floor": 0.6370378387775054,
+   "iter5_mlp_dedicated": 0.07683369287526688
+  },
+  "moods_mirex": {
+   "iter1_mlp": 0.27761052302643374,
+   "iter3_gbm": 0.1788927730734404,
+   "best": 0.1345495154316878,
+   "winner": "mlp-dedicated",
+   "floor": 0.21098021283693535,
+   "vs_floor": 0.6377352341362925,
+   "iter5_mlp_dedicated": 0.1345495154316878
+  },
+  "timbre": {
+   "iter1_mlp": 0.18885470079090977,
+   "iter3_gbm": 0.2569323267931351,
+   "best": 0.15150932509897103,
+   "winner": "mlp-dedicated",
+   "floor": 0.21631039326201337,
+   "vs_floor": 0.7004255450428134,
+   "iter4_mlp_dedicated": 0.15150932509897103
+  },
+  "tonal_atonal": {
+   "iter1_mlp": 0.1550473190303441,
+   "iter3_gbm": 0.22182758273032355,
+   "best": 0.14033944764672324,
+   "winner": "mlp-dedicated",
+   "floor": 0.2183895400923104,
+   "vs_floor": 0.6426106652699739,
+   "iter4_mlp_dedicated": 0.14033944764672324
+  },
+  "voice_instrumental": {
+   "iter1_mlp": 0.23031053123830186,
+   "iter3_gbm": 0.2739961440045316,
+   "best": 0.20909309840602544,
+   "winner": "mlp-dedicated",
+   "floor": 0.23439608356372085,
+   "vs_floor": 0.8920503074411789,
+   "iter4_mlp_dedicated": 0.20909309840602544
+  }
+ },
+ "median_best": 0.15182581505222034,
+ "median_floor": 0.21046539965289718,
+ "at_or_below_floor": 13
+}

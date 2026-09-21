@@ -1,0 +1,136 @@
+<h2>Importing &amp; Refining Music</h2>
+
+<p>Lempi itself only ever <em>plays</em> a library — building and curating
+one is <strong>Vipunen's</strong> job, a separate program with its own
+browser console. This tier walks through getting new music in, correcting
+how it's identified, adjusting exactly where a track starts and ends, and
+what "flavor" analysis actually is. If you're starting completely from
+nothing, see <strong>Starting From Nothing</strong> instead — this tier
+assumes a library already exists and you're adding to or refining it.</p>
+
+<h3>Opening Vipunen's console</h3>
+<p>Vipunen's console is its own local web page, run alongside Lempi, pointed
+at the same library file and (optionally) the folder(s) your music actually
+lives in. Once it's running, open it in a browser the same way you open
+Lempi's own page. It never changes your library directly — every action
+that writes anything runs as a tracked, watchable <strong>job</strong>
+instead, so nothing happens invisibly.</p>
+<p class="note">On a desktop where Vipunen is installed, Lempi's own
+<strong>Browse</strong> page has a <strong>launch Vipunen</strong> link right
+next to "review ids" — click it and Lempi starts Vipunen's console for you,
+pointed at the same library you're already browsing, and opens it in a new
+tab once it's ready. The link only appears where it can actually work; on
+the Raspberry Pi appliance, or on a desktop without Vipunen set up, it stays
+hidden rather than leading anywhere dead.</p>
+
+<h3>Adding a folder of music</h3>
+<ol>
+  <li>On the <strong>Jobs</strong> page, type in the folder you want to add
+    and click <strong>propose</strong>. This is a rehearsal — nothing is
+    written yet — and shows you what it found: how many files, how many
+    would actually be added, how many are already in the library, and
+    which steps it will and won't run (see below).</li>
+  <li>Review the proposal, then click <strong>confirm → induct</strong> to
+    actually run it for real.</li>
+  <li>Once it finishes, use the "after an induct" button to tell a running
+    Lempi to notice the new music — otherwise it won't be selectable until
+    Lempi is restarted.</li>
+</ol>
+
+<p>Underneath, that one "induct" step is really four in order:</p>
+<ol>
+  <li><strong>Ingest</strong> — reads each file's tags and length, and
+    files it into the library as a plain, unidentified track.</li>
+  <li><strong>Extract</strong> — analyzes the actual audio to work out its
+    "flavor" (see below).</li>
+  <li><strong>Identify</strong> — fingerprints the audio and checks it
+    against MusicBrainz to work out exactly which recording it is.</li>
+  <li><strong>Merge</strong> — folds any identification results in.</li>
+</ol>
+
+<p>A plain folder of ordinary song files doesn't need anything more than
+that. A few things are deliberately <em>not</em> attempted automatically,
+because they need information a folder scan can't infer on its own:
+splitting a single whole-album capture into separate tracks, fetching
+cover art or release details (both need a confirmed identity first), and
+measuring exact fade-in/fade-out points. Each is its own action, covered
+below or in <strong>Advanced Features</strong>.</p>
+
+<h3>The Library and Folder pages</h3>
+<p>The <strong>Library</strong> page is Vipunen's overview: counts of
+tracks, how many are missing a MusicBrainz identity, how many have never
+been checked, how many have no flavor data yet — plus a searchable table of
+every track. Click a title to open its full <strong>profile</strong> page
+(see below). The <strong>Folder</strong> page compares what's actually on
+disk in your music folder(s) against what the library thinks is there — a
+quick, unverified pass (by path, size, and modified time, not by actually
+re-reading the audio) that's useful for noticing files the library doesn't
+know about yet, or rows whose file has gone missing or moved.</p>
+
+<h3>Confirming or correcting an identity</h3>
+<p>Sometimes the automatic fingerprint match is wrong, or there wasn't
+enough to go on. From a track's profile page in Vipunen, "Review in Lempi"
+opens Lempi's own <strong>Review</strong> page for that track (Vipunen hands
+you off to it, launching Lempi if it isn't already running). There you'll
+see what the library currently believes next to what the audio fingerprint
+actually suggests, each candidate with a match-confidence score. A
+<strong>Play now</strong> button sends it straight to the player so you can
+judge by ear. You can also search MusicBrainz directly by song or album
+name for tracks the fingerprint match can't reach at all (self-released
+music, an unusual remaster). Decide with <strong>Use the match</strong>,
+<strong>Keep ours</strong>, or <strong>Decide later</strong>; a separate
+box lets you fix just the artist credit.</p>
+
+<p class="note">A review decision is a <em>draft</em> until it's applied —
+Vipunen's profile page will show a banner reminding you a decision is
+waiting to be folded in, with the exact command to run. This two-step
+design exists because changing what a track <em>is</em> also has to
+correctly carry over its play history.</p>
+
+<h3>Adjusting where a track starts, ends, and fades</h3>
+<p>"Edit boundaries in Lempi," also from a track's profile page, opens a
+waveform editor. Six markers on the waveform — start, end (blue),
+lead-in/lead-out (amber — timing for when a smooth handoff with the next
+track is allowed), and fade-in/fade-out (violet — an actual volume ramp,
+independent of that handoff) — can be dragged directly, or set precisely
+with the numeric fields beside the waveform if dragging isn't accurate
+enough. A separate field sets the track's overall volume (gain). Play the
+edit to check it, then <strong>Save edit</strong> — like a review decision,
+this is also a draft until a separate apply step folds it into the
+library.</p>
+
+<h3>Flavor analysis</h3>
+<p>"Flavor" is a large set of measurements (71 numbers) describing what a
+recording actually <em>sounds</em> like — mood, genre character,
+danceability, and more — computed once per track from the audio itself.
+This is what the Program Director uses to keep a program feeling
+consistent and to blend one song into the next smoothly (see the
+Appendix). It is a fully real, working, already-applied part of the
+library today, not experimental — essentially every track has it. Its
+honest limit: even the reference data it's built to reproduce doesn't
+perfectly agree with itself between two different recordings of the exact
+same performance, so treat flavor as a strong signal for "does this fit,"
+not an exact science. A track's own flavor values are visible in full on
+its Vipunen profile page.</p>
+
+<h3>Splitting a whole-album capture into tracks</h3>
+<p>If a whole CD was captured as one long file, it needs to be split into
+individual tracks before each one can be played, tuned, and identified on
+its own. This is a real, working feature, but it's <strong>early and still
+being validated</strong> — treat results as a good starting point, always
+worth a listen through the boundaries it finds. It works by being told
+roughly how long each track should be (or the exact expected lengths, if
+you have them), and searches the audio for the actual silences or track
+breaks near those points.</p>
+
+<h3>Ripping a CD directly</h3>
+<p>Lempi can bring in a physical CD, but it doesn't operate the drive
+itself — you rip the disc first with separate ripping software (on
+Windows, Exact Audio Copy is the supported route today; the equivalent
+Linux path isn't reliable yet), then point the ingest tool at the folder
+that rip produced. Given the disc's own table of contents, track
+boundaries are exact — no guesswork like the whole-album case above — and
+if the disc is recognized, Vipunen pulls its real track titles and artist
+credits directly rather than relying on a fingerprint match per track.
+This is a real, working feature for a single disc at a time; box sets and
+hidden bonus tracks aren't handled yet.</p>

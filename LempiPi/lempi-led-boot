@@ -1,0 +1,37 @@
+#!/bin/sh
+# Apply the stored status-LED preference at boot [PI3-LED-010].
+#
+# The gap this fills: sysfs LED state does not survive a reboot on its
+# own -- something has to reapply the stored choice every time, the same
+# reason `lempi-speaker.sh` exists for the Bluetooth connection rather than
+# trusting the hardware to remember it unaided.
+#
+# Runs once, at boot, as root, via a `lempi-led.service` oneshot unit
+# installed by `setup-lempipi.sh`'s own "act led" section (not tracked in
+# this repo as a separate unit file, the same posture `lempi-speaker.timer`/
+# `.service` already have). Unlike `lempi-speaker.sh` this needs no timer:
+# the LED does not drift on its own the way a Bluetooth link can, so it
+# only ever needs setting once per boot.
+#
+# Deliberately a thin dispatcher, not a second copy of the mode logic --
+# `lempi-btctl led <mode> [pct]` is already the tested, single place that
+# actually touches sysfs; running as root, this calls it directly, no
+# `sudo` needed.
+set -u
+DB="${LEMPI_DB:-/srv/library/library.db}"
+
+mode="$(sqlite3 "$DB" \
+    "SELECT value FROM player_settings WHERE key = 'led_mode'" 2>/dev/null)"
+[ -n "$mode" ] || mode=on
+
+pct="$(sqlite3 "$DB" \
+    "SELECT value FROM player_settings WHERE key = 'led_brightness_pct'" 2>/dev/null)"
+[ -n "$pct" ] || pct=100
+
+# Logged, not discarded -- a boot-time reapplication and a live web change
+# (also now logged, in `web/bluetooth.rs::set_led`) must not look identical
+# in the journal. Answering "who set this, and when" from `journalctl`
+# alone is the whole point; before this, both were silent, and telling them
+# apart meant asking.
+echo "led-boot: applying stored mode=$mode pct=$pct"
+/usr/local/bin/lempi-btctl led "$mode" "$pct"

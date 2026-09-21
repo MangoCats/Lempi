@@ -1,0 +1,23 @@
+# Vipunen's dependencies. SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The repository's previous requirements.txt belonged to the v1 Python player
+# -- fastapi, uvicorn, sounddevice -- and listed none of these. Vipunen's actual
+# dependencies were undeclared, which meant the only way to find out what it
+# needed was to run it and read the traceback.
+#
+# Versions are floors, taken from what these were developed against.
+
+numpy>=2.0            # feature vectors and distance maths, 11 tools
+scikit-learn>=1.5     # the Stage-B models, 23 tools
+zstandard>=0.22       # AcousticBrainz dump decompression
+joblib>=1.4           # model persistence, via model_store
+
+# NOT a Python package, and required by tools/fingerprint_ids.py:
+#
+#   ffmpeg, built with the chromaprint muxer.
+#
+# It is the fingerprinting engine -- the same library fpcalc wraps -- so
+# `ffmpeg -muxers | grep chromaprint` must show it. Developed against
+# ffmpeg 8.0. Essentia is a separate matter again: it is what forces this
+# half of the project to AGPL and to x86 `[SPEC-SA-010]`, and is installed
+# outside pip.

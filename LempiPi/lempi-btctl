@@ -1,0 +1,741 @@
+#!/bin/bash
+# The privileged helper for Bluetooth speaker selection [PI-SET-030] --
+# and, since it is already the one thing the web process may run as root,
+# every other small privileged appliance action too (radio power, the
+# status LED), rather than one helper and one sudoers rule per action.
+#
+# The web process must not hold the privilege to run arbitrary BlueZ commands,
+# and it must not be able to smuggle one through an argument. So this is a
+# closed set of verbs, each taking at most a device address, with that address
+# checked against a strict pattern BEFORE it reaches any command. Nothing here
+# is interpolated into a shell.
+#
+# Invoked as:  sudo /usr/local/bin/lempi-btctl VERB [ADDRESS]
+# Output is JSON on stdout, so the caller parses a shape rather than prose.
+#
+# The verbs exist because of specific failures recorded in PI003 §1:
+#   pair    registers an agent first, or the exchange never completes
+#   repair  removes a stale record first, or pairing fails with no explanation
+#   use     connect + trust + default, because trust is what survives a reboot
+set -uo pipefail
+export LC_ALL=C
+
+VERB="${1:-}"
+ADDR="${2:-}"
+
+die() { printf '{"ok":false,"error":"%s"}\n' "$1"; exit 1; }
+
+# Every verb but list and scan needs an address, and it is the only untrusted
+# input this program takes. Anchored, fixed length, uppercase hex only: an
+# argument that is not exactly a MAC never reaches bluetoothctl.
+# Does blocking this radio cut the route the caller is talking over?
+#
+# rfkill names the radio (`hci0`, `phy0`); the route names an interface
+# (`wlan0`). They are joined through sysfs rather than by guessing that phy0 is
+# wlan0 -- /sys/class/net/<if>/phy80211 points back at the wireless phy, and a
+# bluetooth radio carries no route at all.
+carries_route() {
+    local r="$1" kind iface phy
+    kind="$(cat "$r/type" 2>/dev/null)"
+    [ "$kind" = wlan ] || return 1
+    iface="$(ip route show default 2>/dev/null | awk '/^default/{print $5; exit}')"
+    [ -n "$iface" ] || return 1
+    phy="$(basename "$(readlink -f "/sys/class/net/$iface/phy80211" 2>/dev/null)" 2>/dev/null)"
+    [ "$phy" = "$(cat "$r/name" 2>/dev/null)" ]
+}
+
+need_addr() {
+    [[ "$ADDR" =~ ^([0-9A-F]{2}:){5}[0-9A-F]{2}$ ]] \
+        || die "not a device address"
+}
+
+# How long a Wi-Fi/AP change waits for `wifi-confirm` before
+# `lempi-wifi-revert` fires unconditionally `[SPEC034]` -- PI001's own
+# "five minutes is generous" figure, `[PI-SET-014]`.
+REVERT_MIN="${LEMPI_WIFI_REVERT_MIN:-5}"
+
+# The connection NetworkManager currently has active on wlan0, however
+# many colons its own name happens to contain -- matched by the fixed
+# `wlan0:` prefix `nmcli`'s terse mode always puts first, never by
+# position from the end, so a name is never mis-split on its own content
+# the way `awk -F: '{print $NF}'` would risk `[SPEC034]`.
+active_wifi_conn() {
+    nmcli -t -f DEVICE,NAME connection show --active 2>/dev/null | sed -n 's/^wlan0://p'
+}
+
+# bluetoothctl wants a login session's bus; sudo does not bring one.
+#
+# `$USER` is the fallback for a caller that already IS root without going
+# through `sudo` -- `lempi-led-boot`'s own systemd service, since it needs
+# no bluetoothd session at all. A systemd service's environment carries
+# neither `$SUDO_USER` nor `$USER` `[PI3-LED-010]`: found live, once this
+# script's own output stopped being silently discarded -- `set -u` turned
+# a plain empty fallback into "unbound variable" on every single boot,
+# harmless only because the `led` verb never reads `$XDG_RUNTIME_DIR`.
+# `root` is the correct answer in exactly that case, not a guess.
+RUN_UID="$(id -u "${SUDO_USER:-${USER:-root}}")"
+export XDG_RUNTIME_DIR="/run/user/$RUN_UID"
+
+# Pairing needs a registered agent for the duration [PI3-WHY-060], and the
+# steps need pauses: piping them as one block runs them faster than bluetoothd
+# establishes the connection, which is how a pair can report success and leave
+# the device unpaired.
+pair_sequence() {
+    {
+        printf 'power on\n';              sleep 2
+        printf 'pairable on\n';           sleep 1
+        printf 'agent NoInputNoOutput\n'; sleep 1
+        printf 'default-agent\n';         sleep 1
+        # A speaker is a classic BR/EDR device, and the default discovery
+        # filter returns LE only. Without this the Middleton is invisible to
+        # every scan -- eight other devices found, and never the one being
+        # looked for. It reads like the speaker is switched off.
+        printf 'menu scan\n';             sleep 1
+        printf 'transport bredr\n';       sleep 1
+        printf 'back\n';                  sleep 1
+        printf 'scan on\n';               sleep 20
+        printf 'pair %s\n' "$ADDR";       sleep 12
+        printf 'trust %s\n' "$ADDR";      sleep 2
+        printf 'connect %s\n' "$ADDR";    sleep 6
+        printf 'scan off\nquit\n'
+    } | bluetoothctl >/dev/null 2>&1
+}
+
+# State is REPORTED, never assumed: 'playing' versus 'connected' is the whole
+# lesson of [PI3-WHY-010], and the only honest source for it is what the
+# system says right now.
+# **`[PI3-FOUND-730]` Whether the chip itself is answering, which is a
+# different question from whether BlueZ is.**
+#
+# `bluetoothctl show` and `btmgmt info` both answered correctly throughout the
+# 2026-09-20 wedge -- one from `bluetoothd`'s state, one from the kernel's
+# cache -- while the controller acknowledged no HCI command at all.
+# `hciconfig hci0 name` sends Read Local Name, which the chip must answer.
+# Measured against live A2DP the same day: 60 probes at 1 Hz, none slower
+# than 50 ms, zero underruns, transport stayed `active` -- so asking is cheap
+# enough to ask even while music is playing.
+#
+# `unknown` is a real answer and is never rounded to either of the others: a
+# guard that cannot run says so `[GDE-DEP-060]`.
+controller_health() {
+    command -v hciconfig >/dev/null 2>&1 || { echo unknown; return; }
+    if hciconfig hci0 name >/dev/null 2>&1; then echo alive; else echo wedged; fi
+}
+
+state_of() {
+    local info paired trusted connected bonded has_bonded
+    info="$(bluetoothctl info "$1" 2>/dev/null)" || true
+    [ -z "$info" ] && { echo "found"; return; }
+    paired=$(grep -c 'Paired: yes' <<<"$info")
+    trusted=$(grep -c 'Trusted: yes' <<<"$info")
+    connected=$(grep -c 'Connected: yes' <<<"$info")
+    bonded=$(grep -c 'Bonded: yes' <<<"$info")
+    has_bonded=$(grep -c 'Bonded:' <<<"$info")
+
+    # 'Paired: yes' is not proof of a pairing. A leftover record makes BlueZ
+    # answer AlreadyExists and skip the bonding exchange entirely, leaving
+    # Paired: yes beside Bonded: no -- no link key was ever stored, and the
+    # link dies at the first disconnect looking exactly like interference.
+    # The link key is the thing that has to exist, so where BlueZ will tell
+    # us about it, that is what is believed. Older builds omit the field, and
+    # there Paired is the best available answer.
+    [ "$has_bonded" -gt 0 ] && paired="$bonded"
+
+    if   [ "$connected" -gt 0 ] && [ "$paired" -gt 0 ]; then echo "connected"
+    elif [ "$paired" -gt 0 ];                          then echo "paired"
+    elif [ "$trusted" -gt 0 ] || [ "$connected" -gt 0 ]; then echo "stale"  # [PI3-WHY-050]
+    else echo "found"
+    fi
+}
+
+# **`[PI3-FOUND-070]` `Connected: yes` is not proof of audio.** BlueZ reports
+# the device-level (ACL) link, which survives perfectly well while the A2DP
+# media profile underneath it is idle or gone. The one honest answer is
+# BlueZ's own MediaTransport1: `active` means a stream endpoint is acquired
+# and carrying audio, and nothing else does. Prints `none` when no transport
+# object exists at all, which is a different and more common failure than an
+# idle one.
+transport_state() {
+    local p
+    p="$(busctl --list tree org.bluez 2>/dev/null \
+         | grep -E "/dev_${1//:/_}/sep[0-9]+/fd[0-9]+$" | head -1)"
+    [ -n "$p" ] || { echo none; return; }
+    busctl get-property org.bluez "$p" org.bluez.MediaTransport1 State 2>/dev/null \
+        | sed 's/^s "//; s/"$//' | grep -E '^[a-z]+$' || echo none
+}
+
+# **One `connect` is a coin toss, not a policy `[PI3-FOUND-090]`.** A speaker
+# already carrying another device's connection stops answering pages
+# altogether: BlueZ returns `br-connection-page-timeout`, which is
+# indistinguishable from "switched off" and was being reported as plain
+# failure. On this appliance that is the NORMAL state at power-up, not an
+# exception -- the speaker feeds the Pi's USB, so the two power up together,
+# the Pi needs ~30 s to bring Bluetooth up, and any already-awake phone in
+# the room has had the speaker for twenty-odd seconds by then
+# `[PI3-FOUND-090]`. A single attempt loses that race every time; staying
+# after it wins the moment the other device lets go, or the moment someone
+# presses the speaker's pairing button.
+#
+# Bounded by a deadline rather than an attempt count, because each attempt
+# costs whatever the page timeout happens to be, and a budget in seconds is
+# the thing the caller actually has to spend.
+patient_connect() {
+    local addr="$1" budget="${2:-45}" started="$SECONDS" out last=unreachable
+    while :; do
+        bluetoothctl info "$addr" 2>/dev/null | grep -q 'Connected: yes' \
+            && { echo connected; return 0; }
+        out="$(bluetoothctl connect "$addr" 2>&1)"
+        case "$out" in
+            *"Connection successful"*|*"already connected"*|*AlreadyConnected*)
+                echo connected; return 0 ;;
+            *page-timeout*) last=unreachable ;;
+            *) last=refused ;;
+        esac
+        [ $(( SECONDS - started )) -lt "$budget" ] || break
+        sleep 2
+    done
+    echo "$last"
+    return 1
+}
+
+# `ok` reports the OUTCOME, never that the helper managed to run. That
+# distinction is not pedantry: `repair` once returned ok:true beside
+# state:"found", having destroyed a working pairing and failed to make a new
+# one, and the true half of that answer was ignored because the other half
+# said success.
+#
+#   report STATE "ACCEPTED STATES" [EXTRA_JSON]
+report() {
+    local st="$1" accepted="$2" extra="${3:-}" ok=false
+    case " $accepted " in *" $st "*) ok=true ;; esac
+    printf '{"ok":%s,"state":"%s"%s}\n' "$ok" "$st" "$extra"
+    [ "$ok" = true ] || exit 1
+}
+
+# Withdraw the standing invitation from every audio device but this one
+# `[PI3-FOUND-310]`. Paired is left intact -- only the auto-connect is taken
+# away, so any of them is one `use` away from coming back.
+
+# **`[PI3-FOUND-740]` A cache is not a scan result, and must never be
+# returned as one.**
+#
+# `$1`, when given, is a listener-facing reason the scan did not happen. The
+# remembered devices are still emitted, because they are still selectable and
+# withholding them helps nobody -- but `ok` goes false and the reason travels
+# beside them, so no caller can read a list of remembered speakers as proof
+# that the radio looked.
+json_devices() {
+    local first=1 mac name err="${1:-}" ok=true head=''
+    if [ -n "$err" ]; then
+        ok=false
+        # The reason is assembled from BlueZ's own output, so it is not this
+        # project's string. Quotes and backslashes are removed rather than
+        # escaped: the value is about to be interpolated into JSON by printf,
+        # which has no escaping of its own, and a reason that loses a
+        # character reads fine while a reason that breaks the frame loses the
+        # whole answer.
+        err="$(printf '%s' "$err" | tr -d '"\\' | tr -c '[:print:]' ' ')"
+        head=",\"error\":\"$err\""
+    fi
+    printf '{"ok":%s%s,"devices":[' "$ok" "$head"
+    while read -r _ mac name; do
+        [[ "$mac" =~ ^([0-9A-F]{2}:){5}[0-9A-F]{2}$ ]] || continue
+        # **`[PI3-FOUND-100]` A nameless device is noise, and noise hides the
+        # speaker.** bluetoothctl renders a device it has no name for as its
+        # own address with dashes; a BR/EDR speaker always advertises a name,
+        # so these are LE strangers the radio happened to overhear. Listing
+        # them buries the one row the listener is looking for among a dozen
+        # identical-looking hex strings, which is how "the speaker isn't
+        # there" gets concluded while it is sitting in the list.
+        [ "$name" = "${mac//:/-}" ] && continue
+        [ $first -eq 1 ] || printf ','
+        first=0
+        printf '{"address":"%s","name":"%s","state":"%s"}' \
+               "$mac" "${name//\"/}" "$(state_of "$mac")"
+    done < <(bluetoothctl devices 2>/dev/null)
+    printf ']}\n'
+}
+
+case "$VERB" in
+    list)
+        json_devices
+        ;;
+    scan)
+        # Bounded. A permanently scanning radio is a permanently degraded one
+        # on an antenna shared with Wi-Fi [PI3-UI-040].
+        #
+        # **`[PI3-FOUND-100]` The scan had the same blindness `pair` was
+        # already fixed for.** `pair_sequence` sets `transport bredr` because
+        # the default discovery filter returns LE only and a speaker is a
+        # classic BR/EDR device; `scan` never did, so the one verb whose
+        # entire job is finding a speaker was structurally incapable of
+        # seeing one. Observed directly 2026-09-08: a scan run while looking
+        # for the Middleton returned nine devices, eight of them nameless LE
+        # random addresses, and not the speaker -- which reads exactly like
+        # the speaker being switched off, and sends the listener to the
+        # wrong problem.
+        # **`[PI3-FOUND-740]` The scan discarded the one line that said it
+        # had not run.** `>/dev/null 2>&1` threw away `bluetoothctl`'s output
+        # and `json_devices` then listed BlueZ's cache, so a scan that never
+        # reached the air returned `{"ok":true, ...}` with the remembered
+        # speakers in it -- indistinguishable from a scan that ran and found
+        # nothing. On 2026-09-20 that is exactly what the listener saw seven
+        # times while the adapter was wedged `[PI3-FOUND-730]`: BlueZ refused
+        # every request with `org.bluez.Error.InProgress` before anything was
+        # transmitted, and the panel said "put yours in pairing mode".
+        #
+        # So the output is kept and read. `Discovery started` is the proof
+        # that the radio actually looked; without it this reports a failure
+        # and says why, and the reason is BlueZ's own words rather than a
+        # guess.
+        scanlog="$(mktemp)" || die "could not open a scan log"
+        { printf 'power on\n';    sleep 1
+          printf 'menu scan\n';   sleep 1
+          printf 'transport bredr\n'; sleep 1
+          printf 'back\n';        sleep 1
+          printf 'scan on\n';     sleep "${SCAN_SECONDS:-20}"
+          printf 'scan off\nquit\n'; } | bluetoothctl > "$scanlog" 2>&1
+
+        # Colour codes are stripped first: bluetoothctl emits them even when
+        # its output is a file, and they sit between the prompt and the words
+        # being matched.
+        plain="$(sed 's/\x1b\[[0-9;]*m//g' "$scanlog")"
+        rm -f "$scanlog"
+
+        if printf '%s' "$plain" | grep -q 'Discovery started'; then
+            json_devices
+        else
+            why="$(printf '%s' "$plain" \
+                   | sed -n 's/.*Failed to start discovery: *//p' | head -1)"
+            # A wedged controller is the more useful thing to say when it is
+            # true, because it names something the listener can act on -- the
+            # raw D-Bus error names nothing. Checked only on the failure
+            # path, so a healthy scan never pays for it.
+            case "$(controller_health)" in
+                wedged)
+                    json_devices "the Bluetooth adapter has stopped responding and needs a reboot; no scan was performed"
+                    ;;
+                *)
+                    json_devices "the adapter refused to scan${why:+ ($why)}; these are remembered speakers, not a scan result"
+                    ;;
+            esac
+            exit 1
+        fi
+        ;;
+    pair)
+        need_addr
+        pair_sequence
+        report "$(state_of "$ADDR")" "connected paired"
+        ;;
+    repair)
+        # A trusted-but-not-paired record makes every pair attempt fail with
+        # no explanation, and clearing it is the fix nobody would guess. But
+        # the clearing came FIRST here, which meant a repair that could not
+        # re-pair left the speaker worse than it found it -- no record at all,
+        # and no way back without someone physically holding the button.
+        #
+        # So: try plainly first, and remove only once a plain attempt has
+        # actually failed. Nothing working is destroyed on the strength of a
+        # guess about why.
+        need_addr
+        pair_sequence
+        st="$(state_of "$ADDR")"
+        case "$st" in
+            connected|paired) ;;
+            *)
+                bluetoothctl remove "$ADDR" >/dev/null 2>&1
+                sleep 2
+                pair_sequence
+                st="$(state_of "$ADDR")"
+                ;;
+        esac
+        report "$st" "connected paired"
+        ;;
+    use)
+        # **The panel's "use this one" is the listener's grab handle**, and it
+        # is the button pressed straight after the speaker's own pairing
+        # button, so it must be willing to wait out a pairing window rather
+        # than report failure in five seconds and leave the person pressing
+        # buttons in the dark `[PI3-FOUND-090]`. Trust comes first, because
+        # trust is what survives the next power cut `[PI3-WHY-040]` and this
+        # appliance power-cycles every time the speaker does
+        # `[PI3-FOUND-090]`.
+        need_addr
+        bluetoothctl trust "$ADDR" >/dev/null 2>&1
+
+        # **`[PI3-FOUND-310]` Trust means "reconnect to this without being
+        # asked", and only one speaker should be doing that.** A second
+        # trusted speaker is reached for by BlueZ unprompted on every boot,
+        # and since the adapter carries one A2DP transport `[PI3-FOUND-290]`
+        # it takes it from whichever speaker was chosen. Measured: the
+        # listener selected the Middleton and power-cycled; the keeper
+        # connected it at 30 s, the still-trusted OontZ auto-connected behind
+        # it, the Middleton dropped, and the boot finished playing through the
+        # speaker they had just navigated away from.
+        #
+        # **`[PI3-FOUND-650]` That invitation is no longer withdrawn, and the
+        # untrusting that did it has been removed.** It untrusted every other
+        # speaker so none could let itself in over the chosen one. Two things
+        # retired it. The agent now refuses any audio profile from anything
+        # that is not holding the audio `[PI3-FOUND-630]`, so an auto-connect
+        # from another speaker is answered rather than prevented -- which is
+        # the same outcome without the side effects. And untrusting had a
+        # sharp one: a paired but untrusted speaker, powered on nearby, was
+        # refused for want of an agent and knocked every nine seconds for as
+        # long as it stayed on `[PI3-FOUND-610]`.
+        #
+        # It also forced a subtlety on the keeper's fallback, which had to
+        # test `Paired` rather than `Trusted` precisely because this code had
+        # untrusted the speaker it needed to reach `[PI3-FOUND-560]`. One rule
+        # removed, one gotcha removed with it.
+
+        # **`[PI3-FOUND-290]` Free A2DP before asking for it.** The adapter
+        # carries one A2DP transport at a time. A second speaker connected
+        # beside the first does not fail -- it quietly negotiates HSP/HFP
+        # instead, which is mono over SCO and worthless for music. Measured:
+        # asked to use the OontZ with the Middleton still connected, the
+        # graph came up `output_MONO > OontZ:playback_MONO` with a capture
+        # source beside it (the giveaway: an A2DP sink has no microphone) and
+        # no MediaTransport for it at all. Volume full, nothing audible,
+        # every layer reporting success -- `[PI3-WHY-010]` wearing yet
+        # another hat.
+        #
+        # So using a speaker means leaving the other one, which is what the
+        # listener asked for anyway: nobody presses "use this one" meaning
+        # "and also keep the last".
+        for other in $(bluetoothctl devices Connected 2>/dev/null | awk '{print $2}'); do
+            [ "$other" = "$ADDR" ] && continue
+            bluetoothctl info "$other" 2>/dev/null | grep -q 'UUID: Audio Sink' || continue
+            bluetoothctl disconnect "$other" >/dev/null 2>&1
+            sleep 2
+        done
+
+        # Freeing the transport is not enough on its own: a device that has
+        # already settled on the headset profile stays there, because nothing
+        # renegotiates a live connection. Only reconnected when it is in that
+        # state -- a speaker already carrying A2DP is left strictly alone,
+        # since disconnecting it would interrupt the audio this verb exists
+        # to deliver.
+        if bluetoothctl info "$ADDR" 2>/dev/null | grep -q 'Connected: yes' &&
+           [ "$(transport_state "$ADDR")" = none ]; then
+            bluetoothctl disconnect "$ADDR" >/dev/null 2>&1
+            sleep 3
+        fi
+
+        conn="$(patient_connect "$ADDR" "${LEMPI_GRAB_SECONDS:-45}")"
+        # Make it the default sink. The caller must still reopen the player's
+        # output: the stream does not dependably follow [PI3-WHY-020].
+        # **`[PI3-FOUND-270]` The sink has to be THIS device's sink.** This
+        # took the first non-dummy sink in the list, which is correct only
+        # while exactly one speaker is connected. Connect a second and the
+        # verb quietly points the default at whichever happens to be listed
+        # first: asked to use the OontZ with the Middleton also connected, it
+        # answered `{"ok":true,"sink_node":"48"}` -- node 48 being the
+        # Middleton, node 56 the OontZ -- and the player, told to reopen on
+        # the strength of that `ok`, moved to the speaker the listener had
+        # just asked to leave. It reported success for doing the opposite of
+        # what it was asked.
+        #
+        # Matched by the alias BlueZ holds for the address, which is what
+        # WirePlumber names the node after -- the same join `lempi-speaker`
+        # uses `[PI3-AIM-050]`. No match means the sink is not there yet
+        # (a device can be connected with no transport, which is exactly the
+        # state a second speaker sits in), and that is reported as `none`
+        # rather than papered over with somebody else's sink.
+        want="$(bluetoothctl info "$ADDR" 2>/dev/null |
+                sed -n 's/^[[:space:]]*Alias: //p')"
+        # WirePlumber creates the sink a moment after BlueZ reports the
+        # connection, so a check made immediately finds nothing and would give
+        # up on a speaker that is about to work. Bounded, and it exits the
+        # instant the sink appears.
+        node=""
+        tries=0
+        while [ -n "$want" ] && [ -z "$node" ] && [ "$tries" -lt 10 ]; do
+            node="$(sudo -u "${SUDO_USER:-$USER}" \
+                    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" wpctl status 2>/dev/null \
+                    | sed -n '/Sinks:/,/Sink endpoints/p' \
+                    | grep -F "$want" | grep -oE '[0-9]+\.' | head -1 | tr -d '.')"
+            [ -n "$node" ] || sleep 1
+            tries=$((tries + 1))
+        done
+        [ -n "$node" ] && sudo -u "${SUDO_USER:-$USER}" \
+            XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" wpctl set-default "$node" 2>/dev/null
+        # `reach` distinguishes the two failures the panel could otherwise
+        # only render as one: `unreachable` is a speaker that never answered
+        # (held by another device, or asleep -- press its pairing button),
+        # `refused` is one that answered and said no. `transport` is the
+        # honest end of the whole exercise `[PI3-FOUND-070]`.
+        # Last, deliberately `[PI3-FOUND-310]`. `lempi-speaker` trusts whatever
+        # address is *stored*, and the store still names the old speaker until
+        # the caller records this one -- which it does only once this verb
+        # returns ok. Done at the top, a keeper tick landing mid-connect
+        report "$(state_of "$ADDR")" "connected" \
+               ",\"sink_node\":\"${node:-none}\",\"reach\":\"$conn\",\"transport\":\"$(transport_state "$ADDR")\""
+        ;;
+    forget)
+        need_addr
+        bluetoothctl disconnect "$ADDR" >/dev/null 2>&1
+        bluetoothctl remove "$ADDR"     >/dev/null 2>&1
+        # 'found' is what state_of says when no record remains, which for this
+        # verb is the success it was asked for.
+        report "$(state_of "$ADDR")" "found"
+        ;;
+    status)
+        # A query's ok means only that it could answer, which is the whole of
+        # what it promised. The state field carries everything else.
+        need_addr
+        printf '{"ok":true,"state":"%s"}\n' "$(state_of "$ADDR")"
+        ;;
+    radios)
+        # Every radio, whether it is blocked, and whether blocking it would cut
+        # the route this answer is travelling over `[PI3-RF-020]`.
+        printf '{"ok":true,"radios":['
+        sep=''
+        for r in /sys/class/rfkill/rfkill*; do
+            [ -e "$r/type" ] || continue
+            printf '%s{"name":"%s","kind":"%s","soft":%s,"hard":%s,"carries_route":%s}' \
+                "$sep" "$(cat "$r/name")" "$(cat "$r/type")" \
+                "$(cat "$r/soft")" "$(cat "$r/hard")" \
+                "$(carries_route "$r" && echo true || echo false)"
+            sep=','
+        done
+        printf ']}\n'
+        ;;
+    radio)
+        # `radio <kind> on|off`. KIND and STATE reuse the argument slots, so
+        # they are validated the way an address is: against a closed list,
+        # before anything acts on them.
+        kind="${2:-}"; want="${3:-}"
+        [[ "$kind" =~ ^(bluetooth|wlan|wwan)$ ]] || die "not a radio kind"
+        [[ "$want" =~ ^(on|off)$ ]]              || die "not on or off"
+        found=false
+        for r in /sys/class/rfkill/rfkill*; do
+            [ -e "$r/type" ] || continue
+            [ "$(cat "$r/type")" = "$kind" ] || continue
+            found=true
+            # THE refusal. Not "wlan is forbidden" -- that would be wrong on a
+            # machine with wired ethernet, where taking Wi-Fi down costs
+            # nothing. What is forbidden is blocking the radio carrying the
+            # default route, because the switch would sever the connection to
+            # the page holding it, and nothing short of physical access brings
+            # it back. On a Pi Zero 2 W that is always wlan0; elsewhere it may
+            # be nothing at all `[PI3-RF-030]`.
+            if [ "$want" = off ] && carries_route "$r"; then
+                die "that radio carries the default route"
+            fi
+            if [ "$(cat "$r/hard")" = 1 ]; then
+                die "blocked by a hardware switch"
+            fi
+            [ "$want" = on ] && echo 0 > "$r/soft" || echo 1 > "$r/soft"
+        done
+        $found || die "no such radio"
+        printf '{"ok":true,"kind":"%s","state":"%s"}\n' "$kind" "$want"
+        ;;
+    led)
+        # `led <on|wifi|off|default> [pct]`. Not a Bluetooth verb at all --
+        # it lives here because this is the one helper the web process
+        # already has standing permission to run, and adding a second
+        # privileged binary (and a second sudoers rule) for a few sysfs
+        # writes would be more moving parts, not fewer.
+        #
+        # Four modes, because the ACT LED already had a real, deliberate
+        # job before this existed: `setup-lempipi.sh`'s own "act led"
+        # section binds it to the Wi-Fi radio's rfkill state
+        # (`[PI3-LED-010]`), and that has to stay reachable as `wifi`, not
+        # be silently replaced by a plain on/off toggle.
+        mode="${2:-}"
+        [[ "$mode" =~ ^(on|wifi|off|default)$ ]] || die "not a valid led mode"
+        LED=/sys/class/leds/ACT
+        [ -d "$LED" ] || die "no ACT LED on this device"
+        case "$mode" in
+            default)
+                # Hand it back. Touching nothing here is the point -- the
+                # kernel's own unmanaged trigger applies, whatever that is.
+                ;;
+            wifi)
+                echo rfkill1 > "$LED/trigger" 2>/dev/null
+                ;;
+            off)
+                echo none > "$LED/trigger" 2>/dev/null
+                echo 0 > "$LED/brightness"
+                ;;
+            on)
+                pct="${3:-100}"
+                [[ "$pct" =~ ^([1-9][0-9]?|100)$ ]] || die "brightness must be 1-100"
+                if [ "$pct" -ge 100 ]; then
+                    # No blinking needed at full brightness -- and skipping
+                    # it means "on" at 100% behaves exactly like the
+                    # original plain on/off design, the simplest and most
+                    # reliable case.
+                    echo none > "$LED/trigger" 2>/dev/null
+                    echo 1 > "$LED/brightness"
+                else
+                    # This LED has no real dimmer (`max_brightness` is 1,
+                    # no `/sys/class/pwm` device exists on this board) --
+                    # checked live before this was written, not assumed.
+                    # The kernel's own `timer` trigger, blinked fast enough
+                    # to sit above flicker-fusion, is a faithful software
+                    # PWM: physically, real PWM dims an LED the same way,
+                    # by varying only the fraction of time spent fully on.
+                    # A 20ms period (~50Hz) split proportionally to the
+                    # requested percentage; each half floored at 1ms, the
+                    # finest granularity confirmed live on this board.
+                    echo timer > "$LED/trigger" 2>/dev/null
+                    on_ms=$(( 20 * pct / 100 )); [ "$on_ms" -lt 1 ] && on_ms=1
+                    off_ms=$(( 20 - on_ms ));    [ "$off_ms" -lt 1 ] && off_ms=1
+                    echo "$on_ms"  > "$LED/delay_on"
+                    echo "$off_ms" > "$LED/delay_off"
+                fi
+                ;;
+        esac
+        printf '{"ok":true,"mode":"%s"}\n' "$mode"
+        ;;
+
+    # ---------------------------------------------------------------- wifi
+    # Moving the appliance into a new Wi-Fi network, or serving its own,
+    # entirely on NetworkManager `[SPEC034]` -- checked live before this was
+    # written: this device runs NetworkManager, not the hand-written
+    # `hostapd.conf`/`wpa_supplicant.conf` files `PI001` originally
+    # designed against. `nmcli`'s own connection profiles ARE the "known
+    # networks, remembered, autoconnect or not" list this needs; nothing
+    # here tracks that state a second time.
+    #
+    # Every verb below that can disconnect the very session asking for it
+    # (`wifi-connect`, `ap-start`, `ap-stop`) schedules
+    # `lempi-wifi-revert` via `systemd-run --on-active=` BEFORE touching
+    # anything, and only cancels that schedule on a *fast, certain*
+    # failure -- an apparent success still waits for `wifi-confirm`, since
+    # the command succeeding locally says nothing about whether the
+    # browser that asked for it can still reach this device at all.
+    #
+    # `wifi-scan`/`wifi-known` deliberately do NOT emit this file's usual
+    # JSON: an SSID is arbitrary bytes chosen by whoever ran the network,
+    # not this project, and hand-escaping arbitrary content into JSON in
+    # `awk`/`printf` is a correctness risk not worth taking when the
+    # caller (Rust) already has a real JSON encoder. They relay `nmcli`'s
+    # own `-m multiline` output verbatim on success (unambiguous framing
+    # by field name, no delimiter that could collide with content) and
+    # fall through to the ordinary `{"ok":false,...}` shape on failure --
+    # the caller tells the two apart by this process's own exit status,
+    # not by guessing at the first byte of stdout.
+    wifi-scan)
+        nmcli -m multiline -f SSID,SIGNAL,SECURITY device wifi list --rescan yes 2>/dev/null \
+            || die "could not scan -- is the Wi-Fi radio on?"
+        ;;
+    wifi-known)
+        nmcli -m multiline -f NAME,TYPE,AUTOCONNECT,ACTIVE connection show 2>/dev/null \
+            || die "could not list connections"
+        ;;
+    wifi-connect)
+        ssid="${2:-}"; password="${3:-}"
+        [ -n "$ssid" ] || die "ssid required"
+        conn="wifi-$ssid"
+        prev="$(active_wifi_conn)"
+        change_id="wc$(date +%s)$$"
+        nmcli connection delete "$conn" >/dev/null 2>&1
+        if [ -n "$password" ]; then
+            nmcli connection add type wifi ifname wlan0 con-name "$conn" ssid "$ssid" \
+                wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$password" autoconnect yes \
+                >/dev/null 2>&1 || die "could not create the connection profile"
+        else
+            nmcli connection add type wifi ifname wlan0 con-name "$conn" ssid "$ssid" \
+                autoconnect yes >/dev/null 2>&1 || die "could not create the connection profile"
+        fi
+        systemd-run --unit="lempi-revert-$change_id" --on-active="${REVERT_MIN}min" \
+            /usr/local/bin/lempi-wifi-revert "$prev" "$conn" >/dev/null 2>&1
+        if nmcli connection up "$conn" >/dev/null 2>&1; then
+            printf '{"ok":true,"change_id":"%s","minutes":%s}\n' "$change_id" "$REVERT_MIN"
+        else
+            systemctl stop "lempi-revert-$change_id.timer" >/dev/null 2>&1
+            nmcli connection modify "$conn" autoconnect no >/dev/null 2>&1
+            [ -n "$prev" ] && nmcli connection up "$prev" >/dev/null 2>&1
+            die "could not connect -- reverted immediately, nothing was left waiting"
+        fi
+        ;;
+    wifi-forget)
+        name="${2:-}"
+        [ -n "$name" ] || die "connection name required"
+        [ "$name" != "$(active_wifi_conn)" ] || die "cannot forget the connection currently in use"
+        nmcli connection delete "$name" >/dev/null 2>&1 || die "no such connection"
+        printf '{"ok":true}\n'
+        ;;
+    wifi-autoconnect)
+        name="${2:-}"; want="${3:-}"
+        [ -n "$name" ] || die "connection name required"
+        [[ "$want" =~ ^(on|off)$ ]] || die "not on or off"
+        val=$([ "$want" = on ] && echo yes || echo no)
+        nmcli connection modify "$name" autoconnect "$val" >/dev/null 2>&1 || die "no such connection"
+        printf '{"ok":true,"autoconnect":"%s"}\n' "$want"
+        ;;
+    wifi-confirm)
+        change_id="${2:-}"
+        [[ "$change_id" =~ ^[a-zA-Z0-9_-]+$ ]] || die "not a valid change id"
+        # Idempotent by construction: stopping a timer that already fired,
+        # or never existed, is a harmless no-op in systemd, not an error --
+        # confirming twice, or confirming late, must never itself fail.
+        systemctl stop "lempi-revert-$change_id.timer" >/dev/null 2>&1
+        printf '{"ok":true}\n'
+        ;;
+    ap-start)
+        ssid="${2:-Lempi}"; password="${3:-Lempi321}"
+        # Published, not secret -- `[PI-SET-030]`'s own reasoning, carried
+        # over unchanged: a default any listener can look up is honest
+        # about what it is, where a silently-blank password would not be.
+        # The one thing still enforced is that it not be empty: an open
+        # access point into a device with no login of its own is a
+        # different order of exposure than a known one.
+        [ ${#password} -ge 8 ] || die "the access point password must be at least 8 characters"
+        prev="$(active_wifi_conn)"
+        change_id="ap$(date +%s)$$"
+        nmcli connection delete lempi-ap >/dev/null 2>&1
+        nmcli connection add type wifi ifname wlan0 con-name lempi-ap autoconnect no ssid "$ssid" \
+            802-11-wireless.mode ap 802-11-wireless.band bg \
+            ipv4.method shared ipv4.addresses 10.42.0.1/24 \
+            wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$password" \
+            >/dev/null 2>&1 || die "could not create the access point profile"
+        # The dnsmasq instance NetworkManager spawns for THIS shared
+        # connection reads every file here automatically -- its own
+        # extension point, not a guess `[SPEC034]`. `10.42.0.1` is not
+        # discovered after the fact: it is the address just assigned
+        # above, so the two can never disagree.
+        mkdir -p /etc/NetworkManager/dnsmasq-shared.d
+        printf 'address=/lempi/10.42.0.1\naddress=/lempi.lan/10.42.0.1\n' \
+            > /etc/NetworkManager/dnsmasq-shared.d/lempi.conf
+        systemd-run --unit="lempi-revert-$change_id" --on-active="${REVERT_MIN}min" \
+            /usr/local/bin/lempi-wifi-revert "$prev" lempi-ap >/dev/null 2>&1
+        if nmcli connection up lempi-ap >/dev/null 2>&1; then
+            printf '{"ok":true,"change_id":"%s","minutes":%s}\n' "$change_id" "$REVERT_MIN"
+        else
+            systemctl stop "lempi-revert-$change_id.timer" >/dev/null 2>&1
+            [ -n "$prev" ] && nmcli connection up "$prev" >/dev/null 2>&1
+            die "could not start the access point -- reverted immediately"
+        fi
+        ;;
+    ap-stop)
+        [ "$(active_wifi_conn)" = "lempi-ap" ] || die "the access point is not currently active"
+        # What to return to: whichever known Wi-Fi profile is marked to
+        # autoconnect -- the same thing a reboot would choose, and the
+        # only sensible default when "what was active before AP mode
+        # started" was never recorded for this specific call.
+        fallback="$(nmcli -t -f NAME,TYPE,AUTOCONNECT connection show 2>/dev/null \
+            | awk -F: '$2=="wifi" && $1!="lempi-ap" && $3=="yes"{print $1; exit}')"
+        [ -n "$fallback" ] || die "no known network is set to connect automatically"
+        change_id="as$(date +%s)$$"
+        # Reverting from a failed ap-stop means going BACK to the access
+        # point, not to some third state -- passing no previous connection
+        # is exactly what tells `lempi-wifi-revert` to do that.
+        systemd-run --unit="lempi-revert-$change_id" --on-active="${REVERT_MIN}min" \
+            /usr/local/bin/lempi-wifi-revert "" lempi-ap >/dev/null 2>&1
+        if nmcli connection up "$fallback" >/dev/null 2>&1; then
+            printf '{"ok":true,"change_id":"%s","minutes":%s}\n' "$change_id" "$REVERT_MIN"
+        else
+            systemctl stop "lempi-revert-$change_id.timer" >/dev/null 2>&1
+            nmcli connection up lempi-ap >/dev/null 2>&1
+            die "could not reach that network -- the access point is still running"
+        fi
+        ;;
+
+    *)
+        die "unknown verb"
+        ;;
+esac

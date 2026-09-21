@@ -1,0 +1,72 @@
+<h2>Preference Tuning</h2>
+
+<p>Anywhere you see an underlined song title or artist name — in the
+now-playing area, the queue, the "It beat" list, or the play-history table —
+clicking it opens the <strong>preference panel</strong> for that exact
+recording or that exact artist. This is the one place you can directly tell
+Lempi how you feel about something, rather than leaving it to figure that
+out from what you skip or let play.</p>
+
+<p class="note">This panel exists in the <strong>Lempi</strong> and
+<strong>MuLibPlay</strong> skins. It is not present in <strong>WinAmp</strong>,
+so names there are plain text, not links.</p>
+
+<h3>The three dials</h3>
+<p>Each dial is a slider, and each one answers a different question — they
+are independent of each other, not one combined "popularity" score:</p>
+
+<ul>
+  <li><strong>Cooldown</strong> — how long this has to wait before it's
+    even eligible to play again. Slide it left and it can repeat sooner;
+    slide it right and it has to wait longer. This is a hard rule: while
+    the cooldown is running, the song simply will not be picked.</li>
+  <li><strong>Recovery</strong> — once the cooldown ends, the song doesn't
+    instantly become fully likely again — it eases back in over this
+    length of time. A short recovery means it's back to normal quickly
+    after its cooldown; a long one means it takes a while to feel "fully
+    available" again even once it's technically eligible.</li>
+  <li><strong>Preference</strong> — how much you generally want to hear
+    this, independent of timing. Slide it toward "more" for a favorite you
+    want in heavier rotation; slide it toward "less" to hear something
+    less often without banishing it outright. All the way to "less" and it
+    effectively stops being picked at all.</li>
+</ul>
+
+<p>Each slider reads out roughly what it means in plain terms as you move it
+(a length of time for Cooldown/Recovery, a "how many times as often" figure
+for Preference) — the middle of each slider is always the Program
+Director's own default for whatever you're tuning (a recording or an
+artist have different defaults from each other), and moving toward either
+edge changes things faster the further you go, so the useful range isn't
+squeezed into a tiny sliver at one end.</p>
+
+<h3>Recording vs. artist</h3>
+<p>You can tune a specific recording (just this one song) or an artist
+(everything credited to them). Both apply at once and multiply together —
+turning an artist's Preference down quiets everything of theirs, even a
+specific song of theirs you've separately turned up.</p>
+
+<h3>Reset, Cancel, Save</h3>
+<ul>
+  <li><strong>Reset</strong> (next to each individual dial) — clears just
+    that one field back to "use the default," discarding anything you'd
+    set for it.</li>
+  <li><strong>Cancel</strong> — closes the panel without saving anything
+    you changed.</li>
+  <li><strong>Save</strong> — applies whatever you've changed. Fields you
+    never touched are left exactly as they were.</li>
+</ul>
+
+<h3>Play frequency</h3>
+<p>Underneath the preference panel, a small table fills in on its own (it
+never delays the panel opening) showing how often this recording or artist
+has actually played: across the last 24 hours, 7 days, 30 days, 365 days,
+and all time. The <strong>All</strong> row is every play for any reason.
+The <strong>User</strong> row is plays you personally queued or started.
+Any other rows are plays chosen automatically, broken out by which
+scheduled program was active when it happened — see
+<strong>Advanced Features</strong> for what a "program" is. Older listening
+history recorded before this breakdown existed only ever counts toward
+All, which is why All can show more than every other row put together, but
+never less. This table closes automatically when you close the preference
+panel.</p>

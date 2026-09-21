@@ -1,0 +1,7 @@
+#!/bin/sh
+printf '%s\n' "curl $*" >> "$VT_STATE/calls"
+case "$*" in
+    *reopen-output*) exit 0 ;;
+    *audio/sink*)    printf '{"sink":"%s","dummy":false,"known":true}\n' "$(cat "$VT_STATE/routed" 2>/dev/null)" ;;
+esac
+exit 0

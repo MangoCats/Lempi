@@ -1,0 +1,17 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lempi</title>
+<style>
+  /* The shell owns almost nothing on purpose. Anything styled here is styled
+     for every skin, so it is confined to what must exist before a skin has
+     loaded: the page background, and the box the skin is poured into. */
+  html, body { margin: 0; padding: 0; background: #141416; color: #eee;
+               font: 16px/1.5 system-ui, sans-serif; }
+  #app:empty::after { content: 'Loading…'; display: block; padding: 2rem;
+                      opacity: .5; font-size: .875rem; }
+</style>
+
+<div id="app"></div>
+<script src="/core.js"></script>
+<script>Lempi.start();</script>

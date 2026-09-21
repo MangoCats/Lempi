@@ -1,0 +1,143 @@
+/* Vipunen console [SPEC013]. An operator's tool: dense, legible, unstyled where
+   styling would not help. Deliberately not the player's skin -- these are
+   different questions about the same rows [SPEC-SUI-020], and a console that
+   looked like the listening surface would invite being used as one. */
+
+:root {
+  --bg: #fbfaf8; --fg: #1b1a18; --dim: #6a655e; --line: #ddd8d0;
+  --panel: #fff; --accent: #7a5c2e; --warn: #8a4b1a; --bad: #8c2f2f;
+  --ok: #2f6b3a; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #16151a; --fg: #e8e4dd; --dim: #9a948b; --line: #33313a;
+    --panel: #1e1d23; --accent: #d9ab63; --warn: #d69254; --bad: #e07a7a;
+    --ok: #7fc08c;
+  }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+a { color: var(--accent); }
+header {
+  display: flex; align-items: baseline; gap: 1.5rem;
+  padding: .8rem 1.2rem; border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; background: var(--bg); z-index: 5;
+}
+header h1 { font-size: 1rem; margin: 0; font-weight: 600; letter-spacing: .02em; }
+header nav { display: flex; gap: 1rem; }
+header nav a { text-decoration: none; color: var(--dim); }
+header nav a.on { color: var(--fg); border-bottom: 2px solid var(--accent); }
+header .ro {
+  margin-left: auto; font: 12px var(--mono); color: var(--dim);
+  border: 1px solid var(--line); border-radius: 3px; padding: .1rem .45rem;
+}
+main { padding: 1.2rem; max-width: 1200px; }
+
+/* the counters strip */
+.tiles { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1.2rem; }
+.tile {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+  padding: .55rem .8rem; min-width: 8.5rem;
+}
+.tile b { display: block; font: 600 1.25rem/1.2 var(--mono); }
+.tile span { font-size: .78rem; color: var(--dim); }
+.tile.warn b { color: var(--warn); }
+
+/* coverage bars -- what has run over how much */
+.cov { display: grid; grid-template-columns: 9rem 1fr 7rem; gap: .4rem .7rem;
+       align-items: center; margin-bottom: 1.4rem; font-size: .85rem; }
+.cov .bar { background: var(--line); border-radius: 2px; height: .55rem; }
+.cov .bar i { display: block; height: 100%; background: var(--accent);
+              border-radius: 2px; }
+.cov .n { font: 12px var(--mono); color: var(--dim); text-align: right; }
+
+.controls { display: flex; gap: .5rem; margin-bottom: .9rem; flex-wrap: wrap; }
+input[type=search] {
+  padding: .4rem .6rem; border: 1px solid var(--line); border-radius: 3px;
+  background: var(--panel); color: var(--fg); min-width: 16rem; font: inherit;
+}
+.chip {
+  padding: .35rem .7rem; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--panel); color: var(--dim); cursor: pointer; font-size: .82rem;
+}
+.chip.on { color: var(--fg); border-color: var(--accent); }
+.chip.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+.chip.danger:hover { background: color-mix(in srgb, var(--bad) 10%, var(--panel)); }
+
+table { border-collapse: collapse; width: 100%; font-size: .87rem; }
+th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--line); }
+th { color: var(--dim); font-weight: 500; font-size: .78rem; text-transform: uppercase;
+     letter-spacing: .04em; }
+td.num, th.num { text-align: right; font-family: var(--mono); font-size: .82rem; }
+tbody tr:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+
+.pill { font: 11px var(--mono); padding: .05rem .4rem; border-radius: 3px;
+        border: 1px solid var(--line); color: var(--dim); white-space: nowrap; }
+.pill.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+.pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
+.pill.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, var(--line)); }
+
+/* the honesty label: assumed is not verified [SPEC-SUI-060] */
+.caveat {
+  border-left: 3px solid var(--warn); background: var(--panel);
+  padding: .6rem .9rem; margin: 0 0 1.2rem; font-size: .85rem; color: var(--dim);
+}
+.caveat b { color: var(--warn); }
+
+.list { font: 12px var(--mono); background: var(--panel);
+        border: 1px solid var(--line); border-radius: 4px;
+        padding: .6rem .8rem; max-height: 18rem; overflow: auto; }
+.list div { white-space: nowrap; }
+
+/* profile */
+.kv { display: grid; grid-template-columns: 11rem 1fr; gap: .25rem .9rem;
+      font-size: .87rem; margin-bottom: 1.4rem; }
+.kv dt { color: var(--dim); }
+.kv dd { margin: 0; font-family: var(--mono); font-size: .82rem; word-break: break-all; }
+h2 { font-size: .95rem; margin: 1.6rem 0 .6rem; }
+h2 small { font-weight: 400; color: var(--dim); }
+.flavor { columns: 3 15rem; column-gap: 1.4rem; font-size: .83rem; }
+.flavor .row { display: flex; justify-content: space-between; gap: .5rem;
+               break-inside: avoid; border-bottom: 1px dotted var(--line); padding: .12rem 0; }
+.flavor .row span:last-child { font-family: var(--mono); color: var(--dim); }
+.err { color: var(--bad); font-family: var(--mono); font-size: .85rem; }
+.empty { color: var(--dim); font-style: italic; padding: 1rem 0; }
+
+/* a MusicBrainz release candidate [SPEC-SUI-215] */
+.candidate { border: 1px solid var(--line); border-radius: 4px;
+             padding: .6rem .9rem; margin-bottom: .7rem; }
+.candidate.best { border-color: var(--accent); }
+.candidate h3 { margin: 0 0 .3rem; font-size: .9rem; }
+.candidate .meta { font-size: .8rem; color: var(--dim); margin-bottom: .4rem; }
+
+/* the targeted remote read at open time [SPEC-DF-116..118] */
+.diverge { border-left: 3px solid var(--warn); background: var(--panel);
+           padding: .5rem .9rem; margin: 0 0 1.2rem; font-size: .85rem; }
+.diverge .row { display: flex; justify-content: space-between; align-items: center;
+                gap: .8rem; padding: .4rem 0; border-bottom: 1px dotted var(--line); }
+.diverge .row:last-child { border-bottom: none; }
+
+/* flag sync across local/lempipi, and the unflag action [REQ-VIS-265].
+   Deliberately vivid, not the muted --ok/--warn text used by .pill
+   elsewhere: this is a status a person decides whether to act on at a
+   glance, not a quiet label among many. */
+.flagsync { display: flex; align-items: center; gap: .9rem; flex-wrap: wrap;
+            margin: 0 0 1.2rem; font-size: .85rem; }
+.flagsync .cell { display: flex; align-items: center; gap: .35rem; }
+.flagsync .dot { width: 1.05rem; height: 1.05rem; border-radius: 50%;
+                 display: inline-flex; align-items: center; justify-content: center;
+                 font-size: .65rem; font-weight: 700; line-height: 1; flex: none; }
+.flagsync .dot.sync { background: #22c55e; color: #062b12; }
+.flagsync .dot.desync { background: #eab308; color: #362a00; }
+.flagsync .dot.unknown { background: var(--line); color: var(--dim); }
+.flagsync .label { color: var(--dim); }
+
+/* the handoff [SPEC-SUI-140]: Lempi's own review page, framed in place */
+.handoff-frame {
+  display: block; width: 100%; height: 34rem; margin-top: .5rem;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel);
+}

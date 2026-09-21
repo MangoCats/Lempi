@@ -1,0 +1,27 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check-docs:
+    name: check_docs.py --strict
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      # [GOV-DOC-040]: tag collisions, dangling tags, unresolvable links are
+      # errors and fail the build; a doc-cited path that doesn't exist in the
+      # tree, an over-length doc, and a tag defined twice are warnings and do
+      # not. See tools/check_docs.py's own module docstring for the full list.
+      - run: python tools/check_docs.py --strict
+      # [GOV-FBN-010]: a retired project name belongs in exactly one file.
+      # The guard reads its search terms out of that file at run time, and
+      # exits non-zero if the file is missing or its token block is empty,
+      # rather than reporting a clean scan it never performed [GOV-FBN-020].
+      - run: python tools/check_forbidden_names.py --strict

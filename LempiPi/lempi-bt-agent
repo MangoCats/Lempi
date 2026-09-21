@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""Answer BlueZ's authorisation questions, so the appliance decides who connects.
+
+**Why `[PI3-FOUND-630]`.** With no agent registered, BlueZ has only two
+behaviours and neither is what this appliance wants. A *trusted* device is
+authorised automatically -- so the chosen speaker can barge in and take the
+one A2DP transport away from whatever is playing. An *untrusted* device is
+refused outright, forever: measured 2026-09-10, the Middleton knocked every
+nine seconds for as long as it was powered on, logging `Authentication attempt
+without agent` and `Access denied` each time `[PI3-FOUND-610]`.
+
+An agent turns that pair of reflexes into a decision. The rule it applies is
+the whole design in one sentence: **there is at most one speaker connected at
+a time, and it is only replaced when it goes away** `[PI3-AIM-070]`.
+
+So: accept when there is no incumbent, accept when the caller *is* the
+incumbent, refuse otherwise. Refusing here is what makes the difference,
+because it happens before a transport is handed over -- the keeper's
+disconnect could only ever clean up after the damage, and it lost that race
+`[PI3-FOUND-640]`.
+
+Run `lempi-bt-agent selftest` to check every profile against both callers
+without touching D-Bus or the running agent.
+
+Capability is NoInputNoOutput: this appliance has no keypad to type a passkey
+on, so pairing confirmations are accepted. Pairing still requires the listener
+to have put the speaker in pairing mode; the agent does not make the appliance
+promiscuous, it makes it answer.
+"""
+import os
+import sys
+
+import dbus
+import dbus.mainloop.glib
+import dbus.service
+from gi.repository import GLib
+
+AGENT_PATH = "/org/lempi/agent"
+CAPABILITY = "NoInputNoOutput"
+# Written by `lempi-speaker`; holds the address of the speaker audio is
+# currently established on, or does not exist when there is none.
+INCUMBENT = os.environ.get("LEMPI_INCUMBENT",
+                          "/run/lempi/incumbent")
+# Everything that can take audio bandwidth on this adapter. A2DP sink is the
+# obvious one; the headset and hands-free profiles matter just as much, because
+# they open a *synchronous* (eSCO) link, and a synchronous link does not share
+# the radio with A2DP -- it pre-empts it. That is not a theory: it is what
+# silenced both speakers on 2026-09-10, measured at zero packets against 375
+# `[PI3-FOUND-600]`. Refusing A2DP alone would leave the intruder the very door
+# it came through last time.
+AUDIO_UUIDS = {
+    # **The umbrella UUID is the one BlueZ actually asks about**, and leaving
+    # it out made the first version useless in exactly the case it was written
+    # for: on 2026-09-10 the Middleton asked for `...110d`, was allowed, and
+    # the keeper's backstop had to clean up twenty seconds later
+    # `[PI3-FOUND-660]`. Guarding the sink and source UUIDs alone guards the
+    # names nobody uses.
+    "0000110d-0000-1000-8000-00805f9b34fb",  # Advanced Audio Distribution
+    "0000110b-0000-1000-8000-00805f9b34fb",  # A2DP sink
+    "0000110a-0000-1000-8000-00805f9b34fb",  # A2DP source
+    "00001108-0000-1000-8000-00805f9b34fb",  # headset (HSP)
+    "00001112-0000-1000-8000-00805f9b34fb",  # headset audio gateway
+    "0000111e-0000-1000-8000-00805f9b34fb",  # hands-free (HFP)
+    "0000111f-0000-1000-8000-00805f9b34fb",  # hands-free audio gateway
+}
+# Kept for the tests and for anyone reading a log line.
+A2DP_SINK = "0000110b-0000-1000-8000-00805f9b34fb"
+
+
+def incumbent():
+    """The speaker audio is on, upper-cased, or None."""
+    try:
+        with open(INCUMBENT) as handle:
+            addr = handle.read().strip().upper()
+            return addr or None
+    except OSError:
+        return None
+
+
+def address_of(device_path):
+    """`/org/bluez/hci0/dev_AA_BB_...` -> `AA:BB:...`, without a D-Bus round trip."""
+    tail = str(device_path).rsplit("/", 1)[-1]
+    if not tail.startswith("dev_"):
+        return ""
+    return tail[4:].replace("_", ":").upper()
+
+
+class Rejected(dbus.DBusException):
+    _dbus_error_name = "org.bluez.Error.Rejected"
+
+
+class Agent(dbus.service.Object):
+    @dbus.service.method("org.bluez.Agent1", in_signature="", out_signature="")
+    def Release(self):
+        pass
+
+    @dbus.service.method("org.bluez.Agent1", in_signature="os", out_signature="")
+    def AuthorizeService(self, device, uuid):
+        addr = address_of(device)
+        if uuid.lower() not in AUDIO_UUIDS:
+            print(f"authorise {addr} for {uuid} (not audio, allowing)", flush=True)
+            return
+        held = incumbent()
+        if held is None or held == addr:
+            print(f"authorise {addr} for audio (incumbent: {held or 'none'})",
+                  flush=True)
+            return
+        # The one case this agent exists for.
+        print(f"REFUSE {addr}: '{held}' already has the audio", flush=True)
+        raise Rejected("another speaker already has the audio")
+
+    @dbus.service.method("org.bluez.Agent1", in_signature="o", out_signature="s")
+    def RequestPinCode(self, device):
+        return "0000"
+
+    @dbus.service.method("org.bluez.Agent1", in_signature="o", out_signature="u")
+    def RequestPasskey(self, device):
+        return dbus.UInt32(0)
+
+    @dbus.service.method("org.bluez.Agent1", in_signature="ouq", out_signature="")
+    def DisplayPasskey(self, device, passkey, entered):
+        pass
+
+    @dbus.service.method("org.bluez.Agent1", in_signature="os", out_signature="")
+    def DisplayPinCode(self, device, pincode):
+        pass
+
+    @dbus.service.method("org.bluez.Agent1", in_signature="ou", out_signature="")
+    def RequestConfirmation(self, device, passkey):
+        # No keypad to confirm on; the listener confirmed by putting the
+        # speaker into pairing mode in the first place.
+        print(f"confirm pairing with {address_of(device)}", flush=True)
+
+    @dbus.service.method("org.bluez.Agent1", in_signature="o", out_signature="")
+    def RequestAuthorization(self, device):
+        print(f"authorise pairing with {address_of(device)}", flush=True)
+
+    @dbus.service.method("org.bluez.Agent1", in_signature="", out_signature="")
+    def Cancel(self):
+        pass
+
+
+# **`[PI3-FOUND-660]` The cases are written out here, not read from the code
+# above.** The first version of this test fed each case a UUID taken from
+# `AUDIO_UUIDS` itself, so the test and the implementation agreed about which
+# profile names matter and were wrong together: five green results, and the
+# agent still waved through the umbrella UUID that BlueZ actually asks about.
+# A test that shares the implementation's blind spot tests nothing. These
+# strings are transcribed from the assigned-numbers list by hand, on purpose.
+SELFTEST = [
+    ("Advanced Audio Distribution", "0000110d-0000-1000-8000-00805f9b34fb", False),
+    ("A2DP sink",                   "0000110b-0000-1000-8000-00805f9b34fb", False),
+    ("A2DP source",                 "0000110a-0000-1000-8000-00805f9b34fb", False),
+    ("headset (HSP)",               "00001108-0000-1000-8000-00805f9b34fb", False),
+    ("headset audio gateway",       "00001112-0000-1000-8000-00805f9b34fb", False),
+    ("hands-free (HFP)",            "0000111e-0000-1000-8000-00805f9b34fb", False),
+    ("hands-free audio gateway",    "0000111f-0000-1000-8000-00805f9b34fb", False),
+    # Not audio: control channels the appliance has no reason to refuse.
+    ("A/V remote control",          "0000110e-0000-1000-8000-00805f9b34fb", True),
+    ("A/V remote control target",   "0000110c-0000-1000-8000-00805f9b34fb", True),
+]
+
+INCUMBENT_ADDR = "AA:BB:CC:DD:EE:01"
+INTRUDER_ADDR = "AA:BB:CC:DD:EE:02"
+
+
+def selftest():
+    """Check every profile against both callers, and against no incumbent."""
+    import tempfile
+
+    global INCUMBENT
+    failures = []
+
+    def path_for(addr):
+        return "/org/bluez/hci0/dev_" + addr.replace(":", "_")
+
+    def allowed(addr, uuid):
+        try:
+            Agent.AuthorizeService(None, path_for(addr), uuid)
+            return True
+        except Rejected:
+            return False
+
+    with tempfile.NamedTemporaryFile("w", suffix=".incumbent",
+                                     delete=False) as handle:
+        handle.write(INCUMBENT_ADDR + "\n")
+        held_file = handle.name
+
+    for held, label in ((held_file, "with an incumbent"), (None, "with none")):
+        INCUMBENT = held or "/nonexistent/incumbent"
+        for name, uuid, is_control in SELFTEST:
+            for addr, who in ((INCUMBENT_ADDR, "incumbent"),
+                              (INTRUDER_ADDR, "intruder")):
+                # Refused only when audio is held by somebody else.
+                expect = not (held and who == "intruder" and not is_control)
+                got = allowed(addr, uuid)
+                mark = "ok  " if got == expect else "FAIL"
+                if got != expect:
+                    failures.append(f"{name}/{who}/{label}")
+                print(f"  {mark} {label:18} {who:9} {name:28} "
+                      f"{'allowed' if got else 'refused'}")
+
+    os.unlink(held_file)
+    if failures:
+        print(f"\n{len(failures)} FAILURES: {', '.join(failures)}")
+        return 1
+    print(f"\nall {len(SELFTEST) * 4} cases pass")
+    return 0
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "selftest":
+        return selftest()
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    bus = dbus.SystemBus()
+    Agent(bus, AGENT_PATH)
+    manager = dbus.Interface(bus.get_object("org.bluez", "/org/bluez"),
+                             "org.bluez.AgentManager1")
+    manager.RegisterAgent(AGENT_PATH, CAPABILITY)
+    manager.RequestDefaultAgent(AGENT_PATH)
+    print(f"lempi-bt-agent registered ({CAPABILITY}), "
+          f"incumbent file {INCUMBENT}", flush=True)
+    try:
+        GLib.MainLoop().run()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            manager.UnregisterAgent(AGENT_PATH)
+        except Exception:
+            pass
+
+
+if __name__ == "__main__":
+    sys.exit(main())

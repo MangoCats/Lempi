@@ -1,0 +1,73 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lempi — Guide</title>
+<style>
+  /* One guide page for every skin, the same reason browse.html is one page
+     rather than three [REQ-VIS-310]: it loads the chosen skin's own
+     stylesheet, so it inherits that skin's ground/type/link colours, and
+     everything here is only the layout a long, tiered document needs. */
+  html, body { margin: 0; padding: 0; background: #141416; color: #eee;
+               font: 16px/1.6 system-ui, sans-serif; }
+  a { color: inherit; }
+  .guide { max-width: 46rem; margin: 0 auto; padding: .75rem 1rem 4rem; }
+
+  .guide > header { display: flex; align-items: baseline; gap: .75rem;
+                     flex-wrap: wrap; margin-bottom: .5rem; }
+  .guide > header h1 { font-size: 1.1rem; margin: 0; flex: 1; }
+  .guide > header a.back { font-size: .8125rem; opacity: .75; }
+  #langpick { font: inherit; font-size: .8125rem; background: transparent;
+              color: inherit; border: 1px solid currentColor; border-radius: 4px;
+              padding: .2rem .4rem; }
+
+  /* Tier navigation: a row of tabs on a wide screen, a wrapped set of
+     full-width buttons on a phone -- this document is read one-handed as
+     often as the browse page is. */
+  nav.tiers { display: flex; flex-wrap: wrap; gap: .35rem; margin: .75rem 0 1.25rem;
+              border-bottom: 1px solid currentColor; padding-bottom: .75rem; }
+  nav.tiers button { font: inherit; font-size: .8125rem; cursor: pointer;
+                      padding: .5rem .7rem; min-height: 2.2rem; border-radius: 6px;
+                      border: 1px solid currentColor; background: transparent;
+                      color: inherit; opacity: .7; }
+  nav.tiers button[aria-selected="true"] { opacity: 1; font-weight: 600;
+                                            outline: 2px solid currentColor; }
+
+  #content { line-height: 1.65; }
+  #content h2 { font-size: 1.15rem; margin: 1.75rem 0 .6rem; }
+  #content h2:first-child { margin-top: 0; }
+  #content h3 { font-size: 1rem; margin: 1.4rem 0 .4rem; }
+  #content p, #content ul, #content ol { margin: .5rem 0; }
+  #content li { margin: .25rem 0; }
+  #content code { background: rgba(128,128,128,.25); padding: .05rem .3rem;
+                   border-radius: 3px; font-size: .9em; }
+  #content pre { background: rgba(128,128,128,.18); padding: .6rem .75rem;
+                 border-radius: 6px; overflow-x: auto; }
+  #content pre code { background: none; padding: 0; }
+  #content table { border-collapse: collapse; width: 100%; margin: .6rem 0 1rem;
+                    font-size: .875rem; }
+  #content th, #content td { border: 1px solid currentColor; padding: .35rem .5rem;
+                              text-align: left; vertical-align: top; }
+  #content th { opacity: .8; }
+  #content .note { border-left: 3px solid currentColor; padding: .1rem .8rem;
+                    margin: .75rem 0; opacity: .9; font-size: .9375rem; }
+  #content .status-provisional, #content .status-missing { opacity: .85; font-style: italic; }
+
+  #loaderror { display: none; padding: .75rem; border: 1px solid currentColor;
+               border-radius: 6px; margin: 1rem 0; }
+</style>
+
+<div class="guide">
+  <header>
+    <h1>Lempi &amp; Vipunen — User's Guide</h1>
+    <select id="langpick" hidden></select>
+    <a class="back" href="/">← back to the player</a>
+  </header>
+
+  <nav class="tiers" id="tiers"></nav>
+
+  <p id="loaderror">Could not load the guide. <a href="javascript:location.reload()">Try again</a>.</p>
+  <div id="content"></div>
+</div>
+
+<script src="/core.js"></script>
+<script src="/guide.js"></script>

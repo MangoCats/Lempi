@@ -1,0 +1,74 @@
+<div class="mulib">
+  <div>
+    <button class="button" data-cmd="pause" id="b-pause">Pause</button>&nbsp;&nbsp;
+    <button class="button" data-cmd="play"  id="b-play">Play</button>&nbsp;&nbsp;
+    <button class="button" data-cmd="skip">Skip</button>
+  </div>
+
+  <input type="range" id="volume" min="0" max="1" step="any" value="1">
+  <div class="elapsed" id="volnum">0.0 dB</div>
+
+  <!-- The same full width as the volume slider above it [REQ-VIS-225]. The
+       original had no such control; a track position that could be read and
+       not changed was the one thing MuLibPlay users reached for and did not
+       find. -->
+  <div id="bar" title="Click to move within the track"><div id="fill"></div></div>
+
+  <!-- What is playing sits directly under the bar that measures it: the two
+       are one reading, and a sleeve between them made the position belong to
+       nothing in particular. The original put the cover first because it had
+       no bar to belong to. -->
+  <div class="nowplaying">
+    <span id="title">—</span>
+    <i id="byword" hidden> by </i><span id="artist"></span>
+    <i id="fromword" hidden> from </i><span id="album"></span>
+  </div>
+  <div class="elapsed"><span id="plays"></span> &nbsp; <span id="time">0:00 / 0:00</span></div>
+
+  <!-- Front then back, side by side, both 200px tall and centred -- which
+       is how the original emits them: two <img> in sequence for the
+       now-playing track only, then a line break. -->
+  <div id="art"></div>
+  <div id="artback"></div>
+  <!-- A static block, as the original showed them `[SPEC-LYR-045]`. Absent for
+       most passages, and hidden by itself rather than announcing a 404. -->
+  <pre id="lyrics" hidden></pre>
+
+  <div class="panes">
+    <div class="leftcol">
+      <div class="queue">
+        <h3>Coming up</h3>
+        <div id="queue"></div>
+      </div>
+      <div class="browseby">
+        <h3>Browse by:</h3>
+        <div class="browserow">
+          <a href="/browse?kind=artists"><button class="button">Artist</button></a>
+          <a href="/browse?kind=albums"><button class="button">Album</button></a>
+          <a href="/browse?kind=tracks"><button class="button">Track</button></a>
+        </div>
+      </div>
+    </div>
+    <div class="stations">
+      <h3>Programme</h3>
+      <div id="stations"></div>
+      <p class="autoclock"><input type="checkbox" id="autoclock"><label for="autoclock">Autoselect by clock time</label></p>
+    </div>
+  </div>
+
+  <hr/>
+  <!-- Filled in and toggled by core.js's Lempi.editPreference -- an in-page
+       panel, not a dialog, so it closes straight back into this same flow
+       on Cancel or Save [REQ-VIS-285]. -->
+  <div id="pref-panel" class="pref-panel" hidden></div>
+  <!-- Filled in and toggled by core.js's Lempi.loadFreqPanel, opened from
+       inside editPreference above once its own fetch resolves -- never
+       delaying the preference panel itself [REQ-VIS-300]. -->
+  <div id="freq-panel" class="freq-panel" hidden></div>
+  <div class="why" id="why"></div>
+
+  <div class="skinbar">
+    <a href="/guide" target="_blank">Help</a>
+    <label for="skinpick">Skin</label> <select id="skinpick" data-skins></select>
+  </div>
+</div>

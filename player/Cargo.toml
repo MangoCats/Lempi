@@ -1,0 +1,196 @@
+[package]
+name = "lempi-player"
+version = "0.1.0"
+edition = "2021"
+description = "Lempi audio player: bounded streaming decode, crossfade, queue"
+license = "MIT"
+
+# The MPD Director is off unless asked for `[SPEC-MPD-070]`, `[IMPL-MPD-065]`.
+# Gated LAST, deliberately: gating first would have meant five stages developed
+# behind a flag nobody had turned on.
+#
+# `vipunen-support` is the same shape, for the same reason `[SPEC-SUI-190]`: the
+# identification-review page, and the waveform editor and MusicBrainz browser
+# built alongside it, exist for the desktop induct workflow and have no reason
+# to occupy a byte of an appliance image that never runs Vipunen `[SPEC-SA-010]`.
+[features]
+# `echo-client` is default, and was not until 2026-09-18 `[GDE-ECHO-379]`.
+#
+# Following is a *setting* `[SPEC-ECHO-010]`: every interface offers "Follow
+# this node" unconditionally, stores what is typed there and persists it. With
+# the feature off, `lempi.rs` never spawns the task that reads it, so the
+# control accepts a host and the node stays independent without saying so --
+# the fault the deploy script's own comment about `vipunen-support` already
+# names, "a UI that looks like it works and does not, which is worse than a
+# 404".
+#
+# It cost nothing to leave off and cost a fleet to leave off. Nothing in the
+# tree enabled it: not `cargo test`, not `build/verify-targets.sh`, not
+# `build/deploy-appliance.sh`, whose `FEATURES` is empty unless a caller sets
+# `LEMPI_FEATURES`. bose was built with it by hand and lempipi was not, which
+# is how two nodes of one fleet came to differ in whether a control worked --
+# and it meant `player/src/echo_client.rs` was not merely untested but
+# **uncompiled** by every test run, which is why three faults in it survived
+# to be found by reading `[GDE-ECHO-384]`.
+#
+# The dependencies are free: `tokio-tungstenite` and `futures-util` are both
+# in the graph already via axum's own `ws` feature, so this names crates that
+# are compiled either way. Measured on the appliance build, it is about 400 kB
+# of binary.
+default = ["echo-client"]
+mpd = []
+# `dep:reqwest` -- an appliance build never resolves, fetches or compiles the
+# HTTP client at all, not just leaves it unused `[SPEC-SUI-190]`,
+# `[SPEC-SUI-196]`.
+vipunen-support = ["dep:reqwest"]
+# The native framebuffer/touch UI `[SPEC036]`, for appliances with a small
+# SPI display rather than a browser -- `lempiplay3`'s own touchscreen,
+# not `bose`/`lempipi`, which never resolve or compile any of this.
+# `tokio-tungstenite` is already in the dependency graph via axum's own
+# `ws` feature (server-side); declaring it directly here costs nothing
+# extra in the build graph, it only makes the already-compiled crate
+# nameable from this bin's own client-side code `[SPEC-FBUI-015]`.
+fbui = ["dep:tokio-tungstenite", "dep:embedded-graphics", "dep:framebuffer", "dep:futures-util", "dep:u8g2-fonts", "dep:image"]
+# `echoprobe` `[GDE-ECHO-310]`: an echo node's side of the wire, as an
+# observer. Both crates are already in the graph via `fbui` and via axum's
+# own `ws` feature, so this names them rather than adding them.
+echo-client = ["dep:tokio-tungstenite", "dep:futures-util"]
+
+[dependencies]
+symphonia = { version = "0.5", features = ["mp3", "flac", "isomp4", "aac", "vorbis"] }
+rubato = "0.15"
+cpal = "0.18"
+# bundled: compiles SQLite from source rather than needing libsqlite3-dev for
+# every target. Costs build time, buys a working cross-compile [REQ-HW-145].
+md5 = "0.7"
+rusqlite = { version = "0.32", features = ["bundled"] }
+# Web UI. Default features only, and tokio limited to what the server needs --
+# on a 512 MB Pi Zero 2W every dependency is a memory decision [REQ-HW-140].
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# One outbound call this player ever makes: MusicBrainz search, from the
+# review page, desktop-only `[SPEC-SUI-196]`. `rustls` rather than the default
+# system-OpenSSL backend -- one less thing a desktop build needs installed to
+# link, and an appliance build never pulls this crate in at all (see
+# `vipunen-support` above).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
+
+# fbui's own client-side WebSocket connection to lempi's existing /ws
+# `[SPEC-FBUI-015]` -- the version pinned by whatever axum's `ws` feature
+# already resolved (Cargo.lock decides; not a second version in the tree).
+tokio-tungstenite = { version = "0.24", optional = true }
+# `.split()`/`StreamExt` on the websocket stream -- already in the tree via
+# axum/tokio-tungstenite themselves, same reasoning as both above.
+futures-util = { version = "0.3", optional = true }
+# Drawing primitives + bitmap fonts for the 480x320 panel `[SPEC-FBUI-030]`.
+embedded-graphics = { version = "0.8", optional = true }
+# Linux fbdev ioctl (FBIOGET_*SCREENINFO) + mmap, so this reads the panel's
+# actual reported geometry rather than hardcoding the 480x320/RGB565 this
+# project already measured against real hardware -- a config change to
+# `piscreen2r`'s params should not silently desync from a hardcoded
+# assumption here.
+# Bitmap fonts with real non-ASCII coverage `[SPEC-FBUI-030]`, chosen
+# after measuring what `embedded-graphics`'s own bundled ASCII-only fonts
+# were missing against real library data (see `fbui.rs`'s own module
+# doc comment and `tests::font_coverage_matches_real_library_data`).
+# Default features only -- this crate's own `embedded_graphics_textstyle`
+# feature adds a `TextStyle`-wrapper type this binary has no use for; it
+# calls `FontRenderer::render`/`render_aligned` directly instead.
+framebuffer = { version = "0.3", optional = true }
+u8g2-fonts = { version = "0.5", optional = true }
+# Decoding the same JPEG/PNG cover art `/art/:passage_id` already serves to
+# every browser skin `[SPEC036]` §8 phase 7 -- real production art is one
+# or the other (`media_type_for` in `tags.rs`), never anything else, so
+# only those two codecs are enabled. `[SPEC-FBUI-040]`'s own measurement
+# (a full-panel `render()` already stays under 20ms end to end on
+# lempiplay3) is what justified building this at all rather than
+# leaving it a measurement.
+image = { version = "0.25", optional = true, default-features = false, features = ["jpeg", "png"] }
+
+# The appliance's own local UTC offset `[SPEC-DIR-180]`: already in the
+# dependency tree via cpal/rusqlite, so this declares an existing compile
+# rather than adding a new one. Unix only -- Windows has no `tm_gmtoff` and
+# is asked through `TimeZoneInfo` instead, since it is a development
+# convenience here and never the appliance.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# `delayprobe` only `[GDE-ECHO-540]`. cpal already resolves and compiles this
+# on Linux, so naming it here adds no crate to the build graph -- it only makes
+# the already-compiled one callable, the same trade `tokio-tungstenite` above
+# is declared for. The probe has to reach the raw `snd_pcm_status_get_delay()`
+# that cpal reaches, because whether that call or cpal's handling of it loses
+# the presentation offset is precisely the question `[GDE-ECHO-530]` cannot
+# answer through cpal alone.
+#
+# **This version must track cpal's own.** `alsa-sys` carries `links = "alsa"`,
+# and cargo permits exactly one package in the graph to claim a given `links`
+# value -- so a mismatch is not a duplicate compile, it is a hard resolution
+# failure. cpal 0.18 wants `^0.11`; cpal 0.15 wanted `^0.9`. Bump them together.
+[target.'cfg(target_os = "linux")'.dependencies]
+alsa = "0.11"
+
+[[bin]]
+name = "lempi"
+path = "src/bin/lempi.rs"
+
+# Declared rather than auto-discovered, which is the only way to attach
+# `required-features`: without these entries cargo compiles every `src/bin/*.rs`
+# unconditionally, and the gate would be decorative.
+[[bin]]
+name = "mpd_map"
+path = "src/bin/mpd_map.rs"
+required-features = ["mpd"]
+
+[[bin]]
+name = "mpd_watch"
+path = "src/bin/mpd_watch.rs"
+required-features = ["mpd"]
+
+[[bin]]
+name = "mpd_fill"
+path = "src/bin/mpd_fill.rs"
+required-features = ["mpd"]
+
+[[bin]]
+name = "mpd_direct"
+path = "src/bin/mpd_direct.rs"
+required-features = ["mpd"]
+
+[[bin]]
+name = "mpd_session"
+path = "src/bin/mpd_session.rs"
+required-features = ["mpd"]
+
+[[bin]]
+name = "fbui"
+path = "src/bin/fbui.rs"
+required-features = ["fbui"]
+
+[[bin]]
+name = "echoprobe"
+path = "src/bin/echoprobe.rs"
+required-features = ["echo-client"]
+
+[[bin]]
+name = "flavorcheck"
+path = "src/bin/flavorcheck.rs"
+
+[[bin]]
+name = "memcheck"
+path = "src/bin/memcheck.rs"
+
+[[bin]]
+name = "station"
+path = "src/bin/station.rs"
+
+[[bin]]
+name = "play"
+path = "src/bin/play.rs"
+
+[profile.release]
+opt-level = 3
+lto = true

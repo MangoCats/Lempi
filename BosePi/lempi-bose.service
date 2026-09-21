@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: MIT
+#
+# lempi's unit on bose. Installed by finalize-bose.sh --start.
+#
+# Not After=network-online.target: audio must start without waiting for the
+# network, same reasoning as IMPL001's unit for lempipi. bose's MPD guest is
+# local (127.0.0.1), so no Bluetooth-style settle wait applies here either
+# [IMPL-BOS-030].
+[Unit]
+Description=Lempi
+After=sound.target mpd.service
+Wants=sound.target
+Requires=mpd.service
+
+[Service]
+Type=simple
+# Every option is named [GDE-CLI-020]. This line was the positional form
+# until 2026-09-20 -- `/var/lempi/listener.db` as argument zero -- and the
+# player still reads that, loudly, while the fleet migrates [GDE-CLI-040].
+# **The machine has not been changed**: the unit installed on bose is not
+# tracked here, so this file is the new line and a person must apply it
+# [GDE-CLI-080].
+#
+# --device hifiberry is load-bearing, found missing the first time this
+# actually ran: with no --device, lempi opened ALSA's first enumerated
+# device, which on this image's card order is `card 0: bcm2835 Headphones`
+# (the Pi's own onboard jack, nothing connected) -- not
+# `card 2: sndrpihifiberry`, the real DAC. BOSE001's survey found the
+# HiFiBerry as card 1 on the old 32-bit install; this Bookworm/trixie image
+# orders it differently. Played perfectly, reported healthy, silent --
+# [IMPL-AUD-010]'s dummy-output hazard, in a different shape.
+#
+# Split since 2026-09-11 [BOS-RUN-080]: --listener is that half and
+# --library is the catalogue. /srv/library is `ro` in
+# normal operation, which is why the catalogue goes there and why
+# lempi-db-recover cannot repair it in place [BOS-RUN-090].
+#
+# lempi-preflight runs first and repairs nothing -- it reports which tools are
+# present, with versions, so the log says whether recovery is armed
+# [PI-PRE-010]. lempi-db-recover then does the one read-write open that
+# replays a WAL or rolls back a journal [PI3-FOUND-120]. No lempi-wait-sink
+# here: that waits on PipeWire, and this machine goes straight to ALSA.
+ExecStartPre=/usr/local/bin/lempi-preflight
+ExecStartPre=/usr/local/bin/lempi-db-recover
+ExecStart=/usr/local/bin/lempi --listener /var/lempi/listener.db --library /srv/library/library.db --device hifiberry --mpd 127.0.0.1:6600 --mpd-root /srv/library/audio
+Restart=always
+RestartSec=2
+User=pi
+Nice=-5
+MemoryMax=200M
+
+[Install]
+WantedBy=multi-user.target

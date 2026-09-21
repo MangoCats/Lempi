@@ -1,0 +1,198 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Vipunen — jobs</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/console.css">
+<header>
+  <h1>Vipunen</h1>
+  <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs" class="on">jobs</a><a href="/export">export</a><a href="/flags">flags</a><a href="/mesh">mesh</a><a href="/system">system</a></nav>
+  <span class="ro">library read-only</span>
+</header>
+<main>
+  <h2>Induct a folder</h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    Propose first: the dry run is the same work, and refuses to write. What you
+    confirm is what was read.
+  </p>
+  <div class="controls">
+    <input type="search" id="folder" placeholder="C:\…\Music\Artist\Album" style="min-width:32rem">
+    <button class="chip" id="propose">propose</button>
+  </div>
+  <div id="plan"></div>
+
+  <h2>Jobs</h2>
+  <div id="list"></div>
+  <div id="live"></div>
+
+  <h2>After an induct <small>— make it selectable</small></h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    The player browses the library live and sees new music at once, but its
+    Program Director is built at startup and will not <em>choose</em> it until
+    rebuilt. This asks the local player to rebuild; it starts when the queue can
+    afford it and never interrupts playback.
+  </p>
+  <div class="controls">
+    <input type="search" id="player" value="{{PLAYER_URL}}" style="min-width:18rem">
+    <button class="chip" id="reload">ask the player to reload</button>
+    <span id="reloadsaid" style="color:var(--dim);font-size:.85rem;align-self:center"></span>
+  </div>
+</main>
+<script src="/console.js"></script>
+<script>
+let watching = null, es = null;
+
+async function list() {
+  try {
+    const d = await S.get('/api/jobs');
+    const box = document.getElementById('list');
+    if (!d.length) {
+      box.replaceChildren(S.el('p', { class: 'empty', text: 'Nothing has run yet.' }));
+      return;
+    }
+    box.replaceChildren(S.el('table', {},
+      S.el('thead', {}, S.el('tr', {}, ...['#', 'kind', 'target', 'state', 'started', '']
+        .map(h => S.el('th', { text: h })))),
+      S.el('tbody', {}, ...d.map(j => S.el('tr', {},
+        S.el('td', { class: 'num', text: j.job_id }),
+        S.el('td', {}, S.el('span', { class: 'pill', text: j.kind })),
+        S.el('td', { style: 'font:12px var(--mono)', text: j.target }),
+        S.el('td', {}, S.el('span', {
+          class: 'pill ' + ({ done: 'ok', failed: 'bad', running: 'warn', stopped: 'warn' }[j.state] || ''),
+          text: j.state })),
+        S.el('td', { class: 'num', text: j.started_at || '—' }),
+        S.el('td', {}, ...actions(j)))))));
+  } catch (e) { S.fail('#list', e); }
+}
+
+function actions(j) {
+  const out = [S.el('button', { class: 'chip', onclick: '', text: 'watch' })];
+  out[0].onclick = () => watch(j.job_id);
+  if (j.state === 'running' || j.state === 'queued') {
+    const stop = S.el('button', { class: 'chip', text: 'stop' });
+    stop.onclick = async () => {
+      await fetch(`/api/jobs/${j.job_id}/stop`, { method: 'POST' });
+      list();
+    };
+    out.push(stop);
+  }
+  if (j.kind === 'propose' && j.state === 'done') {
+    const go = S.el('button', { class: 'chip', text: 'confirm → induct' });
+    go.onclick = async () => {
+      const r = await (await fetch(`/api/induct/${j.job_id}/commit`, { method: 'POST' })).json();
+      if (r.error) return alert(r.error);
+      list(); watch(r.job_id);
+    };
+    out.push(go);
+  }
+  return out;
+}
+
+// One stream, closed before the next opens. The job outlives the page either
+// way -- state is in a file, not in this tab [SPEC-SUI-085].
+function watch(id) {
+  if (es) es.close();
+  watching = id;
+  const box = document.getElementById('live');
+  box.replaceChildren(S.el('h2', {}, `Job ${id} `, S.el('small', { text: '— live' })));
+  const log = S.el('div', { class: 'list' });
+  const counts = S.el('div', { class: 'tiles' });
+  box.append(counts, log);
+
+  S.get(`/api/jobs/${id}`).then(j => {
+    for (const e of j.events) render(e, log, counts);
+  }).catch(e => S.fail('#live', e));
+
+  es = new EventSource(`/api/jobs/${id}/stream`);
+  es.onmessage = m => {
+    const e = JSON.parse(m.data);
+    render(e, log, counts);
+    if (e.kind === 'done') { es.close(); es = null; list(); }
+  };
+}
+
+function render(e, log, counts) {
+  if (e.kind === 'counts') {
+    // Committed work only. The bar cannot claim what the database has not
+    // accepted [SPEC-SUI-085].
+    const c = JSON.parse(e.text);
+    counts.replaceChildren(...Object.entries(c).map(([k, v]) =>
+      S.el('div', { class: 'tile' }, S.el('b', { text: S.n(v) }),
+        S.el('span', { text: k + ' (committed)' }))));
+    return;
+  }
+  const line = e.kind === 'stage' ? `── ${e.text} ──`
+    : e.kind === 'done' ? `── finished: ${e.text} ──` : e.text;
+  log.append(S.el('div', {
+    style: e.kind === 'error' ? 'color:var(--bad)'
+      : (e.kind === 'stage' || e.kind === 'done') ? 'color:var(--accent)' : '',
+    text: line,
+  }));
+  log.scrollTop = log.scrollHeight;
+}
+
+document.getElementById('propose').onclick = async () => {
+  const folder = document.getElementById('folder').value.trim();
+  const r = await (await fetch('/api/induct/propose', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folder }),
+  })).json();
+  if (r.error) return S.fail('#plan', new Error(r.error));
+  list(); watch(r.job_id);
+  poll(r.job_id);
+};
+
+// Show the plan once the proposal lands.
+async function poll(id) {
+  for (let i = 0; i < 600; i++) {
+    const j = await S.get(`/api/jobs/${id}`);
+    if (j.state === 'done' && j.plan) return showPlan(j);
+    if (['failed', 'stopped'].includes(j.state)) return;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+}
+
+function showPlan(j) {
+  const p = j.plan, box = document.getElementById('plan');
+  const add = p.items.filter(i => i.outcome === 'add');
+  box.replaceChildren(
+    S.el('h2', {}, 'Proposal ', S.el('small', { text: `— job ${j.job_id}, nothing written` })),
+    S.el('div', { class: 'tiles' },
+      ...[['audio files', p.files], ['would add', p.added], ['already present', p.have],
+          ['unreadable', p.unreadable]].map(([l, n]) =>
+        S.el('div', { class: 'tile' }, S.el('b', { text: S.n(n) }), S.el('span', { text: l })))),
+    add.length ? S.el('div', { class: 'list' }, ...add.map(i => S.el('div', {
+      text: `${i.name}  ${Math.round(i.duration_ms / 1000)}s  ${i.title || ''}` }))) : null,
+    // Which stages will NOT run, and why. A stage silently omitted is how a
+    // library ends up with derived data nothing recorded [SPEC-SUI-075].
+    S.el('h2', {}, 'Stages ', S.el('small', { text: '— what will run, and what will not' })),
+    S.el('table', {}, S.el('tbody', {},
+      ...['ingest', 'extract', 'identify', 'merge'].map(s => S.el('tr', {},
+        S.el('td', {}, S.el('span', { class: 'pill ok', text: 'will run' })),
+        S.el('td', { text: s }), S.el('td', {}))),
+      ...(p.skipped || []).map(s => S.el('tr', {},
+        S.el('td', {}, S.el('span', { class: 'pill', text: 'skipped' })),
+        S.el('td', { text: s.stage }),
+        S.el('td', { style: 'color:var(--dim)', text: s.why }))))));
+}
+
+// The BROWSER posts this, not the console's server -- the same allowance the
+// handoff embed relies on [SPEC-SUI-025]. No Vipunen process speaks to a Lempi
+// process; a page in a tab asks a service on the same machine, exactly as a
+// person clicking a bookmark would.
+//
+// no-cors because the answer is not needed: the request is an intent, the
+// player decides when to act on it, and its own UI reports what happened.
+document.getElementById('reload').onclick = async () => {
+  const base = document.getElementById('player').value.replace(/\/+$/, '');
+  const said = document.getElementById('reloadsaid');
+  said.textContent = 'asking…';
+  try {
+    await fetch(`${base}/library/reload`, { method: 'POST', mode: 'no-cors' });
+    said.textContent = 'asked. The player rebuilds when its queue can afford it.';
+  } catch (e) {
+    said.textContent = `could not reach ${base} — is the player running?`;
+  }
+};
+
+list();
+</script>

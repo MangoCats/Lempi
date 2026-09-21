@@ -1,0 +1,15 @@
+#!/bin/sh
+# The controller-liveness probe of `[PI3-FOUND-730]`. `hciconfig hci0 name`
+# sends Read Local Name and the chip must answer it, which is the property
+# that distinguishes a wedged adapter from an absent speaker -- `hcitool con`
+# cannot, because it reads the kernel's connection list and never touches the
+# chip at all.
+printf '%s\n' "hciconfig $*" >> "$VT_STATE/calls"
+# A fixture file makes the chip look dead. The real message, measured on
+# lempipi 2026-09-20 while the adapter was wedged.
+if [ -f "$VT_STATE/hci_wedged" ]; then
+    echo "Can't read local name on hci0: Connection timed out (110)" >&2
+    exit 1
+fi
+printf "hci0:\tType: Primary  Bus: UART\n\tName: 'LempiPiHost'\n"
+exit 0

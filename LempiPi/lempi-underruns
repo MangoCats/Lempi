@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""Print the player's own underrun counters `[PI3-FOUND-200]`.
+
+The number that matters when audio stutters is `underrun_samples`: how many
+samples the output ring failed to supply. It is the one measurement that
+separates "the player could not keep its buffer fed" from "the radio dropped
+packets" -- PipeWire's own `ERR` column stays at zero for the first case,
+because from PipeWire's side nothing went wrong at all.
+
+It reached 654768 on lempipi -- 14.85 seconds of silence -- during a startup
+that `pw-top`, `free`, `vmstat` and the load average all reported as healthy.
+Nothing else that was being measured would ever have shown it.
+
+Lempi publishes it only over the websocket, so this speaks just enough of
+that protocol to read one frame. No dependencies: the appliance has no pip
+packages and should not need any to answer a question about itself.
+
+  lempi-underruns [host:port]      default 127.0.0.1:5720
+"""
+import base64
+import json
+import os
+import socket
+import struct
+import sys
+
+target = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1:5720"
+host, _, port = target.partition(":")
+sock = socket.create_connection((host, int(port or 5720)), timeout=10)
+key = base64.b64encode(os.urandom(16)).decode()
+sock.send(
+    (
+        "GET /ws HTTP/1.1\r\n"
+        f"Host: {host}\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n"
+    ).encode()
+)
+
+buf = b""
+while b"\r\n\r\n" not in buf:
+    chunk = sock.recv(4096)
+    if not chunk:
+        sys.exit("server closed during handshake")
+    buf += chunk
+buf = buf.split(b"\r\n\r\n", 1)[1]
+
+
+def take(n):
+    """Read exactly n bytes, refilling from the socket as needed."""
+    global buf
+    while len(buf) < n:
+        chunk = sock.recv(8192)
+        if not chunk:
+            sys.exit("server closed mid-frame")
+        buf += chunk
+    head, buf = buf[:n], buf[n:]
+    return head
+
+
+# A snapshot may not be the first frame, so read a few before giving up.
+for _ in range(8):
+    b0, b1 = take(2)
+    length = b1 & 127
+    if length == 126:
+        length = struct.unpack(">H", take(2))[0]
+    elif length == 127:
+        length = struct.unpack(">Q", take(8))[0]
+    payload = take(length)
+    if (b0 & 0x0F) != 1:  # text frames only
+        continue
+    try:
+        snap = json.loads(payload)
+    except ValueError:
+        continue
+    if "underrun_samples" not in snap:
+        continue
+    samples = snap["underrun_samples"]
+    print(f"underrun_samples   {samples}  ({samples / 44100.0:.2f}s at 44.1kHz)")
+    print(f"since_reset        {snap.get('underruns_since_reset')}")
+    print(f"lock_failures      {snap.get('lock_failures')}")
+    print(f"playing            {snap.get('playing')}")
+    print(f"position_ms        {snap.get('position_ms')}")
+    break
+else:
+    sys.exit("no snapshot frame carrying underrun_samples")

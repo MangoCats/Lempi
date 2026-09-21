@@ -1,0 +1,11 @@
+{
+  "name": "lempi-build",
+  "private": true,
+  "description": "Build-time checks for the browser half of Lempi. Not shipped: the player serves its own JS with include_str!, and this exists only so the skin check has a DOM to render into.",
+  "scripts": {
+    "check": "node build/verify-skins.js"
+  },
+  "devDependencies": {
+    "jsdom": "^30.0.1"
+  }
+}

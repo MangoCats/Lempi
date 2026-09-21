@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+#
+# An appliance with a PLAIN WRITABLE ROOT. Generic example -- `speaker-b` is
+# not a real host and 13491 is not the default port.
+#
+# **This unit is half the story.** The drop-in in lempi.service.d/ blanks the
+# ExecStart below and supplies its own, which is why `systemctl show` reports
+# two of them and only the second runs. Both are kept correct, because
+# whichever survives a future edit has to be.
+[Unit]
+Description=Lempi
+After=local-fs.target sound.target
+Wants=sound.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/local/bin/lempi-preflight
+ExecStartPre=/usr/local/bin/lempi-db-recover
+# Waits for a real sink before starting, on a board whose speaker arrives
+# over Bluetooth and may not be there at boot.
+ExecStartPre=/usr/local/bin/lempi-wait-sink
+ExecStart=/usr/local/bin/lempi --listener /srv/library/lempi.db --port 13491
+Restart=always
+RestartSec=2
+# The LOGIN user, not a service account: PipeWire is a per-user session bus
+# and a separate account cannot reach its socket.
+User=pi
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

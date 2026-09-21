@@ -1,0 +1,16 @@
+# Shell scripts always run on Linux (the Pi appliance, or a Linux dev
+# machine) regardless of which OS checked this repo out. Found live,
+# 2026-09-06: this Windows checkout's `core.autocrlf=true`, with no
+# override, had silently rewritten several already-deployed scripts to
+# CRLF -- `set -uo pipefail` becomes an "invalid option name" the moment
+# the last option on the line carries a trailing `\r`, and a bare `\r` on
+# its own line becomes "command not found". Several `build/*.sh` scripts
+# had already been running this way all session, tolerated by luck (no
+# fragile-enough construct on an early line) rather than correctness --
+# not something to keep depending on.
+#
+# `text eol=lf` forces LF on checkout AND on commit, independent of
+# whatever `core.autocrlf` a given clone has set, so this cannot recur on
+# a different machine either.
+*.sh            text eol=lf
+LempiPi/lempi-*    text eol=lf

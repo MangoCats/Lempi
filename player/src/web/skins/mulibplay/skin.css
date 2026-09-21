@@ -1,0 +1,237 @@
+/* MuLibPlay, as it actually runs at http://bose:1160/mulib.
+   The colours and metrics are lifted from that page's own stylesheet rather
+   than remembered: black ground, #ccc text, big rounded #2010a0 buttons with a
+   #d0a000 gold for whatever is currently on, and everything centred.
+
+   Six years of daily use earned this layout. What it gets here is the same
+   look driven by a live socket instead of a 156-second meta refresh. */
+
+body { background-color: black; color: #ccc; }
+
+.mulib { max-width: 46rem; margin: 0 auto; padding: 1rem; text-align: center; }
+
+/* `.pref-reset`/`.pref-cancel`/`.pref-save` are core.js's own semantic hook
+   names for the listener-preference panel's buttons [REQ-VIS-285] -- given
+   the identical shape here, not a `class="button"` this shared markup has
+   no skin-specific reason to carry. */
+.button, .buttonOn, .pref-reset, .pref-cancel, .pref-save {
+  border: 2px solid #402080;
+  padding: 12px 24px;
+  text-align: center;
+  text-decoration: none;
+  font-size: 24px;
+  border-radius: 20px;
+  margin: 4px 2px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.button, .pref-reset, .pref-cancel, .pref-save { background-color: #2010a0; color: #cccccc; }
+.buttonOn { background-color: #d0a000; color: #111111; }
+/* Skip, acknowledged -- the same gold on black, and the same 700 ms, as the
+   queue verbs `[REQ-VIS-185]`. One gesture should not report itself two ways
+   depending on which control took it.
+   Scoped to `[data-cmd]` so it cannot reach the station buttons, whose own
+   class `lit()` rewrites wholesale on every snapshot. Play and Pause are not
+   flashed: they already wear `.buttonOn` for exactly this, and a second signal
+   over the top would be answering a question the gold has answered. */
+[data-cmd].acked { background-color: #d0a000; color: #111111; border-color: #ffd24d; }
+[data-cmd].failed { background-color: #7a1010; color: #ffdede; border-color: #c03030; }
+
+/* The listener-preference panel itself [REQ-VIS-290] -- an in-page block,
+   not a dialog, in the original's own palette: the same border as every
+   other framed block on this page. `.mulib input[type=range]`'s existing
+   rules already style the sliders here -- the panel lives inside `.mulib`,
+   so nothing extra is needed for those. No horizontal padding, and no
+   `max-width`, on the panel itself -- `#bar`/`#volume` reach `.mulib`'s
+   own full width with neither, and the slider has to match that width
+   exactly; text rows carry their own padding instead. */
+.pref-panel:not([hidden]) { border: 2px solid #402080; border-radius: 12px;
+    padding: .75rem 0; margin: .6rem 0; text-align: left; }
+.pref-heading { font-weight: bold; margin: 0 0 .5rem; text-align: center; padding: 0 1rem; }
+/* "by <artist> from <album>" [SPEC-PREF-090] -- centred under the heading,
+   the same shape MuLibPlay's own track editor headed its page with. */
+.pref-subject { color: #888; font-size: .85rem; margin: -.3rem 0 .5rem;
+    text-align: center; padding: 0 1rem; }
+.pref-error { color: #ff8080; margin: 0 0 .5rem; padding: 0 1rem; }
+/* Label, readout and Reset share a row; the slider itself gets a full-width
+   row of its own underneath, flush with the panel's own edges -- the same
+   width `#bar` and `#volume` already span. */
+.pref-field { padding: .4rem 0; }
+.pref-field-head { display: flex; align-items: center; gap: .5rem; padding: 0 1rem; }
+.pref-field label { font-weight: bold; margin-right: auto; }
+.pref-field input[type=range] { width: 100%; display: block; margin-top: .3rem; }
+.pref-readout { color: #888; white-space: nowrap; font-size: .85rem; }
+.pref-reset, .pref-cancel, .pref-save { font-size: 16px; padding: 6px 14px; }
+/* The specials [SPEC-PREF-080] reuse `.pref-field` wholesale and need no
+   styling of their own -- only a rule dividing them from the three tuning
+   sliders, and the heading naming them. */
+.pref-specials { border-top: 1px solid #402080; margin-top: .5rem;
+    padding-top: .4rem; }
+.pref-section { font-weight: bold; margin: 0 0 .2rem; text-align: center;
+    padding: 0 1rem; }
+.pref-actions { margin-top: .5rem; padding: 0 1rem; text-align: right; }
+.pref-actions button { margin-left: .4rem; }
+
+/* Play frequency [REQ-VIS-300] -- underneath the preference panel, same
+   border/radius/margin as `.pref-panel` itself so the two read as one
+   family; the table's own row rule borrows `hr`'s own line colour rather
+   than inventing a second one. */
+.freq-panel:not([hidden]) { border: 2px solid #402080; border-radius: 12px;
+    padding: .75rem 1rem; margin: .6rem 0; }
+.freq-heading { font-weight: bold; margin: 0 0 .5rem; text-align: center; }
+.freq-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+.freq-table th, .freq-table td { padding: .3rem .4rem; border-bottom: 1px solid #333;
+    text-align: right; }
+.freq-table th:first-child, .freq-table td:first-child { text-align: left; }
+.freq-table thead th { color: #888; }
+.freq-table tbody tr:last-child th, .freq-table tbody tr:last-child td { border-bottom: none; }
+
+/* Doubled, as the original does, so the touch target is a target. */
+.mulib input[type=checkbox] { transform: scale(2); padding: 15px; margin-right: .6rem; }
+
+/* The original's slider, kept: a full-width track with a tall pale thumb. */
+.mulib input[type=range] {
+  -webkit-appearance: none; appearance: none;
+  margin: 18px 0; width: 100%; background: transparent;
+}
+.mulib input[type=range]:focus { outline: none; }
+.mulib input[type=range]::-webkit-slider-runnable-track {
+  width: 100%; height: 8.4px; cursor: pointer;
+  box-shadow: 1px 1px 1px #000000, 0px 0px 1px #0d0d0d;
+  background: #3071a9; border-radius: 1.3px; border: 0.2px solid #010101;
+}
+.mulib input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  box-shadow: 1px 1px 1px #000000, 0px 0px 1px #0d0d0d;
+  border: 1px solid #000000; height: 36px; width: 16px; border-radius: 3px;
+  background: #ffffff; cursor: pointer; margin-top: -14px;
+}
+.mulib input[type=range]::-moz-range-track {
+  width: 100%; height: 8.4px; cursor: pointer;
+  background: #3071a9; border-radius: 1.3px; border: 0.2px solid #010101;
+}
+.mulib input[type=range]::-moz-range-thumb {
+  border: 1px solid #000000; height: 36px; width: 16px; border-radius: 3px;
+  background: #ffffff; cursor: pointer;
+}
+
+/* The original showed its cover at 200px, centred. It sat above the title
+   line there; here the title belongs to the bar and the cover follows. */
+/* A fixed box, always occupied: the mark sits under the cover, so the space
+   is reserved whether or not a sleeve exists and the controls below stop
+   jumping as tracks change `[REQ-VIS-127]`. The cost is that a non-square
+   cover letterboxes inside the square instead of the layout adapting to it,
+   which is the trade the reserved space demands. */
+#art, #artback { display: inline-block; vertical-align: top;
+                 width: 200px; height: 200px; max-width: 100%;
+                 margin-top: 1rem; }
+#art img, #artback img { object-fit: contain; }
+/* Two sleeves side by side need air between them; one alone is unchanged. */
+#artback { margin-left: 8px; }
+/* Narrow screens stack rather than shrink: this layout exists to be read
+   from a phone, and two 200px sleeves do not fit across one. */
+@media (max-width: 30rem) { #artback { margin-left: 0; } }
+.nowplaying { font-weight: bold; font-size: 1.15rem; margin: .2rem 0 .2rem; }
+.nowplaying i { font-weight: normal; color: #888; }
+.elapsed { color: #888; }
+/* The volume slider's own width, so the two read as one stack of controls,
+   and the same padded hit area the Lempi skin uses so a 6px line is still an
+   easy target. `content-box` keeps the padding outside the 100%. */
+.mulib #bar { width: 100%; height: 6px; margin: .2rem 0 0; background: #333;
+              border-radius: 3px; background-clip: content-box;
+              padding: 9px 0; box-sizing: content-box; }
+.mulib #bar.seekable { cursor: pointer; }
+.mulib #fill { height: 6px; width: 0; background: #7ab7ff; border-radius: 3px;
+               transition: width .5s linear; }
+.mulib #bar.seekable:hover #fill { filter: brightness(1.2); }
+
+/* Two columns that reach the same floor, so Browse by and the autoselect
+   checkbox sit at one level just above the rule. `margin-top: auto` on the
+   last item of each column is what presses them down. */
+.panes { display: flex; width: 100%; gap: 2rem; text-align: left;
+         margin-top: 1rem; align-items: stretch; }
+.leftcol { flex: 1; display: flex; flex-direction: column; }
+.stations { display: flex; flex-direction: column; }
+.browseby, .stations .autoclock { margin-top: auto; margin-bottom: 0; }
+.browseby h3 { margin: 1rem 0 .3rem; }
+/* One row, not a stack: three destinations, not a menu of programmes. */
+.browserow { display: flex; gap: .5rem; }
+.browserow .button { font-size: 18px; padding: 8px 16px; }
+.stations { text-align: right; }
+.stations h3 { margin: 0 0 .3rem; }
+/* One row per programme: the engagement time to the left, the button at the
+   right edge -- `flex-end` is what keeps the button's own right edge exactly
+   where the old full-width button left it, now that it is only half as wide. */
+.stationrow { display: flex; align-items: center; justify-content: flex-end;
+              gap: .5rem; width: 100%; }
+.stations .button, .stations .buttonOn {
+  display: block; width: 50%; flex: none; box-sizing: border-box;
+  font-size: 18px; padding: 8px 16px;
+}
+/* Same reading as "Played N times" `[.elapsed]` when the clock is the one
+   choosing; dimmed when a manual pick has made the schedule inert, so a
+   glance says whether these times mean anything right now. */
+.engagetime { color: #888; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.engagetime.dim { color: #555; }
+.queue p { margin: .35rem 0; display: flex; align-items: center; gap: .5rem; }
+.queue .qtitle { flex: 1; min-width: 0; }
+.queue .dur { color: #888; }
+/* The original had checkboxes and a "Remove Checked" button; these do the
+   same work in one tap, which is the better bargain on a phone. */
+.qedit { display: flex; gap: .2rem; flex: none; }
+.qedit button { font: inherit; font-size: 16px; line-height: 1; min-width: 2rem;
+                min-height: 2rem; padding: 0; cursor: pointer;
+                background-color: #2010a0; color: #ccc;
+                border: 2px solid #402080; border-radius: 8px; }
+/* The press, acknowledged. Gold on black is what this skin already says "this
+   one is on" with -- the transport and the stations both -- so a registered
+   press borrows the signal the page has already taught rather than
+   introducing a fourth colour to learn. It clears when the engine's next
+   snapshot rebuilds the row, so the flash ends on the change, not on a timer.
+   Refused, or never answered, goes red instead of quietly going back to blue. */
+.qedit button.acked { background-color: #d0a000; color: #111111; border-color: #ffd24d; }
+.qedit button.failed { background-color: #7a1010; color: #ffdede; border-color: #c03030; }
+/* Nowhere to go: the first entry cannot move sooner, nor the last later. Said
+   here rather than left looking live and doing nothing. */
+.qedit button:disabled { opacity: .3; cursor: default; }
+
+/* Why the station buttons are not there yet. Dim, like `.why` -- it is a
+   notice about the machine, not one of the machine's own controls. */
+.stationnote { color: #999; font-size: .9rem; margin: .4rem 0; }
+
+hr { border: none; border-top: 1px solid #333; margin: 1.2rem 0; }
+
+.why { color: #999; font-size: .9rem; text-align: left; }
+.skinbar { margin-top: 1.5rem; color: #666; font-size: .8rem; }
+.mulib select { font: inherit; background: #111; color: #ccc; border: 1px solid #402080; }
+
+/* Provenance [REQ-VIS-120], in the original's palette: gold is "this is the
+   good one" everywhere else on this page, so MusicBrainz gets the gold and
+   everything less certain stays in the grey the body text uses. Sized for a
+   phone held at arm's length, which is what this layout exists for. */
+.src { font-size: 11px; font-weight: bold; letter-spacing: .04em;
+       vertical-align: super; margin-left: 4px; padding: 1px 4px;
+       border: 1px solid #402080; border-radius: 6px; color: #888;
+       white-space: nowrap; }
+.src[data-src="musicbrainz"] { color: #d0a000; border-color: #d0a000; }
+.src[data-src="filename"], .src[data-src="unknown"] { border-style: dashed; }
+
+/* A title/artist reaching the preference panel [REQ-VIS-285] in the queue
+   is a real `<a>` (core.js's `linkableTrack`), which would otherwise take
+   the browser's own default link-blue and visited-purple -- never any of
+   this skin's own palette. The underline alone says it is clickable; the
+   text stays exactly the color it would have been unlinked, visited or
+   not, the same "names are shown bare" posture `[REQ-VIS-122]` already
+   states for this skin. */
+.pref-link { text-decoration: underline dotted; text-underline-offset: 2px;
+    cursor: pointer; color: inherit; }
+.pref-link:visited { color: inherit; }
+.pref-link:hover, .pref-link:active { color: inherit; }
+
+/* Words `[SPEC-LYR-045]`. Pre-wrapped: the line breaks are the song's, and
+   re-flowing them would run the verses together. Scrolls rather than stretching
+   the page, since the longest here is 5,820 characters. */
+#lyrics { white-space: pre-wrap; font-size: .8125rem; line-height: 1.45;
+          max-height: 18rem; overflow-y: auto; margin: .6rem 0 0;
+          padding: .5rem .6rem; border-radius: 6px;
+          background: rgba(127,127,127,.08); }

@@ -1,0 +1,25 @@
+train 79,957  test 20,039  features 928
+
+characteristic           iter1   iter3    best   floor  vs floor
+danceability             0.225   0.222   0.222   0.249     0.89x  <- gbm
+gender                   0.392   0.390   0.390   0.196     1.99x  <- gbm
+genre_dortmund           0.295   0.170   0.170   0.120     1.42x  <- gbm
+genre_electronic         0.190   0.130   0.130   0.120     1.09x  <- gbm
+genre_rosamerica         0.219   0.195   0.195   0.131     1.49x  <- gbm
+genre_tzanetakis         0.604   0.460   0.460   0.181     2.55x  <- gbm
+ismir04_rhythm           0.247   0.227   0.227   0.206     1.11x  <- gbm
+mood_acoustic            0.147   0.139   0.139   0.134     1.04x  <- gbm
+mood_aggressive          0.229   0.212   0.212   0.210     1.01x  <- gbm
+mood_electronic          0.149   0.165   0.149   0.227     0.66x  <- mlp-shared
+mood_happy               0.147   0.227   0.147   0.218     0.68x  <- mlp-shared
+mood_party               0.237   0.222   0.222   0.248     0.90x  <- gbm
+mood_relaxed             0.221   0.242   0.221   0.220     1.01x  <- mlp-shared
+mood_sad                 0.123   0.119   0.119   0.121     0.99x  <- gbm
+moods_mirex              0.278   0.179   0.179   0.211     0.85x  <- gbm
+timbre                   0.189   0.257   0.189   0.216     0.87x  <- mlp-shared
+tonal_atonal             0.155   0.222   0.155   0.218     0.71x  <- mlp-shared
+voice_instrumental       0.230   0.274   0.230   0.234     0.98x  <- mlp-shared
+
+median err/beta  iter1=0.223  ->  iter3=0.192   (AB self-error floor 0.210)
+characteristics at or below the floor: 9/18
+elapsed 2746s

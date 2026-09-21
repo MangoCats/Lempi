@@ -1,0 +1,191 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Vipunen — mesh sync</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/console.css">
+<header>
+  <h1>Vipunen</h1>
+  <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/export">export</a><a href="/flags">flags</a><a href="/mesh" class="on">mesh</a><a href="/system">system</a></nav>
+  <span class="ro">library read-only</span>
+</header>
+<main>
+  <h2>Peers</h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    Named installations this library can compare its catalog against
+    [SPEC035]. Activating a peer here is the same as typing its address into
+    the <a href="/flags">flags</a> page's "sync with a remote" field — those
+    three jobs keep working exactly as they do today, against whichever peer
+    was activated last.
+  </p>
+  <div id="peer-list"></div>
+  <div class="controls">
+    <input type="text" id="peer-name" placeholder="name, e.g. {{EXAMPLE_PEER}}" style="max-width:10rem">
+    <input type="search" id="peer-remote" placeholder="user@host:/path/to/listener.db (or library.db, once split)" style="min-width:20rem">
+    <input type="search" id="peer-remote-listener" placeholder="listener.db path, only if this peer has split" style="min-width:20rem">
+    <button class="chip" id="add-peer">add / update</button>
+  </div>
+  <p class="empty" style="font-size:.8rem;padding:.1rem 0">
+    Leave the second address blank for every peer that hasn't split its
+    database [IMPL002 §7.4] — an unsplit peer needs only the first. Naming
+    which of yours are split belongs in your own notes, not here: this page
+    outlives any particular roster.
+  </p>
+
+  <h2>Diff against a peer</h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    Compares files, recordings and passages by content identity — never a
+    full database copy [SPEC-MESH-030]. Nothing moves on its own: this only
+    reports what differs, and a bundle for what's missing on either side is
+    still your own <code style="font:12px var(--mono)">export_bundle.py</code>
+    command, printed below rather than run for you [SPEC-SUI-110].
+  </p>
+  <div class="controls">
+    <select id="diff-peer"></select>
+    <button class="chip" id="run-diff">run diff</button>
+  </div>
+  <div id="diff-result"></div>
+</main>
+<script src="/console.js"></script>
+<script>
+async function loadPeers() {
+  let peers;
+  try {
+    peers = await S.get('/api/peers');
+  } catch (e) { return S.fail('#peer-list', e); }
+
+  const select = document.getElementById('diff-peer');
+  select.replaceChildren(...(peers.length
+    ? peers.map(p => S.el('option', { value: p.name, text: `${p.name} (${p.remote})` }))
+    : [S.el('option', { value: '', text: 'no peers added yet' })]));
+
+  const box = document.getElementById('peer-list');
+  if (!peers.length) {
+    box.replaceChildren(S.el('p', { class: 'empty', text: 'No peers added yet.' }));
+    return;
+  }
+  const rows = peers.map(p => {
+    const activateBtn = S.el('button', { class: 'chip' }, 'activate');
+    activateBtn.onclick = async () => {
+      const r = await (await fetch(`/api/peers/${encodeURIComponent(p.name)}/activate`,
+        { method: 'POST' })).json();
+      if (r.error) return alert(r.error);
+      alert(`${p.name} is now the active remote for pull/push/sync-preferences on the flags page.`);
+    };
+    const deleteBtn = S.el('button', { class: 'chip' }, 'remove');
+    deleteBtn.onclick = async () => {
+      await fetch(`/api/peers/${encodeURIComponent(p.name)}/delete`, { method: 'POST' });
+      loadPeers();
+    };
+    const remoteCell = p.remote_listener
+      ? S.el('span', {}, S.el('code', { style: 'font:12px var(--mono)', text: p.remote }),
+             S.el('br'), S.el('code', { style: 'font:12px var(--mono);color:var(--muted)', text: p.remote_listener }))
+      : S.el('code', { style: 'font:12px var(--mono)', text: p.remote });
+    return S.el('tr', {},
+      S.el('td', { text: p.name }),
+      S.el('td', {}, remoteCell),
+      S.el('td', {}, activateBtn),
+      S.el('td', {}, deleteBtn));
+  });
+  box.replaceChildren(S.el('table', {}, S.el('tbody', {}, ...rows)));
+}
+loadPeers();
+
+document.getElementById('add-peer').onclick = async () => {
+  const name = document.getElementById('peer-name').value.trim();
+  const remote = document.getElementById('peer-remote').value.trim();
+  const remote_listener = document.getElementById('peer-remote-listener').value.trim();
+  if (!name || !remote) return alert('both a name and an address are needed');
+  const r = await (await fetch('/api/peers', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, remote, remote_listener }),
+  })).json();
+  if (r.error) return alert(r.error);
+  document.getElementById('peer-name').value = '';
+  document.getElementById('peer-remote').value = '';
+  document.getElementById('peer-remote-listener').value = '';
+  loadPeers();
+};
+
+// -- diff -------------------------------------------------------------
+
+function bucketCounts(table, d) {
+  return S.el('div', { class: 'tiles' },
+    S.el('div', { class: 'tile' }, S.el('b', { text: S.n(d.local_only.length) }), S.el('span', { text: 'local-only' })),
+    S.el('div', { class: 'tile' }, S.el('b', { text: S.n(d.peer_only.length) }), S.el('span', { text: 'peer-only' })),
+    S.el('div', { class: 'tile' }, S.el('b', { text: S.n(d.agree) }), S.el('span', { text: 'agree' })),
+    S.el('div', { class: 'tile' }, S.el('b', { text: S.n(d.differ.length) }), S.el('span', { text: 'differ (auto)' })),
+    S.el('div', { class: 'tile' }, S.el('b', { text: S.n(d.conflict.length) }), S.el('span', { text: 'conflict' })));
+}
+
+function bundleHint(table, d) {
+  if (!d.local_only.length) return null;
+  const md5s = table === 'files' ? d.local_only.map(k => k[0])
+    : table === 'recordings' ? [] : []; // only `files` names an audio_md5 directly
+  if (!md5s.length) return null;
+  return S.el('p', { style: 'font-size:.8rem;color:var(--dim)' },
+    `${md5s.length} file${md5s.length === 1 ? '' : 's'} the peer lacks. Write the listed `,
+    S.el('code', { style: 'font:12px var(--mono)', text: 'audio_md5' }), ' values to a file and run: ',
+    S.el('br'),
+    S.el('code', { style: 'font:12px var(--mono)',
+      text: 'python tools/export_bundle.py <db> --md5-file <file> -o out/bundle && rsync -a out/bundle/ <peer>:/srv/library/incoming/' }));
+}
+
+function conflictRow(peerName, table, entry) {
+  const key = entry.key;
+  const resolve = async choice => {
+    const r = await (await fetch('/api/mesh/resolve', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ peer: peerName, table, key, choice }),
+    })).json();
+    if (r.error) return alert(r.error);
+    row.replaceChildren(S.el('td', { colspan: '3', text: 'resolving…' }));
+    S.watchJob(r.job_id, row.lastChild, (job) => {
+      row.replaceChildren(S.el('td', { colspan: '3',
+        text: job.state === 'done' ? 'resolved — this pair will read as agreeing next diff'
+                                    : 'resolution failed, see the job log' }));
+    });
+  };
+  const useLocal = S.el('button', { class: 'chip' }, 'use local');
+  useLocal.onclick = () => resolve('local');
+  const usePeer = S.el('button', { class: 'chip' }, 'use peer');
+  usePeer.onclick = () => resolve('peer');
+  var row = S.el('tr', {},
+    S.el('td', { text: JSON.stringify(key) }),
+    S.el('td', {}, S.el('pre', { style: 'margin:0;font-size:.75rem', text: JSON.stringify(entry.local) })),
+    S.el('td', {}, S.el('pre', { style: 'margin:0;font-size:.75rem', text: JSON.stringify(entry.peer) })),
+    S.el('td', {}, useLocal, usePeer));
+  return row;
+}
+
+function renderDiff(peerName, report) {
+  const box = document.getElementById('diff-result');
+  const sections = Object.entries(report.tables).map(([table, d]) => {
+    const parts = [S.el('h3', { text: table }), bucketCounts(table, d)];
+    const hint = bundleHint(table, d);
+    if (hint) parts.push(hint);
+    if (d.conflict.length) {
+      parts.push(S.el('table', {},
+        S.el('thead', {}, S.el('tr', {}, ...['key', 'local', 'peer', ''].map(h => S.el('th', { text: h })))),
+        S.el('tbody', {}, ...d.conflict.map(entry => conflictRow(peerName, table, entry)))));
+    }
+    return S.el('div', {}, ...parts);
+  });
+  box.replaceChildren(...sections);
+}
+
+document.getElementById('run-diff').onclick = async () => {
+  const peer = document.getElementById('diff-peer').value;
+  if (!peer) return alert('add a peer first');
+  const box = document.getElementById('diff-result');
+  box.replaceChildren(S.el('p', { class: 'empty', text: 'starting…' }));
+  const r = await (await fetch('/api/mesh/diff', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ peer }),
+  })).json();
+  if (r.error) return S.fail('#diff-result', new Error(r.error));
+  S.watchJob(r.job_id, box, (job, box) => {
+    if (job.state !== 'done' || !job.result) return S.tileResult(job, box);
+    renderDiff(peer, job.result);
+  });
+};
+</script>

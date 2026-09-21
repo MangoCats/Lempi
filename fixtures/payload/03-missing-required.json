@@ -1,0 +1,2159 @@
+{
+  "payload_version": 1,
+  "generator": "vipunen-payload@0.1",
+  "encodings": [
+    {
+      "audio_md5": "4ce72610bd3750bc8ed3fb1a10eb89c9",
+      "bundle_path": "Frisina, Gerardo/Mystical Funk - Spaced Out/Gerardo Frisina - Mystical Funk - Spaced Out - 01 Mystical Funk.mp3",
+      "format": "mp3",
+      "duration_ms": 248839,
+      "tags": {
+        "title": "Mystical Funk",
+        "artist": "Gerardo Frisina",
+        "album": "Mystical Funk - Spaced Out",
+        "track_no": 1,
+        "disc_no": null,
+        "has_art": 1
+      },
+      "passages": [
+        {
+          "kind": "radio",
+          "start_ms": 0,
+          "end_ms": 248839,
+          "lead_in_ms": null,
+          "lead_out_ms": null,
+          "gain_db": null,
+          "boundary_src": "ingest:whole-file",
+          "recordings": [
+            {
+              "mbid": "local:audio:4ce72610bd3750bc8ed3fb1a10eb89c9",
+              "weight": 1.0,
+              "source": "local:ingest"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "audio_md5": "58b250f6f5aaa9a370cbda6ed427395d",
+      "bundle_path": "Frisina, Gerardo/Duala - Lindeza/Gerardo Frisina - Duala - Lindeza - 02 Lindeza.mp3",
+      "format": "mp3",
+      "duration_ms": 186272,
+      "tags": {
+        "title": "Lindeza",
+        "artist": "Gerardo Frisina",
+        "album": "Duala / Lindeza",
+        "track_no": 2,
+        "disc_no": null,
+        "has_art": 1
+      },
+      "passages": [
+        {
+          "kind": "radio",
+          "start_ms": 0,
+          "end_ms": 186272,
+          "lead_in_ms": null,
+          "lead_out_ms": null,
+          "gain_db": null,
+          "recordings": [
+            {
+              "mbid": "local:audio:58b250f6f5aaa9a370cbda6ed427395d",
+              "weight": 1.0,
+              "source": "local:ingest"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "audio_md5": "6783678fa9f52ee047fd4d92ed172050",
+      "bundle_path": "Frisina, Gerardo/Mystical Funk - Spaced Out/Gerardo Frisina - Mystical Funk - Spaced Out - 02 Spaced Out.mp3",
+      "format": "mp3",
+      "duration_ms": 242265,
+      "tags": {
+        "title": "Spaced Out",
+        "artist": "Gerardo Frisina",
+        "album": "Mystical Funk - Spaced Out",
+        "track_no": 2,
+        "disc_no": null,
+        "has_art": 1
+      },
+      "passages": [
+        {
+          "kind": "radio",
+          "start_ms": 0,
+          "end_ms": 242265,
+          "lead_in_ms": null,
+          "lead_out_ms": null,
+          "gain_db": null,
+          "boundary_src": "ingest:whole-file",
+          "recordings": [
+            {
+              "mbid": "local:audio:6783678fa9f52ee047fd4d92ed172050",
+              "weight": 1.0,
+              "source": "local:ingest"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "audio_md5": "b34c1da350f094e30c6a792a9f5e7f60",
+      "bundle_path": "Frisina, Gerardo/Duala - Lindeza/Gerardo Frisina - Duala - Lindeza - 01 Duala.mp3",
+      "format": "mp3",
+      "duration_ms": 284250,
+      "tags": {
+        "title": "Duala",
+        "artist": "Gerardo Frisina",
+        "album": "Duala / Lindeza",
+        "track_no": 1,
+        "disc_no": null,
+        "has_art": 1
+      },
+      "passages": [
+        {
+          "kind": "radio",
+          "start_ms": 0,
+          "end_ms": 284250,
+          "lead_in_ms": null,
+          "lead_out_ms": null,
+          "gain_db": null,
+          "boundary_src": "ingest:whole-file",
+          "recordings": [
+            {
+              "mbid": "local:audio:b34c1da350f094e30c6a792a9f5e7f60",
+              "weight": 1.0,
+              "source": "local:ingest"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "recordings": [
+    {
+      "mbid": "local:audio:4ce72610bd3750bc8ed3fb1a10eb89c9",
+      "title": "Mystical Funk",
+      "length_ms": 248839,
+      "source": "local:ingest",
+      "artists": [],
+      "flavor": [
+        {
+          "characteristic": "danceability",
+          "class": "danceable",
+          "value": 0.9800902516465695,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "danceability",
+          "class": "not_danceable",
+          "value": 0.019909748353430512,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "gender",
+          "class": "female",
+          "value": 0.9867840532534984,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "gender",
+          "class": "male",
+          "value": 0.013215946746501617,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "alternative",
+          "value": 0.0009088197520034252,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "blues",
+          "value": 0.00010660974265439139,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "electronic",
+          "value": 0.9977463480412421,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "folkcountry",
+          "value": 0.00027816460766530736,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "funksoulrnb",
+          "value": 2.5760014622679895e-05,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "jazz",
+          "value": 0.0006604661055783127,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "pop",
+          "value": 4.5777992558744565e-05,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "raphiphop",
+          "value": 3.738920320499811e-05,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "rock",
+          "value": 0.00019066454047013772,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "ambient",
+          "value": 0.5417786340620059,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "dnb",
+          "value": 0.02566383077414393,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "house",
+          "value": 0.2615642411778064,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "techno",
+          "value": 0.06687042880896729,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "trance",
+          "value": 0.1041228651770766,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "cla",
+          "value": 0.005434215581495664,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "dan",
+          "value": 0.02027163711502012,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "hip",
+          "value": 0.12307899751983632,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "jaz",
+          "value": 0.035883995948003525,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "pop",
+          "value": 0.07594806837336915,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "rhy",
+          "value": 0.7206174956882353,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "roc",
+          "value": 0.006470162068404526,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "spe",
+          "value": 0.012295427705635376,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "blu",
+          "value": 0.06206710743682428,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "cla",
+          "value": 0.03447490212783053,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "cou",
+          "value": 0.10343397963202994,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "dis",
+          "value": 0.062097126327753216,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "hip",
+          "value": 0.1552724104230201,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "jaz",
+          "value": 0.3106669585908682,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "met",
+          "value": 0.04434668040432344,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "pop",
+          "value": 0.06207937265958126,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "reg",
+          "value": 0.062081655106548915,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "roc",
+          "value": 0.10347980729122011,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "ChaChaCha",
+          "value": 0.7681735753327786,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Jive",
+          "value": 0.032786839512694475,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Quickstep",
+          "value": 0.008040937422904727,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Rumba-American",
+          "value": 0.06906919927503295,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Rumba-International",
+          "value": 0.025360862473548632,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Rumba-Misc",
+          "value": 0.010928713819438472,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Samba",
+          "value": 0.046195299849126466,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Tango",
+          "value": 0.01845232935199491,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "VienneseWaltz",
+          "value": 0.016840388484671138,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Waltz",
+          "value": 0.004151854477809686,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_acoustic",
+          "class": "acoustic",
+          "value": 0.2831954727781123,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_acoustic",
+          "class": "not_acoustic",
+          "value": 0.7168045272218877,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_aggressive",
+          "class": "aggressive",
+          "value": 0.06953308318847037,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_aggressive",
+          "class": "not_aggressive",
+          "value": 0.9304669168115296,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_electronic",
+          "class": "electronic",
+          "value": 0.7823204980958757,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_electronic",
+          "class": "not_electronic",
+          "value": 0.21767950190412433,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_happy",
+          "class": "happy",
+          "value": 0.08016039012209654,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_happy",
+          "class": "not_happy",
+          "value": 0.9198396098779035,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_party",
+          "class": "not_party",
+          "value": 0.3814773719612488,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_party",
+          "class": "party",
+          "value": 0.6185226280387512,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_relaxed",
+          "class": "not_relaxed",
+          "value": 0.2767824160641866,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_relaxed",
+          "class": "relaxed",
+          "value": 0.7232175839358135,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_sad",
+          "class": "not_sad",
+          "value": 0.5843625012526464,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_sad",
+          "class": "sad",
+          "value": 0.41563749874735356,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster1",
+          "value": 0.09803589380855988,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster2",
+          "value": 0.22519210164307968,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster3",
+          "value": 0.24657125449870884,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster4",
+          "value": 0.16320093214434428,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster5",
+          "value": 0.2669998179053074,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "timbre",
+          "class": "bright",
+          "value": 0.03111510736005141,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "timbre",
+          "class": "dark",
+          "value": 0.9688848926399486,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "tonal_atonal",
+          "class": "atonal",
+          "value": 0.8567628042153634,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "tonal_atonal",
+          "class": "tonal",
+          "value": 0.1432371957846365,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "voice_instrumental",
+          "class": "instrumental",
+          "value": 0.38867572616602186,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "voice_instrumental",
+          "class": "voice",
+          "value": 0.6113242738339781,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        }
+      ]
+    },
+    {
+      "mbid": "local:audio:58b250f6f5aaa9a370cbda6ed427395d",
+      "title": "Lindeza",
+      "length_ms": 186272,
+      "source": "local:ingest",
+      "artists": [],
+      "flavor": [
+        {
+          "characteristic": "danceability",
+          "class": "danceable",
+          "value": 0.05584226743232828,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "danceability",
+          "class": "not_danceable",
+          "value": 0.9441577325676718,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "gender",
+          "class": "female",
+          "value": 0.6376661698866033,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "gender",
+          "class": "male",
+          "value": 0.3623338301133967,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "alternative",
+          "value": 0.007219365143704819,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "blues",
+          "value": 0.0012906006818214572,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "electronic",
+          "value": 0.9538000502808406,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "folkcountry",
+          "value": 0.005502752292733299,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "funksoulrnb",
+          "value": 0.0030226307571614005,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "jazz",
+          "value": 0.020477773862991027,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "pop",
+          "value": 0.001723904963035914,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "raphiphop",
+          "value": 0.0016343091563096677,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "rock",
+          "value": 0.005328612861401839,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "ambient",
+          "value": 0.3212466692214744,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "dnb",
+          "value": 0.046961371179254426,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "house",
+          "value": 0.3203501880204588,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "techno",
+          "value": 0.03230282993494102,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "trance",
+          "value": 0.27913894164387143,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "cla",
+          "value": 0.005606264820571783,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "dan",
+          "value": 0.22987566048369,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "hip",
+          "value": 0.08472295338149027,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "jaz",
+          "value": 0.022995682490372225,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "pop",
+          "value": 0.16399405888967508,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "rhy",
+          "value": 0.4718608944377236,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "roc",
+          "value": 0.009431035618511621,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "spe",
+          "value": 0.01151344987796545,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "blu",
+          "value": 0.06177139337099176,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "cla",
+          "value": 0.034301843732077474,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "cou",
+          "value": 0.10290469993363432,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "dis",
+          "value": 0.051471948012965237,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "hip",
+          "value": 0.15443839864509745,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "jaz",
+          "value": 0.3090464510994034,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "met",
+          "value": 0.044126371743404544,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "pop",
+          "value": 0.07721297404007879,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "reg",
+          "value": 0.06177085696831413,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "roc",
+          "value": 0.10295506245403287,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "ChaChaCha",
+          "value": 0.958570326574292,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Jive",
+          "value": 0.0035657637863729325,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Quickstep",
+          "value": 0.0013359111796259913,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Rumba-American",
+          "value": 0.015130301687239877,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Rumba-International",
+          "value": 0.009677692953977064,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Rumba-Misc",
+          "value": 0.0022662711061511823,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Samba",
+          "value": 0.005022305968627674,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Tango",
+          "value": 0.0012872803495164711,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "VienneseWaltz",
+          "value": 0.002610621163295604,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Waltz",
+          "value": 0.0005335252309012725,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_acoustic",
+          "class": "acoustic",
+          "value": 0.01089374304204735,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_acoustic",
+          "class": "not_acoustic",
+          "value": 0.9891062569579526,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_aggressive",
+          "class": "aggressive",
+          "value": 2.839662097301366e-20,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_aggressive",
+          "class": "not_aggressive",
+          "value": 1.0,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_electronic",
+          "class": "electronic",
+          "value": 0.9646229070762311,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_electronic",
+          "class": "not_electronic",
+          "value": 0.035377092923768894,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_happy",
+          "class": "happy",
+          "value": 0.09475968790202628,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_happy",
+          "class": "not_happy",
+          "value": 0.9052403120979737,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_party",
+          "class": "not_party",
+          "value": 0.9999726942549462,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_party",
+          "class": "party",
+          "value": 2.7305745053829433e-05,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_relaxed",
+          "class": "not_relaxed",
+          "value": 0.191228440005787,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_relaxed",
+          "class": "relaxed",
+          "value": 0.808771559994213,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_sad",
+          "class": "not_sad",
+          "value": 0.6011340144429521,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_sad",
+          "class": "sad",
+          "value": 0.3988659855570479,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster1",
+          "value": 0.1594756713224031,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster2",
+          "value": 0.2067906782504397,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster3",
+          "value": 0.24865951187471988,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster4",
+          "value": 0.2457669450691123,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster5",
+          "value": 0.13930719348332496,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "timbre",
+          "class": "bright",
+          "value": 0.4315570674308413,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "timbre",
+          "class": "dark",
+          "value": 0.5684429325691587,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "tonal_atonal",
+          "class": "atonal",
+          "value": 0.9510189825536804,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "tonal_atonal",
+          "class": "tonal",
+          "value": 0.048981017446319566,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "voice_instrumental",
+          "class": "instrumental",
+          "value": 0.4663351415897913,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "voice_instrumental",
+          "class": "voice",
+          "value": 0.5336648584102087,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        }
+      ]
+    },
+    {
+      "mbid": "local:audio:6783678fa9f52ee047fd4d92ed172050",
+      "title": "Spaced Out",
+      "length_ms": 242265,
+      "source": "local:ingest",
+      "artists": [],
+      "flavor": [
+        {
+          "characteristic": "danceability",
+          "class": "danceable",
+          "value": 0.9866933882719174,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "danceability",
+          "class": "not_danceable",
+          "value": 0.013306611728082562,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "gender",
+          "class": "female",
+          "value": 0.4482166234375871,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "gender",
+          "class": "male",
+          "value": 0.5517833765624129,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "alternative",
+          "value": 0.0010545753393358765,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "blues",
+          "value": 0.0007514433483503044,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "electronic",
+          "value": 0.9896893923073264,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "folkcountry",
+          "value": 0.0008463695216862438,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "funksoulrnb",
+          "value": 0.00011532105909745772,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "jazz",
+          "value": 0.006079099630940976,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "pop",
+          "value": 8.6961228659989e-05,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "raphiphop",
+          "value": 0.00020521742353009703,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "rock",
+          "value": 0.0011716201410725507,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "ambient",
+          "value": 0.25313680170980873,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "dnb",
+          "value": 0.05766005183027895,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "house",
+          "value": 0.5078798393203459,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "techno",
+          "value": 0.07232405606119786,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "trance",
+          "value": 0.10899925107836869,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "cla",
+          "value": 0.0132991179870823,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "dan",
+          "value": 0.09626105357300727,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "hip",
+          "value": 0.33293958128733836,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "jaz",
+          "value": 0.03842619582172252,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "pop",
+          "value": 0.057371812526226626,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "rhy",
+          "value": 0.4245473931686223,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "roc",
+          "value": 0.012824470844887505,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "spe",
+          "value": 0.024330374791113177,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "blu",
+          "value": 0.06206710743682428,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "cla",
+          "value": 0.03447490212783053,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "cou",
+          "value": 0.10343397963202994,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "dis",
+          "value": 0.062097126327753216,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "hip",
+          "value": 0.1552724104230201,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "jaz",
+          "value": 0.3106669585908682,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "met",
+          "value": 0.04434668040432344,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "pop",
+          "value": 0.06207937265958126,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "reg",
+          "value": 0.062081655106548915,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "roc",
+          "value": 0.10347980729122011,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "ChaChaCha",
+          "value": 0.9680472201675678,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Jive",
+          "value": 0.0043403892534918465,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Quickstep",
+          "value": 0.0014832473648781902,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Rumba-American",
+          "value": 0.012669858470872965,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Rumba-International",
+          "value": 0.0018378333803621837,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Rumba-Misc",
+          "value": 0.0014644683346648776,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Samba",
+          "value": 0.004673383546870628,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Tango",
+          "value": 0.0025195448592325777,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "VienneseWaltz",
+          "value": 0.0024870753241165887,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Waltz",
+          "value": 0.0004769792979422962,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_acoustic",
+          "class": "acoustic",
+          "value": 0.034938979835658884,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_acoustic",
+          "class": "not_acoustic",
+          "value": 0.9650610201643411,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_aggressive",
+          "class": "aggressive",
+          "value": 0.37523271504664385,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_aggressive",
+          "class": "not_aggressive",
+          "value": 0.6247672849533561,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_electronic",
+          "class": "electronic",
+          "value": 0.9205700529790025,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_electronic",
+          "class": "not_electronic",
+          "value": 0.07942994702099748,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_happy",
+          "class": "happy",
+          "value": 0.22157657783066415,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_happy",
+          "class": "not_happy",
+          "value": 0.7784234221693358,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_party",
+          "class": "not_party",
+          "value": 0.06861760025217793,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_party",
+          "class": "party",
+          "value": 0.9313823997478221,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_relaxed",
+          "class": "not_relaxed",
+          "value": 0.1402593040252509,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_relaxed",
+          "class": "relaxed",
+          "value": 0.8597406959747491,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_sad",
+          "class": "not_sad",
+          "value": 0.8595497962496198,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_sad",
+          "class": "sad",
+          "value": 0.1404502037503802,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster1",
+          "value": 0.13137844576756152,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster2",
+          "value": 0.20146774538805354,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster3",
+          "value": 0.23805201887537175,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster4",
+          "value": 0.21712894276596384,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster5",
+          "value": 0.21197284720304946,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "timbre",
+          "class": "bright",
+          "value": 0.02305264698491316,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "timbre",
+          "class": "dark",
+          "value": 0.9769473530150868,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "tonal_atonal",
+          "class": "atonal",
+          "value": 0.9880309753434773,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "tonal_atonal",
+          "class": "tonal",
+          "value": 0.011969024656522751,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "voice_instrumental",
+          "class": "instrumental",
+          "value": 0.6162814131479691,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "voice_instrumental",
+          "class": "voice",
+          "value": 0.38371858685203086,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        }
+      ]
+    },
+    {
+      "mbid": "local:audio:b34c1da350f094e30c6a792a9f5e7f60",
+      "title": "Duala",
+      "length_ms": 284250,
+      "source": "local:ingest",
+      "artists": [],
+      "flavor": [
+        {
+          "characteristic": "danceability",
+          "class": "danceable",
+          "value": 0.9992357301668977,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "danceability",
+          "class": "not_danceable",
+          "value": 0.0007642698331022935,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "gender",
+          "class": "female",
+          "value": 0.8697387186536509,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "gender",
+          "class": "male",
+          "value": 0.13026128134634907,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "alternative",
+          "value": 1.0519488307951224e-07,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "blues",
+          "value": 8.168951532220027e-08,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "electronic",
+          "value": 0.9998468309473394,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "folkcountry",
+          "value": 1.2227626790748098e-05,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "funksoulrnb",
+          "value": 4.1711890144964e-06,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "jazz",
+          "value": 0.00010984127153080097,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "pop",
+          "value": 2.1386037846850814e-06,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "raphiphop",
+          "value": 1.3862039793807115e-05,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_dortmund",
+          "class": "rock",
+          "value": 1.0741437347698202e-05,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "ambient",
+          "value": 0.18949595315292694,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "dnb",
+          "value": 0.01546340421121221,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "house",
+          "value": 0.4653197920325644,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "techno",
+          "value": 0.028602556439730954,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_electronic",
+          "class": "trance",
+          "value": 0.3011182941635655,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "cla",
+          "value": 0.0033426945651195404,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "dan",
+          "value": 0.11209232528623461,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "hip",
+          "value": 0.4189416949141206,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "jaz",
+          "value": 0.018461096094735924,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "pop",
+          "value": 0.05175213028174154,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "rhy",
+          "value": 0.38363522751434365,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "roc",
+          "value": 0.006779534219445367,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_rosamerica",
+          "class": "spe",
+          "value": 0.004995297124258799,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "blu",
+          "value": 0.060734369148840436,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "cla",
+          "value": 0.033716957515364576,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "cou",
+          "value": 0.07585523329615947,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "dis",
+          "value": 0.05057727096345489,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "hip",
+          "value": 0.1517548020588424,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "jaz",
+          "value": 0.30368523811300063,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "met",
+          "value": 0.060702166060909994,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "pop",
+          "value": 0.0606871280915025,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "reg",
+          "value": 0.05056938340777959,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "genre_tzanetakis",
+          "class": "roc",
+          "value": 0.15171745134414555,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "ChaChaCha",
+          "value": 0.3719430337829086,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Jive",
+          "value": 0.07000266803183895,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Quickstep",
+          "value": 0.025190194236858345,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Rumba-American",
+          "value": 0.0630641291481415,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Rumba-International",
+          "value": 0.04922250141848537,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Rumba-Misc",
+          "value": 0.02840669969868796,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Samba",
+          "value": 0.14995971051159307,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Tango",
+          "value": 0.19448971947773272,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "VienneseWaltz",
+          "value": 0.033097556468826825,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "ismir04_rhythm",
+          "class": "Waltz",
+          "value": 0.014623787224926741,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_acoustic",
+          "class": "acoustic",
+          "value": 0.12157783967936812,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_acoustic",
+          "class": "not_acoustic",
+          "value": 0.8784221603206319,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_aggressive",
+          "class": "aggressive",
+          "value": 0.038255018818679744,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_aggressive",
+          "class": "not_aggressive",
+          "value": 0.9617449811813202,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_electronic",
+          "class": "electronic",
+          "value": 0.9741965079949506,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_electronic",
+          "class": "not_electronic",
+          "value": 0.02580349200504939,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_happy",
+          "class": "happy",
+          "value": 0.008918686596504742,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_happy",
+          "class": "not_happy",
+          "value": 0.9910813134034953,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_party",
+          "class": "not_party",
+          "value": 0.22346499422292718,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_party",
+          "class": "party",
+          "value": 0.7765350057770728,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_relaxed",
+          "class": "not_relaxed",
+          "value": 0.456840748226058,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_relaxed",
+          "class": "relaxed",
+          "value": 0.543159251773942,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_sad",
+          "class": "not_sad",
+          "value": 0.6736693163416125,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "mood_sad",
+          "class": "sad",
+          "value": 0.32633068365838747,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster1",
+          "value": 0.05997637324414314,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster2",
+          "value": 0.13958933773851165,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster3",
+          "value": 0.2080096368181603,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster4",
+          "value": 0.23637704830594186,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "moods_mirex",
+          "class": "Cluster5",
+          "value": 0.3560476038932431,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "timbre",
+          "class": "bright",
+          "value": 0.7034193154752053,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "timbre",
+          "class": "dark",
+          "value": 0.2965806845247947,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "tonal_atonal",
+          "class": "atonal",
+          "value": 0.9938027813783834,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "tonal_atonal",
+          "class": "tonal",
+          "value": 0.006197218621616569,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "voice_instrumental",
+          "class": "instrumental",
+          "value": 0.37672307094472557,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        },
+        {
+          "characteristic": "voice_instrumental",
+          "class": "voice",
+          "value": 0.6232769290552744,
+          "source": "local:essentia-2.1-beta2+gaia-beta1",
+          "accuracy": null
+        }
+      ]
+    }
+  ]
+}

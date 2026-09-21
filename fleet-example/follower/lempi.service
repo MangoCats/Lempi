@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: MIT
+#
+# A node that FOLLOWS another, so the two are heard as one [GDE-ECHO-330].
+# Generic example -- `speaker-a` and `speaker-c` are not real hosts.
+[Unit]
+Description=Lempi (follower)
+After=sound.target
+Wants=sound.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/local/bin/lempi-preflight
+ExecStartPre=/usr/local/bin/lempi-db-recover
+#
+# --follow SEEDS the stored setting rather than overriding it
+# [SPEC-ECHO-010]: the control is the settings page, and this flag is for a
+# node being set up before anyone can reach its interface. A flag that
+# silently overrode what a listener chose would be worse than no flag, so
+# this one is deliberately not a layer-2 option.
+#
+# --echo-offset-frames is this node's MEASURED presentation offset and
+# --echo-fleet-min-frames the smallest in the fleet [LOG-ECHO-030]. Both are
+# calibrated figures, not guesses; `delayprobe` is how they are obtained.
+# **Absent is not zero** [GOV-SRC-040]: with neither, the node fills its ring
+# to capacity, which is right for a node playing alone and for whichever node
+# holds the fleet's minimum. Only a node told both numbers holds anything back.
+ExecStart=/usr/local/bin/lempi --listener /var/lempi/listener.db --library /srv/library/library.db --port 13491 --follow speaker-a --echo-offset-frames 15676 --echo-fleet-min-frames 2043 --echo-rate 44100
+Restart=always
+RestartSec=2
+User=pi
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

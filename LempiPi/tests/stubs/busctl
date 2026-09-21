@@ -1,0 +1,19 @@
+#!/bin/sh
+# Fake busctl. Answers BlueZ's MediaTransport1 from a fixture, because
+# "is audio actually flowing" is the question that decides whether the
+# watcher may reset the radio `[PI3-FOUND-750]`, and it must be answerable
+# without a radio.
+printf '%s\n' "busctl $*" >> "$VT_STATE/calls"
+case "${1:-}" in
+    --list)
+        # One transport path exists whenever the fixture names a state.
+        [ -f "$VT_STATE/transport" ] &&
+            echo "/org/bluez/hci0/dev_2C_8D_48_36_EA_2F/sep1/fd0"
+        ;;
+    get-property)
+        # The real one prints `s "active"`, quotes and all.
+        [ -f "$VT_STATE/transport" ] &&
+            printf 's "%s"\n' "$(cat "$VT_STATE/transport")"
+        ;;
+esac
+exit 0

@@ -1,0 +1,122 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Vipunen — export</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/console.css">
+<header>
+  <h1>Vipunen</h1>
+  <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/export" class="on">export</a><a href="/flags">flags</a><a href="/mesh">mesh</a><a href="/system">system</a></nav>
+  <span class="ro">library read-only</span>
+</header>
+<main>
+  <h2>Build a bundle for a remote Lempi</h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    A GUI over <code>export_bundle.py</code> — audio plus its derived facts for
+    whatever matches below, never the database itself. This carries <em>new</em>
+    music to a Lempi that has none of it; a correction to a recording or
+    passage both installations already have is a different tool
+    (<code>tools/export_changes.py</code>).
+  </p>
+  <div class="controls">
+    <input type="search" id="q" placeholder="artist, album or title to match" style="min-width:24rem">
+    <button class="chip" id="build">build bundle</button>
+  </div>
+  <div id="jobstate"></div>
+  <div id="live"></div>
+
+  <div id="deploy" hidden>
+    <h2>Deploy <small>— nothing here runs anything on another machine</small></h2>
+    <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+      Vipunen never reaches another host on its own. This opens an ordinary
+      terminal on <em>this</em> machine and shows the commands as plain text —
+      copy them in, or type your own; either way you see exactly what runs
+      before it does.
+    </p>
+    <div class="controls">
+      <button class="chip" id="openterm">open a terminal here</button>
+      <span id="termsaid" style="color:var(--dim);font-size:.85rem;align-self:center"></span>
+    </div>
+    <p style="font-size:.85rem;color:var(--dim);margin:.6rem 0 .2rem">
+      Edit the host and remote path for your own setup, then copy into the
+      terminal that just opened:
+    </p>
+    <pre id="commands" class="list" style="white-space:pre-wrap;user-select:all"></pre>
+  </div>
+</main>
+<script src="/console.js"></script>
+<script>
+let es = null;
+
+async function build() {
+  const q = document.getElementById('q').value.trim();
+  if (!q) return;
+  document.getElementById('deploy').hidden = true;
+  const r = await (await fetch('/api/export/bundle', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q }),
+  })).json();
+  if (r.error) return S.fail('#jobstate', new Error(r.error));
+  watch(r.job_id);
+}
+
+// The same watch/render shape jobs.html already uses [SPEC-SUI-085] -- state
+// lives in a file, not in this tab, so a reload finds the job still there.
+function watch(id) {
+  if (es) es.close();
+  const box = document.getElementById('live');
+  box.replaceChildren(S.el('h2', {}, `Job ${id} `, S.el('small', { text: '— live' })));
+  const log = S.el('div', { class: 'list' });
+  box.append(log);
+
+  S.get(`/api/jobs/${id}`).then(j => {
+    for (const e of j.events) render(e, log);
+    if (j.state === 'done') showDeploy(j);
+  }).catch(e => S.fail('#live', e));
+
+  es = new EventSource(`/api/jobs/${id}/stream`);
+  es.onmessage = m => {
+    const e = JSON.parse(m.data);
+    render(e, log);
+    if (e.kind === 'done') {
+      es.close(); es = null;
+      S.get(`/api/jobs/${id}`).then(j => { if (j.state === 'done') showDeploy(j); });
+    }
+  };
+}
+
+function render(e, log) {
+  const line = e.kind === 'stage' ? `── ${e.text} ──`
+    : e.kind === 'done' ? `── finished: ${e.text} ──` : e.text;
+  if (e.kind === 'counts') return;
+  log.append(S.el('div', {
+    style: e.kind === 'error' ? 'color:var(--bad)' : '',
+    text: line,
+  }));
+  log.scrollTop = log.scrollHeight;
+}
+
+let outDir = null;
+
+function showDeploy(j) {
+  if (!j.result || !j.result.out_dir) return;
+  outDir = j.result.out_dir;
+  const name = outDir.split(/[\\/]/).pop();
+  document.getElementById('commands').textContent =
+    `rsync -a "${outDir}/" {{PEER_SSH}}:{{PEER_INCOMING}}/${name}/\n` +
+    `ssh {{PEER_SSH}} import_bundle --library {{PEER_LIBRARY}} --bundle {{PEER_INCOMING}}/${name}\n` +
+    `ssh {{PEER_SSH}} import_bundle --library {{PEER_LIBRARY}} --bundle {{PEER_INCOMING}}/${name} --apply\n` +
+    `curl -X POST {{PEER_URL}}/library/reload`;
+  document.getElementById('deploy').hidden = false;
+}
+
+document.getElementById('build').onclick = build;
+document.getElementById('openterm').onclick = async () => {
+  const said = document.getElementById('termsaid');
+  said.textContent = 'opening…';
+  const r = await (await fetch('/api/export/open-terminal', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dir: outDir }),
+  })).json();
+  said.textContent = r.ok ? 'opened.' : (r.error || 'could not open a terminal');
+};
+</script>

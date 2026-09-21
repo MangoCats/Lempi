@@ -1,0 +1,411 @@
+<title>Duration-Probe Reliability Audit</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Work+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+  :root {
+    --bg: #eef1f4;
+    --surface: #ffffff;
+    --surface-2: #f4f6f8;
+    --text: #1b2027;
+    --muted: #5b6472;
+    --faint: #8892a0;
+    --border: #d8dde3;
+    --accent: #a8701c;
+    --accent-soft: #f3e3cc;
+    --crit: #b13a3a;
+    --crit-soft: #f6e0df;
+    --high: #b1701f;
+    --high-soft: #f5e6d2;
+    --med: #8a7a1e;
+    --med-soft: #f1ecd0;
+    --low: #4c5a72;
+    --low-soft: #e4e9ef;
+    --good: #3f7d5c;
+    --good-soft: #dcece3;
+    --font-display: 'Barlow Condensed', 'Arial Narrow', sans-serif;
+    --font-body: 'Work Sans', system-ui, sans-serif;
+    --font-mono: 'IBM Plex Mono', 'Consolas', monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14171c;
+      --surface: #1b1f26;
+      --surface-2: #20242c;
+      --text: #e7eaef;
+      --muted: #9aa3b2;
+      --faint: #6b7381;
+      --border: #2b3038;
+      --accent: #e0a458;
+      --accent-soft: #3a2f1c;
+      --crit: #e2726b;
+      --crit-soft: #3a2323;
+      --high: #e4a862;
+      --high-soft: #3a2e1c;
+      --med: #d8c665;
+      --med-soft: #34301c;
+      --low: #93a0b5;
+      --low-soft: #262b33;
+      --good: #7cbf9d;
+      --good-soft: #1e2f27;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171c;
+    --surface: #1b1f26;
+    --surface-2: #20242c;
+    --text: #e7eaef;
+    --muted: #9aa3b2;
+    --faint: #6b7381;
+    --border: #2b3038;
+    --accent: #e0a458;
+    --accent-soft: #3a2f1c;
+    --crit: #e2726b;
+    --crit-soft: #3a2323;
+    --high: #e4a862;
+    --high-soft: #3a2e1c;
+    --med: #d8c665;
+    --med-soft: #34301c;
+    --low: #93a0b5;
+    --low-soft: #262b33;
+    --good: #7cbf9d;
+    --good-soft: #1e2f27;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--accent-soft); }
+  a { color: var(--accent); }
+  a:focus-visible, button:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+
+  .wrap { max-width: 68rem; margin: 0 auto; padding: 2.5rem 1.5rem 5rem; }
+
+  header.top {
+    display: flex; flex-direction: column; gap: .35rem;
+    padding-bottom: 1.75rem; margin-bottom: 1.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .eyebrow {
+    font-family: var(--font-mono); font-size: .75rem; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--accent);
+  }
+  h1 {
+    font-family: var(--font-display); font-weight: 700;
+    font-size: clamp(2rem, 4vw, 2.75rem); line-height: 1.05;
+    margin: .15rem 0 0; text-wrap: balance;
+  }
+  .dek {
+    font-size: 1.0625rem; color: var(--muted); max-width: 46rem;
+    margin: .5rem 0 0;
+  }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 1.25rem; margin-top: 1rem;
+    font-family: var(--font-mono); font-size: .8125rem; color: var(--faint);
+  }
+
+  /* Readout strip -- the one deliberate visual moment, styled like a
+     measurement panel, because the whole finding is "the measured number
+     was wrong." */
+  .readout {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+    gap: 1px; background: var(--border); border: 1px solid var(--border);
+    margin: 1.75rem 0 2.5rem; overflow-x: auto;
+  }
+  .cell {
+    background: var(--surface); padding: 1rem 1.1rem; min-width: 9.5rem;
+  }
+  .cell .num {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    font-size: 1.65rem; font-weight: 600; color: var(--text);
+    display: block; line-height: 1.1;
+  }
+  .cell .num.accent { color: var(--accent); }
+  .cell .num.crit { color: var(--crit); }
+  .cell .label {
+    display: block; margin-top: .3rem; font-size: .75rem; color: var(--muted);
+    line-height: 1.3;
+  }
+
+  section { margin: 2.75rem 0; }
+  section > h2 {
+    font-family: var(--font-display); font-weight: 600; font-size: 1.5rem;
+    margin: 0 0 .9rem; letter-spacing: .01em;
+  }
+  section > h3 {
+    font-family: var(--font-display); font-weight: 600; font-size: 1.15rem;
+    margin: 1.6rem 0 .6rem;
+  }
+  p { max-width: 44rem; margin: .8rem 0; }
+  p.wide { max-width: none; }
+  .prose { max-width: 44rem; }
+  code {
+    font-family: var(--font-mono); font-size: .875em;
+    background: var(--surface-2); border: 1px solid var(--border);
+    padding: .05em .35em; border-radius: 3px;
+  }
+  section > h2 code { font-size: .7em; vertical-align: .05em; }
+
+  blockquote {
+    margin: 1rem 0; padding: .15rem 0 .15rem 1rem;
+    border-left: 3px solid var(--accent); color: var(--muted); max-width: 44rem;
+  }
+  blockquote code { white-space: pre-wrap; }
+
+  /* Findings: severity-striped blocks, scannable */
+  .finding {
+    display: grid; grid-template-columns: auto 1fr; gap: 0 1rem;
+    background: var(--surface); border: 1px solid var(--border);
+    border-left-width: 4px; padding: 1rem 1.15rem; margin: .85rem 0;
+  }
+  .finding.crit { border-left-color: var(--crit); }
+  .finding.high { border-left-color: var(--high); }
+  .finding.med  { border-left-color: var(--med); }
+  .finding.low  { border-left-color: var(--low); }
+  .finding.good { border-left-color: var(--good); }
+  .finding .tag {
+    grid-column: 1 / -1; display: flex; align-items: center; gap: .6rem;
+    font-family: var(--font-mono); font-size: .7rem; letter-spacing: .08em;
+    text-transform: uppercase; margin-bottom: .4rem;
+  }
+  .pill {
+    font-family: var(--font-mono); font-size: .7rem; letter-spacing: .06em;
+    text-transform: uppercase; padding: .12rem .5rem; border-radius: 2px;
+  }
+  .pill.crit { background: var(--crit-soft); color: var(--crit); }
+  .pill.high { background: var(--high-soft); color: var(--high); }
+  .pill.med  { background: var(--med-soft);  color: var(--med); }
+  .pill.low  { background: var(--low-soft);  color: var(--low); }
+  .pill.good { background: var(--good-soft); color: var(--good); }
+  .finding .where { color: var(--faint); }
+  .finding h4 {
+    grid-column: 1 / -1; margin: 0 0 .35rem; font-size: 1.0625rem;
+    font-weight: 600; font-family: var(--font-body);
+  }
+  .finding p { grid-column: 1 / -1; margin: 0; max-width: none; color: var(--text); }
+  .finding p + p { margin-top: .5rem; }
+  .finding .refs {
+    grid-column: 1 / -1; margin-top: .55rem; display: flex; flex-wrap: wrap; gap: .4rem;
+  }
+
+  .tablewrap { overflow-x: auto; border: 1px solid var(--border); }
+  table { border-collapse: collapse; width: 100%; min-width: 40rem; font-size: .875rem; }
+  th, td { padding: .55rem .8rem; text-align: left; border-bottom: 1px solid var(--border); }
+  thead th {
+    font-family: var(--font-mono); font-size: .7rem; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--muted); background: var(--surface-2);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num, th.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+  td.path { font-family: var(--font-mono); font-size: .8125rem; color: var(--muted); }
+
+  .stepnum {
+    font-family: var(--font-mono); color: var(--accent); font-weight: 600;
+    margin-right: .5rem;
+  }
+  ol.plan { list-style: none; margin: 1rem 0; padding: 0; max-width: 44rem; }
+  ol.plan li {
+    display: flex; gap: .75rem; padding: .7rem 0; border-top: 1px solid var(--border);
+  }
+  ol.plan li:first-child { border-top: none; }
+  ol.plan li .n {
+    font-family: var(--font-mono); font-weight: 600; color: var(--accent);
+    flex: none; width: 1.4rem;
+  }
+
+  footer.meta-foot {
+    margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid var(--border);
+    font-family: var(--font-mono); font-size: .75rem; color: var(--faint);
+  }
+
+  @media (max-width: 640px) {
+    .finding { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="wrap">
+
+<header class="top">
+  <span class="eyebrow">Lempi / Vipunen &middot; internal audit</span>
+  <h1>Duration-Probe Reliability Audit</h1>
+  <p class="dek">Where an unverified <code>duration_ms</code> shapes behavior across the codebase — traced end to end from one waveform-editor bug report, then measured against the real library.</p>
+  <div class="meta">
+    <span>2026-08-30</span>
+    <span>5,709 files &middot; 16,409 passages scanned</span>
+    <span>Read-only — no data changed</span>
+  </div>
+</header>
+
+<div class="readout">
+  <div class="cell"><span class="num crit">29.7%</span><span class="label">files with a wrong stored duration</span></div>
+  <div class="cell"><span class="num">1,695</span><span class="label">of 5,709 files affected</span></div>
+  <div class="cell"><span class="num">32.8m</span><span class="label">worst single overstatement</span></div>
+  <div class="cell"><span class="num accent">56</span><span class="label">passages losing their fade-out right now</span></div>
+  <div class="cell"><span class="num crit">100%</span><span class="label">of errors invisible to the existing repair tool</span></div>
+</div>
+
+<section id="summary">
+  <h2>Summary</h2>
+  <div class="prose">
+    <p>A boundary-editor bug report — "I can't see the end marker" — traced back to <code>08 - Slow Ride.mp3</code> being stored as 4:54.7 long when it actually decodes to 3:58.7. That's not encoder rounding; it's a systematic failure mode: MP3s encoded without a valid Xing/VBR header cause every duration-probing tool in this pipeline to fall back to a <strong>bitrate estimate</strong>, silently, with no error — and <code>files.duration_ms</code> is documented as <em>decoded, not header-claimed</em> for exactly this reason.</p>
+    <p>This was already found once. <code>[GDE-FEX-106]</code> measured a 29.2% error rate against the migrated library in 2026 and shipped <code>repair_durations.py</code> to fix it. Re-measuring against <strong>real decoded audio</strong> rather than another header estimate finds the <em>same</em> 29.7% error rate persists today — because the repair tool checks the stored value against <code>ffprobe</code>'s own estimate, which is the same flawed method, so it can never disagree with a wrong value it would have produced itself. Every one of the 1,695 files found this way is invisible to the tool built to catch this class of bug.</p>
+  </div>
+</section>
+
+<section id="root-cause">
+  <h2>Root cause</h2>
+  <div class="prose">
+    <p>Three independent call sites ask <code>ffprobe -show_entries format=duration</code> for a file's length: <code>tools/ingest_folder.py</code> (original ingest), <code>tools/extract_library.py</code> (feature extraction), and <code>tools/repair_durations.py</code> (the existing fix). For a well-formed CBR file, or a VBR file with a proper Xing/Info header, this is fast and accurate. For a VBR file <em>without</em> one, ffprobe warns on stderr — <code>Estimating duration from bitrate, this may be inaccurate</code> — and returns a number derived from <code>file_size / average_bitrate</code>, which assumes constant bitrate on a file that, by definition, doesn't have one.</p>
+    <p>Nothing downstream sees that warning. The estimate comes back shaped exactly like a real duration — a plausible float, no error flag — and is written to <code>files.duration_ms</code> as fact.</p>
+  </div>
+  <h3>Worked example</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>method</th><th class="num">result</th><th>why</th></tr></thead>
+      <tbody>
+        <tr><td>stored <code>files.duration_ms</code></td><td class="num">294.7s</td><td>from ingest-time <code>ffprobe format=duration</code></td></tr>
+        <tr><td><code>ffprobe format=duration</code> today</td><td class="num">294.7s</td><td>same bitrate estimate, reproduced exactly</td></tr>
+        <tr><td>real decode (<code>ffmpeg -progress</code>, <code>out_time_us</code>)</td><td class="num">238.7s</td><td>what the file actually contains</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="prose">A 56-second gap between what's stored and what's real — on a file encoded by Rhythmbox with no Xing frame, per its own tags.</p>
+</section>
+
+<section id="scope">
+  <h2>Scope, measured against the real library</h2>
+  <div class="prose">
+    <p>Every file was actually decoded (<code>ffmpeg -progress pipe:1</code>, reading <code>out_time_us</code> — not another metadata shortcut) and compared against its stored <code>duration_ms</code>. Read-only; nothing in the library was changed to produce these numbers.</p>
+  </div>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th></th><th class="num">count</th><th class="num">% of 5,709</th></tr></thead>
+      <tbody>
+        <tr><td>Wrong by &gt;1s vs. real decoded length</td><td class="num">1,695</td><td class="num">29.7%</td></tr>
+        <tr><td>&nbsp;&nbsp;— overstated (stored longer than real)</td><td class="num">1,408</td><td class="num">24.7%</td></tr>
+        <tr><td>&nbsp;&nbsp;— understated (stored shorter than real)</td><td class="num">287</td><td class="num">5.0%</td></tr>
+        <tr><td>Error, median</td><td class="num">34.0s</td><td class="num">—</td></tr>
+        <tr><td>Error, p95</td><td class="num">231.9s</td><td class="num">—</td></tr>
+        <tr><td>Error, worst case</td><td class="num">1,968.6s</td><td class="num">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <h3>Worst overstatements</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>file</th><th class="num">stored</th><th class="num">real</th><th class="num">error</th></tr></thead>
+      <tbody>
+        <tr><td class="path">Brubeck, Dave — 01 Truth.mp3</td><td class="num">43.3m</td><td class="num">10.5m</td><td class="num">32.8m</td></tr>
+        <tr><td class="path">Santana — 04 Fillmore East.mp3</td><td class="num">25.3m</td><td class="num">7.7m</td><td class="num">17.6m</td></tr>
+        <tr><td class="path">ELO — 10 Shine a Little Love.mp3</td><td class="num">21.3m</td><td class="num">4.7m</td><td class="num">16.6m</td></tr>
+        <tr><td class="path">Simple Minds — 201 Let There Be Love.mp3</td><td class="num">19.8m</td><td class="num">5.3m</td><td class="num">14.5m</td></tr>
+        <tr><td class="path">Beatles — 08 Within You Without You.mp3</td><td class="num">18.9m</td><td class="num">5.1m</td><td class="num">13.8m</td></tr>
+        <tr><td class="path">Buffett, Jimmy — 01 Intro… Kinja.mp3</td><td class="num">19.9m</td><td class="num">7.0m</td><td class="num">12.9m</td></tr>
+        <tr><td class="path">McLachlan, Sarah — 01 Possession.mp3</td><td class="num">17.6m</td><td class="num">4.7m</td><td class="num">12.9m</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <h3>What this does to passages, not just files</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th></th><th class="num">count</th><th>consequence</th></tr></thead>
+      <tbody>
+        <tr><td>Phantom (start at/past the real end)</td><td class="num">0</td><td>none currently unplayable</td></tr>
+        <tr><td>Overrun (end past the real end)</td><td class="num">58</td><td>lead-out timing partly or wholly wrong</td></tr>
+        <tr><td>&nbsp;&nbsp;— whole lead-out ramp past real audio</td><td class="num">56</td><td><strong>fade-out never plays; every listen ends in a hard cut</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="findings">
+  <h2>Findings, by consequence</h2>
+
+  <div class="finding crit">
+    <div class="tag"><span class="pill crit">critical</span><span class="where"><code>player/src/queue.rs</code> — real-time playback</span></div>
+    <h4>The crossfade/lead-out trigger silently loses its fade on affected passages</h4>
+    <p><code>should_admit()</code> decides when to start the next track from <code>current.duration_ms() = end_ms − start_ms</code> — the same corrupted database value, not the decoder's actual remaining audio. When real content runs out first, <code>PassageDecoder</code> degrades gracefully (clean EOF, no crash), and <code>admit_due()</code>'s <code>(Some(_), None) =&gt; true</code> fallback does self-heal within about one tick — so there's no silence gap or hang. But the crossfade window computed from <code>overlap_ms</code> is never reached before real audio ends, so the intended lead-out ramp and the overlap into the next track are both skipped. The track just stops, and the next one starts cold. <strong>Confirmed happening on 56 real passages today</strong>, every time they play.</p>
+    <div class="refs"><code>player/src/queue.rs:197-212</code> <code>player/src/decoder.rs:142-153</code> <code>player/src/engine.rs:935-967</code></div>
+  </div>
+
+  <div class="finding high">
+    <div class="tag"><span class="pill high">high</span><span class="where"><code>tools/ingest_folder.py</code> — ongoing ingest</span></div>
+    <h4>New files get the wrong value too, right now</h4>
+    <p>This isn't only historical-migration debt. <code>ingest_folder.py</code>'s <code>probe()</code> — the code path every newly-added file goes through today — uses the same <code>ffprobe format=duration</code> call. Every VBR file without a proper header that gets added to this library from here forward inherits the same bug on day one.</p>
+    <div class="refs"><code>tools/ingest_folder.py:60-87</code></div>
+  </div>
+
+  <div class="finding high">
+    <div class="tag"><span class="pill high">high</span><span class="where"><code>tools/repair_durations.py</code> — the existing fix, disabled by its own method</span></div>
+    <h4>The repair tool cannot see any of this class of error</h4>
+    <p>Its own probe is <code>ffprobe format=duration</code> — identical to what (almost certainly) produced the wrong value in the first place. Checked directly: of the 1,695 files found wrong against real decoded audio, <strong>ffprobe's own re-check agreed with the stored value in all 1,695</strong>. A tool comparing a number against the method that generated it will never find a disagreement, regardless of how many times it's run.</p>
+    <div class="refs"><code>tools/repair_durations.py:40-52</code></div>
+  </div>
+
+  <div class="finding med">
+    <div class="tag"><span class="pill med">medium</span><span class="where"><code>tools/suggest_release.py</code> — MusicBrainz matching</span></div>
+    <h4>Track-length is a scoring signal, fed a number that can be wrong by minutes</h4>
+    <p><code>delta = abs(f["duration_ms"] - track["length"])</code> compares the (possibly corrupted) stored duration against MusicBrainz's own track length to help pick the right release. A large, silent error here doesn't crash anything — it just biases matching against the correct release, or toward a wrong one, for exactly the files most likely to need this tool's help (self-published or oddly-encoded audio).</p>
+    <div class="refs"><code>tools/suggest_release.py:273-274</code></div>
+  </div>
+
+  <div class="finding med">
+    <div class="tag"><span class="pill med">medium</span><span class="where">already flagged, still open — <code>SPEC021 §5</code></span></div>
+    <h4>A duration repair orphans <code>lowlevel_cache</code>, same as a boundary edit does</h4>
+    <p><code>lowlevel_cache</code> is keyed <code>(audio_md5, start_ms, end_ms)</code>. <code>repair_durations.py</code> clamps an overrun <code>end_ms</code> but never touches this cache — the same gap <code>SPEC021</code> already names for manual boundary edits, unresolved on this path too. A future repair run will leave stale feature rows pointing at spans nothing plays anymore.</p>
+    <div class="refs"><code>docs/spec/SPEC021-waveform-boundary-editor.md:80</code> <code>tools/repair_durations.py:108-114</code></div>
+  </div>
+
+  <div class="finding low">
+    <div class="tag"><span class="pill low">low</span><span class="where">display-only, several places</span></div>
+    <h4>Cosmetic disagreement, not data corruption</h4>
+    <p>Vipunen's profile page (<code>lead in / out</code> row), the MPD backend's reported track length, and the player's own snapshot <code>duration_ms</code> field all display the stored value as-is. Confusing when wrong, but nothing here writes or decides anything from it.</p>
+    <div class="refs"><code>player/src/mpd_backend.rs:615-624</code> <code>tools/console_web/profile.html:303-308</code></div>
+  </div>
+
+  <div class="finding good">
+    <div class="tag"><span class="pill good">already fixed this session</span></div>
+    <h4>The waveform boundary editor now names this exact problem instead of failing silently</h4>
+    <p>After decoding, it compares the browser's own decoded length against the library's claim and explains the gap in plain language when one exists — the fix that led to this audit.</p>
+    <div class="refs"><code>player/src/web/edit.js</code> — <code>[SPEC-SUI-221]</code></div>
+  </div>
+
+  <div class="finding low">
+    <div class="tag"><span class="pill low">forward-looking</span><span class="where"><code>MCR-SPEC033</code> — segmentation, not yet built</span></div>
+    <h4>The planned DAO-segmentation pass would inherit this on day one</h4>
+    <p>Its own matching score is a duration-error sum against MusicBrainz track lengths, run against the file's own total duration. Worth closing this gap <em>before</em> segmentation is built, not after — the same way <code>[GDE-FEX-106]</code>'s discovery predates and informed this audit.</p>
+  </div>
+
+  <div class="finding low">
+    <div class="tag"><span class="pill low">process gap</span></div>
+    <h4>Zero test coverage on the entire duration-probing surface</h4>
+    <p>No test file exists for <code>ingest_folder.py</code>, <code>extract_library.py</code>'s <code>probe_duration_ms</code>, or <code>repair_durations.py</code>. And the repair tool has never been wired into any automated job — it's pure manual CLI, so even a corrected version depends on someone remembering to run it.</p>
+  </div>
+</section>
+
+<section id="plan">
+  <h2>Toward a remediation plan</h2>
+  <p class="prose">Not yet acted on — findings only, laid out in the order a fix would actually need to happen.</p>
+  <ol class="plan">
+    <li><span class="n">1</span><span>Replace the probe itself, once, shared. A real-decode measurement (<code>ffmpeg -progress pipe:1</code>, reading <code>out_time_us</code>) costs about the same wall-clock as the existing ffprobe call is fast — milliseconds to low seconds per file — against extraction work that already takes ~27s/file. One function, used by all three call sites, not three copies to keep in sync.</span></li>
+    <li><span class="n">2</span><span>Re-run the corrected repair against the live library, <code>--write</code>, and extend it to invalidate the now-stale <code>lowlevel_cache</code> rows it orphans rather than leaving that gap open a second time.</span></li>
+    <li><span class="n">3</span><span>Add the missing test coverage — at minimum, a fixture VBR file with no Xing header, proving the corrected probe gets the real answer and the old one doesn't.</span></li>
+    <li><span class="n">4</span><span>Decide whether <code>should_admit</code> should also become independent of the stored duration_ms (defense in depth against whatever the next data-quality surprise turns out to be), or whether closing the data bug at the source is enough on its own.</span></li>
+    <li><span class="n">5</span><span>Decide whether re-probing belongs in the regular induct/reanalyze pipeline, or stays a documented manual step after any bulk ingest.</span></li>
+  </ol>
+</section>
+
+<footer class="meta-foot">
+  Methodology: full-library scan via <code>ffmpeg -progress pipe:1</code> (16 parallel workers, 5,709 files, 527s wall time, 0 unreadable) cross-checked against <code>ffprobe format=duration</code> on the 1,695 confirmed-wrong files. Read-only throughout — no writes to <code>data/lempi_new.db</code>.
+</footer>
+
+</div>

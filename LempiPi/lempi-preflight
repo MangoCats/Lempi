@@ -1,0 +1,177 @@
+#!/bin/sh
+# Say what this appliance is about to start with, before it starts.
+#
+# **`[PI-PRE-010]` Why a boot needs this at all.** `lempi-db-recover` is what
+# stands between a power cut and a crash loop `[PI3-FOUND-120]`, and it works
+# by shelling out to `sqlite3`. It is also, deliberately, never fatal: a
+# database it cannot open is reported and the start continues, because a
+# player that starts and complains is better than one that refuses. Those two
+# properties combine badly. If the command it depends on is ever missing, the
+# script prints one line about failing to open a database and exits 0, and
+# recovery silently stops happening -- with nothing in the log distinguishing
+# "this database is broken" from "the tool that repairs it is gone". The next
+# power cut is then the crash loop again, months after the change that caused
+# it.
+#
+# An instrument that cannot say whether it is armed is not an instrument. This
+# runs first, names every tool the startup path needs, gives its version, and
+# states what is lost if it is absent.
+#
+# **`[PI-PRE-020]` It never blocks a start.** Exit is always 0. Nothing here
+# is a gate -- the appliance's job is to play music, and refusing to boot
+# because a diagnostic helper is missing would be the failure this is meant to
+# prevent, not a defence against it. The output is the whole product.
+#
+# **`[PI-PRE-050]` It asks the machine, not a list.** Which tools matter
+# depends on which appliance this is, and hard-coding that means two lists to
+# keep in step. Instead the audio-path tools are reported only when
+# `lempi-wait-sink` is installed, since that script is the only thing in the
+# startup path that uses them: `lempipi` has it and `bose` does not, and
+# neither had to be named here to get the right answer.
+set -u
+
+BIN="${LEMPI_BIN:-/usr/local/bin/lempi}"
+WAIT_SINK="${LEMPI_WAIT_SINK:-/usr/local/bin/lempi-wait-sink}"
+
+say() { echo "lempi-preflight: $*"; }
+warn() { echo "lempi-preflight: $*" >&2; }
+
+# `command -v` and not `which`: a builtin, always present, and it does not
+# depend on a package this is checking for the absence of.
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# One line per tool, and the version is the point of it. "sqlite3 present" ages
+# into uselessness the moment a version difference matters; `3.40.1` beside
+# another appliance's `3.46.1` is a fact you can act on.
+#
+# The version string is produced by the CALLER and passed in, because no two
+# of these tools agree on how to be asked. `sqlite3 --version` leads with the
+# number; `bluetoothctl --version` trails it; `wpctl` has no version option at
+# all and has to be asked through `wireplumber`. Guessing a uniform form is
+# how `wpctl Usage:` ends up in a boot log, which is what the first draft of
+# this did.
+report() {
+    _name="$1"
+    _ver="$2"
+    have "$_name" || return 1
+    say "$_name ${_ver:-(version not reported)} at $(command -v "$_name")"
+}
+
+# ---------------------------------------------------------------- the player
+#
+# `lempi --version` prints its own commit, which is the single most useful
+# line in a boot log: it answers "what is actually running here" without an
+# ssh session, and it is the question every remote diagnosis starts with.
+if [ -x "$BIN" ]; then
+    say "$("$BIN" --version 2>&1 | head -1) at $BIN"
+else
+    warn "player binary MISSING at $BIN -- this start will fail"
+fi
+
+# --------------------------------------------------------------- recovery
+#
+# The two runners are genuinely interchangeable here, which was measured
+# rather than assumed `[PI-PRE-040]`: against a WAL database with
+# un-checkpointed frames and against a hot rollback journal whose pages had
+# really reached the database file, `python3` and `sqlite3` produced identical
+# results -- frames replayed, journal rolled back and deleted.
+RECOVERY=""
+
+if report sqlite3 "$(sqlite3 --version 2>/dev/null | awk '{print $1}')"; then
+    RECOVERY=sqlite3
+else
+    warn "sqlite3 ABSENT -- recovery will fall back to python3, which is"
+    warn "  equivalent for that one act [PI-PRE-030]. Every Vipunen tool that"
+    warn "  reaches this host over ssh still expects the command, and reports"
+    warn "  the appliance unreachable without it [BOS-IMG-020]."
+fi
+
+if report python3 "$(python3 -c 'import sqlite3, sys; print("%s (sqlite module %s)" % (sys.version.split()[0], sqlite3.sqlite_version))' 2>/dev/null)"; then
+    [ -n "$RECOVERY" ] || RECOVERY="python3 (fallback)"
+else
+    warn "python3 ABSENT"
+fi
+
+if [ -n "$RECOVERY" ]; then
+    say "database recovery armed via $RECOVERY"
+else
+    warn "database recovery UNAVAILABLE: neither sqlite3 nor python3 is"
+    warn "  installed. An unclean stop will NOT be repaired at boot, and the"
+    warn "  next power cut is a crash loop [PI3-FOUND-120]. Install either."
+fi
+
+# ------------------------------------------------------------- audio path
+#
+# Reported only where something in the startup path uses them; see
+# `[PI-PRE-050]`. Absence is a warning and never more than that -- `wait-sink`
+# is bounded and exits 0 whatever it finds, so a missing tool here costs the
+# speaker wait, not the boot.
+if [ -x "$WAIT_SINK" ]; then
+    # `wpctl` takes no version option; the number belongs to WirePlumber, which
+    # is the thing that would actually differ between two images.
+    _wp="$(wireplumber --version 2>/dev/null |
+        sed -n 's/^Linked with libwireplumber //p')"
+    [ -n "$_wp" ] && _wp="(wireplumber $_wp)"
+    report wpctl "$_wp" || {
+        warn "wpctl ABSENT -- no sink can be detected, so lempi-wait-sink waits"
+        warn "  out its deadline and starts the player anyway. Audio will go"
+        warn "  nowhere until a sink appears."
+    }
+    report bluetoothctl "$(bluetoothctl --version 2>/dev/null | awk '{print $NF}')" || {
+        warn "bluetoothctl ABSENT -- the listener's chosen speaker cannot be"
+        warn "  named, so the sink wait accepts whichever real sink appears"
+        warn "  first [PI3-FOUND-280]."
+    }
+fi
+
+# ------------------------------------------------------------------ the clock
+#
+# **`[PI-PRE-052]` The check `[GDE-ECHO-300]` asked for and nobody wrote.**
+# That rule says "chrony on every node, verified at boot" and names
+# `systemd-timesyncd` as the wrong tool for a specific reason: it is an SNTP
+# client that corrects the *time* without disciplining the *frequency*, so a
+# node left on it satisfies the wall-clock requirement and silently fails the
+# frequency one. Three nodes moved to chrony on 2026-09-11. The fourth,
+# `lempiplay3`, did not, and nothing anywhere noticed for eight days -- until
+# a listener heard it drifting and the follower turned out to be correcting
+# real audio to chase a clock that was wandering `[GDE-ARC-038]`.
+#
+# Reported unconditionally, not gated on this being an echo node: following is
+# a *setting* a listener can turn on at any moment `[SPEC-ECHO-010]`, so every
+# node is a potential follower and every node needs the clock for it. That is
+# the one place `[PI-PRE-050]`'s "ask the machine" rule does not apply --
+# there is nothing to ask, because the answer is always yes.
+#
+# Still never a gate `[PI-PRE-020]`: a bad clock costs alignment, not
+# playback, and an appliance that refuses to play music because NTP is
+# unhappy would be the fault this script exists to prevent.
+if have chronyc && systemctl is-active chrony >/dev/null 2>&1; then
+    # chrony's own estimate, which `[GDE-ECHO-300]` is right to call a claim
+    # rather than a measurement -- `tools/echo_skew.py` is the measurement.
+    # Printed anyway, because "locked to which server" is the fact a remote
+    # diagnosis starts from, the same way the player's commit is.
+    _ref="$(chronyc tracking 2>/dev/null | sed -n 's/^Reference ID *: *//p')"
+    _off="$(chronyc tracking 2>/dev/null | sed -n 's/^System time *: *//p')"
+    say "clock disciplined by chrony, reference ${_ref:-unknown}, ${_off:-offset unknown}"
+    case "$_ref" in
+        ""|*"7F7F0101"*)
+            warn "  chrony is running but has NOT synchronised to any server"
+            warn "  yet (reference is its own unsynchronised clock). Echo"
+            warn "  alignment is meaningless until it does [GDE-ECHO-300]." ;;
+    esac
+elif systemctl is-active systemd-timesyncd >/dev/null 2>&1; then
+    warn "clock disciplined by systemd-timesyncd, which is the WRONG TOOL for"
+    warn "  this fleet [GDE-ECHO-300]. It corrects the time and not the"
+    warn "  frequency, so this node's clock wanders between polls that can be"
+    warn "  34 minutes apart. If it ever follows another node, or is followed,"
+    warn "  the correction loop will move real audio to chase that wander"
+    warn "  [GDE-ARC-038]. Install chrony and give it the fleet's own"
+    warn "  /etc/chrony/sources.d/lempi-fleet.sources."
+else
+    warn "clock disciplined by NOTHING this script can see: neither chrony nor"
+    warn "  systemd-timesyncd is active. Every echo instant is absolute"
+    warn "  [GDE-ECHO-320], so an undisciplined clock is not a degraded"
+    warn "  alignment, it is no alignment at all [GDE-ECHO-365]."
+fi
+
+exit 0

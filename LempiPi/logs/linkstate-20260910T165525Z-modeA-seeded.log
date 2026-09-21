@@ -1,0 +1,251 @@
+=== fresh boot detected ===
+seed unit: activating
+Sep 10 16:55:16 LempiPiHost systemd[1]: Starting lempi-afh-seed.service - Seed the controller with this room's channel classification (experiment)...
+Sep 10 16:55:16 LempiPiHost lempi-afh-seed[438]: lempi-afh-seed: controller rejected the classification
+Sep 10 16:55:26 LempiPiHost lempi-afh-seed[766]: applied 000000fcffffffffff3f (52 channels)
+----
+uptime 34.28
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000000fcfdf7dffdff1f
+afh_channels 47
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+lempi-linkstate: no speaker address
+----
+uptime 52.98
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 00000080fdf7dffdff1f
+afh_channels 42
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+uptime 62.43
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 00000080fdf7dffdff1f
+afh_channels 42
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+uptime 71.78
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 00000080fdf7dffdff1f
+afh_channels 42
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+uptime 81.13
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 00000080f5f7cffdff1f
+afh_channels 40
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+uptime 90.46
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 00000080f5f7cffdbf1f
+afh_channels 39
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+uptime 99.81
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 00000080f7ffefffbf3f
+afh_channels 44
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+uptime 109.15
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000000fcd7ffefffbf3f
+afh_channels 48
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+uptime 118.48
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000000fcd7bfffffbf38
+afh_channels 45
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+uptime 127.84
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000000fcd7bfffffbf38
+afh_channels 45
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+uptime 137.21
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000000fcdebfffffbf38
+afh_channels 45
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+lempi-linkstate: no speaker address
+----
+uptime 155.60
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000000fcdebffff7ff38
+afh_channels 45
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+uptime 164.96
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000000fcfefffff7ff38
+afh_channels 47
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+uptime 174.27
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000000fcfefffff7ff38
+afh_channels 47
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+uptime 183.59
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000000fcfffffff7ff3f
+afh_channels 51
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+uptime 192.92
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000000fcfffffff7ff3f
+afh_channels 51
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+uptime 202.22
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000000fcffffffffff3f
+afh_channels 52
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+uptime 211.54
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000000fcffffffffff3f
+afh_channels 52
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+uptime 220.87
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000000807fffffffff3f
+afh_channels 46
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+----
+uptime 230.23
+con 	> ACL 20:64:DE:CF:F3:AD handle 11 state 1 lm CENTRAL AUTH ENCRYPT 
+role CENTRAL
+direction inbound
+afh 000000807fffffffff3f
+afh_channels 46
+link_quality 255
+rssi 0
+state "active"
+volume 106
+configuration 4 17 21 2 53
+
+[exited with code 0]

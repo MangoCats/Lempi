@@ -1,0 +1,156 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lempi — Review ids</title>
+<style>
+  /* Reviewing questionable recording ids [REQ-LIB-165].
+
+     A judgement page, not a listing: each row is a question with a small
+     number of answers, and the answer needs the evidence beside it. So the
+     layout is one card per passage -- what the library believes on the left,
+     what the audio says on the right -- rather than a dense table. A table
+     would fit more on screen and make each decision worse.
+
+     Deciding is quick and hearing it is slow, so the audition control is
+     right there: "Play now" sends the passage to the actual player, which is
+     the only way to settle a case the metadata cannot. */
+  html, body { margin: 0; padding: 0; background: #141416; color: #eee;
+               font: 16px/1.5 system-ui, sans-serif; }
+  .review { max-width: 60rem; margin: 0 auto; padding: .75rem; }
+  .review header { display: flex; align-items: center; gap: .5rem;
+                   flex-wrap: wrap; margin-bottom: .5rem; }
+  .review h1 { font-size: .7rem; letter-spacing: .14em; text-transform: uppercase;
+               font-weight: 600; margin: 0; flex: 1; opacity: .6; }
+  .review a.back { font-size: .8125rem; }
+
+  .tally { font-size: .8125rem; opacity: .75; margin: .1rem 0 .75rem;
+           font-variant-numeric: tabular-nums; }
+  .tally b { font-weight: 600; opacity: 1; }
+
+  .card { border: 1px solid rgba(128,128,128,.28); border-radius: 6px;
+          padding: .6rem .7rem; margin-bottom: .7rem; }
+  .card .head { display: flex; align-items: baseline; gap: .5rem;
+                flex-wrap: wrap; margin-bottom: .5rem; }
+  .card .score { font-size: .75rem; opacity: .7; font-variant-numeric: tabular-nums; }
+  /* The two findings are not the same size of problem, and the queue leads
+     with the larger one, so the label has to be readable at a glance. */
+  .card .kind { font-size: .6875rem; letter-spacing: .06em; text-transform: uppercase;
+                font-weight: 600; padding: .1rem .4rem; border-radius: 3px;
+                border: 1px solid currentColor; white-space: nowrap; }
+  /* Worst reads hottest. `different-id` and `unverified` are deliberately
+     cool: they are the bulk of the list and the least worth arguing about. */
+  .card .kind.no-mbid      { color: #ff6b6b; }
+  .card .kind.wrong-song   { color: #ff8a75; }
+  .card .kind.wrong-artist { color: #ffb4a2; }
+  .card .kind.wrong-title  { color: #ffd6a2; }
+  .card .kind.different-id { color: #9aa; opacity: .85; }
+  .card .kind.unverified   { color: #889; opacity: .8; }
+
+  /* The filter row. Sized for a thumb, and pressed state must be obvious at a
+     glance or the list looks wrong rather than filtered. */
+  .filters { display: flex; flex-wrap: wrap; gap: .35rem; margin: 0 0 .8rem; }
+  .filters .chip { font: inherit; font-size: .8125rem; min-height: 2.4rem;
+                   padding: 0 .7rem; cursor: pointer; border-radius: 999px;
+                   background: transparent; color: inherit;
+                   border: 1px solid rgba(128,128,128,.45); opacity: .55; }
+  .filters .chip[aria-pressed="true"] { opacity: 1; font-weight: 600;
+                                        border-color: currentColor;
+                                        box-shadow: inset 0 0 0 1px currentColor; }
+  .filters .chip[disabled] { opacity: .2; cursor: default; }
+  .filters .chip.no-mbid[aria-pressed="true"]      { color: #ff6b6b; }
+  .filters .chip.wrong-song[aria-pressed="true"]   { color: #ff8a75; }
+  .filters .chip.wrong-artist[aria-pressed="true"] { color: #ffb4a2; }
+  .filters .chip.wrong-title[aria-pressed="true"]  { color: #ffd6a2; }
+
+  /* The two claims, side by side on a desktop and stacked on a phone. */
+  .claims { display: flex; gap: .7rem; flex-wrap: wrap; }
+  .claim { flex: 1 1 16rem; min-width: 0; }
+  .claim h2 { font-size: .7rem; letter-spacing: .1em; text-transform: uppercase;
+              margin: 0 0 .25rem; opacity: .55; font-weight: 600; }
+  .claim .name { font-weight: 600; overflow-wrap: anywhere; }
+  .claim .sub { font-size: .8125rem; opacity: .7; overflow-wrap: anywhere; }
+  .claim .mbid { font-size: .6875rem; opacity: .45; overflow-wrap: anywhere;
+                 font-family: ui-monospace, monospace;
+                 color: inherit; text-decoration: none; display: block; }
+  .claim .mbid:hover { opacity: .8; text-decoration: underline; }
+
+  /* Candidates are radio buttons: choosing one IS the reassignment, so the
+     control that picks and the control that commits must not be the same. */
+  .opts { list-style: none; margin: .1rem 0 0; padding: 0; }
+  .opts li { display: flex; gap: .45rem; align-items: flex-start;
+             padding: .3rem .1rem; }
+  .opts input { margin: .3rem 0 0; width: 1.1rem; height: 1.1rem; flex: none; }
+  /* The label fills the row and is the click target. A 1.1rem radio is a poor
+     one on a phone, and the candidate reads as plain text until you find that
+     the whole line is selectable. */
+  .opts label { flex: 1; min-width: 0; cursor: pointer; }
+  .opts li:hover { background: rgba(128,128,128,.10); border-radius: 4px; }
+  .opts li:has(input:checked) { background: rgba(128,128,128,.16);
+                                border-radius: 4px; }
+  /* The "nothing to choose from" case: prose, not a dead option. */
+  .opts li.none { display: block; font-size: .875rem; opacity: .75;
+                  padding: .35rem .1rem; }
+  .opts .pct { font-size: .75rem; opacity: .6; font-variant-numeric: tabular-nums; }
+
+  /* Searching MusicBrainz directly, for the cases the fingerprint queue
+     cannot reach at all [SPEC-SUI-196]. */
+  .search { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap;
+            margin-top: .5rem; }
+  .search input { font: inherit; flex: 1; min-width: 8rem; padding: .4rem .5rem;
+                  background: transparent; color: inherit; border-radius: 4px;
+                  border: 1px solid rgba(128,128,128,.45); }
+  .search button { font: inherit; min-height: 2.2rem; padding: 0 .7rem;
+                   cursor: pointer; background: transparent; color: inherit;
+                   border: 1px solid currentColor; border-radius: 4px; }
+  .search button[disabled] { opacity: .4; cursor: default; }
+
+  .acts { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .6rem;
+          padding-top: .5rem; border-top: 1px solid rgba(128,128,128,.18); }
+  .acts button { font: inherit; min-height: 2.6rem; padding: 0 .8rem;
+                 cursor: pointer; background: transparent; color: inherit;
+                 border: 1px solid currentColor; border-radius: 4px; }
+  .acts button[disabled] { opacity: .35; cursor: default; }
+  .acts .spacer { flex: 1; }
+  .card.done { opacity: .45; }
+  .card .said { font-size: .8125rem; opacity: .8; }
+  /* Which album to call it. Appears only once a candidate is chosen. */
+  .albums { margin-top: .6rem; padding-top: .5rem;
+            border-top: 1px solid rgba(128,128,128,.18); }
+  .albums h2 { font-size: .7rem; letter-spacing: .1em; text-transform: uppercase;
+               margin: 0 0 .3rem; opacity: .55; font-weight: 600; }
+  .albums select { font: inherit; max-width: 100%; padding: .45rem .4rem;
+                   background: transparent; color: inherit; border-radius: 4px;
+                   border: 1px solid rgba(128,128,128,.45); }
+  .albums .sub { font-size: .8125rem; opacity: .7; margin: 0; }
+
+  /* A correction independent of whatever the rest of the card is deciding
+     about the recording [SPEC-SUI-197]. */
+  .artistfix { margin-top: .6rem; padding-top: .5rem;
+               border-top: 1px solid rgba(128,128,128,.18); }
+  .artistfix h2 { font-size: .7rem; letter-spacing: .1em; text-transform: uppercase;
+                  margin: 0 0 .3rem; opacity: .55; font-weight: 600; }
+  .artistfix .opts { margin-top: .3rem; }
+  .artistfix button { font: inherit; min-height: 2.2rem; padding: 0 .7rem;
+                      cursor: pointer; background: transparent; color: inherit;
+                      border: 1px solid currentColor; border-radius: 4px; }
+  .artistfix .sub { font-size: .8125rem; opacity: .7; margin: .2rem 0; }
+
+  .note { font-size: .875rem; opacity: .75; margin: 1rem .2rem; }
+  .note.bad { opacity: 1; }
+</style>
+
+<div class="review">
+  <header>
+    <h1>Lempi — Questionable ids</h1>
+    <a class="back" href="/">← player</a>
+  </header>
+  <p class="tally" id="tally"></p>
+  <!-- One chip per grade, each with its own count: the size of each kind of
+       problem is visible before choosing which to work through. -->
+  <div class="filters" id="filters"></div>
+  <div id="cards"></div>
+  <p class="note" id="note"></p>
+</div>
+
+<script src="/core.js"></script>
+<script src="/review.js"></script>

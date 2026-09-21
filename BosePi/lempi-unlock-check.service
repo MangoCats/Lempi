@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+#
+# The lock-in escape hatch [IMPL-BOS-160]. Installed on A, before --lock-in
+# ever runs -- see lempi-unlock-check.sh's own header for why that ordering
+# is not optional.
+[Unit]
+Description=Check for a lock-in escape-hatch request
+DefaultDependencies=no
+After=var-lempi.mount boot-firmware.mount
+Before=sysinit.target
+ConditionPathExists=|/var/lempi/unlock/request
+ConditionPathExists=|/boot/firmware/unlock-request
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/lempi-unlock-check.sh
+
+[Install]
+WantedBy=sysinit.target

@@ -1,0 +1,36 @@
+fitting dedicated MLPs for 10: danceability, genre_dortmund, genre_electronic, genre_rosamerica, ismir04_rhythm, mood_acoustic, mood_aggressive, mood_party, mood_sad, moods_mirex
+
+characteristic          prev best  ded.MLP  new best   floor  vs floor
+danceability                0.222    0.203     0.203   0.249     0.82x  <- mlp-dedicated  IMPROVED  (480s)
+genre_dortmund              0.170    0.152     0.152   0.120     1.27x  <- mlp-dedicated  IMPROVED  (1516s)
+genre_electronic            0.130    0.104     0.104   0.120     0.87x  <- mlp-dedicated  IMPROVED  (1187s)
+genre_rosamerica            0.195    0.158     0.158   0.131     1.21x  <- mlp-dedicated  IMPROVED  (988s)
+ismir04_rhythm              0.227    0.149     0.149   0.206     0.72x  <- mlp-dedicated  IMPROVED  (1345s)
+mood_acoustic               0.139    0.134     0.134   0.134     1.00x  <- mlp-dedicated  IMPROVED  (2446s)
+mood_aggressive             0.212    0.184     0.184   0.210     0.87x  <- mlp-dedicated  IMPROVED  (1689s)
+mood_party                  0.222    0.225     0.222   0.248     0.90x  <- gbm  (1062s)
+mood_sad                    0.119    0.077     0.077   0.121     0.64x  <- mlp-dedicated  IMPROVED  (5449s)
+moods_mirex                 0.179    0.135     0.135   0.211     0.64x  <- mlp-dedicated  IMPROVED  (9509s)
+
+median err/beta: 0.223 -> 0.192 -> 0.174 -> 0.152   (floor 0.210)
+characteristics at or below their own floor: 13/18
+
+final model selection:
+  mood_happy              0.076   0.35x floor   mlp-dedicated
+  mood_electronic         0.123   0.54x floor   mlp-dedicated
+  mood_sad                0.077   0.64x floor   mlp-dedicated
+  moods_mirex             0.135   0.64x floor   mlp-dedicated
+  tonal_atonal            0.140   0.64x floor   mlp-dedicated
+  timbre                  0.152   0.70x floor   mlp-dedicated
+  ismir04_rhythm          0.149   0.72x floor   mlp-dedicated
+  mood_relaxed            0.170   0.77x floor   mlp-dedicated
+  danceability            0.203   0.82x floor   mlp-dedicated
+  genre_electronic        0.104   0.87x floor   mlp-dedicated
+  mood_aggressive         0.184   0.87x floor   mlp-dedicated
+  voice_instrumental      0.209   0.89x floor   mlp-dedicated
+  mood_party              0.222   0.90x floor   gbm
+  mood_acoustic           0.134   1.00x floor   mlp-dedicated
+  genre_rosamerica        0.158   1.21x floor   mlp-dedicated
+  genre_dortmund          0.152   1.27x floor   mlp-dedicated
+  gender                  0.337   1.72x floor   mlp-dedicated
+  genre_tzanetakis        0.460   2.55x floor   gbm

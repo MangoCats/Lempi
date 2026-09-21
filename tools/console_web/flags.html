@@ -1,0 +1,540 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Vipunen — flagged for review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/console.css">
+<header>
+  <h1>Vipunen</h1>
+  <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/export">export</a><a href="/flags" class="on">flags</a><a href="/mesh">mesh</a><a href="/system">system</a></nav>
+  <span class="ro">library read-only</span>
+</header>
+<main>
+  <h2>Flagged for review</h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    Checked from Lempi's own play-history page — "flag this for review" — and
+    only ever read here, never set or cleared: the checkbox is Lempi's, this
+    is a worklist over what it wrote. Choosing one opens its profile, where
+    the id review and boundary editor Lempi already offers are one click away.
+  </p>
+  <div class="controls">
+    <button class="chip" id="refresh">refresh</button>
+    <span id="count" style="color:var(--dim);font-size:.85rem;align-self:center"></span>
+  </div>
+  <div id="list"></div>
+
+  <h2 id="apply">Apply pending edits to this library</h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    Lempi's editor records a draft and changes nothing else: an edit is not in
+    the library, and cannot be pushed anywhere, until it is folded in here.
+    This runs the same <code style="font:12px var(--mono)">apply_boundary_reviews.py</code>
+    / <code style="font:12px var(--mono)">apply_reviews.py</code> you would
+    otherwise type, as an ordinary job, so who may write the library has not
+    changed -- only how hard it is to do it deliberately. It never runs on its
+    own, is never chained to another job, and always shows you the exact list
+    before it writes anything.
+  </p>
+  <div class="controls">
+    <button class="chip" id="review-pending">review pending edits...</button>
+    <span id="pending-summary" style="color:var(--dim);font-size:.85rem;align-self:center"></span>
+  </div>
+  <div id="pending-detail" hidden></div>
+  <div id="apply-result"></div>
+
+  <h2>Sync with a remote</h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    Pull brings {{PEER_NAME}}'s own flags here, resolved by audio content rather than
+    a local number — a flag on a recording or passage this library doesn't have
+    yet is counted and reported, not silently dropped. It reads only the flags
+    themselves over ssh, never a copy of the whole library, so it's quick
+    even over {{PEER_NAME}}'s own slow WiFi. Push lands whatever
+    identification/boundary/artist edits have accumulated here since the last
+    push, and clears the flags they answer — batched, on request only:
+    it briefly stops and restarts each node's own player, so it never runs on
+    its own. It reads only what the comparison needs, one small ssh query per
+    change, never a copy of the whole library
+    <code style="font:12px var(--mono)">[SPEC-DF-120]</code>; a node that is
+    split is patched through its listener half with the catalogue attached, so
+    each statement lands in the right file.
+    Sync preferences reconciles each side's own hand-tuned artist/recording
+    rotation, recovery and restraint — whichever side edited a given one
+    more recently wins, and only the ones that actually differ move, in
+    either direction; an artist or recording either side's library doesn't
+    have at all is left alone rather than guessed at.
+  </p>
+  <table id="peer-table" class="peers">
+    <thead><tr>
+      <th>node</th><th>address</th><th title="answers on ssh right now">online</th>
+      <th title="include this node when pushing edits">push</th>
+      <th title="pull flags and preferences from this node">pull from</th>
+      <th></th>
+    </tr></thead>
+    <tbody id="peer-rows"></tbody>
+  </table>
+  <p id="peer-empty" class="empty" hidden>
+    No nodes yet. Add one below, or on the <a href="/mesh">mesh</a> page.
+  </p>
+  <div class="controls" style="margin-top:.6rem">
+    <input type="search" id="new-peer-name" placeholder="name, e.g. {{EXAMPLE_PEER}}" style="max-width:9rem">
+    <input type="search" id="new-peer-remote" placeholder="user@host:/path/to/library.db" style="min-width:20rem">
+    <input type="search" id="new-peer-listener" placeholder="listener.db path, only if split" style="min-width:18rem">
+    <button class="chip" id="add-peer">add node</button>
+  </div>
+  <div class="controls">
+    <button class="chip" id="pull">pull flags from the selected node</button>
+    <button class="chip" id="push">push edits to every ticked node</button>
+    <button class="chip" id="sync-prefs">sync preferences with the selected node</button>
+    <button class="chip" id="recheck-online">re-check online</button>
+  </div>
+  <p style="font-size:.8rem;color:var(--dim);margin:.3rem 0 0">
+    e.g. <code style="font:12px var(--mono)">{{PEER_SSH}}:{{PEER_LIBRARY}}</code>
+    &mdash; an input's own placeholder text can't be selected or copied; this can.
+    <b>Push</b> and <b>pull</b> are separate choices on purpose: a node you read
+    from is not necessarily one you write to.
+  </p>
+<div id="sync-result"></div>
+</main>
+<script src="/console.js"></script>
+<script>
+async function load() {
+  let rows;
+  try {
+    rows = await S.get('/api/flags');
+  } catch (e) { return S.fail('#list', e); }
+
+  document.getElementById('count').textContent =
+    `${rows.length} flag${rows.length === 1 ? '' : 's'}`;
+  const box = document.getElementById('list');
+  if (!rows.length) {
+    box.replaceChildren(S.el('p', { class: 'empty', text: 'Nothing flagged yet.' }));
+    return;
+  }
+
+  const head = S.el('thead', {}, S.el('tr', {}, ...['flagged', 'title', 'artist', 'kind', '', '']
+    .map(h => S.el('th', { text: h }))));
+
+  const rowEl = r => {
+    const passageCell = r.resolved
+      ? r.passages.map((pid, i) => S.el('span', {},
+          i > 0 ? ', ' : null,
+          S.el('a', { href: `/profile/${pid}` }, `passage ${pid}`)))
+      : [S.el('span', { class: 'pill warn',
+            title: 'the library has changed since this was flagged, and nothing this specific survives to open',
+            text: 'no longer resolvable' })];
+    return S.el('tr', {},
+      S.el('td', { class: 'num', text: r.flagged_at }),
+      S.el('td', { text: r.title || (r.resolved ? '(untitled)' : '') }),
+      S.el('td', { text: r.artist || '' }),
+      S.el('td', {}, S.el('span', { class: 'pill', text: r.subject_kind })),
+      S.el('td', {}, ...passageCell),
+      S.el('td', {}, unflagButton(r)));
+  };
+
+  const body = S.el('tbody', {}, ...rows.map(rowEl));
+  box.replaceChildren(S.el('table', {}, head, body));
+}
+
+// Cleared directly from the list, no detour through a profile page
+// [REQ-VIS-265] -- found worth adding live: a recording flagged across
+// several files (the common shape -- the same recording on an album AND
+// a compilation) is finished with all at once, right where the flag was
+// seen, not by picking one of several linked passages to open first.
+// `/api/flags/unflag` clears the row's own (kind, subject_id) directly,
+// with no passage to resolve through -- correct outright for a
+// `recording`-kind row (an mbid needs no translation to reach a remote),
+// best-effort for a `passage`-kind one (see the route's own doc for why).
+function unflagButton(r) {
+  const btn = S.el('button', { class: 'chip' }, 'unflag');
+  btn.onclick = async () => {
+    btn.disabled = true;
+    btn.textContent = 'clearing…';
+    try {
+      const body = await (await fetch('/api/flags/unflag', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: r.subject_kind, subject_id: r.subject_id }),
+      })).json();
+      if (body.error) throw new Error(body.error);
+      if (body.local && body.local.ok === false) throw new Error('the local clear failed');
+      await load(); // the row is gone locally -- reload before the warning below,
+                     // so a remote failure is seen beside an already-updated list,
+                     // not mistaken for "nothing happened".
+      if (body.remote && body.remote.configured && body.remote.ok === false) {
+        alert('Cleared here, but the remote could not be reached or refused the '
+            + 'change -- it may still show this as flagged.');
+      }
+    } catch (e) {
+      // A per-row failure, not a reason to blank the whole list -- other
+      // rows' own buttons must stay usable.
+      btn.disabled = false;
+      btn.textContent = 'unflag';
+      alert(`Could not clear this flag: ${e.message}`);
+    }
+  };
+  return btn;
+}
+
+document.getElementById('refresh').onclick = load;
+load();
+
+// -- sync with a remote --------------------------------------------------
+
+// A real, worked example used to sit only in the input's own `placeholder`
+// attribute -- gray text that (a) no browser lets you select or copy, and
+// ---- The nodes, as a list `[SPEC-MESH-090]` --------------------------------
+// This was one text field holding one address, which stopped being the shape
+// of the problem the moment there was a second node: "the remote" had to be
+// retyped to change which machine anything talked to, and nothing on the page
+// said whether that machine was even up.
+//
+// Three separate pieces of state, deliberately not collapsed into one:
+//   online   -- observed, never stored; asked separately so a sleeping node
+//               cannot hold up the table's own render
+//   push     -- `sync_peers.enabled`, a checkbox, many nodes at once
+//   pull from -- the active peer (`remote_config.sync_remote`), a radio, one
+//               node at a time, because a pull reads one library
+let peers = [];
+let online = {};
+
+function peerRow(p) {
+  const dot = online[p.name] === undefined ? '\u00b7'
+            : online[p.name] ? '\u25cf' : '\u25cb';
+  const dotColour = online[p.name] === undefined ? 'var(--dim)'
+                  : online[p.name] ? 'var(--ok)' : 'var(--bad)';
+  const dotTitle = online[p.name] === undefined ? 'not checked yet'
+                 : online[p.name] ? 'answering on ssh' : 'no answer on ssh';
+
+  const push = S.el('input', { type: 'checkbox' });
+  push.checked = !!p.enabled;
+  push.onchange = async () => {
+    push.disabled = true;
+    try {
+      await fetch(`/api/peers/${encodeURIComponent(p.name)}/enabled`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: push.checked }),
+      });
+      p.enabled = push.checked ? 1 : 0;
+    } finally { push.disabled = false; }
+  };
+
+  const pull = S.el('input', { type: 'radio', name: 'pull-from' });
+  pull.checked = !!p.active;
+  pull.onchange = async () => {
+    if (!pull.checked) return;
+    await fetch(`/api/peers/${encodeURIComponent(p.name)}/activate`, { method: 'POST' });
+    for (const q of peers) q.active = (q.name === p.name);
+  };
+
+  const del = S.el('button', { class: 'chip', text: 'remove' });
+  del.onclick = async () => {
+    if (!confirm(`Remove ${p.name}? This forgets the address; it changes nothing on that node.`)) return;
+    await fetch(`/api/peers/${encodeURIComponent(p.name)}/delete`, { method: 'POST' });
+    loadPeers();
+  };
+
+  return S.el('tr', {},
+    S.el('td', {}, S.el('b', { text: p.name })),
+    S.el('td', { style: 'font:12px var(--mono);color:var(--dim)' },
+      p.remote + (p.remote_listener ? '  (+ ' + p.remote_listener + ')' : '')),
+    S.el('td', { style: `text-align:center;color:${dotColour}`, title: dotTitle }, dot),
+    S.el('td', { style: 'text-align:center' }, push),
+    S.el('td', { style: 'text-align:center' }, pull),
+    S.el('td', { style: 'text-align:right' }, del));
+}
+
+function renderPeers() {
+  const body = document.getElementById('peer-rows');
+  body.replaceChildren(...peers.map(peerRow));
+  document.getElementById('peer-table').hidden = !peers.length;
+  document.getElementById('peer-empty').hidden = !!peers.length;
+}
+
+async function loadPeers() {
+  try {
+    peers = await S.get('/api/peers');
+  } catch (e) { peers = []; }
+  renderPeers();
+  checkOnline();
+}
+
+async function checkOnline() {
+  try {
+    online = await S.get('/api/peers/reachable');
+  } catch (e) { online = {}; }
+  renderPeers();
+}
+
+document.getElementById('recheck-online').onclick = checkOnline;
+
+document.getElementById('add-peer').onclick = async () => {
+  const name = document.getElementById('new-peer-name').value.trim();
+  const remote = document.getElementById('new-peer-remote').value.trim();
+  const listener = document.getElementById('new-peer-listener').value.trim();
+  if (!name || !remote) {
+    return S.fail('#sync-result', new Error(
+      'a node needs both a name and a user@host:/path address'));
+  }
+  const r = await (await fetch('/api/peers', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, remote, remote_listener: listener || null }),
+  })).json();
+  if (r.error) return S.fail('#sync-result', new Error(r.error));
+  document.getElementById('new-peer-name').value = '';
+  document.getElementById('new-peer-remote').value = '';
+  document.getElementById('new-peer-listener').value = '';
+  loadPeers();
+};
+
+loadPeers();
+
+
+// ---- What a push actually did `[SPEC-DF-108]` ------------------------------
+// `S.tileResult` renders a flat bag of numbers, which a push result stopped
+// being: it now carries per-change detail, and a fan-out carries one result
+// per node. More to the point, numbers were never the useful part. "3
+// conflicts" tells a person that something is stuck without telling them
+// which song, what the disagreement is, or what to do about it -- so they go
+// and read the raw log, which is what the tiles were supposed to save them.
+const VERDICT_HELP = {
+  conflict: 'this node changed the same thing independently — pick a side',
+  missing: 'this node does not have that recording at all yet',
+};
+
+function countTiles(result) {
+  const keys = ['fastforward', 'resolved', 'noop', 'conflict', 'missing', 'error', 'cleared'];
+  const shown = keys.filter(k => result[k]);
+  if (!shown.length) return null;
+  return S.el('div', { class: 'tiles' }, ...shown.map(k => S.el('div',
+    { class: k === 'conflict' || k === 'error' ? 'tile warn' : 'tile' },
+    S.el('b', { text: S.n(result[k]) }), S.el('span', { text: k }))));
+}
+
+function detailRow(d) {
+  const label = d.label || {};
+  const name = label.title
+    ? label.title + (label.artist ? ' — ' + label.artist : '')
+    : '(no title on this side)';
+  const kids = [
+    S.el('div', { style: 'margin-bottom:.15rem' },
+      S.el('span', { class: d.verdict === 'conflict' ? 'pill bad' : 'pill warn', text: d.verdict }),
+      ' ', S.el('b', { text: name }),
+      S.el('span', { style: 'color:var(--dim)', text: '  ' + (VERDICT_HELP[d.verdict] || '') })),
+  ];
+  const kv = [];
+  if (label.album) kv.push(['album', label.album]);
+  if (d.anchor && d.anchor.audio_md5) kv.push(['audio md5', d.anchor.audio_md5]);
+  if (d.anchor && d.anchor.recording_mbid) kv.push(['recording mbid', d.anchor.recording_mbid]);
+  if (d.anchor && d.anchor.start_ms !== undefined) {
+    kv.push(['anchored at', d.anchor.start_ms + '-' + d.anchor.end_ms + ' ms'
+      + (d.anchor.passage_kind ? ' (' + d.anchor.passage_kind + ')' : '')]);
+  }
+  if (d.incoming) kv.push(['we are sending', d.incoming]);
+  if (d.baseline) kv.push(['we started from', d.baseline]);
+  if (d.here) kv.push(['that node has', d.here]);
+  if (d.origin) kv.push(['decided on', d.origin + (d.decided_at ? ' at ' + d.decided_at : '')]);
+  if (d.verdict === 'conflict') {
+    kv.push(['to settle it', 'apply_changes.py ... --resolve ' + d.n
+      + '=ours (keep theirs) | =theirs (send ours)']);
+  }
+  kids.push(S.el('dl', { class: 'kv' },
+    ...kv.flatMap(([k, v]) => [S.el('dt', { text: k }), S.el('dd', { text: String(v) })])));
+  return S.el('div', { class: 'caveat', style: 'margin:.4rem 0' }, ...kids);
+}
+
+function detailBlock(result) {
+  const details = result.details || [];
+  if (!details.length) return null;
+  return S.el('div', {},
+    S.el('p', { style: 'margin:.6rem 0 .2rem;font-size:.85rem' },
+      S.el('b', { text: details.length + ' change(s) need attention' })),
+    ...details.map(detailRow));
+}
+
+function showPushResult(job, box) {
+  const result = job.result || {};
+  // A fan-out: one section per node, each with its own counts and detail.
+  if (result.peers) {
+    box.append(S.el('p', { style: 'margin:.6rem 0 .2rem' },
+      S.el('span', { class: result.failed && result.failed.length ? 'pill bad' : 'pill ok',
+        text: result.succeeded + ' of ' + result.attempted + ' node(s)' }),
+      result.failed && result.failed.length
+        ? S.el('span', { style: 'font-size:.85rem', text: '  failed: ' + result.failed.join(', ') })
+        : S.el('span', { style: 'font-size:.85rem', text: '  all updated.' })));
+    for (const [name, r] of Object.entries(result.peers)) {
+      box.append(S.el('p', { style: 'margin:.7rem 0 .1rem' }, S.el('b', { text: name })));
+      if (r.error) {
+        box.append(S.el('p', { class: 'err', text: r.error }));
+        continue;
+      }
+      const tiles = countTiles(r);
+      if (tiles) box.append(tiles);
+      const det = detailBlock(r);
+      if (det) box.append(det);
+      if (!tiles && !det) box.append(S.el('p', { class: 'empty', text: 'nothing to send.' }));
+    }
+    return;
+  }
+  const tiles = countTiles(result);
+  if (tiles) box.append(tiles);
+  const det = detailBlock(result);
+  if (det) box.append(det);
+  if (!tiles && !det) box.append(S.el('p', { class: 'empty', text: 'nothing to send.' }));
+}
+
+async function runSync(path) {
+  const box = document.getElementById('sync-result');
+  box.replaceChildren(S.el('p', { class: 'empty', text: 'starting…' }));
+  const r = await (await fetch(path, { method: 'POST' })).json();
+  if (r.error) return S.fail('#sync-result', new Error(r.error));
+  // import_flags.py/apply_changes.py's own --json line already computed
+  // matched/already/unmatched etc; tileResult renders it, not re-derived here.
+  S.watchJob(r.job_id, box, (job, box) => {
+    if (path.startsWith('/api/remote/push')) showPushResult(job, box);
+    else S.tileResult(job, box);
+    if (job.state === 'done') load(); // the pull may have just changed what /api/flags shows
+  });
+}
+
+
+// ---- Applying pending edits: two steps, never one `[REQ-LIB-175]` ----------
+// Step one shows exactly what would be written. Step two writes it, and says
+// plainly that the player is interrupted to do so. The split is the whole
+// point: a button that is easy to reach must not also be easy to press by
+// accident, and a confirmation that only says "apply 4 edits?" is asking for
+// consent to something the person has not actually seen.
+const ms = v => (v === null || v === undefined) ? '?' : String(v);
+
+function boundaryLine(b) {
+  const os0 = b.span[0], oe = b.span[1], ns = b.span[2], ne = b.span[3];
+  const head = b.title ? 'passage ' + b.passage_id + ' "' + b.title + '"'
+                       : 'passage ' + b.passage_id;
+  const parts = [];
+  if (os0 !== ns || oe !== ne) {
+    parts.push('span ' + ms(os0) + '-' + ms(oe) + ' to ' + ms(ns) + '-' + ms(ne));
+  }
+  if (b.lead_out[0] !== b.lead_out[1]) {
+    parts.push('lead-out ' + ms(b.lead_out[0]) + ' to ' + ms(b.lead_out[1]) + 'ms');
+  }
+  if (b.fade_out[0] !== b.fade_out[1]) {
+    parts.push('fade-out ' + ms(b.fade_out[0]) + ' to ' + ms(b.fade_out[1]) + 'ms');
+  }
+  return head + ' \u2014 ' + (parts.join(', ') || 'no measurable change');
+}
+
+function renderPending(d) {
+  const box = document.getElementById('pending-detail');
+  const kinds = Object.entries(d.counts).filter(e => e[1] > 0).map(e => e[0]);
+  box.replaceChildren();
+  if (!d.total) {
+    box.hidden = false;
+    box.append(S.el('p', { class: 'empty',
+      text: 'Nothing is pending. Every edit saved here is already in the library.' }));
+    return;
+  }
+
+  const list = S.el('div', { class: 'list' });
+  for (const b of d.boundary) list.append(S.el('div', { text: boundaryLine(b) }));
+  for (const r of d.id) {
+    const to = r.chosen_title ? '"' + r.chosen_title + '" (' + r.chosen_mbid + ')'
+                              : r.chosen_mbid;
+    list.append(S.el('div', { text: 'passage ' + r.passage_id + ' \u2014 recording id to ' + to }));
+  }
+  for (const a of d.artist) {
+    list.append(S.el('div', { text: 'recording ' + a.recording_mbid
+      + ' \u2014 artist credit to "' + a.artist_name + '"' }));
+  }
+  box.append(S.el('p', { style: 'margin:.2rem 0;font-size:.85rem' },
+    S.el('b', { text: d.total + ' edit(s) would be written: ' }),
+    kinds.map(k => d.counts[k] + ' ' + k).join(', ') + '.'), list);
+
+  // Judgements that rewrite nothing, named rather than folded into the count
+  // -- otherwise this page promises 99 changes and delivers 40.
+  const only = d.id_recorded_only || {};
+  const onlyN = Object.values(only).reduce((a, b) => a + b, 0);
+  if (onlyN) {
+    box.append(S.el('p', { style: 'font-size:.8rem;color:var(--dim);margin:.3rem 0 0',
+      text: 'Not counted above: '
+        + Object.entries(only).map(e => e[1] + ' ' + e[0]).join(', ')
+        + ' \u2014 decisions that record a judgement and rewrite nothing, so applying'
+        + ' never clears them. They are why the nav pill counts more than this does.' }));
+  }
+
+  box.append(S.el('div', { class: 'caveat' },
+    S.el('p', { style: 'margin:0 0 .3rem' },
+      S.el('b', { text: '\u26a0 This interrupts the player.' })),
+    S.el('p', { style: 'margin:0;font-size:.85rem' },
+      'Playback is paused before anything is written, the library is rewritten, '
+      + 'Lempi is then asked to rebuild against it, and playback resumes only if '
+      + 'it was playing when you started. A passage whose boundaries you just '
+      + 'changed keeps its old ones until that rebuild, which is why the pause '
+      + 'and the rebuild are part of this rather than left for you to remember.')),
+    S.el('div', { class: 'controls', style: 'margin-top:.7rem' },
+      S.el('button', { class: 'chip danger', id: 'do-apply',
+        text: 'write these ' + d.total + ' edit(s) and interrupt the player' }),
+      S.el('button', { class: 'chip', id: 'cancel-apply', text: 'cancel' })));
+  box.hidden = false;
+
+  document.getElementById('cancel-apply').onclick = () => { box.hidden = true; };
+  document.getElementById('do-apply').onclick = () => applyNow(kinds, d.total);
+}
+
+async function applyNow(kinds, total) {
+  const btn = document.getElementById('do-apply');
+  btn.disabled = true;
+  btn.textContent = 'writing\u2026';
+  const box = document.getElementById('apply-result');
+  const r = await (await fetch('/api/apply-reviews', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmed: true, kinds: kinds }),
+  })).json();
+  if (r.error) { btn.disabled = false; return S.fail('#apply-result', new Error(r.error)); }
+  document.getElementById('pending-detail').hidden = true;
+  S.watchJob(r.job_id, box, (job, box) => {
+    const res = job.result || {};
+    const b = res.boundary || {}, i = res.id || {};
+    const wrote = (b.applied || 0) + (i.applied || 0) + (i.artist_applied || 0);
+    const good = job.state === 'done';
+    box.append(S.el('p', { style: 'margin:.6rem 0 .2rem' },
+      S.el('span', { class: good ? 'pill ok' : 'pill bad', text: good ? 'written' : job.state }),
+      ' ',
+      S.el('span', { style: 'font-size:.85rem', text: good
+        ? wrote + ' edit(s) are now in the library.'
+        : 'Nothing is guaranteed to have landed \u2014 read the log above before retrying.' })));
+    // The next step, offered where the person already is `[SPEC-DF-108]`. An
+    // edit only becomes eligible to push once it has been applied, so this is
+    // the first moment a push can carry it at all.
+    if (good && wrote) {
+      box.append(S.el('div', { class: 'controls', style: 'margin-top:.4rem' },
+        S.el('button', { class: 'chip on', id: 'push-now',
+          text: 'now push these edits to the remote' }),
+        S.el('span', { style: 'color:var(--dim);font-size:.8rem;align-self:center',
+          text: 'briefly stops and restarts the remote player' })));
+      document.getElementById('push-now').onclick = () => {
+        document.getElementById('push').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        runSync('/api/remote/push');
+      };
+    }
+    refreshPendingSummary();
+  });
+}
+
+async function refreshPendingSummary() {
+  const sum = document.getElementById('pending-summary');
+  try {
+    const d = await S.get('/api/pending/detail');
+    sum.textContent = d.total
+      ? d.total + ' edit(s) saved here but not yet in the library'
+      : 'nothing pending';
+    document.getElementById('review-pending').disabled = !d.total;
+  } catch (e) { sum.textContent = ''; }
+}
+
+document.getElementById('review-pending').onclick = async () => {
+  try {
+    renderPending(await S.get('/api/pending/detail'));
+  } catch (e) { S.fail('#apply-result', e); }
+};
+refreshPendingSummary();
+
+document.getElementById('pull').onclick = () => runSync('/api/remote/pull');
+document.getElementById('push').onclick = () => runSync('/api/remote/push-all');
+document.getElementById('sync-prefs').onclick = () => runSync('/api/remote/sync-preferences');
+</script>

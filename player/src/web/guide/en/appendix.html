@@ -1,0 +1,107 @@
+<h2>Appendix: How the Program Director Decides</h2>
+
+<p>You can't directly control most of what's described here — this is the
+machinery behind automatic selection, included so you can understand
+<em>why</em> Lempi played what it played, not so you can operate it
+directly. Where you genuinely can affect something, it says so and points
+back to where.</p>
+
+<h3>Two separate questions, kept separate</h3>
+<p>Every time Lempi needs to pick the next track, it's really answering two
+independent questions: <strong>how often</strong> is a given song allowed
+to come up (timing), and <strong>does it fit right now</strong> (character
+— the mood/style of the moment). The code keeps these strictly apart on
+purpose — a song's timing never influences whether it sounds right for the
+moment, and vice versa — which is also why the "why this passage" panel
+(Advanced Features) reports them as separate line items rather than one
+blended score.</p>
+
+<h3>How often: Cooldown, Recovery, Preference</h3>
+<p>This is the math behind the three dials in <strong>Preference
+Tuning</strong>, which you <em>can</em> set directly, per recording and per
+artist:</p>
+<ul>
+  <li><strong>Cooldown</strong> is a flat exclusion: once a song plays, it
+    is completely ineligible until its cooldown period has passed. Not
+    "less likely" — genuinely off the table.</li>
+  <li><strong>Recovery</strong> begins right when cooldown ends: the song
+    is technically eligible again but starts near zero likelihood and
+    climbs back to its normal odds over the recovery period, rather than
+    snapping instantly from "never" to "certain."</li>
+  <li><strong>Preference</strong> is a standing multiplier applied on top
+    of all of that, independent of timing — how much you generally want to
+    hear this at all.</li>
+</ul>
+<p>Both Cooldown and Recovery are stored on a stretchy scale rather than a
+plain number of hours, which is what lets the slider in Preference Tuning
+stay useful across a huge range — small adjustments near the middle change
+things gently, and each step further out roughly doubles or halves the
+actual time, so extreme values are reachable without the useful middle
+ground being crushed into a sliver of the slider.</p>
+<p>An artist's own Cooldown/Recovery/Preference apply on top of each of
+their individual recordings' own settings, multiplied together — so
+turning an artist down quiets everything of theirs at once, even a
+specific song you'd separately turned up.</p>
+<p>A few smaller effects feed into "how often" too: a mild preference
+toward typically-sized songs over very short or very long ones; a
+"related recordings" link so a live version and a studio version of the
+same song share some of the same cooldown, rather than one letting the
+other straight back in; and skipping or removing a track from the queue
+holds it back for its own separate, usually shorter window (the "Hold a
+skipped/removed track out for…" settings in Advanced Features) — once that
+window passes, a skip has no further effect on the song's future odds.</p>
+
+<h3>Time of year</h3>
+<p>Separately from all of the above, a song can carry a seasonal
+character — the clearest example is holiday music. A curve maps the day of
+year to a multiplier, and a song's own "how seasonal is this" value decides
+how strongly that multiplier applies to it specifically; a song with no
+seasonal character at all is untouched year-round. This is why certain
+songs seem to show up only around a particular time of year, entirely
+apart from anything in Preference Tuning.</p>
+
+<h3>Does it fit right now: flavor</h3>
+<p>Every recording has a large set of measurements describing what it
+actually <em>sounds</em> like (see "Flavor analysis" in <strong>Importing
+&amp; Refining Music</strong>) — mood, genre character, energy, and more.
+Comparing two songs' measurements gives a single "how different do these
+sound" number. This does two jobs, and never affects how <em>often</em>
+something is allowed to play — only whether it's the right fit at this
+moment:</p>
+<ul>
+  <li><strong>Which songs are even in the running.</strong> A program (see
+    below) supplies a small handful of example songs that define its
+    sound; the pool of candidates is narrowed to whatever sounds similar
+    to at least one of them. If you've ever marked something as a Like,
+    it acts as an extra, gentler example pulling the pool toward your
+    taste; a Dislike instead pushes anything too similar to it out of the
+    running.</li>
+  <li><strong>What plays right after what.</strong> Among whatever is
+    eligible, songs that sound closer to whatever's already queued next
+    are favored, so one track blends into the next rather than lurching.</li>
+</ul>
+
+<h3>Programs and the schedule</h3>
+<p>A <strong>program</strong> is a named block of time (like "morning" or
+"evening") defined by a start time and a short list of example songs that
+define what it should sound like — not a set of sliders, and not a genre
+tag. "What should this time of day sound like?" is answered by naming a
+handful of songs, and the flavor-matching described above pulls the rest
+of the selection toward that same sound. Switching from one program to the
+next at its scheduled start is a clean cut, not a fade between two sounds
+— any sense of continuity across that switch comes entirely from the
+next-song blending described above, not from the schedule itself.</p>
+<p>You can pick a program by hand or return to "automatic" from any skin
+(Advanced Features) — but <strong>defining what a program actually
+contains isn't something the web interface can do today.</strong> If your
+system has programs already, they were set up separately from the web UI;
+picking among them is the only lever you currently have.</p>
+
+<h3>What actually feeds this, and what doesn't</h3>
+<table>
+<tr><th>Data</th><th>Feeds automatic selection?</th></tr>
+<tr><td>Preference Tuning (Cooldown/Recovery/Preference)</td><td>Yes — read directly, this is a first-class input.</td></tr>
+<tr><td>Your play/skip history</td><td>Yes — this is literally what starts the Cooldown/Recovery clock for each song.</td></tr>
+<tr><td>The Play Frequency table (Preference Tuning)</td><td>No — it's a read-only report for you, computed from the same history above but not consulted when picking what plays next.</td></tr>
+<tr><td>"Flag for review" (Play History / Advanced Features)</td><td>No — this is purely a note-to-self for library curation in Vipunen; it has no effect on playback at all.</td></tr>
+</table>

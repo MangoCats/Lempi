@@ -1,0 +1,110 @@
+#!/bin/sh
+# Sample the machine's vital signs to a file that survives a wedge.
+#
+# **Why `[PI3-FOUND-610]`.** On 2026-09-10 the appliance stopped answering TCP
+# for thirteen minutes while still replying to ping: the kernel was healthy and
+# userspace was not. The journal simply ends mid-sequence, with no I/O error,
+# no OOM kill, no hung-task warning and no panic -- because journald is
+# userspace too and stopped with everything else. Whatever happened, the one
+# record that could have shown the run-up was the record that died first.
+#
+# So this writes somewhere else, on a fixed cadence, and each line is complete
+# in itself. The gap where the lines stop is as informative as the lines:
+# **what the last few say is the evidence**, and this exists to have them.
+#
+# **Cheap on purpose `[PI3-FOUND-240]`.** An earlier sampler walked every
+# process in /proc each pass, cost about 5% of a core, and had to be alibied
+# out of the symptoms it was watching for. This forks nothing at all -- five
+# small reads from /proc per sample, in shell -- so it cannot produce a
+# periodic symptom and never needs an alibi.
+#
+# What each field is for:
+#   load1/load5      rising load with idle CPU means blocked, not busy
+#   run/total        runnable against total processes
+#   memavail/swapfree memory pressure, the other classic wedge
+#   iowait_d         jiffies spent waiting on I/O since the last sample --
+#                    the discriminator between a stalled card and a busy one
+#   listen22/5720    whether anything is still accepting; these going 1->0
+#                    while the process still exists is the wedge itself
+#
+# Off by default, and meant to be switched off for production: it writes to the
+# card every ten seconds, which an appliance that plays music should not do
+# forever.
+set -u
+
+OUT="${LEMPI_VITALS_OUT:-/var/log/lempi-vitals.log}"
+EVERY="${LEMPI_VITALS_SECONDS:-10}"
+MAXLINES="${LEMPI_VITALS_MAXLINES:-20000}"
+
+# Hex ports as /proc/net/tcp writes them: 22 -> 0016, 5720 -> 1658.
+P_SSH=":0016"
+P_WEB=":1658"
+
+prev_io=0
+prev_total=0
+
+printf '# vitals from boot at %s\n' "$(date 2>/dev/null)" >> "$OUT" 2>/dev/null
+printf '# mono load1 load5 run/total memavail_kB swapfree_kB iowait_d listen22 listen5720\n' >> "$OUT" 2>/dev/null
+
+while :; do
+    mono=$(cut -d' ' -f1 /proc/uptime 2>/dev/null)
+
+    # /proc/loadavg: "0.42 0.31 0.27 1/123 4567"
+    read -r l1 l5 _ procs _ < /proc/loadavg 2>/dev/null || l1="?"
+
+    memavail="?"
+    swapfree="?"
+    while read -r key val _; do
+        case "$key" in
+            MemAvailable:) memavail=$val ;;
+            SwapFree:)     swapfree=$val; break ;;
+        esac
+    done < /proc/meminfo 2>/dev/null
+
+    # /proc/stat first line: cpu user nice system idle iowait irq softirq ...
+    # iowait is field 6. Reported as a delta, because the absolute is
+    # meaningless and the delta is the whole question.
+    read -r _ u n s i io rest < /proc/stat 2>/dev/null
+    now_io=${io:-0}
+    now_total=$(( ${u:-0} + ${n:-0} + ${s:-0} + ${i:-0} + ${io:-0} ))
+    if [ "$prev_total" -gt 0 ]; then
+        iowait_d=$(( now_io - prev_io ))
+    else
+        iowait_d=0
+    fi
+    prev_io=$now_io
+    prev_total=$now_total
+
+    # Is anything still listening? A socket in state 0A is LISTEN. This is the
+    # field that would have named the fault: the wedge showed as ping alive and
+    # every TCP port refusing, so whether the listener still existed is
+    # precisely what was not known.
+    l22=0
+    l5720=0
+    while read -r _ local _ st rest2; do
+        [ "$st" = "0A" ] || continue
+        case "$local" in
+            *"$P_SSH") l22=1 ;;
+            *"$P_WEB") l5720=1 ;;
+        esac
+    done < /proc/net/tcp 2>/dev/null
+
+    printf '%s %s %s %s %s %s %s %s %s\n' \
+        "$mono" "$l1" "$l5" "$procs" "$memavail" "$swapfree" \
+        "$iowait_d" "$l22" "$l5720" >> "$OUT" 2>/dev/null
+
+    # Bounded, so a forgotten sampler cannot fill the card. Checked rarely,
+    # because counting lines is the most expensive thing here.
+    case "$mono" in
+        *[05].*) : ;;
+    esac
+    if [ "$(( ${mono%.*} % 600 ))" -lt "$EVERY" ]; then
+        lines=$(wc -l < "$OUT" 2>/dev/null || echo 0)
+        if [ "${lines:-0}" -gt "$MAXLINES" ]; then
+            tail -n "$(( MAXLINES / 2 ))" "$OUT" > "$OUT.trim" 2>/dev/null &&
+                mv "$OUT.trim" "$OUT" 2>/dev/null
+        fi
+    fi
+
+    sleep "$EVERY"
+done

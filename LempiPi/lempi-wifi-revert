@@ -1,0 +1,32 @@
+#!/bin/sh
+# The hard, unconditional half of the Wi-Fi/AP confirm-or-revert mechanism
+# [SPEC034], [PI-SET-014]. Scheduled by lempi-btctl's own wifi-connect/
+# ap-start/ap-stop verbs via `systemd-run --on-active=<minutes>`, entirely
+# independent of Lempi's own process staying alive -- this runs even if
+# Lempi crashed, the change broke networking outright, or a confirm
+# request had nowhere left to be sent to. Cancelled before it fires by
+# `systemctl stop lempi-revert-<change-id>.timer`, the only other thing
+# that ever touches this timer.
+#
+# Usage: lempi-wifi-revert <prev-connection-name-or-empty> <attempted-connection-name>
+set -u
+PREV="${1:-}"
+NEW="${2:-}"
+
+# Never delete the attempted connection outright -- a listener who comes
+# back later may want to see what was tried, or retry it by hand once
+# whatever was wrong (a mistyped password, a network briefly down) is
+# fixed. Turning off autoconnect is enough to keep it out of the way at
+# the next boot.
+[ -n "$NEW" ] && nmcli connection modify "$NEW" autoconnect no >/dev/null 2>&1
+
+if [ -n "$PREV" ]; then
+    nmcli connection modify "$PREV" autoconnect yes >/dev/null 2>&1
+    nmcli connection up "$PREV" >/dev/null 2>&1
+else
+    # Nothing was active before this change at all -- the safest place to
+    # land is Lempi's own access point, since that is the one thing
+    # guaranteed reachable with nothing but a phone and no prior state to
+    # depend on.
+    nmcli connection up lempi-ap >/dev/null 2>&1
+fi

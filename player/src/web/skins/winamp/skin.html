@@ -1,0 +1,41 @@
+<div class="wa">
+  <div class="window">
+    <div class="titlebar">Lempi <span id="state">—</span></div>
+    <div class="body">
+      <div class="lcd lcdrow">
+        <div id="art"></div>
+        <div class="lcdmain">
+        <div class="readout">
+          <span id="time">0:00</span>
+          <span class="stat" id="stat">—</span>
+        </div>
+        <div class="marquee" id="marquee"><span id="title">—</span></div>
+        <div class="bar"><div id="fill"></div></div>
+        </div>
+      </div>
+      <div class="row">
+        <button data-cmd="play" title="Play">&#9654;</button>
+        <button data-cmd="pause" title="Pause">&#10073;&#10073;</button>
+        <button data-cmd="skip" title="Skip">&#9654;&#9654;</button>
+        <input type="range" id="volume" min="0" max="1" step="any" value="1">
+        <span id="volnum">0.0 dB</span>
+      </div>
+      <div class="row">
+        <label for="prog">Prog</label>
+        <select id="prog" style="flex:1"></select>
+      </div>
+    </div>
+  </div>
+
+  <div class="window">
+    <div class="titlebar">Playlist</div>
+    <div class="playlist"><ol id="queue"><li class="empty">nothing queued</li></ol></div>
+    <div class="why" id="why"></div>
+  </div>
+
+  <div class="row" style="justify-content:flex-end">
+    <a href="/browse" style="color:inherit;font-size:9px;text-transform:uppercase;letter-spacing:.1em">Browse</a>
+    <a href="/guide" target="_blank" style="color:inherit;font-size:9px;text-transform:uppercase;letter-spacing:.1em">Help</a>
+    <label for="skinpick">Skin</label> <select id="skinpick" data-skins></select>
+  </div>
+</div>
