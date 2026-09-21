@@ -76,7 +76,15 @@ lempi_target() {
         _f="$_root/$_d/targets.env"
         [ -f "$_f" ] || continue
         _line=$(grep -E "^${_k}=" "$_f" 2>/dev/null | tail -1)
-        [ -n "$_line" ] && _v=${_line#*=}
+        # `tr -d '\r'`, because `fleet-example/targets.env` is a tracked file
+        # in a repository that is checked out on Windows. Without a
+        # `.gitattributes` rule it arrives CRLF, the carriage return sits at
+        # the END of the value, and `${_line#*=}` keeps it -- so the ssh
+        # target becomes `pi@speaker-a\r`, which fails with a message naming
+        # a host that looks correct. The rule now exists; this does not
+        # depend on it, because a roster can also be hand-written or copied
+        # in from anywhere.
+        [ -n "$_line" ] && _v=$(printf '%s' "${_line#*=}" | tr -d '\r')
     done
     echo "$_v"
 }

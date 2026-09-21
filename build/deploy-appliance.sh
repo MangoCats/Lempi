@@ -190,11 +190,21 @@ echo "deploy: putting it on $HOST"
 # `[GDE-DEP-070]`. install-player.sh has already written the same bytes to both
 # layers by this point, so ask the durable one: a disagreement here means that
 # write did not take, which is exactly the fault `[IMPL-BOS-185]` was.
+#
+# Ask FSTYPE first, and say what was found `[GDE-DEP-060]`. Reading only
+# `lowerdir` cannot tell "this is a plain root" from "the question did not get
+# answered": an ssh that fails here returns empty, and the empty was taken as
+# a plain root, so the check fell back to the EPHEMERAL copy and reported a
+# pass for exactly the write `[IMPL-BOS-185]` was about. `install-player.sh`
+# already refuses in that case; this half was the weaker of the two.
 VBIN=/usr/local/bin/lempi
-LOWER="$(ssh "$HOST" "findmnt -no OPTIONS / | tr ',' '\n' | sed -n 's/^lowerdir=//p'" 2>/dev/null)"
-if [ -n "$LOWER" ]; then
+if [ "$(ssh "$HOST" "findmnt -no FSTYPE /" 2>/dev/null)" = "overlay" ]; then
+    LOWER="$(ssh "$HOST" "findmnt -no OPTIONS / | tr ',' '\n' | sed -n 's/^lowerdir=//p'" 2>/dev/null)"
+    [ -n "$LOWER" ] || die "overlay root on $HOST but no lowerdir -- refusing to verify the ephemeral copy and call it durable"
     VBIN="$LOWER$VBIN"
     echo "deploy: $HOST has an overlay root -- asking the DURABLE copy at $VBIN"
+else
+    echo "deploy: $HOST has a plain root -- $VBIN is itself the durable copy"
 fi
 REPORTED="$(ssh "$HOST" "sudo $VBIN --version" 2>/dev/null \
             | grep -o '[0-9a-f]\{12\}\(+dirty\)\?')"
