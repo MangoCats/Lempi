@@ -51,6 +51,17 @@ abc` used to serve 5720 and say nothing, because every hand-rolled site read
 `.parse().ok().unwrap_or(default)`. The kind of each option is declared and
 checked at parse time.
 
+**`[GDE-CLI-120]` Where a value is expected, anything option-*shaped* is
+refused — not merely the names this project happens to know.** The parser
+used to reject only what `find_any` recognised, which closed the
+`--help`-as-a-filename fault for `--help` and left it open for every
+misspelling. A mistyped `--port` — dropping the `o`, a name never defined
+here — was taken as `--listener`'s value rather than refused, and the player
+created a database file named after the typo. A reviewer produced exactly
+that, in this repository. A
+value that genuinely begins with a dash goes after `=`, which is the escape
+hatch and is tested as one.
+
 **`[GDE-CLI-060]` `-h` is help and `-V` is version, everywhere.** `-v` is
 reserved and deliberately unused: it means `--verbose` in every other tool,
 and a binary here that one day wants verbosity must not find the letter

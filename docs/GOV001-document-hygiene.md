@@ -24,7 +24,8 @@ To ensure that both human contributors and AI coding assistants can quickly insp
 
 3. **Unique Grep-Searchable Identifiers**:
    - All requirements, design specs, entity definitions, and test cases MUST be assigned a unique, bracketed identifier tag (e.g., `[REQ-AUD-010]`, `[SPEC-AUD-020]`, `[UT-AUD-001]`).
-   - Tags MUST be consistent across specifications, source code comments, and automated test names.
+   - Tags MUST be consistent across specifications, source code comments, and automated test names. *(Enforced since 2026-09-21: `check_docs.py` reads Rust, Python, browser JS, HTML, SQL, shell, units and Dockerfiles, and a tag cited from any of them that resolves to nothing is an error. Before that it read the LempiPi shell helpers alone — two of its seven patterns matched no file at all — and 18 citations across `player/` and `tools/` pointed at tags that had never existed.)*
+   - A tag may carry a trailing letter — `[LOG-FEX-070a]` — for a finding split out after its neighbour was numbered. A trailing `x` is not a sub-tag but a wildcard: `[IMPL-BOS-07x]` means the 070-series.
 
 4. **Direct Markdown Hyperlinks**:
    - All references to other documents MUST use standard GitHub Markdown file links with explicit relative paths (e.g., `[SPEC009: Program Director](SPEC009-program-director.md)`).

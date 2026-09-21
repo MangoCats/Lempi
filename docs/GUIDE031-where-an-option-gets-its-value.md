@@ -36,6 +36,25 @@ option rejects does fall through — a database is not something a process may
 refuse to start over — but it says so, naming the key and the layer it fell
 to.
 
+**`[GDE-CLI-115]` An option read with `must_*` must be able to answer from
+*some* layer, or the binary panics at startup.** `must_real`/`must_int`/
+`must_size` have no fallback of their own: nothing on the command line, no
+stored setting, no environment, no declared `.or(..)` means a crash, not a
+usage message — and on an appliance that is a unit that will not start.
+
+*Written after it shipped.* `common::INTERVAL_S` carried no default while
+its sibling `INTERVAL_MS` took `default_sample_interval_ms!()`, so
+`mpd_watch` panicked on every run and `mpd_fill`/`mpd_direct` panicked
+whenever the listener database held no saved setting. `cargo test` could not
+see it: all three are behind the `mpd` feature and the default run does not
+compile them. The guard therefore reads the *source* of `src/bin/` rather
+than the binaries, the same technique `every_binary_has_a_table` uses, so it
+holds whether or not the feature is enabled.
+
+The fix was to derive rather than retype `[GDE-ARC-033]`: the seconds
+default is the millisecond macro divided by a thousand, so the two cannot
+drift.
+
 ---
 
 ## 2. Bootstrap: the layer that cannot answer for itself

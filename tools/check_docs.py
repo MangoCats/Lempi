@@ -19,8 +19,11 @@ Checks:
   6. Every cited tag is defined somewhere; no tag is defined twice.
   6a. A document number names one document per folder, and a document's `#`
      heading agrees with its filename [GOV-DOC-030].
-  6b. Tags cited from shell/unit/Dockerfile sources resolve -- and a scan
-     pattern that matches no file is an error, not a quiet zero [GOV-FBN-020].
+  6b. Tags cited from SOURCE resolve -- Rust, Python, browser JS, HTML, SQL,
+     shell, systemd units and Dockerfiles, which is `[GOV-DOC-010]`'s
+     "consistent across specifications, source code comments and automated
+     test names" actually enforced. A scan pattern that matches no file is an
+     error, not a quiet zero [GOV-FBN-020].
   7. Every doc-cited player/tools/sql/docs/build/LempiPi/BosePi/sendspin path
      exists in the tree [GOV-DOC-040]; warn only.
 
@@ -614,24 +617,34 @@ def main():
     # reports BROKEN, never clean") broken by the checker that enforces it.
     #
     # The patterns below are the real filenames, extended 2026-09-21 to the
-    # two directories that were never listed at all. Measured before landing:
-    # 173 further citations across 28 files, all of which resolve.
-    # `player/` and `tools/` are still deliberately absent -- 18 citations
-    # there do NOT resolve, and are being worked separately rather than
-    # silenced by omission.
+    # directories that were never listed at all -- first the appliance and
+    # build folders, then `player/` and `tools/` once the 18 citations that
+    # did not resolve there had been worked rather than silenced by omission.
+    #
+    # That is the whole tree now: 2,075 tag citations in Rust, 859 in Python,
+    # 135 in the browser JS, 54 in the console's own pages, 51 in the schema.
+    # All measured clean before this widened. The two that were not --
+    # `[SPEC-SUI-225]` and `[SPEC-SUI-228]` in `web/edit.js`, real editor
+    # behaviour with live incidents behind it and no entry in SPEC021 -- were
+    # written up in the same commit, because a scan extended over a known
+    # failure is a scan somebody turns off.
     CODE_PATTERNS = ("LempiPi/lempi-*", "LempiPi/*.conf", "LempiPi/setup-*.sh",
                      "LempiPi/tests/*", "LempiPi/tests/stubs/*",
                      "BosePi/*.sh", "BosePi/*.service", "BosePi/*.conf",
                      "BosePi/*.ps1", "LempiPlay3/*.service",
-                     "build/*.sh", "build/*.js", "build/Dockerfile.*")
+                     "build/*.sh", "build/*.js", "build/Dockerfile.*",
+                     "player/src/**/*.rs", "player/src/**/*.js",
+                     "player/src/**/*.html", "player/examples/*.rs",
+                     "player/tests/*.rs", "player/build.rs",
+                     "tools/*.py", "tools/console_web/*", "sql/*.sql")
     code_paths = []
     for pattern in CODE_PATTERNS:
-        if not glob.glob(pattern):
+        if not glob.glob(pattern, recursive=True):
             errors.append(f"code-scan pattern {pattern!r} matches no file -- "
                           f"this check is covering nothing it claims to cover "
                           f"[GOV-FBN-020]; fix the pattern or remove it")
     for pattern in CODE_PATTERNS:
-        code_paths.extend(glob.glob(pattern))
+        code_paths.extend(glob.glob(pattern, recursive=True))
     for cp in sorted(set(code_paths)):
         if not os.path.isfile(cp) or cp.endswith(".md"):
             continue
