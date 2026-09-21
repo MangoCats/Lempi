@@ -7,6 +7,14 @@ and not the general dev build (see the repo root's `HOWTO.md`). One thing
 gets done here: a binary is cross-compiled and put where the appliance's
 `lempi` service runs it from.
 
+> **`lempipi` is a router-side name, not the machine's own.** The appliance's
+> hostname is `LempiPiHost` and its DHCP reservation also answers to
+> `lempi02w`; `lempipi` is an alias pointing at the same address,
+> 192.168.67.20. Every script here defaults to `pi@lempipi`, so **that alias
+> has to exist on the router** — it is not configured anywhere on the Pi and
+> would not survive a router reset. If `ssh pi@lempipi` fails while the node is
+> plainly up, this is why; `pi@lempi02w` reaches the same machine.
+
 Every command below is verified against this repository as it stands.
 
 ---
