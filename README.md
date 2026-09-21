@@ -75,6 +75,16 @@ Detailed architectural and design specifications are organized in the [`docs/`](
 - ⚡ **[Embedded Hardware & Storage Resilience](LempiPi/embedded-hardware.md)** — Raspberry Pi Zero 2W spec, fast-boot sequence, and 3-partition layout.
 - 🍓 **[IMPL001: Pi Zero 2W Appliance Setup](LempiPi/IMPL001-appliance-setup.md)** — step-by-step OS build for the appliance.
 
+**The fleet is three appliances, and they are not alike.** Each has its own folder, because its hardware, its root filesystem and the units it runs differ enough that interleaving them would hide exactly the differences that matter — see [CLAUDE.md §4](CLAUDE.md) before writing to any of them.
+
+| node | what makes it different | root | folder |
+| :--- | :--- | :--- | :--- |
+| `lempipi` | Pi Zero 2W, Bluetooth speaker, MPD guest backend | plain ext4 | [LempiPi/](LempiPi/HOWTO.md) |
+| `bose` | HiFiBerry DAC, read-only catalogue, lock-in escape hatch | **overlay** | [BosePi/](BosePi/README.md) |
+| `lp3-wifi` | 480×320 SPI framebuffer and touch panel | **overlay** | [LempiPlay3/](LempiPlay3/LP3001-the-node-and-its-units.md) |
+
+A fourth machine, [SmartPC/](SmartPC/SMART001-survey.md), is a build host rather than an appliance. Which host a script actually targets is not written in the scripts — it comes from `fleet/targets.env`, which is untracked `[GDE-ARC-033]`; `fleet-example/targets.env` shows the shape.
+
 ---
 
 ## 🛠️ Technology Stack

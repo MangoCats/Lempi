@@ -30,31 +30,67 @@ lempi_port() {
 # ---- who the fleet is -------------------------------------------------------
 #
 # These were hardcoded in three scripts, and it cost exactly what hardcoding a
-# name costs. `deploy-appliance.sh`, `install-player.sh` and
-# `deploy-everywhere.sh` each carried `pi@lempipi` as a default target for a
-# name that has never resolved: the node answered to one name before the
-# project was renamed and to `lempi02w` after, and `lempipi` was only ever the
-# name the documentation used. Three copies meant nothing noticed.
+# name costs: each carried `pi@lempipi` as a default target for a name that has
+# never resolved, and three copies meant nothing noticed.
 #
-# The names live here now, once, and every one of them is overridable. A second
-# machine, a test rig, or a node reached by address instead of name needs an
-# environment variable rather than an edit:
+# The roster does NOT live here. `[GDE-ARC-033]` already settled where a real
+# hostname belongs -- `fleet/targets.env`, gitignored, this household's actual
+# kit -- with `fleet-example/targets.env` tracked and deliberately generic, and
+# `tools/console.py` reading whichever exists. Putting real machine names in
+# tracked code is wrong for anyone else's fleet and wrong for this one the day
+# a host is renamed, which is the day that just happened.
+#
+# So this reads the same two files in the same precedence the console uses:
+# generic first, real wins. With no `fleet/targets.env` present a deploy aims
+# at `pi@speaker-a`, which fails immediately and obviously, rather than at a
+# real machine that might be the wrong one.
+#
+# An environment variable still outranks both `[GDE-CLI-090]`:
 #
 #     LEMPI_APPLIANCE=pi@192.168.67.20 build/deploy-appliance.sh
 #     LEMPI_FLEET="pi@bose" build/deploy-everywhere.sh
-#
-# `lempipi` remains what the prose calls the first appliance, and that is fine:
-# a document naming a machine is a label, not a connection. Only these values
-# are dialled.
 
-# The default single target: the Pi Zero 2W with the Bluetooth speaker.
+# Where the roster lives. Tried in order, first one that actually holds
+# `fleet-example/targets.env` wins.
+#
+# This is deliberately not just `$(dirname "$0")/..`. Sourced from a `build/`
+# script that is how you reach the repository root, but sourced any other way
+# -- `sh -c`, a subshell, a test harness -- `$0` is the shell rather than the
+# script and the path silently resolves somewhere with no roster in it. The
+# function would then return nothing and the caller would fall back to the
+# generic names, which is a plausible-looking wrong answer rather than an
+# error: a deploy aimed at `pi@speaker-a` while a real roster sat unread.
+lempi_root() {
+    for _r in "${REPO_ROOT:-}" "${ROOT:-}" "$(dirname "$0")/.." "$PWD" "$PWD/.."; do
+        [ -n "$_r" ] || continue
+        [ -f "$_r/fleet-example/targets.env" ] && { echo "$_r"; return 0; }
+    done
+    return 1
+}
+
+# Read one key out of the roster, generic first so the real file wins.
+lempi_target() {
+    _k=$1; _v=""
+    _root=$(lempi_root) || { echo ""; return 0; }
+    for _d in fleet-example fleet; do
+        _f="$_root/$_d/targets.env"
+        [ -f "$_f" ] || continue
+        _line=$(grep -E "^${_k}=" "$_f" 2>/dev/null | tail -1)
+        [ -n "$_line" ] && _v=${_line#*=}
+    done
+    echo "$_v"
+}
+
+# The default single target: the appliance a plain `deploy-appliance.sh` means.
 lempi_appliance() {
-    echo "${LEMPI_APPLIANCE:-pi@lempi02w}"
+    _t=$(lempi_target LEMPI_APPLIANCE)
+    echo "${LEMPI_APPLIANCE:-${_t:-pi@speaker-a}}"
 }
 
 # Every appliance a fleet-wide deploy touches, in the order it should touch
-# them. `bose` is second because its overlay root makes it the most likely to
-# teach something, and the framebuffer node is last because it is the newest.
+# them -- the overlay-rooted ones before the newest, so a surprise lands where
+# there is most prior art.
 lempi_fleet() {
-    echo "${LEMPI_FLEET:-pi@lempi02w pi@bose pi@lp3-wifi}"
+    _t=$(lempi_target LEMPI_FLEET)
+    echo "${LEMPI_FLEET:-${_t:-pi@speaker-a pi@speaker-b}}"
 }

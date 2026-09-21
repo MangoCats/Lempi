@@ -2,7 +2,7 @@
 
 **`library.db` and `listener.db` are the live pair** — the catalogue half and
 the listener half of one database, split per `[IMPL-DBSPLIT-025]` and matching
-the shape both appliances run. Every tool and doc example in this repo means
+the shape all three appliances run. Every tool and doc example in this repo means
 this pair when it says "the library", and every tool takes **either** path as
 its single argument: `tools/lempi_db.py` finds the other half beside it and
 attaches it.

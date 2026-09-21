@@ -55,10 +55,27 @@ one commit**.
 
 ## 4. Deploying to an appliance is not a file copy
 
-`bose` has an **overlay root**: an ordinary write to `/` lands in a tmpfs upper
-layer, survives a service restart, passes every check — and is gone at the next
-reboot. Five days of player deploys went that way
-`[IMPL-BOS-185]`. `lempipi` has a plain writable root and does not.
+**Two of the three appliances have an overlay root**, and an ordinary write to
+`/` on one of them lands in a tmpfs upper layer: it survives a service restart,
+passes every check — and is gone at the next reboot. Five days of player deploys
+went that way `[IMPL-BOS-185]`.
+
+| node | root | writing to `/` |
+| :--- | :--- | :--- |
+| `bose` | **overlay** | needs both layers |
+| `lp3-wifi` (the framebuffer node) | **overlay** | needs both layers |
+| `lempipi` | plain ext4 | ordinary write is durable |
+
+Do not infer this from the machine's name or its role — check it. `findmnt -no
+FSTYPE /` answers in one line, and the scripts below do exactly that before
+writing `[GDE-DEP-060]`. The count has been wrong in this file before: it named
+`bose` as the only overlay node while the framebuffer node had already been
+converted, which is the same mistake in documentation that `[IMPL-BOS-185]` was
+in practice.
+
+It is not only file copies. `systemctl enable` writes a symlink, and `rm`
+leaves a whiteout; both live in the upper layer and both evaporate at reboot
+unless the durable layer is written too.
 
 - Use [`build/deploy-appliance.sh`](build/deploy-appliance.sh) for the player
   and [`build/install-config.sh`](build/install-config.sh) for any file; both
