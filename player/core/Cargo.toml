@@ -40,3 +40,17 @@ vipunen-support = []
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# The appliance's own local UTC offset `[SPEC-DIR-180]`, for
+# `director/program.rs`. Unix only -- Windows has no `tm_gmtoff` and is asked
+# through `TimeZoneInfo` instead.
+#
+# **Missed when this crate was split out, and Windows hid it.** `libc` was
+# declared in `player/Cargo.toml` and the code that needs it moved here; the
+# `#[cfg(unix)]` branch does not compile on the development host, so a full
+# Windows build and a 598-test suite both passed while the aarch64
+# cross-compile failed on the first try `[GDE-DEP-070]`. The lesson is the one
+# `build/verify-targets.sh` was written for and this change did not heed:
+# compiling is not testing, and compiling *here* is not compiling there.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
