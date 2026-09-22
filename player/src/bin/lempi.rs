@@ -376,7 +376,18 @@ fn engine_thread(
             lempi_player::SAMPLE_INTERVAL_MS,
         ) {
             Ok(mut guest) => {
-                if let Ok(c) = rusqlite::Connection::open(&db) {
+                // `&library`, not `&db`. Both `nameable_uris` and `cue_uris`
+                // read `passages`, `files` and `passage_recordings`, which are
+                // library tables; `db` is the *listener* database
+                // `[IMPL-DBSPLIT-025]`. On a node that gives no `--library`
+                // the two are the same path (line 74), so this worked by
+                // accident everywhere it had been tried -- and failed on
+                // `lempi02w`, the one node that splits them, with
+                // `cannot name URIs for MPD (no such table: passages)` on
+                // every start. Found 2026-09-22 by turning `--features mpd`
+                // on there for the first time; the flag had been passed to a
+                // binary that ignored it since the node was built.
+                if let Ok(c) = rusqlite::Connection::open(&library) {
                     match lempi_player::mpd_backend::nameable_uris(&c, &root) {
                         Ok(n) => guest.attach_names(n),
                         Err(e) => eprintln!("cannot name URIs for MPD ({e})"),
