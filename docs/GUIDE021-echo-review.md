@@ -47,7 +47,7 @@ position debt in ms), `EchoCorrectNextStart` (a boundary shift in ms) and
 the rate ppm and the debt ppm into **one** interval and hands a single frame to
 `apply_trim` in `player/src/mixer.rs` `[GDE-ECHO-349]`; `echo_split` divides a
 boundary shift into a coarse admission nudge, spent through
-`should_admit_nudged` in `player/src/queue.rs`, and a fine "open the passage
+`should_admit_nudged` in `player/core/src/queue.rs`, and a fine "open the passage
 this far in" `[GDE-ECHO-347]`.
 
 That division is sound, and the parts a sign error would hide in — the
@@ -67,7 +67,7 @@ consequential finding here, and it makes the "later" direction of
 
 `should_admit_nudged` computes `want = (overlap + nudge).clamp(0, ceiling)`.
 The overlap it is spending is `min(lead_out(A), lead_in(B))`, and
-`player/src/queue.rs` records the measured library at the top of the file:
+`player/core/src/queue.rs` records the measured library at the top of the file:
 **lead-in median 5 ms**, deliberately, because the ramps exist to hide pops
 rather than to cross-fade. So a typical pair has about **5 ms** of overlap to
 spend, and `[GDE-ECHO-340]`'s claim that the knob is "symmetric by

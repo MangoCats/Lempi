@@ -15,7 +15,7 @@ reached 356 lines against `[GOV-DOC-010]`'s 300-line limit.
 
 **`[SPEC-MESH-080]` Closes `[SPEC-SUI-180]` — "re-importing the same bundle is
 unspecified." Built 2026-09-06, and turned out narrower than first
-written here.** Reading `player/src/bundle.rs` before touching it found it
+written here.** Reading `player/core/src/bundle.rs` before touching it found it
 already more idempotent than `[SPEC-SUI-180]` assumed: `files.audio_md5` is
 checked before any write, so a resent encoding already reports `Already` and
 writes nothing, and `upsert_recording()` already carries `[SPEC-DF-070]`'s

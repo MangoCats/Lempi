@@ -52,7 +52,7 @@ is repaired at boot rather than mounted around.
 does not remount read-only; it carries on.
 
 **`[SD-RISK-020]` Both listener databases are in WAL with SQLite's default
-`synchronous=FULL`, and nothing in the crate changes either.** `player/src/db/mod.rs`
+`synchronous=FULL`, and nothing in the crate changes either.** `player/core/src/db/mod.rs`
 sets only `PRAGMA foreign_keys`; the WAL mode came from `[PI-OWE-030]`'s
 2026-09-11 change. `page_size` 4096, `wal_autocheckpoint` 1000 pages = 4 MB on
 both. Measured on `bose` while playing: the WAL grows **961 B/s**, so it

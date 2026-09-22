@@ -65,7 +65,7 @@ and do not transfer to a different rip. It is reported
 for a person to decide, never applied. Neither means the file is unknown here —
 ingest, not relink `[SPEC-RLK-090]`.
 
-*Designed, not yet built.* `player/src/relink.rs` and `player/src/bin/relink.rs`
+*Designed, not yet built.* `player/core/src/relink.rs` and `player/src/bin/relink.rs`
 implement only the `audio_md5` tier above; `Outcome` (`[SPEC-RLK-050]` below)
 has no `candidate` variant, and an un-hashed file simply falls through to
 `unknown`, full stop. The `recording_mbid` candidate lookup and its reporting

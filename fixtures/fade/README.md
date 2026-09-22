@@ -39,7 +39,7 @@ for name, (gain_in, gain_out) in curves.items():
 "
 ```
 
-Checked by `player/src/fade.rs`'s `matches_the_shared_fade_fixture...` test
+Checked by `player/core/src/fade.rs`'s `matches_the_shared_fade_fixture...` test
 (one curve per fixture file) and by `build/verify-skins.js`'s fade check,
 which loads `player/src/web/fade.js` directly with `require()` — it needs no
 DOM, so this is the one part of the editor's math a Node process can verify

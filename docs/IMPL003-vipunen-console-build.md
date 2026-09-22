@@ -151,7 +151,7 @@ This refines `[SPEC-SUI-085]`, which asked only that job state not live in the b
 
 Order: exporter → importer → scoped relink `[SPEC-SUI-105]` → the real transfer.
 
-> **BOTH HALVES BUILT AND VERIFIED 2026-08-20; the appliance import is BLOCKED.** [`tools/export_bundle.py`](../tools/export_bundle.py), [`player/src/bundle.rs`](../player/src/bundle.rs), [`player/src/bin/import_bundle.rs`](../player/src/bin/import_bundle.rs).
+> **BOTH HALVES BUILT AND VERIFIED 2026-08-20; the appliance import is BLOCKED.** [`tools/export_bundle.py`](../tools/export_bundle.py), [`player/core/src/bundle.rs`](../player/core/src/bundle.rs), [`player/src/bin/import_bundle.rs`](../player/src/bin/import_bundle.rs).
 >
 > **The result stage 1 existed to produce: the two implementations agree.** Run over the fixture corpus, Python's `compatible()` and Rust's `unacceptable()` return the same verdict on all five — accept, accept, reject, reject, accept. Nothing but the fixtures was keeping them honest, and they are.
 >

@@ -1,0 +1,42 @@
+[package]
+name = "lempi-core"
+version = "0.1.0"
+edition = "2021"
+description = "Lempi's selection engine: library, Program Director, queue, payload import"
+license = "MIT"
+
+# **What this crate is for, and the one rule that justifies it.**
+#
+# `lempi-core` holds everything that decides *what to play*, and nothing that
+# decides *how to make a sound*. The boundary was true before this crate
+# existed -- measured 2026-08-20, re-measured 2026-09-02 and again 2026-09-22,
+# each time by reading the Director's imports and finding no `cpal`,
+# `symphonia`, `rubato`, `axum` or `tokio` `[GDE-AND-020]`.
+#
+# That is a property established by inspection on a schedule, which is the
+# shape of thing this repository mechanises everywhere else: `check_docs.py`
+# for documentation, `verify-targets.sh` for the suite, `findmnt` before a
+# write to an appliance root. A convention only one participant can see is not
+# one, and the same is true of an architectural boundary. **The dependency list
+# below is now the check**: a `use crate::engine::` written under `director/`
+# stops being something a reader has to notice and becomes something cargo
+# refuses to compile.
+#
+# The measurement that says this is not premature: the full player's clean
+# build is 135 crates, and this one's is 30.
+#
+# It is also `[GDE-AND-045]`, the piece no phone route avoids -- one selection
+# engine shared by desktop, appliance and phone, rather than a second Director
+# in Kotlin or Swift `[GDE-FBD-040]`.
+
+[features]
+# Vipunen's half of the shared database `[SPEC-SUI-190]`. The player's own
+# feature of the same name forwards to this one and additionally pulls in
+# `reqwest`; nothing here needs an HTTP client, because the desktop induct
+# workflow's outbound calls live in `player/src/web/`, not in the schema.
+vipunen-support = []
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

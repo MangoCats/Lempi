@@ -5,6 +5,36 @@ edition = "2021"
 description = "Lempi audio player: bounded streaming decode, crossfade, queue"
 license = "MIT"
 
+# **The workspace root is this package, deliberately.**
+#
+# A workspace at the repository root would have been the conventional place for
+# it, and would have moved the build directory from `player/target` to
+# `target` -- which eleven references across `build/`, `tools/check_docs.py`
+# and `.github/workflows/tests.yml` would then have had to follow, in the same
+# commit, without one of them being missed. CLAUDE.md §4 is about exactly that
+# class of change: a deploy that looks correct and is not.
+#
+# Rooting the workspace here keeps `player/target` where every one of those
+# eleven expects it, and costs nothing else. It also keeps `lempi-core` inside
+# `player/`, which LICENSING.md already declares MIT -- a crate at the
+# repository root would have needed that arrangement amended to say so.
+[workspace]
+members = ["core"]
+# **`default-members` is not decoration, and this file is where the
+# `echo-client` fault would otherwise have repeated itself.**
+#
+# With `members` alone, a bare `cargo test` in this directory tests the root
+# package and nothing else. Measured at the moment of the split, 2026-09-22:
+# 663 tests before, **359 after** -- every test in `lempi-core`, which is to
+# say every test the Director, the library and the payload importer have,
+# silently stopped running, and the suite still said `ok`.
+#
+# That is the same fault as a module behind a feature nobody turned on: three
+# faults in `echo_client.rs` survived to be found by reading, because no test
+# run compiled it. Naming both members here makes the covering run the default
+# one, so the discipline does not depend on anybody remembering `--workspace`.
+default-members = [".", "core"]
+
 # The MPD Director is off unless asked for `[SPEC-MPD-070]`, `[IMPL-MPD-065]`.
 # Gated LAST, deliberately: gating first would have meant five stages developed
 # behind a flag nobody had turned on.
@@ -42,7 +72,13 @@ mpd = []
 # `dep:reqwest` -- an appliance build never resolves, fetches or compiles the
 # HTTP client at all, not just leaves it unused `[SPEC-SUI-190]`,
 # `[SPEC-SUI-196]`.
-vipunen-support = ["dep:reqwest"]
+#
+# **It forwards to `lempi-core/vipunen-support`**, because the columns and
+# tables that half of the schema names live in `db/`, which is now in that
+# crate. Forwarding rather than duplicating is what keeps one flag meaning one
+# thing: a build asking for Vipunen support here gets it in the schema too, and
+# there is no arrangement of features that gives one without the other.
+vipunen-support = ["dep:reqwest", "lempi-core/vipunen-support"]
 # The native framebuffer/touch UI `[SPEC036]`, for appliances with a small
 # SPI display rather than a browser -- `lempiplay3`'s own touchscreen,
 # not `bose`/`lempi02w`, which never resolve or compile any of this.
@@ -57,6 +93,10 @@ fbui = ["dep:tokio-tungstenite", "dep:embedded-graphics", "dep:framebuffer", "de
 echo-client = ["dep:tokio-tungstenite", "dep:futures-util"]
 
 [dependencies]
+# The selection engine `[GDE-AND-045]`. Three dependencies of its own against
+# this crate's 135, and no path from it to anything below -- which is now a
+# resolution fact rather than a claim someone re-checks by reading imports.
+lempi-core = { path = "core" }
 symphonia = { version = "0.5", features = ["mp3", "flac", "isomp4", "aac", "vorbis"] }
 rubato = "0.15"
 cpal = "0.18"

@@ -12,7 +12,7 @@ play counts for whatever the preference panel currently has open, broken
 out by who or what put each play on.
 
 > **Status.** Built 2026-09-04 (commit `f300579`), per `[REQ-VIS-300]`.
-> `PlayerStore::play_frequency` (`player/src/db/player_store.rs`), the
+> `PlayerStore::play_frequency` (`player/core/src/db/player_store.rs`), the
 > `GET /play-frequency/:kind/:id` route (`player/src/web/preference.rs`),
 > `loadFreqPanel`/`freqPanelSlot` (`player/src/web/core.js`), the
 > `listener_play_history.selected_by` column, and `QueueEntry::selected_by`

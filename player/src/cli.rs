@@ -57,19 +57,27 @@ macro_rules! default_port {
 
 /// How many passages the Director keeps queued ahead. Written here because
 /// `--depth`'s default and [`crate::QUEUE_DEPTH`] were two copies of `5`.
+///
+/// **The literal moved to `lempi_core` with the constant it defines**, and this
+/// expands to it rather than restating it. The macro stays because four option
+/// tables and `cli/tests.rs` call it, and because the point of it was never the
+/// expansion -- it was that there is one place the number is written
+/// `[GDE-ARC-033]`. A crate boundary between the option and the setting would
+/// have made that two places again.
 #[macro_export]
 macro_rules! default_queue_depth {
     () => {
-        "5"
+        $crate::DEFAULT_QUEUE_DEPTH
     };
 }
 
 /// How often a guest's `status` is read while playing, in milliseconds.
 /// `--interval`'s default and [`crate::SAMPLE_INTERVAL_MS`] were two copies.
+/// Expands to `lempi_core`'s literal, for the reason above.
 #[macro_export]
 macro_rules! default_sample_interval_ms {
     () => {
-        "5000"
+        $crate::DEFAULT_SAMPLE_INTERVAL_MS
     };
 }
 
@@ -90,21 +98,12 @@ macro_rules! default_sample_interval_seconds {
 
 /// Read one of the defaults above as a number, at compile time.
 ///
-/// The string is the single definition and the `const` is derived from it,
-/// rather than the two being written out separately and trusted to agree
-/// `[GDE-ARC-033]`. Panics at compile time on a non-decimal default, which is
-/// the only way this can be wrong.
-pub const fn as_number(s: &str) -> u64 {
-    let b = s.as_bytes();
-    let mut i = 0;
-    let mut n = 0u64;
-    while i < b.len() {
-        assert!(b[i] >= b'0' && b[i] <= b'9', "a default read as a number is not one");
-        n = n * 10 + (b[i] - b'0') as u64;
-        i += 1;
-    }
-    n
-}
+/// **Defined in `lempi_core` and re-exported here**, so `crate::cli::as_number`
+/// still names it. It moved because the constants it reads moved: `QUEUE_DEPTH`
+/// and `SAMPLE_INTERVAL_MS` are derived from their own default strings inside
+/// that crate, and a `const fn` cannot be borrowed back across the boundary
+/// from the crate that depends on it.
+pub use lempi_core::as_number;
 
 /// [`default_port!`] as a value, for anything reading it at run time.
 pub const DEFAULT_PORT: &str = crate::default_port!();

@@ -57,10 +57,10 @@ by design. The entity meaning "the same song" is the **Work**.
 
 **`[GDE-WRK-030]` The player needed new code after all.** An earlier revision
 said none was in scope. That held for the junction design, where filling a
-table [`library.rs`](../player/src/director/library.rs) already read was the
+table [`library.rs`](../player/core/src/director/library.rs) already read was the
 whole job. `[GDE-WRK-035]`'s tiers are new history maps keyed on `passage_id`
 and work MBID, so `weigh` in
-[`frequency.rs`](../player/src/director/frequency.rs), the load, the noting and
+[`frequency.rs`](../player/core/src/director/frequency.rs), the load, the noting and
 the census all moved. Built 2026-09-12.
 
 ---

@@ -111,6 +111,41 @@ echo "== C: host (Windows or Linux) =="
 run_suite "C" sh -c "cd '$ROOT/player' && env -u CC cargo test --release" \
     || fail=$((fail+1))
 
+# The lempi-core boundary `[GDE-AND-045]`. The whole point of splitting the
+# selection engine out was to stop the Director's independence from the audio
+# path being a thing someone re-establishes by reading imports -- measured that
+# way on 2026-08-20, 2026-09-02 and 2026-09-22. So it is checked here.
+#
+# `cargo tree` resolves the real graph, which is what makes this different from
+# grepping for `use`: a crate reached three levels down through a dependency's
+# own default features would not appear in any source file, and would appear
+# here.
+#
+# **A guard that cannot run says so and fails** `[GDE-DEP-060]`. An empty tree
+# is the failure mode to fear: `grep -q` against nothing found is
+# indistinguishable from a clean result, which is CLAUDE.md §6's whole subject.
+echo
+echo "== lempi-core boundary =="
+core_tree=$(cd "$ROOT/player" && env -u CC cargo tree -p lempi-core --prefix none 2>/dev/null \
+            | sed 's/ (\*)//' | awk '{print $1}' | sort -u)
+core_n=$(printf '%s\n' "$core_tree" | grep -c . || true)
+if [ "$core_n" -lt 5 ]; then
+    echo "  cargo tree returned $core_n crates -- the check did not run, it did not pass"
+    fail=$((fail+1))
+else
+    bad=""
+    for c in cpal symphonia rubato axum tokio hyper alsa reqwest; do
+        printf '%s\n' "$core_tree" | grep -qx "$c" && bad="$bad $c"
+    done
+    if [ -n "$bad" ]; then
+        echo "  lempi-core can reach:$bad"
+        echo "  selection must not depend on sounding; see player/core/Cargo.toml"
+        fail=$((fail+1))
+    else
+        echo "  $core_n crates, and none of cpal/symphonia/rubato/axum/tokio/hyper/alsa/reqwest"
+    fi
+fi
+
 # The bounded-decode gate. It needs a long file from a real library, which no
 # build machine has by default, so it is opt-in via LEMPI_LONG_FILE -- and a run
 # without one reports SKIPPED rather than passing quietly. `[REQ-AUD-110]`

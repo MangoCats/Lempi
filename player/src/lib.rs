@@ -34,8 +34,39 @@ pub fn build_id() -> String {
     format!("{VERSION} ({GIT})")
 }
 
+/// **The selection engine, which is a separate crate** `[GDE-AND-045]`.
+///
+/// `bundle`, `db`, `director`, `fade`, `queue` and `relink` were files in this
+/// crate until 2026-09-22 and are now `lempi-core`, re-exported here under
+/// their original names. That is not cosmetic: every one of the 99 places in
+/// this crate that says `crate::db::…` or `crate::director::…` still says it,
+/// and the split cost them nothing.
+///
+/// What it does cost is the thing worth buying. `lempi-core` names three
+/// dependencies, and `cpal`, `symphonia`, `rubato`, `axum` and `tokio` are not
+/// reachable from any of them — so the Director's independence from the audio
+/// path, previously a property re-established by reading imports on 2026-08-20,
+/// 2026-09-02 and 2026-09-22, is now something cargo refuses to let anyone
+/// break. See `player/core/Cargo.toml` for the full reasoning.
+pub use lempi_core::{bundle, db, director, fade, queue, relink};
+
+/// The listener-setting defaults and their bounds, which moved with the store
+/// that reads them `[GDE-ARC-033]`.
+///
+/// Re-exported at this crate's root because that is where every existing
+/// `crate::SKIP_SUPPRESS_H`, `crate::QUEUE_DEPTH` and `crate::RESUME_SAVE_MS`
+/// expects them, in the web layer, the CLI specs and the engine alike. See
+/// `lempi_core::settings` for why the two `DEFAULT_*` strings are strings.
+pub use lempi_core::{
+    as_number, BROWSE_LIMIT, DEFAULT_QUEUE_DEPTH, DEFAULT_SAMPLE_INTERVAL_MS,
+    DEQUEUE_SUPPRESS_H, DEQUEUE_SUPPRESS_MAX_H, DEQUEUE_SUPPRESS_MIN_H, QUEUE_DEPTH,
+    QUEUE_DEPTH_MAX, QUEUE_DEPTH_MIN, RESUME_SAVE_MAX_MS, RESUME_SAVE_MIN_MS,
+    RESUME_SAVE_MS, SAMPLE_INTERVAL_MAX_MS, SAMPLE_INTERVAL_MIN_MS, SAMPLE_INTERVAL_MS,
+    SKIP_FADE_MAX_MS, SKIP_FADE_MS, SKIP_LEAD_MAX_MS, SKIP_LEAD_MIN_MS, SKIP_LEAD_MS,
+    SKIP_SUPPRESS_H, SKIP_SUPPRESS_MAX_H, SKIP_SUPPRESS_MIN_H,
+};
+
 pub mod backup;
-pub mod bundle;
 /// One command line, seventeen binaries `[GDE-CLI-010]`. The only argument
 /// parser in the repository; each binary contributes a table of options and
 /// no parsing code of its own.
@@ -43,8 +74,6 @@ pub mod cli;
 /// Cue sheets, so a guest can name a passage inside a capture [SPEC-MPD-056].
 pub mod covers;
 pub mod cue;
-pub mod db;
-pub mod director;
 pub mod decoder;
 pub mod echo;
 /// Following a master `[GDE-ECHO-330]`. Behind `echo-client` because it names
@@ -54,7 +83,6 @@ pub mod echo;
 #[cfg(feature = "echo-client")]
 pub mod echo_client;
 pub mod engine;
-pub mod fade;
 /// Per-song lyrics where a client will find them `[SPEC-LYR-070]`.
 pub mod lyrics_cache;
 /// Lyrics beside the audio, for a client that reads the music folder
@@ -72,10 +100,8 @@ pub mod mpd_backend;
 pub mod output;
 pub mod path;
 pub mod playback;
-pub mod queue;
 /// One shape for what a folder-writing run did `[PI3-API-030]`.
 pub mod report;
-pub mod relink;
 pub mod bluetooth;
 pub mod sink;
 pub mod session;
@@ -113,83 +139,6 @@ pub const DECODE_TOPUP_FRAMES: usize = 4096;
 /// seconds at 44.1 kHz — comfortably more than the 1.5 s overlay a default
 /// fade asks for, and bounded because the listener is waiting on it.
 pub const TOPUP_TRIES_BEFORE_CUT: usize = 24;
-
-/// Most tracks one browse request will answer with `[REQ-VIS-180]`.
-///
-/// A library of 8,000 passages returns in 80 ms, but the number is sent to the
-/// browser rather than assumed there, so the page can say "showing the first
-/// 2,000" without a second copy of this constant to fall out of step.
-pub const BROWSE_LIMIT: usize = 2_000;
-
-/// How long Skip takes to fade the outgoing passage out `[REQ-AUD-158]`.
-///
-/// The listener is hearing audio mixed up to a ring's depth ago, so a skip can
-/// only be prompt if what was already submitted is cut short. This is how much
-/// of it survives, and over how long it falls away.
-pub const SKIP_FADE_MS: u64 = 2_000;
-pub const SKIP_FADE_MAX_MS: u64 = 10_000;
-
-/// How long after a skip the next passage begins its normal fade-in
-/// `[REQ-AUD-162]`.
-///
-/// Shorter than the fade-out, so the two overlap and are summed for the
-/// difference -- 1.5 s with both at their defaults. The overlap is what makes a
-/// skip sound like a transition rather than a stop followed by a start, and it
-/// costs nothing extra because the incoming passage is already decoded
-/// `[REQ-AUD-160]`.
-pub const SKIP_LEAD_MS: u64 = 500;
-/// How often the resume point is written `[REQ-VIS-155]`.
-///
-/// Every write lands on the appliance's most volatile partition
-/// `[PI-C-010]`, and this is the only one that happens continuously and
-/// unattended -- so it is the write rate that decides how much of that
-/// partition's life is spent with a write in flight.
-///
-/// Five seconds rather than one, which is what it was. The cost of the longer
-/// interval is bounded and small: at most this much playback position is lost
-/// to a power cut, and the *interesting* transitions -- passage change, pause,
-/// resume -- bypass the throttle entirely and are written the moment they
-/// happen. So the setting trades a few seconds of position, never an event.
-pub const RESUME_SAVE_MS: u64 = 5_000;
-pub const RESUME_SAVE_MIN_MS: u64 = 1_000;
-pub const RESUME_SAVE_MAX_MS: u64 = 300_000;
-
-/// How long a *skipped* passage is held out of selection `[SPEC-PLAY-050]`.
-///
-/// 156 hours is six and a half days: long enough that a rejected passage does
-/// not return within the week, and offset from a whole week so it does not
-/// come back on the same day at the same time.
-pub const SKIP_SUPPRESS_H: u64 = 156;
-/// Zero is a legitimate setting: it turns skip suppression off entirely.
-pub const SKIP_SUPPRESS_MIN_H: u64 = 0;
-pub const SKIP_SUPPRESS_MAX_H: u64 = 8_760; // a year
-
-/// How long a passage *removed from the queue before it played* is held out
-/// `[SPEC-PLAY-055]`. Shorter than a skip: declining to hear something now is a
-/// weaker statement than stopping it once it had started.
-pub const DEQUEUE_SUPPRESS_H: u64 = 18;
-pub const DEQUEUE_SUPPRESS_MIN_H: u64 = 0;
-pub const DEQUEUE_SUPPRESS_MAX_H: u64 = 8_760;
-
-/// How many passages the Director keeps queued ahead `[SPEC-MPD-105]`.
-///
-/// A listener setting rather than a launch flag: it governs the local engine
-/// and the MPD Director alike, and both read it from the same row.
-pub const QUEUE_DEPTH: usize = crate::cli::as_number(crate::default_queue_depth!()) as usize;
-/// One is the floor: below it there is no lookahead, and the crossfade has
-/// nothing to fade into.
-pub const QUEUE_DEPTH_MIN: usize = 1;
-pub const QUEUE_DEPTH_MAX: usize = 50;
-
-/// How often `status` is read while playing, to judge a play against
-/// `[SPEC-PLAY-010]`'s threshold and to end a span MPD would not
-/// `[SPEC-MPD-096]`. Five seconds `[SPEC-MPD-105]`.
-pub const SAMPLE_INTERVAL_MS: u64 = crate::cli::as_number(crate::default_sample_interval_ms!());
-pub const SAMPLE_INTERVAL_MIN_MS: u64 = 1_000;
-pub const SAMPLE_INTERVAL_MAX_MS: u64 = 60_000;
-
-pub const SKIP_LEAD_MIN_MS: u64 = 100;
-pub const SKIP_LEAD_MAX_MS: u64 = 2_000;
 
 /// Peak resident memory of this process, in bytes.
 ///

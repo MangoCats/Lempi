@@ -241,6 +241,10 @@ mod tests {
 
     /// The one guard against the waveform editor's preview lying about what
     /// production plays `[SPEC021 §4]`: `fade.js` is checked against the same
+    /// Two levels above `CARGO_MANIFEST_DIR`, which is `player/core` since the
+    /// split; the fixtures themselves stayed at the repository root, where
+    /// `fade.js` and Vipunen also reach them.
+    ///
     /// `fixtures/fade/{linear,cosine,exponential}.json` tables this test
     /// checks Rust against `[SPEC-SUI-226]` -- one fixture per curve, so
     /// `fade.js`'s `Linear`/`Cosine` support is checked exactly as strictly
@@ -250,15 +254,15 @@ mod tests {
         let fixtures: [(Curve, &str); 3] = [
             (Curve::Linear, include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../fixtures/fade/linear.json"
+                "/../../fixtures/fade/linear.json"
             ))),
             (Curve::Cosine, include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../fixtures/fade/cosine.json"
+                "/../../fixtures/fade/cosine.json"
             ))),
             (Curve::Exponential, include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../fixtures/fade/exponential.json"
+                "/../../fixtures/fade/exponential.json"
             ))),
         ];
         for (curve, json) in fixtures {

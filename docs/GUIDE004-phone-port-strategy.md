@@ -228,6 +228,16 @@ On Android specifically: The engineering saved by forking is the shell; the shel
 
 **`[GDE-AND-045]` Extract `lempi-core` first, whatever is decided later.** It is worth doing on its own merits: one selection engine shared by desktop, appliance and phone, rather than a second Director in Kotlin — which is the two-implementations fault `[GDE-FBD-040]` names and the payload fixtures were built to prevent `[SPEC-SUI-130]`. It is also the honest way to find the real cost, since it is the piece no route avoids.
 
+**Done, 2026-09-22.** `player/core/` is the crate: `bundle`, `db`, `director`, `fade`, `queue`, `relink` and the data half of `tags`, with the listener-setting defaults that `player_store` reads as fallbacks. `lempi_player` re-exports all of it under the original names, so the 99 existing `crate::db::…` and `crate::director::…` call sites were not touched.
+
+**`[GDE-AND-047]` What the extraction measured, which is the part worth keeping.** The estimate in §2 held: the module lifted without an audio or web dependency following it. Three things it found that reading imports had not:
+
+- **The boundary is 30 crates against the player's 135**, and `cpal`, `symphonia`, `rubato`, `axum`, `tokio`, `hyper`, `alsa` and `reqwest` are unreachable from any of them. `build/verify-targets.sh` now asserts that rather than leaving it to be re-read — it had been re-measured by hand on 2026-08-20, 2026-09-02 and 2026-09-22.
+- **The developer-loop saving is small and should not be the reason.** A Director edit rebuilt the single crate in 9.7 s before; `cargo test -p lempi-core` is 4 s after, and the whole workspace is still 11 s.
+- **Splitting the crate silently halved the test run**, 663 to 359, because a bare `cargo test` tests the root package only. `default-members` fixes it; the fault is `echo-client`'s exactly `[GDE-ECHO-384]`, and it is the one thing about this refactor worth remembering.
+
+Two things in the new crate still leave the process, and a phone finds both: `relink::hash_encoded` shells out to **ffmpeg** and must keep doing so `[SPEC-RLK-080]`, and `director::program`'s UTC-offset sync uses `libc` on Unix — which Android and iOS both are, so only the first is real work.
+
 **`[GDE-AND-050]` The phone is a bundle target, not a new design.** `[SPEC-DF-080]`'s *Sharing* row already describes it: audio arrives with its payload, class A/B/C is imported after verification, and every advanced feature works **with no Vipunen present**. The exporter and importer exist. Vipunen's AGPL never approaches the phone, because the phone consumes derived data and never derives any.
 
 ---

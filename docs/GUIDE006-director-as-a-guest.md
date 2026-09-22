@@ -85,6 +85,8 @@ This is also the argument against treating [GUIDE005](GUIDE005-flavor-service.md
 
 Build that and MPD is a few hundred lines; skip it and every host is a fork.
 
+**Built 2026-09-22**, as `player/core/` — see `[GDE-AND-045]` for what it holds and what the extraction measured. The `powershell` exception above survived the move unchanged and is still the only place the selection engine shells out for a platform fact.
+
 ---
 
 ## 5. Open

@@ -753,7 +753,9 @@ mod tests {
     /// per `fixtures/payload/README.md`'s own stated purpose.
     #[test]
     fn the_fade_fields_fixture_is_accepted_by_the_rust_side_too() {
-        let text = include_str!("../../fixtures/payload/09-fade-fields.json");
+        // Three levels, not two: this file is `player/core/src/`, and the
+        // fixture Vipunen checks the same way is at the repository root.
+        let text = include_str!("../../../fixtures/payload/09-fade-fields.json");
         let d: Value = serde_json::from_str(text).unwrap();
         assert_eq!(unacceptable(&d), Vec::<String>::new());
         let p = &d["encodings"][0]["passages"][0];

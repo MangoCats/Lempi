@@ -176,6 +176,6 @@ along in a payload.
 ---
 
 **Traceability:** `[SPEC-PLAY-010..060]` · implemented in `player/src/scrobble.rs`
-and `player/src/director/frequency.rs`
+and `player/core/src/director/frequency.rs`
 · consumed by `[REQ-PD-110]`, `[SPEC-MPD-090]` · rationale
 [SPEC015](SPEC015-mpd-director.md), [SPEC016](SPEC016-mpd-protocol-findings.md)

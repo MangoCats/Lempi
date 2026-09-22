@@ -176,7 +176,7 @@ That is a better model of the thing being optimised. Whole-recording similarity 
 
 ## 6. Implementation Notes
 
-**`[SPEC-FD-085]` Implemented 2026-08-10** in `player/src/director/flavor.rs`, measured by `flavorcheck`. Four findings, three of them limits on what the metric can currently do.
+**`[SPEC-FD-085]` Implemented 2026-08-10** in `player/core/src/director/flavor.rs`, measured by `flavorcheck`. Four findings, three of them limits on what the metric can currently do.
 
 *Cost is not a constraint.* 7,897 subjects load in 0.14 s; a distance costs **0.1 µs**. Stage B weighing the whole library against five seeds is ~4 ms, so the pool parameters `[SPEC-DIR-200]` can be re-derived on merit rather than on budget. Vectors are stored flat with a `u64` presence bitmask; a map lookup per class would have dominated.
 
@@ -204,7 +204,7 @@ The third is the interesting one: *You* is among Radiohead's heaviest early trac
 
 **`[SPEC-FD-110]`** User-defined characteristics `[GDE-MCR-060]` participate identically: they are distributions summing to 1.0 and take part in `S` whenever present in both vectors. Their `β_c` and `w_c` cannot be measured from AcousticBrainz submissions and must be assigned — default `w_c = 1.0`, `β_c` = observed mean between-recording TV over the library.
 
-**`[SPEC-FD-120]`** *Superseded by `[SPEC-FD-145]`/`[SPEC-FD-150]`, 2026-08-13 — kept for its history, not as current design.* This originally proposed scaling `w_c` by a locally-extracted characteristic's own measured agreement, bounded above by the ceiling in `[GDE-FEX-085]`, so a less trustworthy characteristic contributed less. That assumed a library holding a mix of dump-sourced and locally-extracted values with different reliability per recording. Once provenance was made uniform-local `[SPEC-FD-084]`, the premise disappeared: every recording shares the same extractor, so there is no per-recording provenance signal left to scale by — `[SPEC-FD-150]` says this in as many words. `w_c` in `player/src/director/flavor.rs` is, correctly, a single corpus-wide reliability per characteristic (`[SPEC-FD-052]`), not a per-value one; `flavor.accuracy` (`[SPEC-SC-070]`) is populated but not read into distance, and that is no longer a gap.
+**`[SPEC-FD-120]`** *Superseded by `[SPEC-FD-145]`/`[SPEC-FD-150]`, 2026-08-13 — kept for its history, not as current design.* This originally proposed scaling `w_c` by a locally-extracted characteristic's own measured agreement, bounded above by the ceiling in `[GDE-FEX-085]`, so a less trustworthy characteristic contributed less. That assumed a library holding a mix of dump-sourced and locally-extracted values with different reliability per recording. Once provenance was made uniform-local `[SPEC-FD-084]`, the premise disappeared: every recording shares the same extractor, so there is no per-recording provenance signal left to scale by — `[SPEC-FD-150]` says this in as many words. `w_c` in `player/core/src/director/flavor.rs` is, correctly, a single corpus-wide reliability per characteristic (`[SPEC-FD-052]`), not a per-value one; `flavor.accuracy` (`[SPEC-SC-070]`) is populated but not read into distance, and that is no longer a gap.
 
 ---
 

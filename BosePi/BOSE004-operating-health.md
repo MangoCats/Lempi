@@ -207,9 +207,9 @@ should not be leaned on a second time.
 **`[BOS-OPS-070]` The deployed binary is 126 commits behind `main`, and the
 drift is not only the speaker work.** Running `358c5b176833`; `main` was at
 `85ad857` on 2026-09-10. `git diff --stat 358c5b176833..HEAD -- player` is
-**26 files, +2,891 / −269**, including [`player/src/db/mod.rs`](../player/src/db/mod.rs)
-(+396), [`player/src/db/library.rs`](../player/src/db/library.rs) (+323),
-[`player/src/db/player_store.rs`](../player/src/db/player_store.rs) (+237) and
+**26 files, +2,891 / −269**, including [`player/core/src/db/mod.rs`](../player/core/src/db/mod.rs)
+(+396), [`player/core/src/db/library.rs`](../player/core/src/db/library.rs) (+323),
+[`player/core/src/db/player_store.rs`](../player/core/src/db/player_store.rs) (+237) and
 [`player/src/session.rs`](../player/src/session.rs) (+139). Before the next
 deploy, establish whether any of that carries a schema migration: it would run
 against a **1.1 GB live database** on first start, and the listener backups

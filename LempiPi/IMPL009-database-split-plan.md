@@ -188,7 +188,7 @@ pre-existing `PlayerStore` run.
 
 ### 7.7 Found in the real schema, not the source: a foreign key does cross the boundary after all
 
-`[§7.2]` checked `player/src/db/mod.rs`'s and `player_store.rs`'s
+`[§7.2]` checked `player/core/src/db/mod.rs`'s and `player_store.rs`'s
 in-tree `CREATE TABLE` text for a `REFERENCES` crossing the split and found
 none. Checking the *actual deployed schema* on all three environments
 directly — `sqlite_master`, not the Rust source — for this pass found one:

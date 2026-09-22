@@ -16,7 +16,7 @@ profanity slider, inherited the same way and reachable by just as little.
 
 > **Status.** Built 2026-09-04, per `[REQ-VIS-285]`, `[REQ-VIS-290]`.
 > `player/src/web/preference.rs` (routes), `PlayerStore::get_preference`/
-> `set_preference`/`reset_preference` (`player/src/db/player_store.rs`), and
+> `set_preference`/`reset_preference` (`player/core/src/db/player_store.rs`), and
 > `Lempi.editPreference` (`player/src/web/core.js`, the one shared panel
 > every skin below reuses).
 >
@@ -24,7 +24,7 @@ profanity slider, inherited the same way and reachable by just as little.
 > `listener_characteristics` (new, listener-side), `PlayerStore::list_specials`/
 > `set_special`/`reset_special`/`subject_naming`, the `label` column on
 > `listener_occasions` that `tools/load_occasions.py` now writes, and
-> `load_occasions()`'s own overlay in `player/src/director/library.rs`.
+> `load_occasions()`'s own overlay in `player/core/src/director/library.rs`.
 > Exercised in a real DOM by `build/verify-skins.js`, which renders the
 > panel against a served fixture and checks what Save posts back.
 
@@ -48,7 +48,7 @@ profanity slider, inherited the same way and reachable by just as little.
 `restraint` REAL, `updated_at`) already existed, unchanged from the
 MuLibPlay migration. No new table. `NULL` in any column means "not tuned,
 use the Program Director's own default" (`Tuning::recording_defaults()`/
-`artist_defaults()`, `player/src/director/frequency.rs`) — never a
+`artist_defaults()`, `player/core/src/director/frequency.rs`) — never a
 fabricated zero, and never silently filled in server-side, so a caller can
 always tell "unset" from "explicitly set to the default value."
 

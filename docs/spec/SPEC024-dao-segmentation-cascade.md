@@ -179,7 +179,7 @@ was a worklist: a segmented-but-unconfirmed passage used to be reachable
 only one profile page at a time, never as "here is what still wants a
 look."
 
-`Library::segment_queue()` (`player/src/db/library.rs`), behind
+`Library::segment_queue()` (`player/core/src/db/library.rs`), behind
 `GET /segment/queue` (`player/src/web/segment.rs`) — parallel to
 `[SPEC-SUI-*]`'s identification-review queue (`review_queue()`,
 `GET /review/queue`): selects passages whose `boundary_src` starts

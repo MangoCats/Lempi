@@ -32,7 +32,7 @@ Stages 9–10 do not block 6–8 or the reverse — they touch different tables 
 
 ## Stage 7 — Dragging, preview, commit
 
-**The interaction model of [SPEC021 §4](spec/SPEC021-waveform-boundary-editor.md#4-interaction-model), and the `boundary_reviews` write of §2.** Draggable markers, a Web Audio preview transport built from the same ramp formula as [`player/src/fade.rs`](../player/src/fade.rs), and a commit button that posts the five draft values.
+**The interaction model of [SPEC021 §4](spec/SPEC021-waveform-boundary-editor.md#4-interaction-model), and the `boundary_reviews` write of §2.** Draggable markers, a Web Audio preview transport built from the same ramp formula as [`player/core/src/fade.rs`](../player/core/src/fade.rs), and a commit button that posts the five draft values.
 
 > **Claims:** dragging the end marker inward and pressing play previews the shorter span, with a fade-out that visibly matches the shaded ramp under the waveform. The shared `(position, expected gain)` fixture from `[SPEC021 §4]`'s fidelity guard passes against both the Rust formula and the JS one — the number that answers "how loud, here" is one number, computed twice, checked to agree. Committing writes exactly one `boundary_reviews` row per passage; committing twice on the same passage updates it rather than adding a second.
 >
