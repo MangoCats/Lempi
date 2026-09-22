@@ -1,0 +1,72 @@
+#!/bin/sh
+# Refuse a commit that cannot build for the machines this code ships to.
+#
+# **Written because the fault it catches reached an appliance deploy.** On
+# 2026-09-22 `lempi-core` was committed naming `libc` in `#[cfg(unix)]` code
+# without depending on it. Windows never compiles that branch, so a full host
+# build, every feature combination, `clippy --all-targets` and 598 passing
+# tests all agreed the commit was fine. `build/deploy-appliance.sh` found it,
+# at the point of shipping, on the first aarch64 cross-compile.
+#
+# `build/verify-targets.sh` already existed to catch exactly that and was not
+# run. So the fix is not a new check -- it is running the one already written,
+# at the moment the mistake is made rather than the moment it ships.
+#
+# ---------------------------------------------------------------- scope ---
+#
+# It runs only when something under `player/` or `sql/` is staged. This
+# repository commits far more documentation than code, and a gate that taxes a
+# docs commit is a gate someone turns off. Measured 2026-09-22: 22 s on a warm
+# no-op, 14 s after a core edit, 46 s cold.
+#
+# ------------------------------------------------------------- escaping ---
+#
+# `LEMPI_SKIP_VERIFY=1 git commit ...` skips it, and **says so in the terminal
+# rather than passing quietly**. That is the point of having the escape at
+# all: CLAUDE.md §5 says a guard that cannot run must say so loudly instead of
+# reporting a plausible reason it was skipped, and a hook with no escape gets
+# bypassed with `--no-verify`, which prints nothing and leaves no trace.
+#
+# ------------------------------------------------------------ enabling ----
+#
+#     git config core.hooksPath .githooks
+#
+# Per clone, and not automatic -- git will not run hooks from a tracked
+# directory until told to. See CLAUDE.md §10.
+
+set -u
+
+ROOT=$(git rev-parse --show-toplevel)
+
+# Nothing this gate knows about? Then it has nothing to say. `--diff-filter=d`
+# so a pure deletion does not trigger a compile of what is left.
+staged=$(git diff --cached --name-only --diff-filter=d -- player sql)
+if [ -z "$staged" ]; then
+    exit 0
+fi
+
+if [ "${LEMPI_SKIP_VERIFY:-0}" = "1" ]; then
+    echo "pre-commit: SKIPPED by LEMPI_SKIP_VERIFY=1."
+    echo "pre-commit: this commit's cfg(unix) code is unverified; it may not build on the appliance."
+    exit 0
+fi
+
+echo "pre-commit: $(printf '%s\n' "$staged" | grep -c .) staged file(s) under player/ or sql/ -- checking"
+
+if sh "$ROOT/build/verify-targets.sh" --quick; then
+    exit 0
+fi
+
+cat <<'EOF'
+
+pre-commit: REFUSED.
+
+The code compiles where you are writing it and not where it runs. That is the
+exact shape of the bug this hook exists for, and a passing Windows suite is
+not evidence against it.
+
+  build/verify-targets.sh --quick     to see it again
+  build/verify-targets.sh             the full three-target run
+  LEMPI_SKIP_VERIFY=1 git commit ...  to commit anyway, out loud
+EOF
+exit 1

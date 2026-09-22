@@ -16,8 +16,30 @@
 #   C  Windows x86_64          run on the host
 #   D  real audio device       manual; a null sink cannot catch rate mismatches
 #
-# Usage:  sh build/verify-targets.sh
+# Usage:  sh build/verify-targets.sh            everything above
+#         sh build/verify-targets.sh --quick    the two checks a commit hook runs
+#
+# `--quick` exists because of a specific failure. On 2026-09-22 `lempi-core`
+# was committed naming `libc` in `#[cfg(unix)]` code without depending on it.
+# Windows does not compile that branch, so a full host build, every feature
+# combination, `clippy --all-targets` and 598 tests all passed on a crate that
+# could not build for the appliance at all -- and it was found by
+# `build/deploy-appliance.sh`, at the point of shipping. This file already
+# says why: **compiling is not testing**, and it is equally true that
+# compiling *here* is not compiling *there*.
+#
+# So the two checks that would have caught it -- a Linux compile and the
+# `lempi-core` boundary -- are separable and fast enough to run before a
+# commit. `.githooks/pre-commit` calls exactly this, and the full run stays
+# what it was.
 set -u
+
+QUICK=0
+case "${1:-}" in
+    --quick) QUICK=1; shift ;;
+    "") ;;
+    *) echo "usage: $(basename "$0") [--quick]" >&2; exit 2 ;;
+esac
 # Two forms of the same path: POSIX for the shell, native for docker -v.
 # Combining them with || in one command substitution ran BOTH branches.
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -76,6 +98,96 @@ run_step() {
     return "$status"
 }
 
+# ---- the two checks a commit is gated on --------------------------------
+#
+# Both are compile-or-resolve questions, so both are cheap; neither runs a
+# test. That is deliberate. A pre-commit hook that runs a suite gets disabled
+# within a week, and a disabled guard is worth less than no guard, because it
+# still reads like one in the repository.
+
+# Does the crate compile for the platform it actually ships to?
+#
+# `--all-targets` so tests and binaries are checked too, not just the lib, and
+# a persistent host-side target dir so the second run is seconds rather than a
+# minute. Measured 2026-09-22: 46 s cold, 22 s warm no-op, 14 s after a core
+# edit.
+#
+# **Docker not running is a FAILURE, not a skip** `[GDE-DEP-060]`. The whole
+# lesson of the bug this exists for is that a check which quietly did not
+# happen reads exactly like one that passed.
+linux_compiles() {
+    echo "== Linux compile (the cfg(unix) paths Windows never sees) =="
+    if ! docker info >/dev/null 2>&1; then
+        echo "  Docker is not running, so this check DID NOT RUN."
+        echo "  That is a failure, not a pass: the cfg(unix) code is unchecked."
+        echo "  Start Docker, or commit with LEMPI_SKIP_VERIFY=1 to say so out loud."
+        return 1
+    fi
+    docker build -q -t lempi-linux -f "$ROOT/build/Dockerfile.linux" "$ROOT" >/dev/null || {
+        echo "  the Linux image would not build; the check did not run"
+        return 1
+    }
+    out=$(mktemp)
+    if MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w lempi-linux \
+        cargo check --manifest-path player/Cargo.toml --all-targets \
+        --target-dir player/target/gate-linux >"$out" 2>&1
+    then
+        echo "  compiles for linux x86_64"
+        rm -f "$out"
+        return 0
+    fi
+    grep -E "^error" "$out" | head -10
+    echo "  ^ full output kept at $out"
+    return 1
+}
+
+# The lempi-core boundary `[GDE-AND-045]`. The whole point of splitting the
+# selection engine out was to stop the Director's independence from the audio
+# path being a thing someone re-establishes by reading imports -- measured
+# that way on 2026-08-20, 2026-09-02 and 2026-09-22. So it is checked here.
+#
+# `cargo tree` resolves the real graph, which is what makes this different
+# from grepping for `use`: a crate reached three levels down through a
+# dependency's own default features would not appear in any source file, and
+# would appear here.
+#
+# **A guard that cannot run says so and fails** `[GDE-DEP-060]`. An empty tree
+# is the failure mode to fear: `grep -q` against nothing found is
+# indistinguishable from a clean result, which is CLAUDE.md §6's whole subject.
+core_boundary() {
+    echo "== lempi-core boundary =="
+    core_tree=$(cd "$ROOT/player" && env -u CC cargo tree -p lempi-core --prefix none 2>/dev/null \
+                | sed 's/ (\*)//' | awk '{print $1}' | sort -u)
+    core_n=$(printf '%s\n' "$core_tree" | grep -c . || true)
+    if [ "$core_n" -lt 5 ]; then
+        echo "  cargo tree returned $core_n crates -- the check did not run, it did not pass"
+        return 1
+    fi
+    bad=""
+    for c in cpal symphonia rubato axum tokio hyper alsa reqwest; do
+        printf '%s\n' "$core_tree" | grep -qx "$c" && bad="$bad $c"
+    done
+    if [ -n "$bad" ]; then
+        echo "  lempi-core can reach:$bad"
+        echo "  selection must not depend on sounding; see player/core/Cargo.toml"
+        return 1
+    fi
+    echo "  $core_n crates, and none of cpal/symphonia/rubato/axum/tokio/hyper/alsa/reqwest"
+    return 0
+}
+
+if [ "$QUICK" -eq 1 ]; then
+    linux_compiles || fail=$((fail+1))
+    core_boundary  || fail=$((fail+1))
+    echo
+    if [ "$fail" -eq 0 ]; then
+        echo "QUICK CHECKS PASS"
+        exit 0
+    fi
+    echo "$fail QUICK CHECK(S) FAILED"
+    exit 1
+fi
+
 echo "== A: Linux x86_64 =="
 docker build -q -t lempi-linux -f "$ROOT/build/Dockerfile.linux" "$ROOT" >/dev/null || fail=$((fail+1))
 run_suite "A" env MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w lempi-linux \
@@ -111,40 +223,9 @@ echo "== C: host (Windows or Linux) =="
 run_suite "C" sh -c "cd '$ROOT/player' && env -u CC cargo test --release" \
     || fail=$((fail+1))
 
-# The lempi-core boundary `[GDE-AND-045]`. The whole point of splitting the
-# selection engine out was to stop the Director's independence from the audio
-# path being a thing someone re-establishes by reading imports -- measured that
-# way on 2026-08-20, 2026-09-02 and 2026-09-22. So it is checked here.
-#
-# `cargo tree` resolves the real graph, which is what makes this different from
-# grepping for `use`: a crate reached three levels down through a dependency's
-# own default features would not appear in any source file, and would appear
-# here.
-#
-# **A guard that cannot run says so and fails** `[GDE-DEP-060]`. An empty tree
-# is the failure mode to fear: `grep -q` against nothing found is
-# indistinguishable from a clean result, which is CLAUDE.md §6's whole subject.
+# The same boundary check the commit hook runs, defined once above.
 echo
-echo "== lempi-core boundary =="
-core_tree=$(cd "$ROOT/player" && env -u CC cargo tree -p lempi-core --prefix none 2>/dev/null \
-            | sed 's/ (\*)//' | awk '{print $1}' | sort -u)
-core_n=$(printf '%s\n' "$core_tree" | grep -c . || true)
-if [ "$core_n" -lt 5 ]; then
-    echo "  cargo tree returned $core_n crates -- the check did not run, it did not pass"
-    fail=$((fail+1))
-else
-    bad=""
-    for c in cpal symphonia rubato axum tokio hyper alsa reqwest; do
-        printf '%s\n' "$core_tree" | grep -qx "$c" && bad="$bad $c"
-    done
-    if [ -n "$bad" ]; then
-        echo "  lempi-core can reach:$bad"
-        echo "  selection must not depend on sounding; see player/core/Cargo.toml"
-        fail=$((fail+1))
-    else
-        echo "  $core_n crates, and none of cpal/symphonia/rubato/axum/tokio/hyper/alsa/reqwest"
-    fi
-fi
+core_boundary || fail=$((fail+1))
 
 # The bounded-decode gate. It needs a long file from a real library, which no
 # build machine has by default, so it is opt-in via LEMPI_LONG_FILE -- and a run

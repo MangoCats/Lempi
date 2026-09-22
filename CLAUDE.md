@@ -206,3 +206,34 @@ file someone else is editing discards work that was never yours to discard.
 Do not rewrite shared history to tidy any of this up — a misleading commit
 message is a much smaller problem than a rebased branch under someone else's
 feet.
+
+## 10. Turn the commit hook on, once per clone
+
+```
+git config core.hooksPath .githooks
+```
+
+**Git will not run a hook out of a tracked directory until told to**, so a
+fresh clone has the gate in the tree and switched off — which is the worst of
+both, because the file reads like a guard that is running. One command, and
+`git config core.hooksPath` answers whether it is on.
+
+[`.githooks/pre-commit`](.githooks/pre-commit) refuses a commit that touches
+`player/` or `sql/` and cannot build for Linux. It runs
+`build/verify-targets.sh --quick` — a Linux `cargo check` and the `lempi-core`
+boundary — and nothing else; a docs-only commit is not taxed at all. Warm cost
+measured 2026-09-22: **22 s** on a no-op, 14 s after a core edit.
+
+**It exists because §6's rule has a sibling this file did not state: compiling
+*here* is not compiling *there*.** On 2026-09-22 `lempi-core` was committed
+naming `libc` in `#[cfg(unix)]` code without depending on it. Windows never
+compiles that branch, so a full host build, every feature combination,
+`clippy --all-targets` and 598 passing tests all said the commit was sound. It
+was caught by `build/deploy-appliance.sh`, on the first aarch64 cross-compile,
+at the point of shipping to an appliance — and `verify-targets.sh` had existed
+to catch exactly that for weeks. The check was not missing. Running it was.
+
+**To commit past it, use `LEMPI_SKIP_VERIFY=1`, not `--no-verify`.** Both work;
+only one prints why the code is unverified. That is the same distinction §5
+draws — a skipped guard must be a visible line, not a silent success — and
+`--no-verify` leaves no trace at all.
