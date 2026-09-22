@@ -1,0 +1,118 @@
+name: tests
+
+# The build was red on `main` and nothing noticed, because until 2026-09-21
+# the only job in CI was `check-docs.yml` and it reads markdown. Two failures
+# had landed and stayed: a unit file using a command line the crate forbids,
+# and an `Instant - Duration` that panics on a machine booted less than an
+# hour ago. Both are the kind `cargo test` catches in four seconds.
+#
+# Every version and package below was verified by running it, in a container
+# built from `build/Dockerfile.linux`, before this file was written.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  player:
+    name: cargo test --all-features
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The same three packages `build/Dockerfile.linux` installs, for the
+      # same reasons it gives: ALSA headers because `cpal` links against
+      # them, `pkg-config` to find them, and **ffmpeg because it is a real
+      # dependency of the path under test** -- `relink::hash_encoded` shells
+      # out to it and two bundle-import tests hash a real file through it
+      # `[SPEC-RLK-100]`. Without ffmpeg those two fail with "ffmpeg not
+      # available", which is exactly how they failed unnoticed from
+      # 2026-09-06 to 2026-09-18.
+      - name: system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config ffmpeg
+
+      # **`--all-features`, not a default run, and this is the whole point.**
+      # A default `cargo test` compiles 587 tests; with the features on it is
+      # 658. The 71 it leaves out are not spare: `player/Cargo.toml` records
+      # that `echo-client` being off by default meant `echo_client.rs` was
+      # "not merely untested but **uncompiled** by every test run, which is
+      # why three faults in it survived to be found by reading", and
+      # `[GDE-CLI-115]` is a startup panic that `cargo test` could not see
+      # because the three binaries carrying it are behind `mpd`.
+      #
+      # `build/verify-targets.sh` does not pass features either, so nothing
+      # in this repository compiled them until this job.
+      #
+      # Verified 2026-09-21 in `build/Dockerfile.linux`: 658 pass on Linux,
+      # `fbui` included -- which cannot be checked from a Windows checkout at
+      # all, since `fbui` is Unix-only.
+      - name: cargo test
+        run: cargo test --manifest-path player/Cargo.toml --all-features --locked
+
+  vipunen:
+    name: Vipunen's own test scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      # `numpy` is the only one the tests need -- measured, by running the
+      # suite in a clean container without it and getting exactly three
+      # failures, all `ModuleNotFoundError: No module named 'numpy'`. The
+      # rest of `tools/requirements.txt` is for feature-extraction work the
+      # tests do not reach `[tools/README.md]`. ffmpeg for the same reason
+      # the player job installs it.
+      - name: dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          python -m pip install --upgrade pip
+          pip install numpy
+
+      # **`pytest` is not the runner here.** These scripts pass their own
+      # temporary directory in from a `__main__` block rather than taking a
+      # fixture, so pytest reports 59 errors, every one `fixture 'tmp' not
+      # found`, and every test is fine `[tools/README.md]`.
+      #
+      # `test_split_parity.py` is excluded by name because it is a harness,
+      # not a self-contained test: it takes `--pair DIR --whole lempi.db` and
+      # compares the read-only tools across both database shapes, so run bare
+      # it exits 2 on its own argument parser. That is not a failure of
+      # anything it tests, and it needs a real split pair this repository
+      # does not carry.
+      #
+      # The count guard is `[GDE-ECHO-547]`: a scan that reads nothing must
+      # not pass by finding no fault. A glob that matches no file would
+      # otherwise report success for work it never did, which is the exact
+      # shape `[GOV-FBN-020]` exists to refuse.
+      - name: every test script, run directly
+        run: |
+          ran=0
+          fail=0
+          for f in tools/test_*.py; do
+            if [ "$f" = "tools/test_split_parity.py" ]; then
+              echo "skip $f (harness: needs --pair/--whole)"
+              continue
+            fi
+            ran=$((ran + 1))
+            if python3 "$f" > /tmp/out 2>&1; then
+              echo "ok   $f"
+            else
+              echo "FAIL $f"
+              tail -25 /tmp/out
+              fail=$((fail + 1))
+            fi
+          done
+          echo "--- $ran script(s) run, $fail failure(s) ---"
+          if [ "$ran" -lt 50 ]; then
+            echo "only $ran scripts found; the glob is broken, not the tree"
+            exit 1
+          fi
+          [ "$fail" -eq 0 ]
