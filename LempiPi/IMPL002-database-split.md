@@ -1,14 +1,24 @@
 # IMPL002: The `[PI-DB-010]` Database Split, in Detail
 
-**Implementation Specification — Tier 2 · DESIGNED, NOT YET BUILT**
+**Implementation Specification — Tier 2 · BUILT — the design it was built from**
 
-Everything needed to actually build the split [PI023 §5](PI023-the-database-split-on-disk.md#5-the-database-split)
-has described since early in the project and neither appliance has built:
-one `lempi.db` becoming two files, `library.db` (B) and `listener.db` (C).
-This document is what PI001 left as "design, not code" made concrete enough
-to implement — the exact tables, the exact call sites in the player today,
-the migration procedure, and what a review against synchronization, RAM,
-backup, and MPD turned up.
+> **Status, corrected 2026-09-21.** This header read "DESIGNED, NOT YET BUILT"
+> and the paragraph below read "neither appliance has built" it. Both were true
+> when written and neither is now. `lempipi` split first; the desktop followed
+> on 2026-09-11; and `bose` and `lp3-wifi` each run a separate `--listener` and
+> `--library` today, which their own unit files settle in one line rather than
+> by inference. The migration as it actually ran is
+> [IMPL011](IMPL011-database-split-built.md), and what the local split then
+> owed the appliance — with how each item was proved — is
+> [PI025](PI025-what-the-local-split-owes-lempipi.md). This document stays the
+> design those were built from; read it as design, not as work outstanding.
+
+Everything needed to build the split [PI023 §5](PI023-the-database-split-on-disk.md#5-the-database-split)
+had described since early in the project: one `lempi.db` becoming two files,
+`library.db` (B) and `listener.db` (C). This document is what PI001 left as
+"design, not code" made concrete enough to implement — the exact tables, the
+exact call sites in the player, the migration procedure, and what a review
+against synchronization, RAM, backup, and MPD turned up.
 
 > **Related:** [PI023 §5](PI023-the-database-split-on-disk.md#5-the-database-split) ·
 > [SPEC008 schema](../docs/spec/SPEC008-database-schema.md) ·

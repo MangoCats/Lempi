@@ -2,6 +2,26 @@
 
 **Development Guidance — status as of 2026-09-13, revising [GUIDE009](GUIDE009-echo-playback-plan.md)**
 
+> **Superseded as a status board, 2026-09-21. The table below is the
+> 2026-09-13 snapshot and is kept as one** `[GOV-DOC-050]`. Every phase it
+> leaves open has since been built, and each grew its own document stating
+> its own date:
+>
+> - **Phase 4** — [LOG012](LOG012-phase-4-drift.md), the drift measurement
+>   `[GDE-ECHO-330]`'s gate asks for: taken 2026-09-17, concluded 2026-09-18.
+> - **Phase 5** — [GUIDE017](GUIDE017-echo-correction.md): offset correction
+>   and rate correction both built 2026-09-18. The table below calls this
+>   "not started, now **mandatory**", which is what made it urgent.
+> - **Phase 6** — [GUIDE018](GUIDE018-echo-invalidation.md), split out the
+>   same day, "once the clock cases were built".
+>
+> The standing model for alignment as a whole — and the register of what has
+> been *disproven*, which lives nowhere else — is
+> [GUIDE029](GUIDE029-what-is-known-about-alignment.md), current 2026-09-19.
+>
+> Assembled 2026-09-21 by reading those documents rather than by re-measuring
+> anything: every date and verdict above is the one its own document states.
+
 [GUIDE009](GUIDE009-echo-playback-plan.md) is the plan and stays the plan. This
 file is the status board it deliberately is not, written because three of its
 six gates have now been answered and one of the answers **reorders the

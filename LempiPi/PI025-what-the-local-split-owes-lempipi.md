@@ -184,7 +184,12 @@ deliberate `schema_meta`.
 
 ## 4. Open
 
-**`[PI-OWE-080]`** None of the above has been applied to lempipi. The WAL
+**`[PI-OWE-080]`** *(The state when this register was opened. Settled the
+same day — see the status banner at the top, and `[PI-OWE-095]` two entries
+below, which records both installations reconciling afterwards. Left as
+written rather than edited into agreement, because what was owed is the
+record this document exists to keep `[GOV-DOC-050]`.)* None of the above has
+been applied to lempipi. The WAL
 change is a `sqlite3` one-liner; `[PI-OWE-020]` and `[PI-OWE-040]` both need
 the build, and `[PI-OWE-040]`'s drop must come *after* that deploy or the
 next restart simply recreates what was dropped. Doing them together, once,

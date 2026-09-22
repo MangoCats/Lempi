@@ -43,13 +43,30 @@ folded into one spec.
 | Deploy script naming and target signposting (renamed 2026-09-11; config persistence built; appliances built without `vipunen-support` from 2026-09-12 `[GDE-DEP-098]`) — **open: a worktree cross-compile cannot stamp its commit `[GDE-DEP-100]`, and the final cross-check misreports why `[GDE-DEP-110]`** | [GUIDE011](GUIDE011-deploy-script-naming.md) | [§7 Configuration, and what is still open](GUIDE011-deploy-script-naming.md#7-configuration-and-what-is-still-open) |
 | External backends | [GUIDE007](GUIDE007-external-backends-investigation.md) | [§7 Open](GUIDE007-external-backends-investigation.md#7-open) |
 | Echo drift measurement (Phase 1 campaign, t0 taken 2026-09-12, second reads due 2026-09-13) | [LOG006](LOG006-echo-drift-measurement.md) | [§4 Open](LOG006-echo-drift-measurement.md#4-open) |
-| Echo playback — two or more instances, one programme, each from its own files (investigated 2026-09-11, not yet built) | [GUIDE008](GUIDE008-echo-playback-investigation.md) · [GUIDE009](GUIDE009-echo-playback-plan.md) · [GUIDE010](GUIDE010-echo-node-capabilities.md) · [GUIDE013](GUIDE013-audio-stack-reporting.md) · [LOG006](LOG006-echo-drift-measurement.md) | [GUIDE016 §6 Explicitly not in v1](GUIDE016-echo-playback-plan-build.md#6-explicitly-not-in-v1) |
+| Echo playback — two or more instances, one programme, each from its own files. **Phases 0-6 built**: phase 4 measured in [LOG012](LOG012-phase-4-drift.md) (concluded 2026-09-18), phase 5 in [GUIDE017](GUIDE017-echo-correction.md) (offset and rate correction, both 2026-09-18), phase 6 in [GUIDE018](GUIDE018-echo-invalidation.md) | [GUIDE008](GUIDE008-echo-playback-investigation.md) · [GUIDE009](GUIDE009-echo-playback-plan.md) · [GUIDE010](GUIDE010-echo-node-capabilities.md) · [GUIDE013](GUIDE013-audio-stack-reporting.md) · [LOG006](LOG006-echo-drift-measurement.md) | [GUIDE016 §6 Explicitly not in v1](GUIDE016-echo-playback-plan-build.md#6-explicitly-not-in-v1) |
 | Same-song blocking across different recordings (**built 2026-09-12** — three identity tiers, passage → recording MBID → work MBID, covers included; [SPEC037](spec/SPEC037-eligibility-and-frequency.md) `[SPEC-DIR-119]`) | [GUIDE012](GUIDE012-work-based-song-blocking.md) | [§7 Open](GUIDE012-work-based-song-blocking.md#7-open) |
 | Appliance setup | [LempiPi/IMPL001](../LempiPi/IMPL001-appliance-setup.md) | [IMPL012 §9 Open](../LempiPi/IMPL012-rebuilding-from-the-repository.md#9-open) |
 | Image & partitions | [LempiPi/PI001](../LempiPi/PI001-image-and-partitions.md) | [§7 What is not yet decided](../LempiPi/PI001-image-and-partitions.md#7-what-is-not-yet-decided) |
 | Appliance characterisation | [LempiPi/PI006](../LempiPi/PI006-appliance-characterisation.md) | [§9 What was not measured](../LempiPi/PI006-appliance-characterisation.md#9-what-was-not-measured) |
 | MPD on the appliance | [LempiPi/PI007](../LempiPi/PI007-mpd-on-the-appliance.md) | [§4 What was not measured](../LempiPi/PI007-mpd-on-the-appliance.md#4-what-was-not-measured) |
-| The second appliance, `bose` (build started 2026-09-06, in progress) | [BosePi/](../BosePi/) | [BOSE007 §4 Open](../BosePi/BOSE007-migrating-the-library.md#4-open-and-to-be-measured-before-it-is-claimed) |
+| The second appliance, `bose` — in service since 2026-09-06; operating health and its standing findings are [BOSE004](../BosePi/BOSE004-operating-health.md) | [BosePi/](../BosePi/) | [BOSE007 §4 Open](../BosePi/BOSE007-migrating-the-library.md#4-open-and-to-be-measured-before-it-is-claimed) |
+| Operating health on `bose`, in service | [BOSE004](../BosePi/BOSE004-operating-health.md) | [§5. Standing findings — open, none urgent](../BosePi/BOSE004-operating-health.md#5-standing-findings--open-none-urgent) |
+| The `bose` image update — plan | [BOSE008](../BosePi/BOSE008-image-update-plan.md) | [§8. Open](../BosePi/BOSE008-image-update-plan.md#8-open) |
+| The `bose` image update — runbook | [BOSE009](../BosePi/BOSE009-image-update-runbook.md) | [§6. Open](../BosePi/BOSE009-image-update-runbook.md#6-open) |
+| Database split — what the build left | [IMPL011](../LempiPi/IMPL011-database-split-built.md) | [§19. What remains](../LempiPi/IMPL011-database-split-built.md#19-what-remains) |
+| Appliance startup preflight | [PI026](../LempiPi/PI026-startup-preflight.md) | [§7. Open](../LempiPi/PI026-startup-preflight.md#7-open) |
+| The controller wedge | [PI027](../LempiPi/PI027-the-controller-wedge.md) | [§7. What is still open](../LempiPi/PI027-the-controller-wedge.md#7-what-is-still-open) |
+| `smartboardpc`, the build host | [SMART001](../SmartPC/SMART001-survey.md) | [§7. Open](../SmartPC/SMART001-survey.md#7-open) |
+| Echo alignment — the standing model | [GUIDE029](GUIDE029-what-is-known-about-alignment.md) | [§4. The largest open question](GUIDE029-what-is-known-about-alignment.md#4-the-largest-open-question) |
+| Converting the third appliance | [IMPL016](IMPL016-converting-lempiplay3.md) | [§7. Open](IMPL016-converting-lempiplay3.md#7-open) |
+| Drift instrument correction | [LOG007](LOG007-drift-instrument-correction.md) | [§5. Open](LOG007-drift-instrument-correction.md#5-open) |
+| Acoustic calibration | [LOG008](LOG008-acoustic-calibration.md) | [§5. Open](LOG008-acoustic-calibration.md#5-open) |
+| The lead is a ring | [LOG011](LOG011-the-lead-is-a-ring.md) | [§5. Open](LOG011-the-lead-is-a-ring.md#5-open) |
+| Echo phase 4 — measured drift | [LOG012](LOG012-phase-4-drift.md) | [§4. Open](LOG012-phase-4-drift.md#4-open) |
+| Per-node presentation delay | [SPEC020 *(node delay)*](spec/SPEC020-node-delay-control.md) | [§5. Open](spec/SPEC020-node-delay-control.md#5-open) |
+| Listener preference editing | [SPEC029](spec/SPEC029-listener-preference-editing.md) | [§8. Open](spec/SPEC029-listener-preference-editing.md#8-open) |
+| Play frequency readout | [SPEC031](spec/SPEC031-play-frequency.md) | [§6. Open](spec/SPEC031-play-frequency.md#6-open) |
+| Framebuffer UI — implementation plan | [SPEC042](spec/SPEC042-framebuffer-implementation-plan.md) | [§8. Implementation plan, phased](spec/SPEC042-framebuffer-implementation-plan.md#8-implementation-plan-phased-against-the-open-items-above) |
 
 ## 2. Sendspin — a whole directory of "watch, don't build yet"
 
