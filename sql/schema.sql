@@ -28,7 +28,22 @@ CREATE TABLE IF NOT EXISTS files (
     format       TEXT    NOT NULL,
     duration_ms  INTEGER NOT NULL,
     first_seen   TEXT    NOT NULL,
-    last_seen    TEXT    NOT NULL
+    last_seen    TEXT    NOT NULL,
+    -- Which hasher produced `audio_md5`, as `name@version` -- `ffmpeg@8.0`,
+    -- one day `symphonia@0.5.4` [SPEC-RLK-086], [SPEC-RLK-150] precondition 3.
+    --
+    -- `audio_md5` keys four tables and is treated as a stable identity, but it
+    -- implements no standard: it is whatever the demuxer that computed it did.
+    -- The incumbent values are an Essentia/libav artefact [SPEC-RLK-080], and
+    -- an ffmpeg upgrade could in principle orphan rows with nothing reporting
+    -- it as anything but missing music. This makes such a disagreement
+    -- diagnosable instead.
+    --
+    -- **NULL means the row predates this column, and stays NULL.** No
+    -- back-annotation: the generator of a value written before anyone recorded
+    -- it is an inference, and an inferred provenance is worth less than an
+    -- absent one. Same rule as `listener_play_history.selected_by`.
+    md5_generator TEXT
 );
 CREATE INDEX IF NOT EXISTS files_path ON files(path);
 

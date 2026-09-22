@@ -61,6 +61,60 @@ def audio_md5(path: str) -> str | None:
     return m.group(1) if m else None
 
 
+_GENERATOR: str | None | tuple = ()
+
+
+def ffmpeg_generator() -> str | None:
+    """Which hasher produced an `audio_md5`, as `name@version` -- `ffmpeg@8.0`.
+
+    `[SPEC-RLK-150]` precondition 3. `audio_md5` keys four tables and is
+    treated as a stable identity, but it implements no standard: it is
+    whatever the demuxer that computed it did `[SPEC-RLK-080]`. An ffmpeg
+    upgrade could in principle orphan rows, and nothing downstream would
+    report it as anything but missing music. Recording this makes such a
+    disagreement diagnosable.
+
+    The whole version token, build suffix included -- `8.0-full_build-...`
+    against a distribution's `5.1.9-0+deb12u1` -- because that is exactly the
+    detail that would explain a disagreement `[SPEC-RLK-088]`.
+
+    Asked once per process. `None` where ffmpeg cannot be asked, and a `None`
+    is stored as `NULL` rather than as a guess. The Rust side computes the
+    identical string in `player/core/src/relink.rs::hasher_generator`; the two
+    are separate because Lempi and Vipunen share a schema and no code
+    `[GDE-ARC-018]`.
+    """
+    global _GENERATOR
+    if _GENERATOR != ():
+        return _GENERATOR
+    _GENERATOR = None
+    try:
+        r = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
+    except OSError:
+        return _GENERATOR
+    if r.returncode == 0:
+        first = (r.stdout.splitlines() or [""])[0]
+        m = re.match(r"ffmpeg version (\S+)", first)
+        if m:
+            _GENERATOR = f"ffmpeg@{m.group(1)}"
+    return _GENERATOR
+
+
+def ensure_md5_generator_column(conn) -> None:
+    """Bring a `files` table predating `md5_generator` up to date.
+
+    Already-present is the expected path on every run after the first, which
+    is why the error is swallowed -- the same shape as the Rust side's
+    `db::ensure_md5_generator_column`. Existing rows get `NULL` and keep it:
+    the generator of a value written before anyone recorded it is an
+    inference, and an inferred provenance is worth less than an absent one.
+    """
+    try:
+        conn.execute("ALTER TABLE files ADD COLUMN md5_generator TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+
 def probe(path: str) -> dict | None:
     """Duration and tags. Two different questions, asked two different ways.
 
@@ -178,6 +232,10 @@ def main() -> int:
     added = skipped = failed = 0
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     if args.commit:
+        # Before the transaction: an `ALTER TABLE` that fails because the
+        # column is already there would otherwise abort the ingest it is meant
+        # to enable `[SPEC-RLK-150]`.
+        ensure_md5_generator_column(conn)
         conn.execute("BEGIN IMMEDIATE")
 
     for path in files:
@@ -217,9 +275,11 @@ def main() -> int:
         st = os.stat(path)
         cur = conn.execute(
             "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,"
-            "                   first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7,?7)",
+            "                   first_seen,last_seen,md5_generator)"
+            " VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8)",
             (md5, path, st.st_size, st.st_mtime,
-             os.path.splitext(path)[1].lstrip(".").lower(), info["duration_ms"], now))
+             os.path.splitext(path)[1].lstrip(".").lower(), info["duration_ms"], now,
+             ffmpeg_generator()))
         fid = cur.lastrowid
 
         conn.execute(

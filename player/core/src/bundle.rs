@@ -234,6 +234,10 @@ pub fn import(
     // that makes a dry run untrustworthy `[SPEC-RLK-100]`.
     if apply {
         db.execute_batch(DDL).map_err(|e| e.to_string())?;
+        // Separate from `DDL` rather than folded into it: `execute_batch` is
+        // all-or-nothing, and `ADD COLUMN` fails on every run after the first,
+        // which would take the whole batch down with it `[SPEC-RLK-150]`.
+        crate::db::ensure_md5_generator_column(db);
     }
 
     let empty = Vec::new();
@@ -247,6 +251,11 @@ pub fn import(
 
     let tx = db.transaction().map_err(|e| e.to_string())?;
     let now = now_iso();
+    // Asked once for the whole import, not once per file. Every row this run
+    // writes was verified by the same hasher a moment earlier, so one answer
+    // is the true one for all of them -- and a per-row call would be a
+    // subprocess per file to learn a constant `[SPEC-RLK-150]`.
+    let generator = crate::relink::hasher_generator();
 
     for e in doc.get("encodings").and_then(|v| v.as_array()).unwrap_or(&empty) {
         let md5 = str_of(e, "audio_md5");
@@ -316,14 +325,19 @@ pub fn import(
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0);
         tx.execute(
-            "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen)\
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?7)",
+            "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen,md5_generator)\
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8)",
             params![md5, path.to_string_lossy(), meta.len() as i64, mtime,
                     str_of(e, "format"),
                     num(e, "duration_ms")
                         .filter(|d| *d > 0)
                         .ok_or_else(|| format!("{md5}: encoding.duration_ms is not a positive integer"))?,
-                    now],
+                    now,
+                    // `NULL` where ffmpeg could not be asked. The import got
+                    // this far, so the hash was computed -- but by what is
+                    // then genuinely unknown, and a guess in a provenance
+                    // column is worse than a gap.
+                    generator],
         )
         .map_err(|e| e.to_string())?;
         let file_id = tx.last_insert_rowid();
@@ -703,6 +717,60 @@ mod tests {
             )
             .unwrap();
         assert_eq!(v2, 0.9, "an already-held encoding must not gate updates to its recording's data");
+
+        std::fs::remove_dir_all(&audio_dir).ok();
+    }
+
+    /// `[SPEC-RLK-150]` precondition 3: an imported row records *what hashed
+    /// it*, and a row written before the column existed stays `NULL`.
+    ///
+    /// `empty_library()` builds `files` without `md5_generator`, which is
+    /// exactly the library this migration exists for -- so this also proves
+    /// the `ALTER TABLE` runs and that the pre-existing row beside it is not
+    /// back-annotated. The stored value is compared against
+    /// `hasher_generator()` rather than against a literal: a test asserting
+    /// `ffmpeg@8.0` would fail on the Pi, which is 5.1.9 `[SPEC-RLK-088]`,
+    /// and would be asserting the version of the machine rather than that
+    /// provenance was recorded at all.
+    #[test]
+    fn an_imported_file_records_which_hasher_produced_its_audio_md5() {
+        let mut c = empty_library();
+        let audio_dir =
+            std::env::temp_dir().join(format!("lempi-bundle-gen-{}", std::process::id()));
+        std::fs::create_dir_all(&audio_dir).unwrap();
+        let audio_path = audio_dir.join("a.wav");
+        write_tiny_wav(&audio_path);
+
+        // A row that predates the column, written directly rather than through
+        // `import` -- the 5,705 incumbent values, in miniature.
+        c.execute(
+            "INSERT INTO files (file_id,audio_md5,path,size_bytes,mtime,format,duration_ms,\
+             first_seen,last_seen) VALUES (99,'older','/gone.mp3',1,1.0,'mp3',1000,'t','t')",
+            [],
+        )
+        .unwrap();
+
+        let md5 = crate::relink::hash_encoded(&audio_path)
+            .expect("this test needs ffmpeg, as every other import test here does");
+        let doc = one_encoding_bundle(&md5, "m1", 0.5, "computed:x@1");
+        let rep = import(&mut c, &doc, "body", &audio_dir, true).unwrap();
+        assert!(rep.refused.is_empty(), "{:?}", rep.refused);
+
+        let stored: Option<String> = c
+            .query_row("SELECT md5_generator FROM files WHERE audio_md5 = ?1", params![md5], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored, crate::relink::hasher_generator(),
+            "the importer must record the hasher it actually used");
+        assert!(stored.as_deref().unwrap_or("").starts_with("ffmpeg@"),
+            "ffmpeg is the hasher `[SPEC-RLK-080]`; got {stored:?}");
+
+        let older: Option<String> = c
+            .query_row("SELECT md5_generator FROM files WHERE audio_md5 = 'older'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(older, None,
+            "a row written before the column must stay NULL -- no back-annotation");
 
         std::fs::remove_dir_all(&audio_dir).ok();
     }

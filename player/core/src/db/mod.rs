@@ -20,6 +20,25 @@ mod player_store;
 pub use library::*;
 pub use player_store::*;
 
+/// Bring a `files` table predating `md5_generator` up to date
+/// `[SPEC-RLK-150]`.
+///
+/// One definition, two callers -- [`Library::open_writable`] and
+/// [`crate::bundle::import`] -- because both can be the first thing to touch a
+/// given library and neither may assume the other ran `[GDE-ARC-033]`. The
+/// `CREATE TABLE IF NOT EXISTS` in `sql/schema.sql` is a no-op on a library
+/// that already has the table, which is the same gap `ensure_tag_table` and
+/// `ensure_history_columns` close for theirs.
+///
+/// Already-present is the expected path on every run after the first, so the
+/// error is discarded rather than reported -- the established shape here. What
+/// is *not* discarded is the column's meaning when it is absent: every row it
+/// adds is `NULL`, and `NULL` stays `NULL`. See `sql/schema.sql` for why no
+/// back-annotation is the honest answer.
+pub fn ensure_md5_generator_column(conn: &rusqlite::Connection) {
+    let _ = conn.execute("ALTER TABLE files ADD COLUMN md5_generator TEXT", []);
+}
+
 #[derive(Debug)]
 pub enum DbError {
     Open(String),

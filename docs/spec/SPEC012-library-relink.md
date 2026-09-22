@@ -283,3 +283,15 @@ other.
    hash, not leaving both to compute an identity key their own way.
 3. **Record the generator and its version alongside the values**, so a future
    disagreement is diagnosable rather than discovered as missing music.
+   **Done 2026-09-22** — `files.md5_generator` `[SPEC-SC-038]`, `name@version`,
+   written by both ingest tools, the MuLibPlay migration and the bundle
+   importer. It is the one precondition that pays off whether or not the other
+   two are ever met: it costs nothing now and is the only way a version-driven
+   orphaning could be recognised for what it is rather than read as missing
+   music. **Existing rows are `NULL` and stay that way** — back-annotating the
+   incumbent 5,705 would be recording an inference in a provenance column, and
+   `[SPEC-RLK-080]` already says what produced them.
+
+   It also sharpens precondition 1 rather than closing it: once some rows say
+   `ffmpeg@…` and later ones say `symphonia@…`, the coverage gap stops being a
+   count someone remembers and becomes a query.

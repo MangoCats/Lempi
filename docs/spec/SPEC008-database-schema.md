@@ -36,7 +36,8 @@ CREATE TABLE files (
     format       TEXT    NOT NULL,
     duration_ms  INTEGER NOT NULL,          -- decoded, not header-claimed [REQ-LIB-145]
     first_seen   TEXT    NOT NULL,
-    last_seen    TEXT    NOT NULL
+    last_seen    TEXT    NOT NULL,
+    md5_generator TEXT                      -- what hashed it [SPEC-SC-038]
 );
 CREATE INDEX files_path ON files(path);
 
@@ -48,6 +49,14 @@ CREATE TABLE recordings (
     source     TEXT NOT NULL                -- [SPEC-SC-025]
 );
 ```
+
+**`[SPEC-SC-038]` `md5_generator` records what produced `audio_md5`, as `name@version`** — `ffmpeg@8.0`, one day `symphonia@0.5.4`. *(Added 2026-09-22, [SPEC012](SPEC012-library-relink.md)'s `[SPEC-RLK-150]` precondition 3.)*
+
+`audio_md5` keys four tables and is treated as a stable identity `[SPEC-DF-030]`, but it implements no standard: it is whatever the demuxer that computed it did `[SPEC-RLK-080]`. An ffmpeg upgrade could in principle orphan rows, and nothing downstream would report that as anything but missing music. This column is what makes such a disagreement diagnosable instead of merely fatal.
+
+**`NULL` means the row predates the column, and stays `NULL`.** No back-annotation: the generator of a value written before anyone recorded it is an inference, and an inferred provenance is worth less than an absent one — the same rule `listener_play_history.selected_by` already follows. So the 5,705 incumbent values read `NULL`, which is the honest answer, and `[SPEC-RLK-080]` is where the reader learns they are an Essentia/libav artefact.
+
+Written by `tools/ingest_folder.py`, `tools/ingest_cd.py`, `tools/migrate_mulib.py` and `player/core/src/bundle.rs`; the string is computed by `ingest_folder.ffmpeg_generator()` and `player/core/src/relink.rs::hasher_generator()`, which are separate implementations because Lempi and Vipunen share a schema and no code `[GDE-ARC-018]` — verified byte-identical on one machine 2026-09-22.
 
 **`[SPEC-SC-035]` `path` is deliberately not unique and never a key.** MuLibPlay's ability to relocate a moved library came from matching content, not paths `[GDE-BMK-050]`; that property is preserved by keying on `audio_md5`.
 

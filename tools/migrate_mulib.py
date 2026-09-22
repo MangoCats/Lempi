@@ -42,6 +42,13 @@ import sys
 import time
 from collections import defaultdict
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# `ffmpeg_generator()` only `[SPEC-RLK-150]`. This file keeps its own
+# `audio_md5` -- a duplicate of `ingest_folder`'s and a pre-existing one -- so
+# importing the generator rather than copying it is the direction that reduces
+# the copies rather than adding a third.
+import ingest_folder  # noqa: E402
+
 SR = 44100.0
 SRC = "inherited:mulib"
 
@@ -162,9 +169,10 @@ def main():
         try:
             cur = out.execute(
                 "INSERT INTO files(audio_md5,path,size_bytes,mtime,format,duration_ms,"
-                "first_seen,last_seen) VALUES (?,?,?,?,?,?,?,?)",
+                "first_seen,last_seen,md5_generator) VALUES (?,?,?,?,?,?,?,?,?)",
                 (md5, path, st.st_size, st.st_mtime,
-                 os.path.splitext(path)[1].lstrip(".").lower(), dur, now, now))
+                 os.path.splitext(path)[1].lstrip(".").lower(), dur, now, now,
+                 ingest_folder.ffmpeg_generator()))
             file_map[r["fileId"]] = cur.lastrowid
         except sqlite3.IntegrityError:      # same audio, two containers
             fid = out.execute("SELECT file_id FROM files WHERE audio_md5=?", (md5,)).fetchone()[0]

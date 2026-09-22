@@ -175,6 +175,21 @@ def main() -> int:
                 "SELECT passage_id FROM passage_recordings WHERE mbid=?", (mbid,))}
             check(prs == {radio["passage_id"], album["passage_id"]},
                   f"both passages must link to the same recording, got {prs}")
+
+        # `[SPEC-RLK-150]` precondition 3. SCHEMA above deliberately lacks the
+        # column -- it is the library this migration exists for -- so this
+        # checks that `ensure_md5_generator_column` ran AND that the value
+        # landed. Compared against `ffmpeg_generator()` rather than a literal:
+        # a machine without ffmpeg stores NULL, and NULL is the right answer
+        # there, so the assertion holds either way and pins neither a version
+        # nor the presence of ffmpeg.
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(files)")}
+        check("md5_generator" in cols,
+              "ingest must add md5_generator to a files table that predates it")
+        got = conn.execute("SELECT md5_generator FROM files WHERE audio_md5=?",
+                           (FAKE_MD5,)).fetchone()[0]
+        check(got == ingest_folder.ffmpeg_generator(),
+              f"the row must record the hasher that ran, got {got!r}")
         conn.close()
 
         print()

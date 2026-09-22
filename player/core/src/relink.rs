@@ -191,14 +191,59 @@ pub fn hash_encoded(path: &Path) -> Result<String, String> {
     }
 }
 
+/// `ffmpeg -version`'s first line, asked once per process.
+///
+/// Cached because both questions below want it and neither wants to pay for a
+/// second subprocess. The one consequence worth stating: ffmpeg installed
+/// *during* a run is not noticed. Nothing here runs long enough for that to
+/// matter -- a relink walk is one shot -- and the alternative is spawning a
+/// process per file to learn something that cannot change usefully mid-walk.
+fn version_line() -> Option<&'static str> {
+    static LINE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    LINE.get_or_init(|| {
+        let out = std::process::Command::new("ffmpeg").arg("-version").output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&out.stdout).lines().next()?.trim().to_string())
+    })
+    .as_deref()
+}
+
 /// Is the hasher present? Checked once, so a missing ffmpeg is one clear line
 /// rather than 5,705 identical failures.
 pub fn hasher_available() -> bool {
-    std::process::Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    version_line().is_some()
+}
+
+/// **Which hasher produced a value, as `name@version`** `[SPEC-RLK-086]`,
+/// `[SPEC-RLK-150]`'s third precondition.
+///
+/// `audio_md5` is not a standard. It is "whatever this demuxer did", and
+/// `[SPEC-RLK-080]` establishes that the incumbent 5,705 values are an
+/// Essentia/libav artefact rather than a specified quantity. That makes an
+/// ffmpeg upgrade able, in principle, to orphan rows -- and nothing downstream
+/// would report it as anything but missing music, which is the failure this
+/// records against.
+///
+/// **The whole version token, not a truncated one.** `8.0-full_build-www.gyan.dev`
+/// and a distribution's `5.1.9-0+deb12u1` differ in exactly the build detail
+/// that would explain a disagreement, so trimming to `8.0` would discard the
+/// evidence this column exists to keep. `[SPEC-RLK-088]` compared 5.1.9 against
+/// 8.0 across architectures and found none -- recording the string is what lets
+/// the *next* such comparison be made from the database instead of from memory.
+///
+/// `tools/ingest_folder.py::ffmpeg_generator` computes the identical string on
+/// Vipunen's side; the two are separate because Lempi and Vipunen share a
+/// schema and no code `[GDE-ARC-018]`. Verified equal on this machine
+/// 2026-09-22: both `ffmpeg@8.0-full_build-www.gyan.dev`.
+///
+/// `None` where ffmpeg cannot be asked, and a `None` is written as `NULL`
+/// rather than as a guess.
+pub fn hasher_generator() -> Option<String> {
+    // "ffmpeg version 8.0-full_build-www.gyan.dev Copyright (c) 2000-2025 ..."
+    let v = version_line()?.strip_prefix("ffmpeg version ")?.split_whitespace().next()?;
+    Some(format!("ffmpeg@{v}"))
 }
 
 #[cfg(test)]
@@ -309,5 +354,28 @@ mod tests {
         assert!(!is_audio(Path::new("/x/folder.jpg")));
         assert!(!is_audio(Path::new("/x/Thumbs.db")));
         assert!(!is_audio(Path::new("/x/notes")));
+    }
+
+    /// `[SPEC-RLK-150]` precondition 3. Two claims, and the second is the one
+    /// that matters: the string must *agree with* `hasher_available`, so a
+    /// machine that can hash always records what hashed, and one that cannot
+    /// records nothing rather than a guess.
+    ///
+    /// Deliberately not asserting a version. This runs on Windows 8.0, on the
+    /// Pi's 5.1.9 and in a Debian container, and pinning any of those would be
+    /// testing the build machine `[SPEC-RLK-088]`.
+    #[test]
+    fn the_hasher_names_itself_and_its_version_or_says_nothing() {
+        let g = hasher_generator();
+        assert_eq!(g.is_some(), hasher_available(),
+                   "a hasher that can run must be nameable, and one that cannot must not be named");
+        if let Some(g) = g {
+            let (name, version) = g.split_once('@').expect("the form is name@version");
+            assert_eq!(name, "ffmpeg");
+            assert!(!version.is_empty(), "a version of nothing is not a version");
+            // The whole token, build suffix and all: it is the part that would
+            // explain a disagreement, so it must not be trimmed away.
+            assert!(!version.contains(char::is_whitespace), "one token, got {version:?}");
+        }
     }
 }

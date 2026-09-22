@@ -152,6 +152,11 @@ impl Library {
         conn.busy_timeout(BUSY_WAIT).map_err(|e| DbError::Open(e.to_string()))?;
         let lib = Self { conn };
         lib.ensure_tag_table()?;
+        // Provenance for `audio_md5` `[SPEC-RLK-150]`. Here rather than only in
+        // the importer for the reason the tag table is here: a library the
+        // importer has never touched must still have somewhere for the value
+        // to go, on every appliance, not just ones a bundle happens to reach.
+        super::ensure_md5_generator_column(&lib.conn);
         Ok(lib)
     }
 

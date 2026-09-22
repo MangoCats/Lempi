@@ -183,10 +183,15 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
     st = os.stat(mp3_path)
     total_ms = toc.tracks[-1].end_ms if toc.tracks else 0
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    # `[SPEC-RLK-150]` precondition 3, through the same helper that computed
+    # the hash -- one definition of what ffmpeg is here, not a second.
+    ingest_folder.ensure_md5_generator_column(conn)
     cur = conn.execute(
         "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,"
-        "                   first_seen,last_seen) VALUES (?1,?2,?3,?4,'mp3',?5,?6,?6)",
-        (audio_md5, mp3_path, st.st_size, st.st_mtime, total_ms, now))
+        "                   first_seen,last_seen,md5_generator)"
+        " VALUES (?1,?2,?3,?4,'mp3',?5,?6,?6,?7)",
+        (audio_md5, mp3_path, st.st_size, st.st_mtime, total_ms, now,
+         ingest_folder.ffmpeg_generator()))
     file_id = cur.lastrowid
 
     boundary_src = f"imported:{'eac-cue' if toc.source == 'eac-cue' else 'cdrdao-toc'}"
