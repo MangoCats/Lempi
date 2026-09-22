@@ -10,6 +10,16 @@ against a concrete fourth node: a PC-based Lempi/Vipunen instance (`TeachersLoun
 an Ubuntu laptop) joining a family that already has a desktop, `lempi02w`, and
 `bose`.
 
+> **That node was not a Lempi instance when this was written, and is now half
+> of one** *(corrected 2026-09-22)*. It ran the previous repository until
+> 2026-09-21 `[GDE-NAM-030]`; it now runs Lempi against a verified copy of the
+> same catalogue, audibly, per
+> [TL001](../../TeachersLounge/TL001-migration-and-the-silent-output.md)
+> `[TL-MIG-030]`. The Vipunen half this section assumes is still untested
+> there — `tools/console.py` has never been pointed at that machine's
+> database `[TL-OPN-010]` — so read the mesh design below as still resting on
+> a node that has not yet exercised it.
+
 > **Related:** [SPEC006](SPEC006-data-flow-and-portability.md) §§2–6 — the
 > identity model and class system this extends, not replaces · [SPEC013 §5](SPEC013-vipunen-console.md#5-export--new-music-to-a-remote-lempi)
 > — the bundle exporter/importer this reuses as its payload mechanism ·

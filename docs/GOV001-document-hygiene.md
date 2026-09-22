@@ -116,6 +116,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `DEP` — Deploy scripts: what each acts on, what its name should say, and the signposting that makes a wrong assumption visible, see [GUIDE011](GUIDE011-deploy-script-naming.md)
 - `SNS` — Sonos direct play: what the abandoned investigation reached, the firmware-side ceiling that stopped it, and the LGPL obligations any revival inherits, see [GUIDE032](GUIDE032-sonos-direct-play-closed.md)
 - `ECHO` — Echo playback: two or more instances playing the same passage at the same moment from their own local files, see [GUIDE008](GUIDE008-echo-playback-investigation.md) (the investigation) and [GUIDE009](GUIDE009-echo-playback-plan.md) (the development plan)
+- `TL` — `teacherslounge`, the Ubuntu laptop that is the fleet's acoustic instrument and, since 2026-09-21, a Lempi node, see [TeachersLounge/TL001](../TeachersLounge/TL001-migration-and-the-silent-output.md). Per-machine for the same reason `BOS` and `SMT` are: the findings are only meaningful against one box.
 - `SMT` — `smartboardpc` ("Smart"), the x86_64 node that is both a build host and an intended playback target, see [SmartPC/SMART001](../SmartPC/SMART001-survey.md). Per-machine like `BOS`, and in its own folder for the same reason — but not an appliance
 
 ---
@@ -174,6 +175,9 @@ grep -rn "SPEC-PD" docs/
 | `[PI-CHR-*]` | What the player costs on the appliance: CPU, memory, thermals, latency | [PI006-appliance-characterisation.md](../LempiPi/PI006-appliance-characterisation.md) |
 | `[PI-OWE-*]` | Defects the local split found that lempi02w already has, itemised so they land as one update | [PI025-what-the-local-split-owes-lempi02w.md](../LempiPi/PI025-what-the-local-split-owes-lempi02w.md) |
 | `[PI-PRE-*]` | The tools a boot depends on, reported with versions at every start, and the fallback that means a missing one is not a disarming | [PI026-startup-preflight.md](../LempiPi/PI026-startup-preflight.md) |
+| `[TL-MIG-*]` | Migrating `teacherslounge` off the previous repository: what was copied, and the parity it was measured against | [TL001-migration-and-the-silent-output.md](../TeachersLounge/TL001-migration-and-the-silent-output.md) |
+| `[TL-OPS-*]` | Operating `teacherslounge`: the ssh launch that serves HTTP and produces no sound, and why | [TL001-migration-and-the-silent-output.md](../TeachersLounge/TL001-migration-and-the-silent-output.md) |
+| `[TL-OPN-*]` | What that migration has not settled | [TL001-migration-and-the-silent-output.md](../TeachersLounge/TL001-migration-and-the-silent-output.md) |
 | `[BOS-OPS-*]` | `bose` in service: the health baseline to compare against, the measurements that look alarming and are not, and the standing findings | [BOSE004-operating-health.md](../BosePi/BOSE004-operating-health.md) |
 | `[BOS-IMG-*]` | What to add to `bose`'s image and what to refuse, judged on ease of maintaining the ecosystem rather than on `bose` in isolation | [BOSE008-image-update-plan.md](../BosePi/BOSE008-image-update-plan.md) |
 | `[BOS-RUN-*]` | Executing the `bose` update: order, rollback per step, and the failures found by trying to break the plan | [BOSE009-image-update-runbook.md](../BosePi/BOSE009-image-update-runbook.md) |
