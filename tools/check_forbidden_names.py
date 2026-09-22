@@ -67,6 +67,7 @@ def main():
 
     pattern = re.compile("|".join(re.escape(n) for n in names), re.I)
     hits = []
+    unreadable = []
     scanned = 0
     for dirpath, dirnames, filenames in os.walk(ROOT):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
@@ -80,8 +81,19 @@ def main():
             try:
                 with open(full, encoding="utf-8", errors="strict") as fh:
                     content = fh.read()
-            except (UnicodeDecodeError, OSError):
-                continue          # not text, or unreadable: not prose either way
+            except UnicodeDecodeError:
+                # **Counted and named, never passed over in silence.** This
+                # used to `continue`, so a file this guard could not read
+                # contributed nothing to the scan and nothing to the output
+                # either -- a surface it cannot scan reporting clean, which
+                # is the exact thing `[GOV-FBN-020]` above refuses, in the
+                # checker that exists to enforce it. There are zero such
+                # files today, so the list starts empty and any future one
+                # is a deliberate decision rather than an accident.
+                unreadable.append(rel)
+                continue
+            except OSError:
+                continue          # genuinely unopenable: not prose either way
             scanned += 1
             for lineno, line in enumerate(content.splitlines(), 1):
                 if pattern.search(line):
@@ -90,6 +102,16 @@ def main():
     label = ", ".join(names)
     print("check_forbidden_names: %d token(s) from %s: %s" % (len(names), SOURCE, label))
     print("check_forbidden_names: scanned %d text file(s)" % scanned)
+    if unreadable:
+        print("check_forbidden_names: BROKEN -- %d file(s) could not be read as "
+              "UTF-8 and were therefore NOT searched:" % len(unreadable),
+              file=sys.stderr)
+        for rel in unreadable:
+            print("  %s" % rel, file=sys.stderr)
+        print("check_forbidden_names: a file this cannot read is a file it "
+              "cannot clear [GOV-FBN-020]. Add it to SKIP_EXT if it is "
+              "genuinely binary.", file=sys.stderr)
+        return 2
     if not hits:
         print("check_forbidden_names: clean -- no retired name outside %s" % SOURCE)
         return 0

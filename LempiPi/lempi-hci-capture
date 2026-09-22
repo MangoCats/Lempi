@@ -31,11 +31,6 @@ OUT="${LEMPI_HCI_OUT:-/var/log/lempi-hci.log}"
 SECS="${LEMPI_HCI_SECS:-180}"
 RAW="${TMPDIR:-/tmp}/lempi-hci-raw.$$"
 
-command -v btmon >/dev/null 2>&1 || {
-    echo "lempi-hci-capture: btmon not installed (apt-get install bluez-tools? it ships with bluez)" >&2
-    exit 0
-}
-
 # The whole of the analysis, in one place and callable on its own.
 #
 # **Separated so it can be tested `[PI3-AIM-100]`.** Every measurement in PI011
@@ -62,6 +57,24 @@ if [ "${1:-}" = aggregate ]; then
     aggregate "$@"
     exit 0
 fi
+
+# **The btmon check guards the CAPTURE, and nothing above it.** It used to sit
+# at the top of the file, before the `aggregate` dispatch, so a subcommand
+# that is pure text processing over a file already on disk refused to run on
+# any machine without bluez -- and refused by `exit 0`, so the eight cases in
+# `tests/cases-hci.sh` got empty output and read as eight failures rather than
+# as a tool that declined to start `[GDE-ECHO-547]`.
+#
+# That defeated the one thing the separation above exists for: aggregation was
+# split out and tagged `[PI3-AIM-100]` precisely "so it can be tested", and the
+# guard made it untestable anywhere the real capture could not run. Moved
+# 2026-09-21, after `LempiPi/tests/run` on a machine with bluez scored 8 higher
+# than the same tree on a machine without it, for no reason in the code under
+# test.
+command -v btmon >/dev/null 2>&1 || {
+    echo "lempi-hci-capture: btmon not installed (apt-get install bluez-tools? it ships with bluez)" >&2
+    exit 0
+}
 
 cleanup() { rm -f "$RAW"; }
 trap cleanup EXIT INT TERM

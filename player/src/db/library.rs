@@ -443,6 +443,11 @@ const NAMED: &str = concat!(named_passages!(), " WHERE p.kind = 'radio'");
 /// The queue itself stays radio-only: that is a curation scope, deliberately
 /// chosen, and widening it would bury 604 contradicted radio passages under
 /// eight thousand album cuts nobody asked about.
+/// Deliberately unused, and kept: the paragraph above is the measurement
+/// and the decision, not a leftover. Clippy calls it dead code because the
+/// widening it exists for was considered and declined; deleting it would
+/// delete the reason anyone knows that.
+#[allow(dead_code)]
 const NAMED_ANY: &str = named_passages!();
 
 /// The displayed artist, as a SQL expression over `NAMED` joined to `file_tags`.

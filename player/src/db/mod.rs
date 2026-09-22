@@ -555,6 +555,11 @@ pub(crate) mod test_support {
     /// `ensure_artist_review_table` -- and `ingest_decisions` `[SPEC008
     /// §7]`, which neither fixture includes since the ordinary playback and
     /// identification paths never touch it.
+    /// Unused at present: the fixture is complete and the segmentation
+    /// tests that would take it are not written yet. Kept rather than
+    /// deleted -- it documents exactly which tables that path needs
+    /// beyond `reviewable()`, which is the hard half of writing them.
+    #[allow(dead_code)]
     pub(crate) fn segmentable() -> Connection {
         let c = reviewable();
         #[cfg(feature = "vipunen-support")]

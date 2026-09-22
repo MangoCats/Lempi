@@ -49,9 +49,18 @@ say() { echo "$*"; }
 #
 # `unknown` is never rounded to `alive` or `wedged` -- a guard that cannot
 # run says so `[GDE-DEP-060]`.
+# `LEMPI_HCICONFIG` exists so the "absent" branch below can actually be
+# tested `[PI3-AIM-100]`. It cannot be tested by taking the tool off `PATH`:
+# on any machine with bluez installed `hciconfig` lives in `/usr/bin` beside
+# everything else the script needs, so removing it means removing them too,
+# and a shim directory of symlinks does not survive Git Bash, which copies
+# the binary and leaves it unable to find its own libraries. One named
+# override is deterministic on every host, which the PATH games were not.
+HCICONFIG="${LEMPI_HCICONFIG:-hciconfig}"
+
 probe() {
-    command -v hciconfig >/dev/null 2>&1 || { echo unknown; return; }
-    if timeout 15 hciconfig hci0 name >/dev/null 2>&1; then echo alive; else echo wedged; fi
+    command -v "$HCICONFIG" >/dev/null 2>&1 || { echo unknown; return; }
+    if timeout 15 "$HCICONFIG" hci0 name >/dev/null 2>&1; then echo alive; else echo wedged; fi
 }
 
 # **Is audio actually reaching a speaker right now?** Not "is something

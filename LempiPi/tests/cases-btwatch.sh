@@ -121,9 +121,24 @@ teardown
 # --- 9. a probe that cannot run says so `[GDE-DEP-060]` -----------------
 # The trap this whole investigation keeps meeting: a guard that cannot run
 # must never report a plausible verdict instead.
+#
+# **"Absent" has to be made real, and PATH cannot make it so.** This used to
+# subtract the stub directory from `PATH` and call that absence, which it is
+# not: on any machine with bluez installed `hciconfig` sits in `/usr/bin`
+# beside everything else, so the case only ever passed where the tool
+# happened not to exist -- it passed on a Windows checkout and failed on
+# `teacherslounge` 2026-09-21, the wrong way round for a script that only
+# runs on Linux, and a case about a probe that cannot run failing because
+# the probe could.
+#
+# A shim directory holding only what the script needs was tried and does not
+# work either: Git Bash copies rather than symlinks, and the copied `sh`
+# cannot find its own libraries. So the script takes a named override, the
+# same shape as `LEMPI_BT_DRIVER` beside it, and the absence is deterministic
+# on every host instead of being a property of the machine.
 setup
 driver
-OUT=$(PATH="$(echo "$PATH" | sed "s#$HERE/stubs:##")" \
+OUT=$(LEMPI_HCICONFIG=hciconfig-absent-on-purpose \
       LEMPI_BT_DRIVER="$VT_STATE/driver" sh "$PI/lempi-btwatch.sh" 2>&1)
 case "$OUT" in
     *"not installed"*) ok "says the controller could not be checked when hciconfig is absent" ;;
