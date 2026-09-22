@@ -24,7 +24,7 @@
 # A script that silently assumes produces a log indistinguishable from one that
 # assumed correctly.
 #
-# Non-overlay hosts (lempipi, and any ordinary machine) take the plain path and
+# Non-overlay hosts (lempi02w, and any ordinary machine) take the plain path and
 # are told so -- the detection is on the target's actual mount, never on its
 # name, which is the mistake this whole family of scripts is recovering from.
 set -uo pipefail

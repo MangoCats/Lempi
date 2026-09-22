@@ -31,7 +31,7 @@ this part — see the caveat below):
 1. `rsync` the local audio root to `pi@bose:/srv/library/audio/`, then
    `data/lempi_new.db` to `pi@bose:/srv/library/library-new.db` — **staged, not
    live**, same discipline `scratch/transfer.sh` already established for
-   `lempipi`: "the file it would replace holds this appliance's own play
+   `lempi02w`: "the file it would replace holds this appliance's own play
    history." For a brand-new `bose` there is no history yet to protect, but
    the staging step stays, so the discipline does not depend on remembering
    which cards need it.
@@ -46,7 +46,7 @@ this part — see the caveat below):
 absence `[IMPL-BOS-100]` §1 already found for a card reader. The transfer ran
 inside a throwaway Alpine container (`apk add rsync openssh-client`), mounting
 the local audio root, `data/`, and `.ssh` read-only — the exact pattern
-`scratch/transfer.sh` already used for `lempipi`, just pointed at `bose`.
+`scratch/transfer.sh` already used for `lempi02w`, just pointed at `bose`.
 
 **`[IMPL-BOS-086]` Left undone: ~1,500 files on the old card never reached
 `lempi_new.db`.** The old card holds 7,238 files against the 5,745 in the

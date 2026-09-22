@@ -113,7 +113,7 @@ What that costs, beyond what is already built:
   choice now stands until the listener changes it.
 - **`[PI3-AIM-050]` Done, 2026-09-08.** `[PI3-AIM-040]`'s "audio is already
   flowing correctly" was an assumption, not a check, and it was wrong twice
-  over on a lempipi boot that a listener experienced as "can't connect to
+  over on a lempi02w boot that a listener experienced as "can't connect to
   Middleton" even though the radio link was fine the whole time. First:
   `lempi-wait-sink` releases the player on the first *any* real sink it
   sees, and on this hardware that can be the onboard HDMI output --

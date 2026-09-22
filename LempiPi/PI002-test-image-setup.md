@@ -58,7 +58,10 @@ exactly there; Lite because there is no display.
 
 Use Raspberry Pi Imager and set, in its advanced options:
 
-- hostname `lempipi`;
+- hostname `LempiPiHost` — which is what the running machine actually
+  reports, in `logs/linkstate-*.log`'s syslog lines and in `btmgmt info`'s
+  `name`. It is *not* how you reach the appliance: that is `lempi02w`, its
+  DHCP reservation;
 - enable SSH with a public key;
 - Wi-Fi **client** credentials — for the test image the Pi joins your network
   rather than serving an access point. The AP `[PI-SET-010]` is a later step

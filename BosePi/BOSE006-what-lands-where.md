@@ -88,7 +88,7 @@ on B, per `[PI-DB-010]`'s split design.
 > never built: the player still opens one `lempi.db`, no `ATTACH`". Both
 > halves of that are now false. `attach_library()` landed 2026-09-06 in
 > `ec03371`, was threaded through the catalog queries in `2f2e81c`, and
-> `269fa10` fixed a foreign-key problem "found live on lempipi's real split"
+> `269fa10` fixed a foreign-key problem "found live on lempi02w's real split"
 > the next day. `bose` itself runs the split today —
 > `/var/lempi/listener.db` on C, `/srv/library/library.db` on B — as the
 > RAM-only deploy `[IMPL-BOS-185]` found the hard way. The conclusion below
@@ -97,12 +97,12 @@ on B, per `[PI-DB-010]`'s split design.
 Whichever file holds listener state has to go somewhere that stays writable,
 because every play is a write to it.
 
-`lempipi` ran the same single file under `/srv/library` until its own split on
+`lempi02w` ran the same single file under `/srv/library` until its own split on
 2026-09-10 — it now opens `/var/lempi/listener.db --library
 /srv/library/library.db`, confirmed live 2026-09-12 — and got away with it
 (`[PI002](../LempiPi/PI002-test-image-setup.md)`,
 `[PI005](../LempiPi/PI005-appliance-library.md)`) only because that partition
-is never actually made read-only in practice — `lempipi` has no C, and its
+is never actually made read-only in practice — `lempi02w` has no C, and its
 data partition just stays `rw` forever. `bose` is not that: step 10 of
 `[BOSE003](BOSE003-build-procedure.md)` genuinely flips B to `ro`. Putting
 `lempi.db` there would mean every play after that point fails to write. So

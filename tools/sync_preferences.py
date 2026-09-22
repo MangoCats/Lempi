@@ -4,7 +4,7 @@
 
 `SPEC029` gave a listener a way to edit an artist's or a recording's own
 `rotation`/`recovery`/`restraint` locally. This is what happens once two
-installations -- a desktop and `lempipi`, say -- have each done that
+installations -- a desktop and `lempi02w`, say -- have each done that
 independently: last-write-wins by `updated_at`, not the three-way baseline
 merge `apply_changes.py` uses for review decisions. There is no baseline
 to merge against here -- `listener_preferences` carries only ever "the
@@ -192,7 +192,7 @@ def remote_exists_batch(remote: str, kind: str, ids: list[str]) -> set[str]:
     `listener.db` for `recordings` fails, `{"ok": False}` collapses to an
     empty set, and every one-sided subject is then filed `skip_missing` --
     a sync that reports "nothing to do" while doing nothing. Found live
-    against `pi@lempipi` on 2026-09-10, after that installation was split.
+    against `pi@lempi02w` on 2026-09-10, after that installation was split.
     """
     if not ids:
         return set()
@@ -298,7 +298,7 @@ def absent_table(result: dict) -> bool:
     an empty table, while "the database was locked" must not, or a transient
     lock becomes "the remote has no specials" and this tool pushes stale
     local values over newer remote ones. Observed live on 2026-09-10 --
-    a count against `pi@lempipi` failed once, seconds after the service
+    a count against `pi@lempi02w` failed once, seconds after the service
     restarted, and succeeded four times running immediately after.
     """
     return "no such table" in (result.get("error") or "").lower()

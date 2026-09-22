@@ -69,7 +69,7 @@ async fn main() {
     // stored settings live in, and cannot be answered by it.
     let db = PathBuf::from(args.need(&opt::LISTENER));
     // The catalog-side file. Equal to `db` on every installation that
-    // hasn't split `[IMPL-DBSPLIT-025]`, `[IMPL-DBSPLIT-030]` -- lempipi,
+    // hasn't split `[IMPL-DBSPLIT-025]`, `[IMPL-DBSPLIT-030]` -- lempi02w,
     // once split, is the first to ever pass a genuinely different one.
     let library = args.text(&opt::LIBRARY).map(PathBuf::from).unwrap_or_else(|| db.clone());
 
@@ -349,7 +349,7 @@ fn engine_thread(
     // connection owns the catalogue, and it creates empty `file_tags` and
     // `cover_art` in the LISTENER half -- shadows that mask the real ones
     // `[IMPL-DBSPLIT-025]`. Reproduced here 2026-09-11: dropped both, started
-    // the player, and both came back. This is where lempipi's own pair came
+    // the player, and both came back. This is where lempi02w's own pair came
     // from `[PI-OWE-040]`, on every start, not from some older build.
     let saved_cue = lempi_player::db::PlayerStore::open_split(&db, &library)
         .ok()
@@ -575,7 +575,7 @@ fn engine_thread(
 /// on the catalogue side of a split `[IMPL-DBSPLIT-025]`. This opened the
 /// path the player was *started* with, which on a split installation is the
 /// listener half, so every one of them failed on the first statement with
-/// "no such table: passages". Found on `lempipi` 2026-09-11, where `covers`
+/// "no such table: passages". Found on `lempi02w` 2026-09-11, where `covers`
 /// and `cue_sheets` were both switched on and had been failing since that
 /// appliance split; it would have started failing here the moment the local
 /// database split too.

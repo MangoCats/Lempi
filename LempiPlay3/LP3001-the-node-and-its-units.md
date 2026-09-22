@@ -4,7 +4,7 @@
 
 `lempiplay3` is the third appliance: a Pi with a 480×320 SPI framebuffer panel
 and a touchscreen, which is what distinguishes it from `bose` (a HiFiBerry DAC
-and no display) and from `lempipi` (a Bluetooth speaker and no display). It runs
+and no display) and from `lempi02w` (a Bluetooth speaker and no display). It runs
 the same player as both, plus [fbui.service](fbui.service), which draws the
 now-playing display and takes touch input.
 
@@ -16,7 +16,7 @@ only on the machine**. `[LP3-REP-010]` below is the whole reason for it.
 ## 1. Why this folder exists
 
 **`[LP3-REP-010]` A unit that exists only on the SD card is one card failure
-away from being gone.** `bose` has [BosePi](../BosePi/), `lempipi` has
+away from being gone.** `bose` has [BosePi](../BosePi/), `lempi02w` has
 [LempiPi](../LempiPi/), and each carries the units and helper scripts that
 machine runs. `lempiplay3` had neither — its `lempi.service` and `fbui.service`
 were written directly on the device and never committed anywhere.

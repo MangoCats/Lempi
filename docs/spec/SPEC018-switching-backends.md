@@ -13,7 +13,7 @@ it had outgrown its length.
 
 ## 1. What the measurements settled
 
-Taken on `lempipi` — Pi Zero 2W, PipeWire and wireplumber, one Bluetooth
+Taken on `lempi02w` — Pi Zero 2W, PipeWire and wireplumber, one Bluetooth
 speaker — while it was playing, without stopping anything.
 
 | question | answer | why it decides something |

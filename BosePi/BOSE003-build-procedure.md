@@ -96,7 +96,7 @@ not tooling, is what splits the work into three phases with different homes.
 | :--- | :--- | :--- | :--- |
 | **1 — write** | `bose`, driven over SSH | new card in a USB reader | needs a card slot; see below |
 | **2 — partition and seed** | `bose`, driven over SSH | same card, still in the reader | the card is not booted, so it is free to be repartitioned |
-| **3 — provision** | this host, over SSH | `bose` booted from the new card | exactly how `lempipi` is deployed today |
+| **3 — provision** | this host, over SSH | `bose` booted from the new card | exactly how `lempi02w` is deployed today |
 
 **The development host cannot host phase 1 or 2.** It is Windows with Docker and
 a WSL that carries only the `docker-desktop` distro, and — checked — **it has no
@@ -210,11 +210,11 @@ the development host, over SSH, in the shape `deploy-player.sh` already has:
    systemd drop-in — [`mpd.conf`](mpd.conf) carries the split paths from
    [BOSE002 §3](BOSE002-image-build.md) and the mixer decision `[IMPL-BOS-030]`.
 7. Deploy `lempi`, cross-built `aarch64` with `--features mpd` — the same
-   artefact and the same Docker toolchain `lempipi` uses today.
+   artefact and the same Docker toolchain `lempi02w` uses today.
 8. Seed B (§3 below) and C: empty `listener.db`, the tree from
    [BOSE002 §3](BOSE002-image-build.md), and the resume
    interval from `[IMPL-BOS-070]`. Run `mpd --update` while B is still
-   writable — budget five minutes, from 242 s for 5,758 songs on `lempipi`
+   writable — budget five minutes, from 242 s for 5,758 songs on `lempi02w`
    `[PI-CHR-085]`.
 9. Acceptance: it plays, over the DAC, before anything is made read-only.
 10. **Last:** set `ro` in `fstab` for A and B, and enable the overlay on A.

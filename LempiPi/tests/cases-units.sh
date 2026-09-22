@@ -1,10 +1,10 @@
-# The systemd units `setup-lempipi.sh` writes. Static checks -- no stubs, no
+# The systemd units `setup-appliance.sh` writes. Static checks -- no stubs, no
 # hardware -- over the single source of truth for a rebuilt card.
 group units || return 0
 printf '\nunits\n'
 
 setup
-SETUP="$PI/setup-lempipi.sh"
+SETUP="$PI/setup-appliance.sh"
 
 # **`[PI3-FOUND-670]` Every `Type=oneshot` needs a ceiling.** systemd defaults
 # `TimeoutStartSec` to infinity for oneshot services, so a unit that blocks is

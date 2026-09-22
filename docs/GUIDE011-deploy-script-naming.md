@@ -6,7 +6,7 @@ A naming and signposting convention for the scripts that build, deploy and
 verify Lempi across the fleet. Written because a name proved load-bearing:
 `[IMPL-BOS-185]`'s five days of RAM-only deploys to `bose` happened partly
 because the script doing them was called, and filed, as though it only ever
-touched `lempipi`.
+touched `lempi02w`.
 
 > **Related:** [BOSE010](../BosePi/BOSE010-changing-a-locked-card.md) — the traps this is meant to make visible · [BOSE006](../BosePi/BOSE006-what-lands-where.md) `[IMPL-BOS-185]` — the incident · [build/README.md](../build/README.md) — the cross-compile story these scripts automate
 
@@ -16,11 +16,11 @@ touched `lempipi`.
 
 **`[GDE-DEP-010]` The name is where the question should have been asked.**
 `b032f3b` added `bose` to the appliance list by passing `pi@bose` to a script
-called `deploy-lempipi.sh`, which delegates to `deploy-player.sh` living in the
+called `deploy-lempi02w.sh`, which delegates to `deploy-player.sh` living in the
 `LempiPi/` folder. Both are host-generic — each takes a host argument and
-defaults to lempipi — but nothing in either name, path, or call site ever
+defaults to lempi02w — but nothing in either name, path, or call site ever
 raised *does this appliance's root filesystem behave the same way?* It does
-not: `bose` has an overlay root and `lempipi` does not, and every deploy to
+not: `bose` has an overlay root and `lempi02w` does not, and every deploy to
 `bose` from that day until 2026-09-11 went to RAM and reported success.
 
 A per-machine folder that contains machine-generic tooling is worse than a flat
@@ -36,7 +36,7 @@ matters as much.** Every script taking a `HOST` argument was checked, 2026-09-11
 
 | script | takes a host | named for a machine | verdict |
 | :--- | :--- | :--- | :--- |
-| `deploy-lempipi.sh` (build/) | yes | yes | **misnamed** — generic appliance deploy |
+| `deploy-lempi02w.sh` (build/) | yes | yes | **misnamed** — generic appliance deploy |
 | `deploy-player.sh` (LempiPi/) | yes | by folder | **misplaced** — generic installer |
 | `deploy.sh` (LempiPi/) | yes | by folder | **misplaced** — see `[GDE-DEP-025]` |
 | `provision-bose.sh`, `finalize-bose.sh`, `build-bose-card.sh`, `seed-library.sh`, `attended-import.sh`, `request-unlock.sh` (BosePi/) | yes | yes | **correct** |
@@ -87,11 +87,11 @@ and refuses to be typed by accident `[IMPL-BOS-120]`.
 
 | was | is now |
 | :--- | :--- |
-| `deploy-lempipi.sh` (build/) | [`build/deploy-appliance.sh`](../build/deploy-appliance.sh) |
+| `deploy-lempi02w.sh` (build/) | [`build/deploy-appliance.sh`](../build/deploy-appliance.sh) |
 | `deploy-player.sh` (LempiPi/) | [`build/install-player.sh`](../build/install-player.sh) |
 | `deploy.sh` (LempiPi/) | merged into [`build/deploy-appliance.sh`](../build/deploy-appliance.sh); a forwarder remains at the old path |
 
-`lempipi` remains the default host, so existing invocations keep working; only
+`lempi02w` remains the default host, so existing invocations keep working; only
 the name and path changed. Every executable reference was updated in the same
 commit, and the documentation citations with them, because `[GOV-DOC-040]`'s
 path check makes a half-done rename fail rather than rot — the cost being
@@ -135,7 +135,7 @@ persisted — both must be checked, and the *persisted* one is the answer.
 ## 6. What the migration costs
 
 **`[GDE-DEP-080]` The rename is cheap; the citations are not.** Measured
-2026-09-11: `deploy-lempipi.sh` is named in 4 files, `LempiPi/deploy.sh` in 4,
+2026-09-11: `deploy-lempi02w.sh` is named in 4 files, `LempiPi/deploy.sh` in 4,
 and `deploy-player.sh` in **16** — including `HOWTO.md`, four `PI0*` records,
 three `BOSE0*` records, and specs as far afield as `SPEC034` and `SPIN002`.
 
@@ -196,16 +196,16 @@ history. It passes every argument through unchanged.
 and every future Pi target does too.** Decided by the project owner as part of
 convergence between the open projects; `deploy-appliance.sh` already defaults
 `FEATURES=""`, `player/Cargo.toml` has `default = []`, and
-`deploy-everywhere.sh` routes `pi@lempipi`/`pi@bose` through that path, so the
+`deploy-everywhere.sh` routes `pi@lempi02w`/`pi@bose` through that path, so the
 rule is mechanically enforced rather than remembered. Verified by building both
 ways on 2026-09-12: **11,118,944 bytes with, 7,981,512 without — 2.99 MB**,
 against the 3.05 MB `[SPEC-SUI-190]` measured at its own earlier commit. The
-7.98 MB binary was deployed to `lempipi` the same day. The original argument
+7.98 MB binary was deployed to `lempi02w` the same day. The original argument
 follows, because the reasoning is why the rule holds rather than merely what it
 is.
 
 The two scripts disagreed —
-`deploy-lempipi.sh` passed `--features vipunen-support`, `deploy.sh` did not — so
+`deploy-lempi02w.sh` passed `--features vipunen-support`, `deploy.sh` did not — so
 which binary an appliance received depended on which command was typed. Merging
 forced one answer, and it preserves today's fleet behaviour rather than
 changing what runs on two appliances inside a merge.
@@ -214,7 +214,7 @@ The evidence says today's behaviour is wrong. `[SPEC-SUI-196]` states the gate
 exists *"so an appliance build never resolves or compiles an HTTP client it
 will never call"*, and `[SPEC-SUI-190]` measures the appliance binary **3.05 MB**
 smaller without it. Measured 2026-09-11: `/review` answers **200 on both bose
-and lempipi**, so both carry a `reqwest`/`rustls` stack they never call, on
+and lempi02w**, so both carry a `reqwest`/`rustls` stack they never call, on
 machines with a stated memory budget `[REQ-HW-140]`. The flag has been there
 since `968bdca`, the commit that created these scripts, and no document argues
 for it.

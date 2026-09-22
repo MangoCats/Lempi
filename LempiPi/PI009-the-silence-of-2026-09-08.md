@@ -21,7 +21,7 @@ where it stands. A paragraph is evidence of what was believed on a date.
 
 ## 1. The silence of 2026-09-08, and what it was not
 
-**`[PI3-FOUND-065]` The reported fault was "lempipi cannot connect to
+**`[PI3-FOUND-065]` The reported fault was "lempi02w cannot connect to
 Middleton." Bluetooth was working the entire time.** Established by
 measurement rather than by asking the stack whether it was happy: BlueZ's
 own `MediaTransport1.State` read `active`, `hcitool con` showed an
@@ -53,7 +53,7 @@ symptom, and was wrong — and because the next person to run `wpctl inspect`
 on a silent speaker will see exactly the same two lines.
 
 **`[PI3-FOUND-090]` The speaker powers the Pi, so they can only power up
-together — and the Pi always loses the race.** lempipi is fed from the
+together — and the Pi always loses the race.** lempi02w is fed from the
 Middleton's own USB port. Switching the speaker off cuts power to the
 appliance; switching it on starts a boot. The speaker is connectable within
 about two seconds and the Pi needs some thirty to reach a working Bluetooth
@@ -80,7 +80,7 @@ header, so the condition is true unconditionally. The gate reduced to its
 third clause alone, which passes whenever no sink is marked default.
 
 The consequence needed a machine with no hardware sink to become visible, and
-lempipi is one: a Zero 2 W has no analog jack, its only ALSA card is `vc4hdmi`,
+lempi02w is one: a Zero 2 W has no analog jack, its only ALSA card is `vc4hdmi`,
 and with nothing plugged into HDMI that card yields no sink — so until
 Bluetooth arrives it genuinely has nowhere audible to send audio. (The
 `snd_bcm2835.enable_hdmi=0` / `enable_headphones=0` on its kernel command line

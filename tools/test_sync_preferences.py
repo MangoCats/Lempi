@@ -181,7 +181,7 @@ def main() -> int:
           "a missing table must read as absent")
     check(not sp.absent_table({"ok": False, "error": "Error: database is locked"}),
           "a locked database must NOT read as an empty table -- that pushes stale values")
-    check(not sp.absent_table({"ok": False, "error": "no answer from lempipi within 30s"}),
+    check(not sp.absent_table({"ok": False, "error": "no answer from lempi02w within 30s"}),
           "a timeout must not read as an empty table either")
     check(not sp.absent_table({"ok": False}),
           "a failure with no error text is unknown, not empty")

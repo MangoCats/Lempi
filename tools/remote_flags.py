@@ -3,7 +3,7 @@
 """Fetch a remote's flagged recordings and passages directly, no database copy `[SPEC-DF-119]`.
 
 `export_flags.py` needed a full local copy only because it is Python, and
-`[SPEC-DF-108]` already established lempipi has none to run it *there* --
+`[SPEC-DF-108]` already established lempi02w has none to run it *there* --
 the same reason `[SPEC-DF-116]` gave `remote_peek.py` an `ssh ... sqlite3
 -json ...` round trip instead of a copy for a single review anchor. There is
 nothing about `listener_flags` that needs a copy either: it is one small
@@ -15,7 +15,7 @@ end_ms)` anchor `[SPEC-DF-103]` already uses, a recording-kind flag passed
 through by its own mbid -- as one query, over one `ssh` round trip, via
 `remote_peek.py`'s `run_remote_sql()`.
 
-    python tools/remote_flags.py pi@lempipi:/srv/library/library.db         --remote-listener /var/lempi/listener.db -o flags.json
+    python tools/remote_flags.py pi@lempi02w:/srv/library/library.db         --remote-listener /var/lempi/listener.db -o flags.json
 
 Writes the identical `flags.json` shape `export_flags.py` always has
 (`{"format_version": 1, "flags": [...]}`) -- `import_flags.py` runs
@@ -89,7 +89,7 @@ def fetch_flags(remote: str, hostname: str, timeout: float = rp.TOTAL_TIMEOUT,
     pointed at the listener half it fails on `passages`, and pointed at the
     catalogue half it fails on `listener_flags` -- where the guard below
     then reports "nothing flagged" for an installation that has plenty.
-    Measured against `pi@lempipi` 2026-09-11.
+    Measured against `pi@lempi02w` 2026-09-11.
     """
     result = rp.run_remote_sql(remote, attached(FLAGS_SQL, listener), timeout=timeout)
     if not result["ok"] and "no such column" in result["error"].lower() and "origin" in result["error"].lower():

@@ -22,7 +22,7 @@ Sendspin turned out to have a parent: it was released *by* Music Assistant, an O
 
 | Mode | What it is | MA-side cooperation needed |
 | :--- | :--- | :--- |
-| **A** | An OpenSubsonic-compatible surface on lempipi's own current library | **None** — MA's existing Subsonic provider already speaks it |
+| **A** | An OpenSubsonic-compatible surface on lempi02w's own current library | **None** — MA's existing Subsonic provider already speaks it |
 | **B** | A native Music Assistant `MusicProvider`/`MetadataProvider` plugin | A merged PR, and permanent upstream maintenance |
 | **C** | Lempi as a Sendspin player/source inside an MA-run group | None to little — already analysed in [SPIN001](SPIN001-protocol-and-integration-analysis.md)/[SPIN002](SPIN002-server-mode-deep-dive.md) |
 | **D** | Run both, unconnected | None — available today |

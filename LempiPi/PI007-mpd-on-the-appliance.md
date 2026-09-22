@@ -1,6 +1,6 @@
 # PI007: MPD on the Appliance
 
-**Measurement — Tier 1 · measured on lempipi, 2026-08-23**
+**Measurement — Tier 1 · measured on lempi02w, 2026-08-23**
 
 MPD as Lempi's guest on the hardware `[SPEC-BK-020]`: what it costs to keep
 running, which of its three plausible outputs actually reaches the speaker, and

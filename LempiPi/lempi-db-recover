@@ -2,7 +2,7 @@
 # Roll back any hot SQLite journal before the player opens anything.
 #
 # **`[PI3-FOUND-120]` On this appliance every power-down is a power CUT.**
-# lempipi is fed from the Middleton's own USB port `[PI3-FOUND-090]`, so
+# lempi02w is fed from the Middleton's own USB port `[PI3-FOUND-090]`, so
 # switching the speaker off yanks the supply from a running Linux system with
 # open databases. There is no shutdown, and there is no warning there could
 # have been one. That is not misuse -- it is the only way the hardware can be
@@ -53,7 +53,7 @@ set -u
 #
 # So it resolves a runner instead of naming one. `python3` is on every Lempi
 # appliance because the tooling already assumes it, and for THIS act it is
-# not a lesser substitute: measured on `lempipi` 2026-09-11, against a WAL
+# not a lesser substitute: measured on `lempi02w` 2026-09-11, against a WAL
 # database carrying un-checkpointed frames and against a hot rollback journal
 # whose dirty pages had really spilled into the database file, `python3` and
 # `sqlite3` gave identical outcomes -- frames replayed and the `-wal` removed,
@@ -100,7 +100,7 @@ for db in "$DB" "$LIB" "$LISTENER"; do
     # artifact and recovering it is pure cost.** `$DB` is the pre-split file.
     # After `[IMPL-DBSPLIT-025]` the player opens the two halves and never
     # touches it again -- but this script still opened it read-write at every
-    # single boot: on `lempipi`, 1.16 GB of superseded database, mapped and
+    # single boot: on `lempi02w`, 1.16 GB of superseded database, mapped and
     # read on behalf of nobody, on the slowest machine in the ecosystem, at
     # the one moment it is trying to start.
     #

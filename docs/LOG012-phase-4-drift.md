@@ -256,7 +256,7 @@ factor of two is a fault in the chain, not in the clocks.
 `lempiplay3`'s hours — 45 minutes is a first reading, not a gate.** Each node's rate here is measured against its own NTP-disciplined
 system clock; both discipline to the same sources, so their *rate* agreement is
 far below a ppm and differencing the two figures gives the relative drift echo
-actually has to correct. Phase 1 predicts 7–14 ppm for `bose`↔`lempipi`
+actually has to correct. Phase 1 predicts 7–14 ppm for `bose`↔`lempi02w`
 `[LOG-CAL-030]`, but nothing predicts `bose`↔`lempiplay3`: that pair has never
 been measured, and this run establishes it for the first time.
 

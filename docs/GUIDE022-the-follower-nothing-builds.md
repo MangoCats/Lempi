@@ -55,7 +55,7 @@ why they survived to be found by reading.
 turned out to be.** The deployed binaries settled it rather than the argument
 did. `pi@bose` carries five `echo-follow:` strings and none of the
 `#[cfg(not(...))]` refusal, so it *was* built with the feature — by hand,
-through `LEMPI_FEATURES`, by a route nothing here describes. `pi@lempipi` has
+through `LEMPI_FEATURES`, by a route nothing here describes. `pi@lempi02w` has
 neither. Two nodes of one fleet, differing in whether a control works, because
 the correct build depended on an environment variable a person has to
 remember.
@@ -174,7 +174,7 @@ which stage B sets, because a red line that is always red teaches a reader to
 ignore red lines.
 
 **`[GDE-ECHO-388]` And the follower was not on the deploy list.**
-`deploy-everywhere.sh` named `pi@lempipi` and `pi@bose`. `lp3-wifi` — aarch64,
+`deploy-everywhere.sh` named `pi@lempi02w` and `pi@bose`. `lp3-wifi` — aarch64,
 overlay root, running `lempi.service`, and *the node that actually follows* —
 was not there, so it sat four commits behind while the two that were got kept
 current. It was reachable the whole time under a name nothing but

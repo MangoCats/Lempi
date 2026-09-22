@@ -1,6 +1,6 @@
 # PI008: Appliance Bring-up History
 
-**Appliance Record — dated findings from bringing lempipi up, 2026-08-16 to 2026-08-20**
+**Appliance Record — dated findings from bringing lempi02w up, 2026-08-16 to 2026-08-20**
 
 Three incidents from the appliance's bring-up, each originally narrated inline
 in the current-state document it interrupted: [PI002](PI002-test-image-setup.md)

@@ -4,13 +4,13 @@
 
 > **Status, corrected 2026-09-21.** This header read "DESIGNED, NOT YET BUILT"
 > and the paragraph below read "neither appliance has built" it. Both were true
-> when written and neither is now. `lempipi` split first; the desktop followed
+> when written and neither is now. `lempi02w` split first; the desktop followed
 > on 2026-09-11; and `bose` and `lp3-wifi` each run a separate `--listener` and
 > `--library` today, which their own unit files settle in one line rather than
 > by inference. The migration as it actually ran is
 > [IMPL011](IMPL011-database-split-built.md), and what the local split then
 > owed the appliance — with how each item was proved — is
-> [PI025](PI025-what-the-local-split-owes-lempipi.md). This document stays the
+> [PI025](PI025-what-the-local-split-owes-lempi02w.md). This document stays the
 > design those were built from; read it as design, not as work outstanding.
 
 Everything needed to build the split [PI023 §5](PI023-the-database-split-on-disk.md#5-the-database-split)
@@ -35,9 +35,9 @@ against synchronization, RAM, backup, and MPD turned up.
 > procedure [IMPL010](IMPL010-database-split-review.md), and what was built
 > and proven [IMPL011](IMPL011-database-split-built.md). This document keeps
 > the design and the original migration.
-## 1. Why now, and why lempipi first
+## 1. Why now, and why lempi02w first
 
-Asked directly whether splitting lempipi's database would complicate the
+Asked directly whether splitting lempi02w's database would complicate the
 mesh-sync tooling built for `[SPEC035]`: it doesn't. `tools/mesh_diff.py`
 and `tools/resolve_mesh_conflict.py` already address each side of a diff by
 an independent `(path, table)` pair drawn from a hardcoded `TABLES` allowlist
@@ -48,11 +48,11 @@ target just means pointing the tool at `library.db` instead of `lempi.db`.
 That finding is *why* this is safe to build now rather than a reason to
 build it — see §5 for the review in full.
 
-lempipi, not bose, is the right first target: bose deliberately substituted
+lempi02w, not bose, is the right first target: bose deliberately substituted
 the whole file on C (`[IMPL-BOS-078]`) specifically because building it for
 real showed B genuinely goes read-only there, and moving the split's own
 work onto a second appliance mid-way through would confuse which machine is
-testing what. lempipi's B never becomes read-only in the current design
+testing what. lempi02w's B never becomes read-only in the current design
 (`[PI-A-020]`'s successor discussion), so it does not need the same
 workaround — it can build the split PI-DB-010 actually describes.
 
@@ -138,7 +138,7 @@ convention.** `lempi`'s existing flags are all explicit (`--device`,
 `--mpd-root`) rather than inferred from a shared parent directory, and
 `[PI-SET-020]`'s whole argument against implicit conventions applies here
 too. Add `--library <path>` alongside the existing positional/`--db`
-listener-database argument; `lempi-bose.service`-style units on lempipi
+listener-database argument; `lempi-bose.service`-style units on lempi02w
 gain one more `ExecStart` argument, nothing structural.
 
 **`[IMPL-DBSPLIT-035]` Query qualification is mechanical, not invented per
@@ -158,9 +158,9 @@ one side only.
 Already answered directly and re-stated here for the record
 (`[IMPL-DBSPLIT-005]`): `mesh_diff.py`/`resolve_mesh_conflict.py` never
 touch a `listener_*` table, and address each side by an independent path.
-Post-split, the peer registry's stored path for lempipi changes from
+Post-split, the peer registry's stored path for lempi02w changes from
 `/srv/library/library.db` to `/srv/library/library.db` — a configuration
-edit, not a code change. A **mixed mesh** (bose still one file, lempipi
+edit, not a code change. A **mixed mesh** (bose still one file, lempi02w
 split) works with zero tool changes, since the two sides of a diff have
 never been required to share a layout.
 
@@ -169,10 +169,10 @@ never been required to share a layout.
 Two small `sqlite3` connections instead of one cost a few hundred KB of
 page-cache overhead each, immaterial against `[REQ-HW-100]`'s 150 MB
 budget and dwarfed by the PipeWire/WirePlumber/BlueZ stack already running
-on lempipi. `library.db` is opened `mode=ro` via the `ATTACH` URI, so no
+on lempi02w. `library.db` is opened `mode=ro` via the `ATTACH` URI, so no
 separate writable-open memory cost exists on that side at all. **This split
 does not interact with the overlay-RAM risk found on `bose`
-(`[IMPL-BOS-165]`)** — lempipi has no overlay yet, and if one is added
+(`[IMPL-BOS-165]`)** — lempi02w has no overlay yet, and if one is added
 later, `recurse=0` scoping the overlay to root alone (§6 of PI001,
 already planned regardless of this split) is what controls that risk, not
 the database layout.

@@ -48,7 +48,7 @@ streaming receiver categorically lacks, because it does not yet have the audio.
 A fixed 250 ms is therefore a scheduling constant, not an obstacle.
 
 This retires the categorical exclusion of Bluetooth. The real question for
-`lempipi` is not *how large* its A2DP latency is but *how often and how far it
+`lempi02w` is not *how large* its A2DP latency is but *how often and how far it
 moves*, and whether a move can be detected. That is a measurement nobody has
 taken, not a property anyone should assume.
 
@@ -61,7 +61,7 @@ calibrated residual*, the residual established once per node and re-established
 whenever the link renegotiates. A node that reports only the measured half is
 declaring a number it cannot support `[GOV-SRC-030]`. The calibrated half is set
 by hand where nothing can measure it, and its default is ranked by what actually
-knows the delay -- [SPEC020](spec/SPEC020-node-delay-control.md)
+knows the delay -- [SPEC043](spec/SPEC043-node-delay-control.md)
 `[SPEC-DLY-040]`.
 
 **`[GDE-ECHO-440]` Clock ownership has three cases, and they drift for unrelated
@@ -84,7 +84,7 @@ Probed 2026-09-11.
 | `bose` | HiFiBerry DAC+ Pro, I²S `[PI-BOS-020]` | self | **46.3 ms** (2043 fr) `[LOG-CPAL-060]` | **+14** `[LOG-FIX-030]` | **`Hardware`** |
 | `teacherslounge` | Realtek ALC3246 analog | self | **~4080 fr (92 ms)** probe `[GDE-ECHO-458]` | — | **`Hardware`** |
 | `smartboardpc` | ATE1133 USB, adaptive `[SMT-AUD-040]` | host-slaved | medium | **+9.96** `[LOG-DRIFT-045]` | ≥1 ms granularity |
-| `lempipi` | A2DP to the Middleton | remote | **355 ms** (15676 fr) `[LOG-CPAL-060]` | **no single rate**: +3.96 / −2.09 vs ADC in two sessions `[LOG-CAL-080]` | **`Hardware`** |
+| `lempi02w` | A2DP to the Middleton | remote | **355 ms** (15676 fr) `[LOG-CPAL-060]` | **no single rate**: +3.96 / −2.09 vs ADC in two sessions `[LOG-CAL-080]` | **`Hardware`** |
 | desktop (`local`) | Windows WASAPI | self | unknown | — | estimate only `[GDE-ECHO-180]` |
 
 **`[GDE-ECHO-458]` `teacherslounge` is eligible, and was never affected by the
@@ -180,14 +180,14 @@ Smart's ATE1133 also offers an asynchronous mono capture endpoint at 48 kHz
 `[SMT-AUD-050]` and remains a fallback, but a laptop that can be carried into
 the room beats a mini-PC that cannot.
 
-**`[GDE-ECHO-465]` Do not put the microphone on `lempipi`, however tempting.**
+**`[GDE-ECHO-465]` Do not put the microphone on `lempi02w`, however tempting.**
 It is the node that cannot be measured any other way `[LOG-DRIFT-058]`, so it
 is the obvious place to attach one — and it is the worst host in the fleet for
 the job. The Pi Zero 2 W's `dwc2` OTG controller has documented trouble with
 isochronous transfers: audio arrives "pitched and sped up, as if some samples
 are missing", reproducing across every capture tool and working correctly on a
 Pi 4 with identical hardware. A dropped sample is the one error a timing
-measurement cannot absorb. Measure lempipi's room *from* the laptop instead.
+measurement cannot absorb. Measure lempi02w's room *from* the laptop instead.
 
 **`[GDE-ECHO-468]` Keep the correlation differential, and clock accuracy stops
 mattering.** Recording speaker A against speaker B in one capture makes a
@@ -214,12 +214,12 @@ residual at all.
 
 ## 2b. Going independent, when the master goes away
 
-The motivating case is literal: `lempipi` may be installed in a car and driven
+The motivating case is literal: `lempi02w` may be installed in a car and driven
 out of range. It must not degrade — it should simply resume choosing for
 itself. Three decisions make that free rather than merely possible.
 
 **`[GDE-ECHO-490]` The Program Director stays loaded and inactive. This costs
-nothing, because it is already the status quo.** Measured on `lempipi`
+nothing, because it is already the status quo.** Measured on `lempi02w`
 2026-09-12 with the Director resident: **118 MB RSS, 25 % of its 464 MB, 234 MB
 still free** — matching `[IMPL-SUI-075]`'s figure exactly, and inside
 `[REQ-HW-100]`'s 150 MB process target. A running player has already paid for

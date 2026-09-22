@@ -15,7 +15,7 @@ for `tools/apply_changes.py`'s existing merge logic to run against
 unmodified -- same three-way merge, same `--emit-sql` capture, same
 correctness guarantee, without the whole-file copy in between.
 
-    python tools/remote_snapshot.py pi@lempipi:/srv/library/library.db changes.json -o snapshot.db
+    python tools/remote_snapshot.py pi@lempi02w:/srv/library/library.db changes.json -o snapshot.db
     python tools/apply_changes.py snapshot.db changes.json --commit --emit-sql patch.sql --clear-flags
 
 Deliberately narrow: it answers only what `apply_changes.py`'s own

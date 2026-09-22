@@ -3,7 +3,7 @@
 **Appliance Record — two days of paging killed the adapter, and the log said "speaker"**
 
 The listener put a new Bluetooth speaker into pairing mode four feet from
-`lempipi` and *Find a Speaker* showed nothing. The speaker was fine. The
+`lempi02w` and *Find a Speaker* showed nothing. The speaker was fine. The
 adapter had been dead for two days, and the keeper had spent those two days
 reporting it as a speaker that was switched off.
 
@@ -151,7 +151,7 @@ pays nothing for it. [`skin.js`](../player/src/web/skins/lempi/skin.js) shows
 damage. Covered in [`tests/cases-btctl.sh`](tests/cases-btctl.sh), including
 that a failed scan is still parseable JSON on stdout alone.
 
-**The probe is cheap enough to run during playback.** Measured on `lempipi`
+**The probe is cheap enough to run during playback.** Measured on `lempi02w`
 2026-09-20 against a live A2DP stream to the soundcore: 60 `Read Local Name`
 probes at 1 Hz, none slower than 50 ms, zero failures, `underrun_samples`
 unchanged at 428930 across the run, transport still `active` afterwards.

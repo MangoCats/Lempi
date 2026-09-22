@@ -11,7 +11,7 @@
 # the dummy exists". `grep -v` succeeds when ANY line fails to match, and the
 # block it was fed begins with the `├─ Sinks:` header -- so the condition was
 # true on every machine in every state, including one whose only sink was the
-# dummy. Measured 2026-09-08 on lempipi, whose HDMI and headphone outputs are
+# dummy. Measured 2026-09-08 on lempi02w, whose HDMI and headphone outputs are
 # both switched off at the kernel command line and which therefore has no
 # hardware sink at all until Bluetooth arrives: it reported "real sink present
 # after 3s" and released the player onto a dummy, 30 s before the speaker

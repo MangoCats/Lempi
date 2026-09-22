@@ -97,7 +97,7 @@ else
     # No rsync on this host (Windows/Git Bash) -- confirmed absent building
     # this card, same as prepare-card.sh's reader gap [IMPL-BOS-100]. Borrow
     # rsync from a throwaway Alpine container instead, the same pattern
-    # scratch/transfer.sh already used for lempipi.
+    # scratch/transfer.sh already used for lempi02w.
     say "no native rsync -- using a throwaway Alpine container"
     run "container transfer" env MSYS_NO_PATHCONV=1 docker run --rm \
         -v "$MUSIC_DIR:/music:ro" \

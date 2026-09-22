@@ -1,36 +1,29 @@
 # HOWTO: deploy Lempi to the appliance
 
-How to put a build of Lempi onto `lempipi` — the running Raspberry Pi
+How to put a build of Lempi onto `lempi02w` — the running Raspberry Pi
 appliance — whether that's the latest commit or a specific tagged release.
 Not how to build the Pi image itself (see [PI001](PI001-image-and-partitions.md))
 and not the general dev build (see the repo root's `HOWTO.md`). One thing
 gets done here: a binary is cross-compiled and put where the appliance's
 `lempi` service runs it from.
 
-> **`lempipi` is a router-side name, not the machine's own.** The appliance's
-> hostname is `LempiPiHost` and its DHCP reservation also answers to
-> `lempi02w`; `lempipi` is an alias for the same address, 192.168.67.20. It is
-> not configured anywhere on the Pi and would not survive a router reset, so if
-> `ssh pi@lempipi` fails while the node is plainly up, that is why —
-> `pi@lempi02w` reaches the same machine.
+> **The appliance is `lempi02w`, and no script hardcodes it.** That is its DHCP
+> reservation on this network, and it is the name this fleet reaches it by.
 >
-> **No script defaults to that alias any more** *(corrected 2026-09-21)*. This
-> paragraph used to say "every script here defaults to `pi@lempipi`", and that
-> stopped being true when three hardcoded copies of the name were replaced by a
-> roster: [`build/lib-defaults.sh`](../build/lib-defaults.sh) reads
-> `fleet/targets.env` — untracked, this household's real kit — and falls back to
-> the deliberately generic `fleet-example/targets.env` `[GDE-ARC-033]`. This
-> fleet's roster names `pi@lempi02w`, so that is what a bare
-> `build/deploy-appliance.sh` aims at, and `LEMPI_APPLIANCE` outranks both
-> `[GDE-CLI-090]`.
+> Which host a deploy actually targets is not written in any script:
+> [`build/lib-defaults.sh`](../build/lib-defaults.sh) reads `fleet/targets.env`
+> — untracked, this household's real kit — and falls back to the deliberately
+> generic `fleet-example/targets.env` `[GDE-ARC-033]`, so a fresh clone aims at
+> a host that plainly does not exist rather than at someone else's hardware.
+> This fleet's roster names `pi@lempi02w`, which is what a bare
+> `build/deploy-appliance.sh` aims at; `LEMPI_APPLIANCE` `[GDE-CLI-090]`
+> outranks both.
 >
-> **Whether the alias resolves at all is unsettled, and one command settles
-> it.** This document says it does; `build/lib-defaults.sh`'s own comment says
-> `pi@lempipi` is "a name that has never resolved". Both are assertions and
-> neither is a measurement, which is the situation
-> [GOV002](../docs/GOV002-sources-of-truth.md) exists for. `getent hosts
-> lempipi`, run on that network, answers it in one line. Until someone runs it,
-> prefer `lempi02w` — the two sources agree on that one.
+> *An earlier name for this machine appeared throughout these documents and
+> resolved nowhere — confirmed 2026-09-21 against the network rather than
+> argued from the documents, which had asserted both that it worked and that it
+> never had. It is gone from the tree; if you meet it in an old shell history
+> or a git log, `lempi02w` is the machine it meant.*
 
 Every command below is verified against this repository as it stands.
 
@@ -41,8 +34,8 @@ Every command below is verified against this repository as it stands.
 - **Docker Desktop** (or a Linux `dockerd`), running. It supplies the
   aarch64 cross-compiler — nothing else on your machine needs to know how
   to target the Pi's CPU.
-- **SSH access to `lempipi`** (or whatever host you're actually deploying
-  to) — a working `ssh pi@lempipi` with no password prompt is what the
+- **SSH access to `lempi02w`** (or whatever host you're actually deploying
+  to) — a working `ssh pi@lempi02w` with no password prompt is what the
   script itself uses to restart the service and check what's running.
 
 That's it. No local Rust toolchain, no manually-tracked cross-compiler
@@ -90,7 +83,7 @@ build/deploy-appliance.sh pi@other-host            # latest, elsewhere
 The last line on success looks like:
 
 ```
-deploy: confirmed -- pi@lempipi is running 05d501191f16
+deploy: confirmed -- pi@lempi02w is running 05d501191f16
 ```
 
 That hash is what the running binary itself reports back over SSH, not
@@ -117,7 +110,8 @@ came back, and exits non-zero without pretending the deploy succeeded.
   just what runs on it.
 - [IMPL002-database-split.md](IMPL002-database-split.md) — the detailed
   design for splitting `lempi.db` into `library.db`/`listener.db`, PI001 §5
-  worked out to the actual call sites. Designed and reviewed; not yet built.
+  worked out to the actual call sites. Built — the migration as it ran is
+  [IMPL011](IMPL011-database-split-built.md).
 - `build/README.md` — the manual two-step cross-compile process, and the
   Windows `CC` trap, in full.
 - the repo root's `HOWTO.md` — building and running Lempi and Vipunen on a

@@ -1,4 +1,4 @@
-# SPEC021: Choosing Whether A Node Follows
+# SPEC044: Choosing Whether A Node Follows
 
 **Design Specification — independent or follower, and whom to follow**
 
@@ -9,7 +9,7 @@ plays in a room could only be made by restarting a process over ssh. This
 specifies the control that fixed that, and the several things about echo that
 make it more than a text box and a checkbox. All of it is built.
 
-> **Related:** [SPEC020](SPEC020-node-delay-control.md) `[SPEC-DLY-120]` — the other per-node echo control, in the same panel · [GUIDE016](../GUIDE016-echo-playback-plan-build.md) `[GDE-ECHO-315]` — which node may be master · [GUIDE010](../GUIDE010-echo-node-capabilities.md) `[GDE-ECHO-450]` — the roster this needs
+> **Related:** [SPEC043](SPEC043-node-delay-control.md) `[SPEC-DLY-120]` — the other per-node echo control, in the same panel · [GUIDE016](../GUIDE016-echo-playback-plan-build.md) `[GDE-ECHO-315]` — which node may be master · [GUIDE010](../GUIDE010-echo-node-capabilities.md) `[GDE-ECHO-450]` — the roster this needs
 
 ---
 

@@ -134,7 +134,7 @@ def fake_spawn_snapshot_unreachable(self, job_id, stage, argv):
             json.dump(CHANGES_DOC, f)
         return 0, "1 change(s) exported"
     if stage == "snapshot":
-        return 1, "could not reach pi@lempipi:/srv/library/library.db: no route to host"
+        return 1, "could not reach pi@lempi02w:/srv/library/library.db: no route to host"
     raise AssertionError(f"stage {stage!r} must never run after snapshot fails")
 
 
@@ -147,7 +147,7 @@ def test_push_lands_a_change(tmp: str) -> None:
     runner = jobmod.Runner(library, sidecar)
     captured = {}
     runner._spawn = fake_spawn_success(CHANGES_DOC, captured).__get__(runner, jobmod.Runner)
-    job_id = runner.submit("remote-push", "pi@lempipi:/srv/library/library.db")
+    job_id = runner.submit("remote-push", "pi@lempi02w:/srv/library/library.db")
     j = wait_for(runner, job_id)
     check(j["state"] == "done", f"expected done, got {j}")
     stages = [e["stage"] for e in j["events"] if e["kind"] == "stage"]
@@ -158,7 +158,7 @@ def test_push_lands_a_change(tmp: str) -> None:
 
     # `[SPEC-DF-121]` A real, previously-uncaught bug: a bare `systemctl` as
     # the unprivileged deploy user fails outright with "Interactive
-    # authentication required" -- found live against a real lempipi, not by
+    # authentication required" -- found live against a real lempi02w, not by
     # any test, because this stage was faked wholesale above (and everywhere
     # else this job is tested) without ever inspecting the argv it built.
     apply_argv = captured.get("apply-remote")
@@ -175,7 +175,7 @@ def test_push_lands_a_change(tmp: str) -> None:
     logs = [e["text"] for e in j["events"] if e["kind"] == "log"]
     check(any("1 change(s) to push" in t for t in logs),
           f"a one-sentence summary must say what is about to be pushed, got {logs}")
-    check(any("lempipi now has these changes" in t for t in logs),
+    check(any("lempi02w now has these changes" in t for t in logs),
           f"a final confirmation must say the push actually landed, got {logs}")
 
 
@@ -187,7 +187,7 @@ def test_push_nothing_pending(tmp: str) -> None:
     runner = jobmod.Runner(library, sidecar)
     empty = {"format_version": 1, "changes": []}
     runner._spawn = fake_spawn_success(empty).__get__(runner, jobmod.Runner)
-    job_id = runner.submit("remote-push", "pi@lempipi:/srv/library/library.db")
+    job_id = runner.submit("remote-push", "pi@lempi02w:/srv/library/library.db")
     j = wait_for(runner, job_id)
     check(j["state"] == "done", f"expected done, got {j}")
     stages = [e["stage"] for e in j["events"] if e["kind"] == "stage"]
@@ -197,7 +197,7 @@ def test_push_nothing_pending(tmp: str) -> None:
     check(any("nothing to sync" in t for t in logs),
           f"a plain-English 'nothing to sync' line must appear, got {logs}")
     check(any(t == "the remote was not touched." for t in logs),
-          f"must say plainly that lempipi was never touched, got {logs}")
+          f"must say plainly that lempi02w was never touched, got {logs}")
 
 
 def test_snapshot_unreachable_fails_before_compare(tmp: str) -> None:
@@ -207,7 +207,7 @@ def test_snapshot_unreachable_fails_before_compare(tmp: str) -> None:
     sidecar = os.path.join(tmp, "library2.console.db")
     runner = jobmod.Runner(library, sidecar)
     runner._spawn = fake_spawn_snapshot_unreachable.__get__(runner, jobmod.Runner)
-    job_id = runner.submit("remote-push", "pi@lempipi:/srv/library/library.db")
+    job_id = runner.submit("remote-push", "pi@lempi02w:/srv/library/library.db")
     j = wait_for(runner, job_id)
     check(j["state"] == "failed", f"expected failed, got {j}")
     stages = [e["stage"] for e in j["events"] if e["kind"] == "stage"]
@@ -225,7 +225,7 @@ def _apply_cmd_for(tmp: str, name: str, listener: str | None) -> str:
         runner.set_remote_listener(listener)
     captured = {}
     runner._spawn = fake_spawn_success(CHANGES_DOC, captured).__get__(runner, jobmod.Runner)
-    job_id = runner.submit("remote-push", "pi@lempipi:/srv/library/library.db")
+    job_id = runner.submit("remote-push", "pi@lempi02w:/srv/library/library.db")
     wait_for(runner, job_id)
     argv = captured.get("apply-remote")
     return argv[-1] if argv else ""
@@ -234,12 +234,12 @@ def _apply_cmd_for(tmp: str, name: str, listener: str | None) -> str:
 def test_a_split_peer_is_patched_through_its_listener_half(tmp: str) -> None:
     print()
     print("a split peer takes the patch through its LISTENER half, catalogue attached")
-    # The bug this pins, measured on a real lempipi 2026-09-11: the whole
+    # The bug this pins, measured on a real lempi02w 2026-09-11: the whole
     # patch went to the catalogue path, and `CREATE TABLE` does not follow
     # the attach chain -- so `id_reviews`/`boundary_reviews`/`artist_reviews`
     # were created inside `library.db`, shadowing the real ones in the
     # listener half (40 vs 99 rows, and 4 vs 3).
-    cmd = _apply_cmd_for(tmp, "split", "pi@lempipi:/var/lempi/listener.db")
+    cmd = _apply_cmd_for(tmp, "split", "pi@lempi02w:/var/lempi/listener.db")
     check("sqlite3 /var/lempi/listener.db" in cmd,
           f"the patch must be applied to the listener half, got: {cmd!r}")
     check("ATTACH DATABASE '/srv/library/library.db' AS lib;" in cmd,
@@ -266,7 +266,7 @@ def test_the_player_restarts_even_when_the_patch_fails(tmp: str) -> None:
     # `ro`, it fails every single time. A sync that cannot land its changes
     # is a disappointment; one that silently turns the music off in another
     # room is a fault.
-    cmd = _apply_cmd_for(tmp, "restart", "pi@lempipi:/var/lempi/listener.db")
+    cmd = _apply_cmd_for(tmp, "restart", "pi@lempi02w:/var/lempi/listener.db")
     # Asserted on the MEANING, not on the presence of "&&": the restart is
     # legitimately guarded by whether the node has the unit at all, and an
     # earlier version of this check forbade the two characters rather than
@@ -320,8 +320,8 @@ def test_push_all_visits_every_ticked_peer(tmp: str) -> None:
     library = os.path.join(tmp, "fanout.db")
     build_library(library)
     runner = jobmod.Runner(library, os.path.join(tmp, "fanout.console.db"))
-    runner.upsert_peer("lempipi", "pi@lempipi:/srv/library/library.db",
-                       "pi@lempipi:/var/lempi/listener.db")
+    runner.upsert_peer("lempi02w", "pi@lempi02w:/srv/library/library.db",
+                       "pi@lempi02w:/var/lempi/listener.db")
     runner.upsert_peer("bose", "pi@bose:/srv/library/library.db",
                        "pi@bose:/var/lempi/listener.db")
     runner.upsert_peer("teacherslounge", "sw@teacherslounge:/home/sw/lempi-data/library.db",
@@ -329,10 +329,10 @@ def test_push_all_visits_every_ticked_peer(tmp: str) -> None:
     runner.set_peer_enabled("bose", False)      # deliberately left out
     names = [p["name"] for p in runner.peers_for_push()]
     # Reordered by the rename, not by a behaviour change: the appliance's
-    # former name sorted after `teacherslounge`, `lempipi` sorts before it. A
+    # former name sorted after `teacherslounge`, `lempi02w` sorts before it. A
     # mechanical rename preserves a list's positions and cannot know the list
     # was ordered.
-    check(names == ["lempipi", "teacherslounge"],
+    check(names == ["lempi02w", "teacherslounge"],
           f"only the ticked peers are pushed to, alphabetically, got {names}")
 
     captured = {}
@@ -345,10 +345,10 @@ def test_push_all_visits_every_ticked_peer(tmp: str) -> None:
           f"both ticked peers must be attempted and succeed, got {result}")
     # Same reordering as above: the comparison is against a SORTED list, so
     # the expectation has to be sorted under the new names too.
-    check(sorted(result["peers"]) == ["lempipi", "teacherslounge"],
+    check(sorted(result["peers"]) == ["lempi02w", "teacherslounge"],
           f"a result per peer, got {sorted(result['peers'])}")
     hosts = sorted(a[1] for a in captured.get("apply-remote", []))
-    check(hosts == ["pi@lempipi", "sw@teacherslounge"],
+    check(hosts == ["pi@lempi02w", "sw@teacherslounge"],
           f"and bose, unticked, must never have been contacted; got {hosts}")
     # Each peer's work must be kept apart, or two peers in one job overwrite
     # each other's changes.json and patch.
@@ -360,27 +360,27 @@ def test_one_failing_peer_does_not_stop_the_others(tmp: str) -> None:
     print()
     print("a node that fails is reported, and the rest are still pushed to")
     # The reason the per-peer result is kept separately at all: an
-    # unreachable bose must not silently cancel a push to lempipi that would
+    # unreachable bose must not silently cancel a push to lempi02w that would
     # have worked, and "1 of 2" is a true answer a single exit code cannot give.
     library = os.path.join(tmp, "partial.db")
     build_library(library)
     runner = jobmod.Runner(library, os.path.join(tmp, "partial.console.db"))
-    runner.upsert_peer("lempipi", "pi@lempipi:/srv/library/library.db",
-                       "pi@lempipi:/var/lempi/listener.db")
+    runner.upsert_peer("lempi02w", "pi@lempi02w:/srv/library/library.db",
+                       "pi@lempi02w:/var/lempi/listener.db")
     runner.upsert_peer("bose", "pi@bose:/srv/library/library.db",
                        "pi@bose:/var/lempi/listener.db")
     captured = {}
     runner._spawn = fake_spawn_per_peer(
         CHANGES_DOC, failing_hosts=("pi@bose",), captured=captured).__get__(
             runner, jobmod.Runner)
-    j = wait_for(runner, runner.submit("remote-push-all", json.dumps(["bose", "lempipi"])))
+    j = wait_for(runner, runner.submit("remote-push-all", json.dumps(["bose", "lempi02w"])))
     result = j["result"]
     check(j["state"] == "failed", f"a job with a failed peer must say so, got {j['state']}")
     check(result["failed"] == ["bose"], f"and name which one, got {result['failed']}")
     check(result["succeeded"] == 1 and result["attempted"] == 2,
           f"1 of 2, not all-or-nothing, got {result}")
     hosts = [a[1] for a in captured.get("apply-remote", [])]
-    check("pi@lempipi" in hosts,
+    check("pi@lempi02w" in hosts,
           f"the working peer must still have been pushed to after the failure, got {hosts}")
     logs = [e["text"] for e in j["events"] if e["kind"] == "log"]
     check(any("1 of 2 peer(s) updated" in t for t in logs),

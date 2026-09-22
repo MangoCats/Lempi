@@ -31,9 +31,9 @@ mounts p2 read-only beneath an overlay and `lempiplay3` mounts it read-write.
 `BosePi/build-bose-card.sh` and its companions are not needed here.
 
 It also already has two of the three things `[SD-RISK-150]` recommends for
-`lempipi`: state on its own f2fs partition, and **zram** rather than an
+`lempi02w`: state on its own f2fs partition, and **zram** rather than an
 SD-backed swapfile. Its root carries 2.9 GB of lifetime writes against
-`lempipi`'s 89 GB.
+`lempi02w`'s 89 GB.
 
 ## 2. What must survive
 
@@ -44,7 +44,7 @@ machine, because none of it is in the repository:
 | | |
 | :--- | :--- |
 | `fbui.service` | `ExecStart=/usr/local/bin/fbui --url ws://127.0.0.1:5720/ws`, `User=pi`, `Nice=-5`, `Restart=always`, and an `ExecStartPre` that turns the console cursor off on tty1 |
-| the binary | built with the **`fbui` cargo feature**, which `bose` and `lempipi` never compile `[SPEC-FBUI-015]` |
+| the binary | built with the **`fbui` cargo feature**, which `bose` and `lempi02w` never compile `[SPEC-FBUI-015]` |
 | display overlays | `dtparam=spi=on`, `dtoverlay=nospi10`, `dtoverlay=piscreen2r,rotate=90,speed=16000000,fps=20`, `dtoverlay=dwc2,dr_mode=host` |
 | a deliberate absence | `dtoverlay=vc4-kms-v3d` is commented out — *"HDMI never used on this appliance, disabled for boot speed"* |
 | the port | **5720**, not 80. `fbui` connects to it by URL, so the two move together or not at all |
@@ -63,7 +63,7 @@ hardening and the reason section 4 orders the work as it does.
    nobody can say what code is on it. Replace with a named commit built
    `--features fbui` and without `vipunen-support`, per `[GDE-DEP-025]`.
 2. **The database.** Still the pre-split monolith at `/var/lempi/listener.db`,
-   where `bose` and `lempipi` are both split. Follow
+   where `bose` and `lempi02w` are both split. Follow
    [IMPL009](../LempiPi/IMPL009-database-split-plan.md) and `[BOS-RUN-080]`.
 3. **The root.** Install `overlayroot`, add `overlayroot=tmpfs` to
    `cmdline.txt`, correct `fstab`, reboot. This is the risky one.
@@ -289,7 +289,7 @@ Each gate in section 4 wants three separate answers:
 
 **`[IMPL-VP3-100]` The risk figures for this node have not been computed.**
 [LOG010](LOG010-power-loss-risk-on-the-pi-nodes.md) covers `bose` and
-`lempipi`; this node sits between them and closer to `bose` than the root
+`lempi02w`; this node sits between them and closer to `bose` than the root
 filesystem alone suggests, because its state and library are already on their
 own partitions. Worth computing before step 4 rather than after, so the
 conversion is justified by a number.

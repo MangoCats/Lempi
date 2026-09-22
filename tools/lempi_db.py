@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """One way for a `tools/` script to open a Lempi database, split or not.
 
-The player got `QualifyingConn` and the `__LIB__` placeholder when lempipi
+The player got `QualifyingConn` and the `__LIB__` placeholder when lempi02w
 split `[IMPL-DBSPLIT-035]`, so Rust genuinely does not care which shape it
-is talking to. `tools/` never got the equivalent, because lempipi runs no
+is talking to. `tools/` never got the equivalent, because lempi02w runs no
 Vipunen. Splitting the *desktop* is what makes that gap matter: 63 scripts
 live here, 40 touching catalogue tables, 17 touching listener tables and 12
 touching both.
@@ -60,7 +60,7 @@ how much they rely on anybody being careful:
 
 **Cross-half writes are not atomic under WAL.** SQLite documents a
 transaction spanning attached databases as atomic only when the journal
-mode is not WAL, and the desktop's database is WAL (lempipi's halves are
+mode is not WAL, and the desktop's database is WAL (lempi02w's halves are
 `delete`). A script that must write both halves in one indivisible step
 cannot get that from the database here; it has to be ordered so that a
 crash between the two writes leaves a recoverable state. `peer_writable`
@@ -90,7 +90,7 @@ ROLE_LISTENER = "listener"
 # and reads as whole.
 #
 # Chosen to be tables no bootstrap path ever creates on the wrong side:
-# notably NOT `file_tags` or `cover_art`, which lempipi has empty copies of
+# notably NOT `file_tags` or `cover_art`, which lempi02w has empty copies of
 # in its listener half `[PI-OWE-040]` and which would therefore make that
 # half look like a catalogue.
 LIBRARY_MARKERS = {"recordings", "files", "passages", "flavor"}
@@ -181,7 +181,7 @@ def find_peer(path: str, this_shape: str, explicit: str | None = None) -> str | 
     environment (`LEMPI_LIBRARY`/`LEMPI_LISTENER`), then a sibling beside
     this file. The sibling convention covers a desktop split, whose two
     halves sit in one directory; it deliberately does **not** cover
-    lempipi, whose halves are on different mounts (`/srv/library` and
+    lempi02w, whose halves are on different mounts (`/srv/library` and
     `/var/lempi`) because they are on different partitions for reasons
     `[PI001]` explains -- that installation names them explicitly.
     """

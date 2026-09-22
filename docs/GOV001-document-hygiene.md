@@ -92,7 +92,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `RIP` — CD ripping via a disc's own table of contents, see [SPEC025](spec/SPEC025-cd-ripping.md) (mechanics), [SPEC026](spec/SPEC026-cd-ripping-passages.md) (hidden-audio and multi-disc passage representation), [SPEC027](spec/SPEC027-cd-ripping-windows-automation.md) (driving a GUI-only Windows tool — open), and [SPEC028](spec/SPEC028-cd-ripping-identification.md) (Disc ID/CD-TEXT/MusicBrainz)
 - `PREF` — Editing an artist's or a recording's own rotation/recovery/restraint, see [SPEC029](spec/SPEC029-listener-preference-editing.md) (the panel) and [SPEC030](spec/SPEC030-preference-sync.md) (syncing it between installations)
 - `FREQ` — How often a subject has actually played, and who or what chose each play, see [SPEC031](spec/SPEC031-play-frequency.md) — the readout the `PREF` sliders are adjusted against
-- `OWE` — What a fix on one installation owes another that shares its shape, see [PI025](../LempiPi/PI025-what-the-local-split-owes-lempipi.md)
+- `OWE` — What a fix on one installation owes another that shares its shape, see [PI025](../LempiPi/PI025-what-the-local-split-owes-lempi02w.md)
 - `PRE` — What an appliance's startup path depends on, verified and reported at every boot rather than assumed, see [PI026](../LempiPi/PI026-startup-preflight.md)
 - `OPS` — An appliance measured **in service** rather than at build time: the health baseline, the false alarms, the standing findings. Prefixed per machine (`BOS` for `bose`), because the numbers are only meaningful against one box — see [BOSE004](../BosePi/BOSE004-operating-health.md)
 
@@ -172,7 +172,7 @@ grep -rn "SPEC-PD" docs/
 | `[PI5-LIB-*]` | Getting the real library onto the appliance, and its cost | [PI005-appliance-library.md](../LempiPi/PI005-appliance-library.md) |
 | `[PI2-RUN-*]`, `[PI3-OPEN-010]`, `[PI5-DEP-*]`, `[PI5-PRIV-*]` | Dated bring-up findings, consolidated out of PI002/PI003/PI005 per `[GOV-DOC-050]` | [PI008-appliance-bringup-history.md](../LempiPi/PI008-appliance-bringup-history.md) |
 | `[PI-CHR-*]` | What the player costs on the appliance: CPU, memory, thermals, latency | [PI006-appliance-characterisation.md](../LempiPi/PI006-appliance-characterisation.md) |
-| `[PI-OWE-*]` | Defects the local split found that lempipi already has, itemised so they land as one update | [PI025-what-the-local-split-owes-lempipi.md](../LempiPi/PI025-what-the-local-split-owes-lempipi.md) |
+| `[PI-OWE-*]` | Defects the local split found that lempi02w already has, itemised so they land as one update | [PI025-what-the-local-split-owes-lempi02w.md](../LempiPi/PI025-what-the-local-split-owes-lempi02w.md) |
 | `[PI-PRE-*]` | The tools a boot depends on, reported with versions at every start, and the fallback that means a missing one is not a disarming | [PI026-startup-preflight.md](../LempiPi/PI026-startup-preflight.md) |
 | `[BOS-OPS-*]` | `bose` in service: the health baseline to compare against, the measurements that look alarming and are not, and the standing findings | [BOSE004-operating-health.md](../BosePi/BOSE004-operating-health.md) |
 | `[BOS-IMG-*]` | What to add to `bose`'s image and what to refuse, judged on ease of maintaining the ecosystem rather than on `bose` in isolation | [BOSE008-image-update-plan.md](../BosePi/BOSE008-image-update-plan.md) |

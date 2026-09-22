@@ -1,4 +1,4 @@
-# SPIN004: OpenSubsonic in Detail — What It Is, and What It Would Cost on lempipi
+# SPIN004: OpenSubsonic in Detail — What It Is, and What It Would Cost on lempi02w
 
 **Development Guidance — investigated on `sendspin`, 2026-08-28**
 
@@ -28,7 +28,7 @@
 
 ## 3. Where Vipunen–Lempi–Music Assistant actually meet
 
-**`[GDE-MSA-190]` The server role belongs on lempipi, not in Vipunen — a correction to SPIN003's framing, not just GUIDE007's.** SPIN003 said "Vipunen's library behind an OpenSubsonic-compatible surface," which reads as Vipunen hosting it. Vipunen is a **builder tool**, run when someone is inducting or reviewing, not a thing meant to answer requests around the clock `[SPEC013]`. Music Assistant wants an always-reachable server, and the only always-running process in this project's own architecture that already is one is **Lempi, on the appliance** — the same reasoning that makes lempipi run Lempi as a systemd unit at all. Vipunen's role is what it already is for every other cross-installation question this project has solved: the source of *derived facts* — corrected identifications, flavor, `[REQ-LIB-195]`'s flag sync — that reach lempipi's own `lempi.db` through the sync machinery `[SPEC006 §9, §10]` already built for exactly this, not through Vipunen answering Music Assistant's HTTP requests directly.
+**`[GDE-MSA-190]` The server role belongs on lempi02w, not in Vipunen — a correction to SPIN003's framing, not just GUIDE007's.** SPIN003 said "Vipunen's library behind an OpenSubsonic-compatible surface," which reads as Vipunen hosting it. Vipunen is a **builder tool**, run when someone is inducting or reviewing, not a thing meant to answer requests around the clock `[SPEC013]`. Music Assistant wants an always-reachable server, and the only always-running process in this project's own architecture that already is one is **Lempi, on the appliance** — the same reasoning that makes lempi02w run Lempi as a systemd unit at all. Vipunen's role is what it already is for every other cross-installation question this project has solved: the source of *derived facts* — corrected identifications, flavor, `[REQ-LIB-195]`'s flag sync — that reach lempi02w's own `lempi.db` through the sync machinery `[SPEC006 §9, §10]` already built for exactly this, not through Vipunen answering Music Assistant's HTTP requests directly.
 
 **`[GDE-MSA-200]` So the actual picture is Lempi serving OpenSubsonic out of its own already-current database, and it costs less than GUIDE007's misapplied estimate implied.** Lempi's `Cargo.toml` already carries `axum` (with `ws`), `serde`/`serde_json`, and — startlingly relevant — **`md5 = "0.7"`, unconditionally, for something unrelated**, which means even the legacy Subsonic auth scheme `[GDE-MSA-170]` would need no new dependency at all, though `[GDE-MSA-170]`'s own advice is to skip it anyway. No XML crate exists in the tree today; scoping to **JSON-only** (a real, spec-legal choice for a server that only needs to satisfy Music Assistant) means never adding one.
 
@@ -46,13 +46,13 @@
 
 ---
 
-## 5. Weight on lempipi, concretely
+## 5. Weight on lempi02w, concretely
 
 **`[GDE-MSA-250]` New Cargo dependencies: none, if scoped as above.** `axum`, `serde_json`, `md5` are already unconditional. The binary grows by however much the new route handlers themselves compile to — a few hundred lines of Rust, the same order of magnitude as the history panel or the flag routes already shipped unconditionally, not a new subsystem.
 
 **`[GDE-MSA-260]` The gate is attack surface, not memory** — a different reason than `vipunen-support`'s. `vipunen-support` is gated because an appliance that never runs Vipunen has no use for the extra megabytes `[SPEC-SUI-190]`; an OpenSubsonic surface costs almost no megabytes at all, but it is a **new authenticated, unauthenticated-until-paired network entry point** on a home appliance, and "a person deliberately turned this on" is worth more here than a few kilobytes ever were. Recommend a `subsonic` feature, default off, gated the same shape as `mpd` — cheap to build, off until asked for.
 
-**`[GDE-MSA-270]` The real cost is not code size, it is the passage-clipped `stream` handler doing genuine per-request decode work** — `PassageDecoder` running once per stream request, the same CPU `PassageDecoder` already spends for local playback, now potentially concurrent with local playback if lempipi is asked to serve a Music Assistant client and play locally at the same time. Unmeasured; the honest comparison is against whatever headroom `[PI-BOS-...]`-style survey work has already found on lempipi's own CPU, not assumed to be free because the code already exists.
+**`[GDE-MSA-270]` The real cost is not code size, it is the passage-clipped `stream` handler doing genuine per-request decode work** — `PassageDecoder` running once per stream request, the same CPU `PassageDecoder` already spends for local playback, now potentially concurrent with local playback if lempi02w is asked to serve a Music Assistant client and play locally at the same time. Unmeasured; the honest comparison is against whatever headroom `[PI-BOS-...]`-style survey work has already found on lempi02w's own CPU, not assumed to be free because the code already exists.
 
 ---
 
@@ -65,7 +65,7 @@
 ## 7. Open
 
 1. **`[GDE-MSA-290]` Whether Music Assistant's Subsonic provider actually requests `f=json`** rather than defaulting to XML — assumed from its being a modern implementation, not confirmed by reading its own client code.
-2. **`[GDE-MSA-300]` What concurrent local playback plus one or more `stream` requests actually costs on lempipi's own CPU** `[GDE-MSA-270]` — no measurement exists yet.
+2. **`[GDE-MSA-300]` What concurrent local playback plus one or more `stream` requests actually costs on lempi02w's own CPU** `[GDE-MSA-270]` — no measurement exists yet.
 3. **`[GDE-MSA-310]` Whether a played-via-Music-Assistant passage should ever become a `listener_play_history` row**, and under what provenance marker, before `scrobble` is ever implemented at all `[GDE-MSA-240]`.
 
 ---

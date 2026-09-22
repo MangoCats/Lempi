@@ -188,7 +188,7 @@ running now.
 **MPD's four state files split across two partitions**, which is the same
 `[PI-DB-010]` line drawn again: `db_file` is derived from the library and lives
 on B; `state_file`, `sticker_file` and `playlist_directory` are the listener's
-and live on C. `lempipi` puts all four together under `/srv/library/mpd`
+and live on C. `lempi02w` puts all four together under `/srv/library/mpd`
 because it has no C to put them on; this image should not copy that.
 
 ---

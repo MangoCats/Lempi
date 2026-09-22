@@ -24,7 +24,7 @@
 
 **`[GDE-SPIN-340]` `sendspin-rs` is a *client* implementation, and an unfinished one.** Its own status: Phase 1 done (message types, WebSocket handshake, a PCM decoder, NTP-style clock sync), Phase 2 not started (`cpal` audio output, the scheduler, "end-to-end player"). It is being built toward being a receiver, not a hub — `cpal` is an output-device crate, meaningless for a server that never plays audio itself. There is currently no Rust crate that implements the server side of Noise-as-initiator, pairing, or group/time management at all. A Mode A built in Rust today means writing that from the spec directly, in a security-sensitive protocol its own authors call unfinished.
 
-**`[GDE-SPIN-350]` `sendspin-go-server` already does all of §1's crypto and sync, packaged as one binary.** *"The wire protocol, codecs, clock sync, and group/role model all live in the SDK [`sendspin-go`]... This repo owns the CLI flags, the TUI, the audio source decoders, and packaging."* It takes `--audio <file|http-url|hls-url>`, transcodes to Opus, discovers and pairs clients over mDNS, and ships a systemd daemon mode (`make install-server-daemon`) — deployable the same shape as Lempi itself already is on lempipi. Crucially, **`--audio` accepts a plain HTTP URL as a pull source**, which is the seam Lempi could use without writing any protocol code at all.
+**`[GDE-SPIN-350]` `sendspin-go-server` already does all of §1's crypto and sync, packaged as one binary.** *"The wire protocol, codecs, clock sync, and group/role model all live in the SDK [`sendspin-go`]... This repo owns the CLI flags, the TUI, the audio source decoders, and packaging."* It takes `--audio <file|http-url|hls-url>`, transcodes to Opus, discovers and pairs clients over mDNS, and ships a systemd daemon mode (`make install-server-daemon`) — deployable the same shape as Lempi itself already is on lempi02w. Crucially, **`--audio` accepts a plain HTTP URL as a pull source**, which is the seam Lempi could use without writing any protocol code at all.
 
 ---
 
@@ -50,8 +50,8 @@ This is the cheap option, and `[GDE-SPIN-320]` is exactly why it is not yet the 
 
 1. **`[GDE-SPIN-400]` Whether `sendspin-go` (the library) has any metadata/state hook not exposed by `sendspin-go-server` (the CLI)** — the single fact `[GDE-SPIN-380]` turns on. Answerable by reading the library's own godoc, not by more reading of the CLI's README.
 2. **`[GDE-SPIN-410]` What per-client Opus encoding actually costs on a Pi Zero 2W for a plausible group size** (2–4 receivers) — `[GDE-SPIN-330]`'s CPU question has no measurement yet, the same way `[GDE-BAK-030]`'s trim measurement had to be taken rather than assumed.
-3. **`[GDE-SPIN-420]` Whether running a second process (the sidecar) alongside Lempi's own on a 512 MB appliance is a memory decision `[REQ-HW-140]` already answers "no" to** — `sendspin-go-server`'s own footprint has not been measured against lempipi's actual headroom.
-4. **`[GDE-SPIN-430]` Who holds the pairing trust store in Architecture 1** — the sidecar process does, by construction, which means lempipi's own backup story `[REQ-LIB-160]` would need to know about a second piece of state it does not otherwise own.
+3. **`[GDE-SPIN-420]` Whether running a second process (the sidecar) alongside Lempi's own on a 512 MB appliance is a memory decision `[REQ-HW-140]` already answers "no" to** — `sendspin-go-server`'s own footprint has not been measured against lempi02w's actual headroom.
+4. **`[GDE-SPIN-430]` Who holds the pairing trust store in Architecture 1** — the sidecar process does, by construction, which means lempi02w's own backup story `[REQ-LIB-160]` would need to know about a second piece of state it does not otherwise own.
 
 ---
 

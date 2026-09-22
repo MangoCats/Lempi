@@ -178,7 +178,7 @@ pub const RELOAD_MIN_QUEUE_MS: u64 = 180_000;
 /// nor anything else decided was how hard it should push once running. It ran
 /// at the same priority as the thread feeding the speaker.
 ///
-/// Measured on lempipi: the rebuild pulls about 256 MB off the SD card at
+/// Measured on lempi02w: the rebuild pulls about 256 MB off the SD card at
 /// ~15 MB/s while using half a core, and it used to leave no log line at all
 /// to connect that to anything.
 ///
@@ -294,7 +294,7 @@ impl Session {
     /// split `[IMPL-DBSPLIT-025]`.
     pub fn open(db: &Path, library: &Path, depth: usize) -> Result<Self, DbError> {
         // **`[PI3-FOUND-210]` The phases are timed because guessing at them
-        // cost a whole evening.** Measured on lempipi: nineteen seconds pass
+        // cost a whole evening.** Measured on lempi02w: nineteen seconds pass
         // inside this function before the audio device is even opened, and
         // not one instrument on the appliance could say which statement spent
         // them. Four separate plausible culprits were proposed and measured
@@ -498,7 +498,7 @@ impl Session {
         // and a restart mid-passage left its recording, its work and its artist
         // looking as though they had last played whenever they previously did.
         //
-        // Found live on 2026-09-11: `lempipi` was restarted 3m46s into
+        // Found live on 2026-09-11: `lempi02w` was restarted 3m46s into
         // "Funeral for a Friend / Love Lies Bleeding", and the replacement
         // Director read Elton John's last play as 21 days earlier. Thirteen
         // minutes later it queued another recording of the same song, through

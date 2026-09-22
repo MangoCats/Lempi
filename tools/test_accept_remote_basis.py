@@ -192,10 +192,10 @@ def test_closes_the_loop(tmp: str) -> None:
     classifies it fast-forward -- not a conflict.
     """
     print("accept, then edit, then push: apply_changes.py classifies it fast-forward, not conflict")
-    lempipi = os.path.join(tmp, "lempipi.db")
-    build(lempipi)
-    vc = sqlite3.connect(lempipi)
-    # lempipi diverged independently -- amplitude was re-analysed there, with
+    lempi02w = os.path.join(tmp, "lempi02w.db")
+    build(lempi02w)
+    vc = sqlite3.connect(lempi02w)
+    # lempi02w diverged independently -- amplitude was re-analysed there, with
     # no involvement from this desktop at all. The trim points
     # (start_ms/end_ms) are untouched: that identity is the anchor
     # `remote_peek.py` finds this row by, same as `apply_changes.py`'s own
@@ -214,10 +214,10 @@ def test_closes_the_loop(tmp: str) -> None:
     # What remote_peek.py would have returned, computed with its own SQL
     # against a plain local copy standing in for the ssh round trip.
     anchor = {"audio_md5": "md5-a", "passage_kind": "radio", "start_ms": 1000, "end_ms": 200000}
-    rc = sqlite3.connect(lempipi)
+    rc = sqlite3.connect(lempi02w)
     row = rc.execute(rp.sql_for("boundary_review", anchor)).fetchone()
     rc.close()
-    check(row is not None, "the anchor must still resolve on lempipi -- its identity did not move")
+    check(row is not None, "the anchor must still resolve on lempi02w -- its identity did not move")
     remote_value = dict(zip(
         ["start_ms", "end_ms", "lead_in_ms", "lead_out_ms", "gain_db",
          "fade_in_ms", "fade_out_ms", "fade_in_curve", "fade_out_curve"], row))
@@ -230,7 +230,7 @@ def test_closes_the_loop(tmp: str) -> None:
             "--value", json.dumps(remote_value), "--commit")
     check(r.returncode == 0, f"accept exited {r.returncode}: {r.stderr[:300]}")
     dc = sqlite3.connect(desktop)
-    check(boundary(dc) == (1000, 200000, 250, 1200, -2.0), "the local baseline must now match lempipi's")
+    check(boundary(dc) == (1000, 200000, 250, 1200, -2.0), "the local baseline must now match lempi02w's")
     check(boundary_and_fade(dc) == (1000, 200000, 250, 1200, -2.0, 15, 1500, "linear", "cosine"),
           f"the fade half of the accepted basis must land too, got {boundary_and_fade(dc)}")
 
@@ -257,17 +257,17 @@ def test_closes_the_loop(tmp: str) -> None:
                        capture_output=True, text=True)
     check(r.returncode == 0, f"export exited {r.returncode}: {r.stderr[:300]}")
 
-    r = subprocess.run([sys.executable, APPLY_CHANGES, lempipi, changes_json, "--commit"],
+    r = subprocess.run([sys.executable, APPLY_CHANGES, lempi02w, changes_json, "--commit"],
                        capture_output=True, text=True)
     check(r.returncode == 0, f"apply exited {r.returncode}: {r.stderr[:400]}")
     check("1 fast-forward" in r.stdout, f"expected a fast-forward, got {r.stdout!r}")
     check("0 conflict" in r.stdout,
           f"the accepted basis (fade included) must prevent a conflict, got {r.stdout!r}")
-    vc = sqlite3.connect(lempipi)
+    vc = sqlite3.connect(lempi02w)
     check(boundary(vc) == (2500, 190500, 300, 1100, -1.5),
-          f"the edit must land on lempipi, got {boundary(vc)}")
+          f"the edit must land on lempi02w, got {boundary(vc)}")
     check(boundary_and_fade(vc) == (2500, 190500, 300, 1100, -1.5, 25, 1600, "cosine", "exponential"),
-          f"the fade half of the edit must land on lempipi too, got {boundary_and_fade(vc)}")
+          f"the fade half of the edit must land on lempi02w too, got {boundary_and_fade(vc)}")
     vc.close()
 
 

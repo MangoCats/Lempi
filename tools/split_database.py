@@ -122,7 +122,7 @@ def build_half(source_path: str, out_path: str, tables: list) -> dict:
     # database silently produced two non-WAL halves. That matters: the
     # console reads the live library while the player writes it, and
     # `[IMPL-SUI-040]` rests on WAL for exactly that ("readers never block
-    # the player"). lempipi's own halves are `delete` today because this
+    # the player"). lempi02w's own halves are `delete` today because this
     # line did not exist when they were made.
     #
     # It is also the one pragma that changes what a cross-half transaction

@@ -5,7 +5,7 @@ design, the build procedure, and the scripts and configuration that carry it
 out.
 
 **Separate from [LempiPi/](../LempiPi/) because the hardware differs enough to
-matter.** `lempipi` reaches a Bluetooth speaker through PipeWire on 464 MB;
+matter.** `lempi02w` reaches a Bluetooth speaker through PipeWire on 464 MB;
 `bose` is a Pi 4 with 2 GB and a HiFiBerry DAC+ Pro on I²S. The player is the
 same and the partition design is shared `[PI-PART-020]`, but almost every
 setting below it lands differently — the output plugin, the mixer, the

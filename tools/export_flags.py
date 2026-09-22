@@ -2,20 +2,20 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Export flagged recordings and passages for a remote installation `[SPEC006 §10]`.
 
-`[REQ-VIS-265]`'s checkbox is set on lempipi's own play-history page --
+`[REQ-VIS-265]`'s checkbox is set on lempi02w's own play-history page --
 exactly the machine with no Vipunen to act on it. This gets the name of a
 flagged recording or passage off that installation and onto a portable form a
 *different* installation's own library can resolve, the same way `export_changes.py`
 already does for an applied decision rather than a mere identity.
 
 This reads a **copy** of the peer's listener half, pulled down however you
-like. (`[SPEC-DF-108]` justified that by lempipi having no Python. It has
+like. (`[SPEC-DF-108]` justified that by lempi02w having no Python. It has
 python3 3.11.2 -- `lempi-preflight` logs it at every boot `[PI-PRE-010]` --
 so the copy is a convenience now, not a necessity; `remote_flags.py` gets the
 same answer over one ssh round trip without copying anything.)
 
-    scp pi@lempipi:/var/lempi/listener.db /tmp/lempipi-listener.db
-    python tools/export_flags.py /tmp/lempipi-listener.db -o flags.json
+    scp pi@lempi02w:/var/lempi/listener.db /tmp/lempi02w-listener.db
+    python tools/export_flags.py /tmp/lempi02w-listener.db -o flags.json
 
 Read-only: nothing here writes to the database it reads from. The write half
 is `tools/import_flags.py`, run against the *receiving* installation.

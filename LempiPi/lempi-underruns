@@ -7,7 +7,7 @@ separates "the player could not keep its buffer fed" from "the radio dropped
 packets" -- PipeWire's own `ERR` column stays at zero for the first case,
 because from PipeWire's side nothing went wrong at all.
 
-It reached 654768 on lempipi -- 14.85 seconds of silence -- during a startup
+It reached 654768 on lempi02w -- 14.85 seconds of silence -- during a startup
 that `pw-top`, `free`, `vmstat` and the load average all reported as healthy.
 Nothing else that was being measured would ever have shown it.
 

@@ -15,7 +15,7 @@ Python rather than shell because the subset is a dozen related DELETEs and the
 paths are Windows paths going to a Linux box; the quoting alone justifies it.
 
     python LempiPi/make_sample_library.py
-    python LempiPi/make_sample_library.py --albums 6 --push pi@lempipi
+    python LempiPi/make_sample_library.py --albums 6 --push pi@lempi02w
 """
 
 import argparse

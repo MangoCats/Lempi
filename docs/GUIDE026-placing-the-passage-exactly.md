@@ -11,7 +11,7 @@ actuator at all; the transition could only ever bring a passage **forward**, so
 half the corrections the loop issued were delivered by the slowest thing in the
 system. This is what replaced that.
 
-> **Related:** [GUIDE017](GUIDE017-echo-correction.md) `[GDE-ECHO-340]` — the loop the change lands in · [GUIDE025](GUIDE025-what-holds-the-alignment-back.md) `[GDE-ARC-046]` — the measurement that asked for it · [GUIDE027](GUIDE027-what-the-transition-achieved.md) `[GDE-ARC-057]` — why this document's success lines could not be wrong · [SPEC021](spec/SPEC021-echo-mode-control.md) `[SPEC-ECHO-030]` — what the listener is promised · [GUIDE029](GUIDE029-what-is-known-about-alignment.md) `[GDE-ARC-063]` — the standing model and the refuted register
+> **Related:** [GUIDE017](GUIDE017-echo-correction.md) `[GDE-ECHO-340]` — the loop the change lands in · [GUIDE025](GUIDE025-what-holds-the-alignment-back.md) `[GDE-ARC-046]` — the measurement that asked for it · [GUIDE027](GUIDE027-what-the-transition-achieved.md) `[GDE-ARC-057]` — why this document's success lines could not be wrong · [SPEC044](spec/SPEC044-echo-mode-control.md) `[SPEC-ECHO-030]` — what the listener is promised · [GUIDE029](GUIDE029-what-is-known-about-alignment.md) `[GDE-ARC-063]` — the standing model and the refuted register
 
 ---
 

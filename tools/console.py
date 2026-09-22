@@ -55,8 +55,8 @@ def fleet_targets():
     """Who this console pushes to, as `{{TOKEN}}` -> text.
 
     **The pages name no machine.** They used to: `export.html` generated
-    `ssh pi@lempipi ...` as literal text, and `profile.html` said "Could not
-    check lempipi" fifteen times. That is deployment configuration living in
+    `ssh pi@lempi02w ...` as literal text, and `profile.html` said "Could not
+    check lempi02w" fifteen times. That is deployment configuration living in
     tracked application code -- wrong for anyone else's fleet, and wrong for
     this one the day a host is renamed `[GDE-ARC-033]`.
 
@@ -623,7 +623,7 @@ def flag_sync_status(conn, pid: int) -> dict:
     passage from its own local database, so whatever a person is looking at
     on this very page *is* `local` at the moment it loaded. The only
     genuinely open question a live check can answer is whether the remote
-    still agrees -- `[SPEC-DF-115]`'s own point, that lempipi's flags can
+    still agrees -- `[SPEC-DF-115]`'s own point, that lempi02w's flags can
     change with no involvement from Vipunen at all.
     """
     subjects = passage_flag_subjects(conn, pid)
@@ -1209,7 +1209,7 @@ class Handler(BaseHTTPRequestHandler):
                 STATE["jobs"].set_remote(remote)
                 return self.send_json({"remote": remote})
             if p == "/api/remote/pull":
-                # Direction one `[SPEC-DF-109]`: lempipi's own flags, resolved
+                # Direction one `[SPEC-DF-109]`: lempi02w's own flags, resolved
                 # against this library. A count of flags on recordings or
                 # passages that do not exist here yet is the job's own
                 # `result`, not an error.
@@ -1345,7 +1345,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"job_id": STATE["jobs"].submit("export-bundle", f"%{q}%")})
             if p == "/api/system/shutdown":
                 # Refused while a job is running, not just discouraged --
-                # `remote-push` briefly stops lempipi's own player mid-sync
+                # `remote-push` briefly stops lempi02w's own player mid-sync
                 # `[SPEC-DF-111]`, and killing this process between that
                 # `systemctl stop` and its own `systemctl start` would leave
                 # the appliance silent with nothing left running to restart

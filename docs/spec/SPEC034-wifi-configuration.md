@@ -69,7 +69,7 @@ treats a bare word as a search query) — NetworkManager's own per-connection
 `dnsmasq` instance, scoped to that interface alone, reads every file in
 that directory automatically. Every device joined to the appliance's own
 SSID gets this resolver through ordinary DHCP; no client-side mDNS support
-needed at all. Requires `dnsmasq` installed — added to `setup-lempipi.sh`'s
+needed at all. Requires `dnsmasq` installed — added to `setup-appliance.sh`'s
 package list (alongside `iw`, used to confirm AP-mode support), so a
 future fresh appliance build acquires it automatically.
 
@@ -94,7 +94,7 @@ regression in the dnsmasq setup above.
 its own system-wide service, enabled by default, bound to `0.0.0.0:53` —
 a different job than the one it's wanted for here, and one that would
 collide with it: NetworkManager's own per-connection instance needs port
-53 free on the AP's own interface. `setup-lempipi.sh` now `disable --now`
+53 free on the AP's own interface. `setup-appliance.sh` now `disable --now`
 and `mask`s the system-wide service right after installing the package
 (mirroring, in reverse, the existing `upower.service`-ships-disabled
 fix-up already in that script), so only NetworkManager's own scoped
@@ -165,7 +165,7 @@ failure and carry on serving its configured port exactly as before.
 binary's name or path** — it does not survive the file being replaced,
 which is what every deploy does. Both `install-player.sh` (the primary
 install *and* its rollback-to-`.prev` path — either can leave a freshly
-written file with no capability of its own) and `setup-lempipi.sh` (a
+written file with no capability of its own) and `setup-appliance.sh` (a
 fresh appliance build, checked idempotently via `getcap` so a re-run
 doesn't re-announce it) re-apply `setcap` immediately after every single
 `install`.

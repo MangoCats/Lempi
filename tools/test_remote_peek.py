@@ -221,7 +221,7 @@ def test_peek_error_handling() -> None:
     print("peek() reports ok on a clean round trip with a row")
     rp.subprocess.run = lambda *a, **k: fake(0, json.dumps([{"artist_mbid": ART, "artist_name": "A Band"}]))
     try:
-        r = rp.peek("pi@lempipi:/srv/library/library.db", "artist_review", anchor)
+        r = rp.peek("pi@lempi02w:/srv/library/library.db", "artist_review", anchor)
         check(r == {"ok": True, "current": {"artist_mbid": ART, "artist_name": "A Band"}}, f"got {r}")
     finally:
         rp.subprocess.run = real_run
@@ -229,15 +229,15 @@ def test_peek_error_handling() -> None:
     print("peek() reports ok with current=None on a clean round trip with no row")
     rp.subprocess.run = lambda *a, **k: fake(0, "")
     try:
-        r = rp.peek("pi@lempipi:/srv/library/library.db", "artist_review", anchor)
+        r = rp.peek("pi@lempi02w:/srv/library/library.db", "artist_review", anchor)
         check(r == {"ok": True, "current": None}, f"got {r}")
     finally:
         rp.subprocess.run = real_run
 
     print("peek() reports not-ok on a non-zero exit, without raising")
-    rp.subprocess.run = lambda *a, **k: fake(255, "", "ssh: connect to host lempipi port 22: No route to host")
+    rp.subprocess.run = lambda *a, **k: fake(255, "", "ssh: connect to host lempi02w port 22: No route to host")
     try:
-        r = rp.peek("pi@lempipi:/srv/library/library.db", "artist_review", anchor)
+        r = rp.peek("pi@lempi02w:/srv/library/library.db", "artist_review", anchor)
         check(r["ok"] is False and "No route to host" in r["error"], f"got {r}")
     finally:
         rp.subprocess.run = real_run
@@ -247,15 +247,15 @@ def test_peek_error_handling() -> None:
         raise subprocess.TimeoutExpired(cmd="ssh", timeout=10)
     rp.subprocess.run = raise_timeout
     try:
-        r = rp.peek("pi@lempipi:/srv/library/library.db", "artist_review", anchor)
-        check(r["ok"] is False and "lempipi" in r["error"], f"got {r}")
+        r = rp.peek("pi@lempi02w:/srv/library/library.db", "artist_review", anchor)
+        check(r["ok"] is False and "lempi02w" in r["error"], f"got {r}")
     finally:
         rp.subprocess.run = real_run
 
     print("peek() reports not-ok on a malformed reply instead of raising")
     rp.subprocess.run = lambda *a, **k: fake(0, "{not json")
     try:
-        r = rp.peek("pi@lempipi:/srv/library/library.db", "artist_review", anchor)
+        r = rp.peek("pi@lempi02w:/srv/library/library.db", "artist_review", anchor)
         check(r["ok"] is False and "unparseable" in r["error"], f"got {r}")
     finally:
         rp.subprocess.run = real_run
@@ -275,7 +275,7 @@ def test_peek_error_handling() -> None:
 
     rp.subprocess.run = fake_missing_fade_then_ok
     try:
-        r = rp.peek("pi@lempipi:/srv/library/library.db", "boundary_review", boundary_anchor)
+        r = rp.peek("pi@lempi02w:/srv/library/library.db", "boundary_review", boundary_anchor)
         check(len(calls) == 2, f"expected exactly one retry (2 round trips), got {len(calls)}")
         check(r == {"ok": True, "current": no_fade_row}, f"got {r}")
     finally:
@@ -286,11 +286,11 @@ def test_peek_error_handling() -> None:
 
     def fake_unrelated_failure(*a, **k):
         calls.append(1)
-        return fake(255, "", "ssh: connect to host lempipi port 22: No route to host")
+        return fake(255, "", "ssh: connect to host lempi02w port 22: No route to host")
 
     rp.subprocess.run = fake_unrelated_failure
     try:
-        r = rp.peek("pi@lempipi:/srv/library/library.db", "boundary_review", boundary_anchor)
+        r = rp.peek("pi@lempi02w:/srv/library/library.db", "boundary_review", boundary_anchor)
         check(len(calls) == 1, f"an unrelated failure must not trigger a retry, got {len(calls)} call(s)")
         check(r["ok"] is False and "No route to host" in r["error"], f"got {r}")
     finally:

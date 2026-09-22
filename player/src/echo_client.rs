@@ -1287,7 +1287,7 @@ mod tests {
         };
         {
             let mut s = h.state.lock().unwrap();
-            // lempipi's 355 ms `[LOG-CPAL-060]`.
+            // lempi02w's 355 ms `[LOG-CPAL-060]`.
             s.echo_node.offset_frames = 15_676;
             s.echo_node.rate = 44_100;
             // No anchor of its own, so the residual block is not in the way.

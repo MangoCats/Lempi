@@ -18,7 +18,7 @@
 //! The command line is `cli::specs::echoprobe`; `echoprobe --help` prints it.
 //!
 //! `--offset-frames` is this node's presentation offset `[GDE-ECHO-430]` --
-//! the measured figure, not a guess: `bose` 2043, `lempipi` 15676
+//! the measured figure, not a guess: `bose` 2043, `lempi02w` 15676
 //! `[LOG-CPAL-060]`.
 
 use std::time::Duration;

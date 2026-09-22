@@ -1,20 +1,20 @@
-# PI025: What the Local Split Owes lempipi
+# PI025: What the Local Split Owes lempi02w
 
 **Appliance Record — opened and settled 2026-09-11**
 
-> **Status: paid.** Everything below was applied to `lempipi` on
+> **Status: paid.** Everything below was applied to `lempi02w` on
 > 2026-09-11, in the order §4 required — deploy first, then drop, then WAL —
 > and verified on the running appliance. The register is kept as the record
 > of what was owed and how each item was proved, not as an outstanding list.
 
-Splitting the *local* database turned up defects that lempipi already has,
-because lempipi split first and nothing swept the rest of the system
+Splitting the *local* database turned up defects that lempi02w already has,
+because lempi02w split first and nothing swept the rest of the system
 afterwards. The local split completed on 2026-09-11; this register is what
 it owes the appliance. Each one is found on the desktop, fixed on the desktop, and
 then owed to the appliance — which is running today and is not going to be
 disturbed for every one of them individually.
 
-This is that debt, itemised. It exists so the fixes land on `lempipi` as
+This is that debt, itemised. It exists so the fixes land on `lempi02w` as
 one deliberate update rather than as four separate recollections.
 
 > **Related:** [PI023](PI023-the-database-split-on-disk.md) for the split on
@@ -38,13 +38,13 @@ Recorded as a pattern and not four coincidences, because the next thing
 that touches a database on a split installation will be the fifth unless
 somebody goes looking.
 
-## 2. Owed to lempipi
+## 2. Owed to lempi02w
 
 **`[PI-OWE-020]` The four folder-writing generators are broken there now,
 and `covers`/`cue_sheets` are both switched on.** `run_generation`
 (`player/src/bin/lempi.rs`) opened the path the player was *started* with —
 the listener half — while `cue`/`covers`/`lyrics_sidecar`/`lyrics_cache`
-read catalogue tables and nothing else. On lempipi that is
+read catalogue tables and nothing else. On lempi02w that is
 `no such table: passages` on the first statement, and has been since the
 appliance split. Verified directly against `/var/lempi/listener.db`
 2026-09-11, with `covers=1` and `cue_sheets=1` in `player_settings`.
@@ -65,7 +65,7 @@ at the first statement. After it:
 Forty-three covers is work that had not been happening since the appliance
 split.
 
-**`[PI-OWE-030]` lempipi lost WAL in the split, and that is why its
+**`[PI-OWE-030]` lempi02w lost WAL in the split, and that is why its
 database intermittently reports "locked".** The pre-split
 `/srv/library/library.db` is `wal`; both live halves are `delete`. A fresh
 SQLite file is `delete` and `split_database.py` never set the mode, so the
@@ -75,7 +75,7 @@ after the service restarted, and succeeded four times immediately after —
 which is exactly what `delete` mode does when a reader meets the writer,
 and what WAL exists to avoid.
 
-Fixed in `split_database.py` for future splits. For lempipi it is
+Fixed in `split_database.py` for future splits. For lempi02w it is
 `PRAGMA journal_mode = WAL` on each half — persistent, no data change, no
 rebuild. **Check first whether anything there writes both halves in one
 transaction**: SQLite documents a cross-database transaction as atomic only
@@ -89,7 +89,7 @@ consecutive `SELECT COUNT(*)` reads against the live listener half while
 the player was running, twelve successes, where the same read had failed
 intermittently before.
 
-**`[PI-OWE-040]` Two empty shadow tables sit in lempipi's listener half.**
+**`[PI-OWE-040]` Two empty shadow tables sit in lempi02w's listener half.**
 `file_tags` (0 rows) and `cover_art` (0 rows) are in `/var/lempi/listener.db`
 while the real ones — 5,709 and 1,079 rows — are in `/srv/library/library.db`.
 The player opens the listener half as `main`, so an unqualified reference to
@@ -115,7 +115,7 @@ whole database: the alias becomes `main`,
 catalogue, and it creates empty `file_tags` and `cover_art` in the listener
 half. Both now use `open_split(&db, &library)`.
 
-So dropping the two tables on lempipi is not enough on its own — they will
+So dropping the two tables on lempi02w is not enough on its own — they will
 be back on the next restart until the build carrying this fix is deployed.
 Do the drop and the deploy together, or just the deploy and then the drop.
 
@@ -133,12 +133,12 @@ peer.** `[IMPL002 §7.4]` designed the two-path model and it was half built:
 `sync_peers.remote_listener`, `sync_remote_listener` and
 `JobRunner.get_remote_listener()` all existed, with tests, and nothing read
 them. Fixed locally 2026-09-11; the desktop's own `sync_remote` was also
-still naming lempipi's pre-split `/srv/library/library.db`, a file two days
-stale that nothing reads. Nothing is owed *to* lempipi here — the fix and
+still naming lempi02w's pre-split `/srv/library/library.db`, a file two days
+stale that nothing reads. Nothing is owed *to* lempi02w here — the fix and
 the misconfiguration were both on this side — recorded so the appliance is
 not suspected of it later.
 
-**`[PI-OWE-055]` Pulling flags from lempipi reported "nothing flagged" for
+**`[PI-OWE-055]` Pulling flags from lempi02w reported "nothing flagged" for
 a peer with 19.** `remote_flags.py` is the third script `[IMPL002 §7.4]`
 named, and the last to be fixed. Against a split peer it failed in both
 directions: pointed at the listener half, `no such table: passages`;
@@ -148,20 +148,20 @@ library yet", turned into a cheerful empty result.
 
 Fixed by attaching the peer's listener half in front of the query, the one
 thing `run_remote_sql` can do with a second path since `sqlite3` takes more
-than one statement. Measured against `pi@lempipi` 2026-09-11: 0 flags
+than one statement. Measured against `pi@lempi02w` 2026-09-11: 0 flags
 before, **19 after**, matching what the appliance actually holds. The guard
 now fires only when no listener path was given, so "absent from this file"
 can no longer masquerade as "absent from this installation".
 
-Nothing is owed *to* lempipi — the defect was on this side — but it is the
+Nothing is owed *to* lempi02w — the defect was on this side — but it is the
 clearest instance yet of `[PI-OWE-010]`'s pattern, and the reason that
 pattern is stated as a pattern.
 
 ## 3. Not owed, checked anyway
 
-**`[PI-OWE-060]` The cascade replacement is not needed on lempipi.**
+**`[PI-OWE-060]` The cascade replacement is not needed on lempi02w.**
 `[IMPL009 §7.7]`'s `ON DELETE SET NULL` cascade is just as dead there as
-here, but nothing on lempipi deletes passages — segmentation is desktop-only
+here, but nothing on lempi02w deletes passages — segmentation is desktop-only
 per `[SPEC035]`. Checked 2026-09-11 rather than assumed: **zero orphans**
 across all three of `listener_play_history`, `selection_decisions` and
 `player_state`. `tools/passage_orphans.py` is worth keeping as a
@@ -171,11 +171,11 @@ diagnostic there, not as scheduled work.
 for the same reason.** Those three write the catalogue and then stamp a
 listener-side review table, which on a split pair is two files and — under
 WAL — not one atomic act. They now commit catalogue-first so the only
-survivable half-failure is one a re-run repairs. lempipi runs none of them,
+survivable half-failure is one a re-run repairs. lempi02w runs none of them,
 so it inherits nothing here; recorded because the *reasoning* applies to
 anything that ever writes both halves there, and nothing does yet.
 
-**`[PI-OWE-070]` No catalogue table is missing from lempipi's catalogue
+**`[PI-OWE-070]` No catalogue table is missing from lempi02w's catalogue
 half, and no listener table has strayed into it.** Checked the same day,
 both directions. The only duplicates are the two in `[PI-OWE-040]` and the
 deliberate `schema_meta`.
@@ -189,7 +189,7 @@ same day — see the status banner at the top, and `[PI-OWE-095]` two entries
 below, which records both installations reconciling afterwards. Left as
 written rather than edited into agreement, because what was owed is the
 record this document exists to keep `[GOV-DOC-050]`.)* None of the above has
-been applied to lempipi. The WAL
+been applied to lempi02w. The WAL
 change is a `sqlite3` one-liner; `[PI-OWE-020]` and `[PI-OWE-040]` both need
 the build, and `[PI-OWE-040]`'s drop must come *after* that deploy or the
 next restart simply recreates what was dropped. Doing them together, once,
@@ -202,9 +202,9 @@ against the pair — so everything owed above was exercised on a real split
 installation before it was applied to this one.
 
 **`[PI-OWE-095]` Two split installations now reconcile.** With the desktop
-and `lempipi` both split, `sync_preferences.py` ran end to end for the
+and `lempi02w` both split, `sync_preferences.py` ran end to end for the
 first time in that shape and pulled the one special the appliance held that
-the desktop did not — `user.spiritual` on `93d4c0f2`, set from lempipi's
+the desktop did not — `user.spiritual` on `93d4c0f2`, set from lempi02w's
 own panel. Both sides then read identically and a further run reports
 nothing to do. That is `[SPEC-PREF-155]`'s two-path model, `[IMPL002 §7.4]`'s
 peer column, and `[SPEC-PREF-140]`'s specials sync all working at once,

@@ -73,7 +73,7 @@ def build(path: str) -> None:
     c.execute("INSERT INTO listener_flags (subject_kind, subject_id, flagged_at, origin) "
               "VALUES ('recording', ?, '2026-08-29 09:00:00', NULL)", (SONG_A,))
     c.execute("INSERT INTO listener_flags (subject_kind, subject_id, flagged_at, origin) "
-              "VALUES ('passage', '2', '2026-08-29 09:05:00', 'lempipi')")
+              "VALUES ('passage', '2', '2026-08-29 09:05:00', 'lempi02w')")
     # A passage-kind flag whose passage no longer exists -- must be dropped,
     # not fabricated into a broken anchor.
     c.execute("INSERT INTO listener_flags (subject_kind, subject_id, flagged_at, origin) "
@@ -105,7 +105,7 @@ def test_sql_mirrors_export_flags(tmp: str) -> None:
     real = rp.run_remote_sql
     rp.run_remote_sql = lambda remote, sql, timeout=10.0: {"ok": True, "rows": got_rows}
     try:
-        result = rf.fetch_flags("pi@lempipi:/srv/library/library.db", hostname="desktop")
+        result = rf.fetch_flags("pi@lempi02w:/srv/library/library.db", hostname="desktop")
     finally:
         rp.run_remote_sql = real
     check(result["ok"] is True, f"got {result}")
@@ -121,7 +121,7 @@ def test_sql_mirrors_export_flags(tmp: str) -> None:
     check(got[("recording", json.dumps({"recording_mbid": SONG_A}, sort_keys=True))]["origin"] == "desktop",
           "a NULL origin must fall back to the caller's own hostname, exactly as export_flags.py does")
     check(got[("passage", json.dumps({"audio_md5": "md5-b", "passage_kind": "radio",
-                                       "start_ms": 2000, "end_ms": 190000}, sort_keys=True))]["origin"] == "lempipi",
+                                       "start_ms": 2000, "end_ms": 190000}, sort_keys=True))]["origin"] == "lempi02w",
           "an explicit origin must pass through unchanged")
 
 
@@ -141,7 +141,7 @@ def test_missing_origin_column_falls_back() -> None:
     real = rp.run_remote_sql
     rp.run_remote_sql = fake
     try:
-        result = rf.fetch_flags("pi@lempipi:/srv/library/library.db", hostname="desktop")
+        result = rf.fetch_flags("pi@lempi02w:/srv/library/library.db", hostname="desktop")
     finally:
         rp.run_remote_sql = real
     check(len(calls) == 2, f"expected exactly one retry, got {len(calls)} calls")
@@ -155,7 +155,7 @@ def test_missing_table_is_zero_flags_not_an_error() -> None:
     rp.run_remote_sql = lambda remote, sql, timeout=10.0: (
         {"ok": False, "error": "near line 1: no such table: listener_flags"})
     try:
-        result = rf.fetch_flags("pi@lempipi:/srv/library/library.db", hostname="desktop")
+        result = rf.fetch_flags("pi@lempi02w:/srv/library/library.db", hostname="desktop")
     finally:
         rp.run_remote_sql = real
     check(result == {"ok": True, "flags": []}, f"got {result}")
@@ -166,7 +166,7 @@ def test_unreachable_passes_through() -> None:
     real = rp.run_remote_sql
     rp.run_remote_sql = lambda remote, sql, timeout=10.0: {"ok": False, "error": "no route to host"}
     try:
-        result = rf.fetch_flags("pi@lempipi:/srv/library/library.db", hostname="desktop")
+        result = rf.fetch_flags("pi@lempi02w:/srv/library/library.db", hostname="desktop")
     finally:
         rp.run_remote_sql = real
     check(result == {"ok": False, "error": "no route to host"}, f"got {result}")

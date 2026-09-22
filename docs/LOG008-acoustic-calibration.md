@@ -4,10 +4,10 @@
 
 Ten minutes of `bose`'s DAC recorded by `teacherslounge`'s microphone, to put a
 second and independent instrument on the drift figures and to calibrate the
-laptop's ADC — the reference `lempipi`'s only measurement was taken against
+laptop's ADC — the reference `lempi02w`'s only measurement was taken against
 `[LOG-DRIFT-062]`.
 
-> **Related:** [LOG007](LOG007-drift-instrument-correction.md) `[LOG-FIX-030]` — the electrical figure this is compared with · [LOG006](LOG006-echo-drift-measurement.md) `[LOG-DRIFT-062]` — `lempipi`'s run against the same microphone · [GUIDE014](GUIDE014-echo-phase-status.md) `[GDE-ECHO-540]` — the phase this serves
+> **Related:** [LOG007](LOG007-drift-instrument-correction.md) `[LOG-FIX-030]` — the electrical figure this is compared with · [LOG006](LOG006-echo-drift-measurement.md) `[LOG-DRIFT-062]` — `lempi02w`'s run against the same microphone · [GUIDE014](GUIDE014-echo-phase-status.md) `[GDE-ECHO-540]` — the phase this serves
 
 ---
 
@@ -48,15 +48,15 @@ evidence; either one alone is not `[LOG-DRIFT-064]`.
 
 ## 3. What this gives directly
 
-**`[LOG-CAL-030]` `bose` ↔ `lempipi` is +13.47 ppm ± 0.48, and the microphone
+**`[LOG-CAL-030]` `bose` ↔ `lempi02w` is +13.47 ppm ± 0.48, and the microphone
 cancels out of it.** *Superseded by `[LOG-CAL-080]` the same day: the
-subtraction is right, the ± is not, because `lempipi` has no single rate to
+subtraction is right, the ± is not, because `lempi02w` has no single rate to
 subtract. Read the pair as 7–14 ppm.* Both nodes were measured against the *same* ADC, so
 subtracting the two readings removes it entirely:
 
     bose − ADC        = +11.384 ± 0.003   (this run)
-    lempipi − ADC     =  −2.089 ± 0.477   `[LOG-DRIFT-062]`
-    bose − lempipi    = **+13.47 ± 0.48**
+    lempi02w − ADC     =  −2.089 ± 0.477   `[LOG-DRIFT-062]`
+    bose − lempi02w    = **+13.47 ± 0.48**
 
 This is the assumption-free number, and it is the one echo actually needs: a
 node pair's relative rate. It supersedes `[GDE-ECHO-550]`'s estimate of ~16 ppm
@@ -68,7 +68,7 @@ of the difference. One trimmed frame every **1.7 s**, not 1.4.
 Combined with the electrical figure for `bose` `[LOG-FIX-030]`:
 
     teacherslounge ADC = 14 − 11.384  ≈ **+2.6 ppm**  (± 0.7, all of it bose's)
-    lempipi, absolute  = −2.089 + 2.6 ≈ **+0.5 ppm**  (± 0.9)
+    lempi02w, absolute  = −2.089 + 2.6 ≈ **+0.5 ppm**  (± 0.9)
 
 **`[LOG-CAL-040]` This does not by itself settle whether `bose` is +14 or
 +0.43, and should not be reported as though it does.** An acoustic run compares
@@ -81,18 +81,18 @@ run neither adds to nor subtracts from it.
 
 What would settle it is in `[LOG-CAL-050]` below.
 
-## 4a. `lempipi` heard the same way, 2026-09-13
+## 4a. `lempi02w` heard the same way, 2026-09-13
 
 Twelve minutes with the Middleton beside the microphone, played through the
 same PipeWire → A2DP path the music takes.
 
-**`[LOG-CAL-070]` `lempipi` − ADC = +3.959 ppm ± 0.029** over the settled
+**`[LOG-CAL-070]` `lempi02w` − ADC = +3.959 ppm ± 0.029** over the settled
 window (243–394 s), residual 15.7 µs rms. That is sixteen times tighter than
 `[LOG-DRIFT-062]`'s ±0.477 from 130 seconds — and it does not agree with it.
 The earlier figure was **−2.089**; these are six ppm apart and both error bars
 are far too small to cover it.
 
-**`[LOG-CAL-080]` The explanation is that `lempipi` does not have *a* rate.**
+**`[LOG-CAL-080]` The explanation is that `lempi02w` does not have *a* rate.**
 Three observations from this one run, each measured rather than inferred:
 
 | | |
@@ -107,7 +107,7 @@ a couple of ppm. Where it settles is a property of the session, not of the
 hardware — which is why two honest measurements of the same node disagree by
 six ppm. Neither is wrong; the quantity is not constant.
 
-So `bose` ↔ `lempipi` is **+7.4 ppm this session and +13.5 the last**, and
+So `bose` ↔ `lempi02w` is **+7.4 ppm this session and +13.5 the last**, and
 `[LOG-CAL-030]`'s single figure should be read as a range of roughly 7–14 ppm
 rather than a measurement. `bose`'s own ±0.003 is not the limit on that pair
 and never was.
@@ -120,7 +120,7 @@ where a node returning to the fleet would otherwise be trimmed against a figure
 taken during its own convergence.
 
 **`[LOG-CAL-090]` `lempi-speaker.timer` will interrupt an acoustic run on
-`lempipi`.** It fires every 30 s to keep the speaker attached, and from 480 s
+`lempi02w`.** It fires every 30 s to keep the speaker attached, and from 480 s
 into this run it began moving the PipeWire stream out from under `aplay` —
 detections fell from 119 per 120 s to zero. It runs whether or not `lempi` is
 running, so a future run should stop the timer, not just the player.
@@ -174,7 +174,7 @@ from a single 425 s window inside that. Both routes say "about +13", and
 neither can say more than that about a clock which moves a few ppm from hour to
 hour.
 
-**`[LOG-CAL-120]` `lempipi` absolute, for both sessions: -1.2 ppm and
+**`[LOG-CAL-120]` `lempi02w` absolute, for both sessions: -1.2 ppm and
 +4.9 ppm.** The spread is the finding, not the mean `[LOG-CAL-080]`.
 
 **`[LOG-CAL-060]` 132 detections fell outside the clean run.** The fit is

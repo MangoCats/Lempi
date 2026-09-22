@@ -3,7 +3,7 @@
 """Read exactly one row from a remote installation, over ssh -- no database
 copy `[SPEC-DF-116]`.
 
-lempipi already carries the `sqlite3` CLI for its own maintenance
+lempi02w already carries the `sqlite3` CLI for its own maintenance
 `[SPEC-DF-108]`; this runs one `SELECT`, over
 `ssh <host> sqlite3 -json <path> "..."`, built from the identical anchors
 `apply_changes.py` already resolves locally -- the same *shape* of "current
@@ -12,25 +12,25 @@ mirrored here as `sql_for`), just fetched across the network instead of from
 an open connection. A handful of bytes, not the ~1.16 GB `[SPEC-DF-114]`
 measured a full copy at.
 
-    python tools/remote_peek.py pi@lempipi:/srv/library/library.db \
+    python tools/remote_peek.py pi@lempi02w:/srv/library/library.db \
         --kind boundary_review --audio-md5 <md5> --passage-kind radio \
         --start-ms 1000 --end-ms 200000
 
-    python tools/remote_peek.py pi@lempipi:/srv/library/library.db \
+    python tools/remote_peek.py pi@lempi02w:/srv/library/library.db \
         --kind id_review --audio-md5 <md5> --passage-kind radio \
         --start-ms 1000 --end-ms 200000
 
-    python tools/remote_peek.py pi@lempipi:/srv/library/library.db \
+    python tools/remote_peek.py pi@lempi02w:/srv/library/library.db \
         --kind artist_review --recording-mbid <mbid>
 
-    python tools/remote_peek.py pi@lempipi:/srv/library/library.db \
+    python tools/remote_peek.py pi@lempi02w:/srv/library/library.db \
         --kind passage_flag --audio-md5 <md5> --passage-kind radio \
         --start-ms 1000 --end-ms 200000
 
 **`[SPEC-DF-124]` `passage_flag` does not work against a split peer, and
 every installation is now split.** Its query joins `passages`, which lives in
 the catalogue half, with `listener_flags`, which lives in the listener half,
-and one path cannot serve both `[IMPL002 7.4]`. Measured against `pi@lempipi`
+and one path cannot serve both `[IMPL002 7.4]`. Measured against `pi@lempi02w`
 2026-09-11: pointed at the catalogue it fails on `listener_flags`, pointed at
 the listener half it fails on `passages`. The other three kinds are pure
 catalogue and are unaffected.

@@ -121,7 +121,7 @@ h2 small { font-weight: 400; color: var(--dim); }
                 gap: .8rem; padding: .4rem 0; border-bottom: 1px dotted var(--line); }
 .diverge .row:last-child { border-bottom: none; }
 
-/* flag sync across local/lempipi, and the unflag action [REQ-VIS-265].
+/* flag sync across local/lempi02w, and the unflag action [REQ-VIS-265].
    Deliberately vivid, not the muted --ok/--warn text used by .pill
    elsewhere: this is a status a person decides whether to act on at a
    glance, not a quiet label among many. */

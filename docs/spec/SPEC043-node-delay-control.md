@@ -1,4 +1,4 @@
-# SPEC020: The Node Delay Control
+# SPEC043: The Node Delay Control
 
 **Design Specification — per-node presentation delay, and who decides it**
 
@@ -20,7 +20,7 @@ delay + calibrated residual*; the control sets the residual, and a node whose
 stack reports nothing is simply one whose measured half is absent.
 
 The range covers the worst case with room to spare — the largest offset measured
-on this fleet is `lempipi`'s 355 ms `[LOG-CPAL-060]` — and extends negative
+on this fleet is `lempi02w`'s 355 ms `[LOG-CPAL-060]` — and extends negative
 because the residual can run either way: a stack that over-reports its delay
 needs a node pulled earlier, not later.
 

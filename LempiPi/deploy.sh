@@ -3,7 +3,7 @@
 #
 # MOVED 2026-09-11 to build/deploy-appliance.sh `[GDE-DEP-095]`.
 #
-# This script and `deploy-lempipi.sh` were two entry points to one job that
+# This script and `deploy-lempi02w.sh` were two entry points to one job that
 # overlapped in the no-ref case and diverged everywhere else -- different
 # guards, different cargo features, and after `[IMPL-BOS-185]` a correctness
 # fix that landed in one and not the other. They are one script now.
@@ -15,7 +15,7 @@
 #
 # It also stops being generic tooling that lives in one machine's folder,
 # which is `[GDE-DEP-040]`'s whole point: `LempiPi/` should hold material
-# about lempipi, and a script that deploys to any appliance never did.
+# about lempi02w, and a script that deploys to any appliance never did.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

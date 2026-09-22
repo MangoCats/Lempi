@@ -76,7 +76,7 @@ helper —
 /// Attaches `library_path` as `lib` when it differs from the connection's
 /// own file, and returns the schema prefix every catalog query should use.
 /// The two paths are equal for every installation that hasn't split yet
-/// (bose, today's lempipi, every existing test fixture) -- in that case
+/// (bose, today's lempi02w, every existing test fixture) -- in that case
 /// nothing is attached and this returns "main", so a query written
 /// `{LIB}.recordings` reads the same table through the same connection it
 /// always has. Only an installation with a genuinely separate library.db
@@ -93,7 +93,7 @@ is rewritten to interpolate this alias (`format!("... FROM {lib}.recordings ..."
 rather than a literal `lib.`. `bose` keeps running the same binary,
 unmodified, forever — its two paths are just equal.
 
-This also simplifies §5's rollback story: reverting lempipi's split needs
+This also simplifies §5's rollback story: reverting lempi02w's split needs
 no binary swap, only pointing `--library` back at the same path as `--db`
 (or dropping the flag, with the default being "same as `--db`") — the
 binary already handles that case as its normal, most-tested path.
@@ -115,7 +115,7 @@ remote path gives access to **both** halves at once:
 
 All three reach a peer through `tools/jobs.py`'s `sync_peers.remote` /
 `remote_config`'s single `sync_remote` value — one string, `user@host:/path`.
-Once lempipi is split, that one path is either `library.db` (and these
+Once lempi02w is split, that one path is either `library.db` (and these
 three tools lose the listener tables they need) or `listener.db` (and they
 lose the catalog tables) — it cannot be both. This is a real conflict
 `[IMPL-DBSPLIT-005]`'s "no sync-tool changes needed" did not cover, because
@@ -126,7 +126,7 @@ checked at the time.
 `remote_listener TEXT` (`ALTER TABLE sync_peers ADD COLUMN remote_listener
 TEXT`, additive and safe against every existing row), read as "same file as
 `remote`" when `NULL` — true for every peer that hasn't split, `bose` and
-today's lempipi included, so nothing already configured needs re-entering.
+today's lempi02w included, so nothing already configured needs re-entering.
 `remote_config` gets the equivalent second key,
 `sync_remote_listener`. `sync_preferences.py`/`remote_flags.py`/
 `export_flags.py` each take the listener path from the new field and the
@@ -156,7 +156,7 @@ promoted to production.
 ### 7.6 Gap, found only by checking that the schema still works for `bose` and local: `PlayerStore`'s bootstrap can't just disappear
 
 Asked directly whether the resulting schema stays equally functional on
-`bose` and the local dev instance, not only lempipi — checking that
+`bose` and the local dev instance, not only lempi02w — checking that
 question against §4.3's own resolution found it had overreached. "Move
 this table/column creation out of runtime `open()` entirely" would have
 stopped `PlayerStore` from ever creating `file_tags`/`cover_art`/
@@ -194,7 +194,7 @@ none. Checking the *actual deployed schema* on all three environments
 directly — `sqlite_master`, not the Rust source — for this pass found one:
 
 ```sql
--- local, bose, and lempipi all agree, byte-for-byte:
+-- local, bose, and lempi02w all agree, byte-for-byte:
 CREATE TABLE listener_play_history (
     ...
     passage_id  INTEGER REFERENCES passages(passage_id) ON DELETE SET NULL,
@@ -254,12 +254,12 @@ environment:**
   `accept_remote_basis.py` all set `PRAGMA foreign_keys = ON`, and all run
   against the local desktop database when Vipunen renumbers or deletes a
   passage — exactly the six-years-of-history case the inline comment
-  names. **Neither `bose` nor `lempipi` ever runs any of these tools
+  names. **Neither `bose` nor `lempi02w` ever runs any of these tools
   against its own database** — segmentation labor is desktop-only per
   `[SPEC035]`'s own decision that "Vipunen work only happens on Vipunen-capable
   nodes."
 
-**Conclusion: does not block lempipi's migration.** lempipi never
+**Conclusion: does not block lempi02w's migration.** lempi02w never
 exercises this cascade today and won't after splitting, for the same
 reason it doesn't today — it has no Vipunen. It also does not affect
 `bose`, which isn't splitting. **It is a real, tracked prerequisite for

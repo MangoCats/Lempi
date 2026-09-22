@@ -7,7 +7,7 @@
 # trusting the hardware to remember it unaided.
 #
 # Runs once, at boot, as root, via a `lempi-led.service` oneshot unit
-# installed by `setup-lempipi.sh`'s own "act led" section (not tracked in
+# installed by `setup-appliance.sh`'s own "act led" section (not tracked in
 # this repo as a separate unit file, the same posture `lempi-speaker.timer`/
 # `.service` already have). Unlike `lempi-speaker.sh` this needs no timer:
 # the LED does not drift on its own the way a Bluetooth link can, so it

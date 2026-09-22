@@ -42,7 +42,7 @@ ssh -o ConnectTimeout=10 "$HOST" true 2>/dev/null \
 # Every bose deploy between 2026-09-06 and this fix was RAM-only for exactly
 # this reason, and reported success every time, because the check below asks
 # the RUNNING process -- which was faithfully running the ephemeral copy.
-# lempipi has a plain rw root and takes none of this path.
+# lempi02w has a plain rw root and takes none of this path.
 LOWER=""
 if [ "$(ssh "$HOST" "findmnt -no FSTYPE /" 2>/dev/null)" = "overlay" ]; then
     LOWER=$(ssh "$HOST" "findmnt -no OPTIONS / | tr ',' '\n' | sed -n 's/^lowerdir=//p'" 2>/dev/null)

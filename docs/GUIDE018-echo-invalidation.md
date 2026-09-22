@@ -39,7 +39,7 @@ the *shared datum*: `heard_at`, `sound_at` and `submit_at` are absolute
 audio never faltered and whose frame clock is perfect.
 
 Observed on `lempiplay3`, 2026-09-17. It has **no RTC** — nor do `bose` or
-`lempipi` — so it booted with a restored time of Sep 15 22:35 and NTP stepped it
+`lempi02w` — so it booted with a restored time of Sep 15 22:35 and NTP stepped it
 about two days forward roughly 130 s into the boot. The signature was systemd
 reporting `lempi` started two days *before* the machine booted, with
 `NRestarts=0`. The step is bounded only by how long a node sat powered off.

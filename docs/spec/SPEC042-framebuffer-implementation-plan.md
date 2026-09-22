@@ -16,7 +16,7 @@ Split from [SPEC036](SPEC036-framebuffer-touch-ui.md) on 2026-09-10, which had r
    480×320, RGB565) and `/dev/input/event2` (`ADS7846 Touchscreen`) both
    confirmed against real hardware, per `[SPEC-FBUI-025]`.
 2. ~~A minimal `DrawTarget` + connection test~~ **Done, 2026-09-07** —
-   `player/src/bin/fbui.rs` (feature-gated `fbui`, `bose`/`lempipi` builds
+   `player/src/bin/fbui.rs` (feature-gated `fbui`, `bose`/`lempi02w` builds
    never compile it), a `ClientSnapshot` naming only the fields this phase
    draws rather than making the real `Snapshot` `Deserialize` too
    (`[SPEC-FBUI-015]`'s "zero server-side changes" held in practice, not

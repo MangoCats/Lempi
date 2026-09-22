@@ -30,8 +30,10 @@ lempi_port() {
 # ---- who the fleet is -------------------------------------------------------
 #
 # These were hardcoded in three scripts, and it cost exactly what hardcoding a
-# name costs: each carried `pi@lempipi` as a default target for a name that has
-# never resolved, and three copies meant nothing noticed.
+# name costs: each carried the same default target, for a host name that has
+# never resolved on this network -- confirmed 2026-09-21 -- and three copies
+# meant nothing noticed. The name itself is gone from the tree; the appliance
+# is `lempi02w`, which is a DHCP reservation and does resolve.
 #
 # The roster does NOT live here. `[GDE-ARC-033]` already settled where a real
 # hostname belongs -- `fleet/targets.env`, gitignored, this household's actual

@@ -26,7 +26,7 @@
 # depends on which appliance this is, and hard-coding that means two lists to
 # keep in step. Instead the audio-path tools are reported only when
 # `lempi-wait-sink` is installed, since that script is the only thing in the
-# startup path that uses them: `lempipi` has it and `bose` does not, and
+# startup path that uses them: `lempi02w` has it and `bose` does not, and
 # neither had to be named here to get the right answer.
 set -u
 

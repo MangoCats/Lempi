@@ -539,7 +539,7 @@ case "$VERB" in
         # writes would be more moving parts, not fewer.
         #
         # Four modes, because the ACT LED already had a real, deliberate
-        # job before this existed: `setup-lempipi.sh`'s own "act led"
+        # job before this existed: `setup-appliance.sh`'s own "act led"
         # section binds it to the Wi-Fi radio's rfkill state
         # (`[PI3-LED-010]`), and that has to stay reachable as `wifi`, not
         # be silently replaced by a plain on/off toggle.

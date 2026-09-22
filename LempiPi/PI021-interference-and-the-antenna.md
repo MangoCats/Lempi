@@ -108,10 +108,10 @@ Measured, with the trigger under our own control rather than waited for:
 `linger` does not help. It keeps the graph alive across logouts; it does not
 stop WirePlumber reacting to them. The remedy is one property, in
 `/etc/wireplumber/bluetooth.lua.d/51-lempi-no-logind.lua`, applied by
-`setup-lempipi.sh`.
+`setup-appliance.sh`.
 
 **What this cost, and why.** Two evenings went to measuring a radio because
-checking the link is what broke it: every `ssh pi@lempipi 'bluetoothctl info'`
+checking the link is what broke it: every `ssh pi@lempi02w 'bluetoothctl info'`
 opened a session, and closing it killed the speaker seconds later. The drops
 therefore tracked *our sampling cadence*, which is why they looked periodic,
 and why they always seemed to arrive just after a clean window closed. It is

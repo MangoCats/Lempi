@@ -134,15 +134,18 @@ GOV_DOC_010_OUTSTANDING = set()
 # deliberate act, so that a NEW duplicate is an error rather than the third
 # entry in a list nobody reads.
 #
-# Both are the echo pair, added to `docs/spec/` beside older documents that
-# already held the number. Renaming touches citations in several files and
-# `CLAUDE.md` §9 says to assume someone else is in the echo documents, so the
-# choice is the maintainer's. Retires when SPEC020/SPEC021 each name one
-# document -- convention would move the newer pair to SPEC043/SPEC044.
-DUPLICATE_NUMBERS_OUTSTANDING = {
-    ("docs/spec", "SPEC020"),   # node-delay-control vs the-handoff
-    ("docs/spec", "SPEC021"),   # echo-mode-control vs waveform-boundary-editor
-}
+# Retired 2026-09-21, the day after it was created, which is what a register
+# with a stated retirement condition is for. It held the echo pair --
+# `SPEC020-node-delay-control` beside `SPEC020-the-handoff`, and
+# `SPEC021-echo-mode-control` beside `SPEC021-waveform-boundary-editor` --
+# while the maintainer decided which document kept each number. They became
+# SPEC043 and SPEC044, the older documents kept 020 and 021, and every bare
+# `[SPEC021 §N]` in the tree turned out to mean the waveform editor and so
+# needed no change at all.
+#
+# It stays, empty, so that a number naming two documents again is an error
+# rather than a third line in a list nobody reads.
+DUPLICATE_NUMBERS_OUTSTANDING = set()
 
 # Known, accepted tag collisions. Each entry is debt with a stated retirement
 # condition -- NOT a way to silence the check. A collision absent from this list
@@ -550,9 +553,10 @@ def main():
     # here, both of the kind a reader hits rather than a tool:
     #
     #   * `docs/spec/` held TWO SPEC020s and TWO SPEC021s, each announcing its
-    #     own number in its `#` heading. Links resolve because they carry
-    #     filenames, but prose does not: "SPEC021 §2" appears in three
-    #     documents and cannot be followed. This is exactly the hazard
+    #     own number in its `#` heading. Links resolved because they carry
+    #     filenames, but prose did not: "SPEC021 §2" appears in three
+    #     documents and could not be followed from the number alone. Settled
+    #     2026-09-21 -- the echo pair became SPEC043/SPEC044. This is the hazard
     #     `[GOV-DOC-030]` introduced the `MCR-` prefix for -- "McRhythm and
     #     Lempi both number SPEC003-SPEC006 with different meanings" --
     #     reappearing inside one folder.

@@ -4,7 +4,7 @@
 `[REQ-VIS-275]`.
 
 Found live: a boundary edit saved in Lempi's own editor read as identical to
-one already pushed to lempipi, from this very console's profile page --
+one already pushed to lempi02w, from this very console's profile page --
 `boundary_reviews.applied_at IS NULL` was never surfaced anywhere. This is
 the fix: how many drafts across the three review tables are sitting
 unapplied, globally and for one passage, counted the same way

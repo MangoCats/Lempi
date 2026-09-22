@@ -1,6 +1,6 @@
 # GUIDE012: Blocking the Same Song Across Different Recordings
 
-**Development Guidance — scoped 2026-09-11 from a live incident on `lempipi`;
+**Development Guidance — scoped 2026-09-11 from a live incident on `lempi02w`;
 figures replaced and the design settled 2026-09-12, the latter by owner
 decision `[GDE-WRK-035]`, which supersedes this document's own recommendation**
 
@@ -27,7 +27,7 @@ The recording-side cause is: **`recording_relations` holds 0 rows**, so a
 passage can only ever be blocked by its own exact MBID.
 
 **`[GDE-WRK-012]` It had a second cause, on the artist side, fixed 2026-09-12.**
-`lempipi` was restarted 3m46s into that passage. A passage leaves the queue when
+`lempi02w` was restarted 3m46s into that passage. A passage leaves the queue when
 it is admitted to the mixer and does not reach `listener_play_history` until it
 crosses the counted threshold minutes later, so a Director rebuilt in between
 read neither — `Session::adopt` re-notes the queue for exactly this reason and
@@ -38,7 +38,7 @@ both were real.
 
 **`[GDE-WRK-015]` Identification is not the problem.** All 8,330 radio passages
 carry a recording id — 8,167 real MusicBrainz MBIDs and 163 synthetic
-`local:audio:…` ids for unidentified segments. Those counts are `lempipi`'s;
+`local:audio:…` ids for unidentified segments. Those counts are `lempi02w`'s;
 the desktop catalogue the crawl actually read reaches 8,008, and the two halves
 of the fleet are not identical `[GOV-SRC-030]` — a derivation run against one
 does not describe the other. The MBID-equality block works
@@ -251,7 +251,7 @@ request.
 | 6 · work-MBID tier in the Director | **done 2026-09-12** | `[GDE-WRK-038]`'s widest key |
 | 7 · `[SPEC-DIR-119]` in SPEC037 | **done 2026-09-12** | the spec now says what the code does |
 
-**`[GDE-WRK-130]` Transport already works, by accident.** `lempipi` carries the
+**`[GDE-WRK-130]` Transport already works, by accident.** `lempi02w` carries the
 whole 1.17 GB `library.db`, caches included, so a `recording_works` table ships
 with the file as things stand. [`tools/payload.py`](../tools/payload.py) carries
 neither it nor `recording_relations`, so a move to bundle-only sync would need

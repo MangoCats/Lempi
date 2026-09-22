@@ -79,7 +79,7 @@ Detailed architectural and design specifications are organized in the [`docs/`](
 
 | node | what makes it different | root | folder |
 | :--- | :--- | :--- | :--- |
-| `lempipi` | Pi Zero 2W, Bluetooth speaker, MPD guest backend | plain ext4 | [LempiPi/](LempiPi/HOWTO.md) |
+| `lempi02w` | Pi Zero 2W, Bluetooth speaker, MPD guest backend | plain ext4 | [LempiPi/](LempiPi/HOWTO.md) |
 | `bose` | HiFiBerry DAC, read-only catalogue, lock-in escape hatch | **overlay** | [BosePi/](BosePi/README.md) |
 | `lp3-wifi` | 480×320 SPI framebuffer and touch panel | **overlay** | [LempiPlay3/](LempiPlay3/LP3001-the-node-and-its-units.md) |
 

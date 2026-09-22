@@ -8,7 +8,7 @@ a **rate** is a slope and is trimmed continuously, an **offset** is a position
 and is shed at a passage boundary. Confusing them is how a correction loop
 acquires a fault that only shows after hours.
 
-> **Related:** [GUIDE016](GUIDE016-echo-playback-plan-build.md) `[GDE-ECHO-330]` — the phase this follows · [LOG012](LOG012-phase-4-drift.md) `[LOG-P4-130]` — the +13.92 ppm this corrects · [LOG011](LOG011-the-lead-is-a-ring.md) `[LOG-ECHO-030]` — why depth cannot serve · [SPEC021](spec/SPEC021-echo-mode-control.md) `[SPEC-ECHO-030]` — the control that starts it · [GUIDE029](GUIDE029-what-is-known-about-alignment.md) `[GDE-ARC-063]` — the standing model and the refuted register
+> **Related:** [GUIDE016](GUIDE016-echo-playback-plan-build.md) `[GDE-ECHO-330]` — the phase this follows · [LOG012](LOG012-phase-4-drift.md) `[LOG-P4-130]` — the +13.92 ppm this corrects · [LOG011](LOG011-the-lead-is-a-ring.md) `[LOG-ECHO-030]` — why depth cannot serve · [SPEC044](spec/SPEC044-echo-mode-control.md) `[SPEC-ECHO-030]` — the control that starts it · [GUIDE029](GUIDE029-what-is-known-about-alignment.md) `[GDE-ARC-063]` — the standing model and the refuted register
 
 ---
 
@@ -19,7 +19,7 @@ places, and separating them is what makes the ring's depth stop mattering.** A
 *rate* error accumulates slowly and is corrected by trimming: drop or duplicate
 one frame on submission into the output ring, on the mixer thread, at whatever
 interval the measured ppm calls for — one frame every 5.7 s at the ~4 ppm now
-measured for `bose`↔`smartboardpc`, and every 1.4 s for `bose`↔`lempipi`, not
+measured for `bose`↔`smartboardpc`, and every 1.4 s for `bose`↔`lempi02w`, not
 the one per minute this plan assumed from the discredited 0.4 ppm
 `[GDE-ECHO-550]`.
 That the correction is heard fifteen seconds later is irrelevant, because what

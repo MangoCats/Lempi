@@ -69,7 +69,7 @@ went that way `[IMPL-BOS-185]`.
 | :--- | :--- | :--- |
 | `bose` | **overlay** | needs both layers |
 | `lp3-wifi` (the framebuffer node) | **overlay** | needs both layers |
-| `lempipi` | plain ext4 | ordinary write is durable |
+| `lempi02w` | plain ext4 | ordinary write is durable |
 
 Do not infer this from the machine's name or its role — check it. `findmnt -no
 FSTYPE /` answers in one line, and the scripts below do exactly that before

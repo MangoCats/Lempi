@@ -8,7 +8,7 @@ trivial — every message is absolute and rides a snapshot arriving twice a
 second — so nothing here is about delivery. Every entry is about **when** a
 change takes effect, and every one was found by a listener rather than a test.
 
-> **Related:** [GUIDE016](GUIDE016-echo-playback-plan-build.md) `[GDE-ECHO-325]` — planned transitions against user input · [GUIDE017](GUIDE017-echo-correction.md) `[GDE-ECHO-340]` — the correction that cleans up afterwards · [SPEC021](spec/SPEC021-echo-mode-control.md) `[SPEC-ECHO-030]` — the control that starts it
+> **Related:** [GUIDE016](GUIDE016-echo-playback-plan-build.md) `[GDE-ECHO-325]` — planned transitions against user input · [GUIDE017](GUIDE017-echo-correction.md) `[GDE-ECHO-340]` — the correction that cleans up afterwards · [SPEC044](spec/SPEC044-echo-mode-control.md) `[SPEC-ECHO-030]` — the control that starts it
 
 ---
 

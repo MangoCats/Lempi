@@ -79,7 +79,7 @@ def test_remote_gaps_reports_error_cleanly() -> None:
     rp.run_remote_sql = fake_run_remote_sql([], ok=False, error="no route to host")
     try:
         try:
-            pft.remote_gaps("pi@lempipi:/srv/library/library.db", 5.0)
+            pft.remote_gaps("pi@lempi02w:/srv/library/library.db", 5.0)
             check(False, "must raise when the remote is unreachable")
         except RuntimeError as e:
             check("no route to host" in str(e), f"got {e}")
@@ -144,7 +144,7 @@ def test_dry_run_reports_without_touching_remote() -> None:
     pft._scp = lambda *a, **kw: called.append("scp")
     pft._ssh_apply = lambda *a, **kw: called.append("ssh_apply")
     try:
-        rc = run_main([db, "--target", "pi@lempipi:/srv/library/library.db", "--json"])
+        rc = run_main([db, "--target", "pi@lempi02w:/srv/library/library.db", "--json"])
     finally:
         rp.run_remote_sql = real_rrs
         pft._scp, pft._ssh_apply = real_scp, real_apply
@@ -170,14 +170,14 @@ def test_commit_builds_and_applies_the_patch() -> None:
 
     pft._scp, pft._ssh_apply = fake_scp, fake_apply
     try:
-        rc = run_main([db, "--target", "pi@lempipi:/srv/library/library.db", "--commit"])
+        rc = run_main([db, "--target", "pi@lempi02w:/srv/library/library.db", "--commit"])
     finally:
         rp.run_remote_sql = real_rrs
         pft._scp, pft._ssh_apply = real_scp, real_apply
         os.remove(db)
     check(rc == 0, f"expected 0, got {rc}")
     check(calls.get("scp") is not None, "scp must run when there is something fixable")
-    check(calls.get("apply") == ("pi@lempipi", "/srv/library/library.db", True),
+    check(calls.get("apply") == ("pi@lempi02w", "/srv/library/library.db", True),
           f"sudo must default on, got {calls.get('apply')}")
 
 
@@ -191,7 +191,7 @@ def test_no_sudo_flag_is_honoured() -> None:
     pft._scp = lambda *a, **kw: None
     pft._ssh_apply = lambda host, remote_path, sudo, timeout: calls.__setitem__("sudo", sudo)
     try:
-        run_main([db, "--target", "pi@lempipi:/srv/library/library.db", "--commit", "--no-sudo"])
+        run_main([db, "--target", "pi@lempi02w:/srv/library/library.db", "--commit", "--no-sudo"])
     finally:
         rp.run_remote_sql = real_rrs
         pft._scp, pft._ssh_apply = real_scp, real_apply
@@ -209,7 +209,7 @@ def test_nothing_to_fix_leaves_remote_untouched() -> None:
     pft._scp = lambda *a, **kw: called.append("scp")
     pft._ssh_apply = lambda *a, **kw: called.append("ssh_apply")
     try:
-        rc = run_main([db, "--target", "pi@lempipi:/srv/library/library.db", "--commit", "--json"])
+        rc = run_main([db, "--target", "pi@lempi02w:/srv/library/library.db", "--commit", "--json"])
     finally:
         rp.run_remote_sql = real_rrs
         pft._scp, pft._ssh_apply = real_scp, real_apply
@@ -228,10 +228,10 @@ def test_sync_remote_from_sidecar() -> None:
               "no sidecar file at all must report None, not raise")
         c = sqlite3.connect(sidecar)
         c.execute("CREATE TABLE remote_config (key TEXT PRIMARY KEY, value TEXT)")
-        c.execute("INSERT INTO remote_config VALUES ('sync_remote', 'pi@lempipi:/srv/library/library.db')")
+        c.execute("INSERT INTO remote_config VALUES ('sync_remote', 'pi@lempi02w:/srv/library/library.db')")
         c.commit()
         c.close()
-        check(pft.sync_remote_from_sidecar(db) == "pi@lempipi:/srv/library/library.db",
+        check(pft.sync_remote_from_sidecar(db) == "pi@lempi02w:/srv/library/library.db",
               f"got {pft.sync_remote_from_sidecar(db)!r}")
     finally:
         os.remove(db)

@@ -18,7 +18,7 @@ measurement) remain exactly that — untouched by this build, still open.
 
 > **Related:** [BOSE001](BOSE001-survey.md) for what is on the machine now ·
 > [PI001](../LempiPi/PI001-image-and-partitions.md) for the partition design ·
-> [IMPL001](../LempiPi/IMPL001-appliance-setup.md) for the `lempipi` build this follows
+> [IMPL001](../LempiPi/IMPL001-appliance-setup.md) for the `lempi02w` build this follows
 
 ---
 
@@ -31,7 +31,7 @@ a 2 GB Pi 4 with an I²S DAC and a library already on the card. Five departures:
 
 **`[IMPL-BOS-010]` 64-bit, replacing the 32-bit OS.** `bose` runs `armv7l`
 `[PI-BOS-010]`; the image is built from **Pi OS Lite 64-bit (Bookworm)** so the
-existing `aarch64` toolchain and the binary already running on `lempipi` apply
+existing `aarch64` toolchain and the binary already running on `lempi02w` apply
 unchanged. Adding an `armv7` target to serve one machine is the alternative and
 is not worth it.
 
@@ -56,7 +56,7 @@ The two arrangements, neither yet measured on this machine:
 | `device` | `default` (a mixing layer) | `hw:sndrpihifiberry,0` |
 | Mixer | software `[SPEC-MPD-140]` | **hardware**, `Digital` |
 | Handoff crossfade | works | **not possible** |
-| Evidence | the `lempipi` arrangement | none yet |
+| Evidence | the `lempi02w` arrangement | none yet |
 
 `BosePi/mpd.conf` ships the shared sink, because it is the one with evidence
 behind it and because losing the crossfade is a visible loss where a software

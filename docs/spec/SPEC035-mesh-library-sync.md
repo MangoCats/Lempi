@@ -7,7 +7,7 @@ doesn't name: two or more **Vipunen-capable** installations, each independently
 ingesting, that want the union of their catalogs — audio, identification,
 segmentation, flags — without ever reconciling play history or likes. Decided
 against a concrete fourth node: a PC-based Lempi/Vipunen instance (`TeachersLounge`,
-an Ubuntu laptop) joining a family that already has a desktop, `lempipi`, and
+an Ubuntu laptop) joining a family that already has a desktop, `lempi02w`, and
 `bose`.
 
 > **Related:** [SPEC006](SPEC006-data-flow-and-portability.md) §§2–6 — the
@@ -62,7 +62,7 @@ not discovery.** Four nodes today; this does not need to scale past what a
 person can name. `remote_config` (`[SPEC022]` §2) currently stores exactly
 one remembered remote per library — extended here to a small table,
 `sync_peers(name, remote, enabled)`, one row per known peer
-(`desktop`/`lempipi`/`bose`/`teacherslounge`, each an `ssh` `user@host:/path`
+(`desktop`/`lempi02w`/`bose`/`teacherslounge`, each an `ssh` `user@host:/path`
 per `[SPEC-DF-116]`'s existing addressing). A peer is added or removed by
 editing one row; nothing here builds peer discovery, health-checking, or
 auto-registration.
@@ -245,7 +245,7 @@ They are deliberately independent. A node you read from is not necessarily one y
 5. ~~**The conflict review UI is not built.**~~ **Built 2026-09-06**: `tools/resolve_mesh_conflict.py` (the write, tested per `[SPEC-MESH-070]`'s decision logic the same way `test_sync_preferences.py` established — the actual `ssh`/`scp` leg verified live, not by unit test), the `mesh-resolve` job kind, and `/mesh`'s conflict table with "use local"/"use peer" buttons. Every table with a `manual_field` (`recordings`, `passages`) is covered; `files` carries no provenance and can never produce a conflict to resolve.
 
 **What this pass did *not* build, deliberately:** `--value` (a third value neither side has yet) has a CLI and job-kind path but no UI — `/mesh` only ever offers "use local"/"use peer". A person wanting a genuinely new value still runs `resolve_mesh_conflict.py --value` by hand. The `local_only`/`peer_only` buckets print an `export_bundle.py` command rather than running one — `[SPEC-SUI-110]`'s "an ssh host and a directory, never a Lempi endpoint" stance, applied to the UI too.
-6. **Storage-tier policy — must every peer hold every file? — is explicitly out of scope here.** Asked and not answered: nothing in this document decides whether `lempipi` (464 MB RAM, a small card) is expected to eventually hold the full union library. `[SPEC-MESH-040]`'s human review gate is the mitigation available today — a person can simply decline to approve a bundle a small node shouldn't receive — but "catalog knows about this recording, audio absent here" is not a state the schema represents, and a mesh that grows past hand-curated approval may need it to be. Deferred, not resolved.
+6. **Storage-tier policy — must every peer hold every file? — is explicitly out of scope here.** Asked and not answered: nothing in this document decides whether `lempi02w` (464 MB RAM, a small card) is expected to eventually hold the full union library. `[SPEC-MESH-040]`'s human review gate is the mitigation available today — a person can simply decline to approve a bundle a small node shouldn't receive — but "catalog knows about this recording, audio absent here" is not a state the schema represents, and a mesh that grows past hand-curated approval may need it to be. Deferred, not resolved.
 7. ~~**Landing a `local_only`/`peer_only` bundle's audio on a `bose`-shaped target (B locked outside an attended import) is unaddressed.**~~ **Built 2026-09-06, in [BOSE002](../../BosePi/BOSE002-image-build.md) `[IMPL-BOS-150]`, not in this document** — `attended-import.sh` is what makes item 5's printed `export_bundle.py` command line actually able to write to B once it's `[BOSE003]`-locked, wrapping it in the remount-rw/sync/remount-ro bracket `[PI-B-030]` always specified. Mesh-general, not `bose`-specific, despite where it was built.
 
 ---

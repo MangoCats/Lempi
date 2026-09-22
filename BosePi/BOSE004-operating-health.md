@@ -16,7 +16,7 @@ broken and is not, §5 what is genuinely open.
 > [BOSE003](BOSE003-build-procedure.md) for how this build was made ·
 > [README](README.md) for what has and hasn't been proven ·
 > [PI006](../LempiPi/PI006-appliance-characterisation.md) for the same
-> measurements on `lempipi`
+> measurements on `lempi02w`
 
 ---
 

@@ -74,8 +74,8 @@ different depths can:
     depth <= capacity   =>   Total <= capacity + min(device_delay)
 
 So the node running the fullest ring is the one with the **smallest** device
-delay. With `bose` at 46 ms and `lempipi` at 355 ms, the cap is 15.046 s, `bose`
-runs full and `lempipi` runs 13 633 frames (309 ms) shallower.
+delay. With `bose` at 46 ms and `lempi02w` at 355 ms, the cap is 15.046 s, `bose`
+runs full and `lempi02w` runs 13 633 frames (309 ms) shallower.
 
 **`[LOG-ECHO-035]` That cap is a property of the fleet, not a constraint on who
 may be master.** The derivation above holds `depth <= capacity` for *every*
@@ -85,7 +85,7 @@ announces* with *whose ring runs full*, which are independent.
 
 What is actually defective in the reversed pairing is the **announcement**:
 `schedule_for_admission` derives `sound_at` from the announcer's own full ring,
-hard-wiring `Total = capacity + device_delay(announcer)`. A `lempipi` announcing
+hard-wiring `Total = capacity + device_delay(announcer)`. A `lempi02w` announcing
 that way asks for 15.355 s, which `bose` cannot reach, and `bose` would play
 309 ms early on every passage forever -- looking like a drift problem rather
 than a misconfigured total, which is why `placement` reports `TooShallow`

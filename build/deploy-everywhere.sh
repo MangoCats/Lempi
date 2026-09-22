@@ -1,6 +1,6 @@
 #!/bin/bash
 # Rebuild and redeploy the player everywhere it runs or is built: this desktop,
-# the lempipi and bose appliances, and the teacherslounge and smartboardpc
+# the lempi02w and bose appliances, and the teacherslounge and smartboardpc
 # source hosts. Written after the targets were left to drift more than once --
 # code committed and pushed, but only actually running on some of them,
 # discovered later by Lempi's own staleness check firing rather than by
@@ -34,11 +34,11 @@
 # on your behalf -- publishing is a decision, not a step in a deploy.
 #
 # bose was added after doing exactly what this script exists to prevent: it
-# sat four commits behind while lempipi was kept current, and nobody noticed
+# sat four commits behind while lempi02w was kept current, and nobody noticed
 # until someone asked. It runs the SAME binary -- `[BOS-RUN-010]` verified
 # that one aarch64 build serves both appliances, because the cross-build
 # image is bookworm and the binary imports nothing above GLIBC_2.34, which
-# both lempipi (2.36) and bose (2.41) satisfy.
+# both lempi02w (2.36) and bose (2.41) satisfy.
 #
 # Every leg runs regardless of whether the others succeeded -- a broken local
 # build is not a reason to leave an appliance on stale code, or the reverse --

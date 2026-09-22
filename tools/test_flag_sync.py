@@ -84,7 +84,7 @@ def run(script, *args):
     return subprocess.run([sys.executable, script, *args], capture_output=True, text=True)
 
 
-def lempipi_db(path: str) -> None:
+def lempi02w_db(path: str) -> None:
     """The appliance: two files, one flagged by recording, one by passage --
     the second is exactly `[REQ-VIS-265]`'s own reasoning for keying by
     passage at all, an unidentified recording with nothing else to name it by.
@@ -136,11 +136,11 @@ def flags_here(conn):
 def test_pull(tmp: str) -> None:
     print("Hop 1: pull -- a recording-kind flag matches by mbid, a passage-kind "
           "flag matches only where the library actually overlaps")
-    lempipi = os.path.join(tmp, "lempipi.db")
-    lempipi_db(lempipi)
+    lempi02w = os.path.join(tmp, "lempi02w.db")
+    lempi02w_db(lempi02w)
 
     flags_json = os.path.join(tmp, "flags.json")
-    r = run(EXPORT_FLAGS, lempipi, "-o", flags_json)
+    r = run(EXPORT_FLAGS, lempi02w, "-o", flags_json)
     check(r.returncode == 0, f"export exited {r.returncode}: {r.stderr[:300]}")
     check("2 flag(s)" in r.stdout, f"expected 2 flags, got {r.stdout!r}")
 
@@ -155,7 +155,7 @@ def test_pull(tmp: str) -> None:
     got = flags_here(c)
     check(("recording", SONG_A) in got, f"the recording flag must land on its mbid, got {got}")
     check(("passage", "20") in got, f"the passage flag must resolve to THIS library's own passage_id, got {got}")
-    check(got[("recording", SONG_A)] == "lempipi" or got[("recording", SONG_A)],
+    check(got[("recording", SONG_A)] == "lempi02w" or got[("recording", SONG_A)],
           f"origin must be stamped, got {got[('recording', SONG_A)]!r}")
     c.close()
 
@@ -258,7 +258,7 @@ def test_push_back_emit_sql(tmp: str) -> None:
         c.commit()
         c.close()
 
-    copy_path = os.path.join(tmp, "lempipi-copy.db")
+    copy_path = os.path.join(tmp, "lempi02w-copy.db")
     compare_copy(copy_path)
     before_bytes = open(copy_path, "rb").read()
 
@@ -279,7 +279,7 @@ def test_push_back_emit_sql(tmp: str) -> None:
           "the comparison's own reads must not leak into the emitted script")
 
     # Replay the emitted script against a FRESH copy of the same starting
-    # point, the same as lempipi's own `sqlite3 < patch.sql` would.
+    # point, the same as lempi02w's own `sqlite3 < patch.sql` would.
     replay_path = os.path.join(tmp, "replay.db")
     compare_copy(replay_path)
     rc = sqlite3.connect(replay_path)

@@ -7,7 +7,7 @@
 > RAM overlay. `bose` is a **Pi 4 Model B with 1,889 MB** and its overlay is
 > **disk-backed**, both of which [BOSE001 §1](BOSE001-survey.md) already
 > states — its opening line is literally "`bose` is not a smaller
-> `lempipi`". The draft was written without reading it. §1 and §4 are
+> `lempi02w`". The draft was written without reading it. §1 and §4 are
 > corrected below, and §4's recommendation is **reversed**: the first draft
 > advised against splitting `bose`, which was the wrong answer to the
 > question actually being asked.
@@ -26,8 +26,8 @@ why.
 > execute this in, the rollback at each step, and the three ways the first
 > draft of this document would have failed · [BOSE003](BOSE003-build-procedure.md)
 > for how the image is built · [BOSE005](BOSE005-power-loss-test.md) for the power cut this plan
-> reasons about · [PI025](../LempiPi/PI025-what-the-local-split-owes-lempipi.md)
-> for the same exercise done against `lempipi` · [IMPL001](../LempiPi/IMPL001-appliance-setup.md)
+> reasons about · [PI025](../LempiPi/PI025-what-the-local-split-owes-lempi02w.md)
+> for the same exercise done against `lempi02w` · [IMPL001](../LempiPi/IMPL001-appliance-setup.md)
 > for the package list this proposes one addition to
 
 ---
@@ -35,7 +35,7 @@ why.
 ## 1. The budget
 
 **`[BOS-IMG-010]` `bose` is a Pi 4 Model B with 1,889 MiB — four times
-`lempipi`'s 475 MiB — and the budget here is its own, not the Zero's.**
+`lempi02w`'s 475 MiB — and the budget here is its own, not the Zero's.**
 `[REQ-HW-140]`'s "every crate is a memory decision" was written for a Pi
 Zero 2W, and quoting it at `bose` overstates the constraint by a factor of
 four. Read from the running machine 2026-09-11, as
@@ -81,7 +81,7 @@ differently equipped.
 It costs 557 KB installed, has no reverse dependencies, runs only when
 invoked, and is resident for the length of one query. Against that:
 
-- **Diagnosis.** Every investigation run against `lempipi` this week — shadow
+- **Diagnosis.** Every investigation run against `lempi02w` this week — shadow
   tables, journal modes, orphan counts, flag counts — was one `sqlite3`
   invocation. On `bose` none of them were possible without writing tooling
   first. The value of the command is highest at exactly the moment nobody
@@ -96,7 +96,7 @@ invoked, and is resident for the length of one query. Against that:
   one.
 
 **`[BOS-IMG-025]` And record it in [IMPL001](../LempiPi/IMPL001-appliance-setup.md).**
-Neither appliance's documented build installs `sqlite3`; `lempipi` has it
+Neither appliance's documented build installs `sqlite3`; `lempi02w` has it
 because someone installed it by hand (`apt-mark showmanual` confirms), and
 `bose` does not. That is not two policies, it is an absence of one, and the
 next appliance built will be a coin flip. Whichever way this goes it belongs
@@ -131,7 +131,7 @@ maintaining the ecosystem**, and against that goal the database shape is the
 single largest remaining difference between the two appliances.
 
 Unsplit, every `tools/` invocation takes a different argument shape on
-`bose` than on `lempipi`, `lempi-db-recover` is mandatory on one and
+`bose` than on `lempi02w`, `lempi-db-recover` is mandatory on one and
 meaningless on the other, and the two `ExecStart` lines cannot be read as
 the same procedure. That is `[PI-OWE-010]`'s "a path only one machine takes
 is a path that rots", stated about a machine instead of a code path — and it
@@ -147,7 +147,7 @@ anyway by §2.
 `lempi-db-recover` yet.** Checked rather than assumed, and the reason is
 structural: the recovery script exists because a *split* player attaches
 `library.db` `mode=ro`, and a read-only connection cannot roll back the hot
-journal it is required to roll back — which on `lempipi` turned one power
+journal it is required to roll back — which on `lempi02w` turned one power
 cut into a 23-restart crash loop `[PI3-FOUND-120]`. `bose` opens one
 database read-write, so it rolls back its own journal on the first open.
 `[BOS-PWR-*]`'s power cut on 2026-09-10 passed for exactly this reason.
@@ -157,7 +157,7 @@ they are a package, not a menu:
 
 1. `sqlite3` installed (§2) — `lempi-db-recover` is `/bin/sh` and shells out
    to it.
-2. `lempi-db-recover` installed and wired as `ExecStartPre`, as `lempipi`
+2. `lempi-db-recover` installed and wired as `ExecStartPre`, as `lempi02w`
    has it. Without this, the first power cut after the split is a crash
    loop, and the machine is cut from a speaker's USB port.
 3. The unit's `ExecStart` changed to the two-path form
@@ -169,17 +169,17 @@ cut rather than at the moment it is made.
 **`[BOS-IMG-048]` Corrected: `bose` does not have "one writable
 filesystem".** It has B (`/srv/library`, 105 GB, genuinely `ro` after
 `[BOSE003]` step 10) and C (`/var/lempi`, 4 GB f2fs, `rw`) — a cleaner
-separation than `lempipi` manages, whose equivalent partition simply stays
+separation than `lempi02w` manages, whose equivalent partition simply stays
 `rw` forever. So the catalogue half belongs on B per `[IMPL-BOS-078]`, and
 `bose` *does* have the read-only-catalogue situation that makes
 `lempi-db-recover` load-bearing. Found while executing; see
 `[BOS-RUN-080]`.
 
 **`[BOS-IMG-050]` The reason is homogeneity, and `bose`'s own storage agrees.**
-`lempipi` is split because its catalogue lives on a read-only partition
+`lempi02w` is split because its catalogue lives on a read-only partition
 `[PI023]`; the desktop is split because the split shape had to be the one
 exercised daily. `bose` runs no Vipunen tools, which is why the first draft said no — but
-its storage posture is B-read-only/C-writable, which is `lempipi`'s design
+its storage posture is B-read-only/C-writable, which is `lempi02w`'s design
 rather than an exception to it `[BOS-IMG-048]`.
 
 What it does need is to be *the same machine to maintain*. Three
@@ -208,8 +208,8 @@ specials panel entirely, so the data would sit unread until
 
 ## 6. The diagnostic helpers `bose` does not have
 
-**`[BOS-IMG-062]` `lempipi` carries fifteen `/usr/local/bin/lempi-*`
-helpers and `bose` carries none.** Most are genuinely `lempipi`'s and should
+**`[BOS-IMG-062]` `lempi02w` carries fifteen `/usr/local/bin/lempi-*`
+helpers and `bose` carries none.** Most are genuinely `lempi02w`'s and should
 stay there — but four are hardware-neutral, and their absence is why
 diagnosing `bose` means improvising each time.
 
@@ -223,7 +223,7 @@ diagnosing `bose` means improvising each time.
 | `lempi-wait-sink` | no | Blocks until **PipeWire** has a sink; `bose` has no PipeWire and goes straight to ALSA via the HiFiBerry |
 | `lempi-btctl`, `-bt-agent`, `-hci-capture`, `-linkstate`, `-afh-seed`, `-radio-test`, `-speaker` | no | All Bluetooth. `bose`'s output is an I²S DAC |
 | `lempi-led-boot` | no | Status-LED hardware `[PI3-LED-010]` |
-| `lempi-rocker` | no | Not in the repository; `lempipi`-local |
+| `lempi-rocker` | no | Not in the repository; `lempi02w`-local |
 
 **`[BOS-IMG-065]`** These are `/bin/sh` and `python3` and cost nothing
 resident — they run when invoked and exit. The rule in `[BOS-IMG-035]`
@@ -242,7 +242,7 @@ all be forced to be.** Asked directly whether everything but the audio
 device converges once this plan is executed, the answer is no. What remains,
 read from both machines 2026-09-11:
 
-| | `lempipi` | `bose` |
+| | `lempi02w` | `bose` |
 | :--- | :--- | :--- |
 | Board / memory | Pi Zero 2W, 475 MiB | Pi 4 Model B, 1,889 MiB |
 | OS / kernel | Debian 12 bookworm, 6.12 | Debian 13 trixie, 6.18 |

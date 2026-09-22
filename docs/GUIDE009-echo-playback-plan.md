@@ -72,7 +72,7 @@ requirement and silently fails the frequency one.
 
 Every node shipped that way. **Three moved to chrony on 2026-09-11, with
 `smartboardpc` serving the LAN** (`allow`, plus `local stratum 10` so it keeps
-serving through a WAN outage). `teacherslounge` and `lempipi` `prefer` it and
+serving through a WAN outage). `teacherslounge` and `lempi02w` `prefer` it and
 carry an identical, non-leap-smearing fallback set, so a Smart outage degrades
 the fleet together rather than splitting it: one shared server makes its own
 error **common-mode**, and common-mode cancels in the node-to-node comparison

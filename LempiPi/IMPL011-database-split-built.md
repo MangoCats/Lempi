@@ -16,7 +16,7 @@ Split from [IMPL002](IMPL002-database-split.md) on 2026-09-10, which had reached
 RAM, backup, and MPD (§4); against the plan itself for gaps, oversights,
 conflicts, and ambiguities (§7.1–7.5); against whether the resulting
 schema stays equally functional on `bose` and the local instance, not only
-lempipi (§7.6–7.7); and against indexed query performance and
+lempi02w (§7.6–7.7); and against indexed query performance and
 architectural cleanliness (§9). Seven real problems found across the
 second through fourth passes and fixed on paper before any of this was
 built: a schema-fidelity gap in the migration tool, a compatibility
@@ -26,7 +26,7 @@ original sketch left implicit, an overcorrection in `[§4.3]`'s own fix
 that would have broken `bose`/local's fresh-library bootstrap, a real
 cross-boundary foreign key present in every deployed database checked but
 absent from the current Rust source — found by querying `sqlite_master`
-directly rather than trusting the source, confirmed to not block lempipi
+directly rather than trusting the source, confirmed to not block lempi02w
 or `bose` while being named as a genuine prerequisite for ever splitting
 *local* specifically — and a bootstrap-guard centralization the
 performance/cleanliness pass caught before Phase 2 could scatter it.
@@ -43,7 +43,7 @@ query design, not just an incidental property of today's code.
 this document actually scopes**: the `attach_library` alias approach
 (`[§7.3]`) makes the one player binary behave identically on `bose` and
 local (nothing attached, `alias = "main"`, unchanged) and on a split
-lempipi (`lib` attached read-only) — no environment-specific binary, no
+lempi02w (`lib` attached read-only) — no environment-specific binary, no
 behavior change for the two that aren't splitting. The one open item
 (`[§7.7]`) is scoped to a future local split, not to anything being built
 or deployed now.
@@ -101,7 +101,7 @@ call sites — across `browse.rs`, `edit.rs`, `review.rs`, `media.rs`,
 `segment.rs`, `preference.rs`, `control.rs`, `bluetooth.rs`, `vipunen.rs` —
 all still open only `ui.db.clone()` and call `Library::open`/`PlayerStore::open`
 with that one path. On unsplit `bose`/local this is invisible, since `open`
-already defaults to same-path. **On a split lempipi, every one of those
+already defaults to same-path. **On a split lempi02w, every one of those
 pages fails with "no such table" the first time it's opened**, because
 `Library::open(db)` becomes `open_split(db, db)` and `attach_library` sees
 the two paths equal, resolving catalog references against `main` —
@@ -196,11 +196,11 @@ the three, and the only one not making a remote SQL call at all. None of
 this is built; the registry can store and hand back a listener path today,
 but nothing yet asks for one.
 
-## 17. Rehearsed against lempipi's actual data, not a substitute
+## 17. Rehearsed against lempi02w's actual data, not a substitute
 
 Before ever touching the live device: cross-compiled `lempi` for `aarch64`
 (confirmed genuine — `file` reports `ELF 64-bit ... ARM aarch64`), pulled a
-read-only copy of lempipi's real `/srv/library/library.db` to the dev host
+read-only copy of lempi02w's real `/srv/library/library.db` to the dev host
 (1,161,781,248 bytes, matching exactly — this copy also satisfies `[PI-C-030]`'s
 off-device backup requirement for the live runbook below, so it's being kept,
 not discarded), and rehearsed `split_database.py` against it: 1,065,361
@@ -219,20 +219,20 @@ two ways against actual Rust code, not just the Python tool's own checks:
   consequential cross-boundary path there is, since it drives actual song
   selection. 8,330 radio passages, 733 ms cold load, 148 MB peak RSS —
   comfortably inside `[REQ-HW-100]`'s budget even before accounting for
-  this being lempipi's tighter 464 MB, not the dev host's.
+  this being lempi02w's tighter 464 MB, not the dev host's.
 
 This is real-data proof, not synthetic-fixture proof, for the one thing
 that most needed it.
 
 ## 18. The live migration: run, and one real bug found and fixed inside the same window
 
-Executed against lempipi for real, 2026-09-07, following `[§8]`'s runbook
+Executed against lempi02w for real, 2026-09-07, following `[§8]`'s runbook
 exactly: stopped `lempi`/`mpd`, confirmed the WAL was already clean (the
 service's own shutdown had checkpointed it — `PRAGMA wal_checkpoint(TRUNCATE)`
 afterward reported zero pages, confirming rather than assuming), made a
 timestamped on-device copy (`lempi.db.pre-split-20260907` — kept then,
 **deleted 2026-09-11** once the split had four days in service and the live
-halves were verified to hold everything it did `[PI-PRE-098]`), ran `split_database.py --commit` against that copy on lempipi's
+halves were verified to hold everything it did `[PI-PRE-098]`), ran `split_database.py --commit` against that copy on lempi02w's
 own hardware (1,065,361 catalog rows, 44,337 listener rows — identical to
 the dev-host rehearsal, verification passed), deployed the cross-compiled
 binary, updated the systemd override's `ExecStart` to the two new paths,
@@ -264,7 +264,7 @@ redeploying. Confirmed fixed against the live system two ways: the journal
 stopped showing the error, and `listener.db` queried directly showed fresh
 `player_state`/`selection_decisions` rows landing in real time.
 
-**Status: `lempi` and `mpd` both active on lempipi, running the split
+**Status: `lempi` and `mpd` both active on lempi02w, running the split
 database, writes confirmed landing correctly.** Not yet confirmed: audible
 playback, the one verification this project has never allowed a machine or
 a log line to stand in for at a point of no easy return.
@@ -279,7 +279,7 @@ a log line to stand in for at a point of no easy return.
 - **Hearing it play** — the last step, and the only one that has never
   been substitutable by a green test or an active service.
 
-Scope for the first real implementation and migration pass stays lempipi
-only; `bose` and local stay single-file and untouched until lempipi has
+Scope for the first real implementation and migration pass stays lempi02w
+only; `bose` and local stay single-file and untouched until lempi02w has
 proven the split in practice.
 

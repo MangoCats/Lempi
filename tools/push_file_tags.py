@@ -5,11 +5,11 @@ a file has an entirely empty one `[SPEC-DF-122]`.
 
 `[REQ-LIB-146]` fixed `ingest_folder.py`'s `probe()` (Ogg Vorbis comments
 were never read at all) and `tools/backfill_file_tags.py` repaired the
-*local* library, but neither reaches a remote installation like lempipi's
+*local* library, but neither reaches a remote installation like lempi02w's
 own copy: `export_changes.py`/`apply_changes.py` `[SPEC-DF-120]` only ever
 carry the three review-draft tables (`id_reviews`/`boundary_reviews`/
 `artist_reviews`) -- raw ingest metadata like `file_tags` was never in that
-pipeline's scope. Found live 2026-08-31: lempipi's own mirror of the same
+pipeline's scope. Found live 2026-08-31: lempi02w's own mirror of the same
 28 files this project's own library had just fixed still showed the
 identical gap, which matters there too -- Lempi's own browse page falls
 back to `file_tags` for artist/album/title whenever a passage has no linked

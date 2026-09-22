@@ -104,7 +104,7 @@ it needs. That is why [GUIDE009](GUIDE009-echo-playback-plan.md) measures every
 node before designing a correction — behind a timebase phase that has to settle
 first `[GDE-ECHO-305]`.
 
-**`[GDE-ECHO-070]` `lempipi` is not in this table, but it is not excluded by
+**`[GDE-ECHO-070]` `lempi02w` is not in this table, but it is not excluded by
 category either — and an earlier revision of this document had that wrong.** It
 drives the Middleton over BlueALSA, through a stack-dependent latency of roughly
 100–250 ms. That was first written up as disqualifying. It is not, and the
@@ -117,7 +117,7 @@ scheduling constant.
 What actually disqualifies a node is offset *variability*, not offset
 *magnitude*, and the two were conflated.
 
-> **Measured 2026-09-12, and the blocker turns out to be neither.** `lempipi`
+> **Measured 2026-09-12, and the blocker turns out to be neither.** `lempi02w`
 > is *unobservable* by software: no hardware PCM to read, cpal reporting
 > `Software`, and a frame clock that measures PipeWire's timer rather than the
 > speaker `[LOG-DRIFT-058]`. Variability is not the obstacle — being unable to

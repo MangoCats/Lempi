@@ -27,7 +27,7 @@ license = "MIT"
 # It cost nothing to leave off and cost a fleet to leave off. Nothing in the
 # tree enabled it: not `cargo test`, not `build/verify-targets.sh`, not
 # `build/deploy-appliance.sh`, whose `FEATURES` is empty unless a caller sets
-# `LEMPI_FEATURES`. bose was built with it by hand and lempipi was not, which
+# `LEMPI_FEATURES`. bose was built with it by hand and lempi02w was not, which
 # is how two nodes of one fleet came to differ in whether a control worked --
 # and it meant `player/src/echo_client.rs` was not merely untested but
 # **uncompiled** by every test run, which is why three faults in it survived
@@ -45,7 +45,7 @@ mpd = []
 vipunen-support = ["dep:reqwest"]
 # The native framebuffer/touch UI `[SPEC036]`, for appliances with a small
 # SPI display rather than a browser -- `lempiplay3`'s own touchscreen,
-# not `bose`/`lempipi`, which never resolve or compile any of this.
+# not `bose`/`lempi02w`, which never resolve or compile any of this.
 # `tokio-tungstenite` is already in the dependency graph via axum's own
 # `ws` feature (server-side); declaring it directly here costs nothing
 # extra in the build graph, it only makes the already-compiled crate

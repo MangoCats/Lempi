@@ -78,13 +78,13 @@ def test_target_reaches_sync_preferences(tmp: str) -> None:
 
     runner._spawn = fake_spawn.__get__(runner, jobmod.Runner)
 
-    job_id = runner.submit("sync-preferences", "pi@lempipi:/srv/library/library.db")
+    job_id = runner.submit("sync-preferences", "pi@lempi02w:/srv/library/library.db")
     j = wait_for(runner, job_id)
     check(j["state"] == "done", f"got {j}")
     argv = seen["argv"]
     check("sync_preferences.py" in argv[1], f"got {argv}")
     check(db in argv, f"got {argv}")
-    check("pi@lempipi:/srv/library/library.db" in argv, f"got {argv}")
+    check("pi@lempi02w:/srv/library/library.db" in argv, f"got {argv}")
     check("--commit" in argv and "--json" in argv, f"got {argv}")
     check(j["result"]["pull"] == 2 and j["result"]["push"] == 1, f"got {j['result']}")
 

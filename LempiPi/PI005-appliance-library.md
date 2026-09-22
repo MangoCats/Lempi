@@ -1,6 +1,6 @@
 # PI005: The Library on the Appliance
 
-**Appliance Record — getting the real library onto lempipi, and what it cost**
+**Appliance Record — getting the real library onto lempi02w, and what it cost**
 
 The appliance runs from one SQLite file named outright by its unit
 (`ExecStart=… /srv/library/library.db`). Nothing swaps that file on its own, and

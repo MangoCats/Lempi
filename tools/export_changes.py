@@ -15,7 +15,7 @@ installation can find the same fact without ever seeing this one's
 `passage_id` `[SPEC-DF-035]`.
 
     python tools/export_changes.py data/library.db -o changes.json
-    rsync changes.json pi@lempipi:/srv/library/incoming/
+    rsync changes.json pi@lempi02w:/srv/library/incoming/
 
 Read-only: nothing here writes to the database it reads from. The write half
 is `tools/apply_changes.py`, run against the *receiving* installation.

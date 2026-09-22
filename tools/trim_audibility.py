@@ -20,7 +20,7 @@ cannot be heard on music -- while a positive result only means the worst case
 is audible, and should be retested on real material before concluding.
 
 **Run it on a node with no codec and no resampler in the path.** `bose`'s I²S
-DAC via `aplay -D hw:...` qualifies. `lempipi` does not: SBC is lossy and
+DAC via `aplay -D hw:...` qualifies. `lempi02w` does not: SBC is lossy and
 PipeWire's adaptive resampler is already inserting and dropping samples of its
 own `[LOG-CAL-080]`, so the test would measure their sum.
 

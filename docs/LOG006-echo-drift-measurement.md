@@ -171,7 +171,7 @@ passing it through.
 Two consequences, and they pull in opposite directions:
 
 - **The rate half is fine.** 13,209,552 frames in 300 s is 44,032/s against a
-  nominal 44,100 — the counter tracks, and it is the only instrument `lempipi`
+  nominal 44,100 — the counter tracks, and it is the only instrument `lempi02w`
   can have `[LOG-DRIFT-070]`.
 - **The offset half must come from somewhere else.** Presentation offset
   `[GDE-ECHO-430]` has to be read from `/proc/asound`'s `delay`, or from ALSA
@@ -182,11 +182,11 @@ have been recorded as a measurement and an offset of zero would have been
 designed against. A constant is not a measurement, and the only reason anyone
 knows that here is that the code was made to say so `[GOV-SRC-030]`.
 
-`lempipi` was given the same build the same day and is logging; its verdict is
+`lempi02w` was given the same build the same day and is logging; its verdict is
 the more interesting one, since a `Software` result there would mean no
 software instrument reaches it at all.
 
-**`[LOG-DRIFT-058]` `lempipi` cannot be measured by software at all, and the
+**`[LOG-DRIFT-058]` `lempi02w` cannot be measured by software at all, and the
 number that proves it looks like a success.** Given the same build 2026-09-12,
 it reported **+0.0073 ppm over 4.08 h** — 107 µs of divergence in four hours,
 a clock sixty times better than `bose`'s HiFiBerry DAC+ Pro, reached over
@@ -201,7 +201,7 @@ compared against says it should. Zero by construction.
 With `ts=Software` beside it (`delay=0` across 322,991 callbacks), every
 software path into that node is now closed:
 
-| instrument | result on `lempipi` |
+| instrument | result on `lempi02w` |
 | :--- | :--- |
 | `/proc/asound` `hw_ptr` | no hardware PCM — only `vc4hdmi`, closed |
 | cpal timestamps | `Software`; no delay information at all |
@@ -215,14 +215,14 @@ but it is unproven either way, and a measurement that cannot distinguish "the
 clock is excellent" from "I am measuring nothing" is not a measurement
 `[GOV-SRC-020]`.
 
-## 3b. The acoustic method works, and lempipi is not zero after all
+## 3b. The acoustic method works, and lempi02w is not zero after all
 
-**`[LOG-DRIFT-062]` Measured acoustically 2026-09-12: `lempipi` runs
+**`[LOG-DRIFT-062]` Measured acoustically 2026-09-12: `lempi02w` runs
 −2.089 ppm ±0.477 against `teacherslounge`'s ADC.** Opportunistic — the
 Middleton happened to be placed beside the laptop — and it reaches the quantity
 `[LOG-DRIFT-058]` had just concluded no instrument could.
 
-Method: `lempipi` played a click track through the Middleton (one impulse per
+Method: `lempi02w` played a click track through the Middleton (one impulse per
 44,100 samples, mixed with the music by PipeWire so nothing was interrupted)
 while `teacherslounge` recorded at 48 kHz. The **spacing** between clicks is
 what is read, not their arrival time, so the speaker-to-microphone distance
@@ -243,7 +243,7 @@ buffer forces the average to match — is now disfavoured by measurement.
 
 It also lands usefully between the others, though not where this file first
 placed it: below Smart's +9.96 ppm and below `bose`'s corrected ≈+14, so a
-`bose`↔`lempipi` pair drifts **~16 ppm** relative, about 3.9 ms across a
+`bose`↔`lempi02w` pair drifts **~16 ppm** relative, about 3.9 ms across a
 four-minute passage — the worst pair measured, and well inside the comb band
 rather than under it `[LOG-FIX-030]`. The
 A2DP *offset* stability remains unmeasured and is the separate question
@@ -288,7 +288,7 @@ these into a range rather than a point. A sampler now appends to
 reboot, which makes any later pair of rows a fresh window at no further
 effort.
 
-**`[LOG-DRIFT-070]` Three nodes still have no plan.** `lempipi`'s A2DP path
+**`[LOG-DRIFT-070]` Three nodes still have no plan.** `lempi02w`'s A2DP path
 has no `hw_ptr` to read at all — its output is not a hardware PCM
 `[GDE-ECHO-070]` — and `teacherslounge` and the desktop are unstarted.
 Presentation offset `[GDE-ECHO-430]` is unmeasured everywhere, and the

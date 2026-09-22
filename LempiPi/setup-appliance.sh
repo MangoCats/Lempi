@@ -13,8 +13,8 @@
 # overlay, no access point. Those are easier to add to a machine already known
 # to play music.
 #
-#   scp LempiPi/setup-lempipi.sh pi@lempipi:
-#   ssh pi@lempipi 'sudo bash setup-lempipi.sh'
+#   scp LempiPi/setup-appliance.sh pi@lempi02w:
+#   ssh pi@lempi02w 'sudo bash setup-appliance.sh'
 #
 # Options:
 #   --speaker AA:BB:CC:DD:EE:FF   pair, trust and connect a Bluetooth sink

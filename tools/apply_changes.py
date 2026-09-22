@@ -31,15 +31,15 @@ Both still need `--commit` to actually write; without it, a `--resolve` run
 only previews what that resolution would do.
 
 **`--emit-sql OUT.sql` `[SPEC-DF-111]`**, for a target with no Python at all
-(lempipi, per `[SPEC-DF-108]`): runs the identical merge against `db` as a
+(lempi02w, per `[SPEC-DF-108]`): runs the identical merge against `db` as a
 **read-only** comparison -- nothing is ever committed to `db` itself when
 this is given, regardless of `--commit` -- and captures the literal SQL
 actually executed into `OUT.sql`, ready to hand to a target's own `sqlite3`
 CLI:
 
-    python tools/apply_changes.py /tmp/lempipi-copy.db changes.json --commit --emit-sql patch.sql
-    scp patch.sql pi@lempipi:/tmp/patch.sql
-    ssh pi@lempipi 'systemctl stop lempi && { echo "ATTACH DATABASE '''/srv/library/library.db''' AS lib;"; cat /tmp/patch.sql; } | sqlite3 /var/lempi/listener.db && systemctl start lempi'
+    python tools/apply_changes.py /tmp/lempi02w-copy.db changes.json --commit --emit-sql patch.sql
+    scp patch.sql pi@lempi02w:/tmp/patch.sql
+    ssh pi@lempi02w 'systemctl stop lempi && { echo "ATTACH DATABASE '''/srv/library/library.db''' AS lib;"; cat /tmp/patch.sql; } | sqlite3 /var/lempi/listener.db && systemctl start lempi'
 
 **`--clear-flags`**, combined with either write mode: for each change
 actually applied, also deletes the `listener_flags` row(s) that plausibly

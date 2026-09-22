@@ -218,7 +218,7 @@ WantedBy=multi-user.target
 
 > **Corrected 2026-09-06, found building `bose`:** the `ExecStart` above no
 > longer matches the binary — `--db`, `--music` and `--output` do not exist
-> as flags. The actual, currently-deployed form, confirmed against `lempipi`'s
+> as flags. The actual, currently-deployed form, confirmed against `lempi02w`'s
 > real unit (`[PI002](PI002-test-image-setup.md)`, `[PI005](PI005-appliance-library.md)`):
 > `ExecStart=/usr/local/bin/lempi --listener /srv/library/library.db --port 5720`
 > — no `--music`/`--output` at all. **Renamed 2026-09-20**: that path was the

@@ -56,7 +56,7 @@ it caught a bad measurement before anything was designed on it, which is what
 
 **Phase 1's rate half is answered and its gate fell in the middle.** No pair is
 under 2 ppm relative and no node is over 20 ppm absolute: `bose` ≈+14,
-`smartboardpc` +9.96, `lempipi` −2.09 `[LOG-FIX-030]`. Neither branch of the
+`smartboardpc` +9.96, `lempi02w` −2.09 `[LOG-FIX-030]`. Neither branch of the
 gate applies cleanly, and the conclusion is the stricter one — **Phase 5 is
 mandatory for every pair**, because no node is sub-ppm and clock ownership does
 not predict rate accuracy `[LOG-FIX-040]`.
@@ -112,7 +112,7 @@ for the thing that fails silently `[GOV-SRC-040]`.
 
 **Resolved 2026-09-13** ([LOG009](LOG009-cpal-upgrade.md)). Both nodes report
 a live, varying delay and classify `Hardware`: `bose` 2043 frames (46.3 ms),
-`lempipi` 15676 (355 ms), a difference of 309 ms against roughly 15 s of
+`lempi02w` 15676 (355 ms), a difference of 309 ms against roughly 15 s of
 schedule lead `[LOG-CPAL-060]`. The rest of this section is kept as the
 diagnosis that got there `[GOV-DOC-050]`.
 
@@ -164,10 +164,10 @@ should be tried:
    it is worse — but it is not zero, and it is available today without waiting
    on anyone else's release.
 3. **Acoustic calibration** `[GDE-ECHO-460]`. Already proven on this fleet:
-   `teacherslounge`'s microphone gave `lempipi` −2.089 ppm ±0.477 from 130 s of
+   `teacherslounge`'s microphone gave `lempi02w` −2.089 ppm ±0.477 from 130 s of
    clicks `[LOG-DRIFT-062]`, and ±0.10 ppm at ten minutes. It measures the
    whole path to the air, which is the quantity that actually matters, and it
-   is the only route that works for `lempipi`, whose A2DP output has no
+   is the only route that works for `lempi02w`, whose A2DP output has no
    `hw_ptr` at all `[GDE-ECHO-070]`. `tools/click_emit.py` and
    `tools/click_analyze.py` carry it, and `tools/test_click_analyze.py` checks
    the analyser against recordings whose answer is known -- including the
@@ -191,7 +191,7 @@ drift actually measured:
 | pair | relative | one trimmed frame every |
 | :--- | ---: | ---: |
 | `bose` ↔ `smartboardpc` | ~4 ppm | 5.7 s |
-| `bose` ↔ `lempipi` | ~16 ppm | 1.4 s |
+| `bose` ↔ `lempi02w` | ~16 ppm | 1.4 s |
 
 A single dropped or duplicated frame once a minute is inaudible by inspection.
 Once every 1.7 s was **not** obviously inaudible, so the plan stopped assuming
@@ -201,7 +201,7 @@ it and the question went to a listening test rather than an argument.
 rate this fleet needs, and Phase 5 does not require fractional resampling.**
 Six 20-second segments, blind, four of them trimmed once every 1.7 s — two
 dropping and two duplicating, about 47 trim events — played on the desktop and
-again through `lempipi`'s production A2DP chain. The listener reported every
+again through `lempi02w`'s production A2DP chain. The listener reported every
 segment clean on both, including the four that were not.
 
 The signal was chosen to be the worst case and not a fair one: a sustained
@@ -263,14 +263,14 @@ correction could be skipped. It cannot `[LOG-FIX-040]`.
 2. **Fix or replace the delay read**, then let the verdict in `[GDE-ECHO-290]`
    re-run. Expect `bose` to become `Hardware`.
 3. **Fill the offset column** of `[GDE-ECHO-450]` for `bose` and
-   `smartboardpc` from the repaired instrument, and for `lempipi`
+   `smartboardpc` from the repaired instrument, and for `lempi02w`
    acoustically — a 10-minute run with the Middleton beside
    `teacherslounge`'s microphone, which also calibrates the laptop's ADC and
-   makes `lempipi`'s −2.089 absolute.
+   makes `lempi02w`'s −2.089 absolute.
 4. **Then Phase 3.** Not before: a wire built against an assumed-zero offset is
    the one design `[GDE-ECHO-410]` explicitly rejects. **Steps 1-3 are done as
    of 2026-09-13**, so this is the next work rather than the eventual work.
-   What remains outstanding for it is precision, not existence: `lempipi`'s
+   What remains outstanding for it is precision, not existence: `lempi02w`'s
    rate is ±0.477 from a 130 s acoustic run where `bose`'s is ±0.003, and
    `[LOG-CAL-050]`'s electrical read of the laptop ADC would make both
    absolute.

@@ -73,7 +73,7 @@ history detail, not position.
 `NRestarts=0`, `Result=success`, zero failed units, no `attempt to write a
 readonly database`. `lempi-db-recover` is still not deployed on `bose`
 `[BOS-OPS-050]`-adjacent, and on this trial it was not needed. That is one
-trial, not an argument against deploying the guard: the lempipi failure was a
+trial, not an argument against deploying the guard: the lempi02w failure was a
 *rollback* journal reached through a read-only attach, and `bose` is WAL with a
 read-write connection open first. The shapes differ, so this result does not
 transfer to that one.

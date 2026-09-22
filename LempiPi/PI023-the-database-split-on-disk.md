@@ -19,7 +19,7 @@ exactly as `[SPEC-SC-010]` describes it today. `bose`'s image was built
 around that reality rather than this one: the whole file lives on C, not
 split across B and C — see [BOSE002 `[IMPL-BOS-078]`](../BosePi/BOSE002-image-build.md)
 for why that specific substitution is safe for `bose` (its B genuinely
-becomes read-only) in a way it happens not to be for `lempipi` (whose data
+becomes read-only) in a way it happens not to be for `lempi02w` (whose data
 partition never actually does).
 
 **[IMPL002](IMPL002-database-split.md) works out everything below in the

@@ -63,7 +63,7 @@ folded into one spec.
 | Acoustic calibration | [LOG008](LOG008-acoustic-calibration.md) | [§5. Open](LOG008-acoustic-calibration.md#5-open) |
 | The lead is a ring | [LOG011](LOG011-the-lead-is-a-ring.md) | [§5. Open](LOG011-the-lead-is-a-ring.md#5-open) |
 | Echo phase 4 — measured drift | [LOG012](LOG012-phase-4-drift.md) | [§4. Open](LOG012-phase-4-drift.md#4-open) |
-| Per-node presentation delay | [SPEC020 *(node delay)*](spec/SPEC020-node-delay-control.md) | [§5. Open](spec/SPEC020-node-delay-control.md#5-open) |
+| Per-node presentation delay | [SPEC043](spec/SPEC043-node-delay-control.md) | [§5. Open](spec/SPEC043-node-delay-control.md#5-open) |
 | Listener preference editing | [SPEC029](spec/SPEC029-listener-preference-editing.md) | [§8. Open](spec/SPEC029-listener-preference-editing.md#8-open) |
 | Play frequency readout | [SPEC031](spec/SPEC031-play-frequency.md) | [§6. Open](spec/SPEC031-play-frequency.md#6-open) |
 | Framebuffer UI — implementation plan | [SPEC042](spec/SPEC042-framebuffer-implementation-plan.md) | [§8. Implementation plan, phased](spec/SPEC042-framebuffer-implementation-plan.md#8-implementation-plan-phased-against-the-open-items-above) |

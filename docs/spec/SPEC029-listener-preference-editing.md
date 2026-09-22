@@ -185,7 +185,7 @@ this by hand" (`[SPEC-PREF-085]`), and a six-year-old migrated value is not
 that. Getting this wrong would have made every recovered rating
 un-resettable: Reset drops the listener's own row and falls back to the
 inherited one, and there would have been nothing to fall back to. Applied
-2026-09-10 to the desktop and to `lempipi`, 69 ratings each, reaching 69
+2026-09-10 to the desktop and to `lempi02w`, 69 ratings each, reaching 69
 radio passages on both.
 
 **`[SPEC-PREF-085]` A listener's own value lives in `listener_characteristics`,

@@ -835,7 +835,7 @@ pub const PREFERRED_RATE: u32 = 44_100;
 /// cpal 0.18's ALSA backend reads `BufferSize::Fixed(x)` as *period* = x and
 /// buffer = 2x. Its `Default` path is the problem this constant exists for:
 /// it takes PipeWire's chosen period and clamps the buffer to two of them,
-/// where cpal 0.15 left PipeWire's much larger buffer alone. On `lempipi` that
+/// where cpal 0.15 left PipeWire's much larger buffer alone. On `lempi02w` that
 /// came out as a 512-frame period and a 1024-frame buffer -- **23 ms of slack
 /// on an A2DP path carrying 321 ms of latency, fed by a Pi Zero 2W** -- and
 /// the result was 895 underruns in eight minutes and audibly broken playback.

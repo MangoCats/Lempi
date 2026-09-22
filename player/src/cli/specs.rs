@@ -394,7 +394,7 @@ pub mod echoprobe {
     pub const OFFSET_FRAMES: Opt = Opt::int(
         "--offset-frames",
         "N",
-        "this node's measured presentation offset (bose 2043, lempipi 15676)",
+        "this node's measured presentation offset (bose 2043, lempi02w 15676)",
     )
     .or("0")
     .was(1)

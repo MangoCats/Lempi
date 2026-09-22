@@ -8,7 +8,7 @@
 #   build/deploy-appliance.sh <tag>               a tag, without touching your checkout
 #   build/deploy-appliance.sh <tag> pi@bose       a tag, to a named appliance
 #
-# Merged 2026-09-11 from this script and the older `deploy-lempipi.sh`
+# Merged 2026-09-11 from this script and the older `deploy-lempi02w.sh`
 # `[GDE-DEP-095]`. They overlapped only in the no-ref case, and the split had
 # already begun to cost: the ref-capable half refused a dirty tree while the
 # half `deploy-everywhere.sh` actually calls did not, so the FLEET path -- the
@@ -75,7 +75,7 @@ fi
 
 die() { echo "deploy: $*" >&2; exit 1; }
 
-# `deploy-lempipi.sh` built appliances WITH this flag and this script built
+# `deploy-lempi02w.sh` built appliances WITH this flag and this script built
 # them WITHOUT it, so which binary an appliance received depended on which
 # command you happened to type. Merging forces one answer; this preserves what
 # the fleet runs today rather than changing behaviour inside a merge.

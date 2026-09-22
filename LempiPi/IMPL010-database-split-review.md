@@ -72,16 +72,16 @@ python tools/split_database.py lempi.db --library-out library.db --listener-out 
    to the real output paths rather than a temp directory.
 5. Never deletes or modifies the source file.
 
-**Live runbook against lempipi**, once the player refactor (§7.3's
+**Live runbook against lempi02w**, once the player refactor (§7.3's
 `attach_library` helper and the ~10 rewritten call sites) has its own full
 test cycle behind it and the tool above has been rehearsed against a
-downloaded copy of lempipi's actual database (not synthetic data, not
+downloaded copy of lempi02w's actual database (not synthetic data, not
 bose's):
 
-1. Off-device backup of lempipi's current `lempi.db`, per `[PI-C-030]` —
+1. Off-device backup of lempi02w's current `lempi.db`, per `[PI-C-030]` —
    mandatory, not conditional on anything else in this list.
-2. Stop `lempi` and `mpd` on lempipi.
-3. Copy `lempi.db` aside on lempipi itself (timestamped, not deleted —
+2. Stop `lempi` and `mpd` on lempi02w.
+3. Copy `lempi.db` aside on lempi02w itself (timestamped, not deleted —
    `[IMPL-DBSPLIT-045]`).
 4. Run `split_database.py --commit` against that copy, producing
    `library.db` on B and `listener.db` on C.
@@ -92,9 +92,9 @@ bose's):
    playback still works — the same "heard it play" discipline
    `[IMPL-BOS-120]` already requires before any lock-in-style point of
    no return.
-8. Update `sync_peers`/`remote_config` for lempipi's entry (§7.4) so
+8. Update `sync_peers`/`remote_config` for lempi02w's entry (§7.4) so
    `sync_preferences.py`/`remote_flags.py`/`export_flags.py` keep working
-   from whichever machine drives them against lempipi.
+   from whichever machine drives them against lempi02w.
 
 Rollback at any point through step 6: stop services, point the unit's
 arguments back at the single original `lempi.db` copy from step 3, start

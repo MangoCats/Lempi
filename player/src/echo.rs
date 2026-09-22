@@ -31,7 +31,7 @@ pub type WallNanos = u64;
 /// What a node has to know about itself to place a schedule.
 ///
 /// `[GDE-ECHO-410]`'s model, both halves. Measured per node, not assumed:
-/// `bose` 2043 frames and `lempipi` 15676 as of `[LOG-CPAL-060]`.
+/// `bose` 2043 frames and `lempi02w` 15676 as of `[LOG-CPAL-060]`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NodeTiming {
     /// Submit-to-air delay, in frames. ALSA's reported delay plus whatever
@@ -84,7 +84,7 @@ pub struct Schedule {
 /// Computed from `audible_ms`, never `played_ms`: those differ by the ring's
 /// depth and only one of them describes sound `[REQ-AUD-164]`. Note that the
 /// engine's own `audible_ms` subtracts the ring but **not** the device delay,
-/// which is imperceptible for a display and is not for `lempipi`'s 355 ms --
+/// which is imperceptible for a display and is not for `lempi02w`'s 355 ms --
 /// so an anchor must subtract [`NodeTiming::offset`] as well.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DriftAnchor {
@@ -358,7 +358,7 @@ pub fn clocks_agree(master_heard_at: WallNanos, now: WallNanos, tolerance: Durat
 /// `TooShallow` therefore reports a `Total` this node cannot reach, which in
 /// practice means the announcer computed it from its own full ring instead of
 /// from the fleet's cap -- exactly what `schedule_for_admission` does today.
-/// With `bose` at 46 ms and `lempipi` at 355 ms `[LOG-CPAL-060]`, a `lempipi`
+/// With `bose` at 46 ms and `lempi02w` at 355 ms `[LOG-CPAL-060]`, a `lempi02w`
 /// announcing off a full ring asks for 15.355 s and `bose` can reach 15.046 s;
 /// the fix is the announced total, not the choice of master.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -703,7 +703,7 @@ pub fn offset_fix(
 ///
 /// Distinct from the engine's `audible_ms`, which subtracts the output ring
 /// but not the device: those differ by the presentation offset, which is 46 ms
-/// on `bose` and 355 on `lempipi` `[LOG-CPAL-060]`. Imperceptible for a
+/// on `bose` and 355 on `lempi02w` `[LOG-CPAL-060]`. Imperceptible for a
 /// display, and a third of a second for echo.
 ///
 /// `audible_ms` is deliberately **not** changed to match. It drives the UI and
@@ -851,7 +851,7 @@ pub enum Trim {
 /// noise produces exactly the slow periodic wobble it was built to remove."
 ///
 /// All three guards are parameters rather than constants because the numbers
-/// are still being measured: `lempipi` has no single rate at all
+/// are still being measured: `lempi02w` has no single rate at all
 /// `[LOG-CAL-080]`, so a constant chosen today would be wrong for it tomorrow.
 pub fn trim_decision(
     basis: &Basis,
@@ -1289,12 +1289,12 @@ mod tests {
     #[test]
     fn the_node_with_the_larger_offset_submits_earlier() {
         // The whole point of `[GDE-ECHO-410]`. A backward-only design would
-        // have had lempipi submitting after bose and never catching up.
+        // have had lempi02w submitting after bose and never catching up.
         let sched = Schedule { passage_id: 7, start_sample: 0, sound_at: 100 * SEC, rate: 44100 };
         let now = 80 * SEC;
         let b = submit_at(&sched, BOSE, now).unwrap();
         let v = submit_at(&sched, LEMPIPI, now).unwrap();
-        assert!(v < b, "lempipi must submit before bose");
+        assert!(v < b, "lempi02w must submit before bose");
         assert_eq!(b - v, (LEMPIPI.offset() - BOSE.offset()).as_nanos() as u64);
         // 355 - 46 = 309 ms, the figure the design turns on.
         assert_eq!((b - v) / 1_000_000, 309);
@@ -1387,10 +1387,10 @@ mod tests {
     fn a_slower_device_runs_a_shallower_ring() {
         let now = 100 * SEC;
         let s = schedule_for_admission(7, 0, RING, BOSE.presentation_offset_frames, 44100, now);
-        // lempipi's 355 ms of A2DP comes out of its ring, exactly.
+        // lempi02w's 355 ms of A2DP comes out of its ring, exactly.
         let want = RING + BOSE.presentation_offset_frames - LEMPIPI.presentation_offset_frames;
         assert_eq!(placement(&s, LEMPIPI, RING, now), Placement::Depth(want));
-        assert_eq!(RING - want, 13633, "lempipi runs 309 ms shallower than bose");
+        assert_eq!(RING - want, 13633, "lempi02w runs 309 ms shallower than bose");
     }
 
     /// A total computed off a full ring by the *slower* node is unreachable for
@@ -1881,7 +1881,7 @@ mod tests {
     fn a_lead_shorter_than_the_offset_is_refused() {
         let now = 100 * SEC;
         let m = AirPosition { passage_id: 9, position_ms: 30_000, at: now };
-        // lempipi's 355 ms against a 100 ms lead.
+        // lempi02w's 355 ms against a 100 ms lead.
         assert_eq!(join_mid_passage(&m, LEMPIPI, now, Duration::from_millis(100), 0), None);
         // The same node with room to work in is fine.
         assert!(join_mid_passage(&m, LEMPIPI, now, Duration::from_millis(500), 0).is_some());
@@ -1899,21 +1899,21 @@ mod tests {
 
     /// `[GDE-ECHO-315]`: the slower node announcing is fine, and is in fact the
     /// preferred arrangement, so long as it announces the fleet's total rather
-    /// than its own full ring. `lempipi` then runs the shallow ring it would
+    /// than its own full ring. `lempi02w` then runs the shallow ring it would
     /// have run anyway, and `bose` runs full -- the same two depths as when
     /// `bose` announces. Who announces does not enter the arithmetic.
     #[test]
     fn the_slower_node_may_announce_at_the_fleets_total() {
         let now = 100 * SEC;
-        // The fleet's cap: capacity + the SMALLEST device delay. lempipi holds
+        // The fleet's cap: capacity + the SMALLEST device delay. lempi02w holds
         // the larger, so it announces off a ring short by the difference.
-        let lempipi_depth = RING + BOSE.presentation_offset_frames
+        let lempi02w_depth = RING + BOSE.presentation_offset_frames
             - LEMPIPI.presentation_offset_frames;
         let s = schedule_for_admission(
-            7, 0, lempipi_depth, LEMPIPI.presentation_offset_frames, 44100, now);
+            7, 0, lempi02w_depth, LEMPIPI.presentation_offset_frames, 44100, now);
         assert_eq!(placement(&s, BOSE, RING, now), Placement::Depth(RING),
             "the smallest-delay node runs the fullest ring, whoever announced");
-        assert_eq!(placement(&s, LEMPIPI, RING, now), Placement::Depth(lempipi_depth));
+        assert_eq!(placement(&s, LEMPIPI, RING, now), Placement::Depth(lempi02w_depth));
     }
 
     /// Network lateness spends the ring, and there is ~15 s of it to spend --
@@ -1940,7 +1940,7 @@ mod tests {
     #[test]
     fn the_device_delay_is_what_separates_air_from_audible_ms() {
         // The engine's audible_ms subtracts the ring only. On bose that is a
-        // 46 ms difference and on lempipi 355 -- one is a rounding error in a
+        // 46 ms difference and on lempi02w 355 -- one is a rounding error in a
         // display, the other is not `[LOG-CPAL-060]`.
         let b = air_position(1, 60_000, RING, BOSE.presentation_offset_frames, 44100, 0);
         let v = air_position(1, 60_000, RING, LEMPIPI.presentation_offset_frames, 44100, 0);
@@ -2047,7 +2047,7 @@ mod tests {
 
     #[test]
     fn a_high_offset_node_can_miss_what_a_low_offset_node_makes() {
-        // 100 ms of lead: bose can still submit, lempipi needed to 255 ms ago.
+        // 100 ms of lead: bose can still submit, lempi02w needed to 255 ms ago.
         let sched = Schedule { passage_id: 5, start_sample: 0, sound_at: 10 * SEC + 100_000_000, rate: 44100 };
         let st = state_with(Some(sched), None);
         assert!(matches!(follower(BOSE).on_state(&st, 10 * SEC),

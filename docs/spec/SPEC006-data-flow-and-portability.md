@@ -225,7 +225,7 @@ This is `[SPEC-DF-070]`'s "never silently overwrite a user's correction" rule, g
 
 ```
 python tools/export_changes.py <local_db> -o changes.json
-rsync changes.json pi@lempipi:/srv/library/incoming/
+rsync changes.json pi@lempi02w:/srv/library/incoming/
 
 python tools/apply_changes.py <remote_db> changes.json               # rehearsal
 python tools/apply_changes.py <remote_db> changes.json --commit      # fast-forwards land; conflicts are reported, not written

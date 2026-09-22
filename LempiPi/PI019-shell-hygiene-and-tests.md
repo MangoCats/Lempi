@@ -135,7 +135,7 @@ untested.**
 
 **Two more groups, and a real gap each found.**
 
-*`units`* reads the systemd units `setup-lempipi.sh` writes -- no stubs, no
+*`units`* reads the systemd units `setup-appliance.sh` writes -- no stubs, no
 hardware -- and requires a finite `TimeoutStartSec` on every `Type=oneshot`.
 **It found two more unbounded oneshots the moment it existed**:
 `lempi-afh-seed boot`, which applies seven times at ten-second intervals and

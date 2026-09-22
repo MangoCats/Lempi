@@ -65,12 +65,12 @@ pub(crate) const BUSY_WAIT: std::time::Duration = std::time::Duration::from_secs
 /// from then on `[IMPL-DBSPLIT-025]`.
 ///
 /// The two paths are equal for every installation that hasn't split its
-/// database -- `bose`, today's lempipi, every existing test fixture. In
+/// database -- `bose`, today's lempi02w, every existing test fixture. In
 /// that case nothing is attached and this returns `"main"`, so a query
 /// written `{lib}.recordings` reads the same table through the same
 /// connection it always has, and the one player binary needs no
 /// environment-specific build. Only an installation with a genuinely
-/// separate `library.db` (lempipi, once split -- `[PI-DB-020]`) ever
+/// separate `library.db` (lempi02w, once split -- `[PI-DB-020]`) ever
 /// attaches anything or ever sees `"lib"` come back.
 ///
 /// Equality is the caller's to guarantee, by construction rather than by
@@ -144,7 +144,7 @@ impl QualifyingConn {
             flags | rusqlite::OpenFlags::SQLITE_OPEN_URI,
         )
         .map_err(|e| DbError::Open(e.to_string()))?;
-        // Found live, on lempipi's first real split: rusqlite's *bundled*
+        // Found live, on lempi02w's first real split: rusqlite's *bundled*
         // SQLite defaults `PRAGMA foreign_keys` to ON -- confirmed by
         // asking it directly, not by grepping this crate for an explicit
         // enable, which is exactly the check `[IMPL002 §7.7]` stopped one
@@ -303,7 +303,7 @@ mod qualifying_conn_tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// Found live, on lempipi's actual first split: rusqlite's *bundled*
+    /// Found live, on lempi02w's actual first split: rusqlite's *bundled*
     /// SQLite defaults `PRAGMA foreign_keys` to ON, and this project's real
     /// schema has two foreign keys crossing the split boundary
     /// (`listener_play_history`/`selection_decisions` -> `passages`,

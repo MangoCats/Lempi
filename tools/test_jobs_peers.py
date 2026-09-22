@@ -42,7 +42,7 @@ def test_add_list_and_remove(tmp: str) -> None:
     check(runner.list_peers() == [], "a fresh sidecar has no peers")
 
     runner.upsert_peer("bose", "pi@bose:/var/lempi/listener.db")
-    runner.upsert_peer("lempipi", "pi@lempipi:/srv/library/library.db")
+    runner.upsert_peer("lempi02w", "pi@lempi02w:/srv/library/library.db")
     peers = runner.list_peers()
     check(len(peers) == 2, f"got {peers}")
     check(peers[0]["name"] == "bose", f"expected alphabetical order, got {peers}")
@@ -50,7 +50,7 @@ def test_add_list_and_remove(tmp: str) -> None:
 
     runner.delete_peer("bose")
     peers = runner.list_peers()
-    check([p["name"] for p in peers] == ["lempipi"], f"got {peers}")
+    check([p["name"] for p in peers] == ["lempi02w"], f"got {peers}")
 
 
 def test_upsert_overwrites_by_name(tmp: str) -> None:
@@ -95,21 +95,21 @@ def test_remote_listener_defaults_to_none(tmp: str) -> None:
 
 
 def test_remote_listener_is_carried_through_upsert_and_activation(tmp: str) -> None:
-    """A split peer -- lempipi, once it has actually split -- carries a
+    """A split peer -- lempi02w, once it has actually split -- carries a
     second path all the way from `upsert_peer` through `activate_peer` to
     `get_remote_listener()`, independent of `remote`.
     """
     runner = _runner(tmp)
-    runner.upsert_peer("lempipi", "pi@lempipi:/srv/library/library.db",
-                        remote_listener="pi@lempipi:/var/lempi/listener.db")
+    runner.upsert_peer("lempi02w", "pi@lempi02w:/srv/library/library.db",
+                        remote_listener="pi@lempi02w:/var/lempi/listener.db")
     peers = runner.list_peers()
-    check(peers[0]["remote"] == "pi@lempipi:/srv/library/library.db", f"got {peers[0]}")
-    check(peers[0]["remote_listener"] == "pi@lempipi:/var/lempi/listener.db", f"got {peers[0]}")
+    check(peers[0]["remote"] == "pi@lempi02w:/srv/library/library.db", f"got {peers[0]}")
+    check(peers[0]["remote_listener"] == "pi@lempi02w:/var/lempi/listener.db", f"got {peers[0]}")
 
-    runner.activate_peer("lempipi")
-    check(runner.get_remote() == "pi@lempipi:/srv/library/library.db",
+    runner.activate_peer("lempi02w")
+    check(runner.get_remote() == "pi@lempi02w:/srv/library/library.db",
           "activation must still set the catalog path in remote_config")
-    check(runner.get_remote_listener() == "pi@lempipi:/var/lempi/listener.db",
+    check(runner.get_remote_listener() == "pi@lempi02w:/var/lempi/listener.db",
           "activation must carry the listener path over too, not just the catalog one")
 
 
@@ -119,16 +119,16 @@ def test_activating_an_unsplit_peer_after_a_split_one_clears_remote_listener(tmp
     one doesn't have one.
     """
     runner = _runner(tmp)
-    runner.upsert_peer("lempipi", "pi@lempipi:/srv/library/library.db",
-                        remote_listener="pi@lempipi:/var/lempi/listener.db")
+    runner.upsert_peer("lempi02w", "pi@lempi02w:/srv/library/library.db",
+                        remote_listener="pi@lempi02w:/var/lempi/listener.db")
     runner.upsert_peer("bose", "pi@bose:/var/lempi/listener.db")
-    runner.activate_peer("lempipi")
-    check(runner.get_remote_listener() == "pi@lempipi:/var/lempi/listener.db", "sanity")
+    runner.activate_peer("lempi02w")
+    check(runner.get_remote_listener() == "pi@lempi02w:/var/lempi/listener.db", "sanity")
 
     runner.activate_peer("bose")
     check(runner.get_remote_listener() is None,
           "switching to an unsplit peer must clear the previous remote_listener, "
-          "not leave lempipi's listener.db path active while bose is the target")
+          "not leave lempi02w's listener.db path active while bose is the target")
 
 
 def main() -> int:

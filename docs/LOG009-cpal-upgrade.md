@@ -3,7 +3,7 @@
 **Experiment Record — 2026-09-13**
 
 cpal 0.15.3 → 0.18.2, to obtain the presentation offset `[GDE-ECHO-545]` found
-unreadable through the old version. It worked, and it broke `lempipi` on the
+unreadable through the old version. It worked, and it broke `lempi02w` on the
 way, for a reason that was nobody's mistake.
 
 > **Related:** [GUIDE014](GUIDE014-echo-phase-status.md) `[GDE-ECHO-545]` — the blocker this collects the fix for · [GUIDE009](GUIDE009-echo-playback-plan.md) `[GDE-ECHO-290]` — the eligibility rule that was firing on a broken input · [LOG007](LOG007-drift-instrument-correction.md) `[LOG-FIX-030]` — the rate figures that constrain the sample rate
@@ -48,7 +48,7 @@ guide literally does not compile against the version it is filed under.
 
 ## 3. The regression
 
-**`[LOG-CPAL-030]` `lempipi` played badly: distorted, gaps, stuttery bursts,
+**`[LOG-CPAL-030]` `lempi02w` played badly: distorted, gaps, stuttery bursts,
 895 underruns in eight minutes, and it never settled.** Rolled back it was
 silent-clean. The cause is in cpal 0.18's own source comment:
 
@@ -57,7 +57,7 @@ silent-clean. The cause is in cpal 0.18's own source comment:
 > many periods (huge buffer). We need to … constrain properly.
 
 0.18 deliberately clamps the buffer to two periods where 0.15 left PipeWire's
-large one alone. On `lempipi` that came out as:
+large one alone. On `lempi02w` that came out as:
 
 | | cpal 0.15.3 | cpal 0.18.2 |
 | :--- | ---: | ---: |
@@ -118,12 +118,12 @@ is the real resolution limit.
 
 | node | before | after |
 | :--- | :--- | :--- |
-| `lempipi` A2DP | `delay=0`, `Software` | **`delay≈15676` (355 ms), `Hardware`** |
+| `lempi02w` A2DP | `delay=0`, `Software` | **`delay≈15676` (355 ms), `Hardware`** |
 | `bose` I²S | `delay=0`, `Software` | **`delay=2043` (46.3 ms), `Hardware`** |
 | `smartboardpc` | n/a (no player) | probe: all sources agree |
 | desktop, Windows | 48 kHz only | opens the preferred 44100 |
 
-`lempipi` settled to **0 underruns and 0 recoveries for five consecutive
+`lempi02w` settled to **0 underruns and 0 recoveries for five consecutive
 minutes** at 2048 frames per callback, and is left on the new build.
 
 `bose` took the format fix and is on the new build, durable copy persisted and
@@ -137,10 +137,10 @@ both nodes, which is what this upgrade was for.**
 | node | presentation offset | rate |
 | :--- | ---: | ---: |
 | `bose` — I²S | **2043 frames, 46.3 ms** | ≈+14 ppm |
-| `lempipi` — A2DP | **15676 frames, 355 ms** | −2.09 vs the ADC |
+| `lempi02w` — A2DP | **15676 frames, 355 ms** | −2.09 vs the ADC |
 | **difference** | **13633 frames, 309 ms** | **+13.47 relative** |
 
-That 309 ms is the quantity `[GDE-ECHO-410]` is built around: `lempipi` must
+That 309 ms is the quantity `[GDE-ECHO-410]` is built around: `lempi02w` must
 submit 309 ms *earlier* than `bose` for the two to be heard together. Against
 the forward schedule's ~15 s of lead `[GDE-ECHO-310]` that is a margin of
 roughly fifty to one, so the compensation the design turns on is not close to

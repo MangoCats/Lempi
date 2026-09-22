@@ -47,9 +47,9 @@ def test_peer_host():
     cases = [
         ("pi@bose:/srv/library/library.db", "bose"),
         ("sw@teacherslounge:/home/sw/lempi-data/library.db", "teacherslounge"),
-        ("pi@lempipi:/var/lempi/listener.db", "lempipi"),
+        ("pi@lempi02w:/var/lempi/listener.db", "lempi02w"),
         # No user given: the whole first field is the host.
-        ("lempipi:/srv/library/library.db", "lempipi"),
+        ("lempi02w:/srv/library/library.db", "lempi02w"),
         # A path carrying its own colons must not confuse the split.
         ("mango@smartboardpc:C:/Users/x/library.db", "smartboardpc"),
         # Degenerate input answers rather than raising.

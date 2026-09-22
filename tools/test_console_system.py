@@ -76,11 +76,11 @@ def test_system_status_shape() -> None:
         current = 7
 
         def job(self, job_id):
-            return {"job_id": 7, "kind": "remote-push", "target": "pi@lempipi:/x", "state": "running"}
+            return {"job_id": 7, "kind": "remote-push", "target": "pi@lempi02w:/x", "state": "running"}
 
     console.STATE["jobs"] = FakeJobsBusy()
     s = console.system_status()
-    check(s["active_job"] == {"job_id": 7, "kind": "remote-push", "target": "pi@lempipi:/x", "state": "running"},
+    check(s["active_job"] == {"job_id": 7, "kind": "remote-push", "target": "pi@lempi02w:/x", "state": "running"},
           f"got {s}")
 
 
@@ -228,7 +228,7 @@ def test_shutdown_refused_while_a_job_runs() -> None:
             check(wait_up(port), "the in-process server must come up")
 
             conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-            conn.request("POST", "/api/remote", json.dumps({"remote": "nobody@lempipi:/srv/lempi.db"}),
+            conn.request("POST", "/api/remote", json.dumps({"remote": "nobody@lempi02w:/srv/lempi.db"}),
                          {"Content-Type": "application/json"})
             conn.getresponse().read()
             conn.close()

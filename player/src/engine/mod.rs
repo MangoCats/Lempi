@@ -945,7 +945,7 @@ impl Engine {
     ///
     /// `audible_ms` stops at the ring; this goes on to subtract the device's
     /// own delay, which is what separates "left for the device" from "was
-    /// heard" -- 46 ms on `bose` and 355 on `lempipi` `[LOG-CPAL-060]`.
+    /// heard" -- 46 ms on `bose` and 355 on `lempi02w` `[LOG-CPAL-060]`.
     /// `audible_ms` is left alone on purpose: it drives the display and the
     /// resume point, and shifting those to serve echo would be backwards.
     ///

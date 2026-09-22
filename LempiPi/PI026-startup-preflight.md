@@ -7,7 +7,7 @@ proceed accordingly. It can, it now does on both appliances, and building it
 turned a reporting request into a repair: the missing tool no longer stops
 recovery, it only changes which command performs it.
 
-> **Related:** [PI025](PI025-what-the-local-split-owes-lempipi.md) `[PI-OWE-100]`
+> **Related:** [PI025](PI025-what-the-local-split-owes-lempi02w.md) `[PI-OWE-100]`
 > for `lempi-db-recover`'s WAL reporting · [BOSE009](../BosePi/BOSE009-image-update-runbook.md)
 > for why read-only media makes recovery matter more on `bose` `[BOS-RUN-090]`
 
@@ -50,7 +50,7 @@ worth more.
 **`[PI-PRE-040]`** The recovery is SQLite's, not the command's — both runners
 do one read-write open and read one page, and SQLite repairs on the way in.
 That is the reason the command can be swapped, but a reason is not evidence.
-Run on `lempipi` 2026-09-11, against two fixtures built by killing a writer
+Run on `lempi02w` 2026-09-11, against two fixtures built by killing a writer
 with `SIGKILL`:
 
 | fixture | `sqlite3` | `python3` |
@@ -99,14 +99,14 @@ playback.
 **`[PI-PRE-050]` It asks the machine, not a list.** Which tools matter differs
 per appliance, and hard-coding that means two lists to keep in step. The
 audio-path tools are reported only when `lempi-wait-sink` is installed, since
-that is the only thing in the startup path that uses them. `lempipi` has it
+that is the only thing in the startup path that uses them. `lempi02w` has it
 and `bose` does not — and neither machine is named anywhere in the script to
 get the right answer.
 
 Live output, 2026-09-11, unedited:
 
 ```
-# lempipi
+# lempi02w
 lempi-preflight: lempi 0.1.0 (1a7e1008ab62) at /usr/local/bin/lempi
 lempi-preflight: sqlite3 3.40.1 at /usr/bin/sqlite3
 lempi-preflight: python3 3.11.2 (sqlite module 3.40.1) at /usr/bin/python3
@@ -125,7 +125,7 @@ lempi-preflight: database recovery armed via sqlite3
 uselessness the moment a version difference matters. These six lines already
 answered a question nobody had asked: the two appliances run **different
 player builds** (`1a7e1008` against `5272e3f6`) on **different SQLite**
-(3.40.1 against 3.46.1). Both facts are consequences of `lempipi` being on
+(3.40.1 against 3.46.1). Both facts are consequences of `lempi02w` being on
 bookworm and `bose` on trixie `[BOS-IMG-068]`, both are fine, and neither was
 visible in any boot log before today.
 
@@ -138,7 +138,7 @@ noise.
 
 ## 5. Degraded behaviour, as executed
 
-**`[PI-PRE-070]`** All three states were run on `lempipi` against a real dirty
+**`[PI-PRE-070]`** All three states were run on `lempi02w` against a real dirty
 WAL database, with the tools hidden behind a sanitised `PATH`:
 
 | state | preflight says | recovery |
@@ -166,9 +166,9 @@ helpers the unit names. It now installs them first `[BOS-RUN-085]`.
 
 ## 6. The database nobody opens
 
-**`[PI-PRE-090]` `lempipi` was recovering its pre-split original at every
+**`[PI-PRE-090]` `lempi02w` was recovering its pre-split original at every
 boot.** `lempi-db-recover` walks three paths, and the first of them defaults
-to the whole database that `[IMPL-DBSPLIT-025]` superseded. On `lempipi` that
+to the whole database that `[IMPL-DBSPLIT-025]` superseded. On `lempi02w` that
 is `/srv/library/library.db`: 1.16 GB, opened read-write on the slowest machine
 in the ecosystem at the one moment it is trying to start, on behalf of nobody.
 
@@ -203,7 +203,7 @@ not need the worse story.
 
 **`[PI-PRE-098]` Deleted, all of them, 2026-09-11.** Two copies was the
 finding; the answer given was that one is already excessive. Looking properly
-then found six — 5.3 GB of one database's history stacked up on `lempipi`:
+then found six — 5.3 GB of one database's history stacked up on `lempi02w`:
 
 | removed | size | what it was |
 | :--- | ---: | :--- |
@@ -217,10 +217,10 @@ then found six — 5.3 GB of one database's history stacked up on `lempipi`:
 `lempi-testlib-20260820.db` (29 MB) was kept — a test library is not a backup
 of the live one, and it is a different thing to have.
 
-**`[PI-PRE-097]` `bose` mattered more, for a reason `lempipi` does not have.**
+**`[PI-PRE-097]` `bose` mattered more, for a reason `lempi02w` does not have.**
 Its pre-split original was 1.10 GB on the **4 GB f2fs partition that absorbs
 every write the appliance makes** — the one storage constraint here that is
-real rather than theoretical. `lempipi` had 170 GB free and lost only clutter;
+real rather than theoretical. `lempi02w` had 170 GB free and lost only clutter;
 `bose` went from 37% of C to 10%. Verified the same way first: 8,185
 recordings both sides, and 39,329 plays live against 39,294 in the copy, so
 the live half was ahead rather than merely equal.
@@ -240,13 +240,13 @@ exists only there. A tree-wide search then found the two documents that
 recorded these files as deliberately kept, so the claim and the fact were
 corrected together rather than one of them being left to rot.
 
-`lempipi` went from 54 GB used to 48 GB. And the skip line from
+`lempi02w` went from 54 GB used to 48 GB. And the skip line from
 `[PI-PRE-090]` has now stopped on its own, exactly as intended — the file it
 named is gone.
 
 ## 7. Open
 
-**`[PI-PRE-080]`** `lempipi`'s unit template in `setup-lempipi.sh` still names
+**`[PI-PRE-080]`** `lempi02w`'s unit template in `setup-appliance.sh` still names
 the pre-split `/srv/library/library.db` in its base `ExecStart`; the live
 machine is correct only because `mpd-guest.conf` overrides it.
 

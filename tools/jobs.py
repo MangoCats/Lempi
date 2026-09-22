@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS sync_peers (
 # already exists on every console this ships to and `CREATE TABLE IF NOT
 # EXISTS` never adds a column to a table that's already there
 # `[IMPL002 §7.4]`. NULL means "same file as `remote`" -- true for every
-# peer that hasn't split, `bose` and today's lempipi included, so nothing
+# peer that hasn't split, `bose` and today's lempi02w included, so nothing
 # already configured needs re-entering. Needed because `sync_preferences.py`/
 # `remote_flags.py`/`export_flags.py` all join listener-side tables against
 # catalog-side ones through a peer's remote path, and a split peer can't
@@ -561,7 +561,7 @@ class Runner:
         fetch = [sys.executable, os.path.join(tools, "remote_flags.py"), target, "-o", flags_json]
         # `[IMPL002 §7.4]`'s second path, for the second of the three tools
         # that needed it. Against a split peer without this, `remote_flags.py`
-        # reports "nothing flagged" from the catalogue half -- lempipi has 19.
+        # reports "nothing flagged" from the catalogue half -- lempi02w has 19.
         listener = self.get_remote_listener()
         if listener:
             fetch += ["--remote-listener", listener.partition(":")[2] or listener]
@@ -783,7 +783,7 @@ class Runner:
         # catalogue path alone, and `CREATE TABLE` does not follow the attach
         # chain -- it always targets `main` -- so every push planted the three
         # review tables inside the catalogue half. Measured 2026-09-11:
-        # lempipi's `library.db` holds `id_reviews` (40) and `boundary_reviews`
+        # lempi02w's `library.db` holds `id_reviews` (40) and `boundary_reviews`
         # (4) beside the real ones in its listener half (99 and 3). That is
         # the masking shadow `lempi_db` exists to prevent, arriving from the
         # one direction that had no such guard.
@@ -831,7 +831,7 @@ class Runner:
             return False, {"error": "could not read the remote"}
         # `--emit-sql`: `snapshot_db` is a disposable comparison, never the
         # target of the write itself `[SPEC-DF-111]` -- the real write to
-        # lempipi happens two stages further down, via its own `sqlite3` CLI.
+        # lempi02w happens two stages further down, via its own `sqlite3` CLI.
         self._emit(job_id, "stage", "compare", stage="compare")
         code, out = self._spawn(job_id, "compare", [
             sys.executable, os.path.join(tools, "apply_changes.py"), snapshot_db, changes_json,
@@ -847,7 +847,7 @@ class Runner:
         self._emit(job_id, "log", _push_summary(result))
 
         if not result.get("landed") and not result.get("cleared"):
-            # Nothing to land -- lempipi is never stopped for an empty patch.
+            # Nothing to land -- lempi02w is never stopped for an empty patch.
             # `patch_statements` alone cannot tell this: it always includes
             # `ensure_review_tables`'s own schema-setup statements, so it is
             # never zero even when nothing actually changed. A second push
@@ -863,15 +863,15 @@ class Runner:
         if code != 0:
             result["error"] = "could not send the patch"
             return False, result
-        # The one command lempipi already has `[SPEC-DF-111]`: stop so the
+        # The one command lempi02w already has `[SPEC-DF-111]`: stop so the
         # patch is never applied underneath a live writer, apply it through
-        # lempipi's own `sqlite3`, restart. Briefly interrupts whatever is
+        # lempi02w's own `sqlite3`, restart. Briefly interrupts whatever is
         # playing -- why this job runs only on explicit request, never per edit.
         #
         # `sudo` is load-bearing, not decoration `[SPEC-DF-121]`: a bare
         # `systemctl stop lempi` as the unprivileged deploy user fails outright
         # with "Interactive authentication required" -- found live, the first
-        # time this stage ever ran against a real lempipi outside a test's own
+        # time this stage ever ran against a real lempi02w outside a test's own
         # faked `_spawn`. `pi ALL=(ALL) NOPASSWD: ALL` (`PI005`) already grants
         # this without a password prompt, the same assumption
         # `LempiPi/deploy-player.sh` already makes for its own `systemctl`
@@ -932,7 +932,7 @@ class Runner:
 
         A peer that fails does not stop the others. That is deliberate and it
         is the whole reason the per-peer result is kept separately: an
-        unreachable bose must not silently cancel a push to lempipi that
+        unreachable bose must not silently cancel a push to lempi02w that
         would have worked, and "3 of 4 succeeded" is a true answer that a
         single aggregate exit code cannot express.
         """

@@ -13,7 +13,7 @@
 #     onboard jack. The index moves between images -- BOSE001 measured it
 #     moving already -- so this searches for the PCM that is open instead of
 #     guessing which one should be.
-#   * `bluetoothctl` reported `Connected: yes` on `lempipi` while the same
+#   * `bluetoothctl` reported `Connected: yes` on `lempi02w` while the same
 #     machine's bluez node reported `connection = "disconnected"` and an empty
 #     transport. Two sources, one question, and no way to rank them by asking
 #     either one again `[GOV-SRC-010]`.
@@ -103,7 +103,7 @@ PROBE='
             # be read as "just restarted" rather than as "barely playing".
             #
             # ActiveEnterTimestampMonotonic is the boot-relative instant the
-            # unit STARTED, not its age -- on lempipi it read 28040 s against a
+            # unit STARTED, not its age -- on lempi02w it read 28040 s against a
             # service that had been up 514. Subtract it from the current
             # monotonic clock here, where both numbers are on the same machine.
             started=$(systemctl show -p ActiveEnterTimestampMonotonic --value lempi.service 2>/dev/null)
@@ -168,7 +168,7 @@ CLOCK*)
     # Everything above rests on a log line that is written every 300 s, so the
     # newest one can be five minutes stale -- a player that stopped four
     # minutes ago passes every test above it. On 2026-09-21 that read as a
-    # stalled counter during the lempipi migration and cost a real diversion:
+    # stalled counter during the lempi02w migration and cost a real diversion:
     # two samples eight seconds apart are inside one emission window, so of
     # course they matched. The period is the measurement's resolution, and a
     # number that cannot change on this timescale must not be sampled as if it

@@ -3,7 +3,7 @@
 # lempi's unit on bose. Installed by finalize-bose.sh --start.
 #
 # Not After=network-online.target: audio must start without waiting for the
-# network, same reasoning as IMPL001's unit for lempipi. bose's MPD guest is
+# network, same reasoning as IMPL001's unit for lempi02w. bose's MPD guest is
 # local (127.0.0.1), so no Bluetooth-style settle wait applies here either
 # [IMPL-BOS-030].
 [Unit]

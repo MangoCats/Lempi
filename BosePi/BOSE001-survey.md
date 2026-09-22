@@ -5,7 +5,7 @@
 A reconnaissance of the second appliance candidate before anything is built for
 it. Nothing here was changed; every figure was read from the running machine.
 
-`bose` is not a smaller `lempipi`. It is a **Pi 4 with a real DAC**, twice the
+`bose` is not a smaller `lempi02w`. It is a **Pi 4 with a real DAC**, twice the
 memory, a 44 GB library already on it, and MuLibPlay still playing — and it is
 running a 32-bit OS with its root overlay in RAM. Those four facts decide most
 of [BOSE002](BOSE002-image-build.md) and [BOSE003](BOSE003-build-procedure.md).
@@ -13,13 +13,13 @@ of [BOSE002](BOSE002-image-build.md) and [BOSE003](BOSE003-build-procedure.md).
 > **Related:** [PI001](../LempiPi/PI001-image-and-partitions.md) for the A/B/C partition
 > design this applies · [PI006](../LempiPi/PI006-appliance-characterisation.md) and
 > [PI007](../LempiPi/PI007-mpd-on-the-appliance.md) for what the same software costs on
-> `lempipi`
+> `lempi02w`
 
 ---
 
 ## 1. The machine
 
-| | `bose` (`rpi128`) | `lempipi`, for comparison |
+| | `bose` (`rpi128`) | `lempi02w`, for comparison |
 | :--- | :--- | :--- |
 | Board | **Pi 4 Model B rev 1.1** (`b03111`) | Pi, 4 cores |
 | Memory | **1,884 MiB**, no swap | 464 MB |
@@ -33,7 +33,7 @@ of [BOSE002](BOSE002-image-build.md) and [BOSE003](BOSE003-build-procedure.md).
 **`[PI-BOS-010]` It is 32-bit, and that is the one fact that costs work.**
 `armv7l` userspace on a board that is perfectly capable of `aarch64`. Every
 Lempi binary this project builds targets `aarch64-unknown-linux-gnu` and is now
-exercised daily on `lempipi`; targeting `bose` as it stands would mean adding
+exercised daily on `lempi02w`; targeting `bose` as it stands would mean adding
 and maintaining an `armv7-unknown-linux-gnueabihf` toolchain for one machine.
 
 Since the deliverable is a **new image anyway**, the answer is to install a
@@ -79,7 +79,7 @@ Simple mixer control 'Digital'
   Front Left/Right: 207 [100%] [0.00 dB] [on]
 ```
 
-`lempipi` reaches a Bluetooth speaker and had to be given MPD's **software**
+`lempi02w` reaches a Bluetooth speaker and had to be given MPD's **software**
 mixer, because there was no hardware one and nothing else could set the volume
 while MPD played `[SPEC-MPD-140]`. Here the PCM512x offers 208 steps in the
 chip. `mixer_type "hardware"` is available on `bose` and is the better answer:
@@ -104,7 +104,7 @@ Lempi succeeds, on the hardware it was built for.
 The audio stack is bullseye's split arrangement: **PulseAudio owns the DAC**
 (pid 768 holds `/dev/snd/pcmC1D0p`), while `pipewire` and
 `pipewire-media-session` run alongside handling video. Not the PipeWire-for-
-everything arrangement `lempipi` uses.
+everything arrangement `lempi02w` uses.
 
 It is also a **full desktop install**, not an appliance: `lightdm`, VNC on
 :5900, CUPS with `cups-browsed`, `ModemManager`, `udisks2`, `glamor-test`,
@@ -136,7 +136,7 @@ not supply:
 | Left available to the system | 901 MB |
 
 **Nearly a quarter of the machine's memory is holding writes that will be
-discarded at the next reboot.** On a 464 MB `lempipi` this arrangement would
+discarded at the next reboot.** On a 464 MB `lempi02w` this arrangement would
 have exhausted the machine; here it merely wastes half a gigabyte.
 
 **`[PI-BOS-060]` And the data being discarded is the data that matters.**
@@ -164,7 +164,7 @@ overlay is a good answer for the OS and a silently terrible one for state.
 | of which mp3/flac | 5,819 |
 
 So roughly 14 GB of OS and desktop sits beside 44 GB of music. The library is
-comparable to `lempipi`'s (5,705 files) but stored at full size rather than as
+comparable to `lempi02w`'s (5,705 files) but stored at full size rather than as
 the trimmed appliance copy.
 
 **No USB block devices are attached**, and `BOOT_ORDER` was not readable from

@@ -68,15 +68,15 @@ def main() -> int:
     console._peek = lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not be called"))
     check(console.remote_status(build(), 1) == {"remote": None}, "expected the bare not-configured shape")
 
-    print("lempipi unreachable: reported, and never raises")
-    console.STATE["jobs"] = FakeJobs("pi@lempipi:/srv/library/library.db")
+    print("lempi02w unreachable: reported, and never raises")
+    console.STATE["jobs"] = FakeJobs("pi@lempi02w:/srv/library/library.db")
     console._peek = lambda remote, kind, args, timeout=12.0: {"ok": False, "error": "no route to host"}
     r = console.remote_status(build(), 1)
-    check(r["remote"] == "pi@lempipi:/srv/library/library.db", f"got {r}")
+    check(r["remote"] == "pi@lempi02w:/srv/library/library.db", f"got {r}")
     check(r["reachable"] is False, f"expected unreachable, got {r}")
     check(r["checks"] == {}, f"an unreachable remote must offer nothing to accept, got {r}")
 
-    print("lempipi reachable and in agreement: reachable, nothing diverged")
+    print("lempi02w reachable and in agreement: reachable, nothing diverged")
     def agree(remote, kind, args, timeout=12.0):
         if kind == "id_review":
             return {"ok": True, "current": {"mbid": REC}}
@@ -87,7 +87,7 @@ def main() -> int:
     check(r["reachable"] is True, f"got {r}")
     check(all(not c["diverged"] for c in r["checks"].values()), f"nothing should diverge, got {r['checks']}")
 
-    print("lempipi diverged on the boundary only: exactly that one check is flagged")
+    print("lempi02w diverged on the boundary only: exactly that one check is flagged")
     def diverged_boundary(remote, kind, args, timeout=12.0):
         if kind == "id_review":
             return {"ok": True, "current": {"mbid": REC}}

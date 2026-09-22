@@ -6,7 +6,7 @@
 # chip at all.
 printf '%s\n' "hciconfig $*" >> "$VT_STATE/calls"
 # A fixture file makes the chip look dead. The real message, measured on
-# lempipi 2026-09-20 while the adapter was wedged.
+# lempi02w 2026-09-20 while the adapter was wedged.
 if [ -f "$VT_STATE/hci_wedged" ]; then
     echo "Can't read local name on hci0: Connection timed out (110)" >&2
     exit 1

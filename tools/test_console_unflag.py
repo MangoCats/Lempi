@@ -104,8 +104,8 @@ def test_flag_sync_status_no_remote_configured() -> None:
 
 
 def test_flag_sync_status_unreachable() -> None:
-    print("flag_sync_status(): lempipi unreachable is reported, never raised")
-    console.STATE["jobs"] = FakeJobs("pi@lempipi:/srv/library/library.db")
+    print("flag_sync_status(): lempi02w unreachable is reported, never raised")
+    console.STATE["jobs"] = FakeJobs("pi@lempi02w:/srv/library/library.db")
     real_peek = console._peek
     console._peek = lambda remote, kind, args, timeout=12.0: {"ok": False, "error": "no route to host"}
     try:
@@ -118,7 +118,7 @@ def test_flag_sync_status_unreachable() -> None:
 
 def test_flag_sync_status_agrees_and_diverges() -> None:
     print("flag_sync_status(): local vs. remote agreement and divergence, both reported")
-    console.STATE["jobs"] = FakeJobs("pi@lempipi:/srv/library/library.db")
+    console.STATE["jobs"] = FakeJobs("pi@lempi02w:/srv/library/library.db")
     real_peek = console._peek
 
     console._peek = lambda remote, kind, args, timeout=12.0: {
@@ -160,7 +160,7 @@ def test_unflag_everywhere_no_remote() -> None:
 def test_unflag_everywhere_translates_passage_id_for_remote() -> None:
     print("unflag_everywhere(): the passage-keyed subject is translated to the "
           "remote's OWN local passage_id before being sent there")
-    console.STATE["jobs"] = FakeJobs("pi@lempipi:/srv/library/library.db")
+    console.STATE["jobs"] = FakeJobs("pi@lempi02w:/srv/library/library.db")
     real_peek = console._peek
     real_local, real_remote = lempi_control._lempi_set_flag, lempi_control._remote_set_flag
     console._peek = lambda remote, kind, args, timeout=12.0: {
@@ -185,7 +185,7 @@ def test_unflag_everywhere_translates_passage_id_for_remote() -> None:
 def test_unflag_everywhere_remote_missing_passage() -> None:
     print("unflag_everywhere(): a remote with no such passage skips only the "
           "passage-keyed subject, and still clears the recording-keyed one")
-    console.STATE["jobs"] = FakeJobs("pi@lempipi:/srv/library/library.db")
+    console.STATE["jobs"] = FakeJobs("pi@lempi02w:/srv/library/library.db")
     real_peek = console._peek
     real_local, real_remote = lempi_control._lempi_set_flag, lempi_control._remote_set_flag
     console._peek = lambda remote, kind, args, timeout=12.0: {
@@ -206,7 +206,7 @@ def test_unflag_everywhere_remote_missing_passage() -> None:
 
 def test_unflag_everywhere_clears_a_stale_remote_recording_too() -> None:
     """Found live 2026-09-01: an id correction accepted locally (a real
-    MusicBrainz mbid) but never yet pushed left lempipi still linked to the
+    MusicBrainz mbid) but never yet pushed left lempi02w still linked to the
     *old* `local:audio:` placeholder -- the flag was set under that old id,
     and resolving subjects only from this library's own current link
     reported success while clearing nothing where the flag actually was.
@@ -214,7 +214,7 @@ def test_unflag_everywhere_clears_a_stale_remote_recording_too() -> None:
     print("unflag_everywhere(): a recording the remote still links but this "
           "library has since moved away from is cleared too, not just this "
           "library's own current one")
-    console.STATE["jobs"] = FakeJobs("pi@lempipi:/srv/library/library.db")
+    console.STATE["jobs"] = FakeJobs("pi@lempi02w:/srv/library/library.db")
     real_peek = console._peek
     real_local, real_remote = lempi_control._lempi_set_flag, lempi_control._remote_set_flag
     old_remote_mbid = "local:audio:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -257,7 +257,7 @@ def test_unflag_subject_everywhere_no_remote() -> None:
 def test_unflag_subject_everywhere_sends_the_identical_subject_to_the_remote() -> None:
     print("unflag_subject_everywhere(): no passage, no union, no translation -- the "
           "identical (kind, subject_id) reaches the remote as given")
-    console.STATE["jobs"] = FakeJobs("pi@lempipi:/srv/library/library.db")
+    console.STATE["jobs"] = FakeJobs("pi@lempi02w:/srv/library/library.db")
     real_local, real_remote = lempi_control._lempi_set_flag, lempi_control._remote_set_flag
     lempi_control._lempi_set_flag = lambda *a, **k: True
     remote_calls = []

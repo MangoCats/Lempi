@@ -43,7 +43,7 @@ say() { echo "$*"; }
 # touches the chip either. Read Local Name is the cheapest command the
 # controller cannot answer from anybody else's memory.
 #
-# Cheap enough to ask on a timer while music plays: measured on lempipi
+# Cheap enough to ask on a timer while music plays: measured on lempi02w
 # 2026-09-20 against a live A2DP stream, 60 probes at 1 Hz, none slower than
 # 50 ms, zero underruns, transport still active afterwards.
 #
@@ -87,7 +87,7 @@ recent_hci_errors() {
 #
 # Unbinding and rebinding the serdev driver re-runs the whole bring-up: the
 # chip is re-probed and its firmware patch downloaded again. Proven on
-# lempipi 2026-09-20 -- `hci0` disappeared, came back, and the kernel logged
+# lempi02w 2026-09-20 -- `hci0` disappeared, came back, and the kernel logged
 # `BCM43430A1 'brcm/BCM43430A1.raspberrypi,model-zero-2-w.hcd' Patch`, which
 # is the firmware actually being written to the chip rather than a driver
 # merely reattaching. Read Local Name answered afterwards, and the trusted

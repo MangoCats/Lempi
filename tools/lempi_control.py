@@ -6,7 +6,7 @@ Vipunen's console `[SPEC-SUI-140]`, `[SPEC-SUI-135]`.
 Split out of `console.py`, where this cluster had grown directly against that
 file's own stated safety claim: "the views, and nothing that writes... there
 is no POST route in this file." `unflag_everywhere()` below is a write --
-two, in fact, one local and one to lempipi -- and `console.py`'s own
+two, in fact, one local and one to lempi02w -- and `console.py`'s own
 `do_POST` has carried a route to it since `[REQ-VIS-265]`. The claim that
 still holds, and the one this split makes structural again rather than
 aspirational, is narrower: **this module never opens the library for
@@ -242,10 +242,10 @@ def reload_lempi_library(port: int = LEMPI_PORT) -> bool:
 def _remote_set_flag(remote: str, port: int, kind: str, subject_id: str, flagged: bool,
                       timeout: float = 8.0) -> bool:
     """The identical signal `_lempi_set_flag` sends locally, sent instead to
-    lempipi's own already-running Lempi over one `ssh ... curl` round trip.
+    lempi02w's own already-running Lempi over one `ssh ... curl` round trip.
     Never a database write from this process, and never a service
     interruption: unlike `[SPEC-DF-111]`'s patch-apply recipe, nothing here
-    writes to lempipi's database directly, so there is nothing for its own
+    writes to lempi02w's database directly, so there is nothing for its own
     running player to race against and no reason to stop it.
     """
     host, _, _ = remote.partition(":")
@@ -265,7 +265,7 @@ def unflag_everywhere(subjects: list, remote: str | None, status: dict | None,
                        port: int = LEMPI_PORT) -> dict:
     """Clear every plausible flag on this passage, locally and on the
     remote, in one action `[REQ-VIS-265]`. Both writes go through Lempi's
-    own `set_flag` -- co-resident over plain HTTP, lempipi's over one `ssh
+    own `set_flag` -- co-resident over plain HTTP, lempi02w's over one `ssh
     ... curl` round trip -- never a `listener_flags` write from this
     process: listener state is Lempi's to write, not Vipunen's.
 

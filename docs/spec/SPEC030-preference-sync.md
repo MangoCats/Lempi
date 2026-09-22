@@ -6,13 +6,13 @@
 edit an artist's or a recording's own `rotation`/`recovery`/`restraint`
 locally, and later its "special" tags — Christmas, Children's, Profanity,
 Spiritual — in the same panel. This is what happens once two installations
-— a desktop and `lempipi`, say — have each done that independently, and
+— a desktop and `lempi02w`, say — have each done that independently, and
 someone wants the two reconciled.
 
 > **Status.** Built 2026-09-04, per `[REQ-VIS-295]`. `tools/sync_preferences.py`
 > (the tool), `jobs.py`'s `sync-preferences` job kind, and a third button on
 > the console's existing `/flags` "Sync with a remote" section. Verified
-> live against the real desktop and `pi@lempipi` installations this
+> live against the real desktop and `pi@lempi02w` installations this
 > session: a real edit, dry-run detected it, `--commit` landed it on the
 > remote (service stopped, patched, restarted, confirmed running), and a
 > follow-up dry-run reported the two sides converged.
@@ -176,7 +176,7 @@ unknown stops the sync rather than being treated as empty. The difference is
 not theoretical: reading a locked database as "the remote has no specials"
 would push every local value over whatever is actually there, including
 newer values, silently. Observed live on 2026-09-10, a count against
-`pi@lempipi` failing once seconds after the service restarted and succeeding
+`pi@lempi02w` failing once seconds after the service restarted and succeeding
 four times immediately after.
 
 **`[SPEC-PREF-155]` A split peer is addressed by two paths, and the
@@ -194,7 +194,7 @@ Without it the failure is silent and total: `run_remote_sql` opens exactly
 one path, so every existence query against a split peer errors,
 `{"ok": False}` collapses to an empty set, every one-sided subject is filed
 `skip_missing`, and the tool reports a clean "nothing to do" while having
-synced nothing at all. Found live against `pi@lempipi` on 2026-09-10.
+synced nothing at all. Found live against `pi@lempi02w` on 2026-09-10.
 
 Two things had gone stale rather than been wrong when written. This
 document's own **Status** block records a live verification against that

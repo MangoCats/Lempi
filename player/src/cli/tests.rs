@@ -381,7 +381,7 @@ fn the_retired_positional_form_still_runs_and_warns_by_name() {
         &specs::lempi::SPEC,
         "/var/lempi/listener.db --library /srv/library/library.db --port 5720",
     ) else {
-        panic!("the live lempipi command line was refused")
+        panic!("the live lempi02w command line was refused")
     };
     assert_eq!(a.text(&specs::lempi::LISTENER), Some("/var/lempi/listener.db"));
     assert_eq!(a.text(&specs::lempi::LIBRARY), Some("/srv/library/library.db"));
@@ -539,7 +539,7 @@ fn every_option_the_repository_types_is_one_the_binary_accepts() {
 /// project has never defined -- and created a file called `--prt` in the
 /// repository. A reviewer produced exactly that, which is the second time
 /// this shape has left a file named after an option lying around; there is
-/// one on `lempipi` dated August, and one was found on `smartboardpc`.
+/// one on `lempi02w` dated August, and one was found on `smartboardpc`.
 ///
 /// So the test is shape, not membership: nothing beginning with `-` is a
 /// value. The two deliberate exemptions are pinned here too, because both

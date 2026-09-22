@@ -141,7 +141,7 @@ considered, and a mistyped `--prt` is refused rather than becoming a filename.
 > **`[GDE-CLI-045]` Status: the shim is in, deliberately, and its removal
 > condition is this.** Delete the `was_positional` handling from
 > `player/src/cli.rs`, and the `.was(n)` calls from the tables, **once all
-> four units in §5 use named options** — `bose`, `lempipi` (two: a base unit
+> four units in §5 use named options** — `bose`, `lempi02w` (two: a base unit
 > and a drop-in) and `lp3-wifi`. Not before. Two tests hold the door:
 > `the_retired_positional_form_still_runs_and_warns_by_name` and
 > `the_bare_argument_form_still_works_and_says_exactly_what_to_use_instead`
@@ -160,11 +160,11 @@ node keeps working through §4's shim and says so in its journal every start.
 | Host | Unit | Apply |
 |---|---|---|
 | `bose` | `/etc/systemd/system/lempi.service` — tracked here as [`BosePi/lempi-bose.service`](../BosePi/lempi-bose.service), already updated | ☐ |
-| `lempipi` | base unit `/etc/systemd/system/lempi.service`, written by [`LempiPi/setup-lempipi.sh`](../LempiPi/setup-lempipi.sh), already updated | ☐ |
-| `lempipi` | drop-in `/etc/systemd/system/lempi.service.d/mpd-guest.conf` — tracked as [`LempiPi/lempi-mpd-guest.conf`](../LempiPi/lempi-mpd-guest.conf), already updated | ☐ |
+| `lempi02w` | base unit `/etc/systemd/system/lempi.service`, written by [`LempiPi/setup-appliance.sh`](../LempiPi/setup-appliance.sh), already updated | ☐ |
+| `lempi02w` | drop-in `/etc/systemd/system/lempi.service.d/mpd-guest.conf` — tracked as [`LempiPi/lempi-mpd-guest.conf`](../LempiPi/lempi-mpd-guest.conf), already updated | ☐ |
 | `lp3-wifi` | `/etc/systemd/system/lempi.service` — tracked here as [`LempiPlay3/lempi.service`](../LempiPlay3/lempi.service) since 2026-09-21 `[LP3-REP-010]` | ☐ |
 
-**lempipi reports two `ExecStart` lines because it has two.** The drop-in
+**lempi02w reports two `ExecStart` lines because it has two.** The drop-in
 blanks the base unit's with an empty `ExecStart=` and supplies its own; the
 drop-in is what actually runs. Both need changing, because whichever survives
 a future edit must be right.
@@ -175,10 +175,10 @@ The exact lines:
 # bose
 ExecStart=/usr/local/bin/lempi --listener /var/lempi/listener.db --library /srv/library/library.db --device hifiberry --mpd 127.0.0.1:6600 --mpd-root /srv/library/audio
 
-# lempipi, base unit
+# lempi02w, base unit
 ExecStart=/usr/local/bin/lempi --listener /srv/library/library.db --port 5720
 
-# lempipi, drop-in mpd-guest.conf (this is the one that runs)
+# lempi02w, drop-in mpd-guest.conf (this is the one that runs)
 ExecStart=/usr/local/bin/lempi --listener /var/lempi/listener.db --library /srv/library/library.db --port 5720 --mpd 127.0.0.1:6600 --mpd-root /srv/library/audio
 
 # lp3-wifi

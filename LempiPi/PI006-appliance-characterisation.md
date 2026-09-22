@@ -1,6 +1,6 @@
 # PI006: What the Appliance Actually Costs
 
-**Measurement — Tier 1 · measured on lempipi, 2026-08-23**
+**Measurement — Tier 1 · measured on lempi02w, 2026-08-23**
 
 The player as it runs on the hardware it is for: what it uses, what it can be
 asked for, and the one thing it does badly. Every number here was taken from

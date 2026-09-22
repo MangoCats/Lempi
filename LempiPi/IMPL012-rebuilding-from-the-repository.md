@@ -23,7 +23,7 @@ part a reader checks rather than follows.
 
 **`[PI3-REPRO-010]` Audited 2026-09-09, and it did not reproduce.** A fresh
 card built from this repository alone would have come up without the entire
-reconnection mechanism. `setup-lempipi.sh` installed six helpers and never
+reconnection mechanism. `setup-appliance.sh` installed six helpers and never
 mentioned `lempi-speaker`, its service, or its timer — so the appliance would
 not have re-asserted trust `[PI3-FOUND-130]`, would not have chased the
 speaker after a power cycle `[PI3-FOUND-090]`, and would not have noticed the
@@ -44,7 +44,7 @@ but the card despite being the instruments behind `[PI3-ROCKER-010]` and the
 interference measurements in section 1.
 
 All of the above is now staged in `LempiPi/` and installed by
-`setup-lempipi.sh`, which also gained the `add-wants` that `[PI3-FOUND-030]`'s
+`setup-appliance.sh`, which also gained the `add-wants` that `[PI3-FOUND-030]`'s
 remedy actually needs. Verified by generating the units and comparing them
 byte-for-byte against the running appliance, and by exercising the installer's
 idempotence rather than assuming it.

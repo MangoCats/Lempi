@@ -1,6 +1,6 @@
 # LOG010: Power-Loss Risk on the Two Pi Nodes
 
-**Measured survey + bounded estimate — `bose` and `lempipi`, 2026-09-15**
+**Measured survey + bounded estimate — `bose` and `lempi02w`, 2026-09-15**
 
 A *rate* is what `[PI-FS-050]` has asked for since PI023: how often does a Pi
 losing power with the database open cost something. [BOSE005](../BosePi/BOSE005-power-loss-test.md)
@@ -27,7 +27,7 @@ sixty, and in write *volume* by almost nothing.** This is the finding the rest
 of the document turns on, and it is not the one the overlay's reputation
 suggests.
 
-| | `bose` | `lempipi` |
+| | `bose` | `lempi02w` |
 | :--- | :--- | :--- |
 | Board | Pi 4 Model B rev 1.1 | Pi Zero 2 W rev 1.0 |
 | Card | SanDisk `SR128`, 119.1 GB, mfg 05/2020 | Samsung `JE4S5`, 238.8 GB, mfg 06/2023 |
@@ -46,7 +46,7 @@ suggests.
 1.16.0) is installed and the partition has `passno 2`, so a damaged checkpoint
 is repaired at boot rather than mounted around.
 
-`lempipi`'s ext4 is `rw,noatime`, `data=ordered`, 64 MB journal with
+`lempi02w`'s ext4 is `rw,noatime`, `data=ordered`, 64 MB journal with
 `journal_checksum_v3`, `fsck.repair=yes` on the kernel command line — and
 **`Errors behavior: Continue`**, so a metadata inconsistency noticed at runtime
 does not remount read-only; it carries on.
@@ -60,15 +60,15 @@ reaches the 4 MB threshold about **every 69 minutes**. Dirty page cache sat at
 **336–424 kB** on both nodes across the sampling window — that is the entire
 volume of not-yet-written data a cut would find in RAM.
 
-> `lempipi`'s audio device read `closed` during this survey, so its figures are
+> `lempi02w`'s audio device read `closed` during this survey, so its figures are
 > idle-state figures and its WAL was static. Its playing-state write rate should
 > be assumed similar to `bose`'s, not lower.
 
 **`[SD-RISK-030]` No corruption appears in either machine's surviving kernel log
 — and the logs are too short for that to mean much.** `bose`'s journal spans 3
-days, `lempipi`'s 4; both have rotated. Zero `ext4`, `f2fs`, I/O or mmc errors.
+days, `lempi02w`'s 4; both have rotated. Zero `ext4`, `f2fs`, I/O or mmc errors.
 Boot counting from `wtmp` was attempted and **rejected**: neither Pi has an RTC,
-so the 82 `reboot` lines on `lempipi` carry duplicated stale-clock timestamps
+so the 82 `reboot` lines on `lempi02w` carry duplicated stale-clock timestamps
 and several read `still running` at once. There is no trustworthy boot count on
 either machine.
 
@@ -135,7 +135,7 @@ data; ext4 `data=ordered` journals metadata and replays it. Both are sound, and
 neither promises anything about data an application never fsynced. The
 difference is what a failure costs:
 
-| | `bose` | `lempipi` |
+| | `bose` | `lempi02w` |
 | :--- | :--- | :--- |
 | A minor FS event costs | a log line, one drift sample | a log line — or an OS file |
 | A catastrophic FS event costs | 4 GB of state; **the node still boots** | **the appliance** |
@@ -163,7 +163,7 @@ file, or a database needing recovery — repairable in place, nothing a listener
 notices beyond seconds of history. "Catastrophic" means an unbootable card,
 total loss of the listener database, or a card bricked at the FTL level.
 
-| Per unplanned power cut | `bose` | `lempipi` |
+| Per unplanned power cut | `bose` | `lempi02w` |
 | :--- | ---: | ---: |
 | Durability loss (by design) | ~1 | ~1 |
 | Minor — SQLite | <10⁻⁴ | <10⁻⁴ |
@@ -173,7 +173,7 @@ total loss of the listener database, or a card bricked at the FTL level.
 | **Minor, combined** | **~1×10⁻²** | **~5×10⁻²** |
 | **Catastrophic, combined** | **~1×10⁻⁴** | **~2×10⁻⁴** |
 
-**`[SD-RISK-110]` Per year, and the assumption that dominates it.** `lempipi` is
+**`[SD-RISK-110]` Per year, and the assumption that dominates it.** `lempi02w` is
 fed from the Middleton's own USB port `[PI3-FOUND-090]`, so **every power-down
 is a cut** `[PI3-FOUND-120]`. At one switch-off a day that is ~365 cuts/year;
 the band used here is 100–700.
@@ -182,10 +182,10 @@ For `bose` this document **assumes mains power on a supply not operated by a
 user-facing switch**, giving 2–12 cuts/year (household outages plus deliberate
 ones). That assumption was not verified `[GDE-DEP-060]`. If `bose` is in fact on
 a switched strip or a speaker's own outlet, its column below moves to
-`lempipi`'s cut count and its yearly risk rises by ~60×, while its *per-cut*
+`lempi02w`'s cut count and its yearly risk rises by ~60×, while its *per-cut*
 figures stay exactly as they are.
 
-| Per year | `bose` (~6 cuts) | `lempipi` (~365 cuts) |
+| Per year | `bose` (~6 cuts) | `lempi02w` (~365 cuts) |
 | :--- | ---: | ---: |
 | Cuts | 2–12 | 100–700 |
 | Minor events | **~0.06/yr** — one per ~16 years | **~18/yr** — a few per month |
@@ -198,7 +198,7 @@ narrowed from published work. It is the dominant uncertainty in this document.
 
 **`[SD-RISK-120]` Wear-out is not the binding constraint on either node.** At
 1–1.9 GB/day against a 119 GB and a 239 GB card, with `discard` on `bose` and a
-weekly `fstrim` on `lempipi` (199 GB discarded, measured), even a pessimistic
+weekly `fstrim` on `lempi02w` (199 GB discarded, measured), even a pessimistic
 write amplification of 4 and 500 P/E cycles puts endurance at **17–50 years**.
 Both nodes will meet a power cut long before they meet a worn-out cell. Power
 loss, not wear, is the SD risk here.
@@ -218,13 +218,13 @@ The honest recommendation for `bose` is therefore not a change to `bose`:
 already captures the manifest either side of a cut. Ten more cuts would do more
 for this estimate than any hardware swap.
 
-**`[SD-RISK-140]` `lempipi` is dominated by one writable ext4 root carrying the
+**`[SD-RISK-140]` `lempi02w` is dominated by one writable ext4 root carrying the
 whole OS, hit ~365 times a year.** Not by the card, and not by SQLite. Its
 catastrophic rate is ~300× `bose`'s almost entirely because it takes ~60× the
-cuts against ~60× the writable surface, and because on `lempipi` a filesystem
+cuts against ~60× the writable surface, and because on `lempi02w` a filesystem
 failure is an unbootable appliance rather than a lost state partition.
 
-**The single change that would most reduce it is to give `lempipi` `bose`'s
+**The single change that would most reduce it is to give `lempi02w` `bose`'s
 shape: `overlayroot` over a read-only root, plus a small f2fs state partition.**
 That converts ~99 % of its writable surface to read-only and moves its
 catastrophic column to `bose`'s. The pattern is already proven in this fleet, on

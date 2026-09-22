@@ -17,7 +17,7 @@ order below. Not if executed as `BOSE008` originally read.
 > service stopped and one step at a time rather than as a script.
 
 > **Related:** [BOSE008](BOSE008-image-update-plan.md) for the decisions this
-> executes · [PI025 `[PI-OWE-040]`](../LempiPi/PI025-what-the-local-split-owes-lempipi.md)
+> executes · [PI025 `[PI-OWE-040]`](../LempiPi/PI025-what-the-local-split-owes-lempi02w.md)
 > for the ordering trap this inherits · [BOSE005](BOSE005-power-loss-test.md)
 > for the power cut that can interrupt any step
 
@@ -28,11 +28,11 @@ order below. Not if executed as `BOSE008` originally read.
 **`[BOS-RUN-010]` One binary genuinely serves both appliances.** The largest
 unexamined risk, since they are now on different Debian generations. The
 cross-build image is `rust:1.90-bookworm` (glibc 2.36); the deployed binary
-imports nothing above `GLIBC_2.34`; `lempipi` has 2.36 and `bose` has 2.41.
+imports nothing above `GLIBC_2.34`; `lempi02w` has 2.36 and `bose` has 2.41.
 Building against the **older** distribution is what makes that work, and it
 is load-bearing rather than incidental: bumping `build/Dockerfile.aarch64`
 to trixie would produce a binary that runs on `bose` and refuses to start on
-`lempipi`, with no warning at build time.
+`lempi02w`, with no warning at build time.
 
 **`[BOS-RUN-015]` `sqlite3` installs cleanly.** `apt-get install -s sqlite3`
 on `bose`: one package, `3.46.1-7+deb13u1`, no dependencies pulled, nothing
@@ -57,7 +57,7 @@ and `tools/load_occasions.py` now imports `lempi_db`, so copying that one
 file over fails on import. `tools/backfill_profanity.py` additionally reads
 `mulib.db`, which is 95 MB and lives only on the desktop.
 
-Corrected mechanism, which is the one `lempipi` was actually given:
+Corrected mechanism, which is the one `lempi02w` was actually given:
 
 ```
 # ship both files, not one
@@ -80,7 +80,7 @@ rather than by the desktop's `[SPEC-PREF-082]`.
 `PlayerStore::open(&db)` from telling the connection that the listener half
 is the whole database. On the old build, a split `bose` would create empty
 `file_tags` and `cover_art` in its listener half on **every start**, exactly
-as `lempipi` did `[PI-OWE-040]`.
+as `lempi02w` did `[PI-OWE-040]`.
 
 This is the same trap, on the same evidence, one appliance later. **Deploy
 first.**
@@ -179,15 +179,15 @@ insists.
 
 This also quietly corrects `BOSE008 [BOS-IMG-050]`'s claim that `bose` "has
 one writable filesystem". It has two partitions with different postures, and
-that is closer to `lempipi`'s intent than `lempipi` itself manages — B here
-really is read-only, where `lempipi`'s equivalent just stays `rw` forever.
+that is closer to `lempi02w`'s intent than `lempi02w` itself manages — B here
+really is read-only, where `lempi02w`'s equivalent just stays `rw` forever.
 
 **`[BOS-RUN-085]` Two of the three helpers are inert without their units.**
 `lempi-vitals` and `lempi-startup-sample` each have a
-`/etc/systemd/system/*.service` on `lempipi`; installed as bare scripts they
+`/etc/systemd/system/*.service` on `lempi02w`; installed as bare scripts they
 are exactly the half-a-mechanism mistake `[BOS-RUN-045]` had just caught
 with `lempi-wifi-revert`, and the review made it again one paragraph later.
-Both units are now on `bose` with `lempipi`'s own enablement: `startup-sample`
+Both units are now on `bose` with `lempi02w`'s own enablement: `startup-sample`
 **enabled** (bounded — it samples the first minutes after a boot),
 `lempi-vitals` **disabled** (an infinite sampler, started by hand when
 something is being investigated). `lempi-underruns` genuinely is standalone
@@ -219,7 +219,7 @@ the player cannot open the catalogue, `Restart=always` turns that into the
 crash loop `[PI3-FOUND-120]` describes — and `lempi-db-recover` **cannot fix
 it on `bose`**, because its one read-write open lands on a partition that is
 read-only. Recovery needs an attended window. That is a real difference from
-`lempipi`, where the same file sits on a writable filesystem and the script
+`lempi02w`, where the same file sits on a writable filesystem and the script
 heals it at the next boot.
 
 `attended-import.sh` `sync`s, which is not a checkpoint. Any future window
@@ -251,7 +251,7 @@ touches the catalogue rather than only the audio.
 
 **`[BOS-RUN-075]`** `[BOS-RUN-010]`'s glibc floor is undefended: nothing
 fails at build time if `build/Dockerfile.aarch64` is bumped past bookworm,
-and the failure appears only when `lempipi` refuses to start. A check that
+and the failure appears only when `lempi02w` refuses to start. A check that
 the built binary imports no symbol above the oldest deployed appliance's
 glibc would close it.
 

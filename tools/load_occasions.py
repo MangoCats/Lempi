@@ -125,7 +125,7 @@ def main() -> int:
     # reach over `passages`/`flavor`, which are not. One connection sees
     # both `[IMPL-DBSPLIT-025]`; `--library` still names the catalogue
     # explicitly for an installation whose halves are not siblings, which
-    # is how lempipi is laid out.
+    # is how lempi02w is laid out.
     con = lempi_db.connect(db, lempi_db.ROLE_LISTENER, writable=True,
                            peer=(str(library) if library != db else None))
     reach = con

@@ -88,7 +88,7 @@ def fake_spawn_success(remote_flags_json):
 
 def fake_spawn_unreachable(self, job_id, stage, argv):
     if stage == "fetch-flags":
-        return 1, "could not reach pi@lempipi:/srv/library/library.db: no route to host"
+        return 1, "could not reach pi@lempi02w:/srv/library/library.db: no route to host"
     raise AssertionError(f"stage {stage!r} must never run after fetch-flags fails")
 
 
@@ -100,10 +100,10 @@ def test_pull_lands_a_flag(tmp: str) -> None:
     runner = jobmod.Runner(library, sidecar)
     inner = fake_spawn_success({"format_version": 1, "flags": [
         {"subject_kind": "recording", "anchor": {"recording_mbid": SONG_A},
-         "flagged_at": "2026-08-29 09:00:00", "origin": "lempipi"},
+         "flagged_at": "2026-08-29 09:00:00", "origin": "lempi02w"},
     ]})
     runner._spawn = inner.__get__(runner, jobmod.Runner)
-    job_id = runner.submit("remote-pull", "pi@lempipi:/srv/library/library.db")
+    job_id = runner.submit("remote-pull", "pi@lempi02w:/srv/library/library.db")
     j = wait_for(runner, job_id)
     check(j["state"] == "done", f"expected done, got {j}")
     check(j["result"]["matched"] == 1, f"expected 1 matched flag, got {j['result']}")
@@ -115,7 +115,7 @@ def test_pull_lands_a_flag(tmp: str) -> None:
     row = c.execute("SELECT flagged_at, origin FROM listener_flags WHERE subject_kind='recording' "
                     "AND subject_id=?", (SONG_A,)).fetchone()
     c.close()
-    check(row == ("2026-08-29 09:00:00", "lempipi"), f"the flag must actually be committed, got {row}")
+    check(row == ("2026-08-29 09:00:00", "lempi02w"), f"the flag must actually be committed, got {row}")
 
 
 def test_unreachable_fails_before_import(tmp: str) -> None:
@@ -125,7 +125,7 @@ def test_unreachable_fails_before_import(tmp: str) -> None:
     sidecar = os.path.join(tmp, "library2.console.db")
     runner = jobmod.Runner(library, sidecar)
     runner._spawn = fake_spawn_unreachable.__get__(runner, jobmod.Runner)
-    job_id = runner.submit("remote-pull", "pi@lempipi:/srv/library/library.db")
+    job_id = runner.submit("remote-pull", "pi@lempi02w:/srv/library/library.db")
     j = wait_for(runner, job_id)
     check(j["state"] == "failed", f"expected failed, got {j}")
     c = sqlite3.connect(library)

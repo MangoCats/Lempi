@@ -8,7 +8,7 @@ Reports **emitter ppm minus recorder ppm**. An acoustic measurement cannot give
 either one alone: it compares two clocks and has no third to appeal to. To make
 a figure absolute, measure one side electrically and subtract -- which is the
 whole point of running `bose` past a microphone that has already heard
-`lempipi` `[GDE-ECHO-570]`.
+`lempi02w` `[GDE-ECHO-570]`.
 
 The arithmetic. Clicks leave the emitter `interval` nominal-seconds apart, so
 the real time between them is `interval / (1 + e_emit)`. The recorder counts
@@ -18,7 +18,7 @@ the reported spacing `a` and:
     e_emit - e_rec  ~=  (1 - a) * 1e6  ppm
 
 **How this is fitted matters more than how the clicks are found.** The first
-analysis of the `lempipi` recording reported +12,574 ppm from good data
+analysis of the `lempi02w` recording reported +12,574 ppm from good data
 `[LOG-DRIFT-064]`: it took the rate from the first and last detection, and three
 spurious detections set those endpoints. A span estimator hands its entire
 answer to its two most fragile points. So this one finds the longest run of

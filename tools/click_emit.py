@@ -20,7 +20,7 @@ quantity of interest survives.
 `bose` runs and what the library is. If any resampler stands between this file
 and the DAC -- PipeWire, `plug:`, a mismatched rate -- it will impose its own
 clock and the measurement becomes a reading of the resampler, which is exactly
-how `lempipi`'s first figure came out as a meaningless +0.0073 ppm
+how `lempi02w`'s first figure came out as a meaningless +0.0073 ppm
 `[LOG-DRIFT-058]`. Play it with `aplay -D hw:...` on the raw device, or accept
 that the number describes the software chain rather than the hardware.
 
