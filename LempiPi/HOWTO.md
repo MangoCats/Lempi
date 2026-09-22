@@ -9,11 +9,28 @@ gets done here: a binary is cross-compiled and put where the appliance's
 
 > **`lempipi` is a router-side name, not the machine's own.** The appliance's
 > hostname is `LempiPiHost` and its DHCP reservation also answers to
-> `lempi02w`; `lempipi` is an alias pointing at the same address,
-> 192.168.67.20. Every script here defaults to `pi@lempipi`, so **that alias
-> has to exist on the router** — it is not configured anywhere on the Pi and
-> would not survive a router reset. If `ssh pi@lempipi` fails while the node is
-> plainly up, this is why; `pi@lempi02w` reaches the same machine.
+> `lempi02w`; `lempipi` is an alias for the same address, 192.168.67.20. It is
+> not configured anywhere on the Pi and would not survive a router reset, so if
+> `ssh pi@lempipi` fails while the node is plainly up, that is why —
+> `pi@lempi02w` reaches the same machine.
+>
+> **No script defaults to that alias any more** *(corrected 2026-09-21)*. This
+> paragraph used to say "every script here defaults to `pi@lempipi`", and that
+> stopped being true when three hardcoded copies of the name were replaced by a
+> roster: [`build/lib-defaults.sh`](../build/lib-defaults.sh) reads
+> `fleet/targets.env` — untracked, this household's real kit — and falls back to
+> the deliberately generic `fleet-example/targets.env` `[GDE-ARC-033]`. This
+> fleet's roster names `pi@lempi02w`, so that is what a bare
+> `build/deploy-appliance.sh` aims at, and `LEMPI_APPLIANCE` outranks both
+> `[GDE-CLI-090]`.
+>
+> **Whether the alias resolves at all is unsettled, and one command settles
+> it.** This document says it does; `build/lib-defaults.sh`'s own comment says
+> `pi@lempipi` is "a name that has never resolved". Both are assertions and
+> neither is a measurement, which is the situation
+> [GOV002](../docs/GOV002-sources-of-truth.md) exists for. `getent hosts
+> lempipi`, run on that network, answers it in one line. Until someone runs it,
+> prefer `lempi02w` — the two sources agree on that one.
 
 Every command below is verified against this repository as it stands.
 
@@ -38,11 +55,11 @@ target, no separate checkout for building an older tag.
 One command, from anywhere in the repository:
 
 ```
-LempiPi/deploy.sh
+build/deploy-appliance.sh
 ```
 
-This builds whatever is currently checked out here and puts it on
-`pi@lempipi`: cross-compiles in Docker, uploads, restarts the service, and
+This builds whatever is currently checked out here and puts it on **whichever
+host the roster names**: cross-compiles in Docker, uploads, restarts the service, and
 finishes by asking the appliance which commit it's actually running —
 refusing to call the deploy done if the answer disagrees. If your checkout
 has uncommitted changes, it stops and says so rather than deploying
@@ -52,7 +69,7 @@ something with no commit to point back to later; commit first, or pass
 To deploy a specific tagged version instead of whatever's checked out:
 
 ```
-LempiPi/deploy.sh pi-audio-stable-2026-08-16
+build/deploy-appliance.sh pi-audio-stable-2026-08-16
 ```
 
 This builds that tag in an isolated copy made just for the build — your own
@@ -62,8 +79,8 @@ currently have checked out or edited locally. `git tag` lists what exists.
 To deploy to a different appliance, name it as the last argument:
 
 ```
-LempiPi/deploy.sh pi-audio-stable-2026-08-16 pi@other-host
-LempiPi/deploy.sh pi@other-host                    # latest, elsewhere
+build/deploy-appliance.sh pi-audio-stable-2026-08-16 pi@other-host
+build/deploy-appliance.sh pi@other-host            # latest, elsewhere
 ```
 
 ---
@@ -93,7 +110,7 @@ came back, and exits non-zero without pretending the deploy succeeded.
 
 ## Where to go next
 
-- `build/install-player.sh` — the lower-level script `deploy.sh` wraps (named `deploy-player.sh`, under `LempiPi/`, until 2026-09-11); run it
+- `build/install-player.sh` — the lower-level script `build/deploy-appliance.sh` wraps (named `deploy-player.sh`, under `LempiPi/`, until 2026-09-11); run it
   directly if you've already built the binary some other way (e.g. by
   hand, per `build/README.md`) and just need it uploaded.
 - [PI001-image-and-partitions.md](PI001-image-and-partitions.md) — building the Pi image itself, not
