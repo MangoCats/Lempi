@@ -83,6 +83,19 @@ APPLIANCES=$(. "$ROOT/build/lib-defaults.sh"; lempi_fleet)
 # player's own to sample -- `build/verify-playing.sh` reports "cannot tell"
 # there, which is the honest answer and not one a deploy should treat as a
 # pass. Give it a unit and it can move to APPLIANCES.
+#
+# **`teacherslounge` had never had a checkout at the path named below**, and
+# this leg had therefore never once run against it. Found 2026-09-21 by
+# looking: the machine was still on the pre-rename repository, with its own
+# data beside it, which is exactly why nothing had complained -- a source
+# host that is never reached reports nothing at all.
+#
+# It has one now, and `~/lempi-data` carries a verified copy of that data
+# (every table matching row-for-row, `integrity_check` ok). It builds, and
+# `dircheck` loads the real catalogue there. It runs no player and has no
+# unit, so the predecessor is still the working system on that machine until
+# parity is confirmed; do not assume this leg proves anything about what is
+# playing there.
 SOURCES="sw@teacherslounge:/home/sw/Dev/Lempi
 mango@smartboardpc:/home/mango/Dev/Lempi"
 
