@@ -63,8 +63,23 @@ case "$REF" in *@*) HOST="$REF"; REF="" ;; esac
 # keeping, which is refusing to push a player at a machine that has nowhere to
 # put it.
 BUILD_UNIT=lempi.service
+#
+# **Whether ssh reached the host is its own question, asked first.** Until
+# 2026-09-25 ssh's status was ignored and its stderr discarded, so a host that
+# was merely unreachable produced empty output here -- and was reported as
+# having no `lempi.service`: a guard that could not run, giving a plausible
+# reason instead of saying so (CLAUDE.md §5). Found when `lempi02w` stopped
+# answering ping mid-session and this script said the unit it had been running
+# minutes earlier did not exist. ssh exits 255 when it cannot connect; the
+# remote pipeline's own status is `head`'s, which is 0.
 TARGET_UNIT=$(ssh -o ConnectTimeout=10 "$HOST" \
-    "systemctl list-unit-files --no-legend '$BUILD_UNIT' 2>/dev/null | awk '{print \$1}' | head -1" 2>/dev/null)
+    "systemctl list-unit-files --no-legend '$BUILD_UNIT' 2>/dev/null | awk '{print \$1}' | head -1")
+ssh_rc=$?
+if [ "$ssh_rc" -ne 0 ]; then
+    echo "deploy: cannot ask $HOST whether it runs $BUILD_UNIT -- ssh exited $ssh_rc; nothing was deployed." >&2
+    echo "deploy: is it powered and on the network? (the check did not run; it did not fail)" >&2
+    exit 1
+fi
 if [ -z "$TARGET_UNIT" ]; then
     echo "deploy: $HOST has no $BUILD_UNIT -- this is a deploy, not a first install; refusing." >&2
     echo "deploy: install the unit first, or check you meant this host." >&2
