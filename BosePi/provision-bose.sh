@@ -128,8 +128,19 @@ else
 fi
 
 step "State layout  [BOSE002 §3]"
+# **Not `chown -R pi:pi $STATE_MOUNT`, which this line was until 2026-09-25.**
+# Recursive over the whole partition and run *before* the next step copies
+# /etc/ssh, /home/pi and NetworkManager's profiles onto it, it was harmless
+# on a first run and wrong on every later one -- and this script is meant to
+# be re-run (it was, three times). Found on bose: its entire /etc/ssh,
+# host private keys included, owned by pi, every entry changed in the same
+# second as backup/, mpd/, log/ and home-pi/ on 2026-09-06, the signature of
+# one recursive chown of this directory. It also handed pi /var/log (log/ is
+# bound there). So: the top level and the two directories pi's work lives in,
+# and nothing that later becomes someone else's.
 on "sudo mkdir -p $STATE_MOUNT/log $STATE_MOUNT/mpd/playlists $STATE_MOUNT/backup
-    sudo chown -R pi:pi $STATE_MOUNT
+    sudo chown pi:pi $STATE_MOUNT
+    sudo chown -R pi:pi $STATE_MOUNT/mpd $STATE_MOUNT/backup
     # /var/log becomes a bind mount onto C, so the overlay never holds it
     # [IMPL-BOS-060]. This is the single largest consumer left otherwise.
     grep -q '$STATE_MOUNT/log' /etc/fstab \
