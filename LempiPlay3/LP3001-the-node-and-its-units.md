@@ -90,16 +90,30 @@ only on the card and in [IMPL016](../docs/IMPL016-converting-lempiplay3.md)'s
 prose. It covers identity, packages, the panel, the fstab and its binds, the
 overlay, the services, the helpers and the clock and swap; each item is
 compared on the card's **durable** layer. Run against the live card it agreed
-on every item but two, both deliberate: see the next paragraph. `--go` and
-`--lock` carry IMPL016's commands and have never built a card.
+on every item but the two in the last paragraph, and after those were
+settled, on every item. `--go` and `--lock` carry IMPL016's commands and have
+never built a card.
 
 **`[LP3-SET-020]` On a locked card the script only checks.** Its `--go`
 refuses an overlay root, because a write to `/` there is gone at the next
 reboot `[IMPL-BOS-185]`; one file goes through `build/install-config.sh`,
 which writes both layers.
 
-Two items differ on the live card, and are recorded as the fix rather than
-as found, pending the maintainer: **no swap at all** — bose's `[IMPL-BOS-170]`
-fault, fixed by [`rpi-swap-lempi.conf`](rpi-swap-lempi.conf) — and **Debian's
-own NTP pool still on**, where the other two nodes have it commented out so
-every node falls back identically `[GDE-ECHO-300]`.
+The first run found two differences, and the maintainer settled both on
+2026-09-25. **No swap at all** — bose's `[IMPL-BOS-170]` fault, measured as
+`free` Swap 0 — fixed by [`rpi-swap-lempi.conf`](rpi-swap-lempi.conf) on both
+layers; after a reboot, 904 MB of zram swap and no failed units. **Debian's own
+NTP pool**, on here and commented out by hand on the other two: kept, and
+turned back on for them, so every node shares it as one more fallback
+`[GDE-ECHO-300]`.
+
+**`[LP3-SET-030]` The clock starts ten days behind**, as that reboot showed.
+It came up at 2026-09-15 22:35 — the day the overlay went on — and chrony
+stepped it 858,743 s forward on reaching smartboardpc. The cause is measured,
+not guessed — the first guess, `fake-hwclock`, is not even installed here.
+systemd advances an early clock to the timestamp of
+`/var/lib/systemd/timesync/clock`, and on the durable layer that file reads
+**2026-09-15 22:35:06**: the node has used chrony, not `systemd-timesyncd`,
+since `[GDE-ECHO-300]`, and the file is on the read-only layer besides, so
+nothing will move it. Not fixed here; noted because anything that runs before
+chrony's step sees that date.

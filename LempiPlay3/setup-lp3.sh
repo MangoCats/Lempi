@@ -14,8 +14,8 @@
 #
 # **Status, 2026-09-25.** `--check` was written against the live node and run
 # against it: every item below was read off the durable layer of the card,
-# and the two it reports as differing are the two it is meant to (see "What
-# --check reports today" at the end). **`--go` and `--lock` have never run.**
+# and after two decided fixes it reports every one as recorded (see the note
+# at the end). **`--go` and `--lock` have never run.**
 # Their commands are the ones IMPL016 records being run by hand on
 # 2026-09-15, with that document's own corrections, but no card has been
 # built by this script. Read its output rather than trusting its exit.
@@ -246,9 +246,12 @@ say ""
 say "clock and swap"
 file_item "chrony fleet sources [GDE-ECHO-300]" LempiPlay3/lempi-fleet.sources \
     /etc/chrony/sources.d/lempi-fleet.sources 644
-item "chrony distribution pool off" \
-     "! grep -q '^pool 2\.debian\.pool\.ntp\.org' $P/etc/chrony/chrony.conf" \
-     "sudo sed -i 's/^pool 2\.debian\.pool\.ntp\.org/#&/' /etc/chrony/chrony.conf"
+# Debian's own pool stays on, as one more fallback every node shares -- the
+# maintainer's choice, 2026-09-25. This card always had it; the other two had
+# it commented out by hand, and now have it back.
+item "chrony distribution pool on" \
+     "grep -q '^pool 2\.debian\.pool\.ntp\.org' $P/etc/chrony/chrony.conf" \
+     "sudo sed -i 's/^#.*\(pool 2\.debian\.pool\.ntp\.org\)/\1/' /etc/chrony/chrony.conf"
 file_item "swap: zram, 1x RAM, <= 2 GiB" LempiPlay3/rpi-swap-lempi.conf \
     /etc/rpi/swap.conf.d/10-lempi.conf 644
 
@@ -260,12 +263,9 @@ else
 fi
 [ "$DIFFER" -eq 0 ]
 
-# What --check reports today (2026-09-25), against the live card, and why:
-#
-#   chrony distribution pool off   DIFFERS -- bose and lempi02w had Debian's
-#     own `pool` line commented out by hand; this card never did, so it has a
-#     fallback the others lack, against [GDE-ECHO-300]'s "identical on every
-#     node". Left as found pending the maintainer.
-#   swap                           DIFFERS -- absent: the card runs no swap
-#     at all, the [IMPL-BOS-170] fault (see rpi-swap-lempi.conf). Left as
-#     found pending the maintainer.
+# --check against the live card, 2026-09-25: first run, every item agreed but
+# two -- no swap at all (the [IMPL-BOS-170] fault) and Debian's pool, which
+# this card had on and the others off. The maintainer chose the fix for the
+# first and this card's way for the second; after the swap drop-in went on
+# both layers and a reboot, `free` showed 904 MB of zram swap and --check
+# reported every item as recorded.

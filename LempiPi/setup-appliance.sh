@@ -720,11 +720,13 @@ else
     ok "swap ${SWAP_MB} MB (dphys-swapfile)"
 fi
 
-# The fleet clock `[GDE-ECHO-300]`: one LAN reference for every node, the same
-# fallback on every node, and the distribution's own pool commented out so it
-# cannot become a node's private fallback. All three were done by hand on
-# every node -- BOSE010 carried the commands as a worked example, and no
-# script ran them.
+# The fleet clock `[GDE-ECHO-300]`: one LAN reference for every node, and the
+# same fallbacks on every node -- the fleet file's, plus the distribution's own
+# pool, left on. That pool was commented out by hand on two nodes and left on
+# the third; the maintainer chose on 2026-09-25 that every node keep it, as
+# one more fallback all of them share. All of this was done by hand until
+# then -- BOSE010 carried the commands as a worked example, and no script ran
+# them.
 if ! cmp -s "$HERE/lempi-fleet.sources" /etc/chrony/sources.d/lempi-fleet.sources; then
     install -D -m644 "$HERE/lempi-fleet.sources" /etc/chrony/sources.d/lempi-fleet.sources
     chronyc reload sources >/dev/null 2>&1 || true
@@ -732,12 +734,13 @@ if ! cmp -s "$HERE/lempi-fleet.sources" /etc/chrony/sources.d/lempi-fleet.source
 else
     ok "chrony: fleet sources"
 fi
-if grep -q '^pool 2\.debian\.pool\.ntp\.org' /etc/chrony/chrony.conf 2>/dev/null; then
-    sed -i 's/^pool 2\.debian\.pool\.ntp\.org/#&/' /etc/chrony/chrony.conf
+if ! grep -q '^pool 2\.debian\.pool\.ntp\.org' /etc/chrony/chrony.conf 2>/dev/null; then
+    # Uncomments however it was commented -- by hand it was `#lempi-fleet# `.
+    sed -i 's/^#.*\(pool 2\.debian\.pool\.ntp\.org\)/\1/' /etc/chrony/chrony.conf
     systemctl restart chrony
-    did "chrony: distribution pool off"
+    did "chrony: distribution pool on"
 else
-    ok "chrony: distribution pool off"
+    ok "chrony: distribution pool on"
 fi
 
 # -------------------------------------------------------------- boot tuning

@@ -183,15 +183,16 @@ else
 fi
 
 step "Fleet clock  [GDE-ECHO-300]"
-# One LAN reference for every node, the same fallback on every node, and the
-# distribution's own pool commented out so it cannot become this node's
-# private fallback. Done by hand until 2026-09-25 (BOSE010's worked example);
-# the file is identical in every machine folder.
+# One LAN reference for every node, and the same fallbacks on every node: the
+# fleet file's, plus the distribution's own pool, left on -- the maintainer's
+# choice, 2026-09-25, after it was found commented out by hand here and on
+# lempi02w but not on lempiplay3. Done by hand until then (BOSE010's worked
+# example); the file is identical in every machine folder.
 [ -f BosePi/lempi-fleet.sources ] || die "BosePi/lempi-fleet.sources missing"
 scp -q BosePi/lempi-fleet.sources "$HOST:/tmp/lempi-fleet.sources" || die "upload failed"
 on "sudo install -D -m644 /tmp/lempi-fleet.sources /etc/chrony/sources.d/lempi-fleet.sources
     rm -f /tmp/lempi-fleet.sources
-    sudo sed -i 's/^pool 2\.debian\.pool\.ntp\.org/#&/' /etc/chrony/chrony.conf
+    sudo sed -i 's/^#.*\(pool 2\.debian\.pool\.ntp\.org\)/\1/' /etc/chrony/chrony.conf
     sudo systemctl restart chrony" || die "chrony configuration failed"
 say "verify: chronyc sources shows ^* 192.168.67.93"
 
