@@ -50,6 +50,13 @@ ssh -o ConnectTimeout=10 "$HOST" true 2>/dev/null || die "$HOST is not reachable
 say "$(on 'cat /proc/device-tree/model 2>/dev/null | tr -d "\0"; echo')"
 say "$(on 'uname -m; . /etc/os-release; echo $PRETTY_NAME' | tr '\n' ' ')"
 
+# Passwordless sudo is this script's precondition, and on bose it was a
+# hand-typed bridge [IMPL-BOS-090b] that came out mode 644. Every other
+# sudoers file in the fleet is 440; say so, and make it so. (Found 2026-09-25.)
+on "sudo -n true" || die "no passwordless sudo on $HOST -- see [IMPL-BOS-090b]"
+on "[ ! -f /etc/sudoers.d/010-pi-nopasswd ] || sudo chmod 440 /etc/sudoers.d/010-pi-nopasswd"
+say "passwordless sudo present; pi's drop-in mode 440"
+
 # The whole point of [IMPL-BOS-010] was to stop needing a second toolchain.
 case "$(on 'uname -m')" in
     aarch64) ;;
@@ -170,6 +177,16 @@ on "sudo mkdir -p $STATE_MOUNT/etc-ssh $STATE_MOUNT/home-pi $STATE_MOUNT/nm-conn
 for t in /etc/ssh /home/pi /etc/NetworkManager/system-connections; do
     say "$(on "findmnt -no TARGET,FSTYPE $t" 2>/dev/null || echo "$t: not mounted")"
 done
+# What was root's must still be root's once it lives on C. This is the check
+# that would have caught the recursive chown above on 2026-09-06 -- bose ran
+# with pi owning its host keys and /var/log for nineteen days. Checked here,
+# after the binds are mounted, so it reads what the node will actually use.
+NOT_ROOT=$(on "sudo find /etc/ssh -not -user root -printf '%p\n' | head -5
+               [ \"\$(stat -c %U /var/log)\" = root ] || echo /var/log
+               [ \"\$(stat -c %U /etc/NetworkManager/system-connections)\" = root ] \
+                 || echo /etc/NetworkManager/system-connections")
+[ -z "$NOT_ROOT" ] || die "not owned by root after moving to C: $NOT_ROOT"
+say "/etc/ssh, /var/log and the saved networks still owned by root"
 
 step "pi's own SSH key"
 # The key this node uses to reach other machines -- not its host keys, which

@@ -107,6 +107,14 @@ NTP pool**, on here and commented out by hand on the other two: kept, and
 turned back on for them, so every node shares it as one more fallback
 `[GDE-ECHO-300]`.
 
+**`[LP3-SET-040]` The journal was never kept across a reboot**, until
+2026-09-25. Binding `/var/log` onto STATE `[IMPL-VP3-160]` was not enough:
+the image ships `40-rpi-volatile-storage.conf` with `Storage=volatile`, so
+journald wrote to RAM. Found by a fleet ownership audit, which saw the
+journal's file path under `/run`. Fixed with bose's own override,
+[`journald-lempi.conf`](journald-lempi.conf), on both layers; the flush kept
+that boot's history.
+
 **`[LP3-SET-030]` The clock starts ten days behind**, as that reboot showed.
 It came up at 2026-09-15 22:35 — the day the overlay went on — and chrony
 stepped it 858,743 s forward on reaching smartboardpc. The cause is measured,

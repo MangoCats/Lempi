@@ -33,8 +33,10 @@
 # built `--features fbui` [LP3-REP-040]. The library is seeded as bose's is
 # (BosePi/seed-library.sh), and the database split is IMPL016's step 2.
 # Wi-Fi credentials are the imager's, and are never in this repository.
-# journald runs on its defaults here: /var/log is bound onto STATE, so the
-# journal persists without a setting of its own.
+# journald needs a setting of its own, and until 2026-09-25 lacked one: the
+# image's `Storage=volatile` kept the journal in RAM, so binding /var/log onto
+# STATE was not enough -- see journald-lempi.conf. (This header said the
+# opposite when first written; the fleet audit that day found it wrong.)
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
@@ -203,6 +205,22 @@ for pair in log:/var/log etc-ssh:/etc/ssh home-pi:/home/pi \
     item "STATE holds /var/lempi/$d" "test -d /var/lempi/$d" \
          "sudo mkdir -p /var/lempi/$d && sudo cp -a $src/. /var/lempi/$d/"
 done
+# What moved onto STATE must keep its owner. bose's provisioning once handed
+# pi its whole /etc/ssh and /var/log with a recursive chown of STATE
+# (fixed 2026-09-25); checked on the live paths, which *are* STATE here.
+item "/etc/ssh all owned by root" "test -z \"\$(sudo find /etc/ssh -not -user root)\"" \
+     "sudo chown -R root:root /etc/ssh"
+item "/var/log owned by root" "test \"\$(stat -c %U /var/log)\" = root" \
+     "sudo chown root:root /var/log"
+item "saved networks' directory owned by root" \
+     "test \"\$(stat -c %U /etc/NetworkManager/system-connections)\" = root" \
+     "sudo chown root:root /etc/NetworkManager/system-connections"
+# pi's passwordless sudo: made at image time here, typed by hand on bose
+# [IMPL-BOS-090b], where it came out 644. 440 is what every other sudoers file
+# in the fleet is.
+item "sudoers: pi's drop-in is root, mode 440" \
+     "test \"\$(stat -c %U:%a $P/etc/sudoers.d/010-pi-nopasswd)\" = root:440" \
+     "sudo chmod 440 /etc/sudoers.d/010-pi-nopasswd"
 item "/var/lempi owned by pi" "test \"\$(stat -c %U /var/lempi)\" = pi" "sudo chown pi:pi /var/lempi"
 item "/srv/library owned by pi" "test \"\$(stat -c %U /srv/library)\" = pi" "sudo chown pi:pi /srv/library"
 
@@ -262,6 +280,8 @@ file_item "chrony fleet sources [GDE-ECHO-300]" LempiPlay3/lempi-fleet.sources \
 item "chrony distribution pool on" \
      "grep -q '^pool 2\.debian\.pool\.ntp\.org' $P/etc/chrony/chrony.conf" \
      "sudo sed -i 's/^#.*\(pool 2\.debian\.pool\.ntp\.org\)/\1/' /etc/chrony/chrony.conf"
+file_item "journal kept on STATE (overrides the image's volatile)" \
+    LempiPlay3/journald-lempi.conf /etc/systemd/journald.conf.d/lempi.conf 644
 file_item "swap: zram, 1x RAM, <= 2 GiB" LempiPlay3/rpi-swap-lempi.conf \
     /etc/rpi/swap.conf.d/10-lempi.conf 644
 

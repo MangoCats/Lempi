@@ -721,6 +721,17 @@ else
     ok "ssh key $KEY"
 fi
 
+# Root's files stay root's. bose's provisioning once handed pi its /etc/ssh
+# and /var/log through a recursive chown (fixed 2026-09-25); this node never
+# ran that script, and this makes sure nothing else does the same here.
+if [ -n "$(find /etc/ssh -not -user root -print -quit)" ] || [ "$(stat -c %U /var/log)" != root ]; then
+    chown -R root:root /etc/ssh
+    chown root:root /var/log
+    did "/etc/ssh and /var/log back to root"
+else
+    ok "/etc/ssh and /var/log owned by root"
+fi
+
 # Swap: a 512 MB file through dphys-swapfile, as this node has run it -- a
 # swapfile on the root, which [SD-RISK-150] names as SD wear worth moving to
 # zram one day. Recorded as it is, not as it might be.
