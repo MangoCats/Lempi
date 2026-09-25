@@ -12,6 +12,7 @@
 //! This is McRhythm's split `[DBD-PARAM-030]`: a mixer thread fills an output
 //! ring, the callback drains it. The ring decouples the two so a slow decode
 //! costs latency rather than a dropout.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -539,7 +540,7 @@ impl Output {
     {
         match Self::attach_with(name, ring, true) {
             Err(OutputError::Build(e)) => {
-                eprintln!("output: a {PREFERRED_PERIOD_FRAMES}-frame period was refused ({e}); falling back to the device's own, which on a slow or Bluetooth sink may underrun");
+                tracing::warn!("output: a {PREFERRED_PERIOD_FRAMES}-frame period was refused ({e}); falling back to the device's own, which on a slow or Bluetooth sink may underrun");
                 Self::attach_with(name, ring, false)
             }
             other => other,
@@ -585,7 +586,7 @@ impl Output {
         // stream it replaced, which the startup line cannot cover at all
         // `[GDE-DEP-060]`.
         if sample_rate != PREFERRED_RATE {
-            eprintln!("output: {device_name} opened at {sample_rate} Hz, not the preferred {PREFERRED_RATE} -- every passage will be resampled, and this node's measured ppm describes the {PREFERRED_RATE} clock and not this one");
+            tracing::info!("output: {device_name} opened at {sample_rate} Hz, not the preferred {PREFERRED_RATE} -- every passage will be resampled, and this node's measured ppm describes the {PREFERRED_RATE} clock and not this one");
         }
 
         let cb_state = Arc::clone(&state);
@@ -603,7 +604,7 @@ impl Output {
         let silent = Arc::clone(&ring.silent);
         let cb_failed = Arc::clone(&failed);
         let err_fn = move |e| {
-            eprintln!("output stream error: {e}");
+            tracing::error!("output stream error: {e}");
             cb_failed.store(true, Ordering::Relaxed);
         };
         let stream = match sample_format {
@@ -786,7 +787,7 @@ impl Output {
             Ok(())
         };
         if let Err(e) = &r {
-            eprintln!("output {}: {e}", if on { "play" } else { "pause" });
+            tracing::error!("output {}: {e}", if on { "play" } else { "pause" });
         }
         r.is_ok()
     }
@@ -1218,6 +1219,10 @@ mod tests {
     /// a glitch. The producer's holds are microseconds, so the callback waits
     /// a bounded moment rather than giving up on the first refusal.
     #[test]
+    // Exempt from the module's print lock `[GDE-HST-160]`: this `SKIPPED` line
+    // is not a diagnostic but a contract with `build/verify-targets.sh`, whose
+    // `run_suite` greps `^SKIPPED ` out of the test output for its summary.
+    #[allow(clippy::print_stdout)]
     fn a_brief_hold_costs_no_glitch() {
         // **A wall-clock property, so it refuses to be measured where wall
         // clocks do not mean what they say.** `LOCK_WAIT` is real time and so
