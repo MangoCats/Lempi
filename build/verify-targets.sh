@@ -199,20 +199,36 @@ docker build -q -t lempi-aarch64 -f "$ROOT/build/Dockerfile.aarch64" "$ROOT" >/d
 MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w lempi-aarch64 \
     cargo test --release --no-run --target aarch64-unknown-linux-gnu \
     --manifest-path player/Cargo.toml >/dev/null 2>&1 || fail=$((fail+1))
-BIN=$(ls -t "$ROOT"/player/target/aarch64-unknown-linux-gnu/release/deps/lempi_player-* 2>/dev/null \
-      | grep -v '\.d$' | head -1)
-if [ -n "$BIN" ]; then
-    REL=${BIN#"$ROOT"/}
+# **Both crates' library tests, not one.** Until 2026-09-24 this picked
+# `lempi_player-*` alone -- correct until the Director, the library and the
+# payload importer moved to `lempi-core` in `a9bc8ad`, after which their 230
+# tests were compiled for aarch64 here and never run. The same fault
+# `default-members` fixed for the host run, missed in this stage by the same
+# change; found by reading this stage's own output, which said 359 where the
+# host said 359 + 230.
+#
+# One container for both, so the emulated package install is paid once; each
+# binary's status is kept separately, so a failure in the first cannot hide
+# behind the second, and a binary that is not there is a failure, not a skip.
+RELS=""
+for crate in lempi_player lempi_core; do
+    BIN=$(ls -t "$ROOT"/player/target/aarch64-unknown-linux-gnu/release/deps/${crate}-* 2>/dev/null \
+          | grep -v '\.d$' | head -1)
+    if [ -z "$BIN" ]; then
+        echo "  aarch64 test binary for $crate not found"; fail=$((fail+1))
+    else
+        RELS="$RELS ${BIN#"$ROOT"/}"
+    fi
+done
+if [ -n "$RELS" ]; then
     # `LEMPI_EMULATED` tells the suite it is somewhere wall-clock measurements
     # do not mean what they say, so a test of a *timing* property says so and
     # stops rather than asserting one it cannot observe. Nothing else reads
     # it, and a native run never sets it.
     run_suite "B" env MSYS_NO_PATHCONV=1 docker run --rm --platform linux/arm64 \
         -v "$DROOT":/w -w /w debian:bookworm-slim sh -c \
-        "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq --no-install-recommends libasound2 ffmpeg >/dev/null 2>&1; LEMPI_EMULATED=1 ./$REL --show-output" \
+        "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq --no-install-recommends libasound2 ffmpeg >/dev/null 2>&1; bad=0; for b in $RELS; do LEMPI_EMULATED=1 ./\$b --show-output || bad=1; done; exit \$bad" \
         || fail=$((fail+1))
-else
-    echo "  aarch64 test binary not found"; fail=$((fail+1))
 fi
 
 echo "== C: host (Windows or Linux) =="
