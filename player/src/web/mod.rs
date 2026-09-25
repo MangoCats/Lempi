@@ -33,6 +33,7 @@ use crate::session::{Explanations, SharedControls};
 
 mod bluetooth;
 mod browse;
+pub mod contract;
 mod control;
 mod edit;
 mod guide;
@@ -845,6 +846,34 @@ mod tests {
         assert_eq!(snap.album_source, "tags");
         assert_eq!(snap.plays, 12);
         assert_eq!(snap.passage_id, Some(1));
+    }
+
+    /// The server's side of the snapshot contract `[GDE-HST-060]`: every field
+    /// any reader is recorded as reading is sent. Each reader's own test checks
+    /// that its record is what it reads; this one checks the other half, so a
+    /// field renamed here fails before a reader draws a blank.
+    #[test]
+    fn the_snapshot_carries_every_field_its_readers_read() {
+        let mut snap = Snapshot::from(&state());
+        // Programmes are filled from the session, not from `PlayerState`; one
+        // is needed so `programs[].*` has an element to be checked in.
+        snap.programs.push(ProgramItem { id: 1, name: "Mellow".into(), start: "20:00".into() });
+        let sent = serde_json::to_value(&snap).expect("a snapshot serializes");
+        let readers = contract::consumers();
+        // The three readers with a check of their own side. One dropped from
+        // the fixture would pass here by having nothing to check.
+        for r in ["echo-follower", "fbui", "skins"] {
+            assert!(readers.iter().any(|c| c == r), "the fixture no longer names {r}");
+        }
+        let mut missing = Vec::new();
+        for reader in &readers {
+            for path in contract::required(reader) {
+                if let Err(e) = contract::present(&sent, &path) {
+                    missing.push(format!("{reader}: {e}"));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "the snapshot lacks what its readers read:\n{}", missing.join("\n"));
     }
 
     /// What the mixer already holds cannot be edited, and the flag says which

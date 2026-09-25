@@ -1206,6 +1206,42 @@ function runFadeFixture() {
   if (errors.length) failures++;
 }
 
+// The skins' side of the snapshot contract `[GDE-HST-060]`. Every skin check
+// above renders SPARSE and RICH; if those two describe a field the server does
+// not send, every skin passes against a player that does not exist. So the
+// fields they carry must be exactly the fixture's `skins` list, which Rust's
+// `the_snapshot_carries_every_field_its_readers_read` checks the server sends.
+// `why` is a free-form object the server builds elsewhere, so only its
+// presence is part of the contract, not its insides.
+function runSnapshotFixture() {
+  const errors = [];
+  const want = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', 'fixtures', 'snapshot', 'consumers.json'), 'utf8')).skins || [];
+  const OPAQUE = new Set(['why']);
+  const got = new Set();
+  const walk = (obj, prefix) => {
+    for (const [k, v] of Object.entries(obj)) {
+      const p = prefix + k;
+      got.add(p);
+      if (OPAQUE.has(p) || v === null || typeof v !== 'object') continue;
+      if (Array.isArray(v)) {
+        for (const e of v) if (e && typeof e === 'object') walk(e, p + '[].');
+      } else {
+        walk(v, p + '.');
+      }
+    }
+  };
+  walk(SPARSE, '');
+  walk(RICH, '');
+  if (!want.length) errors.push('the fixture names no fields for skins');
+  for (const p of want) if (!got.has(p)) errors.push(`the fixture records "${p}", which no test snapshot carries`);
+  for (const p of got) if (!want.includes(p)) errors.push(`the test snapshots carry "${p}", which the fixture does not record`);
+  console.log(`${'snapshot'.padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+              `${got.size} fields in the test snapshots, ${want.length} in the fixture`);
+  for (const e of errors) console.log('    ! ' + e);
+  if (errors.length) failures++;
+}
+
 // ---------------------------------------------------------------------------
 // The waveform editor's read-only stage `[REQ-LIB-175]`, `[SPEC021]`. jsdom
 // has no Web Audio, so decoding and drawing the waveform itself is out of
@@ -1663,6 +1699,7 @@ async function runPreference(skin) {
   await runReview();
   await runReviewHandoff();
   runFadeFixture();
+  runSnapshotFixture();
   await runEdit();
   await runPassage();
   console.log(failures ? `\n${failures} skin(s) failed` : '\nall skins rendered without error');

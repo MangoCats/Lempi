@@ -1086,6 +1086,23 @@ fn differs_ignoring_position(a: &ClientSnapshot, b: &ClientSnapshot) -> bool {
 mod tests {
     use super::AffineCalibration;
 
+    /// fbui's side of the snapshot contract `[GDE-HST-060]`: the fields its
+    /// hand-copied structs read are the ones the fixture records for it, so
+    /// the server's test is checking what fbui really needs. Linux-only, like
+    /// fbui; CI's `--all-features` run is where it runs.
+    #[test]
+    fn what_fbui_reads_is_what_the_fixture_records() {
+        use lempi_player::web::contract;
+        let mine = contract::paths(
+            contract::fields_of::<super::ClientSnapshot>(),
+            &[
+                ("queue[]", contract::fields_of::<super::QueueItem>()),
+                ("programs[]", contract::fields_of::<super::ProgramItem>()),
+            ],
+        );
+        assert_eq!(mine, contract::required("fbui"));
+    }
+
     /// Synthetic hardware stand-in: a forward map with a 90-degree-style
     /// axis swap plus scale and offset, the same *shape* of transform
     /// `piscreen2r`'s rotate=90 plus an uncalibrated touch controller would

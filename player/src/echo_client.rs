@@ -1139,6 +1139,19 @@ mod tests {
     use super::*;
     use crate::engine::{Command, Engine};
 
+    /// A follower's side of the snapshot contract `[GDE-HST-060]`: the fields
+    /// it reads, taken from its own structs, are the ones the fixture records
+    /// for it -- so the server's test is checking what a follower really needs.
+    #[test]
+    fn what_a_follower_reads_is_what_the_fixture_records() {
+        use crate::web::contract;
+        let mine = contract::paths(
+            contract::fields_of::<Snapshot>(),
+            &[("queue[]", contract::fields_of::<AnnouncedEntry>())],
+        );
+        assert_eq!(mine, contract::required("echo-follower"));
+    }
+
     fn node() -> Arc<EngineHandle> {
         let (_e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
         // The engine is dropped; the handle and its shared state are what the
