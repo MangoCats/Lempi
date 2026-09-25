@@ -15,6 +15,7 @@
 //! a sample should sound; this node's own presentation offset decides when to
 //! submit for that to happen `[GDE-ECHO-410]`, and a schedule it cannot meet
 //! is declined rather than approximated.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1104,7 +1105,7 @@ async fn start(
     match found {
         Ok(Ok(entry)) => {
             set_status(handle, "Following.");
-            eprintln!("echo-follow: {what} passage {passage_id} at sample {start_sample} in {:.3}s", (at as i64 - now_nanos() as i64) as f64 / 1e9);
+            tracing::info!("echo-follow: {what} passage {passage_id} at sample {start_sample} in {:.3}s", (at as i64 - now_nanos() as i64) as f64 / 1e9);
             handle.send(Command::EchoStartAt { entry, start_sample, at_nanos: at });
         }
         // A master playing something this node does not have is the expected
@@ -1128,7 +1129,7 @@ async fn start(
 /// the same as no log.
 fn note(last: &mut String, line: String) {
     if line != *last {
-        eprintln!("{line}");
+        tracing::info!("{line}");
         *last = line;
     }
 }
