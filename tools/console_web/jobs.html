@@ -166,7 +166,9 @@ function showPlan(j) {
     // library ends up with derived data nothing recorded [SPEC-SUI-075].
     S.el('h2', {}, 'Stages ', S.el('small', { text: '— what will run, and what will not' })),
     S.el('table', {}, S.el('tbody', {},
-      ...['ingest', 'extract', 'identify', 'merge'].map(s => S.el('tr', {},
+      // From the plan, which takes them from `steps_for()`; the fallback is
+      // only for a plan stored before the plan carried them.
+      ...(p.stages || ['ingest', 'extract', 'identify', 'merge']).map(s => S.el('tr', {},
         S.el('td', {}, S.el('span', { class: 'pill ok', text: 'will run' })),
         S.el('td', { text: s }), S.el('td', {}))),
       ...(p.skipped || []).map(s => S.el('tr', {},

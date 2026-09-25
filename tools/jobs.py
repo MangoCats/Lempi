@@ -115,12 +115,27 @@ def steps_for(db: str, folder: str, recheck: bool = False) -> list:
     identify = [sys.executable, os.path.join(tools, "fingerprint_ids.py"), db]
     if recheck:
         identify.append("--recheck")
+    # Works `[GDE-WRK-125]` follow identification, because a Work hangs off a
+    # recording MBID and `identify`/`merge` are what give one. They were a
+    # one-off crawl until 2026-09-25, so a catalogue built later, or a
+    # recording inducted since, had none and blocked only by recording
+    # `[GDE-WRK-130]`. The fetch is capped (300 at MusicBrainz's 1 request/s,
+    # five minutes) so one induct on a fresh cache is not a two-hour crawl --
+    # what it leaves the next induct takes -- and it gives up when the network
+    # is down rather than failing the induct: works enrich, they do not gate.
+    # The cache sits beside the library, where `fetch_works.py` has always
+    # expected `data/work_relations.db`.
+    cache = os.path.join(os.path.dirname(os.path.abspath(db)), "work_relations.db")
     return [
         ("ingest", [sys.executable, os.path.join(tools, "ingest_folder.py"),
                     db, folder, "--commit", "--json"]),
         ("extract", [sys.executable, os.path.join(tools, "extract_library.py"), db]),
         ("identify", identify),
         ("merge", [sys.executable, os.path.join(tools, "fingerprint_ids.py"), db, "--merge"]),
+        ("works", [sys.executable, os.path.join(tools, "fetch_works.py"), db,
+                   "--cache", cache, "--limit", "300", "--give-up-after", "3"]),
+        ("load-works", [sys.executable, os.path.join(tools, "load_works.py"), db,
+                        "--cache", cache]),
     ]
 
 
@@ -435,6 +450,10 @@ class Runner:
                 self.library, target, "--json"])
             plan = parse_json_tail(out)
             if plan is not None:
+                # What will run, from the same list that runs it -- the page
+                # used to type the four names itself, and would have gone on
+                # showing four after `works` made six.
+                plan["stages"] = [s for s, _ in steps_for(self.library, target)]
                 plan["skipped"] = [{"stage": s, "why": w} for s, w in SKIPPED]
             db = self._db()
             db.execute("UPDATE jobs SET plan=?1 WHERE job_id=?2",

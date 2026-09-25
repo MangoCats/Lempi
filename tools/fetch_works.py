@@ -29,6 +29,7 @@ the 1.17 GB library is an avoidable risk, and folding these responses into
 
     python tools/fetch_works.py data/library.db [--cache data/work_relations.db]
                                [--limit N] [--seed other.db] [--refresh]
+                               [--give-up-after N]
 """
 
 import argparse
@@ -71,8 +72,20 @@ def targets(conn) -> list[str]:
     return [r[0] for r in rows]
 
 
-def fetch(mbid: str) -> str:
-    """One recording, with backoff. A 404 is an answer, not a failure."""
+# What this tool once cached when a request never got an answer. Such a row is
+# not an answer about the recording, so it is fetched again rather than
+# counted as done.
+UNREACHABLE = json.dumps({"error": "unreachable"})
+
+
+def fetch(mbid: str) -> str | None:
+    """One recording, with backoff. A 404 is an answer, not a failure; no
+    answer at all is `None`, and is not cached.
+
+    It used to be cached, as `UNREACHABLE` -- so a run with the network down
+    marked every recording it tried as done, and nothing asked again without
+    `--refresh`. Unattended in `induct`, that would have been permanent.
+    """
     url = f"{BASE}{mbid}?inc={INC}&fmt=json"
     for attempt in range(4):
         try:
@@ -84,7 +97,7 @@ def fetch(mbid: str) -> str:
             time.sleep(2 ** attempt * 2)
         except Exception:
             time.sleep(2 ** attempt * 2)
-    return json.dumps({"error": "unreachable"})
+    return None
 
 
 def main() -> int:
@@ -94,10 +107,13 @@ def main() -> int:
     ap.add_argument("--limit", type=int, help="stop after N fetches")
     ap.add_argument("--seed", help="copy already-fetched rows from another cache first")
     ap.add_argument("--refresh", action="store_true", help="re-ask for everything")
+    ap.add_argument("--give-up-after", type=int, metavar="N",
+                    help="stop after N recordings in a row get no answer (network down)")
     args = ap.parse_args()
 
     lib = lempi_db.connect(args.db, lempi_db.ROLE_LIBRARY)
     want = targets(lib)
+    lib.close()     # read once; not held open against the catalogue for hours
 
     cache = sqlite3.connect(args.cache)
     cache.executescript(CACHE_DDL)
@@ -116,7 +132,8 @@ def main() -> int:
         print(f"seeded {n} cached response(s) from {args.seed}", flush=True)
 
     have = set() if args.refresh else {
-        r[0] for r in cache.execute("SELECT mbid FROM work_cache")}
+        r[0] for r in cache.execute(
+            "SELECT mbid FROM work_cache WHERE response != ?", (UNREACHABLE,))}
     todo = [m for m in want if m not in have]
     # Counted before --limit truncates it, or a capped run reports the whole
     # library as cached and the next reader believes the crawl is finished.
@@ -130,16 +147,33 @@ def main() -> int:
           f"-- at least {len(todo) * RATE_S / 3600:.1f} h at {RATE_S:.0f} req/s",
           flush=True)
 
+    unanswered, in_a_row, gave_up = 0, 0, False
     for i, mbid in enumerate(todo, 1):
-        cache.execute("INSERT OR REPLACE INTO work_cache VALUES (?,?,?)",
-                      (mbid, fetch(mbid), int(time.time())))
-        cache.commit()          # committed per row: an interrupt costs one request
+        response = fetch(mbid)
+        if response is None:
+            unanswered += 1
+            in_a_row += 1
+            if args.give_up_after and in_a_row >= args.give_up_after:
+                gave_up = True
+                break
+        else:
+            in_a_row = 0
+            cache.execute("INSERT OR REPLACE INTO work_cache VALUES (?,?,?)",
+                          (mbid, response, int(time.time())))
+            cache.commit()      # committed per row: an interrupt costs one request
         if i % 100 == 0 or i == len(todo):
             print(f"  {i}/{len(todo)}", flush=True)
         time.sleep(RATE_S)
 
     total = cache.execute("SELECT COUNT(*) FROM work_cache").fetchone()[0]
+    if unanswered:
+        # Said, not buried: these recordings have no Work yet, and the run
+        # still exits 0 because what it did fetch is good `[GDE-WRK-130]`.
+        print(f"NOT ANSWERED: {unanswered} recording(s) got no response"
+              f"{f'; gave up after {in_a_row} in a row -- is the network up?' if gave_up else ''}"
+              f" -- left uncached, so the next run asks again", flush=True)
     print(f"done -- {total} response(s) cached in {args.cache}", flush=True)
+    cache.close()
     return 0
 
 

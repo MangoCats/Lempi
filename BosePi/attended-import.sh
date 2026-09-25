@@ -29,6 +29,11 @@
 # fourth run against bose's own real --lock-in'd ro once it existed, not
 # only the earlier hand-simulated one. Not yet exercised over a
 # long-running or interrupted command. See BosePi/README.md's table.
+#
+# The catalogue guard [BOS-RUN-092], added 2026-09-25 after a window closed B
+# over a WAL catalogue and bose went silent for 30 minutes: exercised on bose
+# with the real catalogue (rollback, closed), a WAL file (switched, closed), a
+# WAL file held open (locked, B left rw, exit 1) and no file (said so).
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 . BosePi/lib.sh
@@ -37,6 +42,26 @@ HOST="${HOST:-pi@bose}"
 MODE=""
 UPDATE_MPD=1
 CMD=()
+# The catalogue B holds. It must not be WAL when B closes [BOS-RUN-092]: on
+# ro media a WAL file opens only while its -shm/-wal exist, and a clean close
+# of the last connection deletes them -- which is how bose went silent for 30
+# minutes on 2026-09-25 [BOS-RUN-090].
+CATALOGUE="${CATALOGUE:-/srv/library/library.db}"
+GUARD_FAILED=0
+
+# The journal mode from the file header itself (bytes 18-19: 1 rollback, 2
+# WAL), read with od -- opening it with SQLite to ask would be a connection,
+# and a connection is what creates and deletes the sidecars in question.
+journal_of() {
+    local b
+    ssh "$HOST" "test -e '$CATALOGUE'" 2>/dev/null || { echo absent; return; }
+    b=$(ssh "$HOST" "od -An -tu1 -j18 -N2 '$CATALOGUE'" 2>/dev/null | tr -s ' ' | sed 's/^ //;s/ $//')
+    case "$b" in
+        "1 1") echo rollback ;;
+        "2 2") echo wal ;;
+        *) echo "unknown (header bytes 18-19: '${b}')" ;;
+    esac
+}
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -67,13 +92,15 @@ case ",$ORIG_OPTS," in
     *) WAS_RO=0 ;;
 esac
 say "B's current mount options: $ORIG_OPTS (currently $([ "$WAS_RO" = 1 ] && echo read-only || echo read-write))"
+say "catalogue $CATALOGUE: journal $(journal_of)"
 
 step "Plan"
 say "1. $([ "$WAS_RO" = 1 ] && echo "remount B rw (it is currently ro)" || echo "leave B as-is (already rw)")"
 say "2. run: ${CMD[*]}"
-say "3. sync"
-say "4. $([ "$WAS_RO" = 1 ] && echo "remount B back to ro" || echo "leave B as-is (it started rw)")"
-say "5. $([ "$UPDATE_MPD" = 1 ] && echo "MPD reindex (best-effort)" || echo "skip MPD reindex (--no-mpd-update)")"
+say "3. $([ "$WAS_RO" = 1 ] && echo "catalogue must not be WAL: switch it to DELETE if it is, and keep B rw if that fails [BOS-RUN-092]" || echo "no catalogue check (B stays rw, where WAL is safe)")"
+say "4. sync"
+say "5. $([ "$WAS_RO" = 1 ] && echo "remount B back to ro" || echo "leave B as-is (it started rw)")"
+say "6. $([ "$UPDATE_MPD" = 1 ] && echo "MPD reindex (best-effort)" || echo "skip MPD reindex (--no-mpd-update)")"
 
 if [ "$MODE" != "go" ]; then
     say ""
@@ -94,11 +121,45 @@ fi
 # the remount-back a second time (e.g. if the trap fires after an already-
 # clean close) is a no-op, not an error.
 CLOSED=0
+# Whether B may go back to ro [BOS-RUN-092]. A catalogue that is still WAL,
+# or whose mode cannot be read, keeps B rw: rw is safe for the player (SQLite
+# recreates the sidecars), ro over WAL is the outage. The failure this picks
+# is the loud, harmless one.
+catalogue_safe_to_close() {
+    local mode out
+    mode=$(journal_of)
+    case "$mode" in
+        rollback) say "catalogue: rollback journal -- safe on ro media"; return 0 ;;
+        absent)   say "catalogue: NO FILE at $CATALOGUE -- the check had nothing to check; closing"; return 0 ;;
+        wal)
+            say "catalogue: WAL -- switching to DELETE before B closes [BOS-RUN-092]"
+            out=$(ssh "$HOST" "sqlite3 '$CATALOGUE' 'PRAGMA journal_mode=DELETE;'" 2>&1)
+            say "  sqlite3 said: $out"
+            mode=$(journal_of)
+            if [ "$mode" = rollback ]; then
+                say "catalogue: now a rollback journal"
+                return 0
+            fi
+            say "catalogue: STILL $mode -- is something holding it open (lempi)?" ;;
+        *)
+            say "catalogue: journal mode $mode" ;;
+    esac
+    return 1
+}
+
 close_b() {
     [ "$CLOSED" = 1 ] && return
     CLOSED=1
     say ""
     say "closing B (mount state restore, always attempted)"
+    if [ "$WAS_RO" = 1 ] && ! catalogue_safe_to_close; then
+        GUARD_FAILED=1
+        ssh "$HOST" sync 2>/dev/null || true
+        say "LEAVING B READ-WRITE: closing it over this catalogue would stop the"
+        say "player at its next start [BOS-RUN-090]. Fix the journal mode, then:"
+        say "  ssh $HOST sudo mount -o remount,ro /srv/library"
+        return
+    fi
     ssh "$HOST" sync 2>/dev/null || true
     if [ "$WAS_RO" = 1 ]; then
         if ssh "$HOST" "sudo mount -o remount,ro /srv/library" 2>/dev/null; then
@@ -120,7 +181,12 @@ close_b
 trap - EXIT INT TERM
 
 if [ "$CMD_RC" != 0 ]; then
+    [ "$GUARD_FAILED" = 1 ] \
+        && die "the wrapped command failed ($CMD_RC), and B was LEFT read-write -- see above; nothing else here ran"
     die "the wrapped command failed ($CMD_RC) -- B has still been closed; nothing else here ran"
+fi
+if [ "$GUARD_FAILED" = 1 ]; then
+    die "the command succeeded, but B was left read-write because the catalogue is not safe on ro media [BOS-RUN-092]"
 fi
 
 if [ "$UPDATE_MPD" = 1 ]; then

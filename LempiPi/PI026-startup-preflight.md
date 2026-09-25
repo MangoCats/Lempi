@@ -136,6 +136,17 @@ all** — it must be asked through `wireplumber`. The first draft assumed a
 uniform form and logged `wpctl Usage:`, which is how a diagnostic becomes
 noise.
 
+**`[PI-PRE-065]` A WAL catalogue on read-only media is warned about before
+it fails.** Added 2026-09-25, after `bose` crash-looped for 30 minutes on
+exactly that `[BOS-RUN-090]`. The journal mode is read from the file header
+with `od` — an SQLite open is what creates and deletes the sidecars in
+question — and the mount from `findmnt`. WAL on a `ro` mount warns: that the
+next clean close will break it if its `-shm`/`-wal` are present, that this
+start will fail if they are not. WAL on a writable mount, or a rollback
+journal anywhere, is silent. Run on all three nodes: silent on each, as each
+is safe; the two warnings were exercised on `bose` with a stub `findmnt`
+reporting `ro` against a real WAL file. Exit stays 0 `[PI-PRE-020]`.
+
 ## 5. Degraded behaviour, as executed
 
 **`[PI-PRE-070]`** All three states were run on `lempi02w` against a real dirty

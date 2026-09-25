@@ -32,6 +32,7 @@ set -u
 
 BIN="${LEMPI_BIN:-/usr/local/bin/lempi}"
 WAIT_SINK="${LEMPI_WAIT_SINK:-/usr/local/bin/lempi-wait-sink}"
+CATALOGUE="${LEMPI_CATALOGUE:-/srv/library/library.db}"
 
 say() { echo "lempi-preflight: $*"; }
 warn() { echo "lempi-preflight: $*" >&2; }
@@ -98,6 +99,44 @@ else
     warn "database recovery UNAVAILABLE: neither sqlite3 nor python3 is"
     warn "  installed. An unclean stop will NOT be repaired at boot, and the"
     warn "  next power cut is a crash loop [PI3-FOUND-120]. Install either."
+fi
+
+# -------------------------------------------------------------- the catalogue
+#
+# **`[PI-PRE-065]` A WAL catalogue on read-only media is one clean close from
+# not opening.** The player attaches the catalogue `mode=ro`, and SQLite can
+# open a WAL file that way only while its `-shm` and `-wal` exist or can be
+# created. On a `ro` mount they cannot be; a clean close of the last writer
+# deletes them; and the next start is `unable to open database file` in a
+# crash loop that `lempi-db-recover` cannot heal, since its one write lands on
+# the same `ro` mount. `bose` went silent for 30 minutes that way on
+# 2026-09-25 `[BOS-RUN-090]`, and `[BOS-RUN-092]` is the rule it produced.
+#
+# Asked of the machine `[PI-PRE-050]`: the journal mode from the file header
+# (bytes 18-19, 1 rollback and 2 WAL) with `od`, not an SQLite open -- an open
+# is what creates and deletes the files in question -- and the mount from
+# `findmnt`. Silent where it is safe: WAL on a writable mount, or a rollback
+# journal anywhere.
+if [ -e "$CATALOGUE" ]; then
+    _jm="$(od -An -tu1 -j18 -N2 "$CATALOGUE" 2>/dev/null | tr -s ' ' | sed 's/^ //;s/ $//')"
+    _mo="$(findmnt -no OPTIONS --target "$CATALOGUE" 2>/dev/null)"
+    case ",$_mo," in *,ro,*) _ro=1 ;; *) _ro=0 ;; esac
+    if [ "$_jm" = "2 2" ] && [ "$_ro" = 1 ]; then
+        if [ -e "$CATALOGUE-shm" ] && [ -e "$CATALOGUE-wal" ]; then
+            warn "catalogue $CATALOGUE is WAL on READ-ONLY media: it opens only while"
+            warn "  its -shm/-wal survive, and the next clean close deletes them"
+            warn "  [PI-PRE-065]. Switch it to DELETE in an attended window"
+            warn "  [BOS-RUN-092]."
+        else
+            warn "catalogue $CATALOGUE is WAL on READ-ONLY media with NO -shm/-wal:"
+            warn "  the player cannot open it and this start will fail [PI-PRE-065]."
+            warn "  Switch it to DELETE in an attended window [BOS-RUN-092]."
+        fi
+    elif [ "$_jm" != "1 1" ] && [ "$_jm" != "2 2" ]; then
+        warn "catalogue $CATALOGUE: journal mode unreadable (header '$_jm')"
+    fi
+else
+    say "no catalogue at $CATALOGUE -- nothing to check [PI-PRE-065]"
 fi
 
 # ------------------------------------------------------------- audio path

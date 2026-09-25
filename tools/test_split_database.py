@@ -182,6 +182,59 @@ def test_a_missing_optional_table_is_skipped_not_an_error():
         os.unlink(src)
 
 
+def _split(src: str):
+    library_path, listener_path = out_paths()
+    old_argv = sys.argv
+    try:
+        sys.argv = ["split_database.py", src, "--library-out", library_path,
+                    "--listener-out", listener_path, "--commit"]
+        return sd.main(), library_path, listener_path
+    finally:
+        sys.argv = old_argv
+
+
+def test_works_tables_land_in_the_catalogue():
+    # Absent from LIBRARY_TABLES for thirteen days, so a split dropped them
+    # silently `[GDE-WRK-130]`.
+    src = source_db()
+    conn = sqlite3.connect(src)
+    conn.executescript(
+        "CREATE TABLE works (mbid TEXT PRIMARY KEY, title TEXT, source TEXT NOT NULL);"
+        "CREATE TABLE recording_works (mbid TEXT, work_mbid TEXT, source TEXT,"
+        " PRIMARY KEY (mbid, work_mbid));"
+        "CREATE INDEX recording_works_by_work ON recording_works(work_mbid);"
+        "INSERT INTO works VALUES ('w-1', 'A Song', 'musicbrainz:work-rels');"
+        "INSERT INTO recording_works VALUES ('mb-1', 'w-1', 'musicbrainz:work-rels');")
+    conn.close()
+    rc, library_path, listener_path = _split(src)
+    check(rc == 0, f"a source with works must split, got rc={rc}")
+    if rc == 0:
+        lib = sqlite3.connect(library_path)
+        check(lib.execute("SELECT count(*) FROM recording_works").fetchone()[0] == 1,
+              "recording_works must reach library.db with its row")
+        check(lib.execute("SELECT count(*) FROM sqlite_master WHERE name='recording_works_by_work'")
+              .fetchone()[0] == 1, "and its index")
+        lib.close()
+        lst = sqlite3.connect(listener_path)
+        check(lst.execute("SELECT count(*) FROM sqlite_master WHERE name='works'").fetchone()[0] == 0,
+              "works must not reach listener.db")
+        lst.close()
+    os.unlink(src)
+
+
+def test_a_table_assigned_to_neither_half_is_refused():
+    src = source_db()
+    conn = sqlite3.connect(src)
+    conn.executescript("CREATE TABLE something_new (k TEXT);"
+                       "INSERT INTO something_new VALUES ('x');")
+    conn.close()
+    rc, library_path, listener_path = _split(src)
+    check(rc == 1, f"an unclassified table must refuse the split, got rc={rc}")
+    check(not os.path.exists(library_path) and not os.path.exists(listener_path),
+          "a refused split must write neither file")
+    os.unlink(src)
+
+
 def test_a_source_that_changes_mid_run_is_named_rather_than_blamed_on_the_copy():
     """The live-write race, which cost a real rehearsal a false diagnosis.
 
@@ -257,6 +310,8 @@ def main() -> int:
     test_commit_produces_two_correct_files_and_leaves_the_source_alone()
     test_refuses_to_overwrite_an_existing_output_file()
     test_a_missing_optional_table_is_skipped_not_an_error()
+    test_works_tables_land_in_the_catalogue()
+    test_a_table_assigned_to_neither_half_is_refused()
 
     print()
     if FAILED:

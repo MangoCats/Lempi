@@ -260,12 +260,18 @@ that gap closed first.
 *The accident did not reach the rest of the fleet.* On 2026-09-25 `bose` and
 `lp3-wifi` were found without either table: their catalogues predate stage 4,
 and the old builds never looked. The rows were copied from `lempi02w`'s
-catalogue by MBID — 6,598 works, 7,188 rows, 7,076 of the 7,110 recordings
-with a work present in theirs — and the Director's warning has not appeared
-since. On `bose` that write took the player down for 30 minutes
-`[BOS-RUN-090]`. A catalogue that is built with `load_works.py` as a standing
-step, and shipped by something that carries these tables, is what makes the
-next node not need this.
+catalogue by MBID, then pruned to what `load_works.py` itself would write —
+rows only for recordings the catalogue holds: 6,567 works, 7,154 rows on
+each. The Director's warning has not appeared since. On `bose` that write
+took the player down for 30 minutes `[BOS-RUN-090]`.
+
+What stops a repeat, all 2026-09-25: Vipunen's `induct` now ends with
+`works`/`load-works` — a fetch capped at 300 and giving up offline, since
+works enrich and do not gate — so a recording identified later gets its
+Works; `fetch_works.py` no longer caches "no answer" as an answer, which
+unattended would have been permanent; and `split_database.py` carries both
+tables and refuses a source holding any table it assigns to neither half.
+That check found a second one it would have dropped, `player_queue`.
 
 ---
 

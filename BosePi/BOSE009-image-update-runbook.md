@@ -262,9 +262,15 @@ none.
 
 **`[BOS-RUN-078]` ~~`attended-import.sh` should checkpoint before closing
 B~~** — *withdrawn 2026-09-25*: a checkpoint is what broke the catalogue
-`[BOS-RUN-090]`. What replaces it is `[BOS-RUN-092]`'s rule. Not built into
-`attended-import.sh`: a check there that `library.db` is not WAL before B
-closes would enforce it, and is the open item now.
+`[BOS-RUN-090]`. **Replaced the same day by a guard enforcing
+`[BOS-RUN-092]`.** Before B goes back to `ro`, `attended-import.sh` reads the
+catalogue's journal mode from its header; WAL is switched to `DELETE`, and if
+that fails B is **left `rw`** and the script exits 1 — `rw` is harmless to
+the player, `ro` over WAL is the outage. Exercised on `bose` all four ways:
+the real catalogue (rollback, closed), a WAL file (switched, closed), a WAL
+file held open by a reader (`database is locked`, B left `rw`, exit 1), and
+no file (said so). `lempi-preflight` warns at every start if it is ever
+violated anyway `[PI-PRE-065]`.
 
 **`[BOS-RUN-075]`** `[BOS-RUN-010]`'s glibc floor is undefended: nothing
 fails at build time if `build/Dockerfile.aarch64` is bumped past bookworm,

@@ -48,12 +48,18 @@ import tempfile
 #   Copied to **both** rather than assigned to one side, so a future tool
 #   that checks a database's schema version finds it regardless of which
 #   half it opened.
+#
+# `works`/`recording_works` were missing from this list from 2026-09-12, when
+# `load_works.py` created them, until 2026-09-25 `[GDE-WRK-130]`: a re-split
+# would have dropped both without a word, since only listed tables are copied.
+# `unclassified()` now refuses a source holding any table named nowhere here.
 LIBRARY_TABLES = [
     "files", "passages", "passage_recordings", "recordings", "artists",
     "recording_artists", "recording_relations", "releases",
     "release_recordings", "flavor", "flavor_constants", "cover_art",
     "file_tags", "id_checks", "lyrics", "ingest_decisions",
     "lowlevel_cache", "musicbrainz_cache", "identification_cache",
+    "works", "recording_works",
 ]
 LISTENER_TABLES = [
     "listener_play_history", "listener_rejections", "listener_flags",
@@ -63,6 +69,9 @@ LISTENER_TABLES = [
     "listener_settings", "player_state",
     "player_settings", "id_reviews", "boundary_reviews", "artist_reviews",
     "selection_decisions",
+    # The saved queue `player_store.rs` writes; found unlisted by the same
+    # check, against lempi02w's two halves, 2026-09-25.
+    "player_queue",
 ]
 BOTH = ["schema_meta"]
 
@@ -76,6 +85,24 @@ def table_exists(conn: sqlite3.Connection, table: str) -> bool:
     return conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
     ).fetchone() is not None
+
+
+def unclassified(source_path: str) -> list:
+    """Tables in the source that no list above assigns to a half.
+
+    Each would be left out of both files, so a split carrying one would lose
+    it and report success -- which is how `works` would have gone. SQLite's
+    own `sqlite_*` tables are the file's, not the schema's, and are skipped.
+    """
+    known = set(LIBRARY_TABLES + LISTENER_TABLES + BOTH)
+    con = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+    try:
+        names = [r[0] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+    finally:
+        con.close()
+    return [n for n in names if n not in known]
 
 
 def copy_table(source: sqlite3.Connection, dest: sqlite3.Connection, table: str) -> int:
@@ -230,6 +257,14 @@ def main() -> int:
             say(f"refusing to overwrite an existing file: {out}")
             say("remove it first, or choose a different --library-out/--listener-out.")
             return 1
+    stray = unclassified(args.source)
+    if stray:
+        say("refusing: the source holds table(s) this split assigns to neither half,")
+        say("so they would be dropped from both files without a word:")
+        for t in stray:
+            say(f"  - {t}")
+        say("add each to LIBRARY_TABLES, LISTENER_TABLES or BOTH in split_database.py.")
+        return 1
 
     # Rehearse ON THE DESTINATION, not in /tmp `[IMPL-VP3-120]`.
     #

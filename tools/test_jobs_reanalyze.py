@@ -45,8 +45,16 @@ def test_steps_for_unit() -> None:
     print("steps_for(): --recheck reaches only the identify stage, only when asked")
     plain = jobmod.steps_for("db.sqlite", "C:/Music/Foghat")
     recheck = jobmod.steps_for("db.sqlite", "C:/Music/Foghat", recheck=True)
-    check([s for s, _ in plain] == ["ingest", "extract", "identify", "merge"],
+    # `works`/`load-works` joined 2026-09-25 `[GDE-WRK-130]`: after `merge`,
+    # since a Work hangs off the recording MBID those two stages settle.
+    check([s for s, _ in plain] == ["ingest", "extract", "identify", "merge",
+                                     "works", "load-works"],
           f"stage names/order must be unchanged, got {[s for s, _ in plain]}")
+    works = dict(plain)["works"]
+    check("--limit" in works and "--give-up-after" in works,
+          f"the works fetch must be bounded and give up offline, got {works}")
+    check(dict(plain)["load-works"][-1] == works[works.index("--cache") + 1],
+          "load-works must read the cache the works fetch writes")
     check([s for s, _ in recheck] == [s for s, _ in plain],
           "recheck must not add or remove stages, only alter one's argv")
 
@@ -55,7 +63,7 @@ def test_steps_for_unit() -> None:
     check("--recheck" not in plain_identify, f"plain induct must not recheck, got {plain_identify}")
     check("--recheck" in recheck_identify, f"reanalyze must recheck, got {recheck_identify}")
 
-    for stage in ("ingest", "extract", "merge"):
+    for stage in ("ingest", "extract", "merge", "works", "load-works"):
         check(dict(plain)[stage] == dict(recheck)[stage],
               f"{stage}'s argv must be identical either way, got "
               f"{dict(plain)[stage]!r} vs {dict(recheck)[stage]!r}")
