@@ -182,7 +182,7 @@ Two gates were cleared to get there: `ffmpeg` installed on the Pi, which `[SPEC-
 
 **`[IMPL-SUI-066]` The same music holds `passage_id` 16407 here and 16168 there.** Bound by `audio_md5`, never by number — `[SPEC-DF-035]` demonstrated rather than argued. A link carrying one machine's id to the other would have opened a real passage that was the wrong song.
 
-**`[IMPL-SUI-068]` Two measurements the appliance made possible, both recorded in [SPEC012](spec/SPEC012-library-relink.md).**
+**`[IMPL-SUI-068]` Two measurements the appliance made possible, recorded in [SPEC012](spec/SPEC012-library-relink.md) and — since the 2026-09-24 split — [SPEC045](spec/SPEC045-the-identity-hash.md), which holds the second.**
 
 1. **Windows substitutes a private-use codepoint for characters it cannot store**, and **276 of 5,709 paths (4.8%) carry one** — 264 `:` and 17 `?`. A 250-file sample matched 238 by path; all 12 that failed were present under the translated name with byte-identical audio. Path binding loses one file in twenty, invisibly, because both shells render both forms the same `[SPEC-RLK-025]`.
 2. **The `[SPEC-RLK-086]` version risk was tested for the first time and did not fire**: ffmpeg 5.1.9/aarch64 against 8.0/x86_64, **238 files, 0 disagreements** `[SPEC-RLK-088]`. It lowers the risk without retiring it — the Symphonia spike agreed on six files and then disagreed on sixty of 5,705.

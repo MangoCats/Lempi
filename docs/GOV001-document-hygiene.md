@@ -80,7 +80,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `UI` — Web Server, REST API, WebSocket Protocol, Web UI
 - `HW` — Embedded Target, RPi Zero 2W, Storage Partitioning
 - `APS` — Audio Path Supervisor: output device, sink, speaker lifecycle
-- `RLK` — Library relink: binding a transported library to a target's paths
+- `RLK` — Library relink: binding a transported library to a target's paths, see [SPEC012](spec/SPEC012-library-relink.md); and the identity hash it binds by, see [SPEC045](spec/SPEC045-the-identity-hash.md) — one prefix, two documents, split 2026-09-24 when SPEC012 reached its line limit
 - `SUI` — Vipunen Console: the library-builder's own web interface (distinct from `UI`, which is the player's)
 - `PL` — Derived-data payload: the one format carried by all three transports
 - `MPD` — MPD integration: the Program Director as a guest in someone else's player
@@ -215,7 +215,7 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-APS-060]` | Audio path supervisor: one owner, one snapshot | [SPEC011-audio-path-supervisor.md](spec/SPEC011-audio-path-supervisor.md#3-the-design) |
 | `[SPEC-RLK-030]` | Relink: hash the target, match audio_md5, write the path | [SPEC012-library-relink.md](spec/SPEC012-library-relink.md#2-the-mechanism) |
 | `[SPEC-RLK-050]` | Relink outcomes: matched / moved / missing / unknown | [SPEC012-library-relink.md](spec/SPEC012-library-relink.md#3-what-it-reports) |
-| `[SPEC-RLK-150]` | Deferred: Symphonia takes the hash at the next re-extraction | [SPEC012-library-relink.md](spec/SPEC012-library-relink.md#7-decided-and-deferred) |
+| `[SPEC-RLK-150]` | Deferred: Symphonia takes the hash at the next re-extraction | [SPEC045-the-identity-hash.md](spec/SPEC045-the-identity-hash.md#2-decided-and-deferred) |
 | `[SPEC-SUI-020]` | Vipunen's console against the player's browse page | [SPEC013-vipunen-console.md](spec/SPEC013-vipunen-console.md#2-identity-and-boundaries) |
 | `[SPEC-SUI-055]` | Folder view: identity and completeness are two axes | [SPEC013-vipunen-console.md](spec/SPEC013-vipunen-console.md#32-folder--what-is-here-and-what-is-known-about-it) |
 | `[SPEC-SUI-095]` | Export ships a class A/B/C bundle, not a database | [SPEC013-vipunen-console.md](spec/SPEC013-vipunen-console.md#5-export--new-music-to-a-remote-lempi) |

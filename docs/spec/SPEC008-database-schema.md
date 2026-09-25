@@ -50,7 +50,7 @@ CREATE TABLE recordings (
 );
 ```
 
-**`[SPEC-SC-038]` `md5_generator` records what produced `audio_md5`, as `name@version`** — `ffmpeg@8.0`, one day `symphonia@0.5.4`. *(Added 2026-09-22, [SPEC012](SPEC012-library-relink.md)'s `[SPEC-RLK-150]` precondition 3.)*
+**`[SPEC-SC-038]` `md5_generator` records what produced `audio_md5`, as `name@version`** — `ffmpeg@8.0`, one day `symphonia@0.5.4`. *(Added 2026-09-22, [SPEC045](SPEC045-the-identity-hash.md)'s `[SPEC-RLK-150]` precondition 3.)*
 
 `audio_md5` keys four tables and is treated as a stable identity `[SPEC-DF-030]`, but it implements no standard: it is whatever the demuxer that computed it did `[SPEC-RLK-080]`. An ffmpeg upgrade could in principle orphan rows, and nothing downstream would report that as anything but missing music. This column is what makes such a disagreement diagnosable instead of merely fatal.
 
