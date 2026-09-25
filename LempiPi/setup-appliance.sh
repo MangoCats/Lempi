@@ -602,6 +602,8 @@ for pair in \
     "lempi-mpd-guest.conf:/etc/systemd/system/lempi.service.d/mpd-guest.conf" \
     "lempi-io-priority.conf:/etc/systemd/system/lempi.service.d/20-lempi-io.conf" \
     "mpd-polite.conf:/etc/systemd/system/mpd.service.d/10-lempi-polite.conf" \
+    "lempi-quiet-tick.conf:/etc/systemd/system/lempi-speaker.service.d/10-lempi-quiet.conf" \
+    "lempi-quiet-tick.conf:/etc/systemd/system/lempi-btwatch.service.d/10-lempi-quiet.conf" \
     "sd-tuning.conf:/etc/tmpfiles.d/lempi-readahead.conf" \
     "pipewire-quantum.conf:/etc/pipewire/pipewire.conf.d/10-lempi-quantum.conf" ; do
     src="$HERE/${pair%%:*}"; dst="${pair#*:}"

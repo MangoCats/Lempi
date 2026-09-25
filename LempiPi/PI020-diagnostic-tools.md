@@ -195,3 +195,26 @@ It also captures the *user* journal, where WirePlumber logs live — a blind
 spot named in `[PI3-FOUND-030]`'s original investigation and not closed until
 now.
 
+*Measured 2026-09-25, and not what the paragraph above says:* `lempi02w` runs
+`Storage=persistent`, `SystemMaxUse=64M`, `MaxRetentionSec=1week`, set by hand
+in `/etc/systemd/journald.conf` itself — no script in this repository writes
+those lines. Left as found. So is its `/usr/local/bin/lempi-btwatch`
+(2026-09-21 08:37), which predates the repository's copy by one change: the
+`LEMPI_HCICONFIG` test override `[PI3-AIM-100]` and two comment renames. With
+the variable unset the two behave the same.
+
+**`[PI3-FOUND-760]` The journal was full of timer ticks, not of news.** On
+that date 76% of its 21,327 entries were systemd's own "Starting / Finished /
+Deactivated successfully" for `lempi-speaker` (every 30 s) and
+`lempi-btwatch` (every minute) — three lines a run whether or not anything
+happened. The journal costs about 3 KB an entry, so they, not the player,
+filled the 64 MB, which held 2.7 days of the week asked for.
+[`lempi-quiet-tick.conf`](lempi-quiet-tick.conf), a drop-in on both units,
+sets `LogLevelMax=notice` — on systemd 252 that also silences the service
+manager's lines about the unit, while failure still logs at notice, warning
+and err — and `SyslogLevel=notice`, so what the scripts themselves print
+survives the filter. Both halves were checked with a throwaway unit before
+touching the real ones. After install: both units ran and succeeded with no
+systemd lines, and the whole journal took 4 entries in five minutes against
+a three-day average of about 28.
+
