@@ -426,6 +426,9 @@ fn engine_thread(
     // Otherwise paused until told otherwise. The producers fill regardless, so
     // pressing Play in the browser starts on a primed pipeline rather than an
     // underrun [REQ-AUD-142].
+    // The tick may never wait on a write `[GDE-FBD-090]`: from here on this
+    // thread's lines are queued, not written `[GDE-HST-140]`.
+    lempi_player::logging::this_thread_must_not_block();
     while !lempi_player::playback::Playback::is_shutdown(&backend) {
         let submitted = lempi_player::playback::Playback::tick(&mut backend);
         // Continuous radio: the queue never runs dry, so playback never ends.

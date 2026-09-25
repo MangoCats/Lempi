@@ -85,6 +85,9 @@ fn main() {
     handle.send(Command::Play);
     let started = Instant::now();
     let mut last_id = -1i64;
+    // The tick may never wait on a write `[GDE-FBD-090]`: from here on this
+    // thread's lines are queued, not written `[GDE-HST-140]`.
+    lempi_player::logging::this_thread_must_not_block();
     while !engine.is_shutdown() {
         let submitted = engine.tick();
         let s = handle.snapshot();

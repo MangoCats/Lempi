@@ -37,6 +37,12 @@ license = "MIT"
 vipunen-support = []
 
 [dependencies]
+# Diagnostics `[GDE-HST-100]`. The library emits and never installs: whoever
+# hosts it -- a binary, or one day a phone -- decides where lines go. Without
+# default features, so no proc macros. Three new crates, measured 2026-09-24
+# (`tracing`, `tracing-core`, `pin-project-lite`; `once_cell` was already
+# here), none of them on the boundary gate's list.
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

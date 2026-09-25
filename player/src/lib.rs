@@ -83,6 +83,9 @@ pub mod echo;
 #[cfg(feature = "echo-client")]
 pub mod echo_client;
 pub mod engine;
+/// Where diagnostics go, and how they are written `[GDE-HST-070]`. The
+/// library emits through `tracing`; this is the one place a line is written.
+pub mod logging;
 /// Per-song lyrics where a client will find them `[SPEC-LYR-070]`.
 pub mod lyrics_cache;
 /// Lyrics beside the audio, for a client that reads the music folder

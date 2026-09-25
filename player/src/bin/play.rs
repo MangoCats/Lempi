@@ -88,6 +88,9 @@ fn main() {
 
     let t0 = Instant::now();
     let mut submitted: u64 = 0;
+    // The tick may never wait on a write `[GDE-FBD-090]`: from here on this
+    // thread's lines are queued, not written `[GDE-HST-140]`.
+    lempi_player::logging::this_thread_must_not_block();
     while !engine.is_shutdown() {
         let n = engine.tick();
         submitted += n as u64;

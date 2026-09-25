@@ -111,6 +111,9 @@ fn main() {
     let suppress = (saved.skip_suppress_h, saved.dequeue_suppress_h);
     let started = Instant::now();
     let mut last = 0usize;
+    // The tick may never wait on a write `[GDE-FBD-090]`: from here on this
+    // thread's lines are queued, not written `[GDE-HST-140]`.
+    lempi_player::logging::this_thread_must_not_block();
     while run_for.is_none_or(|s| started.elapsed().as_secs_f64() < s) {
         sw.tick();
         session.refill(&mut sw, suppress);

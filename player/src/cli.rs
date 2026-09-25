@@ -788,6 +788,12 @@ impl Cli {
     pub fn parse(&self) -> Args {
         match self.parse_argv_in(std::env::args().skip(1), |k| std::env::var(k).ok()) {
             Outcome::Run(a) => {
+                // Installed here, once, for all seventeen binaries: this is
+                // the one point every program passes before it does anything,
+                // so an eighteenth cannot forget it `[GDE-HST-070]`. Not for
+                // help, version or refusal, which print and exit below --
+                // the command line's own output, written directly.
+                crate::logging::install(self.program);
                 // Loud, on stderr, so systemd's journal carries it and
                 // `journalctl -u lempi | grep DEPRECATED` is the fleet's
                 // migration checklist rather than someone's memory
