@@ -15,10 +15,31 @@
 //! published an atomic, because the engine needed the answer and could not
 //! afford to ask. That is gone: the engine no longer asks at all, so the
 //! poller it needed is one fewer thread and one fewer copy of the question.
+//!
+//! **`[GDE-HST-350]` One observer per platform, behind one interface.** How the
+//! question is asked differs by host -- `wpctl` on a PipeWire Linux, D-Bus once
+//! `[SPEC-APS-090]` lands, stream state on a phone, nothing at all on Windows or
+//! on a node that goes straight to ALSA -- and the answer must not pretend
+//! otherwise. So callers hold a [`SinkObserver`] and read a [`Tristate`]: where
+//! nothing can be observed, the answer is `Unknown`, said as such, rather than
+//! the `true` a missing `wpctl` used to turn into `[SPEC-APS-030]`. SPEC011's
+//! D-Bus observer then replaces an implementation here, not its callers.
 
 use std::process::Command;
 
-/// Where the player's stream is linked, as PipeWire sees it.
+/// Whether anything could hear us -- the shape of SPEC011's
+/// `PathState.audible` `[SPEC-APS-060]`. `Unknown` is an answer, not a
+/// failure: it is what a host that cannot see its own output must say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Tristate {
+    Yes,
+    No,
+    #[default]
+    Unknown,
+}
+
+/// Where the player's stream is linked, as the host's observer sees it.
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize)]
 pub struct SinkStatus {
     /// The node the stream is linked to, if it could be determined.
@@ -31,6 +52,108 @@ pub struct SinkStatus {
     /// bus, not Linux. Distinguished from "ran and found nothing", because
     /// the remedies differ.
     pub known: bool,
+    /// The answer the three fields above add up to. See [`SinkStatus::judge`].
+    pub audible: Tristate,
+    /// Which observer answered: `wpctl`, or `none`.
+    pub observer: &'static str,
+    /// Why `audible` is `Unknown`, when it is.
+    pub note: Option<String>,
+}
+
+impl SinkStatus {
+    /// Fill in `audible` from what was observed.
+    ///
+    /// Only a dummy is `No`, and only a real linked sink is `Yes`. A query that
+    /// could not run is `Unknown`, and so is one that ran and found our stream
+    /// linked to nothing: the stream may not be open yet, and "not linked" is
+    /// not "linked to the placeholder".
+    fn judge(mut self) -> Self {
+        self.audible = match (self.known, self.dummy, &self.sink) {
+            (false, _, _) => Tristate::Unknown,
+            (true, true, _) => Tristate::No,
+            (true, false, Some(_)) => Tristate::Yes,
+            (true, false, None) => Tristate::Unknown,
+        };
+        if self.audible == Tristate::Unknown && self.note.is_none() && self.known {
+            self.note = Some("the player's stream is linked to nothing".into());
+        }
+        self
+    }
+}
+
+/// Something that can say where the audio is going on this host.
+///
+/// `observe` may block -- a subprocess today, a D-Bus call later -- so, like
+/// [`current`], it is never called from the audio path `[SPEC-APS-070]`.
+pub trait SinkObserver: Send + Sync {
+    /// The mechanism, for the log and the panel.
+    fn name(&self) -> &'static str;
+    fn observe(&self) -> SinkStatus;
+}
+
+/// PipeWire, asked through `wpctl status` -- the Linux observer today.
+pub struct Wpctl;
+
+impl SinkObserver for Wpctl {
+    fn name(&self) -> &'static str {
+        "wpctl"
+    }
+
+    fn observe(&self) -> SinkStatus {
+        let base = SinkStatus { observer: self.name(), ..Default::default() };
+        let out = match Command::new("wpctl").arg("status").output() {
+            Ok(o) => o,
+            Err(e) => {
+                // No `wpctl`: a node that goes straight to ALSA, like `bose`,
+                // or one whose PipeWire is not installed.
+                return SinkStatus { note: Some(format!("wpctl could not run: {e}")), ..base }.judge();
+            }
+        };
+        if !out.status.success() {
+            // Ran, but could not reach a PipeWire -- no session bus, say. The
+            // output is not an answer about any sink.
+            return SinkStatus {
+                note: Some(format!("wpctl status exited {}", out.status)),
+                ..base
+            }
+            .judge();
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        match parse(&text) {
+            Some(sink) => SinkStatus { dummy: sink == DUMMY, sink: Some(sink), known: true, ..base },
+            None => SinkStatus { known: true, ..base },
+        }
+        .judge()
+    }
+}
+
+/// A host with no way to observe its output. Answers `Unknown`, always, and
+/// says why.
+pub struct Unobservable(pub &'static str);
+
+impl SinkObserver for Unobservable {
+    fn name(&self) -> &'static str {
+        "none"
+    }
+
+    fn observe(&self) -> SinkStatus {
+        SinkStatus { observer: self.name(), note: Some(self.0.into()), ..Default::default() }.judge()
+    }
+}
+
+/// This platform's observer.
+///
+/// By `target_os`, and `android` is not `linux`: a phone has no `wpctl`, and
+/// its stream-state observer is Android work `[GDE-HST-350]`.
+pub fn observer() -> &'static dyn SinkObserver {
+    #[cfg(target_os = "linux")]
+    {
+        &Wpctl
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        &Unobservable("no audibility observer exists for this platform yet")
+    }
 }
 
 /// The stream name `cpal` registers with PipeWire.
@@ -72,17 +195,9 @@ pub fn parse(text: &str) -> Option<String> {
     None
 }
 
-/// Ask PipeWire where the audio is going.
+/// Ask this host's observer where the audio is going.
 pub fn current() -> SinkStatus {
-    let out = Command::new("wpctl").arg("status").output();
-    let Ok(out) = out else {
-        return SinkStatus::default(); // known: false
-    };
-    let text = String::from_utf8_lossy(&out.stdout);
-    match parse(&text) {
-        Some(sink) => SinkStatus { dummy: sink == DUMMY, sink: Some(sink), known: true },
-        None => SinkStatus { sink: None, dummy: false, known: true },
-    }
+    observer().observe()
 }
 
 #[cfg(test)]
@@ -118,8 +233,65 @@ mod tests {
             dummy: parse(SILENT).as_deref() == Some(DUMMY),
             sink: parse(SILENT),
             known: true,
-        };
+            ..Default::default()
+        }
+        .judge();
         assert!(s.dummy, "a dummy-bound stream must be distinguishable");
+        assert_eq!(s.audible, Tristate::No);
+    }
+
+    /// Only an observation answers Yes or No; everything else is Unknown, and
+    /// says why `[SPEC-APS-030]`.
+    #[test]
+    fn audibility_is_judged_from_what_was_seen() {
+        let seen = |sink: Option<&str>, known| {
+            SinkStatus {
+                dummy: sink == Some(DUMMY),
+                sink: sink.map(String::from),
+                known,
+                ..Default::default()
+            }
+            .judge()
+        };
+        assert_eq!(seen(Some("MIDDLETON"), true).audible, Tristate::Yes);
+        assert_eq!(seen(Some(DUMMY), true).audible, Tristate::No);
+        let unlinked = seen(None, true);
+        assert_eq!(unlinked.audible, Tristate::Unknown, "not linked is not the dummy");
+        assert!(unlinked.note.is_some(), "and it says why");
+        // The case that used to read as audible: the question never ran.
+        assert_eq!(seen(None, false).audible, Tristate::Unknown);
+    }
+
+    #[test]
+    fn a_host_that_cannot_observe_says_so() {
+        let s = Unobservable("no way to look").observe();
+        assert_eq!(s.audible, Tristate::Unknown);
+        assert!(!s.known);
+        assert_eq!(s.observer, "none");
+        assert_eq!(s.note.as_deref(), Some("no way to look"));
+        assert_eq!(
+            serde_json::to_value(&s).unwrap()["audible"],
+            serde_json::json!("unknown"),
+            "the wire form is a word, not a boolean a reader could take as true"
+        );
+    }
+
+    /// The platform choice itself. On Linux the answer is whatever `wpctl`
+    /// can see -- `Unknown` in a container with no PipeWire -- but the
+    /// observer is named; elsewhere it is `none`, and never `Yes`.
+    #[test]
+    fn this_platform_has_the_observer_it_should() {
+        let s = current();
+        if cfg!(target_os = "linux") {
+            assert_eq!(s.observer, "wpctl");
+        } else {
+            assert_eq!(s.observer, "none");
+            assert_eq!(s.audible, Tristate::Unknown);
+        }
+        if !s.known {
+            assert_eq!(s.audible, Tristate::Unknown, "an unrun query is never an answer");
+            assert!(s.note.is_some());
+        }
     }
 
     #[test]

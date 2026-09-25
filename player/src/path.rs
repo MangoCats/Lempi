@@ -25,6 +25,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::output::{Output, OutputRing};
+use crate::sink::{SinkObserver, Tristate};
 
 /// Base spacing between recovery attempts, doubling to `RETRY_MAX`.
 ///
@@ -168,6 +169,14 @@ fn supervise(
     };
     let Some(out) = out.as_mut() else { return };
 
+    // Said once, at start: whether this host can tell a silent output from a
+    // heard one at all `[GDE-HST-350]`. Where it cannot, the dummy watch below
+    // has nothing to act on, and a speaker switched off mid-play goes
+    // unnoticed -- a property of the host rather than a fault, so info, but a
+    // stated one: a check that cannot run says so `[GDE-DEP-060]`. After the
+    // ready signal, so the subprocess never delays the startup line.
+    announce(crate::sink::observer());
+
     let mut playing = false;
     let mut backoff = RETRY;
     let mut retry_at: Option<Instant> = None;
@@ -207,6 +216,21 @@ fn supervise(
     }
 }
 
+/// The start line for audibility: which observer, and whether it can see.
+fn announce(observer: &dyn SinkObserver) {
+    let seen = observer.observe();
+    if seen.known {
+        tracing::info!("audibility: observed through {}", observer.name());
+    } else {
+        tracing::info!(
+            "audibility: NOT observable here ({}: {}); a sink that falls silent \
+             will not be noticed [SPEC-APS-030]",
+            observer.name(),
+            seen.note.as_deref().unwrap_or("no reason given")
+        );
+    }
+}
+
 /// Notice a sink that became a dummy without anyone reporting an error
 /// `[PI3-API-030]`.
 ///
@@ -223,7 +247,9 @@ fn watch(out: &Output, playing: bool, watch_at: &mut Instant) {
         return;
     }
     *watch_at = Instant::now() + WATCH;
-    if crate::sink::current().dummy {
+    // Only an observed `No` acts. `Unknown` -- a host that cannot see its
+    // output -- was said once at start, and is not a fault to recover from.
+    if crate::sink::current().audible == Tristate::No {
         tracing::warn!("audio is going nowhere audible; looking for a sink");
         out.mark_failed();
     }
@@ -270,7 +296,7 @@ fn recover(
             // Opening succeeded, which says nothing about whether anyone can
             // hear it: the dummy accepts audio perfectly forever. Treat that as
             // a failure so we keep looking for a real sink `[PI3-API-030]`.
-            if crate::sink::current().dummy {
+            if crate::sink::current().audible == Tristate::No {
                 tracing::warn!("output opened onto a dummy -- still silent, retrying");
                 out.mark_failed();
             } else {

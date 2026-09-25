@@ -184,6 +184,21 @@ pub(super) async fn set_led(
     }
 }
 
+/// The reply's `audible`: `true`, `false`, or `null` for "could not tell".
+///
+/// The skin tests `=== false`, so `null` never reads as silence -- and, which
+/// is the point, never as sound either. This used to answer `!dummy` whenever
+/// the stream was not seen unlinked, so a host where `wpctl` could not run at
+/// all replied `true` `[SPEC-APS-030]`.
+fn audible_json(a: crate::sink::Tristate) -> serde_json::Value {
+    use crate::sink::Tristate;
+    match a {
+        Tristate::Yes => true.into(),
+        Tristate::No => false.into(),
+        Tristate::Unknown => serde_json::Value::Null,
+    }
+}
+
 /// One shape for every speaker reply, so the panel has one thing to read.
 pub(super) fn bt_reply(result: Result<serde_json::Value, String>, reopened: bool) -> Response {
     match result {
@@ -194,13 +209,7 @@ pub(super) fn bt_reply(result: Result<serde_json::Value, String>, reopened: bool
                 // the helper cannot give: where the audio ended up
                 // `[PI3-API-020]`.
                 let where_to = crate::sink::current();
-                // An unlinked stream is not a working one. Saying so keeps
-                // "we could not tell" distinct from "it is fine".
-                if where_to.known && where_to.sink.is_none() {
-                    obj.insert("audible".into(), serde_json::Value::Null);
-                } else {
-                    obj.insert("audible".into(), (!where_to.dummy).into());
-                }
+                obj.insert("audible".into(), audible_json(where_to.audible));
                 if let Ok(s) = serde_json::to_value(where_to) {
                     obj.insert("output".into(), s);
                 }
@@ -211,3 +220,18 @@ pub(super) fn bt_reply(result: Result<serde_json::Value, String>, reopened: bool
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::audible_json;
+    use crate::sink::Tristate;
+
+    /// "Could not tell" must reach the panel as `null`, never as `true`
+    /// `[SPEC-APS-030]`.
+    #[test]
+    fn an_unobserved_output_is_null_not_true() {
+        assert_eq!(audible_json(Tristate::Yes), serde_json::json!(true));
+        assert_eq!(audible_json(Tristate::No), serde_json::json!(false));
+        assert_eq!(audible_json(Tristate::Unknown), serde_json::Value::Null);
+    }
+}
