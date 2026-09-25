@@ -87,6 +87,30 @@ jobs:
       - name: shebang implies +x
         run: python3 tools/check_exec_bits.py
 
+  android-core:
+    name: lempi-core compiles for Android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `[GDE-HST-030]`, taken now for `lempi-core` alone by decision
+      # `[GDE-HST-370]` -- the one deliberate exception to the README's "no
+      # early influence" for mobile. Code gated on `target_os = "linux"`
+      # compiles differently on Android `[GDE-HST-025]`, and nothing else in
+      # this workflow would notice.
+      #
+      # The runner has an NDK of its own; this uses `build/Dockerfile.android`
+      # instead, so CI and `verify-targets.sh` stage E share one definition of
+      # the toolchain -- r30 pinned, checked against Google's published SHA-1.
+      - name: build the Android check image
+        run: docker build -t lempi-android -f build/Dockerfile.android .
+
+      - name: cargo check lempi-core for aarch64-linux-android
+        run: >
+          docker run --rm -v "$PWD":/w -w /w lempi-android
+          cargo check --manifest-path player/Cargo.toml -p lempi-core
+          --target aarch64-linux-android --all-targets --locked
+
   vipunen:
     name: Vipunen's own test scripts
     runs-on: ubuntu-latest

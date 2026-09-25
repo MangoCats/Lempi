@@ -1,0 +1,44 @@
+# Android compile check for `lempi-core` `[GDE-HST-030]`, taken now by decision
+# `[GDE-HST-370]` -- the one deliberate exception to the README's "no early
+# influence" for mobile.
+#
+# **Why a check and not a build.** Nothing ships to a phone yet. What this
+# prevents is the crate built to be portable ceasing to be, silently, between
+# work sessions: code gated on `cfg(target_os = "linux")` compiles differently
+# on Android, whose `target_os` is "android" `[GDE-HST-025]`, and on
+# 2026-09-22 a `cfg(unix)` path that Windows never compiled reached an
+# appliance deploy before anything noticed (CLAUDE.md §10).
+#
+# **Why the NDK, for a `cargo check`.** `libsqlite3-sys` compiles SQLite's C
+# in its build script, and build scripts run under `check` too -- so the C
+# cross-compiler must exist even though nothing is linked.
+#
+# **Pinned, and verified against Google's own published checksum.** r30 is
+# NDK 30.0.16248370, the newest *stable*-channel release on 2026-09-24; the
+# SHA-1 below is the one Google's SDK manifest (`repository2-3.xml`) lists for
+# `android-ndk-r30-linux.zip`, 738,633,529 bytes -- not one computed from our
+# own first download, which would only prove the download agreed with itself.
+#
+# **API level 26**, because AAudio begins there and `cpal`'s Android backend is
+# AAudio. It changes nothing for `lempi-core`; it is chosen now so that
+# widening this check to the player later does not change the toolchain.
+FROM rust:1.90-bookworm
+
+ARG NDK=r30
+ARG NDK_SHA1=5107f898313790e449e87eee2183d9a20602dee9
+ARG API=26
+
+RUN apt-get update && apt-get install -y --no-install-recommends unzip \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL -o /tmp/ndk.zip "https://dl.google.com/android/repository/android-ndk-${NDK}-linux.zip" \
+    && echo "${NDK_SHA1}  /tmp/ndk.zip" | sha1sum -c - \
+    && unzip -q /tmp/ndk.zip -d /opt \
+    && rm /tmp/ndk.zip \
+    && rustup target add aarch64-linux-android
+
+ENV NDK_BIN=/opt/android-ndk-${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin
+ENV CC_aarch64_linux_android=${NDK_BIN}/aarch64-linux-android${API}-clang
+ENV AR_aarch64_linux_android=${NDK_BIN}/llvm-ar
+ENV CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${NDK_BIN}/aarch64-linux-android${API}-clang
+
+WORKDIR /w

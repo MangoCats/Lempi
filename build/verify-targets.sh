@@ -15,6 +15,7 @@
 #   B  Linux aarch64           cross-compiled, executed under emulation
 #   C  Windows x86_64          run on the host
 #   D  real audio device       manual; a null sink cannot catch rate mismatches
+#   E  Android aarch64         lempi-core only, compiled not run `[GDE-HST-370]`
 #
 # Usage:  sh build/verify-targets.sh            everything above
 #         sh build/verify-targets.sh --quick    the two checks a commit hook runs
@@ -240,6 +241,29 @@ run_suite "C" sh -c "cd '$ROOT/player' && env -u CC cargo test --release" \
     || fail=$((fail+1))
 
 # The same boundary check the commit hook runs, defined once above.
+echo "== E: Android aarch64 (lempi-core only, compile check) =="
+# `[GDE-HST-030]`, taken now for `lempi-core` alone by decision `[GDE-HST-370]`:
+# the crate built to be portable, checked where it would be ported, so that a
+# `cfg(target_os = "linux")` path compiling differently on Android
+# `[GDE-HST-025]` is found here rather than on the first day it matters.
+#
+# **A check, not a suite**: nothing runs on a phone yet. So `run_step`, not
+# `run_suite` -- a `cargo check` prints no `test result:` line, and
+# `run_suite` would correctly report that as a suite that did not run.
+#
+# Full run only, never `--quick`: the image is 5.48 GB (measured 2026-09-24,
+# 174 s to build the first time), which is a price for this script and CI, not
+# for every commit. Proven to fail: a `compile_error!` under
+# `cfg(target_os = "android")` in core passed the Windows check and failed
+# this one, which is the whole of its reason to exist.
+docker build -q -t lempi-android -f "$ROOT/build/Dockerfile.android" "$ROOT" >/dev/null \
+    || { echo "  the Android image would not build; stage E did not run"; fail=$((fail+1)); }
+run_step "E" env MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w lempi-android \
+    cargo check --manifest-path player/Cargo.toml -p lempi-core \
+    --target aarch64-linux-android --all-targets --locked \
+    --target-dir player/target/gate-android \
+    || fail=$((fail+1))
+
 echo
 core_boundary || fail=$((fail+1))
 
