@@ -106,14 +106,14 @@ impl SinkObserver for Wpctl {
             Err(e) => {
                 // No `wpctl`: a node that goes straight to ALSA, like `bose`,
                 // or one whose PipeWire is not installed.
-                return SinkStatus { note: Some(format!("wpctl could not run: {e}")), ..base }.judge();
+                return SinkStatus { note: Some(format!("could not run: {e}")), ..base }.judge();
             }
         };
         if !out.status.success() {
             // Ran, but could not reach a PipeWire -- no session bus, say. The
             // output is not an answer about any sink.
             return SinkStatus {
-                note: Some(format!("wpctl status exited {}", out.status)),
+                note: Some(format!("`status` exited {}", out.status)),
                 ..base
             }
             .judge();

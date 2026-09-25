@@ -39,9 +39,17 @@ die() { echo "verify-playing: $*" >&2; exit 1; }
 # speaker existed, and the player then "played" into nothing.
 SINK=$(ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" \
     "curl -s -m 4 http://127.0.0.1:$PORT/audio/sink" 2>/dev/null)
+# Read `audible` where the player sends it [GDE-HST-350]: "unknown" is a host
+# that cannot observe its sink (no `wpctl` -- bose, lp3-wifi), and saying "not
+# a dummy" there claimed an observation nobody made. Layer 2 below is then
+# the only evidence, and this line says so.
 case "$SINK" in
     "")            say "no answer from /audio/sink -- the player's web interface is not up" ;;
     *'"dummy":true'*) die "$HOST is feeding a DUMMY sink; frames are consumed and nothing is audible" ;;
+    *'"audible":"unknown"'*)
+                   say "sink CANNOT be observed on this host -- only layer 2 below is evidence ($SINK)" ;;
+    *'"audible":"yes"'*)
+                   say "sink is real and linked ($SINK)" ;;
     *)             say "sink is not a dummy ($SINK)" ;;
 esac
 
