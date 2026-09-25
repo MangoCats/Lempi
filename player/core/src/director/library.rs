@@ -271,7 +271,7 @@ impl Director {
                     works_of.entry(mbid).or_default().push(work);
                 }
             }
-            Err(e) => eprintln!(
+            Err(e) => tracing::warn!(
                 "director: no recording_works ({e}); same-song blocking is \
                  limited to the recording tier [GDE-WRK-035]"
             ),

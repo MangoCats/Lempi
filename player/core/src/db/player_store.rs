@@ -1816,7 +1816,7 @@ impl PlayerStore {
             }
         }
         if moved > 0 {
-            println!("settings: {moved} carried over from the old columns");
+            tracing::info!("settings: {moved} carried over from the old columns");
         }
     }
     pub fn save(&self, passage_id: Option<i64>, position_ms: u64, playing: bool)

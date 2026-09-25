@@ -31,6 +31,13 @@
 //!   elsewhere. Android and iOS are both Unix with a working `tm_gmtoff`, so
 //!   this one is already portable; it is named here only because it is the
 //!   other place this crate leaves its own process.
+//!
+//! **This crate writes no line itself** `[GDE-HST-160]`. It emits through
+//! `tracing`, and whoever hosts it -- a binary, or one day a phone -- decides
+//! where the line goes; a `println!` here would be the library choosing a
+//! phone's output for it, into a stdout Android discards. The lock below is
+//! crate-wide and turned by the gate's `cargo clippy`.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 
 /// The tuning constants selection is decided by, re-exported at the root
 /// because that is where the forty-odd `crate::SKIP_SUPPRESS_H` references in
