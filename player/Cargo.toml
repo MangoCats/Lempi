@@ -70,8 +70,18 @@ default-members = [".", "core"]
 # in the graph already via axum's own `ws` feature, so this names crates that
 # are compiled either way. Measured on the appliance build, it is about 400 kB
 # of binary.
-default = ["echo-client"]
+default = ["echo-client", "appliance"]
 mpd = []
+# `appliance` `[GDE-HST-050]`: the controls that reach past the player -- the
+# restart and shut-down routes (`sudo systemctl`) and everything behind `sudo
+# lempi-btctl` (Wi-Fi, speakers, LED, radios). Default, for the reason
+# `echo-client` above now is: every appliance is deployed with default
+# features, and a control compiled out of one of them is a button that
+# silently stops working. A desktop or phone build says
+# `--no-default-features --features echo-client` and carries no `sudo` at
+# all. Which of these a host can actually use is measured at start either way
+# (`web::capabilities`), and the snapshot says so `[GDE-HST-360]`.
+appliance = []
 # `dep:reqwest` -- an appliance build never resolves, fetches or compiles the
 # HTTP client at all, not just leaves it unused `[SPEC-SUI-190]`,
 # `[SPEC-SUI-196]`.

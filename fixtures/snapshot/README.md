@@ -29,6 +29,11 @@ more (`echo_node`, `backend`, `can_seek`, …), and nothing here derives that
 list from the skins themselves. What it does guarantee is that the snapshots
 every skin is proven against describe a server that exists.
 
+`capabilities.*` `[GDE-HST-360]` are recorded under the skins because the
+lempi skin hides a host control whose capability is `false`. The test
+snapshots carry them all `true`, the appliance case; `verify-skins.js`
+checks the `false` case, and a snapshot without the field, separately.
+
 `why` is recorded by presence only: it is a free-form explanation the server
 builds elsewhere, and its insides are `[REQ-VIS-100]`'s, not this contract's.
 

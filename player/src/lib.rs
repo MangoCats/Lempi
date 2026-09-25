@@ -108,6 +108,8 @@ pub mod path;
 pub mod playback;
 /// One shape for what a folder-writing run did `[PI3-API-030]`.
 pub mod report;
+/// `sudo lempi-btctl`, which only an appliance build carries `[GDE-HST-050]`.
+#[cfg(feature = "appliance")]
 pub mod bluetooth;
 pub mod sink;
 pub mod session;

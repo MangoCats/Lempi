@@ -12,7 +12,9 @@
 
 use std::process::Command;
 
-const HELPER: &str = "/usr/local/bin/lempi-btctl";
+/// Public so the start-up capability check asks about the same path this
+/// module runs `[GDE-HST-360]`.
+pub const HELPER: &str = "/usr/local/bin/lempi-btctl";
 
 /// The verbs the web surface may invoke. An enum rather than a string passed
 /// through, so an unknown verb cannot reach the helper at all.

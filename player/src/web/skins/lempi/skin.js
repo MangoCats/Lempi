@@ -215,6 +215,22 @@
   // question "which build am I looking at" is asked most often when something
   // expected is missing, which is exactly when the answer is hardest to get by
   // any other means.
+  // What this host offers beyond playing `[GDE-HST-360]`, measured by the
+  // server at start. A control the host cannot honour is hidden rather than
+  // drawn to fail -- bose and lp3-wifi have no lempi-btctl, and their Wi-Fi,
+  // speaker, LED and radio rows had never worked. Hidden only on an explicit
+  // `false`: a snapshot without the field says nothing, and nothing is not
+  // "absent".
+  let caps = {};
+  const CAP_SECTIONS = {
+    restart: 'restart', power_off: 'power', wifi: 'wifi-row',
+    bluetooth: 'speakers', led: 'led-row', radios: 'radios',
+  };
+  function renderCapabilities(c) {
+    caps = c || {};
+    for (const [cap, id] of Object.entries(CAP_SECTIONS)) $(id).hidden = caps[cap] === false;
+  }
+
   function renderBuild(s) {
     if (s.build) $('buildtext').textContent = s.build;
     if (s.branch) $('branchtext').textContent = s.branch;
@@ -490,6 +506,7 @@
     renderBackend(s);
     renderCue(s);
     renderBuild(s);
+    renderCapabilities(s.capabilities);
     renderPick(s);
     $('link').textContent =
       Lempi.status === 'connected' ? 'Connected' : 'Reconnecting…';
@@ -1065,7 +1082,14 @@
   // Populated when the panel is opened rather than at load: it costs a
   // subprocess on the appliance, and most sessions never open the settings.
   gear.addEventListener('click', () => {
-    if (!$('panel-settings').hidden) { radios(); refresh(); led(); wifiKnown(); }
+    // Not asked where the host cannot answer: each would only come back as an
+    // error written into a row that is hidden anyway.
+    if (!$('panel-settings').hidden) {
+      if (caps.radios !== false) radios();
+      if (caps.bluetooth !== false) refresh();
+      if (caps.led !== false) led();
+      if (caps.wifi !== false) wifiKnown();
+    }
   });
 
   // --------------------------------------------------------------- history

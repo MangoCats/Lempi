@@ -49,6 +49,11 @@ const SPARSE = {
   skip: { fade_ms: 0, lead_ms: 500, fade_max_ms: 10000, lead_min_ms: 100, lead_max_ms: 2000,
           resume_save_ms: 5000, resume_save_min_ms: 1000, resume_save_max_ms: 300000 },
   underrun_samples: 0, why: null, dev_mode: false,
+  // Every host control offered -- the appliance case, so every check below
+  // that drives one still finds it. The absent case is its own check
+  // `[GDE-HST-360]`.
+  capabilities: { restart: true, power_off: true, wifi: true, bluetooth: true,
+                  led: true, radios: true },
 };
 
 // A snapshot carrying a full Program Director explanation -- the richest
@@ -535,6 +540,26 @@ async function run(skin) {
     // would have passed.
     check(window.document.getElementById('qpick').hidden,
           'unpicking the queued row must hide the controls again');
+  }
+
+  // A host control the host cannot honour is hidden, not drawn to fail
+  // `[GDE-HST-360]` -- and only on an explicit false, so a snapshot that does
+  // not carry `capabilities` at all hides nothing.
+  const capRows = { restart: 'restart', power_off: 'power', wifi: 'wifi-row',
+                    bluetooth: 'speakers', led: 'led-row', radios: 'radios' };
+  if (window.document.getElementById('power')) {
+    const row = id => window.document.getElementById(id);
+    const none = Object.fromEntries(Object.keys(capRows).map(k => [k, false]));
+    sock.onmessage({ data: JSON.stringify({ ...RICH, capabilities: none }) });
+    for (const [cap, id] of Object.entries(capRows))
+      check(row(id) && row(id).hidden, `#${id} must be hidden when capabilities.${cap} is false`);
+    const { capabilities, ...older } = RICH;
+    sock.onmessage({ data: JSON.stringify(older) });
+    for (const [cap, id] of Object.entries(capRows))
+      check(row(id) && !row(id).hidden, `#${id} must show when the snapshot says nothing of ${cap}`);
+    sock.onmessage({ data: JSON.stringify(RICH) });
+    for (const [cap, id] of Object.entries(capRows))
+      check(row(id) && !row(id).hidden, `#${id} must show when capabilities.${cap} is true`);
   }
 
   // Development mode must be visible, not remembered `[PI-SET-016]`: a

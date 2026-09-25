@@ -31,8 +31,10 @@ use crate::engine::{EngineHandle, PlayerState};
 use crate::output::Volume;
 use crate::session::{Explanations, SharedControls};
 
+#[cfg(feature = "appliance")]
 mod bluetooth;
 mod browse;
+pub mod capabilities;
 pub mod contract;
 mod control;
 mod edit;
@@ -46,8 +48,10 @@ mod vipunen;
 mod segment;
 mod settings;
 mod skins;
+#[cfg(feature = "appliance")]
 mod wifi;
 
+#[cfg(feature = "appliance")]
 use bluetooth::*;
 use browse::*;
 use control::*;
@@ -66,6 +70,7 @@ use vipunen::*;
 use segment::*;
 use settings::*;
 use skins::*;
+#[cfg(feature = "appliance")]
 use wifi::*;
 
 /// What the server needs to answer a request: the control surface, and why the
@@ -85,6 +90,9 @@ pub struct Ui {
     pub library: std::path::PathBuf,
     pub why: Explanations,
     pub controls: SharedControls,
+    /// What this host offers beyond playing, measured once at start
+    /// `[GDE-HST-360]`.
+    pub capabilities: capabilities::Capabilities,
 }
 
 /// How often a connected browser is sent a snapshot. Fast enough that the
@@ -282,6 +290,9 @@ pub struct Snapshot {
     /// running. Always false off the appliance -- the setting belongs to the
     /// Pi's privileged helper, and the player only reports what it is told.
     pub dev_mode: bool,
+    /// What this host offers beyond playing `[GDE-HST-360]`. A skin hides a
+    /// control whose capability is `false`.
+    pub capabilities: capabilities::Capabilities,
     pub underrun_samples: u64,
     /// What the interface shows: the count since the baseline, and when that
     /// baseline was taken `[REQ-VIS-230]`.
@@ -394,6 +405,8 @@ impl From<&PlayerState> for Snapshot {
             lyrics_cache: s.lyrics_cache,
             lyrics_sidecar: s.lyrics_sidecar,
             dev_mode: s.dev_mode,
+            // Host, not engine: filled in from `Ui` where the snapshot is sent.
+            capabilities: Default::default(),
             underrun_samples: s.underrun_samples,
             underruns_since_reset: s.underruns_since_reset,
             underruns_since: s.underruns_since,
@@ -461,23 +474,10 @@ pub fn router(ui: Ui) -> Router {
         .route("/vipunen/available", get(vipunen_available))
         .route("/vipunen/ensure", post(vipunen_ensure));
 
-    router
+    appliance_routes(router)
         .route("/queue/:passages/:action", post(queue_passage))
         .route("/ws", get(ws_upgrade))
         .route("/audio/sink", get(audio_sink))
-        .route("/audio/speakers", get(speakers))
-        .route("/audio/speakers/:verb", post(speaker_verb))
-        .route("/audio/speakers/:verb/:address", post(speaker_verb_on))
-        .route("/led", get(led_state))
-        .route("/led/:state", post(set_led))
-        .route("/wifi/scan", get(scan))
-        .route("/wifi/known", get(known))
-        .route("/wifi/connect", post(connect))
-        .route("/wifi/confirm/:change_id", post(confirm))
-        .route("/wifi/forget/:name", post(forget))
-        .route("/wifi/autoconnect/:name/:state", post(autoconnect))
-        .route("/wifi/ap/start", post(ap_start))
-        .route("/wifi/ap/stop", post(ap_stop))
         .route("/command/:name", post(command))
         .route("/volume/:db", post(set_volume))
         .route("/seek/:ms", post(seek_to))
@@ -501,11 +501,38 @@ pub fn router(ui: Ui) -> Router {
         .route("/covers/:on", post(set_covers))
         .route("/lyricscache/:on", post(set_lyrics_cache))
         .route("/lyricssidecar/:on", post(set_lyrics_sidecar))
+        .with_state(ui)
+}
+
+/// The routes that reach past the player -- `sudo systemctl` and `sudo
+/// lempi-btctl` `[GDE-HST-050]`. Only an appliance build has them; a host
+/// that has them compiled in but cannot use them says so in the snapshot's
+/// `capabilities`, and the skin hides the controls `[GDE-HST-360]`.
+#[cfg(feature = "appliance")]
+fn appliance_routes(router: Router<Ui>) -> Router<Ui> {
+    router
+        .route("/audio/speakers", get(speakers))
+        .route("/audio/speakers/:verb", post(speaker_verb))
+        .route("/audio/speakers/:verb/:address", post(speaker_verb_on))
+        .route("/led", get(led_state))
+        .route("/led/:state", post(set_led))
+        .route("/wifi/scan", get(scan))
+        .route("/wifi/known", get(known))
+        .route("/wifi/connect", post(connect))
+        .route("/wifi/confirm/:change_id", post(confirm))
+        .route("/wifi/forget/:name", post(forget))
+        .route("/wifi/autoconnect/:name/:state", post(autoconnect))
+        .route("/wifi/ap/start", post(ap_start))
+        .route("/wifi/ap/stop", post(ap_stop))
         .route("/audio/radios", get(radios))
+        .route("/audio/radio/:kind/:state", post(set_radio))
         .route("/power/off", post(power_off))
         .route("/power/restart", post(restart_player))
-        .route("/audio/radio/:kind/:state", post(set_radio))
-        .with_state(ui)
+}
+
+#[cfg(not(feature = "appliance"))]
+fn appliance_routes(router: Router<Ui>) -> Router<Ui> {
+    router
 }
 
 async fn ws_upgrade(State(ui): State<Ui>, ws: WebSocketUpgrade) -> impl IntoResponse {
@@ -602,6 +629,7 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
         sent_at = Some(now);
         sent_queue = Some((queue, state.mixing_ahead));
         let mut snap = Snapshot::from(&state);
+        snap.capabilities = ui.capabilities;
         explain(&ui, &mut snap, &state);
         if let Ok(c) = ui.controls.lock() {
             snap.program = c.active.clone();
@@ -1278,6 +1306,47 @@ mod tests {
         assert!(unserved.is_empty(), "{}", unserved.join("\n"));
         // A scan that read nothing would otherwise pass by finding no fault.
         assert!(checked > 30, "only {checked} fetch targets found; the scan is not reading");
+    }
+
+    /// A build without `appliance` serves no host control at all
+    /// `[GDE-HST-050]` -- checked against the running router, since the route
+    /// scan above reads the source, where the gated routes are still written.
+    /// Only compiled without the feature, so no request here can reach a real
+    /// `sudo`.
+    #[cfg(not(feature = "appliance"))]
+    #[tokio::test]
+    async fn without_the_appliance_feature_no_host_control_is_served() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (_e, h) = crate::engine::Engine::new(crate::path::PathHandle::silent(), 1);
+        let ui = Ui {
+            handle: Arc::new(h),
+            db: ":memory:".into(),
+            library: ":memory:".into(),
+            why: Default::default(),
+            controls: Default::default(),
+            capabilities: Default::default(),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router(ui)).await });
+        let status = |method: &'static str, path: &'static str| async move {
+            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let req = format!("{method} {path} HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            s.write_all(req.as_bytes()).await.unwrap();
+            let mut buf = Vec::new();
+            s.read_to_end(&mut buf).await.unwrap();
+            String::from_utf8_lossy(&buf).lines().next().unwrap_or("").to_string()
+        };
+        for (m, p) in [
+            ("POST", "/power/off"), ("POST", "/power/restart"), ("GET", "/wifi/scan"),
+            ("GET", "/led"), ("GET", "/audio/speakers"), ("GET", "/audio/radios"),
+        ] {
+            let line = status(m, p).await;
+            assert!(line.contains(" 404 "), "{m} {p} answered {line:?}");
+        }
+        // And the server is up, so the 404s above are not a dead socket.
+        let line = status("GET", "/audio/sink").await;
+        assert!(line.contains(" 200 "), "GET /audio/sink answered {line:?}");
     }
 
     /// **A bound the engine enforces is a bound the control must be told.**

@@ -231,12 +231,17 @@ impl Player {
         }
 
         if let Some(port) = cfg.web_port {
+            // Measured once, here, off the engine's thread, and stated
+            // `[GDE-HST-360]`: which host controls the page will offer.
+            let (capabilities, why_not) = crate::web::capabilities::Capabilities::detect();
+            tracing::info!("{}", capabilities.describe(&why_not));
             let ui = crate::web::Ui {
                 handle: handle.clone(),
                 why,
                 controls,
                 db: cfg.listener.clone(),
                 library: cfg.library.clone(),
+                capabilities,
             };
             let app = crate::web::router(ui);
             let addr = SocketAddr::from(([0, 0, 0, 0], port));

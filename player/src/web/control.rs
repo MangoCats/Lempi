@@ -3,10 +3,13 @@
 //! switch, program override) that do not fit any other topic here.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+// Only the power routes use these, and only an appliance build has them.
+#[cfg(feature = "appliance")]
 use std::time::Duration;
 
 use axum::extract::State;
 use axum::http::StatusCode;
+#[cfg(feature = "appliance")]
 use axum::response::{IntoResponse, Response};
 
 use crate::engine::{Command, Placement};
@@ -258,6 +261,7 @@ pub(super) async fn audio_sink() -> axum::Json<crate::sink::SinkStatus> {
 /// **202, not 204.** The service is about to be stopped by the thing it is
 /// asking, so this reply cannot honestly claim the restart finished
 /// `[PI3-API-030]`.
+#[cfg(feature = "appliance")]
 pub(super) async fn restart_player(State(ui): State<Ui>) -> Response {
     ui.handle.send(Command::Persist);
     tokio::time::sleep(Duration::from_millis(400)).await;
@@ -300,6 +304,7 @@ pub(super) async fn restart_player(State(ui): State<Ui>) -> Response {
 /// 3. **Answer 202, not 204.** The request is accepted; whether the machine
 ///    completes it is not something this reply can honestly claim, since the
 ///    process making it is about to be stopped.
+#[cfg(feature = "appliance")]
 pub(super) async fn power_off(State(ui): State<Ui>) -> Response {
     ui.handle.send(Command::Persist);
     // Long enough for the engine to take the command off the channel and write

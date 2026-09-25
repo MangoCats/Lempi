@@ -62,6 +62,15 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --manifest-path player/Cargo.toml --workspace --all-targets --all-features --locked
 
+      # The build a desktop or a phone would make: no `appliance`, so no
+      # `sudo`, no power or Wi-Fi routes `[GDE-HST-050]`. `--all-features`
+      # above can never see it -- the feature it removes is always on there --
+      # and one test only exists here: that the router serves none of those
+      # routes. Library tests only: the run above already covers the rest,
+      # and the difference the feature makes is all in the library.
+      - name: cargo test, without the appliance feature
+        run: cargo test --manifest-path player/Cargo.toml --lib --no-default-features --features echo-client --locked
+
   executable-bits:
     name: every script with a shebang is executable
     runs-on: ubuntu-latest
