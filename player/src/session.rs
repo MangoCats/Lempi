@@ -4,6 +4,7 @@
 //! library open, the resume point recovered, and the queue kept full. Written
 //! once here so `station` and `lempi` cannot drift apart on what "start
 //! playing" means — they differ only in whether a browser is watching.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
@@ -310,7 +311,7 @@ impl Session {
         // A resume point that cannot be opened is a first run, not a failure:
         // playback must never be blocked by the loss of a convenience.
         let store = PlayerStore::open_split(db, library)
-            .map_err(|e| eprintln!("resume state unavailable ({e}); continuing without it"))
+            .map_err(|e| tracing::warn!("resume state unavailable ({e}); continuing without it"))
             .ok();
         let after_store = started.elapsed();
         let saved = store.as_ref().and_then(|s| s.load().ok()).flatten();
@@ -331,7 +332,7 @@ impl Session {
         // Cumulative marks, differenced here, so each line is the cost of one
         // step rather than a running total the reader has to subtract.
         let after_utc = started.elapsed();
-        eprintln!(
+        tracing::info!(
             "session open: library {}ms, store {}ms, resume-load {}ms, utc-sync {}ms (total {}ms)",
             after_lib.as_millis(),
             (after_store - after_lib).as_millis(),
@@ -466,7 +467,7 @@ impl Session {
                 // ten seconds of a Pi Zero 2W and left no trace at all, which
                 // is why the stutters it caused were attributed to the radio
                 // for most of an evening `[PI3-FOUND-220]`.
-                eprintln!("director rebuild finished in {}ms", began.elapsed().as_millis());
+                tracing::info!("director rebuild finished in {}ms", began.elapsed().as_millis());
                 let _ = tx.send(built);
             }) {
             Ok(_) => {
@@ -582,12 +583,12 @@ impl Session {
             match self.lib.passage(id) {
                 Ok(mut e) => {
                     Self::describe(&self.lib, &mut e);
-                    println!("resuming passage {id} at {:.1}s", self.resume_ms as f64 / 1000.0);
+                    tracing::info!("resuming passage {id} at {:.1}s", self.resume_ms as f64 / 1000.0);
                     engine.resume_at(self.resume_ms);
                     engine.enqueue(e);
                 }
                 // The library was rebuilt and the passage renumbered away.
-                Err(_) => eprintln!("saved passage {id} is no longer in the library"),
+                Err(_) => tracing::warn!("saved passage {id} is no longer in the library"),
             }
         }
         // The queue as it stood `[SPEC-DIR-225]`, and **before** the refill
@@ -619,7 +620,7 @@ impl Session {
                 // Renumbered away by a rescan `[SPEC-SC-095]`. One passage
                 // short is a gap the refill below closes; refusing the rest of
                 // the queue over it would not be.
-                Err(_) => eprintln!("queued passage {id} is no longer in the library"),
+                Err(_) => tracing::warn!("queued passage {id} is no longer in the library"),
             }
         }
         let suppress = engine.snapshot_suppress_h();
@@ -747,10 +748,10 @@ impl Session {
                     match serde_json::to_string(&decision.why) {
                         Ok(json) => {
                             if let Err(e) = store.record_decision(now, entry.passage_id, &json) {
-                                eprintln!("record decision: {e}");
+                                tracing::error!("record decision: {e}");
                             }
                         }
-                        Err(e) => eprintln!("encode decision: {e}"),
+                        Err(e) => tracing::error!("encode decision: {e}"),
                     }
                 }
                 // The reasoning, encoded before the log consumes it.
@@ -803,7 +804,7 @@ impl Session {
                     Self::describe(&self.lib, &mut e);
                     engine.enqueue(e);
                 }),
-                Err(e) => eprintln!("refill: {e}"),
+                Err(e) => tracing::error!("refill: {e}"),
             }
         }
         self.remember_queue(&*engine);
@@ -830,7 +831,7 @@ impl Session {
         }
         let Some(store) = &self.decisions else { return };
         if let Err(e) = store.save_queue(&ids) {
-            eprintln!("save queue: {e}");
+            tracing::error!("save queue: {e}");
             return;
         }
         self.saved_queue = ids;
