@@ -102,6 +102,9 @@ fn main() {
             std::thread::sleep(Duration::from_millis(5));
         }
     }
+    // The tick is over, so this thread may wait: let what it queued be
+    // written before the program goes on to exit `[GDE-HST-140]`.
+    lempi_player::logging::flush(std::time::Duration::from_millis(500));
     let under = handle.snapshot().underrun_samples;
     let audio_s = submitted as f64 / (rate as f64 * channels as f64);
     println!("\nsubmitted {audio_s:.1}s of audio in {:.1}s wall | underrun samples {under}",

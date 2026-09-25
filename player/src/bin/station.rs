@@ -108,6 +108,9 @@ fn main() {
             std::thread::sleep(Duration::from_millis(5));
         }
     }
+    // The tick is over, so this thread may wait: let what it queued be
+    // written before the program goes on to exit `[GDE-HST-140]`.
+    lempi_player::logging::flush(std::time::Duration::from_millis(500));
     let s = handle.snapshot();
     println!("\nfinished in {:.1}s | underrun samples: {}",
              started.elapsed().as_secs_f64(), s.underrun_samples);

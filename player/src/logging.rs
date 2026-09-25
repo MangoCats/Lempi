@@ -37,7 +37,7 @@
 use std::cell::Cell;
 use std::fmt::{self, Write as _};
 use std::io::Write as _;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -62,6 +62,8 @@ thread_local! {
 
 /// Lines dropped because a thread that may not block found the queue full.
 static DROPPED: AtomicU64 = AtomicU64::new(0);
+/// Lines queued and not yet written, for [`flush`] to wait on.
+static PENDING: AtomicUsize = AtomicUsize::new(0);
 static QUEUE: OnceLock<SyncSender<String>> = OnceLock::new();
 
 /// Mark the calling thread as one that may never wait on a write -- the
@@ -77,6 +79,27 @@ pub fn this_thread_must_not_block() {
 /// How many lines threads that may not block have dropped so far.
 pub fn dropped() -> u64 {
     DROPPED.load(Ordering::Relaxed)
+}
+
+/// End the calling thread's no-blocking stretch, and wait -- at most `limit`
+/// -- for what it queued to be written. Returns whether everything was.
+///
+/// **For the moment a tick loop ends and the process is about to.** A queued
+/// line is written by the `lempi-log` thread; a program that exits straight
+/// after its loop can outrun it, and the last lines -- often the ones that
+/// say why it stopped -- are the ones lost. `play` on a missing file wrote its
+/// `skipping` line three times in three, which is a race won, not a guarantee;
+/// this makes it one. Waiting here is allowed, because the tick is over.
+pub fn flush(limit: Duration) -> bool {
+    MUST_NOT_BLOCK.with(|c| c.set(false));
+    let until = std::time::Instant::now() + limit;
+    while PENDING.load(Ordering::Acquire) > 0 {
+        if std::time::Instant::now() >= until {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    true
 }
 
 /// Install this process's subscriber. The first call wins; later ones, and a
@@ -127,7 +150,7 @@ impl<S: Subscriber> Layer<S> for Lines {
         let line = format_line(event, self.journal, &self.own);
         if MUST_NOT_BLOCK.with(Cell::get) {
             if let Some(q) = QUEUE.get() {
-                offer(q, line, &DROPPED);
+                offer(q, line, &DROPPED, &PENDING);
                 return;
             }
         }
@@ -136,8 +159,13 @@ impl<S: Subscriber> Layer<S> for Lines {
 }
 
 /// Queue a line without waiting; if the queue is full or gone, count it.
-fn offer(q: &SyncSender<String>, line: String, dropped: &AtomicU64) {
+///
+/// `pending` is raised before the send, so the writer can never lower it
+/// past zero by writing a line this has not yet counted.
+fn offer(q: &SyncSender<String>, line: String, dropped: &AtomicU64, pending: &AtomicUsize) {
+    pending.fetch_add(1, Ordering::AcqRel);
     if q.try_send(line).is_err() {
+        pending.fetch_sub(1, Ordering::AcqRel);
         dropped.fetch_add(1, Ordering::Relaxed);
     }
 }
@@ -175,6 +203,8 @@ fn drain(rx: Receiver<String>, journal: bool) {
             }
             if let Ok(line) = &next {
                 let _ = out.write_all(line.as_bytes());
+                let _ = out.flush();
+                PENDING.fetch_sub(1, Ordering::AcqRel);
             }
         }
         if let Err(RecvTimeoutError::Disconnected) = next {
@@ -355,10 +385,13 @@ mod tests {
     fn a_full_queue_drops_and_counts_rather_than_waits() {
         let (tx, _rx) = sync_channel::<String>(2);
         let dropped = AtomicU64::new(0);
+        let pending = AtomicUsize::new(0);
         for i in 0..3 {
-            offer(&tx, format!("line {i}\n"), &dropped);
+            offer(&tx, format!("line {i}\n"), &dropped, &pending);
         }
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(pending.load(Ordering::Relaxed), 2,
+                   "a dropped line is not pending -- flush must not wait for it");
     }
 
     #[test]
