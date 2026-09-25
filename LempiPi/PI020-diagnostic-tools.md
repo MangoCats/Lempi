@@ -179,26 +179,23 @@ forever.
     sudo systemctl disable --now lempi-vitals   # off
     cat /var/log/lempi-vitals.log
 
-**Persistent journal — off, restored to `Storage=volatile`.** The appliance
-ships volatile deliberately: it is power-cut on every shutdown
-`[PI3-FOUND-120]` and SD writes are not free. But volatile means a power
-cycle destroys the evidence of what just went wrong, which is exactly the
-class of fault this machine has. Three power cycles were investigated blind
-before it was turned on, and it immediately paid for itself. Turn it on for
-any mystery that survives a reboot, and off again afterwards:
+**`[PI3-FOUND-770]` Persistent journal — on, and now written down.** This
+section used to say the journal had been restored to `Storage=volatile` after
+a spell of investigation. It had not: `lempi02w` has run `Storage=persistent`,
+`SystemMaxUse=64M`, `MaxRetentionSec=1week` since 2026-09-09, set by hand in
+`/etc/systemd/journald.conf` and written by no script. Captured 2026-09-25 as
+[`journald-lempi.conf`](journald-lempi.conf), which `setup-appliance.sh`
+installs as a drop-in, so a rebuilt card gets what this one runs; the hand
+edit in the main file is left in place, identical and now redundant.
 
-    sudo sed -i 's/^Storage=volatile/Storage=persistent/' /etc/systemd/journald.conf
-    sudo systemctl restart systemd-journald
-    # and to revert, the same substitution the other way round
+Why on, and not only for a mystery: the appliance is power-cut on every
+shutdown `[PI3-FOUND-120]`, and a volatile journal loses the evidence of what
+went wrong just before it — three power cycles were investigated blind before
+it was turned on, and it paid for itself at once. SD writes are the cost, which
+the 64 MB bound caps. It also captures the *user* journal, where WirePlumber
+logs live — a blind spot named in `[PI3-FOUND-030]`'s original investigation.
 
-It also captures the *user* journal, where WirePlumber logs live — a blind
-spot named in `[PI3-FOUND-030]`'s original investigation and not closed until
-now.
-
-*Measured 2026-09-25, and not what the paragraph above says:* `lempi02w` runs
-`Storage=persistent`, `SystemMaxUse=64M`, `MaxRetentionSec=1week`, set by hand
-in `/etc/systemd/journald.conf` itself — no script in this repository writes
-those lines. Left as found. So is its `/usr/local/bin/lempi-btwatch`
+*Also found on 2026-09-25, and left as found:* `lempi02w`'s `/usr/local/bin/lempi-btwatch`
 (2026-09-21 08:37), which predates the repository's copy by one change: the
 `LEMPI_HCICONFIG` test override `[PI3-AIM-100]` and two comment renames. With
 the variable unset the two behave the same.

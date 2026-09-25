@@ -604,6 +604,7 @@ for pair in \
     "mpd-polite.conf:/etc/systemd/system/mpd.service.d/10-lempi-polite.conf" \
     "lempi-quiet-tick.conf:/etc/systemd/system/lempi-speaker.service.d/10-lempi-quiet.conf" \
     "lempi-quiet-tick.conf:/etc/systemd/system/lempi-btwatch.service.d/10-lempi-quiet.conf" \
+    "journald-lempi.conf:/etc/systemd/journald.conf.d/10-lempi.conf" \
     "sd-tuning.conf:/etc/tmpfiles.d/lempi-readahead.conf" \
     "pipewire-quantum.conf:/etc/pipewire/pipewire.conf.d/10-lempi-quantum.conf" ; do
     src="$HERE/${pair%%:*}"; dst="${pair#*:}"
@@ -612,6 +613,9 @@ for pair in \
     if ! cmp -s "$src" "$dst"; then
         install -m644 "$src" "$dst" && did "installed $(basename "$dst")"
         NEED_RELOAD=1
+        # journald reads its config only when it starts; daemon-reload does
+        # not reach it.
+        case "$dst" in */journald.conf.d/*) RESTART_JOURNALD=1 ;; esac
     else
         ok "$(basename "$dst") current"
     fi
@@ -622,6 +626,10 @@ done
 systemd-tmpfiles --create /etc/tmpfiles.d/lempi-readahead.conf >/dev/null 2>&1 || true
 
 [ "${NEED_RELOAD:-0}" = 1 ] && systemctl daemon-reload
+# Also what creates /var/log/journal on a fresh card, for Storage=persistent.
+if [ "${RESTART_JOURNALD:-0}" = 1 ]; then
+    systemctl restart systemd-journald && did "restarted journald for its new config"
+fi
 if ! systemctl is-enabled --quiet lempi-speaker.timer 2>/dev/null; then
     systemctl enable --now lempi-speaker.timer >/dev/null 2>&1
     did "enabled lempi-speaker.timer"
