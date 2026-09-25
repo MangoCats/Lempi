@@ -17,9 +17,8 @@ Type=simple
 # Every option is named [GDE-CLI-020]. This line was the positional form
 # until 2026-09-20 -- `/var/lempi/listener.db` as argument zero -- and the
 # player still reads that, loudly, while the fleet migrates [GDE-CLI-040].
-# **The machine has not been changed**: the unit installed on bose is not
-# tracked here, so this file is the new line and a person must apply it
-# [GDE-CLI-080].
+# Applied to bose 2026-09-25 with build/install-config.sh, both overlay layers
+# [GDE-CLI-080]; a later edit here reaches the machine only the same way.
 #
 # --device hifiberry is load-bearing, found missing the first time this
 # actually ran: with no --device, lempi opened ALSA's first enumerated

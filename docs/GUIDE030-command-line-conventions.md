@@ -152,16 +152,18 @@ considered, and a mistyped `--prt` is refused rather than becoming a filename.
 
 ## 5. What a human must apply, per appliance
 
-**`[GDE-CLI-080]` Nothing here has been deployed.** These units live on the
-machines and are not in this repository; `build/deploy-appliance.sh` installs
-the binary and does not manage units. Until someone applies these lines, each
-node keeps working through §4's shim and says so in its journal every start.
+**`[GDE-CLI-080]` Applied only where ticked.** These units live on the
+machines; `build/deploy-appliance.sh` installs the binary and does not manage
+units. Until someone applies these lines, each node keeps working through §4's
+shim and says so in its journal every start. A tick means the line was read
+back off the machine — on an overlay node, off the durable layer — not that it
+was sent.
 
 | Host | Unit | Apply |
 |---|---|---|
-| `bose` | `/etc/systemd/system/lempi.service` — tracked here as [`BosePi/lempi-bose.service`](../BosePi/lempi-bose.service), already updated | ☐ |
-| `lempi02w` | base unit `/etc/systemd/system/lempi.service`, written by [`LempiPi/setup-appliance.sh`](../LempiPi/setup-appliance.sh), already updated | ☐ |
-| `lempi02w` | drop-in `/etc/systemd/system/lempi.service.d/mpd-guest.conf` — tracked as [`LempiPi/lempi-mpd-guest.conf`](../LempiPi/lempi-mpd-guest.conf), already updated | ☐ |
+| `bose` | `/etc/systemd/system/lempi.service` — tracked here as [`BosePi/lempi-bose.service`](../BosePi/lempi-bose.service) | ☑ 2026-09-25, both layers, no shim line since |
+| `lempi02w` | base unit `/etc/systemd/system/lempi.service`, written by [`LempiPi/setup-appliance.sh`](../LempiPi/setup-appliance.sh) | ☐ named, but reads `--listener /srv/library/lempi.db` (2026-09-25); the drop-in overrides it |
+| `lempi02w` | drop-in `/etc/systemd/system/lempi.service.d/mpd-guest.conf` — tracked as [`LempiPi/lempi-mpd-guest.conf`](../LempiPi/lempi-mpd-guest.conf) | ☑ read back 2026-09-25 |
 | `lp3-wifi` | `/etc/systemd/system/lempi.service` — tracked here as [`LempiPlay3/lempi.service`](../LempiPlay3/lempi.service) since 2026-09-21 `[LP3-REP-010]` | ☐ |
 
 **lempi02w reports two `ExecStart` lines because it has two.** The drop-in
