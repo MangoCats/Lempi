@@ -104,7 +104,7 @@ They interoperate only through the shared `lempi.db` file — no linked code, no
 | :--- | :--- | :--- |
 | **Raspberry Pi Zero 2W** | Dedicated 24/7 Radio Station Appliance | **First Priority** |
 | **Desktop PC (Win/Linux/macOS)** | Standard Computer Host / Player | **First Priority** |
-| **Mobile (Android / iOS)** | Direct Native Mobile Host | *Future / Post-V1 (No early influence)* |
+| **Mobile (Android / iOS)** | Direct Native Mobile Host | *Future / Post-V1 (No early influence)* — one deliberate exception: `lempi-core`, the crate already built to be portable, is compile-checked for Android now so it cannot decay unseen ([GUIDE033](docs/GUIDE033-the-player-without-an-appliance.md) `[GDE-HST-370]`) |
 
 ---
 

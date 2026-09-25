@@ -108,7 +108,10 @@ cpal = "0.18"
 md5 = "0.7"
 rusqlite = { version = "0.32", features = ["bundled"] }
 # Web UI. Default features only, and tokio limited to what the server needs --
-# on a 512 MB Pi Zero 2W every dependency is a memory decision [REQ-HW-140].
+# on a 512 MB Pi Zero 2W every dependency is a memory decision [REQ-HW-100].
+# (Cited as [REQ-HW-140] until 2026-09-24 -- that tag is "desktop hosts are
+# first-class targets"; the 150 MB budget is REQ-HW-100. GUIDE033 copied the
+# wrong one from here before review caught it.)
 axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 serde = { version = "1", features = ["derive"] }
