@@ -14,6 +14,7 @@
 //! **Not playing means nothing to add.** `shortfall` reports zero unless MPD is
 //! playing, so `[SPEC-MPD-120]`'s activation rule needs no special case in the
 //! session: the Director simply finds nothing wanted.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -343,11 +344,11 @@ impl MpdBackend {
     /// the transport failing counts, which is what `Mpd::broken` records.
     fn mark_lost(&mut self, what: &str, e: &str) {
         if !self.mpd.broken {
-            eprintln!("mpd {what}: {e}");
+            tracing::error!("mpd {what}: {e}");
             return;
         }
         if !self.lost {
-            eprintln!("mpd {what}: {e} -- connection lost, will retry");
+            tracing::warn!("mpd {what}: {e} -- connection lost, will retry");
             self.lost_since = Some(Instant::now());
         }
         self.lost = true;
@@ -379,10 +380,10 @@ impl MpdBackend {
             Err(_) => return false,
         };
         if let Err(e) = mpd.cmd("consume 1") {
-            eprintln!("mpd reconnect: consume 1: {e}");
+            tracing::error!("mpd reconnect: consume 1: {e}");
             return false;
         }
-        eprintln!("mpd reconnected at {} (protocol {})", self.addr, mpd.version);
+        tracing::info!("mpd reconnected at {} (protocol {})", self.addr, mpd.version);
         self.mpd = mpd;
         for (_, o) in std::mem::take(&mut self.ours) {
             self.dropped.push(o.passage_id);
@@ -500,7 +501,7 @@ impl MpdBackend {
         match self.stall {
             Some((at, since)) if at == position_ms => {
                 if since.elapsed() >= STALL_AFTER {
-                    eprintln!(
+                    tracing::warn!(
                         "mpd says playing at {position_ms} ms and has not moved for {:.1}s; \
                          restarting its output",
                         since.elapsed().as_secs_f32()
@@ -557,7 +558,7 @@ impl MpdBackend {
                 // play-frequency panel's "All" row, just not "User" or a
                 // program row.
                 if let Err(e) = s.record_play(o.passage_id, o.mbid.as_deref(), o.heard_ms, o.span_ms, None) {
-                    eprintln!("record play: {e}");
+                    tracing::error!("record play: {e}");
                 }
             }
         } else {
@@ -575,7 +576,7 @@ impl MpdBackend {
     ) {
         if let Some(s) = &self.store {
             if let Err(e) = s.record_rejection(kind, passage_id, mbid, heard_ms, span_ms) {
-                eprintln!("record {}: {e}", kind.as_str());
+                tracing::error!("record {}: {e}", kind.as_str());
             }
         }
     }
@@ -686,7 +687,7 @@ impl MpdBackend {
                     // rather than guessed at `[SPEC-MPD-060]`, and once rather
                     // than on every sample.
                     _ if !uri.is_empty() && self.unnameable.insert(uri.clone()) => {
-                        eprintln!(
+                        tracing::warn!(
                             "a queued song could not be named, so its play is not attributed: {}",
                             uri.rsplit('/').next().unwrap_or(&uri)
                         );
@@ -785,7 +786,7 @@ impl crate::switch::Publish for MpdBackend {
             let cmd =
                 format!("sticker set song {} {} {}", quote(&uri), quote(name), quote(value));
             if let Err(e) = self.mpd.cmd(&cmd) {
-                eprintln!("sticker {name}: {e}");
+                tracing::warn!("sticker {name}: {e}");
             }
         };
         set("lempi.why", p.why);
@@ -855,9 +856,9 @@ impl Playback for MpdBackend {
                         self.queue_len += 1;
                         return;
                     }
-                    eprintln!("addid returned no Id for cue track {uri}");
+                    tracing::warn!("addid returned no Id for cue track {uri}");
                 }
-                Err(e) => eprintln!("mpd addid {uri}: {e}"),
+                Err(e) => tracing::warn!("mpd addid {uri}: {e}"),
             }
             // A cue track that would not add is not a reason to give up on the
             // passage: the file underneath it still plays, just unnamed.
@@ -866,7 +867,7 @@ impl Playback for MpdBackend {
         let Some(uri) = self.uri_for(&entry) else {
             // Outside MPD's music directory, so MPD cannot name it. It never
             // played, and the Director must un-count it `[REQ-PD-112]`.
-            eprintln!("passage {} is not under MPD's music directory", entry.passage_id);
+            tracing::warn!("passage {} is not under MPD's music directory", entry.passage_id);
             self.dropped.push(entry.passage_id);
             return;
         };
