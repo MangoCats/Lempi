@@ -106,6 +106,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `CHT` / `ARC` / `PHS` / `FBD` / `DIS` / `OPN` — Charter, architecture decisions, phases, forbidden patterns, disposal register, open questions
 - `AND` — Phone port strategy: routes onto a phone, and what each costs
 - `IOS` — Phone port strategy, iOS-specific: store terms, audio stack, toolchain
+- `HST` — The player under a host that is not a Linux appliance: what it assumes, the structural changes that let a phone target be maintained beside the existing ones, and logging with `tracing`, see [GUIDE033](GUIDE033-the-player-without-an-appliance.md)
 - `CLD` — Hosted flavor service: what it would be, and whether it pays for itself
 - `EXT` — Driving other players with Lempi's selection, and where that stops
 - `BAK` — External backends: the measured cost of an MPD/OpenSubsonic adapter
@@ -144,6 +145,7 @@ grep -rn "SPEC-PD" docs/
 | `[GDE-DIS-*]` | Predecessor disposal register | [GUIDE001-lineage-and-lessons.md](GUIDE001-lineage-and-lessons.md#7-disposal-register) |
 | `[GDE-FEX-*]` | Feature extraction strategy (P0 critical path) — current strategy only; reverse-engineering and validation history split out per `[GOV-DOC-050]` | [GUIDE003-feature-extraction-strategy.md](GUIDE003-feature-extraction-strategy.md) |
 | `[GDE-AND-*]` | Phone ports (Android, iOS): fork vs ground-up, and the licence that decides it | [GUIDE004-phone-port-strategy.md](GUIDE004-phone-port-strategy.md) |
+| `[GDE-HST-*]` | What the player assumes about its host; groundwork for a phone target; logging with `tracing` | [GUIDE033-the-player-without-an-appliance.md](GUIDE033-the-player-without-an-appliance.md) |
 | `[GDE-CLD-*]` | Hosted flavor lookup instead of Vipunen on the device | [GUIDE005-flavor-service.md](GUIDE005-flavor-service.md) |
 | `[GDE-EXT-*]` | The Director driving other players; why streaming is closed | [GUIDE006-director-as-a-guest.md](GUIDE006-director-as-a-guest.md) |
 | `[GDE-BAK-*]` | Measured cost of an MPD / OpenSubsonic backend, and its containment | [GUIDE007-external-backends-investigation.md](GUIDE007-external-backends-investigation.md) |
