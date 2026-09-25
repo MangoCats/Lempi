@@ -83,6 +83,9 @@ pub mod echo;
 #[cfg(feature = "echo-client")]
 pub mod echo_client;
 pub mod engine;
+/// The player as a library: start it, command it, read it, stop it
+/// `[GDE-HST-040]`. What `lempi`'s `main` did, callable by any host.
+pub mod host;
 /// Where diagnostics go, and how they are written `[GDE-HST-070]`. The
 /// library emits through `tracing`; this is the one place a line is written.
 pub mod logging;
