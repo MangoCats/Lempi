@@ -1,6 +1,7 @@
 //! Playback control: volume, seek, queue actions, the WebSocket command
 //! verb, and the handful of process-level actions (power, restart, backend
 //! switch, program override) that do not fit any other topic here.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use std::time::Duration;
 
@@ -224,10 +225,10 @@ pub(super) async fn set_program(
     let _ = tokio::task::spawn_blocking(move || match crate::db::PlayerStore::open_split(&db, &library) {
         Ok(store) => {
             if let Err(e) = store.save_manual_program(new_value) {
-                eprintln!("save manual program: {e}");
+                tracing::error!("save manual program: {e}");
             }
         }
-        Err(e) => eprintln!("save manual program: {e}"),
+        Err(e) => tracing::error!("save manual program: {e}"),
     })
     .await;
     StatusCode::NO_CONTENT

@@ -1,5 +1,6 @@
 //! Bluetooth speaker discovery and pairing, reached from the audio-source
 //! panel `[PI3-AIM-020]`.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use std::time::Duration;
 
@@ -87,10 +88,10 @@ pub(super) async fn speaker_verb_on(
                 // change from a different path (or a bug) looks identical
                 // to this one, and there is nothing to tell them apart by
                 // `[PI3-LED-010]`'s own lesson.
-                Ok(()) => println!("speaker address set to {addr2} via web request"),
-                Err(e) => eprintln!("save speaker address: {e}"),
+                Ok(()) => tracing::info!("speaker address set to {addr2} via web request"),
+                Err(e) => tracing::error!("save speaker address: {e}"),
             },
-            Err(e) => eprintln!("save speaker address: {e}"),
+            Err(e) => tracing::error!("save speaker address: {e}"),
         })
         .await;
         ui.handle.send(Command::ReopenOutput);
@@ -172,7 +173,7 @@ pub(super) async fn set_led(
     // distinct from `lempi-led-boot`'s own (also now logged), so "who set
     // this" is a fact one `journalctl` away rather than a guess the next
     // time it looks surprising.
-    println!("led set to {mode} ({effective_pct}%) via web request");
+    tracing::info!("led set to {mode} ({effective_pct}%) via web request");
     // The choice is already durable at this point -- a hardware failure
     // from here down is real and worth reporting, but it must not read as
     // "your choice was not saved" `[PI3-LED-010]`.
