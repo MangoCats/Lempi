@@ -257,6 +257,16 @@ with the file as things stand. [`tools/payload.py`](../tools/payload.py) carries
 neither it nor `recording_relations`, so a move to bundle-only sync would need
 that gap closed first.
 
+*The accident did not reach the rest of the fleet.* On 2026-09-25 `bose` and
+`lp3-wifi` were found without either table: their catalogues predate stage 4,
+and the old builds never looked. The rows were copied from `lempi02w`'s
+catalogue by MBID — 6,598 works, 7,188 rows, 7,076 of the 7,110 recordings
+with a work present in theirs — and the Director's warning has not appeared
+since. On `bose` that write took the player down for 30 minutes
+`[BOS-RUN-090]`. A catalogue that is built with `load_works.py` as a standing
+step, and shipped by something that carries these tables, is what makes the
+next node not need this.
+
 ---
 
 ## 7. Open

@@ -202,7 +202,7 @@ the truth is more useful:
 
 | left on `ro` media | `mode=ro` — what the player uses | `immutable=1` |
 | :--- | :--- | :--- |
-| clean (no sidecars) | correct | correct |
+| clean (no sidecars) | ~~correct~~ **`unable to open database file`** — see below | correct |
 | dirty `-wal`, `-shm` present | **correct** — frames are read out of the `-wal` | **1 row of 2, silently stale** |
 | dirty `-wal`, `-shm` absent | `unable to open database file` | **silently stale** |
 
@@ -222,11 +222,27 @@ read-only. Recovery needs an attended window. That is a real difference from
 `lempi02w`, where the same file sits on a writable filesystem and the script
 heals it at the next boot.
 
-`attended-import.sh` `sync`s, which is not a checkpoint. Any future window
-that writes `library.db` should end with `PRAGMA wal_checkpoint(TRUNCATE)`,
-so B never closes over frames. Today `bose`'s `library.db-wal` is 0 bytes and
-nothing writes that file, so the state is sound — but `[BOS-RUN-078]` stops
-being optional the first time an import touches the catalogue.
+**Corrected 2026-09-25, by an outage.** The first row was wrong. A window
+added `works`/`recording_works` to the catalogue and ended, as this section
+then advised, with `PRAGMA wal_checkpoint(TRUNCATE)`. Closing the last
+connection after it deleted the `-wal` and `-shm` that had sat beside the
+file since 2026-09-11 — and on `ro` media a WAL file with **no** sidecars
+cannot be opened `mode=ro` either: SQLite needs them to exist or to be
+creatable. The player crash-looped on `attach library ... unable to open
+database file` for 30 minutes. The checkpoint advice was the cause, not the
+cure: in WAL mode a clean close is exactly what removes the files a later
+read-only open needs.
+
+**`[BOS-RUN-092]` The catalogue on `bose` is a rollback-journal file, not
+WAL.** Set 2026-09-25 in an attended window (`PRAGMA journal_mode=DELETE`,
+`quick_check` ok), and the player has opened it since with nothing beside it.
+Nothing on `bose` writes the catalogue except inside a window, so WAL's
+concurrency buys nothing there, and a rollback-journal file on `ro` media has
+no sidecar to lose — every row of the table above stops applying. A window
+that writes `library.db` must leave it in `DELETE` mode; a catalogue copied
+onto B (a fresh seed, `split_database.py`) must be switched before B closes.
+`lp3-wifi`'s and `lempi02w`'s catalogues stay WAL: their `/srv/library` is
+`rw`, so SQLite recreates the sidecars itself.
 
 **`[BOS-RUN-095]` Nothing in this project reads a catalogue with
 `immutable=1`, and nothing should start.** Checked: every use of that flag
@@ -244,10 +260,11 @@ answer: `[BOS-RUN-035]` alone would have produced a `bose` quietly
 manufacturing shadow tables on every boot, and the post-split check found
 none.
 
-**`[BOS-RUN-078]` `attended-import.sh` should checkpoint before closing B**
-`[BOS-RUN-090]`. Not built: nothing writes `library.db` today, and the one
-window that did leave it clean. It becomes real the first time an import
-touches the catalogue rather than only the audio.
+**`[BOS-RUN-078]` ~~`attended-import.sh` should checkpoint before closing
+B~~** — *withdrawn 2026-09-25*: a checkpoint is what broke the catalogue
+`[BOS-RUN-090]`. What replaces it is `[BOS-RUN-092]`'s rule. Not built into
+`attended-import.sh`: a check there that `library.db` is not WAL before B
+closes would enforce it, and is the open item now.
 
 **`[BOS-RUN-075]`** `[BOS-RUN-010]`'s glibc floor is undefended: nothing
 fails at build time if `build/Dockerfile.aarch64` is bumped past bookworm,
