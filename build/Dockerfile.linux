@@ -12,4 +12,9 @@ FROM rust:1.90-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libasound2-dev pkg-config ffmpeg \
     && rm -rf /var/lib/apt/lists/*
+# clippy, because the pre-commit gate runs `cargo clippy` rather than
+# `cargo check` -- the same compile, plus the lints. Without it a module's
+# `#![deny(clippy::print_stdout, clippy::print_stderr)]` `[GDE-HST-160]` would be
+# a lock no gate ever turned; this image did not have clippy until 2026-09-24.
+RUN rustup component add clippy
 WORKDIR /w

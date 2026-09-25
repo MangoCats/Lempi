@@ -223,8 +223,10 @@ commit, [`tools/check_exec_bits.py`](tools/check_exec_bits.py) refuses a staged
 script that opens with `#!` and is not executable — well under a second, and it
 reads the mode from git's index, so it works on Windows, where `[ -x ]` passes
 for everything. On a commit touching `player/` or `sql/`, it also runs
-`build/verify-targets.sh --quick` — a Linux `cargo check` and the `lempi-core`
-boundary; a docs-only commit skips that. Warm cost measured 2026-09-22:
+`build/verify-targets.sh --quick` — a Linux `cargo clippy` and the `lempi-core`
+boundary; a docs-only commit skips that. Clippy rather than `check` since
+2026-09-24: the same compile plus the lints, so a module's
+`#![deny(clippy::print_stdout)]` actually refuses a `println!`. Warm cost measured 2026-09-22:
 **22 s** on a no-op, 14 s after a core edit.
 
 **It exists because §6's rule has a sibling this file did not state: compiling

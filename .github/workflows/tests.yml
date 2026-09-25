@@ -53,6 +53,15 @@ jobs:
       - name: cargo test
         run: cargo test --manifest-path player/Cargo.toml --all-features --locked
 
+      # A module migrated to `tracing` locks itself with
+      # `#![deny(clippy::print_stdout, clippy::print_stderr)]` `[GDE-HST-160]`,
+      # and a lock only clippy turns is a lock nothing turned until this step.
+      # Deny-level lints fail; clippy's ordinary warnings do not -- measured
+      # 2026-09-24 on Linux with all features: 0 errors, and two existing
+      # warnings in `fbui` this step leaves where they are.
+      - name: cargo clippy
+        run: cargo clippy --manifest-path player/Cargo.toml --workspace --all-targets --all-features --locked
+
   executable-bits:
     name: every script with a shebang is executable
     runs-on: ubuntu-latest

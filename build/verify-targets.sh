@@ -113,6 +113,13 @@ run_step() {
 # minute. Measured 2026-09-22: 46 s cold, 22 s warm no-op, 14 s after a core
 # edit.
 #
+# **`cargo clippy`, not `cargo check`**, since 2026-09-24: the same compile,
+# plus the lints. It is what makes a module's
+# `#![deny(clippy::print_stdout, clippy::print_stderr)]` `[GDE-HST-160]` a lock
+# rather than a comment -- a deny-level lint fails here, while clippy's
+# ordinary warnings do not, so adopting it failed nothing that passed before
+# (Linux, default features: 0 errors, 0 warnings, measured).
+#
 # **Docker not running is a FAILURE, not a skip** `[GDE-DEP-060]`. The whole
 # lesson of the bug this exists for is that a check which quietly did not
 # happen reads exactly like one that passed.
@@ -130,10 +137,10 @@ linux_compiles() {
     }
     out=$(mktemp)
     if MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w lempi-linux \
-        cargo check --manifest-path player/Cargo.toml --all-targets \
+        cargo clippy --manifest-path player/Cargo.toml --workspace --all-targets \
         --target-dir player/target/gate-linux >"$out" 2>&1
     then
-        echo "  compiles for linux x86_64"
+        echo "  compiles, and passes clippy's deny-level lints, for linux x86_64"
         rm -f "$out"
         return 0
     fi
