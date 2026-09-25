@@ -177,6 +177,7 @@ grep -rn "SPEC-PD" docs/
 | `[PI-CHR-*]` | What the player costs on the appliance: CPU, memory, thermals, latency | [PI006-appliance-characterisation.md](../LempiPi/PI006-appliance-characterisation.md) |
 | `[PI-OWE-*]` | Defects the local split found that lempi02w already has, itemised so they land as one update | [PI025-what-the-local-split-owes-lempi02w.md](../LempiPi/PI025-what-the-local-split-owes-lempi02w.md) |
 | `[PI-PRE-*]` | The tools a boot depends on, reported with versions at every start, and the fallback that means a missing one is not a disarming | [PI026-startup-preflight.md](../LempiPi/PI026-startup-preflight.md) |
+| `[LP3-REP-*]`, `[LP3-SET-*]` | `lempiplay3`: the units that existed only on its card, and the script that now records the rest of its setup | [LP3001-the-node-and-its-units.md](../LempiPlay3/LP3001-the-node-and-its-units.md) |
 | `[TL-MIG-*]` | Migrating `teacherslounge` off the previous repository: what was copied, and the parity it was measured against | [TL001-migration-and-the-silent-output.md](../TeachersLounge/TL001-migration-and-the-silent-output.md) |
 | `[TL-OPS-*]` | Operating `teacherslounge`: the ssh launch that serves HTTP and produces no sound, and why | [TL001-migration-and-the-silent-output.md](../TeachersLounge/TL001-migration-and-the-silent-output.md) |
 | `[TL-OPN-*]` | What that migration has not settled | [TL001-migration-and-the-silent-output.md](../TeachersLounge/TL001-migration-and-the-silent-output.md) |

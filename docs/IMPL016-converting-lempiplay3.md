@@ -32,7 +32,7 @@ mounts p2 read-only beneath an overlay and `lempiplay3` mounts it read-write.
 
 It also already has two of the three things `[SD-RISK-150]` recommends for
 `lempi02w`: state on its own f2fs partition, and **zram** rather than an
-SD-backed swapfile. Its root carries 2.9 GB of lifetime writes against
+SD-backed swapfile *(configured, not measured: `free` showed no swap at all, 2026-09-25 `[LP3-SET-010]`)*. Its root carries 2.9 GB of lifetime writes against
 `lempi02w`'s 89 GB.
 
 ## 2. What must survive

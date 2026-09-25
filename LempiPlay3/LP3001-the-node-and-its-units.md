@@ -76,3 +76,30 @@ It has nothing to do on this machine — `/` is already `rw` when it runs, and
 makes `systemctl --failed` useless as a signal, which is worth more than the
 unit is. Masked on **both** overlay layers, since a mask written only to the
 live layer evaporates at the next reboot.
+
+---
+
+## 4. The rest of the node, as a script
+
+**`[LP3-SET-010]` [`setup-lp3.sh`](setup-lp3.sh) is the record of how this
+node is set up, beyond its two units.** Written 2026-09-25, at the
+maintainer's direction that the setup scripts, not the cards, hold how each
+node was built. Until then everything else here — the panel overlays, the
+partitions and binds, the overlay, the disabled services, the clock — lived
+only on the card and in [IMPL016](../docs/IMPL016-converting-lempiplay3.md)'s
+prose. It covers identity, packages, the panel, the fstab and its binds, the
+overlay, the services, the helpers and the clock and swap; each item is
+compared on the card's **durable** layer. Run against the live card it agreed
+on every item but two, both deliberate: see the next paragraph. `--go` and
+`--lock` carry IMPL016's commands and have never built a card.
+
+**`[LP3-SET-020]` On a locked card the script only checks.** Its `--go`
+refuses an overlay root, because a write to `/` there is gone at the next
+reboot `[IMPL-BOS-185]`; one file goes through `build/install-config.sh`,
+which writes both layers.
+
+Two items differ on the live card, and are recorded as the fix rather than
+as found, pending the maintainer: **no swap at all** — bose's `[IMPL-BOS-170]`
+fault, fixed by [`rpi-swap-lempi.conf`](rpi-swap-lempi.conf) — and **Debian's
+own NTP pool still on**, where the other two nodes have it commented out so
+every node falls back identically `[GDE-ECHO-300]`.
