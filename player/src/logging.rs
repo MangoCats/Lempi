@@ -58,6 +58,100 @@ const QUEUE_LINES: usize = 1024;
 
 thread_local! {
     static MUST_NOT_BLOCK: Cell<bool> = const { Cell::new(false) };
+    /// The underflow count of the file this thread is decoding right now, if
+    /// it is inside a call into symphonia; see [`decoding`].
+    static DECODING: Cell<Option<u32>> = const { Cell::new(None) };
+}
+
+/// **How many bit-reservoir underflows one opened file may produce before they
+/// are unusual** `[GDE-HST-190]`.
+///
+/// An MP3 frame may borrow up to 511 bytes of data from the frames before it
+/// (`main_data_begin` is nine bits). Starting mid-file -- which Lempi does by
+/// design, since it plays spans -- means those earlier frames were never
+/// decoded, and symphonia warns once per frame whose borrowing it cannot
+/// satisfy. At 128 kbps 511 bytes reaches back about a frame and a half, so a
+/// start can explain at most two; measured on `lempi02w` over twelve passage
+/// starts, 2026-09-25: zero, one or two each, never more. Lower bitrates have
+/// smaller frames and reach further back -- about three at 64 kbps -- so the
+/// budget is five: every normal music file sits under it with margin, and a
+/// damaged file, which underflows frame after frame, crosses it at once.
+///
+/// Within the budget the line is info, not a warning: expected, still in the
+/// journal, not in `journalctl -p warning` -- where, as a warning at every
+/// passage start, it was 9 of 9 dependency lines and about 45 an hour.
+pub const RESERVOIR_BUDGET: u32 = 5;
+
+/// The warning's target and text, exactly as `symphonia-bundle-mp3` 0.5.5
+/// writes them (`layer3/mod.rs:86`), up to the byte count. Matched on text
+/// because the record carries nothing else to match on. If a later symphonia
+/// rewords it, the match fails **towards noise, not silence**: the lines go
+/// back to being warnings, which is visible, rather than being hidden.
+const RESERVOIR_TARGET: &str = "symphonia_bundle_mp3";
+const RESERVOIR_UNDERFLOW: &str = "mpa: invalid main_data_begin, underflow by ";
+
+/// Run `f` -- a call into symphonia -- as decoding the file whose underflow
+/// count so far is `seen`, and leave the updated count there afterwards.
+///
+/// The count belongs to one opened file, so a passage's decoder carries its
+/// own and a crossfade's two decoders, interleaved on one thread, never share
+/// one. Nesting restores whatever was in force outside.
+pub fn decoding<R>(seen: &mut u32, f: impl FnOnce() -> R) -> R {
+    let outer = DECODING.with(|d| d.replace(Some(*seen)));
+    let r = f();
+    if let Some(n) = DECODING.with(|d| d.replace(outer)) {
+        *seen = n;
+    }
+    r
+}
+
+/// How many of a file's underflows were counted rather than shown: everything
+/// past the budget and the one warning that surfaced.
+pub fn unshown(seen: u32) -> u32 {
+    seen.saturating_sub(RESERVOIR_BUDGET + 1)
+}
+
+/// Report, as a file closes, the underflows that were counted rather than
+/// shown -- once, so a damaged file costs two warning lines, not hundreds.
+pub fn reservoir_closed(path: &std::path::Path, seen: u32) {
+    let hidden = unshown(seen);
+    if hidden > 0 {
+        tracing::warn!(
+            "decode: {}: {seen} bit-reservoir underflows in all, {hidden} of them not shown one by \
+             one; a start mid-file explains up to {RESERVOIR_BUDGET}, so this many suggests damage",
+            path.display()
+        );
+    }
+}
+
+/// What the reservoir policy does with one line.
+enum Reservoir {
+    /// Within the budget: expected, written as info.
+    Demote,
+    /// The first past it: written as the warning it is, saying what follows.
+    Surface,
+    /// Past that: counted for the summary, not written.
+    Count,
+}
+
+/// Apply the policy to a line, if it is the reservoir warning and this thread
+/// is decoding a file. Outside a decode it is left alone -- still a warning --
+/// because nothing says it is the expected kind.
+fn reservoir(target: &str, message: &str) -> Option<Reservoir> {
+    if !target.starts_with(RESERVOIR_TARGET) || !message.starts_with(RESERVOIR_UNDERFLOW) {
+        return None;
+    }
+    DECODING.with(|d| {
+        let n = d.get()? + 1;
+        d.set(Some(n));
+        Some(if n <= RESERVOIR_BUDGET {
+            Reservoir::Demote
+        } else if n == RESERVOIR_BUDGET + 1 {
+            Reservoir::Surface
+        } else {
+            Reservoir::Count
+        })
+    })
 }
 
 /// Lines dropped because a thread that may not block found the queue full.
@@ -147,7 +241,7 @@ struct Lines {
 
 impl<S: Subscriber> Layer<S> for Lines {
     fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
-        let line = format_line(event, self.journal, &self.own);
+        let Some(line) = format_line(event, self.journal, &self.own) else { return };
         if MUST_NOT_BLOCK.with(Cell::get) {
             if let Some(q) = QUEUE.get() {
                 offer(q, line, &DROPPED, &PENDING);
@@ -230,25 +324,42 @@ fn priority(level: &Level) -> u8 {
 /// bare "invalid main_data offset" says nothing about where it came from.
 /// Events bridged from `log` carry their real target in `log.*` fields;
 /// `normalized_metadata` recovers it, and those fields are not repeated.
-fn format_line(event: &Event<'_>, journal: bool, own: &[String]) -> String {
+///
+/// `None` when the reservoir policy counts a line rather than writing it
+/// `[GDE-HST-190]`.
+fn format_line(event: &Event<'_>, journal: bool, own: &[String]) -> Option<String> {
     let mut v = Fields::default();
     event.record(&mut v);
     let normalized = event.normalized_metadata();
     let meta = normalized.as_ref().unwrap_or_else(|| event.metadata());
-    let level = meta.level();
+    let mut level = *meta.level();
     let target = meta.target();
 
-    let mut line = String::with_capacity(v.message.len() + v.rest.len() + 8);
-    if journal && *level != Level::INFO {
-        let _ = write!(line, "<{}>", priority(level));
+    let mut note = String::new();
+    match reservoir(target, &v.message) {
+        Some(Reservoir::Demote) => level = Level::INFO,
+        Some(Reservoir::Surface) => {
+            note = format!(
+                " -- more than {RESERVOIR_BUDGET} in one file, which a start mid-file does not \
+                 explain; any further ones are counted and reported when it closes"
+            );
+        }
+        Some(Reservoir::Count) => return None,
+        None => {}
+    }
+
+    let mut line = String::with_capacity(v.message.len() + v.rest.len() + note.len() + 8);
+    if journal && level != Level::INFO {
+        let _ = write!(line, "<{}>", priority(&level));
     }
     if !own.iter().any(|o| target == o || target.starts_with(&format!("{o}::"))) {
         let _ = write!(line, "{target}: ");
     }
     line.push_str(&v.message);
+    line.push_str(&note);
     line.push_str(&v.rest);
     line.push('\n');
-    line
+    Some(line)
 }
 
 #[derive(Default)]
@@ -321,7 +432,9 @@ mod tests {
     impl<S: Subscriber> Layer<S> for Capture {
         fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
             let own = vec!["lempi_player".to_string(), "lempi_core".to_string()];
-            self.lines.lock().unwrap().push(format_line(event, self.journal, &own));
+            if let Some(line) = format_line(event, self.journal, &own) {
+                self.lines.lock().unwrap().push(line);
+            }
         }
     }
 
@@ -392,6 +505,80 @@ mod tests {
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
         assert_eq!(pending.load(Ordering::Relaxed), 2,
                    "a dropped line is not pending -- flush must not wait for it");
+    }
+
+    fn underflow(bytes: u32) {
+        tracing::warn!(target: "symphonia_bundle_mp3::layer3",
+                       "mpa: invalid main_data_begin, underflow by {} bytes", bytes);
+    }
+
+    /// `[GDE-HST-190]`, the whole policy on one file: five demoted to info,
+    /// the sixth surfaced as a warning that says what follows, the rest
+    /// counted and not written -- and the count left with the file.
+    #[test]
+    fn a_files_first_five_underflows_are_info_the_sixth_warns_the_rest_are_counted() {
+        let mut seen = 0;
+        let got = capture(true, || {
+            decoding(&mut seen, || {
+                for i in 0..9 {
+                    underflow(200 + i);
+                }
+            });
+        });
+        assert_eq!(seen, 9, "every underflow is counted, shown or not");
+        assert_eq!(got.len(), 6, "five demoted and one surfaced; three counted: {got:#?}");
+        for (i, l) in got[..5].iter().enumerate() {
+            assert_eq!(l, &format!(
+                "symphonia_bundle_mp3::layer3: mpa: invalid main_data_begin, underflow by {} bytes\n",
+                200 + i), "within the budget: info, so no <4> even into the journal");
+        }
+        assert!(got[5].starts_with(
+            "<4>symphonia_bundle_mp3::layer3: mpa: invalid main_data_begin, underflow by 205 bytes -- more than 5"),
+            "the sixth is a warning and says so: {}", got[5]);
+        assert_eq!(unshown(seen), 3);
+    }
+
+    /// Each opened file has its own budget: a crossfade's two decoders,
+    /// interleaved on one thread, do not spend each other's.
+    #[test]
+    fn each_file_has_its_own_budget() {
+        let (mut a, mut b) = (0, 0);
+        let got = capture(true, || {
+            for _ in 0..4 {
+                decoding(&mut a, || underflow(1));
+                decoding(&mut b, || underflow(2));
+            }
+        });
+        assert_eq!((a, b), (4, 4));
+        assert!(got.iter().all(|l| !l.starts_with("<4>")),
+                "four each is inside either budget: {got:#?}");
+    }
+
+    /// Outside a decode the policy does not apply: nothing says the line is
+    /// the expected kind, so it stays a warning. And symphonia's *other*
+    /// warnings are never demoted, inside a decode or out.
+    #[test]
+    fn only_the_reservoir_warning_and_only_while_decoding_is_demoted() {
+        let got = capture(true, || {
+            underflow(7);
+            let mut seen = 0;
+            decoding(&mut seen, || {
+                tracing::warn!(target: "symphonia_bundle_mp3::layer3", "mpa: invalid block_type");
+            });
+        });
+        assert_eq!(got, vec![
+            "<4>symphonia_bundle_mp3::layer3: mpa: invalid main_data_begin, underflow by 7 bytes\n".to_string(),
+            "<4>symphonia_bundle_mp3::layer3: mpa: invalid block_type\n".to_string(),
+        ]);
+    }
+
+    #[test]
+    fn a_closing_file_reports_only_what_was_counted_and_not_shown() {
+        for n in 0..=RESERVOIR_BUDGET + 1 {
+            assert_eq!(unshown(n), 0, "{n} underflows were all written, as info or the one warning");
+        }
+        assert_eq!(unshown(RESERVOIR_BUDGET + 2), 1);
+        assert_eq!(unshown(40), 34);
     }
 
     #[test]

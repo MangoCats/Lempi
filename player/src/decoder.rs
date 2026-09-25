@@ -59,6 +59,19 @@ pub struct PassageDecoder {
     /// on a packet boundary, not a sample, so it can stop short of the request;
     /// this is the remainder it undershot by.
     skip_frames: u64,
+    /// symphonia's bit-reservoir underflows so far, for this opened file
+    /// only `[GDE-HST-190]`: a start mid-file explains a few, and the log
+    /// layer demotes those; many more suggest damage, and are reported when
+    /// this closes. Per opened file, so a seek -- which reopens -- starts afresh.
+    underflows: u32,
+    /// Named in that report.
+    path: std::path::PathBuf,
+}
+
+impl Drop for PassageDecoder {
+    fn drop(&mut self) {
+        crate::logging::reservoir_closed(&self.path, self.underflows);
+    }
 }
 
 impl PassageDecoder {
@@ -121,6 +134,8 @@ impl PassageDecoder {
             frames_emitted: 0,
             frame_limit,
             skip_frames,
+            underflows: 0,
+            path: path.to_path_buf(),
         })
     }
 
@@ -155,7 +170,11 @@ impl PassageDecoder {
             if packet.track_id() != self.track_id {
                 continue;
             }
-            match self.decoder.decode(&packet) {
+            // Decoded inside this file's context, so the log layer can tell a
+            // reservoir underflow a mid-file start explains from the tenth one
+            // in a damaged file `[GDE-HST-190]`.
+            let decoded = crate::logging::decoding(&mut self.underflows, || self.decoder.decode(&packet));
+            match decoded {
                 Ok(buf) => {
                     // Disjoint field borrows: `buf` borrows self.decoder while
                     // scratch is a different field, which is legal where a
