@@ -145,6 +145,16 @@ item "Wi-Fi country $WIFI_COUNTRY" \
      "grep -q 'cfg80211.ieee80211_regdom=$WIFI_COUNTRY' /boot/firmware/cmdline.txt" \
      "sudo raspi-config nonint do_wifi_country $WIFI_COUNTRY"
 
+# pi's own SSH key, for reaching other machines -- not the host keys. No node
+# had one until 2026-09-25; the maintainer asked that every node's script make
+# one. Here, before the binds below: on a new card it is made in /home/pi and
+# copied onto STATE with the rest of it; once the bind is up, /home/pi *is*
+# STATE, so it is checked there directly, not under $P. Made once, never
+# replaced -- a new key would silently undo wherever the old one was
+# authorised.
+item "pi's ed25519 SSH key" "test -f /home/pi/.ssh/id_ed25519 && test -f /home/pi/.ssh/id_ed25519.pub" \
+     "ssh-keygen -q -t ed25519 -N '' -C pi@$NAME -f /home/pi/.ssh/id_ed25519"
+
 # ------------------------------------------------------------------ packages
 say ""
 say "packages"

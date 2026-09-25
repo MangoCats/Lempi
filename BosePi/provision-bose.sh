@@ -160,6 +160,19 @@ for t in /etc/ssh /home/pi /etc/NetworkManager/system-connections; do
     say "$(on "findmnt -no TARGET,FSTYPE $t" 2>/dev/null || echo "$t: not mounted")"
 done
 
+step "pi's own SSH key"
+# The key this node uses to reach other machines -- not its host keys, which
+# sshd generated and the step above moved to C. No node had one until
+# 2026-09-25, when bose was found without any and the maintainer asked that
+# every node's script make one. After the step above on purpose: /home/pi is
+# bound to C by now, so the key survives the overlay. Made once, never
+# replaced -- a new key would silently undo wherever the old one was
+# authorised. No passphrase: an appliance uses it unattended.
+on 'test -f ~/.ssh/id_ed25519 || ssh-keygen -q -t ed25519 -N "" -C "pi@$(hostname)" -f ~/.ssh/id_ed25519' \
+    || die "could not create pi's SSH key"
+say "$(on 'ssh-keygen -l -f ~/.ssh/id_ed25519.pub')"
+say "authorise it where this node must log in: ~/.ssh/id_ed25519.pub"
+
 step "Journal  [supersedes PI-A-020]"
 # Persistent on C, capped -- not Storage=volatile, because volatile is RAM and
 # RAM is the resource this whole layout is defending.

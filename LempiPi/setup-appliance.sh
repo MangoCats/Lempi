@@ -707,6 +707,20 @@ else
     ok "wifi country $WIFI_COUNTRY"
 fi
 
+# The service account's own SSH key, for reaching other machines -- not the
+# host keys, which sshd makes itself. No node had one until 2026-09-25, when
+# bose was found without any and the maintainer asked that every node's
+# script make one. Made once, never replaced: a new key would silently undo
+# wherever the old one was authorised. No passphrase: used unattended.
+KEY="/home/$RUN_USER/.ssh/id_ed25519"
+if [ ! -f "$KEY" ]; then
+    install -d -m700 -o "$RUN_USER" -g "$RUN_USER" "/home/$RUN_USER/.ssh"
+    sudo -u "$RUN_USER" ssh-keygen -q -t ed25519 -N "" -C "$RUN_USER@$(hostname)" -f "$KEY"
+    did "ssh key $KEY (authorise its .pub where needed)"
+else
+    ok "ssh key $KEY"
+fi
+
 # Swap: a 512 MB file through dphys-swapfile, as this node has run it -- a
 # swapfile on the root, which [SD-RISK-150] names as SD wear worth moving to
 # zram one day. Recorded as it is, not as it might be.
