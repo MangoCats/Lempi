@@ -12,6 +12,7 @@
 //! method here callable from `mod.rs`'s own tick/mixing methods is
 //! `pub(super)` rather than left private: a child can see its parent's
 //! private items, but not the other way around.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use std::time::{Duration, Instant};
 
@@ -34,7 +35,7 @@ impl Engine {
     pub(super) fn remember_settings(&self) {
         if let Some(store) = &self.store {
             if let Err(e) = store.save_settings(&self.settings()) {
-                eprintln!("save settings: {e}");
+                tracing::error!("save settings: {e}");
             }
         }
     }
@@ -112,7 +113,7 @@ impl Engine {
             None => (None, 0),
         };
         if let Err(e) = store.save(id, pos, self.playing) {
-            eprintln!("save player state: {e}");
+            tracing::error!("save player state: {e}");
         }
         self.last_save = Instant::now();
         self.saved = Some(key);
@@ -266,7 +267,7 @@ impl Engine {
             // departs `[REQ-VIS-250]`.
             match store.record_play(id, mbid.as_deref(), self.heard_ms, span_ms, selected_by.as_deref()) {
                 Ok(play_id) => self.pending_play_id = Some(play_id),
-                Err(e) => eprintln!("record play: {e}"),
+                Err(e) => tracing::error!("record play: {e}"),
             }
         }
     }
@@ -279,7 +280,7 @@ impl Engine {
     pub(super) fn write_finish(&self, play_id: i64, heard_ms: u64) {
         let Some(store) = &self.store else { return };
         if let Err(e) = store.finish_play(play_id, heard_ms) {
-            eprintln!("finish play: {e}");
+            tracing::error!("finish play: {e}");
         }
     }
 
@@ -357,7 +358,7 @@ impl Engine {
     ) {
         if let Some(store) = &self.store {
             if let Err(e) = store.record_rejection(kind, passage_id, mbid, heard_ms, span_ms) {
-                eprintln!("record {}: {e}", kind.as_str());
+                tracing::error!("record {}: {e}", kind.as_str());
             }
         }
     }

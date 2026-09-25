@@ -7,6 +7,7 @@
 //!
 //! [`Engine::tick`] performs exactly one pump iteration and is public, so the
 //! whole engine is testable without a thread, an audio device, or real time.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -1052,7 +1053,7 @@ impl Engine {
             return;
         }
         self.clock_log_at = Some(now + Self::CLOCK_LOG_EVERY);
-        eprintln!(
+        tracing::info!(
             "clock: frames={} at_nanos={} delay={} rate={} ts={:?} callbacks={}",
             snap.0, snap.1, snap.2, snap.3, snap.4, snap.5
         );
@@ -1061,12 +1062,12 @@ impl Engine {
         // WebSocket; logging it first makes the arithmetic observable on a
         // real node before anything depends on it being right.
         match (self.echo_basis.is_valid(), self.air_position()) {
-            (true, Some(a)) => eprintln!(
+            (true, Some(a)) => tracing::info!(
                 "echo-anchor: passage={} position_ms={} at_nanos={}",
                 a.passage_id, a.position_ms, a.at),
             // Saying why nothing was emitted beats emitting nothing, which
             // reads the same as a node that is simply quiet `[GOV-SRC-040]`.
-            (false, _) => eprintln!(
+            (false, _) => tracing::info!(
                 "echo-anchor: withheld, basis voided by {:?} until the next passage",
                 self.echo_basis.voided_by()),
             (true, None) => {}
@@ -1092,7 +1093,7 @@ impl Engine {
                     // which skips forever and is baffling to watch.
                     let host = host.trim().to_string();
                     if !host.is_empty() && is_self(&host) {
-                        eprintln!("echo-follow: {host} is this node; refusing to follow itself");
+                        tracing::warn!("echo-follow: {host} is this node; refusing to follow itself");
                     } else {
                         // **A new master means relearning** `[GDE-ARC-061]`.
                         // The bias mixes this node's own pipeline with
@@ -1103,7 +1104,7 @@ impl Engine {
                         // else. Re-setting the SAME host is not a change and
                         // keeps the history -- a reconnect must not wipe it.
                         if host != self.echo_follow_host && !self.echo_join_bias.is_empty() {
-                            eprintln!("echo-join: now following {host}; forgetting {} landing(s) learned against {}",
+                            tracing::info!("echo-join: now following {host}; forgetting {} landing(s) learned against {}",
                                       self.echo_join_bias.len(),
                                       if self.echo_follow_host.is_empty() { "nobody" } else { &self.echo_follow_host });
                             self.echo_join_bias = crate::echo::JoinBias::default();
@@ -1115,7 +1116,7 @@ impl Engine {
                 Ok(Command::SetEchoRate(ppm)) => {
                     let want = if ppm.is_finite() { ppm } else { 0.0 };
                     if want.abs() > Self::ECHO_RATE_CEILING_PPM {
-                        eprintln!("echo-rate: {want:+.1} ppm is not a crystal; clamping to {:+.0} and carrying on", Self::ECHO_RATE_CEILING_PPM.copysign(want));
+                        tracing::warn!("echo-rate: {want:+.1} ppm is not a crystal; clamping to {:+.0} and carrying on", Self::ECHO_RATE_CEILING_PPM.copysign(want));
                     }
                     self.echo_rate_ppm =
                         want.clamp(-Self::ECHO_RATE_CEILING_PPM, Self::ECHO_RATE_CEILING_PPM);
@@ -1139,7 +1140,7 @@ impl Engine {
                     if self.echo_debt_frames != 0 && self.echo_last_trim.is_none() {
                         self.echo_last_trim = Some(std::time::Instant::now());
                     }
-                    eprintln!("echo-offset: shedding {ms} ms by trimming ({} frames)",
+                    tracing::info!("echo-offset: shedding {ms} ms by trimming ({} frames)",
                               self.echo_debt_frames);
                 }
                 Ok(Command::EchoCorrectNextStart(ms)) => {
@@ -1165,11 +1166,11 @@ impl Engine {
                     let was = self.echo_join_bias.correction_ms();
                     if self.echo_join_bias.record(ms) {
                         let now = self.echo_join_bias.correction_ms();
-                        eprintln!("echo-join: landed {ms:+} ms; {} sample(s), aiming {now:+} ms further on from now (was {was:+})",
+                        tracing::info!("echo-join: landed {ms:+} ms; {} sample(s), aiming {now:+} ms further on from now (was {was:+})",
                                   self.echo_join_bias.len());
                         self.remember_settings();
                     } else {
-                        eprintln!("echo-join: landed {ms:+} ms, which is past the credible range; not learned from");
+                        tracing::warn!("echo-join: landed {ms:+} ms, which is past the credible range; not learned from");
                     }
                 }
                 Ok(Command::SetEchoJoinNow(now)) => {
@@ -1434,7 +1435,7 @@ impl Engine {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_nanos() as u64);
                 let ms = self.join_lead_frames(sound_at, now) * 1000 / rate.max(1);
-                eprintln!("echo-start: sample 0 goes {ms} ms into the ring, measured at the cut (the constant lead would have been {} ms)",
+                tracing::info!("echo-start: sample 0 goes {ms} ms into the ring, measured at the cut (the constant lead would have been {} ms)",
                           self.skip_lead_ms);
                 ms
             }
@@ -1542,7 +1543,7 @@ impl Engine {
             // A file that will not re-open is not a reason to stop the music
             // that is already sounding from it.
             Err(e) => {
-                eprintln!("seek in {}: {e}", entry.path.display());
+                tracing::error!("seek in {}: {e}", entry.path.display());
                 return;
             }
         };
@@ -1748,9 +1749,9 @@ impl Engine {
             // Say which happened rather than claiming a shift that was dropped
             // `[GDE-ECHO-351]`.
             if superseded {
-                eprintln!("echo-offset: passage {} had a {} ms shift pending, superseded by a commanded start", entry.passage_id, self.echo_next_shift_ms.abs());
+                tracing::info!("echo-offset: passage {} had a {} ms shift pending, superseded by a commanded start", entry.passage_id, self.echo_next_shift_ms.abs());
             } else {
-                eprintln!("echo-offset: passage {} asked for {} ms {}; placed by {} ms of overlap + {} ms origin + {} ms silence; wanted {} ms, achieved {} ms ({} ms of the outgoing passage left, overlap {}), {} ms left to the frame trim",
+                tracing::info!("echo-offset: passage {} asked for {} ms {}; placed by {} ms of overlap + {} ms origin + {} ms silence; wanted {} ms, achieved {} ms ({} ms of the outgoing passage left, overlap {}), {} ms left to the frame trim",
                           entry.passage_id, self.echo_next_shift_ms.abs(),
                           if self.echo_next_shift_ms > 0 { "earlier" } else { "later" },
                           spent.admit_ms, spent.origin_ms, spent.gap_ms,
@@ -1810,7 +1811,7 @@ impl Engine {
                 .map(|l| (l.stream.ring.len() / l.stream.channels.max(1)) as u64
                          * 1000 / self.out_rate.max(1) as u64);
             match ready_ms {
-                Some(have) => eprintln!(
+                Some(have) => tracing::info!(
                     "echo-decode: passage {} asked {} ms, admission brought forward {} ms, {} ms decoded and ready{}",
                     entry.passage_id, asked_ms, advance_ms, have,
                     if (have as i64) < advance_ms {
@@ -1818,7 +1819,7 @@ impl Engine {
                     } else {
                         String::new()
                     }),
-                None => eprintln!(
+                None => tracing::info!(
                     "echo-decode: passage {} asked {} ms, admission brought forward {} ms, nothing prepared (opened here instead)", entry.passage_id, asked_ms, advance_ms),
             }
         }
@@ -1833,7 +1834,7 @@ impl Engine {
         match self.open(&entry, origin.unwrap_or(0)) {
             Ok(l) => self.live.push(l),
             Err(e) => {
-                eprintln!("skipping {}: {e}", entry.path.display());
+                tracing::warn!("skipping {}: {e}", entry.path.display());
                 self.dropped.push(entry.passage_id);
             }
         }
@@ -1871,7 +1872,7 @@ impl Engine {
                 // Dropped rather than left in place: retrying an unopenable
                 // passage every tick would spin forever and never reach the
                 // playable one behind it.
-                eprintln!("skipping {}: {e}", entry.path.display());
+                tracing::warn!("skipping {}: {e}", entry.path.display());
                 self.queue.advance();
                 self.dropped.push(entry.passage_id);
                 self.ready = None;
@@ -1955,7 +1956,7 @@ impl Engine {
                             l.stream.push(&mut buf);
                         }
                         Err(e) => {
-                            eprintln!("resample: {e}");
+                            tracing::error!("resample: {e}");
                             l.stream.finished = true;
                         }
                     }
@@ -1963,7 +1964,7 @@ impl Engine {
                 }
                 Ok(None) => l.stream.finished = true,
                 Err(e) => {
-                    eprintln!("decode: {e}");
+                    tracing::error!("decode: {e}");
                     l.stream.finished = true;
                 }
             }
@@ -2053,7 +2054,7 @@ impl Engine {
             crate::echo::StartVerdict::TooFar { by } => {
                 // A clock that has not been disciplined yet `[GDE-ECHO-365]`.
                 // Waiting for this would be waiting for days.
-                eprintln!("echo-start: scheduled {} s out, which is not a schedule; dropping it and waiting for this node's clock", by.as_secs());
+                tracing::warn!("echo-start: scheduled {} s out, which is not a schedule; dropping it and waiting for this node's clock", by.as_secs());
                 self.echo_start = None;
                 return;
             }
@@ -2071,7 +2072,7 @@ impl Engine {
                     ((was * 3 + Self::ECHO_PREP_GUESS_MS) / 4).max(Self::ECHO_PREP_GUESS_MS);
                 // Said out loud. A node that silently declines to join looks
                 // exactly like one that was never told to `[GOV-SRC-040]`.
-                eprintln!("echo-start: passage missed by {} ms; holding for the next schedule (assuming {was} ms of preparation, now {})",
+                tracing::warn!("echo-start: passage missed by {} ms; holding for the next schedule (assuming {was} ms of preparation, now {})",
                           by.as_millis(), self.echo_prep_ms);
                 self.echo_start = None;
                 return;
@@ -2113,7 +2114,7 @@ impl Engine {
         let took = (began.elapsed().as_millis() as u64).min(Self::ECHO_PREP_MAX_MS);
         let was = self.echo_prep_ms;
         self.echo_prep_ms = (was * 3 + took) / 4;
-        eprintln!("echo-start: preparing took {took} ms (was assuming {was}); firing {} ms early from now on", self.echo_prep_ms + self.skip_lead_ms);
+        tracing::info!("echo-start: preparing took {took} ms (was assuming {was}); firing {} ms early from now on", self.echo_prep_ms + self.skip_lead_ms);
     }
 
     /// This node's presentation offset: what the device reports plus what a
@@ -2170,13 +2171,13 @@ impl Engine {
         match crate::echo::placement(&sched, timing, capacity_frames, now) {
             crate::echo::Placement::Depth(f) => f,
             crate::echo::Placement::TooShallow { short_by_frames } => {
-                eprintln!("echo-start: the target is {} ms deeper than this ring holds; \
+                tracing::warn!("echo-start: the target is {} ms deeper than this ring holds; \
 placing at the ring's own depth, which sounds early",
                           short_by_frames * 1000 / self.out_rate.max(1) as u64);
                 capacity_frames
             }
             crate::echo::Placement::Late { by } => {
-                eprintln!("echo-start: the target passed {} ms ago; sounding at once",
+                tracing::warn!("echo-start: the target passed {} ms ago; sounding at once",
                           by.as_millis());
                 0
             }
@@ -2231,7 +2232,7 @@ placing at the ring's own depth, which sounds early",
             rate,
             d.as_nanos() as u64,
         );
-        eprintln!("echo-schedule: passage={} start_sample={} sound_at={} rate={} depth={}",
+        tracing::info!("echo-schedule: passage={} start_sample={} sound_at={} rate={} depth={}",
                   s.passage_id, s.start_sample, s.sound_at, s.rate, depth_frames);
         self.echo_schedule = Some(s);
     }
@@ -2572,7 +2573,7 @@ placing at the ring's own depth, which sounds early",
             self.scratch[..n].fill(0.0);
             self.echo_gap_frames -= frames as u64;
             if self.echo_gap_frames == 0 {
-                eprintln!("echo-gap: silence spent; the passage starts now");
+                tracing::info!("echo-gap: silence spent; the passage starts now");
             }
             return match &self.path.ring {
                 Some(o) => {
@@ -2620,7 +2621,7 @@ placing at the ring's own depth, which sounds early",
                     // rather than at the mixer's own cadence.
                     if !self.echo_trim_refused {
                         self.echo_trim_refused = true;
-                        eprintln!("echo-trim: a {} was refused on a {filled}-sample block; nothing credited, retrying",
+                        tracing::info!("echo-trim: a {} was refused on a {filled}-sample block; nothing credited, retrying",
                                   if drop_frame { "drop" } else { "duplicate" });
                     }
                 } else {
@@ -2711,7 +2712,7 @@ placing at the ring's own depth, which sounds early",
         // on the strength of a percentage; they are not, and the way to stop
         // guessing about the remainder is to timestamp them.
         if misses > self.last_lock_failures {
-            eprintln!("output: {} missed ring lock(s), {} total",
+            tracing::warn!("output: {} missed ring lock(s), {} total",
                       misses - self.last_lock_failures, misses);
             self.last_lock_failures = misses;
         }
