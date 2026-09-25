@@ -17,6 +17,7 @@
 //! On this thread, by contrast, blocking is free: it may sleep through the
 //! settle, poll `wpctl`, and take as long as it likes, because nothing is
 //! waiting on it to fill a buffer.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, Sender};
@@ -223,7 +224,7 @@ fn watch(out: &Output, playing: bool, watch_at: &mut Instant) {
     }
     *watch_at = Instant::now() + WATCH;
     if crate::sink::current().dummy {
-        eprintln!("audio is going nowhere audible; looking for a sink");
+        tracing::warn!("audio is going nowhere audible; looking for a sink");
         out.mark_failed();
     }
 }
@@ -270,10 +271,10 @@ fn recover(
             // hear it: the dummy accepts audio perfectly forever. Treat that as
             // a failure so we keep looking for a real sink `[PI3-API-030]`.
             if crate::sink::current().dummy {
-                eprintln!("output opened onto a dummy -- still silent, retrying");
+                tracing::warn!("output opened onto a dummy -- still silent, retrying");
                 out.mark_failed();
             } else {
-                eprintln!("output recovered on {name}");
+                tracing::info!("output recovered on {name}");
                 *retry_at = None;
                 *backoff = RETRY;
                 // The stream comes back stopped; only resume it if the listener
@@ -281,7 +282,7 @@ fn recover(
                 out.set_playing(playing);
             }
         }
-        Err(e) => eprintln!("output recovery failed, retrying: {e}"),
+        Err(e) => tracing::warn!("output recovery failed, retrying: {e}"),
     }
 }
 
