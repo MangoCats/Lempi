@@ -24,10 +24,13 @@ members = ["core"]
 # `echo-client` fault would otherwise have repeated itself.**
 #
 # With `members` alone, a bare `cargo test` in this directory tests the root
-# package and nothing else. Measured at the moment of the split, 2026-09-22:
-# 663 tests before, **359 after** -- every test in `lempi-core`, which is to
-# say every test the Director, the library and the payload importer have,
-# silently stopped running, and the suite still said `ok`.
+# package and nothing else. At the moment of the split, 2026-09-22: 596 tests
+# before, **368 after** -- the 228 that stopped were every test in
+# `lempi-core`, which is to say every test the Director, the library and the
+# payload importer have, and the suite still said `ok`. (First written here as
+# "663 -> 359", corrected 2026-09-24: 663 counted `#[test]` attributes,
+# feature-gated ones included, and 359 was one test binary's line rather than
+# the sum. `cargo test -p lempi-player` reproduces the 368.)
 #
 # That is the same fault as a module behind a feature nobody turned on: three
 # faults in `echo_client.rs` survived to be found by reading, because no test

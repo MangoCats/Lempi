@@ -234,7 +234,7 @@ On Android specifically: The engineering saved by forking is the shell; the shel
 
 - **The boundary is 30 crates against the player's 135**, and `cpal`, `symphonia`, `rubato`, `axum`, `tokio`, `hyper`, `alsa` and `reqwest` are unreachable from any of them. `build/verify-targets.sh` now asserts that rather than leaving it to be re-read — it had been re-measured by hand on 2026-08-20, 2026-09-02 and 2026-09-22.
 - **The developer-loop saving is small and should not be the reason.** A Director edit rebuilt the single crate in 9.7 s before; `cargo test -p lempi-core` is 4 s after, and the whole workspace is still 11 s.
-- **Splitting the crate silently halved the test run**, 663 to 359, because a bare `cargo test` tests the root package only. `default-members` fixes it; the fault is `echo-client`'s exactly `[GDE-ECHO-384]`, and it is the one thing about this refactor worth remembering.
+- **Splitting the crate silently cut the test run by 38%**, 596 to 368, because a bare `cargo test` tests the root package only — the 228 lost were every test in `lempi-core`. `default-members` fixes it; the fault is `echo-client`'s exactly `[GDE-ECHO-384]`, and it is the one thing about this refactor worth remembering. *(Corrected 2026-09-24: first written as "halved, 663 to 359". 663 counted `#[test]` attributes, feature-gated ones included, and 359 was one test binary's line rather than the sum — a miscount of the kind CLAUDE.md §6 describes, made while writing about one.)*
 
 Two things in the new crate still leave the process, and a phone finds both: `relink::hash_encoded` shells out to **ffmpeg** and must keep doing so `[SPEC-RLK-080]`, and `director::program`'s UTC-offset sync uses `libc` on Unix — which Android and iOS both are, so only the first is real work.
 
@@ -245,7 +245,7 @@ Two things in the new crate still leave the process, and a phone finds both: `re
 ## 7. Open
 
 1. **`[GDE-AND-060]` Whether the phone runs the existing web UI in a WebView.** `axum` and `tokio` are Apache-2.0/MIT and the three skins already exist `[REQ-VIS-160]`. Maximum reuse, at the cost of a non-native feel and a server on a battery. Cheap to spike, and it would answer how much native UI is really wanted.
-2. **`[GDE-AND-065]` Battery cost of the Director.** Measured on the appliance at 9.86 s and ~12 MB per rebuild `[IMPL-SUI-075]`; per-selection cost is unmeasured, and a phone budget is not a Pi budget.
+2. **`[GDE-AND-065]` Battery cost of the Director.** Measured on the appliance at 9.86 s and ~12 MB per rebuild `[IMPL-SUI-075]` — but that is `Director::load` **in isolation**. In service, rebuilding while it plays, `lempi02w` logged a median of **22.8 s** over 17 rebuilds of the same 8,330 passages, and a phone's budget belongs against that figure `[GDE-HST-200]`. Per-selection cost is unmeasured, and a phone budget is not a Pi budget.
 3. **`[GDE-AND-070]` Where the library lives** — app-private storage, or a user-chosen tree via the Storage Access Framework. Affects relink, and whether other apps can see the music.
 
 ---
