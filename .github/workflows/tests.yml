@@ -59,11 +59,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # **This check lives in CI because it cannot live anywhere else.**
-      # Windows has no executable bit, so Git Bash runs a mode-644 script
-      # quite happily and the same check on the development machine would
-      # pass vacuously -- a guard that cannot observe what it guards, which
-      # is the thing `[GOV-FBN-020]` refuses.
+      # **This first read "lives in CI because it cannot live anywhere
+      # else", and that was half right.** Windows has no executable bit, so
+      # `[ -x "$f" ]` on the development machine passes for every file -- a
+      # guard that cannot observe what it guards, which is the thing
+      # `[GOV-FBN-020]` refuses. But git keeps the mode in its INDEX on every
+      # platform, so `tools/check_exec_bits.py` reads it from there, and the
+      # same rule now also runs in `.githooks/pre-commit` (2026-09-24), before
+      # the commit rather than after the push. This job runs the same script
+      # over every tracked file, so there is one implementation of the rule.
       #
       # Found 2026-09-21 by running `LempiPi/tests/run` on Linux for the
       # first time: 83 passed / 47 failed there against 103/8 on Windows.
@@ -77,25 +81,11 @@ jobs:
       #
       # `BosePi/lib.sh` is the one exemption: it carries a shebang for
       # shellcheck's benefit and says "Sourced, not run" in its own header.
+      # The script exempts any file whose header says so, rather than naming
+      # the path here, so the reason and the exemption cannot drift apart.
+      # Its floor is kept: fewer than 100 shebang files is a broken scan.
       - name: shebang implies +x
-        run: |
-          bad=0
-          checked=0
-          while IFS= read -r f; do
-            [ "$f" = "BosePi/lib.sh" ] && continue
-            head -c2 "$f" 2>/dev/null | grep -q '#!' || continue
-            checked=$((checked + 1))
-            if [ ! -x "$f" ]; then
-              echo "not executable: $f"
-              bad=$((bad + 1))
-            fi
-          done < <(git ls-files)
-          echo "--- $checked shebang script(s) checked, $bad not executable ---"
-          if [ "$checked" -lt 100 ]; then
-            echo "only $checked found; the scan is broken, not the tree"
-            exit 1
-          fi
-          [ "$bad" -eq 0 ]
+        run: python3 tools/check_exec_bits.py
 
   vipunen:
     name: Vipunen's own test scripts

@@ -218,11 +218,14 @@ fresh clone has the gate in the tree and switched off — which is the worst of
 both, because the file reads like a guard that is running. One command, and
 `git config core.hooksPath` answers whether it is on.
 
-[`.githooks/pre-commit`](.githooks/pre-commit) refuses a commit that touches
-`player/` or `sql/` and cannot build for Linux. It runs
+[`.githooks/pre-commit`](.githooks/pre-commit) runs two checks. On **every**
+commit, [`tools/check_exec_bits.py`](tools/check_exec_bits.py) refuses a staged
+script that opens with `#!` and is not executable — well under a second, and it
+reads the mode from git's index, so it works on Windows, where `[ -x ]` passes
+for everything. On a commit touching `player/` or `sql/`, it also runs
 `build/verify-targets.sh --quick` — a Linux `cargo check` and the `lempi-core`
-boundary — and nothing else; a docs-only commit is not taxed at all. Warm cost
-measured 2026-09-22: **22 s** on a no-op, 14 s after a core edit.
+boundary; a docs-only commit skips that. Warm cost measured 2026-09-22:
+**22 s** on a no-op, 14 s after a core edit.
 
 **It exists because §6's rule has a sibling this file did not state: compiling
 *here* is not compiling *there*.** On 2026-09-22 `lempi-core` was committed

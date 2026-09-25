@@ -1,6 +1,12 @@
 #!/bin/sh
 # Refuse a commit that cannot build for the machines this code ships to.
 #
+# Two checks, both about the same gap -- what works on the Windows machine the
+# code is written on and not on the Linux ones it runs on: (1) a staged script
+# with a shebang and no executable bit, on every commit; (2) a Linux compile,
+# when `player/` or `sql/` is staged. (2) is what this hook was written for;
+# (1) was added after the hook itself shipped without its executable bit.
+#
 # **Written because the fault it catches reached an appliance deploy.** On
 # 2026-09-22 `lempi-core` was committed naming `libc` in `#[cfg(unix)]` code
 # without depending on it. Windows never compiles that branch, so a full host
@@ -38,16 +44,55 @@ set -u
 
 ROOT=$(git rev-parse --show-toplevel)
 
+if [ "${LEMPI_SKIP_VERIFY:-0}" = "1" ]; then
+    echo "pre-commit: SKIPPED by LEMPI_SKIP_VERIFY=1."
+    echo "pre-commit: staged scripts' executable bits are unchecked, and this commit's"
+    echo "pre-commit: cfg(unix) code is unverified; it may not build on the appliance."
+    exit 0
+fi
+
+# ---- 1. every staged script is executable: every commit -----------------
+#
+# Well under a second, so it runs whatever is staged. Added 2026-09-24 after
+# this hook was itself committed `100644` in `175c3ef` -- a file git will not
+# run on Linux. CI's `executable-bits` job would have caught it, but only after
+# a push; `tools/check_exec_bits.py` reads the mode from the index, which git
+# keeps on Windows too, so the same rule can run here, before the commit.
+#
+# An interpreter that exists is not one that runs: on some Windows machines
+# `python3` is a Store stub. So the first that runs `pass` is used, and none
+# running is a failure rather than a skip `[GDE-DEP-060]`.
+PY=""
+for candidate in python3 python; do
+    if "$candidate" -c "pass" >/dev/null 2>&1; then
+        PY=$candidate
+        break
+    fi
+done
+if [ -z "$PY" ]; then
+    echo "pre-commit: no working python3 or python, so the executable-bit check DID NOT RUN."
+    echo "pre-commit: that is a failure, not a pass. LEMPI_SKIP_VERIFY=1 commits anyway, out loud."
+    exit 1
+fi
+if ! "$PY" "$ROOT/tools/check_exec_bits.py" --staged; then
+    cat <<'EOF'
+
+pre-commit: REFUSED -- a staged script opens with #! and is not executable.
+
+Windows has no executable bit, so it runs here and will not run on Linux --
+where every appliance, and CI, lives. Apply the `fix:` line above, which sets
+the mode in the index, and commit again. A file that is sourced rather than
+run says "Sourced, not run" in its header and is exempt.
+EOF
+    exit 1
+fi
+
+# ---- 2. the Linux gate: only when player/ or sql/ is staged -------------
+#
 # Nothing this gate knows about? Then it has nothing to say. `--diff-filter=d`
 # so a pure deletion does not trigger a compile of what is left.
 staged=$(git diff --cached --name-only --diff-filter=d -- player sql)
 if [ -z "$staged" ]; then
-    exit 0
-fi
-
-if [ "${LEMPI_SKIP_VERIFY:-0}" = "1" ]; then
-    echo "pre-commit: SKIPPED by LEMPI_SKIP_VERIFY=1."
-    echo "pre-commit: this commit's cfg(unix) code is unverified; it may not build on the appliance."
     exit 0
 fi
 
