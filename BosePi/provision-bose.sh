@@ -102,8 +102,12 @@ step "Packages"
 # at the network. It was installed by hand on 2026-09-11 and lost at the next
 # reboot with everything else that went to the overlay `[IMPL-BOS-185]`;
 # listing it here is what stops a rebuilt card from arriving without it.
+#
+# `chrony` is the fleet's clock `[GDE-ECHO-300]`, configured by the "Fleet
+# clock" step below. It was installed by hand -- BOSE010 carries the command
+# as a worked example -- until 2026-09-25.
 on "sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-        mpd f2fs-tools cloud-guest-utils alsa-utils sqlite3 >/dev/null" \
+        mpd f2fs-tools cloud-guest-utils alsa-utils sqlite3 chrony >/dev/null" \
     || die "package install failed"
 say "mpd $(on 'mpd --version 2>/dev/null | head -1')"
 
@@ -164,6 +168,33 @@ on "sudo mkdir -p /etc/systemd/journald.conf.d
       | sudo tee /etc/systemd/journald.conf.d/lempi.conf >/dev/null"
 say "Storage=persistent, SystemMaxUse=64M, on C via /var/log"
 
+step "Wi-Fi country"
+# The regulatory country the radio obeys. The imager's customisation screen
+# set it on this card (`cfg80211.ieee80211_regdom=US` in cmdline.txt) and
+# nothing in the repository did, so a card imaged without that screen came up
+# with whatever the default was. Stated here, through raspi-config, which owns
+# that line -- found only on the card, 2026-09-25.
+WIFI_COUNTRY="${WIFI_COUNTRY:-US}"
+if [ "$(on "sudo raspi-config nonint get_wifi_country" 2>/dev/null)" = "$WIFI_COUNTRY" ]; then
+    say "already $WIFI_COUNTRY"
+else
+    on "sudo raspi-config nonint do_wifi_country $WIFI_COUNTRY" || die "could not set Wi-Fi country"
+    say "set to $WIFI_COUNTRY (takes effect at the next boot)"
+fi
+
+step "Fleet clock  [GDE-ECHO-300]"
+# One LAN reference for every node, the same fallback on every node, and the
+# distribution's own pool commented out so it cannot become this node's
+# private fallback. Done by hand until 2026-09-25 (BOSE010's worked example);
+# the file is identical in every machine folder.
+[ -f BosePi/lempi-fleet.sources ] || die "BosePi/lempi-fleet.sources missing"
+scp -q BosePi/lempi-fleet.sources "$HOST:/tmp/lempi-fleet.sources" || die "upload failed"
+on "sudo install -D -m644 /tmp/lempi-fleet.sources /etc/chrony/sources.d/lempi-fleet.sources
+    rm -f /tmp/lempi-fleet.sources
+    sudo sed -i 's/^pool 2\.debian\.pool\.ntp\.org/#&/' /etc/chrony/chrony.conf
+    sudo systemctl restart chrony" || die "chrony configuration failed"
+say "verify: chronyc sources shows ^* 192.168.67.93"
+
 step "Overlay-safe remount-fs  [IMPL-BOS-170, found live on bose 2026-09-07]"
 # systemd-remount-fs.service tries to remount / per fstab's overlay entry --
 # not just at boot, but every time anything pulls in local-fs.target, which
@@ -200,8 +231,16 @@ step "zram-only swap, not zram+file  [IMPL-BOS-170]"
 # on device` -- found live, right after the remount-fs fix above stopped
 # masking it. Simplest correct fix for a read-only appliance: drop the file
 # half entirely, pure zram.
-on "sudo sed -i 's/^#Mechanism=auto/Mechanism=zram/' /etc/rpi/swap.conf
+#
+# Since 2026-09-25 a tracked drop-in, stating the size as well as the
+# mechanism, rather than a sed on the package's own file: the size had been
+# whatever rpi-swap's defaults gave, recorded nowhere.
+[ -f BosePi/rpi-swap-lempi.conf ] || die "BosePi/rpi-swap-lempi.conf missing"
+scp -q BosePi/rpi-swap-lempi.conf "$HOST:/tmp/rpi-swap-lempi.conf" || die "upload failed"
+on "sudo install -D -m644 /tmp/rpi-swap-lempi.conf /etc/rpi/swap.conf.d/10-lempi.conf
+    rm -f /tmp/rpi-swap-lempi.conf
     sudo systemctl daemon-reload"
+say "zram, 1x RAM, at most 2048 MiB (BosePi/rpi-swap-lempi.conf)"
 say "verify after the next boot: systemctl cat dev-zram0.swap | grep zram)"
 say "should say '(zram)', not '(zram+file)', with no rpi-setup-loop binding"
 

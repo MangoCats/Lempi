@@ -67,9 +67,11 @@ NEED=""
 # point; iw is what confirmed live that this board's driver supports AP
 # mode in the first place, and is worth keeping installed for the same
 # diagnostic reason on every appliance, not just the one it was checked on.
+# chrony is the fleet's clock `[GDE-ECHO-300]`, configured under "platform"
+# below; it was installed by hand on every node until 2026-09-25.
 for p in pipewire pipewire-pulse pipewire-alsa wireplumber libspa-0.2-bluetooth \
          bluez libasound2 alsa-utils sqlite3 upower evtest ffmpeg \
-         dnsmasq iw python3-dbus python3-gi; do
+         dnsmasq iw python3-dbus python3-gi chrony; do
     dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"
 done
 if [ -n "$NEED" ]; then
@@ -685,6 +687,57 @@ UNIT
     else
         ok "led unit enabled"
     fi
+fi
+
+# ---------------------------------------------------------------- platform
+# Set here explicitly, even where the imager already set them, so this script
+# is the whole record of how the node was built -- not the imager's
+# customisation screen, which leaves no trace in the repository. Both were
+# found only on the card on 2026-09-25 [PI3-FOUND-770].
+echo "platform"
+
+# The Wi-Fi regulatory country: which channels and powers the radio may use.
+# The imager wrote it to cmdline.txt (`cfg80211.ieee80211_regdom=US`);
+# raspi-config is the tool that owns that line.
+WIFI_COUNTRY="${WIFI_COUNTRY:-US}"
+if [ "$(raspi-config nonint get_wifi_country 2>/dev/null)" != "$WIFI_COUNTRY" ]; then
+    raspi-config nonint do_wifi_country "$WIFI_COUNTRY"
+    did "wifi country $WIFI_COUNTRY (reboot to apply)"
+else
+    ok "wifi country $WIFI_COUNTRY"
+fi
+
+# Swap: a 512 MB file through dphys-swapfile, as this node has run it -- a
+# swapfile on the root, which [SD-RISK-150] names as SD wear worth moving to
+# zram one day. Recorded as it is, not as it might be.
+SWAP_MB=512
+if ! grep -qx "CONF_SWAPSIZE=$SWAP_MB" /etc/dphys-swapfile 2>/dev/null; then
+    sed -i "s/^#\{0,1\}CONF_SWAPSIZE=.*/CONF_SWAPSIZE=$SWAP_MB/" /etc/dphys-swapfile
+    dphys-swapfile swapoff >/dev/null 2>&1 || true
+    dphys-swapfile setup >/dev/null 2>&1 && dphys-swapfile swapon >/dev/null 2>&1
+    did "swap ${SWAP_MB} MB (dphys-swapfile)"
+else
+    ok "swap ${SWAP_MB} MB (dphys-swapfile)"
+fi
+
+# The fleet clock `[GDE-ECHO-300]`: one LAN reference for every node, the same
+# fallback on every node, and the distribution's own pool commented out so it
+# cannot become a node's private fallback. All three were done by hand on
+# every node -- BOSE010 carried the commands as a worked example, and no
+# script ran them.
+if ! cmp -s "$HERE/lempi-fleet.sources" /etc/chrony/sources.d/lempi-fleet.sources; then
+    install -D -m644 "$HERE/lempi-fleet.sources" /etc/chrony/sources.d/lempi-fleet.sources
+    chronyc reload sources >/dev/null 2>&1 || true
+    did "chrony: fleet sources"
+else
+    ok "chrony: fleet sources"
+fi
+if grep -q '^pool 2\.debian\.pool\.ntp\.org' /etc/chrony/chrony.conf 2>/dev/null; then
+    sed -i 's/^pool 2\.debian\.pool\.ntp\.org/#&/' /etc/chrony/chrony.conf
+    systemctl restart chrony
+    did "chrony: distribution pool off"
+else
+    ok "chrony: distribution pool off"
 fi
 
 # -------------------------------------------------------------- boot tuning

@@ -1,0 +1,8 @@
+# Lempi fleet time [GDE-ECHO-300]. Smart is the LAN reference: disciplining
+# every node to one server makes its error common-mode, which cancels in the
+# node-to-node comparison echo playback depends on.
+server 192.168.67.93 iburst prefer minpoll 4 maxpoll 6
+# Identical fallback on every node, so a Smart outage degrades the fleet
+# together rather than splitting it. Both are non-leap-smearing.
+pool us.pool.ntp.org iburst maxsources 3
+server time.nist.gov iburst

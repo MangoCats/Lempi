@@ -61,6 +61,13 @@ directly. **It reconnected on the same schedule anyway.** Music Assistant's own
 tracker reports the behaviour as format-independent, affecting `.flac` and
 `.aac` alike.
 
+The server itself outlived the experiment: `icecast2` stayed installed on
+`lempi02w`, disabled, with its configuration (and its passwords) edited on
+2026-09-21 and written in no setup script. Found by a fleet audit on
+2026-09-25 and **purged** at the maintainer's direction — package,
+configuration, user and group — rather than recorded, since this direction is
+closed.
+
 **The conclusion is a Sonos-firmware-side timeout for this class of stream, not
 a serving-side defect.** The tractable target was never eliminating the
 disconnect but narrowing the gap it leaves — buffer-ahead, fast re-request,
