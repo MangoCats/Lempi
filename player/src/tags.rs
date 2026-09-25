@@ -17,6 +17,7 @@
 //! pulling a media framework into its build. They are re-exported below under
 //! their original names, so `crate::tags::Tags` reads the same here as it did
 //! when this was one file.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use std::path::Path;
 
@@ -176,7 +177,7 @@ pub fn backfill(db: &std::path::Path, announce: bool) -> Result<(usize, usize), 
         return Ok((0, 0));
     }
     if announce {
-        println!("scanning tags for {} file(s) in the background", files.len());
+        tracing::info!("scanning tags for {} file(s) in the background", files.len());
     }
     let started = std::time::Instant::now();
     let mut art = 0usize;
@@ -194,12 +195,12 @@ pub fn backfill(db: &std::path::Path, announce: bool) -> Result<(usize, usize), 
             // forgotten `[REQ-VIS-180]`.
             unstored += 1;
             if unstored <= 5 {
-                eprintln!("store tags for {file_id}: {e}");
+                tracing::error!("store tags for {file_id}: {e}");
             }
         }
         // A silent minute looks like a hang `[REQ-VIS-140]`.
         if announce && (i % 500 == 499 || i + 1 == files.len()) {
-            println!(
+            tracing::info!(
                 "  tags: {}/{} files ({:.0}s)",
                 i + 1,
                 files.len(),
@@ -208,14 +209,14 @@ pub fn backfill(db: &std::path::Path, announce: bool) -> Result<(usize, usize), 
         }
     }
     if announce {
-        println!(
+        tracing::info!(
             "tag scan complete: {} files, {art} with cover art, {:.1}s",
             files.len(),
             started.elapsed().as_secs_f32()
         );
     }
     if unstored > 0 {
-        eprintln!(
+        tracing::warn!(
             "WARNING: {unstored} file(s) could not be stored and will not be retried; \
              re-run `tagscan --all` to rebuild the index"
         );
