@@ -164,7 +164,7 @@ was sent.
 | `bose` | `/etc/systemd/system/lempi.service` — tracked here as [`BosePi/lempi-bose.service`](../BosePi/lempi-bose.service) | ☑ 2026-09-25, both layers, no shim line since |
 | `lempi02w` | base unit `/etc/systemd/system/lempi.service`, written by [`LempiPi/setup-appliance.sh`](../LempiPi/setup-appliance.sh) | ☐ named, but reads `--listener /srv/library/lempi.db` (2026-09-25); the drop-in overrides it |
 | `lempi02w` | drop-in `/etc/systemd/system/lempi.service.d/mpd-guest.conf` — tracked as [`LempiPi/lempi-mpd-guest.conf`](../LempiPi/lempi-mpd-guest.conf) | ☑ read back 2026-09-25 |
-| `lp3-wifi` | `/etc/systemd/system/lempi.service` — tracked here as [`LempiPlay3/lempi.service`](../LempiPlay3/lempi.service) since 2026-09-21 `[LP3-REP-010]` | ☐ |
+| `lp3-wifi` | `/etc/systemd/system/lempi.service` — tracked here as [`LempiPlay3/lempi.service`](../LempiPlay3/lempi.service) since 2026-09-21 `[LP3-REP-010]` | ☑ 2026-09-25, both layers, no shim line since |
 
 **lempi02w reports two `ExecStart` lines because it has two.** The drop-in
 blanks the base unit's with an empty `ExecStart=` and supplies its own; the
