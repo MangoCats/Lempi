@@ -35,6 +35,7 @@
     "capabilities.radios",
     "capabilities.restart",
     "capabilities.wifi",
+    "capabilities.writes_beside_audio",
     "dev_mode",
     "duration_ms",
     "fader_min_db",

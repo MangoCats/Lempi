@@ -1407,6 +1407,46 @@ mod tests {
         assert!(appliance.starts_with("HTTP/1.1 200"), "no secret set must ask for nothing");
     }
 
+    /// A host that forbids writing beside the audio refuses the lyrics
+    /// sidecar's route, and leaves no request for the loop to act on
+    /// `[REQ-AND-200]`; one that allows it takes the request as before.
+    #[tokio::test]
+    async fn the_lyrics_sidecar_is_refused_where_the_host_forbids_it() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let post = |allowed: bool| async move {
+            let (_e, h) = crate::engine::Engine::new(crate::path::PathHandle::silent(), 1);
+            let ui = Ui {
+                handle: Arc::new(h),
+                db: ":memory:".into(),
+                library: ":memory:".into(),
+                why: Default::default(),
+                controls: Default::default(),
+                capabilities: capabilities::Capabilities {
+                    writes_beside_audio: allowed,
+                    ..Default::default()
+                },
+            };
+            let controls = ui.controls.clone();
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = l.local_addr().unwrap();
+            tokio::spawn(async move { axum::serve(l, router(ui)).await });
+            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+            s.write_all(b"POST /lyricssidecar/on HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await.unwrap();
+            let mut buf = Vec::new();
+            s.read_to_end(&mut buf).await.unwrap();
+            let line = String::from_utf8_lossy(&buf).lines().next().unwrap_or("").to_string();
+            let asked = controls.lock().unwrap().sidecar_requested;
+            (line, asked)
+        };
+        let (line, asked) = post(false).await;
+        assert!(line.contains(" 403 "), "a forbidding host answered {line:?}");
+        assert_eq!(asked, None, "a refused request must leave nothing for the loop");
+        let (line, asked) = post(true).await;
+        assert!(line.contains(" 202 "), "an allowing host answered {line:?}");
+        assert_eq!(asked, Some(true));
+    }
+
     /// **A bound the engine enforces is a bound the control must be told.**
     ///
     /// `ECHO_TRIM_LIMIT_MS` was enforced in the engine's command handler, again

@@ -228,6 +228,7 @@
     restart: ['restart'], power_off: ['power'], wifi: ['wifi-row'],
     bluetooth: ['speakers'], led: ['led-row'], radios: ['radios'],
     follow: ['echo-trim-row', 'follow-row', 'join-row'],
+    writes_beside_audio: ['sidecar-row'],
   };
   function renderCapabilities(c) {
     caps = c || {};

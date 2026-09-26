@@ -136,8 +136,14 @@ pub(super) async fn set_skip_lead(
 /// lists are the same four in the same order, and neither is complete without
 /// the other. Adding a fifth means an arm here, an entry there, a column of
 /// none — settings are rows now `[SPEC-SC-099]` — and a checkbox in the skin.
+///
+/// `beside` marks a setting that writes **beside the audio**, which a host may
+/// forbid -- a phone, where the music is shared and Lempi's own files are not
+/// `[REQ-AND-200]`. Where it is forbidden the route refuses rather than
+/// persisting a choice that would do nothing, and the snapshot's
+/// `writes_beside_audio` capability lets the skin hide it.
 macro_rules! writes_files {
-    ($($fn_name:ident => $cmd:ident, $asked:ident, $status:ident, $what:literal, $req:literal;)+) => {
+    ($($fn_name:ident => $cmd:ident, $asked:ident, $status:ident, $what:literal, $req:literal, beside: $beside:literal;)+) => {
         $(
             #[doc = concat!("Allow or forbid Lempi writing ", $what, " `", $req, "`.")]
             ///
@@ -146,6 +152,9 @@ macro_rules! writes_files {
                 State(ui): State<Ui>,
                 axum::extract::Path(on): axum::extract::Path<String>,
             ) -> StatusCode {
+                if $beside && !ui.capabilities.writes_beside_audio {
+                    return StatusCode::FORBIDDEN;
+                }
                 let want = on == "on" || on == "true" || on == "1";
                 ui.handle.send(Command::$cmd(want));
                 let Ok(mut c) = ui.controls.lock() else {
@@ -159,13 +168,16 @@ macro_rules! writes_files {
     };
 }
 
+// Only the lyrics sidecar is marked `beside` so far: [REQ-AND-200] decided it.
+// Cue sheets and covers also write into the music folder, and whether a phone
+// forbids them too is [REQ-AND-950], the maintainer's.
 writes_files! {    set_cue_sheets => SetCueSheets, cue_requested, cue_status,
-        "cue sheets into the music folder", "[REQ-VIS-205]";
+        "cue sheets into the music folder", "[REQ-VIS-205]", beside: false;
     set_covers => SetCovers, covers_requested, covers_status,
-        "cover art into the music folder", "[REQ-VIS-210]";
+        "cover art into the music folder", "[REQ-VIS-210]", beside: false;
     set_lyrics_cache => SetLyricsCache, lyrics_requested, lyrics_status,
-        "per-song lyrics into a local client's cache", "[REQ-VIS-215]";
+        "per-song lyrics into a local client's cache", "[REQ-VIS-215]", beside: false;
     set_lyrics_sidecar => SetLyricsSidecar, sidecar_requested, sidecar_status,
-        "lyrics beside the audio", "[REQ-VIS-220]";
+        "lyrics beside the audio", "[REQ-VIS-220]", beside: true;
 }
 

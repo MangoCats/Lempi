@@ -115,6 +115,9 @@ fn main() {
         // are a phone host's `[REQ-AND-160]`.
         web_loopback_only: false,
         web_secret: None,
+        // An appliance's library is its own to annotate `[REQ-VIS-220]`; a
+        // phone's is not `[REQ-AND-200]`.
+        writes_beside_audio: true,
         backup: true,
         tag_scan: true,
     };

@@ -34,6 +34,11 @@ pub struct Capabilities {
     /// `[REQ-AND-170]`, `[REQ-AND-180]`. Not a host fact but a build fact, so
     /// it needs no measuring.
     pub follow: bool,
+    /// Lempi may write its own files beside the audio -- the lyrics sidecar
+    /// `[REQ-VIS-220]`. A host's choice, from its configuration: a phone's
+    /// music is shared and Lempi's files stay private `[REQ-AND-200]`. False
+    /// here until the host says otherwise.
+    pub writes_beside_audio: bool,
 }
 
 impl Capabilities {
@@ -60,6 +65,8 @@ impl Capabilities {
             led: via_helper,
             radios: via_helper,
             follow: cfg!(feature = "echo-client"),
+            // Not measured here: the host's configuration says, after this.
+            writes_beside_audio: false,
         };
         let why = if !has_helper {
             format!(" (no {helper})")
@@ -88,6 +95,7 @@ impl Capabilities {
             ("led", self.led),
             ("radios", self.radios),
             ("follow", self.follow),
+            ("files beside the audio", self.writes_beside_audio),
         ];
         let on: Vec<&str> = all.iter().filter(|(_, v)| *v).map(|(n, _)| *n).collect();
         let off: Vec<&str> = all.iter().filter(|(_, v)| !*v).map(|(n, _)| *n).collect();
@@ -108,8 +116,8 @@ mod tests {
         let caps = Capabilities { restart: true, power_off: true, ..Default::default() };
         assert_eq!(
             caps.describe(" (no /usr/local/bin/lempi-btctl)"),
-            "host controls: restart, power-off; not offered: wifi, bluetooth, led, radios, follow \
-             (no /usr/local/bin/lempi-btctl)"
+            "host controls: restart, power-off; not offered: wifi, bluetooth, led, radios, follow, \
+             files beside the audio (no /usr/local/bin/lempi-btctl)"
         );
         assert_eq!(
             Capabilities::default().describe(" (built without the appliance feature)"),
@@ -122,7 +130,8 @@ mod tests {
     #[test]
     fn every_capability_is_on_the_wire() {
         let v = serde_json::to_value(Capabilities::default()).unwrap();
-        for k in ["restart", "power_off", "wifi", "bluetooth", "led", "radios", "follow"] {
+        for k in ["restart", "power_off", "wifi", "bluetooth", "led", "radios", "follow",
+                  "writes_beside_audio"] {
             assert_eq!(v[k], serde_json::json!(false), "{k}");
         }
     }

@@ -47,7 +47,7 @@ The README ranks mobile *Future / Post-V1*. Nothing here schedules the work; it 
 
 ## 3. The library and its storage
 
-**`[REQ-AND-200]` Lempi's own files are private**: its databases, caches, lyrics cache and backups live in app-private storage. Lyrics are never written beside the audio `[GDE-APP-080]`.
+**`[REQ-AND-200]` Lempi's own files are private**: its databases, caches, lyrics cache and backups live in app-private storage. Lyrics are never written beside the audio `[GDE-APP-080]`. *Built 2026-09-25:* the host's `writes_beside_audio` switch, false on a phone, refuses the sidecar's route, hides its setting through the snapshot's capabilities, and never runs the generation. Covers and cue sheets also write into the music folder — `[REQ-AND-950]`.
 
 **`[REQ-AND-210]` The music is shared.** Audio lives in shared storage, visible to and playable by other apps; what Lempi imports lands in `Music/Lempi/` `[GDE-APP-070]`.
 
@@ -100,7 +100,8 @@ The README ranks mobile *Future / Post-V1*. Nothing here schedules the work; it 
 3. **`[REQ-AND-920]` Whether a MediaStore path opens with `File::open`** on the device; if not, the audio-source resolver `[GDE-HST-080]` covers every path, not only the sidecars `[GDE-APP-080]`.
 4. **`[REQ-AND-930]` How exported music reaches Vipunen** `[REQ-AND-280]`. *Decided 2026-09-25: over the local network to an active node, ideally* — `[REQ-AND-285]`. Still open beneath it: discovery, authorisation and where the node files what arrives.
 5. **`[REQ-AND-940]` The Director's handling of a passage without flavor** `[REQ-AND-310]`. *Answered from the code 2026-09-25* — see `[REQ-AND-310]`; it raised `[REQ-AND-315]`, which awaits the maintainer.
+6. **`[REQ-AND-950]` Whether a phone also refuses to write covers and cue sheets into `Music/`** `[REQ-AND-200]`. Both are Lempi's files in a shared folder, as the lyrics sidecar is; both help another player that reads them. The switch built for the sidecar extends to them by marking their settings `beside` in `web/settings.rs`.
 
 ---
 
-**Traceability:** `[REQ-AND-010..940]` · every requirement cites the GUIDE034 decision it comes from · refines `[REQ-PORT-130]`, `[REQ-PORT-150]` · excludes `[REQ-HW-100]`, `[REQ-HW-110]`, `[REQ-HW-120]`, `[REQ-HW-150]`
+**Traceability:** `[REQ-AND-010..950]` · every requirement cites the GUIDE034 decision it comes from · refines `[REQ-PORT-130]`, `[REQ-PORT-150]` · excludes `[REQ-HW-100]`, `[REQ-HW-110]`, `[REQ-HW-120]`, `[REQ-HW-150]`

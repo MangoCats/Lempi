@@ -53,7 +53,7 @@ const SPARSE = {
   // that drives one still finds it. The absent case is its own check
   // `[GDE-HST-360]`.
   capabilities: { restart: true, power_off: true, wifi: true, bluetooth: true,
-                  led: true, radios: true, follow: true },
+                  led: true, radios: true, follow: true, writes_beside_audio: true },
 };
 
 // A snapshot carrying a full Program Director explanation -- the richest
@@ -546,10 +546,12 @@ async function run(skin) {
   // `[GDE-HST-360]` -- and only on an explicit false, so a snapshot that does
   // not carry `capabilities` at all hides nothing.
   // One capability can govern several rows: `follow` hides every setting that
-  // only means something inside an echo fleet `[REQ-AND-170]`.
+  // only means something inside an echo fleet `[REQ-AND-170]`. And a host
+  // that forbids writing beside the audio hides that setting `[REQ-AND-200]`.
   const capRows = { restart: ['restart'], power_off: ['power'], wifi: ['wifi-row'],
                     bluetooth: ['speakers'], led: ['led-row'], radios: ['radios'],
-                    follow: ['echo-trim-row', 'follow-row', 'join-row'] };
+                    follow: ['echo-trim-row', 'follow-row', 'join-row'],
+                    writes_beside_audio: ['sidecar-row'] };
   const eachRow = (fn) => { for (const [cap, ids] of Object.entries(capRows)) for (const id of ids) fn(cap, id); };
   if (window.document.getElementById('power')) {
     const row = id => window.document.getElementById(id);

@@ -95,6 +95,12 @@ pub struct Config {
     /// launch `[REQ-AND-160]` -- see `web::access`. `None` asks for nothing:
     /// the appliance's LAN UI. Never logged.
     pub web_secret: Option<String>,
+    /// Lempi may write its own files beside the audio -- the lyrics sidecar
+    /// `[REQ-VIS-220]`. An appliance's library is Lempi's to annotate; a
+    /// phone's music is shared with other apps, and Lempi's files stay in its
+    /// private storage `[REQ-AND-200]`. False refuses the setting's route,
+    /// hides it in the skin, and never runs the generation.
+    pub writes_beside_audio: bool,
     /// Snapshot the listener database now and hourly `[REQ-LIB-160]`.
     pub backup: bool,
     /// Read the files' own tags in the background, for browsing by album.
@@ -196,6 +202,7 @@ impl Player {
             device: cfg.device.clone(),
             mpd_addr: cfg.mpd_addr.clone(),
             mpd_root: cfg.mpd_root.clone(),
+            writes_beside_audio: cfg.writes_beside_audio,
         };
         let signal = Signal(ended_tx.clone(), Ended::Engine);
         std::thread::Builder::new()
@@ -254,7 +261,8 @@ impl Player {
         if let Some(port) = cfg.web_port {
             // Measured once, here, off the engine's thread, and stated
             // `[GDE-HST-360]`: which host controls the page will offer.
-            let (capabilities, why_not) = crate::web::capabilities::Capabilities::detect();
+            let (mut capabilities, why_not) = crate::web::capabilities::Capabilities::detect();
+            capabilities.writes_beside_audio = cfg.writes_beside_audio;
             tracing::info!("{}", capabilities.describe(&why_not));
             let ui = crate::web::Ui {
                 handle: handle.clone(),
@@ -418,6 +426,7 @@ struct EngineSetup {
     device: Option<String>,
     mpd_addr: Option<String>,
     mpd_root: Option<String>,
+    writes_beside_audio: bool,
 }
 
 /// The published state, so the loop can read the listener's settings after the
@@ -427,7 +436,8 @@ fn state_of(h: &EngineHandle) -> Arc<Mutex<PlayerState>> {
 }
 
 fn engine_thread(setup: EngineSetup, tx: SyncSender<Started>) {
-    let EngineSetup { db, library, depth, device, mpd_addr, mpd_root } = setup;
+    let EngineSetup { db, library, depth, device, mpd_addr, mpd_root, writes_beside_audio } =
+        setup;
     let mut session = match Session::open(&db, &library, depth) {
         Ok(s) => s,
         Err(e) => {
@@ -612,8 +622,12 @@ fn engine_thread(setup: EngineSetup, tx: SyncSender<Started>) {
         run_generation(&library, &controls_for_switch, "cover art", "covers",
             |c| c.covers_requested.take(), |c, s| c.covers_status = Some(s),
             |conn| crate::covers::generate(conn, false).map(|r| (r, "cover")));
+        // The route already refuses where the host forbids it; this is the
+        // second lock on the same door `[REQ-AND-200]`, so no other path to
+        // the request can write beside a phone's shared music.
         run_generation(&library, &controls_for_switch, "lyrics sidecar", "files",
-            |c| c.sidecar_requested.take(), |c, s| c.sidecar_status = Some(s),
+            |c| c.sidecar_requested.take().filter(|_| writes_beside_audio),
+            |c, s| c.sidecar_status = Some(s),
             |conn| crate::lyrics_sidecar::generate(conn, false).map(|r| (r, "file")));
         // The odd one out: it writes into a client's cache rather than the
         // music folder, so it has somewhere to fail to find.
@@ -795,6 +809,7 @@ mod tests {
             also_port_80: false,
             web_loopback_only: false,
             web_secret: None,
+            writes_beside_audio: false,
             backup: false,
             tag_scan: false,
         };
