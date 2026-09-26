@@ -46,7 +46,7 @@ Needed regardless of route:
 - **Relink by content.** Phone paths resemble nothing on the Pi, and `[SPEC-RLK-025]` is the standing proof that path rewriting is not sound.
 - **Bundle import**, listener-state write-back, backup, Director reload.
 
-Provided by Media3 either way: decode, gapless, audio focus, media session, notification, media buttons, Bluetooth routing. *(2026-09-24: this section assumes the audio path is rebuilt on Media3. `[GDE-HST-010]` argues it need not be — `cpal` carries an AAudio backend, so the existing decoder, mixer and fades could run unchanged — but that is a hypothesis until `[GDE-HST-030]` first compiles the player for Android.)*
+Provided by Media3 either way: decode, gapless, audio focus, media session, notification, media buttons, Bluetooth routing. *(2026-09-24: this section assumes the audio path is rebuilt on Media3. `[GDE-HST-010]` argues it need not be — `cpal` carries an AAudio backend, so the existing decoder, mixer and fades could run unchanged — but that is a hypothesis until `[GDE-HST-030]` first compiles the player for Android. 2026-09-25: it compiles; linking and running it on a device is unproven, and GUIDE034 `[GDE-APP-001]`/`[GDE-APP-010]` recommends the Rust player, with Media3 for the media session only, gated on a device spike.)*
 
 **So a fork saves only the shell**: library browsing, MediaStore indexing, tag parsing, playlists, search, sort, theming.
 
