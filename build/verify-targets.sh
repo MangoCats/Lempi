@@ -270,6 +270,15 @@ run_step "E" env MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w lempi-a
     --target aarch64-linux-android --all-targets --locked \
     --target-dir player/target/gate-android \
     || fail=$((fail+1))
+# And the player library as a phone links it -- no `appliance` -- since
+# 2026-09-25 `[REQ-AND-500]`, warnings denied as in CI.
+run_step "E" env MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w \
+    -e RUSTFLAGS="-D warnings" lempi-android \
+    cargo check --manifest-path player/Cargo.toml -p lempi-player --lib \
+    --no-default-features --features echo-client \
+    --target aarch64-linux-android --locked \
+    --target-dir player/target/gate-android-player \
+    || fail=$((fail+1))
 
 echo
 core_boundary || fail=$((fail+1))

@@ -20,6 +20,8 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 > [REQ005](REQ005-visibility-listening-surface.md) and
 > [REQ006](REQ006-visibility-words-and-the-rest.md). This document keeps the
 > remaining domains, the non-requirements and the coverage gaps.
+> **Android** is [REQ007](REQ007-android.md) `[REQ-AND-*]`, added 2026-09-25
+> as a draft: what differs on a phone, citing these for what does not.
 ## 2. Program Director — `PD`
 
 **`[REQ-PD-100]`** Select the next passage automatically, continuously, without user intervention. The queue never empties while eligible passages exist.
@@ -182,11 +184,11 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 
 **`[REQ-PORT-120]`** Listener state **never** travels with music `[SPEC-DF-055]`. The transport carries facts about the music, never facts about the listener.
 
-**`[REQ-PORT-130]`** Imported metadata is verified before trust: recompute `audio_md5` and discard encoding-scope claims that disagree `[SPEC-DF-070]`.
+**`[REQ-PORT-130]`** Imported metadata is verified before trust: recompute `audio_md5` and discard encoding-scope claims that disagree `[SPEC-DF-070]`. *On a phone, which cannot compute `audio_md5`, by the byte hash carried in the payload instead — [REQ007](REQ007-android.md) `[REQ-AND-030]`.*
 
 **`[REQ-PORT-140]`** Writing tags to a user's files requires informed consent, and uses temp-file → verify → atomic replace so a failed write cannot damage the library `[SPEC-DF-092]`.
 
-**`[REQ-PORT-150]`** Listener state is exported automatically on a schedule, integrity-checked before rotation, retained generationally `[SPEC-DF-094]`. It is the only irreplaceable data in the system.
+**`[REQ-PORT-150]`** Listener state is exported automatically on a schedule, integrity-checked before rotation, retained generationally `[SPEC-DF-094]`. It is the only irreplaceable data in the system. *On a phone a backup must also be retrievable off it, since uninstalling deletes app-private storage — [REQ007](REQ007-android.md) `[REQ-AND-190]`.*
 
 **`[REQ-PORT-160]`** Two or more Vipunen-capable installations can reconcile their catalogs — class A/B/C content and flags — against each other, not only against one hub. Designed in [SPEC035](SPEC035-mesh-library-sync.md) §2.
 

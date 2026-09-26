@@ -194,7 +194,7 @@ grep -rn "SPEC-PD" docs/
 | `[INH-*]` | Inherited-document provenance register & hazards | [inherited/README.md](inherited/README.md) |
 | `[SPEC-FD-030]` | Total-variation per-characteristic distance | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#2-the-metric) |
 | `[SPEC-FD-050]` | Measured per-characteristic reliability & scale constants | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#3-reliability--measured-not-assumed) |
-| `[REQ-*]` (AUD/PD/VIS/LIB/PORT/HW) | Functional requirements -- supersedes REQ001. REQ002 indexes them and holds PD/LIB/PORT/HW; `[REQ-AUD-*]` is REQ003; `[REQ-VIS-*]` is REQ004 (provenance), REQ005 (the listening surface) and REQ006 (words) | [REQ002-functional-requirements.md](spec/REQ002-functional-requirements.md) |
+| `[REQ-*]` (AUD/PD/VIS/LIB/PORT/HW) | Functional requirements -- supersedes REQ001. REQ002 indexes them and holds PD/LIB/PORT/HW; `[REQ-AUD-*]` is REQ003; `[REQ-VIS-*]` is REQ004 (provenance), REQ005 (the listening surface) and REQ006 (words); `[REQ-AND-*]`, Android, is REQ007 | [REQ002-functional-requirements.md](spec/REQ002-functional-requirements.md) |
 | `[SPEC-DIR-100]` | Frequency vs character orthogonality | [SPEC009-program-director.md](spec/SPEC009-program-director.md#1-the-governing-idea) |
 | `[SPEC-DIR-150]` | Where Like/Dislike Taste enters selection | [SPEC009-program-director.md](spec/SPEC009-program-director.md#4-stage-b--pool-shaping) |
 | `[SPEC-SC-030]` | Identity spine: files / recordings / passages DDL | [SPEC008-database-schema.md](spec/SPEC008-database-schema.md#2-identity-spine) |

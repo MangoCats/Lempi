@@ -4,7 +4,7 @@
 
 Written 2026-09-25, after the tree was tagged `pre-android-development`, in answer to the question whether the Android guidance was ready to support requirements, implementation and test. It was not: GUIDE004 and GUIDE033 disagreed on what plays the audio, one decision taken that day (`[GDE-AND-070]`) contradicted an older principle, and much of what an app needs was never asked. This puts each open matter as a question with a recommendation, the way GUIDE033 §6 did — *proposed, not decided*, until the maintainer answers.
 
-**Answered 2026-09-25.** The maintainer accepted every recommendation except two: `[GDE-APP-050]` is decided as revised by the maintainer's clarification — a scan also finds music new to the fleet, which the phone can send out for induction — and `[GDE-APP-070]` was asked to weigh `Music/Lempi/` against `Music/`, which it now does, and awaits confirmation.
+**Answered 2026-09-25.** The maintainer accepted every recommendation except two: `[GDE-APP-050]` is decided as revised by the maintainer's clarification — a scan also finds music new to the fleet, which the phone can send out for induction — and `[GDE-APP-070]` was asked to weigh `Music/Lempi/` against `Music/`, which it now does — its recommendation confirmed the same day. Every question here is now decided; the requirements they produce are [REQ007](spec/REQ007-android.md).
 
 > **Related:** [GUIDE004](GUIDE004-phone-port-strategy.md) (route and licence; `[GDE-AND-060]`, `[GDE-AND-065]`, `[GDE-AND-070]`) · [GUIDE033](GUIDE033-the-player-without-an-appliance.md) (the player made host-indifferent) · [SPEC011](spec/SPEC011-audio-path-supervisor.md) · [SPEC012](spec/SPEC012-library-relink.md)
 
@@ -39,7 +39,7 @@ So the phone still never analyses — `[GDE-AND-050]` holds — but it gains an 
 
 **`[GDE-APP-060]` Verifying and recognising files without ffmpeg.** *Options:* carry a byte hash in the payload; move the identity hash into Rust `[SPEC-RLK-150]`; ship ffmpeg on the phone. *Recommendation:* **a SHA-256 of each file's bytes, computed by Vipunen and carried in the payload** `[GDE-HST-080]`. The phone uses it to confirm an import arrived intact, and to recognise a scanned file as a catalogue entry. The audio-identity hash stays on the desktop. *Why:* the phone needs "same bytes", never "same audio"; a byte hash is cheap, needs no decoder, and a pure-Rust hash crate passes the core boundary gate. *Consequence:* a file retagged on the phone no longer matches, and falls to tags-only until the next bundle — said in the UI, not hidden.
 
-**`[GDE-APP-070]` How a library reaches the phone.** *Accepted:* the user copies audio in by any means and opens the bundle through Android's share or open sheet `[GDE-AND-050]`; a LAN pull is later. *Awaiting confirmation:* **where the audio lands.** The folder answers three separate questions, and only one of them depends on it:
+**`[GDE-APP-070]` How a library reaches the phone.** *Accepted:* the user copies audio in by any means and opens the bundle through Android's share or open sheet `[GDE-AND-050]`; a LAN pull is later. *Confirmed 2026-09-25, below:* **where the audio lands.** The folder answers three separate questions, and only one of them depends on it:
 
 | | `Music/Lempi/` | `Music/` |
 | :--- | :--- | :--- |

@@ -106,7 +106,7 @@ jobs:
         run: python3 tools/check_exec_bits.py
 
   android-core:
-    name: lempi-core compiles for Android
+    name: lempi-core and the player library compile for Android
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -128,6 +128,19 @@ jobs:
           docker run --rm -v "$PWD":/w -w /w lempi-android
           cargo check --manifest-path player/Cargo.toml -p lempi-core
           --target aarch64-linux-android --all-targets --locked
+
+      # The player library as a phone links it -- no `appliance`, no `sudo`
+      # -- a gate since 2026-09-25 `[REQ-AND-500]`. Run once by hand that day
+      # and clean: 157 crates, cpal's AAudio backend among them. A check
+      # decays between sessions unless something runs it `[GDE-HST-025]`.
+      # `-D warnings`: a warning here is an Android-only cfg path nobody reads.
+      - name: cargo check the player library for aarch64-linux-android
+        run: >
+          docker run --rm -v "$PWD":/w -w /w -e RUSTFLAGS="-D warnings"
+          lempi-android
+          cargo check --manifest-path player/Cargo.toml -p lempi-player --lib
+          --no-default-features --features echo-client
+          --target aarch64-linux-android --locked
 
   vipunen:
     name: Vipunen's own test scripts
