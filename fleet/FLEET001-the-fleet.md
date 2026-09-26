@@ -63,7 +63,7 @@ Beside each backup, `pre-star-2026-09-26-tools/` holds the tool and the two patc
 
 | node | player | notes |
 | :--- | :--- | :--- |
-| `lempi02w`, `bose`, `lp3-wifi` | `618fd14`, deployed that day | lempi02w is plain ext4; the other two were written to both layers and their durable copy checked |
+| `lempi02w`, `bose`, `lp3-wifi` | `bca6e7a`, deployed 2026-09-26 evening (the skins' progress-bar fix, `[LOG-SPK-900]`) | lempi02w is plain ext4; the other two were written to both layers and their durable copy checked |
 | `teacherslounge` | no player service, **on purpose**: started by hand only `[TL-OPN-020]`; its checkout follows this repository | mirrors this file |
 | `smartboardpc` | `6e38ab4`, built there 2026-09-26 by `build/update-source-host.sh` | migrated that day `[FLT-ISS-020]`; a `systemd --user` unit since the same evening `[SMT-SVC-010]` |
 

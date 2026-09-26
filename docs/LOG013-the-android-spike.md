@@ -110,8 +110,8 @@ cable.
    page through Chrome DevTools, A/B/A, read **132.9% → 25.1% → 132.8%**.
    *Built:* no skin transitions the bar's width, and a test holds all three
    to that. The rebuilt APK read **24.3%** with the skin on screen, and 6.7%
-   with the screen off. *Closed.* It reaches the appliances' web UIs with
-   their next player deploy.
+   with the screen off. *Closed.* Deployed to all three appliances the same
+   day as `bca6e7a`; each serves all three skins without the transition.
 2. **`[LOG-SPK-910]` The start-up underrun** `[LOG-SPK-040]`. *Cause found
    2026-09-26:* nothing primed the output. Leaving silence played the device's
    first callbacks from a ring the engine had only begun to fill, which is the
