@@ -67,6 +67,28 @@ Sidecars are derived from the database path, so they follow the split:
 Chromaprint fingerprints and their AcoustID verdicts — carried over from the
 pre-split sidecar, 99.7% of its rows still keyed to live passages).
 
+**Both sidecars went with the lost primary.** Measured 2026-09-26 on the
+rebuilt pair:
+- The console runs against it (`tools/launch_vipunen_console.bat`, whose
+  path was corrected that day: it still named `lempi_new.db`). Its totals
+  match the database: 5,709 files, 16,661 passages, 8,224 recordings.
+- It made a new, empty `library.console.db`. Its peer list was re-entered
+  for `lempi02w`, `bose` and `lp3-wifi`, and all three answer.
+- `library.idchecks.db` is not rebuilt. The verdicts survive in the
+  catalogue's own `id_checks` table (8,273), which is what the console
+  counts. Only the raw fingerprints are gone, and they matter only when a
+  passage is fingerprinted again. Rebuilding them all is 8,330 AcoustID
+  lookups; `tools/fingerprint_ids.py` makes them one passage at a time as
+  it is needed.
+
+**Backups and routine syncs, since 2026-09-26** `[SPEC-STAR-085..087]`:
+- `data/backups/` holds a daily copy of the pair, stored by content hash,
+  mirrored to `teacherslounge:~/lempi-hub-backups/`. It is run by the
+  Windows task "Lempi hub backup" at 03:30.
+- `data/sync/` holds each sync's run folder, and `state.json`, which
+  records what each node was last sent.
+- `python tools/star_sync.py fleet/star-plan.json status` shows both.
+
 `flavor.db`, `flavor-sample.db`, `sample-library.db` and
 `sample-library.console.db` are fixtures and extraction data, not copies of
 the live pair.
