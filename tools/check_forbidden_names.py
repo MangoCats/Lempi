@@ -33,7 +33,11 @@ SKIP_DIRS = {".git", "node_modules", "target", ".venv", "__pycache__", ".mypy_ca
 # the top-level `build/` holds this project's own scripts. Compiled copies, like
 # `target/` -- and on 2026-09-26 the reason a local run reported 34 unreadable
 # files that CI, on a clean checkout, never saw.
-SKIP_PATHS = {"android/build", "android/app/build", "android/app/src/main/jniLibs"}
+SKIP_PATHS = {"android/build", "android/app/build", "android/app/src/main/jniLibs",
+              # Untracked recovery evidence [SPEC-STAR-075]: logs of real paths on
+              # nodes whose data folders still carry the retired name. Rewriting
+              # them would falsify the record they exist to be.
+              "data/recovery"}
 # Binary-ish things a text search would only produce noise from.
 SKIP_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip",
             ".gz", ".xz", ".db", ".bin", ".wav", ".flac", ".mp3", ".m4a", ".ttf",
