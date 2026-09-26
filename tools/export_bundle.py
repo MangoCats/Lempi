@@ -90,6 +90,13 @@ def main() -> int:
     os.makedirs(args.out, exist_ok=True)
     audio_dir = os.path.join(args.out, "audio")
     copied = missing = 0
+    # The catalogue's own record of each file's bytes `[REQ-AND-960]`, where
+    # it has one: the copy must match it, or the source has changed since it
+    # was inducted and every derived fact in the payload may be about other
+    # bytes. Caught here, not on a phone that cannot recompute audio_md5.
+    recorded_col = "sha256" in {r[1] for r in conn.execute("PRAGMA table_info(files)")}
+    agree = unrecorded = 0
+    differ = []
     bytes_out = 0
     for e in doc["encodings"]:
         src = conn.execute("SELECT path FROM files WHERE audio_md5 = ?",
@@ -105,6 +112,15 @@ def main() -> int:
         # `[SPEC-PL-087]`. A phone has no ffmpeg to recompute audio_md5, so
         # this is its only proof the file arrived whole `[REQ-AND-230]`.
         e["sha256"] = sha256_file(dest)
+        recorded = conn.execute("SELECT sha256 FROM files WHERE audio_md5 = ?",
+                                (e["audio_md5"],)).fetchone()[0] if recorded_col else None
+        if recorded is None:
+            unrecorded += 1
+        elif recorded == e["sha256"]:
+            agree += 1
+        else:
+            print(f"  BYTES DIFFER from the catalogue's record: {src}", file=sys.stderr)
+            differ.append(src)
         bytes_out += os.path.getsize(dest)
         copied += 1
 
@@ -127,9 +143,12 @@ def main() -> int:
           + (f"   ({missing} MISSING)" if missing else ""))
     print(f"  payload     {len(text.encode())/1024:.1f} KB"
           + (f"  ({gz_len/1024:.1f} KB gzipped)" if gz_len else ""))
-    if missing:
-        # A bundle that is short of audio is not a bundle; say so with a
-        # non-zero exit so a script cannot ship it as complete.
+    print(f"  byte hashes {agree} match the catalogue's record, {unrecorded} not recorded there"
+          + (f", {len(differ)} DIFFER" if differ else ""))
+    if missing or differ:
+        # A bundle that is short of audio, or carries bytes the catalogue does
+        # not describe, is not a bundle; say so with a non-zero exit so a
+        # script cannot ship it as complete.
         return 1
     return 0
 

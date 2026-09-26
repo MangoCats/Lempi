@@ -125,9 +125,37 @@ def test_md5_file_combines_with_a_hand_typed_md5():
     check(rc == 0, f"an empty --md5-file plus a hand-typed --md5 must still export, got {rc}")
 
 
+def test_copy_is_checked_against_the_recorded_byte_hash():
+    """[REQ-AND-960]: where the catalogue records a file's sha256, the copy
+    that ships must match it; a source changed since induction is refused."""
+    import hashlib
+    for label, record_right in (("recorded and right", True), ("recorded and wrong", False)):
+        tmp = tempfile.mkdtemp()
+        db_path = os.path.join(tmp, "lempi.db")
+        audio_path = os.path.join(tmp, "a.wav")
+        with open(audio_path, "wb") as fh:
+            fh.write(b"the bytes as inducted")
+        md5 = "0123abcd00000000000000000000000"
+        build_library(db_path, audio_path, md5)
+        c = sqlite3.connect(db_path)
+        c.execute("ALTER TABLE files ADD COLUMN sha256 TEXT")
+        right = hashlib.sha256(b"the bytes as inducted").hexdigest()
+        c.execute("UPDATE files SET sha256 = ?", (right if record_right else "0" * 64,))
+        c.commit()
+        c.close()
+        old_argv = sys.argv
+        sys.argv = ["export_bundle.py", db_path, "--md5", md5, "-o", os.path.join(tmp, "bundle")]
+        try:
+            rc = eb.main()
+        finally:
+            sys.argv = old_argv
+        check(rc == (0 if record_right else 1), f"{label}: exit {rc}")
+
+
 def main() -> int:
     test_md5_file_selects_the_listed_encodings()
     test_md5_file_combines_with_a_hand_typed_md5()
+    test_copy_is_checked_against_the_recorded_byte_hash()
 
     print()
     if FAILED:
