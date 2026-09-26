@@ -661,6 +661,45 @@ async function run(skin) {
   // refuses so the failed state has something to report.
   // `+2` for the Play and Pause presses above, which exist to prove they do
   // NOT flash; they still reach the engine like any other press.
+  // Churn: what one snapshot rewrites when nothing but the clock has moved
+  // `[LOG-SPK-900]`. The player pushes one every 500 ms, and on a phone the
+  // lempi skin cost ~130% of a core to draw them. A mutation the browser has
+  // to lay out again is the unit that cost is paid in.
+  let churn = null;
+  {
+    const settle = () => new Promise(r => setTimeout(r, 20));
+    sock.onmessage({ data: JSON.stringify(RICH) });
+    await settle();
+    const records = [];
+    const obs = new window.MutationObserver(rs => records.push(...rs));
+    obs.observe(window.document.body,
+                { subtree: true, childList: true, characterData: true, attributes: true });
+    sock.onmessage({ data: JSON.stringify({ ...RICH, position_ms: RICH.position_ms + 500 }) });
+    await settle();
+    records.push(...obs.takeRecords());
+    obs.disconnect();
+    const where = n => {
+      for (let e = n.nodeType === 1 ? n : n.parentElement; e; e = e.parentElement) {
+        if (e.id) return '#' + e.id;
+      }
+      return '(no id)';
+    };
+    const by = {};
+    for (const r of records) {
+      const k = `${where(r.target)} ${r.type}${r.attributeName ? `(${r.attributeName})` : ''}`;
+      by[k] = (by[k] || 0) + 1;
+    }
+    churn = { total: records.length, by };
+    // The reference skin is held to the minimum: a clock-only snapshot moves
+    // the clock and the bar, and nothing else. Measured 102 before
+    // 2026-09-26. The others are reported, not yet held.
+    if (skin === 'lempi') {
+      const extra = Object.keys(by).filter(k => !/^#(time|fill) /.test(k));
+      check(extra.length === 0,
+            `a clock-only snapshot rewrote more than the clock: ${extra.join(', ')}`);
+    }
+  }
+
   const expectedPosts = 2 + (gear ? (nowrow ? 7 : 4) : 2) + (stations ? 1 : 0) + (histBtn ? 1 : 0);
   const ok = errors.length === 0 && posted.length === expectedPosts
              && opts === skins.length && posted[1] === '/volume/-18';
@@ -672,6 +711,11 @@ async function run(skin) {
     `queue=${queue ? queue.children.length : '-'} rows  posted=${JSON.stringify(posted)}  ` +
     `picker=${opts}`);
   for (const e of errors) console.log('    ! ' + e);
+  if (churn) {
+    const top = Object.entries(churn.by).sort((a, b) => b[1] - a[1]);
+    console.log(`    churn: ${churn.total} mutation(s) for a snapshot where only the clock moved`);
+    for (const [k, n] of top.slice(0, 25)) console.log(`      ${String(n).padStart(4)}  ${k}`);
+  }
 }
 
 

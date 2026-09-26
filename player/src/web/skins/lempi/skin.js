@@ -2,6 +2,27 @@
 // first -- so if something is missing from the contract, it shows up here.
 (() => {
   const $ = id => document.getElementById(id);
+  // Write only what changed `[LOG-SPK-900]`. A snapshot arrives every 500 ms
+  // and nearly all of it repeats the last one, but assigning a value an
+  // element already holds still replaces its text node or re-sets its
+  // attribute, and the browser lays the page out again for each. Measured
+  // 2026-09-26 by the churn check in build/verify-skins.js: 102 mutations per
+  // snapshot where only the clock had moved -- on a phone, ~130% of a core.
+  const setText = (el, v) => {
+    const t = v == null ? '' : String(v);
+    if (el.textContent !== t) el.textContent = t;
+  };
+  const setHidden = (el, v) => { if (el.hidden !== Boolean(v)) el.hidden = Boolean(v); };
+  const setProp = (el, k, v) => { if (String(el[k]) !== String(v)) el[k] = v; };
+  // A panel rebuilt only when what it shows has changed: `changed` answers
+  // whether these inputs differ from the ones it was last drawn from.
+  const drawn = new Map();
+  const changed = (key, ...deps) => {
+    const sig = JSON.stringify(deps);
+    if (drawn.get(key) === sig) return false;
+    drawn.set(key, sig);
+    return true;
+  };
   const { clock, overlap } = Lempi.fmt;
 
   // Volume, programme and the queue are the same behaviour in every skin, so
@@ -67,9 +88,9 @@
   const gear = $('gear'), histBtn = $('histbtn');
   function showPanel(which) {
     const settings = which === 'settings', history = which === 'history';
-    $('panel-main').hidden = settings || history;
-    $('panel-settings').hidden = !settings;
-    $('panel-history').hidden = !history;
+    setHidden($('panel-main'), settings || history);
+    setHidden($('panel-settings'), !settings);
+    setHidden($('panel-history'), !history);
     gear.setAttribute('aria-expanded', String(settings));
     histBtn.setAttribute('aria-expanded', String(history));
   }
@@ -129,9 +150,9 @@
   // Hidden entirely when nothing is playing, rather than showing empty rows.
   function showSource(s) {
     const box = $('source');
-    if (!s.file_path) { box.hidden = true; return; }
-    box.hidden = false;
-    $('srcpath').textContent = s.file_path;
+    if (!s.file_path) { setHidden(box, true); return; }
+    setHidden(box, false);
+    setText($('srcpath'), s.file_path);
     const t = ms => Lempi.fmt.clock(ms);
     // The file's length is unknown where it was never probed, which is not
     // the same as a file of no length.
@@ -233,7 +254,7 @@
   function renderCapabilities(c) {
     caps = c || {};
     for (const [cap, ids] of Object.entries(CAP_SECTIONS))
-      for (const id of ids) $(id).hidden = caps[cap] === false;
+      for (const id of ids) setHidden($(id), caps[cap] === false);
   }
 
   function renderBuild(s) {
@@ -253,13 +274,13 @@
 
   function renderCue(s) {
     if (document.activeElement !== cueSheets) cueSheets.checked = !!s.cue_sheets;
-    $('cuestatus').textContent = s.cue_status || '';
+    setText($('cuestatus'), s.cue_status || '');
     if (document.activeElement !== coversBox) coversBox.checked = !!s.covers;
-    $('coversstatus').textContent = s.covers_status || '';
+    setText($('coversstatus'), s.covers_status || '');
     if (document.activeElement !== lyricsBox) lyricsBox.checked = !!s.lyrics_cache;
-    $('lyricsstatus').textContent = s.lyrics_status || '';
+    setText($('lyricsstatus'), s.lyrics_status || '');
     if (document.activeElement !== sidecarBox) sidecarBox.checked = !!s.lyrics_sidecar;
-    $('sidecarstatus').textContent = s.sidecar_status || '';
+    setText($('sidecarstatus'), s.sidecar_status || '');
   }
 
   function renderBackend(s) {
@@ -267,13 +288,13 @@
     // own label and explanation, and hiding only the `<span>` would leave a
     // heading and a paragraph describing a control that is not there.
     const block = backendSel.closest('.setting');
-    if (block) block.hidden = !s.guest_available;
+    if (block) setHidden(block, !s.guest_available);
     // Name the guest rather than its category: "MPD at 127.0.0.1:6600" says
     // whether the thing behind the option is the one being looked at.
     const guestOpt = backendSel.querySelector('option[value=mpd]');
     if (guestOpt && s.guest_name) guestOpt.textContent = `${s.guest_name} (spans only)`;
     if (s.backend && document.activeElement !== backendSel) backendSel.value = s.backend;
-    $('switchstatus').textContent = s.switch_status || '';
+    setText($('switchstatus'), s.switch_status || '');
   }
 
   // This node's place in a fleet [SPEC-DLY-050], [SPEC-ECHO-020].
@@ -286,8 +307,8 @@
     if (!n) return;
     // The engine's own limit, not a copy of it kept here [GDE-ARC-033].
     if (n.trim_limit_ms) {
-      echoTrim.min = -n.trim_limit_ms;
-      echoTrim.max = n.trim_limit_ms;
+      setProp(echoTrim, 'min', -n.trim_limit_ms);
+      setProp(echoTrim, 'max', n.trim_limit_ms);
     }
     if (document.activeElement !== echoTrim) echoTrim.value = n.trim_ms;
     if (document.activeElement !== echoFollow) echoFollow.value = n.follow_host || '';
@@ -310,7 +331,7 @@
     // A clamp is reported, never silently applied: a node cannot sound before
     // it submits [SPEC-DLY-030].
     if (n.clamped) note += ' That is further back than the speaker can go; using none.';
-    $('echotrimnote').textContent = note;
+    setText($('echotrimnote'), note);
 
     const st = $('echofollownote');
     if (!n.follow_host) {
@@ -319,51 +340,55 @@
     } else {
       // "Following" is a setting, not a state. Saying which of the two is
       // true is the difference between a working fleet and a silent failure.
-      st.textContent = n.follow_status || `Set to follow ${n.follow_host}; not connected yet.`;
+      setText(st, n.follow_status || `Set to follow ${n.follow_host}; not connected yet.`);
     }
   }
 
   function renderSkip(k) {
     if (!k) return;
     if (document.activeElement !== skipFade) {
-      skipFade.min = 0;
-      skipFade.max = k.fade_max_ms / 1000;
+      setProp(skipFade, 'min', 0);
+      setProp(skipFade, 'max', k.fade_max_ms / 1000);
       skipFade.value = (k.fade_ms / 1000).toFixed(1);
     }
     if (document.activeElement !== skipLead) {
-      skipLead.min = k.lead_min_ms / 1000;
-      skipLead.max = k.lead_max_ms / 1000;
+      setProp(skipLead, 'min', k.lead_min_ms / 1000);
+      setProp(skipLead, 'max', k.lead_max_ms / 1000);
       skipLead.value = (k.lead_ms / 1000).toFixed(1);
     }
-    $('skipoverlap').textContent = overlap(k);
+    setText($('skipoverlap'), overlap(k));
     if (k.resume_save_ms != null && document.activeElement !== resumeSave) {
-      resumeSave.min = k.resume_save_min_ms / 1000;
-      resumeSave.max = k.resume_save_max_ms / 1000;
+      setProp(resumeSave, 'min', k.resume_save_min_ms / 1000);
+      setProp(resumeSave, 'max', k.resume_save_max_ms / 1000);
       resumeSave.value = (k.resume_save_ms / 1000).toFixed(1);
     }
     if (k.skip_suppress_h != null && document.activeElement !== skipSuppress) {
-      skipSuppress.min = k.skip_suppress_min_h;
-      skipSuppress.max = k.skip_suppress_max_h;
+      setProp(skipSuppress, 'min', k.skip_suppress_min_h);
+      setProp(skipSuppress, 'max', k.skip_suppress_max_h);
       skipSuppress.value = k.skip_suppress_h;
     }
     if (k.dequeue_suppress_h != null && document.activeElement !== dequeueSuppress) {
-      dequeueSuppress.min = k.dequeue_suppress_min_h;
-      dequeueSuppress.max = k.dequeue_suppress_max_h;
+      setProp(dequeueSuppress, 'min', k.dequeue_suppress_min_h);
+      setProp(dequeueSuppress, 'max', k.dequeue_suppress_max_h);
       dequeueSuppress.value = k.dequeue_suppress_h;
     }
     if (k.queue_depth != null && document.activeElement !== queueDepth) {
-      queueDepth.min = k.queue_depth_min;
-      queueDepth.max = k.queue_depth_max;
+      setProp(queueDepth, 'min', k.queue_depth_min);
+      setProp(queueDepth, 'max', k.queue_depth_max);
       queueDepth.value = k.queue_depth;
     }
     if (k.sample_interval_ms != null && document.activeElement !== sampleInterval) {
-      sampleInterval.min = k.sample_interval_min_ms / 1000;
-      sampleInterval.max = k.sample_interval_max_ms / 1000;
+      setProp(sampleInterval, 'min', k.sample_interval_min_ms / 1000);
+      setProp(sampleInterval, 'max', k.sample_interval_max_ms / 1000);
       sampleInterval.value = (k.sample_interval_ms / 1000).toFixed(1);
     }
   }
 
   function renderWhy(w) {
+    // Rebuilt only when the explanation itself changes: it was ~80 of the
+    // 102 mutations each snapshot cost `[LOG-SPK-900]`, redrawing the same
+    // table twice a second.
+    if (!changed('why', w)) return;
     const terms = $('terms'), losers = $('losers');
     if (!w) {
       $('why').textContent =
@@ -385,20 +410,20 @@
       const v = get(w);
       const tr = body.insertRow();
       if (Math.abs(v - 1) < 1e-9) tr.className = 'inert';
-      tr.insertCell().textContent = label;
-      tr.insertCell().textContent = '×' + v.toFixed(4);
+      setText(tr.insertCell(), label);
+      setText(tr.insertCell(), '×' + v.toFixed(4));
     }
     const tot = body.insertRow();
     tot.className = 'total';
-    tot.insertCell().textContent = 'Frequency weight';
-    tot.insertCell().textContent = w.weight.toFixed(4);
+    setText(tot.insertCell(), 'Frequency weight');
+    setText(tot.insertCell(), w.weight.toFixed(4));
 
     // Stage B/C terms: how it FIT, kept visually apart from how OFTEN it may
     // play. The two stories stay separate all the way to the screen.
     const add = (label, text) => {
       const tr = body.insertRow();
-      tr.insertCell().textContent = label;
-      tr.insertCell().textContent = text;
+      setText(tr.insertCell(), label);
+      setText(tr.insertCell(), text);
     };
     if (w.shaping && !w.shaping.bypassed) {
       add('Pool shaping', `${w.shaping.eligible_in.toLocaleString()} eligible → ` +
@@ -412,9 +437,9 @@
     add('Flow rank', `#${w.rank + 1}`);
     const decayed = body.insertRow();
     decayed.className = 'total';
-    decayed.insertCell().textContent = 'Roulette weight';
-    decayed.insertCell().textContent = w.decayed_weight.toFixed(4);
-    terms.hidden = false;
+    setText(decayed.insertCell(), 'Roulette weight');
+    setText(decayed.insertCell(), w.decayed_weight.toFixed(4));
+    setHidden(terms, false);
 
     const ol = losers.querySelector('ol');
     ol.textContent = '';
@@ -426,12 +451,12 @@
       Lempi.linkableTrack(li, r);
       const span = document.createElement('span');
       span.className = 'w';
-      span.textContent = `(${r.weight.toFixed(3)})`;
+      setText(span, `(${r.weight.toFixed(3)})`);
       li.appendChild(span);
       ol.appendChild(li);
     }
-    losers.hidden = ol.children.length === 0;
-    $('stages').textContent = w.stages ?? '';
+    setHidden(losers, ol.children.length === 0);
+    setText($('stages'), w.stages ?? '');
   }
 
   // The byline is two independent claims that happen to share a line, so each
@@ -439,6 +464,7 @@
   // is only a file tag is the common case here, and averaging the two into one
   // marker would describe neither.
   function showByline(s) {
+    if (!changed('byline', s.artist, s.artist_source, s.artist_mbid, s.album, s.album_source)) return;
     const el = $('byline');
     el.textContent = '';
     // `link` is only set for the artist -- an album has no mbid to open a
@@ -475,7 +501,9 @@
   Lempi.subscribe(s => { latest = s; render(s); });
 
   function render(s) {
-    Lempi.named($('title'), s.title ?? '—', s.title_source, 'title');
+    if (changed('title', s.title, s.title_source)) {
+      Lempi.named($('title'), s.title ?? '—', s.title_source, 'title');
+    }
     // The title reaches a recording preference panel when a recording is
     // actually behind it `[REQ-VIS-285]` -- `stopPropagation` so this does
     // not also fire `#nowrow`'s own click (the "explain this pick" panel,
@@ -485,27 +513,27 @@
       ? e => { e.stopPropagation(); Lempi.editPreference('recording', s.mbid, s.title); }
       : null;
     showByline(s);
-    $('plays').textContent = Lempi.fmt.plays(s.plays, s.last_played);
+    setText($('plays'), Lempi.fmt.plays(s.plays, s.last_played));
     Lempi.showArt($('art'), s.passage_id);
-    $('time').textContent = `${clock(s.position_ms)} / ${clock(s.duration_ms)}`;
+    setText($('time'), `${clock(s.position_ms)} / ${clock(s.duration_ms)}`);
     $('fill').style.width =
       s.duration_ms ? `${(s.position_ms / s.duration_ms) * 100}%` : '0';
     // Offered only where the live backend can honour it [SPEC-BK-040].
     $('bar').classList.toggle('seekable', Boolean(s.can_seek && s.duration_ms));
-    $('state').textContent = s.playing ? 'playing' : 'paused';
+    setText($('state'), s.playing ? 'playing' : 'paused');
     // The ground shifts with it, so the state is legible without reading.
-    $('devmode').hidden = !s.dev_mode;
+    setHidden($('devmode'), !s.dev_mode);
     document.body.classList.toggle('dev', Boolean(s.dev_mode));
-    $('under').textContent = s.underruns_since_reset ?? s.underrun_samples;
+    setText($('under'), s.underruns_since_reset ?? s.underrun_samples);
     const since = Lempi.since(s.underruns_since);
-    $('undersince').textContent = since ? `since ${since}` : '';
+    setText($('undersince'), since ? `since ${since}` : '');
     showSource(s);
     showQueue(s);
     showProgram(s);
     showVolume(s);
-    $('progmode').textContent = s.program
+    setText($('progmode'), s.program
       ? (s.program_manual ? `${s.program}, chosen` : `${s.program}, by the clock`)
-      : '';
+      : '');
     renderSkip(s.skip);
     renderEchoNode(s.echo_node);
     renderBackend(s);
@@ -513,8 +541,8 @@
     renderBuild(s);
     renderCapabilities(s.capabilities);
     renderPick(s);
-    $('link').textContent =
-      Lempi.status === 'connected' ? 'Connected' : 'Reconnecting…';
+    setText($('link'),
+      Lempi.status === 'connected' ? 'Connected' : 'Reconnecting…');
   }
 
   // The explanation panel, and the one control set that goes with it.
@@ -533,15 +561,15 @@
 
     $('nowrow').classList.toggle('picked', picked == null);
     const on = picked != null ? (s.queue || []).find(q => q.qid === picked) : null;
-    $('whotitle').textContent = on
+    setText($('whotitle'), on
       ? (on.artist ? `${on.title} — ${on.artist}` : on.title)
-      : 'this passage';
+      : 'this passage');
     renderWhy(picked == null ? s.why : pickedWhy);
 
     // Controls belong to a queued row; the playing one cannot be moved or
     // dropped, which is why picking it hides them rather than disabling them.
     const box = $('qpick');
-    box.hidden = !on;
+    setHidden(box, !on);
     if (!on) {
       qpickSig = null;
       return;
@@ -587,16 +615,16 @@
 
     const name = document.createElement('span');
     name.className = 'btname';
-    name.textContent = d.name || d.address;
+    setText(name, d.name || d.address);
     const said = document.createElement('span');
     said.className = 'btstate';
-    said.textContent = label;
+    setText(said, label);
     li.append(name, said);
 
     if (action) {
       const b = document.createElement('button');
       b.type = 'button';
-      b.textContent = action;
+      setText(b, action);
       b.onclick = () => choose(d, VERB[state] || 'use');
       li.appendChild(b);
     }
@@ -604,7 +632,7 @@
       const f = document.createElement('button');
       f.type = 'button';
       f.className = 'btforget';
-      f.textContent = 'Forget';
+      setText(f, 'Forget');
       f.onclick = () => act('forget', d.address);
       li.appendChild(f);
     }
@@ -644,7 +672,7 @@
   }
 
   function askConfirm(device) {
-    $('bt-confirm').hidden = false;
+    setHidden($('bt-confirm'), false);
     let left = 30;
     const tick = () => {
       $('bt-countdown').textContent =
@@ -660,7 +688,7 @@
 
   function settle() {
     clearInterval(countdown);
-    $('bt-confirm').hidden = true;
+    setHidden($('bt-confirm'), true);
     previous = null;
   }
 
@@ -732,17 +760,17 @@
   // The same ask-then-confirm shape as shutting down: both stop the music,
   // and neither should happen on one stray click.
   $('rs-ask').onclick = () => {
-    $('rs-confirm').hidden = false;
+    setHidden($('rs-confirm'), false);
     $('rs-ask').disabled = true;
   };
   $('rs-no').onclick = () => {
-    $('rs-confirm').hidden = true;
+    setHidden($('rs-confirm'), true);
     $('rs-ask').disabled = false;
   };
   $('rs-yes').onclick = async () => {
     $('rs-yes').disabled = true;
     $('rs-no').disabled = true;
-    $('rs-hint').textContent = 'Saving where you were, then restarting…';
+    setText($('rs-hint'), 'Saving where you were, then restarting…');
     try {
       const r = await fetch('/power/restart', { method: 'POST' });
       $('rs-hint').textContent = r.ok
@@ -753,24 +781,24 @@
       $('rs-hint').textContent =
         'Restarting. This page reconnects on its own in a few seconds.';
     }
-    $('rs-confirm').hidden = true;
+    setHidden($('rs-confirm'), true);
     $('rs-yes').disabled = false;
     $('rs-no').disabled = false;
     $('rs-ask').disabled = false;
   };
 
   $('pw-ask').onclick = () => {
-    $('pw-confirm').hidden = false;
+    setHidden($('pw-confirm'), false);
     $('pw-ask').disabled = true;
   };
   $('pw-no').onclick = () => {
-    $('pw-confirm').hidden = true;
+    setHidden($('pw-confirm'), true);
     $('pw-ask').disabled = false;
   };
   $('pw-yes').onclick = async () => {
     $('pw-yes').disabled = true;
     $('pw-no').disabled = true;
-    $('pw-hint').textContent = 'Saving where you were, then shutting down…';
+    setText($('pw-hint'), 'Saving where you were, then shutting down…');
     try {
       const r = await fetch('/power/off', { method: 'POST' });
       // 202, not 204: accepted. The process answering is about to be stopped,
@@ -783,7 +811,7 @@
       $('pw-hint').textContent =
         'Shutting down. Wait for the light to go out before pulling power.';
     }
-    $('pw-confirm').hidden = true;
+    setHidden($('pw-confirm'), true);
   };
 
   // ---------------------------------------------------------------- radios
@@ -805,7 +833,7 @@
         if (off) blocked++;
         const b = document.createElement('button');
         b.type = 'button';
-        b.textContent = `${label}: ${off ? 'off' : 'on'}`;
+        setText(b, `${label}: ${off ? 'off' : 'on'}`);
         // Two reasons a switch is refused, and they are not the same thing.
         // A hardware switch cannot be overridden from here at all. A radio
         // carrying the default route could be switched and must not be: it is
@@ -836,7 +864,7 @@
         : 'Aerials are on.';
     } catch (e) {
       box.textContent = '';
-      $('radio-hint').textContent = 'Could not ask about the radios.';
+      setText($('radio-hint'), 'Could not ask about the radios.');
     }
   }
 
@@ -853,8 +881,8 @@
   const ledBrightnessLabel = $('led-brightness-label');
 
   function showBrightness(show) {
-    ledBrightness.hidden = !show;
-    ledBrightnessLabel.hidden = !show;
+    setHidden(ledBrightness, !show);
+    setHidden(ledBrightnessLabel, !show);
   }
 
   async function led() {
@@ -862,7 +890,7 @@
       const body = await (await fetch('/led')).json();
       ledMode.value = body.mode ?? 'on';
       ledBrightness.value = body.brightness ?? 100;
-      ledBrightnessLabel.textContent = `${ledBrightness.value}%`;
+      setText(ledBrightnessLabel, `${ledBrightness.value}%`);
       showBrightness(ledMode.value === 'on');
     } catch { /* leave whatever it last showed */ }
   }
@@ -885,11 +913,11 @@
   // gives for the volume slider -- dragging must not spam the appliance
   // with a request (and a subprocess) per pixel.
   ledBrightness.onchange = () => {
-    ledBrightnessLabel.textContent = `${ledBrightness.value}%`;
+    setText(ledBrightnessLabel, `${ledBrightness.value}%`);
     postLed('on', ledBrightness.value);
   };
   ledBrightness.oninput = () => {
-    ledBrightnessLabel.textContent = `${ledBrightness.value}%`;
+    setText(ledBrightnessLabel, `${ledBrightness.value}%`);
   };
 
   // ------------------------------------------------------------------ wifi
@@ -920,7 +948,7 @@
     button.onclick = () => {
       const shown = input.type === 'text';
       input.type = shown ? 'password' : 'text';
-      button.textContent = shown ? '👁' : '🙈';
+      setText(button, shown ? '👁' : '🙈');
       button.title = shown ? 'Show password' : 'Hide password';
       button.setAttribute('aria-pressed', String(!shown));
     };
@@ -937,7 +965,7 @@
   function showWifiConfirm(changeId, minutes) {
     clearInterval(confirmTimer);
     let remaining = minutes * 60;
-    wifiConfirmBox.hidden = false;
+    setHidden(wifiConfirmBox, false);
     const tick = () => {
       const m = Math.floor(remaining / 60), s = remaining % 60;
       wifiConfirmCountdown.textContent =
@@ -953,7 +981,7 @@
         await fetch(`/wifi/confirm/${changeId}`, { method: 'POST' });
       } finally {
         clearInterval(confirmTimer);
-        wifiConfirmBox.hidden = true;
+        setHidden(wifiConfirmBox, true);
         wifiConfirmYes.disabled = false;
       }
     };
@@ -975,7 +1003,7 @@
       li.append(`${r.name}${active ? ' (active)' : ''} `);
       const auto = document.createElement('button');
       auto.type = 'button';
-      auto.textContent = r.autoconnect === 'yes' ? 'auto: on' : 'auto: off';
+      setText(auto, r.autoconnect === 'yes' ? 'auto: on' : 'auto: off');
       auto.onclick = async () => {
         auto.disabled = true;
         const want = r.autoconnect === 'yes' ? 'off' : 'on';
@@ -998,10 +1026,10 @@
     }
 
     const activeRow = rows.find(r => r.active === 'yes');
-    $('wifi-current').textContent = activeRow ? activeRow.name : 'not connected';
+    setText($('wifi-current'), activeRow ? activeRow.name : 'not connected');
     const onOwnAp = activeRow && activeRow.name === 'lempi-ap';
-    apStartBtn.hidden = !!onOwnAp;
-    apStopBtn.hidden = !onOwnAp;
+    setHidden(apStartBtn, !!onOwnAp);
+    setHidden(apStopBtn, !onOwnAp);
   }
 
   async function wifiScan() {
@@ -1017,11 +1045,11 @@
       const li = document.createElement('li');
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.textContent = `${r.ssid} (${r.security || 'open'}, ${r.signal}%)`;
+      setText(btn, `${r.ssid} (${r.security || 'open'}, ${r.signal}%)`);
       btn.onclick = () => {
-        wifiConnectSsid.textContent = r.ssid;
+        setText(wifiConnectSsid, r.ssid);
         wifiConnectForm.dataset.ssid = r.ssid;
-        wifiConnectForm.hidden = false;
+        setHidden(wifiConnectForm, false);
         wifiConnectPassword.value = '';
         wifiConnectPassword.focus();
       };
@@ -1032,10 +1060,10 @@
 
   wifiScanBtn.onclick = () => {
     wifiScanBtn.disabled = true;
-    wifiScanBtn.textContent = 'scanning…';
+    setText(wifiScanBtn, 'scanning…');
     wifiScan().finally(() => {
       wifiScanBtn.disabled = false;
-      wifiScanBtn.textContent = 'Scan for networks';
+      setText(wifiScanBtn, 'Scan for networks');
     });
   };
   $('wifi-connect-cancel').onclick = () => { wifiConnectForm.hidden = true; };
@@ -1047,7 +1075,7 @@
       const q = new URLSearchParams({ ssid, password: wifiConnectPassword.value });
       const body = await (await fetch(`/wifi/connect?${q}`, { method: 'POST' })).json();
       if (body.error) throw new Error(body.error);
-      wifiConnectForm.hidden = true;
+      setHidden(wifiConnectForm, true);
       showWifiConfirm(body.change_id, body.minutes);
     } catch (e) {
       alert(`Could not connect: ${e.message}`);
@@ -1112,7 +1140,7 @@
       // A cell is plain text, or a node this function no longer has to
       // understand -- `histCell` below builds the clickable ones.
       if (cell instanceof Node) td.appendChild(cell);
-      else td.textContent = cell;
+      else setText(td, cell);
       tr.appendChild(td);
     }
     return tr;
@@ -1126,7 +1154,7 @@
     if (!id) return document.createTextNode(text || (kind === 'recording' ? '(unknown)' : ''));
     const span = document.createElement('span');
     span.className = 'pref-link';
-    span.textContent = text;
+    setText(span, text);
     span.onclick = () => Lempi.editPreference(kind, id, text);
     return span;
   }
@@ -1166,7 +1194,7 @@
     tr.className = 'empty';
     const td = document.createElement('td');
     td.colSpan = HIST_COLS;
-    td.textContent = text;
+    setText(td, text);
     tr.appendChild(td);
     return tr;
   }
@@ -1209,7 +1237,7 @@
       tr.appendChild(flagCell(row));
       body.appendChild(tr);
     }
-    $('histpage').textContent = `Page ${histPage} of ${pages}`;
+    setText($('histpage'), `Page ${histPage} of ${pages}`);
     $('histprev').disabled = histPage <= 1;
     $('histnext').disabled = histPage >= pages;
   }

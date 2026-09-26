@@ -408,7 +408,12 @@ const Lempi = (() => {
   function bindVolume(slider, label) {
     let holding = false;
     let pending = 0;
-    const show = db => { if (label) label.textContent = fmt.db(db); };
+    // Written only when it changes: every skin shows this, twice a second
+    // `[LOG-SPK-900]`.
+    const show = db => {
+      const t = fmt.db(db);
+      if (label && label.textContent !== t) label.textContent = t;
+    };
     slider.oninput = () => {
       holding = true;
       pending = fmt.round1(fader.db(Number(slider.value)));

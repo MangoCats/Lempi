@@ -93,7 +93,15 @@ cable.
 
 1. **`[LOG-SPK-900]` The skin's cost per snapshot** `[LOG-SPK-060]`: about 130%
    of this phone's core to show a playing passage. Any phone browsing an
-   appliance's UI pays the same.
+   appliance's UI pays the same. *Cause found 2026-09-26*, by counting DOM
+   mutations in `build/verify-skins.js`. A snapshot in which only the clock
+   had moved rewrote the lempi skin **102** times, about 80 of them
+   rebuilding the "why this pick" panel twice a second; the rest set values
+   already there. *Built:* writes are made only when the value changes, and
+   panels are rebuilt only when their inputs do. The count is now **2**, the
+   clock and the bar, and verify-skins holds the reference skin to that.
+   mulibplay (11) and winamp (7) are reported, not yet held. The phone has
+   not confirmed the CPU figure yet.
 2. **`[LOG-SPK-910]` The start-up underrun** `[LOG-SPK-040]`. *Cause found
    2026-09-26:* nothing primed the output. Leaving silence played the device's
    first callbacks from a ring the engine had only begun to fill, which is the
