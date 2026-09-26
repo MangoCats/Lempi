@@ -1,8 +1,14 @@
 #!/bin/sh
 # Per-thread CPU over a window, as % of one core, from /proc ticks (100 Hz).
 # Usage: cpu.sh <device> <seconds>
+# Where it runs: inside lempi-adb by default. From the Windows host, over USB,
+# set ADB to platform-tools' adb.exe, W to the repository, S to the work
+# directory and PY to python -- see android/README.md.
+ADB="${ADB:-adb}"; W="${W:-/w}"; S="${S:-/s}"; PY="${PY:-python3}"
+# Git Bash rewrites /sdcard/... into a Windows path before adb.exe sees it.
+export MSYS_NO_PATHCONV=1
 DEV="$1"; WIN="${2:-30}"
-A="adb -s $DEV"
+A="$ADB -s $DEV"
 PKG=io.github.mangocats.lempi
 P=$($A shell pidof $PKG </dev/null)
 R=$($A shell "ps -A -o PID,NAME | grep 'webview:sandboxed' | awk '{print \$1}'" </dev/null | head -1)

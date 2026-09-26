@@ -43,6 +43,27 @@ Two things measured on the moto g power (2021), Android 11, 2026-09-26:
   `adb tcpip 5555` made it worse. For bulk copies, a USB cable is the
   reliable route.
 
+**Over USB, adb runs on Windows**: Docker Desktop cannot see USB devices.
+Google's platform-tools 37.0.1 for Windows is in `C:\Users\Mango Cat\Tools\`,
+checked against the SHA-1 in `repository2-3.xml`, and nothing is on `PATH`. It
+uses the key the phone already trusts, copied from the `lempi-adb` volume into
+`%USERPROFILE%\.android`, so the two adbs are one identity to the phone. Once
+connected by cable, `adb tcpip 5555` gives a fixed network port until the phone
+reboots. Windows adb also finds the wireless-debugging port by itself (mDNS),
+which Docker's network hides.
+
+The scripts in `spike/` run there too, from Git Bash. `ADB`, `W`, `S` and `PY`
+override the container's `adb`, `/w`, `/s` and `python3`. Use short paths for
+anything under `Mango Cat`, since `ADB` runs as a command string:
+
+```
+ADB=C:/Users/MANGOC~1/Tools/platform-tools/adb.exe W=C:/Users/MANGOC~1/Dev/Lempi \
+S=<work dir> PY=python sh android/spike/verify.sh <serial>
+```
+
+Each script sets `MSYS_NO_PATHCONV=1`, since Git Bash would otherwise
+rewrite `/sdcard/...` into a Windows path before adb sees it.
+
 ## The spike's scripts — [`spike/`](spike/)
 
 They run inside `lempi-adb`, with `/w` the repository, `/music` the PC's music

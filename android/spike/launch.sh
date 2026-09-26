@@ -1,16 +1,22 @@
 #!/bin/sh
 # Catalogue in, app launched, first evidence out -- in one adb session.
+# Where it runs: inside lempi-adb by default. From the Windows host, over USB,
+# set ADB to platform-tools' adb.exe, W to the repository, S to the work
+# directory and PY to python -- see android/README.md.
+ADB="${ADB:-adb}"; W="${W:-/w}"; S="${S:-/s}"; PY="${PY:-python3}"
+# Git Bash rewrites /sdcard/... into a Windows path before adb.exe sees it.
+export MSYS_NO_PATHCONV=1
 set -u
 DEV="$1"
 PKG=io.github.mangocats.lempi
-adb connect "$DEV"
+$ADB connect "$DEV"
 sleep 2
-adb -s "$DEV" get-state || { echo "NO DEVICE at $DEV"; exit 1; }
-A="adb -s $DEV"
+$ADB -s "$DEV" get-state || { echo "NO DEVICE at $DEV"; exit 1; }
+A="$ADB -s $DEV"
 
 echo "== every catalogued file on the phone?"
 missing=0
-cut -f2 /s/pairs.tsv | grep -E '^(10,000_Maniacs|4 Non Blondes|Beatles|Cure)/' > /tmp/want
+cut -f2 "$S/pairs.tsv" | grep -E '^(10,000_Maniacs|4 Non Blondes|Beatles|Cure)/' > /tmp/want
 while IFS= read -r rel; do
     if ! $A shell "test -f \"/sdcard/Music/Lempi/$rel\"" </dev/null; then
         echo "  MISSING $rel"; missing=$((missing+1))
@@ -24,7 +30,7 @@ $A shell pm grant $PKG android.permission.READ_EXTERNAL_STORAGE </dev/null
 $A shell am force-stop $PKG </dev/null
 
 echo "== catalogue"
-$A push /s/library.db /s/listener.db /data/local/tmp/ </dev/null | tail -1
+$A push "$S/library.db" "$S/listener.db" /data/local/tmp/ </dev/null | tail -1
 for db in library.db listener.db; do
     $A shell "run-as $PKG rm -f files/$db files/$db-wal files/$db-shm; cat /data/local/tmp/$db | run-as $PKG sh -c 'cat > files/$db'" </dev/null
 done

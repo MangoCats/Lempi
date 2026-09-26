@@ -1,6 +1,6 @@
 """Read one snapshot from the phone's player over /ws, through `adb forward`.
 
-The key comes from the WebView's own cookie store (copied to /s/cookies.db by
+The key comes from the WebView's own cookie store (copied to $S/cookies.db, /s by default, by
 run-as): the player never writes it anywhere [REQ-AND-160]. Standard library
 only -- a WebSocket handshake and one unmasked server frame is all this needs.
 Usage: python3 snap.py [field ...]   (no fields: print every top-level key)
@@ -12,7 +12,7 @@ import socket
 import sqlite3
 import sys
 
-key = sqlite3.connect("/s/cookies.db").execute(
+key = sqlite3.connect(os.path.join(os.environ.get("S", "/s"), "cookies.db")).execute(
     "SELECT value FROM cookies WHERE name='lempi_key'").fetchone()[0]
 s = socket.create_connection(("127.0.0.1", 5720), timeout=10)
 nonce = base64.b64encode(os.urandom(16)).decode()
