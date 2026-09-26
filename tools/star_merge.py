@@ -224,14 +224,23 @@ def merge_table(table: str, spec: dict, nodes: list[Node], hub: str, rep: Report
 
 
 def build(manifest: dict, out: str) -> Report:
-    nodes = sorted((Node(s) for s in manifest["nodes"]), key=lambda n: n.name)
-    hub = manifest["hub_state_from"]
-    if hub not in {n.name for n in nodes}:
-        raise SystemExit(f"hub_state_from names {hub!r}, which is not a node in the manifest")
     rep = Report()
     os.makedirs(out, exist_ok=True)
     if os.listdir(out):
         raise SystemExit(f"{out} is not empty: the merge writes a new directory, never over one")
+    if "nodes" in manifest:
+        build_listener(manifest, out, rep)
+    if "catalogue" in manifest:
+        build_catalogue(manifest["catalogue"], out, rep)
+    write_report(rep, out)
+    return rep
+
+
+def build_listener(manifest: dict, out: str, rep: Report):
+    nodes = sorted((Node(s) for s in manifest["nodes"]), key=lambda n: n.name)
+    hub = manifest["hub_state_from"]
+    if hub not in {n.name for n in nodes}:
+        raise SystemExit(f"hub_state_from names {hub!r}, which is not a node in the manifest")
     dest = sqlite3.connect(os.path.join(out, "listener.db"))
 
     every = sorted(set().union(*(n.tables for n in nodes)))
@@ -263,15 +272,225 @@ def build(manifest: dict, out: str) -> Report:
     rep.data["integrity"] = check
     rep.data["nodes"] = [dict(name=n.name, taken_at=n.taken_at, backups=len(n.history))
                          for n in nodes]
-    write_report(rep, out)
-    return rep
+
+
+# ------------------------------------------------------------ catalogue half --
+# [SPEC-STAR-047]: three ways, against the oldest common ancestor.
+
+# Each machine's own, never merged [SPEC-DF-030]: the hub keeps its own.
+MACHINE_SCOPE = {"files": {"path", "size_bytes", "mtime", "last_seen"}}
+TIME_COLUMNS = ("updated_at", "fetched_at", "decided_at", "applied_at", "scanned_at")
+PROVENANCE = ("source", "boundary_src")
+
+
+def _synced(row: dict | None) -> bool:
+    """Received from elsewhere, not made here: `synced:<origin>`."""
+    src = (row or {}).get("source") or (row or {}).get("boundary_src") or ""
+    return src.startswith("synced:")
+
+
+def rank(row: dict | None) -> int:
+    """Provenance rank of a row [SPEC-DF-070]: manual > synced > computed >
+    inherited/local. A deletion (None) ranks lowest of all."""
+    if row is None:
+        return -1
+    src = row.get("source") or row.get("boundary_src") or ""
+    if src == "manual":
+        return 4
+    if src.startswith("synced:"):
+        return 3
+    if src.startswith(("inherited:", "local:")) or src == "":
+        return 1
+    return 2
+
+
+def row_time(row: dict | None) -> str:
+    if row is None:
+        return ""
+    for c in TIME_COLUMNS:
+        if row.get(c) is not None:
+            return norm_time(row[c])
+    return ""
+
+
+def pk_of(conn: sqlite3.Connection, table: str) -> list[str]:
+    info = list(conn.execute(f"PRAGMA table_info({table})"))
+    return [r[1] for r in sorted(info, key=lambda r: r[5]) if r[5]] or [r[1] for r in info]
+
+
+def load(conn: sqlite3.Connection, table: str, key: list[str]) -> dict | None:
+    try:
+        cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+        if not cols:
+            return None
+        out = {}
+        for r in conn.execute(f"SELECT * FROM {table}"):
+            d = dict(zip(cols, r))
+            out[tuple(d.get(k) for k in key)] = d
+        return out
+    except sqlite3.Error:
+        return None
+
+
+def build_catalogue(cat: dict, out: str, rep: Report):
+    base = open_ro(cat["base"])
+    copies = sorted(((c["name"], open_ro(c["library"])) for c in cat["nodes"]), key=lambda x: x[0])
+    home = cat["machine_from"]
+    names = [n for n, _ in copies]
+    if home not in names:
+        raise SystemExit(f"machine_from names {home!r}, which is not a catalogue node")
+    dest = sqlite3.connect(os.path.join(out, "library.db"))
+    everyone = [("base", base)] + copies
+    tables_of = lambda c: {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    # Only tables some catalogue copy holds. The ancestor may be a whole,
+    # pre-split database whose listener tables belong to the other half.
+    tables = sorted(set().union(*(tables_of(c) for _, c in copies)) - {"sqlite_sequence"})
+    rep.data["catalogue"] = {"base": cat["base"], "nodes": names, "tables": {}, "conflicts": [],
+                             "ancestor_only": sorted(tables_of(base) - set(tables) - {"sqlite_sequence"})}
+    for table in tables:
+        holders = [(n, c) for n, c in everyone if [1 for _ in c.execute(f"PRAGMA table_info({table})")]]
+        wname, widest = max(holders, key=lambda h: (len(list(h[1].execute(f"PRAGMA table_info({table})"))), h[0]))
+        cols = [r[1] for r in widest.execute(f"PRAGMA table_info({table})")]
+        dest.execute(widest.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+                                    (table,)).fetchone()[0])
+        for (isql,) in widest.execute("SELECT sql FROM sqlite_master WHERE type='index' "
+                                      "AND tbl_name=? AND sql IS NOT NULL", (table,)):
+            dest.execute(isql)
+        key = pk_of(widest, table)
+        machine = MACHINE_SCOPE.get(table, set())
+        compare = [c for c in cols if c not in machine]
+        b = load(base, table, key) or {}
+        # A column the ancestor predates is baselined at the default its
+        # migration gives it, not NULL: filling in `fade_in_ms = 20` is a
+        # schema change, not an edit, and must not read as one -- while a
+        # copy holding anything else there still counts as having changed it.
+        base_cols = {r[1] for r in base.execute(f"PRAGMA table_info({table})")}
+        if base_cols:
+            defaults = {r[1]: _literal(r[4]) for r in widest.execute(f"PRAGMA table_info({table})")
+                        if r[1] not in base_cols}
+            for row in b.values():
+                for c, v in defaults.items():
+                    row.setdefault(c, v)
+        per = {n: load(c, table, key) for n, c in copies}
+        per = {n: d for n, d in per.items() if d is not None}   # a copy without the table says nothing
+        view = lambda row: None if row is None else tuple(row.get(c) for c in compare)
+        # The same row without its provenance label, to tell one edit seen
+        # through two transports from two different edits.
+        content = lambda row: None if row is None else tuple(
+            row.get(c) for c in compare if c not in PROVENANCE)
+        merged, taken, conflicts, deleted, relabelled = {}, {}, 0, 0, 0
+        for k in sorted(set(b).union(*per.values()), key=lambda k: tuple("" if x is None else str(x) for x in k)):
+            base_row = b.get(k)
+            changes = {n: d.get(k) for n, d in per.items() if view(d.get(k)) != view(base_row)}
+            if not changes:
+                chosen, who = base_row, None
+            else:
+                distinct = {view(r) for r in changes.values()}
+                same_content = len({content(r) for r in changes.values()}) == 1
+                if len(distinct) == 1:
+                    who = sorted(changes)[0]
+                    chosen = changes[who]
+                elif same_content:
+                    # One edit, labelled differently where it travelled: the
+                    # original says `review:acoustid`, a spoke that received it
+                    # says `synced:GMKtec`. The hub keeps the original.
+                    who = sorted(changes, key=lambda n: (_synced(changes[n]), -rank(changes[n]), n))[0]
+                    chosen = changes[who]
+                    relabelled += 1
+                else:
+                    conflicts += 1
+                    mods = {n: r for n, r in changes.items() if r is not None}
+                    pool = mods or changes     # a modification outranks a deletion
+                    who = sorted(pool, key=lambda n: (-rank(pool[n]), _neg(row_time(pool[n])), n))[0]
+                    chosen = pool[who]
+                    rep.data["catalogue"]["conflicts"].append(dict(
+                        table=table, key=list(k), chose=who,
+                        values={n: (None if r is None else {c: r.get(c) for c in compare}) for n, r in changes.items()},
+                        base=None if base_row is None else {c: base_row.get(c) for c in compare}))
+                if chosen is None:
+                    deleted += 1
+                taken[who] = taken.get(who, 0) + 1
+            if chosen is None:
+                continue
+            row = {c: chosen.get(c) for c in cols}
+            if machine:
+                own = per.get(home, {}).get(k) or base_row or chosen
+                for c in machine:
+                    row[c] = own.get(c)
+            merged[k] = row
+        dest.executemany(f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                         [tuple(r[c] for c in cols) for r in merged.values()])
+        rep.data["catalogue"]["tables"][table] = dict(
+            base=len(b), per_node={n: len(d) for n, d in per.items()}, merged=len(merged),
+            changes_from=taken, conflicts=conflicts, deleted=deleted, relabelled=relabelled)
+    dest.commit()
+    rep.data["catalogue"]["integrity"] = dest.execute("PRAGMA integrity_check").fetchone()[0]
+    dest.close()
+
+
+def _literal(dflt):
+    """A column's DEFAULT as PRAGMA table_info reports it: '20', "'exponential'",
+    or None."""
+    if dflt is None:
+        return None
+    t = str(dflt)
+    if len(t) >= 2 and t[0] == t[-1] == "'":
+        return t[1:-1]
+    for kind in (int, float):
+        try:
+            return kind(t)
+        except ValueError:
+            pass
+    return t
+
+
+def _neg(s: str) -> str:
+    """Sort key making a later time sort first."""
+    return "".join(chr(0x10FFFF - ord(ch)) for ch in s)
 
 
 def write_report(rep: Report, out: str):
     d = rep.data
     with open(os.path.join(out, "report.json"), "w", encoding="utf-8", newline="\n") as fh:
         json.dump(d, fh, indent=1, sort_keys=True, default=str)
-    L = ["# Star merge report — listener half", "",
+    L = ["# Star merge report", "",
+         "Read it before promoting this output to `data/` [SPEC-STAR-070]."]
+    if "nodes" in d:
+        L += listener_section(d)
+    if "catalogue" in d:
+        L += catalogue_section(d["catalogue"])
+    with open(os.path.join(out, "report.md"), "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(L) + "\n")
+
+
+def catalogue_section(c: dict) -> list[str]:
+    names = c["nodes"]
+    L = ["", "# Catalogue half", "",
+         "Three ways against the common ancestor [SPEC-STAR-047]. `changes from` counts the",
+         "rows the hub took from each copy's own change; `conflicts` are rows two copies",
+         "changed differently, each listed below with the rule's choice.", "",
+         f"Ancestor: `{c['base']}`", "",
+         "`relabelled` are one edit carried with two provenance labels, where the hub keeps",
+         "the original's rather than a spoke's `synced:` copy.", "",
+         "| table | base | " + " | ".join(names) + " | merged | changes from | conflicts | relabelled | deleted |",
+         "| :--- | ---: | " + " | ".join("---:" for _ in names) + " | ---: | :--- | ---: | ---: | ---: |"]
+    for t, s in sorted(c["tables"].items()):
+        ch = ", ".join(f"{n} {k}" for n, k in sorted(s["changes_from"].items()))
+        L.append(f"| `{t}` | {s['base']} | " + " | ".join(str(s["per_node"].get(n, "-")) for n in names)
+                 + f" | {s['merged']} | {ch} | {s['conflicts']} | {s.get('relabelled', 0)} | {s['deleted']} |")
+    if c.get("ancestor_only"):
+        L += ["", "Tables only the ancestor holds, not merged: " + ", ".join(f"`{t}`" for t in c["ancestor_only"])]
+    L += ["", f"Integrity of the output: **{c['integrity']}**.", "", "## Conflicts", ""]
+    if not c["conflicts"]:
+        L.append("None: wherever two copies changed a row, they changed it the same way.")
+    for x in c["conflicts"]:
+        L.append(f"- `{x['table']}` {x['key']}: chose **{x['chose']}** -- " + "; ".join(
+            f"{n}: {'deleted' if v is None else v}" for n, v in sorted(x["values"].items())))
+    return L
+
+
+def listener_section(d: dict) -> list[str]:
+    L = ["", "# Listener half", "",
          "Every row the hub took from one node over another, every tie and every removal.",
          "Read it before promoting this output to `data/` [SPEC-STAR-070].", "",
          "## Inputs", "", "| node | snapshot taken | backups read |", "| :--- | :--- | ---: |"]
@@ -291,8 +510,7 @@ def write_report(rep: Report, out: str):
         L.append("None: every table agreed wherever nodes overlapped.")
     for x in d["decisions"]:
         L.append(f"- `{x['table']}` {x['key']}: {x['what']} `[{x['rule']}]`")
-    with open(os.path.join(out, "report.md"), "w", encoding="utf-8", newline="\n") as fh:
-        fh.write("\n".join(L) + "\n")
+    return L
 
 
 def main(argv: list[str]) -> int:
@@ -302,9 +520,15 @@ def main(argv: list[str]) -> int:
     with open(argv[0], encoding="utf-8") as fh:
         manifest = json.load(fh)
     rep = build(manifest, argv[2])
-    print(f"merged into {argv[2]}: integrity {rep.data['integrity']}, "
-          f"{len(rep.data['decisions'])} decision(s) in report.md")
-    return 0 if rep.data["integrity"] == "ok" else 1
+    checks = {}
+    if "integrity" in rep.data:
+        checks["listener"] = rep.data["integrity"]
+    if "catalogue" in rep.data:
+        checks["catalogue"] = rep.data["catalogue"]["integrity"]
+    conflicts = len(rep.data.get("catalogue", {}).get("conflicts", []))
+    print(f"merged into {argv[2]}: integrity {checks}, {len(rep.data['decisions'])} listener "
+          f"decision(s), {conflicts} catalogue conflict(s) -- see report.md")
+    return 0 if all(v == "ok" for v in checks.values()) else 1
 
 
 if __name__ == "__main__":

@@ -26,9 +26,23 @@ The Vipunen primary was lost when this repository was seeded (`data/README.md`),
 | flags | `listener_flags` | union, with removals taken from the evidence in §3 | yes |
 | programmes and occasions | `listener_programs`, `…_program_seeds`, `listener_occasions`, `…_occasion_points` | no timestamps: union, with removals from §3 | yes |
 | catalogue corrections | `id_reviews`, `boundary_reviews`, `artist_reviews` | union by (subject, `decided_at`); the latest `applied_at` is kept | yes, and applied to each catalogue |
-| catalogue (classes A–C) | the library half | provenance rank, then recency `[SPEC-DF-070]`; two differing **manual** values: the newer wins by default and is listed for the person `[SPEC-MESH-065]` | yes |
+| catalogue (classes A–C) | the library half | three ways against the common ancestor `[SPEC-STAR-047]`; conflicting changes by provenance rank, then recency `[SPEC-DF-070]`; two differing **manual** values: the newer wins by default and is listed for the person `[SPEC-MESH-065]` | yes |
 | events | `listener_play_history`, `listener_rejections` | **union**, deduplicated by (time, passage, recording); an echo-followed play heard on two nodes is one play, keeping the larger `heard_ms` | **no** — each node keeps its own history |
 | node state | `player_*`, `selection_decisions`, `schema_meta` | not merged; the hub keeps its own | never |
+
+**`[SPEC-STAR-047]` The catalogue merges three ways, against the oldest common ancestor** — SPEC006 §9's baseline/target/current, generalised to N copies. Measured 2026-09-26: every catalogue descends from one desktop library, and each then received a *different* part of the later work. `teacherslounge` holds 40 re-credits the desktop synced on 09-12 (`inherited:mulib` → `synced:GMKtec`), 39 recordings and 51 artist credits. The desktop's 09-10 copy holds 138 flavor rows `teacherslounge` lacks. So no copy is simply newest, and a missing row may be a deletion — the old credit a re-credit replaced — as easily as an addition. For each row, keyed by its primary key:
+
+- the ancestor's value is the baseline, and absent counts as a value;
+- a copy that differs from the baseline has **changed** it, and only changes count;
+- changes that agree are taken; changes that disagree go by provenance rank (`manual` › `synced:` › computed › `inherited:`/`local:`), then the row's own time column, then node name, and are reported;
+- a deletion is a change, but it loses to a conflicting modification, and the row is kept and reported.
+
+Two refinements, both found in the first trial on 2026-09-26:
+
+- **One edit under two labels is not a conflict.** An identification made on the desktop reads `review:acoustid` there, and `synced:GMKtec` on a spoke that received it. Where copies differ only in their provenance label, the hub keeps the original's rather than the `synced:` copy's, and the report counts it as *relabelled*. That was 146 of the trial's 150 "conflicts".
+- **A column the ancestor predates is baselined at its default.** Filling in `fade_in_ms = 20` is a migration, not an edit. A copy holding exactly the default has not changed the row; one holding anything else has. That was the other 4.
+
+**Machine-scope columns never merge** `[SPEC-DF-030]`: `files.path`, `size_bytes`, `mtime` and `last_seen` are each machine's own, and the hub keeps the desktop's.
 
 **`[SPEC-STAR-045]` Why events stay home.** Each node's rotation is built from what *that node* played `[REQ-AND-190]`. Pushing the whole household's plays to every node would make a song played in the kitchen rest in the study. That may be wanted one day, but it is a behaviour change, not a recovery. The hub keeps the union all the same, so that no node's history exists in only one place again.
 

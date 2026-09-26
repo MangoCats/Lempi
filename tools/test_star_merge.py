@@ -88,8 +88,83 @@ def rows(path, sql):
     return r
 
 
+CAT = """
+CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT, path TEXT, duration_ms INTEGER);
+CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, end_ms INTEGER, boundary_src TEXT);
+CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, source TEXT,
+    PRIMARY KEY (passage_id, mbid));
+CREATE TABLE artists (mbid TEXT PRIMARY KEY, name TEXT, source TEXT);
+"""
+
+
+def cat(path, *sql):
+    c = sqlite3.connect(path)
+    c.executescript(CAT)
+    for s in sql:
+        c.execute(s)
+    c.commit()
+    c.close()
+
+
+def test_catalogue(tmp):
+    """[SPEC-STAR-047]: three ways against the ancestor."""
+    base_rows = ("INSERT INTO files VALUES (1,'m1','C:/old/a.mp3',100)",
+                 "INSERT INTO passages (passage_id, end_ms, boundary_src) VALUES (1,1000,'ingest')",
+                 "INSERT INTO passages (passage_id, end_ms, boundary_src) VALUES (2,2000,'ingest')",
+                 "INSERT INTO passage_recordings VALUES (1,'old','inherited:mulib')")
+    base, desk, tl, pi = (os.path.join(tmp, f"{n}.cat") for n in ("base", "desk", "tl", "pi"))
+    cat(base, *base_rows)
+    # The copies have migrated: a column the ancestor predates, with a default.
+    migrate = "ALTER TABLE passages ADD COLUMN fade_out_ms INTEGER NOT NULL DEFAULT 20"
+    # the desktop: its own path, and a repaired duration
+    cat(desk, migrate, "INSERT INTO files VALUES (1,'m1','C:/music/a.mp3',123)", *base_rows[1:])
+    # teacherslounge: a Linux path, a re-credit, a manual boundary, and passage 2 dropped
+    cat(tl, migrate, "INSERT INTO files VALUES (1,'m1','/home/sw/a.mp3',100)",
+        "INSERT INTO passages VALUES (1,1500,'manual',102)",
+        "INSERT INTO passage_recordings VALUES (1,'new','synced:GMKtec')",
+        "INSERT INTO artists VALUES ('a','Someone','synced:GMKtec')")
+    # a Pi: a computed boundary for passage 1, and passage 2 edited
+    cat(pi, migrate, "INSERT INTO files VALUES (1,'m1','/srv/a.mp3',100)",
+        "INSERT INTO passages VALUES (1,1400,'computed:x',20)",
+        "INSERT INTO passages VALUES (2,2100,'computed:x',20)",
+        "INSERT INTO passage_recordings VALUES (1,'old','inherited:mulib')",
+        "INSERT INTO artists VALUES ('a','Someone','review:acoustid')")
+    nodes = [dict(name="desktop", library=desk), dict(name="tl", library=tl), dict(name="pi", library=pi)]
+    out = os.path.join(tmp, "cat-out")
+    rep = sm.build({"catalogue": dict(base=base, machine_from="desktop", nodes=nodes)}, out)
+    L = os.path.join(out, "library.db")
+    check(rep.data["catalogue"]["integrity"] == "ok", "the merged catalogue must pass integrity_check")
+    check(rows(L, "SELECT path, duration_ms FROM files") == [("C:/music/a.mp3", 123)],
+          "machine scope stays the hub's own; a change only one copy made is taken")
+    check(rows(L, "SELECT mbid FROM passage_recordings") == [("new",)],
+          "a re-credit replaces the old credit rather than joining it")
+    p = dict(rows(L, "SELECT passage_id, end_ms FROM passages"))
+    check(p.get(1) == 1500, "a manual boundary outranks a conflicting computed one")
+    check(p.get(2) == 2100, "a deletion loses to a conflicting modification")
+    check(rows(L, "SELECT source FROM artists") == [("review:acoustid",)],
+          "one edit under two labels: the hub keeps the original, not a spoke's synced: copy")
+    check(rep.data["catalogue"]["tables"]["artists"]["conflicts"] == 0
+          and rep.data["catalogue"]["tables"]["artists"]["relabelled"] == 1,
+          "and it is counted as relabelled, not as a conflict")
+    check(rows(L, "SELECT fade_out_ms FROM passages WHERE passage_id = 1") == [(102,)],
+          "a value in a column the ancestor predates still counts as an edit")
+    p1 = [c for c in rep.data["catalogue"]["conflicts"] if c["table"] == "passages" and c["key"] == [1]]
+    check(p1 and set(p1[0]["values"]) == {"tl", "pi"},
+          "a copy that only gained the migration's default is not a changer: "
+          + str(p1 and sorted(p1[0]["values"])))
+    kinds = {(c["table"], tuple(c["key"])) for c in rep.data["catalogue"]["conflicts"]}
+    check(("passages", (1,)) in kinds and ("passages", (2,)) in kinds,
+          f"both conflicts are reported: {kinds}")
+    out2 = os.path.join(tmp, "cat-out2")
+    nodes.reverse()
+    sm.build({"catalogue": dict(base=base, machine_from="desktop", nodes=nodes)}, out2)
+    check(open(L, "rb").read() == open(os.path.join(out2, "library.db"), "rb").read(),
+          "the catalogue too: the same bytes whatever the order")
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp()
+    test_catalogue(tmp)
     manifest, inputs = fleet(tmp)
     before = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in inputs}
     out = os.path.join(tmp, "out")
