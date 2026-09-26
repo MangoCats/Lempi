@@ -46,14 +46,16 @@ The desktop's pair went missing when this repository was seeded; `data/README.md
 | node | player | notes |
 | :--- | :--- | :--- |
 | `lempi02w`, `bose`, `lp3-wifi` | `618fd14`, deployed that day | lempi02w is plain ext4; the other two were written to both layers and their durable copy checked |
-| `teacherslounge` | no player service; checkout at `a3c9ce7` | behind `main` |
-| `smartboardpc` | **the previous generation's player**, from that project's own checkout, up 6 days | **never migrated.** `build/deploy-everywhere.sh` names `/home/mango/Dev/Lempi`, which does not exist: the same silent miss TL001 found on `teacherslounge` `[TL-MIG-010]` |
+| `teacherslounge` | no player service; checkout fast-forwarded to `be778b9` that day | mirrors this file |
+| `smartboardpc` | **the previous generation's player**, from that project's own checkout, up 6 days | **never migrated.** `build/deploy-everywhere.sh` named `/home/mango/Dev/Lempi`, which did not exist until it was cloned there that day to mirror this file (`be778b9`): the same silent miss TL001 found on `teacherslounge` `[TL-MIG-010]` |
 
 ## 4. Standing issues
 
 **`[FLT-ISS-010]` `bose` dropped off the network on 2026-09-26 at about 15:33 UTC**, during a snapshot copy, and was still unreachable at the link level ("destination host unreachable") an hour later. Its Wi-Fi has a recorded history `[BOS-OPS-110]`. It needs a look, possibly a power cycle, and its database joins the merge when it is back `[SPEC-STAR-900]`.
 
 **`[FLT-ISS-020]` `smartboardpc` needs migrating** to this repository's player `[FLT-RUN-010]`, as `teacherslounge` was in TL001.
+
+**`[FLT-ISS-030]` `lp3-wifi` keeps UK time.** Its listener records a UTC offset of +60 minutes where every other node has −240, and its journal stamps agree: 14:56 on `lp3-wifi` was 09:56 on `bose`. Anything that follows the clock — a programme that starts at a set time `[SPEC-DIR-180]` — runs five hours off there. The fix belongs in its setup script, with the rest of its configuration.
 
 ---
 

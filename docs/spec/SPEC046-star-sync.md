@@ -22,7 +22,7 @@ The Vipunen primary was lost when this repository was seeded (`data/README.md`),
 
 | data | tables | merged by | leaves the hub for the spokes? |
 | :--- | :--- | :--- | :--- |
-| household listener edits | `listener_preferences`, `listener_characteristics`, `listener_settings` | **last write wins** on `updated_at` `[SPEC-PREF-105]`; an exact tie with differing values is reported, not guessed | yes |
+| household listener edits | `listener_preferences`, `listener_characteristics`, `listener_settings` (its `utc_offset_minutes` is the node's own, rewritten by each player at start) | **last write wins** on `updated_at` `[SPEC-PREF-105]`; an exact tie with differing values is reported, not guessed | yes |
 | flags | `listener_flags` | union, with removals taken from the evidence in §3 | yes |
 | programmes and occasions | `listener_programs`, `…_program_seeds`, `listener_occasions`, `…_occasion_points` | no timestamps: union, with removals from §3 | yes |
 | catalogue corrections | `id_reviews`, `boundary_reviews`, `artist_reviews` | union by (subject, `decided_at`); the latest `applied_at` is kept | yes, and applied to each catalogue |
