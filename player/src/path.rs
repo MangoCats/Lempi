@@ -300,7 +300,12 @@ fn recover(
                 tracing::warn!("output opened onto a dummy -- still silent, retrying");
                 out.mark_failed();
             } else {
-                tracing::info!("output recovered on {name}");
+                // The stream's own error callback writes only the first error
+                // of a failure and counts the rest; here is the count.
+                match out.take_stream_errors() {
+                    0 | 1 => tracing::info!("output recovered on {name}"),
+                    n => tracing::info!("output recovered on {name} ({n} stream errors while it was down)"),
+                }
                 *retry_at = None;
                 *backoff = RETRY;
                 // The stream comes back stopped; only resume it if the listener

@@ -565,7 +565,7 @@ pub async fn run(cfg: Following, handle: Arc<EngineHandle>) {
             Ok((ws, _)) => ws,
             Err(e) => {
                 set_status(&handle, &format!("Cannot reach {url}: {e}"));
-                note(&mut last_note, format!("echo-follow: connect to {url} failed: {e}"));
+                note_warn(&mut last_note, format!("echo-follow: connect to {url} failed: {e}"));
                 tokio::time::sleep(Duration::from_secs(3)).await;
                 continue;
             }
@@ -594,7 +594,7 @@ pub async fn run(cfg: Following, handle: Arc<EngineHandle>) {
                 Ok(tokio_tungstenite::tungstenite::Message::Text(t)) => t,
                 Ok(_) => continue,
                 Err(e) => {
-                    note(&mut last_note, format!("echo-follow: socket error: {e}"));
+                    note_warn(&mut last_note, format!("echo-follow: socket error: {e}"));
                     break;
                 }
             };
@@ -639,7 +639,7 @@ async fn act(
         // should still be told the clock is wrong `[GDE-ECHO-365]`.
         if !crate::echo::clocks_agree(m.heard_at, now_nanos(), MAX_CLOCK_SKEW) {
             let skew = (now_nanos() as i64 - m.heard_at as i64) / 1_000_000_000;
-            note(&mut fs.note, format!(
+            note_warn(&mut fs.note, format!(
                 "echo-follow: this node's clock is {skew} s from that one's; following anyway, on its clock"));
         }
     }
@@ -1118,7 +1118,7 @@ async fn start(
             note(last, format!(
                 "echo-follow: passage {passage_id} is not in this node's library ({e}); staying with its own queue"));
         }
-        Err(e) => note(last, format!("echo-follow: library lookup failed: {e}")),
+        Err(e) => note_warn(last, format!("echo-follow: library lookup failed: {e}")),
     }
 }
 
@@ -1130,6 +1130,19 @@ async fn start(
 fn note(last: &mut String, line: String) {
     if line != *last {
         tracing::info!("{line}");
+        *last = line;
+    }
+}
+
+/// [`note`], for the lines that report a fault rather than narrate the
+/// follow loop: a connection or socket that failed, a clock that disagrees,
+/// a lookup that errored. Everything here was info until 2026-09-25, so
+/// `journalctl -p warning` could not see a follower that had lost its master
+/// `[GDE-HST-110]`. Same de-duplication, so a fault that persists is one line.
+/// A boot that tries before DNS is ready shows one of these, then "connected".
+fn note_warn(last: &mut String, line: String) {
+    if line != *last {
+        tracing::warn!("{line}");
         *last = line;
     }
 }

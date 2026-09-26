@@ -66,7 +66,9 @@ fn main() {
         lempi_player::db::PlayerStore::open_split(&db, &library).ok().and_then(|s| s.load_settings())
     {
         for complaint in args.with_settings(|k| saved.value_of(k)) {
-            eprintln!("lempi: {complaint}");
+            // A stored setting that could not be used: a warning, where
+            // `journalctl -p warning` can see it `[GDE-HST-180]` step (4).
+            tracing::warn!("lempi: {complaint}");
         }
     }
     // And what layer 2 has now changed, if anything. Only the stored ones:
@@ -86,7 +88,7 @@ fn main() {
         // Refusing loudly beats ignoring a flag: a node asked to follow and
         // silently playing its own programme is the hardest kind of wrong to
         // notice `[GOV-SRC-040]`.
-        eprintln!("{} needs a build with `--features echo-client`; not following", opt::FOLLOW.name);
+        tracing::warn!("{} needs a build with `--features echo-client`; not following", opt::FOLLOW.name);
     }
 
     let config = Config {
@@ -118,9 +120,11 @@ fn main() {
         Err(e) => {
             // The same lines, in the same order, as before this was a library:
             // the session's own error, then the verdict.
-            eprintln!("{e}");
+            // Errors, not plain stderr: this is the line a failed start is
+            // diagnosed from, and it read as info in the journal.
+            tracing::error!("{e}");
             if matches!(e, StartError::Engine(_)) {
-                eprintln!("engine failed to start");
+                tracing::error!("engine failed to start");
             }
             std::process::exit(1);
         }

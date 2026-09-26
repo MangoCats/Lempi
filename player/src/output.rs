@@ -282,6 +282,9 @@ pub struct OutputRing {
     pub volume: Volume,
     /// Set by the stream's error callback, cleared by a successful attach.
     failed: Arc<AtomicBool>,
+    /// Errors the stream's callback has reported since the supervisor last
+    /// took the count. Stable across reattachment, like `failed`.
+    stream_errors: Arc<std::sync::atomic::AtomicU64>,
     /// Feed zeros rather than stop, so the link survives a pause.
     silent: Arc<AtomicBool>,
     /// The device's own rate and channel count, which a reattach may change --
@@ -304,6 +307,7 @@ impl OutputRing {
             state: Arc::new(Mutex::new(OutputState::new(capacity))),
             volume,
             failed: Arc::new(AtomicBool::new(false)),
+            stream_errors: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             silent: Arc::new(AtomicBool::new(false)),
             rate: Arc::new(std::sync::atomic::AtomicU32::new(44_100)),
             chans: Arc::new(std::sync::atomic::AtomicU32::new(2)),
@@ -322,6 +326,10 @@ impl OutputRing {
 
     /// Has the stream reported an error it will not recover from itself?
     pub fn failed(&self) -> bool { self.failed.load(Ordering::Relaxed) }
+
+    /// How many errors the stream reported since this was last called, and
+    /// reset -- for the supervisor's recovery line.
+    pub fn take_stream_errors(&self) -> u64 { self.stream_errors.swap(0, Ordering::Relaxed) }
 
     /// Silence without stopping the device `[PI3-OPEN-020]`.
     pub fn set_silent(&self, on: bool) { self.silent.store(on, Ordering::Relaxed); }
@@ -603,9 +611,16 @@ impl Output {
         let failed = Arc::clone(&ring.failed);
         let silent = Arc::clone(&ring.silent);
         let cb_failed = Arc::clone(&failed);
+        let cb_errors = Arc::clone(&ring.stream_errors);
+        // Counted, and only the first of a failure written. This runs on
+        // cpal's thread -- on ALSA the same one that writes audio -- which
+        // nothing had marked, so each error was a blocking write to stderr
+        // there `[GDE-HST-140]`, and a short `writei` reports one per callback
+        // `[LOG007]`. Marked now, the line goes through the log queue; the
+        // rest are a count the supervisor reports when it recovers.
         let err_fn = move |e| {
-            tracing::error!("output stream error: {e}");
-            cb_failed.store(true, Ordering::Relaxed);
+            crate::logging::this_thread_must_not_block();
+            record_stream_error(&cb_errors, &cb_failed, &e);
         };
         let stream = match sample_format {
             SampleFormat::F32 => {
@@ -712,6 +727,11 @@ impl Output {
     /// Has the stream reported an error it will not recover from itself?
     pub fn failed(&self) -> bool {
         self.ring.failed()
+    }
+
+    /// Stream errors since last asked, and reset.
+    pub fn take_stream_errors(&self) -> u64 {
+        self.ring.take_stream_errors()
     }
 
     /// Release the device without opening another.
@@ -901,6 +921,23 @@ fn pick_config(device: &cpal::Device, default_cfg: &cpal::SupportedStreamConfig)
     }
 }
 
+/// What the stream's error callback does: mark the output failed, count the
+/// error, and write only the first since the supervisor last took the count.
+/// Returns whether it wrote. Its own function so the rule is testable without
+/// a device.
+fn record_stream_error(
+    errors: &std::sync::atomic::AtomicU64,
+    failed: &AtomicBool,
+    e: &dyn std::fmt::Display,
+) -> bool {
+    failed.store(true, Ordering::Relaxed);
+    let first = errors.fetch_add(1, Ordering::Relaxed) == 0;
+    if first {
+        tracing::error!("output stream error: {e}");
+    }
+    first
+}
+
 fn tick_clock(clock: &FrameClock, info: &cpal::OutputCallbackInfo,
               samples: usize, channels: usize, rate: u32) {
     let ts = info.timestamp();
@@ -1023,6 +1060,24 @@ mod tests {
     fn audible() -> Arc<AtomicBool> { Arc::new(AtomicBool::new(false)) }
 
     use super::*;
+
+    /// A failure writes one line however many errors it reports; the rest are
+    /// a count the supervisor takes when it recovers, and the next failure
+    /// writes again `[GDE-HST-140]`.
+    #[test]
+    fn stream_errors_write_once_per_failure_and_are_counted() {
+        let ring = OutputRing::new(64, Volume::new(1.0));
+        let failed = AtomicBool::new(false);
+        let wrote: Vec<bool> = (0..5)
+            .map(|_| record_stream_error(&ring.stream_errors, &failed, &"short writei"))
+            .collect();
+        assert_eq!(wrote, [true, false, false, false, false]);
+        assert!(failed.load(Ordering::Relaxed), "every error marks the output failed");
+        assert_eq!(ring.take_stream_errors(), 5, "all five counted");
+        assert_eq!(ring.take_stream_errors(), 0, "and taking the count resets it");
+        assert!(record_stream_error(&ring.stream_errors, &failed, &"again"),
+                "after a recovery the next failure is written again");
+    }
 
     // `[GDE-ECHO-370]`: the verdict logic is where a threshold error is
     // invisible in listening and obvious in a test, so it is tested rather

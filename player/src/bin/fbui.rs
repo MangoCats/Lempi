@@ -90,6 +90,12 @@
 //!
 //!     The command line is `cli::specs::fbui`; `fbui --help` prints it,
 //!     default URL included.
+//!
+//! Every line it writes goes through `tracing` since 2026-09-25, with its
+//! text unchanged: it runs as a service, and its 17 `eprintln!`s -- a failed
+//! snapshot parse, a lost connection -- reached the journal as info, where
+//! `journalctl -p warning` could not see them `[GDE-HST-180]` step (4).
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
@@ -351,7 +357,7 @@ fn draw_text(display: &mut FbDisplay, text: &str, x: i32, y: i32) {
 /// not two near-identical copies of it.
 fn draw_text_color(display: &mut FbDisplay, text: &str, x: i32, y: i32, color: Rgb565) {
     if let Err(e) = TEXT_FONT.render(text, Point::new(x, y), VerticalPosition::Baseline, FontColor::Transparent(color), display) {
-        eprintln!("fbui: could not render {text:?}: {e:?}");
+        tracing::warn!("fbui: could not render {text:?}: {e:?}");
     }
 }
 
@@ -370,7 +376,7 @@ fn draw_text_centered_font(display: &mut FbDisplay, font: &FontRenderer, text: &
         FontColor::Transparent(color),
         display,
     ) {
-        eprintln!("fbui: could not render {text:?}: {e:?}");
+        tracing::warn!("fbui: could not render {text:?}: {e:?}");
     }
 }
 
@@ -670,7 +676,7 @@ fn render_disconnected(display: &mut FbDisplay) -> Result<(), std::convert::Infa
             FontColor::Transparent(LCD_GREEN),
             display,
         ) {
-            eprintln!("fbui: could not render {line:?}: {e:?}");
+            tracing::warn!("fbui: could not render {line:?}: {e:?}");
         }
     }
     Ok(())
@@ -688,13 +694,13 @@ async fn http_post(addr: String, path: String) {
     let mut stream = match tokio::net::TcpStream::connect(&addr).await {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("fbui: {path} failed to connect to {addr}: {e}");
+            tracing::warn!("fbui: {path} failed to connect to {addr}: {e}");
             return;
         }
     };
     let req = format!("POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
     if let Err(e) = stream.write_all(req.as_bytes()).await {
-        eprintln!("fbui: {path} failed to send: {e}");
+        tracing::warn!("fbui: {path} failed to send: {e}");
         return;
     }
     let mut buf = [0u8; 32];
@@ -1062,7 +1068,7 @@ fn run_calibration(display: &mut FbDisplay, touch: &mut TouchDevice) -> std::io:
     for (i, &(sx, sy)) in CAL_POINTS.iter().enumerate() {
         let _ = draw_crosshair(display, sx, sy, i);
         let (rx, ry) = touch.wait_for_tap()?;
-        println!("fbui: calibration point {} -- screen ({sx},{sy}) -> raw ({rx},{ry})", i + 1);
+        tracing::info!("fbui: calibration point {} -- screen ({sx},{sy}) -> raw ({rx},{ry})", i + 1);
         raw_pts[i] = (rx, ry);
     }
     let screen_pts = CAL_POINTS.map(|(x, y)| (x as f64, y as f64));
@@ -1249,11 +1255,14 @@ async fn main() {
     let mut display = match FbDisplay::open(&FbDisplay::find_panel_path()) {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("fbui: {e}");
+            tracing::error!("fbui: {e}");
             std::process::exit(1);
         }
     };
-    println!("fbui: {}x{} framebuffer opened", display.width, display.height);
+    // Read out first: inside tracing's macros `display` names its own
+    // formatting helper, which shadows this variable.
+    let (width, height) = (display.width, display.height);
+    tracing::info!("fbui: {width}x{height} framebuffer opened");
 
     // Calibrate once, re-triggerable, before anything else touches the
     // screen `[SPEC-FBUI-050]` -- resolves the "what happens before
@@ -1272,23 +1281,23 @@ async fn main() {
             Ok(mut touch) => match run_calibration(&mut display, &mut touch) {
                 Ok(cal) => {
                     match cal.save(CALIBRATION_PATH) {
-                        Ok(()) => println!("fbui: calibration saved to {CALIBRATION_PATH}"),
-                        Err(e) => eprintln!("fbui: could not save calibration: {e}"),
+                        Ok(()) => tracing::info!("fbui: calibration saved to {CALIBRATION_PATH}"),
+                        Err(e) => tracing::error!("fbui: could not save calibration: {e}"),
                     }
                     Some(cal)
                 }
                 Err(e) => {
-                    eprintln!("fbui: calibration aborted: {e}");
+                    tracing::warn!("fbui: calibration aborted: {e}");
                     None
                 }
             },
             Err(e) => {
-                eprintln!("fbui: could not open {touch_path} for calibration: {e}");
+                tracing::warn!("fbui: could not open {touch_path} for calibration: {e}");
                 None
             }
         }
     } else {
-        println!("fbui: using existing calibration at {CALIBRATION_PATH}");
+        tracing::info!("fbui: using existing calibration at {CALIBRATION_PATH}");
         AffineCalibration::load(CALIBRATION_PATH)
     };
 
@@ -1313,12 +1322,12 @@ async fn main() {
                         }
                     }
                     Err(e) => {
-                        eprintln!("fbui: touch read error: {e}");
+                        tracing::warn!("fbui: touch read error: {e}");
                         break;
                     }
                 }
             },
-            Err(e) => eprintln!("fbui: could not open {touch_path}: {e}"),
+            Err(e) => tracing::error!("fbui: could not open {touch_path}: {e}"),
         }
         std::thread::sleep(std::time::Duration::from_secs(2));
     });
@@ -1355,16 +1364,16 @@ async fn main() {
     // ~1s snapshot push for as long as it keeps playing.
     let mut art_cache: Option<(i64, Option<Vec<Rgb565>>)> = None;
     loop {
-        println!("fbui: connecting to {url}");
+        tracing::info!("fbui: connecting to {url}");
         let ws = match tokio_tungstenite::connect_async(&url).await {
             Ok((ws, _)) => ws,
             Err(e) => {
-                eprintln!("fbui: connect failed: {e}; retrying in 3s");
+                tracing::warn!("fbui: connect failed: {e}; retrying in 3s");
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                 continue;
             }
         };
-        println!("fbui: connected");
+        tracing::info!("fbui: connected");
         let (_, mut read) = ws.split();
 
         // Any taps that queued up while disconnected are stale by the time
@@ -1378,7 +1387,7 @@ async fn main() {
                     let msg = match msg {
                         Some(Ok(m)) => m,
                         Some(Err(e)) => {
-                            eprintln!("fbui: ws error: {e}");
+                            tracing::warn!("fbui: ws error: {e}");
                             break;
                         }
                         None => break, // stream ended
@@ -1390,7 +1399,7 @@ async fn main() {
                     let snap: ClientSnapshot = match serde_json::from_str(&text) {
                         Ok(s) => s,
                         Err(e) => {
-                            eprintln!("fbui: snapshot parse failed: {e}");
+                            tracing::warn!("fbui: snapshot parse failed: {e}");
                             continue;
                         }
                     };
@@ -1418,7 +1427,7 @@ async fn main() {
                                 Some(pid) => {
                                     let started = std::time::Instant::now();
                                     let art = fetch_art(http_addr.clone(), pid).await;
-                                    println!("fbui: art fetch+decode for passage {pid} took {:?} ({})", started.elapsed(), if art.is_some() { "found" } else { "none" });
+                                    tracing::info!("fbui: art fetch+decode for passage {pid} took {:?} ({})", started.elapsed(), if art.is_some() { "found" } else { "none" });
                                     Some((pid, art))
                                 }
                                 None => None,
@@ -1442,7 +1451,7 @@ async fn main() {
                         };
                         let elapsed = started.elapsed();
                         if elapsed > std::time::Duration::from_millis(20) {
-                            println!("fbui: render took {elapsed:?}");
+                            tracing::info!("fbui: render took {elapsed:?}");
                         }
                         if let Err(e) = result {
                             // Infallible today, per DrawTarget::Error above --
@@ -1450,7 +1459,7 @@ async fn main() {
                             // a future fallible backend (the `drm` path
                             // `[SPEC-FBUI-025]` leaves open) fails loudly
                             // here instead of panicking.
-                            eprintln!("fbui: render failed: {e:?}");
+                            tracing::warn!("fbui: render failed: {e:?}");
                         }
                         last_position_redraw = std::time::Instant::now();
                     }
@@ -1469,7 +1478,7 @@ async fn main() {
                                 Page::Settings => render_settings(&mut display, &snap),
                             };
                             if let Err(e) = result {
-                                eprintln!("fbui: render failed: {e:?}");
+                                tracing::warn!("fbui: render failed: {e:?}");
                             }
                         }
                         Some(Zone::PlayPause) => {
@@ -1518,7 +1527,7 @@ async fn main() {
                 }
             }
         }
-        eprintln!("fbui: disconnected; reconnecting in 3s");
+        tracing::info!("fbui: disconnected; reconnecting in 3s");
         let _ = render_disconnected(&mut display);
         // Cleared, not carried over: the next successful snapshot must
         // render even if it happens to be identical to the last one shown
