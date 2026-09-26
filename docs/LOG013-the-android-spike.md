@@ -97,10 +97,9 @@ cable.
 2. **`[LOG-SPK-910]` The start-up underrun** `[LOG-SPK-040]`: whether the ring
    is primed before the stream starts, and whether AAudio's first callbacks
    ask for more than the default period.
-3. **`[LOG-SPK-920]` "The skin controlling it"** `[REQ-AND-530]`: the skin
-   loaded, and the player answered the skin's own routes (`/command/play`,
-   `/command/pause`, `/ws`) through the launch key. A tap in the WebView itself
-   awaits the maintainer.
+3. **`[LOG-SPK-920]` "The skin controlling it"** `[REQ-AND-530]`. *Closed
+   2026-09-26:* the maintainer confirmed by hand, in the WebView, that pause,
+   play, skip, volume and seek all work. With it the spike passes.
 
 ---
 
