@@ -27,11 +27,18 @@ SOURCE = os.path.join("docs", "GUIDE015-the-earlier-names.md")
 # Not searched: version control internals, dependency trees and build output are
 # not this project's prose, and `target/` in particular holds compiled copies of
 # every string in the crate.
-SKIP_DIRS = {".git", "node_modules", "target", ".venv", "__pycache__", ".mypy_cache"}
+SKIP_DIRS = {".git", "node_modules", "target", ".venv", "__pycache__", ".mypy_cache",
+             ".gradle"}
+# Gradle's build output, by path: `build` alone cannot be skipped by name, since
+# the top-level `build/` holds this project's own scripts. Compiled copies, like
+# `target/` -- and on 2026-09-26 the reason a local run reported 34 unreadable
+# files that CI, on a clean checkout, never saw.
+SKIP_PATHS = {"android/build", "android/app/build", "android/app/src/main/jniLibs"}
 # Binary-ish things a text search would only produce noise from.
 SKIP_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip",
             ".gz", ".xz", ".db", ".bin", ".wav", ".flac", ".mp3", ".m4a", ".ttf",
-            ".woff", ".woff2", ".otf"}
+            ".woff", ".woff2", ".otf",
+            ".jar"}  # android/gradle/wrapper/gradle-wrapper.jar, 2026-09-26
 
 
 def tokens_from_source(path):
@@ -70,7 +77,9 @@ def main():
     unreadable = []
     scanned = 0
     for dirpath, dirnames, filenames in os.walk(ROOT):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        here = os.path.relpath(dirpath, ROOT).replace(os.sep, "/")
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS
+                       and ("%s/%s" % (here, d)).lstrip("./") not in SKIP_PATHS]
         for fn in filenames:
             full = os.path.join(dirpath, fn)
             rel = os.path.relpath(full, ROOT).replace(os.sep, "/")
