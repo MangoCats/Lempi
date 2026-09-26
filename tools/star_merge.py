@@ -335,6 +335,8 @@ def load(conn: sqlite3.Connection, table: str, key: list[str]) -> dict | None:
 def build_catalogue(cat: dict, out: str, rep: Report):
     base = open_ro(cat["base"])
     copies = sorted(((c["name"], open_ro(c["library"])) for c in cat["nodes"]), key=lambda x: x[0])
+    # [SPEC-STAR-048]: an appliance receives the catalogue and never authors it.
+    receivers = {c["name"] for c in cat["nodes"] if c.get("role") == "receiver"}
     home = cat["machine_from"]
     names = [n for n, _ in copies]
     if home not in names:
@@ -346,6 +348,7 @@ def build_catalogue(cat: dict, out: str, rep: Report):
     # pre-split database whose listener tables belong to the other half.
     tables = sorted(set().union(*(tables_of(c) for _, c in copies)) - {"sqlite_sequence"})
     rep.data["catalogue"] = {"base": cat["base"], "nodes": names, "tables": {}, "conflicts": [],
+                             "receivers": sorted(receivers), "receiver_differences": [],
                              "ancestor_only": sorted(tables_of(base) - set(tables) - {"sqlite_sequence"})}
     for table in tables:
         holders = [(n, c) for n, c in everyone if [1 for _ in c.execute(f"PRAGMA table_info({table})")]]
@@ -373,15 +376,23 @@ def build_catalogue(cat: dict, out: str, rep: Report):
                     row.setdefault(c, v)
         per = {n: load(c, table, key) for n, c in copies}
         per = {n: d for n, d in per.items() if d is not None}   # a copy without the table says nothing
+        authors = {n: d for n, d in per.items() if n not in receivers}
+        # A table no author holds -- `works`, which exists only on the
+        # appliances -- is decided among the receivers: nothing outranks them.
+        receivers_only = not authors
+        if receivers_only:
+            authors = per
+        listen = {n: d for n, d in per.items() if n not in authors}
         view = lambda row: None if row is None else tuple(row.get(c) for c in compare)
         # The same row without its provenance label, to tell one edit seen
         # through two transports from two different edits.
         content = lambda row: None if row is None else tuple(
             row.get(c) for c in compare if c not in PROVENANCE)
-        merged, taken, conflicts, deleted, relabelled = {}, {}, 0, 0, 0
-        for k in sorted(set(b).union(*per.values()), key=lambda k: tuple("" if x is None else str(x) for x in k)):
+        merged, taken, conflicts, deleted, relabelled, diffs = {}, {}, 0, 0, 0, 0
+        order = lambda k: tuple("" if x is None else str(x) for x in k)
+        for k in sorted(set(b).union(*authors.values()), key=order):
             base_row = b.get(k)
-            changes = {n: d.get(k) for n, d in per.items() if view(d.get(k)) != view(base_row)}
+            changes = {n: d.get(k) for n, d in authors.items() if view(d.get(k)) != view(base_row)}
             if not changes:
                 chosen, who = base_row, None
             else:
@@ -410,6 +421,14 @@ def build_catalogue(cat: dict, out: str, rep: Report):
                 if chosen is None:
                     deleted += 1
                 taken[who] = taken.get(who, 0) + 1
+            for n, d in listen.items():
+                rv = d.get(k)
+                if rv is not None and content(rv) not in (content(chosen), content(base_row)):
+                    diffs += 1
+                    rep.data["catalogue"]["receiver_differences"].append(dict(
+                        table=table, key=list(k), receiver=n,
+                        receiver_value={c: rv.get(c) for c in compare},
+                        merged_value=None if chosen is None else {c: chosen.get(c) for c in compare}))
             if chosen is None:
                 continue
             row = {c: chosen.get(c) for c in cols}
@@ -418,11 +437,20 @@ def build_catalogue(cat: dict, out: str, rep: Report):
                 for c in machine:
                     row[c] = own.get(c)
             merged[k] = row
+        # Rows only a receiver holds: what it was sent and no author kept, or
+        # never had. Listed, never taken [SPEC-STAR-048].
+        for n, d in listen.items():
+            for k in sorted(set(d) - set(merged) - set(b), key=order):
+                diffs += 1
+                rep.data["catalogue"]["receiver_differences"].append(dict(
+                    table=table, key=list(k), receiver=n,
+                    receiver_value={c: d[k].get(c) for c in compare}, merged_value=None))
         dest.executemany(f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
                          [tuple(r[c] for c in cols) for r in merged.values()])
         rep.data["catalogue"]["tables"][table] = dict(
             base=len(b), per_node={n: len(d) for n, d in per.items()}, merged=len(merged),
-            changes_from=taken, conflicts=conflicts, deleted=deleted, relabelled=relabelled)
+            changes_from=taken, conflicts=conflicts, deleted=deleted, relabelled=relabelled,
+            receiver_differences=diffs, receivers_only=receivers_only)
     dest.commit()
     rep.data["catalogue"]["integrity"] = dest.execute("PRAGMA integrity_check").fetchone()[0]
     dest.close()
@@ -478,7 +506,13 @@ def catalogue_section(c: dict) -> list[str]:
         ch = ", ".join(f"{n} {k}" for n, k in sorted(s["changes_from"].items()))
         L.append(f"| `{t}` | {s['base']} | " + " | ".join(str(s["per_node"].get(n, "-")) for n in names)
                  + f" | {s['merged']} | {ch} | {s['conflicts']} | {s.get('relabelled', 0)} | {s['deleted']} |")
-    if c.get("ancestor_only"):
+    if c.get("receivers"):
+        L += ["", "Receivers (appliances, whose catalogue is sent to them, never authored there "
+              "[SPEC-STAR-048]): " + ", ".join(c["receivers"]) + ". A table marked *receivers only* "
+              "was decided among them; no author holds it."]
+        ro = [t for t, s in sorted(c["tables"].items()) if s.get("receivers_only")]
+        if ro:
+            L.append("Receivers only: " + ", ".join(f"`{t}`" for t in ro))
         L += ["", "Tables only the ancestor holds, not merged: " + ", ".join(f"`{t}`" for t in c["ancestor_only"])]
     L += ["", f"Integrity of the output: **{c['integrity']}**.", "", "## Conflicts", ""]
     if not c["conflicts"]:
@@ -486,6 +520,23 @@ def catalogue_section(c: dict) -> list[str]:
     for x in c["conflicts"]:
         L.append(f"- `{x['table']}` {x['key']}: chose **{x['chose']}** -- " + "; ".join(
             f"{n}: {'deleted' if v is None else v}" for n, v in sorted(x["values"].items())))
+    rd = c.get("receiver_differences", [])
+    L += ["", "## Receiver differences, for the person", "",
+          "Values an appliance holds that differ from both the ancestor and the merged result.",
+          "None was taken. Each is either something the appliance was sent that no author kept,",
+          "or an edit that reached only the appliance -- which is the question for the person.", ""]
+    if not rd:
+        L.append("None.")
+    by = {}
+    for x in rd:
+        by.setdefault((x["table"], x["receiver"]), []).append(x)
+    for (t, n), xs in sorted(by.items()):
+        L.append(f"- `{t}` on {n}: {len(xs)} row(s)")
+        for x in xs[:25]:
+            L.append(f"  - {x['key']}: {n} has {x['receiver_value']}; merged "
+                     f"{'has none' if x['merged_value'] is None else 'has ' + str(x['merged_value'])}")
+        if len(xs) > 25:
+            L.append(f"  - ... and {len(xs) - 25} more in report.json")
     return L
 
 

@@ -162,9 +162,38 @@ def test_catalogue(tmp):
           "the catalogue too: the same bytes whatever the order")
 
 
+def test_receivers(tmp):
+    """[SPEC-STAR-048]: an appliance's catalogue is received, not authored."""
+    base, desk, app = (os.path.join(tmp, f"r-{n}.cat") for n in ("base", "desk", "app"))
+    rows0 = ("INSERT INTO files VALUES (1,'m1','C:/a.mp3',100)",
+             "INSERT INTO passages VALUES (1,1000,'ingest')",
+             "INSERT INTO passages VALUES (2,2000,'ingest')")
+    cat(base, *rows0)
+    cat(desk, *rows0)
+    # The appliance never got passage 2, holds a stale value for passage 1,
+    # and alone has a works table.
+    cat(app, "INSERT INTO files VALUES (1,'m1','/srv/a.mp3',100)",
+        "INSERT INTO passages VALUES (1,900,'inherited:mulib')",
+        "CREATE TABLE works (mbid TEXT PRIMARY KEY, title TEXT, source TEXT)",
+        "INSERT INTO works VALUES ('w1','A Song','mb')")
+    out = os.path.join(tmp, "r-out")
+    rep = sm.build({"catalogue": dict(base=base, machine_from="desktop", nodes=[
+        dict(name="desktop", library=desk), dict(name="app", library=app, role="receiver")])}, out)
+    L = os.path.join(out, "library.db")
+    p = dict(rows(L, "SELECT passage_id, end_ms FROM passages"))
+    check(p == {1: 1000, 2: 2000},
+          f"a receiver's absence is not a deletion, and its stale value is not taken: {p}")
+    check(rows(L, "SELECT title FROM works") == [("A Song",)],
+          "a table no author holds is taken from the receivers")
+    rd = rep.data["catalogue"]["receiver_differences"]
+    check([(x["table"], x["key"]) for x in rd] == [("passages", [1])],
+          f"the stale value is listed for the person, and only it: {rd}")
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp()
     test_catalogue(tmp)
+    test_receivers(tmp)
     manifest, inputs = fleet(tmp)
     before = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in inputs}
     out = os.path.join(tmp, "out")
