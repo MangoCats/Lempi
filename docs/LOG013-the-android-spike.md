@@ -48,7 +48,9 @@ bound.** Battery level went from 100% to 97%, and batterystats reported an
 actual drain of 100–151 mAh against 5,018 mAh capacity over the 37.8 minutes.
 That includes the screen-on minutes. The phone's charge counter never moved
 from 4,767,100, so on this phone it cannot be used; a longer run would narrow
-the figure.
+the figure. At the upper bound that is about 20 hours of play, which the
+maintainer judged acceptable, even good, for a five-year-old battery
+`[REQ-AND-910]`.
 
 **`[LOG-SPK-060]` The player is cheap; the skin is not.** Per-thread CPU,
 measured from `/proc` ticks over 20–30 second windows:
