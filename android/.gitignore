@@ -1,0 +1,6 @@
+.gradle/
+build/
+app/build/
+local.properties
+# Built by cargo-ndk from player/android, never committed.
+app/src/main/jniLibs/

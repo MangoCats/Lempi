@@ -41,3 +41,10 @@ LempiPi/tests/run       text eol=lf
 LempiPi/tests/stubs/*   text eol=lf
 build/Dockerfile.*      text eol=lf
 *.env                   text eol=lf
+
+# The Android app is built inside a Linux container from this Windows
+# checkout (android/README.md), so `gradlew` -- a shell script with no
+# extension -- runs under Linux sh and needs LF like every `*.sh` above.
+# The `.bat` twin is Windows-only and keeps CRLF.
+android/gradlew         text eol=lf
+android/gradlew.bat     text eol=crlf

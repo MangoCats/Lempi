@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The device spike [GDE-APP-020]: the player in a foreground service, its
+     own skin in a WebView. Each permission is the narrowest that works
+     [REQ-AND-220]. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The player's web server is a socket, even on loopback. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Decoding and ticking must keep the CPU while the screen is off; this is
+         what the spike's drain measurement is a measurement of. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- The music in shared storage [REQ-AND-210]: by ordinary path, which is
+         what [REQ-AND-920] asks. Android 11-12 name it one way, 13+ another. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+
+    <application
+        android:label="Lempi"
+        android:allowBackup="false"
+        android:networkSecurityConfig="@xml/network_security_config">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- [REQ-AND-120]: the player lives here, not in the activity, so it
+             outlives the screen. -->
+        <service
+            android:name=".PlayerService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+    </application>
+</manifest>

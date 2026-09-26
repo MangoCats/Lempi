@@ -1,0 +1,33 @@
+[package]
+name = "lempi-android"
+version = "0.1.0"
+edition = "2021"
+description = "The phone's way into the player: JNI entries for the Android app"
+license = "MIT"
+
+# **For the device spike `[GDE-APP-020]`, and shaped to be replaced.**
+# `[REQ-AND-410]` puts the app's API behind a generated interface (UniFFI) with
+# one hand-written JNI entry for the Android context. The spike asks whether
+# the player runs on a phone at all -- audibly, screen off, under a WebView --
+# and three hand-written entries answer that with no generator to set up
+# first. If it passes, `start`/`stop` move behind UniFFI and `init` stays.
+#
+# A workspace member, not a default one: `cargo test` at the root does not
+# build it, and on any host but Android it compiles to an empty library, since
+# every line is `cfg(target_os = "android")`.
+
+[lib]
+name = "lempi_android"
+crate-type = ["cdylib"]
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Built as a phone links it: no `appliance` (no sudo routes), no `echo-client`
+# (a phone neither leads nor follows, `[REQ-AND-180]`).
+lempi-player = { path = "..", default-features = false }
+# The versions cpal's own Android backend already resolves, so the context
+# handed over here is the one cpal reads back `[GDE-HST-330]`.
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+# jni-sys 0.4 groups the function table by JNI version: `(**env).v1_2.X`.
+jni-sys = "0.4"
+ndk-context = "0.1"
+libc = "0.2"

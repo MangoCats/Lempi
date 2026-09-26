@@ -935,6 +935,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
+name = "lempi-android"
+version = "0.1.0"
+dependencies = [
+ "jni-sys 0.4.1",
+ "lempi-player",
+ "libc",
+ "ndk-context",
+ "tracing",
+]
+
+[[package]]
 name = "lempi-core"
 version = "0.1.0"
 dependencies = [

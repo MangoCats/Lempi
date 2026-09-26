@@ -19,7 +19,7 @@ license = "MIT"
 # `player/`, which LICENSING.md already declares MIT -- a crate at the
 # repository root would have needed that arrangement amended to say so.
 [workspace]
-members = ["core"]
+members = ["core", "android"]
 # **`default-members` is not decoration, and this file is where the
 # `echo-client` fault would otherwise have repeated itself.**
 #
