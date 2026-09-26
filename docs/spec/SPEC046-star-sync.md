@@ -1,0 +1,60 @@
+# SPEC046: Star Sync — One Central Library, Merged From the Fleet
+
+**Design Specification — Tier 2 · written 2026-09-26, the day the primary was found missing**
+
+The Vipunen primary was lost when this repository was seeded (`data/README.md`), and no surviving copy was complete: the desktop lineage stopped in early September, while the latest listener edits lived on `lempi02w`. The maintainer's direction: merge the latest information from every database, **latest edit wins, in a star topology**, into one central copy on the desktop. That copy is verified by hand, then distributed. And a **deterministic program** is to do this from now on, so the same thing never depends on care alone again.
+
+> **Related:** [SPEC006](SPEC006-data-flow-and-portability.md) (data classes, `[SPEC-DF-070]`) · [SPEC030](SPEC030-preference-sync.md) (last-write-wins) · [SPEC022](SPEC022-flag-and-edit-sync.md) (flags, patching a node) · [SPEC035](SPEC035-mesh-library-sync.md) (manual vs manual) · `data/README.md` · [FLEET001](../../fleet/FLEET001-the-fleet.md)
+
+---
+
+## 1. The shape
+
+**`[SPEC-STAR-010]` One hub, many spokes.** The hub is the desktop's `data/` pair. Every other database in the fleet is a spoke: each appliance's, `smartboardpc`'s, and `teacherslounge`'s, which is also the hub's mirror for validating the tools under Linux. Edits made anywhere reach the hub first, and leave the hub for everywhere else. No spoke is ever merged with another spoke directly. That is what keeps N nodes one comparison each, rather than a mesh `[SPEC-MESH-020]`.
+
+**`[SPEC-STAR-020]` The merge reads snapshots, never live files, and writes a new pair.** Its inputs are consistent copies taken through SQLite's backup API, each hash-verified after transfer (the procedure in §5). Its output goes to a fresh directory beside `data/`; it never writes over an input or over `data/` itself. Promoting the output to be the hub is a separate step that a person takes `[SPEC-STAR-070]`.
+
+**`[SPEC-STAR-030]` Deterministic: the same inputs give the same bytes.** Every choice is made by a rule in §2 and never by input order. When a rule ties, it breaks the tie by node name, alphabetically, and the report says so. Running the merge twice over the same snapshots produces identical output. A test holds it to that.
+
+## 2. The rules, by kind of data
+
+**`[SPEC-STAR-040]` What travels where follows SPEC006's classes, with the fleet as the owner's own machines** `[SPEC-DF-055]`:
+
+| data | tables | merged by | leaves the hub for the spokes? |
+| :--- | :--- | :--- | :--- |
+| household listener edits | `listener_preferences`, `listener_characteristics`, `listener_settings` | **last write wins** on `updated_at` `[SPEC-PREF-105]`; an exact tie with differing values is reported, not guessed | yes |
+| flags | `listener_flags` | union, with removals taken from the evidence in §3 | yes |
+| programmes and occasions | `listener_programs`, `…_program_seeds`, `listener_occasions`, `…_occasion_points` | no timestamps: union, with removals from §3 | yes |
+| catalogue corrections | `id_reviews`, `boundary_reviews`, `artist_reviews` | union by (subject, `decided_at`); the latest `applied_at` is kept | yes, and applied to each catalogue |
+| catalogue (classes A–C) | the library half | provenance rank, then recency `[SPEC-DF-070]`; two differing **manual** values: the newer wins by default and is listed for the person `[SPEC-MESH-065]` | yes |
+| events | `listener_play_history`, `listener_rejections` | **union**, deduplicated by (time, passage, recording); an echo-followed play heard on two nodes is one play, keeping the larger `heard_ms` | **no** — each node keeps its own history |
+| node state | `player_*`, `selection_decisions`, `schema_meta` | not merged; the hub keeps its own | never |
+
+**`[SPEC-STAR-045]` Why events stay home.** Each node's rotation is built from what *that node* played `[REQ-AND-190]`. Pushing the whole household's plays to every node would make a song played in the kitchen rest in the study. That may be wanted one day, but it is a behaviour change, not a recovery. The hub keeps the union all the same, so that no node's history exists in only one place again.
+
+## 3. Removals, which a timestamp cannot show
+
+**`[SPEC-STAR-050]` A row that is missing is ambiguous: never added, or removed.** Last-write-wins sees only rows that exist, so an unflagged track would come back on the next merge from any node that still had the flag. The evidence is each node's own hourly listener backups `[REQ-LIB-160]`. A row present in a node's earlier backup and absent from its current snapshot **was removed on that node**, at some time after that backup. The removal wins over a copy elsewhere whose own timestamp is older than that backup, and loses to one newer, which is a re-add. A row that no node's history shows removed is kept. Every removal applied is listed in the report, with the backup that evidences it.
+
+## 4. The report, and the person
+
+**`[SPEC-STAR-060]` Every decision is written down.** The merge writes a report beside its output. It gives counts per table and per node, and lists every row the hub takes from one node over another, every tie, every removal, and every manual-versus-manual conflict, each with the rule that decided it. A decision the report does not name was not made.
+
+**`[SPEC-STAR-070]` Nothing is promoted or distributed until a person has read the report.** The maintainer checks it, can override any listed decision, and then promotes the output to `data/`. Distribution is a separate, later step `[SPEC-STAR-080]`.
+
+## 5. Taking a snapshot
+
+**`[SPEC-STAR-075]` Snapshot, then verify the copy, then use it.** A live SQLite file is copied through the backup API on its own node, never with `cp` or `scp` of the file itself, since the WAL holds the recent writes. The SHA-256 is computed on the node, the file is transferred, and the copy is kept only if the hash matches. A transfer that stalls is retried, and a node that cannot be reached is **reported as missing from the merge**, never quietly left out. Found necessary on 2026-09-26: a stalled `scp` left 20.1 of bose's 21.6 MB, which a size-blind copy would have accepted.
+
+## 6. Distribution
+
+**`[SPEC-STAR-080]` Leaving the hub is by patch, not by file copy** `[SPEC-DF-110]`. A node's own history and state must survive, so the hub sends each spoke only the rows the spoke lacks or holds older, through the patching route SPEC022 built. That route writes both layers on an overlay node `[GDE-DEP-060]`, and restarts the player whether or not the patch succeeded `[SPEC-DF-127]`. Designed here, built when the first merged hub has been verified.
+
+## 7. Open
+
+1. **`[SPEC-STAR-900]` bose was unreachable** when the first snapshots were taken, and its database is not yet in the merge. It must be before the hub is promoted.
+2. **`[SPEC-STAR-910]` Whether plays should one day travel** `[SPEC-STAR-045]` is the maintainer's decision, not this one's.
+
+---
+
+**Traceability:** `[SPEC-STAR-010..910]` · from the maintainer's direction of 2026-09-26 · applies `[SPEC-DF-055]`, `[SPEC-DF-070]`, `[SPEC-PREF-105]`, `[SPEC-MESH-065]`, `[SPEC-DF-110]`

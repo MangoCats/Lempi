@@ -38,7 +38,10 @@ SKIP_PATHS = {"android/build", "android/app/build", "android/app/src/main/jniLib
 SKIP_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip",
             ".gz", ".xz", ".db", ".bin", ".wav", ".flac", ".mp3", ".m4a", ".ttf",
             ".woff", ".woff2", ".otf",
-            ".jar"}  # android/gradle/wrapper/gradle-wrapper.jar, 2026-09-26
+            ".jar",  # android/gradle/wrapper/gradle-wrapper.jar, 2026-09-26
+            # SQLite's sidecars: binary like the `.db` beside them, and found
+            # 2026-09-26 in the recovery snapshots under data/.
+            ".db-shm", ".db-wal"}
 
 
 def tokens_from_source(path):

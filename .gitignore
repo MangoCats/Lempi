@@ -112,4 +112,9 @@ scratch/
 
 # This fleet's own roster: hostnames, paths and unit files.
 # Operational fact about these machines, not part of the project.
-fleet/
+# One exception, 2026-09-26: FLEET001, the fleet's description, is a project
+# document the maintainer asked to be mirrored to the source hosts through
+# their checkouts. It carries roles, hostnames and data paths that the
+# machine folders already publish, and deliberately no addresses or keys.
+fleet/*
+!fleet/FLEET001-the-fleet.md
