@@ -20,6 +20,7 @@ so the node needs nothing but python3.
     python tools/star_patch.py make SNAPSHOT.db TARGET.db -o node.patch.json
     python3 star_patch.py apply /var/lempi/listener.db node.patch.json
     python3 star_patch.py apply /var/lempi/listener.db node.patch.json --commit
+    python3 star_patch.py check /srv/library/library.db node.patch.json   # read-only
     python3 star_patch.py backup /var/lempi/listener.db /var/lempi/pre-star/listener.db
     python3 star_patch.py fingerprint /var/lempi/listener.db
     python3 star_patch.py restore /var/lempi/pre-star/listener.db /var/lempi/listener.db
@@ -130,6 +131,8 @@ def make(baseline, target, out):
                 entry["rows"].append(rec)
         if entry["rows"] or "create" in entry or "add_columns" in entry:
             patch["tables"].append(entry)
+    b.close()
+    t.close()
     with open(out, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(patch, fh, separators=(",", ":"), sort_keys=True)
     for e in patch["tables"]:
@@ -177,9 +180,16 @@ def sha256(path):
 
 
 def apply(db, patch_path, commit):
+    c = sqlite3.connect(db, isolation_level=None)
+    try:
+        return _apply(c, db, patch_path, commit)
+    finally:
+        c.close()   # on Windows an open handle keeps the file from being removed
+
+
+def _apply(c, db, patch_path, commit):
     with open(patch_path, encoding="utf-8") as fh:
         patch = json.load(fh)
-    c = sqlite3.connect(db, isolation_level=None)
     c.execute("BEGIN IMMEDIATE")
     counts = {"applied": 0, "already": 0, "conflict": 0}
     conflicts, deletes, inserts = [], [], []
@@ -292,10 +302,65 @@ def fingerprint(db):
             acc ^= int.from_bytes(hashlib.sha256(repr(r).encode()).digest()[:16], "big")
             n += 1
         print(f"{t} {n} {acc:032x} {','.join(cols)}")
+    c.close()
     return 0
 
 
+def check(db, patch_path):
+    """What `apply` would do, read-only: no transaction, no copy, nothing
+    written -- so it runs against a read-only mount, and needs no room for a
+    1.2 GB scratch copy. A table or column the node lacks reads as the patch
+    would make it: absent rows, and the column's default."""
+    c = open_current(db)
+    try:
+        return _check(c, db, patch_path)
+    finally:
+        c.close()
+
+
+def _check(c, db, patch_path):
+    with open(patch_path, encoding="utf-8") as fh:
+        patch = json.load(fh)
+    counts = {"apply": 0, "already": 0, "conflict": 0}
+    have_tables = set(tables(c))
+    for e in patch["tables"]:
+        name, cols, key = e["name"], e["columns"], e["key"]
+        if name not in have_tables:
+            if "create" not in e:
+                raise SystemExit(f"{name}: not in {db}, and the patch does not create it")
+            counts["apply"] += len(e["rows"])
+            continue
+        have = columns(c, name)
+        fill = {}
+        for decl in e.get("add_columns", []):
+            col = decl.split()[0]
+            if col not in have:
+                d = decl.split(" DEFAULT ", 1)
+                fill[col] = None if len(d) == 1 else \
+                    sqlite3.connect(":memory:").execute(f"SELECT {d[1]}").fetchone()[0]
+        if sorted(set(have) | set(fill)) != sorted(cols):
+            raise SystemExit(f"{name}: columns {have} are not the patch's {cols}")
+        where = " AND ".join(f"{k} IS ?" for k in key)
+        for r in e["rows"]:
+            k = [dec(v) for v in r["key"]]
+            cur = c.execute(f"SELECT {', '.join(have)} FROM {name} WHERE {where} LIMIT 1", k).fetchone()
+            held = None if cur is None else digest([dict(zip(have, cur), **fill)[col] for col in cols])
+            if held == r["now"]:
+                counts["already"] += 1
+            elif held == r["was"]:
+                counts["apply"] += 1
+            else:
+                counts["conflict"] += 1
+                print(f"  CONFLICT {name} {k}: changed here since the snapshot")
+    print(f"{db}: {counts['apply']} to apply, {counts['already']} already there, "
+          f"{counts['conflict']} conflict(s)")
+    print("RESULT=" + ("conflict" if counts["conflict"] else "clean") + ": checked read-only, nothing written")
+    return 1 if counts["conflict"] else 0
+
+
 def main(argv):
+    if len(argv) == 3 and argv[0] == "check":
+        return check(argv[1], argv[2])
     if len(argv) == 3 and argv[0] == "backup":
         return backup(argv[1], argv[2])
     if len(argv) == 3 and argv[0] == "restore":

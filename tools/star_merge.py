@@ -25,8 +25,11 @@ MANIFEST.json:
                                                  catalogue copy's own paths)
               "mirror": true,   (optional: it receives the hub's listener)
               "taken_at": "2026-09-26T15:32:35Z"}, ...],
-   "hub_state_from": "desktop"}   the node whose own plays, player_* and
+   "hub_state_from": "desktop",   the node whose own plays, player_* and
                                    selection_decisions the hub keeps
+   "catalogue": {...} | "hub_library": "data/library.db"}
+     a three-way merge of every copy [SPEC-STAR-047], or, routinely, the
+     hub's own catalogue as it stands [SPEC-STAR-085]
 """
 from __future__ import annotations
 
@@ -246,6 +249,16 @@ def build(manifest: dict, out: str) -> Report:
     if "catalogue" in manifest:
         build_catalogue(manifest["catalogue"], out, rep)
         hub_cat = os.path.join(out, "library.db")
+    elif "hub_library" in manifest:
+        # [SPEC-STAR-085]: routinely only the hub authors the catalogue, so
+        # its own is the merged one, taken as it stands; every node receives.
+        hub_cat = os.path.join(out, "library.db")
+        src = open_ro(manifest["hub_library"])
+        dst = sqlite3.connect(hub_cat)
+        src.backup(dst)
+        rep.data["hub_library"] = dict(source=manifest["hub_library"],
+                                       integrity=dst.execute("PRAGMA integrity_check").fetchone()[0])
+        dst.close()
     if "nodes" in manifest:
         build_listener(manifest, out, rep, hub_cat)
         if hub_cat:
@@ -630,6 +643,10 @@ def write_report(rep: Report, out: str):
         L += listener_section(d)
     if "catalogue" in d:
         L += catalogue_section(d["catalogue"])
+    if "hub_library" in d:
+        L += ["", "# Catalogue half", "",
+              f"The hub's own, taken as it stands [SPEC-STAR-085]: `{d['hub_library']['source']}`. "
+              f"Integrity **{d['hub_library']['integrity']}**."]
     if d.get("copies"):
         L += copies_section(d["copies"])
     with open(os.path.join(out, "report.md"), "w", encoding="utf-8", newline="\n") as fh:
@@ -741,6 +758,8 @@ def main(argv: list[str]) -> int:
         checks["listener"] = rep.data["integrity"]
     if "catalogue" in rep.data:
         checks["catalogue"] = rep.data["catalogue"]["integrity"]
+    if "hub_library" in rep.data:
+        checks["catalogue"] = rep.data["hub_library"]["integrity"]
     conflicts = len(rep.data.get("catalogue", {}).get("conflicts", []))
     print(f"merged into {argv[2]}: integrity {checks}, {len(rep.data['decisions'])} listener "
           f"decision(s), {conflicts} catalogue conflict(s) -- see report.md")

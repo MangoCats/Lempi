@@ -74,7 +74,22 @@ Two refinements, both found in the first trial on 2026-09-26:
 
 Found while building it: a fingerprint read `immutable` ignores the WAL, and missed 375 KB of one on `lp3-wifi`. The node-side tool reads a live database with its WAL.
 
-## 7. Open
+## 7. The routine
+
+The recovery above was run by hand, once. From 2026-09-26 the same thing is one tool, `tools/star_sync.py`, with one command per stage, reading the fleet's plan from `fleet/star-plan.json` (untracked; `fleet-example/star-plan.json` shows its shape).
+
+**`[SPEC-STAR-085]` Routinely, only the hub authors the catalogue, and a node's catalogue is copied only when it has moved.** Catalogue edits are made in Vipunen, on the desktop, so a routine merge takes the hub's catalogue as it stands. Every node receives it with its own paths. A node's catalogue is fingerprinted on the node, with its WAL, and compared with what it was last sent. Only a difference brings the 1.2 GB file across; otherwise the copy last sent is the baseline for its patch. The listener is copied every time, compressed. What each node was last sent is recorded in `data/sync/state.json`, and that copy is also the evidence for anything the node has removed since `[SPEC-STAR-050]`: the node held it then, and does not now. The stages are `snapshot`, `merge`, `patch` (every patch proven offline, and a `SUMMARY.md` for the person), `rehearse` (read-only, against the live files) and `commit` (the hub first, then each node, as `[SPEC-STAR-080]`). An unreachable node is listed as missing and receives nothing until the next run `[SPEC-STAR-075]`. A node keeps the backups of its three most recent syncs, with the catalogue's on the library partition. The recovery's `pre-star-2026-09-26` backups are never pruned.
+
+**`[SPEC-STAR-086]` The hub is backed up daily, mirrored, and says so when it stops.** The primary was lost once because it lived in one untracked folder (`data/README.md`). `star_sync.py … backup` runs daily from Task Scheduler, through `tools/hub_backup.cmd`:
+- It copies the pair through the backup API into `data/backups/`, stored by content hash. An unchanged catalogue is neither stored nor sent again.
+- It keeps 14 days and the first day of each of 12 months.
+- It sends the same days and files to `teacherslounge`.
+- It exits non-zero when the newest backup is over 30 hours old or the mirror is behind, and the wrapper then puts a message on screen.
+- `status` prints the same answer at any time. The Vipunen launcher runs it first, so a stopped backup is seen by whoever opens the console.
+
+**`[SPEC-STAR-087]` A sync runs when a person starts it.** `[SPEC-STAR-070]` stands: nothing is distributed until someone has read the run's summary and the merge's report. So the sync is not scheduled. `status` shows how long since each node was last synced. The backup, which changes nothing anywhere, is the part that runs by itself.
+
+## 8. Open
 
 1. ~~**`[SPEC-STAR-900]` bose was unreachable** when the first snapshots were taken~~ *(resolved: its snapshot was taken after a power cycle the same day, and is in every merge since)*.
 2. ~~**`[SPEC-STAR-910]` Whether plays should one day travel**~~ *(resolved by `[REQ-PD-113]`: they do not)*.

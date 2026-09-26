@@ -190,6 +190,30 @@ def test_receivers(tmp):
           f"the stale value is listed for the person, and only it: {rd}")
 
 
+def test_routine(tmp):
+    """[SPEC-STAR-085]: the hub's catalogue taken as it stands; each node
+    still gets it with its own paths, and its own plays."""
+    hub, node = os.path.join(tmp, "h-hub.cat"), os.path.join(tmp, "h-node.cat")
+    cat(hub, "INSERT INTO files VALUES (1,'A','C:/a.mp3',100)", "INSERT INTO artists VALUES ('x','New name','manual')")
+    cat(node, "INSERT INTO files VALUES (1,'A','/srv/a.mp3',100)", "INSERT INTO artists VALUES ('x','Old name','synced:GMKtec')")
+    hl, nl = os.path.join(tmp, "h-hub.lis"), os.path.join(tmp, "h-node.lis")
+    db(hl)
+    db(nl, "INSERT INTO listener_play_history VALUES (1,5000,1,'m',100,200,'auto')")
+    out = os.path.join(tmp, "h-out")
+    rep = sm.build({"hub_state_from": "desktop", "hub_library": hub,
+                    "nodes": [dict(name="desktop", listener=hl),
+                              dict(name="node", listener=nl, files=node)]}, out)
+    check(rep.data["hub_library"]["integrity"] == "ok", "the hub's catalogue is taken whole")
+    check(rows(os.path.join(out, "library.db"), "SELECT name FROM artists") == [("New name",)],
+          "as the hub has it: only the hub authors")
+    mine = os.path.join(out, "nodes", "node")
+    check(rows(os.path.join(mine, "library.db"), "SELECT name FROM artists") == [("New name",)]
+          and rows(os.path.join(mine, "library.db"), "SELECT path FROM files") == [("/srv/a.mp3",)],
+          "the node receives it, with its own path")
+    check(rows(os.path.join(mine, "listener.db"), "SELECT count(*) FROM listener_play_history") == [(1,)],
+          "and keeps its own plays")
+
+
 def test_translation(tmp):
     """[SPEC-STAR-049]: two files inducted in opposite order on the desktop
     and on an appliance -- the same passage id is different music."""
@@ -240,6 +264,7 @@ def main() -> int:
     test_catalogue(tmp)
     test_receivers(tmp)
     test_translation(tmp)
+    test_routine(tmp)
     manifest, inputs = fleet(tmp)
     before = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in inputs}
     out = os.path.join(tmp, "out")

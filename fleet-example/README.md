@@ -90,3 +90,14 @@ A unit file is applied by hand, and on an overlay root it must reach both
 layers — see [`speaker-overlay/README.md`](speaker-overlay/README.md). After
 any change: `systemctl daemon-reload`, then `systemctl restart lempi`, then
 **verify the durable copy and not the running one** `[GDE-DEP-070]`.
+
+---
+
+## The fleet's sync plan
+
+[`star-plan.json`](star-plan.json) is the shape of the plan
+`tools/star_sync.py` reads `[SPEC-STAR-085]`: the hub, every node with its
+paths and how its player stops and starts, where each keeps the backups a
+sync takes, and where the hub's own backups are mirrored `[SPEC-STAR-086]`.
+The real one is `fleet/star-plan.json`, untracked like the rest of `fleet/`.
+A node marked `mirror` receives the hub's listener instead of its own.

@@ -89,6 +89,12 @@ def main() -> int:
     before = open(edited, "rb").read()
     check(sp.apply(edited, patch, commit=True) == 1, "a row changed since the snapshot is a conflict")
     check(open(edited, "rb").read() == before, "and one conflict means nothing is written")
+    check(sp.check(edited, patch) == 1, "the read-only check finds the same conflict")
+    fresh = os.path.join(tmp, "fresh.db")
+    shutil.copyfile(base, fresh)
+    before = open(fresh, "rb").read()
+    check(sp.check(fresh, patch) == 0, "and passes an untouched snapshot, a table it lacks included")
+    check(open(fresh, "rb").read() == before, "writing nothing")
 
     # The node-side backup and fingerprint.
     bk = os.path.join(tmp, "bk.db")
@@ -123,6 +129,7 @@ def main() -> int:
     sp.make(old, new, p2)
     node = os.path.join(tmp, "node.db")
     shutil.copyfile(old, node)
+    check(sp.check(node, p2) == 0, "the read-only check reads a missing column as its default")
     check(sp.apply(node, p2, commit=True) == 0, "a patch adding a nullable column applies")
     check(rows(node, "SELECT * FROM files") == [(1, "/a", None)], "and the column is there, rows untouched")
 
