@@ -47,11 +47,15 @@ The README ranks mobile *Future / Post-V1*. Nothing here schedules the work; it 
 
 ## 3. The library and its storage
 
-**`[REQ-AND-200]` Lempi's own files are private**: its databases, caches, lyrics cache and backups live in app-private storage. Lyrics are never written beside the audio `[GDE-APP-080]`. *Built 2026-09-25:* the host's `writes_beside_audio` switch, false on a phone, refuses the sidecar's route, hides its setting through the snapshot's capabilities, and never runs the generation. Covers and cue sheets also write into the music folder — `[REQ-AND-950]`.
+**`[REQ-AND-200]` Lempi's own files are private**: its databases, caches, lyrics and backups live in app-private storage. Lyrics are never written beside the audio `[GDE-APP-080]`. *Built 2026-09-25:* the host's `writes_beside_audio` switch, false on a phone, refuses the sidecar's route, hides its setting through the snapshot's capabilities, and never runs the generation.
+
+**`[REQ-AND-202]` Lyrics reach the phone**, and are kept in its private database like any other catalogue fact — clarified by the maintainer 2026-09-25: private is where they are stored, not whether they arrive. They travel in the bundle on the recording they belong to `[SPEC-LYR-025]`.
+
+**`[REQ-AND-205]` Covers and cue sheets are written beside their audio in `Music/`** — decided by the maintainer 2026-09-25 `[REQ-AND-950]`. They describe the shared music, so other players should find them there; they are not Lempi's private workings the way lyrics and the databases are.
 
 **`[REQ-AND-210]` The music is shared.** Audio lives in shared storage, visible to and playable by other apps; what Lempi imports lands in `Music/Lempi/` `[GDE-APP-070]`.
 
-**`[REQ-AND-220]` Access is the narrowest that works**: MediaStore to find and read audio and images, one folder grant on `Music/` for the `.cue`, `.lrc` and cover files beside them, and never the all-files permission `[GDE-APP-080]`.
+**`[REQ-AND-220]` Access is the narrowest that works**: MediaStore to find and read audio and images, one folder grant on `Music/` to read the `.cue`, `.lrc` and cover files beside them and to write covers and cue sheets there `[REQ-AND-205]`, and never the all-files permission `[GDE-APP-080]`.
 
 **`[REQ-AND-230]` A bundle is imported from the share or open sheet, and every file is verified before it is trusted** — by the SHA-256 of its bytes that Vipunen carried in the payload. A file that does not match is reported, never silently accepted `[GDE-APP-060]`. *Built 2026-09-25* as `[SPEC-PL-087]`: `export_bundle.py` writes the hash; `lempi-core`'s importer checks it, and one with neither that hash nor ffmpeg is reported unverifiable and not written.
 
@@ -65,7 +69,15 @@ The README ranks mobile *Future / Post-V1*. Nothing here schedules the work; it 
 
 **`[REQ-AND-280]` New music can be sent out for induction.** The user can list the found files the catalogue does not hold and export them — the files, their tags and byte hashes, and no listener state `[REQ-PORT-120]` — for a Vipunen node to induct. After the next bundle they are catalogue entries on the phone `[GDE-APP-050]`.
 
-**`[REQ-AND-285]` Exported music travels over the local network to an active Vipunen node** — decided by the maintainer 2026-09-25 `[REQ-AND-930]`, "ideally". So the network is the intended route, and not the only one: where no node answers, the same export can be written to a folder the user moves by hand, so the feature never depends on the network being there. How a node is found, how the phone proves it may send, and where the node puts what arrives are specification, and open — §7.
+**`[REQ-AND-285]` Exported music travels over the local network to an active Vipunen node** — decided by the maintainer 2026-09-25 `[REQ-AND-930]`, "ideally". So the network is the intended route, and not the only one: where no node answers, the same export can be written to a folder the user moves by hand, so the feature never depends on the network being there. The route below was set by the maintainer 2026-09-25; it holds for any Lempi node sending to Vipunen, the phone being the first.
+
+**`[REQ-AND-286]` The node is named, not discovered**: by host name or IP address, the way every other Lempi application is pointed at a node.
+
+**`[REQ-AND-287]` The sender proves it may send with a key.** By default the application's own ID key — shared by every copy, so it keeps out mistakes and not people. A user may instead create a key of their own and give it to both ends, which is slightly better. Neither is presented as security against someone on the LAN who wants in.
+
+**`[REQ-AND-288]` Vipunen negotiates before anything moves**: the sender describes what it would send, and Vipunen answers which files it holds already and which may be of interest. Only those are transferred. What the description carries — the byte hash, and whatever else lets Vipunen recognise its own files — is `[REQ-AND-960]`.
+
+**`[REQ-AND-289]` What arrives waits in a *pending identification* folder, and a person decides.** Vipunen identifies each file and tells its user whether it is truly new to the collection or a near match, and what artist, recording, work and release it could establish. The user can listen before deciding, and nothing is inducted until they have decided.
 
 ## 4. Selection
 
@@ -93,15 +105,18 @@ The README ranks mobile *Future / Post-V1*. Nothing here schedules the work; it 
 
 **`[REQ-AND-530]` The device spike passes before this document leaves draft** `[GDE-APP-020]`: a passage audible for 30 minutes screen-off with zero underruns, a measured drain, the skin controlling it in a WebView.
 
+**`[REQ-AND-540]` The spike runs first on the oldest phone the floor admits**: a 2021 Moto G on Android 11, the `[REQ-AND-100]` floor itself. A Pixel 7a on Android 17 follows once that passes, as the current-platform data point.
+
 ## 7. Open — to be settled before this leaves draft
 
 1. **`[REQ-AND-900]` How a backup leaves the phone** `[REQ-AND-190]`. *Decided 2026-09-25: export on request* — `[REQ-AND-195]`.
 2. **`[REQ-AND-910]` The memory and battery budgets**, as numbers, from the spike `[REQ-AND-020]`; `[GDE-AND-065]` measured a Director rebuild at about 16.5 CPU-seconds and +122.5 MB on a Pi 3 core.
 3. **`[REQ-AND-920]` Whether a MediaStore path opens with `File::open`** on the device; if not, the audio-source resolver `[GDE-HST-080]` covers every path, not only the sidecars `[GDE-APP-080]`.
-4. **`[REQ-AND-930]` How exported music reaches Vipunen** `[REQ-AND-280]`. *Decided 2026-09-25: over the local network to an active node, ideally* — `[REQ-AND-285]`. Still open beneath it: discovery, authorisation and where the node files what arrives.
+4. **`[REQ-AND-930]` How exported music reaches Vipunen** `[REQ-AND-280]`. *Decided 2026-09-25: over the local network to an active node, ideally* — `[REQ-AND-285]`; named node, key, negotiation and a pending-identification folder — `[REQ-AND-286..289]`.
 5. **`[REQ-AND-940]` The Director's handling of a passage without flavor** `[REQ-AND-310]`. *Answered from the code 2026-09-25* — see `[REQ-AND-310]`; it raised `[REQ-AND-315]`, which awaits the maintainer.
-6. **`[REQ-AND-950]` Whether a phone also refuses to write covers and cue sheets into `Music/`** `[REQ-AND-200]`. Both are Lempi's files in a shared folder, as the lyrics sidecar is; both help another player that reads them. The switch built for the sidecar extends to them by marking their settings `beside` in `web/settings.rs`.
+6. **`[REQ-AND-950]` Whether a phone also refuses to write covers and cue sheets into `Music/`** `[REQ-AND-200]`. *Decided 2026-09-25: no — they belong beside their audio* — `[REQ-AND-205]`.
+7. **`[REQ-AND-960]` How Vipunen recognises a file it holds, from the phone's description** `[REQ-AND-288]`. The phone has only the byte hash `[REQ-AND-270]`, and Vipunen keys its files by `audio_md5`, recording no byte hash for them. A byte-hash match proves a duplicate; tags and duration can only suggest one.
 
 ---
 
-**Traceability:** `[REQ-AND-010..950]` · every requirement cites the GUIDE034 decision it comes from · refines `[REQ-PORT-130]`, `[REQ-PORT-150]` · excludes `[REQ-HW-100]`, `[REQ-HW-110]`, `[REQ-HW-120]`, `[REQ-HW-150]`
+**Traceability:** `[REQ-AND-010..960]` · every requirement cites the GUIDE034 decision it comes from · refines `[REQ-PORT-130]`, `[REQ-PORT-150]` · excludes `[REQ-HW-100]`, `[REQ-HW-110]`, `[REQ-HW-120]`, `[REQ-HW-150]`
