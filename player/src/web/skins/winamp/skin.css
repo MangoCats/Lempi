@@ -64,7 +64,8 @@ body { background: #101014; color: #d8d8dc;
 @keyframes roll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 
 .bar { height: 6px; background: #05170a; margin-top: 4px; border: 1px solid #0d2a12; }
-.bar div { height: 100%; width: 0; background: var(--lcd); transition: width .5s linear; }
+/* No width transition: it animated every frame while playing [LOG-SPK-900]. */
+.bar div { height: 100%; width: 0; background: var(--lcd); }
 
 .row { display: flex; align-items: center; gap: 4px; margin-top: 6px; }
 

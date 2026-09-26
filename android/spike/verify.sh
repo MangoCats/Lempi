@@ -17,15 +17,25 @@ PKG=io.github.mangocats.lempi
 SP="$W/android/spike"
 $ADB connect "$DEV" >/dev/null; sleep 2
 $A get-state >/dev/null 2>&1 || { echo "NO DEVICE at $DEV -- nothing checked"; exit 1; }
-key() { $A exec-out run-as $PKG cat app_webview/Default/Cookies > "$S/cookies.db"; }
 # The WebView writes its cookie out lazily: just after a launch the file can
-# still hold the previous key, which the player refuses. Re-read once.
-say() {
-    $PY "$SP/snap.py" playing title position_ms underrun_samples out_recoveries 2>/dev/null \
-        || { sleep 5; key; $PY "$SP/snap.py" playing title position_ms underrun_samples out_recoveries; }
+# still hold the previous launch's key, which the player refuses. One retry
+# after 5 s was not enough on 2026-09-26 -- the cold-start reading came back
+# empty and pause/resume were refused -- so wait until the player accepts
+# the copied key (GET / answers 200, not 403), and say so if it never does.
+key() {
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+        $A exec-out run-as $PKG cat app_webview/Default/Cookies > "$S/cookies.db"
+        K=$($PY -c "import sqlite3; print(sqlite3.connect('$S/cookies.db').execute('select value from cookies').fetchone()[0])" | tr -d '\r')
+        [ "$(curl -s -o /dev/null -w '%{http_code}' -H "x-lempi-key: $K" http://127.0.0.1:5720/)" = 200 ] && return 0
+        sleep 5
+    done
+    echo "KEY NOT ACCEPTED after 60 s -- the readings below are not valid"
 }
+say() { $PY "$SP/snap.py" playing title position_ms underrun_samples out_recoveries; }
 cmd() {
-    K=$($PY -c "import sqlite3; print(sqlite3.connect('$S/cookies.db').execute('select value from cookies').fetchone()[0])")
+    # tr: a Windows python ends the line with \r\n, and $(...) strips only
+    # the \n -- a key sent with a trailing \r is refused (403), found 2026-09-26.
+    K=$($PY -c "import sqlite3; print(sqlite3.connect('$S/cookies.db').execute('select value from cookies').fetchone()[0])" | tr -d '\r')
     curl -s -o /dev/null -w "$1: %{http_code}\n" -X POST -H "x-lempi-key: $K" "http://127.0.0.1:5720/command/$1"
 }
 

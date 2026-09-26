@@ -23,8 +23,13 @@
          background-clip: content-box; padding: 9px 0; box-sizing: content-box; }
   #bar.seekable { cursor: pointer; }
   #bar.seekable:hover #fill { filter: brightness(1.25); }
-  #fill { height: 4px; width: 0; background: currentColor; border-radius: 2px;
-          transition: width .5s linear; }
+  /* No transition on the width. A new width arrives every 500 ms, so a
+     half-second transition never finishes: the bar re-laid out and repainted
+     every frame for as long as music played. Measured on the Moto G
+     2026-09-26, A/B/A in the live page: 132.9% of a core, 25.1% without,
+     132.8% with it back [LOG-SPK-900]. Stepping twice a second moves a
+     phone-width bar under a pixel per step on a four-minute song. */
+  #fill { height: 4px; width: 0; background: currentColor; border-radius: 2px; }
   /* Monospaced, because a path and two timecodes are read by scanning for a
      difference, not by reading prose. Wraps rather than truncates: a path
      cut short is the half a listener does not need. */

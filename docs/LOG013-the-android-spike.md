@@ -100,8 +100,18 @@ cable.
    already there. *Built:* writes are made only when the value changes, and
    panels are rebuilt only when their inputs do. The count is now **2**, the
    clock and the bar, and verify-skins holds the reference skin to that.
-   mulibplay (11) and winamp (7) are reported, not yet held. The phone has
-   not confirmed the CPU figure yet.
+   mulibplay (11) and winamp (7) are reported, not yet held. *On the phone,
+   2026-09-26, that fix changed nothing*: 134% of a core with the skin on
+   screen and playing, against about 130% before. The cause was elsewhere.
+   The progress bar carried `transition: width .5s linear`, and a new width
+   arrives every 500 ms, so the transition never finished and the bar was
+   laid out and repainted every frame while music played. That fits the
+   table above: 30% paused, 130% playing. Switching it off in the running
+   page through Chrome DevTools, A/B/A, read **132.9% → 25.1% → 132.8%**.
+   *Built:* no skin transitions the bar's width, and a test holds all three
+   to that. The rebuilt APK read **24.3%** with the skin on screen, and 6.7%
+   with the screen off. *Closed.* It reaches the appliances' web UIs with
+   their next player deploy.
 2. **`[LOG-SPK-910]` The start-up underrun** `[LOG-SPK-040]`. *Cause found
    2026-09-26:* nothing primed the output. Leaving silence played the device's
    first callbacks from a ring the engine had only begun to fill, which is the
@@ -117,7 +127,9 @@ cable.
    while `deploy-appliance.sh` was remounting and writing the read-only
    layer. It restarts before it persists, deliberately, so that only a binary
    proven to run is made durable, and a glitch during a deploy is that
-   order's price. The phone has not confirmed it yet.
+   order's price. *Confirmed on the phone 2026-09-26*, over USB with
+   `048a0dd`: a cold start that resumed mid-song, then a pause and resume,
+   read 0 underrun samples and 0 recoveries, twice. *Closed.*
 3. **`[LOG-SPK-920]` "The skin controlling it"** `[REQ-AND-530]`. *Closed
    2026-09-26:* the maintainer confirmed by hand, in the WebView, that pause,
    play, skip, volume and seek all work. With it the spike passes.

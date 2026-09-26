@@ -43,6 +43,11 @@ Two things measured on the moto g power (2021), Android 11, 2026-09-26:
   `adb tcpip 5555` made it worse. For bulk copies, a USB cable is the
   reliable route.
 
+**A charge-only cable looks like a working one.** On 2026-09-26 the first
+cable charged the phone, but Windows listed no USB device at all, so adb
+never had anything to see. If `Get-PnpDevice` shows no "moto g power
+(2021)", change the cable before anything else.
+
 **Over USB, adb runs on Windows**: Docker Desktop cannot see USB devices.
 Google's platform-tools 37.0.1 for Windows is in `C:\Users\Mango Cat\Tools\`,
 checked against the SHA-1 in `repository2-3.xml`, and nothing is on `PATH`. It

@@ -1071,6 +1071,22 @@ mod tests {
     /// styles neither class still *works*, and that is exactly the failure
     /// worth catching here: the press would be taken and the listener would
     /// have no way to know, which is the complaint all of this answers.
+    /// `[LOG-SPK-900]`: a transition on the progress bar's width never
+    /// finishes, since a new width arrives every snapshot, so it re-laid out
+    /// and repainted every frame while music played -- 108% of a core on the
+    /// Moto G, measured A/B/A in the live page on 2026-09-26. Any skin, any
+    /// device that shows it.
+    #[test]
+    fn no_skin_animates_the_progress_bar_every_frame() {
+        for skin in SKINS {
+            assert!(
+                !skin.css.contains("transition: width"),
+                "{} transitions a width: the bar would animate every frame while playing",
+                skin.name
+            );
+        }
+    }
+
     #[test]
     fn every_skin_says_what_a_registered_press_looks_like() {
         assert!(

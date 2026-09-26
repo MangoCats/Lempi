@@ -141,8 +141,8 @@ body { background-color: black; color: #ccc; }
               border-radius: 3px; background-clip: content-box;
               padding: 9px 0; box-sizing: content-box; }
 .mulib #bar.seekable { cursor: pointer; }
-.mulib #fill { height: 6px; width: 0; background: #7ab7ff; border-radius: 3px;
-               transition: width .5s linear; }
+/* No width transition: it animated every frame while playing [LOG-SPK-900]. */
+.mulib #fill { height: 6px; width: 0; background: #7ab7ff; border-radius: 3px; }
 .mulib #bar.seekable:hover #fill { filter: brightness(1.2); }
 
 /* Two columns that reach the same floor, so Browse by and the autoselect

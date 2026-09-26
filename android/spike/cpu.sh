@@ -12,12 +12,15 @@ A="$ADB -s $DEV"
 PKG=io.github.mangocats.lempi
 P=$($A shell pidof $PKG </dev/null)
 R=$($A shell "ps -A -o PID,NAME | grep 'webview:sandboxed' | awk '{print \$1}'" </dev/null | head -1)
+# One line per thread: its id, its name, user and system ticks. Paired across
+# the two readings by thread id -- pairing by position in the list, as this
+# did until 2026-09-26, read a thread's whole lifetime as one window (475%
+# of a core) as soon as a thread came or went between the readings.
 snap() {
-    $A shell run-as $PKG sh -c "'for t in /proc/$P/task/*; do echo \$(cat \$t/comm) \$(cut -d\" \" -f14,15 \$t/stat); done'" </dev/null
-    [ -n "$R" ] && echo "RENDERER $($A shell cat /proc/$R/stat </dev/null | cut -d' ' -f14,15)"
+    $A shell run-as $PKG sh -c "'for t in /proc/$P/task/*; do echo \${t##*/} \$(cat \$t/comm | tr -d \" \") \$(cut -d\" \" -f14,15 \$t/stat); done'" </dev/null
+    [ -n "$R" ] && echo "r$R RENDERER $($A shell cat /proc/$R/stat </dev/null | cut -d' ' -f14,15)"
 }
 snap > /tmp/a; sleep "$WIN"; snap > /tmp/b
 echo "pid $P, renderer ${R:-none}, window ${WIN}s  (% of one core)"
-awk -v w="$WIN" 'NR==FNR { a[$1" "NR]=$2+$3; n[NR]=$1; next }
-     { t=$2+$3; b[FNR]=t; nm[FNR]=$1 }
-     END { for (i in nm) { d=b[i]-a[nm[i]" "i]; if (d>0) printf "%6.1f%%  %s\n", d/w, nm[i] } }' /tmp/a /tmp/b | sort -rn | head -12
+awk -v w="$WIN" 'NR==FNR { a[$1]=$3+$4; next }
+     ($1 in a) { d=$3+$4-a[$1]; if (d>0) printf "%6.1f%%  %s\n", d/w, $2 }' /tmp/a /tmp/b | sort -rn | head -12
