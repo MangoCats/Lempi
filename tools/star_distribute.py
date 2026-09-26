@@ -114,7 +114,7 @@ def compare(host, tool, remote_db, target_db, skip):
 def holders(host, paths):
     probe = " ".join(shlex.quote(p) for p in paths)
     cmd = (f"for p in /proc/[0-9]*; do ls -l $p/fd 2>/dev/null | grep -qF -e {probe.replace(' ', ' -e ')} "
-           "&& echo ${p#/proc/}; done")
+           "&& echo ${p#/proc/}; done; true")   # the loop's status is the last grep's, not sudo's
     rc, out = ssh(host, f"sudo -n sh -c {shlex.quote(cmd)}", quiet=True)
     if rc:
         say("  NOTE: no sudo -- only this user's processes were checked for open files")
@@ -228,7 +228,10 @@ def run(plan, name, commit):
                 state = ssh(host, f"systemctl is-active {shlex.quote(player['service'])}", quiet=True)[1]
                 say(f"  player started again: {state}")
             else:
-                ssh(host, player["start"])
+                # Detached whole: a backgrounded command that keeps ssh's
+                # output open holds the session until it exits -- found on
+                # smartboardpc 2026-09-26, where the player ran and ssh waited.
+                ssh(host, f"( {player['start']} ) > /dev/null 2>&1 < /dev/null &")
                 time.sleep(8)
                 say(f"  player started again; holding the files: {holders(host, [lis]) or 'NOTHING'}")
     say(f"RESULT {name}: {'COMMITTED and verified' if ok else 'COMMITTED but a table DIFFERS'}; "

@@ -30,14 +30,26 @@ The overlay nodes need both layers written, and any write must go through the sc
 
 | node | listener (its own) | catalogue | backups |
 | :--- | :--- | :--- | :--- |
-| desktop | `data/listener.db` — **missing** | `data/library.db` — **missing** | — |
+| desktop | `data/listener.db` | `data/library.db` | — |
 | `teacherslounge` | `~/lempi-data/listener.db` | `~/lempi-data/library.db` | `~/lempi-data/listener-backups/` |
 | `smartboardpc` | the previous build's data directory | same | same, daily |
 | `lempi02w` | `/var/lempi/listener.db` | `/srv/library/library.db` | `/var/lempi/listener-backups/` |
 | `bose` | `/var/lempi/listener.db` | `/srv/library/library.db` (read-only mount) | `/var/lempi/listener-backups/` |
 | `lp3-wifi` | `/var/lempi/listener.db` | `/srv/library/library.db` | `/var/lempi/listener-backups/` |
 
-The desktop's pair went missing when this repository was seeded; `data/README.md` records it and SPEC046 rebuilds it.
+The desktop's pair went missing when this repository was seeded, and was rebuilt by merging every node's `[SPEC046]`; `data/README.md` records both.
+
+**`[FLT-DAT-020]` The 2026-09-26 merge reached every node, and each keeps what it had before.** Each node received its own copy by patch `[SPEC-STAR-080]`: the household's merged edits, its own plays and state untouched `[REQ-PD-113]`, and the merged catalogue with its own paths. On every node the backup was taken with the player stopped, both patches applied with no conflict, and every governed table read back from disk identical to the target. The evidence is in `data/recovery/2026-09-26/distribute/`.
+
+| node | listener rows | catalogue rows | its pair from before the merge |
+| :--- | ---: | ---: | :--- |
+| `bose` | 103 | 258 | `/var/lempi/pre-star-2026-09-26/` |
+| `lp3-wifi` | 114 | 396 | `/var/lempi/pre-star-2026-09-26/` |
+| `lempi02w` | 73 | 6,447 | `/var/lempi/pre-star-2026-09-26/` |
+| `teacherslounge` | 90 (the hub's listener, as its mirror) | 14,071 | `~/lempi-data/pre-star-2026-09-26/` |
+| `smartboardpc` | 3,519 | 13,786 | `pre-star-2026-09-26/` in its data directory |
+
+Beside each backup, `pre-star-2026-09-26-tools/` holds the tool and the two patches that were applied, so what changed can be read on the node itself. Rolling a node back is `star_patch.py restore`, with the player stopped.
 
 ## 3. What each runs — read 2026-09-26
 
@@ -67,4 +79,4 @@ Related but distinct, and not counted: on 2026-09-25 `bose` lost only *unmarked*
 
 ---
 
-**Traceability:** `[FLT-SHP-010]`, `[FLT-DAT-010]`, `[FLT-RUN-010]`, `[FLT-ISS-010..030]` · read from the machines 2026-09-26
+**Traceability:** `[FLT-SHP-010]`, `[FLT-DAT-010..020]`, `[FLT-RUN-010]`, `[FLT-ISS-010..030]` · read from the machines 2026-09-26

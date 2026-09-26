@@ -1,6 +1,6 @@
 # `data/`
 
-## Where the live pair lives — and where it is now
+## Where the live pair lives
 
 **The arrangement, as the maintainer describes it:** the Vipunen primary is in
 this directory on **the Windows desktop**, `GMKtec` (Windows 11, where the 44 GB
@@ -9,13 +9,13 @@ of music is under `C:\Users\Mango Cat\Music`). **`teacherslounge`** (Ubuntu
 under Linux. Each appliance keeps its own catalogue copy and its **own** listener
 history, and those are not mirrors of this one.
 
-**Measured 2026-09-26: the primary is not here.** It lived in `data/` of the
+**2026-09-26: the primary was lost, and rebuilt.** It lived in `data/` of the
 previous repository's checkout on this PC, a sibling of `Dev\Lempi` whose path
 is recorded in `[GDE-NAM-040]`. This repository was seeded on 2026-09-21
 without those untracked files, and that checkout no longer exists; it is not in
-the Recycle Bin. Its sidecars went
-with it: `library.console.db` and `library.idchecks.db`, the 8,330
-fingerprints described below. The copies that survive, read that day:
+the Recycle Bin. Its sidecars went with it: `library.console.db` and
+`library.idchecks.db`, the 8,330 fingerprints described below. The copies that
+survived, read that day:
 
 | copy | files | passages | recordings | `recording_works` | plays (newest) |
 | :--- | ---: | ---: | ---: | ---: | :--- |
@@ -24,16 +24,22 @@ fingerprints described below. The copies that survive, read that day:
 | `bose`, `lp3-wifi` | 5,709 | 16,661 | 8,185 | 7,154 | each its own |
 | `lempi02w` | 5,709 | 16,409 | 8,191 | 7,188 | its own |
 
-None is a superset of the others. So the hub is rebuilt by merging all of
+None was a superset of the others, so the hub was rebuilt by merging all of
 them, not by choosing one: [SPEC046](../docs/spec/SPEC046-star-sync.md), by
 `tools/star_merge.py`.
 
-**State, 2026-09-26: a merged candidate awaits the maintainer's verification.**
-It is in `data/recovery/2026-09-26/merge-full-4/`, with `REVIEW.md` (the recent
-edits by name) and `report.md` (every decision). Every node's snapshot is in
-the folder beside it, hash-verified against the node and made read-only.
-Until the candidate is promoted, a tool run here against `data/library.db`
-finds no file, and that failure is correct.
+**The pair here is `merge-full-5`**, from `data/recovery/2026-09-26/`, promoted
+on 2026-09-26 at the maintainer's word. It is the `merge-full-4` the maintainer
+reviewed, table for table, except that each node's plays are no longer merged
+into the hub's `[REQ-PD-113]`: the hub holds the desktop's own 37,763. Its
+`REVIEW.md` shows the recent edits by name, and `report.md` every decision.
+Every node's snapshot is in the folder beside it, hash-verified against the
+node and read-only.
+
+**Each node received its own copy by patch** `[SPEC-STAR-080]`, and keeps the
+pair it had before in `pre-star-2026-09-26/` beside its listener. Which nodes,
+and what was verified, is in [FLEET001](../fleet/FLEET001-the-fleet.md)
+`[FLT-DAT-020]`.
 
 ## What the pair is
 
