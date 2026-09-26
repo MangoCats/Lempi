@@ -125,6 +125,8 @@ The estimate in `[SPEC-DF-093]` — *"~1–2 KB per recording"* — **is true on
 
 **The decision it was defending survives intact, and is now better supported.** Compression reaches 1.27 KB per recording while keeping every property the packed form would have cost: inspectable, exact, debuggable, parseable by every tool including our own. The packed alternative would save fractions of a kilobyte against *this* baseline rather than the stated 1.5 KB. So: **stored readable, transported compressed**, and `[SPEC-DF-093]`'s arithmetic is corrected without its conclusion moving.
 
+**`[SPEC-PL-095]` A bundle travels as a folder, or as one `.zip` of the same folder.** `export_bundle.py --zip` writes `<out>.zip` beside the folder, with `payload.json` first and the audio under `audio/`. It is *stored*, not deflated: the audio is already compressed, and a receiver can read the payload before the audio. The zip exists because a phone's share sheet and "Open with" hand over files, not folders `[REQ-AND-230]`. A phone takes either form. It unpacks into private staging, accepting only `payload.json` and `audio/…` and nothing whose path leaves the folder. It verifies every file there against its `sha256` (`[SPEC-PL-087]`), and only then copies it into `Music/Lempi/` `[REQ-AND-210]`, so a damaged file never reaches shared storage. What it holds already is not copied, and a byte-identical file already in place is bound rather than copied beside itself `[REQ-AND-240]`. Measured on the Moto G, 2026-09-26: a four-track zip imported, and a second import of it copied nothing. A zip with one byte changed in one track placed the intact track and reported the other as damaged.
+
 ---
 
 ## 6. Open

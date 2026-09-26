@@ -647,6 +647,165 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+// --------------------------------------------------------- staged import ---
+
+/// What became of a bundle brought to a phone `[REQ-AND-230]`.
+#[derive(Debug, Default, PartialEq)]
+pub struct StagedReport {
+    /// Non-empty means the payload was refused whole, and nothing was placed
+    /// or written.
+    pub refused: Vec<String>,
+    /// Placed under the music folder, verified and written to the library.
+    pub imported: usize,
+    /// Held already, by `audio_md5`: not copied again.
+    pub already: usize,
+    /// A byte-identical file was already where it belongs, and was bound
+    /// rather than copied beside itself `[REQ-AND-240]`.
+    pub reused: usize,
+    /// Arrived, and its bytes are not the ones Vipunen sent. Never placed.
+    pub corrupt: Vec<String>,
+    /// Described by the payload, but not in the bundle.
+    pub missing: Vec<String>,
+    /// No byte hash in the payload, and nothing here can check it otherwise.
+    pub unverifiable: Vec<String>,
+    /// A different file already has this name in the music folder. It is left
+    /// alone, and the arriving one is not placed.
+    pub conflicts: Vec<String>,
+    /// A `bundle_path` that would land outside the music folder.
+    pub unsafe_paths: Vec<String>,
+    pub rows_written: usize,
+}
+
+/// A bundle path as components under a root, or `None` if it could leave it
+/// -- absolute, a drive, or any `..`. A bundle comes from outside the app.
+fn safe_rel(rel: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    let p = Path::new(rel);
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::Normal(s) => out.push(s),
+            Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    (!out.as_os_str().is_empty()).then_some(out)
+}
+
+/// Import a bundle unpacked into `staging` -- its `payload.json`, and its audio
+/// under `audio/` -- into the library, placing its audio under `music_root`
+/// `[REQ-AND-210]`.
+///
+/// **Verified before it is placed**, not after. Every staged file is checked
+/// against the byte hash Vipunen carried `[REQ-AND-230]` while it is still in
+/// private staging, so a file that arrived damaged never reaches shared
+/// storage, where other apps would find it. Only then is it copied into the
+/// music folder, and [`import`] binds it there, checking it again.
+///
+/// **Never duplicates** `[REQ-AND-240]`. An encoding the library holds already
+/// is not copied, and a byte-identical file already at its destination is
+/// bound rather than copied beside itself. A *different* file at the
+/// destination is left alone and reported: this does not overwrite a file it
+/// did not write.
+///
+/// The caller removes `staging` afterwards; this reads it and writes nothing
+/// there.
+pub fn import_staged(db: &mut Connection, staging: &Path, music_root: &Path) -> Result<StagedReport, String> {
+    let md5 = crate::relink::hasher_available().then_some(crate::relink::hash_encoded as Md5Hasher);
+    import_staged_with(db, staging, music_root, md5)
+}
+
+fn import_staged_with(
+    db: &mut Connection,
+    staging: &Path,
+    music_root: &Path,
+    md5_hasher: Option<Md5Hasher>,
+) -> Result<StagedReport, String> {
+    let payload = staging.join("payload.json");
+    let body = std::fs::read_to_string(&payload)
+        .map_err(|e| format!("no payload.json in the bundle ({}): {e}", payload.display()))?;
+    let doc: Value = serde_json::from_str(&body).map_err(|e| format!("payload.json is not JSON: {e}"))?;
+    let mut rep = StagedReport { refused: unacceptable(&doc), ..Default::default() };
+    if !rep.refused.is_empty() {
+        return Ok(rep);
+    }
+    let empty = Vec::new();
+    for e in doc.get("encodings").and_then(|v| v.as_array()).unwrap_or(&empty) {
+        let md5 = str_of(e, "audio_md5");
+        let rel = str_of(e, "bundle_path");
+        let held = db
+            .query_row("SELECT 1 FROM files WHERE audio_md5 = ?1", params![md5], |_| Ok(()))
+            .is_ok();
+        if held {
+            rep.already += 1;
+            continue;
+        }
+        let Some(rel_path) = safe_rel(&rel) else {
+            rep.unsafe_paths.push(rel);
+            continue;
+        };
+        let staged = staging.join("audio").join(&rel_path);
+        if !staged.is_file() {
+            rep.missing.push(rel);
+            continue;
+        }
+        let Some(want) = e.get("sha256").and_then(|v| v.as_str()) else {
+            if md5_hasher.is_none() {
+                rep.unverifiable.push(rel);
+                continue;
+            }
+            // A host with ffmpeg: `import` checks audio_md5 once placed.
+            place(&staged, &music_root.join(&rel_path), None, &rel, &mut rep)?;
+            continue;
+        };
+        match sha256_file(&staged) {
+            Ok(h) if h == want => {}
+            _ => {
+                rep.corrupt.push(rel);
+                continue;
+            }
+        }
+        place(&staged, &music_root.join(&rel_path), Some(want), &rel, &mut rep)?;
+    }
+
+    // Everything placed is now where `import` looks for it. It verifies each
+    // again and writes the rows; an encoding that was not placed is simply
+    // not there, and lands as awaiting its audio, which writes nothing.
+    let r = import_with(db, &doc, &body, music_root, true, md5_hasher)?;
+    rep.rows_written = r.rows_written;
+    rep.imported = r.count(|o| *o == Landed::Imported);
+    rep.reused = rep.reused.min(rep.imported);
+    rep.imported -= rep.reused;
+    Ok(rep)
+}
+
+/// Copy one verified file into the music folder, unless the same bytes are
+/// there already `[REQ-AND-240]` or different ones are (a conflict).
+fn place(staged: &Path, dest: &Path, sha256: Option<&str>, rel: &str, rep: &mut StagedReport) -> Result<(), String> {
+    if dest.exists() {
+        match (sha256, sha256_file(dest)) {
+            (Some(want), Ok(have)) if have == want => rep.reused += 1,
+            _ => rep.conflicts.push(rel.to_string()),
+        }
+        return Ok(());
+    }
+    if let Some(dir) = dest.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    }
+    // Written beside itself and renamed, so a copy cut short is never found
+    // under the real name. The temporary name keeps the audio extension:
+    // Android's shared storage lets an app create only files whose names say
+    // what they are in `Music/`, and refused `x.lempi-part` with EPERM on the
+    // Moto G, 2026-09-26.
+    let part = match dest.extension() {
+        Some(ext) => dest.with_extension(format!("lempi-part.{}", ext.to_string_lossy())),
+        None => dest.with_extension("lempi-part"),
+    };
+    std::fs::copy(staged, &part).map_err(|e| format!("cannot write {}: {e}", part.display()))?;
+    std::fs::rename(&part, dest).map_err(|e| format!("cannot place {}: {e}", dest.display()))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1146,5 +1305,148 @@ mod tests {
             assert_eq!(unacceptable(&d), vec!["a: encoding.sha256 is not 64 lower-case hex digits"],
                        "{bad}");
         }
+    }
+
+    // ---------------------------------------------------- staged import ---
+
+    /// A bundle staged as the phone unpacks one: `payload.json`, and each
+    /// file's bytes under `audio/`. Each entry is (audio_md5, bundle_path,
+    /// the bytes staged, the sha256 the payload claims -- None for none).
+    struct Staged {
+        root: PathBuf,
+        staging: PathBuf,
+        music: PathBuf,
+    }
+
+    fn stage(name: &str, entries: &[(&str, &str, Option<&[u8]>, Option<String>)]) -> Staged {
+        let root = std::env::temp_dir().join(format!("lempi-staged-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (staging, music) = (root.join("staging"), root.join("Music"));
+        std::fs::create_dir_all(staging.join("audio")).unwrap();
+        std::fs::create_dir_all(&music).unwrap();
+        let mut encs = Vec::new();
+        for (i, (md5, rel, bytes, sha)) in entries.iter().enumerate() {
+            if let Some(b) = bytes {
+                let p = staging.join("audio").join(rel);
+                if let Some(d) = p.parent() {
+                    let _ = std::fs::create_dir_all(d);
+                }
+                std::fs::write(&p, b).unwrap();
+            }
+            let sha = sha.as_ref().map(|h| format!(r#","sha256":"{h}""#)).unwrap_or_default();
+            encs.push(format!(
+                r#"{{"audio_md5":"{md5}","bundle_path":"{rel}","format":"wav","duration_ms":1000{sha},
+                 "passages":[{{"kind":"radio","start_ms":0,"end_ms":1000,"boundary_src":"x",
+                              "recordings":[{{"mbid":"m{i}","weight":1.0,"source":"s"}}]}}]}}"#
+            ));
+        }
+        let recs: Vec<String> =
+            (0..entries.len()).map(|i| format!(r#"{{"mbid":"m{i}","title":"t{i}","source":"s"}}"#)).collect();
+        std::fs::write(
+            staging.join("payload.json"),
+            format!(r#"{{"payload_version":1,"encodings":[{}],"recordings":[{}]}}"#, encs.join(","), recs.join(",")),
+        )
+        .unwrap();
+        Staged { root, staging, music }
+    }
+
+    fn sha_of(b: &[u8]) -> String {
+        use sha2::Digest;
+        sha2::Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect()
+    }
+
+    /// `[REQ-AND-230]`: a verified file is placed in the music folder and
+    /// bound there; a damaged one never reaches it.
+    #[test]
+    fn staged_import_places_what_verifies_and_nothing_else() {
+        let good: &[u8] = b"the bytes as sent";
+        let s = stage("verify", &[
+            ("md5good", "A/good.wav", Some(good), Some(sha_of(good))),
+            ("md5bad", "A/bad.wav", Some(b"damaged in transit"), Some(sha_of(b"the bytes as sent, originally"))),
+            ("md5gone", "A/gone.wav", None, Some(sha_of(b"never arrived"))),
+            ("md5nohash", "A/nohash.wav", Some(b"unhashed"), None),
+        ]);
+        let mut c = empty_library();
+        let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
+        assert!(r.refused.is_empty(), "{:?}", r.refused);
+        assert_eq!(r.imported, 1, "{r:?}");
+        assert_eq!(r.corrupt, vec!["A/bad.wav"]);
+        assert_eq!(r.missing, vec!["A/gone.wav"]);
+        assert_eq!(r.unverifiable, vec!["A/nohash.wav"]);
+        assert!(s.music.join("A/good.wav").is_file(), "the verified file is placed");
+        assert!(!s.music.join("A/bad.wav").exists(), "a damaged file never reaches shared storage");
+        assert!(!s.music.join("A/nohash.wav").exists(), "nor does one that cannot be checked");
+        let path: String = c.query_row("SELECT path FROM files WHERE audio_md5='md5good'", [], |r| r.get(0)).unwrap();
+        assert_eq!(PathBuf::from(path), s.music.join("A/good.wav"), "and it is bound where it was placed");
+        let rows: i64 = c.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 1, "nothing else was written");
+        std::fs::remove_dir_all(&s.root).ok();
+    }
+
+    /// `[REQ-AND-240]`: what the library holds is not copied; a byte-identical
+    /// file already in place is bound; a different file there is left alone.
+    #[test]
+    fn staged_import_never_duplicates_or_overwrites() {
+        let a: &[u8] = b"already catalogued";
+        let b: &[u8] = b"already on the phone";
+        let d: &[u8] = b"arriving";
+        let s = stage("dup", &[
+            ("md5held", "held.wav", Some(a), Some(sha_of(a))),
+            ("md5same", "same.wav", Some(b), Some(sha_of(b))),
+            ("md5clash", "clash.wav", Some(d), Some(sha_of(d))),
+        ]);
+        let mut c = empty_library();
+        c.execute(
+            "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen) \
+             VALUES ('md5held','/elsewhere/held.wav',1,1.0,'wav',1000,'t','t')",
+            [],
+        )
+        .unwrap();
+        std::fs::write(s.music.join("same.wav"), b).unwrap();
+        std::fs::write(s.music.join("clash.wav"), b"a file the app did not write").unwrap();
+        let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
+        assert_eq!(r.already, 1, "{r:?}");
+        assert!(!s.music.join("held.wav").exists(), "a held encoding is not copied again");
+        assert_eq!(r.reused, 1, "{r:?}");
+        assert_eq!(r.imported, 0, "{r:?}");
+        let bound: i64 =
+            c.query_row("SELECT count(*) FROM files WHERE audio_md5='md5same'", [], |r| r.get(0)).unwrap();
+        assert_eq!(bound, 1, "the identical file already there is bound, not copied beside itself");
+        assert_eq!(r.conflicts, vec!["clash.wav"]);
+        assert_eq!(
+            std::fs::read(s.music.join("clash.wav")).unwrap(),
+            b"a file the app did not write",
+            "a different file is never overwritten"
+        );
+        let clash: i64 =
+            c.query_row("SELECT count(*) FROM files WHERE audio_md5='md5clash'", [], |r| r.get(0)).unwrap();
+        assert_eq!(clash, 0);
+        std::fs::remove_dir_all(&s.root).ok();
+    }
+
+    /// A bundle comes from outside the app: a path may not leave the music
+    /// folder, and a refused payload places nothing.
+    #[test]
+    fn staged_import_keeps_to_the_music_folder_and_refuses_whole() {
+        let x: &[u8] = b"escape";
+        let s = stage("unsafe", &[("md5esc", "../outside.wav", Some(x), Some(sha_of(x)))]);
+        let mut c = empty_library();
+        let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
+        assert_eq!(r.unsafe_paths, vec!["../outside.wav"]);
+        assert!(!s.root.join("outside.wav").exists(), "nothing written outside the music folder");
+
+        std::fs::write(
+            s.staging.join("payload.json"),
+            r#"{"payload_version":1,"encodings":[
+            {"audio_md5":"a","bundle_path":"a.wav","format":"wav","duration_ms":1000,
+             "passages":[{"kind":"radio","start_ms":0,"end_ms":1000,
+                          "recordings":[{"mbid":"m","weight":1.0,"source":"s"}]}]}],
+            "recordings":[{"mbid":"m","title":"t","source":"s"}]}"#,
+        )
+        .unwrap();
+        let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
+        assert!(r.refused.iter().any(|x| x.contains("boundary_src")), "{r:?}");
+        assert_eq!(std::fs::read_dir(&s.music).unwrap().count(), 0, "a refused payload places nothing");
+        std::fs::remove_dir_all(&s.root).ok();
     }
 }

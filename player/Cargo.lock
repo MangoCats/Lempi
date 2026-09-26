@@ -1138,6 +1138,7 @@ dependencies = [
  "lempi-player",
  "libc",
  "ndk-context",
+ "rusqlite",
  "tracing",
  "uniffi",
 ]

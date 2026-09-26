@@ -33,6 +33,29 @@
             </intent-filter>
         </activity>
 
+        <!-- [REQ-AND-230]: a bundle from Vipunen, by the share sheet or
+             "Open with" (a .zip), or from Lempi's own menu (a .zip or a
+             folder, through the system pickers, which grant access to that
+             one document or folder and nothing else [REQ-AND-220]). -->
+        <activity
+            android:name=".ImportActivity"
+            android:label="Import to Lempi"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+            </intent-filter>
+        </activity>
+
         <!-- [REQ-AND-120]: the player lives here, not in the activity, so it
              outlives the screen. -->
         <service

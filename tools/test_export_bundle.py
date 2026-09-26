@@ -152,8 +152,39 @@ def test_copy_is_checked_against_the_recorded_byte_hash():
         check(rc == (0 if record_right else 1), f"{label}: exit {rc}")
 
 
+def test_zip_is_the_whole_bundle_in_one_file():
+    """[REQ-AND-230]: --zip writes <out>.zip, payload.json first, then the
+    audio under audio/, stored rather than deflated."""
+    import zipfile
+    tmp = tempfile.mkdtemp()
+    db_path = os.path.join(tmp, "lempi.db")
+    audio_path = os.path.join(tmp, "a.wav")
+    with open(audio_path, "wb") as fh:
+        fh.write(b"zip me")
+    md5 = "feedface00000000000000000000000"
+    build_library(db_path, audio_path, md5)
+    out_dir = os.path.join(tmp, "bundle")
+    old_argv = sys.argv
+    sys.argv = ["export_bundle.py", db_path, "--md5", md5, "-o", out_dir, "--zip"]
+    try:
+        rc = eb.main()
+    finally:
+        sys.argv = old_argv
+    check(rc == 0, f"a clean export with --zip, exit {rc}")
+    zpath = out_dir + ".zip"
+    if check(os.path.isfile(zpath), "the zip is written beside the bundle folder"):
+        with zipfile.ZipFile(zpath) as z:
+            infos = z.infolist()
+            names = [i.filename for i in infos]
+            check(names[0] == "payload.json", f"payload.json comes first: {names}")
+            check("audio/a.wav" in names, f"the audio is under audio/: {names}")
+            check(all(i.compress_type == zipfile.ZIP_STORED for i in infos), "stored, not deflated")
+            check(z.read("audio/a.wav") == b"zip me", "with the bytes that were exported")
+
+
 def main() -> int:
     test_md5_file_selects_the_listed_encodings()
+    test_zip_is_the_whole_bundle_in_one_file()
     test_md5_file_combines_with_a_hand_typed_md5()
     test_copy_is_checked_against_the_recorded_byte_hash()
 

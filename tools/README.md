@@ -97,7 +97,7 @@ The Gaia/Stage B pipeline — reproducing AcousticBrainz's own extraction chain 
 
 | script | what |
 | :--- | :--- |
-| `export_bundle.py` | Build a bundle for a remote Lempi `[SPEC-SUI-095]`, `[SPEC014]`. |
+| `export_bundle.py` | Build a bundle for a remote Lempi `[SPEC-SUI-095]`, `[SPEC014]`; `--zip` also writes it as one file, for a phone `[SPEC-PL-095]`. |
 | `payload.py` | Build the derived-data payload that travels between installations `[SPEC014]`. |
 
 ## Everything else

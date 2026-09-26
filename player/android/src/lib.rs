@@ -271,3 +271,58 @@ pub fn stop() -> Result<(), LempiError> {
     })
     .map_err(LempiError::from)
 }
+
+/// What became of a bundle, for the import screen `[REQ-AND-230]`.
+#[derive(uniffi::Record)]
+pub struct ImportSummary {
+    /// Non-empty: the payload was refused whole, and nothing changed.
+    pub refused: Vec<String>,
+    pub imported: u32,
+    pub already: u32,
+    /// Byte-identical files already on the phone, bound rather than copied.
+    pub reused: u32,
+    pub corrupt: Vec<String>,
+    pub missing: Vec<String>,
+    pub unverifiable: Vec<String>,
+    pub conflicts: Vec<String>,
+    pub unsafe_paths: Vec<String>,
+    pub rows_written: u32,
+}
+
+/// Import a bundle the app has unpacked into `staging` -- `payload.json` and
+/// `audio/` -- into the library at `library`, placing its audio under
+/// `music_root` `[REQ-AND-210]`. Every file is verified against Vipunen's
+/// byte hash while still in private staging, before it is placed
+/// `[REQ-AND-230]`; nothing is copied twice or over a file the app did not
+/// write `[REQ-AND-240]`. The caller removes `staging`, and asks the player to
+/// reload.
+#[uniffi::export]
+pub fn import_bundle(library: String, staging: String, music_root: String) -> Result<ImportSummary, LempiError> {
+    let n = |x: usize| u32::try_from(x).unwrap_or(u32::MAX);
+    let r = guarded(|| {
+        let mut db = rusqlite::Connection::open(&library).map_err(|e| format!("cannot open {library}: {e}"))?;
+        // The player holds the same file open; wait for it rather than fail.
+        db.busy_timeout(std::time::Duration::from_secs(15)).map_err(|e| e.to_string())?;
+        lempi_player::bundle::import_staged(&mut db, std::path::Path::new(&staging), std::path::Path::new(&music_root))
+    });
+    match &r {
+        Ok(s) => tracing::info!(
+            "import: {} imported, {} already, {} reused, {} corrupt, {} missing, {} conflicts, {} refused",
+            s.imported, s.already, s.reused, s.corrupt.len(), s.missing.len(), s.conflicts.len(), s.refused.len()
+        ),
+        Err(e) => tracing::error!("import failed: {e}"),
+    }
+    let s = r.map_err(LempiError::from)?;
+    Ok(ImportSummary {
+        refused: s.refused,
+        imported: n(s.imported),
+        already: n(s.already),
+        reused: n(s.reused),
+        corrupt: s.corrupt,
+        missing: s.missing,
+        unverifiable: s.unverifiable,
+        conflicts: s.conflicts,
+        unsafe_paths: s.unsafe_paths,
+        rows_written: n(s.rows_written),
+    })
+}

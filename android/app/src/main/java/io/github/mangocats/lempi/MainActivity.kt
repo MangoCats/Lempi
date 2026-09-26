@@ -8,6 +8,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.Menu
+import android.view.MenuItem
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.TextView
@@ -89,6 +91,23 @@ class MainActivity : Activity() {
     override fun onStart() {
         super.onStart()
         if (web == null) poll()
+    }
+
+    /** Importing a bundle [REQ-AND-230]; sharing a .zip with Lempi does the same. */
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menu.add(0, 1, 0, "Import a bundle (.zip)…")
+        menu.add(0, 2, 1, "Import a bundle folder…")
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        val action = when (item.itemId) {
+            1 -> ImportActivity.PICK_ZIP
+            2 -> ImportActivity.PICK_FOLDER
+            else -> return super.onOptionsItemSelected(item)
+        }
+        startActivity(Intent(this, ImportActivity::class.java).setAction(action))
+        return true
     }
 
     @Deprecated("Activity's own back handling; this app has no AndroidX")

@@ -35,3 +35,6 @@ libc = "0.2"
 # hand-written JNI entry, since it takes the Android context. Pinned: the
 # generator must be the same release.
 uniffi = "=0.32.2"
+# Its own connection to the library, for a bundle import [REQ-AND-230]; the
+# same release as the player's, so the two unify into one SQLite.
+rusqlite = { version = "0.32", features = ["bundled"] }

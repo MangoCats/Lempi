@@ -77,6 +77,26 @@ S=<work dir> PY=python sh android/spike/verify.sh <serial>
 Each script sets `MSYS_NO_PATHCONV=1`, since Git Bash would otherwise
 rewrite `/sdcard/...` into a Windows path before adb sees it.
 
+## Music onto the phone: a bundle
+
+Vipunen sends music with everything it knows about it as a **bundle**
+`[SPEC-PL-095]`: a folder, or the same folder as one `.zip`.
+
+```
+python tools/export_bundle.py data/library.db --like '%Frisina%'     --root "C:/Users/Mango Cat/Music" -o out/frisina --zip
+```
+
+On the phone, any of these imports it `[REQ-AND-230]`:
+- share the `.zip` with **Import to Lempi**, or open it with Lempi;
+- Lempi's menu, **Import a bundle (.zip)…**;
+- Lempi's menu, **Import a bundle folder…**, for the unpacked folder. Android
+  asks to allow that one folder and nothing more.
+
+Every file is checked against Vipunen's byte hash before it is placed in
+`Music/Lempi/`. The screen reports what was imported, what was there already,
+and any file that arrived damaged, which is never placed. The running player
+is then asked to rebuild its choices, so the new music can be picked.
+
 ## The spike's scripts — [`spike/`](spike/)
 
 They run inside `lempi-adb`, with `/w` the repository, `/music` the PC's music

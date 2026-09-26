@@ -45,6 +45,9 @@ def main() -> int:
     ap.add_argument("-o", "--out", required=True, help="bundle directory to write")
     ap.add_argument("--have", help="file of audio_md5 the target already holds, one per line")
     ap.add_argument("--gzip", action="store_true", help="write payload.json.gz as well")
+    ap.add_argument("--zip", action="store_true",
+                    help="also write <out>.zip: the whole bundle as one file, for a phone's "
+                         "share or open sheet [REQ-AND-230]")
     args = ap.parse_args()
 
     # Catalogue-only, read-only.
@@ -150,6 +153,20 @@ def main() -> int:
         # not describe, is not a bundle; say so with a non-zero exit so a
         # script cannot ship it as complete.
         return 1
+    if args.zip:
+        # One file, since a share sheet hands over files and not folders.
+        # Stored, not deflated: audio is already compressed, and deflating it
+        # costs time on both ends to save almost nothing. payload.json first,
+        # so a receiver can read what is coming before the audio arrives.
+        import zipfile
+        dest = args.out.rstrip("/\\") + ".zip"
+        with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_STORED) as z:
+            z.write(os.path.join(args.out, "payload.json"), "payload.json")
+            for dirpath, _, files in sorted(os.walk(audio_dir)):
+                for f in sorted(files):
+                    full = os.path.join(dirpath, f)
+                    z.write(full, "audio/" + os.path.relpath(full, audio_dir).replace(os.sep, "/"))
+        print(f"  zip         {dest}, {os.path.getsize(dest)/1e6:.1f} MB")
     return 0
 
 
