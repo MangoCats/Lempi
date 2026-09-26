@@ -67,6 +67,7 @@ folded into one spec.
 | Per-node presentation delay | [SPEC043](spec/SPEC043-node-delay-control.md) | [§5. Open](spec/SPEC043-node-delay-control.md#5-open) |
 | Listener preference editing | [SPEC029](spec/SPEC029-listener-preference-editing.md) | [§8. Open](spec/SPEC029-listener-preference-editing.md#8-open) |
 | Play frequency readout | [SPEC031](spec/SPEC031-play-frequency.md) | [§6. Open](spec/SPEC031-play-frequency.md#6-open) |
+| The Android device spike | [LOG013](LOG013-the-android-spike.md) | [§4. Open](LOG013-the-android-spike.md#4-open) |
 | Node discovery — a future idea, not scheduled | [GUIDE035](GUIDE035-node-discovery.md) | [§3. Open, for when it is taken up](GUIDE035-node-discovery.md#3-open-for-when-it-is-taken-up) |
 | Framebuffer UI — implementation plan | [SPEC042](spec/SPEC042-framebuffer-implementation-plan.md) | [§8. Implementation plan, phased](spec/SPEC042-framebuffer-implementation-plan.md#8-implementation-plan-phased-against-the-open-items-above) |
 

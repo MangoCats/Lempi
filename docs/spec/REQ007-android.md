@@ -103,15 +103,15 @@ The README ranks mobile *Future / Post-V1*. Nothing here schedules the work; it 
 
 **`[REQ-AND-520]` Each release passes a device checklist, recorded as numbers**: 30 minutes screen-off with the underrun count, battery drain per hour, focus lost and regained, headset buttons, the notification, a bundle import, a scan, an export and a Director rebuild `[GDE-APP-160]`.
 
-**`[REQ-AND-530]` The device spike passes before this document leaves draft** `[GDE-APP-020]`: a passage audible for 30 minutes screen-off with zero underruns, a measured drain, the skin controlling it in a WebView.
+**`[REQ-AND-530]` The device spike passes before this document leaves draft** `[GDE-APP-020]`: a passage audible for 30 minutes screen-off with zero underruns, a measured drain, the skin controlling it in a WebView. *Run 2026-09-26, [LOG013](../LOG013-the-android-spike.md):* 37.8 minutes audible screen-off with no underrun during it; a drain of at most 3.2–4.8% per hour; the skin loaded, with a tap in it still to be confirmed `[LOG-SPK-920]`. Each start underruns briefly `[LOG-SPK-040]`.
 
 **`[REQ-AND-540]` The spike runs first on the oldest phone the floor admits**: a 2021 Moto G on Android 11, the `[REQ-AND-100]` floor itself. A Pixel 7a on Android 17 follows once that passes, as the current-platform data point.
 
 ## 7. Open — to be settled before this leaves draft
 
 1. **`[REQ-AND-900]` How a backup leaves the phone** `[REQ-AND-190]`. *Decided 2026-09-25: export on request* — `[REQ-AND-195]`.
-2. **`[REQ-AND-910]` The memory and battery budgets**, as numbers, from the spike `[REQ-AND-020]`; `[GDE-AND-065]` measured a Director rebuild at about 16.5 CPU-seconds and +122.5 MB on a Pi 3 core.
-3. **`[REQ-AND-920]` Whether a MediaStore path opens with `File::open`** on the device; if not, the audio-source resolver `[GDE-HST-080]` covers every path, not only the sidecars `[GDE-APP-080]`.
+2. **`[REQ-AND-910]` The memory and battery budgets**, as numbers, from the spike `[REQ-AND-020]`; `[GDE-AND-065]` measured a Director rebuild at about 16.5 CPU-seconds and +122.5 MB on a Pi 3 core. The spike's first numbers: 118 MB PSS, 6–7% of a core screen-off, at most 3.2–4.8% of the battery per hour `[LOG-SPK-050]`, `[LOG-SPK-060]`.
+3. **`[REQ-AND-920]` Whether a MediaStore path opens with `File::open`** on the device; if not, the audio-source resolver `[GDE-HST-080]` covers every path, not only the sidecars `[GDE-APP-080]`. *Answered 2026-09-26: it does*, on Android 11 with the storage permission `[LOG-SPK-020]`.
 4. **`[REQ-AND-930]` How exported music reaches Vipunen** `[REQ-AND-280]`. *Decided 2026-09-25: over the local network to an active node, ideally* — `[REQ-AND-285]`; named node, key, negotiation and a pending-identification folder — `[REQ-AND-286..289]`.
 5. **`[REQ-AND-940]` The Director's handling of a passage without flavor** `[REQ-AND-310]`. *Answered from the code 2026-09-25* — see `[REQ-AND-310]`; it raised `[REQ-AND-315]`, which awaits the maintainer.
 6. **`[REQ-AND-950]` Whether a phone also refuses to write covers and cue sheets into `Music/`** `[REQ-AND-200]`. *Decided 2026-09-25: no — they belong beside their audio* — `[REQ-AND-205]`.

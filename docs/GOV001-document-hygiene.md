@@ -191,6 +191,7 @@ grep -rn "SPEC-PD" docs/
 | `[LOG-FEX-*]` | Route 2 (Gaia/SVM chain reproduction) reverse-engineering and production validation — what ships | [LOG002-feature-reproduction-investigation.md](LOG002-feature-reproduction-investigation.md), [LOG003-feature-reproduction-verification.md](LOG003-feature-reproduction-verification.md) |
 | `[LOG-WFE-*]` | Waveform boundary editor: incident and build history behind SPEC021's usability pass and fade addition | [LOG004-waveform-editor-build-log.md](LOG004-waveform-editor-build-log.md) |
 | `[LOG-RIP-*]` | CD ripping: real-hardware findings behind SPEC025 §5a's failure-handling design | [LOG005-cd-ripping-hardware-findings.md](LOG005-cd-ripping-hardware-findings.md) |
+| `[LOG-SPK-*]` | The Android device spike: the player on a phone, screen off, measured — what held, what it cost, what it found | [LOG013-the-android-spike.md](LOG013-the-android-spike.md) |
 | `[SD-RISK-*]` | What an unplanned power cut costs each Pi node: measured filesystem/card survey, the four failure layers, and bounded per-cut and per-year rates | [LOG010-power-loss-risk-on-the-pi-nodes.md](LOG010-power-loss-risk-on-the-pi-nodes.md) |
 | `[INH-*]` | Inherited-document provenance register & hazards | [inherited/README.md](inherited/README.md) |
 | `[SPEC-FD-030]` | Total-variation per-characteristic distance | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#2-the-metric) |
