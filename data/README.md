@@ -36,6 +36,11 @@ into the hub's `[REQ-PD-113]`: the hub holds the desktop's own 37,763. Its
 Every node's snapshot is in the folder beside it, hash-verified against the
 node and read-only.
 
+**Since promotion, `files.sha256` is filled** `[REQ-AND-960]`: every one of the
+5,709 files hashed by `tools/add_byte_hashes.py` on 2026-09-26, in 111 s, all
+distinct, spot-checked against the files. That column is the one difference
+from `merge-full-5`, and no node has it yet.
+
 **Each node received its own copy by patch** `[SPEC-STAR-080]`, and keeps the
 pair it had before in `pre-star-2026-09-26/` beside its listener. Which nodes,
 and what was verified, is in [FLEET001](../fleet/FLEET001-the-fleet.md)

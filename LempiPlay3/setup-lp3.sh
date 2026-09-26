@@ -42,6 +42,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 HOST="${HOST:-pi@lp3-wifi}"
 WIFI_COUNTRY="${WIFI_COUNTRY:-US}"
+TIMEZONE="${TIMEZONE:-America/New_York}"
 NAME=lempiplay3
 CFG=/boot/firmware/config.txt
 MODE=check
@@ -286,6 +287,13 @@ file_item "chrony fleet sources [GDE-ECHO-300]" LempiPlay3/lempi-fleet.sources \
 item "chrony distribution pool on" \
      "grep -q '^pool 2\.debian\.pool\.ntp\.org' $P/etc/chrony/chrony.conf" \
      "sudo sed -i 's/^#.*\(pool 2\.debian\.pool\.ntp\.org\)/\1/' /etc/chrony/chrony.conf"
+# The household's zone, as the other nodes have. The image came up in
+# Europe/London and nothing here said otherwise, so lp3's listener recorded
+# +60 minutes where every other node recorded -240, and anything that follows
+# the clock ran five hours off [FLT-ISS-030]. Found 2026-09-26.
+item "timezone $TIMEZONE" \
+     "test \"\$(readlink $P/etc/localtime)\" = /usr/share/zoneinfo/$TIMEZONE && test \"\$(cat $P/etc/timezone)\" = $TIMEZONE" \
+     "sudo timedatectl set-timezone $TIMEZONE && echo $TIMEZONE | sudo tee /etc/timezone"
 file_item "journal kept on STATE (overrides the image's volatile)" \
     LempiPlay3/journald-lempi.conf /etc/systemd/journald.conf.d/lempi.conf 644
 file_item "swap: zram, 1x RAM, <= 2 GiB" LempiPlay3/rpi-swap-lempi.conf \

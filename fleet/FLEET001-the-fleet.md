@@ -32,7 +32,7 @@ The overlay nodes need both layers written, and any write must go through the sc
 | :--- | :--- | :--- | :--- |
 | desktop | `data/listener.db` | `data/library.db` | — |
 | `teacherslounge` | `~/lempi-data/listener.db` | `~/lempi-data/library.db` | `~/lempi-data/listener-backups/` |
-| `smartboardpc` | the previous build's data directory | same | same, daily |
+| `smartboardpc` | `/var/lempi/listener.db` | `/var/lempi/library.db` | `/var/lempi/listener-backups/` |
 | `lempi02w` | `/var/lempi/listener.db` | `/srv/library/library.db` | `/var/lempi/listener-backups/` |
 | `bose` | `/var/lempi/listener.db` | `/srv/library/library.db` (read-only mount) | `/var/lempi/listener-backups/` |
 | `lp3-wifi` | `/var/lempi/listener.db` | `/srv/library/library.db` | `/var/lempi/listener-backups/` |
@@ -47,7 +47,7 @@ The desktop's pair went missing when this repository was seeded, and was rebuilt
 | `lp3-wifi` | 114 | 396 | `/var/lempi/pre-star-2026-09-26/` |
 | `lempi02w` | 73 | 6,447 | `/var/lempi/pre-star-2026-09-26/` |
 | `teacherslounge` | 90 (the hub's listener, as its mirror) | 14,071 | `~/lempi-data/pre-star-2026-09-26/` |
-| `smartboardpc` | 3,519 | 13,786 | `pre-star-2026-09-26/` in its data directory |
+| `smartboardpc` | 3,519 | 13,786 | `pre-star-2026-09-26/` in the previous build's data directory |
 
 Beside each backup, `pre-star-2026-09-26-tools/` holds the tool and the two patches that were applied, so what changed can be read on the node itself. Rolling a node back is `star_patch.py restore`, with the player stopped.
 
@@ -59,7 +59,7 @@ Beside each backup, `pre-star-2026-09-26-tools/` holds the tool and the two patc
 | :--- | :--- | :--- |
 | `lempi02w`, `bose`, `lp3-wifi` | `618fd14`, deployed that day | lempi02w is plain ext4; the other two were written to both layers and their durable copy checked |
 | `teacherslounge` | no player service; checkout fast-forwarded to `be778b9` that day | mirrors this file |
-| `smartboardpc` | **the previous generation's player**, from that project's own checkout, up 6 days | **never migrated.** `build/deploy-everywhere.sh` named `/home/mango/Dev/Lempi`, which did not exist until it was cloned there that day to mirror this file (`be778b9`): the same silent miss TL001 found on `teacherslounge` `[TL-MIG-010]` |
+| `smartboardpc` | `6e38ab4`, built there 2026-09-26 by `build/update-source-host.sh` | migrated that day `[FLT-ISS-020]`; started by hand with `nohup`, as before, so a reboot does not bring it back |
 
 ## 4. Standing issues
 
@@ -73,9 +73,15 @@ Beside each backup, `pre-star-2026-09-26-tools/` holds the tool and the two patc
 
 Related but distinct, and not counted: on 2026-09-25 `bose` lost only *unmarked* traffic to `smartboardpc`, and one reassociation cleared it `[BOS-OPS-110]`. The link was up; the access point held stuck state.
 
-**`[FLT-ISS-020]` `smartboardpc` needs migrating** to this repository's player `[FLT-RUN-010]`, as `teacherslounge` was in TL001.
+**`[FLT-ISS-020]` `smartboardpc` migrated to this repository's player, 2026-09-26**, as `teacherslounge` was in TL001 `[TL-MIG-020]`:
+- The previous player was stopped. Its listener and catalogue were copied through the backup API to `/var/lempi/`, where SMART001 had placed them `[SMT-DB-030]`, and every table was checked identical to its source.
+- Lempi `6e38ab4` was started on that copy, with `XDG_RUNTIME_DIR` set so PulseAudio can be found `[TL-OPS-020]`.
+- It plays through PulseAudio's default device, as the previous player did, and follows `bose`'s echo from the setting the data carries. Its stored position advanced 0 → 28,709 ms in 30 s, with no stream errors.
+- The previous build and its data directory are untouched and still runnable.
 
-**`[FLT-ISS-030]` `lp3-wifi` keeps UK time.** Its listener records a UTC offset of +60 minutes where every other node has −240, and its journal stamps agree: 14:56 on `lp3-wifi` was 09:56 on `bose`. Anything that follows the clock — a programme that starts at a set time `[SPEC-DIR-180]` — runs five hours off there. The fix belongs in its setup script, with the rest of its configuration.
+Still open: it has no unit, so a reboot leaves it silent, as before. A unit needs the music volume's `fstab` entry first `[SMT-DB-020]`.
+
+~~**`[FLT-ISS-030]` `lp3-wifi` keeps UK time.**~~ *Resolved 2026-09-26.* Its listener recorded a UTC offset of +60 minutes where every other node had −240, so anything that follows the clock — a programme that starts at a set time `[SPEC-DIR-180]` — ran five hours off there. The image had come up in `Europe/London`, and no script said otherwise. `LempiPlay3/setup-lp3.sh` now carries the zone, `America/New_York`. It was written to both layers, and the player recorded −240 at its restart. `overlayroot-chroot` could not remount the durable layer read-only on exit ("mount point is busy"). A second `remount,ro` a moment later succeeded; check `findmnt -no OPTIONS /media/root-ro` after using it.
 
 ---
 

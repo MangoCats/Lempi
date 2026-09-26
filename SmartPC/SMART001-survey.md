@@ -223,7 +223,7 @@ list is explicit and human-maintained `[SPEC-MESH-025]`; Smart is not on it, and
 adding it is a decision about what this machine is *for*, not a consequence of
 it existing.
 
-**`[SMT-OPN-040]` One `lempi.db` or the split pair is undecided.** `bose` runs
+~~**`[SMT-OPN-040]` One `lempi.db` or the split pair is undecided.**~~ *Settled 2026-09-26: the split pair, in `/var/lempi/` as `[SMT-DB-030]` placed it, when Smart moved to this repository's player `[FLT-ISS-020]`.* `bose` runs
 a single file `[IMPL-BOS-078]`; the desktop runs `listener.db` plus
 `--library library.db`, and `attach_library()` has supported the split since
 2026-09-06. Nothing about Smart's storage forces the choice, since both files
