@@ -54,6 +54,41 @@ pub enum Landed {
     /// Audio is here and hashes to something else. A failed transfer, never a
     /// discovery `[SPEC-RLK-055]`.
     Corrupt { expected: String, found: String },
+    /// Audio is here and nothing on this host can check it: the payload
+    /// carries no byte hash and there is no ffmpeg to recompute `audio_md5`.
+    /// Not written -- unverified is not trusted `[REQ-AND-230]` -- and not
+    /// called corrupt, since nothing was found to disagree.
+    Unverifiable { why: String },
+}
+
+/// Recomputes `audio_md5` from a file: `relink::hash_encoded` wherever ffmpeg
+/// is, and absent on a host without it.
+type Md5Hasher = fn(&Path) -> Result<String, String>;
+
+/// The SHA-256 of a file's bytes, lower-case hex `[SPEC-PL-087]`.
+///
+/// Of the bytes, not the audio: unlike `audio_md5` it changes when a tag is
+/// rewritten, which is right for its one job -- proving the file that arrived
+/// is the file that was sent -- and wrong for identity, which stays
+/// `audio_md5`'s.
+pub fn sha256_file(path: &Path) -> Result<String, String> {
+    use sha2::Digest;
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let mut hasher = sha2::Sha256::new();
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        let n = f.read(&mut buf).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 #[derive(Debug, Default)]
@@ -110,6 +145,12 @@ pub fn unacceptable(doc: &Value) -> Vec<String> {
         // `[SPEC-MPD-092]`. Reject it here rather than default it later.
         if req(e, "duration_ms") && num(e, "duration_ms").is_none_or(|d| d <= 0) {
             out.push(format!("{md5}: encoding.duration_ms is not a positive integer"));
+        }
+        // Optional -- a sender older than `[SPEC-PL-087]` omits it -- but a
+        // value that is there and unusable would pass every file as corrupt
+        // at the far end of the transfer, so it is refused here instead.
+        if req(e, "sha256") && !e["sha256"].as_str().is_some_and(is_sha256_hex) {
+            out.push(format!("{md5}: encoding.sha256 is not 64 lower-case hex digits"));
         }
         // A payload disagreeing with ITSELF. `[SPEC-DF-070]` ranks a payload
         // against the receiver, by provenance then recency; nothing ranks it
@@ -214,12 +255,31 @@ fn fade_curve<'a>(o: &'a Value, k: &str) -> &'a str {
 /// file it is given, verifies it against the payload, stats it for the
 /// machine-scope columns `[SPEC-DF-030]` and writes the path itself. No
 /// separate relink pass is needed for a bundle.
+///
+/// Verified two ways where it can be `[SPEC-PL-087]`: the bytes against the
+/// payload's `sha256` when it carries one, and `audio_md5` recomputed wherever
+/// ffmpeg is. A phone has no ffmpeg, so there the byte hash is the check
+/// `[REQ-AND-230]`, and a file with neither is reported, never written.
 pub fn import(
     db: &mut Connection,
     doc: &Value,
     body: &str,
     audio_root: &Path,
     apply: bool,
+) -> Result<Report, String> {
+    let md5 = crate::relink::hasher_available().then_some(crate::relink::hash_encoded as Md5Hasher);
+    import_with(db, doc, body, audio_root, apply, md5)
+}
+
+/// [`import`], told whether `audio_md5` can be recomputed here -- so a test
+/// can be the phone on a machine that has ffmpeg.
+fn import_with(
+    db: &mut Connection,
+    doc: &Value,
+    body: &str,
+    audio_root: &Path,
+    apply: bool,
+    md5_hasher: Option<Md5Hasher>,
 ) -> Result<Report, String> {
     let mut rep = Report { refused: unacceptable(doc), ..Default::default() };
     if !rep.refused.is_empty() {
@@ -254,8 +314,10 @@ pub fn import(
     // Asked once for the whole import, not once per file. Every row this run
     // writes was verified by the same hasher a moment earlier, so one answer
     // is the true one for all of them -- and a per-row call would be a
-    // subprocess per file to learn a constant `[SPEC-RLK-150]`.
-    let generator = crate::relink::hasher_generator();
+    // subprocess per file to learn a constant `[SPEC-RLK-150]`. Where nothing
+    // here recomputed `audio_md5`, the value is the sender's and its hasher
+    // unknown: `NULL`, not this host's ffmpeg, if it has one.
+    let generator = md5_hasher.and_then(|_| crate::relink::hasher_generator());
 
     for e in doc.get("encodings").and_then(|v| v.as_array()).unwrap_or(&empty) {
         let md5 = str_of(e, "audio_md5");
@@ -297,19 +359,49 @@ pub fn import(
             rep.outcomes.push((md5, Landed::AwaitingAudio { at: path.display().to_string() }));
             continue;
         }
-        // Verify before trusting `[SPEC-DF-070]`, with the hasher relink
-        // already uses -- one implementation `[GDE-FBD-040]`, and the one that
-        // produced the incumbent values `[SPEC-RLK-086]`.
-        let found = match crate::relink::hash_encoded(&path) {
-            Ok(h) => h,
-            Err(e) => {
-                rep.outcomes.push((md5.clone(), Landed::Corrupt { expected: md5, found: e }));
+        // Verify before trusting `[SPEC-DF-070]`. The bytes first, where the
+        // payload carries their hash: cheap, and the only check a phone has
+        // `[SPEC-PL-087]`.
+        let sha256 = e.get("sha256").and_then(|v| v.as_str());
+        if let Some(want) = sha256 {
+            let found = match sha256_file(&path) {
+                Ok(h) if h == want => None,
+                Ok(h) => Some(format!("sha256 {h}")),
+                Err(err) => Some(err),
+            };
+            if let Some(found) = found {
+                let expected = format!("sha256 {want}");
+                rep.outcomes.push((md5, Landed::Corrupt { expected, found }));
                 continue;
             }
-        };
-        if found != md5 {
-            rep.outcomes.push((md5.clone(), Landed::Corrupt { expected: md5, found }));
-            continue;
+        }
+        // Then `audio_md5`, with the hasher relink already uses -- one
+        // implementation `[GDE-FBD-040]`, and the one that produced the
+        // incumbent values `[SPEC-RLK-086]`. Still asked where the bytes
+        // matched: it is the identity the row is keyed on, and a sender whose
+        // `audio_md5` disagrees with its own file is worth catching here.
+        match md5_hasher {
+            Some(hash) => {
+                let found = match hash(&path) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        rep.outcomes.push((md5.clone(), Landed::Corrupt { expected: md5, found: e }));
+                        continue;
+                    }
+                };
+                if found != md5 {
+                    rep.outcomes.push((md5.clone(), Landed::Corrupt { expected: md5, found }));
+                    continue;
+                }
+            }
+            // The bytes are the ones the sender hashed, so its `audio_md5`
+            // is carried as sent.
+            None if sha256.is_some() => {}
+            None => {
+                let why = "no sha256 in the payload, and no ffmpeg here to recompute audio_md5".into();
+                rep.outcomes.push((md5, Landed::Unverifiable { why }));
+                continue;
+            }
         }
 
         if !apply {
@@ -831,5 +923,111 @@ mod tests {
         assert_eq!(fade_ms(p, "fade_out_ms"), 1200);
         assert_eq!(fade_curve(p, "fade_in_curve"), "linear");
         assert_eq!(fade_curve(p, "fade_out_curve"), "cosine");
+    }
+
+    /// `one_encoding_bundle` with a byte hash on its encoding `[SPEC-PL-087]`.
+    fn with_sha256(mut d: Value, sha256: &str) -> Value {
+        d["encodings"][0]["sha256"] = Value::String(sha256.into());
+        d
+    }
+
+    /// A fresh directory holding the tiny WAV, and the hash of its bytes.
+    fn one_file(tag: &str) -> (PathBuf, String) {
+        let dir = std::env::temp_dir().join(format!("lempi-bundle-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        write_tiny_wav(&dir.join("a.wav"));
+        let sha = sha256_file(&dir.join("a.wav")).unwrap();
+        (dir, sha)
+    }
+
+    /// FIPS 180-2's own example, so the hex form is proven and not merely
+    /// self-consistent: a hasher agreeing with itself would pass every other
+    /// test here.
+    #[test]
+    fn the_byte_hash_is_standard_sha256() {
+        let dir = std::env::temp_dir().join(format!("lempi-sha-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("abc"), b"abc").unwrap();
+        assert_eq!(sha256_file(&dir.join("abc")).unwrap(),
+                   "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The phone's case `[REQ-AND-230]`: no ffmpeg, so the byte hash is the
+    /// check, and a matching file lands with `audio_md5` as sent and no
+    /// hasher claimed for it.
+    #[test]
+    fn without_ffmpeg_a_matching_byte_hash_is_enough() {
+        let mut c = empty_library();
+        let (dir, sha) = one_file("phone");
+        let doc = with_sha256(one_encoding_bundle("sent-md5", "m1", 0.5, "computed:x@1"), &sha);
+        let rep = import_with(&mut c, &doc, "body", &dir, true, None).unwrap();
+        assert_eq!(rep.outcomes, vec![("sent-md5".to_string(), Landed::Imported)]);
+        let gen: Option<String> = c
+            .query_row("SELECT md5_generator FROM files WHERE audio_md5='sent-md5'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(gen, None, "nothing here hashed audio_md5, so no hasher may be recorded");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Bytes that disagree are corrupt on every host, ffmpeg or not -- and
+    /// nothing is written for them.
+    #[test]
+    fn a_byte_hash_that_disagrees_is_corrupt() {
+        let mut c = empty_library();
+        let (dir, sha) = one_file("wrong");
+        let wrong = format!("{}0", &sha[..63]);
+        let wrong = if wrong == sha { format!("{}1", &sha[..63]) } else { wrong };
+        let doc = with_sha256(one_encoding_bundle("sent-md5", "m1", 0.5, "computed:x@1"), &wrong);
+        let rep = import_with(&mut c, &doc, "body", &dir, true, None).unwrap();
+        assert_eq!(rep.outcomes, vec![("sent-md5".to_string(), Landed::Corrupt {
+            expected: format!("sha256 {wrong}"),
+            found: format!("sha256 {sha}"),
+        })]);
+        let n: i64 = c.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Neither hash available: reported, not written, and not called corrupt
+    /// -- nothing disagreed; nothing could be asked.
+    #[test]
+    fn a_file_nothing_here_can_check_is_not_trusted() {
+        let mut c = empty_library();
+        let (dir, _) = one_file("neither");
+        let doc = one_encoding_bundle("sent-md5", "m1", 0.5, "computed:x@1");
+        let rep = import_with(&mut c, &doc, "body", &dir, true, None).unwrap();
+        assert!(matches!(rep.outcomes.as_slice(), [(_, Landed::Unverifiable { .. })]),
+                "{:?}", rep.outcomes);
+        let n: i64 = c.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Where ffmpeg is, both are asked: matching bytes do not excuse an
+    /// `audio_md5` the file does not have.
+    #[test]
+    fn with_ffmpeg_audio_md5_is_still_checked_after_the_bytes() {
+        let mut c = empty_library();
+        let (dir, sha) = one_file("both");
+        let doc = with_sha256(one_encoding_bundle("not-its-md5", "m1", 0.5, "computed:x@1"), &sha);
+        let rep = import(&mut c, &doc, "body", &dir, true).unwrap();
+        assert!(matches!(rep.outcomes.as_slice(), [(_, Landed::Corrupt { .. })]),
+                "{:?}", rep.outcomes);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Present and unusable is refused whole, like a bad duration.
+    #[test]
+    fn a_malformed_byte_hash_is_refused() {
+        for bad in ["\"abc\"", "12", &format!("\"{}\"", "A".repeat(64))] {
+            let d = doc(&format!(
+                r#"{{"encodings":[
+                {{"audio_md5":"a","bundle_path":"a.mp3","format":"mp3","duration_ms":10,"sha256":{bad},
+                 "passages":[{{"kind":"radio","start_ms":0,"end_ms":10,"boundary_src":"x"}}]}}]}}"#
+            ));
+            assert_eq!(unacceptable(&d), vec!["a: encoding.sha256 is not 64 lower-case hex digits"],
+                       "{bad}");
+        }
     }
 }

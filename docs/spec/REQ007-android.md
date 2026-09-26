@@ -53,7 +53,7 @@ The README ranks mobile *Future / Post-V1*. Nothing here schedules the work; it 
 
 **`[REQ-AND-220]` Access is the narrowest that works**: MediaStore to find and read audio and images, one folder grant on `Music/` for the `.cue`, `.lrc` and cover files beside them, and never the all-files permission `[GDE-APP-080]`.
 
-**`[REQ-AND-230]` A bundle is imported from the share or open sheet, and every file is verified before it is trusted** — by the SHA-256 of its bytes that Vipunen carried in the payload. A file that does not match is reported, never silently accepted `[GDE-APP-060]`.
+**`[REQ-AND-230]` A bundle is imported from the share or open sheet, and every file is verified before it is trusted** — by the SHA-256 of its bytes that Vipunen carried in the payload. A file that does not match is reported, never silently accepted `[GDE-APP-060]`. *Built 2026-09-25* as `[SPEC-PL-087]`: `export_bundle.py` writes the hash; `lempi-core`'s importer checks it, and one with neither that hash nor ffmpeg is reported unverifiable and not written.
 
 **`[REQ-AND-240]` Importing never duplicates.** An imported file byte-identical to one already on the phone is bound to that file, not copied beside it `[GDE-APP-070]`.
 

@@ -27,6 +27,7 @@ The one payload `[SPEC-DF-065]` promises and does not contain. Written because `
   "encodings": [{                    // binds by audio_md5 — this exact rip
     "audio_md5": "b34c1da3…",
     "bundle_path": "Frisina, Gerardo/Duala - Lindeza/… 01 Duala.mp3",
+    "sha256": "9f2c…",               // bundle only: the shipped file's bytes
     "format": "mp3", "duration_ms": 284250,
     "tags": { "title": "Duala", "artist": "Gerardo Frisina", … },
     "passages": [{
@@ -101,6 +102,8 @@ The one payload `[SPEC-DF-065]` promises and does not contain. Written because `
 **`[SPEC-PL-080]` Idempotent by identity, not by flag** `[SPEC-SUI-180]`. `files.audio_md5` is `UNIQUE` and `passages_span` is unique on `(file_id, kind, start_ms, end_ms)`, so a re-import matches existing rows rather than duplicating them. **Existence is checked explicitly; `INSERT OR IGNORE` is forbidden here** — it turns a `NOT NULL` violation into nothing happening, which is exactly how `apply_reviews` came to be unable to apply anything `[REQ-LIB-165]`.
 
 **`[SPEC-PL-085]` The import binds what it creates.** Relink never creates a row `[SPEC-RLK-090]`, so it cannot bind an arriving one; the importer hashes each file it is given, verifies it against the payload `[SPEC-DF-070]`, stats it for the machine-scope columns and writes the path itself. **A separate scoped relink pass is therefore not needed for a bundle** — refining `[SPEC-SUI-105]`, whose work turns out to be the same walk. Relink proper remains for the whole-library case.
+
+**`[SPEC-PL-087]` A bundle also carries `sha256`, the hash of each shipped file's bytes — because `audio_md5` cannot be recomputed everywhere.** It needs ffmpeg `[SPEC-RLK-080]`, and a phone has none `[REQ-AND-230]`. Bundle scope, like `bundle_path`: `export_bundle.py` writes it from the copy it ships, and a sidecar or embedded payload has no file to hash and omits it. **It is not identity** — a rewritten tag changes it and leaves `audio_md5` alone — so it proves only that the file which arrived is the file that was sent. Optional, since an older sender omits it; present and not 64 lower-case hex digits is refused whole, like a bad duration. The receiver checks the bytes where the hash is given, then `audio_md5` wherever ffmpeg is; with the bytes matched and no ffmpeg, `audio_md5` is carried as sent and no hasher is recorded for it. With neither, the file is **unverifiable**: reported, not written, and not called corrupt, since nothing disagreed.
 
 ---
 

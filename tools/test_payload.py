@@ -129,10 +129,30 @@ def test_committed_fixture_09_round_trips():
           f"unexpected fade values: {p}")
 
 
+def test_byte_hash_is_optional_but_must_be_usable():
+    """`sha256` `[SPEC-PL-087]`: absent is fine, well-formed is fine, and
+    anything else is refused -- the same verdicts as the Rust importer's
+    `a_malformed_byte_hash_is_refused`.
+    """
+    import json
+    path = os.path.join(HERE, "..", "fixtures", "payload", "01-valid-four-tracks.json")
+    payload = json.load(open(path, encoding="utf-8"))
+    check(pl.compatible(payload) == [], "01 carries no sha256 and must stay acceptable")
+    enc = payload["encodings"][0]
+    enc["sha256"] = "0" * 64
+    check(pl.compatible(payload) == [], f"a well-formed sha256 refused: {pl.compatible(payload)}")
+    for bad in ("abc", 12, "A" * 64):
+        enc["sha256"] = bad
+        got = pl.compatible(payload)
+        check(got == [f"{enc['audio_md5']}: encoding.sha256 is not 64 lower-case hex digits"],
+              f"sha256={bad!r}: got {got}")
+
+
 def main() -> int:
     test_fade_travels_when_the_schema_has_it()
     test_fade_absent_from_a_pre_migration_source()
     test_committed_fixture_09_round_trips()
+    test_byte_hash_is_optional_but_must_be_usable()
 
     print()
     if FAILED:

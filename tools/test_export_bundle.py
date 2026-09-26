@@ -91,6 +91,16 @@ def test_md5_file_selects_the_listed_encodings():
         with open(payload_path, encoding="utf-8") as fh:
             text = fh.read()
         check(md5 in text, "the approved md5 must actually reach the payload")
+        # The byte hash of the file that shipped `[SPEC-PL-087]`, checked
+        # against hashlib directly rather than against the exporter's helper.
+        import hashlib
+        import json
+        shipped = os.path.join(out_dir, "audio", "a.wav")
+        with open(shipped, "rb") as fh:
+            want = hashlib.sha256(fh.read()).hexdigest()
+        enc = json.loads(text)["encodings"][0]
+        check(enc.get("sha256") == want,
+              f"the encoding must carry the shipped file's sha256, got {enc.get('sha256')!r}")
 
 
 def test_md5_file_combines_with_a_hand_typed_md5():

@@ -210,6 +210,12 @@ def missing_required(payload: dict) -> list[str]:
         d = e.get("duration_ms")
         if d is not None and not (isinstance(d, int) and not isinstance(d, bool) and d > 0):
             out.append(f"{where}: encoding.duration_ms is not a positive integer")
+        # Optional `[SPEC-PL-087]` -- only a bundle carries it -- but present
+        # and unusable would fail every file at the receiver, as corrupt.
+        h = e.get("sha256")
+        if h is not None and not (isinstance(h, str) and len(h) == 64
+                                  and all(c in "0123456789abcdef" for c in h)):
+            out.append(f"{where}: encoding.sha256 is not 64 lower-case hex digits")
         if not e.get("passages"):
             out.append(f"{where}: no passages")
         for p in e.get("passages", []):

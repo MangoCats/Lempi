@@ -20,6 +20,7 @@ The payload is built by `payload.py`, which is the one serializer
 
 import argparse
 import gzip
+import hashlib
 import json
 import os
 import shutil
@@ -28,6 +29,15 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import payload as payloadmod  # noqa: E402
+
+
+def sha256_file(path: str) -> str:
+    """The SHA-256 of a file's bytes, lower-case hex `[SPEC-PL-087]`."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 16), b""):
+            h.update(block)
+    return h.hexdigest()
 
 
 def main() -> int:
@@ -100,6 +110,10 @@ def main() -> int:
             missing += 1
             continue
         shutil.copy2(src, dest)
+        # Of the copy, not the source: what ships is what the receiver checks
+        # `[SPEC-PL-087]`. A phone has no ffmpeg to recompute audio_md5, so
+        # this is its only proof the file arrived whole `[REQ-AND-230]`.
+        e["sha256"] = sha256_file(dest)
         bytes_out += os.path.getsize(dest)
         copied += 1
 

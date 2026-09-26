@@ -46,6 +46,13 @@ tracing = { version = "0.1", default-features = false, features = ["std"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The byte hash a bundle carries for each file `[REQ-AND-230]`, `[SPEC-PL-087]`:
+# how a host without ffmpeg -- a phone -- verifies what arrived, since
+# `audio_md5` needs ffmpeg to recompute `[SPEC-RLK-080]`. RustCrypto, pure
+# Rust, on the same `digest` 0.10 the player's `sha1` already pulls in: one
+# new crate for the player, and 33 -> 40 for this one alone, measured
+# 2026-09-25 by the boundary gate's own count.
+sha2 = "0.10"
 
 # The appliance's own local UTC offset `[SPEC-DIR-180]`, for
 # `director/program.rs`. Unix only -- Windows has no `tm_gmtoff` and is asked

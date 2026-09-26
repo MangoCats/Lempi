@@ -97,11 +97,15 @@ fn main() {
     let already = rep.count(|o| matches!(o, Landed::Already));
     let waiting = rep.count(|o| matches!(o, Landed::AwaitingAudio { .. }));
     let corrupt = rep.count(|o| matches!(o, Landed::Corrupt { .. }));
+    let unverified = rep.count(|o| matches!(o, Landed::Unverifiable { .. }));
     println!();
     println!("  imported  {imported}");
     println!("  already   {already}");
     println!("  awaiting  {waiting}");
     println!("  corrupt   {corrupt}");
+    if unverified > 0 {
+        println!("  unverified {unverified} (not written)");
+    }
     if rep.kept_local > 0 {
         println!("  kept local {} (manual outranks an arriving value)", rep.kept_local);
     }
@@ -112,6 +116,7 @@ fn main() {
                 println!("CORRUPT   {md5}  expected {expected}, found {found}")
             }
             Landed::AwaitingAudio { at } => println!("AWAITING  {md5}  no audio at {at}"),
+            Landed::Unverifiable { why } => println!("UNVERIFIED {md5}  {why}"),
             _ => {}
         }
     }
@@ -135,7 +140,9 @@ fn main() {
     } else {
         println!("wrote {} row(s).", rep.rows_written);
     }
-    if corrupt > 0 {
+    // Unverified is a failure too: the audio is here and was not taken, which
+    // a zero status would make look like success `[REQ-AND-230]`.
+    if corrupt > 0 || unverified > 0 {
         std::process::exit(1);
     }
 }
