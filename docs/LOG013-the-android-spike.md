@@ -94,9 +94,13 @@ cable.
 1. **`[LOG-SPK-900]` The skin's cost per snapshot** `[LOG-SPK-060]`: about 130%
    of this phone's core to show a playing passage. Any phone browsing an
    appliance's UI pays the same.
-2. **`[LOG-SPK-910]` The start-up underrun** `[LOG-SPK-040]`: whether the ring
-   is primed before the stream starts, and whether AAudio's first callbacks
-   ask for more than the default period.
+2. **`[LOG-SPK-910]` The start-up underrun** `[LOG-SPK-040]`. *Cause found
+   2026-09-26:* nothing primed the output. Leaving silence played the device's
+   first callbacks from a ring the engine had only begun to fill, which is the
+   remedy `[REQ-AUD-142]` names if the transient proves audible. *Built:* the
+   callback now holds a start, silent and uncounted, until the ring holds two
+   callbacks' worth, and gives up after about two seconds. The phone has not
+   confirmed it yet.
 3. **`[LOG-SPK-920]` "The skin controlling it"** `[REQ-AND-530]`. *Closed
    2026-09-26:* the maintainer confirmed by hand, in the WebView, that pause,
    play, skip, volume and seek all work. With it the spike passes.

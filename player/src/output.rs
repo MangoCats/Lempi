@@ -65,9 +65,26 @@ pub struct Counts {
     last: Arc<std::sync::atomic::AtomicU32>,
     /// Set by a miss, cleared by the fill that follows it, which ramps back in.
     resuming: Arc<AtomicBool>,
+    /// Playback has just been asked for and the ring may not hold enough yet
+    /// `[REQ-AUD-142]`. See [`fill`]'s priming branch.
+    priming: Arc<AtomicBool>,
+    /// Samples of silence emitted while priming, so it can give up.
+    primed: Arc<std::sync::atomic::AtomicU64>,
 }
 
+/// How long priming may hold the start before a shortfall is counted again, in
+/// samples: about two seconds of stereo at 48 kHz. The callback knows neither
+/// rate nor channels, and the figure only needs to be "long enough that a
+/// working producer has filled the ring, short enough that one that is not
+/// working is reported".
+const PRIME_GIVE_UP_SAMPLES: u64 = 192_000;
+
 impl Counts {
+    /// Hold the next start until the ring has enough to play without a gap.
+    pub(crate) fn arm_priming(&self) {
+        self.primed.store(0, Ordering::Relaxed);
+        self.priming.store(true, Ordering::Relaxed);
+    }
     pub fn underruns(&self) -> u64 { self.underruns.load(Ordering::Relaxed) }
     pub fn lock_failures(&self) -> u64 { self.lock_failures.load(Ordering::Relaxed) }
     /// The last sample emitted, for tests and for reasoning about a miss.
@@ -303,6 +320,9 @@ impl OutputRing {
     // device, and the engine's own tests build one to simulate a device that
     // is buffering audio without a real one on the machine `[REQ-VIS-250]`.
     pub(crate) fn new(capacity: usize, volume: Volume) -> Self {
+        let counts = Counts::default();
+        // A new output starts empty, so its first start is primed.
+        counts.arm_priming();
         Self {
             state: Arc::new(Mutex::new(OutputState::new(capacity))),
             volume,
@@ -311,7 +331,7 @@ impl OutputRing {
             silent: Arc::new(AtomicBool::new(false)),
             rate: Arc::new(std::sync::atomic::AtomicU32::new(44_100)),
             chans: Arc::new(std::sync::atomic::AtomicU32::new(2)),
-            counts: Counts::default(),
+            counts,
             clock: FrameClock::default(),
         }
     }
@@ -331,8 +351,15 @@ impl OutputRing {
     /// reset -- for the supervisor's recovery line.
     pub fn take_stream_errors(&self) -> u64 { self.stream_errors.swap(0, Ordering::Relaxed) }
 
-    /// Silence without stopping the device `[PI3-OPEN-020]`.
-    pub fn set_silent(&self, on: bool) { self.silent.store(on, Ordering::Relaxed); }
+    /// Silence without stopping the device `[PI3-OPEN-020]`. Leaving silence
+    /// primes the start `[REQ-AUD-142]`; after a pause the ring is still full,
+    /// so that costs a resume nothing.
+    pub fn set_silent(&self, on: bool) {
+        let was = self.silent.swap(on, Ordering::Relaxed);
+        if was && !on {
+            self.counts.arm_priming();
+        }
+    }
 
     /// Space available in the output ring, in samples.
     pub fn free(&self) -> usize {
@@ -962,6 +989,25 @@ fn fill(state: &Arc<Mutex<OutputState>>, volume: &Volume, out: &mut [f32],
         out.iter_mut().for_each(|v| *v = 0.0);
         return;
     }
+    // Prime before commencing `[REQ-AUD-142]`. Playback asked for with an
+    // empty ring used to play the device's first callbacks from nothing:
+    // measured 2026-09-26 on the Android spike, 8,192 to 24,576 samples of
+    // shortfall at every start, audible as a glitch on the first passage
+    // `[LOG-SPK-040]` -- the "startup transient" LOG009 saw on the Pis too.
+    // Until the ring holds two callbacks' worth, the silence is intended, as
+    // a pause's is, and not counted. A producer that never fills it is still
+    // reported: priming gives up after `PRIME_GIVE_UP_SAMPLES`.
+    if counts.priming.load(Ordering::Relaxed) {
+        // One acquisition, released before the read below takes its own.
+        let ready = acquire(state)
+            .is_some_and(|s| s.ring.len() >= (2 * out.len()).min(s.ring.capacity() / 2));
+        let waited = counts.primed.fetch_add(out.len() as u64, Ordering::Relaxed);
+        if !ready && waited < PRIME_GIVE_UP_SAMPLES {
+            out.iter_mut().for_each(|v| *v = 0.0);
+            return;
+        }
+        counts.priming.store(false, Ordering::Relaxed);
+    }
     match acquire(state) {
         Some(mut s) => {
             let got = s.ring.read(out);
@@ -1145,6 +1191,55 @@ mod tests {
         // this as an underrun would spoil the diagnostic `[PI3-OPEN-020]`.
         assert_eq!(s.ring.len(), 8, "buffered audio is kept for the resume");
         assert_eq!(c.underruns(), 0, "intended silence is not a shortfall");
+    }
+
+    /// Prime before commencing `[REQ-AUD-142]`, `[LOG-SPK-040]`: a start into
+    /// a thin ring waits, silent and uncounted, then plays the audio whole.
+    #[test]
+    fn a_primed_start_waits_for_the_ring_and_counts_nothing() {
+        let st = Arc::new(Mutex::new(OutputState::new(64)));
+        let c = Counts::default();
+        c.arm_priming();
+        st.lock().unwrap().ring.write(&[0.5; 8]);
+        let mut out = [9.9f32; 8];
+        fill(&st, &Volume::new(1.0), &mut out, &audible(), &c);
+        assert_eq!(out, [0.0; 8], "one callback's worth is not yet enough to start");
+        assert_eq!(st.lock().unwrap().ring.len(), 8, "waiting consumes nothing");
+        st.lock().unwrap().ring.write(&[0.5; 8]);
+        fill(&st, &Volume::new(1.0), &mut out, &audible(), &c);
+        assert_eq!(out, [0.5; 8], "two callbacks' worth starts it");
+        assert_eq!(c.underruns(), 0, "a primed start is not a shortfall");
+    }
+
+    /// Priming is not a place to hide a producer that never arrives
+    /// `[REQ-VIS-140]`: past the limit, the shortfall is counted again.
+    #[test]
+    fn priming_gives_up_and_a_starved_output_is_still_reported() {
+        let st = Arc::new(Mutex::new(OutputState::new(64)));
+        let c = Counts::default();
+        c.arm_priming();
+        let mut out = vec![9.9f32; 48_000];
+        for _ in 0..4 {
+            fill(&st, &Volume::new(1.0), &mut out, &audible(), &c);
+        }
+        assert_eq!(c.underruns(), 0, "within the limit, the wait is intended");
+        fill(&st, &Volume::new(1.0), &mut out, &audible(), &c);
+        assert_eq!(c.underruns(), 48_000, "past it, an empty ring is an underrun again");
+    }
+
+    /// A resume after a pause is still instant: the ring kept its audio, so a
+    /// primed start finds it ready at once.
+    #[test]
+    fn leaving_silence_primes_but_a_full_ring_plays_at_once() {
+        let ring = OutputRing::new(64, Volume::new(1.0));
+        ring.set_silent(true);
+        ring.state.lock().unwrap().ring.write(&[0.5; 32]);
+        ring.set_silent(false);
+        assert!(ring.counts.priming.load(Ordering::Relaxed), "leaving silence arms priming");
+        let mut out = [9.9f32; 8];
+        fill(&ring.state, &ring.volume, &mut out, &ring.silent, &ring.counts);
+        assert_eq!(out, [0.5; 8], "a full ring plays on the first callback");
+        assert_eq!(ring.counts.underruns(), 0);
     }
 
     #[test]
