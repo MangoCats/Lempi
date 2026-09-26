@@ -132,13 +132,13 @@ Lempi/Vipunen instance and `tools/console.py` has never been pointed at
 which confirms it has never run there rather than merely not run recently.
 Half of what that document assumes is therefore untested.
 
-**`[TL-OPN-020]` There is no unit, so nothing survives a reboot.** The
-previous build had none either, so this is parity rather than a regression,
-and the machine correctly stays in `SOURCES` rather than `APPLIANCES` —
-without a unit there is no `lempi.service` journal and no device of the
-player's own to sample. `build/deploy-everywhere.sh` states the exit
-condition: give it a unit and it can move. Doing so must carry
-`[TL-OPS-020]`'s environment, or it will start and be silent.
+~~**`[TL-OPN-020]` There is no unit, so nothing survives a reboot.**~~
+*Decided 2026-09-26 by the maintainer: no unit, on purpose.* The player
+runs on this machine only when started by hand. It is the fleet's acoustic
+instrument and the hub's mirror, and a laptop that starts playing at every
+boot suits neither. So it stays in `SOURCES`, not `APPLIANCES`. A manual
+start must still carry `[TL-OPS-020]`'s environment, or it will start and be
+silent. Do not add a unit here without asking.
 
 **`[TL-OPN-030]` The predecessor is still installed and still runnable**, with
 its checkout and a 3.3 G data directory that includes a pre-split monolith and
