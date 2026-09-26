@@ -279,6 +279,9 @@ pub struct ImportSummary {
     pub refused: Vec<String>,
     pub imported: u32,
     pub already: u32,
+    /// Held, and rewritten by Vipunen since: replaced in place `[REQ-AND-250]`.
+    pub replaced: u32,
+    pub not_replaced: Vec<String>,
     /// Byte-identical files already on the phone, bound rather than copied.
     pub reused: u32,
     pub corrupt: Vec<String>,
@@ -307,8 +310,9 @@ pub fn import_bundle(library: String, staging: String, music_root: String) -> Re
     });
     match &r {
         Ok(s) => tracing::info!(
-            "import: {} imported, {} already, {} reused, {} corrupt, {} missing, {} conflicts, {} refused",
-            s.imported, s.already, s.reused, s.corrupt.len(), s.missing.len(), s.conflicts.len(), s.refused.len()
+            "import: {} imported, {} already, {} replaced, {} reused, {} corrupt, {} missing, {} conflicts, {} refused",
+            s.imported, s.already, s.replaced, s.reused, s.corrupt.len(), s.missing.len(), s.conflicts.len(),
+            s.refused.len()
         ),
         Err(e) => tracing::error!("import failed: {e}"),
     }
@@ -317,6 +321,8 @@ pub fn import_bundle(library: String, staging: String, music_root: String) -> Re
         refused: s.refused,
         imported: n(s.imported),
         already: n(s.already),
+        replaced: n(s.replaced),
+        not_replaced: s.not_replaced,
         reused: n(s.reused),
         corrupt: s.corrupt,
         missing: s.missing,

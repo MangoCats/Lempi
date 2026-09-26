@@ -80,7 +80,7 @@ class ImportActivity : Activity() {
                 val music = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "Lempi")
                 val r = importBundle(File(filesDir, "library.db").path, staging.path, music.path)
                 report(r)
-                if (r.imported > 0u || r.reused > 0u) reload()
+                if (r.imported > 0u || r.reused > 0u || r.replaced > 0u) reload()
             } catch (e: LempiException) {
                 say("\nImport failed: ${e.message}")
             } catch (e: Exception) {
@@ -99,9 +99,11 @@ class ImportActivity : Activity() {
         }
         say("\nImported ${r.imported}.")
         if (r.already > 0u) say("Already here: ${r.already}.")
+        if (r.replaced > 0u) say("Rewritten by Vipunen since, and replaced where they lie: ${r.replaced}.")
         if (r.reused > 0u) say("Already on the phone, and bound rather than copied again: ${r.reused}.")
         listOf(
             "Damaged in transit, not placed" to r.corrupt,
+            "Rewritten by Vipunen, but the phone would not let it be replaced" to r.notReplaced,
             "Not in the bundle" to r.missing,
             "No byte hash to check against, not placed" to r.unverifiable,
             "A different file already has this name, left alone" to r.conflicts,

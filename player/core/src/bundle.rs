@@ -657,8 +657,13 @@ pub struct StagedReport {
     pub refused: Vec<String>,
     /// Placed under the music folder, verified and written to the library.
     pub imported: usize,
-    /// Held already, by `audio_md5`: not copied again.
+    /// Held already, by `audio_md5`, with the same bytes: not copied again.
     pub already: usize,
+    /// Held already, and Vipunen has rewritten the file since, so the phone's
+    /// copy was replaced where it lies `[REQ-AND-250]`.
+    pub replaced: usize,
+    /// A rewritten file whose replacement the system refused, with why.
+    pub not_replaced: Vec<String>,
     /// A byte-identical file was already where it belongs, and was bound
     /// rather than copied beside itself `[REQ-AND-240]`.
     pub reused: usize,
@@ -730,14 +735,15 @@ fn import_staged_with(
         return Ok(rep);
     }
     let empty = Vec::new();
+    crate::db::ensure_sha256_column(db);
     for e in doc.get("encodings").and_then(|v| v.as_array()).unwrap_or(&empty) {
         let md5 = str_of(e, "audio_md5");
         let rel = str_of(e, "bundle_path");
-        let held = db
-            .query_row("SELECT 1 FROM files WHERE audio_md5 = ?1", params![md5], |_| Ok(()))
-            .is_ok();
-        if held {
-            rep.already += 1;
+        let held: Option<String> = db
+            .query_row("SELECT path FROM files WHERE audio_md5 = ?1", params![md5], |r| r.get(0))
+            .ok();
+        if let Some(held_path) = held {
+            replace_if_rewritten(db, e, &md5, &rel, staging, Path::new(&held_path), &mut rep)?;
             continue;
         }
         let Some(rel_path) = safe_rel(&rel) else {
@@ -779,6 +785,73 @@ fn import_staged_with(
     Ok(rep)
 }
 
+/// `[REQ-AND-250]`: the phone holds this encoding -- the same audio -- and the
+/// bundle brings it again. If its bytes differ, Vipunen has rewritten the
+/// file (its tags, most often), and the phone's copy is replaced where it
+/// lies rather than kept beside the new one. Only with a staged file that
+/// verifies against the payload's hash; otherwise it is simply held already.
+/// A replacement Android refuses -- a file the app did not write -- is
+/// reported for that file, and fails nothing else.
+fn replace_if_rewritten(
+    db: &Connection,
+    e: &Value,
+    md5: &str,
+    rel: &str,
+    staging: &Path,
+    held: &Path,
+    rep: &mut StagedReport,
+) -> Result<(), String> {
+    let staged = safe_rel(rel).map(|r| staging.join("audio").join(r));
+    let (Some(want), Some(staged)) = (e.get("sha256").and_then(|v| v.as_str()), staged) else {
+        rep.already += 1;
+        return Ok(());
+    };
+    // A held file that is not where the catalogue says is relink's to find
+    // `[SPEC-RLK-090]`, not this import's to write in its absence.
+    if !staged.is_file() || !held.is_file() || sha256_file(held).ok().as_deref() == Some(want) {
+        rep.already += 1;
+        return Ok(());
+    }
+    if sha256_file(&staged).ok().as_deref() != Some(want) {
+        rep.corrupt.push(rel.to_string());
+        return Ok(());
+    }
+    let part = part_name(held);
+    let replaced = std::fs::copy(&staged, &part)
+        .and_then(|_| std::fs::rename(&part, held))
+        .map_err(|err| err.to_string());
+    if let Err(why) = replaced {
+        let _ = std::fs::remove_file(&part);
+        rep.not_replaced.push(format!("{rel}: {why}"));
+        return Ok(());
+    }
+    let meta = std::fs::metadata(held).map_err(|e| format!("cannot stat {}: {e}", held.display()))?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    db.execute(
+        "UPDATE files SET sha256 = ?1, size_bytes = ?2, mtime = ?3, last_seen = ?4 WHERE audio_md5 = ?5",
+        params![want, meta.len() as i64, mtime, now_iso(), md5],
+    )
+    .map_err(|e| e.to_string())?;
+    rep.replaced += 1;
+    Ok(())
+}
+
+/// Where a file is written before it is renamed into place. It keeps the
+/// audio extension: Android's shared storage lets an app create only files
+/// whose names say what they are in `Music/`, and refused `x.lempi-part`
+/// with EPERM on the Moto G, 2026-09-26.
+fn part_name(dest: &Path) -> PathBuf {
+    match dest.extension() {
+        Some(ext) => dest.with_extension(format!("lempi-part.{}", ext.to_string_lossy())),
+        None => dest.with_extension("lempi-part"),
+    }
+}
+
 /// Copy one verified file into the music folder, unless the same bytes are
 /// there already `[REQ-AND-240]` or different ones are (a conflict).
 fn place(staged: &Path, dest: &Path, sha256: Option<&str>, rel: &str, rep: &mut StagedReport) -> Result<(), String> {
@@ -793,14 +866,8 @@ fn place(staged: &Path, dest: &Path, sha256: Option<&str>, rel: &str, rep: &mut 
         std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
     // Written beside itself and renamed, so a copy cut short is never found
-    // under the real name. The temporary name keeps the audio extension:
-    // Android's shared storage lets an app create only files whose names say
-    // what they are in `Music/`, and refused `x.lempi-part` with EPERM on the
-    // Moto G, 2026-09-26.
-    let part = match dest.extension() {
-        Some(ext) => dest.with_extension(format!("lempi-part.{}", ext.to_string_lossy())),
-        None => dest.with_extension("lempi-part"),
-    };
+    // under the real name.
+    let part = part_name(dest);
     std::fs::copy(staged, &part).map_err(|e| format!("cannot write {}: {e}", part.display()))?;
     std::fs::rename(&part, dest).map_err(|e| format!("cannot place {}: {e}", dest.display()))?;
     Ok(())
@@ -1447,6 +1514,54 @@ mod tests {
         let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
         assert!(r.refused.iter().any(|x| x.contains("boundary_src")), "{r:?}");
         assert_eq!(std::fs::read_dir(&s.music).unwrap().count(), 0, "a refused payload places nothing");
+        std::fs::remove_dir_all(&s.root).ok();
+    }
+
+    /// `[REQ-AND-250]`: the same audio with rewritten bytes replaces the
+    /// phone's copy where it lies; the same bytes are only held already; a
+    /// damaged rewrite leaves the phone's copy alone.
+    #[test]
+    fn staged_import_replaces_a_rewritten_file_in_place() {
+        let old: &[u8] = b"audio, with the tags as first sent";
+        let new: &[u8] = b"audio, with the tags Vipunen wrote back";
+        let s = stage("rewrite", &[
+            ("md5re", "re.wav", Some(new), Some(sha_of(new))),
+            ("md5same", "same.wav", Some(old), Some(sha_of(old))),
+            ("md5dmg", "dmg.wav", Some(b"damaged rewrite"), Some(sha_of(new))),
+        ]);
+        let mut c = empty_library();
+        for (md5, name) in [("md5re", "re.wav"), ("md5same", "same.wav"), ("md5dmg", "dmg.wav")] {
+            let held = s.music.join("held").join(name);
+            std::fs::create_dir_all(held.parent().unwrap()).unwrap();
+            std::fs::write(&held, old).unwrap();
+            c.execute(
+                "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen) \
+                 VALUES (?1,?2,1,1.0,'wav',1000,'t','t')",
+                params![md5, held.to_string_lossy()],
+            )
+            .unwrap();
+        }
+        let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
+        assert_eq!(r.replaced, 1, "{r:?}");
+        assert_eq!(r.already, 1, "{r:?}");
+        assert_eq!(r.corrupt, vec!["dmg.wav"], "{r:?}");
+        assert!(r.not_replaced.is_empty(), "{r:?}");
+        assert_eq!(std::fs::read(s.music.join("held/re.wav")).unwrap(), new, "replaced where it lies");
+        assert!(!s.music.join("re.wav").exists(), "and not kept beside the new copy");
+        assert_eq!(std::fs::read(s.music.join("held/same.wav")).unwrap(), old, "the same bytes are left alone");
+        assert_eq!(std::fs::read(s.music.join("held/dmg.wav")).unwrap(), old, "a damaged rewrite replaces nothing");
+        let (sha, size): (String, i64) = c
+            .query_row("SELECT sha256, size_bytes FROM files WHERE audio_md5='md5re'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((sha, size), (sha_of(new), new.len() as i64), "the catalogue records the new bytes");
+        let leftovers: Vec<_> = std::fs::read_dir(s.music.join("held"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("lempi-part"))
+            .collect();
+        assert!(leftovers.is_empty(), "no temporary file is left behind");
         std::fs::remove_dir_all(&s.root).ok();
     }
 }
