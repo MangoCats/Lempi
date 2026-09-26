@@ -51,7 +51,7 @@ The desktop's pair went missing when this repository was seeded; `data/README.md
 
 ## 4. Standing issues
 
-**`[FLT-ISS-010]` `bose` dropped off the network on 2026-09-26 at about 15:33 UTC**, during a snapshot copy, and was still unreachable at the link level ("destination host unreachable") an hour later. Its Wi-Fi has a recorded history `[BOS-OPS-110]`. It needs a look, possibly a power cycle, and its database joins the merge when it is back `[SPEC-STAR-900]`.
+**`[FLT-ISS-010]` `bose`'s Wi-Fi died silently on 2026-09-26 at 11:33 EDT**, during a 21 MB snapshot copy, and stayed dead for two hours until a power cycle. Its journal is persistent (`/var/lempi/log/journal`), and the previous boot showed **the player playing normally throughout**, with not one Wi-Fi, NetworkManager or kernel message: the link failed without saying so. That is the fault `[BOS-OPS-110]` recorded, when reassociating fixed it. A sustained transfer may be what trips it, as it trips the Moto G's wireless debugging. A watchdog that reassociates when the gateway stops answering would recover it without a person; not yet built.
 
 **`[FLT-ISS-020]` `smartboardpc` needs migrating** to this repository's player `[FLT-RUN-010]`, as `teacherslounge` was in TL001.
 
