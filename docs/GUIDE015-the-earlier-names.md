@@ -86,6 +86,13 @@ who searched it alongside this project would find a commercial product and infer
 a relationship that does not exist. The citation's job is to let the maintainer
 verify a measurement, not to be a search term.
 
+**`[GDE-NAM-040]` The previous repository's checkout on the desktop was
+`C:\Users\Mango Cat\Dev\Vaino`, and the Vipunen primary lived in its `data/`.**
+Recorded here because this is the one file allowed to spell the path. The
+databases were untracked, so seeding this repository did not carry them. By
+2026-09-26 that folder no longer existed, and the primary with it:
+[`data/README.md`](../data/README.md) has what survives.
+
 ---
 
 ## 3. What this means in practice

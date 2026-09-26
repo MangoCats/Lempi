@@ -242,3 +242,18 @@ to catch exactly that for weeks. The check was not missing. Running it was.
 only one prints why the code is unverified. That is the same distinction §5
 draws — a skipped guard must be a visible line, not a silent success — and
 `--no-verify` leaves no trace at all.
+
+## 11. The Vipunen library is not in git — know where it is before using it
+
+**The primary library pair lives in `data/` on the Windows desktop (`GMKtec`),
+with a mirror on `teacherslounge` in `~/lempi-data/`.** It is untracked, so a
+fresh clone, a re-seeded repository or a worktree has none. Nothing in the tree
+fails until a tool is pointed at it.
+
+That is how it went missing. On 2026-09-26 `data/` held no database at all:
+the primary had stayed in the previous repository's checkout when this
+repository was seeded (its path is `[GDE-NAM-040]`), and that folder has since
+gone.
+[`data/README.md`](data/README.md) has the measured state of every surviving
+copy. Read it before any work that reads or writes the library, and update it
+whenever the primary moves.
