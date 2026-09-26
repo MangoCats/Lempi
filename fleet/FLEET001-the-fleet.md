@@ -51,6 +51,12 @@ The desktop's pair went missing when this repository was seeded, and was rebuilt
 
 Beside each backup, `pre-star-2026-09-26-tools/` holds the tool and the two patches that were applied, so what changed can be read on the node itself. Rolling a node back is `star_patch.py restore`, with the player stopped.
 
+**`[FLT-DAT-030]` From 2026-09-26, the hub is backed up every night, and syncs are one tool** `[SPEC-STAR-085..087]`.
+- `data/backups/` on the desktop holds 14 days and 12 month-starts, mirrored to `teacherslounge:~/lempi-hub-backups/`. It is run by the Windows task "Lempi hub backup", which puts a message on screen if it fails.
+- A sync is `tools/star_sync.py fleet/star-plan.json`, stage by stage, started by a person.
+- Each node keeps the backups of its three most recent syncs as `pre-sync-<run>/`, beside its listener and its catalogue. The recovery's `pre-star-2026-09-26/` is never pruned.
+- The first routine sync, `20260926T1952Z`, carried the file hashes and that afternoon's edits to every node.
+
 ## 3. What each runs — read 2026-09-26
 
 **`[FLT-RUN-010]`** The appliances' build is from `lempi --version`. The source hosts' is their checkout.
@@ -59,7 +65,7 @@ Beside each backup, `pre-star-2026-09-26-tools/` holds the tool and the two patc
 | :--- | :--- | :--- |
 | `lempi02w`, `bose`, `lp3-wifi` | `618fd14`, deployed that day | lempi02w is plain ext4; the other two were written to both layers and their durable copy checked |
 | `teacherslounge` | no player service; checkout fast-forwarded to `be778b9` that day | mirrors this file |
-| `smartboardpc` | `6e38ab4`, built there 2026-09-26 by `build/update-source-host.sh` | migrated that day `[FLT-ISS-020]`; started by hand with `nohup`, as before, so a reboot does not bring it back |
+| `smartboardpc` | `6e38ab4`, built there 2026-09-26 by `build/update-source-host.sh` | migrated that day `[FLT-ISS-020]`; a `systemd --user` unit since the same evening `[SMT-SVC-010]` |
 
 ## 4. Standing issues
 
@@ -79,10 +85,10 @@ Related but distinct, and not counted: on 2026-09-25 `bose` lost only *unmarked*
 - It plays through PulseAudio's default device, as the previous player did, and follows `bose`'s echo from the setting the data carries. Its stored position advanced 0 → 28,709 ms in 30 s, with no stream errors.
 - The previous build and its data directory are untouched and still runnable.
 
-Still open: it has no unit, so a reboot leaves it silent, as before. A unit needs the music volume's `fstab` entry first `[SMT-DB-020]`.
+The same evening it gained a unit, set up by `SmartPC/setup-smart.sh` `[SMT-SVC-010]`. A reboot on 2026-09-26 brought it back playing, and following `bose`'s echo, with no one touching it. That machine logs its desktop in automatically, so the reboot did not test the case with no login at all, which the unit is also built for.
 
 ~~**`[FLT-ISS-030]` `lp3-wifi` keeps UK time.**~~ *Resolved 2026-09-26.* Its listener recorded a UTC offset of +60 minutes where every other node had −240, so anything that follows the clock — a programme that starts at a set time `[SPEC-DIR-180]` — ran five hours off there. The image had come up in `Europe/London`, and no script said otherwise. `LempiPlay3/setup-lp3.sh` now carries the zone, `America/New_York`. It was written to both layers, and the player recorded −240 at its restart. `overlayroot-chroot` could not remount the durable layer read-only on exit ("mount point is busy"). A second `remount,ro` a moment later succeeded; check `findmnt -no OPTIONS /media/root-ro` after using it.
 
 ---
 
-**Traceability:** `[FLT-SHP-010]`, `[FLT-DAT-010..020]`, `[FLT-RUN-010]`, `[FLT-ISS-010..030]` · read from the machines 2026-09-26
+**Traceability:** `[FLT-SHP-010]`, `[FLT-DAT-010..030]`, `[FLT-RUN-010]`, `[FLT-ISS-010..030]` · read from the machines 2026-09-26

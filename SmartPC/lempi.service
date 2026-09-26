@@ -1,0 +1,28 @@
+# smartboardpc's player, as a systemd --user unit [SMT-SVC-010].
+#
+# A user unit, not a system one: the output is PulseAudio's default device
+# through PipeWire, which runs in mango's own user manager, and a player
+# started outside it plays nothing while serving HTTP 200 [TL-OPS-020].
+# Linger starts that manager at boot, with no one logged in.
+#
+# The music is on an exFAT volume that fstab mounts by UUID with nofail
+# [SMT-DB-020]; the player is not started until it is there, and is retried
+# rather than started on an empty directory.
+#
+# Installed by SmartPC/setup-smart.sh to ~/.config/systemd/user/lempi.service.
+
+[Unit]
+Description=Lempi player
+Wants=pipewire-pulse.service
+After=pipewire-pulse.service
+StartLimitIntervalSec=0
+
+[Service]
+WorkingDirectory=/home/mango/Dev/Lempi
+ExecStartPre=/usr/bin/mountpoint -q /media/mango/PortableSSD
+ExecStart=/home/mango/Dev/Lempi/player/target/release/lempi --listener /var/lempi/listener.db --library /var/lempi/library.db
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

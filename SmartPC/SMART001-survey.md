@@ -186,6 +186,23 @@ Sizing, from the desktop's own files: a catalogue of this size is ~1.2 GB and
 listener state ~6.5 MB. Both are comfortable against 61 G. Whether Smart uses
 one `lempi.db` or the split pair is open — see `[SMT-OPN-040]`.
 
+**`[SMT-SVC-010]` Since 2026-09-26 the player starts at boot, as a `systemd
+--user` unit, recorded in [`setup-smart.sh`](setup-smart.sh).** A user unit
+because the output is PipeWire's default device, and PipeWire runs in
+mango's own user manager `[TL-OPS-020]`. Four things make it work with no
+one logged in, and the script checks and applies each:
+- the music volume in `fstab` by UUID with `nofail` `[SMT-DB-020]`;
+- mango in `audio`, since the speaker's device is otherwise reachable only
+  through the ACL a local login grants;
+- linger, which starts mango's user manager at boot;
+- [`lempi.service`](lempi.service), which is not started until the volume
+  is mounted, and retries rather than playing from an empty directory.
+
+Every file the catalogue names was on the volume with its recorded size,
+5,709 of 5,709, when this was set up. A reboot that evening brought it back
+playing with no one touching it. GDM logs mango in automatically, though,
+so the case with no login at all is built for but not yet tested.
+
 ---
 
 ## 6. Standing findings not related to audio
