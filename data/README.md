@@ -24,9 +24,16 @@ fingerprints described below. The copies that survive, read that day:
 | `bose`, `lp3-wifi` | 5,709 | 16,661 | 8,185 | 7,154 | each its own |
 | `lempi02w` | 5,709 | 16,409 | 8,191 | 7,188 | its own |
 
-None is a superset of the others. **Which copy becomes the primary again is the
-maintainer's decision.** Until it is made, a tool run here against
-`data/library.db` finds no file, and that failure is correct.
+None is a superset of the others. So the hub is rebuilt by merging all of
+them, not by choosing one: [SPEC046](../docs/spec/SPEC046-star-sync.md), by
+`tools/star_merge.py`.
+
+**State, 2026-09-26: a merged candidate awaits the maintainer's verification.**
+It is in `data/recovery/2026-09-26/merge-full-4/`, with `REVIEW.md` (the recent
+edits by name) and `report.md` (every decision). Every node's snapshot is in
+the folder beside it, hash-verified against the node and made read-only.
+Until the candidate is promoted, a tool run here against `data/library.db`
+finds no file, and that failure is correct.
 
 ## What the pair is
 
