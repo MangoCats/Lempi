@@ -22,7 +22,12 @@
 # **API level 26**, because AAudio begins there and `cpal`'s Android backend is
 # AAudio. It changes nothing for `lempi-core`; it is chosen now so that
 # widening this check to the player later does not change the toolchain.
-FROM rust:1.90-bookworm
+#
+# **Two stages.** `check` is the above, and all CI and `verify-targets.sh`
+# build (`--target check`), so the compile gate costs no more than it did.
+# `app` adds what building and installing the app needs -- see its own
+# header below.
+FROM rust:1.90-bookworm AS check
 
 ARG NDK=r30
 ARG NDK_SHA1=5107f898313790e449e87eee2183d9a20602dee9
@@ -42,3 +47,65 @@ ENV AR_aarch64_linux_android=${NDK_BIN}/llvm-ar
 ENV CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${NDK_BIN}/aarch64-linux-android${API}-clang
 
 WORKDIR /w
+
+# ---------------------------------------------------------------------------
+# `app`: build the APK and put it on a phone `[REQ-AND-400]`, added 2026-09-25
+# with the maintainer's go-ahead for the device spike `[REQ-AND-530]`.
+#
+#     docker build --target app -t lempi-android-app -f build/Dockerfile.android .
+#
+# **Everything pinned, and checked against what its publisher lists** -- not
+# against a checksum of our own first download, which would prove only that
+# the download agreed with itself (the NDK's rule above):
+#
+# - cmdline-tools 23.0: the SHA-1 Google's `repository2-3.xml` lists for
+#   `commandlinetools-linux-16111833_latest.zip`, 181,052,239 bytes. Read
+#   2026-09-25; the newest stable there.
+# - The SDK packages go through `sdkmanager`, which checks each archive against
+#   that same manifest itself. Each is the newest stable of its kind on
+#   2026-09-25, except the platform. Platform 36 (Android 16) is what Play
+#   requires an app to target from 2026-08-31 `[REQ-AND-100]`; 37 is newer
+#   and not required. build-tools 36.0.0 matches it, and platform-tools
+#   37.0.1 is adb.
+# - Gradle 9.8.0: the SHA-256 gradle.org publishes beside the zip. It is
+#   installed so the `android/` project's wrapper can be generated here; the
+#   wrapper then pins the same distribution by the same hash.
+# - cargo-ndk 4.1.2, `--locked`.
+# - JDK 17 from Debian, the version AGP 9 and Gradle 9 run on.
+#
+# **The phone is reached by adb over Wi-Fi**, from inside the container:
+# Android 11's wireless debugging pairs once, with a code shown on the phone.
+# The key that pairing trusts lives in `/root/.android`, so a run mounts a
+# named volume there, or every run would have to pair again:
+#
+#     docker run --rm -it -v lempi-adb:/root/.android lempi-android-app adb pair <ip>:<port>
+#
+# Gradle's own cache is worth the same treatment (`-v lempi-gradle:/root/.gradle`).
+FROM check AS app
+
+ARG CMDLINE_TOOLS=16111833
+ARG CMDLINE_TOOLS_SHA1=e025545c62a8e64c7559119566a569fb1dec5f60
+ARG GRADLE=9.8.0
+ARG GRADLE_SHA256=bafd5ce9cfaea0fbccfdc8439a1ac42fbd4cd9c89dc9a988228d8a2639a58e6c
+ARG CARGO_NDK=4.1.2
+
+ENV ANDROID_HOME=/opt/android-sdk
+ENV ANDROID_NDK_HOME=/opt/android-ndk-r30
+ENV PATH=${PATH}:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/gradle-${GRADLE}/bin
+
+RUN apt-get update && apt-get install -y --no-install-recommends openjdk-17-jdk-headless \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL -o /tmp/tools.zip \
+       "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS}_latest.zip" \
+    && echo "${CMDLINE_TOOLS_SHA1}  /tmp/tools.zip" | sha1sum -c - \
+    && mkdir -p ${ANDROID_HOME}/cmdline-tools \
+    && unzip -q /tmp/tools.zip -d ${ANDROID_HOME}/cmdline-tools \
+    && mv ${ANDROID_HOME}/cmdline-tools/cmdline-tools ${ANDROID_HOME}/cmdline-tools/latest \
+    && rm /tmp/tools.zip \
+    && yes | sdkmanager --licenses >/dev/null \
+    && sdkmanager --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" \
+    && curl -fsSL -o /tmp/gradle.zip "https://services.gradle.org/distributions/gradle-${GRADLE}-bin.zip" \
+    && echo "${GRADLE_SHA256}  /tmp/gradle.zip" | sha256sum -c - \
+    && unzip -q /tmp/gradle.zip -d /opt \
+    && rm /tmp/gradle.zip \
+    && cargo install cargo-ndk --version ${CARGO_NDK} --locked

@@ -263,7 +263,7 @@ echo "== E: Android aarch64 (lempi-core only, compile check) =="
 # for every commit. Proven to fail: a `compile_error!` under
 # `cfg(target_os = "android")` in core passed the Windows check and failed
 # this one, which is the whole of its reason to exist.
-docker build -q -t lempi-android -f "$ROOT/build/Dockerfile.android" "$ROOT" >/dev/null \
+docker build -q --target check -t lempi-android -f "$ROOT/build/Dockerfile.android" "$ROOT" >/dev/null \
     || { echo "  the Android image would not build; stage E did not run"; fail=$((fail+1)); }
 run_step "E" env MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w lempi-android \
     cargo check --manifest-path player/Cargo.toml -p lempi-core \

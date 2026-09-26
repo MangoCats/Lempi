@@ -120,8 +120,10 @@ jobs:
       # The runner has an NDK of its own; this uses `build/Dockerfile.android`
       # instead, so CI and `verify-targets.sh` stage E share one definition of
       # the toolchain -- r30 pinned, checked against Google's published SHA-1.
+      # `--target check`: the file's second stage, `app`, adds the SDK, JDK
+      # and Gradle for building the APK, which a compile check does not need.
       - name: build the Android check image
-        run: docker build -t lempi-android -f build/Dockerfile.android .
+        run: docker build --target check -t lempi-android -f build/Dockerfile.android .
 
       - name: cargo check lempi-core for aarch64-linux-android
         run: >

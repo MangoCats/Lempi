@@ -89,7 +89,7 @@ The README ranks mobile *Future / Post-V1*. Nothing here schedules the work; it 
 
 ## 5. Building and shipping
 
-**`[REQ-AND-400]` The app is an `android/` Gradle project in this repository**, with the Rust library built by `cargo-ndk` in the existing Android image, and every build reports the commit it was built from `[GDE-APP-140]`.
+**`[REQ-AND-400]` The app is an `android/` Gradle project in this repository**, with the Rust library built by `cargo-ndk` in the existing Android image, and every build reports the commit it was built from `[GDE-APP-140]`. *The image, 2026-09-25:* `build/Dockerfile.android`'s `app` stage adds SDK platform 36, build-tools, adb, JDK 17, Gradle and `cargo-ndk`, each pinned; CI and stage E build only its `check` stage.
 
 **`[REQ-AND-410]` Kotlin reaches Rust through a generated interface** (UniFFI) for starting, commanding, reading and stopping the player, and **one** hand-written JNI entry that hands over the Android context before start. Starting without that context is refused with a named error, not left to fail inside the audio stack `[GDE-APP-030]` `[GDE-HST-330]`.
 
