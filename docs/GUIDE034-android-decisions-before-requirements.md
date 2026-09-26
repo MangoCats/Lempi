@@ -4,6 +4,8 @@
 
 Written 2026-09-25, after the tree was tagged `pre-android-development`, in answer to the question whether the Android guidance was ready to support requirements, implementation and test. It was not: GUIDE004 and GUIDE033 disagreed on what plays the audio, one decision taken that day (`[GDE-AND-070]`) contradicted an older principle, and much of what an app needs was never asked. This puts each open matter as a question with a recommendation, the way GUIDE033 §6 did — *proposed, not decided*, until the maintainer answers.
 
+**Answered 2026-09-25.** The maintainer accepted every recommendation except two: `[GDE-APP-050]` is decided as revised by the maintainer's clarification — a scan also finds music new to the fleet, which the phone can send out for induction — and `[GDE-APP-070]` was asked to weigh `Music/Lempi/` against `Music/`, which it now does, and awaits confirmation.
+
 > **Related:** [GUIDE004](GUIDE004-phone-port-strategy.md) (route and licence; `[GDE-AND-060]`, `[GDE-AND-065]`, `[GDE-AND-070]`) · [GUIDE033](GUIDE033-the-player-without-an-appliance.md) (the player made host-indifferent) · [SPEC011](spec/SPEC011-audio-path-supervisor.md) · [SPEC012](spec/SPEC012-library-relink.md)
 
 ---
@@ -28,11 +30,24 @@ Written 2026-09-25, after the tree was tagged `pre-android-development`, in answ
 
 ## 3. The library on the phone
 
-**`[GDE-APP-050]` What a file found in shared storage becomes.** *Options:* ignored unless the catalogue already knows it; matched to the catalogue where it can be and otherwise played from its tags; fully analysed on the phone. *Recommendation:* **the second.** A file whose byte hash `[GDE-APP-060]` matches a catalogue entry gets everything the catalogue has. Any other file becomes a **tags-only passage**: playable and selectable by artist and recording, with no flavor, and marked as such in the UI — the fallback `[GDE-IOS-050]` already sketches. Nothing derived is written back. *Why:* it keeps `[GDE-AND-050]` true — the phone finds, it never analyses — while honouring `[GDE-AND-070]`'s scan. *To verify:* how the Director weights a passage with no flavor today; that is a requirement, not an assumption.
+**`[GDE-APP-050]` What a file found in shared storage becomes.** *Decided 2026-09-25, as revised by the maintainer:* a scan finds two kinds of file, and they go opposite ways.
+
+- **Music the fleet already has.** Its byte hash `[GDE-APP-060]` matches a catalogue entry, and it gets everything the catalogue has.
+- **Music new to the fleet.** It becomes a **tags-only passage** on the phone — playable and selectable by artist and recording, with no flavor, marked as such in the UI, the fallback `[GDE-IOS-050]` sketches — **and the user can send it out to a Vipunen node for induction**. The phone lists what is not in the catalogue; exporting hands those files, with their byte hashes and tags, to wherever the user moves them to a Vipunen host, where `induct` takes a folder as it does today. The next bundle brings them back as catalogue entries, matched by byte hash.
+
+So the phone still never analyses — `[GDE-AND-050]` holds — but it gains an **outbound** route the guides had only ever drawn inbound. Two consequences for the specification. If Vipunen rewrites a file's tags (`tools/push_file_tags.py`), its bytes change, the phone's copy stops matching, and the returning bundle must **replace** that copy, not add a second. And a file already in the fleet under different bytes — another rip, another encoding — is not recognised by byte hash; it is found as new, and it is the desktop's audio-identity relink, after induction, that ties it to the recording. *To verify:* how the Director weights a passage with no flavor today; that is a requirement, not an assumption.
 
 **`[GDE-APP-060]` Verifying and recognising files without ffmpeg.** *Options:* carry a byte hash in the payload; move the identity hash into Rust `[SPEC-RLK-150]`; ship ffmpeg on the phone. *Recommendation:* **a SHA-256 of each file's bytes, computed by Vipunen and carried in the payload** `[GDE-HST-080]`. The phone uses it to confirm an import arrived intact, and to recognise a scanned file as a catalogue entry. The audio-identity hash stays on the desktop. *Why:* the phone needs "same bytes", never "same audio"; a byte hash is cheap, needs no decoder, and a pure-Rust hash crate passes the core boundary gate. *Consequence:* a file retagged on the phone no longer matches, and falls to tags-only until the next bundle — said in the UI, not hidden.
 
-**`[GDE-APP-070]` How a library reaches the phone.** *Options:* the user copies audio into `Music/` by any means and opens the bundle file with the app; the app pulls from Vipunen's host over the LAN; a cloud store. *Recommendation:* **the first, for the first release** — audio into `Music/Lempi/` (USB, file sync, anything), then the bundle opened through Android's share or open sheet and imported `[GDE-AND-050]`. A LAN pull is a later feature. *Why:* it needs nothing new on the desktop and no network code on the phone.
+**`[GDE-APP-070]` How a library reaches the phone.** *Accepted:* the user copies audio in by any means and opens the bundle through Android's share or open sheet `[GDE-AND-050]`; a LAN pull is later. *Awaiting confirmation:* **where the audio lands.** The folder answers three separate questions, and only one of them depends on it:
+
+| | `Music/Lempi/` | `Music/` |
+| :--- | :--- | :--- |
+| Discovery | MediaStore sees all shared storage either way | same |
+| The folder grant for `.cue`/`.lrc`/covers | reaches only Lempi's own folder — **not** the sidecars of music the user already keeps elsewhere, which is what a scan finds | reaches every file under `Music/` |
+| Where imports land | one folder Lempi owns: visibly its arrivals, removable or movable whole, never mixed with the user's own | mixed into the user's tree; which files Lempi manages is no longer visible |
+
+*Recommendation:* **both, for different jobs — grant `Music/`, import into `Music/Lempi/`** — and do not copy an imported file whose byte hash matches one already on the phone: bind the catalogue entry to the existing file, so other players never see a duplicate album. *Why:* the grant has to be as wide as the music a scan can find, while the imports benefit from a boundary.
 
 **`[GDE-APP-080]` The storage mechanics behind `[GDE-AND-070]`.** *Recommendation:* MediaStore to find audio and images, opened by path (API 30+); **one folder grant** (`ACTION_OPEN_DOCUMENT_TREE`) on `Music/Lempi/` for the `.cue`, `.lrc` and cover files beside the audio, which are not media; Lempi's own files in app-private storage; `lyrics_sidecar.rs`'s writes moved there. *Then* the audio-source resolver `[GDE-HST-080]` shrinks to the sidecar reads that go through the grant — **if** the spike shows `File::open` works on MediaStore paths. If it does not, the resolver covers every path GUIDE033 §2 lists.
 
