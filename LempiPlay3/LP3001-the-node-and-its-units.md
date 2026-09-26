@@ -123,5 +123,6 @@ systemd advances an early clock to the timestamp of
 `/var/lib/systemd/timesync/clock`, and on the durable layer that file reads
 **2026-09-15 22:35:06**: the node has used chrony, not `systemd-timesyncd`,
 since `[GDE-ECHO-300]`, and the file is on the read-only layer besides, so
-nothing will move it. Not fixed here; noted because anything that runs before
-chrony's step sees that date.
+nothing will move it. **Expected, per the maintainer**: this Pi has no
+hardware clock, so some date must stand in until chrony answers. Noted
+because anything that runs before chrony's step sees that date.

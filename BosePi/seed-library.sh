@@ -82,15 +82,20 @@ check "relink binary is aarch64" bash -c "file '$RELINK_BIN' | grep -q aarch64"
 step "Transfer: audio, then the staged database [music before db, IMPL-BOS-085]"
 mkdir -p /srv/library/mpd 2>/dev/null # harmless if this path doesn't exist locally
 run "mkdir /srv/library/mpd on bose" ssh "$HOST" mkdir -p /srv/library/mpd
+# `--chmod=D755,F644` on every copy, since 2026-09-25: `-a` carries the
+# source's modes across, and this host's music sits on NTFS, which presents
+# every file as 0777 -- so every file and directory of bose's library arrived
+# world-writable (8,304 entries; lempi02w's the same way, 8,018). Nothing
+# needed that: the player reads as pi, the owner.
 if command -v rsync >/dev/null 2>&1; then
     # A Linux dev host: rsync is just here.
     run "rsync audio -> $HOST:/srv/library/audio/" \
-        rsync -a --partial --stats --human-readable \
+        rsync -a --chmod=D755,F644 --partial --stats --human-readable \
             --exclude=.DS_Store --exclude=Thumbs.db \
             -e 'ssh -o StrictHostKeyChecking=accept-new' \
             "$MUSIC_DIR"/ "$HOST":/srv/library/audio/
     run "rsync db -> $HOST:/srv/library/library-new.db" \
-        rsync -a --partial --human-readable \
+        rsync -a --chmod=D755,F644 --partial --human-readable \
             -e 'ssh -o StrictHostKeyChecking=accept-new' \
             "$DB" "$HOST":/srv/library/library-new.db
 else
@@ -108,10 +113,10 @@ else
             mkdir -p /root/.ssh && cp /keys/id_ed25519 /root/.ssh/ 2>/dev/null
             chmod 700 /root/.ssh; chmod 600 /root/.ssh/* 2>/dev/null
             SSH='ssh -o StrictHostKeyChecking=accept-new'
-            rsync -a --partial --stats --human-readable \
+            rsync -a --chmod=D755,F644 --partial --stats --human-readable \
                 --exclude=.DS_Store --exclude=Thumbs.db \
                 -e \"\$SSH\" /music/ $HOST:/srv/library/audio/ &&
-            rsync -a --partial --human-readable \
+            rsync -a --chmod=D755,F644 --partial --human-readable \
                 -e \"\$SSH\" /s/$(basename "$DB") $HOST:/srv/library/library-new.db
         "
 fi

@@ -222,6 +222,12 @@ item "sudoers: pi's drop-in is root, mode 440" \
      "test \"\$(stat -c %U:%a $P/etc/sudoers.d/010-pi-nopasswd)\" = root:440" \
      "sudo chmod 440 /etc/sudoers.d/010-pi-nopasswd"
 item "/var/lempi owned by pi" "test \"\$(stat -c %U /var/lempi)\" = pi" "sudo chown pi:pi /var/lempi"
+# Nothing on STATE or LIBRARY writable by everyone. A copy from a Windows
+# drive arrives 0777 under `rsync -a`, which is how bose's and lempi02w's
+# libraries ended up (2026-09-25); symlinks and sticky directories excepted.
+item "nothing world-writable on STATE or LIBRARY" \
+     "test -z \"\$(sudo find /var/lempi /srv/library -xdev -perm -0002 ! -type l ! -perm -1000 -print -quit)\"" \
+     "sudo find /var/lempi /srv/library -xdev -type d -perm -0002 ! -perm -1000 -exec chmod 755 {} + ; sudo find /var/lempi /srv/library -xdev -type f -perm -0002 -exec chmod 644 {} +"
 item "/srv/library owned by pi" "test \"\$(stat -c %U /srv/library)\" = pi" "sudo chown pi:pi /srv/library"
 
 # -------------------------------------------------------------------- overlay

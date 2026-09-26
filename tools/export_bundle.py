@@ -15,7 +15,7 @@ The payload is built by `payload.py`, which is the one serializer
 
     python tools/export_bundle.py data/library.db --like '%Frisina%' \\
            --root "C:/Users/Mango Cat/Music" -o out/frisina
-    rsync -a out/frisina/ pi@lempi02w:/srv/library/incoming/frisina/
+    rsync -a --chmod=D755,F644 out/frisina/ pi@lempi02w:/srv/library/incoming/frisina/
 """
 
 import argparse

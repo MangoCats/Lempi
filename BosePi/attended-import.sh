@@ -11,8 +11,12 @@
 # post-`--lock-in` `ro` -- "restore what was actually there" is correct in
 # both worlds, "assume ro" is not.
 #
-#     bash BosePi/attended-import.sh --check -- rsync -a ./NewAlbum/ pi@bose:/srv/library/audio/NewAlbum/
-#     bash BosePi/attended-import.sh --go    -- rsync -a ./NewAlbum/ pi@bose:/srv/library/audio/NewAlbum/
+#     bash BosePi/attended-import.sh --check -- rsync -a --chmod=D755,F644 ./NewAlbum/ pi@bose:/srv/library/audio/NewAlbum/
+#     bash BosePi/attended-import.sh --go    -- rsync -a --chmod=D755,F644 ./NewAlbum/ pi@bose:/srv/library/audio/NewAlbum/
+#
+# `--chmod` because `-a` copies the source's modes, and music on a Windows
+# drive is 0777 to rsync -- how the whole library came to be world-writable
+# until 2026-09-25.
 #
 # `--check` prints the plan and touches nothing. There is no default action:
 # a script that reopens the one partition this whole design keeps closed

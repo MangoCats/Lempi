@@ -194,7 +194,9 @@ def main():
         run = lambda *c: subprocess.run(c, check=False)   # noqa: E731
         run("ssh", a.push, f"sudo install -d -o lempi -g lempi {DEST_AUDIO}")
         if shutil.which("rsync"):
-            run("rsync", "-a", "--info=stats1",
+            # --chmod: `-a` would carry a Windows source's 0777 across, as it
+            # did for the fleet's libraries until 2026-09-25.
+            run("rsync", "-a", "--chmod=D755,F644", "--info=stats1",
                 "--rsync-path=sudo -u lempi rsync",
                 a.stage.replace("\\", "/") + "/", f"{a.push}:{DEST_AUDIO}/")
         else:

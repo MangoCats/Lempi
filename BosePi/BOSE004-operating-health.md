@@ -237,13 +237,28 @@ is the history of that repair and stops dead at the fix. The first cold boot
 after this will either confirm it or reopen `[IMPL-BOS-170]`; check
 `cat /proc/swaps` first thing.
 
-**`[BOS-OPS-095]` Minor, recorded rather than acted on.**
-`/var/lempi/listener.db*` are mode `0777`, world-writable — almost certainly a
-provisioning leftover, harmless on a single-user appliance, but not what anyone
-intended. The card reports manufacture date 05/2020 and exposes no wear-level
+**`[BOS-OPS-095]` Minor, recorded rather than acted on — the modes since
+fixed.** `/var/lempi/listener.db*` were mode `0777`; by 2026-09-25 they were
+`644`, and a fleet audit that day found the real case: **all 8,304 library
+entries world-writable**, copied from NTFS with `rsync -a` (lempi02w's the
+same). Set to 755/644, mtimes kept; every copy path now passes
+`--chmod=D755,F644`. The card reports manufacture date 05/2020 and exposes no wear-level
 attribute for its type, and `[BOS-OPS-010]`'s written-bytes figure is **per
 boot, not lifetime** `[BOS-PWR-070]` — so this appliance has no cumulative wear
 measure at all, only a rate that has to be re-derived and accumulated by hand.
+
+**`[BOS-OPS-110]` bose lost smartboardpc, and only for unmarked traffic.**
+Found 2026-09-25 when chrony fell back to pi.hole: pings, plain TCP and NTP
+from bose to smartboardpc were all lost while `ssh` worked — because OpenSSH
+marks its packets (DSCP AF21) and the rest are Best Effort. A capture on
+smartboardpc showed marked pings arriving and unmarked ones never arriving; no
+firewall on either end, no TDLS link, no address conflict. bose and
+smartboardpc were the only two clients on the access point's 5 GHz radio, so
+this was the one path forwarded client-to-client inside it. **One Wi-Fi
+reassociation of bose cleared it** — smartboardpc back as `^*` within seconds
+— so it was stuck state in the access point. If it recurs: test with
+`ping -Q 0x48` against plain `ping`; reassociate or restart the access point;
+or move bose to 2.4 GHz, where the other two nodes are.
 
 ## 6. The database, and what is actually in it
 
