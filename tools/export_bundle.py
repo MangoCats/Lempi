@@ -20,7 +20,6 @@ The payload is built by `payload.py`, which is the one serializer
 
 import argparse
 import gzip
-import hashlib
 import json
 import os
 import shutil
@@ -29,15 +28,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import payload as payloadmod  # noqa: E402
-
-
-def sha256_file(path: str) -> str:
-    """The SHA-256 of a file's bytes, lower-case hex `[SPEC-PL-087]`."""
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for block in iter(lambda: fh.read(1 << 16), b""):
-            h.update(block)
-    return h.hexdigest()
+from byte_hash import sha256_file  # noqa: E402
 
 
 def main() -> int:

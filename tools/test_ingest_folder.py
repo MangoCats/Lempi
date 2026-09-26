@@ -190,6 +190,17 @@ def main() -> int:
                            (FAKE_MD5,)).fetchone()[0]
         check(got == ingest_folder.ffmpeg_generator(),
               f"the row must record the hasher that ran, got {got!r}")
+
+        # `[REQ-AND-960]`: the byte hash is set at induction, into a column the
+        # ingest adds to a table that predates it -- and it is the hash of the
+        # file's actual bytes, checked with hashlib rather than the helper.
+        import hashlib
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(files)")}
+        check("sha256" in cols, "ingest must add sha256 to a files table that predates it")
+        with open(os.path.join(folder, "song.mp3"), "rb") as fh:
+            want = hashlib.sha256(fh.read()).hexdigest()
+        got = conn.execute("SELECT sha256 FROM files WHERE audio_md5=?", (FAKE_MD5,)).fetchone()[0]
+        check(got == want, f"files.sha256 must be the file's byte hash, got {got!r}")
         conn.close()
 
         print()

@@ -30,6 +30,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import audio_duration  # noqa: E402
+from byte_hash import ensure_sha256_column, sha256_file  # noqa: E402
 
 AUDIO = (".mp3", ".flac", ".ogg", ".m4a", ".wav", ".opus")
 
@@ -236,6 +237,9 @@ def main() -> int:
         # column is already there would otherwise abort the ingest it is meant
         # to enable `[SPEC-RLK-150]`.
         ensure_md5_generator_column(conn)
+        # The byte hash a phone can match against `[REQ-AND-960]`, set at
+        # induction; `add_byte_hashes.py` filled in what came before.
+        ensure_sha256_column(conn)
         conn.execute("BEGIN IMMEDIATE")
 
     for path in files:
@@ -275,11 +279,11 @@ def main() -> int:
         st = os.stat(path)
         cur = conn.execute(
             "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,"
-            "                   first_seen,last_seen,md5_generator)"
-            " VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8)",
+            "                   first_seen,last_seen,md5_generator,sha256)"
+            " VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8,?9)",
             (md5, path, st.st_size, st.st_mtime,
              os.path.splitext(path)[1].lstrip(".").lower(), info["duration_ms"], now,
-             ffmpeg_generator()))
+             ffmpeg_generator(), sha256_file(path)))
         fid = cur.lastrowid
 
         conn.execute(

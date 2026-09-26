@@ -43,9 +43,17 @@ CREATE TABLE IF NOT EXISTS files (
     -- back-annotation: the generator of a value written before anyone recorded
     -- it is an inference, and an inferred provenance is worth less than an
     -- absent one. Same rule as `listener_play_history.selected_by`.
-    md5_generator TEXT
+    md5_generator TEXT,
+    -- SHA-256 of the file's bytes [REQ-AND-960], [SPEC-PL-087]. Not identity
+    -- -- a rewritten tag changes it -- but the one fingerprint a phone can
+    -- compute, so Vipunen can tell a phone exactly which of its files it holds
+    -- already. Set at induction (tools/ingest_folder.py) and by a bundle
+    -- import that verified it; tools/add_byte_hashes.py fills existing rows.
+    -- NULL means not yet hashed.
+    sha256        TEXT
 );
 CREATE INDEX IF NOT EXISTS files_path ON files(path);
+CREATE INDEX IF NOT EXISTS files_sha256 ON files(sha256);
 
 -- The file's own tags, as read from the container. Encoding scope, and part of
 -- the library rather than a cache: the player resolves a display name

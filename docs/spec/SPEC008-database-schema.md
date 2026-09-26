@@ -37,9 +37,11 @@ CREATE TABLE files (
     duration_ms  INTEGER NOT NULL,          -- decoded, not header-claimed [REQ-LIB-145]
     first_seen   TEXT    NOT NULL,
     last_seen    TEXT    NOT NULL,
-    md5_generator TEXT                      -- what hashed it [SPEC-SC-038]
+    md5_generator TEXT,                     -- what hashed it [SPEC-SC-038]
+    sha256       TEXT                       -- the bytes' hash [SPEC-SC-039]
 );
 CREATE INDEX files_path ON files(path);
+CREATE INDEX files_sha256 ON files(sha256);
 
 -- Recording scope: this music, any encoding. Portable across installations.
 CREATE TABLE recordings (
@@ -55,6 +57,8 @@ CREATE TABLE recordings (
 `audio_md5` keys four tables and is treated as a stable identity `[SPEC-DF-030]`, but it implements no standard: it is whatever the demuxer that computed it did `[SPEC-RLK-080]`. An ffmpeg upgrade could in principle orphan rows, and nothing downstream would report that as anything but missing music. This column is what makes such a disagreement diagnosable instead of merely fatal.
 
 **`NULL` means the row predates the column, and stays `NULL`.** No back-annotation: the generator of a value written before anyone recorded it is an inference, and an inferred provenance is worth less than an absent one — the same rule `listener_play_history.selected_by` already follows. So the 5,705 incumbent values read `NULL`, which is the honest answer, and `[SPEC-RLK-080]` is where the reader learns they are an Essentia/libav artefact.
+
+**`[SPEC-SC-039]` `sha256` is the hash of the file's bytes** `[REQ-AND-960]`, `[SPEC-PL-087]`. It is not identity — a rewritten tag changes it and leaves `audio_md5` alone — but it is the one fingerprint a phone can compute, so Vipunen can tell a phone exactly which of its files it holds already `[REQ-AND-288]`, and a phone can recognise a bundled file it finds again `[REQ-AND-260]`. It is set at induction (`tools/ingest_folder.py`) and by a bundle import that verified it; `tools/add_byte_hashes.py` fills rows that predate it. `NULL` means not yet hashed. *(Added 2026-09-26.)*
 
 Written by `tools/ingest_folder.py`, `tools/ingest_cd.py`, `tools/migrate_mulib.py` and `player/core/src/bundle.rs`; the string is computed by `ingest_folder.ffmpeg_generator()` and `player/core/src/relink.rs::hasher_generator()`, which are separate implementations because Lempi and Vipunen share a schema and no code `[GDE-ARC-018]` — verified byte-identical on one machine 2026-09-22.
 

@@ -315,6 +315,7 @@ fn import_with(
         // all-or-nothing, and `ADD COLUMN` fails on every run after the first,
         // which would take the whole batch down with it `[SPEC-RLK-150]`.
         crate::db::ensure_md5_generator_column(db);
+        crate::db::ensure_sha256_column(db);
     }
 
     let empty = Vec::new();
@@ -434,8 +435,8 @@ fn import_with(
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0);
         tx.execute(
-            "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen,md5_generator)\
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8)",
+            "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen,md5_generator,sha256)\
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8,?9)",
             params![md5, path.to_string_lossy(), meta.len() as i64, mtime,
                     str_of(e, "format"),
                     num(e, "duration_ms")
@@ -446,7 +447,11 @@ fn import_with(
                     // this far, so the hash was computed -- but by what is
                     // then genuinely unknown, and a guess in a provenance
                     // column is worse than a gap.
-                    generator],
+                    generator,
+                    // The byte hash just verified against this file, kept so
+                    // a phone can recognise the file again by it
+                    // `[REQ-AND-260]`. NULL where the payload carried none.
+                    sha256],
         )
         .map_err(|e| e.to_string())?;
         let file_id = tx.last_insert_rowid();
@@ -1022,6 +1027,13 @@ mod tests {
             .query_row("SELECT md5_generator FROM files WHERE audio_md5='sent-md5'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(gen, None, "nothing here hashed audio_md5, so no hasher may be recorded");
+        // Kept, so a phone can recognise the file by its bytes again
+        // `[REQ-AND-260]` -- in a column the import added to a table that
+        // predated it.
+        let stored: Option<String> = c
+            .query_row("SELECT sha256 FROM files WHERE audio_md5='sent-md5'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored.as_deref(), Some(sha.as_str()));
         std::fs::remove_dir_all(&dir).ok();
     }
 

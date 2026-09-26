@@ -50,6 +50,14 @@ def main() -> int:
     if not args:
         say(__doc__)
         return 2
+    # A mistyped flag used to be ignored and run as a dry run with exit 0 --
+    # measured 2026-09-26, when `--commit` added nothing and said so only in
+    # passing. Refused now (CLAUDE.md section 6).
+    unknown = [a for a in args[1:] if a != "--write"]
+    if unknown:
+        say(__doc__)
+        say(f"unknown option(s): {' '.join(unknown)}")
+        return 2
     db = Path(args[0])
     write = "--write" in args
 

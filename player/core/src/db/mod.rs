@@ -39,6 +39,15 @@ pub fn ensure_md5_generator_column(conn: &rusqlite::Connection) {
     let _ = conn.execute("ALTER TABLE files ADD COLUMN md5_generator TEXT", []);
 }
 
+/// `files.sha256` and its index `[REQ-AND-960]`, for a library that predates
+/// them: the byte hash a phone matches its found music against
+/// `[REQ-AND-260]`. The same already-present-is-expected shape as
+/// [`ensure_md5_generator_column`]; existing rows stay NULL until hashed.
+pub fn ensure_sha256_column(conn: &rusqlite::Connection) {
+    let _ = conn.execute("ALTER TABLE files ADD COLUMN sha256 TEXT", []);
+    let _ = conn.execute("CREATE INDEX IF NOT EXISTS files_sha256 ON files(sha256)", []);
+}
+
 #[derive(Debug)]
 pub enum DbError {
     Open(String),
