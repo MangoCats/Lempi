@@ -93,6 +93,9 @@ class Node:
         self.path = spec["listener"]
         self.taken_at = norm_time(spec.get("taken_at"))
         self.db = open_ro(self.path)
+        self.catalogue = spec.get("catalogue")
+        self.remap: dict = {}          # [SPEC-STAR-049]: node passage id -> hub's
+        self.remapped: dict = {}       # table -> rows translated
         self.tables = {r[0] for r in self.db.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         # The node's own history, oldest first: each hourly backup, then now.
@@ -112,7 +115,18 @@ class Node:
         if table not in self.tables:
             return []
         cols = self.cols(table)
-        return [dict(zip(cols, r)) for r in self.db.execute(f"SELECT * FROM {table}")]
+        rows = [dict(zip(cols, r)) for r in self.db.execute(f"SELECT * FROM {table}")]
+        if self.remap:
+            for r in rows:
+                if r.get("passage_id") in self.remap:
+                    r["passage_id"] = self.remap[r["passage_id"]]
+                    self.remapped[table] = self.remapped.get(table, 0) + 1
+                elif (r.get("subject_kind") == "passage"
+                      and _int(r.get("subject_id")) in self.remap):
+                    new = self.remap[_int(r["subject_id"])]
+                    r["subject_id"] = type(r["subject_id"])(new)
+                    self.remapped[table] = self.remapped.get(table, 0) + 1
+        return rows
 
 
 def keys_in(conn: sqlite3.Connection, table: str, key: tuple) -> set | None:
@@ -228,16 +242,62 @@ def build(manifest: dict, out: str) -> Report:
     os.makedirs(out, exist_ok=True)
     if os.listdir(out):
         raise SystemExit(f"{out} is not empty: the merge writes a new directory, never over one")
-    if "nodes" in manifest:
-        build_listener(manifest, out, rep)
+    # The catalogue first: the listener half translates passage ids against
+    # it [SPEC-STAR-049].
+    hub_cat = None
     if "catalogue" in manifest:
         build_catalogue(manifest["catalogue"], out, rep)
+        hub_cat = os.path.join(out, "library.db")
+    if "nodes" in manifest:
+        build_listener(manifest, out, rep, hub_cat)
     write_report(rep, out)
     return rep
 
 
-def build_listener(manifest: dict, out: str, rep: Report):
+def passage_remap(node_cat: str, hub_cat: str):
+    """[SPEC-STAR-049]: node passage id -> hub passage id, for ids whose file
+    differs between the two catalogues; and the ids the hub no longer has."""
+    q = ("SELECT p.passage_id, f.audio_md5, p.kind, p.start_ms FROM passages p "
+         "JOIN files f USING (file_id)")
+    node = {r[0]: r[1:] for r in open_ro(node_cat).execute(q)}
+    hub = {r[0]: r[1:] for r in open_ro(hub_cat).execute(q)}
+    def by_file(m):
+        out = {}
+        for pid, (md5, kind, start) in m.items():
+            out.setdefault((md5, kind), []).append((start, pid))
+        return {k: [p for _, p in sorted(v)] for k, v in out.items()}
+    nf, hf = by_file(node), by_file(hub)
+    remap, gone = {}, []
+    for pid, (md5, kind, _) in node.items():
+        if pid in hub and hub[pid][0] == md5:
+            continue                          # same file: the same passage
+        siblings, theirs = nf.get((md5, kind), []), hf.get((md5, kind), [])
+        if pid not in hub and not theirs:
+            gone.append(pid)
+            continue
+        i = siblings.index(pid)
+        if pid in hub and i < len(theirs):
+            remap[pid] = theirs[i]
+        elif pid not in hub:
+            gone.append(pid)                  # re-cut since: matches nothing
+    return remap, sorted(gone)
+
+
+def _int(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_listener(manifest: dict, out: str, rep: Report, hub_cat: str | None = None):
     nodes = sorted((Node(s) for s in manifest["nodes"]), key=lambda n: n.name)
+    rep.data["translations"] = {}
+    for n in nodes:
+        if n.catalogue and hub_cat:
+            n.remap, gone = passage_remap(n.catalogue, hub_cat)
+            rep.data["translations"][n.name] = dict(
+                ids=sorted([a, b] for a, b in n.remap.items()), unmatched=gone)
     hub = manifest["hub_state_from"]
     if hub not in {n.name for n in nodes}:
         raise SystemExit(f"hub_state_from names {hub!r}, which is not a node in the manifest")
@@ -272,6 +332,9 @@ def build_listener(manifest: dict, out: str, rep: Report):
     rep.data["integrity"] = check
     rep.data["nodes"] = [dict(name=n.name, taken_at=n.taken_at, backups=len(n.history))
                          for n in nodes]
+    for n in nodes:
+        if n.name in rep.data["translations"]:
+            rep.data["translations"][n.name]["rows"] = n.remapped
 
 
 # ------------------------------------------------------------ catalogue half --
@@ -556,6 +619,13 @@ def listener_section(d: dict) -> list[str]:
     for t, s in sorted(d["tables"].items()):
         if s.get("only_on"):
             L.append(f"- `{t}`: " + ", ".join(f"{n} {c}" for n, c in sorted(s["only_on"].items())))
+    tr = {k: v for k, v in d.get("translations", {}).items() if v["ids"] or v["unmatched"]}
+    if tr:
+        L += ["", "## Passage ids translated to the hub's [SPEC-STAR-049]", ""]
+        for n, v in sorted(tr.items()):
+            L.append(f"- {n}: {len(v['ids'])} id(s) translated {v['ids']}; rows translated "
+                     f"{v.get('rows', {})}; {len(v['unmatched'])} id(s) the hub no longer has "
+                     f"(rows naming them keep the id and match nothing)")
     L += ["", f"Integrity of the output: **{d['integrity']}**.", "", "## Decisions", ""]
     if not d["decisions"]:
         L.append("None: every table agreed wherever nodes overlapped.")

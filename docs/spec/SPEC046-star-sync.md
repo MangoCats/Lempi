@@ -46,6 +46,8 @@ Two refinements, both found in the first trial on 2026-09-26:
 
 **Machine-scope columns never merge** `[SPEC-DF-030]`: `files.path`, `size_bytes`, `mtime` and `last_seen` are each machine's own, and the hub keeps the desktop's.
 
+**`[SPEC-STAR-049]` A passage id is local, so a node's ids are translated before its rows join the hub** `[SPEC-DF-035]`. Found 2026-09-26: the four locally ingested Frisina tracks were inducted separately on the desktop and on `lempi02w`, and received their ids in a different order. `lempi02w`'s passage 16407 is the hub's 16409, and its plays of 16407 would otherwise count against a different song. For each listener row naming a passage, the node's own catalogue gives the passage's file (by `audio_md5`). Where the hub's passage of that id lies in a different file, the row is translated to the hub's passage on the node's file with the same kind and the same position among that file's passages. A passage the hub no longer has — a capture re-cut since — keeps its id, which then matches nothing, and is counted in the report. A merge with a catalogue half translates first, then merges.
+
 **`[SPEC-STAR-045]` Why events stay home.** Each node's rotation is built from what *that node* played `[REQ-AND-190]`. Pushing the whole household's plays to every node would make a song played in the kitchen rest in the study. That may be wanted one day, but it is a behaviour change, not a recovery. The hub keeps the union all the same, so that no node's history exists in only one place again.
 
 ## 3. Removals, which a timestamp cannot show

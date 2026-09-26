@@ -190,10 +190,49 @@ def test_receivers(tmp):
           f"the stale value is listed for the person, and only it: {rd}")
 
 
+def test_translation(tmp):
+    """[SPEC-STAR-049]: two files inducted in opposite order on the desktop
+    and on an appliance -- the same passage id is different music."""
+    base, desk, app = (os.path.join(tmp, f"t-{n}.cat") for n in ("base", "desk", "app"))
+    cat(base)
+    cat(desk, "INSERT INTO files VALUES (1,'A','C:/a.mp3',100)", "INSERT INTO files VALUES (2,'B','C:/b.mp3',100)",
+        "INSERT INTO passages VALUES (1,1000,'ingest')", "INSERT INTO passages VALUES (2,1000,'ingest')")
+    c = sqlite3.connect(desk)
+    c.execute("ALTER TABLE passages ADD COLUMN file_id INTEGER")
+    c.execute("ALTER TABLE passages ADD COLUMN kind TEXT")
+    c.execute("ALTER TABLE passages ADD COLUMN start_ms INTEGER")
+    c.execute("UPDATE passages SET file_id = passage_id, kind = 'radio', start_ms = 0")
+    c.commit()
+    c.close()
+    cat(app, "INSERT INTO files VALUES (1,'B','/b.mp3',100)", "INSERT INTO files VALUES (2,'A','/a.mp3',100)",
+        "INSERT INTO passages VALUES (1,1000,'ingest')", "INSERT INTO passages VALUES (2,1000,'ingest')")
+    c = sqlite3.connect(app)
+    for s in ("ALTER TABLE passages ADD COLUMN file_id INTEGER", "ALTER TABLE passages ADD COLUMN kind TEXT",
+              "ALTER TABLE passages ADD COLUMN start_ms INTEGER",
+              "UPDATE passages SET file_id = passage_id, kind = 'radio', start_ms = 0"):
+        c.execute(s)
+    c.commit()
+    c.close()
+    dl, al = os.path.join(tmp, "t-desk.lis"), os.path.join(tmp, "t-app.lis")
+    db(dl)
+    db(al, "INSERT INTO listener_play_history VALUES (1,5000,1,'rec-B',100,200,'auto')")
+    out = os.path.join(tmp, "t-out")
+    rep = sm.build({"hub_state_from": "desktop",
+                    "nodes": [dict(name="desktop", listener=dl),
+                              dict(name="app", listener=al, catalogue=app)],
+                    "catalogue": dict(base=base, machine_from="desktop", nodes=[
+                        dict(name="desktop", library=desk), dict(name="app", library=app, role="receiver")])},
+                   out)
+    got = rows(os.path.join(out, "listener.db"), "SELECT passage_id, mbid FROM listener_play_history")
+    check(got == [(2, "rec-B")], f"the appliance's play of its passage 1 (file B) is the hub's passage 2: {got}")
+    check(rep.data["translations"]["app"]["ids"] == [[1, 2], [2, 1]], "and the translation is reported")
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp()
     test_catalogue(tmp)
     test_receivers(tmp)
+    test_translation(tmp)
     manifest, inputs = fleet(tmp)
     before = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in inputs}
     out = os.path.join(tmp, "out")
