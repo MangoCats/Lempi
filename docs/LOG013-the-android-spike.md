@@ -107,8 +107,17 @@ cable.
    first callbacks from a ring the engine had only begun to fill, which is the
    remedy `[REQ-AUD-142]` names if the transient proves audible. *Built:* the
    callback now holds a start, silent and uncounted, until the ring holds two
-   callbacks' worth, and gives up after about two seconds. The phone has not
-   confirmed it yet.
+   callbacks' worth, and gives up after about two seconds. *Confirmed on the
+   Pis 2026-09-26*, with `618fd14` deployed to all three. Five ordinary
+   restarts (lempi02w once, bose twice, lp3-wifi twice), two of them resuming
+   40–60 s into a passage, all counted **0** underrun samples and 0
+   recoveries. There is no same-day baseline from the old build on the Pis,
+   only LOG009's "startup transient". The one exception was the deploy's own
+   restart on the two overlay nodes: 4,096–8,192 samples and one recovery,
+   while `deploy-appliance.sh` was remounting and writing the read-only
+   layer. It restarts before it persists, deliberately, so that only a binary
+   proven to run is made durable, and a glitch during a deploy is that
+   order's price. The phone has not confirmed it yet.
 3. **`[LOG-SPK-920]` "The skin controlling it"** `[REQ-AND-530]`. *Closed
    2026-09-26:* the maintainer confirmed by hand, in the WebView, that pause,
    play, skip, volume and seek all work. With it the spike passes.
