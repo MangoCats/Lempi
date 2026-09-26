@@ -44,7 +44,8 @@ The one payload `[SPEC-DF-065]` promises and does not contain. Written because `
     "source": "local:ingest", "artists": [],
     "flavor": [{ "characteristic": "danceability", "class": "danceable",
                  "value": 0.9992…, "source": "local:essentia-2.1-beta2+gaia-beta1",
-                 "accuracy": null }]
+                 "accuracy": null }],
+    "lyrics": { "text": "…", "source": "mulibplay", "fetched_at": "2026-…" }   // only if it has words
   }]
 }
 ```
@@ -75,6 +76,8 @@ The one payload `[SPEC-DF-065]` promises and does not contain. Written because `
 
 **`[SPEC-PL-050]` `tags` travel although they are re-derivable, and the reason is a measured one.** The four reference recordings have **no artists at all** in `recording_artists`: they carry `local:audio:` ids and never met MusicBrainz. The player resolves a display name MusicBrainz → tag → filename, so the file's own `artist` tag is the only place *"Gerardo Frisina"* exists. Omitting it would land the music artist-less until the receiver ran a probe pass — recovering what the sender already knew. The cost is 127 bytes per track.
 
+**`[SPEC-PL-052]` `lyrics` travel on their recording** `[SPEC-LYR-025]`, emitted since 2026-09-25 so a phone has words without writing them beside the audio `[REQ-AND-202]`. Absent, not `null`, when a recording has none — the common case. A receiver ranks them as it ranks flavor `[SPEC-DF-070]`: a `manual` text is kept, otherwise the later `fetched_at` wins, so a resend changes nothing.
+
 ---
 
 ## 4. Acceptance
@@ -90,6 +93,7 @@ The one payload `[SPEC-DF-065]` promises and does not contain. Written because `
 | credit | `mbid`, `weight`, `source` |
 | recording | `mbid`, `title`, `source` |
 | flavor | `characteristic`, `class`, `value`, `source` |
+| lyrics, where present | `text`, `source`, `fetched_at` |
 
 *Unresolvable conflict* — a payload disagreeing with **itself**. `[SPEC-DF-070]` ranks a payload against the receiver's values by provenance then recency; nothing ranks it against itself, so two titles for one mbid have equal claim and choosing either would be a guess recorded as a fact. CHECK violations belong here too: a row SQLite would refuse is not a value to reconcile.
 

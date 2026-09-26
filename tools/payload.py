@@ -54,7 +54,17 @@ REQUIRED = {
     "credit": ("mbid", "weight", "source"),
     "recording": ("mbid", "title", "source"),
     "flavor": ("characteristic", "class", "value", "source"),
+    # Optional as a whole -- most recordings have no words -- but a `lyrics`
+    # object that is present must be a whole row `[SPEC-LYR-025]`.
+    "lyrics": ("text", "source", "fetched_at"),
 }
+
+
+def has_table(conn: sqlite3.Connection, table: str) -> bool:
+    """`lyrics` is created by `import_lyrics.py` on first use, so a library
+    that never imported any has no such table -- and no words to send."""
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone() is not None
 
 
 def has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
@@ -138,6 +148,7 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
             "passages": passages,
         })
 
+    have_lyrics = has_table(conn, "lyrics")
     recordings = []
     for mbid in sorted(wanted):
         r = conn.execute("SELECT * FROM recordings WHERE mbid = ?", (mbid,)).fetchone()
@@ -146,7 +157,7 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
             # in the source, not something to paper over on the way out.
             print(f"  WARN no recordings row for {mbid}", file=sys.stderr)
             continue
-        recordings.append({
+        rec = {
             "mbid": r["mbid"],
             "title": r["title"],
             "length_ms": r["length_ms"],
@@ -164,7 +175,17 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
                 for v in conn.execute(
                     "SELECT * FROM flavor WHERE subject_kind = 'recording' AND subject_id = ? "
                     "ORDER BY characteristic, class", (mbid,))],
-        })
+        }
+        # The words, on the recording they belong to `[SPEC-LYR-025]`: class C,
+        # so they travel, and a phone keeps them in its private database
+        # rather than beside the audio `[REQ-AND-202]`. Omitted, not null, when
+        # there are none -- absent is the common case, not a gap.
+        w = conn.execute("SELECT text, source, fetched_at FROM lyrics WHERE mbid = ?",
+                         (mbid,)).fetchone() if have_lyrics else None
+        if w is not None:
+            rec["lyrics"] = {"text": w["text"], "source": w["source"],
+                             "fetched_at": w["fetched_at"]}
+        recordings.append(rec)
 
     return {
         "payload_version": PAYLOAD_VERSION,
@@ -226,6 +247,8 @@ def missing_required(payload: dict) -> list[str]:
         check("recording", r, r.get("mbid", "<no mbid>"))
         for v in r.get("flavor", []):
             check("flavor", v, r.get("mbid", "<no mbid>"))
+        if r.get("lyrics") is not None:
+            check("lyrics", r["lyrics"], r.get("mbid", "<no mbid>"))
     return out
 
 

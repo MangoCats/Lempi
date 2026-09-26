@@ -148,7 +148,40 @@ def test_byte_hash_is_optional_but_must_be_usable():
               f"sha256={bad!r}: got {got}")
 
 
+def test_lyrics_travel_on_their_recording():
+    """`[SPEC-LYR-025]`, `[REQ-AND-202]`: a recording's words ride on it,
+    absent when it has none or the library has no `lyrics` table at all, and
+    a partial `lyrics` object is refused as any partial row is.
+    """
+    def library(with_table):
+        conn = make_db(":memory:", SCHEMA)
+        conn.execute("INSERT INTO passages VALUES (1,1,'radio',0,10000,NULL,NULL,NULL,'x',"
+                     "20,20,'exponential','exponential')")
+        for m in ("m1", "m2"):
+            conn.execute("INSERT INTO recordings VALUES (?,'t',NULL,'s')", (m,))
+            conn.execute("INSERT INTO passage_recordings VALUES (1,?,1.0,'s')", (m,))
+        if with_table:
+            conn.execute("CREATE TABLE lyrics (mbid TEXT PRIMARY KEY, text TEXT NOT NULL, "
+                         "source TEXT NOT NULL, fetched_at TEXT NOT NULL)")
+            conn.execute("INSERT INTO lyrics VALUES ('m1','la la','mulibplay','2026-09-01T00:00:00+00:00')")
+        return conn
+
+    recs = {r["mbid"]: r for r in pl.build(library(True), ["md5"])["recordings"]}
+    check(recs["m1"].get("lyrics") == {"text": "la la", "source": "mulibplay",
+                                       "fetched_at": "2026-09-01T00:00:00+00:00"},
+          f"m1 lyrics: {recs['m1'].get('lyrics')!r}")
+    check("lyrics" not in recs["m2"], "a recording without words must carry no lyrics key")
+    payload = pl.build(library(False), ["md5"])
+    check(all("lyrics" not in r for r in payload["recordings"]),
+          "a library without the table must send no lyrics")
+    payload = pl.build(library(True), ["md5"])
+    del payload["recordings"][0]["lyrics"]["source"]
+    check(pl.compatible(payload) == ["m1: missing lyrics.source"],
+          f"partial lyrics: {pl.compatible(payload)}")
+
+
 def main() -> int:
+    test_lyrics_travel_on_their_recording()
     test_fade_travels_when_the_schema_has_it()
     test_fade_absent_from_a_pre_migration_source()
     test_committed_fixture_09_round_trips()

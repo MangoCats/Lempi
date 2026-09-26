@@ -53,6 +53,8 @@ share them. This is the same scope `flavor` and `recordings` already use.
 about a recording, like a title or a flavor vector — not an account of one
 person's listening `[SPEC-DF-055]`. A payload carrying a recording should carry
 its words, and `[SPEC-PL-*]` gains a `lyrics` field on the recording object.
+*Built 2026-09-25* as `[SPEC-PL-052]`: `payload.py` emits it and
+`lempi-core`'s bundle import lands it.
 
 > At an average 1,140 bytes over 2,265 recordings this is about 2.6 MB — a
 > rounding error beside the audio, and worth measuring again if a source with

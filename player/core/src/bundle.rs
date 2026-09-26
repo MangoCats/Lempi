@@ -40,6 +40,15 @@ CREATE TABLE IF NOT EXISTS imported_payloads (
     encodings       INTEGER NOT NULL,
     body            TEXT NOT NULL,
     imported_at     TEXT NOT NULL
+);
+-- The words a bundle carries `[SPEC-LYR-025]`. The same shape
+-- `tools/import_lyrics.py` creates on Vipunen's side, and created here for
+-- the same reason: a receiver that has never been sent any has no table.
+CREATE TABLE IF NOT EXISTS lyrics (
+    mbid       TEXT PRIMARY KEY,
+    text       TEXT NOT NULL,
+    source     TEXT NOT NULL,
+    fetched_at TEXT NOT NULL
 )";
 
 /// What became of one encoding `[SPEC-PL-075]`.
@@ -217,6 +226,14 @@ pub fn unacceptable(doc: &Value) -> Vec<String> {
             if let Some(v) = f.get("value").and_then(|v| v.as_f64()) {
                 if !(0.0..=1.0).contains(&v) {
                     out.push(format!("{mbid}: flavor value {v} outside 0..1"));
+                }
+            }
+        }
+        // Optional as a whole; present means a whole row `[SPEC-LYR-025]`.
+        if let Some(w) = r.get("lyrics").filter(|w| !w.is_null()) {
+            for k in ["text", "source", "fetched_at"] {
+                if !req(w, k) {
+                    out.push(format!("{mbid}: missing lyrics.{k}"));
                 }
             }
         }
@@ -557,6 +574,44 @@ fn upsert_recording(tx: &rusqlite::Transaction, r: &Value, rep: &mut Report) -> 
         .map_err(|e| e.to_string())?;
         rep.rows_written += 1;
     }
+    if let Some(w) = r.get("lyrics").filter(|w| !w.is_null()) {
+        upsert_lyrics(tx, &mbid, w, rep)?;
+    }
+    Ok(())
+}
+
+/// A recording's words `[SPEC-LYR-025]`, into this database -- which on a
+/// phone is private storage `[REQ-AND-202]`.
+///
+/// The flavor rule, ranked the same way `[SPEC-DF-070]`: a `manual` text is
+/// never replaced, and otherwise the more recently fetched text wins -- so a
+/// resend of the same bundle changes nothing, and a corrected source reaches
+/// the phone on the next one.
+fn upsert_lyrics(tx: &rusqlite::Transaction, mbid: &str, w: &Value, rep: &mut Report) -> Result<(), String> {
+    let (text, source, fetched) = (str_of(w, "text"), str_of(w, "source"), str_of(w, "fetched_at"));
+    let local: Option<(String, String)> = tx
+        .query_row("SELECT source, fetched_at FROM lyrics WHERE mbid = ?1", params![mbid], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .ok();
+    match local {
+        Some((src, _)) if src == "manual" => {
+            rep.kept_local += 1;
+            return Ok(());
+        }
+        // ISO-8601 in one zone compares as text; an older or equal arrival is
+        // not news.
+        Some((_, at)) if at >= fetched => return Ok(()),
+        _ => {}
+    }
+    tx.execute(
+        "INSERT INTO lyrics (mbid, text, source, fetched_at) VALUES (?1, ?2, ?3, ?4) \
+         ON CONFLICT(mbid) DO UPDATE SET text = excluded.text, \
+         source = excluded.source, fetched_at = excluded.fetched_at",
+        params![mbid, text, source, fetched],
+    )
+    .map_err(|e| e.to_string())?;
+    rep.rows_written += 1;
     Ok(())
 }
 
@@ -1015,6 +1070,56 @@ mod tests {
         assert!(matches!(rep.outcomes.as_slice(), [(_, Landed::Corrupt { .. })]),
                 "{:?}", rep.outcomes);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `one_encoding_bundle` with words on its recording `[SPEC-LYR-025]`.
+    fn with_lyrics(mut d: Value, text: &str, source: &str, at: &str) -> Value {
+        d["recordings"][0]["lyrics"] =
+            serde_json::json!({"text": text, "source": source, "fetched_at": at});
+        d
+    }
+
+    fn words(c: &Connection, mbid: &str) -> Option<(String, String)> {
+        c.query_row("SELECT text, source FROM lyrics WHERE mbid = ?1", params![mbid], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .ok()
+    }
+
+    /// Lyrics reach the receiver's own database `[REQ-AND-202]`; a newer
+    /// fetch replaces them, an older or equal one does not, and a `manual`
+    /// text is never replaced `[SPEC-DF-070]`.
+    #[test]
+    fn lyrics_arrive_with_their_recording_and_rank_by_provenance_then_recency() {
+        let mut c = empty_library();
+        let (dir, sha) = one_file("lyrics");
+        let base = || with_sha256(one_encoding_bundle("md5-l", "m1", 0.5, "computed:x@1"), &sha);
+
+        let first = with_lyrics(base(), "old words", "mulibplay", "2026-09-01T00:00:00+00:00");
+        import_with(&mut c, &first, "b", &dir, true, None).unwrap();
+        assert_eq!(words(&c, "m1"), Some(("old words".into(), "mulibplay".into())));
+
+        let stale = with_lyrics(base(), "stale", "mulibplay", "2026-08-01T00:00:00+00:00");
+        import_with(&mut c, &stale, "b", &dir, true, None).unwrap();
+        assert_eq!(words(&c, "m1").unwrap().0, "old words", "an older fetch is not news");
+
+        let newer = with_lyrics(base(), "new words", "mulibplay", "2026-09-20T00:00:00+00:00");
+        import_with(&mut c, &newer, "b", &dir, true, None).unwrap();
+        assert_eq!(words(&c, "m1").unwrap().0, "new words", "a corrected source must arrive");
+
+        c.execute("UPDATE lyrics SET source = 'manual' WHERE mbid = 'm1'", []).unwrap();
+        let later = with_lyrics(base(), "overwrite?", "mulibplay", "2026-09-24T00:00:00+00:00");
+        let rep = import_with(&mut c, &later, "b", &dir, true, None).unwrap();
+        assert_eq!(words(&c, "m1"), Some(("new words".into(), "manual".into())));
+        assert_eq!(rep.kept_local, 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn partial_lyrics_are_refused() {
+        let mut d = with_lyrics(one_encoding_bundle("a", "m1", 0.5, "s"), "w", "s", "t");
+        d["recordings"][0]["lyrics"].as_object_mut().unwrap().remove("fetched_at");
+        assert_eq!(unacceptable(&d), vec!["m1: missing lyrics.fetched_at"]);
     }
 
     /// Present and unusable is refused whole, like a bad duration.
