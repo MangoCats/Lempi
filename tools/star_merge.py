@@ -519,6 +519,14 @@ def build_catalogue(cat: dict, out: str, rep: Report):
     dest.close()
 
 
+def _show(row) -> str:
+    """A row for a person to read: a blob (cover art) as its size, not its bytes."""
+    if row is None:
+        return "none"
+    return "{" + ", ".join(f"{k}: " + (f"<{len(v)} bytes>" if isinstance(v, (bytes, bytearray)) else repr(v))
+                           for k, v in row.items()) + "}"
+
+
 def _literal(dflt):
     """A column's DEFAULT as PRAGMA table_info reports it: '20', "'exponential'",
     or None."""
@@ -582,7 +590,7 @@ def catalogue_section(c: dict) -> list[str]:
         L.append("None: wherever two copies changed a row, they changed it the same way.")
     for x in c["conflicts"]:
         L.append(f"- `{x['table']}` {x['key']}: chose **{x['chose']}** -- " + "; ".join(
-            f"{n}: {'deleted' if v is None else v}" for n, v in sorted(x["values"].items())))
+            f"{n}: {'deleted' if v is None else _show(v)}" for n, v in sorted(x["values"].items())))
     rd = c.get("receiver_differences", [])
     L += ["", "## Receiver differences, for the person", "",
           "Values an appliance holds that differ from both the ancestor and the merged result.",
@@ -596,8 +604,8 @@ def catalogue_section(c: dict) -> list[str]:
     for (t, n), xs in sorted(by.items()):
         L.append(f"- `{t}` on {n}: {len(xs)} row(s)")
         for x in xs[:25]:
-            L.append(f"  - {x['key']}: {n} has {x['receiver_value']}; merged "
-                     f"{'has none' if x['merged_value'] is None else 'has ' + str(x['merged_value'])}")
+            L.append(f"  - {x['key']}: {n} has {_show(x['receiver_value'])}; merged "
+                     f"{'has none' if x['merged_value'] is None else 'has ' + _show(x['merged_value'])}")
         if len(xs) > 25:
             L.append(f"  - ... and {len(xs) - 25} more in report.json")
     return L

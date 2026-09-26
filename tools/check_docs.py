@@ -397,6 +397,9 @@ def lempi_docs():
             if name.endswith(".md"):
                 out.append(os.path.relpath(os.path.join(root, name)).replace("\\", "/"))
     out = [p for p in out if INHERITED_DIR.replace("\\", "/") not in p]
+    # Untracked recovery evidence [SPEC-STAR-075]: merge reports generated from
+    # snapshots, not documents -- and CI, on a clean checkout, never sees them.
+    out = [p for p in out if not p.startswith("data/recovery/")]
     reg = os.path.join(INHERITED_DIR, "README.md")
     if os.path.exists(reg):
         out.append(reg)
