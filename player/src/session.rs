@@ -287,6 +287,12 @@ pub struct Session {
     /// the restore could not rebuild, instead of leaving the table naming
     /// passages that are not queued.
     saved_queue: Vec<i64>,
+    /// The random-refill failure being repeated, and how many times. Refill
+    /// runs every tick, so a query that cannot succeed -- a catalogue missing
+    /// a column, measured 2026-09-26 on the phone spike -- wrote the same line
+    /// **1,724 times in about twenty seconds**. Said once, again only if the
+    /// message changes, and once more with the count when it clears.
+    refill_failing: Option<(String, u64)>,
 }
 
 impl Session {
@@ -382,6 +388,7 @@ impl Session {
             library: library.to_path_buf(),
             rebuild: None,
             saved_queue: Vec::new(),
+            refill_failing: None,
         })
     }
 
@@ -796,15 +803,30 @@ impl Session {
         let still_short = engine.shortfall();
         if still_short > 0 {
             match self.lib.random_radio(still_short) {
-                Ok(entries) => entries.into_iter().for_each(|mut e| {
-                    // Also an auto-selection, with no program steering it
-                    // `[REQ-VIS-300]` -- the same "auto" the main loop above
-                    // uses when no program is in force.
-                    e.selected_by = Some("auto".into());
-                    Self::describe(&self.lib, &mut e);
-                    engine.enqueue(e);
-                }),
-                Err(e) => tracing::error!("refill: {e}"),
+                Ok(entries) => {
+                    if let Some((_, n)) = self.refill_failing.take() {
+                        tracing::info!("refill: recovered after {n} failed attempt(s)");
+                    }
+                    entries.into_iter().for_each(|mut e| {
+                        // Also an auto-selection, with no program steering it
+                        // `[REQ-VIS-300]` -- the same "auto" the main loop
+                        // above uses when no program is in force.
+                        e.selected_by = Some("auto".into());
+                        Self::describe(&self.lib, &mut e);
+                        engine.enqueue(e);
+                    })
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    match &mut self.refill_failing {
+                        Some((last, n)) if *last == msg => *n += 1,
+                        _ => {
+                            tracing::error!(
+                                "refill: {msg} (repeats are counted, not logged, until it clears)");
+                            self.refill_failing = Some((msg, 1));
+                        }
+                    }
+                }
             }
         }
         self.remember_queue(&*engine);

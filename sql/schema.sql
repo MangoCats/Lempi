@@ -106,6 +106,14 @@ CREATE TABLE IF NOT EXISTS passages (
     gain_db       REAL,
     -- 'manual' outranks everything and is never silently recomputed
     boundary_src  TEXT    NOT NULL,
+    -- This passage's own volume envelope [SPEC-SC-046], [SPEC-SUI-226].
+    -- Missing here until 2026-09-26, while tools/add_fade_columns.py added
+    -- them to every existing library: a library built from this file could
+    -- not refill its queue at all, which the Android spike found.
+    fade_in_ms     INTEGER NOT NULL DEFAULT 20,
+    fade_out_ms    INTEGER NOT NULL DEFAULT 20,
+    fade_in_curve  TEXT    NOT NULL DEFAULT 'exponential',
+    fade_out_curve TEXT    NOT NULL DEFAULT 'exponential',
     CHECK (end_ms > start_ms)
 );
 CREATE INDEX IF NOT EXISTS passages_file ON passages(file_id);

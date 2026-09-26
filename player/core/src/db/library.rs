@@ -2621,4 +2621,33 @@ mod tests {
         let sib2 = by_span.sibling.expect("passage 10 must find passage 11 by exact span");
         assert_eq!((sib2.passage_id, sib2.kind.as_str()), (11, "album"));
     }
+
+    /// **The canonical schema must be one the player can queue from.**
+    /// `sql/schema.sql` lacked the four fade columns until 2026-09-26, while
+    /// `tools/add_fade_columns.py` added them to every library that existed --
+    /// so the only libraries missing them were new ones, and nothing built a
+    /// library from that file and asked it for a passage. The Android spike
+    /// did, and its refill failed on every tick.
+    #[test]
+    fn a_library_built_from_the_canonical_schema_can_fill_a_queue() {
+        let dir = std::env::temp_dir().join(format!("lempi-schema-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fresh.db");
+        let _ = std::fs::remove_file(&path);
+        {
+            let c = rusqlite::Connection::open(&path).unwrap();
+            c.execute_batch(include_str!("../../../../sql/schema.sql")).unwrap();
+            c.execute_batch(
+                "INSERT INTO files (file_id,audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen)
+                   VALUES (1,'m','/x.mp3',1,1.0,'mp3',1000,'t','t');
+                 INSERT INTO passages (passage_id,file_id,kind,start_ms,end_ms,boundary_src)
+                   VALUES (1,1,'radio',0,1000,'x');",
+            )
+            .unwrap();
+        }
+        let lib = Library::open(&path).unwrap();
+        let got = lib.random_radio(1).expect("the refill query must run against the canonical schema");
+        assert_eq!(got.len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
