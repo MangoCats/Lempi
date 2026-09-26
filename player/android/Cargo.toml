@@ -2,15 +2,14 @@
 name = "lempi-android"
 version = "0.1.0"
 edition = "2021"
-description = "The phone's way into the player: JNI entries for the Android app"
+description = "The phone's way into the player: its UniFFI interface, and the JNI init"
 license = "MIT"
 
-# **For the device spike `[GDE-APP-020]`, and shaped to be replaced.**
-# `[REQ-AND-410]` puts the app's API behind a generated interface (UniFFI) with
-# one hand-written JNI entry for the Android context. The spike asks whether
-# the player runs on a phone at all -- audibly, screen off, under a WebView --
-# and three hand-written entries answer that with no generator to set up
-# first. If it passes, `start`/`stop` move behind UniFFI and `init` stays.
+# **`[REQ-AND-410]`: a generated interface, and one hand-written entry.** The
+# device spike `[GDE-APP-020]` ran on three hand-written JNI entries, and
+# passed on 2026-09-26. Since then `start`, `command`, `state` and `stop` are
+# UniFFI exports, generated for Kotlin, and `init` alone stays hand-written,
+# because it takes the Android context.
 #
 # A workspace member, not a default one: `cargo test` at the root does not
 # build it, and on any host but Android it compiles to an empty library, since
@@ -31,3 +30,8 @@ tracing = { version = "0.1", default-features = false, features = ["std"] }
 jni-sys = "0.4"
 ndk-context = "0.1"
 libc = "0.2"
+# The app's interface [REQ-AND-410]: `start`, `command`, `state` and `stop`,
+# generated for Kotlin by `uniffi-bindgen` from this library. `init` stays a
+# hand-written JNI entry, since it takes the Android context. Pinned: the
+# generator must be the same release.
+uniffi = "=0.32.2"

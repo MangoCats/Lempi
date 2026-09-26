@@ -1,11 +1,14 @@
 # The Android app
 
-The Android app `[REQ-AND-400]`. For now it is the **device spike**
-`[GDE-APP-020]`, `[REQ-AND-530]`: the player in a foreground service, the lempi
-skin in a WebView, and three hand-written JNI entries in
-[`player/android`](../player/android/src/lib.rs). It is Java, with no AndroidX,
-so the spike downloads and depends on as little as possible. Kotlin and UniFFI
-follow once the spike passes `[REQ-AND-410]`.
+The Android app `[REQ-AND-400]`: the player in a foreground service, the
+lempi skin in a WebView, and a notification that shows what is playing and
+carries Pause, Skip and Stop. It is Kotlin, with no AndroidX, and reaches the
+player through a **generated interface** `[REQ-AND-410]`: `start`, `command`,
+`set_volume`, `state` and `stop` are UniFFI exports in
+[`player/android`](../player/android/src/lib.rs), and `init`, which hands over
+the Android context, is the one hand-written JNI entry. The device spike
+`[GDE-APP-020]` that came before it passed on 2026-09-26 (LOG013); its
+measuring scripts are in `spike/`.
 
 Everything runs in the `app` stage of
 [`build/Dockerfile.android`](../build/Dockerfile.android), so nothing Android
@@ -19,13 +22,18 @@ docker run -d --name lempi-adb -v "<repo>":/w -v "<music>":/music:ro -v "<work>"
     -v lempi-adb:/root/.android -v lempi-gradle:/root/.gradle \
     lempi-android-app sh -c 'adb start-server; sleep infinity'
 
-# the library, stripped, for API 30
-docker exec -w /w/player -e CARGO_PROFILE_RELEASE_STRIP=symbols lempi-adb \
-    cargo ndk -t arm64-v8a -P 30 -o /w/android/app/src/main/jniLibs \
-    build --release -p lempi-android --target-dir /w/player/target/android-app
-# the APK
-docker exec -w /w/android lempi-adb ./gradlew --no-daemon assembleDebug -PlempiCommit=<sha>
+# the library, its Kotlin interface, and the APK -- android/build.sh
+docker exec lempi-adb sh /w/android/build.sh <sha>
 ```
+
+`build.sh` makes one unstripped cargo build, generates the Kotlin from it with
+the workspace's `uniffi-bindgen` into the app's build output, strips a
+copy into `jniLibs`, and runs Gradle. The generated Kotlin is never committed:
+it is always the interface of the library it ships with. UniFFI reads that
+interface out of the library's symbols, so it cannot be generated from the
+stripped copy. The image's Rust is 1.90, and `Cargo.lock` holds
+`cargo-platform` at 0.3.2, since 0.3.3, which `uniffi` 0.32.2 would take,
+needs 1.91.
 
 Run it as **one long-lived container**, not one `docker run` per command.
 Every command then shares one adb server and one connection to the phone.

@@ -1,20 +1,20 @@
-//! The phone's way into the player `[REQ-AND-410]`, as the device spike needs
-//! it `[GDE-APP-020]`: three JNI entries, called from
-//! `io.github.mangocats.lempi.Lempi`.
+//! The phone's way into the player `[REQ-AND-410]`: a generated interface for
+//! everything the app asks of it, and one hand-written JNI entry.
 //!
-//! * `init` -- once per process, before anything else. Hands the Android
-//!   context to `ndk_context`, where cpal's AAudio backend reads it back
-//!   `[GDE-HST-330]`, and sends the player's log lines to a file: Android
-//!   discards a native library's stderr, so without this the spike would be
-//!   measured blind.
-//! * `start` -- a player, with its web server on loopback behind the launch
-//!   key `[REQ-AND-160]`, writing nothing beside the audio `[REQ-AND-200]`.
-//! * `stop` -- persist and shut down.
+//! * `init` -- JNI, from `io.github.mangocats.lempi.Lempi`, once per process
+//!   and before anything else. Hands the Android context to `ndk_context`,
+//!   where cpal's AAudio backend reads it back `[GDE-HST-330]`, and sends the
+//!   player's log lines to a file, since Android discards a native library's
+//!   stderr. It is the one entry UniFFI cannot make: it takes the context.
+//! * `start`, `command`, `set_volume`, `state`, `stop` -- UniFFI exports,
+//!   generated for Kotlin by the workspace's `uniffi-bindgen`. A player with
+//!   its web server on loopback behind the launch key `[REQ-AND-160]`,
+//!   writing nothing beside the audio `[REQ-AND-200]`.
 //!
-//! **Refused, not crashed.** `start` before `init` returns a named error rather
-//! than failing inside the audio stack `[REQ-AND-410]`, and a panic is caught
-//! at the boundary and returned as text: unwinding into the JVM is undefined
-//! behaviour, not an error the app could show.
+//! **Refused, not crashed.** `start` before `init` is refused with a named
+//! error rather than failing inside the audio stack `[REQ-AND-410]`, and a
+//! panic is caught at the boundary and returned as an error: unwinding into
+//! the JVM is undefined behaviour, not an error the app could show.
 #![cfg(target_os = "android")]
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
@@ -24,7 +24,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-use jni_sys::{jclass, jint, jobject, jstring, JNIEnv, JavaVM};
+use jni_sys::{jclass, jobject, jstring, JNIEnv, JavaVM};
+use lempi_player::engine::Command;
 use lempi_player::host::{Config, Player};
 
 /// Set once `init` has handed over the context. `ndk_context` asserts on a
@@ -58,7 +59,7 @@ unsafe fn outcome(env: *mut JNIEnv, r: Result<(), String>) -> jstring {
 }
 
 /// Run `f`, turning a panic into an error message.
-fn guarded(f: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+fn guarded<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|p| {
         let why = p
             .downcast_ref::<&str>()
@@ -111,26 +112,73 @@ pub unsafe extern "system" fn Java_io_github_mangocats_lempi_Lempi_init(
     outcome(env, r)
 }
 
-/// `static native String start(String listener, String library, int port, String key)`
-#[no_mangle]
-pub unsafe extern "system" fn Java_io_github_mangocats_lempi_Lempi_start(
-    env: *mut JNIEnv,
-    _class: jclass,
-    listener: jstring,
-    library: jstring,
-    port: jint,
-    key: jstring,
-) -> jstring {
-    let (listener, library, key) = (text(env, listener), text(env, library), text(env, key));
-    let r = guarded(|| {
-        if CONTEXT.get().is_none() {
-            return Err("init was not called: the player needs the Android context before start"
-                .into());
+uniffi::setup_scaffolding!();
+
+/// Why a call was refused. Flat: Kotlin sees the variant and its message.
+#[derive(Debug, uniffi::Error)]
+#[uniffi(flat_error)]
+pub enum LempiError {
+    /// `init` has not handed over the Android context yet.
+    NotInitialised,
+    /// The player said no, or is not in the state the call needs.
+    Refused(String),
+}
+
+impl std::fmt::Display for LempiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LempiError::NotInitialised => {
+                f.write_str("init was not called: the player needs the Android context before start")
+            }
+            LempiError::Refused(why) => f.write_str(why),
         }
-        let (Some(listener), Some(library)) = (listener, library) else {
-            return Err("start needs both database paths".into());
-        };
-        let port = u16::try_from(port).map_err(|_| format!("{port} is not a port"))?;
+    }
+}
+
+impl From<String> for LempiError {
+    fn from(why: String) -> Self {
+        LempiError::Refused(why)
+    }
+}
+
+/// What is playing, for the notification and anything native the app shows.
+/// A fixed record rather than the engine's own state: the interface should
+/// not change each time the engine learns something new.
+#[derive(uniffi::Record)]
+pub struct NowPlaying {
+    pub playing: bool,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub position_ms: u64,
+    /// 0.0 to 1.0.
+    pub volume: f32,
+    pub queue_len: u32,
+}
+
+/// The transport, as the notification and a headset ask for it.
+#[derive(uniffi::Enum)]
+pub enum Transport {
+    Play,
+    Pause,
+    Skip,
+}
+
+fn with_player<T>(f: impl FnOnce(&Player) -> T) -> Result<T, LempiError> {
+    let slot = PLAYER.lock().map_err(|_| LempiError::Refused("the player lock is poisoned".into()))?;
+    match slot.as_ref() {
+        Some(p) => Ok(f(p)),
+        None => Err(LempiError::Refused("not started".into())),
+    }
+}
+
+/// Start the player, its web server on loopback `port` behind `key`.
+#[uniffi::export]
+pub fn start(listener: String, library: String, port: u16, key: String) -> Result<(), LempiError> {
+    if CONTEXT.get().is_none() {
+        tracing::error!("start refused: init was not called");
+        return Err(LempiError::NotInitialised);
+    }
+    let r = guarded(|| {
         let mut slot = PLAYER.lock().map_err(|_| "the player lock is poisoned".to_string())?;
         if slot.is_some() {
             return Err("already started".into());
@@ -149,7 +197,7 @@ pub unsafe extern "system" fn Java_io_github_mangocats_lempi_Lempi_start(
             web_port: Some(port),
             also_port_80: false,
             web_loopback_only: true,
-            web_secret: key,
+            web_secret: Some(key),
             writes_beside_audio: false,
             backup: true,
             tag_scan: false,
@@ -161,16 +209,53 @@ pub unsafe extern "system" fn Java_io_github_mangocats_lempi_Lempi_start(
     if let Err(e) = &r {
         tracing::error!("start refused: {e}");
     }
-    outcome(env, r)
+    r.map_err(LempiError::from)
 }
 
-/// `static native String stop()`
-#[no_mangle]
-pub unsafe extern "system" fn Java_io_github_mangocats_lempi_Lempi_stop(
-    env: *mut JNIEnv,
-    _class: jclass,
-) -> jstring {
-    let r = guarded(|| {
+/// Play, pause or skip.
+#[uniffi::export]
+pub fn command(what: Transport) -> Result<(), LempiError> {
+    with_player(|p| {
+        p.command(match what {
+            Transport::Play => Command::Play,
+            Transport::Pause => Command::Pause,
+            Transport::Skip => Command::Skip,
+        })
+    })
+}
+
+/// Master volume, 0.0 to 1.0; the engine clamps it.
+#[uniffi::export]
+pub fn set_volume(volume: f32) -> Result<(), LempiError> {
+    with_player(|p| p.command(Command::SetVolume(volume)))
+}
+
+/// What the engine last published; `None` when the player is not running.
+#[uniffi::export]
+pub fn state() -> Option<NowPlaying> {
+    with_player(|p| {
+        let s = p.state();
+        NowPlaying {
+            playing: s.playing,
+            // The queue entry's own precedence -- MusicBrainz, then the file's
+            // tags, then the filename -- so the notification names a passage
+            // as the skin does `[REQ-VIS-170]`. Found 2026-09-26: reading
+            // `mb_title` alone showed a raw filename where the skin said
+            // "Dear Mr. President".
+            title: s.current.as_ref().map(|c| c.title()),
+            artist: s.current.as_ref().and_then(|c| c.artist()),
+            position_ms: s.position_ms,
+            volume: s.volume,
+            queue_len: u32::try_from(s.queue_len).unwrap_or(u32::MAX),
+        }
+    })
+    .ok()
+}
+
+/// Persist and stop. Stopping a player that is not running is not an error.
+#[uniffi::export]
+pub fn stop() -> Result<(), LempiError> {
+    guarded(|| {
         let taken = PLAYER.lock().map_err(|_| "the player lock is poisoned".to_string())?.take();
         match taken {
             None => Ok(()),
@@ -183,6 +268,6 @@ pub unsafe extern "system" fn Java_io_github_mangocats_lempi_Lempi_stop(
                 }
             }
         }
-    });
-    outcome(env, r)
+    })
+    .map_err(LempiError::from)
 }

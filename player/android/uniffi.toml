@@ -1,0 +1,4 @@
+# The Kotlin that `uniffi-bindgen` generates from this library [REQ-AND-410].
+[bindings.kotlin]
+package_name = "io.github.mangocats.lempi.ffi"
+cdylib_name = "lempi_android"

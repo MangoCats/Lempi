@@ -1,0 +1,20 @@
+[package]
+name = "uniffi-bindgen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Generates the Kotlin side of lempi-android's interface [REQ-AND-410]"
+license = "MIT"
+
+# Run on the build host, never shipped: it reads the interface out of the
+# built Android library and writes the Kotlin that calls it. The version is
+# pinned to lempi-android's `uniffi`, since generator and scaffolding must be
+# the same release. A workspace member, not a default one, like
+# lempi-android: an ordinary `cargo test` does not build it.
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/main.rs"
+
+[dependencies]
+uniffi = { version = "=0.32.2", features = ["cli"] }
