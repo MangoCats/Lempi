@@ -51,7 +51,15 @@ The desktop's pair went missing when this repository was seeded; `data/README.md
 
 ## 4. Standing issues
 
-**`[FLT-ISS-010]` `bose`'s Wi-Fi died silently on 2026-09-26 at 11:33 EDT**, during a 21 MB snapshot copy, and stayed dead for two hours until a power cycle. Its journal is persistent (`/var/lempi/log/journal`), and the previous boot showed **the player playing normally throughout**, with not one Wi-Fi, NetworkManager or kernel message: the link failed without saying so. That is the fault `[BOS-OPS-110]` recorded, when reassociating fixed it. A sustained transfer may be what trips it, as it trips the Moto G's wireless debugging. A watchdog that reassociates when the gateway stops answering would recover it without a person; not yet built.
+**`[FLT-ISS-010]` `bose`'s Wi-Fi died silently on 2026-09-26 at 11:33 EDT**, during a 21 MB snapshot copy, and stayed dead for two hours until a power cycle. Its journal is persistent (`/var/lempi/log/journal`), and the previous boot showed **the player playing normally throughout**, with not one Wi-Fi, NetworkManager or kernel message: the link failed without saying so. That is the fault `[BOS-OPS-110]` recorded, when reassociating fixed it. A sustained transfer may be what trips it, as it trips the Moto G's wireless debugging.
+
+**`[FLT-ISS-015]` A Wi-Fi watchdog is a possible future feature, and how often the link dies decides it.** It would reassociate, or at worst reboot, when the gateway stops answering, and so recover a node without a person. It is not built: on 2026-09-26 there is one occurrence and no frequency to decide on. **At each new occurrence, add a row here and decide again** whether it is time to build it. Record the node, when, what it was doing, what brought it back and how long it was down, since those make the frequency and show whether load is the trigger.
+
+| # | when | node | doing | recovered by | down |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 1 | 2026-09-26 11:33 EDT | `bose` | a 21 MB snapshot copy over ssh | power cycle | about 2 h |
+
+Related but distinct, and not counted: on 2026-09-25 `bose` lost only *unmarked* traffic to `smartboardpc`, and one reassociation cleared it `[BOS-OPS-110]`. The link was up; the access point held stuck state.
 
 **`[FLT-ISS-020]` `smartboardpc` needs migrating** to this repository's player `[FLT-RUN-010]`, as `teacherslounge` was in TL001.
 
@@ -59,4 +67,4 @@ The desktop's pair went missing when this repository was seeded; `data/README.md
 
 ---
 
-**Traceability:** `[FLT-SHP-010]`, `[FLT-DAT-010]`, `[FLT-RUN-010]`, `[FLT-ISS-010..020]` · read from the machines 2026-09-26
+**Traceability:** `[FLT-SHP-010]`, `[FLT-DAT-010]`, `[FLT-RUN-010]`, `[FLT-ISS-010..030]` · read from the machines 2026-09-26

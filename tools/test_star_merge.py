@@ -219,13 +219,20 @@ def test_translation(tmp):
     out = os.path.join(tmp, "t-out")
     rep = sm.build({"hub_state_from": "desktop",
                     "nodes": [dict(name="desktop", listener=dl),
-                              dict(name="app", listener=al, catalogue=app)],
+                              dict(name="app", listener=al, catalogue=app, files=app)],
                     "catalogue": dict(base=base, machine_from="desktop", nodes=[
                         dict(name="desktop", library=desk), dict(name="app", library=app, role="receiver")])},
                    out)
-    got = rows(os.path.join(out, "listener.db"), "SELECT passage_id, mbid FROM listener_play_history")
-    check(got == [(2, "rec-B")], f"the appliance's play of its passage 1 (file B) is the hub's passage 2: {got}")
+    hub = rows(os.path.join(out, "listener.db"), "SELECT passage_id, mbid FROM listener_play_history")
+    check(hub == [], f"the appliance's plays stay its own, never the hub's [REQ-PD-113]: {hub}")
+    mine = os.path.join(out, "nodes", "app")
+    got = rows(os.path.join(mine, "listener.db"), "SELECT passage_id, mbid FROM listener_play_history")
+    check(got == [(2, "rec-B")], f"in its own copy, its play of its passage 1 (file B) is the hub's passage 2: {got}")
     check(rep.data["translations"]["app"]["ids"] == [[1, 2], [2, 1]], "and the translation is reported")
+    f = rows(os.path.join(mine, "library.db"), "SELECT file_id, audio_md5, path FROM files ORDER BY file_id")
+    check(f == [(1, "A", "/a.mp3"), (2, "B", "/b.mp3")],
+          f"its catalogue is the hub's, with its own paths matched by audio_md5, not file id: {f}")
+    check(not os.path.exists(os.path.join(out, "nodes", "desktop")), "the hub's own pair is not repeated")
 
 
 def main() -> int:
@@ -257,10 +264,16 @@ def main() -> int:
     check(o == [("Christmas",)], "field by field, a value beats NULL")
 
     h = rows(L, "SELECT play_id, played_at, heard_ms, selected_by FROM listener_play_history")
-    check(h == [(1, 1000, 150, "auto"), (2, 2000, 50, "auto")],
-          f"events: one play heard twice is one row, the larger heard_ms, renumbered: {h}")
+    check(h == [(7, 1000, 100, "auto")],
+          f"plays are the hub's own, b's neither merged nor shared [REQ-PD-113]: {h}")
     check(rows(L, "SELECT passage_id FROM player_state") == [(11,)],
           "node state comes from the hub's own node, not merged")
+    B = os.path.join(out, "nodes", "b", "listener.db")
+    hb = rows(B, "SELECT play_id, played_at, heard_ms FROM listener_play_history ORDER BY play_id")
+    check(hb == [(3, 1000, 150), (4, 2000, 50)], f"b's copy holds b's own plays, unchanged: {hb}")
+    check(rows(B, "SELECT passage_id FROM player_state") == [(22,)], "and b's own player state")
+    check(rows(B, "SELECT rotation FROM listener_preferences WHERE subject_id = 'X'") == [(2,)],
+          "and the household's edits, merged exactly as the hub's are")
 
     after = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in inputs}
     check(before == after, "no input may change")

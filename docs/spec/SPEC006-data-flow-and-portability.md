@@ -64,7 +64,7 @@ What the rule prevents is silent by construction. A stale or foreign `passage_id
 | **C · Segmentation** | DAO passage boundaries, Album/Radio duality, `lead_in_ms`/`lead_out_ms` | **Yes — the highest-value payload.** This is the manual labour that made induction painful `[GDE-BMK-050]`. Sharing it is the single biggest convenience win. |
 | **D · Listener state** | rotation/recovery/restraint, likes/dislikes, play history, programs | **Never.** |
 
-**`[SPEC-DF-055]` Class D never travels with music.** It describes *the listener*, not the music: personal, private, and meaningless to anyone else. A shared file carrying someone's play history would be both a privacy leak and noise. Listener state moves only by deliberate whole-`lempi.db` migration `[SPEC-DF-080]` or the class-D export `[SPEC-DF-090]`, both between a user's own machines.
+**`[SPEC-DF-055]` Class D never travels with music.** It describes *the listener*, not the music: personal, private, and meaningless to anyone else. A shared file carrying someone's play history would be both a privacy leak and noise. Listener state moves only by deliberate whole-`lempi.db` migration `[SPEC-DF-080]` or the class-D export `[SPEC-DF-090]`, both between a user's own machines. Even among those machines, a node's plays stay on that node `[REQ-PD-113]`; only the listener's edits travel, by star sync `[SPEC-STAR-040]`.
 
 **The rule:** *the transport carries facts about the music, never facts about the listener.*
 

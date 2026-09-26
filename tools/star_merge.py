@@ -9,7 +9,9 @@ order, and every rule that ties breaks the tie by node name
 [SPEC-STAR-030]. Every decision a rule makes is written to the report
 [SPEC-STAR-060].
 
-This is the listener half. The catalogue half follows the same shape.
+Beside the hub's own pair it writes each node's, in nodes/<name>/: the
+merged household edits with that node's own plays [REQ-PD-113], and the
+hub's catalogue with that node's own paths [SPEC-STAR-080].
 
 Usage:
   python tools/star_merge.py MANIFEST.json --out DIR
@@ -18,8 +20,12 @@ MANIFEST.json:
   {"nodes": [{"name": "lempi02w",
               "listener": "path/to/listener.db",
               "backups": "path/to/listener-backups",   (optional)
+              "catalogue": "its library.db",   (optional: translates its ids)
+              "files": "a db holding its files table",  (optional: its
+                                                 catalogue copy's own paths)
+              "mirror": true,   (optional: it receives the hub's listener)
               "taken_at": "2026-09-26T15:32:35Z"}, ...],
-   "hub_state_from": "desktop"}   the node whose player_* and
+   "hub_state_from": "desktop"}   the node whose own plays, player_* and
                                    selection_decisions the hub keeps
 """
 from __future__ import annotations
@@ -30,6 +36,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import sqlite3
 import sys
 
@@ -56,7 +63,7 @@ def norm_time(v) -> str:
 # node's own backups can evidence [SPEC-STAR-050].
 LWW = "lww"          # last write wins on `stamp`
 UNION = "union"      # every key any node holds; field-wise, a value beats NULL
-EVENTS = "events"    # union, deduplicated; the hub keeps all, nodes keep theirs
+LOCAL = "local"      # each node's own plays, never merged or shared [REQ-PD-113]
 HUB = "hub"          # the hub's own state, taken from `hub_state_from`
 
 TABLES = {
@@ -75,10 +82,8 @@ TABLES = {
     "id_reviews": dict(rule=UNION, key=("passage_id", "decided_at"), latest=("applied_at",)),
     "boundary_reviews": dict(rule=UNION, key=("passage_id", "decided_at"), latest=("applied_at",)),
     "artist_reviews": dict(rule=UNION, key=("recording_mbid", "decided_at"), latest=("applied_at",)),
-    "listener_play_history": dict(rule=EVENTS, key=("played_at", "passage_id", "mbid"),
-                                  larger=("heard_ms", "span_ms"), renumber="play_id"),
-    "listener_rejections": dict(rule=EVENTS, key=("rejected_at", "kind", "passage_id", "mbid"),
-                                larger=("heard_ms", "span_ms"), renumber="rejection_id"),
+    "listener_play_history": dict(rule=LOCAL),
+    "listener_rejections": dict(rule=LOCAL),
     "player_queue": dict(rule=HUB),
     "player_settings": dict(rule=HUB),
     "player_state": dict(rule=HUB),
@@ -93,6 +98,7 @@ class Node:
         self.path = spec["listener"]
         self.taken_at = norm_time(spec.get("taken_at"))
         self.db = open_ro(self.path)
+        self.mirror = bool(spec.get("mirror"))
         self.catalogue = spec.get("catalogue")
         self.remap: dict = {}          # [SPEC-STAR-049]: node passage id -> hub's
         self.remapped: dict = {}       # table -> rows translated
@@ -162,7 +168,7 @@ def merge_table(table: str, spec: dict, nodes: list[Node], hub: str, rep: Report
     rule = spec["rule"]
     per_node = {n.name: n.rows(table) for n in nodes}
     counts = {name: len(rows) for name, rows in per_node.items()}
-    if rule == HUB:
+    if rule in (HUB, LOCAL):
         chosen = per_node.get(hub, [])
         rep.data["tables"][table] = dict(rule=rule, per_node=counts, merged=len(chosen))
         return chosen
@@ -190,16 +196,11 @@ def merge_table(table: str, spec: dict, nodes: list[Node], hub: str, rep: Report
                 elif b == a and any(have.get(c) != row.get(c) for c in row if c in have):
                     rep.decide(table, k, f"tie at {a}, values differ; kept {source[k]}'s, "
                                f"{n.name} disagrees", "SPEC-STAR-030")
-            else:  # UNION and EVENTS: field by field
+            else:  # UNION: field by field
                 for c, v in row.items():
                     if c in spec.get("latest", ()) :
                         if norm_time(v) > norm_time(have.get(c)):
                             have[c] = v
-                    elif c in spec.get("larger", ()):
-                        if v is not None and (have.get(c) is None or v > have[c]):
-                            have[c] = v
-                    elif c == spec.get("renumber"):
-                        continue
                     elif have.get(c) is None and v is not None:
                         have[c] = v
                     elif v is not None and have.get(c) != v and c != "origin":
@@ -224,9 +225,6 @@ def merge_table(table: str, spec: dict, nodes: list[Node], hub: str, rep: Report
                                f"{seen} and not since", "SPEC-STAR-050")
 
     rows = [merged[k] for k in sorted(merged, key=lambda k: tuple("" if x is None else str(x) for x in k))]
-    if spec.get("renumber"):
-        for i, r in enumerate(rows, 1):
-            r[spec["renumber"]] = i
     only: dict = {}
     for k in merged:
         if len(holders[k]) == 1:
@@ -250,6 +248,8 @@ def build(manifest: dict, out: str) -> Report:
         hub_cat = os.path.join(out, "library.db")
     if "nodes" in manifest:
         build_listener(manifest, out, rep, hub_cat)
+        if hub_cat:
+            catalogue_copies(manifest, out, rep)
     write_report(rep, out)
     return rep
 
@@ -301,40 +301,109 @@ def build_listener(manifest: dict, out: str, rep: Report, hub_cat: str | None = 
     hub = manifest["hub_state_from"]
     if hub not in {n.name for n in nodes}:
         raise SystemExit(f"hub_state_from names {hub!r}, which is not a node in the manifest")
-    dest = sqlite3.connect(os.path.join(out, "listener.db"))
-
     every = sorted(set().union(*(n.tables for n in nodes)))
     unknown = [t for t in every if t not in TABLES and not t.startswith("sqlite_")]
     if unknown:
         raise SystemExit(f"no rule for table(s) {unknown}: [SPEC-STAR-060] a decision "
                          "the report does not name is not made -- add a rule first")
-    for table in every:
+    rep.data["integrity"] = write_listener(nodes, hub, os.path.join(out, "listener.db"), rep)
+    rep.data["nodes"] = [dict(name=n.name, taken_at=n.taken_at, backups=len(n.history))
+                         for n in nodes]
+    for n in nodes:
+        if n.name in rep.data["translations"]:
+            rep.data["translations"][n.name]["rows"] = dict(n.remapped)
+
+    # [SPEC-STAR-080]: each node's own listener -- the household's edits,
+    # merged exactly as the hub's are, and that node's own plays and state
+    # [REQ-PD-113], in the schema its own player made. A mirror of the hub
+    # receives the hub's.
+    rep.data["copies"] = {}
+    for n in nodes:
+        if n.name == hub:
+            continue
+        d = os.path.join(out, "nodes", n.name)
+        os.makedirs(d)
+        path = os.path.join(d, "listener.db")
+        if n.mirror:
+            shutil.copyfile(os.path.join(out, "listener.db"), path)
+            rep.data["copies"][n.name] = dict(listener="the hub's: a mirror")
+            continue
+        scratch = Report()
+        ok = write_listener(nodes, n.name, path, scratch, schema_of=n)
+        own = {t: s["merged"] for t, s in scratch.data["tables"].items()
+               if s["rule"] in (LOCAL, HUB)}
+        rep.data["copies"][n.name] = dict(listener=f"its own, integrity {ok}", own=own)
+
+
+def write_listener(nodes: list[Node], own: str, path: str, rep: Report,
+                   schema_of: Node | None = None) -> str:
+    """One listener database: the household's edits merged, and `own`'s own
+    plays and state. `schema_of`: each table as that node defines it, where
+    it has the table; otherwise the widest definition any node has."""
+    dest = sqlite3.connect(path)
+    for table in sorted(set().union(*(n.tables for n in nodes))):
         if table.startswith("sqlite_"):
             continue
-        # The widest definition any node has: a newer schema's columns win.
         holders = [n for n in nodes if table in n.tables]
-        widest = max(holders, key=lambda n: (len(n.cols(table)), n.name))
-        sql = widest.db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
-                                (table,)).fetchone()[0]
+        if schema_of is not None and table in schema_of.tables:
+            src = schema_of
+        else:                       # a newer schema's columns win
+            src = max(holders, key=lambda n: (len(n.cols(table)), n.name))
+        sql = src.db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+                             (table,)).fetchone()[0]
         dest.execute(sql)
-        for (isql,) in widest.db.execute(
+        for (isql,) in src.db.execute(
                 "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
                 (table,)):
             dest.execute(isql)
-        cols = widest.cols(table)
-        rows = merge_table(table, TABLES[table], nodes, hub, rep)
+        cols = src.cols(table)
+        rows = merge_table(table, TABLES[table], nodes, own, rep)
         dest.executemany(
             f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
             [tuple(r.get(c) for c in cols) for r in rows])
     dest.commit()
     check = dest.execute("PRAGMA integrity_check").fetchone()[0]
     dest.close()
-    rep.data["integrity"] = check
-    rep.data["nodes"] = [dict(name=n.name, taken_at=n.taken_at, backups=len(n.history))
-                         for n in nodes]
-    for n in nodes:
-        if n.name in rep.data["translations"]:
-            rep.data["translations"][n.name]["rows"] = n.remapped
+    return check
+
+
+def catalogue_copies(manifest: dict, out: str, rep: Report):
+    """[SPEC-STAR-080]: each node's catalogue is the hub's, with the node's
+    own machine-scope columns [SPEC-DF-030] -- matched by `audio_md5`, since
+    a file id is local too [SPEC-DF-035]. A node names the database holding
+    its own `files` table as `files`; one that names none gets no catalogue,
+    and the report says so."""
+    hub_cat = os.path.join(out, "library.db")
+    held = {r[1] for r in open_ro(hub_cat).execute("PRAGMA table_info(files)")}
+    cols = sorted(MACHINE_SCOPE["files"] & held)
+    for spec in sorted(manifest["nodes"], key=lambda s: s["name"]):
+        name = spec["name"]
+        if name == manifest["hub_state_from"]:
+            continue
+        entry = rep.data.setdefault("copies", {}).setdefault(name, {})
+        if not spec.get("files"):
+            entry["catalogue"] = "none: the manifest names no `files` for this node"
+            continue
+        theirs = {r[0]: r[1:] for r in open_ro(spec["files"]).execute(
+            f"SELECT audio_md5, {', '.join(cols)} FROM files")}
+        d = os.path.join(out, "nodes", name)
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, "library.db")
+        shutil.copyfile(hub_cat, path)
+        dest = sqlite3.connect(path)
+        md5s = [r[0] for r in dest.execute("SELECT audio_md5 FROM files ORDER BY file_id")]
+        missing = [m for m in md5s if m not in theirs]
+        if missing:
+            dest.close()
+            raise SystemExit(f"{name} has no file for {len(missing)} of the hub's, e.g. {missing[:3]}: "
+                             "its catalogue would name paths it does not have [SPEC-STAR-080]")
+        dest.executemany(f"UPDATE files SET {', '.join(c + ' = ?' for c in cols)} WHERE audio_md5 = ?",
+                         [(*theirs[m], m) for m in md5s])
+        dest.commit()
+        ok = dest.execute("PRAGMA integrity_check").fetchone()[0]
+        dest.close()
+        entry["catalogue"] = f"the hub's, with its own {', '.join(cols)}; integrity {ok}"
+        entry["only_theirs"] = len(set(theirs) - set(md5s))
 
 
 # ------------------------------------------------------------ catalogue half --
@@ -551,13 +620,18 @@ def _neg(s: str) -> str:
 def write_report(rep: Report, out: str):
     d = rep.data
     with open(os.path.join(out, "report.json"), "w", encoding="utf-8", newline="\n") as fh:
-        json.dump(d, fh, indent=1, sort_keys=True, default=str)
+        # A blob (cover art) as its size, as `_show` gives it: its bytes made
+        # this file 600 MB on 2026-09-26.
+        json.dump(d, fh, indent=1, sort_keys=True,
+                  default=lambda v: f"<{len(v)} bytes>" if isinstance(v, (bytes, bytearray)) else str(v))
     L = ["# Star merge report", "",
          "Read it before promoting this output to `data/` [SPEC-STAR-070]."]
     if "nodes" in d:
         L += listener_section(d)
     if "catalogue" in d:
         L += catalogue_section(d["catalogue"])
+    if d.get("copies"):
+        L += copies_section(d["copies"])
     with open(os.path.join(out, "report.md"), "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(L) + "\n")
 
@@ -608,6 +682,19 @@ def catalogue_section(c: dict) -> list[str]:
                      f"{'has none' if x['merged_value'] is None else 'has ' + _show(x['merged_value'])}")
         if len(xs) > 25:
             L.append(f"  - ... and {len(xs) - 25} more in report.json")
+    return L
+
+
+def copies_section(c: dict) -> list[str]:
+    L = ["", "# Each node's copy [SPEC-STAR-080]", "",
+         "In `nodes/<name>/`: the household's edits as merged above, with the node's own plays,",
+         "rejections and player state [REQ-PD-113], and the hub's catalogue with the node's own",
+         "paths. The hub's own pair is the one beside this report.", ""]
+    for n, e in sorted(c.items()):
+        own = ", ".join(f"`{t}` {k}" for t, k in sorted(e.get("own", {}).items()))
+        L.append(f"- **{n}**: listener {e.get('listener', 'none')}" + (f" ({own})" if own else "")
+                 + f"; catalogue {e.get('catalogue', 'none')}"
+                 + (f"; {e['only_theirs']} file(s) it holds that the hub does not" if e.get("only_theirs") else ""))
     return L
 
 

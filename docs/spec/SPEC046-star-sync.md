@@ -27,7 +27,7 @@ The Vipunen primary was lost when this repository was seeded (`data/README.md`),
 | programmes and occasions | `listener_programs`, `…_program_seeds`, `listener_occasions`, `…_occasion_points` | no timestamps: union, with removals from §3 | yes |
 | catalogue corrections | `id_reviews`, `boundary_reviews`, `artist_reviews` | union by (subject, `decided_at`); the latest `applied_at` is kept | yes, and applied to each catalogue |
 | catalogue (classes A–C) | the library half | three ways against the common ancestor `[SPEC-STAR-047]`; conflicting changes by provenance rank, then recency `[SPEC-DF-070]`; two differing **manual** values: the newer wins by default and is listed for the person `[SPEC-MESH-065]` | yes |
-| events | `listener_play_history`, `listener_rejections` | **union**, deduplicated by (time, passage, recording); an echo-followed play heard on two nodes is one play, keeping the larger `heard_ms` | **no** — each node keeps its own history |
+| plays | `listener_play_history`, `listener_rejections` | **never merged**: each node keeps its own, the hub included `[REQ-PD-113]` | never |
 | node state | `player_*`, `selection_decisions`, `schema_meta` | not merged; the hub keeps its own | never |
 
 **`[SPEC-STAR-047]` The catalogue merges three ways, against the oldest common ancestor** — SPEC006 §9's baseline/target/current, generalised to N copies. Measured 2026-09-26: every catalogue descends from one desktop library, and each then received a *different* part of the later work. `teacherslounge` holds 40 re-credits the desktop synced on 09-12 (`inherited:mulib` → `synced:GMKtec`), 39 recordings and 51 artist credits. The desktop's 09-10 copy holds 138 flavor rows `teacherslounge` lacks. So no copy is simply newest, and a missing row may be a deletion — the old credit a re-credit replaced — as easily as an addition. For each row, keyed by its primary key:
@@ -48,7 +48,7 @@ Two refinements, both found in the first trial on 2026-09-26:
 
 **`[SPEC-STAR-049]` A passage id is local, so a node's ids are translated before its rows join the hub** `[SPEC-DF-035]`. Found 2026-09-26: the four locally ingested Frisina tracks were inducted separately on the desktop and on `lempi02w`, and received their ids in a different order. `lempi02w`'s passage 16407 is the hub's 16409, and its plays of 16407 would otherwise count against a different song. For each listener row naming a passage, the node's own catalogue gives the passage's file (by `audio_md5`). Where the hub's passage of that id lies in a different file, the row is translated to the hub's passage on the node's file with the same kind and the same position among that file's passages. A passage the hub no longer has — a capture re-cut since — keeps its id, which then matches nothing, and is counted in the report. A merge with a catalogue half translates first, then merges.
 
-**`[SPEC-STAR-045]` Why events stay home.** Each node's rotation is built from what *that node* played `[REQ-AND-190]`. Pushing the whole household's plays to every node would make a song played in the kitchen rest in the study. That may be wanted one day, but it is a behaviour change, not a recovery. The hub keeps the union all the same, so that no node's history exists in only one place again.
+**`[SPEC-STAR-045]` Plays stay home** `[REQ-PD-113]`. Each node's rotation is built from what *that node* played, so a song played in the kitchen does not rest in the study. The hub is a node like the others here: its listener holds the desktop's own plays, and no one else's. A node's history is kept safe by that node's own backups `[REQ-LIB-160]` and by the dated snapshots a merge takes `[SPEC-STAR-075]`, never by folding it into another node's. *(This spec first had the hub keep the union of every node's plays. The maintainer ruled that out on 2026-09-26, before anything was promoted.)*
 
 ## 3. Removals, which a timestamp cannot show
 
@@ -66,12 +66,18 @@ Two refinements, both found in the first trial on 2026-09-26:
 
 ## 6. Distribution
 
-**`[SPEC-STAR-080]` Leaving the hub is by patch, not by file copy** `[SPEC-DF-110]`. A node's own history and state must survive, so the hub sends each spoke only the rows the spoke lacks or holds older, through the patching route SPEC022 built. That route writes both layers on an overlay node `[GDE-DEP-060]`, and restarts the player whether or not the patch succeeded `[SPEC-DF-127]`. Designed here, built when the first merged hub has been verified.
+**`[SPEC-STAR-080]` Leaving the hub is by patch, not by file copy** `[SPEC-DF-110]`. A node keeps playing between its snapshot and the switch, and a file copy would lose what it did meanwhile. Built 2026-09-26, in three parts:
+
+1. **A copy per node.** Beside the hub's pair, `tools/star_merge.py` writes `nodes/<name>/`. Its listener holds the household's edits, merged exactly as the hub's are, with the node's own plays and state, in the schema the node's own player made. Its catalogue is the hub's, with the node's own paths matched by `audio_md5`, since a file id is local too `[SPEC-DF-035]`. A mirror of the hub receives the hub's listener.
+2. **A patch from the node's snapshot to its copy.** `tools/star_patch.py` carries each changed row's key, a digest of its snapshot value, and only the columns that change. It applies a row only where the node still holds the snapshot value, and one conflict writes nothing. A column the player adds on open is added as the player would add it. Rows the patch does not name, the plays recorded since the snapshot among them, are never touched.
+3. **One node at a time.** `tools/star_distribute.py` first rehearses on the node, against a copy of its live data, with the player running. On `--commit` it stops the player, backs up the live pair into a dated folder on the node and leaves it there, applies both patches, and compares the files on disk with the target, table by table `[GDE-DEP-070]`. If the second patch fails, the first is restored from that backup, and the player is started again whatever happened `[SPEC-DF-127]`. It refuses a database on an overlay `[GDE-DEP-060]`.
+
+Found while building it: a fingerprint read `immutable` ignores the WAL, and missed 375 KB of one on `lp3-wifi`. The node-side tool reads a live database with its WAL.
 
 ## 7. Open
 
-1. **`[SPEC-STAR-900]` bose was unreachable** when the first snapshots were taken, and its database is not yet in the merge. It must be before the hub is promoted.
-2. **`[SPEC-STAR-910]` Whether plays should one day travel** `[SPEC-STAR-045]` is the maintainer's decision, not this one's.
+1. ~~**`[SPEC-STAR-900]` bose was unreachable** when the first snapshots were taken~~ *(resolved: its snapshot was taken after a power cycle the same day, and is in every merge since)*.
+2. ~~**`[SPEC-STAR-910]` Whether plays should one day travel**~~ *(resolved by `[REQ-PD-113]`: they do not)*.
 
 ---
 

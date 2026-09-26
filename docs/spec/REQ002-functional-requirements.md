@@ -44,6 +44,8 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 >
 > A passage may legally hold a medley of several recordings, so the query selects the heaviest by a scalar subquery rather than a join, which would return that passage twice in every pool.
 
+**`[REQ-PD-113]` A node's play history is its own: the basis of that node's selections, and never merged into or shared with another node's.** *(Stated by the maintainer 2026-09-26.)* It covers `listener_play_history`, `listener_rejections` and `selection_decisions`. Each node's Program Director rotates by what *that node* played. A song heard in the kitchen does not rest in the study, and the hub is a node like the others in this respect. The listener's *edits* are different: preferences, flags, specials, programmes and occasions describe the household's wishes, and are merged and distributed across the fleet `[SPEC-STAR-040]`. Plays are preserved by each node's own backups `[REQ-LIB-160]` and by the dated snapshots a star sync takes `[SPEC-STAR-075]`, never by folding one node's history into another's. The same holds for a phone `[REQ-AND-190]`.
+
 **`[REQ-PD-120]`** Select from **`radio` passages only** `[GDE-BMK-030]`.
 
 **`[REQ-PD-130]`** Shape candidates by flavor distance `[SPEC-FD-040]` in two stages — prune against programme seeds, then order by similarity to the passage already queued — and apply randomness **last**, over the shaped pool `[GDE-PD-050]`.

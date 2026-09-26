@@ -66,6 +66,9 @@ Folding reviewed decisions into the library, and syncing them — and flags — 
 | `remote_peek.py` | Read exactly one row from a remote installation over `ssh`, no database copy. |
 | `remote_snapshot.py` | Build a tiny local snapshot of exactly what a `changes.json` needs, over targeted reads `[SPEC-DF-120]`. |
 | `push_file_tags.py` | Push locally-known `file_tags` to a remote whose own copy is behind. |
+| `star_merge.py` | Merge every node's snapshot into the hub's pair, and write each node's own copy `[SPEC046]`. Plays are never merged `[REQ-PD-113]`. |
+| `star_patch.py` | Turn a node's snapshot and its copy into a patch; on the node, apply it only where nothing changed since, and back up, restore or fingerprint a live database `[SPEC-STAR-080]`. |
+| `star_distribute.py` | Carry the patches to one node: rehearse on a copy of its live data, then `--commit` with the node's current pair kept as a backup there. |
 
 ## Flavor extraction & classifier training
 

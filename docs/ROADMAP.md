@@ -69,6 +69,7 @@ folded into one spec.
 | Play frequency readout | [SPEC031](spec/SPEC031-play-frequency.md) | [§6. Open](spec/SPEC031-play-frequency.md#6-open) |
 | The Android device spike | [LOG013](LOG013-the-android-spike.md) | [§4. Open](LOG013-the-android-spike.md#4-open) |
 | Node discovery — a future idea, not scheduled | [GUIDE035](GUIDE035-node-discovery.md) | [§3. Open, for when it is taken up](GUIDE035-node-discovery.md#3-open-for-when-it-is-taken-up) |
+| Wi-Fi watchdog — a future feature, decided by how often a link dies | [FLEET001](../fleet/FLEET001-the-fleet.md) | [§4. Standing issues](../fleet/FLEET001-the-fleet.md#4-standing-issues) `[FLT-ISS-015]` |
 | Framebuffer UI — implementation plan | [SPEC042](spec/SPEC042-framebuffer-implementation-plan.md) | [§8. Implementation plan, phased](spec/SPEC042-framebuffer-implementation-plan.md#8-implementation-plan-phased-against-the-open-items-above) |
 
 ## 2. Sendspin — a whole directory of "watch, don't build yet"
