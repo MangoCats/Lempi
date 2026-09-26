@@ -80,20 +80,20 @@
     <h2>Settings</h2>
     <!-- This node's place in a fleet [SPEC-DLY-120], [SPEC-ECHO-010]. Two
          controls that are only useful together, so they sit together. -->
-    <div class="setting">
+    <div class="setting" id="echo-trim-row">
       <label for="echotrim">Speaker delay</label>
       <span><input type="number" id="echotrim" step="1"> ms
             <button type="button" id="echotrimreset">Default</button></span>
       <p id="echotrimnote"></p>
     </div>
-    <div class="setting">
+    <div class="setting" id="follow-row">
       <label for="echofollow">Follow another player</label>
       <span><input type="text" id="echofollow" placeholder="none &mdash; play independently"
                    spellcheck="false" autocapitalize="none"></span>
       <p id="echofollownote">The name of a player on this network, e.g.
          <code>bose</code>. Leave empty to play this node's own programme.</p>
     </div>
-    <div class="setting">
+    <div class="setting" id="join-row">
       <label for="echojoin">Get in step</label>
       <span><select id="echojoin">
         <option value="1">straight away, and stay there</option>

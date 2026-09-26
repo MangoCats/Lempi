@@ -222,13 +222,17 @@
   // `false`: a snapshot without the field says nothing, and nothing is not
   // "absent".
   let caps = {};
+  // One capability may govern several rows: `follow` hides every setting that
+  // only means something inside an echo fleet [REQ-AND-170].
   const CAP_SECTIONS = {
-    restart: 'restart', power_off: 'power', wifi: 'wifi-row',
-    bluetooth: 'speakers', led: 'led-row', radios: 'radios',
+    restart: ['restart'], power_off: ['power'], wifi: ['wifi-row'],
+    bluetooth: ['speakers'], led: ['led-row'], radios: ['radios'],
+    follow: ['echo-trim-row', 'follow-row', 'join-row'],
   };
   function renderCapabilities(c) {
     caps = c || {};
-    for (const [cap, id] of Object.entries(CAP_SECTIONS)) $(id).hidden = caps[cap] === false;
+    for (const [cap, ids] of Object.entries(CAP_SECTIONS))
+      for (const id of ids) $(id).hidden = caps[cap] === false;
   }
 
   function renderBuild(s) {

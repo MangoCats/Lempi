@@ -87,6 +87,14 @@ pub struct Config {
     pub web_port: Option<u16>,
     /// Also serve on :80, best-effort, where the process may bind it `[SPEC034]`.
     pub also_port_80: bool,
+    /// Serve on the loopback address only. An appliance serves its LAN; a
+    /// phone must not, since every app on it can reach a port on any address
+    /// the phone has `[REQ-AND-160]`.
+    pub web_loopback_only: bool,
+    /// A secret every web request must carry, made anew by the host at each
+    /// launch `[REQ-AND-160]` -- see `web::access`. `None` asks for nothing:
+    /// the appliance's LAN UI. Never logged.
+    pub web_secret: Option<String>,
     /// Snapshot the listener database now and hourly `[REQ-LIB-160]`.
     pub backup: bool,
     /// Read the files' own tags in the background, for browsing by album.
@@ -113,6 +121,9 @@ pub enum StartError {
     EngineGone,
     /// The web UI's port could not be bound.
     Listen { addr: SocketAddr, error: std::io::Error },
+    /// A web secret too short to be one `[REQ-AND-160]`. Refused before
+    /// anything starts: a guessable key is worse than a visible absence of one.
+    WeakSecret { len: usize },
 }
 
 impl std::fmt::Display for StartError {
@@ -122,6 +133,11 @@ impl std::fmt::Display for StartError {
             StartError::Engine(e) => write!(f, "{e}"),
             StartError::EngineGone => write!(f, "engine failed to start"),
             StartError::Listen { addr, error } => write!(f, "cannot listen on {addr}: {error}"),
+            StartError::WeakSecret { len } => write!(
+                f,
+                "the web secret is {len} characters; at least {} are needed",
+                crate::web::access::MIN_SECRET_LEN
+            ),
         }
     }
 }
@@ -153,6 +169,11 @@ impl Player {
     /// Start a player: its background threads, its engine, and -- if asked --
     /// its web UI. Returns once the engine is primed and the port is bound.
     pub fn start(cfg: Config) -> Result<Player, StartError> {
+        if let Some(s) = &cfg.web_secret {
+            if s.len() < crate::web::access::MIN_SECRET_LEN {
+                return Err(StartError::WeakSecret { len: s.len() });
+            }
+        }
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -243,8 +264,9 @@ impl Player {
                 library: cfg.library.clone(),
                 capabilities,
             };
-            let app = crate::web::router(ui);
-            let addr = SocketAddr::from(([0, 0, 0, 0], port));
+            let app = crate::web::access::guard(crate::web::router(ui), cfg.web_secret.as_deref());
+            let ip = if cfg.web_loopback_only { [127, 0, 0, 1] } else { [0, 0, 0, 0] };
+            let addr = SocketAddr::from((ip, port));
             let listener = match runtime.block_on(tokio::net::TcpListener::bind(addr)) {
                 Ok(l) => l,
                 Err(error) => {
@@ -255,7 +277,11 @@ impl Player {
                     return Err(StartError::Listen { addr, error });
                 }
             };
-            tracing::info!("web UI on http://localhost:{port}/");
+            tracing::info!(
+                "web UI on http://localhost:{port}/{}{}",
+                if cfg.web_loopback_only { " (loopback only)" } else { "" },
+                if cfg.web_secret.is_some() { " (launch key required)" } else { "" }
+            );
 
             // Also on :80, best-effort `[SPEC034]` -- reachable as plain
             // `http://lempi/` once `setcap cap_net_bind_service` lets this
@@ -263,7 +289,7 @@ impl Player {
             // that has not been done, and that failure is one line, never
             // fatal: the port above is what everything else depends on.
             if cfg.also_port_80 && port != 80 {
-                let addr80 = SocketAddr::from(([0, 0, 0, 0], 80));
+                let addr80 = SocketAddr::from((ip, 80));
                 match runtime.block_on(tokio::net::TcpListener::bind(addr80)) {
                     Ok(listener80) => {
                         let app80 = app.clone();
@@ -767,6 +793,8 @@ mod tests {
             mpd_root: None,
             web_port: None,
             also_port_80: false,
+            web_loopback_only: false,
+            web_secret: None,
             backup: false,
             tag_scan: false,
         };

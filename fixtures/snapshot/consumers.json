@@ -29,6 +29,7 @@
     "artist_source",
     "capabilities",
     "capabilities.bluetooth",
+    "capabilities.follow",
     "capabilities.led",
     "capabilities.power_off",
     "capabilities.radios",

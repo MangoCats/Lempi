@@ -34,6 +34,7 @@ use crate::session::{Explanations, SharedControls};
 #[cfg(feature = "appliance")]
 mod bluetooth;
 mod browse;
+pub mod access;
 pub mod capabilities;
 pub mod contract;
 mod control;
@@ -1347,6 +1348,63 @@ mod tests {
         // And the server is up, so the 404s above are not a dead socket.
         let line = status("GET", "/audio/sink").await;
         assert!(line.contains(" 200 "), "GET /audio/sink answered {line:?}");
+    }
+
+    /// The launch key, end to end through the real router `[REQ-AND-160]`:
+    /// refused without it; the query key answered with the cookie the page's
+    /// own requests then carry; the header; a wrong key refused; and no key
+    /// required when the host set none.
+    #[tokio::test]
+    async fn the_launch_key_guards_every_route() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        const KEY: &str = "0123456789abcdef0123";
+        let ui = || {
+            let (_e, h) = crate::engine::Engine::new(crate::path::PathHandle::silent(), 1);
+            Ui {
+                handle: Arc::new(h),
+                db: ":memory:".into(),
+                library: ":memory:".into(),
+                why: Default::default(),
+                controls: Default::default(),
+                capabilities: Default::default(),
+            }
+        };
+        let serve = |app: Router| async move {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let a = l.local_addr().unwrap();
+            tokio::spawn(async move { axum::serve(l, app).await });
+            a
+        };
+        let ask = |addr: std::net::SocketAddr, path: &'static str, extra: String| async move {
+            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let req = format!("GET {path} HTTP/1.1\r\nHost: x\r\n{extra}Connection: close\r\n\r\n");
+            s.write_all(req.as_bytes()).await.unwrap();
+            let mut buf = Vec::new();
+            s.read_to_end(&mut buf).await.unwrap();
+            String::from_utf8_lossy(&buf).to_string()
+        };
+
+        let guarded = serve(access::guard(router(ui()), Some(KEY))).await;
+        let bare = ask(guarded, "/audio/sink", String::new()).await;
+        assert!(bare.starts_with("HTTP/1.1 403"), "no key must be refused: {}", bare.lines().next().unwrap_or(""));
+
+        let first = ask(guarded, "/?key=0123456789abcdef0123", String::new()).await;
+        assert!(first.starts_with("HTTP/1.1 200"), "the query key must be let in");
+        let cookie = first.lines()
+            .find(|l| l.to_ascii_lowercase().starts_with("set-cookie:"))
+            .expect("the query key must be answered with the cookie");
+        assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"), "{cookie}");
+
+        let by_cookie = ask(guarded, "/audio/sink", format!("Cookie: {}={KEY}\r\n", access::COOKIE)).await;
+        assert!(by_cookie.starts_with("HTTP/1.1 200"), "the cookie alone must be enough afterwards");
+        let by_header = ask(guarded, "/audio/sink", format!("{}: {KEY}\r\n", access::HEADER)).await;
+        assert!(by_header.starts_with("HTTP/1.1 200"), "the header must be let in");
+        let wrong = ask(guarded, "/audio/sink", format!("{}: 0123456789abcdef0124\r\n", access::HEADER)).await;
+        assert!(wrong.starts_with("HTTP/1.1 403"), "a wrong key must be refused");
+
+        let open = serve(access::guard(router(ui()), None)).await;
+        let appliance = ask(open, "/audio/sink", String::new()).await;
+        assert!(appliance.starts_with("HTTP/1.1 200"), "no secret set must ask for nothing");
     }
 
     /// **A bound the engine enforces is a bound the control must be told.**

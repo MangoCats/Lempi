@@ -111,6 +111,10 @@ fn main() {
         mpd_root: args.text(&opt::MPD_ROOT).map(str::to_string),
         web_port: Some(args.must_size(&opt::PORT) as u16),
         also_port_80: true,
+        // The appliance's UI is for its LAN, and asks for nothing: these two
+        // are a phone host's `[REQ-AND-160]`.
+        web_loopback_only: false,
+        web_secret: None,
         backup: true,
         tag_scan: true,
     };
