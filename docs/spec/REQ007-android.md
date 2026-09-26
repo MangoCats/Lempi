@@ -41,7 +41,9 @@ The README ranks mobile *Future / Post-V1*. Nothing here schedules the work; it 
 
 **`[REQ-AND-180]` The phone neither leads nor follows an echo fleet** in the first release `[GDE-APP-120]`: echo rests on a clock disciplined to one LAN reference `[GDE-ECHO-300]`, which a phone cannot promise.
 
-**`[REQ-AND-190]` The phone keeps its own listening history and preferences**, independent of the appliances `[GDE-APP-130]`, backed up as `[REQ-PORT-150]` requires — **and a backup can be taken off the phone by the user**, since uninstalling deletes app-private storage. *How* is open — §7.
+**`[REQ-AND-190]` The phone keeps its own listening history and preferences**, independent of the appliances `[GDE-APP-130]`, backed up as `[REQ-PORT-150]` requires — **and a backup can be taken off the phone by the user**, since uninstalling deletes app-private storage.
+
+**`[REQ-AND-195]` A backup leaves the phone by export on request** — decided by the maintainer 2026-09-25 `[REQ-AND-900]`. The user asks, chooses where it goes through Android's own document picker, and the newest integrity-checked backup `[REQ-PORT-150]` is written there. Nothing leaves the phone unasked, and Android's automatic cloud backup is not relied on.
 
 ## 3. The library and its storage
 
@@ -57,17 +59,21 @@ The README ranks mobile *Future / Post-V1*. Nothing here schedules the work; it 
 
 **`[REQ-AND-250]` A file Vipunen has rewritten replaces the phone's copy.** When a bundle brings a file whose tags Vipunen wrote back, so its bytes changed, the phone's earlier copy is replaced, not kept beside the new one `[GDE-APP-050]`.
 
-**`[REQ-AND-260]` The phone finds music in shared storage.** A found file whose byte hash matches a catalogue entry gets everything the catalogue holds. Any other becomes a **tags-only passage**: playable, selectable by artist and recording, without flavor, and marked as tags-only wherever it is shown `[GDE-APP-050]`.
+**`[REQ-AND-260]` The phone finds music in shared storage.** A found file whose byte hash matches a catalogue entry gets everything the catalogue holds. Any other becomes a **tags-only passage**: playable, selectable, without flavor or MBID, and marked as tags-only wherever it is shown `[GDE-APP-050]`. How the Director treats it is `[REQ-AND-310]`.
 
 **`[REQ-AND-270]` The phone derives nothing.** It computes no audio-identity hash, no flavor and no segmentation; the byte hash is its only fingerprint `[GDE-APP-060]`, and a file differing from a catalogue entry only in its bytes is found as new `[GDE-AND-050]`.
 
 **`[REQ-AND-280]` New music can be sent out for induction.** The user can list the found files the catalogue does not hold and export them — the files, their tags and byte hashes, and no listener state `[REQ-PORT-120]` — for a Vipunen node to induct. After the next bundle they are catalogue entries on the phone `[GDE-APP-050]`.
 
+**`[REQ-AND-285]` Exported music travels over the local network to an active Vipunen node** — decided by the maintainer 2026-09-25 `[REQ-AND-930]`, "ideally". So the network is the intended route, and not the only one: where no node answers, the same export can be written to a folder the user moves by hand, so the feature never depends on the network being there. How a node is found, how the phone proves it may send, and where the node puts what arrives are specification, and open — §7.
+
 ## 4. Selection
 
 **`[REQ-AND-300]` The Director rebuilds when it does on every host** — at start, and after an import — and never on a timer `[GDE-APP-110]`. A further rule, such as only while charging, requires the spike's measurement first.
 
-**`[REQ-AND-310]` A tags-only passage is selectable**, and how the Director weighs a passage without flavor is specified before this leaves draft — it is not yet known how it does today `[GDE-APP-050]`.
+**`[REQ-AND-310]` A tags-only passage is selected as the Director already selects an unidentified one** `[REQ-AND-940]`, read from `lempi-core` 2026-09-25: it is **eligible** — "no MBID means no history, not exclusion", pinned by the test `an_unidentified_passage_still_plays`; it **rotates on its own passage id** only `[GDE-WRK-055]`, since the recording, work and artist tiers are keyed by MBID; it **cannot appear twice in one queue**, which `choose` guarantees structurally; and flavor shaping **keeps it**, admitting it apart from the distance-gathered pool — "unmeasured is not unsuitable" — or falls back to frequency alone when nothing has flavor `[SPEC-DIR-158]`.
+
+**`[REQ-AND-315]` *Proposed, for the maintainer:* a tags-only passage also rotates by its artist, keyed on the normalised artist tag.** Without it, a newly found album rotates track by track and nothing stops several of its tracks playing close together — the artist tier exists for exactly that and is keyed by MBID, which a found file lacks. The key would be kept distinct from MBIDs, so a tag name can never collide with or block an identified artist.
 
 ## 5. Building and shipping
 
@@ -89,11 +95,11 @@ The README ranks mobile *Future / Post-V1*. Nothing here schedules the work; it 
 
 ## 7. Open — to be settled before this leaves draft
 
-1. **`[REQ-AND-900]` How a backup leaves the phone** `[REQ-AND-190]` — written to a user-visible folder on a schedule, exported on request, or Android's own backup service — and whether listener state belongs in the second at all.
+1. **`[REQ-AND-900]` How a backup leaves the phone** `[REQ-AND-190]`. *Decided 2026-09-25: export on request* — `[REQ-AND-195]`.
 2. **`[REQ-AND-910]` The memory and battery budgets**, as numbers, from the spike `[REQ-AND-020]`; `[GDE-AND-065]` measured a Director rebuild at about 16.5 CPU-seconds and +122.5 MB on a Pi 3 core.
 3. **`[REQ-AND-920]` Whether a MediaStore path opens with `File::open`** on the device; if not, the audio-source resolver `[GDE-HST-080]` covers every path, not only the sidecars `[GDE-APP-080]`.
-4. **`[REQ-AND-930]` How exported music reaches Vipunen** `[REQ-AND-280]` — which transport, and what the export carries beyond files, tags and hashes.
-5. **`[REQ-AND-940]` The Director's handling of a passage without flavor** `[REQ-AND-310]`.
+4. **`[REQ-AND-930]` How exported music reaches Vipunen** `[REQ-AND-280]`. *Decided 2026-09-25: over the local network to an active node, ideally* — `[REQ-AND-285]`. Still open beneath it: discovery, authorisation and where the node files what arrives.
+5. **`[REQ-AND-940]` The Director's handling of a passage without flavor** `[REQ-AND-310]`. *Answered from the code 2026-09-25* — see `[REQ-AND-310]`; it raised `[REQ-AND-315]`, which awaits the maintainer.
 
 ---
 
