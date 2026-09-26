@@ -161,6 +161,14 @@ pub struct QueuedNote {
     works: Vec<(String, Option<i64>)>,
 }
 
+/// An artist tag as a rotation key `[REQ-AND-315]`: trimmed, lower case, inner
+/// whitespace collapsed, so "The Beatles" and "the  beatles " are one artist.
+/// The `tag:` prefix keeps it apart from every MBID.
+fn tag_artist_key(tag: &str) -> String {
+    let name: Vec<String> = tag.split_whitespace().map(str::to_lowercase).collect();
+    format!("tag:{}", name.join(" "))
+}
+
 pub struct Director {
     rows: Vec<Row>,
     policy: Policy,
@@ -168,6 +176,13 @@ pub struct Director {
     artist_tuning: HashMap<String, Tuning>,
     /// recording → its artist. One artist per recording, as migrated.
     artist_of: HashMap<String, String>,
+    /// passage → an artist key from its file's tag, for a passage `artist_of`
+    /// cannot reach: no recording, or a recording with no credited artist
+    /// `[REQ-AND-315]`. Found music on a phone is all like this, and so is
+    /// music ingested locally anywhere. Keyed `tag:<normalised name>`, which
+    /// no MBID can equal, so a tag never blocks an identified artist and is
+    /// never blocked by one.
+    tag_artist: HashMap<i64, String>,
     last_played: HashMap<String, i64>,
     // (see `QueuedNote` for why the previous values are handed back)
     artist_last_played: HashMap<String, i64>,
@@ -277,6 +292,36 @@ impl Director {
             ),
         }
 
+        // The artist tier's fallback `[REQ-AND-315]`: a radio passage no
+        // credited artist reaches is keyed by its file's artist tag. A library
+        // without `file_tags` says so, the way one without `recording_works`
+        // does, and such passages rotate on their own passage id alone, as
+        // they always did.
+        let mut tag_artist: HashMap<i64, String> = HashMap::new();
+        match conn.prepare(
+            "SELECT p.passage_id, t.artist FROM __LIB__.passages p \
+               JOIN __LIB__.file_tags t ON t.file_id = p.file_id \
+              WHERE p.kind = 'radio' AND t.artist IS NOT NULL AND TRIM(t.artist) <> '' \
+                AND NOT EXISTS (SELECT 1 FROM __LIB__.passage_recordings pr \
+                                  JOIN __LIB__.recording_artists ra ON ra.mbid = pr.mbid \
+                                 WHERE pr.passage_id = p.passage_id)",
+        ) {
+            Ok(mut stmt) => {
+                let rows = stmt
+                    .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+                    .map_err(q)?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(q)?;
+                for (passage_id, artist) in rows {
+                    tag_artist.insert(passage_id, tag_artist_key(&artist));
+                }
+            }
+            Err(e) => tracing::warn!(
+                "director: no file_tags ({e}); a passage with no credited artist \
+                 rotates on its passage alone [REQ-AND-315]"
+            ),
+        }
+
         let mut last_played = HashMap::new();
         let mut artist_last_played: HashMap<String, i64> = HashMap::new();
         let mut passage_last_played: HashMap<i64, i64> = HashMap::new();
@@ -308,6 +353,11 @@ impl Director {
         drop(stmt);
         for (passage_id, at) in by_passage {
             passage_last_played.insert(passage_id, at);
+            // Through the passage, not the recording: a tags-only play may
+            // carry no recording at all.
+            if let Some(t) = tag_artist.get(&passage_id) {
+                bump(&mut artist_last_played, t, at);
+            }
         }
 
         let mut stmt = conn
@@ -412,6 +462,7 @@ impl Director {
             recording_tuning,
             artist_tuning,
             artist_of,
+            tag_artist,
             last_played,
             artist_last_played,
             works_of,
@@ -494,6 +545,13 @@ impl Director {
         out
     }
 
+    /// The artist a passage rotates by: its recording's credited artist, or
+    /// failing that its file's artist tag `[REQ-AND-315]`.
+    fn artist_key(&self, mbid: Option<&str>, passage_id: i64) -> Option<&String> {
+        mbid.and_then(|m| self.artist_of.get(m))
+            .or_else(|| self.tag_artist.get(&passage_id))
+    }
+
     fn age(&self, map: &HashMap<String, i64>, key: &str, now: i64) -> Option<f64> {
         // A play stamped in the future -- clock skew, or a restored backup --
         // must read as "just played", not as a negative age that would sail
@@ -518,7 +576,7 @@ impl Director {
                     .and_then(|m| self.recording_tuning.get(m))
                     .copied()
                     .unwrap_or_else(Tuning::recording_defaults);
-                let artist_id = mbid.and_then(|m| self.artist_of.get(m));
+                let artist_id = self.artist_key(mbid, row.entry.passage_id);
                 let artist = artist_id
                     .and_then(|a| self.artist_tuning.get(a))
                     .copied()
@@ -581,7 +639,7 @@ impl Director {
         // `[GDE-WRK-055]`.
         let row = self.rows.iter().find(|r| r.entry.passage_id == passage_id)?;
         let mbid = row.mbid.clone();
-        let artist = mbid.as_ref().and_then(|m| self.artist_of.get(m)).cloned();
+        let artist = self.artist_key(mbid.as_deref(), passage_id).cloned();
         let works: Vec<String> = mbid
             .as_ref()
             .and_then(|m| self.works_of.get(m))
@@ -1226,6 +1284,77 @@ mod tests {
         let cen = d.census(NOW);
         assert_eq!(cen.eligible, 2, "the played recording drops out");
         assert_eq!(cen.artist_blocked + cen.recording_blocked, 1);
+    }
+
+    /// Three tags-only passages beside the fixture's credited ones: 5 and 6
+    /// by one artist, tagged two ways; 7 by another; 1 (rec-a, credited
+    /// art-1) also carries that tag on its file. `[REQ-AND-315]`
+    fn with_tags(c: &QualifyingConn) {
+        c.execute_batch(
+            "CREATE TABLE file_tags (file_id INTEGER PRIMARY KEY, artist TEXT);
+             INSERT INTO files VALUES (2, '/m/b.mp3', 600000), (3, '/m/c.mp3', 600000),
+                                      (4, '/m/d.mp3', 600000);
+             INSERT INTO passages (passage_id, file_id, kind, start_ms, end_ms, lead_in_ms,
+                                   lead_out_ms, gain_db)
+                  VALUES (5,2,'radio',0,180000,0,0,0.0), (6,3,'radio',0,180000,0,0,0.0),
+                         (7,4,'radio',0,180000,0,0,0.0);
+             INSERT INTO file_tags VALUES (1, 'The Beatles'), (2, 'The Beatles'),
+                                          (3, '  the   BEATLES '), (4, 'Someone Else');",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_tag_is_normalised_into_a_key_no_mbid_can_equal() {
+        assert_eq!(tag_artist_key("  The   Beatles "), "tag:the beatles");
+        assert_eq!(tag_artist_key("the beatles"), tag_artist_key("THE BEATLES"));
+        assert!(tag_artist_key("x").starts_with("tag:"));
+    }
+
+    /// `[REQ-AND-315]`: a play of one tags-only passage holds another by the
+    /// same tagged artist, however the tag is spelled, and not a third by
+    /// someone else.
+    #[test]
+    fn tags_only_passages_rotate_by_their_artist_tag() {
+        let c = fixture();
+        with_tags(&c);
+        c.execute("INSERT INTO listener_play_history VALUES (1, ?1, 5, NULL)", [NOW - 60])
+            .unwrap();
+        let d = Director::load(&c).unwrap();
+        let w = |id: i64| d.weigh_all(NOW).into_iter()
+            .find(|(e, _)| e.passage_id == id).map(|(_, w)| w).unwrap();
+        assert!(w(6).artist_blocked, "6 shares 5's artist tag, spelled differently");
+        assert!(w(6).excluded.is_some());
+        assert!(!w(7).artist_blocked && w(7).excluded.is_none(), "7 is someone else");
+    }
+
+    /// The key keeps tags and identities apart: a recent tags-only play does
+    /// not hold rec-a, although rec-a's file carries the same tag, because
+    /// rec-a rotates by its credited artist.
+    #[test]
+    fn a_tag_never_blocks_an_identified_artist() {
+        let c = fixture();
+        with_tags(&c);
+        c.execute("INSERT INTO listener_play_history VALUES (1, ?1, 5, NULL)", [NOW - 60])
+            .unwrap();
+        let d = Director::load(&c).unwrap();
+        let passage_1 = d.weigh_all(NOW).into_iter()
+            .find(|(e, _)| e.passage_id == 1).map(|(_, w)| w).unwrap();
+        assert!(!passage_1.artist_blocked, "a tag must not block a credited artist");
+    }
+
+    /// Queueing counts as playing for rotation, for tag keys as for MBIDs: a
+    /// fill of several slots must not queue two passages by one tagged artist.
+    #[test]
+    fn queueing_a_tags_only_passage_holds_its_artist_at_once() {
+        let c = fixture();
+        with_tags(&c);
+        let mut d = Director::load(&c).unwrap();
+        let note = d.note_queued(5, NOW).expect("a carried passage can be noted");
+        assert_eq!(note.artist.as_deref(), Some("tag:the beatles"));
+        let six = d.weigh_all(NOW).into_iter()
+            .find(|(e, _)| e.passage_id == 6).map(|(_, w)| w).unwrap();
+        assert!(six.artist_blocked, "6 is held the moment 5 is queued");
     }
 
     /// The repair, end to end: a play of rec-b blocks rec-a through their
