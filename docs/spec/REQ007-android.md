@@ -18,7 +18,7 @@ The README ranks mobile *Future / Post-V1*. Nothing here schedules the work; it 
 
 **`[REQ-AND-030]` Two existing requirements are refined for the phone**, and each now points here:
 
-- Imported metadata is verified by recomputing `audio_md5` `[REQ-PORT-130]`. The phone cannot — that hash needs ffmpeg `[SPEC-RLK-080]` — so it verifies by the byte hash carried in the payload `[REQ-AND-230]`.
+- Imported metadata is verified by recomputing `audio_md5` `[REQ-PORT-130]`. The phone does not compute it `[REQ-AND-270]`, so it verifies by the byte hash carried in the payload `[REQ-AND-230]`.
 - Backups exist because listener state is irreplaceable `[REQ-PORT-150]`; on a phone, app-private storage is deleted with the app, so a backup must also be retrievable off it `[REQ-AND-190]`.
 
 ## 2. The player and the platform — `AND`

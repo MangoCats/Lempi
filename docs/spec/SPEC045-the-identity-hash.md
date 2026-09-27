@@ -1,6 +1,6 @@
 # SPEC045: The Identity Hash
 
-**Design Specification — what `audio_md5` is, which tool defines it, and the deferred move of that definition into the binary**
+**Design Specification — what `audio_md5` is, which tool defines it, and the move of that definition into the binary (made 2026-09-27)**
 
 Split from [SPEC012](SPEC012-library-relink.md) on 2026-09-24, when that document reached 297 of its 300 lines `[GOV-DOC-010]`. Relink *uses* the hash to bind paths; this document is about the hash itself, which is the subject expected to grow — a transfer hash for payloads, the move to Symphonia, a phone that cannot shell out to ffmpeg `[GDE-HST-080]`. The tags keep their `SPEC-RLK-*` names, so every citation in code, schema and other documents still resolves.
 
@@ -12,7 +12,8 @@ Split from [SPEC012](SPEC012-library-relink.md) on 2026-09-24, when that documen
 
 **`[SPEC-RLK-080]` Hash with ffmpeg — because ffmpeg wrote the values we
 hold, not because it is more correct.** *(Revised 2026-08-17, then corrected
-the same day.)*
+the same day. Superseded 2026-09-27 by `[SPEC-RLK-152]`; kept as the reasoning
+that held until then.)*
 
 An earlier draft rejected Symphonia on a 1% disagreement, as though it had
 lost on merit. That was wrong, and the correction matters more than the
@@ -113,3 +114,54 @@ other.
    It also sharpens precondition 1 rather than closing it: once some rows say
    `ffmpeg@…` and later ones say `symphonia@…`, the coverage gap stops being a
    count someone remembers and becomes a query.
+
+---
+
+## 3. Done, 2026-09-27
+
+**`[SPEC-RLK-152]` The library is keyed by Symphonia's reading, and ffmpeg
+defines nothing.** The maintainer directed it on 2026-09-26, without waiting
+for a re-extraction, once the cost was measured rather than assumed.
+
+"Why it waits" assumed every key would change. **Measured, 98.9% did not**:
+over the 5,709 files, 5,648 hash identically either way, 60 differ (all MP3,
+all at the tail `[SPEC-RLK-085]`) and 1 cannot be read. So the four tables
+held **353 rows** keyed by a changing value, not ~45,000, and rewriting them
+costs one transaction. The hashing is the whole cost: **211 s** for the
+library on one thread from disk on the desktop, 18 ms a file warm, against
+ffmpeg's 80 ms (a process per file).
+
+- **The definition** is `player/src/identity.rs`: the MD5 of the packets
+  Symphonia's demuxer yields for the first track with a real codec, probed
+  exactly as the player probes a file it plays. `symphonia` is pinned `=0.5.5`,
+  and a test refuses a lock file that disagrees with `identity::GENERATOR`,
+  so the definition moves only by a deliberate edit `[SPEC-RLK-086]`.
+- **One implementation** (precondition 2). `lempi-core` may not reach a
+  demuxer `[GDE-AND-045]`, so it takes a `relink::Hasher` from its host.
+  `relink` and `import_bundle` pass Symphonia's; a phone passes none
+  `[REQ-AND-270]`. Vipunen's Python asks the `hash_audio` binary rather than
+  computing a key its own way. No tool runs ffmpeg for an identity any more.
+- **Provenance.** The re-key wrote `symphonia@0.5.5` to `md5_generator` on
+  every row it hashed. That is not the back-annotation `[SPEC-SC-038]`
+  forbids: each value was recomputed a moment earlier, so the generator is a
+  measurement, not an inference.
+- **The coverage gap** (precondition 1) is accepted for one file:
+  *Ammonia Avenue*'s "Prime Time", an MP3 inside a WAV container. It keeps its
+  ffmpeg-era key and its `NULL` generator, and is the one row a query for
+  `md5_generator IS NULL` returns. The player probes it the same way and
+  refuses it too, so it is unplayable as well as unhashable: remuxing it into
+  a plain MP3 would fix both.
+- **Relink is still the integrity check** `[SPEC-RLK-140]`, now on
+  Symphonia's reading, so damage past the last whole frame is no longer
+  caught. That is the trade `[SPEC-RLK-085]` described, taken deliberately.
+
+**`[SPEC-RLK-155]` A retired key is kept, and read as its successor.** The
+table `audio_md5_aliases (old_md5 PRIMARY KEY, new_md5, generator,
+rekeyed_at)`, in the catalogue half, holds one row per key the re-key
+retired. A copy still holding the old value -- a node not yet synced, a phone
+-- has the same file, not a different one, so `star_merge` translates through
+this table before matching files and passages by `audio_md5`. Without it the
+next sync refuses: "node has no file for 60 of the hub's". The table travels
+with the catalogue, so every copy can translate. `tools/rekey_identity.py`
+writes it, backs both halves up beside them first, and re-reads every table
+afterwards to prove no old key remains.

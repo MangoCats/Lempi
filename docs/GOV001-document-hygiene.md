@@ -221,7 +221,7 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-APS-060]` | Audio path supervisor: one owner, one snapshot | [SPEC011-audio-path-supervisor.md](spec/SPEC011-audio-path-supervisor.md#3-the-design) |
 | `[SPEC-RLK-030]` | Relink: hash the target, match audio_md5, write the path | [SPEC012-library-relink.md](spec/SPEC012-library-relink.md#2-the-mechanism) |
 | `[SPEC-RLK-050]` | Relink outcomes: matched / moved / missing / unknown | [SPEC012-library-relink.md](spec/SPEC012-library-relink.md#3-what-it-reports) |
-| `[SPEC-RLK-150]` | Deferred: Symphonia takes the hash at the next re-extraction | [SPEC045-the-identity-hash.md](spec/SPEC045-the-identity-hash.md#2-decided-and-deferred) |
+| `[SPEC-RLK-150]` | Symphonia takes the hash from ffmpeg — decided 2026-08-17, done 2026-09-27 `[SPEC-RLK-152]` | [SPEC045-the-identity-hash.md](spec/SPEC045-the-identity-hash.md#3-done-2026-09-27) |
 | `[SPEC-SUI-020]` | Vipunen's console against the player's browse page | [SPEC013-vipunen-console.md](spec/SPEC013-vipunen-console.md#2-identity-and-boundaries) |
 | `[SPEC-SUI-055]` | Folder view: identity and completeness are two axes | [SPEC013-vipunen-console.md](spec/SPEC013-vipunen-console.md#32-folder--what-is-here-and-what-is-known-about-it) |
 | `[SPEC-SUI-095]` | Export ships a class A/B/C bundle, not a database | [SPEC013-vipunen-console.md](spec/SPEC013-vipunen-console.md#5-export--new-music-to-a-remote-lempi) |

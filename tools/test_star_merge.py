@@ -259,8 +259,46 @@ def test_translation(tmp):
     check(not os.path.exists(os.path.join(out, "nodes", "desktop")), "the hub's own pair is not repeated")
 
 
+def test_rekeyed(tmp):
+    """[SPEC-RLK-155]: the hub has re-keyed a file and the node has not. The
+    node's old `audio_md5` is the same file, so its path still lands, and its
+    passage is not read as music the hub no longer has."""
+    hub, node = os.path.join(tmp, "k-hub.cat"), os.path.join(tmp, "k-node.cat")
+    for path, md5, where in ((hub, "NEW", "C:/a.mp3"), (node, "OLD", "/srv/a.mp3")):
+        cat(path, f"INSERT INTO files VALUES (1,'{md5}','{where}',100)",
+            "INSERT INTO passages VALUES (1,1000,'ingest')")
+        c = sqlite3.connect(path)
+        for s in ("ALTER TABLE passages ADD COLUMN file_id INTEGER", "ALTER TABLE passages ADD COLUMN kind TEXT",
+                  "ALTER TABLE passages ADD COLUMN start_ms INTEGER",
+                  "UPDATE passages SET file_id = 1, kind = 'radio', start_ms = 0"):
+            c.execute(s)
+        c.commit()
+        c.close()
+    c = sqlite3.connect(hub)
+    c.execute("CREATE TABLE audio_md5_aliases (old_md5 TEXT PRIMARY KEY, new_md5 TEXT NOT NULL, "
+              "generator TEXT NOT NULL, rekeyed_at TEXT NOT NULL)")
+    c.execute("INSERT INTO audio_md5_aliases VALUES ('OLD','NEW','symphonia@0.5.5','2026-09-27T00:00:00Z')")
+    c.commit()
+    c.close()
+    hl, nl = os.path.join(tmp, "k-hub.lis"), os.path.join(tmp, "k-node.lis")
+    db(hl)
+    db(nl, "INSERT INTO listener_play_history VALUES (1,5000,1,'m',100,200,'auto')")
+    out = os.path.join(tmp, "k-out")
+    rep = sm.build({"hub_state_from": "desktop", "hub_library": hub,
+                    "nodes": [dict(name="desktop", listener=hl),
+                              dict(name="node", listener=nl, catalogue=node, files=node)]}, out)
+    mine = os.path.join(out, "nodes", "node")
+    f = rows(os.path.join(mine, "library.db"), "SELECT audio_md5, path FROM files")
+    check(f == [("NEW", "/srv/a.mp3")], f"the node's copy takes the new key, with its own path: {f}")
+    t = rep.data["translations"]["node"]
+    check(t["ids"] == [] and t["unmatched"] == [], f"its passage is the hub's, not gone: {t}")
+    check(rows(os.path.join(mine, "listener.db"), "SELECT passage_id FROM listener_play_history") == [(1,)],
+          "and its play keeps its passage")
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp()
+    test_rekeyed(tmp)
     test_catalogue(tmp)
     test_receivers(tmp)
     test_translation(tmp)

@@ -52,17 +52,17 @@ CREATE TABLE recordings (
 );
 ```
 
-**`[SPEC-SC-038]` `md5_generator` records what produced `audio_md5`, as `name@version`** — `ffmpeg@8.0`, one day `symphonia@0.5.4`. *(Added 2026-09-22, [SPEC045](SPEC045-the-identity-hash.md)'s `[SPEC-RLK-150]` precondition 3.)*
+**`[SPEC-SC-038]` `md5_generator` records what produced `audio_md5`, as `name@version`** — `symphonia@0.5.5` since the re-key of 2026-09-27 `[SPEC-RLK-152]`, `ffmpeg@8.0` on rows written before it. *(Added 2026-09-22, [SPEC045](SPEC045-the-identity-hash.md)'s `[SPEC-RLK-150]` precondition 3.)*
 
 `audio_md5` keys four tables and is treated as a stable identity `[SPEC-DF-030]`, but it implements no standard: it is whatever the demuxer that computed it did `[SPEC-RLK-080]`. An ffmpeg upgrade could in principle orphan rows, and nothing downstream would report that as anything but missing music. This column is what makes such a disagreement diagnosable instead of merely fatal.
 
-**`NULL` means the row predates the column, and stays `NULL`.** No back-annotation: the generator of a value written before anyone recorded it is an inference, and an inferred provenance is worth less than an absent one — the same rule `listener_play_history.selected_by` already follows. So the 5,705 incumbent values read `NULL`, which is the honest answer, and `[SPEC-RLK-080]` is where the reader learns they are an Essentia/libav artefact.
+**`NULL` means the row predates the column, and stays `NULL`.** No back-annotation: the generator of a value written before anyone recorded it is an inference, and an inferred provenance is worth less than an absent one — the same rule `listener_play_history.selected_by` already follows. So the 5,705 incumbent values read `NULL` until 2026-09-27, when the re-key recomputed 5,708 of them and recorded `symphonia@0.5.5`: a measurement just made, not an inference. The one file it could not read keeps `NULL` `[SPEC-RLK-152]`. The keys the re-key retired are in `audio_md5_aliases` `[SPEC-RLK-155]`.
 
 **`[SPEC-SC-039]` `sha256` is the hash of the file's bytes** `[REQ-AND-960]`, `[SPEC-PL-087]`. It is not identity — a rewritten tag changes it and leaves `audio_md5` alone — but it is the one fingerprint a phone can compute, so Vipunen can tell a phone exactly which of its files it holds already `[REQ-AND-288]`, and a phone can recognise a bundled file it finds again `[REQ-AND-260]`. It is set at induction (`tools/ingest_folder.py`) and by a bundle import that verified it; `tools/add_byte_hashes.py` fills rows that predate it. `NULL` means not yet hashed. *(Added 2026-09-26.)*
 
 **`[SPEC-SC-041]` A file a phone found for itself is keyed `sha256:<its byte hash>` in `audio_md5`** `[REQ-AND-260]`. The phone cannot compute `audio_md5` `[REQ-AND-270]`, and the column is `NOT NULL UNIQUE`, so the byte hash stands in, in a namespace a real 32-hex `audio_md5` can never enter. Its one passage is whole-file radio, with `boundary_src = 'found:tags'` marking it tags-only. When a bundle later names the same bytes, those rows give way to Vipunen's, bound at the same path.
 
-Written by `tools/ingest_folder.py`, `tools/ingest_cd.py`, `tools/migrate_mulib.py` and `player/core/src/bundle.rs`; the string is computed by `ingest_folder.ffmpeg_generator()` and `player/core/src/relink.rs::hasher_generator()`, which are separate implementations because Lempi and Vipunen share a schema and no code `[GDE-ARC-018]` — verified byte-identical on one machine 2026-09-22.
+Written by `tools/ingest_folder.py`, `tools/ingest_cd.py`, `tools/migrate_mulib.py`, `tools/rekey_identity.py` and `player/core/src/bundle.rs`. The string has one source, `player/src/identity.rs::GENERATOR`: the Python tools ask `hash_audio --generator`, the binary that also computes the hash, so a row cannot name a hasher other than the one that ran. Until 2026-09-27 each side computed an ffmpeg string of its own.
 
 **`[SPEC-SC-035]` `path` is deliberately not unique and never a key.** MuLibPlay's ability to relocate a moved library came from matching content, not paths `[GDE-BMK-050]`; that property is preserved by keying on `audio_md5`.
 

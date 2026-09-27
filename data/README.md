@@ -41,6 +41,15 @@ node and read-only.
 distinct, spot-checked against the files. That column is the one difference
 from `merge-full-5`, and no node has it yet.
 
+**Since 2026-09-27 04:15 UTC the pair is keyed by Symphonia's reading**
+`[SPEC-RLK-152]`. `tools/rekey_identity.py` hashed all 5,709 files in 212 s:
+5,648 kept their `audio_md5`, 60 changed (353 rows across four tables), and one
+could not be read (*Ammonia Avenue*'s "Prime Time", an MP3 in a WAV container),
+which keeps its old key and a `NULL` generator. The 60 retired keys are in
+`audio_md5_aliases` `[SPEC-RLK-155]`. Both halves as they were just before are in
+`backups/pre-rekey-20260927T0415Z/`, and the run's output is
+`rekey-2026-09-27.log`. **No node has the new keys until its next star sync.**
+
 **Each node received its own copy by patch** `[SPEC-STAR-080]`, and keeps the
 pair it had before in `pre-star-2026-09-26/` beside its listener. Which nodes,
 and what was verified, is in [FLEET001](../fleet/FLEET001-the-fleet.md)

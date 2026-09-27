@@ -31,7 +31,7 @@ folded into one spec.
 | Database schema | [SPEC008](spec/SPEC008-database-schema.md) | [§8 Open](spec/SPEC008-database-schema.md#8-open) |
 | Program Director | [SPEC009](spec/SPEC009-program-director.md) | [§9 Open](spec/SPEC009-program-director.md#9-open) |
 | Audio path supervisor | [SPEC011](spec/SPEC011-audio-path-supervisor.md) | [§5 Risks and open questions](spec/SPEC011-audio-path-supervisor.md#5-risks-and-open-questions) |
-| Library relink — the identity hash | [SPEC045](spec/SPEC045-the-identity-hash.md) | [§2 Decided, and deferred](spec/SPEC045-the-identity-hash.md#2-decided-and-deferred) |
+| Library relink — the identity hash (re-keyed to Symphonia 2026-09-27; one file it cannot read remains) | [SPEC045](spec/SPEC045-the-identity-hash.md) | [§3 Done, 2026-09-27](spec/SPEC045-the-identity-hash.md#3-done-2026-09-27) |
 | Vipunen console | [SPEC013](spec/SPEC013-vipunen-console.md) | [§6 Open](spec/SPEC013-vipunen-console.md#6-open) |
 | Payload schema | [SPEC014](spec/SPEC014-payload-schema.md) | [§6 Open](spec/SPEC014-payload-schema.md#6-open) |
 | Mesh library sync — N Vipunen-capable peers (designed 2026-09-06, not yet built) | [SPEC035](spec/SPEC035-mesh-library-sync.md) | [§8 Open](spec/SPEC035-mesh-library-sync.md#8-what-remains-open-after-this-document) |

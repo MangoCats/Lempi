@@ -104,6 +104,7 @@ class Node:
         self.mirror = bool(spec.get("mirror"))
         self.catalogue = spec.get("catalogue")
         self.remap: dict = {}          # [SPEC-STAR-049]: node passage id -> hub's
+        self.aliases: dict = {}        # [SPEC-RLK-155]: a retired audio_md5 -> the hub's
         self.remapped: dict = {}       # table -> rows translated
         self.tables = {r[0] for r in self.db.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
@@ -125,6 +126,11 @@ class Node:
             return []
         cols = self.cols(table)
         rows = [dict(zip(cols, r)) for r in self.db.execute(f"SELECT * FROM {table}")]
+        if self.aliases and "audio_md5" in cols:
+            for r in rows:
+                if r["audio_md5"] in self.aliases:
+                    r["audio_md5"] = self.aliases[r["audio_md5"]]
+                    self.remapped[table] = self.remapped.get(table, 0) + 1
         if self.remap:
             for r in rows:
                 if r.get("passage_id") in self.remap:
@@ -267,12 +273,24 @@ def build(manifest: dict, out: str) -> Report:
     return rep
 
 
+def aliases(hub_cat: str) -> dict:
+    """[SPEC-RLK-155]: each retired `audio_md5` -> the one the hub keys that
+    file by now. A node that has not yet received a re-key still holds the old
+    value, and it is the same file, not a different one."""
+    c = open_ro(hub_cat)
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE name = 'audio_md5_aliases'").fetchone():
+        return {}
+    return dict(c.execute("SELECT old_md5, new_md5 FROM audio_md5_aliases"))
+
+
 def passage_remap(node_cat: str, hub_cat: str):
     """[SPEC-STAR-049]: node passage id -> hub passage id, for ids whose file
-    differs between the two catalogues; and the ids the hub no longer has."""
+    differs between the two catalogues; and the ids the hub no longer has.
+    A node's retired `audio_md5` is read as the hub's [SPEC-RLK-155]."""
     q = ("SELECT p.passage_id, f.audio_md5, p.kind, p.start_ms FROM passages p "
          "JOIN files f USING (file_id)")
-    node = {r[0]: r[1:] for r in open_ro(node_cat).execute(q)}
+    alias = aliases(hub_cat)
+    node = {r[0]: (alias.get(r[1], r[1]),) + r[2:] for r in open_ro(node_cat).execute(q)}
     hub = {r[0]: r[1:] for r in open_ro(hub_cat).execute(q)}
     def by_file(m):
         out = {}
@@ -307,6 +325,8 @@ def build_listener(manifest: dict, out: str, rep: Report, hub_cat: str | None = 
     nodes = sorted((Node(s) for s in manifest["nodes"]), key=lambda n: n.name)
     rep.data["translations"] = {}
     for n in nodes:
+        if hub_cat:
+            n.aliases = aliases(hub_cat)
         if n.catalogue and hub_cat:
             n.remap, gone = passage_remap(n.catalogue, hub_cat)
             rep.data["translations"][n.name] = dict(
@@ -383,9 +403,10 @@ def write_listener(nodes: list[Node], own: str, path: str, rep: Report,
 def catalogue_copies(manifest: dict, out: str, rep: Report):
     """[SPEC-STAR-080]: each node's catalogue is the hub's, with the node's
     own machine-scope columns [SPEC-DF-030] -- matched by `audio_md5`, since
-    a file id is local too [SPEC-DF-035]. A node names the database holding
-    its own `files` table as `files`; one that names none gets no catalogue,
-    and the report says so."""
+    a file id is local too [SPEC-DF-035], and a node's retired `audio_md5`
+    read as the hub's [SPEC-RLK-155]. A node names the database holding its
+    own `files` table as `files`; one that names none gets no catalogue, and
+    the report says so."""
     hub_cat = os.path.join(out, "library.db")
     held = {r[1] for r in open_ro(hub_cat).execute("PRAGMA table_info(files)")}
     cols = sorted(MACHINE_SCOPE["files"] & held)
@@ -397,7 +418,8 @@ def catalogue_copies(manifest: dict, out: str, rep: Report):
         if not spec.get("files"):
             entry["catalogue"] = "none: the manifest names no `files` for this node"
             continue
-        theirs = {r[0]: r[1:] for r in open_ro(spec["files"]).execute(
+        alias = aliases(hub_cat)
+        theirs = {alias.get(r[0], r[0]): r[1:] for r in open_ro(spec["files"]).execute(
             f"SELECT audio_md5, {', '.join(cols)} FROM files")}
         d = os.path.join(out, "nodes", name)
         os.makedirs(d, exist_ok=True)

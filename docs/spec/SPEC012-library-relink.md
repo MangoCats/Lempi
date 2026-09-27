@@ -108,6 +108,8 @@ path that resolves to nothing.
 **`[SPEC-RLK-070]`** `ffmpeg -i F -vn -c:a copy -f md5 -` hashes the encoded
 packets as they are read — no decode, so the work is I/O. Measured end to end:
 **5,742 files in 423 s**, 74 ms each, against the schema's estimate of ~70.
+*Since 2026-09-27 the hash is Symphonia's, in-process `[SPEC-RLK-152]`: 5,709
+files in 211 s on the desktop, with no process started per file.*
 
 **`[SPEC-RLK-075]` On the appliance it is 2 h 37 m, not the hour this document
 guessed.** *(Measured 2026-08-20, first full run on the Pi Zero 2 W: 5,745 files,
