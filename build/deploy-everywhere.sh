@@ -64,10 +64,10 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 # is under `lp3-wifi`, which only `tools/echo_skew.sh`'s usage line knew.
 #
 # It also runs `fbui.service` from a separate `/usr/local/bin/fbui` binary
-# `[SPEC-FBUI-015]`, which `install-player.sh` does NOT replace. That binary
-# reads the snapshot over the same WebSocket and tolerates fields it does not
-# know, so it survives a `lempi` newer than itself -- but it does drift, and
-# nothing here updates it.
+# `[SPEC-FBUI-015]`. Until 2026-09-27 nothing here updated it, and it drifted:
+# a 2026-09-21 build under a current player. `deploy-appliance.sh` now builds
+# and installs it on any node that has the unit, and the final check below
+# asks its durable copy too `[GDE-DEP-120]`.
 APPLIANCES=$(. "$ROOT/build/lib-defaults.sh"; lempi_fleet)
 # `host:path` -- a source host needs its checkout named, since unlike an
 # appliance's `/usr/local/bin/lempi` there is no conventional location.
@@ -208,6 +208,22 @@ for host in $HOSTS; do
             *) printf '  %-*s : %s -- this deploy would NOT survive a reboot
 '                    "$width" "${host#*@}" "$durable" >&2
                mismatch=$((mismatch + 1)) ;;
+        esac
+        # The screen's program, where the node runs one `[GDE-DEP-120]`: its
+        # durable copy, since that is what the next boot starts. A node
+        # without the unit says so, and is not asked.
+        fbui=$(ssh -o ConnectTimeout=5 "$host" '
+            systemctl list-unit-files --no-legend fbui.service 2>/dev/null | grep -q . || { echo none; exit 0; }
+            L=$(findmnt -no OPTIONS / | tr "," "\n" | sed -n "s/^lowerdir=//p")
+            sudo "$L/usr/local/bin/fbui" --version 2>/dev/null | head -1' 2>/dev/null)
+        case "$fbui" in
+            none) ;;
+            *"$head_sha"*)
+                printf '  %-*s : fbui matches HEAD (%s)
+' "$width" "${host#*@}" "$head_sha" ;;
+            *)  printf '  %-*s : fbui does NOT match HEAD (%s) -- got: %s
+'                    "$width" "${host#*@}" "$head_sha" "${fbui:-no answer}" >&2
+                mismatch=$((mismatch + 1)) ;;
         esac
     fi
     check_matches "${host#*@}" "$answer" || mismatch=$((mismatch + 1))

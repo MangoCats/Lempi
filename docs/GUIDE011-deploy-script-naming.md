@@ -130,6 +130,20 @@ correctly calls the only check that catches a stale service. It is also blind
 to the case where the disk is RAM. Where a target has two copies — live and
 persisted — both must be checked, and the *persisted* one is the answer.
 
+**`[GDE-DEP-120]` Every program a node runs from this crate is deployed with
+the player, and the node says which.** `fbui` is a separate binary behind the
+`fbui` feature `[SPEC-FBUI-010]`, and a player-only deploy left it behind.
+lp3-wifi ran a 2026-09-21 build, six days old, under a current player, and no
+check reported it. `deploy-appliance.sh` now asks each node whether it has
+`fbui.service`, the same way it asks about `lempi.service`: no list of which
+nodes have a screen. Where it does, `fbui` is cross-compiled separately from
+the same tree, so the player stays the same bytes everywhere, and installed by
+`build/install-fbui.sh` after the player. That installer applies this
+section's rules: checksummed upload, a staged `--version`, and the durable
+layer written only once the new build has logged "connected" since its
+restart, else rolled back. The final check in `deploy-everywhere.sh` asks
+`fbui`'s durable copy too.
+
 ---
 
 ## 6. What the migration costs

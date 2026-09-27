@@ -61,7 +61,10 @@ behind the `fbui` feature, and its source is
 knowing before deploying to this node:
 
 - **`install-player.sh` does not replace it.** It installs the player and
-  nothing else, so `fbui` drifts until it is built and installed deliberately.
+  nothing else. *Since 2026-09-27 `build/deploy-appliance.sh` builds and
+  installs `fbui` too, on any node that has `fbui.service`* `[GDE-DEP-120]`,
+  and the fleet check asks its version. Before that it drifted: this node ran
+  a 2026-09-21 build under a current player.
 - **It compiles its calibration path in.** The saved touch calibration lives at
   `/var/lempi/touch-calibration.toml` as a `const`, so a change to where the
   state directory lives cannot be fixed by editing anything on the machine —

@@ -90,6 +90,23 @@ fi
 
 die() { echo "deploy: $*" >&2; exit 1; }
 
+# **Does it also run the framebuffer screen's program?** `[GDE-DEP-120]`.
+# `fbui` is a separate binary behind the `fbui` feature [SPEC-FBUI-010], so a
+# player-only deploy left it behind: lp3-wifi ran a 2026-09-21 build, six days
+# old, while every player in the fleet was current. The node answers, the same
+# way it answers for `lempi.service` above -- no list of which nodes have a
+# screen, since a hand-kept list is how lp3-wifi was once left out of the fleet
+# altogether.
+HAS_FBUI=$(ssh -o ConnectTimeout=10 "$HOST" \
+    "systemctl list-unit-files --no-legend fbui.service 2>/dev/null | awk '{print \$1}' | head -1")
+ssh_rc=$?
+[ "$ssh_rc" -eq 0 ] || die "cannot ask $HOST whether it runs fbui.service -- ssh exited $ssh_rc; nothing was deployed"
+if [ -n "$HAS_FBUI" ]; then
+    echo "deploy: $HOST also runs fbui.service -- fbui is built and installed with the player"
+else
+    echo "deploy: $HOST has no fbui.service -- the player only"
+fi
+
 # `deploy-lempi02w.sh` built appliances WITH this flag and this script built
 # them WITHOUT it, so which binary an appliance received depended on which
 # command you happened to type. Merging forces one answer; this preserves what
@@ -125,6 +142,7 @@ docker build -t lempi-aarch64 -f "$DOCKER_PATH/build/Dockerfile.aarch64" "$DOCKE
     || die "docker build failed"
 
 OUT="$REPO_ROOT/player/target/aarch64-unknown-linux-gnu/release/lempi"
+OUT_FBUI="$REPO_ROOT/player/target/aarch64-unknown-linux-gnu/release/fbui"
 
 if [ -z "$REF" ]; then
     # No ref named: build exactly what is checked out here, same as running
@@ -142,6 +160,16 @@ if [ -z "$REF" ]; then
     docker run --rm -v "$DOCKER_PATH:/w" lempi-aarch64 \
         cargo build --release --target aarch64-unknown-linux-gnu --manifest-path player/Cargo.toml $FEATURES \
         || die "cross-compile failed"
+    # A second compile, not one with both: the `fbui` feature would otherwise
+    # be unified into the player's own build, and the player binary must stay
+    # the same bytes on every appliance, screen or not `[BOS-RUN-010]`.
+    if [ -n "$HAS_FBUI" ]; then
+        echo "deploy: cross-compiling fbui from the same tree ($EXPECTED)..."
+        docker run --rm -v "$DOCKER_PATH:/w" lempi-aarch64 \
+            cargo build --release --target aarch64-unknown-linux-gnu --manifest-path player/Cargo.toml \
+                --features fbui --bin fbui \
+            || die "cross-compile of fbui failed"
+    fi
 else
     # A named ref: built in a worktree that is created and used entirely
     # inside the container, so your own checkout is never touched and a
@@ -172,6 +200,10 @@ cd /tmp/lempi-build
 cargo build --release --target aarch64-unknown-linux-gnu --manifest-path player/Cargo.toml $2
 mkdir -p /w/.deploy-out
 cp player/target/aarch64-unknown-linux-gnu/release/lempi /w/.deploy-out/lempi
+if [ -n "$3" ]; then
+    cargo build --release --target aarch64-unknown-linux-gnu --manifest-path player/Cargo.toml --features fbui --bin fbui
+    cp player/target/aarch64-unknown-linux-gnu/release/fbui /w/.deploy-out/fbui
+fi
 cd /w
 git worktree remove --force /tmp/lempi-build
 EOS
@@ -184,10 +216,13 @@ EOS
     # nonexistent path on the host's own filesystem.
     MSYS_NO_PATHCONV=1 docker run --rm \
         -v "$DOCKER_PATH:/w" -v "$DOCKER_PATH/.lempi-deploy-build.sh:/build.sh:ro" lempi-aarch64 \
-        bash /build.sh "$REF" "$FEATURES" \
+        bash /build.sh "$REF" "$FEATURES" "$HAS_FBUI" \
         || die "cross-compile failed"
     mkdir -p "$(dirname "$OUT")"
     mv "$REPO_ROOT/.deploy-out/lempi" "$OUT"
+    if [ -n "$HAS_FBUI" ]; then
+        mv "$REPO_ROOT/.deploy-out/fbui" "$OUT_FBUI" || die "the fbui build produced no binary"
+    fi
     rmdir "$REPO_ROOT/.deploy-out" 2>/dev/null || true
 fi
 
@@ -213,9 +248,11 @@ echo "deploy: putting it on $HOST"
 # pass for exactly the write `[IMPL-BOS-185]` was about. `install-player.sh`
 # already refuses in that case; this half was the weaker of the two.
 VBIN=/usr/local/bin/lempi
+DURABLE=""
 if [ "$(ssh "$HOST" "findmnt -no FSTYPE /" 2>/dev/null)" = "overlay" ]; then
     LOWER="$(ssh "$HOST" "findmnt -no OPTIONS / | tr ',' '\n' | sed -n 's/^lowerdir=//p'" 2>/dev/null)"
     [ -n "$LOWER" ] || die "overlay root on $HOST but no lowerdir -- refusing to verify the ephemeral copy and call it durable"
+    DURABLE="$LOWER"
     VBIN="$LOWER$VBIN"
     echo "deploy: $HOST has an overlay root -- asking the DURABLE copy at $VBIN"
 else
@@ -248,4 +285,18 @@ fi
 if [ -x "$(dirname "$0")/verify-playing.sh" ] || [ -f "$(dirname "$0")/verify-playing.sh" ]; then
     sh "$(dirname "$0")/verify-playing.sh" "$HOST" ||
         echo "deploy: WARNING -- $HOST installed correctly but could not be shown to be playing (see above; a paused player reads the same way)"
+fi
+
+# ---- the screen's program, on a node that runs it `[GDE-DEP-120]` ---------
+# After the player and its checks, so a failure here can never stand in the
+# way of the music: `fbui` is a separate process for exactly that reason
+# [SPEC-FBUI-010]. Its own installer rolls back a build that does not connect.
+if [ -n "$HAS_FBUI" ]; then
+    echo "deploy: putting fbui on $HOST"
+    (cd "$REPO_ROOT" && "$REPO_ROOT/build/install-fbui.sh" "$HOST") || die "install-fbui.sh failed; see above"
+    FREPORTED="$(ssh "$HOST" "sudo $DURABLE/usr/local/bin/fbui --version" 2>/dev/null \
+                 | grep -o '[0-9a-f]\{12\}\(+dirty\)\?')"
+    [ "$FREPORTED" = "$EXPECTED" ] \
+        || die "$HOST's durable fbui reports '${FREPORTED:-nothing}', expected '$EXPECTED'"
+    echo "deploy: confirmed -- $HOST's fbui is $EXPECTED${DURABLE:+ (the durable copy)}"
 fi

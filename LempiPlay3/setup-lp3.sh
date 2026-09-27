@@ -28,9 +28,9 @@
 # suggests a copy of bose's card, and that is a guess. This script starts
 # from the layout, not from that history.
 #
-# **What it does not do.** The player and fbui binaries are built and
-# installed separately: `build/deploy-appliance.sh` for the player, and fbui
-# built `--features fbui` [LP3-REP-040]. The library is seeded as bose's is
+# **What it does not do.** The player and fbui binaries are not installed
+# here: `build/deploy-appliance.sh` builds and installs both, fbui because this
+# node has fbui.service [GDE-DEP-120], [LP3-REP-040]. The library is seeded as bose's is
 # (BosePi/seed-library.sh), and the database split is IMPL016's step 2.
 # Wi-Fi credentials are the imager's, and are never in this repository.
 # journald needs a setting of its own, and until 2026-09-25 lacked one: the
@@ -274,7 +274,7 @@ file_item "lempi-db-recover" LempiPi/lempi-db-recover /usr/local/bin/lempi-db-re
 item "lempi installed" "test -x $P/usr/local/bin/lempi" "" \
      "build/deploy-appliance.sh $HOST"
 item "fbui installed" "test -x $P/usr/local/bin/fbui" "" \
-     "build it --features fbui --bin fbui [LP3-REP-040]"
+     "build/deploy-appliance.sh $HOST (installs fbui where fbui.service exists) [GDE-DEP-120]"
 
 # ------------------------------------------------------------ clock and swap
 say ""
