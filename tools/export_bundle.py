@@ -54,6 +54,9 @@ def main() -> int:
     ap.add_argument("--payload-only", action="store_true",
                     help="no audio: what Vipunen knows about files the receiver already "
                          "holds, named by their recorded byte hash [SPEC-PL-095]")
+    ap.add_argument("--no-covers", action="store_true",
+                    help="send no cover images: the releases travel, without their pictures "
+                         "[SPEC-PL-105]")
     ap.add_argument("--part-size", type=int, default=0,
                     help="with --payload-only: encodings per payload part, so a phone "
                          "parses a few MB at a time")
@@ -145,6 +148,7 @@ def main() -> int:
         bytes_out += os.path.getsize(dest)
         copied += 1
 
+    cover_bytes = write_covers(conn, doc, args.out, args, set())
     text = json.dumps(doc, indent=2, ensure_ascii=False)
     with open(os.path.join(args.out, "payload.json"), "w",
               encoding="utf-8", newline="\n") as fh:
@@ -162,6 +166,7 @@ def main() -> int:
     print(f"  recordings  {len(doc['recordings'])}")
     print(f"  audio       {copied} files, {bytes_out/1e6:.1f} MB"
           + (f"   ({missing} MISSING)" if missing else ""))
+    print(f"  releases    {len(doc.get('releases', []))}, covers {cover_bytes/1e6:.1f} MB")
     print(f"  payload     {len(text.encode())/1024:.1f} KB"
           + (f"  ({gz_len/1024:.1f} KB gzipped)" if gz_len else ""))
     print(f"  byte hashes {agree} match the catalogue's record, {unrecorded} not recorded there"
@@ -184,8 +189,40 @@ def main() -> int:
                 for f in sorted(files):
                     full = os.path.join(dirpath, f)
                     z.write(full, "audio/" + os.path.relpath(full, audio_dir).replace(os.sep, "/"))
+            zip_covers(z, args.out)
         print(f"  zip         {dest}, {os.path.getsize(dest)/1e6:.1f} MB")
     return 0
+
+
+def write_covers(conn, doc, out, args, written: set) -> int:
+    """`[SPEC-PL-105]`: each cover the payload names, written beside it as
+    `covers/...`, once however many parts name it. With --no-covers the
+    payload stops naming them, so a receiver expects none. Returns bytes
+    written."""
+    if args.no_covers:
+        for rel in doc.get("releases", []):
+            rel.pop("cover", None)
+        return 0
+    n = 0
+    for name, blob in payloadmod.cover_files(conn, doc).items():
+        if name in written:
+            continue
+        dest = os.path.join(out, *name.split("/"))
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "wb") as fh:
+            fh.write(blob)
+        written.add(name)
+        n += len(blob)
+    return n
+
+
+def zip_covers(z, out):
+    """Every file under `covers/`, into an open zip."""
+    covers = os.path.join(out, "covers")
+    for dirpath, _, files in sorted(os.walk(covers)):
+        for f in sorted(files):
+            full = os.path.join(dirpath, f)
+            z.write(full, "covers/" + os.path.relpath(full, covers).replace(os.sep, "/"))
 
 
 def payload_only(conn, md5s, roots, args) -> int:
@@ -206,6 +243,8 @@ def payload_only(conn, md5s, roots, args) -> int:
     chunks = [named[i:i + size] for i in range(0, len(named), size)]
     os.makedirs(args.out, exist_ok=True)
     names = []
+    written: set = set()
+    cover_bytes = 0
     for n, chunk in enumerate(chunks, 1):
         doc = payloadmod.build(conn, chunk, roots)
         bad = payloadmod.compatible(doc)
@@ -215,6 +254,7 @@ def payload_only(conn, md5s, roots, args) -> int:
             return 1
         for e in doc["encodings"]:
             e["sha256"] = recorded[e["audio_md5"]]
+        cover_bytes += write_covers(conn, doc, args.out, args, written)
         name = "payload.json" if len(chunks) == 1 else f"payload-{n:03d}.json"
         with open(os.path.join(args.out, name), "w", encoding="utf-8", newline="\n") as fh:
             json.dump(doc, fh, separators=(",", ":"), ensure_ascii=False)
@@ -223,6 +263,7 @@ def payload_only(conn, md5s, roots, args) -> int:
     print(f"bundle: {args.out} (payload only)")
     print(f"  encodings   {len(named)}, in {len(names)} part(s)")
     print(f"  payload     {total / 1e6:.1f} MB")
+    print(f"  covers      {len(written)} files, {cover_bytes / 1e6:.1f} MB")
     if args.zip:
         import zipfile
         dest = args.out.rstrip("/\\") + ".zip"
@@ -230,6 +271,7 @@ def payload_only(conn, md5s, roots, args) -> int:
         with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED) as z:
             for name in names:
                 z.write(os.path.join(args.out, name), name)
+            zip_covers(z, args.out)
         print(f"  zip         {dest}, {os.path.getsize(dest) / 1e6:.1f} MB")
     return 0
 

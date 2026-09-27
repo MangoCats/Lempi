@@ -197,7 +197,52 @@ def test_retired_keys_travel_with_every_payload():
           f"every alias, in a stable order: {got}")
 
 
+def test_covers_travel_as_files_named_by_the_payload():
+    """`[SPEC-PL-105]`: a recording's chosen release, and any release of it
+    with a front cover, travel with its tracks for the payload's recordings
+    only; the cover is named as a file with its byte hash, and `cover_files`
+    returns exactly those bytes. Other releases stay home.
+    """
+    import hashlib
+    conn = make_db(":memory:", SCHEMA)
+    conn.execute("INSERT INTO passages VALUES (1,1,'radio',0,10000,NULL,NULL,NULL,'x',"
+                 "20,20,'exponential','exponential')")
+    conn.execute("INSERT INTO recordings VALUES ('m1','t',NULL,'s')")
+    conn.execute("INSERT INTO passage_recordings VALUES (1,'m1',1.0,'s')")
+    conn.executescript("""
+        CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT NOT NULL, release_date TEXT,
+            source TEXT NOT NULL, release_group TEXT, status TEXT, primary_type TEXT,
+            secondary_types TEXT, country TEXT, track_count INTEGER);
+        CREATE TABLE release_recordings (release_mbid TEXT NOT NULL, mbid TEXT NOT NULL,
+            position INTEGER, source TEXT NOT NULL, track_length_ms INTEGER, chosen INTEGER DEFAULT 0,
+            disc INTEGER, PRIMARY KEY (release_mbid, mbid)) WITHOUT ROWID;
+        CREATE TABLE cover_art (release_mbid TEXT PRIMARY KEY, front BLOB, back BLOB,
+            source TEXT NOT NULL, fetched_at TEXT NOT NULL);
+        INSERT INTO releases (mbid,title,source) VALUES ('r-chosen','Chosen','mb'),
+            ('r-pictured','Pictured','mb'), ('r-other','Other','mb');
+        INSERT INTO release_recordings VALUES ('r-chosen','m1',3,'mb',NULL,1,1),
+            ('r-pictured','m1',5,'mb',NULL,0,1), ('r-other','m1',7,'mb',NULL,0,1);
+    """)
+    jpg = b"\xff\xd8\xff" + b"j" * 600
+    png = b"\x89PNG" + b"p" * 600
+    conn.execute("INSERT INTO cover_art VALUES ('r-pictured', ?, ?, 'caa', 't')", (jpg, png))
+    doc = pl.build(conn, ["md5"])
+    rels = {r["mbid"]: r for r in doc.get("releases", [])}
+    check(sorted(rels) == ["r-chosen", "r-pictured"], f"chosen and pictured only: {sorted(rels)}")
+    check(rels["r-chosen"]["tracks"] == [{"recording": "m1", "position": 3, "disc": 1, "chosen": 1,
+                                          "track_length_ms": None, "source": "mb"}],
+          f"tracks: {rels['r-chosen']['tracks']}")
+    cov = rels["r-pictured"].get("cover", {})
+    check(cov.get("front") == {"file": "covers/r-pictured-front.jpg",
+                               "sha256": hashlib.sha256(jpg).hexdigest()}, f"front: {cov.get('front')}")
+    check(cov.get("back", {}).get("file") == "covers/r-pictured-back.png", f"back: {cov.get('back')}")
+    files = pl.cover_files(conn, doc)
+    check(files == {"covers/r-pictured-front.jpg": jpg, "covers/r-pictured-back.png": png},
+          f"cover files: {sorted(files)}")
+
+
 def main() -> int:
+    test_covers_travel_as_files_named_by_the_payload()
     test_retired_keys_travel_with_every_payload()
     test_lyrics_travel_on_their_recording()
     test_fade_travels_when_the_schema_has_it()

@@ -7,6 +7,8 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.StatFs
+import android.provider.OpenableColumns
 import android.provider.DocumentsContract
 import android.widget.ScrollView
 import android.widget.TextView
@@ -24,11 +26,12 @@ import java.util.zip.ZipInputStream
  * - an unpacked bundle folder, from the folder picker ([PICK_FOLDER]).
  *
  * Either way the bundle is copied into private staging first -- only
- * `payload.json` and `audio/...`, and nothing whose name climbs out of the
- * folder -- and handed to the player library, which verifies every file
- * against Vipunen's byte hash before placing it in `Music/Lempi/`
- * [REQ-AND-210]. Staging is removed afterwards, and the running player is
- * asked to rebuild its choices so the new music can be picked.
+ * `payload.json`, `audio/...` and `covers/...`, and nothing whose name climbs
+ * out of the folder -- and handed to the player library, which verifies every
+ * file against Vipunen's byte hash before placing it in `Music/Lempi/`
+ * [REQ-AND-210]. Each step first checks there is room for it, and refuses
+ * rather than failing part-way. Staging is removed afterwards, and the running
+ * player is asked to rebuild its choices so the new music can be picked.
  */
 class ImportActivity : Activity() {
     private val main = Handler(Looper.getMainLooper())
@@ -75,11 +78,18 @@ class ImportActivity : Activity() {
                 say("Unpacking…")
                 staging.mkdirs()
                 stageInto(staging)
-                say("Checking every file against Vipunen's record, then placing it in Music/Lempi…")
                 val music = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "Lempi")
+                // Before anything is placed: the audio staged is at most what
+                // placing it can need. Files the phone holds already take no
+                // room, so this can refuse a bundle that would have fitted --
+                // never the other way round.
+                need("placing its audio in Music/Lempi", bytesUnder(File(staging, "audio")), music)
+                say("Checking every file against Vipunen's record, then placing it in Music/Lempi…")
                 val r = importBundle(File(filesDir, "library.db").path, staging.path, music.path)
                 report(r)
-                if (r.imported > 0u || r.reused > 0u || r.replaced > 0u || r.upgraded > 0u || r.rekeyed > 0u) reload()
+                if (r.imported > 0u || r.reused > 0u || r.replaced > 0u || r.upgraded > 0u || r.rekeyed > 0u || r.covers > 0u) reload()
+            } catch (e: NoRoom) {
+                say("\nNot imported, and nothing changed: ${e.message}")
             } catch (e: LempiException) {
                 say("\nImport failed: ${e.message}")
             } catch (e: Exception) {
@@ -102,6 +112,7 @@ class ImportActivity : Activity() {
         if (r.upgraded > 0u) say("Found on the phone already, and now given Vipunen's data where they lie: ${r.upgraded}.")
         if (r.rekeyed > 0u) say("Renamed to Vipunen's new signature for the same audio: ${r.rekeyed}.")
         if (r.reused > 0u) say("Already on the phone, and bound rather than copied again: ${r.reused}.")
+        if (r.releases > 0u) say("Albums described: ${r.releases}, with ${r.covers} cover picture(s).")
         listOf(
             "Damaged in transit, not placed" to r.corrupt,
             "Rewritten by Vipunen, but the phone would not let it be replaced" to r.notReplaced,
@@ -110,6 +121,7 @@ class ImportActivity : Activity() {
             "No byte hash to check against, not placed" to r.unverifiable,
             "A different file already has this name, left alone" to r.conflicts,
             "A path outside the music folder, refused" to r.unsafePaths,
+            "Cover pictures damaged in transit, not stored" to r.badCovers,
         ).forEach { (what, list) ->
             if (list.isNotEmpty()) {
                 say("\n$what (${list.size}):")
@@ -150,8 +162,37 @@ class ImportActivity : Activity() {
         }, "lempi-scan").start()
     }
 
-    /** A bundle's `.zip`: `payload.json` and `audio/...` only. */
+    /** Too little free space for a step of the import; nothing was changed. */
+    private class NoRoom(message: String) : Exception(message)
+
+    /**
+     * Refuse, before starting, a step that would run out of space part-way:
+     * `bytes` plus a margin must be free on the volume holding `where` (or its
+     * nearest existing ancestor, since `Music/Lempi` may not exist yet).
+     */
+    private fun need(what: String, bytes: Long, where: File) {
+        var dir: File? = where
+        while (dir != null && !dir.exists()) dir = dir.parentFile
+        val free = StatFs((dir ?: where).path).availableBytes
+        if (bytes + MARGIN > free) {
+            throw NoRoom("$what needs ${mb(bytes)} MB and ${mb(MARGIN)} MB to spare, and ${mb(free)} MB is free.")
+        }
+    }
+
+    private fun mb(b: Long) = (b + 999_999) / 1_000_000
+
+    private fun bytesUnder(dir: File): Long = dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+
+    /** A bundle's `.zip`: `payload.json`, `audio/...` and `covers/...` only. */
     private fun fromZip(uri: Uri): (File) -> Unit = { staging ->
+        val size = contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+            if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null
+        }
+        // At least its own size unpacked: an audio bundle is stored, and a
+        // data-only one is deflated and unpacks to about ten times it
+        // [SPEC-PL-095]. So this is a first check, and each entry below keeps
+        // the margin free as well.
+        if (size != null) need("unpacking the bundle", size, staging)
         val input = contentResolver.openInputStream(uri) ?: throw IllegalStateException("cannot open $uri")
         var files = 0
         ZipInputStream(input.buffered()).use { z ->
@@ -159,6 +200,7 @@ class ImportActivity : Activity() {
                 val e = z.nextEntry ?: break
                 val name = e.name
                 if (e.isDirectory || !wanted(name)) continue
+                need("unpacking $name", maxOf(e.size, 0L), staging)
                 val out = File(staging, name)
                 out.parentFile?.mkdirs()
                 out.outputStream().use { z.copyTo(it) }
@@ -170,9 +212,33 @@ class ImportActivity : Activity() {
 
     /** An unpacked bundle folder, chosen in the folder picker. */
     private fun fromFolder(tree: Uri): (File) -> Unit = { staging ->
+        need("copying the bundle", sizeOfTree(tree, DocumentsContract.getTreeDocumentId(tree), ""), staging)
         val files = copyTree(tree, DocumentsContract.getTreeDocumentId(tree), staging, "")
         say("Copied $files file(s).")
     }
+
+    /** What [copyTree] would copy, in bytes. */
+    private fun sizeOfTree(tree: Uri, docId: String, prefix: String): Long {
+        var n = 0L
+        val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId)
+        val cols = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.COLUMN_SIZE)
+        contentResolver.query(children, cols, null, null, null)?.use { c ->
+            while (c.moveToNext()) {
+                val rel = prefix + c.getString(1)
+                if (c.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR) {
+                    if (bundleDir(rel)) n += sizeOfTree(tree, c.getString(0), "$rel/")
+                } else if (wanted(rel) && !c.isNull(3)) {
+                    n += c.getLong(3)
+                }
+            }
+        }
+        return n
+    }
+
+    /** A folder of a bundle that is copied: its audio, and its covers. */
+    private fun bundleDir(rel: String) =
+        rel == "audio" || rel.startsWith("audio/") || rel == "covers" || rel.startsWith("covers/")
 
     private fun copyTree(tree: Uri, docId: String, staging: File, prefix: String): Int {
         var n = 0
@@ -185,7 +251,7 @@ class ImportActivity : Activity() {
                 val name = c.getString(1)
                 val rel = prefix + name
                 if (c.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR) {
-                    if (rel == "audio" || rel.startsWith("audio/")) n += copyTree(tree, id, staging, "$rel/")
+                    if (bundleDir(rel)) n += copyTree(tree, id, staging, "$rel/")
                 } else if (wanted(rel)) {
                     val out = File(staging, rel)
                     out.parentFile?.mkdirs()
@@ -204,7 +270,7 @@ class ImportActivity : Activity() {
         if (name.split('/').any { it == ".." || it.isEmpty() }) return false
         // A payload in parts [SPEC-PL-095]: payload-001.json, payload-002.json, ...
         val part = Regex("payload-[0-9]+\\.json")
-        return name == "payload.json" || part.matches(name) || name.startsWith("audio/")
+        return name == "payload.json" || part.matches(name) || name.startsWith("audio/") || name.startsWith("covers/")
     }
 
     companion object {
@@ -213,5 +279,7 @@ class ImportActivity : Activity() {
         const val SCAN = "io.github.mangocats.lempi.SCAN"
         private const val REQ_ZIP = 1
         private const val REQ_FOLDER = 2
+        /** Room kept free beyond what a step needs, for the database and the system. */
+        private const val MARGIN = 64L * 1_000_000
     }
 }

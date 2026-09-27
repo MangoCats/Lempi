@@ -795,6 +795,150 @@ pub struct StagedReport {
     /// Files held under a retired key, re-keyed to its successor
     /// `[SPEC-PL-097]`.
     pub rekeyed: usize,
+    /// Releases, and their cover images, stored `[SPEC-PL-105]`.
+    pub releases: usize,
+    pub covers: usize,
+    /// Cover files absent or not matching their byte hash: not stored.
+    pub bad_covers: Vec<String>,
+}
+
+/// What [`import_releases`] did.
+#[derive(Debug, Default, PartialEq)]
+pub struct ReleasesReport {
+    pub releases: usize,
+    pub tracks: usize,
+    /// Cover images stored, front and back counted apart.
+    pub covers: usize,
+    /// Cover files named by the payload that were absent or did not match
+    /// their byte hash: not stored.
+    pub bad_covers: Vec<String>,
+}
+
+/// Columns a catalogue made before they existed lacks: added, as
+/// `ensure_sha256_column` adds its own. A phone's catalogue has `releases`
+/// with four of these ten columns and `release_recordings` without `chosen`,
+/// which the player's cover lookup orders by.
+fn ensure_release_columns(db: &Connection) -> Result<(), String> {
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS releases (mbid TEXT PRIMARY KEY, title TEXT NOT NULL, release_date TEXT, \
+             source TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS release_recordings (release_mbid TEXT NOT NULL, mbid TEXT NOT NULL, \
+             position INTEGER, source TEXT NOT NULL, PRIMARY KEY (release_mbid, mbid)) WITHOUT ROWID;
+         CREATE TABLE IF NOT EXISTS cover_art (release_mbid TEXT PRIMARY KEY, front BLOB, back BLOB, \
+             source TEXT NOT NULL, fetched_at TEXT NOT NULL);",
+    )
+    .map_err(|e| e.to_string())?;
+    for (table, cols) in [
+        ("releases", &["release_group TEXT", "status TEXT", "primary_type TEXT", "secondary_types TEXT",
+                       "country TEXT", "track_count INTEGER"][..]),
+        ("release_recordings", &["track_length_ms INTEGER", "chosen INTEGER DEFAULT 0", "disc INTEGER"][..]),
+    ] {
+        let have: std::collections::HashSet<String> = db
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .map_err(|e| e.to_string())?
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .collect();
+        for col in cols {
+            let name = col.split(' ').next().unwrap_or_default();
+            if !have.contains(name) {
+                db.execute(&format!("ALTER TABLE {table} ADD COLUMN {col}"), []).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `[SPEC-PL-105]`: the releases a payload carries, their tracks, and their
+/// covers, into the catalogue, so the player's third cover source -- the
+/// archive, keyed by release -- works on a receiver too. On a phone it is the
+/// only one a bundle can add: Android keeps pictures out of `Music/`, so a
+/// cover cannot travel as a file beside the audio.
+///
+/// A cover file is read from `bundle_root` (the staged bundle), and stored
+/// only if its bytes match the hash the payload gives. A track is linked only
+/// to a recording the catalogue holds. Idempotent: a second import of the same
+/// payload changes nothing.
+pub fn import_releases(db: &mut Connection, doc: &Value, bundle_root: &Path) -> Result<ReleasesReport, String> {
+    let mut rep = ReleasesReport::default();
+    let Some(list) = doc.get("releases").and_then(|v| v.as_array()).filter(|l| !l.is_empty()) else {
+        return Ok(rep);
+    };
+    ensure_release_columns(db)?;
+    let tx = db.transaction().map_err(|e| e.to_string())?;
+    let opt = |v: &Value, k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+    let int = |v: &Value, k: &str| v.get(k).and_then(|x| x.as_i64());
+    for r in list {
+        let mbid = str_of(r, "mbid");
+        tx.execute(
+            "INSERT INTO releases (mbid,title,release_date,source,release_group,status,primary_type,secondary_types,\
+             country,track_count) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(mbid) DO UPDATE SET \
+             title=excluded.title, release_date=excluded.release_date, source=excluded.source, \
+             release_group=excluded.release_group, status=excluded.status, primary_type=excluded.primary_type, \
+             secondary_types=excluded.secondary_types, country=excluded.country, track_count=excluded.track_count",
+            params![mbid, str_of(r, "title"), opt(r, "release_date"), str_of(r, "source"), opt(r, "release_group"),
+                    opt(r, "status"), opt(r, "primary_type"), opt(r, "secondary_types"), opt(r, "country"),
+                    int(r, "track_count")],
+        )
+        .map_err(|e| format!("release {mbid}: {e}"))?;
+        rep.releases += 1;
+        for t in r.get("tracks").and_then(|v| v.as_array()).map(Vec::as_slice).unwrap_or(&[]) {
+            let rec = str_of(t, "recording");
+            let held = tx
+                .query_row("SELECT 1 FROM recordings WHERE mbid = ?1", params![rec], |_| Ok(()))
+                .optional()
+                .map_err(|e| e.to_string())?
+                .is_some();
+            if !held {
+                continue;
+            }
+            tx.execute(
+                "INSERT INTO release_recordings (release_mbid,mbid,position,source,track_length_ms,chosen,disc) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(release_mbid,mbid) DO UPDATE SET \
+                 position=excluded.position, source=excluded.source, track_length_ms=excluded.track_length_ms, \
+                 chosen=excluded.chosen, disc=excluded.disc",
+                params![mbid, rec, int(t, "position"), str_of(t, "source"), int(t, "track_length_ms"),
+                        int(t, "chosen").unwrap_or(0), int(t, "disc")],
+            )
+            .map_err(|e| format!("release {mbid} track {rec}: {e}"))?;
+            rep.tracks += 1;
+        }
+        let Some(cover) = r.get("cover").filter(|c| c.is_object()) else { continue };
+        let mut sides: [Option<Vec<u8>>; 2] = [None, None];
+        for (i, side) in ["front", "back"].iter().enumerate() {
+            let Some(c) = cover.get(*side) else { continue };
+            let (file, want) = (str_of(c, "file"), str_of(c, "sha256"));
+            let bytes = safe_rel(&file)
+                .filter(|rel| rel.starts_with("covers"))
+                .and_then(|rel| std::fs::read(bundle_root.join(rel)).ok());
+            match bytes {
+                Some(b) if sha256_bytes(&b) == want => {
+                    sides[i] = Some(b);
+                    rep.covers += 1;
+                }
+                _ => rep.bad_covers.push(file),
+            }
+        }
+        if sides.iter().any(Option::is_some) {
+            let [front, back] = sides;
+            tx.execute(
+                "INSERT INTO cover_art (release_mbid,front,back,source,fetched_at) VALUES (?1,?2,?3,?4,?5) \
+                 ON CONFLICT(release_mbid) DO UPDATE SET front=COALESCE(excluded.front, cover_art.front), \
+                 back=COALESCE(excluded.back, cover_art.back), source=excluded.source, fetched_at=excluded.fetched_at",
+                params![mbid, front, back, str_of(cover, "source"), str_of(cover, "fetched_at")],
+            )
+            .map_err(|e| format!("cover of {mbid}: {e}"))?;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(rep)
+}
+
+/// The SHA-256 of some bytes, lower-case hex, as [`sha256_file`] gives a file's.
+fn sha256_bytes(b: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect()
 }
 
 /// Whether the `files` row aliased `f` is tags-only: a file a phone found for
@@ -919,6 +1063,9 @@ pub fn import_staged(
         total.replaced += r.replaced;
         total.upgraded += r.upgraded;
         total.rekeyed += r.rekeyed;
+        total.releases += r.releases;
+        total.covers += r.covers;
+        total.bad_covers.extend(r.bad_covers);
         total.reused += r.reused;
         total.rows_written += r.rows_written;
         total.not_replaced.extend(r.not_replaced);
@@ -1081,6 +1228,11 @@ fn import_one_payload(
         tx.commit().map_err(|e| e.to_string())?;
     }
     let r = import_bound(db, doc, body, music_root, true, md5_hasher, &bind, &trusted)?;
+    // After the encodings, so each track finds the recording it links to.
+    let rel = import_releases(db, doc, staging)?;
+    rep.releases = rel.releases;
+    rep.covers = rel.covers;
+    rep.bad_covers = rel.bad_covers;
     rep.upgraded = upgrades.len().min(r.count(|o| *o == Landed::Imported));
     rep.rows_written = r.rows_written;
     rep.imported = r.count(|o| *o == Landed::Imported);
@@ -2078,6 +2230,64 @@ mod tests {
             .query_row("SELECT count(*) FROM passages WHERE boundary_src = 'found:tags'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(tags_only, 1, "its tags-only entry is left as it was");
+        std::fs::remove_dir_all(&s.root).ok();
+    }
+
+    /// `[SPEC-PL-105]`: releases and their covers land in the catalogue from
+    /// a staged bundle -- into a phone's older release tables, whose missing
+    /// columns are added. A cover whose bytes do not match is refused; a track
+    /// links only a recording the catalogue holds; a second import changes
+    /// nothing.
+    #[test]
+    fn releases_and_verified_covers_land_in_the_catalogue() {
+        let audio: &[u8] = b"some audio";
+        let s = stage("covers", &[("md5-1", "a.mp3", Some(audio), Some(sha_of(audio)))]);
+        let front: Vec<u8> = [&[0xFF, 0xD8, 0xFF][..], &[b'j'; 600][..]].concat();
+        std::fs::create_dir_all(s.staging.join("covers")).unwrap();
+        std::fs::write(s.staging.join("covers").join("r1-front.jpg"), &front).unwrap();
+        std::fs::write(s.staging.join("covers").join("r2-front.jpg"), b"tampered in transit").unwrap();
+        let path = s.staging.join("payload.json");
+        let mut doc: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        doc["releases"] = serde_json::json!([
+            {"mbid": "r1", "title": "One", "source": "mb", "status": "Official",
+             "tracks": [{"recording": "m0", "position": 4, "disc": 1, "chosen": 1, "source": "mb"},
+                        {"recording": "not-held", "position": 5, "disc": 1, "chosen": 1, "source": "mb"}],
+             "cover": {"source": "caa", "fetched_at": "t",
+                       "front": {"file": "covers/r1-front.jpg", "sha256": sha_of(&front)}}},
+            {"mbid": "r2", "title": "Two", "source": "mb", "tracks": [],
+             "cover": {"source": "caa", "fetched_at": "t",
+                       "front": {"file": "covers/r2-front.jpg", "sha256": sha_of(b"the real picture")}}},
+        ]);
+        std::fs::write(&path, doc.to_string()).unwrap();
+        let mut c = empty_library();
+        // The phone's shape: four columns, and no `chosen`.
+        c.execute_batch(
+            "CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT NOT NULL, release_date TEXT, source TEXT NOT NULL);
+             CREATE TABLE release_recordings (release_mbid TEXT NOT NULL, mbid TEXT NOT NULL, position INTEGER,
+                 source TEXT NOT NULL, PRIMARY KEY (release_mbid, mbid)) WITHOUT ROWID;",
+        )
+        .unwrap();
+        let r = import_staged(&mut c, &s.staging, &s.music, None).unwrap();
+        assert_eq!((r.imported, r.releases, r.covers), (1, 2, 1), "{r:?}");
+        assert_eq!(r.bad_covers, vec!["covers/r2-front.jpg".to_string()]);
+        let status: String = c.query_row("SELECT status FROM releases WHERE mbid='r1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(status, "Official", "a column the old table lacked, added and filled");
+        let tracks: Vec<(String, i64)> = c
+            .prepare("SELECT mbid, chosen FROM release_recordings")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(tracks, vec![("m0".to_string(), 1)], "linked only to a recording held");
+        let stored: Vec<u8> = c.query_row("SELECT front FROM cover_art WHERE release_mbid='r1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(stored, front);
+        let r2: i64 = c.query_row("SELECT count(*) FROM cover_art WHERE release_mbid='r2'", [], |r| r.get(0)).unwrap();
+        assert_eq!(r2, 0, "a cover that does not match is not stored");
+        let again = import_staged(&mut c, &s.staging, &s.music, None).unwrap();
+        assert_eq!(again.imported, 0, "{again:?}");
+        let n: i64 = c.query_row("SELECT count(*) FROM release_recordings", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1, "idempotent");
         std::fs::remove_dir_all(&s.root).ok();
     }
 

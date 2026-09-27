@@ -34,6 +34,7 @@ import json
 import sqlite3
 import sys
 
+import hashlib
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
@@ -74,6 +75,63 @@ def has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
     gap instead of refusing to run against an older library.
     """
     return any(row[1] == column for row in conn.execute(f"PRAGMA table_info({table})"))
+
+
+def releases_for(conn: sqlite3.Connection, mbids) -> list[dict]:
+    """`[SPEC-PL-105]`: the releases a receiver needs to show these recordings'
+    covers, as the player looks one up -- the chosen release first, else any
+    release that has a picture. So: each recording's chosen release, and each
+    of its releases with a front cover; not the ~37 releases per recording the
+    catalogue knows of. Each carries its tracks for these recordings only, and
+    its cover as `covers/<release>-<side>.<ext>` with the image's byte hash:
+    the image itself travels as that file, beside the payload, not inside it.
+    Empty where the catalogue has no releases."""
+    if not (has_table(conn, "releases") and has_table(conn, "release_recordings")):
+        return []
+    art = has_table(conn, "cover_art")
+    pick = "rr.chosen = 1" + (" OR EXISTS (SELECT 1 FROM cover_art a WHERE a.release_mbid = rr.release_mbid"
+                              " AND a.front IS NOT NULL)" if art else "")
+    tracks: dict[str, list] = {}
+    for m in sorted(set(mbids)):
+        for r in conn.execute("SELECT release_mbid, position, disc, chosen, track_length_ms, source "
+                              f"FROM release_recordings rr WHERE rr.mbid = ? AND ({pick})", (m,)):
+            tracks.setdefault(r[0], []).append({
+                "recording": m, "position": r[1], "disc": r[2], "chosen": r[3] or 0,
+                "track_length_ms": r[4], "source": r[5]})
+    out = []
+    for mbid in sorted(tracks):
+        r = conn.execute("SELECT mbid, title, release_date, source, release_group, status, primary_type, "
+                         "secondary_types, country, track_count FROM releases WHERE mbid = ?", (mbid,)).fetchone()
+        if r is None:
+            continue
+        rel = dict(zip(("mbid", "title", "release_date", "source", "release_group", "status",
+                        "primary_type", "secondary_types", "country", "track_count"), tuple(r)))
+        rel["tracks"] = tracks[mbid]
+        a = conn.execute("SELECT front, back, source, fetched_at FROM cover_art WHERE release_mbid = ?",
+                         (mbid,)).fetchone() if art else None
+        if a is not None and (a[0] or a[1]):
+            cover = {"source": a[2], "fetched_at": a[3]}
+            for side, blob in (("front", a[0]), ("back", a[1])):
+                if blob:
+                    ext = "png" if bytes(blob[:4]) == b"\x89PNG" else "jpg"
+                    cover[side] = {"file": f"covers/{mbid}-{side}.{ext}",
+                                   "sha256": hashlib.sha256(bytes(blob)).hexdigest()}
+            rel["cover"] = cover
+        out.append(rel)
+    return out
+
+
+def cover_files(conn: sqlite3.Connection, doc: dict) -> dict[str, bytes]:
+    """The image bytes each release's `cover` names, by its `file` path."""
+    files = {}
+    for rel in doc.get("releases", []):
+        cover = rel.get("cover") or {}
+        for side in ("front", "back"):
+            if side in cover:
+                blob = conn.execute(f"SELECT {side} FROM cover_art WHERE release_mbid = ?",
+                                    (rel["mbid"],)).fetchone()[0]
+                files[cover[side]["file"]] = bytes(blob)
+    return files
 
 
 def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
@@ -193,6 +251,9 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
         "encodings": encodings,
         "recordings": recordings,
     }
+    releases = releases_for(conn, [r["mbid"] for r in recordings])
+    if releases:
+        doc["releases"] = releases
     # `[SPEC-PL-097]`: every retired key, not only those of the encodings sent.
     # A receiver may hold a file under its old key that this bundle does not
     # carry, and it is the same file `[SPEC-RLK-155]`. The whole table is small

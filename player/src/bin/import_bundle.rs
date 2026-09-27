@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 use lempi_player::cli::specs::import_bundle as opt;
-use lempi_player::bundle::{import, unacceptable, Landed};
+use lempi_player::bundle::{import, import_releases, unacceptable, Landed};
 
 fn main() {
     let args = opt::SPEC.parse();
@@ -131,14 +131,30 @@ fn main() {
         rep.outcomes.len()
     );
 
+    let mut bad_covers = 0;
     if !apply {
         println!("nothing was written. Re-run with --apply to do it.");
     } else {
         println!("wrote {} row(s).", rep.rows_written);
+        // The releases and their covers `[SPEC-PL-105]`, read from the bundle
+        // itself -- its `covers/` beside `payload.json`.
+        match import_releases(&mut db, &doc, &bundle) {
+            Ok(r) => {
+                println!("releases  {}   tracks {}   covers {}", r.releases, r.tracks, r.covers);
+                for f in &r.bad_covers {
+                    println!("BAD COVER {f}  absent, or not the bytes the payload names");
+                }
+                bad_covers = r.bad_covers.len();
+            }
+            Err(e) => {
+                eprintln!("releases not imported: {e}");
+                std::process::exit(1);
+            }
+        }
     }
     // Unverified is a failure too: the audio is here and was not taken, which
     // a zero status would make look like success `[REQ-AND-230]`.
-    if corrupt > 0 || unverified > 0 {
+    if corrupt > 0 || unverified > 0 || bad_covers > 0 {
         std::process::exit(1);
     }
 }

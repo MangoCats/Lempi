@@ -297,6 +297,11 @@ pub struct ImportSummary {
     pub conflicts: Vec<String>,
     pub unsafe_paths: Vec<String>,
     pub rows_written: u32,
+    /// Releases stored, and their cover images `[SPEC-PL-105]`.
+    pub releases: u32,
+    pub covers: u32,
+    /// Cover files absent or not matching their byte hash: not stored.
+    pub bad_covers: Vec<String>,
 }
 
 /// Import a bundle the app has unpacked into `staging` -- `payload.json` and
@@ -323,9 +328,9 @@ pub fn import_bundle(library: String, staging: String, music_root: String) -> Re
     match &r {
         Ok(s) => tracing::info!(
             "import: {} imported, {} already, {} replaced, {} upgraded, {} re-keyed, {} reused, {} corrupt, \
-             {} missing, {} conflicts, {} refused",
+             {} missing, {} conflicts, {} refused, {} releases, {} covers, {} bad covers",
             s.imported, s.already, s.replaced, s.upgraded, s.rekeyed, s.reused, s.corrupt.len(), s.missing.len(),
-            s.conflicts.len(), s.refused.len()
+            s.conflicts.len(), s.refused.len(), s.releases, s.covers, s.bad_covers.len()
         ),
         Err(e) => tracing::error!("import failed: {e}"),
     }
@@ -346,6 +351,9 @@ pub fn import_bundle(library: String, staging: String, music_root: String) -> Re
         conflicts: s.conflicts,
         unsafe_paths: s.unsafe_paths,
         rows_written: n(s.rows_written),
+        releases: n(s.releases),
+        covers: n(s.covers),
+        bad_covers: s.bad_covers,
     })
 }
 
