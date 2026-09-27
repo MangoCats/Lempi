@@ -24,6 +24,8 @@ CREATE TABLE listener_occasions (characteristic TEXT, class TEXT, interp TEXT, l
 CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY, played_at INTEGER,
     passage_id INTEGER, mbid TEXT, heard_ms INTEGER, span_ms INTEGER, selected_by TEXT);
 CREATE TABLE player_state (id INTEGER PRIMARY KEY, passage_id INTEGER, updated_at TEXT);
+CREATE TABLE listener_programs (program_id INTEGER PRIMARY KEY, name TEXT);
+CREATE TABLE listener_program_seeds (program_id INTEGER, mbid TEXT, PRIMARY KEY (program_id, mbid));
 """
 
 FAILED = []
@@ -53,7 +55,9 @@ def fleet(tmp):
        "INSERT INTO listener_flags VALUES ('recording','keep','2026-08-01 00:00:00','GMKtec')",
        "INSERT INTO listener_occasions VALUES ('user.xmas','xmasy','linear',NULL)",
        "INSERT INTO listener_play_history VALUES (7,1000,1,'m',100,200,'auto')",
-       "INSERT INTO player_state VALUES (1,11,'a')")
+       "INSERT INTO player_state VALUES (1,11,'a')",
+       "INSERT INTO listener_programs VALUES (1,'Morning')",
+       "INSERT INTO listener_program_seeds VALUES (1,'seed-a')")
     db(b,
        "INSERT INTO listener_preferences VALUES ('artist','X',2,2,0,'2026-09-05T00:00:00')",
        "INSERT INTO listener_preferences VALUES ('artist','T',9,9,0,'2026-09-02 00:00:00')",
@@ -63,7 +67,10 @@ def fleet(tmp):
        "INSERT INTO listener_occasions VALUES ('user.xmas','xmasy','linear','Christmas')",
        "INSERT INTO listener_play_history VALUES (3,1000,1,'m',150,200,NULL)",
        "INSERT INTO listener_play_history VALUES (4,2000,2,'n',50,90,'auto')",
-       "INSERT INTO player_state VALUES (1,22,'b')")
+       "INSERT INTO player_state VALUES (1,22,'b')",
+       "INSERT INTO listener_programs VALUES (1,'Kitchen')",
+       "INSERT INTO listener_programs VALUES (2,'Evening')",
+       "INSERT INTO listener_program_seeds VALUES (2,'seed-b')")
     # b's own history: a flag it held on 09-10 and has since cleared, and one
     # it cleared on 09-10 that a later flag elsewhere must survive.
     bk = os.path.join(tmp, "bk")
@@ -337,6 +344,14 @@ def main() -> int:
     check(rows(B, "SELECT passage_id FROM player_state") == [(22,)], "and b's own player state")
     check(rows(B, "SELECT rotation FROM listener_preferences WHERE subject_id = 'X'") == [(2,)],
           "and the household's edits, merged exactly as the hub's are")
+
+    # [SPEC-MTR-040]: programmes are each node's own, never merged.
+    check(rows(L, "SELECT program_id, name FROM listener_programs") == [(1, "Morning")]
+          and rows(L, "SELECT mbid FROM listener_program_seeds") == [("seed-a",)],
+          "the hub keeps its own programmes, none of b's")
+    check(rows(B, "SELECT program_id, name FROM listener_programs ORDER BY program_id") == [(1, "Kitchen"), (2, "Evening")]
+          and rows(B, "SELECT mbid FROM listener_program_seeds") == [("seed-b",)],
+          "and b keeps its own, even one numbered as the hub's")
 
     after = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in inputs}
     check(before == after, "no input may change")

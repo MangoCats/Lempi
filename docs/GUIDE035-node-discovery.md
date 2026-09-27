@@ -2,6 +2,8 @@
 
 **Development Guidance — a future feature, recorded so it is not lost: how Lempi and Vipunen nodes could find each other on a LAN**
 
+*Taken up 2026-09-27:* discovery is now specified on top of mesh membership, in [SPEC049](spec/SPEC049-mesh-membership-and-trust.md) §5, which also settles `[GDE-NDS-900]`. This guide stays as the idea's record.
+
 Recorded 2026-09-25 from the maintainer's description, **as an idea for later and explicitly not part of the current path**. Nothing here is scheduled, and nothing here changes a requirement today: every node is still pointed at another by host name or IP address `[REQ-AND-286]` `[SPEC-ECHO-010]`. What follows is the maintainer's design as stated, then what this repository already says that such work would have to meet.
 
 > **Related:** [SPEC044](spec/SPEC044-echo-mode-control.md) (following; `[SPEC-ECHO-100]`) · [SPEC034](spec/SPEC034-wifi-configuration.md) (`[SPEC-WIFI-030]`) · [SPEC035](spec/SPEC035-mesh-library-sync.md) (mesh sync) · [REQ007](spec/REQ007-android.md) (`[REQ-AND-286..289]`)

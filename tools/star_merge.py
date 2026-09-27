@@ -79,8 +79,12 @@ TABLES = {
     "listener_occasions": dict(rule=UNION, key=("characteristic", "class"), removals=True),
     "listener_occasion_points": dict(rule=UNION, key=("characteristic", "class", "month", "day"),
                                      removals=True),
-    "listener_programs": dict(rule=UNION, key=("program_id",), removals=True),
-    "listener_program_seeds": dict(rule=UNION, key=("program_id", "mbid"), removals=True),
+    # A node's own since 2026-09-27 [SPEC-MTR-040]: each node defines and
+    # edits its own programmes, and copying them between a node and the hub
+    # is a person's act, never the merge's. Unioned before that, so every node
+    # starts from the same set.
+    "listener_programs": dict(rule=LOCAL),
+    "listener_program_seeds": dict(rule=LOCAL),
     "listener_likes": dict(rule=UNION, key=("mbid", "recorded_at")),
     "id_reviews": dict(rule=UNION, key=("passage_id", "decided_at"), latest=("applied_at",)),
     "boundary_reviews": dict(rule=UNION, key=("passage_id", "decided_at"), latest=("applied_at",)),
