@@ -210,6 +210,7 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-RIP-090..106]` | CD ripping: passage representation for hidden/pregap audio and multi-disc sets — designed, not yet built | [SPEC026-cd-ripping-passages.md](spec/SPEC026-cd-ripping-passages.md) |
 | `[SPEC-PREF-010..098]` | Editing an artist's or a recording's own rotation/recovery/restraint, and a recording's "special" tags — built | [SPEC029-listener-preference-editing.md](spec/SPEC029-listener-preference-editing.md) |
 | `[SPEC-PREF-100..150]` | Syncing listener preferences and specials between installations, last-write-wins — built | [SPEC030-preference-sync.md](spec/SPEC030-preference-sync.md) |
+| `[SPEC-COV-*]` | Covers: undisturbed beside the audio, inducted into the catalogue, shown from the catalogue alone | [SPEC047-covers.md](spec/SPEC047-covers.md) |
 | `[SPEC-STAR-*]` | Star sync: one central library merged from the fleet, latest edit wins, a person verifies before it is promoted or distributed | [SPEC046-star-sync.md](spec/SPEC046-star-sync.md) |
 | `[FLT-*]` | The fleet: each node's role, databases, build and standing issues; mirrored via git to the source hosts | [FLEET001-the-fleet.md](../fleet/FLEET001-the-fleet.md) |
 | `[SPEC-FREQ-*]` | How often a subject has played, by window and by who chose each play — built | [SPEC031-play-frequency.md](spec/SPEC031-play-frequency.md) |
