@@ -803,6 +803,10 @@ pub struct StagedReport {
     pub covers: usize,
     /// Cover files absent or not matching their byte hash: not stored.
     pub bad_covers: Vec<String>,
+    /// Each release, and each cover, once across every part: a release whose
+    /// recordings fall in several parts is carried by each of them.
+    pub distinct_releases: std::collections::HashSet<String>,
+    pub distinct_covers: std::collections::HashSet<String>,
 }
 
 /// A replacement the system refused: the phone's copy, the staged file that
@@ -831,6 +835,8 @@ pub struct ReleasesReport {
     pub covers_not_placed: Vec<String>,
     /// The releases this payload carried.
     pub seen: std::collections::HashSet<String>,
+    /// The covers stored, as `<release>/<side>`.
+    pub stored_covers: std::collections::HashSet<String>,
 }
 
 /// Columns a catalogue made before they existed lacks: added, as
@@ -1043,6 +1049,7 @@ pub fn import_releases(db: &mut Connection, doc: &Value, bundle_root: &Path) -> 
                 Some(b) if sha256_bytes(&b) == want => {
                     sides[i] = Some(b);
                     rep.covers += 1;
+                    rep.stored_covers.insert(format!("{mbid}/{side}"));
                 }
                 _ => rep.bad_covers.push(file),
             }
@@ -1191,8 +1198,8 @@ pub fn import_staged(
         total.replaced += r.replaced;
         total.upgraded += r.upgraded;
         total.rekeyed += r.rekeyed;
-        total.releases += r.releases;
-        total.covers += r.covers;
+        total.distinct_releases.extend(r.distinct_releases);
+        total.distinct_covers.extend(r.distinct_covers);
         total.bad_covers.extend(r.bad_covers);
         total.reused += r.reused;
         total.rows_written += r.rows_written;
@@ -1205,6 +1212,10 @@ pub fn import_staged(
         total.unsafe_paths.extend(r.unsafe_paths);
         total.changed_since_scan.extend(r.changed_since_scan);
     }
+    // Counted once each: measured on the Moto G, a 19-part bundle reported
+    // 7,813 albums and 9,125 pictures for 1,381 releases and 857 covers.
+    total.releases = total.distinct_releases.len();
+    total.covers = total.distinct_covers.len();
     // No covers beside the audio: this is the phone's import, and Android
     // refuses every picture in `Music/` -- 133 of 133 on the Moto G,
     // 2026-09-27. There the archive is where covers live `[REQ-AND-205]`. A
@@ -1367,6 +1378,8 @@ fn import_one_payload(
     rep.releases = rel.releases;
     rep.covers = rel.covers;
     rep.bad_covers = rel.bad_covers;
+    rep.distinct_releases = rel.seen;
+    rep.distinct_covers = rel.stored_covers;
     rep.upgraded = upgrades.len().min(r.count(|o| *o == Landed::Imported));
     rep.rows_written = r.rows_written;
     rep.imported = r.count(|o| *o == Landed::Imported);
@@ -2404,6 +2417,37 @@ mod tests {
         assert_eq!(tags_only, 1, "its tags-only entry is left as it was");
         std::fs::remove_dir_all(&s.root).ok();
     }
+
+    /// A release carried by two parts -- its recordings fall in both -- is
+    /// one album and one picture, not two of each.
+    #[test]
+    fn a_release_in_two_parts_is_counted_once() {
+        let (one, two): (&[u8], &[u8]) = (b"first file", b"second file");
+        let s = stage("two-parts", &[("md5-1", "a.mp3", Some(one), Some(sha_of(one))),
+                                     ("md5-2", "b.mp3", Some(two), Some(sha_of(two)))]);
+        let front: Vec<u8> = [&[0xFF, 0xD8, 0xFF][..], &[b'x'; 600][..]].concat();
+        std::fs::create_dir_all(s.staging.join("covers")).unwrap();
+        std::fs::write(s.staging.join("covers").join("r1-front.jpg"), &front).unwrap();
+        let whole: Value = serde_json::from_str(&std::fs::read_to_string(s.staging.join("payload.json")).unwrap()).unwrap();
+        std::fs::remove_file(s.staging.join("payload.json")).unwrap();
+        for n in 0..2 {
+            let rec = format!("m{n}");
+            let doc = serde_json::json!({"payload_version": 1,
+                "encodings": [whole["encodings"][n].clone()], "recordings": [whole["recordings"][n].clone()],
+                "releases": [{"mbid": "r1", "title": "One", "source": "mb",
+                    "tracks": [{"recording": rec, "position": n + 1, "chosen": 1, "source": "mb"}],
+                    "cover": {"source": "caa", "fetched_at": "t",
+                              "front": {"file": "covers/r1-front.jpg", "sha256": sha_of(&front)}}}]});
+            std::fs::write(s.staging.join(format!("payload-00{}.json", n + 1)), doc.to_string()).unwrap();
+        }
+        let mut c = empty_library();
+        let r = import_staged(&mut c, &s.staging, &s.music, None).unwrap();
+        assert_eq!((r.imported, r.releases, r.covers), (2, 1, 1), "{r:?}");
+        let tracks: i64 = c.query_row("SELECT count(*) FROM release_recordings", [], |r| r.get(0)).unwrap();
+        assert_eq!(tracks, 2, "both parts' tracks, on the one release");
+        std::fs::remove_dir_all(&s.root).ok();
+    }
+
 
     /// `[REQ-AND-205]`: a cover is written beside the audio only where the
     /// folder is that release's alone, and never over a cover already there.
