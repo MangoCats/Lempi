@@ -313,10 +313,12 @@ pub fn import_bundle(library: String, staging: String, music_root: String) -> Re
         let mut db = rusqlite::Connection::open(&library).map_err(|e| format!("cannot open {library}: {e}"))?;
         // The player holds the same file open; wait for it rather than fail.
         db.busy_timeout(std::time::Duration::from_secs(15)).map_err(|e| e.to_string())?;
-        // No identity hasher: a phone computes no `audio_md5`, and verifies by
-        // the byte hash Vipunen sent instead `[REQ-AND-270]`, `[REQ-AND-230]`.
+        // The phone computes signatures as every host does `[REQ-AND-270]`: a
+        // file placed from the bundle is checked by its audio as well as by
+        // the byte hash Vipunen sent `[REQ-AND-230]`. A file the phone's own
+        // scan already identified is not read again.
         let (staging, music) = (std::path::Path::new(&staging), std::path::Path::new(&music_root));
-        lempi_player::bundle::import_staged(&mut db, staging, music, None)
+        lempi_player::bundle::import_staged(&mut db, staging, music, Some(lempi_player::identity::HASHER))
     });
     match &r {
         Ok(s) => tracing::info!(
@@ -363,6 +365,8 @@ pub struct FoundSummary {
     pub retired: u32,
     /// Catalogued files that had no byte hash, hashed now.
     pub hashed: u32,
+    /// Tags-only files re-keyed by their signature `[SPEC-SC-041]`.
+    pub identified: u32,
 }
 
 /// Look at the audio files at `paths` -- what MediaStore lists -- that the
@@ -379,8 +383,8 @@ pub fn scan_found(library: String, paths: Vec<String>) -> Result<FoundSummary, L
     });
     match &r {
         Ok(s) => tracing::info!(
-            "found: {} looked at, {} rebound, {} tags-only, {} duplicates, {} unreadable, {} retired",
-            s.looked_at, s.rebound, s.tags_only, s.duplicates, s.unreadable.len(), s.retired
+            "found: {} looked at, {} rebound, {} tags-only, {} duplicates, {} unreadable, {} retired, {} identified",
+            s.looked_at, s.rebound, s.tags_only, s.duplicates, s.unreadable.len(), s.retired, s.identified
         ),
         Err(e) => tracing::error!("scan failed: {e}"),
     }
@@ -393,5 +397,6 @@ pub fn scan_found(library: String, paths: Vec<String>) -> Result<FoundSummary, L
         unreadable: s.unreadable,
         retired: n(s.retired),
         hashed: n(s.hashed),
+        identified: n(s.identified),
     })
 }

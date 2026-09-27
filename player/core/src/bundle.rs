@@ -71,8 +71,9 @@ pub enum Landed {
     Unverifiable { why: String },
 }
 
-/// Recomputes `audio_md5` from a file: the host's, absent on a host that
-/// computes no identity hash `[REQ-AND-270]`.
+/// Recomputes `audio_md5` from a file: the host's -- every host's, a phone's
+/// included, since 2026-09-27 `[REQ-AND-270]` -- or absent where a caller
+/// passes none.
 type Md5Hasher = crate::relink::Hasher;
 
 /// The SHA-256 of a file's bytes, lower-case hex `[SPEC-PL-087]`.
@@ -361,9 +362,9 @@ fn apply_aliases(db: &mut Connection, doc: &Value) -> Result<usize, String> {
 ///
 /// Verified two ways where it can be `[SPEC-PL-087]`: the bytes against the
 /// payload's `sha256` when it carries one, and `audio_md5` recomputed by
-/// `md5_hasher` when the host passes one. A phone passes none
-/// `[REQ-AND-270]`, so there the byte hash is the check `[REQ-AND-230]`, and a
-/// file with neither is reported, never written.
+/// `md5_hasher` when the host passes one `[REQ-AND-270]`. Without a hasher
+/// the byte hash is the check `[REQ-AND-230]`, and a file with neither is
+/// reported, never written.
 pub fn import(
     db: &mut Connection,
     doc: &Value,
@@ -390,7 +391,7 @@ fn import_bound(
     apply: bool,
     md5_hasher: Option<Md5Hasher>,
     bind: &HashMap<String, PathBuf>,
-    trusted: &std::collections::HashSet<String>,
+    trusted: &HashMap<String, String>,
 ) -> Result<Report, String> {
     let mut rep = Report { refused: unacceptable(doc), ..Default::default() };
     if !rep.refused.is_empty() {
@@ -477,9 +478,12 @@ fn import_bound(
         // payload carries their hash: cheap, and the only check a phone has
         // `[SPEC-PL-087]`.
         let sha256 = e.get("sha256").and_then(|v| v.as_str());
-        // `trusted`: bytes already verified against this very hash, by a
-        // phone's own scan of a file unchanged since `[REQ-AND-260]`.
-        if let Some(want) = sha256.filter(|_| !trusted.contains(&md5)) {
+        // `trusted`: a file a phone's own scan already identified, unchanged
+        // since `[REQ-AND-260]` -- by these very bytes, or by this audio in
+        // bytes of its own (a re-tagged copy). Its value is the file's own
+        // byte hash, which is what is recorded for it.
+        let own = trusted.get(&md5).map(String::as_str);
+        if let Some(want) = sha256.filter(|_| own.is_none()) {
             let found = match sha256_file(&path) {
                 Ok(h) if h == want => None,
                 Ok(h) => Some(format!("sha256 {h}")),
@@ -496,7 +500,9 @@ fn import_bound(
         // by `[SPEC-RLK-150]`. Still asked where the bytes
         // matched: it is the identity the row is keyed on, and a sender whose
         // `audio_md5` disagrees with its own file is worth catching here.
-        match md5_hasher {
+        // Not asked of a trusted file: its identity is already established,
+        // and on a phone asking would be a read of the whole SD card.
+        match md5_hasher.filter(|_| own.is_none()) {
             Some(hasher) => {
                 let found = match (hasher.hash)(&path) {
                     Ok(h) => h,
@@ -510,6 +516,7 @@ fn import_bound(
                     continue;
                 }
             }
+            None if own.is_some() => {}
             // The bytes are the ones the sender hashed, so its `audio_md5`
             // is carried as sent.
             None if sha256.is_some() => {}
@@ -548,8 +555,10 @@ fn import_bound(
                     generator,
                     // The byte hash just verified against this file, kept so
                     // a phone can recognise the file again by it
-                    // `[REQ-AND-260]`. NULL where the payload carried none.
-                    sha256],
+                    // `[REQ-AND-260]` -- the file's own where it was trusted,
+                    // since a re-tagged copy's bytes are not the sender's.
+                    // NULL where the payload carried none.
+                    own.or(sha256)],
         )
         .map_err(|e| e.to_string())?;
         let file_id = tx.last_insert_rowid();
@@ -788,6 +797,28 @@ pub struct StagedReport {
     pub rekeyed: usize,
 }
 
+/// Whether the `files` row aliased `f` is tags-only: a file a phone found for
+/// itself, with one whole-file passage named from its own tags
+/// `[REQ-AND-260]`. Marked by that passage, not by the key: found files were
+/// keyed `sha256:<bytes>` until the phone could compute a signature, and by
+/// their signature since `[SPEC-SC-041]`.
+pub const TAGS_ONLY_SQL: &str =
+    "EXISTS (SELECT 1 FROM passages p WHERE p.file_id = f.file_id AND p.boundary_src = 'found:tags')";
+
+/// Whether the file at `path` is the size and age a scan recorded: then what
+/// the scan established about its bytes still holds, and reading them again
+/// proves nothing new -- on the Moto G, 5,639 files and fourteen minutes of SD.
+fn unchanged_since(path: &str, size: i64, mtime: f64) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else { return false };
+    let now = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(-1.0);
+    meta.len() as i64 == size && (now - mtime).abs() < 0.001
+}
+
 /// A bundle path as components under a root, or `None` if it could leave it
 /// -- absolute, a drive, or any `..`. A bundle comes from outside the app.
 fn safe_rel(rel: &str) -> Option<PathBuf> {
@@ -856,8 +887,8 @@ fn read_payload(path: &Path) -> Result<(String, Value), String> {
 /// The caller removes `staging` afterwards; this reads it and writes nothing
 /// there.
 ///
-/// `md5_hasher` is the host's identity hasher, or `None` on a host that
-/// computes none `[REQ-AND-270]`: then every file needs the byte hash.
+/// `md5_hasher` is the host's identity hasher `[REQ-AND-270]`, or `None`:
+/// then every file needs the byte hash.
 pub fn import_staged(
     db: &mut Connection,
     staging: &Path,
@@ -916,15 +947,44 @@ fn import_one_payload(
     // found under its new one `[SPEC-PL-097]`.
     rep.rekeyed = apply_aliases(db, doc)?;
     let mut upgrades: Vec<(i64, String, PathBuf)> = Vec::new();
-    let mut trusted: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut trusted: HashMap<String, String> = HashMap::new();
     for e in doc.get("encodings").and_then(|v| v.as_array()).unwrap_or(&empty) {
         let md5 = str_of(e, "audio_md5");
         let rel = str_of(e, "bundle_path");
-        let held: Option<String> = db
-            .query_row("SELECT path FROM files WHERE audio_md5 = ?1", params![md5], |r| r.get(0))
+        let held: Option<(i64, String, i64, f64, Option<String>, bool)> = db
+            .query_row(
+                &format!(
+                    "SELECT file_id, path, size_bytes, mtime, sha256, {TAGS_ONLY_SQL} FROM files f WHERE audio_md5 = ?1"
+                ),
+                params![md5],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            )
             .ok();
-        if let Some(held_path) = held {
-            replace_if_rewritten(db, e, &md5, &rel, staging, Path::new(&held_path), &mut rep)?;
+        if let Some((file_id, held_path, size, mtime, own_sha, tags_only)) = held {
+            if !tags_only {
+                replace_if_rewritten(db, e, &md5, &rel, staging, Path::new(&held_path), &mut rep)?;
+                continue;
+            }
+            // `[REQ-AND-260]`, by audio: the phone found this audio in its own
+            // storage -- perhaps in bytes of its own, re-tagged -- and holds it
+            // tags-only under its signature. The bundle makes that file whole
+            // where it lies. Trusted if unchanged since the scan identified
+            // it; otherwise identified again, and left alone if it is no
+            // longer this audio.
+            let own = match own_sha {
+                Some(h) if unchanged_since(&held_path, size, mtime) => Some(h),
+                _ => match md5_hasher.map(|h| (h.hash)(Path::new(&held_path))) {
+                    Some(Ok(found)) if found == md5 => sha256_file(Path::new(&held_path)).ok(),
+                    _ => None,
+                },
+            };
+            match own {
+                Some(h) => {
+                    trusted.insert(md5.clone(), h);
+                    upgrades.push((file_id, md5.clone(), PathBuf::from(held_path)));
+                }
+                None => rep.changed_since_scan.push(held_path),
+            }
             continue;
         }
         // `[REQ-AND-260]`: the phone found these very bytes in its own storage
@@ -934,8 +994,10 @@ fn import_one_payload(
         if let Some(want) = e.get("sha256").and_then(|v| v.as_str()) {
             let found: Option<(i64, String, i64, f64)> = db
                 .query_row(
-                    "SELECT file_id, path, size_bytes, mtime FROM files \
-                     WHERE sha256 = ?1 AND audio_md5 LIKE 'sha256:%'",
+                    &format!(
+                        "SELECT file_id, path, size_bytes, mtime FROM files f \
+                         WHERE sha256 = ?1 AND {TAGS_ONLY_SQL}"
+                    ),
                     params![want],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 )
@@ -953,7 +1015,7 @@ fn import_one_payload(
                         .map(|d| d.as_secs_f64())
                         .unwrap_or(-1.0);
                     if meta.len() as i64 == size && (now - mtime).abs() < 0.001 {
-                        trusted.insert(md5.clone());
+                        trusted.insert(md5.clone(), want.to_string());
                     } else if sha256_file(Path::new(&found_path)).ok().as_deref() != Some(want) {
                         // Changed since the scan, and no longer these bytes:
                         // left exactly as it is, tags-only rows and all. It
@@ -1953,6 +2015,72 @@ mod tests {
         std::fs::remove_dir_all(&s.root).ok();
     }
 
+    /// A phone file found by its signature -- the same audio in bytes of its
+    /// own, a re-tagged copy -- sets up its tags-only row as the scan would.
+    fn found_by_audio(c: &Connection, path: &Path, md5: &str, bytes: &[u8]) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+        let meta = std::fs::metadata(path).unwrap();
+        let mtime = meta.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+        crate::db::ensure_sha256_column(c);
+        c.execute(
+            "INSERT INTO files (file_id,audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen,sha256)              VALUES (1,?1,?2,?3,?4,'mp3',1000,'t','t',?5)",
+            params![md5, path.to_string_lossy(), meta.len() as i64, mtime, sha_of(bytes)],
+        )
+        .unwrap();
+        c.execute("INSERT INTO passages (file_id,kind,start_ms,end_ms,boundary_src) VALUES (1,'radio',0,1000,'found:tags')", [])
+            .unwrap();
+    }
+
+    /// `[REQ-AND-260]` by audio: the bundle names the phone's tags-only file
+    /// by its signature although the bytes differ. It is made whole where it
+    /// lies, and keeps the byte hash of the bytes it has, not the sender's.
+    #[test]
+    fn a_re_tagged_copy_found_by_signature_is_made_whole_where_it_lies() {
+        let vipunen: &[u8] = b"vipunen's copy, its own tags";
+        let phone: &[u8] = b"the phone's copy, re-tagged, same audio";
+        let s = stage("by-audio", &[("the-signature", "song.mp3", None, Some(sha_of(vipunen)))]);
+        let found = s.root.join("Found").join("song.mp3");
+        let mut c = empty_library();
+        found_by_audio(&c, &found, "the-signature", phone);
+        let r = import_staged(&mut c, &s.staging, &s.music, None).unwrap();
+        assert_eq!(r.upgraded, 1, "{r:?}");
+        let (path, sha): (String, String) = c
+            .query_row("SELECT path, sha256 FROM files WHERE audio_md5 = 'the-signature'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(path, found.to_string_lossy(), "bound where it lies, not copied");
+        assert_eq!(sha, sha_of(phone), "the byte hash of the bytes it has");
+        let src: Vec<String> = c
+            .prepare("SELECT boundary_src FROM passages")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(src, vec!["x".to_string()], "Vipunen's passage, and no tags-only one");
+        std::fs::remove_dir_all(&s.root).ok();
+    }
+
+    /// The same, where the file changed after the scan identified it: asked
+    /// again, and left alone when it is no longer that audio.
+    #[test]
+    fn a_found_file_that_is_no_longer_its_audio_is_left_alone() {
+        let s = stage("no-longer", &[("the-signature", "song.mp3", None, Some(sha_of(b"vipunen")))]);
+        let found = s.root.join("Found").join("song.mp3");
+        let mut c = empty_library();
+        found_by_audio(&c, &found, "the-signature", b"what the scan saw");
+        std::fs::write(&found, b"edited since, into something else entirely").unwrap();
+        let r = import_staged(&mut c, &s.staging, &s.music, Some(TEST_HASHER)).unwrap();
+        assert_eq!((r.upgraded, r.changed_since_scan.len()), (0, 1), "{r:?}");
+        let tags_only: i64 = c
+            .query_row("SELECT count(*) FROM passages WHERE boundary_src = 'found:tags'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(tags_only, 1, "its tags-only entry is left as it was");
+        std::fs::remove_dir_all(&s.root).ok();
+    }
+
     /// A found file changed since its scan is checked again, and a found
     /// file that no longer holds the bytes the payload names is not made
     /// whole with them.
@@ -1971,6 +2099,9 @@ mod tests {
             params![format!("sha256:{}", sha_of(claimed)), found.to_string_lossy(), claimed.len() as i64, sha_of(claimed)],
         )
         .unwrap();
+        // As the scan makes it: tags-only is marked by this passage.
+        c.execute("INSERT INTO passages (file_id,kind,start_ms,end_ms,boundary_src) VALUES (1,'radio',0,1000,'found:tags')", [])
+            .unwrap();
         let r = import_staged(&mut c, &s.staging, &s.music, None).unwrap();
         assert_eq!(r.upgraded, 0, "{r:?}");
         let real: i64 = c.query_row("SELECT count(*) FROM files WHERE audio_md5='realmd5'", [], |r| r.get(0)).unwrap();

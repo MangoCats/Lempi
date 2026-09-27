@@ -90,7 +90,7 @@ pub fn read(path: &Path) -> Tags {
     tags
 }
 
-/// How long the file is, in ms, from the container -- read, not derived
+/// How long the file is, in ms, from the container -- read, not decoded
 /// `[REQ-AND-270]`. The header's frame count where it states one; otherwise
 /// the packets' own durations summed, which walks the file without decoding
 /// a sample (an MP3 with no Xing header states nothing). `None` for a file

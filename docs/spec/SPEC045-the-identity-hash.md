@@ -138,7 +138,7 @@ ffmpeg's 80 ms (a process per file).
   so the definition moves only by a deliberate edit `[SPEC-RLK-086]`.
 - **One implementation** (precondition 2). `lempi-core` may not reach a
   demuxer `[GDE-AND-045]`, so it takes a `relink::Hasher` from its host.
-  `relink` and `import_bundle` pass Symphonia's; a phone passes none
+  `relink`, `import_bundle` and, since 2026-09-27, the phone pass Symphonia's
   `[REQ-AND-270]`. Vipunen's Python asks the `hash_audio` binary rather than
   computing a key its own way. No tool runs ffmpeg for an identity any more.
 - **Lempi needs no ffmpeg anywhere** -- the maintainer's aim is a lightweight

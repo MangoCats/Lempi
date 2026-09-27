@@ -138,11 +138,12 @@ class ImportActivity : Activity() {
                 if (r.duplicates > 0u) say("Second copies of music Lempi already has, left alone: ${r.duplicates}.")
                 if (r.retired > 0u) say("Removed, as not in a Music folder or a second copy: ${r.retired}.")
                 if (r.hashed > 0u) say("Files Lempi had, fingerprinted now: ${r.hashed}.")
+                if (r.identified > 0u) say("Found music identified by its audio: ${r.identified}.")
                 if (r.unreadable.isNotEmpty()) {
                     say("\nCould not be read as audio (${r.unreadable.size}):")
                     r.unreadable.forEach { say("  • $it") }
                 }
-                if (r.rebound > 0u || r.tagsOnly > 0u || r.retired > 0u) reload()
+                if (r.rebound > 0u || r.tagsOnly > 0u || r.retired > 0u || r.identified > 0u) reload()
             } catch (e: LempiException) {
                 say("\nScan failed: ${e.message}")
             }

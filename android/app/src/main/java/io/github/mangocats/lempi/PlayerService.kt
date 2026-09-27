@@ -113,7 +113,7 @@ class PlayerService : Service() {
         // wait for it. The Director rebuilds only if it changed anything.
         try {
             val found = Found.scan(this)
-            if (found.rebound > 0u || found.tagsOnly > 0u || found.retired > 0u) Lempi.reload()
+            if (found.rebound > 0u || found.tagsOnly > 0u || found.retired > 0u || found.identified > 0u) Lempi.reload()
         } catch (e: LempiException) {
             Log.w(TAG, "scan: ${e.message}")
         }
