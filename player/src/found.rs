@@ -95,9 +95,9 @@ const BATCH: usize = 50;
 /// the next one takes up the rest, since a catalogued path is skipped.
 pub fn scan(db: &mut Connection, paths: &[PathBuf]) -> Result<FoundReport, String> {
     crate::db::ensure_sha256_column(db);
-    let mut rep = FoundReport::default();
-    rep.retired = retire_outside_music(db)?;
-    rep.hashed = hash_unhashed(db)?;
+    // In this order: a struct literal evaluates its fields as written.
+    let mut rep =
+        FoundReport { retired: retire_outside_music(db)?, hashed: hash_unhashed(db)?, ..Default::default() };
     rep.retired += retire_copies(db)?;
     rep.retired += retire_deleted(db)?;
     let paths: Vec<PathBuf> =
@@ -376,7 +376,7 @@ mod tests {
         let f = d.join("found.wav");
         wav(&f, 1);
         let mut c = library();
-        let r = scan(&mut c, &[f.clone()]).unwrap();
+        let r = scan(&mut c, std::slice::from_ref(&f)).unwrap();
         assert_eq!(r, FoundReport { looked_at: 1, tags_only: 1, ..Default::default() });
         let sha = sha256_file(&f).unwrap();
         let (key, dur, stored): (String, i64, String) = c

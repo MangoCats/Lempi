@@ -1533,7 +1533,11 @@ mod tests {
         music: PathBuf,
     }
 
-    fn stage(name: &str, entries: &[(&str, &str, Option<&[u8]>, Option<String>)]) -> Staged {
+    /// One staged entry: (audio_md5, bundle_path, the bytes staged, the
+    /// sha256 the payload claims).
+    type Entry<'a> = (&'a str, &'a str, Option<&'a [u8]>, Option<String>);
+
+    fn stage(name: &str, entries: &[Entry]) -> Staged {
         let root = std::env::temp_dir().join(format!("lempi-staged-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let (staging, music) = (root.join("staging"), root.join("Music"));

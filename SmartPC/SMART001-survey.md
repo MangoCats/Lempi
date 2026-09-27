@@ -222,11 +222,17 @@ needed rather than when it breaks.
 **`[SMT-OPN-010]` Smart has a candidate music library, on a volume with no room
 left.** `/media/mango/PortableSSD/Media/Music` — **49 G, 5,719 audio files**,
 the same Mac-origin library the rest of the fleet carries, in a variant
-revision. Compared against the desktop's copy by album and track, the genuine
-delta is **36 files it lacks** (Xavier Rudd's *White Moth* and *Storm Boy*, two
-Gerardo Frisina albums, *Mangocats/Tropicat*) and **12 it has that the desktop
-does not** (Thomas Dolby's *The Golden Age of Wireless*, and two singles) — a
-path-derived figure, not a hash, per `[GDE-ECHO-480]`.
+revision. *First compared by album and track path, which counted 36 files it
+lacked and 12 it had that the desktop did not. Both figures were wrong in the
+way `[GDE-ECHO-480]` warns of: a path cannot see a rename or a re-tag.
+Re-measured 2026-09-27 by audio signature `[SPEC-RLK-152]`:* it holds **all
+5,709** files the catalogue names, and **45** more. Of those, 21 are the
+`Sounds` clips the desktop also leaves uncatalogued, and 19 are second copies
+of music the library holds: a re-tagged *The Golden Age of Wireless* under
+`Thomas Dolby/` (the desktop's is `Dolby, Thomas/`), eight `_2` Children's
+songs, and a second Robyn file. **Five are genuinely not in the library:**
+AURORA's "Teardrop", Metallica's "Confusion", Fluke's "Out" and "Puppy", and
+Hooverphonic's *Live at the Ancienne Belgique*.
 
 The problem is the volume, not the content: `[SMT-STO-010]` has it at 100 % with
 11 G spare, so the library cannot grow where it sits and Lempi cannot write
