@@ -68,6 +68,20 @@ catalogue:
 - on Android, in the Keystore;
 - on the desktop, beside `data/`, and in its backups.
 
+**`[SPEC-MTR-105]` A node may also have a short name, and lists show it by
+that name.** *Decided by the maintainer 2026-09-27.* The name is optional, and
+a person edits it. It may be the host name, a name the network knows it by, or
+any UTF-8 text. It is a label, never an identity: the key decides who a node
+is, and a name can be changed, repeated, or left empty. Wherever nodes are
+listed (the mesh screen, candidates, the phone's Send screen, a follower's
+choice) three rules apply:
+- **An empty name shows the short fingerprint** in its place.
+- **Two nodes with the same name in one list each show their short fingerprint
+  after it**, so the two can be told apart without a click.
+- **"Show fingerprints" appends every node's short fingerprint.** The person
+  switches it on when they want to compare fingerprints, as when confirming an
+  enrolment `[SPEC-MTR-130]`.
+
 **`[SPEC-MTR-110]` A mesh is its hub's key.** The hub has a second keypair, the
 mesh key; the mesh's identity is its fingerprint. Losing it means enrolling every
 member again, so it is backed up with the hub's pair `[SPEC-STAR-086]` and never
