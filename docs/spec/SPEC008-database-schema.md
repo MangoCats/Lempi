@@ -60,6 +60,8 @@ CREATE TABLE recordings (
 
 **`[SPEC-SC-039]` `sha256` is the hash of the file's bytes** `[REQ-AND-960]`, `[SPEC-PL-087]`. It is not identity — a rewritten tag changes it and leaves `audio_md5` alone — but it is the one fingerprint a phone can compute, so Vipunen can tell a phone exactly which of its files it holds already `[REQ-AND-288]`, and a phone can recognise a bundled file it finds again `[REQ-AND-260]`. It is set at induction (`tools/ingest_folder.py`) and by a bundle import that verified it; `tools/add_byte_hashes.py` fills rows that predate it. `NULL` means not yet hashed. *(Added 2026-09-26.)*
 
+**`[SPEC-SC-041]` A file a phone found for itself is keyed `sha256:<its byte hash>` in `audio_md5`** `[REQ-AND-260]`. The phone cannot compute `audio_md5` `[REQ-AND-270]`, and the column is `NOT NULL UNIQUE`, so the byte hash stands in, in a namespace a real 32-hex `audio_md5` can never enter. Its one passage is whole-file radio, with `boundary_src = 'found:tags'` marking it tags-only. When a bundle later names the same bytes, those rows give way to Vipunen's, bound at the same path.
+
 Written by `tools/ingest_folder.py`, `tools/ingest_cd.py`, `tools/migrate_mulib.py` and `player/core/src/bundle.rs`; the string is computed by `ingest_folder.ffmpeg_generator()` and `player/core/src/relink.rs::hasher_generator()`, which are separate implementations because Lempi and Vipunen share a schema and no code `[GDE-ARC-018]` — verified byte-identical on one machine 2026-09-22.
 
 **`[SPEC-SC-035]` `path` is deliberately not unique and never a key.** MuLibPlay's ability to relocate a moved library came from matching content, not paths `[GDE-BMK-050]`; that property is preserved by keying on `audio_md5`.

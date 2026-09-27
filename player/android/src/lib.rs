@@ -282,6 +282,8 @@ pub struct ImportSummary {
     /// Held, and rewritten by Vipunen since: replaced in place `[REQ-AND-250]`.
     pub replaced: u32,
     pub not_replaced: Vec<String>,
+    /// Files the phone had found for itself, made whole where they lie.
+    pub upgraded: u32,
     /// Byte-identical files already on the phone, bound rather than copied.
     pub reused: u32,
     pub corrupt: Vec<String>,
@@ -323,6 +325,7 @@ pub fn import_bundle(library: String, staging: String, music_root: String) -> Re
         already: n(s.already),
         replaced: n(s.replaced),
         not_replaced: s.not_replaced,
+        upgraded: n(s.upgraded),
         reused: n(s.reused),
         corrupt: s.corrupt,
         missing: s.missing,
@@ -330,5 +333,50 @@ pub fn import_bundle(library: String, staging: String, music_root: String) -> Re
         conflicts: s.conflicts,
         unsafe_paths: s.unsafe_paths,
         rows_written: n(s.rows_written),
+    })
+}
+
+/// What a scan of the phone's own music found `[REQ-AND-260]`.
+#[derive(uniffi::Record)]
+pub struct FoundSummary {
+    pub looked_at: u32,
+    /// Catalogued files found moved, and bound where they are now.
+    pub rebound: u32,
+    /// New tags-only passages.
+    pub tags_only: u32,
+    /// Second copies of files the catalogue holds in place, left alone.
+    pub duplicates: u32,
+    pub unreadable: Vec<String>,
+    /// Tags-only entries outside a `Music` folder, removed.
+    pub retired: u32,
+}
+
+/// Look at the audio files at `paths` -- what MediaStore lists -- that the
+/// library at `library` does not already hold at that path. See
+/// `lempi_player::found`.
+#[uniffi::export]
+pub fn scan_found(library: String, paths: Vec<String>) -> Result<FoundSummary, LempiError> {
+    let n = |x: usize| u32::try_from(x).unwrap_or(u32::MAX);
+    let r = guarded(|| {
+        let mut db = rusqlite::Connection::open(&library).map_err(|e| format!("cannot open {library}: {e}"))?;
+        db.busy_timeout(std::time::Duration::from_secs(15)).map_err(|e| e.to_string())?;
+        let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+        lempi_player::found::scan(&mut db, &paths)
+    });
+    match &r {
+        Ok(s) => tracing::info!(
+            "found: {} looked at, {} rebound, {} tags-only, {} duplicates, {} unreadable, {} retired",
+            s.looked_at, s.rebound, s.tags_only, s.duplicates, s.unreadable.len(), s.retired
+        ),
+        Err(e) => tracing::error!("scan failed: {e}"),
+    }
+    let s = r.map_err(LempiError::from)?;
+    Ok(FoundSummary {
+        looked_at: n(s.looked_at),
+        rebound: n(s.rebound),
+        tags_only: n(s.tags_only),
+        duplicates: n(s.duplicates),
+        unreadable: s.unreadable,
+        retired: n(s.retired),
     })
 }

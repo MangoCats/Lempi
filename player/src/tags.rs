@@ -90,6 +90,40 @@ pub fn read(path: &Path) -> Tags {
     tags
 }
 
+/// How long the file is, in ms, from the container -- read, not derived
+/// `[REQ-AND-270]`. The header's frame count where it states one; otherwise
+/// the packets' own durations summed, which walks the file without decoding
+/// a sample (an MP3 with no Xing header states nothing). `None` for a file
+/// that is not audio this build can open.
+///
+/// A header that states **0** frames is not believed: on the Moto G,
+/// 2026-09-26, Fiona Apple's "The First Taste" said 0 and held 10,893
+/// packets. And the track is chosen as the decoder chooses it, the first with
+/// a real codec, so what is measured is what plays.
+pub fn duration_ms(path: &Path) -> Option<u64> {
+    let mut probed = open(path)?;
+    let track = probed
+        .format
+        .tracks()
+        .iter()
+        .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)?
+        .clone();
+    let rate = u64::from(track.codec_params.sample_rate?);
+    let frames = match track.codec_params.n_frames {
+        Some(n) if n > 0 => n,
+        _ => {
+            let mut sum = 0u64;
+            while let Ok(p) = probed.format.next_packet() {
+                if p.track_id() == track.id {
+                    sum += p.dur;
+                }
+            }
+            sum
+        }
+    };
+    (frames > 0).then(|| frames * 1000 / rate)
+}
+
 /// Cover files sitting beside the audio, in the order worth trying.
 ///
 /// Measured on this library: 1,656 of the 1,986 files with no embedded picture

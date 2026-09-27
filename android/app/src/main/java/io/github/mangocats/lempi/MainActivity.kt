@@ -97,6 +97,7 @@ class MainActivity : Activity() {
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menu.add(0, 1, 0, "Import a bundle (.zip)…")
         menu.add(0, 2, 1, "Import a bundle folder…")
+        menu.add(0, 3, 2, "Look for music on the phone")
         return true
     }
 
@@ -104,6 +105,7 @@ class MainActivity : Activity() {
         val action = when (item.itemId) {
             1 -> ImportActivity.PICK_ZIP
             2 -> ImportActivity.PICK_FOLDER
+            3 -> ImportActivity.SCAN
             else -> return super.onOptionsItemSelected(item)
         }
         startActivity(Intent(this, ImportActivity::class.java).setAction(action))

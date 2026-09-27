@@ -108,6 +108,15 @@ class PlayerService : Service() {
             .also { it.acquire() }
         Lempi.status = "running"
         main.post(refresh)
+        // The phone's own music [REQ-AND-260], once playing has begun: a first
+        // scan hashes every file not yet catalogued, and playback should not
+        // wait for it. The Director rebuilds only if it changed anything.
+        try {
+            val found = Found.scan(this)
+            if (found.rebound > 0u || found.tagsOnly > 0u || found.retired > 0u) Lempi.reload()
+        } catch (e: LempiException) {
+            Log.w(TAG, "scan: ${e.message}")
+        }
     }
 
     private fun stopPlayer() {

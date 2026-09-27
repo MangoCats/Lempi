@@ -14,8 +14,6 @@ import io.github.mangocats.lempi.ffi.ImportSummary
 import io.github.mangocats.lempi.ffi.LempiException
 import io.github.mangocats.lempi.ffi.importBundle
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.zip.ZipInputStream
 
 /**
@@ -52,6 +50,7 @@ class ImportActivity : Activity() {
             PICK_ZIP -> startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT)
                 .addCategory(Intent.CATEGORY_OPENABLE).setType("application/zip"), REQ_ZIP)
             PICK_FOLDER -> startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_FOLDER)
+            SCAN -> { title = "Music on the phone"; scan() }
             else -> say("Share a bundle's .zip with Lempi, or choose one from Lempi's menu.")
         }
     }
@@ -80,7 +79,7 @@ class ImportActivity : Activity() {
                 val music = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "Lempi")
                 val r = importBundle(File(filesDir, "library.db").path, staging.path, music.path)
                 report(r)
-                if (r.imported > 0u || r.reused > 0u || r.replaced > 0u) reload()
+                if (r.imported > 0u || r.reused > 0u || r.replaced > 0u || r.upgraded > 0u) reload()
             } catch (e: LempiException) {
                 say("\nImport failed: ${e.message}")
             } catch (e: Exception) {
@@ -100,6 +99,7 @@ class ImportActivity : Activity() {
         say("\nImported ${r.imported}.")
         if (r.already > 0u) say("Already here: ${r.already}.")
         if (r.replaced > 0u) say("Rewritten by Vipunen since, and replaced where they lie: ${r.replaced}.")
+        if (r.upgraded > 0u) say("Found on the phone already, and now given Vipunen's data where they lie: ${r.upgraded}.")
         if (r.reused > 0u) say("Already on the phone, and bound rather than copied again: ${r.reused}.")
         listOf(
             "Damaged in transit, not placed" to r.corrupt,
@@ -116,26 +116,34 @@ class ImportActivity : Activity() {
         }
     }
 
-    /** Ask the running player to rebuild its choices [the web API's own reload]. */
     private fun reload() {
-        val key = Lempi.key
-        if (Lempi.status != "running" || key == null) {
-            say("\nThe player is not running; the new music is picked up when it starts.")
-            return
-        }
-        try {
-            val c = URL("http://127.0.0.1:${Lempi.PORT}/library/reload").openConnection() as HttpURLConnection
-            c.requestMethod = "POST"
-            c.setRequestProperty("x-lempi-key", key)
-            c.connectTimeout = 5_000
-            c.readTimeout = 10_000
-            val code = c.responseCode
-            c.disconnect()
-            say(if (code in 200..299) "\nThe player is rebuilding its choices to include it."
-                else "\nThe player did not accept the reload ($code); it will include it at its next start.")
-        } catch (e: Exception) {
-            say("\nCould not reach the player to reload: $e")
-        }
+        say(when (val code = Lempi.reload()) {
+            null -> "\nThe player is not running; the new music is picked up when it starts."
+            in 200..299 -> "\nThe player is rebuilding its choices to include it."
+            else -> "\nThe player did not accept the reload ($code); it will include it at its next start."
+        })
+    }
+
+    /** Look for music already on the phone [REQ-AND-260]. */
+    private fun scan() {
+        Thread({
+            try {
+                say("Looking through the phone's music…")
+                val r = Found.scan(this)
+                say("\nLooked at ${r.lookedAt} file(s) not yet in Lempi.")
+                if (r.rebound > 0u) say("Found where they had moved to: ${r.rebound}.")
+                say("Added as tags-only (playable; named by their tags, no MusicBrainz data yet): ${r.tagsOnly}.")
+                if (r.duplicates > 0u) say("Second copies of music Lempi already has, left alone: ${r.duplicates}.")
+                if (r.retired > 0u) say("Removed, as they are not in a Music folder: ${r.retired}.")
+                if (r.unreadable.isNotEmpty()) {
+                    say("\nCould not be read as audio (${r.unreadable.size}):")
+                    r.unreadable.forEach { say("  • $it") }
+                }
+                if (r.rebound > 0u || r.tagsOnly > 0u || r.retired > 0u) reload()
+            } catch (e: LempiException) {
+                say("\nScan failed: ${e.message}")
+            }
+        }, "lempi-scan").start()
     }
 
     /** A bundle's `.zip`: `payload.json` and `audio/...` only. */
@@ -196,6 +204,7 @@ class ImportActivity : Activity() {
     companion object {
         const val PICK_ZIP = "io.github.mangocats.lempi.PICK_ZIP"
         const val PICK_FOLDER = "io.github.mangocats.lempi.PICK_FOLDER"
+        const val SCAN = "io.github.mangocats.lempi.SCAN"
         private const val REQ_ZIP = 1
         private const val REQ_FOLDER = 2
     }

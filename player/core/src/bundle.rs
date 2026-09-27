@@ -298,6 +298,22 @@ fn import_with(
     apply: bool,
     md5_hasher: Option<Md5Hasher>,
 ) -> Result<Report, String> {
+    import_bound(db, doc, body, audio_root, apply, md5_hasher, &HashMap::new())
+}
+
+/// [`import_with`], with some encodings bound where they already are rather
+/// than under `audio_root`: `bind` maps an `audio_md5` to its file. A phone
+/// uses it for a file it found in its own storage, which a bundle then names
+/// `[REQ-AND-260]`.
+fn import_bound(
+    db: &mut Connection,
+    doc: &Value,
+    body: &str,
+    audio_root: &Path,
+    apply: bool,
+    md5_hasher: Option<Md5Hasher>,
+    bind: &HashMap<String, PathBuf>,
+) -> Result<Report, String> {
     let mut rep = Report { refused: unacceptable(doc), ..Default::default() };
     if !rep.refused.is_empty() {
         // Whole, and it names the unmet requirement `[SPEC-PL-070]`. A partial
@@ -372,7 +388,10 @@ fn import_with(
             continue;
         }
 
-        let path: PathBuf = audio_root.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let path: PathBuf = bind
+            .get(&md5)
+            .cloned()
+            .unwrap_or_else(|| audio_root.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR)));
         if !path.is_file() {
             rep.outcomes.push((md5, Landed::AwaitingAudio { at: path.display().to_string() }));
             continue;
@@ -664,6 +683,9 @@ pub struct StagedReport {
     pub replaced: usize,
     /// A rewritten file whose replacement the system refused, with why.
     pub not_replaced: Vec<String>,
+    /// Files the phone had found for itself and held as tags-only, now made
+    /// whole where they lie with what Vipunen sent `[REQ-AND-260]`.
+    pub upgraded: usize,
     /// A byte-identical file was already where it belongs, and was bound
     /// rather than copied beside itself `[REQ-AND-240]`.
     pub reused: usize,
@@ -736,6 +758,7 @@ fn import_staged_with(
     }
     let empty = Vec::new();
     crate::db::ensure_sha256_column(db);
+    let mut upgrades: Vec<(i64, String, PathBuf)> = Vec::new();
     for e in doc.get("encodings").and_then(|v| v.as_array()).unwrap_or(&empty) {
         let md5 = str_of(e, "audio_md5");
         let rel = str_of(e, "bundle_path");
@@ -745,6 +768,25 @@ fn import_staged_with(
         if let Some(held_path) = held {
             replace_if_rewritten(db, e, &md5, &rel, staging, Path::new(&held_path), &mut rep)?;
             continue;
+        }
+        // `[REQ-AND-260]`: the phone found these very bytes in its own storage
+        // and holds them as tags-only. The bundle makes that file whole where
+        // it lies -- its tags-only rows give way to Vipunen's, bound to the
+        // same path -- rather than copying it beside itself `[REQ-AND-240]`.
+        if let Some(want) = e.get("sha256").and_then(|v| v.as_str()) {
+            let found: Option<(i64, String)> = db
+                .query_row(
+                    "SELECT file_id, path FROM files WHERE sha256 = ?1 AND audio_md5 LIKE 'sha256:%'",
+                    params![want],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .ok();
+            if let Some((file_id, found_path)) = found {
+                if Path::new(&found_path).is_file() {
+                    upgrades.push((file_id, md5.clone(), PathBuf::from(found_path)));
+                    continue;
+                }
+            }
         }
         let Some(rel_path) = safe_rel(&rel) else {
             rep.unsafe_paths.push(rel);
@@ -777,11 +819,33 @@ fn import_staged_with(
     // Everything placed is now where `import` looks for it. It verifies each
     // again and writes the rows; an encoding that was not placed is simply
     // not there, and lands as awaiting its audio, which writes nothing.
-    let r = import_with(db, &doc, &body, music_root, true, md5_hasher)?;
+    // The tags-only rows of each found file go first, in one transaction, so
+    // its full rows can take the same path. Its plays keep their times but
+    // no longer name a passage that exists; a tags-only passage has no
+    // recording, so they were never part of any recording's history.
+    let mut bind = HashMap::new();
+    if !upgrades.is_empty() {
+        let tx = db.transaction().map_err(|e| e.to_string())?;
+        for (file_id, md5, path) in &upgrades {
+            for sql in [
+                "DELETE FROM passage_recordings WHERE passage_id IN (SELECT passage_id FROM passages WHERE file_id = ?1)",
+                "DELETE FROM passages WHERE file_id = ?1",
+                "DELETE FROM file_tags WHERE file_id = ?1",
+                "DELETE FROM files WHERE file_id = ?1",
+            ] {
+                // `file_tags` may be absent from an older catalogue.
+                let _ = tx.execute(sql, params![file_id]);
+            }
+            bind.insert(md5.clone(), path.clone());
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+    }
+    let r = import_bound(db, &doc, &body, music_root, true, md5_hasher, &bind)?;
+    rep.upgraded = upgrades.len().min(r.count(|o| *o == Landed::Imported));
     rep.rows_written = r.rows_written;
     rep.imported = r.count(|o| *o == Landed::Imported);
     rep.reused = rep.reused.min(rep.imported);
-    rep.imported -= rep.reused;
+    rep.imported = rep.imported.saturating_sub(rep.reused + rep.upgraded);
     Ok(rep)
 }
 
@@ -1562,6 +1626,50 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().contains("lempi-part"))
             .collect();
         assert!(leftovers.is_empty(), "no temporary file is left behind");
+        std::fs::remove_dir_all(&s.root).ok();
+    }
+
+    /// `[REQ-AND-260]`: a file the phone found for itself, held as tags-only,
+    /// is made whole where it lies when a bundle names its bytes -- not
+    /// copied into the music folder beside itself.
+    #[test]
+    fn staged_import_makes_a_found_file_whole_where_it_lies() {
+        let bytes: &[u8] = b"a song the phone found in Downloads";
+        let s = stage("upgrade", &[("realmd5", "Artist/song.wav", Some(bytes), Some(sha_of(bytes)))]);
+        let found = s.root.join("Download").join("song.wav");
+        std::fs::create_dir_all(found.parent().unwrap()).unwrap();
+        std::fs::write(&found, bytes).unwrap();
+        let mut c = empty_library();
+        crate::db::ensure_sha256_column(&c);
+        c.execute(
+            "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen,sha256) \
+             VALUES (?1,?2,1,1.0,'wav',1000,'t','t',?3)",
+            params![format!("sha256:{}", sha_of(bytes)), found.to_string_lossy(), sha_of(bytes)],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO passages (file_id,kind,start_ms,end_ms,boundary_src) VALUES (1,'radio',0,1000,'found:tags')",
+            [],
+        )
+        .unwrap();
+        let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
+        assert_eq!(r.upgraded, 1, "{r:?}");
+        assert_eq!(r.imported, 0, "{r:?}");
+        assert!(!s.music.join("Artist/song.wav").exists(), "not copied beside itself");
+        let (md5, path): (String, String) =
+            c.query_row("SELECT audio_md5, path FROM files", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(md5, "realmd5", "it takes Vipunen's identity");
+        assert_eq!(PathBuf::from(path), found, "bound where it was found");
+        let srcs: Vec<String> = c
+            .prepare("SELECT boundary_src FROM passages")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(srcs, vec!["x"], "the tags-only passage gives way to Vipunen's");
+        let credited: i64 = c.query_row("SELECT count(*) FROM passage_recordings", [], |r| r.get(0)).unwrap();
+        assert_eq!(credited, 1, "and it now has a recording");
         std::fs::remove_dir_all(&s.root).ok();
     }
 }
