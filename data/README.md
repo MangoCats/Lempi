@@ -44,11 +44,18 @@ from `merge-full-5`, and no node has it yet.
 **Since 2026-09-27 04:15 UTC the pair is keyed by Symphonia's reading**
 `[SPEC-RLK-152]`. `tools/rekey_identity.py` hashed all 5,709 files in 212 s:
 5,648 kept their `audio_md5`, 60 changed (353 rows across four tables), and one
-could not be read (*Ammonia Avenue*'s "Prime Time", an MP3 in a WAV container),
-which keeps its old key and a `NULL` generator. The 60 retired keys are in
-`audio_md5_aliases` `[SPEC-RLK-155]`. Both halves as they were just before are in
-`backups/pre-rekey-20260927T0415Z/`, and the run's output is
-`rekey-2026-09-27.log`. **No node has the new keys until its next star sync.**
+could not be read (*Ammonia Avenue*'s "Prime Time", an MP3 in a WAV container).
+That file was fixed at 12:53 UTC, its wrapper removed (`[SPEC-RLK-152]` says how),
+and a second run re-keyed it: every file now records `symphonia@0.5.5`, and the
+61 retired keys are in `audio_md5_aliases` `[SPEC-RLK-155]`. Both halves as they
+were before each run are in `backups/pre-rekey-20260927T0415Z/` and
+`backups/pre-rekey-20260927T1257Z/`, the original file in
+`backups/prime-time-original-20260927/`, and the runs' output in
+`rekey-2026-09-27.log` and `rekey-2026-09-27-prime.log`. **Every node holds the
+fixed file, but no node's catalogue has the new keys until star-sync run
+`20260927T1303Z` is committed.** Until then a node's catalogue still describes
+Prime Time by its old key and byte hash. That is harmless to playback, which
+never checks either.
 
 **Each node received its own copy by patch** `[SPEC-STAR-080]`, and keeps the
 pair it had before in `pre-star-2026-09-26/` beside its listener. Which nodes,

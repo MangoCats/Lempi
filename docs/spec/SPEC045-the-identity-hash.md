@@ -145,12 +145,19 @@ ffmpeg's 80 ms (a process per file).
   every row it hashed. That is not the back-annotation `[SPEC-SC-038]`
   forbids: each value was recomputed a moment earlier, so the generator is a
   measurement, not an inference.
-- **The coverage gap** (precondition 1) is accepted for one file:
-  *Ammonia Avenue*'s "Prime Time", an MP3 inside a WAV container. It keeps its
-  ffmpeg-era key and its `NULL` generator, and is the one row a query for
-  `md5_generator IS NULL` returns. The player probes it the same way and
-  refuses it too, so it is unplayable as well as unhashable: remuxing it into
-  a plain MP3 would fix both.
+- **The coverage gap** (precondition 1) was one file, closed the same day:
+  *Ammonia Avenue*'s "Prime Time", MP3 frames inside a WAV container (format
+  0x0055) behind an ID3 tag. Symphonia's probe finds `RIFF`, hands it to a WAV
+  reader that has no MP3 codec, and refuses it -- so the player could not play
+  it either. A scan of all 5,744 audio files under the music folder found no
+  other. The fix removed the 70-byte wrapper and kept every other byte: the
+  ID3v2 tag, the frames, the ID3v1 tag. It also dropped the rip's last frame,
+  cut off at 372 of 417 bytes, which in a plain MP3 would have been completed
+  from the ID3v1 tag as 26 ms of garbage. Decoded, the new file is the old one's
+  exact samples less those 1,152, which peak at 50 of 32,767. Replaced on the
+  desktop and on all five nodes, verified by SHA-256 on disk; the original is
+  in `data/backups/prime-time-original-20260927/`. Every file now records
+  `symphonia@0.5.5`, and `audio_md5_aliases` holds 61 keys.
 - **Relink is still the integrity check** `[SPEC-RLK-140]`, now on
   Symphonia's reading, so damage past the last whole frame is no longer
   caught. That is the trade `[SPEC-RLK-085]` described, taken deliberately.
