@@ -182,8 +182,54 @@ def test_zip_is_the_whole_bundle_in_one_file():
             check(z.read("audio/a.wav") == b"zip me", "with the bytes that were exported")
 
 
+def test_payload_only_by_byte_hash_in_parts():
+    """[SPEC-PL-095]: selected by the byte hashes a phone found, no audio,
+    each encoding carrying its recorded sha256, in parts of --part-size."""
+    import json
+    import zipfile
+    tmp = tempfile.mkdtemp()
+    db_path = os.path.join(tmp, "lempi.db")
+    c = sqlite3.connect(db_path)
+    c.executescript(SCHEMA)
+    c.execute("ALTER TABLE files ADD COLUMN sha256 TEXT")
+    for i in range(3):
+        audio = os.path.join(tmp, f"{i}.wav")
+        open(audio, "wb").close()
+        c.execute("INSERT INTO files VALUES (?,?,?,4,1.0,'wav',1000,'t','t',?)",
+                  (i + 1, f"md5{i:029d}", audio, f"{i:064x}"))
+        c.execute("INSERT INTO passages VALUES (?,?,'radio',0,1000,NULL,NULL,NULL,'x')", (i + 1, i + 1))
+        c.execute("INSERT INTO passage_recordings VALUES (?,?,1.0,'s')", (i + 1, f"m{i}"))
+        c.execute("INSERT INTO recordings VALUES (?,'Song',NULL,'s')", (f"m{i}",))
+    c.commit()
+    c.close()
+    shas = os.path.join(tmp, "found.txt")
+    with open(shas, "w", encoding="utf-8") as fh:
+        fh.write(f"{0:064x}\n{2:064x}\n{'f' * 64}\n")   # two held, one not
+    out_dir = os.path.join(tmp, "naming")
+    old_argv = sys.argv
+    sys.argv = ["export_bundle.py", db_path, "--sha256-file", shas, "--payload-only",
+                "--part-size", "1", "-o", out_dir, "--zip"]
+    try:
+        rc = eb.main()
+    finally:
+        sys.argv = old_argv
+    check(rc == 0, f"a payload-only export, exit {rc}")
+    parts = sorted(os.listdir(out_dir))
+    check(parts == ["payload-001.json", "payload-002.json"], f"one part per encoding held: {parts}")
+    shipped = []
+    for p in parts:
+        with open(os.path.join(out_dir, p), encoding="utf-8") as fh:
+            shipped += [(e["audio_md5"], e.get("sha256")) for e in json.load(fh)["encodings"]]
+    check(sorted(shipped) == [(f"md5{0:029d}", f"{0:064x}"), (f"md5{2:029d}", f"{2:064x}")],
+          f"each carries its recorded byte hash: {shipped}")
+    with zipfile.ZipFile(out_dir + ".zip") as z:
+        names = z.namelist()
+    check(names == parts, f"the zip holds the parts and no audio: {names}")
+
+
 def main() -> int:
     test_md5_file_selects_the_listed_encodings()
+    test_payload_only_by_byte_hash_in_parts()
     test_zip_is_the_whole_bundle_in_one_file()
     test_md5_file_combines_with_a_hand_typed_md5()
     test_copy_is_checked_against_the_recorded_byte_hash()

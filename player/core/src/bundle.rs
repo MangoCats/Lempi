@@ -298,13 +298,16 @@ fn import_with(
     apply: bool,
     md5_hasher: Option<Md5Hasher>,
 ) -> Result<Report, String> {
-    import_bound(db, doc, body, audio_root, apply, md5_hasher, &HashMap::new())
+    import_bound(db, doc, body, audio_root, apply, md5_hasher, &HashMap::new(), &Default::default())
 }
 
 /// [`import_with`], with some encodings bound where they already are rather
 /// than under `audio_root`: `bind` maps an `audio_md5` to its file. A phone
 /// uses it for a file it found in its own storage, which a bundle then names
 /// `[REQ-AND-260]`.
+// Eight: each is one thing the caller decides, and a struct would only
+// rename them.
+#[allow(clippy::too_many_arguments)]
 fn import_bound(
     db: &mut Connection,
     doc: &Value,
@@ -313,6 +316,7 @@ fn import_bound(
     apply: bool,
     md5_hasher: Option<Md5Hasher>,
     bind: &HashMap<String, PathBuf>,
+    trusted: &std::collections::HashSet<String>,
 ) -> Result<Report, String> {
     let mut rep = Report { refused: unacceptable(doc), ..Default::default() };
     if !rep.refused.is_empty() {
@@ -400,7 +404,9 @@ fn import_bound(
         // payload carries their hash: cheap, and the only check a phone has
         // `[SPEC-PL-087]`.
         let sha256 = e.get("sha256").and_then(|v| v.as_str());
-        if let Some(want) = sha256 {
+        // `trusted`: bytes already verified against this very hash, by a
+        // phone's own scan of a file unchanged since `[REQ-AND-260]`.
+        if let Some(want) = sha256.filter(|_| !trusted.contains(&md5)) {
             let found = match sha256_file(&path) {
                 Ok(h) if h == want => None,
                 Ok(h) => Some(format!("sha256 {h}")),
@@ -686,6 +692,9 @@ pub struct StagedReport {
     /// Files the phone had found for itself and held as tags-only, now made
     /// whole where they lie with what Vipunen sent `[REQ-AND-260]`.
     pub upgraded: usize,
+    /// Found files the bundle named by bytes they no longer hold: changed
+    /// since the scan, and left as they are.
+    pub changed_since_scan: Vec<String>,
     /// A byte-identical file was already where it belongs, and was bound
     /// rather than copied beside itself `[REQ-AND-240]`.
     pub reused: usize,
@@ -742,23 +751,94 @@ pub fn import_staged(db: &mut Connection, staging: &Path, music_root: &Path) -> 
     import_staged_with(db, staging, music_root, md5)
 }
 
+/// The payload files a staged bundle carries, in order: `payload.json`, or
+/// `payload-001.json`, `payload-002.json`, ... when it was written in parts
+/// `[SPEC-PL-095]`.
+fn payload_parts(staging: &Path) -> Result<Vec<PathBuf>, String> {
+    let single = staging.join("payload.json");
+    if single.is_file() {
+        return Ok(vec![single]);
+    }
+    let mut parts: Vec<PathBuf> = std::fs::read_dir(staging)
+        .map_err(|e| format!("cannot read {}: {e}", staging.display()))?
+        .filter_map(|d| d.ok().map(|d| d.path()))
+        .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(is_part_name))
+        .collect();
+    parts.sort();
+    if parts.is_empty() {
+        return Err(format!("no payload.json in the bundle ({})", staging.display()));
+    }
+    Ok(parts)
+}
+
+/// `payload-<digits>.json`.
+pub fn is_part_name(n: &str) -> bool {
+    n.strip_prefix("payload-")
+        .and_then(|r| r.strip_suffix(".json"))
+        .is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn read_payload(path: &Path) -> Result<(String, Value), String> {
+    let body = std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let doc = serde_json::from_str(&body).map_err(|e| format!("{} is not JSON: {e}", path.display()))?;
+    Ok((body, doc))
+}
+
 fn import_staged_with(
     db: &mut Connection,
     staging: &Path,
     music_root: &Path,
     md5_hasher: Option<Md5Hasher>,
 ) -> Result<StagedReport, String> {
-    let payload = staging.join("payload.json");
-    let body = std::fs::read_to_string(&payload)
-        .map_err(|e| format!("no payload.json in the bundle ({}): {e}", payload.display()))?;
-    let doc: Value = serde_json::from_str(&body).map_err(|e| format!("payload.json is not JSON: {e}"))?;
-    let mut rep = StagedReport { refused: unacceptable(&doc), ..Default::default() };
-    if !rep.refused.is_empty() {
-        return Ok(rep);
+    let parts = payload_parts(staging)?;
+    // Acceptance is per bundle and all-or-nothing `[SPEC-PL-070]`: every part
+    // is checked before any is written -- one at a time, so a large bundle
+    // is never all in memory at once.
+    let mut total = StagedReport::default();
+    let many = parts.len() > 1;
+    for part in &parts {
+        let (_, doc) = read_payload(part)?;
+        let name = part.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        for r in unacceptable(&doc) {
+            total.refused.push(if many { format!("{name}: {r}") } else { r });
+        }
     }
+    if !total.refused.is_empty() {
+        return Ok(total);
+    }
+    for part in &parts {
+        let (body, doc) = read_payload(part)?;
+        let r = import_one_payload(db, staging, music_root, md5_hasher, &doc, &body)?;
+        total.imported += r.imported;
+        total.already += r.already;
+        total.replaced += r.replaced;
+        total.upgraded += r.upgraded;
+        total.reused += r.reused;
+        total.rows_written += r.rows_written;
+        total.not_replaced.extend(r.not_replaced);
+        total.corrupt.extend(r.corrupt);
+        total.missing.extend(r.missing);
+        total.unverifiable.extend(r.unverifiable);
+        total.conflicts.extend(r.conflicts);
+        total.unsafe_paths.extend(r.unsafe_paths);
+        total.changed_since_scan.extend(r.changed_since_scan);
+    }
+    Ok(total)
+}
+
+fn import_one_payload(
+    db: &mut Connection,
+    staging: &Path,
+    music_root: &Path,
+    md5_hasher: Option<Md5Hasher>,
+    doc: &Value,
+    body: &str,
+) -> Result<StagedReport, String> {
+    let mut rep = StagedReport::default();
     let empty = Vec::new();
     crate::db::ensure_sha256_column(db);
     let mut upgrades: Vec<(i64, String, PathBuf)> = Vec::new();
+    let mut trusted: std::collections::HashSet<String> = std::collections::HashSet::new();
     for e in doc.get("encodings").and_then(|v| v.as_array()).unwrap_or(&empty) {
         let md5 = str_of(e, "audio_md5");
         let rel = str_of(e, "bundle_path");
@@ -774,15 +854,35 @@ fn import_staged_with(
         // it lies -- its tags-only rows give way to Vipunen's, bound to the
         // same path -- rather than copying it beside itself `[REQ-AND-240]`.
         if let Some(want) = e.get("sha256").and_then(|v| v.as_str()) {
-            let found: Option<(i64, String)> = db
+            let found: Option<(i64, String, i64, f64)> = db
                 .query_row(
-                    "SELECT file_id, path FROM files WHERE sha256 = ?1 AND audio_md5 LIKE 'sha256:%'",
+                    "SELECT file_id, path, size_bytes, mtime FROM files \
+                     WHERE sha256 = ?1 AND audio_md5 LIKE 'sha256:%'",
                     params![want],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 )
                 .ok();
-            if let Some((file_id, found_path)) = found {
-                if Path::new(&found_path).is_file() {
+            if let Some((file_id, found_path, size, mtime)) = found {
+                if let Ok(meta) = std::fs::metadata(&found_path) {
+                    // The scan hashed these bytes. If the file is the same
+                    // size and age as then, hashing it again proves nothing
+                    // new -- on the Moto G that is 5,639 files and fourteen
+                    // minutes of SD reads. Otherwise it is checked.
+                    let now = meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs_f64())
+                        .unwrap_or(-1.0);
+                    if meta.len() as i64 == size && (now - mtime).abs() < 0.001 {
+                        trusted.insert(md5.clone());
+                    } else if sha256_file(Path::new(&found_path)).ok().as_deref() != Some(want) {
+                        // Changed since the scan, and no longer these bytes:
+                        // left exactly as it is, tags-only rows and all. It
+                        // is checked here, before anything is removed.
+                        rep.changed_since_scan.push(found_path);
+                        continue;
+                    }
                     upgrades.push((file_id, md5.clone(), PathBuf::from(found_path)));
                     continue;
                 }
@@ -840,7 +940,7 @@ fn import_staged_with(
         }
         tx.commit().map_err(|e| e.to_string())?;
     }
-    let r = import_bound(db, &doc, &body, music_root, true, md5_hasher, &bind)?;
+    let r = import_bound(db, doc, body, music_root, true, md5_hasher, &bind, &trusted)?;
     rep.upgraded = upgrades.len().min(r.count(|o| *o == Landed::Imported));
     rep.rows_written = r.rows_written;
     rep.imported = r.count(|o| *o == Landed::Imported);
@@ -1670,6 +1770,67 @@ mod tests {
         assert_eq!(srcs, vec!["x"], "the tags-only passage gives way to Vipunen's");
         let credited: i64 = c.query_row("SELECT count(*) FROM passage_recordings", [], |r| r.get(0)).unwrap();
         assert_eq!(credited, 1, "and it now has a recording");
+        std::fs::remove_dir_all(&s.root).ok();
+    }
+
+    /// `[SPEC-PL-095]`: a payload in parts is imported part by part; one
+    /// unacceptable part refuses the whole bundle, before anything is written.
+    #[test]
+    fn staged_import_takes_a_payload_in_parts_and_refuses_it_whole() {
+        let a: &[u8] = b"first part's song";
+        let b: &[u8] = b"second part's song";
+        let s = stage("parts", &[("md5a", "a.wav", Some(a), Some(sha_of(a)))]);
+        let one = std::fs::read_to_string(s.staging.join("payload.json")).unwrap();
+        std::fs::remove_file(s.staging.join("payload.json")).unwrap();
+        std::fs::write(s.staging.join("payload-001.json"), &one).unwrap();
+        std::fs::write(s.staging.join("audio/b.wav"), b).unwrap();
+        let two = one.replace("md5a", "md5b").replace("a.wav", "b.wav").replace(&sha_of(a), &sha_of(b));
+        std::fs::write(s.staging.join("payload-002.json"), &two).unwrap();
+
+        // A broken second part: nothing from the first may land either.
+        let broken = two.replace(r#""boundary_src":"x","#, "");
+        std::fs::write(s.staging.join("payload-002.json"), &broken).unwrap();
+        let mut c = empty_library();
+        let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
+        assert!(r.refused.iter().any(|x| x.starts_with("payload-002.json: ")), "{r:?}");
+        let n: i64 = c.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0, "refused whole: the good first part wrote nothing");
+        assert!(!s.music.join("a.wav").exists());
+
+        std::fs::write(s.staging.join("payload-002.json"), &two).unwrap();
+        let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
+        assert!(r.refused.is_empty(), "{r:?}");
+        assert_eq!(r.imported, 2, "both parts land: {r:?}");
+        std::fs::remove_dir_all(&s.root).ok();
+    }
+
+    /// A found file changed since its scan is checked again, and a found
+    /// file that no longer holds the bytes the payload names is not made
+    /// whole with them.
+    #[test]
+    fn a_found_file_changed_since_its_scan_is_checked_again() {
+        let claimed: &[u8] = b"the bytes the scan saw";
+        let s = stage("changed", &[("realmd5", "song.wav", None, Some(sha_of(claimed)))]);
+        let found = s.root.join("Found").join("song.wav");
+        std::fs::create_dir_all(found.parent().unwrap()).unwrap();
+        std::fs::write(&found, b"edited since, and a different length").unwrap();
+        let mut c = empty_library();
+        crate::db::ensure_sha256_column(&c);
+        c.execute(
+            "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen,sha256) \
+             VALUES (?1,?2,?3,1.0,'wav',1000,'t','t',?4)",
+            params![format!("sha256:{}", sha_of(claimed)), found.to_string_lossy(), claimed.len() as i64, sha_of(claimed)],
+        )
+        .unwrap();
+        let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
+        assert_eq!(r.upgraded, 0, "{r:?}");
+        let real: i64 = c.query_row("SELECT count(*) FROM files WHERE audio_md5='realmd5'", [], |r| r.get(0)).unwrap();
+        assert_eq!(real, 0, "a file whose bytes changed is not given Vipunen's identity");
+        assert_eq!(r.changed_since_scan.len(), 1, "{r:?}");
+        let kept: i64 = c
+            .query_row("SELECT count(*) FROM files WHERE audio_md5 LIKE 'sha256:%'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(kept, 1, "and its tags-only entry is left as it was");
         std::fs::remove_dir_all(&s.root).ok();
     }
 }

@@ -48,6 +48,15 @@ def main() -> int:
     ap.add_argument("--zip", action="store_true",
                     help="also write <out>.zip: the whole bundle as one file, for a phone's "
                          "share or open sheet [REQ-AND-230]")
+    ap.add_argument("--sha256-file",
+                    help="file of byte hashes to include, one per line -- what a phone found "
+                         "in its own storage [REQ-AND-260]")
+    ap.add_argument("--payload-only", action="store_true",
+                    help="no audio: what Vipunen knows about files the receiver already "
+                         "holds, named by their recorded byte hash [SPEC-PL-095]")
+    ap.add_argument("--part-size", type=int, default=0,
+                    help="with --payload-only: encodings per payload part, so a phone "
+                         "parses a few MB at a time")
     args = ap.parse_args()
 
     # Catalogue-only, read-only.
@@ -59,6 +68,13 @@ def main() -> int:
     if args.like:
         md5s += [r[0] for r in conn.execute(
             "SELECT audio_md5 FROM files WHERE path LIKE ?", (args.like,))]
+    if args.sha256_file:
+        with open(args.sha256_file, encoding="utf-8") as fh:
+            wanted = {ln.strip() for ln in fh if ln.strip()}
+        hits = [r for r in conn.execute("SELECT audio_md5, sha256 FROM files WHERE sha256 IS NOT NULL")
+                if r[1] in wanted]
+        md5s += [r[0] for r in hits]
+        print(f"by byte hash: {len(wanted)} listed, {len(hits)} held here")
     md5s = sorted(set(md5s))
     if not md5s:
         print("nothing selected", file=sys.stderr)
@@ -79,6 +95,8 @@ def main() -> int:
             return 0
 
     roots = ";".join(args.root)
+    if args.payload_only:
+        return payload_only(conn, md5s, roots, args)
     doc = payloadmod.build(conn, md5s, roots)
 
     bad = payloadmod.compatible(doc)
@@ -167,6 +185,52 @@ def main() -> int:
                     full = os.path.join(dirpath, f)
                     z.write(full, "audio/" + os.path.relpath(full, audio_dir).replace(os.sep, "/"))
         print(f"  zip         {dest}, {os.path.getsize(dest)/1e6:.1f} MB")
+    return 0
+
+
+def payload_only(conn, md5s, roots, args) -> int:
+    """[SPEC-PL-095]: what Vipunen knows about files the receiver already
+    holds, and no audio. Each encoding carries its recorded byte hash, which
+    is how the receiver finds its own copy [REQ-AND-260]; one with none
+    recorded cannot be found, and is left out and counted. In parts of
+    --part-size encodings, so a phone parses a few MB at a time: parts are
+    payload-001.json, payload-002.json, ... and one part is payload.json."""
+    recorded = dict(conn.execute("SELECT audio_md5, sha256 FROM files WHERE sha256 IS NOT NULL"))
+    named = [m for m in md5s if m in recorded]
+    if len(named) < len(md5s):
+        print(f"  {len(md5s) - len(named)} encoding(s) have no recorded sha256 and are left out")
+    if not named:
+        print("nothing to send", file=sys.stderr)
+        return 1
+    size = args.part_size if args.part_size > 0 else len(named)
+    chunks = [named[i:i + size] for i in range(0, len(named), size)]
+    os.makedirs(args.out, exist_ok=True)
+    names = []
+    for n, chunk in enumerate(chunks, 1):
+        doc = payloadmod.build(conn, chunk, roots)
+        bad = payloadmod.compatible(doc)
+        if bad:
+            for b in bad:
+                print(f"  REFUSING: {b}", file=sys.stderr)
+            return 1
+        for e in doc["encodings"]:
+            e["sha256"] = recorded[e["audio_md5"]]
+        name = "payload.json" if len(chunks) == 1 else f"payload-{n:03d}.json"
+        with open(os.path.join(args.out, name), "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(doc, fh, separators=(",", ":"), ensure_ascii=False)
+        names.append(name)
+    total = sum(os.path.getsize(os.path.join(args.out, n)) for n in names)
+    print(f"bundle: {args.out} (payload only)")
+    print(f"  encodings   {len(named)}, in {len(names)} part(s)")
+    print(f"  payload     {total / 1e6:.1f} MB")
+    if args.zip:
+        import zipfile
+        dest = args.out.rstrip("/\\") + ".zip"
+        # Deflated, unlike an audio bundle: JSON compresses about tenfold.
+        with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED) as z:
+            for name in names:
+                z.write(os.path.join(args.out, name), name)
+        print(f"  zip         {dest}, {os.path.getsize(dest) / 1e6:.1f} MB")
     return 0
 
 

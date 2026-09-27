@@ -104,6 +104,7 @@ class ImportActivity : Activity() {
         listOf(
             "Damaged in transit, not placed" to r.corrupt,
             "Rewritten by Vipunen, but the phone would not let it be replaced" to r.notReplaced,
+            "Changed on the phone since it was found, left as it is" to r.changedSinceScan,
             "Not in the bundle" to r.missing,
             "No byte hash to check against, not placed" to r.unverifiable,
             "A different file already has this name, left alone" to r.conflicts,
@@ -198,7 +199,9 @@ class ImportActivity : Activity() {
     private fun wanted(name: String): Boolean {
         if (name.startsWith("/") || name.contains('\\')) return false
         if (name.split('/').any { it == ".." || it.isEmpty() }) return false
-        return name == "payload.json" || name.startsWith("audio/")
+        // A payload in parts [SPEC-PL-095]: payload-001.json, payload-002.json, ...
+        val part = Regex("payload-[0-9]+\\.json")
+        return name == "payload.json" || part.matches(name) || name.startsWith("audio/")
     }
 
     companion object {

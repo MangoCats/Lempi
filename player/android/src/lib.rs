@@ -284,6 +284,8 @@ pub struct ImportSummary {
     pub not_replaced: Vec<String>,
     /// Files the phone had found for itself, made whole where they lie.
     pub upgraded: u32,
+    /// Found files named by bytes they no longer hold, left as they are.
+    pub changed_since_scan: Vec<String>,
     /// Byte-identical files already on the phone, bound rather than copied.
     pub reused: u32,
     pub corrupt: Vec<String>,
@@ -326,6 +328,7 @@ pub fn import_bundle(library: String, staging: String, music_root: String) -> Re
         replaced: n(s.replaced),
         not_replaced: s.not_replaced,
         upgraded: n(s.upgraded),
+        changed_since_scan: s.changed_since_scan,
         reused: n(s.reused),
         corrupt: s.corrupt,
         missing: s.missing,
