@@ -473,3 +473,55 @@ pub fn prepare_backup(listener: String) -> Result<BackupReady, LempiError> {
         bytes: e.bytes,
     })
 }
+
+/// A file the phone found for itself and holds tags-only: what an offer to
+/// Vipunen describes `[REQ-AND-280]`, `[REQ-AND-288]`.
+#[derive(uniffi::Record)]
+pub struct FoundFile {
+    pub path: String,
+    pub sha256: String,
+    /// Its signature, where the scan computed one `[REQ-AND-270]`; absent for
+    /// a file still keyed by its bytes.
+    pub audio_md5: Option<String>,
+    pub size: u64,
+    pub duration_ms: u64,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub track_no: Option<i64>,
+}
+
+/// The found files the catalogue does not hold -- every tags-only file -- for
+/// the app to offer to Vipunen `[REQ-AND-280]`.
+#[uniffi::export]
+pub fn found_to_send(library: String) -> Result<Vec<FoundFile>, LempiError> {
+    let r = guarded(|| {
+        let db = rusqlite::Connection::open_with_flags(&library, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| format!("cannot open {library}: {e}"))?;
+        let q = format!(
+            "SELECT f.path, f.sha256, f.audio_md5, f.size_bytes, f.duration_ms, t.title, t.artist, t.album, t.track_no \
+             FROM files f LEFT JOIN file_tags t ON t.file_id = f.file_id \
+             WHERE {} AND f.sha256 IS NOT NULL ORDER BY t.artist, t.album, t.track_no, f.path",
+            lempi_player::bundle::TAGS_ONLY_SQL
+        );
+        let mut stmt = db.prepare(&q).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                let key: String = r.get(2)?;
+                Ok(FoundFile {
+                    path: r.get(0)?,
+                    sha256: r.get(1)?,
+                    audio_md5: (!key.starts_with("sha256:")).then_some(key),
+                    size: r.get::<_, i64>(3)?.max(0) as u64,
+                    duration_ms: r.get::<_, i64>(4)?.max(0) as u64,
+                    title: r.get(5)?,
+                    artist: r.get(6)?,
+                    album: r.get(7)?,
+                    track_no: r.get(8)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    });
+    r.map_err(LempiError::from)
+}

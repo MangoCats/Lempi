@@ -43,6 +43,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sqlite3
 import sys
 import threading
@@ -151,6 +152,63 @@ class Intake:
                     self.offered[f["sha256"]] = {"offered": f, "answer": a, "sender": sender}
         return {"files": answers}
 
+    def keep(self, sha: str, source: str, entry: dict):
+        """Move a received file, already checked, into pending beside its
+        note. Returns where it went and the note."""
+        dest, note = self._path(sha, entry["offered"].get("name", ""))
+        os.replace(source, dest)
+        record = {
+            "received_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "sender": entry["sender"],
+            "offered": entry["offered"],
+            "verdict": entry["answer"]["verdict"],
+            "near": entry["answer"].get("near", []),
+            "signature": self.signature(dest),
+            "bytes": os.path.getsize(dest),
+            "file": os.path.basename(dest),
+        }
+        with open(note, "w", encoding="utf-8") as fh:
+            json.dump(record, fh, indent=2, ensure_ascii=False)
+        with self.lock:
+            self.offered.pop(sha, None)
+        say(f"intake: kept {os.path.basename(dest)} ({record['verdict']}) from {entry['sender']}")
+        return dest, record
+
+    def from_folder(self, folder: str) -> dict:
+        """[REQ-AND-285]: the same offer, carried by hand -- `offer.json` and
+        the files named by their byte hash, as the phone writes them where no
+        node answers. Judged exactly as an offer over the network is, and each
+        wanted file kept only if its bytes are what it was offered as."""
+        with open(os.path.join(folder, "offer.json"), encoding="utf-8") as fh:
+            body = json.load(fh)
+        answers = self.offer(body, "folder " + os.path.basename(os.path.normpath(folder)))
+        out = {"kept": [], "not_wanted": [], "damaged": [], "missing": []}
+        by_id = {f.get("id"): f for f in body.get("files", []) if isinstance(f, dict)}
+        for a in answers["files"]:
+            f = by_id.get(a.get("id"), {})
+            if not a.get("want"):
+                out["not_wanted"].append((f.get("name"), a["verdict"]))
+                continue
+            sha = f["sha256"]
+            src = os.path.join(folder, sha + os.path.splitext(f.get("name", ""))[1])
+            if not os.path.isfile(src):
+                out["missing"].append(f.get("name"))
+                continue
+            h = hashlib.sha256()
+            with open(src, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(chunk)
+            if h.hexdigest() != sha:
+                out["damaged"].append(f.get("name"))
+                continue
+            staged = self._path(sha, f.get("name", ""))[0] + ".part"
+            shutil.copyfile(src, staged)
+            with self.lock:
+                entry = self.offered[sha]
+            self.keep(sha, staged, entry)
+            out["kept"].append((f.get("name"), a["verdict"]))
+        return out
+
     def _path(self, sha: str, name: str):
         ext = os.path.splitext(name)[1].lower()
         ext = ext if re.fullmatch(r"\.[a-z0-9]{1,5}", ext) else ".bin"
@@ -226,8 +284,7 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or -1)
         if n <= 0 or n > MAX_FILE:
             return self.reply(413, {"error": f"length {n} refused"})
-        dest, note = self.intake._path(sha, entry["offered"].get("name", ""))
-        part = dest + ".part"
+        part = self.intake._path(sha, entry["offered"].get("name", ""))[0] + ".part"
         h = hashlib.sha256()
         left = n
         self.consumed = True
@@ -242,23 +299,7 @@ class Handler(BaseHTTPRequestHandler):
         if left or h.hexdigest() != sha:
             os.remove(part)
             return self.reply(422, {"error": "what arrived is not what was offered; nothing kept"})
-        os.replace(part, dest)
-        sig = self.intake.signature(dest)
-        record = {
-            "received_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "sender": entry["sender"],
-            "offered": entry["offered"],
-            "verdict": entry["answer"]["verdict"],
-            "near": entry["answer"].get("near", []),
-            "signature": sig,
-            "bytes": n,
-            "file": os.path.basename(dest),
-        }
-        with open(note, "w", encoding="utf-8") as fh:
-            json.dump(record, fh, indent=2, ensure_ascii=False)
-        with self.intake.lock:
-            self.intake.offered.pop(sha, None)
-        say(f"intake: kept {os.path.basename(dest)} ({record['verdict']}) from {entry['sender']}")
+        dest, record = self.intake.keep(sha, part, entry)
         self.reply(201, {"kept": os.path.basename(dest), "verdict": record["verdict"]})
 
 
@@ -275,6 +316,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--bind", default="0.0.0.0",
                     help="address to listen on (default all -- a phone must reach it)")
     ap.add_argument("--key-file", help="a key of the user's own [REQ-AND-287]; default: the application's")
+    ap.add_argument("--from-folder", help="take an offer carried by hand -- a folder the phone wrote -- "
+                                          "and stop, without listening [REQ-AND-285]")
     args = ap.parse_args(argv)
     if not os.path.isfile(args.db):
         say(f"no such database: {args.db}")
@@ -288,6 +331,18 @@ def main(argv: list[str]) -> int:
             say(f"{args.key_file} is empty")
             return 1
     intake = Intake(args.db, pending, key)
+    if args.from_folder:
+        out = intake.from_folder(args.from_folder)
+        for name, verdict in out["kept"]:
+            say(f"  kept        {name} ({verdict})")
+        for name, verdict in out["not_wanted"]:
+            say(f"  not wanted  {name} ({verdict})")
+        for name in out["damaged"]:
+            say(f"  DAMAGED     {name}: its bytes are not what the offer says; not kept")
+        for name in out["missing"]:
+            say(f"  MISSING     {name}: offered, but not in the folder")
+        say(f"intake: {len(out['kept'])} kept in {pending}")
+        return 1 if out["damaged"] or out["missing"] else 0
     # Say what this is and where it listens [GDE-DEP-060]: a network-facing
     # listener should never be a surprise.
     say(f"intake: library {os.path.abspath(args.db)} (read-only)")

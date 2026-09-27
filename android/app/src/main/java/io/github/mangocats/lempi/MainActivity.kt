@@ -99,12 +99,17 @@ class MainActivity : Activity() {
         menu.add(0, 2, 1, "Import a bundle folder…")
         menu.add(0, 3, 2, "Look for music on the phone")
         menu.add(0, 4, 3, "Export a backup…")
+        menu.add(0, 5, 4, "Send new music to Vipunen…")
         return true
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         if (item.itemId == 4) {
             startActivity(Intent(this, BackupActivity::class.java))
+            return true
+        }
+        if (item.itemId == 5) {
+            startActivity(Intent(this, SendActivity::class.java))
             return true
         }
         val action = when (item.itemId) {

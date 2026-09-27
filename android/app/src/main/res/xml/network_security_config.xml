@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Plain HTTP to the player's own server on loopback, and nowhere else: the
-     launch key, not TLS, is what keeps other apps out [REQ-AND-160]. -->
+<!-- Plain HTTP, to two places only: the player's own server on loopback,
+     where the launch key keeps other apps out [REQ-AND-160]; and the Vipunen
+     node the user names, to send it music [REQ-AND-285]. That node is any
+     address the user types, which no list here can name in advance, so plain
+     HTTP is allowed in general. The app makes no other requests. The intake's
+     key keeps out mistakes, not people [REQ-AND-287]. -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false" />
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">127.0.0.1</domain>
-    </domain-config>
+    <base-config cleartextTrafficPermitted="true" />
 </network-security-config>

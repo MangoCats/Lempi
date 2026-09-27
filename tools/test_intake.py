@@ -116,6 +116,32 @@ def main() -> int:
     status, _ = call(port, "PUT", "/file/" + sha(new_bytes), new_bytes)
     check(status == 409, f"and not taken twice: {status}")
 
+    # [REQ-AND-285]: the same offer, carried by hand.
+    folder = os.path.join(tmp, "lempi-offer-x")
+    os.makedirs(folder)
+    good, bad = b"a second new song", b"a third, damaged later"
+    files = [
+        {"id": 0, "sha256": sha(b"held bytes"), "name": "held.mp3", "tags": {}},
+        {"id": 1, "sha256": sha(good), "name": "Puppy.mp3", "tags": {"artist": "Fluke", "title": "Puppy"}},
+        {"id": 2, "sha256": sha(bad), "name": "Bad.mp3", "tags": {"artist": "X", "title": "Y"}},
+        {"id": 3, "sha256": sha(b"never written"), "name": "Gone.mp3", "tags": {"artist": "Z", "title": "W"}},
+    ]
+    with open(os.path.join(folder, "offer.json"), "w") as fh:
+        json.dump({"files": files}, fh)
+    with open(os.path.join(folder, sha(good) + ".mp3"), "wb") as fh:
+        fh.write(good)
+    with open(os.path.join(folder, sha(bad) + ".mp3"), "wb") as fh:
+        fh.write(b"not what was offered")
+    out = it.from_folder(folder)
+    check(out["kept"] == [("Puppy.mp3", "new")], f"the wanted, sound file is kept: {out['kept']}")
+    check(out["not_wanted"] == [("held.mp3", "held")], f"a held one is not: {out['not_wanted']}")
+    check(out["damaged"] == ["Bad.mp3"] and out["missing"] == ["Gone.mp3"],
+          f"damaged and missing are named: {out}")
+    check(os.path.isfile(os.path.join(pending, sha(good) + ".mp3"))
+          and os.path.isfile(os.path.join(pending, sha(good) + ".json"))
+          and not os.path.exists(os.path.join(pending, sha(bad) + ".mp3")),
+          "kept with its note, and the damaged one not at all")
+
     httpd.shutdown()
     print()
     if FAILED:

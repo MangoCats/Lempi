@@ -65,6 +65,13 @@
             android:label="Export a backup"
             android:exported="false" />
 
+        <!-- [REQ-AND-280]: music the phone found, sent to Vipunen. -->
+        <activity
+            android:name=".SendActivity"
+            android:label="Send music to Vipunen"
+            android:windowSoftInputMode="adjustResize"
+            android:exported="false" />
+
         <!-- [REQ-AND-130]: also the media session's service, which the system,
              Bluetooth and Android Auto bind to, and so exported. Media3
              answers them; nothing here plays audio for them. -->
