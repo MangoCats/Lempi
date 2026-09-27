@@ -147,6 +147,7 @@ grep -rn "SPEC-PD" docs/
 | `[GDE-AND-*]` | Phone ports (Android, iOS): fork vs ground-up, and the licence that decides it | [GUIDE004-phone-port-strategy.md](GUIDE004-phone-port-strategy.md) |
 | `[GDE-APP-*]` | The Android app: the decisions its requirements wait on, each with a recommendation | [GUIDE034-android-decisions-before-requirements.md](GUIDE034-android-decisions-before-requirements.md) |
 | `[GDE-NDS-*]` | Node discovery on a LAN — a future idea, recorded and not scheduled | [GUIDE035-node-discovery.md](GUIDE035-node-discovery.md) |
+| `[GDE-OCP-*]` | Node occasion policies — a profanity ceiling and ramp, curve overrides; designed, not scheduled | [GUIDE036-node-occasion-policies.md](GUIDE036-node-occasion-policies.md) |
 | `[GDE-HST-*]` | What the player assumes about its host; groundwork for a phone target; logging with `tracing` | [GUIDE033-the-player-without-an-appliance.md](GUIDE033-the-player-without-an-appliance.md) |
 | `[GDE-CLD-*]` | Hosted flavor lookup instead of Vipunen on the device | [GUIDE005-flavor-service.md](GUIDE005-flavor-service.md) |
 | `[GDE-EXT-*]` | The Director driving other players; why streaming is closed | [GUIDE006-director-as-a-guest.md](GUIDE006-director-as-a-guest.md) |
