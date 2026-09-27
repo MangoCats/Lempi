@@ -90,6 +90,12 @@
   #panel-settings h2 { font-size: .75rem; letter-spacing: .12em;
                        text-transform: uppercase; color: var(--dim);
                        font-weight: 600; margin: 0 0 1.2rem; }
+  /* `hidden` must win over the grid below, as `.qpick[hidden]` does for its
+     flex. Without this every hidden row showed: "Really restart?" and "Really
+     shut down?" before anyone asked, and rows for controls the host does not
+     offer -- restart and shut down on the desktop, which cannot do either.
+     Found 2026-09-27; the scripts that hide and show them were right all along. */
+  .setting[hidden] { display: none; }
   .setting { display: grid; grid-template-columns: 10rem auto;
              gap: .2rem .8rem; align-items: baseline;
              padding: .8rem 0; border-bottom: 1px solid var(--line); }
