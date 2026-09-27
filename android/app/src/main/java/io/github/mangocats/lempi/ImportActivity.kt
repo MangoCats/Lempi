@@ -135,7 +135,8 @@ class ImportActivity : Activity() {
                 if (r.rebound > 0u) say("Found where they had moved to: ${r.rebound}.")
                 say("Added as tags-only (playable; named by their tags, no MusicBrainz data yet): ${r.tagsOnly}.")
                 if (r.duplicates > 0u) say("Second copies of music Lempi already has, left alone: ${r.duplicates}.")
-                if (r.retired > 0u) say("Removed, as they are not in a Music folder: ${r.retired}.")
+                if (r.retired > 0u) say("Removed, as not in a Music folder or a second copy: ${r.retired}.")
+                if (r.hashed > 0u) say("Files Lempi had, fingerprinted now: ${r.hashed}.")
                 if (r.unreadable.isNotEmpty()) {
                     say("\nCould not be read as audio (${r.unreadable.size}):")
                     r.unreadable.forEach { say("  • $it") }

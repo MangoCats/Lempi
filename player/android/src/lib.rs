@@ -314,9 +314,10 @@ pub fn import_bundle(library: String, staging: String, music_root: String) -> Re
     });
     match &r {
         Ok(s) => tracing::info!(
-            "import: {} imported, {} already, {} replaced, {} reused, {} corrupt, {} missing, {} conflicts, {} refused",
-            s.imported, s.already, s.replaced, s.reused, s.corrupt.len(), s.missing.len(), s.conflicts.len(),
-            s.refused.len()
+            "import: {} imported, {} already, {} replaced, {} upgraded, {} reused, {} corrupt, {} missing, \
+             {} conflicts, {} refused",
+            s.imported, s.already, s.replaced, s.upgraded, s.reused, s.corrupt.len(), s.missing.len(),
+            s.conflicts.len(), s.refused.len()
         ),
         Err(e) => tracing::error!("import failed: {e}"),
     }
@@ -350,8 +351,11 @@ pub struct FoundSummary {
     /// Second copies of files the catalogue holds in place, left alone.
     pub duplicates: u32,
     pub unreadable: Vec<String>,
-    /// Tags-only entries outside a `Music` folder, removed.
+    /// Tags-only entries removed: outside a `Music` folder, or a second copy
+    /// of a file Vipunen named.
     pub retired: u32,
+    /// Catalogued files that had no byte hash, hashed now.
+    pub hashed: u32,
 }
 
 /// Look at the audio files at `paths` -- what MediaStore lists -- that the
@@ -381,5 +385,6 @@ pub fn scan_found(library: String, paths: Vec<String>) -> Result<FoundSummary, L
         duplicates: n(s.duplicates),
         unreadable: s.unreadable,
         retired: n(s.retired),
+        hashed: n(s.hashed),
     })
 }

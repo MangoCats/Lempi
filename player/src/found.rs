@@ -55,8 +55,11 @@ pub struct FoundReport {
     pub duplicates: usize,
     /// Files that could not be read as audio, with why.
     pub unreadable: Vec<String>,
-    /// Tags-only entries outside a `Music` folder, removed.
+    /// Tags-only entries removed: outside a `Music` folder, or a second copy
+    /// of a file Vipunen named.
     pub retired: usize,
+    /// Catalogued files that had no byte hash, hashed now.
+    pub hashed: usize,
 }
 
 /// ISO-8601 without a zone, as every other writer of the library does, and
@@ -94,6 +97,8 @@ pub fn scan(db: &mut Connection, paths: &[PathBuf]) -> Result<FoundReport, Strin
     crate::db::ensure_sha256_column(db);
     let mut rep = FoundReport::default();
     rep.retired = retire_outside_music(db)?;
+    rep.hashed = hash_unhashed(db)?;
+    rep.retired += retire_copies(db)?;
     let paths: Vec<PathBuf> =
         paths.iter().filter(|p| in_music_folder(&p.to_string_lossy())).cloned().collect();
     let paths = &paths[..];
@@ -110,6 +115,66 @@ pub fn scan(db: &mut Connection, paths: &[PathBuf]) -> Result<FoundReport, Strin
         }
     }
     Ok(rep)
+}
+
+/// Catalogued files with no byte hash -- rows written before the column
+/// existed -- hashed now, where the file is here. Without it a second copy
+/// of such a file cannot be recognised: on the Moto G, 47 files on the SD
+/// card were catalogued as tags-only beside the same songs in
+/// `Music/Lempi/`, whose rows predated the column. A byte hash is the one
+/// thing a phone may compute `[REQ-AND-270]`.
+fn hash_unhashed(db: &mut Connection) -> Result<usize, String> {
+    let rows: Vec<(i64, String)> = {
+        let mut q = db
+            .prepare("SELECT file_id, path FROM files WHERE sha256 IS NULL")
+            .map_err(|e| e.to_string())?;
+        let v = q
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .collect();
+        v
+    };
+    let tx = db.transaction().map_err(|e| e.to_string())?;
+    let mut n = 0;
+    for (id, path) in rows {
+        if let Ok(h) = sha256_file(Path::new(&path)) {
+            tx.execute("UPDATE files SET sha256 = ?1 WHERE file_id = ?2", params![h, id])
+                .map_err(|e| e.to_string())?;
+            n += 1;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(n)
+}
+
+/// Tags-only entries whose bytes a named file also holds: second copies,
+/// retired so the same song is not in the Director twice. The named one is
+/// kept; it is the one Vipunen knows.
+fn retire_copies(db: &mut Connection) -> Result<usize, String> {
+    let ids: Vec<(i64, String)> = {
+        let mut q = db
+            .prepare(
+                "SELECT f.file_id, f.path FROM files f WHERE f.audio_md5 LIKE 'sha256:%' AND EXISTS \
+                 (SELECT 1 FROM files g WHERE g.sha256 = f.sha256 AND g.audio_md5 NOT LIKE 'sha256:%')",
+            )
+            .map_err(|e| e.to_string())?;
+        let v = q
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .collect();
+        v
+    };
+    let tx = db.transaction().map_err(|e| e.to_string())?;
+    for (id, path) in &ids {
+        let _ = tx.execute("DELETE FROM file_tags WHERE file_id = ?1", params![id]);
+        tx.execute("DELETE FROM passages WHERE file_id = ?1", params![id]).map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM files WHERE file_id = ?1", params![id]).map_err(|e| e.to_string())?;
+        tracing::info!("found: retired {path}, a second copy of a file Vipunen named");
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(ids.len())
 }
 
 /// Tags-only entries outside a `Music` folder, with their passages. Only
@@ -315,6 +380,46 @@ mod tests {
         assert_eq!(PathBuf::from(p), moved, "the catalogued file is bound where it was found");
         let n: i64 = c.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 2, "a second copy is not catalogued");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A named file with no byte hash is hashed, and a tags-only second
+    /// copy of it -- catalogued before its hash was known -- is retired.
+    #[test]
+    fn a_tags_only_copy_of_a_named_file_is_retired_once_it_is_hashed() {
+        let d = dir("copies");
+        let (named, copy) = (d.join("named.wav"), d.join("copy.wav"));
+        wav(&named, 11);
+        std::fs::copy(&named, &copy).unwrap();
+        let mut c = library();
+        crate::db::ensure_sha256_column(&c);
+        c.execute(
+            "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen) \
+             VALUES ('realmd5', ?1, 1, 1.0, 'wav', 500, 't', 't')",
+            params![named.to_string_lossy()],
+        )
+        .unwrap();
+        let sha = sha256_file(&copy).unwrap();
+        c.execute(
+            "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen,sha256) \
+             VALUES (?1, ?2, 1, 1.0, 'wav', 500, 't', 't', ?3)",
+            params![found_key(&sha), copy.to_string_lossy(), sha],
+        )
+        .unwrap();
+        c.execute("INSERT INTO passages (file_id,kind,start_ms,end_ms,boundary_src) VALUES (2,'radio',0,500,'found:tags')", [])
+            .unwrap();
+        let r = scan(&mut c, &[named.clone(), copy]).unwrap();
+        assert_eq!((r.hashed, r.retired), (1, 1), "{r:?}");
+        let left: Vec<String> = c
+            .prepare("SELECT audio_md5 FROM files")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(left, vec!["realmd5"], "the named file is kept, its copy retired");
+        let passages: i64 = c.query_row("SELECT count(*) FROM passages", [], |r| r.get(0)).unwrap();
+        assert_eq!(passages, 0, "and the copy's passage with it");
         std::fs::remove_dir_all(&d).ok();
     }
 
