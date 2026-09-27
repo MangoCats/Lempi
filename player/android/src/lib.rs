@@ -284,6 +284,9 @@ pub struct ImportSummary {
     pub not_replaced: Vec<String>,
     /// Files the phone had found for itself, made whole where they lie.
     pub upgraded: u32,
+    /// Files held under a retired key, re-keyed to its successor
+    /// `[SPEC-PL-097]`.
+    pub rekeyed: u32,
     /// Found files named by bytes they no longer hold, left as they are.
     pub changed_since_scan: Vec<String>,
     /// Byte-identical files already on the phone, bound rather than copied.
@@ -317,9 +320,9 @@ pub fn import_bundle(library: String, staging: String, music_root: String) -> Re
     });
     match &r {
         Ok(s) => tracing::info!(
-            "import: {} imported, {} already, {} replaced, {} upgraded, {} reused, {} corrupt, {} missing, \
-             {} conflicts, {} refused",
-            s.imported, s.already, s.replaced, s.upgraded, s.reused, s.corrupt.len(), s.missing.len(),
+            "import: {} imported, {} already, {} replaced, {} upgraded, {} re-keyed, {} reused, {} corrupt, \
+             {} missing, {} conflicts, {} refused",
+            s.imported, s.already, s.replaced, s.upgraded, s.rekeyed, s.reused, s.corrupt.len(), s.missing.len(),
             s.conflicts.len(), s.refused.len()
         ),
         Err(e) => tracing::error!("import failed: {e}"),
@@ -332,6 +335,7 @@ pub fn import_bundle(library: String, staging: String, music_root: String) -> Re
         replaced: n(s.replaced),
         not_replaced: s.not_replaced,
         upgraded: n(s.upgraded),
+        rekeyed: n(s.rekeyed),
         changed_since_scan: s.changed_since_scan,
         reused: n(s.reused),
         corrupt: s.corrupt,

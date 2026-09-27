@@ -79,7 +79,7 @@ class ImportActivity : Activity() {
                 val music = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "Lempi")
                 val r = importBundle(File(filesDir, "library.db").path, staging.path, music.path)
                 report(r)
-                if (r.imported > 0u || r.reused > 0u || r.replaced > 0u || r.upgraded > 0u) reload()
+                if (r.imported > 0u || r.reused > 0u || r.replaced > 0u || r.upgraded > 0u || r.rekeyed > 0u) reload()
             } catch (e: LempiException) {
                 say("\nImport failed: ${e.message}")
             } catch (e: Exception) {
@@ -100,6 +100,7 @@ class ImportActivity : Activity() {
         if (r.already > 0u) say("Already here: ${r.already}.")
         if (r.replaced > 0u) say("Rewritten by Vipunen since, and replaced where they lie: ${r.replaced}.")
         if (r.upgraded > 0u) say("Found on the phone already, and now given Vipunen's data where they lie: ${r.upgraded}.")
+        if (r.rekeyed > 0u) say("Renamed to Vipunen's new signature for the same audio: ${r.rekeyed}.")
         if (r.reused > 0u) say("Already on the phone, and bound rather than copied again: ${r.reused}.")
         listOf(
             "Damaged in transit, not placed" to r.corrupt,

@@ -180,6 +180,8 @@ retired. A copy still holding the old value -- a node not yet synced, a phone
 -- has the same file, not a different one, so `star_merge` translates through
 this table before matching files and passages by `audio_md5`. Without it the
 next sync refuses: "node has no file for 60 of the hub's". The table travels
-with the catalogue, so every copy can translate. `tools/rekey_identity.py`
+with the catalogue, so every copy can translate; a phone, outside star sync,
+receives it in every bundle and applies it on import `[SPEC-PL-097]`.
+`tools/rekey_identity.py`
 writes it, backs both halves up beside them first, and re-reads every table
 afterwards to prove no old key remains.

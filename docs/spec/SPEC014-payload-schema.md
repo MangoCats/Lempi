@@ -129,6 +129,17 @@ The estimate in `[SPEC-DF-093]` — *"~1–2 KB per recording"* — **is true on
 
 A bundle can also carry **only the payload**. `--payload-only` sends no audio; each encoding carries the catalogue's recorded `sha256`, and `--sha256-file` selects encodings by the byte hashes a phone found in its own storage. A receiver makes each file it holds as tags-only whole *where it lies* `[REQ-AND-260]`, and copies nothing. Such a payload may come **in parts**, `payload-001.json`, `payload-002.json`, … (`--part-size`), so a phone parses a few MB at a time rather than tens. Acceptance stays per bundle: every part is checked before any is written `[SPEC-PL-070]`. A found file unchanged in size and age since its scan is not hashed again, and one that has changed is checked first, and left as it is if its bytes no longer match.
 
+**`[SPEC-PL-097]` A payload carries the library's retired keys.** `aliases` is a
+list of `{old, new, generator}`, every row of `audio_md5_aliases`
+`[SPEC-RLK-155]`, not only those of the encodings sent, and in every part: a
+receiver may hold a file under an old key that this bundle does not carry. The
+importer applies them before it looks any key up. It rewrites the key in every
+table keyed by it, in one transaction, and records the pair in its own
+`audio_md5_aliases`. It rewrites only where the old key is held and the new one
+is not; both held is left alone and logged. Absent where the library was never
+re-keyed; ignored by an older receiver, which is no worse off than before.
+*Added 2026-09-27, when the phone held 60 of the 61 keys the re-key retired.*
+
 ---
 
 ## 6. Open

@@ -187,12 +187,21 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
                              "fetched_at": w["fetched_at"]}
         recordings.append(rec)
 
-    return {
+    doc = {
         "payload_version": PAYLOAD_VERSION,
         "generator": GENERATOR,
         "encodings": encodings,
         "recordings": recordings,
     }
+    # `[SPEC-PL-097]`: every retired key, not only those of the encodings sent.
+    # A receiver may hold a file under its old key that this bundle does not
+    # carry, and it is the same file `[SPEC-RLK-155]`. The whole table is small
+    # (61 rows, 2026-09-27) and is sent in each part, since each is imported
+    # on its own. Omitted where the library has never been re-keyed.
+    if has_table(conn, "audio_md5_aliases"):
+        doc["aliases"] = [{"old": o, "new": n, "generator": g} for o, n, g in conn.execute(
+            "SELECT old_md5, new_md5, generator FROM audio_md5_aliases ORDER BY old_md5")]
+    return doc
 
 
 def bundle_path(path: str, roots: str) -> str:

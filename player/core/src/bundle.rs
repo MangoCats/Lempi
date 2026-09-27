@@ -22,7 +22,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 
 /// Retains the payload as it arrived `[SPEC-SUI-165]`.
@@ -110,6 +110,9 @@ pub struct Report {
     /// payload's `[SPEC-DF-070]`.
     pub kept_local: usize,
     pub rows_written: usize,
+    /// Files held under a retired key, re-keyed to its successor
+    /// `[SPEC-PL-097]`.
+    pub rekeyed: usize,
 }
 
 impl Report {
@@ -265,6 +268,88 @@ fn fade_curve<'a>(o: &'a Value, k: &str) -> &'a str {
 
 // ---------------------------------------------------------------- import ---
 
+/// `[SPEC-PL-097]`, `[SPEC-RLK-155]`: the retired keys a payload carries,
+/// applied here before anything else looks a key up. A file this library
+/// holds under an old key is the same file under the new one, so the value is
+/// rewritten in every table keyed by it, in one transaction, and the pair
+/// recorded in this library's own `audio_md5_aliases`. A key is rewritten only
+/// where the old one is held and the new one is not: both held would be two
+/// rows for one file, which is a person's to look at, and is left alone and
+/// logged. Idempotent -- a second payload carrying the same pairs finds nothing
+/// left to do. Returns how many files were re-keyed.
+fn apply_aliases(db: &mut Connection, doc: &Value) -> Result<usize, String> {
+    let Some(list) = doc.get("aliases").and_then(|v| v.as_array()) else {
+        return Ok(0);
+    };
+    let pairs: Vec<(String, String, String)> = list
+        .iter()
+        .filter_map(|a| {
+            let (old, new) = (a.get("old")?.as_str()?, a.get("new")?.as_str()?);
+            let g = a.get("generator").and_then(|v| v.as_str()).unwrap_or("");
+            (!old.is_empty() && !new.is_empty() && old != new).then(|| (old.into(), new.into(), g.into()))
+        })
+        .collect();
+    if pairs.is_empty() {
+        return Ok(0);
+    }
+    let tx = db.transaction().map_err(|e| e.to_string())?;
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS audio_md5_aliases (old_md5 TEXT PRIMARY KEY, new_md5 TEXT NOT NULL, \
+         generator TEXT NOT NULL, rekeyed_at TEXT NOT NULL)",
+    )
+    .map_err(|e| e.to_string())?;
+    let tables: Vec<String> = {
+        let mut q = tx
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name <> 'audio_md5_aliases'")
+            .map_err(|e| e.to_string())?;
+        let names: Vec<String> =
+            q.query_map([], |r| r.get(0)).map_err(|e| e.to_string())?.filter_map(Result::ok).collect();
+        names
+            .into_iter()
+            .filter(|t| {
+                tx.prepare(&format!("SELECT audio_md5 FROM \"{t}\" LIMIT 0")).is_ok()
+            })
+            .collect()
+    };
+    let held = |k: &str| -> Result<bool, String> {
+        tx.query_row("SELECT 1 FROM files WHERE audio_md5 = ?1", params![k], |_| Ok(()))
+            .optional()
+            .map(|r| r.is_some())
+            .map_err(|e| e.to_string())
+    };
+    let now = now_iso();
+    let mut n = 0;
+    for (old, new, generator) in &pairs {
+        if !held(old)? {
+            continue;
+        }
+        if held(new)? {
+            tracing::warn!("aliases: both {old} and its successor {new} are held; left as they are");
+            continue;
+        }
+        for t in &tables {
+            // `files` is checked above and cannot collide. A cache keyed by
+            // (audio_md5, ...) could already hold a row under the new key;
+            // that row wins, and the old one goes.
+            tx.execute(&format!("UPDATE OR IGNORE \"{t}\" SET audio_md5 = ?1 WHERE audio_md5 = ?2"), params![new, old])
+                .map_err(|e| format!("re-keying {t}: {e}"))?;
+            tx.execute(&format!("DELETE FROM \"{t}\" WHERE audio_md5 = ?1"), params![old])
+                .map_err(|e| format!("re-keying {t}: {e}"))?;
+        }
+        tx.execute(
+            "INSERT OR REPLACE INTO audio_md5_aliases VALUES (?1, ?2, ?3, ?4)",
+            params![old, new, generator, now],
+        )
+        .map_err(|e| e.to_string())?;
+        n += 1;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    if n > 0 {
+        tracing::info!("aliases: {n} file(s) re-keyed to their successors");
+    }
+    Ok(n)
+}
+
 /// Import a bundle. `audio_root` is where arriving audio lives — the bundle's
 /// own `audio/` directory, or the library root it has already been placed in.
 ///
@@ -325,6 +410,7 @@ fn import_bound(
         // which would take the whole batch down with it `[SPEC-RLK-150]`.
         crate::db::ensure_md5_generator_column(db);
         crate::db::ensure_sha256_column(db);
+        rep.rekeyed = apply_aliases(db, doc)?;
     }
 
     let empty = Vec::new();
@@ -697,6 +783,9 @@ pub struct StagedReport {
     /// A `bundle_path` that would land outside the music folder.
     pub unsafe_paths: Vec<String>,
     pub rows_written: usize,
+    /// Files held under a retired key, re-keyed to its successor
+    /// `[SPEC-PL-097]`.
+    pub rekeyed: usize,
 }
 
 /// A bundle path as components under a root, or `None` if it could leave it
@@ -798,6 +887,7 @@ pub fn import_staged(
         total.already += r.already;
         total.replaced += r.replaced;
         total.upgraded += r.upgraded;
+        total.rekeyed += r.rekeyed;
         total.reused += r.reused;
         total.rows_written += r.rows_written;
         total.not_replaced.extend(r.not_replaced);
@@ -822,6 +912,9 @@ fn import_one_payload(
     let mut rep = StagedReport::default();
     let empty = Vec::new();
     crate::db::ensure_sha256_column(db);
+    // Before any key is looked up: a file held under a retired key must be
+    // found under its new one `[SPEC-PL-097]`.
+    rep.rekeyed = apply_aliases(db, doc)?;
     let mut upgrades: Vec<(i64, String, PathBuf)> = Vec::new();
     let mut trusted: std::collections::HashSet<String> = std::collections::HashSet::new();
     for e in doc.get("encodings").and_then(|v| v.as_array()).unwrap_or(&empty) {
@@ -1455,6 +1548,74 @@ mod tests {
         let rep = import(&mut c, &doc, "body", &dir, true, Some(TEST_HASHER)).unwrap();
         assert!(matches!(rep.outcomes.as_slice(), [(_, Landed::Corrupt { .. })]),
                 "{:?}", rep.outcomes);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `[SPEC-PL-097]`, `[SPEC-RLK-155]`: a file held under a retired key is
+    /// re-keyed wherever that key keys a row, its passages untouched; a key
+    /// held in both forms is left alone; a key not held is ignored; the pair
+    /// is recorded; and a second import finds nothing left to do. A dry run
+    /// writes nothing.
+    #[test]
+    fn a_retired_key_is_rewritten_wherever_it_keys_a_row() {
+        let library = || {
+            let c = empty_library();
+            c.execute_batch(
+                "CREATE TABLE lowlevel_cache (audio_md5 TEXT NOT NULL, start_ms INTEGER NOT NULL,
+                     end_ms INTEGER NOT NULL, data TEXT, PRIMARY KEY (audio_md5, start_ms, end_ms));
+                 INSERT INTO files (file_id,audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen)
+                     VALUES (7,'old-key','/m/a.mp3',1,1.0,'mp3',1000,'t','t'),
+                            (8,'both-old','/m/b.mp3',1,1.0,'mp3',1000,'t','t'),
+                            (9,'both-new','/m/c.mp3',1,1.0,'mp3',1000,'t','t');
+                 INSERT INTO passages (file_id,kind,start_ms,end_ms,boundary_src) VALUES (7,'radio',0,1000,'x');
+                 INSERT INTO lowlevel_cache VALUES ('old-key',0,1000,'d');",
+            )
+            .unwrap();
+            c
+        };
+        let mut doc = one_encoding_bundle("other-md5", "m1", 0.5, "computed:x@1");
+        doc["aliases"] = serde_json::json!([
+            {"old": "old-key", "new": "new-key", "generator": "symphonia@0.5.5"},
+            {"old": "both-old", "new": "both-new", "generator": "symphonia@0.5.5"},
+            {"old": "not-held", "new": "whatever", "generator": "symphonia@0.5.5"},
+        ]);
+        let dir = std::env::temp_dir().join(format!("lempi-aliases-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut dry = library();
+        assert_eq!(import(&mut dry, &doc, "body", &dir, false, None).unwrap().rekeyed, 0);
+        let k: String = dry.query_row("SELECT audio_md5 FROM files WHERE file_id = 7", [], |r| r.get(0)).unwrap();
+        assert_eq!(k, "old-key", "a dry run writes nothing");
+
+        let mut c = library();
+        assert_eq!(import(&mut c, &doc, "body", &dir, true, None).unwrap().rekeyed, 1);
+        let keys: Vec<(i64, String)> = c
+            .prepare("SELECT file_id, audio_md5 FROM files ORDER BY file_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(keys, vec![(7, "new-key".into()), (8, "both-old".into()), (9, "both-new".into())]);
+        let cache: Vec<String> = c
+            .prepare("SELECT audio_md5 FROM lowlevel_cache")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(cache, vec!["new-key".to_string()], "the cache follows its file");
+        let p: i64 = c.query_row("SELECT count(*) FROM passages WHERE file_id = 7", [], |r| r.get(0)).unwrap();
+        assert_eq!(p, 1, "rows keyed by file id are not touched");
+        let recorded: Vec<(String, String, String)> = c
+            .prepare("SELECT old_md5, new_md5, generator FROM audio_md5_aliases")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(recorded, vec![("old-key".into(), "new-key".into(), "symphonia@0.5.5".into())]);
+        assert_eq!(import(&mut c, &doc, "body", &dir, true, None).unwrap().rekeyed, 0, "idempotent");
         std::fs::remove_dir_all(&dir).ok();
     }
 

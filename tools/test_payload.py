@@ -180,7 +180,25 @@ def test_lyrics_travel_on_their_recording():
           f"partial lyrics: {pl.compatible(payload)}")
 
 
+def test_retired_keys_travel_with_every_payload():
+    """`[SPEC-PL-097]`: the library's retired keys ride on every payload --
+    all of them, not only those of the encodings sent -- and a library never
+    re-keyed sends no `aliases` at all.
+    """
+    conn = make_db(":memory:", SCHEMA)
+    check("aliases" not in pl.build(conn, ["md5"]), "no table, no aliases key")
+    conn.execute("CREATE TABLE audio_md5_aliases (old_md5 TEXT PRIMARY KEY, new_md5 TEXT NOT NULL, "
+                 "generator TEXT NOT NULL, rekeyed_at TEXT NOT NULL)")
+    conn.execute("INSERT INTO audio_md5_aliases VALUES ('b-old','b-new','symphonia@0.5.5','t')")
+    conn.execute("INSERT INTO audio_md5_aliases VALUES ('a-old','a-new','symphonia@0.5.5','t')")
+    got = pl.build(conn, ["md5"]).get("aliases")
+    check(got == [{"old": "a-old", "new": "a-new", "generator": "symphonia@0.5.5"},
+                  {"old": "b-old", "new": "b-new", "generator": "symphonia@0.5.5"}],
+          f"every alias, in a stable order: {got}")
+
+
 def main() -> int:
+    test_retired_keys_travel_with_every_payload()
     test_lyrics_travel_on_their_recording()
     test_fade_travels_when_the_schema_has_it()
     test_fade_absent_from_a_pre_migration_source()
