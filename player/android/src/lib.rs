@@ -428,3 +428,48 @@ pub fn scan_found(library: String, paths: Vec<String>) -> Result<FoundSummary, L
         identified: n(s.identified),
     })
 }
+
+/// A backup ready to leave the phone `[REQ-AND-195]`.
+#[derive(uniffi::Record)]
+pub struct BackupReady {
+    /// The snapshot, in app-private storage, for the app to copy out.
+    pub path: String,
+    /// Taken just now; false when the newest earlier one that passed was used.
+    pub fresh: bool,
+    /// When it was taken, in seconds since the epoch.
+    pub taken_at: i64,
+    pub plays: i64,
+    pub preferences: i64,
+    pub likes: i64,
+    pub programs: i64,
+    /// Its bytes' hash, to check the copy where it lands.
+    pub sha256: String,
+    pub bytes: u64,
+}
+
+/// The newest backup of the listener at `listener` that passes SQLite's
+/// integrity check -- a fresh one if it can be taken -- for the app to write
+/// where the user chose `[REQ-AND-195]`. See `lempi_player::backup::for_export`.
+#[uniffi::export]
+pub fn prepare_backup(listener: String) -> Result<BackupReady, LempiError> {
+    let r = guarded(|| lempi_player::backup::for_export(std::path::Path::new(&listener)).map_err(|e| e.to_string()));
+    match &r {
+        Ok(e) => tracing::info!(
+            "backup for export: {} ({}), {} plays, {} bytes",
+            e.path.display(), if e.fresh { "fresh" } else { "earlier" }, e.summary.plays, e.bytes
+        ),
+        Err(e) => tracing::error!("backup for export failed: {e}"),
+    }
+    let e = r.map_err(LempiError::from)?;
+    Ok(BackupReady {
+        path: e.path.to_string_lossy().into_owned(),
+        fresh: e.fresh,
+        taken_at: e.taken_at,
+        plays: e.summary.plays,
+        preferences: e.summary.preferences,
+        likes: e.summary.likes,
+        programs: e.summary.programs,
+        sha256: e.sha256,
+        bytes: e.bytes,
+    })
+}

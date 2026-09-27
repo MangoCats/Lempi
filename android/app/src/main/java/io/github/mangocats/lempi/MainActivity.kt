@@ -98,10 +98,15 @@ class MainActivity : Activity() {
         menu.add(0, 1, 0, "Import a bundle (.zip)…")
         menu.add(0, 2, 1, "Import a bundle folder…")
         menu.add(0, 3, 2, "Look for music on the phone")
+        menu.add(0, 4, 3, "Export a backup…")
         return true
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        if (item.itemId == 4) {
+            startActivity(Intent(this, BackupActivity::class.java))
+            return true
+        }
         val action = when (item.itemId) {
             1 -> ImportActivity.PICK_ZIP
             2 -> ImportActivity.PICK_FOLDER

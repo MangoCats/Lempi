@@ -49,7 +49,7 @@ Unplugged headphones pause it too; untested, because Android lets only the syste
 
 **`[REQ-AND-190]` The phone keeps its own listening history and preferences**, independent of the appliances `[GDE-APP-130]`, backed up as `[REQ-PORT-150]` requires — **and a backup can be taken off the phone by the user**, since uninstalling deletes app-private storage.
 
-**`[REQ-AND-195]` A backup leaves the phone by export on request** — decided by the maintainer 2026-09-25 `[REQ-AND-900]`. The user asks, chooses where it goes through Android's own document picker, and the newest integrity-checked backup `[REQ-PORT-150]` is written there. Nothing leaves the phone unasked, and Android's automatic cloud backup is not relied on.
+**`[REQ-AND-195]` A backup leaves the phone by export on request** — decided by the maintainer 2026-09-25 `[REQ-AND-900]`. The user asks, chooses where it goes through Android's own document picker, and the newest integrity-checked backup `[REQ-PORT-150]` is written there. Nothing leaves the phone unasked, and Android's automatic cloud backup is not relied on. *Built 2026-09-27:* "Export a backup…" in Lempi's menu. A fresh snapshot is taken and must pass SQLite's integrity check; if either fails, the newest earlier snapshot that passes is used, and the user is told. It is written through Android's save dialog, then read back where it landed and compared by byte hash. *Measured on the Moto G:* a 72 KB backup of 292 plays, saved to Downloads, reported as checked. Pulled to the desktop, it passed `integrity_check`, and its plays and newest play matched the phone's live listener.
 
 ## 3. The library and its storage
 

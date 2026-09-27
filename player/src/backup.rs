@@ -186,6 +186,68 @@ fn snapshot_named(db: &Path, prefix: &str, rotate: bool) -> Result<PathBuf, DbEr
 }
 
 
+/// A backup ready to leave the machine `[REQ-AND-195]`: which snapshot, what
+/// it holds, and its bytes' hash, so the copy that arrives can be checked.
+#[derive(Debug)]
+pub struct Export {
+    pub path: PathBuf,
+    pub summary: Summary,
+    /// Taken just now. False when a fresh one could not be taken, and this is
+    /// the newest earlier one that passed -- which the listener is told.
+    pub fresh: bool,
+    /// When it was taken, in seconds since the epoch.
+    pub taken_at: i64,
+    pub sha256: String,
+    pub bytes: u64,
+}
+
+/// The newest backup that passes SQLite's integrity check, for export
+/// `[REQ-AND-195]`, `[REQ-PORT-150]`. A fresh snapshot first, so what leaves
+/// the phone holds the listening up to now; if one cannot be taken, or it
+/// fails the check, the newest earlier snapshot that passes. A backup nobody
+/// checked is not one to send away as the only copy.
+pub fn for_export(db: &Path) -> Result<Export, DbError> {
+    let fresh = snapshot(db);
+    let mut candidates: Vec<(PathBuf, bool)> = Vec::new();
+    if let Ok(p) = &fresh {
+        candidates.push((p.clone(), true));
+    }
+    let mut older: Vec<(i64, PathBuf)> = std::fs::read_dir(dir_for(db))
+        .map(|it| {
+            it.flatten()
+                .filter_map(|e| stamp_of(&e.path()).map(|t| (t, e.path())))
+                .collect()
+        })
+        .unwrap_or_default();
+    older.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, p) in older {
+        if fresh.as_ref().ok() != Some(&p) {
+            candidates.push((p, false));
+        }
+    }
+    for (path, is_fresh) in candidates {
+        if !passes_integrity(&path) {
+            tracing::warn!("backup {} fails its integrity check; trying an older one", path.display());
+            continue;
+        }
+        let summary = inspect(&path)?;
+        let sha256 = crate::bundle::sha256_file(&path).map_err(DbError::Open)?;
+        let bytes = std::fs::metadata(&path).map(|m| m.len()).map_err(|e| DbError::Open(e.to_string()))?;
+        let taken_at = stamp_of(&path).unwrap_or(0);
+        return Ok(Export { path, summary, fresh: is_fresh, taken_at, sha256, bytes });
+    }
+    Err(DbError::Query(match fresh {
+        Err(e) => format!("no backup passes its integrity check, and a fresh one could not be taken: {e}"),
+        Ok(_) => "no backup passes its integrity check".into(),
+    }))
+}
+
+fn passes_integrity(path: &Path) -> bool {
+    Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .and_then(|c| c.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0)))
+        .is_ok_and(|v| v == "ok")
+}
+
 /// What a snapshot holds, without committing to anything.
 ///
 /// The first question anyone asks of a backup is "is this the right one",
@@ -456,6 +518,41 @@ mod tests {
             )
             .unwrap();
         assert_eq!(has_files, 0, "the derived library is not copied");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// `[REQ-AND-195]`: an export is a fresh snapshot, integrity-checked, with
+    /// what it holds and its bytes' hash.
+    #[test]
+    fn an_export_is_a_fresh_checked_snapshot() {
+        let tmp = std::env::temp_dir().join(format!("lempi-bk-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let db = library(&tmp);
+        let e = for_export(&db).unwrap();
+        assert!(e.fresh);
+        assert_eq!(e.summary.plays, 2);
+        assert_eq!(e.sha256, crate::bundle::sha256_file(&e.path).unwrap());
+        assert_eq!(e.bytes, std::fs::metadata(&e.path).unwrap().len());
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Without a fresh snapshot, the newest earlier one that passes -- not a
+    /// newer one that is damaged -- and the export says it is not fresh.
+    #[test]
+    fn an_export_falls_back_past_a_damaged_backup() {
+        let tmp = std::env::temp_dir().join(format!("lempi-bk-fallback-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let good = snapshot(&library(&tmp)).unwrap();
+        let dir = good.parent().unwrap().to_path_buf();
+        let newer = dir.join(format!("listener-{}.db", stamp_of(&good).unwrap() + 1000));
+        std::fs::write(&newer, b"not a database at all").unwrap();
+        // A listener database that cannot be read: no fresh snapshot.
+        let e = for_export(&tmp.join("absent.db")).unwrap();
+        assert!(!e.fresh, "not fresh, and said so");
+        assert_eq!(e.path, good, "the newest that passes, not the damaged newer one");
+        assert_eq!(e.summary.plays, 2);
         std::fs::remove_dir_all(&tmp).ok();
     }
 
