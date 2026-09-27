@@ -44,4 +44,11 @@ android {
 dependencies {
     // UniFFI's Kotlin calls the library through JNA.
     implementation("net.java.dev.jna:jna:5.17.0@aar")
+    // The media session only [REQ-AND-130], [GDE-APP-100]: Media3 carries the
+    // lock screen, notification, headset, Bluetooth and Auto controls to the
+    // player's own commands, and plays nothing itself.
+    implementation("androidx.media3:media3-session:1.11.1")
+    // NotificationCompat, for the media-styled notification. Media3 already
+    // brings this version, but only at runtime; declared to compile against it.
+    implementation("androidx.core:core:1.9.0")
 }

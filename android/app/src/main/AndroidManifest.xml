@@ -58,9 +58,22 @@
 
         <!-- [REQ-AND-120]: the player lives here, not in the activity, so it
              outlives the screen. -->
+        <!-- [REQ-AND-130]: also the media session's service, which the system,
+             Bluetooth and Android Auto bind to, and so exported. Media3
+             answers them; nothing here plays audio for them. -->
         <service
             android:name=".PlayerService"
-            android:exported="false"
-            android:foregroundServiceType="mediaPlayback" />
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaLibraryService" />
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
+
+        <!-- Android Auto finds media apps by this [REQ-AND-130]. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
     </application>
 </manifest>

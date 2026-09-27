@@ -29,9 +29,15 @@ The README ranks mobile *Future / Post-V1*. Nothing here schedules the work; it 
 
 **`[REQ-AND-120]` Playback continues with the screen off and the app in the background**, hosted by a foreground service of type `mediaPlayback`, with a notification carrying the transport controls `[GDE-APP-100]`.
 
-**`[REQ-AND-130]` The phone's own controls reach the player**: lock screen, notification, wired and Bluetooth headset buttons, and Android Auto — through a media session that forwards to the player's commands and never handles audio itself `[GDE-APP-100]`.
+**`[REQ-AND-130]` The phone's own controls reach the player**: lock screen, notification, wired and Bluetooth headset buttons, and Android Auto — through a media session that forwards to the player's commands and never handles audio itself `[GDE-APP-100]`. *Built 2026-09-27:* a Media3 `MediaLibraryService` with a session over `LempiPlayer`, a `SimpleBasePlayer` that plays nothing; skip is offered as "next". *Measured on the Moto G:* the session was active and Android's media-button target. The pause, play and next keys each worked, next going from "Savannah Fare You Well" to "Birds". The media player in the notification shade showed the title, artist and output, and its buttons worked. Android lists the service as a media browser, which is how Auto finds it; the Auto screen itself is untested, needing a car or the desktop head unit. The lock screen shows the same media notification, but this phone has no lock, so it was not seen.
 
-**`[REQ-AND-140]` Audio focus is honoured.** Losing focus pauses; losing it briefly pauses, or ducks where a device shows ducking is needed `[GDE-HST-340]`; regaining it resumes **only if focus was what paused it** — a listener's own pause is never undone by the system `[GDE-APP-100]`.
+**`[REQ-AND-140]` Audio focus is honoured.** Losing focus pauses; losing it briefly pauses, or ducks where a device shows ducking is needed `[GDE-HST-340]`; regaining it resumes **only if focus was what paused it** — a listener's own pause is never undone by the system `[GDE-APP-100]`. *Built 2026-09-27, measured on the Moto G:*
+- Playing took focus.
+- The Assistant (a brief, exclusive loss) paused it, and closing the Assistant resumed it.
+- Paused by the pause key first, the same loss left it paused.
+- The Files app playing a song (a permanent loss) paused it, and it stayed paused after Files closed.
+
+Unplugged headphones pause it too; untested, because Android lets only the system send that event. Ducking is left to Android `[GDE-HST-340]`, and whether that reaches Lempi's stream still needs the listening test: a navigation prompt over music.
 
 **`[REQ-AND-150]` The listening surface is the existing skins in a WebView**, served by the player's own web server `[GDE-AND-060]`. A native client is evaluated afterwards and is not required here.
 
