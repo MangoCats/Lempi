@@ -101,23 +101,27 @@ policy behaves exactly as today. This is the proposed answer to
 
 ---
 
-## 3. Open, for when it is taken up
+## 3. Settled by the maintainer, 2026-09-27
 
-1. **`[GDE-OCP-900]` Whether a policy governs a person's own choice.** A
-   ceiling applies to what the Director picks. Whether a track a person queues
-   by hand above the ceiling plays anyway, or is refused with the reason, has
-   not been decided.
-2. **`[GDE-OCP-910]` Whether the setting is protected.** A ceiling in a child's
-   room means little if anyone at that room's Settings page can switch it off.
-   Whether it needs a PIN, or can be set only from the hub, touches
-   `[SPEC049]`'s membership.
-3. **`[GDE-OCP-920]` A passage of several recordings.** Today the occasion term
-   is read by the passage's recording. A passage crediting two recordings with
-   different values would need a rule, most likely the highest value.
-4. **`[GDE-OCP-930]` Editing the household's curves at all.** Today only
-   `load_occasions.py` does. An editor at the hub, for the shared curves, is the
-   natural companion to the node's own overrides.
+1. **`[GDE-OCP-900]` A policy never blocks a person's own choice.** It shapes
+   only what the Director picks. A track queued by hand plays, whatever its
+   values. Searching on the node shows every track the node holds, the ones
+   above its ceiling included, so any of them can be queued.
+2. **`[GDE-OCP-910]` The setting is not protected.** Listeners are trusted to
+   listen to anything in the collection they choose, so a policy is an ordinary
+   setting in the node's Settings: no PIN, and not reserved to the hub. A
+   policy is a default for the Director, never a restriction on a person.
+3. **`[GDE-OCP-920]` A passage crediting several recordings takes the highest
+   value among them.** It should rarely matter in practice. The Director
+   selects radio passages, which are usually a single recording or a segment
+   of one work.
+4. **`[GDE-OCP-930]` A curve editor, and further design for the kinds of
+   occasion, belong to Vipunen's future development.** Today only
+   `load_occasions.py` authors the household's curves. The seasonal ones and
+   the flat ones (Profanity, Spiritual) are different in kind, and how each
+   kind should be defined and shaped needs design of its own before an editor
+   is built. Not scheduled.
 
 ---
 
-**Traceability:** `[GDE-OCP-010..930]` · from the maintainer's direction of 2026-09-27 · touches `[SPEC-DIR-130..137]`, `[SPEC-PREF-080]`, `[SPEC-MTR-040]`, `[SPEC-MTR-900]`
+**Traceability:** `[GDE-OCP-010..930]` · from the maintainer's direction and decisions of 2026-09-27 · touches `[SPEC-DIR-130..137]`, `[SPEC-PREF-080]`, `[SPEC-MTR-040]`, `[SPEC-MTR-900]`
