@@ -78,11 +78,12 @@ APPLIANCES=$(. "$ROOT/build/lib-defaults.sh"; lempi_fleet)
 # **Corrected 2026-09-20: it does now run a player** -- pid 801098 serving
 # :5720 from `./player/target/release/lempi`, started by hand rather than by
 # systemd. That makes it the first target that is BOTH, which
-# `[GDE-ECHO-075]` anticipated. It stays in SOURCES for one concrete reason:
-# with no unit there is no `lempi.service` journal and no device of the
-# player's own to sample -- `build/verify-playing.sh` reports "cannot tell"
-# there, which is the honest answer and not one a deploy should treat as a
-# pass. Give it a unit and it can move to APPLIANCES.
+# `[GDE-ECHO-075]` anticipated. *Since then it has a user `lempi.service`*
+# (`SmartPC/lempi.service`), still running from the checkout, so it stays a
+# source host: it is built there, not sent an aarch64 binary. Its leg restarts
+# that service after the rebuild, and the check below confirms no player is
+# left on the replaced file -- on 2026-09-27 one was, and this reported it
+# current regardless.
 #
 # **`teacherslounge` had never had a checkout at the path named below**, and
 # this leg had therefore never once run against it. Found 2026-09-21 by
@@ -179,6 +180,18 @@ for host in $HOSTS; do
         # nothing running, and asking a process that happened to be up would
         # not prove the binary had been rebuilt in any case.
         answer=$(ssh -o ConnectTimeout=5 "$host"             "cd '$checkout' && ./player/target/release/lempi --version" 2>/dev/null | head -1)
+        # And whether a player is still running the file the rebuild replaced:
+        # the binary on disk being right says nothing about a process started
+        # before it was rebuilt (smartboardpc, 2026-09-27).
+        stale=$(ssh -o ConnectTimeout=5 "$host" "b='$checkout/player/target/release/lempi'
+            for p in /proc/[0-9]*; do
+                [ \"\$(readlink \$p/exe 2>/dev/null)\" = \"\$b (deleted)\" ] && printf '%s ' \"\${p#/proc/}\"
+            done" 2>/dev/null)
+        if [ -n "$stale" ]; then
+            printf '  %-*s : a player is still running the REPLACED binary (pid %s)
+'                "$width" "${host#*@}" "$stale" >&2
+            mismatch=$((mismatch + 1))
+        fi
     else
         answer=$(ssh -o ConnectTimeout=5 "$host" "curl -s --max-time 3 http://localhost:$port/build" 2>/dev/null)
         # And, on an overlay root, whether what is running is what will still

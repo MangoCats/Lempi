@@ -7,14 +7,25 @@
 # Why this is not another host in deploy-appliance.sh's list: the appliances
 # are aarch64 and are sent a cross-compiled binary by build/install-player.sh,
 # which refuses outright anything that is not aarch64. A source host is a
-# different shape -- its own architecture, its own toolchain, a git checkout,
-# and usually no service at all -- so there is nothing to scp and nothing to
-# restart. It pulls and rebuilds.
+# different shape -- its own architecture, its own toolchain, a git checkout --
+# so there is nothing to scp. It pulls and rebuilds.
 #
-# Verification asks the BUILT BINARY what commit it is, not a running player.
-# That is deliberate, and it is a stronger check than the appliances get: a
-# source host normally has nothing running, and a process that happened to be
-# serving the right sha would not prove the binary on disk had been rebuilt.
+# Verification asks the BUILT BINARY what commit it is: a process that
+# happened to be serving the right sha would not prove the binary on disk had
+# been rebuilt. **But that alone is not enough where a player RUNS from the
+# checkout**, as smartboardpc's `lempi.service` does. Found 2026-09-27: the
+# rebuild replaced the file under a player started at 10:10, which went on
+# serving the old code from a deleted inode while this reported "current" --
+# the check of a stand-in, not of the thing, that CLAUDE.md section 6 warns of.
+# So after the build it looks for a player on this checkout's binary:
+#
+#   - a running `lempi.service` (user or system) whose ExecStart is that
+#     binary is restarted, and the new process confirmed to run the rebuilt
+#     file;
+#   - a unit that is stopped is left stopped -- teacherslounge is manual-start
+#     only, by the maintainer's choice;
+#   - a player started by hand on the replaced file fails this, by pid: there
+#     is no unit to restart it with, and "current" would be untrue.
 #
 # The host pulls from the git remote, NOT from this machine, so a commit that
 # has not been pushed cannot reach it. This refuses up front rather than
@@ -93,6 +104,51 @@ case "$ver" in
     *"$(echo "$want" | cut -c1-12)"*) say "binary reports: $ver" ;;
     *) fail "binary reports '$ver', which is not $(echo "$want" | cut -c1-12) -- it did not rebuild" ;;
 esac
+
+# ---- a player running from this checkout (see the header) -----------------
+bin="$(pwd)/player/target/release/lempi"
+# Processes still on the file the build replaced: the kernel names their
+# executable "<path> (deleted)". Read from /proc, so it needs nothing installed.
+stale_pids() {
+    for p in /proc/[0-9]*; do
+        [ "$(readlink "$p/exe" 2>/dev/null)" = "$bin (deleted)" ] && echo "${p#/proc/}"
+    done
+}
+# The unit that runs this binary, if one is active: "user" or "system".
+unit=""
+for scope in user system; do
+    flag=""; [ "$scope" = user ] && flag="--user"
+    systemctl $flag is-active --quiet lempi.service 2>/dev/null || continue
+    systemctl $flag show -p ExecStart --value lempi.service 2>/dev/null | grep -qF "path=$bin " || continue
+    unit=$scope; break
+done
+if [ -n "$unit" ]; then
+    say "a $unit lempi.service runs this binary -- restarting it onto the new build"
+    if [ "$unit" = user ]; then
+        systemctl --user restart lempi.service || fail "could not restart the user lempi.service"
+        pidof_unit() { systemctl --user show -p MainPID --value lempi.service; }
+    else
+        sudo -n systemctl restart lempi.service \
+            || fail "lempi.service is a system unit and sudo -n cannot restart it -- it still runs the OLD binary"
+        pidof_unit() { systemctl show -p MainPID --value lempi.service; }
+    fi
+    running=""
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        pid=$(pidof_unit)
+        if [ -n "$pid" ] && [ "$pid" != 0 ] && [ "$(readlink "/proc/$pid/exe" 2>/dev/null)" = "$bin" ]; then
+            running=$pid; break
+        fi
+        sleep 1
+    done
+    [ -n "$running" ] || fail "restarted, but no lempi.service process is running the rebuilt $bin"
+    say "player restarted: pid $running runs the rebuilt binary"
+fi
+left=$(stale_pids | tr '\n' ' ')
+if [ -n "$left" ]; then
+    fail "player(s) still running the binary this build replaced, not under an active lempi.service: pid $left
+    restart them by hand -- this host is NOT running $(echo "$want" | cut -c1-7)"
+fi
+[ -n "$unit" ] || say "no player runs from this checkout; nothing to restart"
 REMOTE
 status=$?
 [ "$status" -eq 0 ] || die "$HOST did not update"
