@@ -732,7 +732,7 @@ async fn http_get(addr: &str, path: &str) -> Option<Vec<u8>> {
 }
 
 /// Decodes whatever `/art/:passage_id` returned (real production art is
-/// JPEG or PNG, never anything else -- `media_type_for` in `tags.rs`,
+/// JPEG or PNG, never anything else -- `stored_art` in `library.rs`;
 /// `image::load_from_memory` sniffs the format from magic bytes so this
 /// doesn't need to trust or even look at the `Content-Type` header) and
 /// resizes it once to exactly `ART_SIZE`x`ART_SIZE`, so `draw_art` is a

@@ -1188,30 +1188,52 @@ impl Library {
     /// and a recording without art is worse than one shown under a release
     /// that is not quite the chosen edition -- so `covers.rs` already takes
     /// this same fallback for the MPD-facing cover file, and this matches it.
+    /// Failing every release, the file's own cover, in `file_art` by its
+    /// signature `[SPEC-COV-040]` -- a file no release's cover reaches. This
+    /// is the whole of the lookup: Lempi shows covers from the catalogue alone
+    /// `[SPEC-COV-010]`.
+    ///
     /// Absent table, absent row and a blob too small to be a picture all mean
     /// the same thing to the caller: no art, show nothing.
     pub fn stored_art(&self, passage_id: i64, back: bool) -> Option<crate::tags::Artwork> {
-        if !self.has_table("cover_art") {
-            return None;
-        }
         let col = if back { "back" } else { "front" };
-        let data: Vec<u8> = self
-            .conn
-            .query_row(
-                &format!(
-                    "SELECT a.{col} FROM __LIB__.cover_art a \
-                       JOIN __LIB__.release_recordings rr ON rr.release_mbid = a.release_mbid \
-                       JOIN __LIB__.passage_recordings pr ON pr.mbid = rr.mbid \
-                      WHERE pr.passage_id = ?1 AND a.{col} IS NOT NULL \
-                      ORDER BY rr.chosen DESC LIMIT 1"
-                ),
-                [passage_id],
-                |r| r.get(0),
-            )
-            .ok()?;
-        if data.len() < crate::tags::MIN_ART_BYTES {
-            return None;
-        }
+        let big = |d: &Vec<u8>| d.len() >= crate::tags::MIN_ART_BYTES;
+        let by_release = || -> Option<Vec<u8>> {
+            if !self.has_table("cover_art") {
+                return None;
+            }
+            self.conn
+                .query_row(
+                    &format!(
+                        "SELECT a.{col} FROM __LIB__.cover_art a \
+                           JOIN __LIB__.release_recordings rr ON rr.release_mbid = a.release_mbid \
+                           JOIN __LIB__.passage_recordings pr ON pr.mbid = rr.mbid \
+                          WHERE pr.passage_id = ?1 AND a.{col} IS NOT NULL \
+                          ORDER BY rr.chosen DESC LIMIT 1"
+                    ),
+                    [passage_id],
+                    |r| r.get(0),
+                )
+                .ok()
+        };
+        let by_file = || -> Option<Vec<u8>> {
+            if !self.has_table("file_art") {
+                return None;
+            }
+            self.conn
+                .query_row(
+                    &format!(
+                        "SELECT a.{col} FROM __LIB__.file_art a \
+                           JOIN __LIB__.files f ON f.audio_md5 = a.audio_md5 \
+                           JOIN __LIB__.passages p ON p.file_id = f.file_id \
+                          WHERE p.passage_id = ?1 AND a.{col} IS NOT NULL"
+                    ),
+                    [passage_id],
+                    |r| r.get(0),
+                )
+                .ok()
+        };
+        let data = by_release().filter(big).or_else(|| by_file().filter(big))?;
         // Sniffed rather than stored: the archive serves JPEG and PNG, and a
         // wrong Content-Type would render as a broken image.
         let media_type = if data.starts_with(&[0x89, b'P', b'N', b'G']) {
@@ -1936,6 +1958,43 @@ mod tests {
             .unwrap();
         let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
         assert!(lib.stored_art(2, false).is_none());
+    }
+
+    /// `[SPEC-COV-040]`: a passage no release's cover reaches shows its file's
+    /// own, by the file's signature; a release's cover, where there is one,
+    /// comes first.
+    #[test]
+    fn stored_art_falls_back_to_the_files_own_cover() {
+        let c = reviewable();
+        c.execute_batch(ART_TABLE).unwrap();
+        c.execute_batch(
+            "CREATE TABLE file_art (audio_md5 TEXT PRIMARY KEY, front BLOB, back BLOB, \
+             source TEXT NOT NULL, fetched_at TEXT NOT NULL)",
+        )
+        .unwrap();
+        let md5: String = c
+            .query_row("SELECT f.audio_md5 FROM files f JOIN passages p ON p.file_id = f.file_id \
+                        WHERE p.passage_id = 2", [], |r| r.get(0))
+            .unwrap();
+        c.execute("INSERT INTO file_art VALUES (?1,?2,NULL,'found:embedded','t')",
+                  rusqlite::params![md5, vec![0xEEu8; 700]])
+            .unwrap();
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
+        let front = lib.stored_art(2, false).expect("the file's own cover");
+        assert_eq!(front.data, vec![0xEEu8; 700]);
+        assert!(lib.stored_art(2, true).is_none(), "it has no back");
+
+        let c = lib.conn.conn;
+        c.execute("INSERT INTO releases (mbid,title,source) VALUES ('rel-1','A Record','mb')", []).unwrap();
+        c.execute(
+            "INSERT INTO release_recordings (release_mbid,mbid,source,chosen) \
+             VALUES ('rel-1','aaaaaaaa-0000-0000-0000-000000000001','mb',1)", [])
+            .unwrap();
+        c.execute("INSERT INTO cover_art VALUES ('rel-1',?1,NULL,'test','t')",
+                  rusqlite::params![vec![0xFFu8; 512]])
+            .unwrap();
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
+        assert_eq!(lib.stored_art(2, false).unwrap().data.len(), 512, "the release's cover comes first");
     }
 
     /// A library with no `cover_art` table at all -- one Vipunen has never

@@ -26,11 +26,12 @@ release's, from `cover_art`; failing that, its file's own, from `file_art`
 where the catalogue has none: the picture beside the audio (`folder.jpg`,
 `cover.jpg` and the like, as the player has always recognised them), else the
 picture embedded in the file. A picture beside the audio counts only where the
-folder is one album's — every catalogued file in it has that release, or, with
-no release, shares one album tag — since a folder of several albums would give
-some of its songs the wrong picture. The catalogue's own cover, fetched or
-inducted before, is never replaced by a found one. `tools/induct_covers.py`,
-reporting by default, writing with `--write`.
+folder is one album's, since a folder of several albums would give some of its
+songs the wrong picture: for a release, every catalogued file there has that
+release; for a file's own cover, every file there has one release or shares one
+album tag. The catalogue's own cover, fetched or inducted before, is never
+replaced by a found one. `tools/induct_covers.py`, reporting by default,
+writing with `--write`.
 
 **`[SPEC-COV-030]` A cover beside the audio is left undisturbed** wherever the
 host allows it — everywhere but the phone, so far. Vipunen reads found covers
@@ -39,10 +40,15 @@ catalogue cover there where the folder has none (`place_covers`,
 `[SPEC-PL-105]`), for other players; a cover already there is never
 overwritten.
 
-**`[SPEC-COV-040]` A file with no release has a cover of its own.** The
+**`[SPEC-COV-040]` A file no release covers has a cover of its own.** The
 archive is keyed by MusicBrainz release, which an unidentified or tags-only
 file does not have. `file_art (audio_md5, front, back, source, fetched_at)`
 holds a cover per file, by its signature, filled from the same found sources.
+It is filled for any file with a passage that no release's cover reaches, not
+only a file with no release. That covers a file whose passages sit on several
+releases, and an album folder whose songs Vipunen matched to different
+releases (Kansas' *Leftoverture*). Kept on the file, such a picture is never
+shown for another folder's copy of a release.
 
 **`[SPEC-COV-050]` The catalogue keeps a display copy.** A found picture over
 1 MB, or over 1200 px on its long side, is stored as a 1200 px JPEG; the rest
@@ -59,7 +65,26 @@ average. A phone receives these in bundles and decodes them to show them.
 Switching the player to the catalogue alone first would take away every cover
 the catalogue does not yet hold. So: the covers are inducted into the hub;
 star sync carries `cover_art` and `file_art` to the nodes, and bundles carry
-them to the phone; and only then is the player's lookup narrowed.
+them to the phone `[SPEC-PL-106]`; and only then is the player's lookup
+narrowed.
+
+*Inducted 2026-09-27 on the hub:* 384 release covers and 116 file covers. The
+catalogue then holds 1,256 and 116. Measured passage by passage, the three
+sources against the catalogue alone:
+
+| | passages |
+| :--- | ---: |
+| a cover both ways | 16,214 |
+| no cover either way | 346 |
+| a cover from the catalogue alone only | 0 |
+| a cover the three sources gave, and the catalogue does not | 101 |
+
+The 101 are three files in folders holding one picture for several albums:
+Elton John's and Radiohead's (three albums each, one `cover.jpg`) and
+Pharrell Williams' (three versions from different sources). The picture was
+wrong for most of what it was shown for; losing it is `[SPEC-COV-020]` at work.
+The catalogue's backup before the induction is in
+`data/backups/pre-covers-20260927/`.
 
 ---
 

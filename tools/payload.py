@@ -109,28 +109,40 @@ def releases_for(conn: sqlite3.Connection, mbids) -> list[dict]:
         rel["tracks"] = tracks[mbid]
         a = conn.execute("SELECT front, back, source, fetched_at FROM cover_art WHERE release_mbid = ?",
                          (mbid,)).fetchone() if art else None
-        if a is not None and (a[0] or a[1]):
-            cover = {"source": a[2], "fetched_at": a[3]}
-            for side, blob in (("front", a[0]), ("back", a[1])):
-                if blob:
-                    ext = "png" if bytes(blob[:4]) == b"\x89PNG" else "jpg"
-                    cover[side] = {"file": f"covers/{mbid}-{side}.{ext}",
-                                   "sha256": hashlib.sha256(bytes(blob)).hexdigest()}
+        cover = cover_entry(mbid, a)
+        if cover:
             rel["cover"] = cover
         out.append(rel)
     return out
 
 
+def cover_entry(stem: str, row) -> dict | None:
+    """A payload `cover` for a (front, back, source, fetched_at) row: each side
+    as `covers/<stem>-<side>.<ext>` with its byte hash. None if it has neither."""
+    if row is None or not (row[0] or row[1]):
+        return None
+    cover = {"source": row[2], "fetched_at": row[3]}
+    for side, blob in (("front", row[0]), ("back", row[1])):
+        if blob:
+            ext = "png" if bytes(blob[:4]) == b"\x89PNG" else "jpg"
+            cover[side] = {"file": f"covers/{stem}-{side}.{ext}",
+                           "sha256": hashlib.sha256(bytes(blob)).hexdigest()}
+    return cover
+
+
 def cover_files(conn: sqlite3.Connection, doc: dict) -> dict[str, bytes]:
-    """The image bytes each release's `cover` names, by its `file` path."""
+    """The image bytes each release's and each encoding's `cover` names, by
+    its `file` path."""
     files = {}
-    for rel in doc.get("releases", []):
-        cover = rel.get("cover") or {}
-        for side in ("front", "back"):
-            if side in cover:
-                blob = conn.execute(f"SELECT {side} FROM cover_art WHERE release_mbid = ?",
-                                    (rel["mbid"],)).fetchone()[0]
-                files[cover[side]["file"]] = bytes(blob)
+    for table, key, items, id_of in (("cover_art", "release_mbid", doc.get("releases", []), "mbid"),
+                                     ("file_art", "audio_md5", doc.get("encodings", []), "audio_md5")):
+        for item in items:
+            cover = item.get("cover") or {}
+            for side in ("front", "back"):
+                if side in cover:
+                    blob = conn.execute(f"SELECT {side} FROM {table} WHERE {key} = ?",
+                                        (item[id_of],)).fetchone()[0]
+                    files[cover[side]["file"]] = bytes(blob)
     return files
 
 
@@ -146,6 +158,9 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
     # this source predates the columns entirely, and a receiver seeing them
     # absent falls back to `passages`' own schema default `[SPEC008 §3]`.
     have_fade = has_column(conn, "passages", "fade_in_ms")
+    # A file with no release has a cover of its own [SPEC-COV-040]: it travels
+    # on its encoding, as a release's travels on the release.
+    have_file_art = has_table(conn, "file_art")
 
     encodings, wanted = [], set()
     for f in conn.execute(
@@ -205,6 +220,12 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
             },
             "passages": passages,
         })
+        if have_file_art:
+            cover = cover_entry(f"file-{f['audio_md5']}", conn.execute(
+                "SELECT front, back, source, fetched_at FROM file_art WHERE audio_md5 = ?",
+                (f["audio_md5"],)).fetchone())
+            if cover:
+                encodings[-1]["cover"] = cover
 
     have_lyrics = has_table(conn, "lyrics")
     recordings = []

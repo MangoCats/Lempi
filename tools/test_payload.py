@@ -241,8 +241,26 @@ def test_covers_travel_as_files_named_by_the_payload():
           f"cover files: {sorted(files)}")
 
 
+def test_a_files_own_cover_travels_on_its_encoding():
+    """`[SPEC-COV-040]`: a file's own cover, in `file_art`, travels on its
+    encoding as a release's does on the release, and nowhere without one."""
+    conn = make_db(":memory:", SCHEMA)
+    conn.execute("CREATE TABLE file_art (audio_md5 TEXT PRIMARY KEY, front BLOB, back BLOB, "
+                 "source TEXT NOT NULL, fetched_at TEXT NOT NULL)")
+    doc = pl.build(conn, ["md5"])
+    check("cover" not in doc["encodings"][0], "no cover where file_art has none")
+    jpg = b"\xff\xd8\xff" + b"o" * 600
+    conn.execute("INSERT INTO file_art VALUES ('md5', ?, NULL, 'found:embedded', 't')", (jpg,))
+    doc = pl.build(conn, ["md5"])
+    cov = doc["encodings"][0].get("cover", {})
+    check(cov.get("source") == "found:embedded" and cov.get("front", {}).get("file") == "covers/file-md5-front.jpg"
+          and "back" not in cov, f"the encoding's own cover: {cov}")
+    check(pl.cover_files(conn, doc) == {"covers/file-md5-front.jpg": jpg}, "and its bytes")
+
+
 def main() -> int:
     test_covers_travel_as_files_named_by_the_payload()
+    test_a_files_own_cover_travels_on_its_encoding()
     test_retired_keys_travel_with_every_payload()
     test_lyrics_travel_on_their_recording()
     test_fade_travels_when_the_schema_has_it()

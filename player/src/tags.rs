@@ -124,44 +124,6 @@ pub fn duration_ms(path: &Path) -> Option<u64> {
     (frames > 0).then(|| frames * 1000 / rate)
 }
 
-/// Cover files sitting beside the audio, in the order worth trying.
-///
-/// Measured on this library: 1,656 of the 1,986 files with no embedded picture
-/// -- 83% -- have one of these in the same folder. The art was already on disk
-/// and nothing was looking for it.
-use crate::bundle::{SIBLING_BACK, SIBLING_FRONT};
-
-fn media_type_for(path: &Path) -> String {
-    match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
-        Some("png") => "image/png".into(),
-        Some("gif") => "image/gif".into(),
-        Some("webp") => "image/webp".into(),
-        _ => "image/jpeg".into(),
-    }
-}
-
-/// A cover file in the same directory as the audio, if one is there.
-///
-/// Case-insensitively, because `Folder.jpg` and `folder.jpg` are the same file
-/// to Windows and different strings to everyone else.
-pub fn sibling_art(path: &Path, back: bool) -> Option<Artwork> {
-    let dir = path.parent()?;
-    let wanted: &[&str] = if back { &SIBLING_BACK } else { &SIBLING_FRONT };
-    let entries: Vec<_> = std::fs::read_dir(dir).ok()?.flatten().collect();
-    for name in wanted {
-        for e in &entries {
-            if e.file_name().to_string_lossy().eq_ignore_ascii_case(name) {
-                let p = e.path();
-                let data = std::fs::read(&p).ok()?;
-                if data.len() >= MIN_ART_BYTES {
-                    return Some(Artwork { media_type: media_type_for(&p), data });
-                }
-            }
-        }
-    }
-    None
-}
-
 /// The embedded cover, if there is one.
 ///
 /// Front cover by preference; failing that, whatever picture is there. A file

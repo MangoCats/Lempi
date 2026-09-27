@@ -24,9 +24,9 @@ is not touched.
 **A folder's picture counts only where the folder is one album's.** A folder
 holds one cover, so a folder of several albums would give some of its songs the
 wrong picture: a picture beside the audio is taken for a release only when every
-catalogued file in that folder has that release, and for a file with no release
-only when every file there shares its album tag. Otherwise the file's own
-embedded picture is the source.
+catalogued file in that folder has that release, and for a file's own cover
+only when every file there has one release or shares one album tag. Otherwise
+the file's own embedded picture is the source.
 
 Usage:
   python tools/induct_covers.py <library.db> [--write]
@@ -150,9 +150,46 @@ def embedded(path: str) -> bytes | None:
     return front[0] if front else pics[0][1]
 
 
+def found(path: str, folder_ok: bool, now: str, counts: dict) -> tuple | None:
+    """A file's found cover as a catalogue entry (front, back, source,
+    fetched_at): the folder's picture where `folder_ok`, else its own."""
+    folder = os.path.dirname(path)
+    front = back = None
+    source = ""
+    if folder_ok:
+        s = sibling(folder, SIBLING_FRONT)
+        if s:
+            front, source = s[0], f"found:folder:{s[1]}"
+            b = sibling(folder, SIBLING_BACK)
+            back = b[0] if b else None
+    if front is None and os.path.isfile(path):
+        e = embedded(path)
+        if e:
+            front, source = e, "found:embedded"
+    if front is None:
+        return None
+    counts["folder" if source.startswith("found:folder") else "embedded"] += 1
+    front, note = display_copy(front)
+    if back is not None:
+        back, _ = display_copy(back)
+    if note:
+        counts["shrunk"] += 1
+    return front, back, source + note, now
+
+
 def plan(conn) -> tuple[dict, dict, dict]:
-    """What to take: {release: (front, back, source)}, {audio_md5: (...)},
-    and counts of what was looked at and passed over."""
+    """What to take: {release: (front, back, source, fetched_at)},
+    {audio_md5: (...)}, and counts of what was looked at and passed over.
+
+    Two passes, as the player looks a cover up [SPEC-COV-010]. First each
+    file's chosen release, where the release has no cover. Then any file with
+    a passage still left without one -- through none of its recording's
+    releases -- gets a cover of its own: a file with no release, and also a
+    file whose passages sit on several releases, or whose folder is one album
+    on disk while Vipunen chose different releases for its songs (measured
+    2026-09-27 on the hub: 150 passages in 34 files, Kansas' *Leftoverture*
+    among them). Kept on the file, such a picture can never be shown for
+    another folder's copy of a release."""
     has = lambda t: conn.execute("SELECT 1 FROM sqlite_master WHERE name=?", (t,)).fetchone()  # noqa: E731
     covered_rel = {r[0] for r in conn.execute(
         "SELECT release_mbid FROM cover_art WHERE front IS NOT NULL")} if has("cover_art") else set()
@@ -161,7 +198,7 @@ def plan(conn) -> tuple[dict, dict, dict]:
     chosen = "rr.chosen = 1" if "chosen" in {r[1] for r in conn.execute(
         "PRAGMA table_info(release_recordings)")} else "1"
     rows = conn.execute(f"""
-        SELECT f.path, f.audio_md5, t.album,
+        SELECT f.file_id, f.path, f.audio_md5, t.album,
                (SELECT rr.release_mbid FROM passages p
                   JOIN passage_recordings pr ON pr.passage_id = p.passage_id
                   JOIN release_recordings rr ON rr.mbid = pr.mbid AND {chosen}
@@ -169,52 +206,49 @@ def plan(conn) -> tuple[dict, dict, dict]:
                  ORDER BY rr.release_mbid LIMIT 1)
           FROM files f LEFT JOIN file_tags t ON t.file_id = f.file_id
          ORDER BY f.path""").fetchall()
+    # Every release each passage could show a cover through, as the player's
+    # lookup joins them: any release of any of its recordings.
+    passages: dict[int, dict[int, set]] = {}
+    for fid, pid, rel in conn.execute("""
+            SELECT p.file_id, p.passage_id, rr.release_mbid FROM passages p
+              LEFT JOIN passage_recordings pr ON pr.passage_id = p.passage_id
+              LEFT JOIN release_recordings rr ON rr.mbid = pr.mbid"""):
+        s = passages.setdefault(fid, {}).setdefault(pid, set())
+        if rel:
+            s.add(rel)
     # What each folder holds, to judge whether its picture is one album's.
     folders: dict[str, list[tuple]] = {}
-    for path, md5, album, rel in rows:
+    for _, path, _, album, rel in rows:
         folders.setdefault(os.path.dirname(path), []).append((rel, (album or "").strip().lower()))
+
+    def one_release(folder, rel):
+        return bool(rel) and all(r == rel for r, _ in folders[folder])
+
+    def one_album(folder, album):
+        a = (album or "").strip().lower()
+        return bool(a) and all(x == a for _, x in folders[folder])
+
     now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     by_rel: dict[str, tuple] = {}
     by_file: dict[str, tuple] = {}
     counts = {"files": len(rows), "already": 0, "none_found": 0, "folder": 0, "embedded": 0, "shrunk": 0}
-    for path, md5, album, rel in rows:
-        if rel:
-            if rel in covered_rel or rel in by_rel:
-                counts["already"] += 1
-                continue
-        elif md5 in covered_file or md5 in by_file:
+    for _, path, md5, album, rel in rows:
+        if rel and rel not in covered_rel and rel not in by_rel:
+            e = found(path, one_release(os.path.dirname(path), rel), now, counts)
+            if e:
+                by_rel[rel] = e
+    covered = covered_rel | set(by_rel)
+    for fid, path, md5, album, rel in rows:
+        bare = [p for p, rels in passages.get(fid, {}).items() if not rels & covered]
+        if not bare or md5 in covered_file or md5 in by_file:
             counts["already"] += 1
             continue
         folder = os.path.dirname(path)
-        members = folders[folder]
-        alone = (all(r == rel for r, _ in members) if rel
-                 else all(r is None and a == (album or "").strip().lower() and a for r, a in members))
-        front = back = None
-        source = ""
-        if alone:
-            s = sibling(folder, SIBLING_FRONT)
-            if s:
-                front, source = s[0], f"found:folder:{s[1]}"
-                b = sibling(folder, SIBLING_BACK)
-                back = b[0] if b else None
-        if front is None and os.path.isfile(path):
-            e = embedded(path)
-            if e:
-                front, source = e, "found:embedded"
-        if front is None:
-            counts["none_found"] += 1
-            continue
-        counts["folder" if source.startswith("found:folder") else "embedded"] += 1
-        front, note = display_copy(front)
-        if back is not None:
-            back, _ = display_copy(back)
-        if note:
-            counts["shrunk"] += 1
-        entry = (front, back, source + note, now)
-        if rel:
-            by_rel[rel] = entry
+        e = found(path, one_release(folder, rel) or one_album(folder, album), now, counts)
+        if e:
+            by_file[md5] = e
         else:
-            by_file[md5] = entry
+            counts["none_found"] += 1
     return by_rel, by_file, counts
 
 
@@ -231,7 +265,7 @@ def main(argv: list[str]) -> int:
     conn = lempi_db.connect(paths[0], lempi_db.ROLE_LIBRARY, writable=write)
     by_rel, by_file, c = plan(conn)
     say(f"files looked at: {c['files']}")
-    say(f"  their release or file already has a cover: {c['already']}")
+    say(f"  every passage already shows a cover from the catalogue: {c['already']}")
     say(f"  a cover found beside the audio: {c['folder']}; embedded in the file: {c['embedded']}")
     say(f"  nothing found: {c['none_found']}")
     say(f"  kept as a display copy, being large: {c['shrunk']}")

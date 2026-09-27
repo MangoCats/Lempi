@@ -68,36 +68,19 @@ pub(super) async fn cover_art_back(
     art_response(ui, passage_id, true).await
 }
 
-/// One passage's cover, from wherever it can be found.
+/// One passage's cover, from the catalogue alone `[SPEC-COV-010]`.
 ///
-/// Three sources, cheapest first `[REQ-VIS-170]`:
-///
-/// 1. **the audio file's own picture** -- 64% of this library carries one;
-/// 2. **a cover file beside it** -- `folder.jpg` and its spellings, which 83%
-///    of the remaining files have. It was already on disk and nothing looked;
-/// 3. **the fetched archive**, keyed by the release Vipunen chose, which is the
-///    only one of the three that can tell two albums in one folder apart.
-///
-/// A back cover skips step 1: embedded back covers are vanishingly rare, and
-/// `artwork()` deliberately falls back to *any* picture, which would return
-/// the front and label it the back.
+/// Until 2026-09-27 this tried three sources: the file's own picture, a cover
+/// file beside it, then the archive. What a listener saw then depended on what
+/// happened to lie beside a file on one machine, and a phone -- where Android
+/// keeps pictures out of `Music/` -- could show only the third. Vipunen now
+/// inducts the covers it finds into the catalogue `[SPEC-COV-020]`, and every
+/// host shows the same one.
 pub(super) async fn art_response(ui: Ui, passage_id: i64, back: bool) -> axum::response::Response {
     let db = ui.db.clone();
     let library = ui.library.clone();
     let found = tokio::task::spawn_blocking(move || {
-        let lib = crate::db::Library::open_split(&db, &library).ok()?;
-        let path = lib.passage_path(passage_id).ok();
-        if !back {
-            if let Some(a) = path.as_deref().and_then(crate::tags::artwork) {
-                if a.data.len() >= crate::tags::MIN_ART_BYTES {
-                    return Some(a);
-                }
-            }
-        }
-        if let Some(a) = path.as_deref().and_then(|p| crate::tags::sibling_art(p, back)) {
-            return Some(a);
-        }
-        lib.stored_art(passage_id, back)
+        crate::db::Library::open_split(&db, &library).ok()?.stored_art(passage_id, back)
     })
     .await;
 

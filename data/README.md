@@ -58,6 +58,12 @@ back from each node's disk: 5,709 of 5,709 files record `symphonia@0.5.5`, and
 still the old file's, 442 bytes too high. Size is a per-node column the sync
 takes from the copy it last sent, and no node's player reads it.
 
+**Since 2026-09-27 the catalogue holds the covers found on disk** `[SPEC-COV-020]`.
+`tools/induct_covers.py --write` took 384 release covers into `cover_art` and 116
+file covers into the new `file_art`. The catalogue then held 1,256 and 116; the
+output is in `induct-covers-2026-09-27.log`. The catalogue as it was before
+is in `backups/pre-covers-20260927/library.db`, sha256 `00ba3ad29de3cc6c…`.
+
 **Each node received its own copy by patch** `[SPEC-STAR-080]`, and keeps the
 pair it had before in `pre-star-2026-09-26/` beside its listener. Which nodes,
 and what was verified, is in [FLEET001](../fleet/FLEET001-the-fleet.md)

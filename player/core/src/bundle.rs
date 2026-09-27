@@ -850,6 +850,8 @@ fn ensure_release_columns(db: &Connection) -> Result<(), String> {
          CREATE TABLE IF NOT EXISTS release_recordings (release_mbid TEXT NOT NULL, mbid TEXT NOT NULL, \
              position INTEGER, source TEXT NOT NULL, PRIMARY KEY (release_mbid, mbid)) WITHOUT ROWID;
          CREATE TABLE IF NOT EXISTS cover_art (release_mbid TEXT PRIMARY KEY, front BLOB, back BLOB, \
+             source TEXT NOT NULL, fetched_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS file_art (audio_md5 TEXT PRIMARY KEY, front BLOB, back BLOB, \
              source TEXT NOT NULL, fetched_at TEXT NOT NULL);",
     )
     .map_err(|e| e.to_string())?;
@@ -989,15 +991,24 @@ pub fn place_covers(db: &Connection, releases: &std::collections::HashSet<String
 /// only one a bundle can add: Android keeps pictures out of `Music/`, so a
 /// cover cannot travel as a file beside the audio.
 ///
+/// A file with no release carries a cover of its own, stored in `file_art` by
+/// its signature `[SPEC-COV-040]`.
+///
 /// A cover file is read from `bundle_root` (the staged bundle), and stored
 /// only if its bytes match the hash the payload gives. A track is linked only
 /// to a recording the catalogue holds. Idempotent: a second import of the same
 /// payload changes nothing.
 pub fn import_releases(db: &mut Connection, doc: &Value, bundle_root: &Path) -> Result<ReleasesReport, String> {
     let mut rep = ReleasesReport::default();
-    let Some(list) = doc.get("releases").and_then(|v| v.as_array()).filter(|l| !l.is_empty()) else {
+    let list = doc.get("releases").and_then(|v| v.as_array()).map(Vec::as_slice).unwrap_or(&[]);
+    let own: Vec<&Value> = doc
+        .get("encodings")
+        .and_then(|v| v.as_array())
+        .map(|l| l.iter().filter(|e| e.get("cover").is_some_and(Value::is_object)).collect())
+        .unwrap_or_default();
+    if list.is_empty() && own.is_empty() {
         return Ok(rep);
-    };
+    }
     ensure_release_columns(db)?;
     let tx = db.transaction().map_err(|e| e.to_string())?;
     let opt = |v: &Value, k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
@@ -1038,22 +1049,7 @@ pub fn import_releases(db: &mut Connection, doc: &Value, bundle_root: &Path) -> 
             rep.tracks += 1;
         }
         let Some(cover) = r.get("cover").filter(|c| c.is_object()) else { continue };
-        let mut sides: [Option<Vec<u8>>; 2] = [None, None];
-        for (i, side) in ["front", "back"].iter().enumerate() {
-            let Some(c) = cover.get(*side) else { continue };
-            let (file, want) = (str_of(c, "file"), str_of(c, "sha256"));
-            let bytes = safe_rel(&file)
-                .filter(|rel| rel.starts_with("covers"))
-                .and_then(|rel| std::fs::read(bundle_root.join(rel)).ok());
-            match bytes {
-                Some(b) if sha256_bytes(&b) == want => {
-                    sides[i] = Some(b);
-                    rep.covers += 1;
-                    rep.stored_covers.insert(format!("{mbid}/{side}"));
-                }
-                _ => rep.bad_covers.push(file),
-            }
-        }
+        let sides = read_cover(cover, bundle_root, &mbid, &mut rep);
         if sides.iter().any(Option::is_some) {
             let [front, back] = sides;
             tx.execute(
@@ -1065,9 +1061,46 @@ pub fn import_releases(db: &mut Connection, doc: &Value, bundle_root: &Path) -> 
             .map_err(|e| format!("cover of {mbid}: {e}"))?;
         }
     }
+    for e in own {
+        let md5 = str_of(e, "audio_md5");
+        let cover = &e["cover"];
+        let [front, back] = read_cover(cover, bundle_root, &format!("file:{md5}"), &mut rep);
+        if front.is_some() || back.is_some() {
+            tx.execute(
+                "INSERT INTO file_art (audio_md5,front,back,source,fetched_at) VALUES (?1,?2,?3,?4,?5) \
+                 ON CONFLICT(audio_md5) DO UPDATE SET front=COALESCE(excluded.front, file_art.front), \
+                 back=COALESCE(excluded.back, file_art.back), source=excluded.source, fetched_at=excluded.fetched_at",
+                params![md5, front, back, str_of(cover, "source"), str_of(cover, "fetched_at")],
+            )
+            .map_err(|e| format!("cover of file {md5}: {e}"))?;
+        }
+    }
     tx.commit().map_err(|e| e.to_string())?;
     rep.seen = list.iter().map(|r| str_of(r, "mbid")).collect();
     Ok(rep)
+}
+
+/// A payload `cover`'s front and back, each read from the staged bundle and
+/// kept only if its bytes match the hash given `[SPEC-PL-105]`. `key` names it
+/// in `stored_covers`: a release's MBID, or `file:<audio_md5>`.
+fn read_cover(cover: &Value, bundle_root: &Path, key: &str, rep: &mut ReleasesReport) -> [Option<Vec<u8>>; 2] {
+    let mut sides: [Option<Vec<u8>>; 2] = [None, None];
+    for (i, side) in ["front", "back"].iter().enumerate() {
+        let Some(c) = cover.get(*side) else { continue };
+        let (file, want) = (str_of(c, "file"), str_of(c, "sha256"));
+        let bytes = safe_rel(&file)
+            .filter(|rel| rel.starts_with("covers"))
+            .and_then(|rel| std::fs::read(bundle_root.join(rel)).ok());
+        match bytes {
+            Some(b) if sha256_bytes(&b) == want => {
+                sides[i] = Some(b);
+                rep.covers += 1;
+                rep.stored_covers.insert(format!("{key}/{side}"));
+            }
+            _ => rep.bad_covers.push(file),
+        }
+    }
+    sides
 }
 
 /// The SHA-256 of some bytes, lower-case hex, as [`sha256_file`] gives a file's.
@@ -2448,6 +2481,39 @@ mod tests {
         std::fs::remove_dir_all(&s.root).ok();
     }
 
+
+    /// `[SPEC-COV-040]`: a file with no release brings a cover of its own,
+    /// stored by its signature; one whose bytes do not match is refused.
+    #[test]
+    fn a_file_with_no_release_brings_its_own_cover() {
+        let root = std::env::temp_dir().join(format!("lempi-file-art-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("covers")).unwrap();
+        let front: Vec<u8> = [&[0xFF, 0xD8, 0xFF][..], &[b'o'; 600][..]].concat();
+        std::fs::write(root.join("covers").join("file-m1-front.jpg"), &front).unwrap();
+        std::fs::write(root.join("covers").join("file-m2-front.jpg"), b"not what was hashed").unwrap();
+        let cover = |md5: &str, sha: String| serde_json::json!({"source": "found:embedded", "fetched_at": "t",
+            "front": {"file": format!("covers/file-{md5}-front.jpg"), "sha256": sha}});
+        let doc = serde_json::json!({"encodings": [
+            {"audio_md5": "m1", "cover": cover("m1", sha_of(&front))},
+            {"audio_md5": "m2", "cover": cover("m2", sha_of(&front))},
+            {"audio_md5": "m3"}]});
+        let mut c = empty_library();
+        let r = import_releases(&mut c, &doc, &root).unwrap();
+        assert_eq!((r.releases, r.covers), (0, 1), "{r:?}");
+        assert_eq!(r.bad_covers, vec!["covers/file-m2-front.jpg".to_string()]);
+        assert!(r.stored_covers.contains("file:m1/front"), "{:?}", r.stored_covers);
+        let (stored, source): (Vec<u8>, String) = c
+            .query_row("SELECT front, source FROM file_art WHERE audio_md5='m1'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!((stored, source.as_str()), (front, "found:embedded"));
+        let n: i64 = c.query_row("SELECT count(*) FROM file_art", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1, "neither the mismatched cover nor the file without one");
+        import_releases(&mut c, &doc, &root).unwrap();
+        let n: i64 = c.query_row("SELECT count(*) FROM file_art", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1, "a second import changes nothing");
+        std::fs::remove_dir_all(&root).ok();
+    }
 
     /// `[REQ-AND-205]`: a cover is written beside the audio only where the
     /// folder is that release's alone, and never over a cover already there.

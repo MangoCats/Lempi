@@ -200,8 +200,8 @@ def write_covers(conn, doc, out, args, written: set) -> int:
     payload stops naming them, so a receiver expects none. Returns bytes
     written."""
     if args.no_covers:
-        for rel in doc.get("releases", []):
-            rel.pop("cover", None)
+        for item in doc.get("releases", []) + doc.get("encodings", []):
+            item.pop("cover", None)
         return 0
     n = 0
     for name, blob in payloadmod.cover_files(conn, doc).items():

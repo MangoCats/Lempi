@@ -60,6 +60,10 @@ LIBRARY_TABLES = [
     "file_tags", "id_checks", "lyrics", "ingest_decisions",
     "lowlevel_cache", "musicbrainz_cache", "identification_cache",
     "works", "recording_works",
+    # Both created 2026-09-27, and named here the same day, after
+    # `unclassified()` would have refused the hub: `audio_md5_aliases` by the
+    # re-key [SPEC-RLK-155], `file_art` by the cover induction [SPEC-COV-040].
+    "audio_md5_aliases", "file_art",
 ]
 LISTENER_TABLES = [
     "listener_play_history", "listener_rejections", "listener_flags",
