@@ -86,6 +86,15 @@ wrong for most of what it was shown for; losing it is `[SPEC-COV-020]` at work.
 The catalogue's backup before the induction is in
 `data/backups/pre-covers-20260927/`.
 
+*Carried the same day.* Star sync run `20260927T2002Z` took the 500 rows
+(`cover_art` 384, `file_art` 116) to the nodes. A phone is sent a payload-only
+bundle naming **every file whose cover differs from the hub's**, not only those
+with none. A first bundle of the 270 files that had no cover left 6,152 passages
+showing another edition's picture: those files' chosen release had just gained a
+cover, and the phone still held one of a release it had been sent before. The
+second bundle named 3,005 files (1,083 pictures, 123 MB). After it, on the Moto
+G, 16,076 of 16,076 passages shared with the hub show the hub's cover.
+
 ---
 
 **Traceability:** `[SPEC-COV-010..050]` · from the maintainer's direction of 2026-09-27 · refines `[REQ-AND-205]`, `[SPEC-PL-105]`, `[REQ-VIS-170]`

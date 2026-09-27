@@ -83,7 +83,7 @@ Unplugged headphones pause it too; untested, because Android lets only the syste
 
 **`[REQ-AND-288]` Vipunen negotiates before anything moves**: the sender describes what it would send, and Vipunen answers which files it holds already and which may be of interest. Only those are transferred. What the description carries — the byte hash, and whatever else lets Vipunen recognise its own files — is `[REQ-AND-960]`.
 
-**`[REQ-AND-289]` What arrives waits in a *pending identification* folder, and a person decides.** Vipunen identifies each file and tells its user whether it is truly new to the collection or a near match, and what artist, recording, work and release it could establish. The user can listen before deciding, and nothing is inducted until they have decided.
+**`[REQ-AND-289]` What arrives waits in a *pending identification* folder, and a person decides.** Vipunen identifies each file and tells its user whether it is truly new to the collection or a near match, and what artist, recording, work and release it could establish. The user can listen before deciding, and nothing is inducted until they have decided. *Built 2026-09-27* as the console's intake page and `tools/pending.py` ([SPEC048](SPEC048-pending-identification.md)): identified by AcoustID and by MusicBrainz, and decided three ways. A file is inducted into `Music/<artist>/<album>/` by its tags, or rejected. A damaged copy of a library file is **repaired**: the phone is given the good copy the next time it asks `[SPEC-PID-040]`. All four files the Moto G first sent were damaged copies, and all four were repaired that way.
 
 ## 4. Selection
 

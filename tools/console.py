@@ -46,6 +46,7 @@ import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 from ingest_folder import AUDIO  # noqa: E402  -- one list of what counts as audio
 import jobs as jobmod  # noqa: E402
 import lempi_control  # noqa: E402  -- process/network side of the handoff
+import pending as pendingmod  # noqa: E402  -- what waits for a person [SPEC048]
 
 WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "console_web")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -902,6 +903,38 @@ class Handler(BaseHTTPRequestHandler):
             self._conn.close()
             self._conn = None
 
+    def send_pending_audio(self, sha: str):
+        """A waiting file, to listen to before deciding [REQ-AND-289]. Ranges
+        honoured, so the page's player can seek."""
+        pdir = pendingmod.pending_dir(STATE["library"] or STATE["path"])
+        match = [e for e in pendingmod.entries(pdir) if e["sha"] == sha]
+        if not match or not os.path.isfile(match[0]["audio"]):
+            return self.send_error(404)
+        path = match[0]["audio"]
+        size = os.path.getsize(path)
+        start, end = 0, size - 1
+        rng = self.headers.get("Range", "")
+        if rng.startswith("bytes="):
+            a, _, b = rng[6:].partition("-")
+            start = int(a) if a else max(0, size - int(b or 0))
+            end = int(b) if a and b else end
+        self.send_response(206 if rng else 200)
+        self.send_header("Content-Type", "audio/mpeg" if path.lower().endswith(".mp3") else "application/octet-stream")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        if rng:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        with open(path, "rb") as fh:
+            fh.seek(start)
+            left = end - start + 1
+            while left > 0:
+                chunk = fh.read(min(left, 1 << 16))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                left -= len(chunk)
+
     def send_file(self, name, ctype):
         path = os.path.join(WEB, name)
         if not os.path.isfile(path):
@@ -947,6 +980,18 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/console.js":
                 return self.send_file("console.js", "application/javascript; charset=utf-8")
 
+            if p == "/intake":
+                return self.send_file("intake.html", "text/html; charset=utf-8")
+            if p == "/api/intake":
+                # What waits for a person [REQ-AND-289], [SPEC048]: each file's
+                # note as the intake and `pending.py identify` wrote it.
+                pdir = pendingmod.pending_dir(STATE["library"] or STATE["path"])
+                decided = {w: len([n for n in os.listdir(os.path.join(pdir, w)) if n.endswith(".json")])
+                           if os.path.isdir(os.path.join(pdir, w)) else 0 for w in pendingmod.DONE}
+                return self.send_json({"waiting": pendingmod.entries(pdir), "decided": decided,
+                                       "root": (STATE["roots"] or [""])[0], "folder": pdir})
+            if p.startswith("/intake/audio/"):
+                return self.send_pending_audio(p.rsplit("/", 1)[-1])
             if p == "/api/totals":
                 return self.send_json({"totals": totals(self._db()),
                                        "coverage": completeness(self._db())})
@@ -1132,6 +1177,20 @@ class Handler(BaseHTTPRequestHandler):
                 if not folder or not os.path.isdir(folder):
                     return self.send_json({"error": f"not a folder: {folder}"}, code=400)
                 return self.send_json({"job_id": STATE["jobs"].submit("propose", folder)})
+            if p.startswith("/api/intake/"):
+                # A person's decision on a waiting file, run as a job: the
+                # same `pending.py` command a person could type [SPEC-SUI-015].
+                parts = p.split("/")
+                if len(parts) != 5 or parts[4] not in ("identify", "induct", "reject", "repair"):
+                    return self.send_json({"error": "unknown"}, code=404)
+                sha, action = parts[3], parts[4]
+                if not all(ch in "0123456789abcdef" for ch in sha) or len(sha) != 64:
+                    return self.send_json({"error": "not a byte hash"}, code=400)
+                root = (STATE["roots"] or [""])[0]
+                if action == "induct" and not os.path.isdir(root):
+                    return self.send_json({"error": "no music folder: start the console with --root"}, code=400)
+                target = json.dumps({"sha": sha, "action": action, "root": root})
+                return self.send_json({"job_id": STATE["jobs"].submit("pending", target)})
             if p.startswith("/api/induct/") and p.endswith("/commit"):
                 job_id = int(p.split("/")[3])
                 prev = STATE["jobs"].job(job_id)

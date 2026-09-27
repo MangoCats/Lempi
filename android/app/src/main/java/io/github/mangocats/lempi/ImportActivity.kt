@@ -1,7 +1,6 @@
 package io.github.mangocats.lempi
 
 import android.app.Activity
-import android.content.ContentUris
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -145,18 +144,8 @@ class ImportActivity : Activity() {
         return true
     }
 
-    /** The media-store item for a file path, on whichever volume holds it. */
-    private fun mediaUri(path: String): Uri? {
-        for (volume in MediaStore.getExternalVolumeNames(this)) {
-            val base = MediaStore.Audio.Media.getContentUri(volume)
-            @Suppress("DEPRECATION")
-            contentResolver.query(base, arrayOf(MediaStore.MediaColumns._ID),
-                "${MediaStore.MediaColumns.DATA} = ?", arrayOf(path), null)?.use { c ->
-                if (c.moveToFirst()) return ContentUris.withAppendedId(base, c.getLong(0))
-            }
-        }
-        return null
-    }
+    /** The media-store item for a file path: [mediaUri] in MediaItems.kt. */
+    private fun mediaUri(path: String): Uri? = mediaUri(this, path)
 
     /**
      * The user's answer. Allowed: each replacement is written through the

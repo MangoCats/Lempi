@@ -51,6 +51,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import pending as pendingmod  # noqa: E402  -- the decisions a person made [SPEC048]
 
 # The application's own key [REQ-AND-287]: every copy of Lempi and Vipunen
 # carries it, so it keeps out a stray request, not a person. The phone's copy is
@@ -146,6 +147,9 @@ class Intake:
             a = judge(lib, f)
             if a["want"] and os.path.exists(self._path(f["sha256"], f.get("name", ""))[0]):
                 a = {**a, "verdict": "pending", "want": False}
+            elif a["want"] and pendingmod.decided(self.pending, f["sha256"]) == "rejected":
+                # A person decided against it once [SPEC-PID-030]: not asked again.
+                a = {**a, "verdict": "rejected", "want": False}
             answers.append(a)
             if a["want"]:
                 with self.lock:
@@ -251,11 +255,48 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.authorised():
             return
+        if self.path == "/repairs":
+            return self.reply(200, {"repairs": pendingmod.repairs(self.intake.pending)})
+        m = re.fullmatch(r"/good/([0-9a-f]{64})", self.path)
+        if m:
+            return self.good(m.group(1))
         self.reply(200, {"intake": "vipunen", "pending": self.intake.pending})
+
+    def good(self, sha: str):
+        """[SPEC-PID-040]: the library's good copy, for a repair a person
+        decided -- and only then: this is not a way to fetch the library.
+        Checked against its hash before it goes, so what is sent is what the
+        decision named."""
+        for e in pendingmod.entries(self.intake.pending):
+            d = e.get("decision") or {}
+            if d.get("action") == "repair" and d.get("good_sha256") == sha:
+                path = d["good_path"]
+                break
+        else:
+            return self.reply(404, {"error": "no repair offers that file"})
+        if not os.path.isfile(path) or pendingmod.sha256_file(path) != sha:
+            return self.reply(410, {"error": "the library's copy has changed since the repair was decided"})
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(os.path.getsize(path)))
+        self.end_headers()
+        with open(path, "rb") as fh:
+            shutil.copyfileobj(fh, self.wfile, 1 << 16)
 
     def do_POST(self):
         if not self.authorised():
             return
+        m = re.fullmatch(r"/repaired/([0-9a-f]{64})", self.path)
+        if m:
+            # The sender has written the good copy over its own and says what
+            # its file's bytes now hash to; only the good copy's hash closes it.
+            n = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(n) or b"{}") if 0 < n <= 4096 else {}
+            self.consumed = True
+            if pendingmod.repaired(self.intake.pending, m.group(1), str(body.get("sha256", ""))):
+                say(f"intake: repaired {m.group(1)[:12]} at {self.headers.get('X-Lempi-Sender') or self.client_address[0]}")
+                return self.reply(200, {"repaired": True})
+            return self.reply(409, {"error": "no such repair, or the bytes are not the good copy's"})
         if self.path != "/offer":
             return self.reply(404, {"error": "unknown"})
         n = int(self.headers.get("Content-Length") or 0)

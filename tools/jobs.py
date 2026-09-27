@@ -528,11 +528,38 @@ class Runner:
         if kind == "cd-rip":
             return self._cd_rip(job_id, target)
 
+        if kind == "pending":
+            return self._pending(job_id, target)
+
         # 'induct' and 'reanalyze' `[SPEC-SUI-214]` are the same four-stage
         # pipeline, differing only in whether `identify` is told to retry
         # what it already tried -- anything else unrecognized also lands
         # here, matching this method's own long-standing fallthrough.
         return self._run_pipeline(job_id, target, recheck=(kind == "reanalyze"))
+
+    def _pending(self, job_id: int, target: str):
+        """A decision on a file waiting in pending-identification/ [SPEC048]:
+        `pending.py` does it, as a person would run it. An induction places
+        the file by its tags and then runs the usual pipeline over that
+        folder -- the same stages as any other folder's induction."""
+        t = json.loads(target)
+        action, sha = t["action"], t["sha"]
+        tools = os.path.dirname(os.path.abspath(__file__))
+        argv = [sys.executable, os.path.join(tools, "pending.py"), self.library, action, sha]
+        if action == "induct":
+            argv += ["--root", t["root"]]
+        self._emit(job_id, "stage", action, stage=action)
+        code, out = self._spawn(job_id, action, argv)
+        if code != 0:
+            self._emit(job_id, "error", f"pending.py {action} exited {code}", stage=action)
+            return self._finish(job_id, "failed")
+        if action != "induct":
+            return self._finish(job_id, "done")
+        placed = parse_json_tail(out)
+        if not placed or not placed.get("folder"):
+            self._emit(job_id, "error", "the file was placed, but where was not reported", stage=action)
+            return self._finish(job_id, "failed")
+        return self._run_pipeline(job_id, placed["folder"], recheck=False)
 
     def _run_pipeline(self, job_id: int, target: str, recheck: bool):
         result = {}

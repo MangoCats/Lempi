@@ -1,0 +1,158 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Vipunen — music sent for induction</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/console.css">
+<style>
+  .card { border: 1px solid var(--line); border-radius: 6px; padding: .7rem .9rem; margin: .7rem 0; }
+  .card h3 { margin: 0 0 .2rem; font-size: 1rem; }
+  .meta { color: var(--dim); font-size: .8rem; }
+  .verdict { font-size: .75rem; padding: .05rem .4rem; border-radius: 3px; border: 1px solid var(--line); margin-left: .4rem; }
+  .damaged { border-left: 3px solid var(--bad); padding: .3rem .6rem; margin: .5rem 0; font-size: .85rem; }
+  .best { border-left: 3px solid var(--accent); padding: .3rem .6rem; margin: .5rem 0; font-size: .85rem; }
+  .waiting { border-left: 3px solid var(--dim); padding: .3rem .6rem; margin: .5rem 0; font-size: .85rem; }
+  details { font-size: .8rem; margin: .3rem 0; }
+  details li { margin: .15rem 0; }
+  audio { width: 100%; max-width: 32rem; margin: .4rem 0; }
+  .actions { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .4rem; }
+  .actions button[disabled] { opacity: .4; }
+</style>
+<header>
+  <h1>Vipunen</h1>
+  <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/export">export</a><a href="/flags">flags</a><a href="/intake" class="on">intake</a><a href="/mesh">mesh</a><a href="/system">system</a></nav>
+  <span class="ro">library read-only</span>
+</header>
+<main>
+  <h2>Music sent for induction</h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    What a Lempi node sent through <code style="font:12px var(--mono)">tools/intake.py</code>
+    waits here until you decide <code style="font:12px var(--mono)">[REQ-AND-289]</code>.
+    Listen, identify, then choose one of three: <b>induct</b> places it in
+    the music folder by its own tags, as <i>artist/album/</i>, and runs the
+    usual induction; <b>reject</b> sets it aside, and the intake declines it
+    if it is offered again; <b>repair</b> is for a damaged copy of a file
+    the library already holds, and offers the sender the good copy, which
+    the sender fetches next time it asks Vipunen.
+  </p>
+  <div class="controls">
+    <button class="chip" id="refresh">refresh</button>
+    <span id="summary" style="color:var(--dim);font-size:.85rem;align-self:center"></span>
+  </div>
+  <div id="list"></div>
+</main>
+<script src="/console.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const mb = id => S.el('a', { href: `https://musicbrainz.org/recording/${id}`, target: '_blank', text: id.slice(0, 8) });
+
+function describe(e, box) {
+  const i = e.identification;
+  const d = e.decision || {};
+  if (d.action === 'repair') {
+    box.append(S.el('div', { class: 'waiting', text:
+      `Repair offered ${d.at}: ${e.sender || 'the sender'} is given ${d.good_path} ` +
+      `the next time it asks Vipunen, and this closes when its copy's bytes are the good copy's.` }));
+  }
+  if (!i) {
+    box.append(S.el('div', { class: 'meta', text: 'Not identified yet.' }));
+    return;
+  }
+  if (i.damaged_copy) {
+    const g = i.damaged_copy;
+    box.append(S.el('div', { class: 'damaged' },
+      S.el('b', { text: 'A damaged copy of a file the library holds. ' }),
+      `${g.path}: the same name and size, but ${g.blocks_differ} of its ${S.n(g.blocks)} 4 KiB blocks ` +
+      `are other data (bytes ${S.n(g.first_byte)}–${S.n(g.last_byte)}). The library's copy is intact. ` +
+      'Repair offers the sender the good one.'));
+  }
+  if (i.best) {
+    const b = i.best;
+    box.append(S.el('div', { class: 'best' },
+      `By ${b.by === 'acoustid' ? 'its sound (AcoustID)' : 'its tags and length (MusicBrainz)'}: `,
+      S.el('b', { text: `${b.artist} — ${b.title}` }), ' ', mb(b.recording),
+      b.releases && b.releases.length ? ` · on ${b.releases.slice(0, 3).join('; ')}` : '',
+      S.el('br'),
+      b.held && b.held.length ? `The library already holds this recording: ${b.held[0]}`
+                              : 'The library does not hold this recording: new to the collection.'));
+  } else if (!i.damaged_copy) {
+    box.append(S.el('div', { class: 'meta', text:
+      'Neither AcoustID nor MusicBrainz could name it with confidence.' }));
+  }
+  const cands = (title, rows, fmt) => rows && rows.length ? S.el('details', {},
+    S.el('summary', { text: `${title} (${rows.length})` }),
+    S.el('ul', {}, ...rows.map(r => S.el('li', {}, ...fmt(r))))) : null;
+  box.append(...[
+    cands('AcoustID', i.acoustid, r => [`${r.score} `, mb(r.recording),
+      ` ${r.artist} — ${r.title}`, r.length_ms ? ` (${S.clock(r.length_ms)})` : '',
+      r.releases.length ? ` · ${r.releases.join('; ')}` : '']),
+    cands('MusicBrainz by tags', i.musicbrainz, r => [mb(r.recording),
+      ` ${r.artist} — ${r.title}`, r.length_ms ? ` (${S.clock(r.length_ms)})` : '',
+      r.tags_agree ? ' · tags agree' : '', r.length_agrees ? ' · length agrees' : '',
+      r.releases.length ? ` · ${r.releases.join('; ')}` : '']),
+  ].filter(Boolean));
+  for (const k of ['acoustid_error', 'musicbrainz_error']) {
+    if (i[k]) box.append(S.el('div', { class: 'meta', style: 'color:var(--bad)', text: i[k] }));
+  }
+  box.append(S.el('div', { class: 'meta', text: `identified ${i.at}, measured ${S.clock(i.duration_ms)}` }));
+}
+
+async function act(e, action, out) {
+  const t = e.offered.tags || {};
+  const where = [t.artist, t.album].filter(Boolean).join('/');
+  const ask = {
+    induct: `Place it at <music>/${where}/ and induct it?`,
+    reject: 'Set it aside? The intake will decline it if it is offered again.',
+    repair: 'Offer the sender the library\'s good copy of this file?',
+  }[action];
+  if (ask && !confirm(ask)) return;
+  const r = await (await fetch(`/api/intake/${e.sha}/${action}`, { method: 'POST' })).json();
+  if (r.error) return out.replaceChildren(S.el('div', { style: 'color:var(--bad)', text: r.error }));
+  S.watchJob(r.job_id, out, () => load());
+}
+
+async function load() {
+  let d;
+  try { d = await S.get('/api/intake'); } catch (err) { return S.fail('#list', err); }
+  $('#summary').textContent = `${d.waiting.length} waiting · decided so far: ` +
+    `${d.decided.inducted} inducted, ${d.decided.rejected} rejected, ${d.decided.repaired} repaired · ${d.folder}`;
+  const list = $('#list');
+  list.replaceChildren();
+  if (!d.waiting.length) {
+    list.append(S.el('p', { class: 'empty', text: 'Nothing is waiting.' }));
+    return;
+  }
+  for (const e of d.waiting) {
+    const t = e.offered.tags || {};
+    const card = S.el('div', { class: 'card' });
+    card.append(
+      S.el('h3', {}, `${t.artist || '(no artist)'} — ${t.title || e.offered.name}`,
+        S.el('span', { class: 'verdict', text: e.verdict })),
+      S.el('div', { class: 'meta', text:
+        `${t.album ? t.album + ' · ' : ''}${e.offered.name} · ${S.n(e.bytes)} bytes · ` +
+        `from ${e.sender} at ${e.received_at} · ${e.sha.slice(0, 12)}` }),
+      S.el('audio', { controls: '', preload: 'none', src: `/intake/audio/${e.sha}` }));
+    const info = S.el('div');
+    describe(e, info);
+    card.append(info);
+    const out = S.el('div');
+    const repairable = !!(e.identification && e.identification.damaged_copy);
+    const offered = (e.decision || {}).action === 'repair';
+    const btn = (label, action, enabled = true, title = '') => {
+      const b = S.el('button', { class: 'chip', text: label, title });
+      if (!enabled) b.disabled = true;
+      b.onclick = () => act(e, action, out);
+      return b;
+    };
+    card.append(S.el('div', { class: 'actions' },
+      btn(e.identification ? 'identify again' : 'identify', 'identify'),
+      btn('induct', 'induct', !offered && !!t.artist, t.artist ? '' : 'no artist tag'),
+      btn('reject', 'reject'),
+      btn('repair', 'repair', repairable && !offered,
+          repairable ? '' : 'only for a damaged copy of a file the library holds')), out);
+    list.append(card);
+  }
+}
+
+$('#refresh').onclick = load;
+load();
+</script>
