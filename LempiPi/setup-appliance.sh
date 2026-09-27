@@ -69,8 +69,11 @@ NEED=""
 # diagnostic reason on every appliance, not just the one it was checked on.
 # chrony is the fleet's clock `[GDE-ECHO-300]`, configured under "platform"
 # below; it was installed by hand on every node until 2026-09-25.
+# No ffmpeg since 2026-09-27: it was here for relink's hash, which is
+# in-process now `[SPEC-RLK-152]`. A node that plays through MPD gets ffmpeg's
+# libraries as MPD's own dependency, not from this list.
 for p in pipewire pipewire-pulse pipewire-alsa wireplumber libspa-0.2-bluetooth \
-         bluez libasound2 alsa-utils sqlite3 upower evtest ffmpeg \
+         bluez libasound2 alsa-utils sqlite3 upower evtest \
          dnsmasq iw python3-dbus python3-gi chrony; do
     dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"
 done

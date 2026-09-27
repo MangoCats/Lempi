@@ -141,6 +141,17 @@ ffmpeg's 80 ms (a process per file).
   `relink` and `import_bundle` pass Symphonia's; a phone passes none
   `[REQ-AND-270]`. Vipunen's Python asks the `hash_audio` binary rather than
   computing a key its own way. No tool runs ffmpeg for an identity any more.
+- **Lempi needs no ffmpeg anywhere** -- the maintainer's aim is a lightweight
+  player -- except through MPD, whose Debian package brings ffmpeg's
+  libraries, on the two nodes that play through it (bose, lempi02w). The
+  provisioning scripts, the build image and the test gate no longer install
+  it, and the full cross-target run passed without it. Audited on all five
+  nodes 2026-09-27: no unit, script or cron entry names it; no `lempi` binary
+  contains or links it; MPD is the only process with its libraries loaded.
+  The `ffmpeg` packages stay installed, unused. An Android build has no MPD
+  client (`mpd` is a feature it does not enable), and a client would need an
+  MPD server, not ffmpeg, since the server decodes. Vipunen keeps ffmpeg on
+  the desktop, and Essentia links its libraries; that is out of scope.
 - **Provenance.** The re-key wrote `symphonia@0.5.5` to `md5_generator` on
   every row it hashed. That is not the back-annotation `[SPEC-SC-038]`
   forbids: each value was recomputed a moment earlier, so the generator is a

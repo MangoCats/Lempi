@@ -2,15 +2,13 @@
 # --platform linux/arm64 emulation to exercise the aarch64 target for real
 # rather than only compiling it.
 FROM rust:1.90-bookworm
-# `ffmpeg` is not a nicety: `relink::hash_encoded` shells out to it, and two
-# bundle-import tests hash a real file through it `[SPEC-RLK-100]`. Without it
-# they fail with "ffmpeg not available" on every containerised target -- which
-# they did, from 2026-09-06 until 2026-09-18, unnoticed because this script's
-# own status handling swallowed the failure. Installed rather than skipped
-# around: the tool is a real dependency of the path under test, so a test
-# image without it is testing something else.
+# No `ffmpeg` since 2026-09-27. It was installed because `relink::hash_encoded`
+# shelled out to it and two bundle-import tests hashed a real file through it
+# `[SPEC-RLK-100]`; the identity hash is in-process now `[SPEC-RLK-152]`, and
+# nothing under test runs it. Leaving it installed would let a new call to it
+# pass here and fail on an appliance.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libasound2-dev pkg-config ffmpeg \
+        libasound2-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 # clippy, because the pre-commit gate runs `cargo clippy` rather than
 # `cargo check` -- the same compile, plus the lints. Without it a module's

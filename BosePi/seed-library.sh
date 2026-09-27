@@ -8,9 +8,10 @@
 # **Status: run for real against bose 2026-09-06** -- 5,709 paths bound by
 # relink, the relinked db swapped in as /var/lempi/listener.db. Run once, so
 # treat its output as something to read, not a black box: `docker`/Alpine
-# package names, this dev host's own `$HOME/Music` layout, and relink's
-# `ffmpeg` dependency are all things that can drift out from under it on a
-# different machine or a later date, unexercised until they are.
+# package names and this dev host's own `$HOME/Music` layout are things that
+# can drift out from under it on a different machine or a later date,
+# unexercised until they are. (Relink's `ffmpeg` dependency was a third, until
+# the hash moved in-process on 2026-09-27 `[SPEC-RLK-152]`.)
 #
 # Runs on the development host. Idempotent in every step except the last,
 # which is deliberately not: swapping the relinked database in as the live
@@ -61,10 +62,6 @@ step "B is writable for this seed [attended import, PI-B-030]"
 # chown, not a permission bit flip -- idempotent either way, and matches how
 # C was already made pi-writable in provision-bose.sh's State layout step.
 run "chown /srv/library to pi" ssh "$HOST" sudo chown pi:pi /srv/library
-
-step "ffmpeg on bose, for relink's audio hashing [SPEC012]"
-run "apt install ffmpeg" ssh "$HOST" \
-    "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ffmpeg"
 
 step "Cross-compile relink for aarch64"
 # Always redone, not gated on an existence check: a stale relink binary
@@ -122,9 +119,9 @@ else
 fi
 
 caveat \
-    "relink hashes each file's *encoded* audio stream, not its bytes -- a" \
-    "different ffmpeg version decoding the same file can theoretically hash" \
-    "differently. Read the apply report below rather than only its exit" \
+    "relink hashes each file's *encoded* audio stream, not its bytes, with" \
+    "the Symphonia compiled into it -- a relink built on a different Symphonia" \
+    "can hash differently. Read the apply report below rather than only its exit" \
     "code: 'missing'/'corrupt' counts above zero mean look, not proceed."
 step "Relink: bind the staged db to bose's own paths [SPEC012]"
 scp -q "$RELINK_BIN" "$HOST:/tmp/relink" || die "scp of relink failed"

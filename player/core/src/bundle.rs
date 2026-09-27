@@ -64,7 +64,8 @@ pub enum Landed {
     /// discovery `[SPEC-RLK-055]`.
     Corrupt { expected: String, found: String },
     /// Audio is here and nothing on this host can check it: the payload
-    /// carries no byte hash and there is no ffmpeg to recompute `audio_md5`.
+    /// carries no byte hash and the host passed no hasher to recompute
+    /// `audio_md5`.
     /// Not written -- unverified is not trusted `[REQ-AND-230]` -- and not
     /// called corrupt, since nothing was found to disagree.
     Unverifiable { why: String },
@@ -427,7 +428,7 @@ fn import_bound(
             // is carried as sent.
             None if sha256.is_some() => {}
             None => {
-                let why = "no sha256 in the payload, and no ffmpeg here to recompute audio_md5".into();
+                let why = "no sha256 in the payload, and no hasher here to recompute audio_md5".into();
                 rep.outcomes.push((md5, Landed::Unverifiable { why }));
                 continue;
             }
@@ -454,7 +455,7 @@ fn import_bound(
                         .filter(|d| *d > 0)
                         .ok_or_else(|| format!("{md5}: encoding.duration_ms is not a positive integer"))?,
                     now,
-                    // `NULL` where ffmpeg could not be asked. The import got
+                    // `NULL` where the host passed no hasher. The import got
                     // this far, so the hash was computed -- but by what is
                     // then genuinely unknown, and a guess in a provenance
                     // column is worse than a gap.
@@ -1386,11 +1387,11 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// The phone's case `[REQ-AND-230]`: no ffmpeg, so the byte hash is the
+    /// The phone's case `[REQ-AND-230]`: no hasher, so the byte hash is the
     /// check, and a matching file lands with `audio_md5` as sent and no
     /// hasher claimed for it.
     #[test]
-    fn without_ffmpeg_a_matching_byte_hash_is_enough() {
+    fn without_a_hasher_a_matching_byte_hash_is_enough() {
         let mut c = empty_library();
         let (dir, sha) = one_file("phone");
         let doc = with_sha256(one_encoding_bundle("sent-md5", "m1", 0.5, "computed:x@1"), &sha);
@@ -1410,7 +1411,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// Bytes that disagree are corrupt on every host, ffmpeg or not -- and
+    /// Bytes that disagree are corrupt on every host, hasher or not -- and
     /// nothing is written for them.
     #[test]
     fn a_byte_hash_that_disagrees_is_corrupt() {
@@ -1444,10 +1445,10 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// Where ffmpeg is, both are asked: matching bytes do not excuse an
+    /// Where there is a hasher, both are asked: matching bytes do not excuse an
     /// `audio_md5` the file does not have.
     #[test]
-    fn with_ffmpeg_audio_md5_is_still_checked_after_the_bytes() {
+    fn with_a_hasher_audio_md5_is_still_checked_after_the_bytes() {
         let mut c = empty_library();
         let (dir, sha) = one_file("both");
         let doc = with_sha256(one_encoding_bundle("not-its-md5", "m1", 0.5, "computed:x@1"), &sha);

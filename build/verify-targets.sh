@@ -235,7 +235,7 @@ if [ -n "$RELS" ]; then
     # it, and a native run never sets it.
     run_suite "B" env MSYS_NO_PATHCONV=1 docker run --rm --platform linux/arm64 \
         -v "$DROOT":/w -w /w debian:bookworm-slim sh -c \
-        "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq --no-install-recommends libasound2 ffmpeg >/dev/null 2>&1; bad=0; for b in $RELS; do LEMPI_EMULATED=1 ./\$b --show-output || bad=1; done; exit \$bad" \
+        "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq --no-install-recommends libasound2 >/dev/null 2>&1; bad=0; for b in $RELS; do LEMPI_EMULATED=1 ./\$b --show-output || bad=1; done; exit \$bad" \
         || fail=$((fail+1))
 fi
 

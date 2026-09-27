@@ -38,7 +38,8 @@ this part — see the caveat below):
 2. Cross-compile `relink` (`player/src/bin/relink.rs`, `[SPEC012]`) for
    aarch64 and run it on `bose` against the staged db and `/srv/library/audio`
    — it rebinds every row by content hash rather than the dev-host path baked
-   into the db, and needs `ffmpeg` on `PATH` to do it.
+   into the db. It needed `ffmpeg` on `PATH` to do it until 2026-09-27; the
+   hash is compiled in since `[SPEC-RLK-152]`.
 3. Install the relinked db as `/var/lempi/listener.db` — C, not B, per
    `[IMPL-BOS-078]` — as the deliberate "swap it in" step.
 
