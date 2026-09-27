@@ -99,6 +99,7 @@ pub fn scan(db: &mut Connection, paths: &[PathBuf]) -> Result<FoundReport, Strin
     rep.retired = retire_outside_music(db)?;
     rep.hashed = hash_unhashed(db)?;
     rep.retired += retire_copies(db)?;
+    rep.retired += retire_deleted(db)?;
     let paths: Vec<PathBuf> =
         paths.iter().filter(|p| in_music_folder(&p.to_string_lossy())).cloned().collect();
     let paths = &paths[..];
@@ -175,6 +176,41 @@ fn retire_copies(db: &mut Connection) -> Result<usize, String> {
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(ids.len())
+}
+
+/// Tags-only entries whose file has been deleted, while the folder it was in
+/// is still there. The folder is the guard: an SD card taken out makes every
+/// file on it look deleted, and those entries must survive until it is back.
+/// Found 2026-09-26, when seven files were deleted from the Moto G's
+/// `Music/Children's/` and their passages were still there to be chosen.
+fn retire_deleted(db: &mut Connection) -> Result<usize, String> {
+    let rows: Vec<(i64, String)> = {
+        let mut q = db
+            .prepare("SELECT file_id, path FROM files WHERE audio_md5 LIKE 'sha256:%'")
+            .map_err(|e| e.to_string())?;
+        let v = q
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .collect();
+        v
+    };
+    let gone: Vec<(i64, String)> = rows
+        .into_iter()
+        .filter(|(_, p)| {
+            let p = Path::new(p);
+            !p.exists() && p.parent().is_some_and(|d| d.is_dir())
+        })
+        .collect();
+    let tx = db.transaction().map_err(|e| e.to_string())?;
+    for (id, path) in &gone {
+        let _ = tx.execute("DELETE FROM file_tags WHERE file_id = ?1", params![id]);
+        tx.execute("DELETE FROM passages WHERE file_id = ?1", params![id]).map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM files WHERE file_id = ?1", params![id]).map_err(|e| e.to_string())?;
+        tracing::info!("found: retired {path}, which has been deleted");
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(gone.len())
 }
 
 /// Tags-only entries outside a `Music` folder, with their passages. Only
@@ -420,6 +456,37 @@ mod tests {
         assert_eq!(left, vec!["realmd5"], "the named file is kept, its copy retired");
         let passages: i64 = c.query_row("SELECT count(*) FROM passages", [], |r| r.get(0)).unwrap();
         assert_eq!(passages, 0, "and the copy's passage with it");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A deleted file's tags-only entry is retired while its folder is there,
+    /// and kept while the whole folder is gone, as with an SD card taken out.
+    #[test]
+    fn a_deleted_file_is_retired_but_not_one_on_a_missing_card() {
+        let d = dir("deleted");
+        let kept = d.join("kept.wav");
+        wav(&kept, 13);
+        let mut c = library();
+        crate::db::ensure_sha256_column(&c);
+        for (i, path) in [d.join("deleted.wav"), d.join("card-out").join("song.wav")].iter().enumerate() {
+            c.execute(
+                "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen,sha256) \
+                 VALUES (?1, ?2, 1, 1.0, 'wav', 500, 't', 't', ?1)",
+                params![format!("sha256:{i}"), path.to_string_lossy()],
+            )
+            .unwrap();
+        }
+        let r = scan(&mut c, &[kept]).unwrap();
+        assert_eq!(r.retired, 1, "{r:?}");
+        let left: Vec<String> = c
+            .prepare("SELECT path FROM files WHERE audio_md5 LIKE 'sha256:_'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(left.len(), 1, "{left:?}");
+        assert!(left[0].contains("card-out"), "the entry on a missing folder is kept: {left:?}");
         std::fs::remove_dir_all(&d).ok();
     }
 
