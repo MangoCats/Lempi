@@ -771,6 +771,9 @@ pub struct StagedReport {
     pub replaced: usize,
     /// A rewritten file whose replacement the system refused, with why.
     pub not_replaced: Vec<String>,
+    /// The same refusals, as what a host needs to ask the system's leave and
+    /// write the replacement itself `[SPEC-PL-098]`.
+    pub refused_replacements: Vec<RefusedReplacement>,
     /// Files the phone had found for itself and held as tags-only, now made
     /// whole where they lie with what Vipunen sent `[REQ-AND-260]`.
     pub upgraded: usize,
@@ -800,6 +803,15 @@ pub struct StagedReport {
     pub covers: usize,
     /// Cover files absent or not matching their byte hash: not stored.
     pub bad_covers: Vec<String>,
+}
+
+/// A replacement the system refused: the phone's copy, the staged file that
+/// should replace it, and that file's byte hash `[SPEC-PL-098]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RefusedReplacement {
+    pub held: String,
+    pub staged: String,
+    pub sha256: String,
 }
 
 /// What [`import_releases`] did.
@@ -1069,6 +1081,7 @@ pub fn import_staged(
         total.reused += r.reused;
         total.rows_written += r.rows_written;
         total.not_replaced.extend(r.not_replaced);
+        total.refused_replacements.extend(r.refused_replacements);
         total.corrupt.extend(r.corrupt);
         total.missing.extend(r.missing);
         total.unverifiable.extend(r.unverifiable);
@@ -1264,7 +1277,14 @@ fn replace_if_rewritten(
     };
     // A held file that is not where the catalogue says is relink's to find
     // `[SPEC-RLK-090]`, not this import's to write in its absence.
-    if !staged.is_file() || !held.is_file() || sha256_file(held).ok().as_deref() == Some(want) {
+    if !staged.is_file() || !held.is_file() {
+        rep.already += 1;
+        return Ok(());
+    }
+    if sha256_file(held).ok().as_deref() == Some(want) {
+        // Already these bytes -- perhaps written since by the host, with the
+        // system's leave `[SPEC-PL-098]`. The catalogue follows the file.
+        record_bytes(db, md5, want, held)?;
         rep.already += 1;
         return Ok(());
     }
@@ -1279,6 +1299,11 @@ fn replace_if_rewritten(
     if let Err(why) = replaced {
         let _ = std::fs::remove_file(&part);
         rep.not_replaced.push(format!("{rel}: {why}"));
+        rep.refused_replacements.push(RefusedReplacement {
+            held: held.to_string_lossy().into_owned(),
+            staged: staged.to_string_lossy().into_owned(),
+            sha256: want.to_string(),
+        });
         return Ok(());
     }
     let meta = std::fs::metadata(held).map_err(|e| format!("cannot stat {}: {e}", held.display()))?;
@@ -1294,6 +1319,32 @@ fn replace_if_rewritten(
     )
     .map_err(|e| e.to_string())?;
     rep.replaced += 1;
+    Ok(())
+}
+
+/// The catalogue's record of a file's bytes, made to agree with the file at
+/// `held`, whose bytes are `sha256`. Nothing is written when it agrees already.
+fn record_bytes(db: &Connection, md5: &str, sha256: &str, held: &Path) -> Result<(), String> {
+    let recorded: Option<String> = db
+        .query_row("SELECT sha256 FROM files WHERE audio_md5 = ?1", params![md5], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?
+        .flatten();
+    if recorded.as_deref() == Some(sha256) {
+        return Ok(());
+    }
+    let meta = std::fs::metadata(held).map_err(|e| format!("cannot stat {}: {e}", held.display()))?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    db.execute(
+        "UPDATE files SET sha256 = ?1, size_bytes = ?2, mtime = ?3, last_seen = ?4 WHERE audio_md5 = ?5",
+        params![sha256, meta.len() as i64, mtime, now_iso(), md5],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -2230,6 +2281,32 @@ mod tests {
             .query_row("SELECT count(*) FROM passages WHERE boundary_src = 'found:tags'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(tags_only, 1, "its tags-only entry is left as it was");
+        std::fs::remove_dir_all(&s.root).ok();
+    }
+
+    /// `[SPEC-PL-098]`: a phone copy the host has since written with the
+    /// system's leave holds Vipunen's bytes while its row still records the
+    /// old ones. The import finds it held, and the row follows the file.
+    #[test]
+    fn a_copy_already_rewritten_brings_its_row_up_to_date() {
+        let new: &[u8] = b"vipunen's rewritten file";
+        let s = stage("follows", &[("md5-1", "a.mp3", Some(new), Some(sha_of(new)))]);
+        let held = s.music.join("a.mp3");
+        std::fs::write(&held, new).unwrap();
+        let mut c = empty_library();
+        crate::db::ensure_sha256_column(&c);
+        c.execute(
+            "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen,sha256) \
+             VALUES ('md5-1',?1,3,1.0,'mp3',1000,'t','t',?2)",
+            params![held.to_string_lossy(), sha_of(b"old")],
+        )
+        .unwrap();
+        let r = import_staged(&mut c, &s.staging, &s.music, None).unwrap();
+        assert_eq!((r.already, r.replaced, r.refused_replacements.len()), (1, 0, 0), "{r:?}");
+        let (sha, size): (String, i64) = c
+            .query_row("SELECT sha256, size_bytes FROM files WHERE audio_md5='md5-1'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!((sha, size), (sha_of(new), new.len() as i64));
         std::fs::remove_dir_all(&s.root).ok();
     }
 

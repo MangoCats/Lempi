@@ -140,6 +140,15 @@ is not; both held is left alone and logged. Absent where the library was never
 re-keyed; ignored by an older receiver, which is no worse off than before.
 *Added 2026-09-27, when the phone held 60 of the 61 keys the re-key retired.*
 
+**`[SPEC-PL-098]` A replacement the system refuses is done with the user's leave.** Android lets an app overwrite only
+files it created, so replacing a rewritten file the phone found for itself `[REQ-AND-250]` fails with `EPERM`. The
+importer reports each refusal in full: the phone's copy, the staged file and its byte hash. The app finds each copy in
+the media store and asks leave in Android's own dialog (`MediaStore.createWriteRequest`), keeping staging meanwhile.
+Allowed, it writes each replacement through the media store, which honours that leave, and imports the same bundle
+again. That checks the bytes, and brings the catalogue's record up to date, since a copy already holding the payload's
+bytes has its row made to agree. Refused, nothing changes. Either way staging is removed. *Measured 2026-09-27 on the
+Moto G:* one file, both answers, as described in `[REQ-AND-250]`.
+
 ---
 
 ## 6. Open

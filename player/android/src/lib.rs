@@ -272,6 +272,18 @@ pub fn stop() -> Result<(), LempiError> {
     .map_err(LempiError::from)
 }
 
+/// A replacement Android refused -- a file the app did not create -- as the
+/// app needs it to ask the user's leave and write it `[SPEC-PL-098]`.
+#[derive(uniffi::Record)]
+pub struct RefusedReplacement {
+    /// The phone's copy, where it lies.
+    pub held: String,
+    /// The staged file, verified, that should replace it.
+    pub staged: String,
+    /// Its byte hash.
+    pub sha256: String,
+}
+
 /// What became of a bundle, for the import screen `[REQ-AND-230]`.
 #[derive(uniffi::Record)]
 pub struct ImportSummary {
@@ -297,6 +309,9 @@ pub struct ImportSummary {
     pub conflicts: Vec<String>,
     pub unsafe_paths: Vec<String>,
     pub rows_written: u32,
+    /// Replacements the system refused, for the app to ask leave for and
+    /// write itself `[SPEC-PL-098]`.
+    pub refused_replacements: Vec<RefusedReplacement>,
     /// Releases stored, and their cover images `[SPEC-PL-105]`.
     pub releases: u32,
     pub covers: u32,
@@ -351,6 +366,11 @@ pub fn import_bundle(library: String, staging: String, music_root: String) -> Re
         conflicts: s.conflicts,
         unsafe_paths: s.unsafe_paths,
         rows_written: n(s.rows_written),
+        refused_replacements: s
+            .refused_replacements
+            .into_iter()
+            .map(|r| RefusedReplacement { held: r.held, staged: r.staged, sha256: r.sha256 })
+            .collect(),
         releases: n(s.releases),
         covers: n(s.covers),
         bad_covers: s.bad_covers,

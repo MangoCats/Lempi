@@ -1,6 +1,7 @@
 package io.github.mangocats.lempi
 
 import android.app.Activity
+import android.content.ContentUris
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -10,10 +11,12 @@ import android.os.Looper
 import android.os.StatFs
 import android.provider.OpenableColumns
 import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.widget.ScrollView
 import android.widget.TextView
 import io.github.mangocats.lempi.ffi.ImportSummary
 import io.github.mangocats.lempi.ffi.LempiException
+import io.github.mangocats.lempi.ffi.RefusedReplacement
 import io.github.mangocats.lempi.ffi.importBundle
 import java.io.File
 import java.util.zip.ZipInputStream
@@ -36,6 +39,14 @@ import java.util.zip.ZipInputStream
 class ImportActivity : Activity() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var log: TextView
+
+    /**
+     * A bundle kept staged while the user is asked for leave to replace files
+     * the app did not create [SPEC-PL-098]: the staging folder, and each
+     * refused replacement with the media-store item it is to be written to.
+     */
+    private var pendingStaging: File? = null
+    private var pending: List<Pair<RefusedReplacement, Uri>> = emptyList()
 
     override fun onCreate(saved: Bundle?) {
         super.onCreate(saved)
@@ -60,6 +71,10 @@ class ImportActivity : Activity() {
 
     @Deprecated("Activity's own result handling; this app has no AndroidX")
     override fun onActivityResult(code: Int, result: Int, data: Intent?) {
+        if (code == REQ_WRITE) {
+            writeGranted(result == RESULT_OK)
+            return
+        }
         val uri = data?.data
         if (result != RESULT_OK || uri == null) {
             finish()
@@ -70,10 +85,14 @@ class ImportActivity : Activity() {
 
     private fun say(line: String) = main.post { log.append(line + "\n") }
 
-    /** Stage on a worker thread, import, report; staging is always removed. */
+    /**
+     * Stage on a worker thread, import, report. Staging is removed afterwards,
+     * unless the user is being asked for leave to replace files with it.
+     */
     private fun importWith(stageInto: (File) -> Unit) {
         Thread({
             val staging = File(cacheDir, "import-${System.currentTimeMillis()}")
+            var keep = false
             try {
                 say("Unpacking…")
                 staging.mkdirs()
@@ -88,6 +107,7 @@ class ImportActivity : Activity() {
                 val r = importBundle(File(filesDir, "library.db").path, staging.path, music.path)
                 report(r)
                 if (r.imported > 0u || r.reused > 0u || r.replaced > 0u || r.upgraded > 0u || r.rekeyed > 0u || r.covers > 0u) reload()
+                keep = askToReplace(staging, r.refusedReplacements)
             } catch (e: NoRoom) {
                 say("\nNot imported, and nothing changed: ${e.message}")
             } catch (e: LempiException) {
@@ -95,9 +115,87 @@ class ImportActivity : Activity() {
             } catch (e: Exception) {
                 say("\nImport failed: $e")
             } finally {
-                staging.deleteRecursively()
+                if (!keep) staging.deleteRecursively()
             }
         }, "lempi-import").start()
+    }
+
+    /**
+     * [SPEC-PL-098]: Android will not let the app replace a file it did not
+     * create -- every song it found on the phone -- but the user can allow it,
+     * item by item, in the system's own dialog. Each refused file is found in
+     * the media store; if all are, the dialog is shown and staging kept for
+     * [writeGranted]. Returns whether it was.
+     */
+    private fun askToReplace(staging: File, refused: List<RefusedReplacement>): Boolean {
+        if (refused.isEmpty()) return false
+        val found = refused.mapNotNull { r -> mediaUri(r.held)?.let { r to it } }
+        if (found.size < refused.size) {
+            say("\n${refused.size - found.size} file(s) could not be found in the phone's media store, so leave to replace them cannot be asked.")
+        }
+        if (found.isEmpty()) return false
+        pendingStaging = staging
+        pending = found
+        val request = MediaStore.createWriteRequest(contentResolver, found.map { it.second })
+        main.post {
+            say("\nAsking leave to replace ${found.size} file(s) Lempi did not create…")
+            @Suppress("DEPRECATION")
+            startIntentSenderForResult(request.intentSender, REQ_WRITE, null, 0, 0, 0)
+        }
+        return true
+    }
+
+    /** The media-store item for a file path, on whichever volume holds it. */
+    private fun mediaUri(path: String): Uri? {
+        for (volume in MediaStore.getExternalVolumeNames(this)) {
+            val base = MediaStore.Audio.Media.getContentUri(volume)
+            @Suppress("DEPRECATION")
+            contentResolver.query(base, arrayOf(MediaStore.MediaColumns._ID),
+                "${MediaStore.MediaColumns.DATA} = ?", arrayOf(path), null)?.use { c ->
+                if (c.moveToFirst()) return ContentUris.withAppendedId(base, c.getLong(0))
+            }
+        }
+        return null
+    }
+
+    /**
+     * The user's answer. Allowed: each replacement is written through the
+     * media store, which honours the leave just given, and the same bundle is
+     * imported again, which checks the bytes and brings the catalogue up to
+     * date. Refused: nothing changes. Staging is removed either way.
+     */
+    private fun writeGranted(allowed: Boolean) {
+        val staging = pendingStaging ?: return
+        val items = pending
+        pendingStaging = null
+        pending = emptyList()
+        if (!allowed) {
+            say("Not allowed, so those files are left as they were.")
+            staging.deleteRecursively()
+            return
+        }
+        Thread({
+            try {
+                var written = 0
+                for ((r, uri) in items) {
+                    contentResolver.openOutputStream(uri, "wt")?.use { out ->
+                        File(r.staged).inputStream().use { it.copyTo(out) }
+                        written++
+                    } ?: say("  • could not open ${r.held} for writing")
+                }
+                say("Replaced with your leave: $written. Checking them…")
+                val music = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "Lempi")
+                val again = importBundle(File(filesDir, "library.db").path, staging.path, music.path)
+                val still = again.refusedReplacements.size
+                say(if (still == 0) "Every replaced file is Vipunen's, and Lempi's record of it agrees."
+                    else "$still file(s) are still not Vipunen's bytes.")
+                reload()
+            } catch (e: Exception) {
+                say("\nReplacing failed: $e")
+            } finally {
+                staging.deleteRecursively()
+            }
+        }, "lempi-replace").start()
     }
 
     private fun report(r: ImportSummary) {
@@ -279,6 +377,7 @@ class ImportActivity : Activity() {
         const val SCAN = "io.github.mangocats.lempi.SCAN"
         private const val REQ_ZIP = 1
         private const val REQ_FOLDER = 2
+        private const val REQ_WRITE = 3
         /** Room kept free beyond what a step needs, for the database and the system. */
         private const val MARGIN = 64L * 1_000_000
     }
