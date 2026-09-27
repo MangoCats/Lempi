@@ -16,9 +16,10 @@ Two bridges make it work, both verified before writing:
   identity   MuLibPlay's files.sig is SHA3-224 of the whole file -- the fragile
              scheme SPEC006 replaces, and useless as audio_md5. But the local
              library is byte-identical to the Pi's (38 of 40 sampled), so
-             sig -> local path -> ffmpeg -> audio_md5 bridges them. The ffmpeg
-             route matches Essentia's md5_encoded exactly at ~70 ms/file,
-             against 27 s for a full extraction.
+             sig -> local path -> audio_md5 bridges them. Written with
+             ffmpeg, which matched Essentia's md5_encoded exactly at ~70
+             ms/file; the identity is Symphonia's since 2026-09-26
+             [SPEC-RLK-150].
 
   boundaries MuLibPlay stores frames; Lempi stores milliseconds. 44.1 kHz
              verified against ffprobe to within 0.01% on sampled files, and
@@ -37,17 +38,16 @@ import math
 import os
 import re
 import sqlite3
-import subprocess
 import sys
 import time
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# `ffmpeg_generator()` only `[SPEC-RLK-150]`. This file keeps its own
-# `audio_md5` -- a duplicate of `ingest_folder`'s and a pre-existing one -- so
-# importing the generator rather than copying it is the direction that reduces
-# the copies rather than adding a third.
+# `audio_md5()` and `md5_generator()` both, since 2026-09-26: the identity
+# hash has one implementation, Lempi's `hash_audio` `[SPEC-RLK-150]`. This file
+# kept its own ffmpeg copy until then.
 import ingest_folder  # noqa: E402
+from ingest_folder import audio_md5  # noqa: E402
 
 SR = 44100.0
 SRC = "inherited:mulib"
@@ -98,15 +98,6 @@ DEAD_FIELDS = ["tempo", "intensity", "keyMood", "darkLight", "genre", "themes",
                "quality", "jts", "popularity", "venue", "lyrics", "profanity",
                "ukChart", "usChart", "usChartPeak"]
 
-
-def audio_md5(path):
-    """Essentia's md5_encoded, via ffmpeg. ~70 ms vs ~27 s for extraction."""
-    r = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-vn", "-c:a", "copy",
-                        "-f", "md5", "-"], capture_output=True, text=True)
-    if r.returncode != 0:
-        return None
-    m = re.search(r"MD5=([0-9a-f]{32})", r.stdout)
-    return m.group(1) if m else None
 
 
 def build_sig_index(roots):
@@ -172,7 +163,7 @@ def main():
                 "first_seen,last_seen,md5_generator) VALUES (?,?,?,?,?,?,?,?,?)",
                 (md5, path, st.st_size, st.st_mtime,
                  os.path.splitext(path)[1].lstrip(".").lower(), dur, now, now,
-                 ingest_folder.ffmpeg_generator()))
+                 ingest_folder.md5_generator()))
             file_map[r["fileId"]] = cur.lastrowid
         except sqlite3.IntegrityError:      # same audio, two containers
             fid = out.execute("SELECT file_id FROM files WHERE audio_md5=?", (md5,)).fetchone()[0]

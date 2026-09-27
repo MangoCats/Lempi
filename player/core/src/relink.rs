@@ -159,91 +159,23 @@ pub fn walk(root: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// The MD5 of a file's encoded audio stream, container and tags excluded.
+/// **How this crate computes `audio_md5`: it does not.** The host passes a
+/// hasher in `[SPEC-RLK-150]`.
 ///
-/// **Via ffmpeg, because ffmpeg wrote the values we hold `[SPEC-RLK-080]`.**
-/// Not because it is more correct: `audio_md5` is Essentia's `md5_encoded`,
-/// and Essentia's audio I/O is FFmpeg/libav, so the stored corpus is an
-/// ffmpeg artefact and agreeing with it is close to a tautology.
+/// The identity hash is the MD5 of a file's encoded packets as a demuxer yields
+/// them, and a demuxer is what this crate may not reach `[GDE-AND-045]`. Until
+/// 2026-09-26 it shelled out to ffmpeg here, because ffmpeg had written the
+/// incumbent values `[SPEC-RLK-080]`; the library has since been re-keyed to the
+/// player's own Symphonia reading (`lempi_player::identity`), and ffmpeg's is
+/// no longer the definition anywhere.
 ///
-/// Symphonia is equally deterministic and equally self-consistent; it simply
-/// stops at the last complete decodable frame where ffmpeg carries on to the
-/// end of the file `[SPEC-RLK-085]`. On ~60 of 5,705 files here that trailing
-/// remnant exists and the two part company. Had Symphonia written the
-/// references, ffmpeg would be the one failing.
-///
-/// So this is not a free choice. It must stay the tool that produced the
-/// incumbent values, and changing it means regenerating every hash at once
-/// `[SPEC-RLK-086]`.
-pub fn hash_encoded(path: &Path) -> Result<String, String> {
-    let out = std::process::Command::new("ffmpeg")
-        .args(["-v", "error", "-i"])
-        .arg(path)
-        .args(["-vn", "-c:a", "copy", "-f", "md5", "-"])
-        .output()
-        .map_err(|e| format!("ffmpeg not available: {e}"))?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    // `MD5=<hex>`; anything else means ffmpeg could not read the stream, and
-    // the stderr it produced is the only useful thing to say about it.
-    match text.trim().rsplit_once('=') {
-        Some((_, hex)) if hex.len() == 32 => Ok(hex.to_string()),
-        _ => Err(String::from_utf8_lossy(&out.stderr).trim().to_string()),
-    }
-}
-
-/// `ffmpeg -version`'s first line, asked once per process.
-///
-/// Cached because both questions below want it and neither wants to pay for a
-/// second subprocess. The one consequence worth stating: ffmpeg installed
-/// *during* a run is not noticed. Nothing here runs long enough for that to
-/// matter -- a relink walk is one shot -- and the alternative is spawning a
-/// process per file to learn something that cannot change usefully mid-walk.
-fn version_line() -> Option<&'static str> {
-    static LINE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    LINE.get_or_init(|| {
-        let out = std::process::Command::new("ffmpeg").arg("-version").output().ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        Some(String::from_utf8_lossy(&out.stdout).lines().next()?.trim().to_string())
-    })
-    .as_deref()
-}
-
-/// Is the hasher present? Checked once, so a missing ffmpeg is one clear line
-/// rather than 5,705 identical failures.
-pub fn hasher_available() -> bool {
-    version_line().is_some()
-}
-
-/// **Which hasher produced a value, as `name@version`** `[SPEC-RLK-086]`,
-/// `[SPEC-RLK-150]`'s third precondition.
-///
-/// `audio_md5` is not a standard. It is "whatever this demuxer did", and
-/// `[SPEC-RLK-080]` establishes that the incumbent 5,705 values are an
-/// Essentia/libav artefact rather than a specified quantity. That makes an
-/// ffmpeg upgrade able, in principle, to orphan rows -- and nothing downstream
-/// would report it as anything but missing music, which is the failure this
-/// records against.
-///
-/// **The whole version token, not a truncated one.** `8.0-full_build-www.gyan.dev`
-/// and a distribution's `5.1.9-0+deb12u1` differ in exactly the build detail
-/// that would explain a disagreement, so trimming to `8.0` would discard the
-/// evidence this column exists to keep. `[SPEC-RLK-088]` compared 5.1.9 against
-/// 8.0 across architectures and found none -- recording the string is what lets
-/// the *next* such comparison be made from the database instead of from memory.
-///
-/// `tools/ingest_folder.py::ffmpeg_generator` computes the identical string on
-/// Vipunen's side; the two are separate because Lempi and Vipunen share a
-/// schema and no code `[GDE-ARC-018]`. Verified equal on this machine
-/// 2026-09-22: both `ffmpeg@8.0-full_build-www.gyan.dev`.
-///
-/// `None` where ffmpeg cannot be asked, and a `None` is written as `NULL`
-/// rather than as a guess.
-pub fn hasher_generator() -> Option<String> {
-    // "ffmpeg version 8.0-full_build-www.gyan.dev Copyright (c) 2000-2025 ..."
-    let v = version_line()?.strip_prefix("ffmpeg version ")?.split_whitespace().next()?;
-    Some(format!("ffmpeg@{v}"))
+/// `generator` is what the value is recorded as in `files.md5_generator`
+/// `[SPEC-SC-038]` -- carried with the function, so a row can only ever name the
+/// hasher that actually produced it.
+#[derive(Clone, Copy, Debug)]
+pub struct Hasher {
+    pub hash: fn(&Path) -> Result<String, String>,
+    pub generator: &'static str,
 }
 
 #[cfg(test)]
@@ -356,26 +288,4 @@ mod tests {
         assert!(!is_audio(Path::new("/x/notes")));
     }
 
-    /// `[SPEC-RLK-150]` precondition 3. Two claims, and the second is the one
-    /// that matters: the string must *agree with* `hasher_available`, so a
-    /// machine that can hash always records what hashed, and one that cannot
-    /// records nothing rather than a guess.
-    ///
-    /// Deliberately not asserting a version. This runs on Windows 8.0, on the
-    /// Pi's 5.1.9 and in a Debian container, and pinning any of those would be
-    /// testing the build machine `[SPEC-RLK-088]`.
-    #[test]
-    fn the_hasher_names_itself_and_its_version_or_says_nothing() {
-        let g = hasher_generator();
-        assert_eq!(g.is_some(), hasher_available(),
-                   "a hasher that can run must be nameable, and one that cannot must not be named");
-        if let Some(g) = g {
-            let (name, version) = g.split_once('@').expect("the form is name@version");
-            assert_eq!(name, "ffmpeg");
-            assert!(!version.is_empty(), "a version of nothing is not a version");
-            // The whole token, build suffix and all: it is the part that would
-            // explain a disagreement, so it must not be trimmed away.
-            assert!(!version.contains(char::is_whitespace), "one token, got {version:?}");
-        }
-    }
 }

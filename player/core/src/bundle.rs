@@ -70,9 +70,9 @@ pub enum Landed {
     Unverifiable { why: String },
 }
 
-/// Recomputes `audio_md5` from a file: `relink::hash_encoded` wherever ffmpeg
-/// is, and absent on a host without it.
-type Md5Hasher = fn(&Path) -> Result<String, String>;
+/// Recomputes `audio_md5` from a file: the host's, absent on a host that
+/// computes no identity hash `[REQ-AND-270]`.
+type Md5Hasher = crate::relink::Hasher;
 
 /// The SHA-256 of a file's bytes, lower-case hex `[SPEC-PL-087]`.
 ///
@@ -274,23 +274,11 @@ fn fade_curve<'a>(o: &'a Value, k: &str) -> &'a str {
 /// separate relink pass is needed for a bundle.
 ///
 /// Verified two ways where it can be `[SPEC-PL-087]`: the bytes against the
-/// payload's `sha256` when it carries one, and `audio_md5` recomputed wherever
-/// ffmpeg is. A phone has no ffmpeg, so there the byte hash is the check
-/// `[REQ-AND-230]`, and a file with neither is reported, never written.
+/// payload's `sha256` when it carries one, and `audio_md5` recomputed by
+/// `md5_hasher` when the host passes one. A phone passes none
+/// `[REQ-AND-270]`, so there the byte hash is the check `[REQ-AND-230]`, and a
+/// file with neither is reported, never written.
 pub fn import(
-    db: &mut Connection,
-    doc: &Value,
-    body: &str,
-    audio_root: &Path,
-    apply: bool,
-) -> Result<Report, String> {
-    let md5 = crate::relink::hasher_available().then_some(crate::relink::hash_encoded as Md5Hasher);
-    import_with(db, doc, body, audio_root, apply, md5)
-}
-
-/// [`import`], told whether `audio_md5` can be recomputed here -- so a test
-/// can be the phone on a machine that has ffmpeg.
-fn import_with(
     db: &mut Connection,
     doc: &Value,
     body: &str,
@@ -349,13 +337,11 @@ fn import_bound(
 
     let tx = db.transaction().map_err(|e| e.to_string())?;
     let now = now_iso();
-    // Asked once for the whole import, not once per file. Every row this run
-    // writes was verified by the same hasher a moment earlier, so one answer
-    // is the true one for all of them -- and a per-row call would be a
-    // subprocess per file to learn a constant `[SPEC-RLK-150]`. Where nothing
-    // here recomputed `audio_md5`, the value is the sender's and its hasher
-    // unknown: `NULL`, not this host's ffmpeg, if it has one.
-    let generator = md5_hasher.and_then(|_| crate::relink::hasher_generator());
+    // Every row this run writes was verified by the same hasher a moment
+    // earlier, so its name is the true one for all of them `[SPEC-RLK-150]`.
+    // Where nothing here recomputed `audio_md5`, the value is the sender's and
+    // its hasher unknown: `NULL`, not a guess.
+    let generator = md5_hasher.map(|h| h.generator);
 
     for e in doc.get("encodings").and_then(|v| v.as_array()).unwrap_or(&empty) {
         let md5 = str_of(e, "audio_md5");
@@ -419,13 +405,13 @@ fn import_bound(
             }
         }
         // Then `audio_md5`, with the hasher relink already uses -- one
-        // implementation `[GDE-FBD-040]`, and the one that produced the
-        // incumbent values `[SPEC-RLK-086]`. Still asked where the bytes
+        // implementation `[GDE-FBD-040]`, and the one the library is keyed
+        // by `[SPEC-RLK-150]`. Still asked where the bytes
         // matched: it is the identity the row is keyed on, and a sender whose
         // `audio_md5` disagrees with its own file is worth catching here.
         match md5_hasher {
-            Some(hash) => {
-                let found = match hash(&path) {
+            Some(hasher) => {
+                let found = match (hasher.hash)(&path) {
                     Ok(h) => h,
                     Err(e) => {
                         rep.outcomes.push((md5.clone(), Landed::Corrupt { expected: md5, found: e }));
@@ -728,29 +714,6 @@ fn safe_rel(rel: &str) -> Option<PathBuf> {
     (!out.as_os_str().is_empty()).then_some(out)
 }
 
-/// Import a bundle unpacked into `staging` -- its `payload.json`, and its audio
-/// under `audio/` -- into the library, placing its audio under `music_root`
-/// `[REQ-AND-210]`.
-///
-/// **Verified before it is placed**, not after. Every staged file is checked
-/// against the byte hash Vipunen carried `[REQ-AND-230]` while it is still in
-/// private staging, so a file that arrived damaged never reaches shared
-/// storage, where other apps would find it. Only then is it copied into the
-/// music folder, and [`import`] binds it there, checking it again.
-///
-/// **Never duplicates** `[REQ-AND-240]`. An encoding the library holds already
-/// is not copied, and a byte-identical file already at its destination is
-/// bound rather than copied beside itself. A *different* file at the
-/// destination is left alone and reported: this does not overwrite a file it
-/// did not write.
-///
-/// The caller removes `staging` afterwards; this reads it and writes nothing
-/// there.
-pub fn import_staged(db: &mut Connection, staging: &Path, music_root: &Path) -> Result<StagedReport, String> {
-    let md5 = crate::relink::hasher_available().then_some(crate::relink::hash_encoded as Md5Hasher);
-    import_staged_with(db, staging, music_root, md5)
-}
-
 /// The payload files a staged bundle carries, in order: `payload.json`, or
 /// `payload-001.json`, `payload-002.json`, ... when it was written in parts
 /// `[SPEC-PL-095]`.
@@ -784,7 +747,28 @@ fn read_payload(path: &Path) -> Result<(String, Value), String> {
     Ok((body, doc))
 }
 
-fn import_staged_with(
+/// Import a bundle unpacked into `staging` -- its `payload.json`, and its audio
+/// under `audio/` -- into the library, placing its audio under `music_root`
+/// `[REQ-AND-210]`.
+///
+/// **Verified before it is placed**, not after. Every staged file is checked
+/// against the byte hash Vipunen carried `[REQ-AND-230]` while it is still in
+/// private staging, so a file that arrived damaged never reaches shared
+/// storage, where other apps would find it. Only then is it copied into the
+/// music folder, and [`import`] binds it there, checking it again.
+///
+/// **Never duplicates** `[REQ-AND-240]`. An encoding the library holds already
+/// is not copied, and a byte-identical file already at its destination is
+/// bound rather than copied beside itself. A *different* file at the
+/// destination is left alone and reported: this does not overwrite a file it
+/// did not write.
+///
+/// The caller removes `staging` afterwards; this reads it and writes nothing
+/// there.
+///
+/// `md5_hasher` is the host's identity hasher, or `None` on a host that
+/// computes none `[REQ-AND-270]`: then every file needs the byte hash.
+pub fn import_staged(
     db: &mut Connection,
     staging: &Path,
     music_root: &Path,
@@ -902,7 +886,7 @@ fn import_one_payload(
                 rep.unverifiable.push(rel);
                 continue;
             }
-            // A host with ffmpeg: `import` checks audio_md5 once placed.
+            // A host with a hasher: `import` checks audio_md5 once placed.
             place(&staged, &music_root.join(&rel_path), None, &rel, &mut rep)?;
             continue;
         };
@@ -1180,10 +1164,16 @@ mod tests {
         ))
     }
 
-    /// A minimal, real, ffmpeg-decodable audio file -- `hash_encoded` shells
-    /// out to ffmpeg `[SPEC-RLK-080]`, so nothing shorter than an actual
-    /// container it can open will do. WAV rather than a hand-rolled MP3
-    /// frame: no encoder needed, just a 44-byte header ffmpeg reads directly.
+    /// The identity hasher these tests stand in for the host's. This crate
+    /// cannot reach a demuxer `[GDE-AND-045]`, and what is under test here is
+    /// that an import verifies with, and records, whatever it is given -- so
+    /// the bytes' own hash, cut to `audio_md5`'s length, is enough.
+    const TEST_HASHER: Md5Hasher = crate::relink::Hasher {
+        hash: |p| sha256_file(p).map(|h| h[..32].to_string()),
+        generator: "test@1",
+    };
+
+    /// A small audio file for the tests above to import.
     fn write_tiny_wav(path: &std::path::Path) {
         let (sample_rate, num_samples, bits_per_sample, num_channels): (u32, u32, u16, u16) =
             (8000, 100, 16, 1);
@@ -1226,12 +1216,12 @@ mod tests {
         let audio_path = audio_dir.join("a.wav");
         write_tiny_wav(&audio_path);
         // `import()` verifies the payload's claimed audio_md5 against the
-        // real file `[SPEC-DF-070]` -- hash it for real rather than asserting
-        // against a value that would only ever agree with itself.
-        let md5 = crate::relink::hash_encoded(&audio_path).unwrap();
+        // real file `[SPEC-DF-070]` -- hash it rather than asserting against a
+        // value that would only ever agree with itself.
+        let md5 = (TEST_HASHER.hash)(&audio_path).unwrap();
 
         let first = one_encoding_bundle(&md5, "m1", 0.5, "computed:x@1");
-        let rep1 = import(&mut c, &first, "body1", &audio_dir, true).unwrap();
+        let rep1 = import(&mut c, &first, "body1", &audio_dir, true, Some(TEST_HASHER)).unwrap();
         assert!(rep1.refused.is_empty(), "{:?}", rep1.refused);
         assert_eq!(rep1.outcomes, vec![(md5.clone(), Landed::Imported)]);
         let v1: f64 = c
@@ -1246,7 +1236,7 @@ mod tests {
         // Same encoding, a later Vipunen run with an improved (still
         // non-manual) flavor value for the same recording.
         let second = one_encoding_bundle(&md5, "m1", 0.9, "computed:x@2");
-        let rep2 = import(&mut c, &second, "body2", &audio_dir, true).unwrap();
+        let rep2 = import(&mut c, &second, "body2", &audio_dir, true, Some(TEST_HASHER)).unwrap();
         assert!(rep2.refused.is_empty(), "{:?}", rep2.refused);
         assert_eq!(rep2.outcomes, vec![(md5, Landed::Already)],
             "the file itself is unchanged -- Already is correct");
@@ -1269,11 +1259,7 @@ mod tests {
     /// `empty_library()` builds `files` without `md5_generator`, which is
     /// exactly the library this migration exists for -- so this also proves
     /// the `ALTER TABLE` runs and that the pre-existing row beside it is not
-    /// back-annotated. The stored value is compared against
-    /// `hasher_generator()` rather than against a literal: a test asserting
-    /// `ffmpeg@8.0` would fail on the Pi, which is 5.1.9 `[SPEC-RLK-088]`,
-    /// and would be asserting the version of the machine rather than that
-    /// provenance was recorded at all.
+    /// back-annotated.
     #[test]
     fn an_imported_file_records_which_hasher_produced_its_audio_md5() {
         let mut c = empty_library();
@@ -1292,10 +1278,9 @@ mod tests {
         )
         .unwrap();
 
-        let md5 = crate::relink::hash_encoded(&audio_path)
-            .expect("this test needs ffmpeg, as every other import test here does");
+        let md5 = (TEST_HASHER.hash)(&audio_path).unwrap();
         let doc = one_encoding_bundle(&md5, "m1", 0.5, "computed:x@1");
-        let rep = import(&mut c, &doc, "body", &audio_dir, true).unwrap();
+        let rep = import(&mut c, &doc, "body", &audio_dir, true, Some(TEST_HASHER)).unwrap();
         assert!(rep.refused.is_empty(), "{:?}", rep.refused);
 
         let stored: Option<String> = c
@@ -1303,10 +1288,8 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(stored, crate::relink::hasher_generator(),
+        assert_eq!(stored.as_deref(), Some(TEST_HASHER.generator),
             "the importer must record the hasher it actually used");
-        assert!(stored.as_deref().unwrap_or("").starts_with("ffmpeg@"),
-            "ffmpeg is the hasher `[SPEC-RLK-080]`; got {stored:?}");
 
         let older: Option<String> = c
             .query_row("SELECT md5_generator FROM files WHERE audio_md5 = 'older'", [], |r| r.get(0))
@@ -1329,10 +1312,10 @@ mod tests {
         std::fs::create_dir_all(&audio_dir).unwrap();
         let audio_path = audio_dir.join("a.wav");
         write_tiny_wav(&audio_path);
-        let md5 = crate::relink::hash_encoded(&audio_path).unwrap();
+        let md5 = (TEST_HASHER.hash)(&audio_path).unwrap();
 
         let first = one_encoding_bundle(&md5, "m2", 0.5, "computed:x@1");
-        import(&mut c, &first, "body1", &audio_dir, true).unwrap();
+        import(&mut c, &first, "body1", &audio_dir, true, Some(TEST_HASHER)).unwrap();
         // A listener corrects it locally, same as `upsert_recording`'s own
         // fresh-import test would exercise on the first pass.
         c.execute(
@@ -1343,7 +1326,7 @@ mod tests {
         .unwrap();
 
         let second = one_encoding_bundle(&md5, "m2", 0.1, "computed:x@2");
-        import(&mut c, &second, "body2", &audio_dir, true).unwrap();
+        import(&mut c, &second, "body2", &audio_dir, true, Some(TEST_HASHER)).unwrap();
 
         let (v, src): (f64, String) = c
             .query_row(
@@ -1411,7 +1394,7 @@ mod tests {
         let mut c = empty_library();
         let (dir, sha) = one_file("phone");
         let doc = with_sha256(one_encoding_bundle("sent-md5", "m1", 0.5, "computed:x@1"), &sha);
-        let rep = import_with(&mut c, &doc, "body", &dir, true, None).unwrap();
+        let rep = import(&mut c, &doc, "body", &dir, true, None).unwrap();
         assert_eq!(rep.outcomes, vec![("sent-md5".to_string(), Landed::Imported)]);
         let gen: Option<String> = c
             .query_row("SELECT md5_generator FROM files WHERE audio_md5='sent-md5'", [], |r| r.get(0))
@@ -1436,7 +1419,7 @@ mod tests {
         let wrong = format!("{}0", &sha[..63]);
         let wrong = if wrong == sha { format!("{}1", &sha[..63]) } else { wrong };
         let doc = with_sha256(one_encoding_bundle("sent-md5", "m1", 0.5, "computed:x@1"), &wrong);
-        let rep = import_with(&mut c, &doc, "body", &dir, true, None).unwrap();
+        let rep = import(&mut c, &doc, "body", &dir, true, None).unwrap();
         assert_eq!(rep.outcomes, vec![("sent-md5".to_string(), Landed::Corrupt {
             expected: format!("sha256 {wrong}"),
             found: format!("sha256 {sha}"),
@@ -1453,7 +1436,7 @@ mod tests {
         let mut c = empty_library();
         let (dir, _) = one_file("neither");
         let doc = one_encoding_bundle("sent-md5", "m1", 0.5, "computed:x@1");
-        let rep = import_with(&mut c, &doc, "body", &dir, true, None).unwrap();
+        let rep = import(&mut c, &doc, "body", &dir, true, None).unwrap();
         assert!(matches!(rep.outcomes.as_slice(), [(_, Landed::Unverifiable { .. })]),
                 "{:?}", rep.outcomes);
         let n: i64 = c.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
@@ -1468,7 +1451,7 @@ mod tests {
         let mut c = empty_library();
         let (dir, sha) = one_file("both");
         let doc = with_sha256(one_encoding_bundle("not-its-md5", "m1", 0.5, "computed:x@1"), &sha);
-        let rep = import(&mut c, &doc, "body", &dir, true).unwrap();
+        let rep = import(&mut c, &doc, "body", &dir, true, Some(TEST_HASHER)).unwrap();
         assert!(matches!(rep.outcomes.as_slice(), [(_, Landed::Corrupt { .. })]),
                 "{:?}", rep.outcomes);
         std::fs::remove_dir_all(&dir).ok();
@@ -1498,20 +1481,20 @@ mod tests {
         let base = || with_sha256(one_encoding_bundle("md5-l", "m1", 0.5, "computed:x@1"), &sha);
 
         let first = with_lyrics(base(), "old words", "mulibplay", "2026-09-01T00:00:00+00:00");
-        import_with(&mut c, &first, "b", &dir, true, None).unwrap();
+        import(&mut c, &first, "b", &dir, true, None).unwrap();
         assert_eq!(words(&c, "m1"), Some(("old words".into(), "mulibplay".into())));
 
         let stale = with_lyrics(base(), "stale", "mulibplay", "2026-08-01T00:00:00+00:00");
-        import_with(&mut c, &stale, "b", &dir, true, None).unwrap();
+        import(&mut c, &stale, "b", &dir, true, None).unwrap();
         assert_eq!(words(&c, "m1").unwrap().0, "old words", "an older fetch is not news");
 
         let newer = with_lyrics(base(), "new words", "mulibplay", "2026-09-20T00:00:00+00:00");
-        import_with(&mut c, &newer, "b", &dir, true, None).unwrap();
+        import(&mut c, &newer, "b", &dir, true, None).unwrap();
         assert_eq!(words(&c, "m1").unwrap().0, "new words", "a corrected source must arrive");
 
         c.execute("UPDATE lyrics SET source = 'manual' WHERE mbid = 'm1'", []).unwrap();
         let later = with_lyrics(base(), "overwrite?", "mulibplay", "2026-09-24T00:00:00+00:00");
-        let rep = import_with(&mut c, &later, "b", &dir, true, None).unwrap();
+        let rep = import(&mut c, &later, "b", &dir, true, None).unwrap();
         assert_eq!(words(&c, "m1"), Some(("new words".into(), "manual".into())));
         assert_eq!(rep.kept_local, 1);
         std::fs::remove_dir_all(&dir).ok();
@@ -1598,7 +1581,7 @@ mod tests {
             ("md5nohash", "A/nohash.wav", Some(b"unhashed"), None),
         ]);
         let mut c = empty_library();
-        let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
+        let r = import_staged(&mut c, &s.staging, &s.music, None).unwrap();
         assert!(r.refused.is_empty(), "{:?}", r.refused);
         assert_eq!(r.imported, 1, "{r:?}");
         assert_eq!(r.corrupt, vec!["A/bad.wav"]);
@@ -1635,7 +1618,7 @@ mod tests {
         .unwrap();
         std::fs::write(s.music.join("same.wav"), b).unwrap();
         std::fs::write(s.music.join("clash.wav"), b"a file the app did not write").unwrap();
-        let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
+        let r = import_staged(&mut c, &s.staging, &s.music, None).unwrap();
         assert_eq!(r.already, 1, "{r:?}");
         assert!(!s.music.join("held.wav").exists(), "a held encoding is not copied again");
         assert_eq!(r.reused, 1, "{r:?}");
@@ -1662,7 +1645,7 @@ mod tests {
         let x: &[u8] = b"escape";
         let s = stage("unsafe", &[("md5esc", "../outside.wav", Some(x), Some(sha_of(x)))]);
         let mut c = empty_library();
-        let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
+        let r = import_staged(&mut c, &s.staging, &s.music, None).unwrap();
         assert_eq!(r.unsafe_paths, vec!["../outside.wav"]);
         assert!(!s.root.join("outside.wav").exists(), "nothing written outside the music folder");
 
@@ -1675,7 +1658,7 @@ mod tests {
             "recordings":[{"mbid":"m","title":"t","source":"s"}]}"#,
         )
         .unwrap();
-        let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
+        let r = import_staged(&mut c, &s.staging, &s.music, None).unwrap();
         assert!(r.refused.iter().any(|x| x.contains("boundary_src")), "{r:?}");
         assert_eq!(std::fs::read_dir(&s.music).unwrap().count(), 0, "a refused payload places nothing");
         std::fs::remove_dir_all(&s.root).ok();
@@ -1705,7 +1688,7 @@ mod tests {
             )
             .unwrap();
         }
-        let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
+        let r = import_staged(&mut c, &s.staging, &s.music, None).unwrap();
         assert_eq!(r.replaced, 1, "{r:?}");
         assert_eq!(r.already, 1, "{r:?}");
         assert_eq!(r.corrupt, vec!["dmg.wav"], "{r:?}");
@@ -1752,7 +1735,7 @@ mod tests {
             [],
         )
         .unwrap();
-        let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
+        let r = import_staged(&mut c, &s.staging, &s.music, None).unwrap();
         assert_eq!(r.upgraded, 1, "{r:?}");
         assert_eq!(r.imported, 0, "{r:?}");
         assert!(!s.music.join("Artist/song.wav").exists(), "not copied beside itself");
@@ -1791,14 +1774,14 @@ mod tests {
         let broken = two.replace(r#""boundary_src":"x","#, "");
         std::fs::write(s.staging.join("payload-002.json"), &broken).unwrap();
         let mut c = empty_library();
-        let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
+        let r = import_staged(&mut c, &s.staging, &s.music, None).unwrap();
         assert!(r.refused.iter().any(|x| x.starts_with("payload-002.json: ")), "{r:?}");
         let n: i64 = c.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "refused whole: the good first part wrote nothing");
         assert!(!s.music.join("a.wav").exists());
 
         std::fs::write(s.staging.join("payload-002.json"), &two).unwrap();
-        let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
+        let r = import_staged(&mut c, &s.staging, &s.music, None).unwrap();
         assert!(r.refused.is_empty(), "{r:?}");
         assert_eq!(r.imported, 2, "both parts land: {r:?}");
         std::fs::remove_dir_all(&s.root).ok();
@@ -1822,7 +1805,7 @@ mod tests {
             params![format!("sha256:{}", sha_of(claimed)), found.to_string_lossy(), claimed.len() as i64, sha_of(claimed)],
         )
         .unwrap();
-        let r = import_staged_with(&mut c, &s.staging, &s.music, None).unwrap();
+        let r = import_staged(&mut c, &s.staging, &s.music, None).unwrap();
         assert_eq!(r.upgraded, 0, "{r:?}");
         let real: i64 = c.query_row("SELECT count(*) FROM files WHERE audio_md5='realmd5'", [], |r| r.get(0)).unwrap();
         assert_eq!(real, 0, "a file whose bytes changed is not given Vipunen's identity");

@@ -347,7 +347,7 @@ pub mod relink {
         program: "relink",
         summary: "rebind a library to the audio under this machine's paths, and verify it",
         opts: &[LIBRARY, AUDIO_ROOT, APPLY, QUICK, REPORT],
-        notes: &["Needs ffmpeg on PATH: it hashes each file's encoded audio stream."],
+        notes: &["Hashes each file's encoded audio stream in-process [SPEC-RLK-150]."],
     };
 }
 
@@ -375,6 +375,38 @@ pub mod import_bundle {
         summary: "import a Vipunen bundle, in one transaction or not at all",
         opts: &[LIBRARY, BUNDLE, AUDIO_ROOT, APPLY, INVENTORY],
         notes: &["--bundle is required unless --inventory is given."],
+    };
+}
+
+/// A file's identity hash, `audio_md5`, for the tools that are not this
+/// crate `[SPEC-RLK-150]`: one implementation, called, not copied.
+pub mod hash_audio {
+    use super::common;
+    use crate::cli::{Cli, Opt};
+
+    pub const FILE: Opt = common::FILE.saying("the audio file to hash; prints its audio_md5");
+    pub const STDIN: Opt = Opt::flag(
+        "--stdin",
+        "read paths from stdin, one per line; answer each as it is read",
+    )
+        .short("i")
+        .not_from_env();
+    pub const GENERATOR: Opt = Opt::flag(
+        "--generator",
+        "print what files.md5_generator records for these values, and stop",
+    )
+        .short("g")
+        .stops()
+        .not_from_env();
+
+    pub const SPEC: Cli = Cli {
+        program: "hash_audio",
+        summary: "print the audio_md5 of audio files: the MD5 of their encoded packets",
+        opts: &[FILE, STDIN, GENERATOR],
+        notes: &[
+            "One of --file or --stdin. With --stdin each line of output is",
+            "<audio_md5>TAB<path>, or ERR TAB <path> TAB <reason>, flushed per line.",
+        ],
     };
 }
 
@@ -626,6 +658,7 @@ pub const ALL: &[&Cli] = &[
     &tagscan::SPEC,
     &relink::SPEC,
     &import_bundle::SPEC,
+    &hash_audio::SPEC,
     &echoprobe::SPEC,
     &delayprobe::SPEC,
     &fbui::SPEC,

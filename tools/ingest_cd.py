@@ -191,7 +191,7 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
         "                   first_seen,last_seen,md5_generator)"
         " VALUES (?1,?2,?3,?4,'mp3',?5,?6,?6,?7)",
         (audio_md5, mp3_path, st.st_size, st.st_mtime, total_ms, now,
-         ingest_folder.ffmpeg_generator()))
+         ingest_folder.md5_generator()))
     file_id = cur.lastrowid
 
     boundary_src = f"imported:{'eac-cue' if toc.source == 'eac-cue' else 'cdrdao-toc'}"

@@ -110,7 +110,11 @@ echo-client = ["dep:tokio-tungstenite", "dep:futures-util"]
 # this crate's 135, and no path from it to anything below -- which is now a
 # resolution fact rather than a claim someone re-checks by reading imports.
 lempi-core = { path = "core" }
-symphonia = { version = "0.5", features = ["mp3", "flac", "isomp4", "aac", "vorbis"] }
+# Pinned exactly: its demuxer *is* the definition of `audio_md5`
+# `[SPEC-RLK-150]`, so an upgrade changes an identity key other tables are keyed
+# on, and must be a deliberate edit here and in `identity::GENERATOR` -- never
+# a `cargo update` `[SPEC-RLK-086]`.
+symphonia = { version = "=0.5.5", features = ["mp3", "flac", "isomp4", "aac", "vorbis"] }
 rubato = "0.15"
 cpal = "0.18"
 # bundled: compiles SQLite from source rather than needing libsqlite3-dev for

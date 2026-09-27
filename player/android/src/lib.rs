@@ -310,7 +310,10 @@ pub fn import_bundle(library: String, staging: String, music_root: String) -> Re
         let mut db = rusqlite::Connection::open(&library).map_err(|e| format!("cannot open {library}: {e}"))?;
         // The player holds the same file open; wait for it rather than fail.
         db.busy_timeout(std::time::Duration::from_secs(15)).map_err(|e| e.to_string())?;
-        lempi_player::bundle::import_staged(&mut db, std::path::Path::new(&staging), std::path::Path::new(&music_root))
+        // No identity hasher: a phone computes no `audio_md5`, and verifies by
+        // the byte hash Vipunen sent instead `[REQ-AND-270]`, `[REQ-AND-230]`.
+        let (staging, music) = (std::path::Path::new(&staging), std::path::Path::new(&music_root));
+        lempi_player::bundle::import_staged(&mut db, staging, music, None)
     });
     match &r {
         Ok(s) => tracing::info!(

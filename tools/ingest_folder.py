@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -51,53 +52,65 @@ def say(text: str) -> None:
     print(text.encode(enc, "replace").decode(enc), flush=True)
 
 
+def hash_audio_binary() -> str:
+    """Where Lempi's `hash_audio` is: `$LEMPI_HASH_AUDIO`, else this checkout's
+    release build, else `PATH`.
+
+    Refuses rather than falling back to anything. A second hasher is exactly
+    what `[SPEC-RLK-150]` retired: its values would key rows the library's
+    other 5,708 cannot be compared with, and nothing would say so.
+    """
+    named = os.environ.get("LEMPI_HASH_AUDIO")
+    if named:
+        return named
+    exe = "hash_audio.exe" if os.name == "nt" else "hash_audio"
+    built = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "player", "target", "release", exe)
+    if os.path.isfile(built):
+        return built
+    found = shutil.which("hash_audio")
+    if found:
+        return found
+    raise SystemExit("hash_audio not found: build it (cd player && cargo build --release "
+                     "--bin hash_audio) or name it in LEMPI_HASH_AUDIO [SPEC-RLK-150]")
+
+
 def audio_md5(path: str) -> str | None:
-    """Essentia's `md5_encoded`, via ffmpeg -- the same value the migration
-    used, so a file ingested here and one migrated hash alike."""
-    r = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-vn", "-c:a", "copy",
-                        "-f", "md5", "-"], capture_output=True, text=True)
+    """The file's identity hash: the MD5 of its encoded packets, as Lempi's
+    player reads them `[SPEC-RLK-150]`.
+
+    Asked of `hash_audio` rather than computed here: one implementation, not
+    two `[GDE-FBD-040]`. Until 2026-09-26 this ran ffmpeg, whose reading
+    differs from Symphonia's at the tail of ~1% of MP3s `[SPEC-RLK-085]`; the
+    library was re-keyed that day. `None` is a file it cannot read.
+    """
+    r = subprocess.run([hash_audio_binary(), "--file", path], capture_output=True, text=True)
     if r.returncode != 0:
         return None
-    m = re.search(r"MD5=([0-9a-f]{32})", r.stdout)
-    return m.group(1) if m else None
+    h = r.stdout.strip()
+    return h if re.fullmatch(r"[0-9a-f]{32}", h) else None
 
 
-_GENERATOR: str | None | tuple = ()
+_GENERATOR: str | None = None
 
 
-def ffmpeg_generator() -> str | None:
-    """Which hasher produced an `audio_md5`, as `name@version` -- `ffmpeg@8.0`.
+def md5_generator() -> str:
+    """Which hasher produced an `audio_md5`, as `name@version` --
+    `symphonia@0.5.5` `[SPEC-SC-038]`, `[SPEC-RLK-150]` precondition 3.
 
-    `[SPEC-RLK-150]` precondition 3. `audio_md5` keys four tables and is
-    treated as a stable identity, but it implements no standard: it is
-    whatever the demuxer that computed it did `[SPEC-RLK-080]`. An ffmpeg
-    upgrade could in principle orphan rows, and nothing downstream would
-    report it as anything but missing music. Recording this makes such a
-    disagreement diagnosable.
-
-    The whole version token, build suffix included -- `8.0-full_build-...`
-    against a distribution's `5.1.9-0+deb12u1` -- because that is exactly the
-    detail that would explain a disagreement `[SPEC-RLK-088]`.
-
-    Asked once per process. `None` where ffmpeg cannot be asked, and a `None`
-    is stored as `NULL` rather than as a guess. The Rust side computes the
-    identical string in `player/core/src/relink.rs::hasher_generator`; the two
-    are separate because Lempi and Vipunen share a schema and no code
-    `[GDE-ARC-018]`.
+    `audio_md5` keys four tables and implements no standard: it is whatever
+    the demuxer that computed it did `[SPEC-RLK-080]`. Recording which one
+    makes a disagreement diagnosable rather than discovered as missing music.
+    Asked of the same binary that hashes, so it cannot name a different one.
     """
     global _GENERATOR
-    if _GENERATOR != ():
-        return _GENERATOR
-    _GENERATOR = None
-    try:
-        r = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
-    except OSError:
-        return _GENERATOR
-    if r.returncode == 0:
-        first = (r.stdout.splitlines() or [""])[0]
-        m = re.match(r"ffmpeg version (\S+)", first)
-        if m:
-            _GENERATOR = f"ffmpeg@{m.group(1)}"
+    if _GENERATOR is None:
+        r = subprocess.run([hash_audio_binary(), "--generator"], capture_output=True, text=True)
+        g = r.stdout.strip()
+        if r.returncode != 0 or "@" not in g:
+            raise SystemExit(f"hash_audio --generator answered {g!r} (exit {r.returncode})")
+        _GENERATOR = g
+    return _GENERATOR
     return _GENERATOR
 
 
@@ -283,7 +296,7 @@ def main() -> int:
             " VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8,?9)",
             (md5, path, st.st_size, st.st_mtime,
              os.path.splitext(path)[1].lstrip(".").lower(), info["duration_ms"], now,
-             ffmpeg_generator(), sha256_file(path)))
+             md5_generator(), sha256_file(path)))
         fid = cur.lastrowid
 
         conn.execute(

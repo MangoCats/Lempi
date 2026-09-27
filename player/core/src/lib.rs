@@ -18,19 +18,17 @@
 //!
 //! ## What is *not* portable yet
 //!
-//! Two things in here reach outside the process, and a phone would find both:
+//! One thing in here reaches outside the process:
 //!
-//! * [`relink::hash_encoded`] shells out to **ffmpeg**, and must keep doing so
-//!   `[SPEC-RLK-080]` -- the stored `audio_md5` corpus is an ffmpeg artefact,
-//!   so agreeing with it is the requirement, not a preference. There is already
-//!   a [`relink::hasher_available`] guard, so a host without ffmpeg says so once
-//!   rather than failing 5,705 times. A phone needs either an in-process
-//!   ffmpeg-compatible hasher or bundles verified before they arrive.
 //! * [`director::program`]'s UTC-offset sync calls `libc::localtime_r` on Unix
 //!   and `powershell` on Windows `[SPEC-DIR-180]`, falling back to `None`
 //!   elsewhere. Android and iOS are both Unix with a working `tm_gmtoff`, so
 //!   this one is already portable; it is named here only because it is the
-//!   other place this crate leaves its own process.
+//!   one place this crate leaves its own process.
+//!
+//! The other, until 2026-09-26, was `audio_md5`: it shelled out to ffmpeg.
+//! The identity hash is now the host's to pass in ([`relink::Hasher`]), since
+//! computing it needs a demuxer this crate may not reach `[SPEC-RLK-150]`.
 //!
 //! **This crate writes no line itself** `[GDE-HST-160]`. It emits through
 //! `tracing`, and whoever hosts it -- a binary, or one day a phone -- decides

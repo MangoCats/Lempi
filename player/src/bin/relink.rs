@@ -10,7 +10,8 @@ use std::time::Instant;
 
 use rusqlite::Connection;
 use lempi_player::cli::specs::relink as opt;
-use lempi_player::relink::{hash_encoded, hasher_available, plan, walk, Found, Outcome, Row};
+use lempi_player::identity::hash_audio;
+use lempi_player::relink::{plan, walk, Found, Outcome, Row};
 
 fn main() {
     let args = opt::SPEC.parse();
@@ -19,11 +20,6 @@ fn main() {
     let apply = args.has(&opt::APPLY);
     let quick = args.has(&opt::QUICK);
 
-    if !hasher_available() {
-        eprintln!("relink needs ffmpeg on PATH to read encoded audio streams.");
-        eprintln!("  Debian/Raspberry Pi OS:  sudo apt install ffmpeg");
-        std::process::exit(1);
-    }
     let db = match Connection::open(&db_path) {
         Ok(c) => c,
         Err(e) => {
@@ -62,7 +58,7 @@ fn main() {
             }
             continue;
         }
-        match hash_encoded(f) {
+        match hash_audio(f) {
             Ok(md5) => found.push(Found { path: as_str, audio_md5: md5 }),
             // A file that cannot be opened at all is neither bound nor
             // dismissed: it is reported, and left for a person.

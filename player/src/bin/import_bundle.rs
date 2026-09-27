@@ -65,11 +65,6 @@ fn main() {
         args.text(&opt::AUDIO_ROOT).map(PathBuf::from).unwrap_or_else(|| bundle.join("audio"));
     let apply = args.has(&opt::APPLY);
 
-    if !lempi_player::relink::hasher_available() {
-        eprintln!("import needs ffmpeg on PATH to verify arriving audio.");
-        std::process::exit(1);
-    }
-
     println!("payload  {}", payload_path.display());
     println!("audio    {}", audio_root.display());
     let refused = unacceptable(&doc);
@@ -85,7 +80,8 @@ fn main() {
         std::process::exit(1);
     }
 
-    let rep = match import(&mut db, &doc, &text, Path::new(&audio_root), apply) {
+    let hasher = Some(lempi_player::identity::HASHER);
+    let rep = match import(&mut db, &doc, &text, Path::new(&audio_root), apply, hasher) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("import failed: {e}");

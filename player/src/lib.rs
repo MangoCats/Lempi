@@ -85,6 +85,8 @@ pub mod echo_client;
 pub mod engine;
 /// Music a phone finds in shared storage `[REQ-AND-260]`.
 pub mod found;
+/// The identity hash, `audio_md5`, computed in-process `[SPEC-RLK-150]`.
+pub mod identity;
 /// The player as a library: start it, command it, read it, stop it
 /// `[GDE-HST-040]`. What `lempi`'s `main` did, callable by any host.
 pub mod host;

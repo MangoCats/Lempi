@@ -7,7 +7,7 @@ Exercises the contract on its own -- `--kind both` (the new default) writes
 one `radio` and one `album` passage per file, sharing the same span and the
 same recording link; an album cut's lead/gain are 0, permanently, not NULL
 the way a fresh radio cut's are; and a re-run over the same audio adds
-nothing a second time. `probe()`/`audio_md5()` shell out to ffmpeg/ffprobe --
+nothing a second time. `probe()`/`audio_md5()` shell out to ffprobe/hash_audio --
 mocked here rather than run for real, the same reasoning every other tool
 test in this directory already takes toward audio it does not need to
 actually decode.
@@ -179,16 +179,15 @@ def main() -> int:
         # `[SPEC-RLK-150]` precondition 3. SCHEMA above deliberately lacks the
         # column -- it is the library this migration exists for -- so this
         # checks that `ensure_md5_generator_column` ran AND that the value
-        # landed. Compared against `ffmpeg_generator()` rather than a literal:
-        # a machine without ffmpeg stores NULL, and NULL is the right answer
-        # there, so the assertion holds either way and pins neither a version
-        # nor the presence of ffmpeg.
+        # landed. Compared against `md5_generator()` rather than a literal, so
+        # a Symphonia upgrade -- a deliberate edit to `identity::GENERATOR` --
+        # does not also have to find this test.
         cols = {r[1] for r in conn.execute("PRAGMA table_info(files)")}
         check("md5_generator" in cols,
               "ingest must add md5_generator to a files table that predates it")
         got = conn.execute("SELECT md5_generator FROM files WHERE audio_md5=?",
                            (FAKE_MD5,)).fetchone()[0]
-        check(got == ingest_folder.ffmpeg_generator(),
+        check(got == ingest_folder.md5_generator(),
               f"the row must record the hasher that ran, got {got!r}")
 
         # `[REQ-AND-960]`: the byte hash is set at induction, into a column the
