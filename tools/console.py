@@ -52,6 +52,24 @@ WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "console_web")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def music_folder(conn) -> str | None:
+    """The one folder every catalogued file lies under, if there is one and it
+    is a folder here -- never a drive's root, which names nothing. Measured
+    2026-09-27 on the desktop: all 5,709 under `C:\\Users\\Mango Cat\\Music`."""
+    paths = [r[0] for r in conn.execute("SELECT path FROM files")]
+    if not paths:
+        return None
+    try:
+        common = os.path.commonpath(paths)
+    except ValueError:            # different drives, or mixed absolute and relative
+        return None
+    if len(paths) == 1:
+        common = os.path.dirname(common)
+    if not os.path.isdir(common) or os.path.dirname(common) == common:
+        return None
+    return os.path.normpath(common)
+
+
 def fleet_targets():
     """Who this console pushes to, as `{{TOKEN}}` -> text.
 
@@ -1488,13 +1506,23 @@ def main() -> int:
         STATE["library"] = attached.get("main") or STATE["path"]
         STATE["listener"] = attached.get(lempi_db.ALIAS[lempi_db.ROLE_LISTENER],
                                          STATE["library"])
+        derived = None if STATE["roots"] else music_folder(boot)
     finally:
         boot.close()
     print(f"library: {t['files']:,} files, {t['radio']:,} radio passages")
     if STATE["roots"]:
         print(f"roots:   {', '.join(STATE['roots'])}")
+    elif derived:
+        # Lempi's Settings starts the console with no --root [REQ-VIS-325]:
+        # it has no music folder of its own to name. The catalogue does, where
+        # every file it holds lies under one folder -- said here, so a wrong
+        # one is a visible line rather than a silent choice [GDE-DEP-060].
+        STATE["roots"] = [derived]
+        STATE["jobs"].roots = [derived]
+        print(f"roots:   {derived}  (none given; every catalogued file lies under it)")
     else:
-        print("roots:   none given; the folder view will have nothing to walk")
+        print("roots:   none given, and the catalogue's files share no one folder; "
+              "the folder view has nothing to walk, and nothing can be inducted")
     # Loopback only. It holds no write lock today, but it reads a private
     # library and stage 3 gives it one `[SPEC-SUI-010]`.
     print(f"jobs:    {sidecar}")

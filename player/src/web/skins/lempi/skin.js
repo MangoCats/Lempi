@@ -1125,6 +1125,50 @@
     }
   });
 
+  // --------------------------------------------------------------- Vipunen
+  // `[REQ-VIS-325]`: the row appears only where this player can start
+  // Vipunen, as the browse page's link does `[REQ-VIS-320]`. A build without
+  // vipunen-support has no `/vipunen/available` at all, and that 404 hides the
+  // row exactly as "not available" does.
+  //
+  // Vipunen's console listens on this computer's loopback only
+  // `[SPEC-SUI-010]`, so from any other device the button could only open a
+  // dead tab. There the row says why instead, and the button is off.
+  const vipunenRow = $('vipunen-row'), vipunenBtn = $('vipunen-open');
+  const vipunenLocal = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(location.hostname);
+  fetch('/vipunen/available')
+    .then(r => (r.ok ? r.json() : { available: false }))
+    .then(body => {
+      setHidden(vipunenRow, !body.available);
+      if (body.available && !vipunenLocal) {
+        vipunenBtn.disabled = true;
+        $('vipunen-note').textContent = 'Vipunen answers only on the computer this player runs on. ' +
+          'Open Lempi there (http://localhost/) to use it.';
+      }
+    })
+    .catch(() => {}); // stays hidden
+  vipunenBtn.onclick = async () => {
+    if (vipunenBtn.disabled) return;
+    // The tab is opened now, while this is still the click: one opened after
+    // the await below is no longer the user's doing, and a browser may block it.
+    const tab = window.open('about:blank', '_blank');
+    vipunenBtn.disabled = true;
+    const was = vipunenBtn.textContent;
+    vipunenBtn.textContent = 'Starting Vipunen…';
+    try {
+      const body = await (await fetch('/vipunen/ensure', { method: 'POST' })).json();
+      if (!body.ok) throw new Error(body.error || 'it did not start');
+      const url = `http://127.0.0.1:${body.port}/`;
+      if (tab) tab.location.href = url; else window.location.href = url;
+    } catch (e) {
+      if (tab) tab.close();
+      alert(`Could not reach Vipunen: ${e.message}`);
+    } finally {
+      vipunenBtn.textContent = was;
+      vipunenBtn.disabled = false;
+    }
+  };
+
   // --------------------------------------------------------------- history
   // Its own fetch rather than the socket's snapshot `[REQ-VIS-250]`: a page
   // of what has already happened is not "what is true right now", and

@@ -111,8 +111,9 @@ pub(super) async fn vipunen_available() -> Response {
 /// which is what Vipunen is a browser for; see the call site for what handing
 /// it the listener half cost. Launched without `--root`
 /// (Lempi has no single "music folder" to offer -- only individual
-/// passage paths); Vipunen's own console already treats that as a normal,
-/// supported case, with only its Folder view left empty (`HOWTO.md §5`).
+/// passage paths); the console then takes the one folder every catalogued
+/// file lies under, and says so, or runs without one (`HOWTO.md §5`)
+/// `[REQ-VIS-325]`.
 pub(super) async fn vipunen_ensure(State(ui): State<Ui>) -> Response {
     if vipunen_reachable().await {
         return axum::Json(serde_json::json!({ "ok": true, "port": VIPUNEN_PORT })).into_response();
