@@ -824,6 +824,13 @@ pub struct ReleasesReport {
     /// Cover files named by the payload that were absent or did not match
     /// their byte hash: not stored.
     pub bad_covers: Vec<String>,
+    /// Cover files written beside their audio `[REQ-AND-205]`, by
+    /// [`place_covers`] -- which the caller runs once, after every part.
+    pub covers_placed: usize,
+    /// Cover files the system would not let be written there, with why.
+    pub covers_not_placed: Vec<String>,
+    /// The releases this payload carried.
+    pub seen: std::collections::HashSet<String>,
 }
 
 /// Columns a catalogue made before they existed lacks: added, as
@@ -856,6 +863,114 @@ fn ensure_release_columns(db: &Connection) -> Result<(), String> {
             let name = col.split(' ').next().unwrap_or_default();
             if !have.contains(name) {
                 db.execute(&format!("ALTER TABLE {table} ADD COLUMN {col}"), []).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    // The player's own index, as `player_store` makes it once `chosen` exists
+    // -- made here too, because this is where a phone's catalogue first gets
+    // that column. Without it every lookup of a recording's release scans the
+    // table: measured on the Moto G's catalogue, the cover placement's query
+    // took 17.6 s on the desktop and 0.05 s with it, and a 19-part import ran
+    // 23 minutes.
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_release_recordings_chosen \
+           ON release_recordings(mbid, chosen DESC, release_mbid)",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// The file names a player -- this one, and others -- takes for a folder's
+/// cover, front and back, case-insensitively. Here rather than in the player's
+/// `tags`, which reads them, so that what an import writes and what the player
+/// looks for are one list `[REQ-AND-205]`.
+pub const SIBLING_FRONT: [&str; 8] = [
+    "folder.jpg", "cover.jpg", "front.jpg", "album.jpg",
+    "folder.png", "cover.png", "front.png", "albumart.jpg",
+];
+pub const SIBLING_BACK: [&str; 4] = ["back.jpg", "back.png", "backcover.jpg", "folder-back.jpg"];
+
+/// `[REQ-AND-205]`, on a host that may: each stored cover also written beside its audio, as
+/// `cover.jpg` and `back.jpg` (or `.png`), so other players find it too --
+/// covers describe the shared music, unlike lyrics and the databases.
+///
+/// **Only where the folder is that release's alone**: every catalogued file in
+/// it has the release as its chosen one. A folder holds exactly one cover, so
+/// a folder of several albums, or with a file whose release is unknown, would
+/// give some of its songs the wrong picture -- the rule `covers.rs` already
+/// follows for MPD. A folder that has a cover file of either side's kind keeps
+/// it: this does not overwrite a file it did not write. A write the system
+/// refuses is reported per folder and fails nothing; the cover is in the
+/// catalogue either way.
+pub fn place_covers(db: &Connection, releases: &std::collections::HashSet<String>, rep: &mut ReleasesReport)
+    -> Result<(), String> {
+    if releases.is_empty() {
+        return Ok(());
+    }
+    // Every catalogued file's folder, with the chosen releases of its
+    // recordings -- empty for a file with none.
+    let mut folders: HashMap<PathBuf, Vec<std::collections::HashSet<String>>> = HashMap::new();
+    {
+        let mut q = db
+            .prepare(
+                "SELECT f.path, (SELECT group_concat(rr.release_mbid, char(31)) FROM passages p \
+                   JOIN passage_recordings pr ON pr.passage_id = p.passage_id \
+                   JOIN release_recordings rr ON rr.mbid = pr.mbid AND rr.chosen = 1 \
+                  WHERE p.file_id = f.file_id) FROM files f",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = q
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))
+            .map_err(|e| e.to_string())?;
+        for row in rows.flatten() {
+            let (path, rels) = row;
+            let Some(dir) = Path::new(&path).parent() else { continue };
+            let set = rels.map(|s| s.split('\u{1f}').map(str::to_string).collect()).unwrap_or_default();
+            folders.entry(dir.to_path_buf()).or_default().push(set);
+        }
+    }
+    for (dir, files) in &folders {
+        // The one release every file in the folder shares, if there is one.
+        let mut shared: Option<std::collections::HashSet<String>> = None;
+        for f in files {
+            shared = Some(match shared {
+                None => f.clone(),
+                Some(s) => s.intersection(f).cloned().collect(),
+            });
+        }
+        let shared = shared.unwrap_or_default();
+        let Some(release) = shared.iter().find(|r| releases.contains(*r)) else { continue };
+        if shared.len() != 1 || !dir.is_dir() {
+            continue;
+        }
+        let (front, back): (Option<Vec<u8>>, Option<Vec<u8>>) = db
+            .query_row("SELECT front, back FROM cover_art WHERE release_mbid = ?1", params![release], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()
+            .map_err(|e| e.to_string())?
+            .unwrap_or((None, None));
+        let present = |names: &[&str]| {
+            std::fs::read_dir(dir).ok().is_some_and(|it| {
+                it.flatten().any(|e| names.iter().any(|n| e.file_name().to_string_lossy().eq_ignore_ascii_case(n)))
+            })
+        };
+        for (bytes, names, stem) in [(front, &SIBLING_FRONT[..], "cover"), (back, &SIBLING_BACK[..], "back")] {
+            let Some(bytes) = bytes else { continue };
+            if present(names) {
+                continue;
+            }
+            let ext = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) { "png" } else { "jpg" };
+            let dest = dir.join(format!("{stem}.{ext}"));
+            let part = part_name(&dest);
+            let written = std::fs::write(&part, &bytes).and_then(|_| std::fs::rename(&part, &dest));
+            match written {
+                Ok(()) => rep.covers_placed += 1,
+                Err(e) => {
+                    let _ = std::fs::remove_file(&part);
+                    rep.covers_not_placed.push(format!("{}: {e}", dest.display()));
+                }
             }
         }
     }
@@ -944,6 +1059,7 @@ pub fn import_releases(db: &mut Connection, doc: &Value, bundle_root: &Path) -> 
         }
     }
     tx.commit().map_err(|e| e.to_string())?;
+    rep.seen = list.iter().map(|r| str_of(r, "mbid")).collect();
     Ok(rep)
 }
 
@@ -1089,6 +1205,11 @@ pub fn import_staged(
         total.unsafe_paths.extend(r.unsafe_paths);
         total.changed_since_scan.extend(r.changed_since_scan);
     }
+    // No covers beside the audio: this is the phone's import, and Android
+    // refuses every picture in `Music/` -- 133 of 133 on the Moto G,
+    // 2026-09-27. There the archive is where covers live `[REQ-AND-205]`. A
+    // host that may write beside its audio places them itself, with
+    // [`place_covers`], as `import_bundle` does.
     Ok(total)
 }
 
@@ -2284,6 +2405,69 @@ mod tests {
         std::fs::remove_dir_all(&s.root).ok();
     }
 
+    /// `[REQ-AND-205]`: a cover is written beside the audio only where the
+    /// folder is that release's alone, and never over a cover already there.
+    #[test]
+    fn a_cover_goes_only_into_a_folder_that_is_its_release_alone() {
+        let root = std::env::temp_dir().join(format!("lempi-cover-dirs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (alone, mixed, covered) = (root.join("alone"), root.join("mixed"), root.join("covered"));
+        for d in [&alone, &mixed, &covered] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(covered.join("Folder.jpg"), b"someone else's picture").unwrap();
+        let mut c = empty_library();
+        c.execute_batch(
+            "CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT NOT NULL, release_date TEXT, source TEXT NOT NULL);
+             CREATE TABLE release_recordings (release_mbid TEXT NOT NULL, mbid TEXT NOT NULL, position INTEGER,
+                 source TEXT NOT NULL, chosen INTEGER DEFAULT 0, PRIMARY KEY (release_mbid, mbid)) WITHOUT ROWID;",
+        )
+        .unwrap();
+        // alone: two files, both r1. mixed: one r1, one r9. covered: r1, with a cover already.
+        let files = [(1, alone.join("a.mp3"), "m1"), (2, alone.join("b.mp3"), "m2"),
+                     (3, mixed.join("c.mp3"), "m1"), (4, mixed.join("d.mp3"), "m9"),
+                     (5, covered.join("e.mp3"), "m1")];
+        for (id, path, rec) in &files {
+            c.execute(
+                "INSERT INTO files (file_id,audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen) \
+                 VALUES (?1,?2,?3,1,1.0,'mp3',1000,'t','t')",
+                params![id, format!("md5-{id}"), path.to_string_lossy()],
+            )
+            .unwrap();
+            c.execute("INSERT INTO passages (passage_id,file_id,kind,start_ms,end_ms,boundary_src) VALUES (?1,?1,'radio',0,1000,'x')",
+                      params![id]).unwrap();
+            c.execute("INSERT OR IGNORE INTO recordings (mbid,title,source) VALUES (?1,'t','s')", params![rec]).unwrap();
+            c.execute("INSERT INTO passage_recordings (passage_id,mbid,source) VALUES (?1,?2,'s')", params![id, rec]).unwrap();
+        }
+        c.execute_batch(
+            "INSERT INTO releases VALUES ('r9','Nine',NULL,'mb');
+             INSERT INTO release_recordings VALUES ('r9','m9',1,'mb',1);",
+        )
+        .unwrap();
+        let front: Vec<u8> = [&[0xFF, 0xD8, 0xFF][..], &[b'f'; 600][..]].concat();
+        std::fs::create_dir_all(root.join("covers")).unwrap();
+        std::fs::write(root.join("covers").join("r1-front.jpg"), &front).unwrap();
+        let doc = serde_json::json!({"releases": [{
+            "mbid": "r1", "title": "One", "source": "mb",
+            "tracks": [{"recording": "m1", "position": 1, "chosen": 1, "source": "mb"},
+                       {"recording": "m2", "position": 2, "chosen": 1, "source": "mb"}],
+            "cover": {"source": "caa", "fetched_at": "t",
+                      "front": {"file": "covers/r1-front.jpg", "sha256": sha_of(&front)}}}]});
+        let mut r = import_releases(&mut c, &doc, &root).unwrap();
+        let seen = std::mem::take(&mut r.seen);
+        place_covers(&c, &seen, &mut r).unwrap();
+        assert_eq!((r.covers, r.covers_placed), (1, 1), "{r:?}");
+        assert_eq!(std::fs::read(alone.join("cover.jpg")).unwrap(), front, "the folder that is r1's alone");
+        assert!(!mixed.join("cover.jpg").exists(), "two releases share this folder");
+        assert!(!covered.join("cover.jpg").exists(), "a cover is here already");
+        assert_eq!(std::fs::read(covered.join("Folder.jpg")).unwrap(), b"someone else's picture");
+        let mut again = import_releases(&mut c, &doc, &root).unwrap();
+        let seen = std::mem::take(&mut again.seen);
+        place_covers(&c, &seen, &mut again).unwrap();
+        assert_eq!(again.covers_placed, 0, "the cover it wrote is now the folder's own: {again:?}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// `[SPEC-PL-098]`: a phone copy the host has since written with the
     /// system's leave holds Vipunen's bytes while its row still records the
     /// old ones. The import finds it held, and the row follows the file.
@@ -2361,6 +2545,8 @@ mod tests {
         assert_eq!(stored, front);
         let r2: i64 = c.query_row("SELECT count(*) FROM cover_art WHERE release_mbid='r2'", [], |r| r.get(0)).unwrap();
         assert_eq!(r2, 0, "a cover that does not match is not stored");
+        // `[REQ-AND-205]`: the phone's import keeps covers in the archive only.
+        assert!(!s.music.join("cover.jpg").exists(), "nothing written beside the audio");
         let again = import_staged(&mut c, &s.staging, &s.music, None).unwrap();
         assert_eq!(again.imported, 0, "{again:?}");
         let n: i64 = c.query_row("SELECT count(*) FROM release_recordings", [], |r| r.get(0)).unwrap();

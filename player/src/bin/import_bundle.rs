@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 use lempi_player::cli::specs::import_bundle as opt;
-use lempi_player::bundle::{import, import_releases, unacceptable, Landed};
+use lempi_player::bundle::{import, import_releases, place_covers, unacceptable, Landed};
 
 fn main() {
     let args = opt::SPEC.parse();
@@ -139,8 +139,16 @@ fn main() {
         // The releases and their covers `[SPEC-PL-105]`, read from the bundle
         // itself -- its `covers/` beside `payload.json`.
         match import_releases(&mut db, &doc, &bundle) {
-            Ok(r) => {
-                println!("releases  {}   tracks {}   covers {}", r.releases, r.tracks, r.covers);
+            Ok(mut r) => {
+                let seen = std::mem::take(&mut r.seen);
+                if let Err(e) = place_covers(&db, &seen, &mut r) {
+                    eprintln!("covers not placed: {e}");
+                }
+                println!("releases  {}   tracks {}   covers {}   beside the audio {}",
+                         r.releases, r.tracks, r.covers, r.covers_placed);
+                for f in &r.covers_not_placed {
+                    println!("NOT PLACED {f}");
+                }
                 for f in &r.bad_covers {
                     println!("BAD COVER {f}  absent, or not the bytes the payload names");
                 }

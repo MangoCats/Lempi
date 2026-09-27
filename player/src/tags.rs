@@ -129,11 +129,7 @@ pub fn duration_ms(path: &Path) -> Option<u64> {
 /// Measured on this library: 1,656 of the 1,986 files with no embedded picture
 /// -- 83% -- have one of these in the same folder. The art was already on disk
 /// and nothing was looking for it.
-const SIBLING_FRONT: [&str; 8] = [
-    "folder.jpg", "cover.jpg", "front.jpg", "album.jpg",
-    "folder.png", "cover.png", "front.png", "albumart.jpg",
-];
-const SIBLING_BACK: [&str; 4] = ["back.jpg", "back.png", "backcover.jpg", "folder-back.jpg"];
+use crate::bundle::{SIBLING_BACK, SIBLING_FRONT};
 
 fn media_type_for(path: &Path) -> String {
     match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
