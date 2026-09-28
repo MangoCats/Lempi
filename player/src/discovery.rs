@@ -124,7 +124,14 @@ pub fn answer(q: &serde_json::Value, me: &Identity, listener: &Path, library: &P
     if !matches!(kind, "candidates" | "hubs") || !announcing(listener, library) {
         return None;
     }
-    let hub = hub_here(listener);
+    // Being a hub is having the roster; *answering* as one also needs the
+    // members' port open. Until 2026-09-28 both hung on the port, so a hub
+    // whose intake was stopped answered as an ordinary candidate.
+    let is_hub = state_dir(listener).join("mesh").join("roster.json").is_file();
+    let hub = if kind == "hubs" && is_hub { hub_here(listener) } else { None };
+    if kind == "candidates" && is_hub {
+        return None;
+    }
     let mut a = serde_json::json!({
         "lempi": 1, "nonce": nonce, "name": host_name(), "fingerprint": me.fingerprint,
         "web_port": web_port, "version": crate::GIT,
@@ -206,5 +213,19 @@ mod tests {
         assert!(q(serde_json::json!({"q": "candidates", "nonce": "n3"})).is_none(), "not a Lempi query");
         assert!(q(serde_json::json!({"lempi": 1, "q": "candidates"})).is_none(), "no nonce, no answer");
         assert!(q(serde_json::json!({"lempi": 1, "q": "everything", "nonce": "n4"})).is_none());
+    }
+
+    /// A hub is no one's candidate, even while its members' port is closed --
+    /// found 2026-09-28, the desktop listed as a candidate with its intake stopped.
+    #[test]
+    fn a_hub_is_never_a_candidate() {
+        let d = dir("hub");
+        let (l, lib) = (d.join("listener.db"), d.join("library.db"));
+        let me = identity(&l).unwrap();
+        std::fs::create_dir_all(d.join("mesh")).unwrap();
+        std::fs::write(d.join("mesh").join("roster.json"),
+            r#"{"roster": "{\"mesh\": {\"name\": \"Home\", \"fingerprint\": \"ff\"}}", "signature": ""}"#).unwrap();
+        let q = |v: serde_json::Value| answer(&v, &me, &l, &lib, 5720);
+        assert!(q(serde_json::json!({"lempi": 1, "q": "candidates", "nonce": "n"})).is_none(), "not a candidate");
     }
 }
