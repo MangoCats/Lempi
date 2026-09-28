@@ -196,12 +196,23 @@ pub fn reveal(listener: &Path, id: &str, nonce_h: &str) -> Result<Value, String>
 }
 
 /// A person here says the codes match: signed, for the hub to verify.
-pub fn confirm(listener: &Path, id: &str) -> Result<Value, String> {
+pub fn confirm(listener: &Path, id: &str, code_in: &str) -> Result<Value, String> {
     let (code, state) = with_invite(id, |inv| Ok((inv.code.clone(), inv.state)))?;
     if state != "comparing" {
         return Err(format!("the invitation is {state}"));
     }
-    let sig = sign(listener, &format!("lempi-confirm|{id}|{}", code.unwrap_or_default()))?;
+    // The confirming request must carry the code this player itself shows
+    // `[SecurityReview2 R3]`. The player's own Settings page has it from
+    // `status`, so a person still just clicks "the codes match" -- but a blind
+    // POST from another LAN host, which never saw the code, cannot complete an
+    // enrolment on the human's behalf. This does not defend against an attacker
+    // who ran the whole invitation (they can derive the code); it stops the
+    // unattended automated case, which is what the LAN UI leaves open.
+    let code = code.unwrap_or_default();
+    if code.is_empty() || code_in != code {
+        return Err("the confirmation code does not match".into());
+    }
+    let sig = sign(listener, &format!("lempi-confirm|{id}|{code}"))?;
     with_invite(id, |inv| {
         inv.state = "confirmed";
         inv.confirmation = Some(sig);
@@ -270,7 +281,7 @@ pub fn update_roster(listener: &Path, signed: &Value) -> Result<Value, String> {
         return Err(format!("roster version {new} is not newer than the {old} held"));
     }
     if !r["members"].as_array().is_some_and(|m| m.iter().any(|m| m["fingerprint"] == me.fingerprint)) {
-        leave(listener)?;
+        forget_membership(listener)?;
         tracing::info!("mesh: removed from '{}' at roster version {new}; left", r["mesh"]["name"]);
         return Ok(json!({"state": "removed", "version": new}));
     }
@@ -281,12 +292,28 @@ pub fn update_roster(listener: &Path, signed: &Value) -> Result<Value, String> {
 }
 
 /// This player leaves its mesh here; the hub removes it from the roster there.
-pub fn leave(listener: &Path) -> Result<(), String> {
+/// Delete the stored membership. The unguarded removal, for the two callers
+/// that have already earned it: `leave` after its fingerprint check, and the
+/// roster update that finds this player is no longer named (a change already
+/// verified as signed by the pinned mesh key).
+fn forget_membership(listener: &Path) -> Result<(), String> {
     let p = state_dir(listener).join("mesh-member.json");
     if p.exists() {
         std::fs::remove_file(&p).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+pub fn leave(listener: &Path, mesh_fp_in: &str) -> Result<(), String> {
+    // A leave requested through the LAN UI must name the mesh this player is
+    // actually in `[SecurityReview2 R3]`. Its own page has the fingerprint
+    // from `status`, so leaving stays one click; a blind POST that never read
+    // the membership cannot detach the player from its mesh.
+    let held = membership(listener).ok_or("this player is in no mesh")?;
+    if held["mesh_fp"].as_str() != Some(mesh_fp_in) {
+        return Err("that is not this player's mesh".into());
+    }
+    forget_membership(listener)
 }
 
 /// What the Settings page and the hub read: membership, and an invitation in
@@ -325,6 +352,47 @@ mod tests {
         // to the digit, or every comparison fails.
         assert_eq!(code("aa", "bb", "cc", "dd"), "564 444");
         assert_eq!(code("ddc60c85", "3398fb55", "n1", "n2"), "347 511");
+    }
+
+    #[test]
+    fn leaving_requires_this_players_own_mesh_fingerprint() {
+        // [SecurityReview2 R3]: a blind POST /mesh/leave from another LAN host
+        // cannot detach the player; the fingerprint the player's own page shows
+        // is required, and a wrong or absent one is refused.
+        let d = std::env::temp_dir().join(format!("lempi-leave-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let l = d.join("listener.db");
+        let member = json!({
+            "roster": {"roster": "{\"members\":[],\"mesh\":{\"name\":\"Home\"}}", "signature": "x"},
+            "mesh_fp": "abcd1234", "hub_fp": "ffff", "hub_address": "192.0.2.10"});
+        std::fs::write(state_dir(&l).join("mesh-member.json"), member.to_string()).unwrap();
+        assert!(leave(&l, "").is_err(), "an empty fingerprint is refused");
+        assert!(leave(&l, "wrongfp").is_err(), "a wrong fingerprint is refused");
+        assert!(state_dir(&l).join("mesh-member.json").exists(), "the membership is untouched");
+        assert!(leave(&l, "abcd1234").is_ok(), "the held fingerprint leaves");
+        assert!(!state_dir(&l).join("mesh-member.json").exists(), "and the membership is gone");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn confirming_requires_the_code_the_player_shows() {
+        // [SecurityReview2 R3]: confirm needs the code this player displays, so
+        // a blind confirm from elsewhere on the LAN cannot complete enrolment.
+        let d = std::env::temp_dir().join(format!("lempi-confirm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let l = d.join("listener.db");
+        *INVITE.lock().unwrap() = Some(Invite {
+            id: "inv1".into(), mesh: "Home".into(), mesh_fp: "m".into(), hub_fp: "h".into(),
+            hub_address: String::new(), commit: String::new(), nonce: "n".into(),
+            code: Some("123 456".into()), state: "comparing", confirmation: None});
+        assert!(confirm(&l, "inv1", "000 000").is_err(), "a wrong code is refused");
+        assert!(confirm(&l, "inv1", "").is_err(), "an empty code is refused");
+        let ok = confirm(&l, "inv1", "123 456").unwrap();
+        assert_eq!(ok["state"], "confirmed", "the shown code confirms");
+        *INVITE.lock().unwrap() = None;
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

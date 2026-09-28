@@ -1212,13 +1212,19 @@
     setHidden($('mesh-row'), false);
     const buttons = $('mesh-buttons'), note = $('mesh-note');
     buttons.replaceChildren();
-    const button = (label, path, ask) => {
+    // `body`, when given, carries the value this page already shows -- the
+    // invite code, or the mesh fingerprint -- so a click confirms or leaves
+    // exactly as before, while a blind POST from elsewhere on the LAN, which
+    // never read it, is refused `[SecurityReview2 R3]`.
+    const button = (label, path, ask, body) => {
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = label;
       b.onclick = async () => {
         if (ask && !confirm(ask)) return;
-        const r = await fetch(`/mesh/${path}`, { method: 'POST' });
+        const opts = { method: 'POST' };
+        if (body) { opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(body); }
+        const r = await fetch(`/mesh/${path}`, opts);
         if (!r.ok) alert(((await r.json().catch(() => ({}))).error) || 'Refused.');
         meshShown = '';
         mesh();
@@ -1230,11 +1236,11 @@
       const m = d.member;
       note.textContent = `A member of “${m.mesh}” (mesh ${short(m.mesh_fp)}), whose hub is ${short(m.hub_fp)}` +
         ` at ${m.hub_address || 'its address'}; roster version ${m.version}, ${(m.members || []).length} member(s).`;
-      button('Leave the mesh', 'leave', 'Forget this mesh here? The hub lists this player until someone removes it there.');
+      button('Leave the mesh', 'leave', 'Forget this mesh here? The hub lists this player until someone removes it there.', { mesh_fp: m.mesh_fp });
     } else if (inv && inv.state === 'comparing') {
       note.textContent = `Invited to join “${inv.mesh}” by hub ${short(inv.hub_fp)}. Code ${inv.code} — ` +
         'confirm only if the hub’s mesh page shows the same code.';
-      button('The codes match', `invite/${inv.id}/confirm`);
+      button('The codes match', `invite/${inv.id}/confirm`, null, { code: inv.code });
       button('Reject', `invite/${inv.id}/reject`);
     } else if (inv) {
       note.textContent = `Confirmed here (code ${inv.code}); waiting for the hub to accept.`;

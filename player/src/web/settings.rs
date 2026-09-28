@@ -101,10 +101,10 @@ pub(super) async fn mesh_step(
         match parts.as_slice() {
             ["invite"] => crate::membership::invite(&db, &b),
             ["invite", id, "reveal"] => crate::membership::reveal(&db, id, b["nonce"].as_str().unwrap_or("")),
-            ["invite", id, "confirm"] => crate::membership::confirm(&db, id),
+            ["invite", id, "confirm"] => crate::membership::confirm(&db, id, b["code"].as_str().unwrap_or("")),
             ["invite", id, "reject"] => crate::membership::reject(id),
             ["invite", id, "roster"] => crate::membership::take_roster(&db, id, &b),
-            ["leave"] => crate::membership::leave(&db).map(|()| serde_json::json!({"left": true})),
+            ["leave"] => crate::membership::leave(&db, b["mesh_fp"].as_str().unwrap_or("")).map(|()| serde_json::json!({"left": true})),
             ["roster"] => crate::membership::update_roster(&db, &b),
             _ => Err("unknown".into()),
         }
