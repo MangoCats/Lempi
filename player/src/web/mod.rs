@@ -1429,6 +1429,52 @@ mod tests {
         assert!(appliance.starts_with("HTTP/1.1 200"), "no secret set must ask for nothing");
     }
 
+    /// The cross-site guard `[SecurityReview C2]`, end to end through the real
+    /// router: a same-origin or Origin-less loopback request is served; a
+    /// foreign `Origin` is refused (CSRF); an unrecognised `Host` is refused
+    /// (DNS rebinding). Applied even with no launch key -- the appliance case.
+    #[tokio::test]
+    async fn the_origin_guard_refuses_cross_site_and_rebinding() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (_e, h) = crate::engine::Engine::new(crate::path::PathHandle::silent(), 1);
+        let ui = Ui {
+            handle: Arc::new(h),
+            db: ":memory:".into(),
+            library: ":memory:".into(),
+            why: Default::default(),
+            controls: Default::default(),
+            capabilities: Default::default(),
+        };
+        let app = access::origin_guard(router(ui));
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(l, app).await });
+        let ask = |host: &'static str, origin: Option<&'static str>| async move {
+            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let o = origin.map(|o| format!("Origin: {o}\r\n")).unwrap_or_default();
+            let req = format!("GET /audio/sink HTTP/1.1\r\nHost: {host}\r\n{o}Connection: close\r\n\r\n");
+            s.write_all(req.as_bytes()).await.unwrap();
+            let mut buf = Vec::new();
+            s.read_to_end(&mut buf).await.unwrap();
+            String::from_utf8_lossy(&buf).lines().next().unwrap_or("").to_string()
+        };
+        // A bare IP Host, no Origin (a top-level navigation): served.
+        assert!(ask("127.0.0.1:9", None).await.contains(" 200 "), "loopback, no Origin, must be served");
+        // Same-origin fetch: Origin authority equals Host: served.
+        assert!(ask("127.0.0.1:9", Some("http://127.0.0.1:9")).await.contains(" 200 "),
+                "a same-origin request must be served");
+        // A visited page: a foreign Origin. Refused (CSRF).
+        assert!(ask("127.0.0.1:9", Some("http://evil.example")).await.contains(" 403 "),
+                "a foreign Origin must be refused");
+        // DNS rebinding: Origin and Host agree on the attacker's own name, so
+        // the Origin check passes -- but the name is not one we answer to.
+        assert!(ask("evil.example", Some("http://evil.example")).await.contains(" 403 "),
+                "an unrecognised Host must be refused");
+        // localhost by name is one we answer to.
+        assert!(ask("localhost:9", Some("http://localhost:9")).await.contains(" 200 "),
+                "localhost must be served");
+    }
+
     /// A host that forbids writing beside the audio refuses the lyrics
     /// sidecar's route, and leaves no request for the loop to act on
     /// `[REQ-AND-200]`; one that allows it takes the request as before.

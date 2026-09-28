@@ -104,6 +104,85 @@ pub fn guard(router: Router, secret: Option<&str>) -> Router {
     }
 }
 
+// --- Cross-site guard `[SecurityReview C2]` ---------------------------------
+//
+// The appliance UI is meant to be open on the LAN and asks for nothing (a
+// phone adds the launch key above). Being open to the LAN is a choice; being
+// driven by a page the household merely *visited* is not. A bodyless or
+// `text/plain` POST crosses origins with no CORS preflight, so without this a
+// visited page could POST `/power/off`, `/wifi/forget/*`, `/mesh/*` or
+// `/discovery/announce/*`, and a DNS-rebinding page could read the snapshot.
+//
+// Two checks, the pair the review names, because each covers what the other
+// misses:
+//   * **Origin equals Host.** A browser sets `Origin` on every state-changing
+//     request; a cross-site one carries a foreign authority. Comparing it to
+//     `Host` needs no address list and works whether the node is reached by IP
+//     or by name. A GET navigation sends no `Origin`, which is allowed.
+//   * **Host is one we answer to.** DNS rebinding defeats the first check --
+//     the page's own foreign name resolves here, so `Origin` and `Host` agree
+//     on that name. But that name is not `localhost`, this node's hostname, or
+//     a bare IP literal, so it is refused here.
+
+/// The `Host` authorities this node legitimately answers to. A bare IP literal
+/// is allowed dynamically (an appliance is usually reached by address); a
+/// *name* must be one of these, so an attacker's rebinding domain is not.
+fn local_host_names() -> Arc<std::collections::HashSet<String>> {
+    let mut s = std::collections::HashSet::new();
+    for n in ["localhost", "127.0.0.1", "::1", "lempi", "lempi.lan"] {
+        s.insert(n.to_string());
+    }
+    let h = crate::discovery::host_name().to_ascii_lowercase();
+    if h != "unknown" && !h.is_empty() {
+        s.insert(h.clone());
+        s.insert(format!("{h}.local"));
+    }
+    Arc::new(s)
+}
+
+/// The host part of an authority (`host:port`, or `[v6]:port`), lower-cased.
+fn host_of(authority: &str) -> String {
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        rest.split_once(']').map(|(h, _)| h).unwrap_or(rest)
+    } else {
+        authority.rsplit_once(':').map(|(h, _)| h).unwrap_or(authority)
+    };
+    host.to_ascii_lowercase()
+}
+
+fn host_ok(names: &std::collections::HashSet<String>, authority: &str) -> bool {
+    let host = host_of(authority);
+    names.contains(&host) || host.parse::<std::net::IpAddr>().is_ok()
+}
+
+async fn same_origin(
+    State(names): State<Arc<std::collections::HashSet<String>>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let headers = req.headers();
+    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("");
+    if !host_ok(&names, host) {
+        return (StatusCode::FORBIDDEN, "unrecognised Host").into_response();
+    }
+    if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+        // `Origin: null` (a sandboxed frame, `file://`) has no authority and
+        // never equals `Host`, so it is refused, which is what we want.
+        let authority = origin.split_once("://").map(|(_, a)| a).unwrap_or(origin);
+        if !authority.eq_ignore_ascii_case(host) {
+            return (StatusCode::FORBIDDEN, "cross-site request refused").into_response();
+        }
+    }
+    next.run(req).await
+}
+
+/// Wrap a router so a cross-site or rebinding request is refused before any
+/// handler (including the `/ws` upgrade) runs. Applied on every build; the
+/// launch-key `guard` above is the phone's extra layer, this is everyone's.
+pub fn origin_guard(router: Router) -> Router {
+    router.layer(axum::middleware::from_fn_with_state(local_host_names(), same_origin))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

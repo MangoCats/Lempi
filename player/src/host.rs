@@ -273,6 +273,7 @@ impl Player {
                 capabilities,
             };
             let app = crate::web::access::guard(crate::web::router(ui), cfg.web_secret.as_deref());
+            let app = crate::web::access::origin_guard(app);
             let ip = if cfg.web_loopback_only { [127, 0, 0, 1] } else { [0, 0, 0, 0] };
             let addr = SocketAddr::from((ip, port));
             let listener = match runtime.block_on(tokio::net::TcpListener::bind(addr)) {
