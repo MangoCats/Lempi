@@ -81,7 +81,46 @@ pub(super) async fn discovery_status(State(ui): State<Ui>) -> axum::response::Re
 /// Each answers JSON; a refusal is 409 with the reason.
 pub(super) async fn mesh_status(State(ui): State<Ui>) -> axum::response::Response {
     use axum::response::IntoResponse;
-    axum::Json(crate::membership::status(&ui.db)).into_response()
+    let mut s = crate::membership::status(&ui.db);
+    // The pairing window `[SecurityReview3 R3]`, so the page can say whether
+    // enrolment is open and for how long. On a loopback-only host it is always
+    // effectively open (no window needed), which the skin reads as "local".
+    s["pairing"] = serde_json::json!({
+        "required": !ui.web_loopback_only,
+        "open": ui.web_loopback_only || crate::pairing::open(),
+        "remaining_secs": crate::pairing::remaining_secs(),
+        "window_secs": crate::pairing::window_secs(),
+    });
+    axum::Json(s).into_response()
+}
+
+/// Set how long the pairing window stays open, in seconds `[SecurityReview3
+/// R3]`. Clamped to 60..=3600. Gated like the membership changes it governs: a
+/// LAN host must not be able to pre-stretch the window before a button press,
+/// so on a LAN-exposed host this needs the window already open (or loopback).
+pub(super) async fn set_pairing_window(
+    State(ui): State<Ui>,
+    axum::extract::Path(secs): axum::extract::Path<u64>,
+) -> StatusCode {
+    if !ui.web_loopback_only && !crate::pairing::open() {
+        return StatusCode::CONFLICT;
+    }
+    let secs = secs.clamp(60, 3600);
+    let (db, lib) = (ui.db.clone(), ui.library.clone());
+    let done = tokio::task::spawn_blocking(move || {
+        crate::db::PlayerStore::open_split(&db, &lib)
+            .map_err(|e| e.to_string())?
+            .save_pairing_window_secs(secs)
+            .map_err(|e| e.to_string())
+    })
+    .await;
+    match done {
+        Ok(Ok(())) => {
+            crate::pairing::set_window_secs(secs);
+            StatusCode::NO_CONTENT
+        }
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 pub(super) async fn mesh_step(
@@ -91,6 +130,7 @@ pub(super) async fn mesh_step(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     let db = ui.db.clone();
+    let loopback = ui.web_loopback_only;
     let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
         let b: serde_json::Value = if body.trim().is_empty() {
             serde_json::Value::Null
@@ -98,6 +138,22 @@ pub(super) async fn mesh_step(
             serde_json::from_str(&body).map_err(|e| format!("not JSON: {e}"))?
         };
         let parts: Vec<&str> = path.split('/').collect();
+        // Membership changes -- accepting an invitation, confirming it, and
+        // leaving -- require an open pairing window on a LAN-exposed host, so a
+        // host on the network cannot enrol or detach this player on its own
+        // `[SecurityReview3 R3]`. A loopback-only host (a phone) is inherently
+        // local and needs no window. The window opens only by the local button
+        // (`crate::pairing`), never over HTTP. The hub-driven roster update, and
+        // the mid-flow reveal/reject, are not gated: `roster` is authenticated
+        // by the pinned mesh key, and a reject only cancels.
+        let gated = matches!(parts.as_slice(), ["invite"] | ["invite", _, "confirm"] | ["leave"]);
+        if gated && !loopback && !crate::pairing::open() {
+            return Err(format!(
+                "pairing is not open: press the pair button on the device (open for {}s), \
+                 then try again `[SecurityReview3 R3]`",
+                crate::pairing::window_secs()
+            ));
+        }
         match parts.as_slice() {
             ["invite"] => crate::membership::invite(&db, &b),
             ["invite", id, "reveal"] => crate::membership::reveal(&db, id, b["nonce"].as_str().unwrap_or("")),

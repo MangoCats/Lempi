@@ -114,6 +114,21 @@ An invitation runs as its own process, since it waits minutes for two people.
 An Accept queued behind it in the console's one-at-a-time jobs was never
 reached. Accept, reject and remove are done at once.
 
+**`[SPEC-DSC-090]` A player accepts an invitation, confirms it, or leaves only
+while a pairing window is open.** The player's `/mesh/*` routes have no login,
+like the rest of its LAN UI, so the code comparison alone did not stop a host on
+the network from driving the whole enrolment itself (it can read the code from
+`GET /mesh`) `[SecurityReview3 R3]`. So those three changes need a **pairing
+window**, opened only by a local, physical act -- a `SIGUSR1` to the player
+(`lempi-btctl pair`, wired to a button, the framebuffer UI, or an operator on
+the console). A page on the LAN can neither send that signal nor read that it
+happened. The window is five minutes by default, adjustable and clamped to
+1--60 minutes, and only adjustable while it is already open. A loopback-only
+host (a phone `[REQ-AND-160]`) is inherently local and needs no window. A new
+invitation is refused while one is in progress, and `leave` needs the window
+too, so detaching a player is a physical act as well; hub-driven removal (a
+signed roster that no longer names it) is unaffected.
+
 ## 3. What it shows
 
 The console's mesh page, **On this network**, lists the candidates that answer,
@@ -165,4 +180,4 @@ within its three seconds and never re-sent on a schedule.
 
 ---
 
-**Traceability:** `[SPEC-DSC-010..080]` · builds `[SPEC-MTR-300..330]` · revises `[SPEC-MTR-310]` for hubs (`[SPEC-DSC-040]`)
+**Traceability:** `[SPEC-DSC-010..090]` · builds `[SPEC-MTR-300..330]` · revises `[SPEC-MTR-310]` for hubs (`[SPEC-DSC-040]`) · the pairing gate answers the follow-up review (R3)

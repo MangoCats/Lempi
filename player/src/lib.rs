@@ -95,6 +95,7 @@ pub mod host;
 /// library emits through `tracing`; this is the one place a line is written.
 pub mod logging;
 pub mod membership;
+pub mod pairing;
 /// Per-song lyrics where a client will find them `[SPEC-LYR-070]`.
 pub mod lyrics_cache;
 /// Lyrics beside the audio, for a client that reads the music folder

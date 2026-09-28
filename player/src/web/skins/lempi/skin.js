@@ -1232,20 +1232,30 @@
       buttons.append(b);
     };
     const inv = d.invite && ['comparing', 'confirmed'].includes(d.invite.state) ? d.invite : null;
+    // The pairing window [SecurityReview3 R3]: enrolling or leaving needs it open
+    // (opened only by the pair button on the device), unless this is a local
+    // loopback host that needs no window.
+    const p = d.pairing || {};
+    let pairMsg = '';
+    if (p.required) {
+      pairMsg = p.open
+        ? ` Pairing is open for about ${Math.max(1, Math.ceil((p.remaining_secs || 0) / 60))} more min.`
+        : ' Pairing is closed — press the pair button on the device to enrol or leave.';
+    }
     if (d.member) {
       const m = d.member;
       note.textContent = `A member of “${m.mesh}” (mesh ${short(m.mesh_fp)}), whose hub is ${short(m.hub_fp)}` +
-        ` at ${m.hub_address || 'its address'}; roster version ${m.version}, ${(m.members || []).length} member(s).`;
+        ` at ${m.hub_address || 'its address'}; roster version ${m.version}, ${(m.members || []).length} member(s).` + pairMsg;
       button('Leave the mesh', 'leave', 'Forget this mesh here? The hub lists this player until someone removes it there.', { mesh_fp: m.mesh_fp });
     } else if (inv && inv.state === 'comparing') {
       note.textContent = `Invited to join “${inv.mesh}” by hub ${short(inv.hub_fp)}. Code ${inv.code} — ` +
-        'confirm only if the hub’s mesh page shows the same code.';
+        'confirm only if the hub’s mesh page shows the same code.' + pairMsg;
       button('The codes match', `invite/${inv.id}/confirm`, null, { code: inv.code });
       button('Reject', `invite/${inv.id}/reject`);
     } else if (inv) {
       note.textContent = `Confirmed here (code ${inv.code}); waiting for the hub to accept.`;
     } else {
-      note.textContent = 'In no mesh. A hub’s mesh page can invite this player, and the code is compared here.';
+      note.textContent = 'In no mesh. A hub’s mesh page can invite this player, and the code is compared here.' + pairMsg;
     }
   }
   mesh();

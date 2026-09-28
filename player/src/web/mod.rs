@@ -94,6 +94,11 @@ pub struct Ui {
     /// What this host offers beyond playing, measured once at start
     /// `[GDE-HST-360]`.
     pub capabilities: capabilities::Capabilities,
+    /// Whether the web server is bound to loopback only. On such a host (a
+    /// phone `[REQ-AND-160]`) every request is already local, so the mesh
+    /// pairing window `[SecurityReview3 R3]` is not required; on a LAN-exposed
+    /// appliance it is.
+    pub web_loopback_only: bool,
 }
 
 /// How often a connected browser is sent a snapshot. Fast enough that the
@@ -497,6 +502,10 @@ pub fn router(ui: Ui) -> Router {
         // Joining a mesh, and belonging to one `[SPEC-MTR-130]`.
         .route("/mesh", get(mesh_status))
         .route("/mesh/*step", post(mesh_step))
+        // How long the pairing window stays open `[SecurityReview3 R3]`. Opening
+        // it is the local button (SIGUSR1), never a route; this only sets the
+        // length, and is under `/pairing` to stay clear of `/mesh/*step`.
+        .route("/pairing/window/:secs", post(set_pairing_window))
         .route("/skip/suppress/:hours", post(set_skip_suppress))
         .route("/dequeue/suppress/:hours", post(set_dequeue_suppress))
         .route("/queue/depth/:n", post(set_queue_depth))
@@ -1348,6 +1357,7 @@ mod tests {
             why: Default::default(),
             controls: Default::default(),
             capabilities: Default::default(),
+            web_loopback_only: false,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1389,6 +1399,7 @@ mod tests {
                 why: Default::default(),
                 controls: Default::default(),
                 capabilities: Default::default(),
+                web_loopback_only: false,
             }
         };
         let serve = |app: Router| async move {
@@ -1444,6 +1455,7 @@ mod tests {
             why: Default::default(),
             controls: Default::default(),
             capabilities: Default::default(),
+            web_loopback_only: false,
         };
         let app = access::origin_guard(router(ui));
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1498,6 +1510,7 @@ mod tests {
                     writes_beside_audio: allowed,
                     ..Default::default()
                 },
+                web_loopback_only: false,
             };
             let controls = ui.controls.clone();
             let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

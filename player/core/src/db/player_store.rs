@@ -1368,6 +1368,33 @@ impl PlayerStore {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
+    /// How long the mesh pairing window stays open after a button press, in
+    /// seconds `[SecurityReview3 R3]`. Default 300 (five minutes); clamped to
+    /// a sane range by the caller that writes it.
+    pub fn load_pairing_window_secs(&self) -> u64 {
+        self.conn
+            .query_row("SELECT value FROM player_settings WHERE key = 'pairing_window_secs'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(300)
+    }
+
+    pub fn save_pairing_window_secs(&self, secs: u64) -> Result<(), DbError> {
+        self.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES ('pairing_window_secs', ?1, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![secs.to_string()],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
     /// The speaker last chosen through `use` or `pair`, if any
     /// `[PI3-AIM-020]`, `[REQ-VIS-260]`. `None` on a library where nothing
     /// has ever been chosen this way -- the caller's job is to fall back to

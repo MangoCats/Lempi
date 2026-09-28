@@ -145,6 +145,17 @@ pub fn invite(listener: &Path, body: &Value) -> Result<Value, String> {
     if membership(listener).is_some() {
         return Err("already a member of a mesh: leave it first".into());
     }
+    // Refuse a new invitation while one is mid-comparison `[SecurityReview3 R3]`:
+    // the single `INVITE` slot would otherwise be silently overwritten, so a
+    // second invite could replace the one a person is part-way through
+    // confirming. A stale one that never completed is cleared with reject.
+    if let Ok(g) = INVITE.lock() {
+        if let Some(existing) = g.as_ref() {
+            if existing.state != "rejected" {
+                return Err("an invitation is already in progress: confirm or reject it first".into());
+            }
+        }
+    }
     let s = |k: &str| body[k].as_str().map(str::to_string).ok_or(format!("the invitation has no {k}"));
     let hub_cert = s("hub_certificate")?;
     let (hub_fp, hub_key) = cert_key(&hub_cert)?;
@@ -391,6 +402,12 @@ mod tests {
         assert!(confirm(&l, "inv1", "").is_err(), "an empty code is refused");
         let ok = confirm(&l, "inv1", "123 456").unwrap();
         assert_eq!(ok["state"], "confirmed", "the shown code confirms");
+        // [SecurityReview3 R3, option 4]: a second invitation is refused while
+        // one is in progress -- the single INVITE slot is not silently replaced.
+        // (Checked here, where INVITE is already held, to stay off the global
+        // that parallel tests would race on.)
+        let err = invite(&l, &json!({})).unwrap_err();
+        assert!(err.contains("already in progress"), "a second invite is refused: {err}");
         *INVITE.lock().unwrap() = None;
         let _ = std::fs::remove_dir_all(&d);
     }
