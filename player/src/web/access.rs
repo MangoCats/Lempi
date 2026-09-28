@@ -152,7 +152,22 @@ fn host_of(authority: &str) -> String {
 
 fn host_ok(names: &std::collections::HashSet<String>, authority: &str) -> bool {
     let host = host_of(authority);
-    names.contains(&host) || host.parse::<std::net::IpAddr>().is_ok()
+    if host.is_empty() {
+        return false;
+    }
+    // A name we answer to, or a bare IP literal.
+    if names.contains(&host) || host.parse::<std::net::IpAddr>().is_ok() {
+        return true;
+    }
+    // A single-label LAN short name -- how a household actually reaches a node
+    // (`lempi02w`, `lp3-wifi`), which is a DNS or hosts alias distinct from the
+    // node's kernel hostname, so the allow-list above cannot know it. A
+    // DNS-rebinding page uses a *registered* domain, which has a dot and stays
+    // refused; a dotless name only ever resolves on the local network, which
+    // is the boundary this appliance UI is already open on by design. Found
+    // 2026-09-28 in fleet verification: the strict list 403'd the very URLs the
+    // fleet is reached by `[SecurityReview2 C2 follow-up]`.
+    !host.contains('.') && !host.contains(':')
 }
 
 async fn same_origin(

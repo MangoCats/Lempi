@@ -1466,13 +1466,18 @@ mod tests {
         // A visited page: a foreign Origin. Refused (CSRF).
         assert!(ask("127.0.0.1:9", Some("http://evil.example")).await.contains(" 403 "),
                 "a foreign Origin must be refused");
-        // DNS rebinding: Origin and Host agree on the attacker's own name, so
-        // the Origin check passes -- but the name is not one we answer to.
+        // DNS rebinding: Origin and Host agree on the attacker's own registered
+        // (dotted) name, so the Origin check passes -- but the name is not one
+        // we answer to, and its dot keeps it out.
         assert!(ask("evil.example", Some("http://evil.example")).await.contains(" 403 "),
-                "an unrecognised Host must be refused");
+                "an unrecognised dotted Host must be refused");
         // localhost by name is one we answer to.
         assert!(ask("localhost:9", Some("http://localhost:9")).await.contains(" 200 "),
                 "localhost must be served");
+        // A dotless LAN short name (a hosts/DNS alias, not the kernel hostname)
+        // is served -- how the fleet is actually reached `[C2 follow-up]`.
+        assert!(ask("lp3-wifi:9", Some("http://lp3-wifi:9")).await.contains(" 200 "),
+                "a dotless LAN alias must be served");
     }
 
     /// A host that forbids writing beside the audio refuses the lyrics
