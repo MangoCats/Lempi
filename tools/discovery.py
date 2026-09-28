@@ -92,9 +92,9 @@ def query(kind: str, timeout: float = 3.0, targets=("255.255.255.255",),
                         except OSError:
                             pass
             wait = min(left, max(0.0, due[0] - (time.monotonic() - start))) if due else left
-            for key, _ in sel.select(wait):
+            for ready, _ in sel.select(wait):
                 try:
-                    data, (ip, _) = key.fileobj.recvfrom(4096)
+                    data, (ip, _) = ready.fileobj.recvfrom(4096)
                 except OSError:
                     continue      # a port-unreachable from somewhere: not an answer
                 try:

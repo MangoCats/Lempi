@@ -249,7 +249,13 @@ document.getElementById('run-diff').onclick = async () => {
   async function act(path, body) {
     const r = await (await fetch(path, { method: 'POST', body: JSON.stringify(body || {}) })).json();
     if (r.error) return $('#mesh-out').replaceChildren(S.el('div', { style: 'color:var(--bad)', text: r.error }));
-    S.watchJob(r.job_id, $('#mesh-out'), () => load());
+    if (r.job_id) return S.watchJob(r.job_id, $('#mesh-out'), () => load());
+    // Done at once (accept, reject, remove), or an invitation now under way:
+    // it appears under "Asking to join" with its code within a few seconds.
+    $('#mesh-out').replaceChildren(S.el('div', { class: 'meta', text: r.inviting
+      ? `Inviting ${r.inviting}: its code appears below, and in its own Settings.` : 'Done.' }));
+    last = null;
+    load();
   }
   function render(d) {
     $('#mesh-none').hidden = d.initialised;

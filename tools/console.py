@@ -1226,9 +1226,15 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"error": f"not a folder: {folder}"}, code=400)
                 return self.send_json({"job_id": STATE["jobs"].submit("propose", folder)})
             if p.startswith("/api/mesh/"):
-                # [SPEC049]: each a `mesh.py` command, run as a job.
+                # [SPEC049]. Creating the mesh is a job. Accept, reject and
+                # remove are done here and at once: they touch the mesh files,
+                # never the library, and one queued behind a waiting invitation
+                # was never reached -- found 2026-09-28, the console's job queue
+                # being one at a time. An invitation waits minutes for two
+                # people, so it runs as its own process, not as a job.
                 parts = p.strip("/").split("/")
                 hexish = lambda s: bool(s) and all(c in "0123456789abcdef" for c in s)  # noqa: E731
+                mdir = meshmod.mesh_dir(STATE["library"] or STATE["path"])
                 if parts[2:] == ["init"]:
                     n = int(self.headers.get("Content-Length") or 0)
                     b = json.loads(self.rfile.read(n) or b"{}") if 0 < n < 4096 else {}
@@ -1237,22 +1243,31 @@ class Handler(BaseHTTPRequestHandler):
                     args = ["init", "--mesh", str(b["mesh"]).strip()]
                     if str(b.get("name", "")).strip():
                         args += ["--name", str(b["name"]).strip()]
-                elif len(parts) == 5 and parts[2] == "enrol" and parts[4] in ("accept", "reject") and hexish(parts[3]):
-                    args = [parts[4], parts[3]]
-                elif len(parts) == 5 and parts[2] == "member" and parts[4] == "remove" and hexish(parts[3]):
-                    args = ["remove", parts[3]]
-                elif parts[2:] == ["invite"]:
-                    # [SPEC-MTR-130] for a player: the job invites it and waits for
-                    # both people to confirm, then gives it the roster.
+                    return self.send_json({"job_id": STATE["jobs"].submit("mesh", json.dumps(args))})
+                try:
+                    if len(parts) == 5 and parts[2] == "enrol" and parts[4] in ("accept", "reject") and hexish(parts[3]):
+                        s = (meshmod.accept if parts[4] == "accept" else meshmod.reject)(mdir, parts[3])
+                        return self.send_json({"state": s["state"]})
+                    if len(parts) == 5 and parts[2] == "member" and parts[4] == "remove" and hexish(parts[3]):
+                        return self.send_json({"version": meshmod.remove(mdir, parts[3])["version"]})
+                except SystemExit as e:
+                    return self.send_json({"error": str(e)}, code=409)
+                if parts[2:] == ["invite"]:
                     n = int(self.headers.get("Content-Length") or 0)
                     b = json.loads(self.rfile.read(n) or b"{}") if 0 < n < 4096 else {}
                     address, port = str(b.get("address", "")), int(b.get("port") or 5720)
                     if not address or not all(c in "0123456789." for c in address):
                         return self.send_json({"error": "not an address"}, code=400)
-                    args = ["invite", address, "--port", str(port)]
-                else:
-                    return self.send_json({"error": "unknown"}, code=404)
-                return self.send_json({"job_id": STATE["jobs"].submit("mesh", json.dumps(args))})
+                    logs = os.path.join(mdir, "invites")
+                    os.makedirs(logs, exist_ok=True)
+                    log = os.path.join(logs, f"{address}.log")
+                    with open(log, "w", encoding="utf-8") as fh:
+                        subprocess.Popen([sys.executable, "-u", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                                             "mesh.py"),
+                                          STATE["library"] or STATE["path"], "invite", address, "--port", str(port)],
+                                         stdout=fh, stderr=subprocess.STDOUT, cwd=ROOT)
+                    return self.send_json({"inviting": address, "log": log})
+                return self.send_json({"error": "unknown"}, code=404)
             if p.startswith("/api/intake/"):
                 # A person's decision on a waiting file, run as a job: the
                 # same `pending.py` command a person could type [SPEC-SUI-015].
