@@ -31,9 +31,18 @@ passed off as a new one:
  "mesh": "<name>", "mesh_fingerprint": "...", "members_port": 5732}
 ```
 
-The last three are a hub's only. The members' query of `[SPEC-MTR-310]`,
-proven by the discovery key, is not built: today no enrolled member listens.
-It comes with the appliances' enrolment.
+The last three are a hub's only.
+
+**`[SPEC-DSC-015]` The members' query** `[SPEC-MTR-310]`, built with the
+players' enrolment:
+- **The query** adds `"q": "members"`, the mesh's fingerprint, and a `proof`:
+  HMAC-SHA256 over `lempi-members|<mesh>|<nonce>`, keyed with the discovery key
+  the roster carries to members.
+- **Who answers:** a member answers only a query whose proof checks against
+  its own mesh. It then answers `"a": "member"` with a proof of its own over
+  `lempi-member|<nonce>|<fingerprint>`.
+- **Everyone else, other meshes included, gets silence:** not even that a member
+  is there. A member no longer answers as a candidate.
 
 **`[SPEC-DSC-020]` Who answers what.**
 - **A player that belongs to no mesh answers `candidates`**, unless "Be found on
@@ -69,6 +78,32 @@ off is joined only by typing its address.
 
 ---
 
+**`[SPEC-DSC-070]` A player joins by invitation, over plain HTTP.** A player
+has no screen of its own and no HTTPS client, so the hub invites it over its
+web port (`mesh.py invite`, the console's **invite**), and a person compares the
+code on the console with the one in the player's Settings. HTTP is safe for
+this only because of what the code covers, as Bluetooth's numeric comparison
+is safe over an open radio:
+- each side derives the code from both keys as *it* received them, and the hub
+  commits to its nonce first, so a device in the middle makes the codes differ;
+- the invitation carries the mesh key signed by the hub's own key, which the
+  code covers, so the mesh key, and every roster it signs after, is
+  authenticated by the same comparison.
+
+In order:
+1. The player answers with its bare self-signed certificate and a nonce, signed
+   by its key.
+2. The hub reveals its nonce, and both sides show the code.
+3. The player's person confirms in its Settings, signed.
+4. The hub's person accepts on the console.
+5. Only then does the hub send the roster. The player keeps it only if the
+   pinned mesh key signed it and it names the player (`mesh-member.json`
+   beside the listener, `lempi_player::membership`).
+
+An invitation runs as its own process, since it waits minutes for two people.
+An Accept queued behind it in the console's one-at-a-time jobs was never
+reached. Accept, reject and remove are done at once.
+
 ## 3. What it shows
 
 The console's mesh page, **On this network**, lists the candidates that answer,
@@ -84,6 +119,10 @@ address, and joining still goes through the code comparison `[SPEC-MTR-130]`.
   key `ddc6 0c85`;
 - the Moto G found it as "“Home” — GMKTEC at 192.168.67.95 · hub ddc6 0c85",
   through Windows' firewall;
+- lempi02w joined "Home" by invitation, the console and its own Settings both
+  showing 017 830 and naming hub `ddc6 0c85`; roster version 3. Then the proven
+  members' query found it at 192.168.67.20, a wrong key got silence, and it
+  answered as a candidate no more;
 - with ee247d0 deployed, the four players answered as candidates, each with a
   key made at its first start: bose `3398 fb55`, lempi02w ("LempiPiHost")
   `f101 e6e2`, lp3-wifi ("lempiplay3") `7cf0 4ccf`, smartboardpc ("Smart")
@@ -107,4 +146,4 @@ within its three seconds and never re-sent on a schedule.
 
 ---
 
-**Traceability:** `[SPEC-DSC-010..060]` · builds `[SPEC-MTR-300..330]` · revises `[SPEC-MTR-310]` for hubs (`[SPEC-DSC-040]`)
+**Traceability:** `[SPEC-DSC-010..070]` · builds `[SPEC-MTR-300..330]` · revises `[SPEC-MTR-310]` for hubs (`[SPEC-DSC-040]`)
