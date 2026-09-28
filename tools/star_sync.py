@@ -11,6 +11,7 @@ One command per stage, each working in a dated run folder under the plan's
     python tools/star_sync.py PLAN patch              every patch, each proven offline
     python tools/star_sync.py PLAN rehearse [NODE..]  read-only, against the live files
     python tools/star_sync.py PLAN commit [NODE..]    for real: the hub, then the nodes
+    python tools/star_sync.py PLAN shadow             the signed transport beside ssh, read-only
     python tools/star_sync.py PLAN backup             the hub's daily backup, and its mirror
     python tools/star_sync.py PLAN status             exits 1 when a backup has gone stale
 
@@ -664,6 +665,147 @@ def status(plan):
     return 1 if bad else 0
 
 
+# ---------------------------------------------- the signed transport, shadowed --
+# [IMPL-NSH-300]: before any run depends on it, each player's snapshot is
+# taken both ways and each patch rehearsed both ways, and the two must agree.
+# Nothing here writes to a node: a rehearsal checks and keeps nothing.
+
+# The merge's shared listener tables and per-machine catalogue columns, which
+# lempi-core names as MERGED and MACHINE_SCOPE (held equal by test_star_merge).
+SIGNED_TABLES = sorted(t for t, s in sm.TABLES.items() if s["rule"] in (sm.LWW, sm.UNION))
+SIGNED_EXCLUDE = {"files": sorted(sm.MACHINE_SCOPE["files"])}
+
+
+def db_of(export, path):
+    """A database from `mesh_sync::export`'s shape. A table the export gives
+    no creating statement for -- the catalogue summary's -- is made from its
+    columns, keyed by its first."""
+    c = sqlite3.connect(path)
+    try:
+        for t in export["tables"]:
+            for s in t.get("create") or [f"CREATE TABLE {t['name']} ({', '.join(t['columns'])}, "
+                                         f"PRIMARY KEY ({', '.join(t['key'])}))"]:
+                c.execute(s)
+            c.executemany(f"INSERT INTO {t['name']} ({', '.join(t['columns'])}) VALUES "
+                          f"({', '.join('?' * len(t['columns']))})",
+                          [[sp.dec(v) for v in r] for r in t["rows"]])
+        c.commit()
+    finally:
+        c.close()
+
+
+def differs(a_db, b_db, spec):
+    """Rows held by one side and not the other, per table: `spec` maps a table
+    to the columns compared. Values compared as a patch carries them."""
+    out = {}
+    a, b = sp.open_ro(a_db), sp.open_ro(b_db)
+    try:
+        for t, cols in spec.items():
+            def rows(c):
+                if t not in sp.tables_of(c):
+                    return set()
+                have = [x for x in cols if x in sp.columns(c, t)]
+                return {json.dumps([sp.enc(v) for v in r]) for r in c.execute(f"SELECT {', '.join(have)} FROM {t}")}
+            ra, rb = rows(a), rows(b)
+            if ra != rb:
+                out[t] = {"only_first": len(ra - rb), "only_second": len(rb - ra)}
+    finally:
+        a.close()
+        b.close()
+    return out
+
+
+def shadow(plan, run):
+    """Every planned player with a `member` fingerprint, over the signed
+    transport, beside what the ssh path took for this run."""
+    with open(os.path.join(run, "baselines.json"), encoding="utf-8") as fh:
+        baselines = json.load(fh)
+    mdir = meshmod.mesh_dir(at_root(plan["hub"]["library"]))
+    found = meshmod.sync_players(mdir)
+    out = os.path.join(run, "shadow")
+    os.makedirs(out, exist_ok=True)
+    report = ["# Signed transport, shadowed", "",
+              f"Run `{stamp_of(run)}`, beside its ssh snapshot and patches [IMPL-NSH-300]. "
+              "Rows that moved on a node between the two snapshots show as differences; "
+              "take the shadow soon after the snapshot.", ""]
+    ok = True
+    for name, n in sorted(plan["nodes"].items()):
+        fp = n.get("member")
+        if not fp:
+            report += [f"## {name}", "", "- skipped: no `member` fingerprint in the plan", ""]
+            continue
+        report += [f"## {name}", ""]
+        if name not in baselines:
+            report += ["- skipped: missing from this run's ssh snapshot", ""]
+            continue
+        if fp not in found:
+            report += [f"- MISSING: {fp[:8]} did not answer the members' query", ""]
+            ok = False
+            continue
+        nd = os.path.join(out, name)
+        os.makedirs(nd, exist_ok=True)
+        try:
+            snap = meshmod.sync_step(mdir, found[fp], "snapshot", stamp_of(run))
+        except (ValueError, OSError) as err:
+            report += [f"- snapshot REFUSED: {err}", ""]
+            ok = False
+            continue
+        for part, fname in (("listener", "listener.db"), ("catalogue", "summary.db")):
+            p = os.path.join(nd, fname)
+            if os.path.exists(p):
+                os.remove(p)
+            db_of(snap[part], p)
+        # The inputs: the shared tables, and the catalogue as the merge reads it.
+        c = sp.open_ro(baselines[name]["listener"])
+        try:
+            spec = {t: sp.columns(c, t) for t in SIGNED_TABLES if t in sp.tables_of(c)}
+        finally:
+            c.close()
+        d_lis = differs(baselines[name]["listener"], os.path.join(nd, "listener.db"), spec)
+        summ = {t["name"]: t["columns"] for t in snap["catalogue"]["tables"]}
+        d_cat = differs(at_root(baselines[name]["library"]), os.path.join(nd, "summary.db"), summ)
+        report.append("- snapshot, shared tables: " + ("the same both ways" if not d_lis else f"DIFFER {d_lis}"))
+        report.append("- snapshot, catalogue as the merge reads it: "
+                      + ("the same both ways" if not d_cat else f"DIFFER {d_cat}"))
+        # The patches, as values, against the same target the ssh patch was made for.
+        t = targets(plan, run, name)
+        lis = sp.make_values(os.path.join(nd, "listener.db"), t["listener"], tables=SIGNED_TABLES)
+        cat = sp.make_values(at_root(baselines[name]["library"]), t["library"], exclude=SIGNED_EXCLUDE)
+        for half, p in (("listener", lis), ("catalogue", cat)):
+            with open(os.path.join(nd, f"{half}.values.json"), "w", encoding="utf-8", newline="\n") as fh:
+                json.dump(p, fh, separators=(",", ":"), sort_keys=True)
+        counts = lambda p: {e["name"]: len(e["rows"]) for e in p["tables"]}       # noqa: E731
+        ssh = {}
+        for half, f in (("listener", "listener.patch.json"), ("catalogue", "library.patch.json")):
+            pth = os.path.join(run, "patches", name, f)
+            if os.path.isfile(pth):
+                with open(pth, encoding="utf-8") as fh:
+                    ssh[half] = {e["name"]: len(e["rows"]) for e in json.load(fh)["tables"]
+                                 if half == "catalogue" or e["name"] in SIGNED_TABLES}
+            else:
+                ssh[half] = {}
+        for half, p in (("listener", lis), ("catalogue", cat)):
+            same = counts(p) == ssh[half]
+            report.append(f"- {half} patch: {counts(p) or 'nothing'}"
+                          + ("" if same else f" -- the ssh patch has {ssh[half] or 'nothing'}"))
+            ok = ok and same
+        try:
+            got = meshmod.sync_step(mdir, found[fp], "rehearse", stamp_of(run),
+                                    cat if cat["tables"] else None, lis if lis["tables"] else None)
+            report.append(f"- signed rehearsal: CLEAN {got}")
+        except (ValueError, OSError) as err:
+            report.append(f"- signed rehearsal: REFUSED -- {err}")
+            ok = False
+        ok = ok and not d_lis and not d_cat
+        report.append("")
+        say(f"  {name}: " + ("agrees" if not (d_lis or d_cat) else "DIFFERS") + " -- see the report")
+    with open(os.path.join(out, "REPORT.md"), "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(report) + "\n")
+    say(f"RESULT shadow: {'every player agrees both ways' if ok else 'a player DIFFERS or refused'}; "
+        f"read {out}/REPORT.md")
+    return 0 if ok else 1
+
+
 def main(argv):
     if len(argv) < 2:
         print(__doc__)
@@ -684,6 +826,8 @@ def main(argv):
         return patch(plan, newest_run(plan, given))
     if cmd in ("rehearse", "commit"):
         return distribute(plan, newest_run(plan, given), rest, cmd == "commit")
+    if cmd == "shadow":
+        return shadow(plan, newest_run(plan, given))
     if cmd == "backup":
         return backup(plan)
     if cmd == "status":

@@ -211,6 +211,72 @@ def apply_member(db, patch, tables):
     return counts
 
 
+def make_values(baseline, target, tables=None, exclude=None):
+    """A patch as values, for the player to apply itself over the signed
+    transport [SPEC-NSH-070] -- `lempi_core::mesh_sync::apply_with` reads it.
+
+    Unlike `make_member` it keeps rows about a passage: an appliance's target
+    is already in its own passage ids [SPEC-NSH-060]. Unlike `make` it carries
+    values, not digests, since Rust cannot reproduce the digest. `tables`
+    limits it (the listener's shared tables); `exclude` maps a table to
+    columns that travel in neither direction -- a node's own machine-scope
+    `files` columns [SPEC-DF-030] -- which a row the node lacks takes from the
+    target, as `also`. A table or column the baseline lacks is made, as
+    `make` makes it."""
+    exclude = exclude or {}
+    b, t = open_ro(baseline), open_ro(target)
+    patch = {"tables": []}
+    try:
+        extra = sorted((tables_of(b) - tables_of(t)) & set(tables or tables_of(b)))
+        if extra:
+            raise SystemExit(f"the target lacks table(s) {extra}: a patch never drops a table")
+        for name in sorted(tables_of(t) & set(tables or tables_of(t))):
+            full = columns(t, name)
+            skip = set(exclude.get(name, ()))
+            cols = [c for c in full if c not in skip]
+            key = key_of(t, name)
+            if set(key) & skip:
+                raise SystemExit(f"{name}: a key column cannot be excluded")
+            entry = {"name": name, "columns": cols, "key": key, "rows": []}
+            base = {}
+            if name in tables_of(b):
+                have = columns(b, name)
+                if set(have) - set(full):
+                    raise SystemExit(f"{name}: the target lacks column(s) {sorted(set(have) - set(full))}")
+                added = [r for r in t.execute(f"PRAGMA table_info({name})") if r[1] not in have]
+                if added:
+                    entry["add_columns"] = [column_decl(r) for r in added]
+                fill = {r[1]: default_of(r) for r in added}
+                for row in b.execute(f"SELECT {', '.join(have)} FROM {name}"):
+                    d = dict(zip(have, row), **fill)
+                    base[tuple(d[c] for c in key)] = tuple(d[c] for c in cols)
+            else:
+                entry["create"] = [r[0] for r in t.execute(
+                    "SELECT sql FROM sqlite_master WHERE tbl_name=? AND sql IS NOT NULL "
+                    "ORDER BY type DESC, name", (name,))]
+            want, also = {}, {}
+            for row in t.execute(f"SELECT {', '.join(full)} FROM {name}"):
+                d = dict(zip(full, row))
+                k = tuple(d[c] for c in key)
+                want[k] = tuple(d[c] for c in cols)
+                also[k] = {c: enc(d[c]) for c in full if c in skip}
+            for k in sorted(set(base) | set(want), key=repr):
+                was, now = base.get(k), want.get(k)
+                if was != now:
+                    r = {"key": [enc(v) for v in k],
+                         "was": None if was is None else [enc(v) for v in was],
+                         "now": None if now is None else [enc(v) for v in now]}
+                    if was is None and also.get(k):
+                        r["also"] = also[k]
+                    entry["rows"].append(r)
+            if entry["rows"] or "create" in entry or "add_columns" in entry:
+                patch["tables"].append(entry)
+    finally:
+        b.close()
+        t.close()
+    return patch
+
+
 def column_decl(info):
     """`ALTER TABLE ... ADD COLUMN` text for a PRAGMA table_info row -- only
     what SQLite can add to a table that already has rows."""

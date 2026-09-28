@@ -43,8 +43,43 @@ SCHEMA = ("CREATE TABLE prefs (id TEXT PRIMARY KEY, v REAL, updated_at TEXT) WIT
           "CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT UNIQUE, art BLOB)")
 
 
+def test_values(tmp):
+    """[SPEC-NSH-070]: a patch as values for the signed transport. A column
+    excluded -- a node's own path -- never travels, and a row differing only
+    there is no row at all; a new row takes it from the target as `also`;
+    rows about a passage are kept [SPEC-NSH-060]; a table and a column the
+    node lacks are made."""
+    base, target = os.path.join(tmp, "vbase.db"), os.path.join(tmp, "vtarget.db")
+    db(base, "CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT, format TEXT, path TEXT)",
+       "CREATE TABLE flags (subject_kind TEXT, subject_id TEXT, at TEXT, PRIMARY KEY (subject_kind, subject_id))",
+       "INSERT INTO files VALUES (1, 'm1', 'flac', '/node/a'), (2, 'm2', 'mp3', '/node/b'), (4, 'm4', 'ogg', '/node/d')",
+       "INSERT INTO flags VALUES ('passage', '10', 't0')")
+    db(target, "CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT, format TEXT, path TEXT, sha TEXT)",
+       "CREATE TABLE flags (subject_kind TEXT, subject_id TEXT, at TEXT, PRIMARY KEY (subject_kind, subject_id))",
+       "CREATE TABLE genres (genre_id INTEGER PRIMARY KEY, name TEXT)",
+       "INSERT INTO files VALUES (1, 'm1', 'opus', '/hub/a', NULL), (3, 'm3', 'flac', '/node/c', 'h3'), "
+       "(4, 'm4', 'ogg', '/hub/d', NULL)",
+       "INSERT INTO flags VALUES ('passage', '10', 't1')", "INSERT INTO genres VALUES (1, 'jazz')")
+    p = sp.make_values(base, target, exclude={"files": ["path"]})
+    t = {e["name"]: e for e in p["tables"]}
+    check(t["files"]["columns"] == ["file_id", "audio_md5", "format", "sha"], "the excluded column is not among the patch's")
+    check(t["files"]["add_columns"] == ["sha TEXT"], "a column the node lacks is added")
+    got = {r["key"][0]: r for r in t["files"]["rows"]}
+    check(sorted(got) == [1, 2, 3], "a row differing only in an excluded column is no row (file 4)")
+    check(got[1]["was"] == [1, "m1", "flac", None] and got[1]["now"] == [1, "m1", "opus", None],
+          "an update carries both values, and never the path")
+    check(got[2]["now"] is None, "a removal")
+    check(got[3].get("also") == {"path": "/node/c"} and got[3]["was"] is None, "a new row takes its path as `also`")
+    check("also" not in got[1], "only a new row carries `also`")
+    check(t["flags"]["rows"] == [{"key": ["passage", "10"], "was": ["passage", "10", "t0"],
+                                  "now": ["passage", "10", "t1"]}], "a passage row is kept, unlike make_member")
+    check(t["genres"]["create"][0].startswith("CREATE TABLE genres"), "a table the node lacks is made")
+    check("path" not in str(sp.make_values(base, target, tables=["flags"])), "tables= limits the patch")
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp()
+    test_values(tmp)
     base, target = os.path.join(tmp, "base.db"), os.path.join(tmp, "target.db")
     db(base, *SCHEMA,
        "INSERT INTO prefs VALUES ('a', 1.0, 't1')", "INSERT INTO prefs VALUES ('gone', 1.0, 't1')",

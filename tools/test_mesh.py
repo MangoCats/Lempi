@@ -77,8 +77,70 @@ def refused(fn) -> bool:
         return True
 
 
+def test_sync_step(tmp):
+    """[SPEC-NSH-030], the hub's side: a request signed by the mesh key, and an
+    answer taken only when the player's own key signed it and it answers this
+    request. A local server plays the player's part. Its own directory: main
+    makes candidates of the same names."""
+    import http.server
+    tmp = tempfile.mkdtemp()
+    from cryptography.hazmat.primitives import serialization
+    mdir = mesh.mesh_dir(os.path.join(tmp, "sync", "library.db"))
+    mesh.init(mdir, "Sync mesh", "desktop")
+    player, stranger = Candidate(tmp, "player"), Candidate(tmp, "stranger")
+    r = mesh.roster(mdir)
+    r["members"].append(mesh.member_entry(mesh.cert_from_pem(player.pem), "player", "p"))
+    mesh.publish(mdir, r)
+    mesh_pub = serialization.load_pem_public_key(mesh.roster(mdir)["mesh"]["public_key"].encode())
+    mode, seen = {"v": "good"}, {}
+
+    class Player(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            req = json.loads(body["request"])
+            seen["signed"] = mesh.verify(mesh_pub, body["request"].encode(), body["signature"])
+            seen["req"] = req
+            who = stranger if mode["v"] == "stranger" else player
+            nonce = "0" * 32 if mode["v"] == "nonce" else req["nonce"]
+            ans = json.dumps({"op": req["op"], "run": req["run"], "nonce": nonce, "node": req["node"],
+                              "result": {"ok": 1}})
+            out = json.dumps({"answer": ans, "signature": who.sign(ans)}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), Player)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    where = {"fingerprint": player.fp, "address": "127.0.0.1", "web_port": srv.server_address[1]}
+    try:
+        got = mesh.sync_step(mdir, where, "snapshot", "20260928T1830Z")
+        check(got == {"ok": 1}, "sync_step: the player's signed answer is taken")
+        check(seen["signed"], "sync_step: the request is signed by the mesh key")
+        check(seen["req"]["node"] == player.fp and seen["req"]["mesh"] == mesh.roster(mdir)["mesh"]["fingerprint"],
+              "sync_step: the request names the node and the mesh")
+        for m, why in (("stranger", "an answer signed by another key"), ("nonce", "an answer to another request")):
+            mode["v"] = m
+            try:
+                mesh.sync_step(mdir, where, "snapshot", "20260928T1830Z")
+                check(False, f"sync_step: {why} is refused")
+            except ValueError:
+                check(True, f"sync_step: {why} is refused")
+        try:
+            mesh.sync_step(mdir, dict(where, fingerprint=stranger.fp), "snapshot", "20260928T1830Z")
+            check(False, "sync_step: a node not in the roster is not asked")
+        except ValueError:
+            check(True, "sync_step: a node not in the roster is not asked")
+    finally:
+        srv.shutdown()
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp()
+    test_sync_step(tmp)
     db = os.path.join(tmp, "library.db")
     mdir = mesh.mesh_dir(db)
     r = mesh.init(mdir, "Test mesh", "desktop")
