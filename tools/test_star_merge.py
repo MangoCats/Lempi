@@ -303,8 +303,25 @@ def test_rekeyed(tmp):
           "and its play keeps its passage")
 
 
+def test_rust_agrees():
+    """[SPEC-NSH-050]: the tables an appliance sends over the signed transport
+    are named in Rust (`MERGED`, `MACHINE_SCOPE` in lempi-core's mesh_sync.rs),
+    and must be exactly the ones this merge shares and keeps per machine."""
+    import re
+    src = open(os.path.join(os.path.dirname(HERE), "player", "core", "src", "mesh_sync.rs"),
+               encoding="utf-8").read()
+    def const(name):
+        body = re.search(rf"pub const {name}: \[&str; \d+\] = \[(.*?)\];", src, re.S).group(1)
+        return sorted(re.findall(r'"([a-z_0-9]+)"', body))
+    shared = sorted(t for t, s in sm.TABLES.items() if s["rule"] in (sm.LWW, sm.UNION))
+    check(const("MERGED") == shared, f"Rust MERGED {const('MERGED')} must be the merge's shared {shared}")
+    check(const("MACHINE_SCOPE") == sorted(sm.MACHINE_SCOPE["files"]),
+          "Rust MACHINE_SCOPE must be the merge's machine-scope files columns")
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp()
+    test_rust_agrees()
     test_rekeyed(tmp)
     test_catalogue(tmp)
     test_receivers(tmp)

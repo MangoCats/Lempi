@@ -57,6 +57,10 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 # new crate for the player, and 33 -> 40 for this one alone, measured
 # 2026-09-25 by the boundary gate's own count.
 sha2 = "0.10"
+# A blob in a patch, as `star_patch.py` writes it (`{"b64": ...}`): a
+# catalogue patch carries them, which a member patch never did `[SPEC-NSH-070]`.
+# The player's own version, so one copy serves both; no dependencies of its own.
+base64 = "0.22"
 
 # The appliance's own local UTC offset `[SPEC-DIR-180]`, for
 # `director/program.rs`. Unix only -- Windows has no `tm_gmtoff` and is asked
