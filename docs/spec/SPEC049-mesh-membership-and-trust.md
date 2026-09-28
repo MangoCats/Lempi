@@ -174,7 +174,7 @@ membership:
 
 **`[SPEC-MTR-220]` ssh stays for the appliances until the channel replaces it.**
 Star sync keeps its ssh transport `[SPEC-STAR-075]`. Moving it onto node
-identities is later work, and optional.
+identities is desired, and to be built later (decided 2026-09-28).
 
 ---
 
@@ -262,8 +262,8 @@ The order agreed 2026-09-27:
    channel, only what changed `[SPEC-PL-107]`;
 4. discovery, and the players' joining by invitation. *Built 2026-09-28*:
    [SPEC050](SPEC050-node-discovery.md) `[SPEC-DSC-070]`;
-5. later, and optional: star sync onto node identities `[SPEC-MTR-220]`, and
-   moving the hub `[SPEC-MTR-070]`.
+5. desired, to be built later: star sync onto node identities `[SPEC-MTR-220]`.
+   Moving the hub `[SPEC-MTR-070]` stays later and optional.
 
 1. **`[SPEC-MTR-900]` Whether occasions follow programmes.** SPEC046 carries
    `listener_occasions` and `listener_occasion_points`, the seasonal calendar,
