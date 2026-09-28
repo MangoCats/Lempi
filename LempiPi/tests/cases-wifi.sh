@@ -133,15 +133,26 @@ OUT=$(printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' 
 assert_in "$OUT" '"ok":true' "a 64-hex key is accepted"
 teardown
 
-# A backslash in the key is GKeyFile-escaped in the file, and never on an argv.
+# A backslash in the key is refused: NetworkManager's keyfile reader cannot
+# store one faithfully (measured on lempi02w 2026-09-28), so it is rejected
+# rather than mangled, and nothing is created.
 setup
 export LEMPI_NM_DIR="$VT_STATE/nm" LEMPI_DNSMASQ_DIR="$VT_STATE/dnsmasq"
 OUT=$(printf 'pa\\ss12word' | btctl wifi-connect BackNet)
-assert_in "$OUT" '"ok":true' "a key with a backslash connects"
-if grep -q '^psk=pa\\\\ss12word$' "$VT_STATE/nm/wifi-BackNet.nmconnection" 2>/dev/null; then
-    ok "the backslash is doubled for GKeyFile"
-else bad "the backslash is doubled for GKeyFile" "keyfile: $(grep '^psk=' "$VT_STATE/nm/wifi-BackNet.nmconnection" 2>/dev/null)"; fi
-assert_not_called 'pa\ss12word' "the raw key never appears in an nmcli argv"
+assert_in "$OUT" "printable characters" "a key with a backslash is refused"
+if [ -e "$VT_STATE/nm/wifi-BackNet.nmconnection" ]; then bad "no profile is left for a backslash key" "one exists"; else ok "no profile is left for a backslash key"; fi
+teardown
+
+# A leading space is encoded as \s (NM strips a raw leading space); the raw key
+# is never on an argv.
+setup
+export LEMPI_NM_DIR="$VT_STATE/nm" LEMPI_DNSMASQ_DIR="$VT_STATE/dnsmasq"
+OUT=$(printf ' leadpass12' | btctl wifi-connect LeadNet)
+assert_in "$OUT" '"ok":true' "a key with a leading space connects"
+if grep -q '^psk=\\sleadpass12$' "$VT_STATE/nm/wifi-LeadNet.nmconnection" 2>/dev/null; then
+    ok "the leading space is written as \\s"
+else bad "the leading space is written as \\s" "keyfile: $(grep '^psk=' "$VT_STATE/nm/wifi-LeadNet.nmconnection" 2>/dev/null)"; fi
+assert_not_called ' leadpass12' "the raw key never appears in an nmcli argv"
 teardown
 
 # When set_psk cannot find the keyfile, the throwaway profile is deleted, not

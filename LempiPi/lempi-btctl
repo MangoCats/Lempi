@@ -69,8 +69,15 @@ DNSMASQ_DIR="${LEMPI_DNSMASQ_DIR:-/etc/NetworkManager/dnsmasq-shared.d}"
 # into the root-owned keyfile, and stops an out-of-range key from being written
 # only to fail obscurely at connect time. `LC_ALL=C` is set at the top, so
 # `[:print:]` is exactly 0x20-0x7E.
+#
+# A backslash is refused too. Measured against NetworkManager on lempi02w
+# 2026-09-28, this keyfile reader treats `\s` as a space and leaves `\\` as two
+# characters -- so no encoding round-trips a literal backslash faithfully, and a
+# password containing one would be silently mangled. A backslash in a Wi-Fi key
+# is rare; refusing it with a clear message is safer than storing it wrong.
 valid_psk() {
     case "$1" in *[![:print:]]*) return 1 ;; esac
+    case "$1" in *\\*) return 1 ;; esac
     _n=${#1}
     [ "$_n" -ge 8 ] && [ "$_n" -le 63 ] && return 0
     case "$1" in *[!0-9A-Fa-f]*) return 1 ;; esac
@@ -86,18 +93,22 @@ valid_psk() {
 #
 # The file is found by the connection's UUID, not by guessing its name from the
 # SSID: NetworkManager sanitises keyfile names, so a guessed path can miss and
-# leave the throwaway `00000000` in place `[SecurityReview2 R1]`. The value is
-# GKeyFile-escaped -- a backslash, and a leading or trailing space, which the
-# format would otherwise mangle.
+# leave the throwaway `00000000` in place `[SecurityReview2 R1]`.
+#
+# Encoding, measured against this NetworkManager 2026-09-28: it strips a leading
+# space from the raw value and reads `\s` as a space, while leaving every other
+# printable character (interior and trailing spaces included) literal -- and a
+# backslash never reaches here, `valid_psk` refuses it. So the only character
+# that needs encoding is a *leading* space, written `\s`.
 set_psk() {
     _conn="$1"; _psk="$2"
     _uuid="$(nmcli -g connection.uuid connection show "$_conn" 2>/dev/null)"
     [ -n "$_uuid" ] || return 1
     _f="$(grep -l "^uuid=$_uuid\$" "$NM_DIR"/*.nmconnection 2>/dev/null | head -1)"
     [ -n "$_f" ] && [ -f "$_f" ] || return 1
-    _esc=${_psk//\\/\\\\}
-    case "$_esc" in " "*) _esc="\\s${_esc# }" ;; esac
-    case "$_esc" in *" ") _esc="${_esc% }\\s" ;; esac
+    _esc="$_psk"; _lead=""
+    while [ "${_esc# }" != "$_esc" ]; do _lead="${_lead}\\s"; _esc="${_esc# }"; done
+    _esc="${_lead}${_esc}"
     _tmp="$(mktemp)" || return 1
     chmod 600 "$_tmp"
     _insec=0; _wrote=0
