@@ -52,6 +52,14 @@ def main() -> int:
     check(not leaks(r"C:\Users\<user>\Music"), "a redacted Windows path is not flagged")
     check(not leaks(r"C:\Users\Public\Music"), "C:\\Users\\Public is not flagged")
 
+    # ssh-target user@host: (a real login is invisible to IP/MAC/path scans).
+    check(leaks("scp x sw@teacherslounge:/home/sw/"), "a real user@host: is flagged")
+    check(leaks("deploy to mango@smartboardpc:/srv"), "another real login is flagged")
+    check(not leaks("ssh pi@speaker-a:/srv/library"), "a role-alias host is not flagged")
+    check(not leaks("git@github.com:MangoCats/Lempi.git"), "the public git host is not flagged")
+    check(not leaks("someone@workshop:/home/someone"), "a placeholder host is not flagged")
+    check(not leaks("user@host:/path/to/library.db"), "the generic user@host: is not flagged")
+
     # The denylist path (compiled pattern), independent of the file.
     pat = re.compile("|".join(re.escape(t) for t in ["lempi02w", "GMKtec"]), re.I)
     check(cfl.denylist_hits("deploy to pi@lempi02w now", pat), "a denylisted hostname is flagged")

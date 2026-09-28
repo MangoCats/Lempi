@@ -13,10 +13,11 @@ second place the private strings live -- the same discipline
 
 **Generic patterns**, always on, for the leaks a denylist would miss because no
 one thought to add them: private IPv4 outside the documentation ranges, full
-MAC addresses, and personal `/home/<name>` and `C:\\Users\\<name>` paths. A
+MAC addresses, personal `/home/<name>` and `C:\\Users\\<name>` paths, and an
+ssh-target `user@host:` naming a host that is not a documented placeholder. A
 small allow-list keeps the documented placeholders (RFC 5737 addresses, the
-appliance's own `10.42.0.x` access-point subnet, `pi`, `<user>`) from being
-reported.
+appliance's own `10.42.0.x` access-point subnet, `pi`, `<user>`, the
+`speaker-*` role aliases) from being reported.
 
 `[GOV-FBN-020]` **It says which instruments ran.** In CI there is no `fleet/`,
 so the denylist is empty and only the generic patterns run -- and it prints
@@ -59,6 +60,11 @@ PRIVATE_IP = re.compile(
 MAC = re.compile(r"\b(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b")
 HOME = re.compile(r"/home/([a-z_][a-z0-9_-]*)", re.I)
 WINUSER = re.compile(r"[Cc]:[\\/]+Users[\\/]+([^\\/\r\n\"']+)")
+# An ssh-target shape: `user@host:` `[SecurityReview2 R5]`. This is what the
+# generic patterns missed before -- a real login like `sw@teacherslounge:` is
+# invisible to an IP/MAC/path scan. Only flagged for a host that is not a
+# documented placeholder, so `pi@speaker-a:` and `someone@workshop:` pass.
+USERHOST = re.compile(r"\b([a-z_][a-z0-9_.-]*)@([a-z0-9][a-z0-9.-]*):", re.I)
 
 # Documented, non-leaking values.
 IP_OK = re.compile(r"^(?:192\.0\.2\.|198\.51\.100\.|203\.0\.113\."   # RFC 5737
@@ -68,6 +74,11 @@ MAC_OK = {"00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff", "aa:bb:cc:dd:ee:ff",
           "de:ad:be:ef:00:00", "12:34:56:78:9a:bc"}
 NAME_OK = {"user", "users", "public", "default", "pi", "root", "shared",
            "someone", "you", "example"}
+# Placeholder / public hosts for the `user@host:` check -- the role aliases the
+# fleet-example files use, and the public git host. A real node name is not here.
+USERHOST_HOST_OK = {"host", "example", "example.com", "localhost", "hub", "mirror",
+                    "build-host", "workshop", "speaker-a", "speaker-b", "speaker-c",
+                    "speaker-bt", "speaker-dac", "speaker-fb", "github.com", "gitlab.com"}
 
 
 def generic_hits(line: str):
@@ -86,6 +97,9 @@ def generic_hits(line: str):
         name = name.strip()
         if name.lower() not in NAME_OK and not name.startswith("<"):
             out.append(rf"C:\Users\{name}")
+    for user, host in USERHOST.findall(line):
+        if host.lower() not in USERHOST_HOST_OK and not host.startswith("<"):
+            out.append(f"{user}@{host}:")
     return out
 
 

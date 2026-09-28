@@ -27,11 +27,14 @@
 #
 # ------------------------------------------------------------- escaping ---
 #
-# `LEMPI_SKIP_VERIFY=1 git commit ...` skips it, and **says so in the terminal
-# rather than passing quietly**. That is the point of having the escape at
-# all: CLAUDE.md §5 says a guard that cannot run must say so loudly instead of
-# reporting a plausible reason it was skipped, and a hook with no escape gets
-# bypassed with `--no-verify`, which prints nothing and leaves no trace.
+# Each check has its OWN escape, and each **says so in the terminal rather than
+# passing quietly** -- CLAUDE.md §5: a skipped guard must be a loud line, not a
+# silent reason, which is why `--no-verify` (no trace) is the wrong tool:
+#   `LEMPI_SKIP_VERIFY=1` -- the slow Linux cross-compile only (section 2);
+#   `LEMPI_SKIP_LEAKS=1`  -- the fleet-leak scan only (section 1b).
+# The two are separate on purpose `[SecurityReview2 R5]`: skipping the slow
+# compile must not also quietly skip the fast privacy scan. The executable-bit
+# check has no escape -- it is sub-second and never worth skipping.
 #
 # ------------------------------------------------------------ enabling ----
 #
@@ -44,13 +47,12 @@ set -u
 
 ROOT=$(git rev-parse --show-toplevel)
 
-if [ "${LEMPI_SKIP_VERIFY:-0}" = "1" ]; then
-    echo "pre-commit: SKIPPED by LEMPI_SKIP_VERIFY=1."
-    echo "pre-commit: staged scripts' executable bits are unchecked, this commit's added"
-    echo "pre-commit: lines are unscanned for fleet leaks, and its cfg(unix) code is"
-    echo "pre-commit: unverified; it may not build on the appliance."
-    exit 0
-fi
+# The two fast checks below (executable bits, fleet leaks) run on EVERY commit
+# and are not skipped by `LEMPI_SKIP_VERIFY`. That variable exists to commit
+# past the slow Linux cross-compile (section 2), and coupling the fast privacy
+# scan to the slow-compile escape meant a leak could slip out whenever someone
+# skipped the compile `[SecurityReview2 R5]`. Each fast check now has its own
+# escape, said out loud: `LEMPI_SKIP_LEAKS=1` for the leak scan.
 
 # ---- 1. every staged script is executable: every commit -----------------
 #
@@ -90,19 +92,23 @@ fi
 
 # ---- 1b. no new fleet leak in the lines this commit adds: every commit --
 #
-# Fast, like the exec-bit check, so it runs on every commit. It scans only the
-# ADDED lines (`--staged`), so the private detail already in the tree -- left
-# as-is by decision, 2026-09-28 -- does not block work, while a new leak is
-# refused `[SecurityReview N1]`. Generic patterns always; the real-name
-# denylist too when `fleet/private-tokens.txt` exists (it does not in CI).
-if ! "$PY" "$ROOT/tools/check_fleet_leaks.py" --staged --strict; then
+# Fast, like the exec-bit check, so it runs on every commit -- and, unlike the
+# slow gate below, is NOT skipped by `LEMPI_SKIP_VERIFY` `[SecurityReview2 R5]`.
+# It scans only the ADDED lines (`--staged`), so the private detail already in
+# the tree -- left as-is by decision, 2026-09-28 -- does not block work, while a
+# new leak is refused `[SecurityReview N1]`. Generic patterns always; the
+# real-name denylist too when `fleet/private-tokens.txt` exists (not in CI).
+if [ "${LEMPI_SKIP_LEAKS:-0}" = "1" ]; then
+    echo "pre-commit: fleet-leak scan SKIPPED by LEMPI_SKIP_LEAKS=1 -- this commit's"
+    echo "pre-commit: added lines were NOT scanned for private fleet detail."
+elif ! "$PY" "$ROOT/tools/check_fleet_leaks.py" --staged --strict; then
     cat <<'EOF'
 
 pre-commit: REFUSED -- a staged line looks like private fleet detail.
 
 Use a documentation address (192.0.2.x, RFC 5737), a role alias, or move the
 detail into the gitignored fleet/. A documented placeholder goes in the
-allow-list in tools/check_fleet_leaks.py. LEMPI_SKIP_VERIFY=1 commits anyway,
+allow-list in tools/check_fleet_leaks.py. LEMPI_SKIP_LEAKS=1 commits anyway,
 out loud.
 EOF
     exit 1
@@ -114,6 +120,14 @@ fi
 # so a pure deletion does not trigger a compile of what is left.
 staged=$(git diff --cached --name-only --diff-filter=d -- player sql)
 if [ -z "$staged" ]; then
+    exit 0
+fi
+
+# The slow gate, and the one `LEMPI_SKIP_VERIFY` is for -- said out loud, so an
+# unverified commit leaves a trace, which `--no-verify` would not `[GDE-DEP-060]`.
+if [ "${LEMPI_SKIP_VERIFY:-0}" = "1" ]; then
+    echo "pre-commit: the Linux cross-compile gate is SKIPPED by LEMPI_SKIP_VERIFY=1;"
+    echo "pre-commit: this commit's cfg(unix) code is unverified and may not build on the appliance."
     exit 0
 fi
 
