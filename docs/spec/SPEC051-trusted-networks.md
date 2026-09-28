@@ -1,6 +1,6 @@
 # SPEC051: Trusted Networks
 
-**Design Specification — Tier 2 · written 2026-09-28 · a design for later work, not yet built · build decisions in [SPEC054](SPEC054-mesh-without-ssh.md) §6**
+**Design Specification — Tier 2 · written 2026-09-28 · built for appliances 2026-09-28 (`player/src/trust.rs`, IMPL017 Phase 4); the phone waits on `[SPEC-NSH-195]` · build decisions in [SPEC054](SPEC054-mesh-without-ssh.md) §6**
 
 A node should take part in Lempi's discovery and mesh only on networks its
 operator has chosen to trust. This is the answer to the disclosure and
@@ -117,19 +117,31 @@ makes the node dormant there at once; turning it on lets discovery resume. The
 list says plainly which network is active and whether it is trusted, so a node
 that has gone quiet shows *why*, rather than looking broken `[GDE-DEP-060]`.
 
+**`[SPEC-TN-065]` Granting trust is physical; revoking is not.** Marking a
+network trusted needs the pairing window `[SPEC-DSC-090]`, the same local act as
+pairing. Otherwise any host on a foreign network could mark *that* network
+trusted through the node's open page and wake it there -- undoing the whole of
+this document from inside the network it guards against. Revoking trust only
+narrows exposure, and stays one click.
+
 ## 7. Left for the building
 
-**`[SPEC-TN-900]` Open, to settle when built:**
+**`[SPEC-TN-900]` Settled by the appliance build, 2026-09-28:**
 
-- how a node re-evaluates trust the moment the network changes, without a
-  poll it does not need on a device that rarely moves;
-- whether an appliance on wired Ethernet, which has no SSID, keys trust to the
-  interface or simply trusts its one LAN;
-- whether a trusted-network change should itself be a mesh-visible event, or
-  stay a purely local preference like a programme `[SPEC-MTR-900]`;
-- the phone's gateway-MAC identity across a network that legitimately changes
-  its router.
+- *Re-evaluating on a network change:* a reading of the node's connections is
+  reused for 30 s and taken again when next needed -- by the next discovery
+  query, sync request or page load -- so a change is seen within that without a
+  poll of its own.
+- *Wired Ethernet:* keyed like any connection, by its NetworkManager UUID. The
+  rule counts every connection the node is on, loopback aside, and takes part
+  only when all of them are trusted: the discovery socket is bound to every
+  interface, so one untrusted connection is one network it would answer on.
+- *Mesh-visible or local:* local. Trust is kept in `player_settings`, which no
+  sync carries.
+
+Still open: the phone's gateway-MAC identity across a network that legitimately
+changes its router, with the phone itself `[SPEC-NSH-195]`.
 
 ---
 
-**Traceability:** `[SPEC-TN-010..060]`, `[SPEC-TN-900]` · gates [SPEC050](SPEC050-node-discovery.md) `[SPEC-DSC-020]` · generalises `[SPEC-MTR-020]` · answers the discovery edges recorded in the follow-up security review (R4)
+**Traceability:** `[SPEC-TN-010..065]`, `[SPEC-TN-900]` · gates [SPEC050](SPEC050-node-discovery.md) `[SPEC-DSC-020]` · generalises `[SPEC-MTR-020]` · answers the discovery edges recorded in the follow-up security review (R4)

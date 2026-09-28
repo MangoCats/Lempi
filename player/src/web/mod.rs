@@ -547,6 +547,10 @@ fn appliance_routes(router: Router<Ui>) -> Router<Ui> {
         .route("/wifi/autoconnect/:name/:state", post(autoconnect))
         .route("/wifi/ap/start", post(ap_start))
         .route("/wifi/ap/stop", post(ap_stop))
+        // Trusted networks `[SPEC051]`: which connections this node takes
+        // part in the mesh on. Keyed by NetworkManager, so appliance-only.
+        .route("/network/trust", get(network_trust))
+        .route("/network/trust/:uuid/:on", post(set_network_trust))
         .route("/audio/radios", get(radios))
         .route("/audio/radio/:kind/:state", post(set_radio))
         .route("/power/off", post(power_off))

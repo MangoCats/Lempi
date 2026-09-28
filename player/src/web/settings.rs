@@ -95,6 +95,15 @@ pub(super) async fn mesh_status(State(ui): State<Ui>) -> axum::response::Respons
         "remaining_secs": crate::pairing::remaining_secs(),
         "window_secs": crate::pairing::window_secs(),
     });
+    // Whether this node takes part on the network it is on, and why not
+    // `[SPEC-TN-060]`: a dormant node says so rather than looking broken.
+    let (db, library) = (ui.db.clone(), ui.library.clone());
+    s["trust"] = tokio::task::spawn_blocking(move || {
+        let t = crate::trust::status(&db, &library);
+        serde_json::json!({"applies": t["applies"], "participating": t["participating"], "why": t["why"]})
+    })
+    .await
+    .unwrap_or(serde_json::Value::Null);
     axum::Json(s).into_response()
 }
 
@@ -147,8 +156,14 @@ pub(super) async fn mesh_step(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     let db = ui.db.clone();
+    let library = ui.library.clone();
     let loopback = ui.web_loopback_only;
     let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        // Dormant on a network this node does not trust: no membership step
+        // at all, pairing included `[SPEC-NSH-180]`.
+        if !loopback {
+            crate::trust::participating(&db, &library).map_err(|why| format!("this node is dormant: {why}"))?;
+        }
         let b: serde_json::Value = if body.trim().is_empty() {
             serde_json::Value::Null
         } else {
@@ -242,6 +257,43 @@ pub(super) async fn mesh_sync(
             axum::Json(h.answer).into_response()
         }
         Err(e) => (StatusCode::CONFLICT, axum::Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
+/// The trusted networks: every connection this node knows, which it is on,
+/// which it trusts, and whether it takes part here -- with why not
+/// `[SPEC-TN-060]`.
+#[cfg(feature = "appliance")]
+pub(super) async fn network_trust(State(ui): State<Ui>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let (db, library) = (ui.db.clone(), ui.library.clone());
+    match tokio::task::spawn_blocking(move || crate::trust::status(&db, &library)).await {
+        Ok(v) => axum::Json(v).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// Trust a connection (`on`) or stop trusting it (`off`). Granting needs the
+/// pairing window, the physical act pairing needs, so a host on a foreign
+/// network cannot wake the node there; revoking is always allowed
+/// (`crate::trust`).
+#[cfg(feature = "appliance")]
+pub(super) async fn set_network_trust(
+    State(ui): State<Ui>,
+    axum::extract::Path((uuid, on)): axum::extract::Path<(String, String)>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let on = match on.as_str() {
+        "on" => true,
+        "off" => false,
+        _ => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    let window = ui.web_loopback_only || crate::pairing::open();
+    let (db, library) = (ui.db.clone(), ui.library.clone());
+    match tokio::task::spawn_blocking(move || crate::trust::set(&db, &library, &uuid, on, window)).await {
+        Ok(Ok(v)) => axum::Json(v).into_response(),
+        Ok(Err(e)) => (StatusCode::CONFLICT, axum::Json(serde_json::json!({"error": e}))).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 

@@ -990,17 +990,67 @@
   // One fetch feeds both the known-networks list and "what's active right
   // now" -- there is nothing about NetworkManager's own connection state
   // that changes between reading it twice a moment apart.
+  // Trusted networks [SPEC-TN-060]: a toggle per connection, and one line
+  // saying whether this node takes part in the mesh here -- a dormant node
+  // says why rather than looking broken. Granting trust needs the pairing
+  // window; the refusal is shown as it comes, so the page says what to do.
+  function trustButton(uuid, trusted, onDone) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    setText(b, trusted ? 'mesh: trusted' : 'mesh: not trusted');
+    b.onclick = async () => {
+      b.disabled = true;
+      const r = await fetch(`/network/trust/${encodeURIComponent(uuid)}/${trusted ? 'off' : 'on'}`, { method: 'POST' });
+      if (!r.ok) {
+        let msg = `HTTP ${r.status}`;
+        try { msg = (await r.json()).error || msg; } catch { /* keep the status */ }
+        showTrust(msg);
+      }
+      onDone();
+    };
+    return b;
+  }
+
+  function showTrust(text) {
+    const p = $('wifi-trust-status');
+    setText(p, text);
+    setHidden(p, !text);
+  }
+
   async function wifiKnown() {
     let rows = [];
     try {
       rows = await (await fetch('/wifi/known')).json();
     } catch { /* leave whatever it last showed */ return; }
+    let trust = null;
+    try {
+      const r = await fetch('/network/trust');
+      if (r.ok) trust = await r.json();
+    } catch { /* an older player: no trust column */ }
+    const trustOf = uuid => trust && trust.applies
+      ? (trust.networks.find(n => n.uuid === uuid) || null) : null;
+    if (trust && trust.applies) {
+      showTrust(trust.participating
+        ? 'Taking part in the mesh on this network.'
+        : `Dormant: not taking part in the mesh, because ${trust.why}. It keeps playing.`);
+    }
 
     wifiKnownList.textContent = '';
+    // An active wired connection is not in the Wi-Fi list, but trust counts
+    // it: shown so a node on one can be told why it is dormant.
+    for (const n of (trust && trust.applies ? trust.networks : [])) {
+      if (n.type === 'wifi' || !n.active) continue;
+      const li = document.createElement('li');
+      li.append(`${n.name} (${n.type}, active) `);
+      li.appendChild(trustButton(n.uuid, n.trusted, wifiKnown));
+      wifiKnownList.appendChild(li);
+    }
     for (const r of rows) {
       const li = document.createElement('li');
       const active = r.active === 'yes';
       li.append(`${r.name}${active ? ' (active)' : ''} `);
+      const t = trustOf(r.uuid);
+      if (t) li.appendChild(trustButton(t.uuid, t.trusted, wifiKnown));
       const auto = document.createElement('button');
       auto.type = 'button';
       setText(auto, r.autoconnect === 'yes' ? 'auto: on' : 'auto: off');

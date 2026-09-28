@@ -271,19 +271,25 @@ pub fn wifi_scan() -> Result<Vec<serde_json::Value>, String> {
 /// this project's own "known networks" list is exactly this, not a
 /// second copy of it `[SPEC034]`.
 pub fn wifi_known() -> Result<Vec<serde_json::Value>, String> {
-    let out = run_helper(&["wifi-known"])?;
-    if !out.status.success() {
-        return Err(helper_error(&out));
-    }
-    let all = parse_multiline(
-        &String::from_utf8_lossy(&out.stdout),
-        &["NAME", "TYPE", "AUTOCONNECT", "ACTIVE"],
-    );
-    Ok(all
+    Ok(connections()?
         .into_iter()
         .filter(|v| v.get("type").and_then(|t| t.as_str()) == Some("wifi"))
         .collect())
 }
+
+/// Every connection NetworkManager remembers, of any type, each with its
+/// `name`, `uuid`, `type`, `autoconnect` and `active` -- what the trusted
+/// networks are keyed by `[SPEC-NSH-185]`.
+pub fn connections() -> Result<Vec<serde_json::Value>, String> {
+    let out = run_helper(&["wifi-known"])?;
+    if !out.status.success() {
+        return Err(helper_error(&out));
+    }
+    Ok(parse_multiline(&String::from_utf8_lossy(&out.stdout), &CONNECTION_FIELDS))
+}
+
+/// `lempi-btctl wifi-known`'s fields, in the order it asks nmcli for them.
+const CONNECTION_FIELDS: [&str; 5] = ["NAME", "UUID", "TYPE", "AUTOCONNECT", "ACTIVE"];
 
 /// Switch the client connection to `ssid`, schedule the hard revert, and
 /// return the pending change's id and its own timeout `[SPEC034]`. An
@@ -400,13 +406,14 @@ mod tests {
 
     #[test]
     fn wifi_known_keeps_only_wifi_profiles() {
-        let text = "NAME:  preconfigured\nTYPE:  wifi\nAUTOCONNECT:  yes\nACTIVE:  yes\n\
-                     NAME:  lo\nTYPE:  loopback\nAUTOCONNECT:  no\nACTIVE:  yes\n";
-        let all = parse_multiline(text, &["NAME", "TYPE", "AUTOCONNECT", "ACTIVE"]);
+        let text = "NAME:  preconfigured\nUUID:  1f2e-0001\nTYPE:  wifi\nAUTOCONNECT:  yes\nACTIVE:  yes\n\
+                     NAME:  lo\nUUID:  1f2e-0002\nTYPE:  loopback\nAUTOCONNECT:  no\nACTIVE:  yes\n";
+        let all = parse_multiline(text, &CONNECTION_FIELDS);
         let wifi: Vec<_> =
             all.into_iter().filter(|v| v.get("type").and_then(|t| t.as_str()) == Some("wifi")).collect();
         assert_eq!(wifi.len(), 1);
         assert_eq!(wifi[0]["name"], "preconfigured");
+        assert_eq!(wifi[0]["uuid"], "1f2e-0001", "each carries the UUID trust is keyed by");
     }
 
     #[test]

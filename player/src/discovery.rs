@@ -119,6 +119,11 @@ pub fn answer(q: &serde_json::Value, me: &Identity, listener: &Path, library: &P
     if q["lempi"] != 1 {
         return None;
     }
+    // Silent on a network this node does not trust -- to members too
+    // `[SPEC-NSH-180]`, `[SPEC-TN-020]`.
+    if crate::trust::participating(listener, library).is_err() {
+        return None;
+    }
     let nonce = q["nonce"].as_str().filter(|n| n.len() <= 64)?;
     let kind = q["q"].as_str()?;
     // A member answers its own mesh, and only one that proves it knows the

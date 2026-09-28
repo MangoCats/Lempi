@@ -1368,6 +1368,33 @@ impl PlayerStore {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
+    /// The NetworkManager connections this node takes part in the mesh on,
+    /// by UUID `[SPEC-NSH-185]`, `[SPEC-TN-030]`. `None` until the first
+    /// start that records them -- which trusts the connection active then,
+    /// so no node already in service goes quiet on upgrade.
+    pub fn load_trusted_networks(&self) -> Option<Vec<String>> {
+        self.conn
+            .query_row("SELECT value FROM player_settings WHERE key = 'trusted_networks'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .ok()
+            .and_then(|v| serde_json::from_str(&v).ok())
+    }
+
+    pub fn save_trusted_networks(&self, uuids: &[String]) -> Result<(), DbError> {
+        let v = serde_json::to_string(uuids).map_err(|e| DbError::Query(e.to_string()))?;
+        self.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES ('trusted_networks', ?1, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![v],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
     /// How long the mesh pairing window stays open after a button press, in
     /// seconds `[SecurityReview3 R3]`. Default 300 (five minutes); clamped to
     /// a sane range by the caller that writes it.

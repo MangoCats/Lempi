@@ -301,6 +301,9 @@ impl Player {
                         "pairing: in no mesh; machine uptime is unreadable here, so no boot window -- \
                          press the pair button to enrol `[SPEC-NSH-170]`"),
                 }
+                // Trusted networks: recorded on the first start that has none,
+                // and said either way `[SPEC-NSH-185]`.
+                tracing::info!("{}", crate::trust::seed_at_start(&cfg.listener, &cfg.library));
             }
             let app = crate::web::access::guard(crate::web::router(ui), cfg.web_secret.as_deref());
             let app = crate::web::access::origin_guard(app);

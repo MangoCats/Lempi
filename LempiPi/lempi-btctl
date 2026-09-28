@@ -714,7 +714,10 @@ case "$VERB" in
             || die "could not scan -- is the Wi-Fi radio on?"
         ;;
     wifi-known)
-        nmcli -m multiline -f NAME,TYPE,AUTOCONNECT,ACTIVE connection show 2>/dev/null \
+        # Every connection, not only Wi-Fi: the player's trusted networks are
+        # keyed by UUID, and a wired one counts too [SPEC-NSH-185]. Its known
+        # Wi-Fi list filters these. The field order is the parser's.
+        nmcli -m multiline -f NAME,UUID,TYPE,AUTOCONNECT,ACTIVE connection show 2>/dev/null \
             || die "could not list connections"
         ;;
     wifi-connect)

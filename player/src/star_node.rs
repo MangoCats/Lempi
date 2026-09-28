@@ -46,6 +46,8 @@ pub fn handle(listener: &Path, library: &Path, op: &str, body: &Value) -> Result
     if !matches!(op, "snapshot" | "rehearse" | "commit") {
         return Err(format!("no such step: {op}"));
     }
+    // Dormant on a network this node does not trust `[SPEC-NSH-180]`.
+    crate::trust::participating(listener, library).map_err(|why| format!("this node is dormant: {why}"))?;
     let text = body["request"].as_str().ok_or("no request")?;
     let held = crate::membership::mesh_signed(listener, text, body["signature"].as_str().unwrap_or(""))?;
     let req: Value = serde_json::from_str(text).map_err(|e| format!("the request: {e}"))?;
