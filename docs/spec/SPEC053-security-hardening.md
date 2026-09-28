@@ -8,7 +8,9 @@ committed (`.gitignore`: `secrets/`). This is their tracked, redacted
 counterpart: every finding, what was done, where, the tracked test that pins it,
 and its status — so a `[SecurityReview …]` citation in the code resolves to a
 document a fresh clone can read. It names no household detail; the network map
-finding (N1) is *about* not committing such detail.
+finding (N1) is *about* not committing such detail. **An entry for a finding
+still open gives no reproduction steps** — it says what is exposed and what the
+fix will be, never how to exercise it; the private review keeps those.
 
 > **Related:** [SPEC052](SPEC052-web-access-guard.md) `[SPEC-WAG-010..030]` (the appliance web guard, C1/C2 in full) · [SPEC050](SPEC050-node-discovery.md) `[SPEC-DSC-090]` (the mesh pairing window, R3) · [SPEC051](SPEC051-trusted-networks.md) (trusted networks, where R4 is designed)
 

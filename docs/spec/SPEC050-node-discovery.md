@@ -114,16 +114,23 @@ An invitation runs as its own process, since it waits minutes for two people.
 An Accept queued behind it in the console's one-at-a-time jobs was never
 reached. Accept, reject and remove are done at once.
 
-**`[SPEC-DSC-090]` A player accepts an invitation, confirms it, or leaves only
+**`[SPEC-DSC-090]` A player accepts, confirms or rejects an invitation, or leaves, only
 while a pairing window is open.** The player's `/mesh/*` routes have no login,
 like the rest of its LAN UI, so the code comparison alone did not stop a host on
 the network from driving the whole enrolment itself (it can read the code from
-`GET /mesh`) `[SecurityReview3 R3]`. So those three changes need a **pairing
+`GET /mesh`) `[SecurityReview3 R3]`. So those changes need a **pairing
 window**, opened only by a local, physical act -- a `SIGUSR1` to the player
 (`lempi-btctl mesh-pair`, wired to a button, the framebuffer UI, or an operator on
-the console). A page on the LAN can neither send that signal nor read that it
-happened. The window is five minutes by default, adjustable and clamped to
-1--60 minutes, and only adjustable while it is already open. A loopback-only
+the console). A page on the LAN cannot send that signal, and **no route may
+ever open the window** -- over HTTP it can only be used, never started. Its
+*state* is readable, by design: `GET /mesh` reports it so the page can tell the
+person pairing whether it is open `[SecurityReview4 D1]`. It allows one pairing:
+a successful confirmation or leave closes it, rejecting needs it like the rest,
+and an invitation not yet confirmed is dropped with it (`[SPEC-NSH-130]` to
+`[SPEC-NSH-150]` in [SPEC054](SPEC054-mesh-without-ssh.md)). The window is five
+minutes by default, adjustable and clamped to 1--60 minutes, and only
+adjustable while it is already open; a new length applies from the next press,
+never to the window already open. A loopback-only
 host (a phone `[REQ-AND-160]`) is inherently local and needs no window. A new
 invitation is refused while one is in progress, and `leave` needs the window
 too, so detaching a player is a physical act as well; hub-driven removal (a

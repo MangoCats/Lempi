@@ -1,0 +1,5 @@
+#!/bin/sh
+# Fake pkill: records the call, and answers as though a process matched --
+# or none did, with PKILL_RC=1 `[SPEC-NSH-160]`.
+printf '%s\n' "pkill $*" >> "$VT_STATE/calls"
+exit "${PKILL_RC:-0}"

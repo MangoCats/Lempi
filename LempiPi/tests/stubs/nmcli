@@ -56,6 +56,11 @@ case "$sub" in
   modify)
     # connection modify <name> connection.id <newid> -> rename the keyfile,
     # so the atomic AP swap can be exercised [SecurityReview3 R1a].
+    # NM_RENAME_FAIL_FROM=<name> makes renaming that connection fail, leaving
+    # it as it was -- exercising the swap's put-it-back path.
+    if [ "${2:-}" = connection.id ] && [ "$1" = "${NM_RENAME_FAIL_FROM:-}" ]; then
+      exit 1
+    fi
     if [ "${2:-}" = connection.id ] && [ -n "$LEMPI_NM_DIR" ]; then
       old="$LEMPI_NM_DIR/$1.nmconnection"; new="$LEMPI_NM_DIR/$3.nmconnection"
       if [ -f "$old" ]; then

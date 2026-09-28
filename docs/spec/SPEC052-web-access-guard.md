@@ -32,7 +32,11 @@ by a page the household merely *visited*, and a DNS-rebinding page:
   reserved **local-use suffix** (`.local`, `.lan`, `.home`, `.internal`,
   `.intranet`, `.corp`, `.home.arpa`). A *publicly registerable* domain -- one
   with a real TLD, `evil.com` -- is refused, which is the whole point: only such
-  a name can be pointed at the node from off the LAN for rebinding.
+  a name can be pointed at the node from off the LAN for rebinding. Of those
+  suffixes, `.local` and `.home.arpa` are reserved by RFC and `.internal` by
+  ICANN; `.lan`, `.home`, `.intranet` and `.corp` are only *undelegated* --
+  conventional, not promised. If a new-gTLD round ever lists one, it leaves
+  this list `[SecurityReview4]`.
 
 **`[SPEC-WAG-030]` The guard is not a network boundary.** It stops the
 cross-site and rebinding vectors, not a network operator who deliberately

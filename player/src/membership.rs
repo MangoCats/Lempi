@@ -41,6 +41,10 @@ struct Invite {
     /// `invited` -> `comparing` -> `confirmed` -> `joined`, or `rejected`.
     state: &'static str,
     confirmation: Option<String>,
+    /// The pairing window this invitation began in (`crate::pairing::window_id`),
+    /// or 0 on a host that needs none. An unconfirmed invitation does not
+    /// outlive its window `[SPEC-NSH-140]`.
+    window: u64,
 }
 
 fn state_dir(listener: &Path) -> PathBuf {
@@ -168,7 +172,7 @@ pub fn invite(listener: &Path, body: &Value) -> Result<Value, String> {
     }
     let inv = Invite {
         id: random_hex(16), mesh: s("mesh")?, mesh_fp, hub_fp, hub_address: s("hub_address").unwrap_or_default(),
-        commit, nonce: random_hex(16), code: None, state: "invited", confirmation: None,
+        commit, nonce: random_hex(16), code: None, state: "invited", confirmation: None, window: 0,
     };
     let answer = json!({
         "invite": inv.id, "certificate": certificate(listener)?, "nonce": inv.nonce,
@@ -236,6 +240,29 @@ pub fn reject(id: &str) -> Result<Value, String> {
         inv.state = "rejected";
         Ok(json!({"state": inv.state}))
     })
+}
+
+/// Record which pairing window an invitation began in `[SPEC-NSH-140]`.
+pub fn stamp_invite_window(id: &str, window: u64) {
+    let _ = with_invite(id, |inv| {
+        inv.window = window;
+        Ok(())
+    });
+}
+
+/// Drop an invitation not yet confirmed whose pairing window has gone
+/// `[SPEC-NSH-140]`: closed, or replaced by a later one. A confirmed invitation
+/// is kept -- it waits for the hub's roster, which is authenticated by the mesh
+/// key and needs no window. Called only on a host that uses the window.
+pub fn drop_stale_invite(current_window: u64) {
+    if let Ok(mut g) = INVITE.lock() {
+        let stale = g.as_ref().is_some_and(|inv| {
+            inv.state != "confirmed" && (current_window == 0 || inv.window != current_window)
+        });
+        if stale {
+            *g = None;
+        }
+    }
 }
 
 /// Step three, from the hub: the signed roster, once both people confirmed.
@@ -397,7 +424,7 @@ mod tests {
         *INVITE.lock().unwrap() = Some(Invite {
             id: "inv1".into(), mesh: "Home".into(), mesh_fp: "m".into(), hub_fp: "h".into(),
             hub_address: String::new(), commit: String::new(), nonce: "n".into(),
-            code: Some("123 456".into()), state: "comparing", confirmation: None});
+            code: Some("123 456".into()), state: "comparing", confirmation: None, window: 0});
         assert!(confirm(&l, "inv1", "000 000").is_err(), "a wrong code is refused");
         assert!(confirm(&l, "inv1", "").is_err(), "an empty code is refused");
         let ok = confirm(&l, "inv1", "123 456").unwrap();
@@ -408,6 +435,24 @@ mod tests {
         // that parallel tests would race on.)
         let err = invite(&l, &json!({})).unwrap_err();
         assert!(err.contains("already in progress"), "a second invite is refused: {err}");
+        // [SPEC-NSH-140]: a confirmed invitation outlives its window -- it waits
+        // for the hub's roster, which needs no window.
+        drop_stale_invite(0);
+        assert!(INVITE.lock().unwrap().is_some(), "a confirmed invitation is kept");
+        // An unconfirmed one lives exactly as long as the window it began in.
+        let unconfirmed = |window| Invite {
+            id: "inv2".into(), mesh: "Home".into(), mesh_fp: "m".into(), hub_fp: "h".into(),
+            hub_address: String::new(), commit: String::new(), nonce: "n".into(),
+            code: None, state: "comparing", confirmation: None, window};
+        *INVITE.lock().unwrap() = Some(unconfirmed(0));
+        stamp_invite_window("inv2", 777);
+        drop_stale_invite(777);
+        assert_eq!(INVITE.lock().unwrap().as_ref().map(|i| i.window), Some(777), "kept in its own window");
+        drop_stale_invite(888);
+        assert!(INVITE.lock().unwrap().is_none(), "dropped when a later window replaces it");
+        *INVITE.lock().unwrap() = Some(unconfirmed(777));
+        drop_stale_invite(0);
+        assert!(INVITE.lock().unwrap().is_none(), "dropped when the window closes");
         *INVITE.lock().unwrap() = None;
         let _ = std::fs::remove_dir_all(&d);
     }

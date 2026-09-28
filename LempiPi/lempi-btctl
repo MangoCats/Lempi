@@ -789,9 +789,11 @@ case "$VERB" in
         # GPIO button wired to this verb, the framebuffer UI, or an operator on
         # the console -- never a page on the LAN, which can neither signal the
         # process nor reach this root helper.
-        if systemctl kill -s SIGUSR1 lempi.service >/dev/null 2>&1 \
-           || pkill -USR1 -x lempi >/dev/null 2>&1 \
-           || pkill -USR1 -f 'lempi .*--listener' >/dev/null 2>&1; then
+        # The process named exactly `lempi`, and nothing else `[SPEC-NSH-160]`.
+        # `systemctl kill` signalled every process in the unit's cgroup, and a
+        # child whose SIGUSR1 is still the default would have died of it; a
+        # `pkill -f` pattern could match any command line that mentions one.
+        if pkill -USR1 -x lempi >/dev/null 2>&1; then
             printf '{"ok":true}\n'
         else
             die "could not signal the player -- is it running?"
@@ -825,11 +827,24 @@ case "$VERB" in
             wifi-sec.key-mgmt wpa-psk wifi-sec.psk 00000000 \
             >/dev/null 2>&1 || die "could not create the access point profile"
         set_psk lempi-ap-pending "$password" || { nmcli connection delete lempi-ap-pending >/dev/null 2>&1; die "could not set the access point key"; }
-        # The key is set: replace the old profile atomically -- drop the old,
-        # rename the pending one into its place. Only now is `lempi-ap` touched.
-        nmcli connection delete lempi-ap >/dev/null 2>&1
-        nmcli connection modify lempi-ap-pending connection.id lempi-ap >/dev/null 2>&1 \
-            || die "could not put the new access point profile in place"
+        # The key is set: swap the new profile in. Rename before deleting
+        # `[SPEC-SEC-080]` -- the old profile steps aside as `lempi-ap-old`, the
+        # new one takes its name, and only then is the old one dropped. A rename
+        # that fails puts the old one back, so there is never a moment when the
+        # node has no `lempi-ap` at all.
+        nmcli connection delete lempi-ap-old >/dev/null 2>&1
+        had_old=0
+        if [ -n "$(nmcli -g connection.uuid connection show lempi-ap 2>/dev/null)" ]; then
+            nmcli connection modify lempi-ap connection.id lempi-ap-old >/dev/null 2>&1 \
+                || { nmcli connection delete lempi-ap-pending >/dev/null 2>&1; die "could not set the old access point profile aside"; }
+            had_old=1
+        fi
+        if ! nmcli connection modify lempi-ap-pending connection.id lempi-ap >/dev/null 2>&1; then
+            nmcli connection delete lempi-ap-pending >/dev/null 2>&1
+            [ "$had_old" = 1 ] && nmcli connection modify lempi-ap-old connection.id lempi-ap >/dev/null 2>&1
+            die "could not put the new access point profile in place"
+        fi
+        [ "$had_old" = 1 ] && nmcli connection delete lempi-ap-old >/dev/null 2>&1
         # The dnsmasq instance NetworkManager spawns for THIS shared
         # connection reads every file here automatically -- its own
         # extension point, not a guess `[SPEC034]`. `10.42.0.1` is not

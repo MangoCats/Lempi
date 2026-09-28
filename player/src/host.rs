@@ -273,13 +273,13 @@ impl Player {
                 capabilities,
                 web_loopback_only: cfg.web_loopback_only,
             };
-            // The mesh pairing window `[SecurityReview3 R3]`: cache its length
-            // and arm the button (SIGUSR1). Loopback-only hosts do not use it.
+            // The mesh pairing window `[SecurityReview3 R3]`: cache its length.
+            // The button's handler is installed first thing in `main`
+            // `[SPEC-NSH-160]`. Loopback-only hosts do not use the window.
             if !cfg.web_loopback_only {
                 if let Ok(store) = crate::db::PlayerStore::open_split(&cfg.listener, &cfg.library) {
                     crate::pairing::set_window_secs(store.load_pairing_window_secs());
                 }
-                crate::pairing::install_signal_handler();
             }
             let app = crate::web::access::guard(crate::web::router(ui), cfg.web_secret.as_deref());
             let app = crate::web::access::origin_guard(app);

@@ -29,6 +29,11 @@ use lempi_player::cli::specs::lempi as opt;
 use lempi_player::host::{Config, Player, StartError};
 
 fn main() {
+    // The pairing button's handler, before anything else `[SPEC-NSH-160]`.
+    // SIGUSR1's default action ends a process, so a press that arrived before
+    // the handler was installed -- or on a host that never installed it --
+    // would stop the player. Installed first, on every host, it never does.
+    lempi_player::pairing::install_signal_handler();
     // Help, version and every refusal are handled here, identically for all
     // seventeen binaries. Nothing below this line inspects a raw argument.
     let mut args = opt::SPEC.parse();

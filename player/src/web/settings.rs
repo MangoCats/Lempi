@@ -81,6 +81,10 @@ pub(super) async fn discovery_status(State(ui): State<Ui>) -> axum::response::Re
 /// Each answers JSON; a refusal is 409 with the reason.
 pub(super) async fn mesh_status(State(ui): State<Ui>) -> axum::response::Response {
     use axum::response::IntoResponse;
+    if !ui.web_loopback_only {
+        // Never show an invitation whose window has gone `[SPEC-NSH-140]`.
+        crate::membership::drop_stale_invite(crate::pairing::window_id());
+    }
     let mut s = crate::membership::status(&ui.db);
     // The pairing window `[SecurityReview3 R3]`, so the page can say whether
     // enrolment is open and for how long. On a loopback-only host it is always
@@ -123,6 +127,19 @@ pub(super) async fn set_pairing_window(
     }
 }
 
+/// The membership steps a LAN host may take only inside a pairing window:
+/// accepting an invitation, confirming it, rejecting it `[SPEC-NSH-140]`, and
+/// leaving.
+fn gated(parts: &[&str]) -> bool {
+    matches!(parts, ["invite"] | ["invite", _, "confirm"] | ["invite", _, "reject"] | ["leave"])
+}
+
+/// The steps that use the window up: after one of these succeeds the window
+/// closes, so it yields one pairing, not several `[SPEC-NSH-130]`.
+fn consumes_window(parts: &[&str]) -> bool {
+    matches!(parts, ["invite", _, "confirm"] | ["leave"])
+}
+
 pub(super) async fn mesh_step(
     State(ui): State<Ui>,
     axum::extract::Path(path): axum::extract::Path<String>,
@@ -138,23 +155,27 @@ pub(super) async fn mesh_step(
             serde_json::from_str(&body).map_err(|e| format!("not JSON: {e}"))?
         };
         let parts: Vec<&str> = path.split('/').collect();
-        // Membership changes -- accepting an invitation, confirming it, and
-        // leaving -- require an open pairing window on a LAN-exposed host, so a
-        // host on the network cannot enrol or detach this player on its own
-        // `[SecurityReview3 R3]`. A loopback-only host (a phone) is inherently
-        // local and needs no window. The window opens only by the local button
-        // (`crate::pairing`), never over HTTP. The hub-driven roster update, and
-        // the mid-flow reveal/reject, are not gated: `roster` is authenticated
-        // by the pinned mesh key, and a reject only cancels.
-        let gated = matches!(parts.as_slice(), ["invite"] | ["invite", _, "confirm"] | ["leave"]);
-        if gated && !loopback && !crate::pairing::open() {
+        // Membership changes need an open pairing window on a LAN-exposed host,
+        // so a host on the network cannot enrol or detach this player on its
+        // own `[SecurityReview3 R3]`. A loopback-only host (a phone) is
+        // inherently local and needs no window. The window opens only by the
+        // local button (`crate::pairing`), never over HTTP. The hub-driven
+        // roster update and the mid-flow reveal are not gated: `roster` is
+        // authenticated by the pinned mesh key.
+        let window = if loopback { 0 } else { crate::pairing::window_id() };
+        if !loopback {
+            // An invitation not confirmed within its own window goes with it
+            // `[SPEC-NSH-140]`.
+            crate::membership::drop_stale_invite(window);
+        }
+        if !loopback && gated(&parts) && window == 0 {
             return Err(format!(
                 "pairing is not open: press the pair button on the device (open for {}s), \
                  then try again `[SecurityReview3 R3]`",
                 crate::pairing::window_secs()
             ));
         }
-        match parts.as_slice() {
+        let out = match parts.as_slice() {
             ["invite"] => crate::membership::invite(&db, &b),
             ["invite", id, "reveal"] => crate::membership::reveal(&db, id, b["nonce"].as_str().unwrap_or("")),
             ["invite", id, "confirm"] => crate::membership::confirm(&db, id, b["code"].as_str().unwrap_or("")),
@@ -163,7 +184,21 @@ pub(super) async fn mesh_step(
             ["leave"] => crate::membership::leave(&db, b["mesh_fp"].as_str().unwrap_or("")).map(|()| serde_json::json!({"left": true})),
             ["roster"] => crate::membership::update_roster(&db, &b),
             _ => Err("unknown".into()),
+        };
+        if !loopback {
+            if let Ok(v) = &out {
+                if parts.as_slice() == ["invite"] {
+                    if let Some(id) = v["invite"].as_str() {
+                        crate::membership::stamp_invite_window(id, window);
+                    }
+                }
+                // One pairing per window `[SPEC-NSH-130]`.
+                if consumes_window(&parts) {
+                    crate::pairing::close();
+                }
+            }
         }
+        out
     })
     .await
     .unwrap_or_else(|_| Err("failed".into()));
@@ -315,3 +350,24 @@ writes_files! {    set_cue_sheets => SetCueSheets, cue_requested, cue_status,
         "lyrics beside the audio", "[REQ-VIS-220]", beside: true;
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Which membership steps a LAN host needs the pairing window for, and
+    /// which of them use it up `[SPEC-NSH-130]`, `[SPEC-NSH-140]`. Pure, so it
+    /// is tested here without the process-global window.
+    #[test]
+    fn the_window_gates_and_is_consumed_by_the_right_steps() {
+        for p in [vec!["invite"], vec!["invite", "x", "confirm"], vec!["invite", "x", "reject"], vec!["leave"]] {
+            assert!(gated(&p), "{p:?} needs the window");
+        }
+        for p in [vec!["invite", "x", "reveal"], vec!["invite", "x", "roster"], vec!["roster"]] {
+            assert!(!gated(&p), "{p:?} is authenticated otherwise, not by the window");
+        }
+        assert!(consumes_window(&["invite", "x", "confirm"]), "a confirmation uses the window up");
+        assert!(consumes_window(&["leave"]), "so does leaving");
+        assert!(!consumes_window(&["invite"]), "accepting an invitation does not");
+        assert!(!consumes_window(&["invite", "x", "reject"]), "nor does rejecting one");
+    }
+}

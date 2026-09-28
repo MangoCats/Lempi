@@ -123,3 +123,19 @@ else
     bad "a failed scan is still valid JSON on stdout alone" "did not parse: $OUT"
 fi
 teardown
+
+# --- the pairing button -----------------------------------------------
+# `mesh-pair` signals the process named exactly `lempi` and nothing else
+# [SPEC-NSH-160]: not the unit's whole cgroup, not a command-line pattern.
+setup
+OUT=$(btctl mesh-pair)
+assert_in "$OUT" '"ok":true' "mesh-pair signals the player"
+assert_called "pkill -USR1 -x lempi" "by its exact process name"
+assert_not_called "systemctl kill" "never through the unit's cgroup"
+assert_not_called "pkill -USR1 -f" "never through a command-line pattern"
+teardown
+
+setup
+OUT=$(PKILL_RC=1 btctl mesh-pair)
+assert_in "$OUT" "could not signal the player" "mesh-pair with no player running says so"
+teardown

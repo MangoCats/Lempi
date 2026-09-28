@@ -124,6 +124,42 @@ else bad "the existing lempi-ap survives a failed ap-start" "it was destroyed"; 
 if [ -e "$VT_STATE/nm/lempi-ap-pending.nmconnection" ]; then bad "the pending profile is cleaned up" "it remains"; else ok "the pending profile is cleaned up"; fi
 teardown
 
+# The swap renames before it deletes [SPEC-SEC-080]: a replaced lempi-ap
+# carries the new key, and neither the old nor the pending profile is left.
+setup
+export LEMPI_NM_DIR="$VT_STATE/nm" LEMPI_DNSMASQ_DIR="$VT_STATE/dnsmasq"
+mkdir -p "$VT_STATE/nm"
+printf '[connection]\nid=lempi-ap\nuuid=uuid-lempi-ap\n\n[wifi-security]\nkey-mgmt=wpa-psk\npsk=oldpass99\n' \
+    > "$VT_STATE/nm/lempi-ap.nmconnection"
+OUT=$(printf 'newpassword9' | btctl ap-start Studio)
+assert_in "$OUT" '"ok":true' "ap-start replaces an existing lempi-ap"
+if psk_in_keyfile lempi-ap "newpassword9"; then ok "the replaced lempi-ap has the new key"
+else bad "the replaced lempi-ap has the new key" "not found"; fi
+assert_called "nmcli connection modify lempi-ap connection.id lempi-ap-old" "the old profile steps aside before anything is deleted"
+if [ -e "$VT_STATE/nm/lempi-ap-old.nmconnection" ] || [ -e "$VT_STATE/nm/lempi-ap-pending.nmconnection" ]; then
+    bad "no old or pending profile is left" "$(ls "$VT_STATE/nm")"
+else ok "no old or pending profile is left"; fi
+teardown
+
+# A rename that fails puts the old lempi-ap back: at no step is there none.
+setup
+export LEMPI_NM_DIR="$VT_STATE/nm" LEMPI_DNSMASQ_DIR="$VT_STATE/dnsmasq"
+mkdir -p "$VT_STATE/nm"
+printf '[connection]\nid=lempi-ap\nuuid=uuid-lempi-ap\n\n[wifi-security]\nkey-mgmt=wpa-psk\npsk=oldpass99\n' \
+    > "$VT_STATE/nm/lempi-ap.nmconnection"
+export NM_RENAME_FAIL_FROM=lempi-ap-pending
+OUT=$(printf 'newpassword9' | btctl ap-start Studio)
+unset NM_RENAME_FAIL_FROM
+assert_in "$OUT" "could not put the new access point profile in place" "a failed swap is reported"
+if [ -f "$VT_STATE/nm/lempi-ap.nmconnection" ] && grep -q '^psk=oldpass99$' "$VT_STATE/nm/lempi-ap.nmconnection"; then
+    ok "the old lempi-ap is put back when the swap fails"
+else bad "the old lempi-ap is put back when the swap fails" "$(ls "$VT_STATE/nm")"; fi
+if [ -e "$VT_STATE/nm/lempi-ap-old.nmconnection" ] || [ -e "$VT_STATE/nm/lempi-ap-pending.nmconnection" ]; then
+    bad "a failed swap leaves no old or pending profile" "$(ls "$VT_STATE/nm")"
+else ok "a failed swap leaves no old or pending profile"; fi
+assert_not_called "nmcli connection up lempi-ap" "and the failed swap brings nothing up"
+teardown
+
 # A too-short AP password is refused before anything is created.
 setup
 export LEMPI_NM_DIR="$VT_STATE/nm" LEMPI_DNSMASQ_DIR="$VT_STATE/dnsmasq"
