@@ -48,7 +48,7 @@ pub fn build_id() -> String {
 /// path, previously a property re-established by reading imports on 2026-08-20,
 /// 2026-09-02 and 2026-09-22, is now something cargo refuses to let anyone
 /// break. See `player/core/Cargo.toml` for the full reasoning.
-pub use lempi_core::{bundle, db, director, fade, queue, relink};
+pub use lempi_core::{bundle, db, director, fade, mesh_sync, queue, relink};
 
 /// The listener-setting defaults and their bounds, which moved with the store
 /// that reads them `[GDE-ARC-033]`.

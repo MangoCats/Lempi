@@ -44,6 +44,7 @@ sys.path.insert(0, HERE)
 import star_distribute as sd  # noqa: E402
 import star_merge as sm  # noqa: E402
 import star_patch as sp  # noqa: E402
+import mesh as meshmod  # noqa: E402  -- members reached by upload [REQ-AND-330]
 
 SSH = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=5",
        "-o", "ServerAliveCountMax=6"]
@@ -226,6 +227,34 @@ def snapshot(plan):
             backups=history_of(ns.get("listener_sent"), ns.get("at", ""), os.path.join(nd, "history")),
             catalogue=lib, files=lib, mirror=bool(n.get("mirror"))))
         baselines[name] = {"listener": os.path.join(nd, "listener.db"), "library": lib}
+    # [REQ-AND-330]: enrolled phones, by what each last uploaded over the
+    # members' channel -- a node reached by upload rather than ssh. Only the
+    # shared tables travel, so only they are merged for it.
+    mdir = meshmod.mesh_dir(at_root(hub["library"]))
+    for m in meshmod.sync_members(mdir):
+        name, fp = m["node"], m["fingerprint"]
+        up = meshmod.upload_of(mdir, fp)
+        if up is None:
+            missing[name] = "enrolled, but has not uploaded its edits yet"
+            say(f"  {name} ({m['name'] or 'unnamed'}): MISSING from this run -- nothing uploaded yet")
+            continue
+        nd = os.path.join(run, name)
+        os.makedirs(nd)
+        shutil.copyfile(up["path"], os.path.join(nd, "listener.db"))
+        seal(os.path.join(nd, "listener.db"))
+        # Its history is its own earlier uploads, never the merged copy it was
+        # last sent: that holds tables and passage rows it never uploads, which
+        # would read as rows it had removed [SPEC-STAR-050].
+        hist = os.path.join(nd, "history")
+        os.makedirs(hist)
+        for f in sorted(os.listdir(up["uploads"])):
+            if f != f"listener-{up['epoch']}.db":     # earlier uploads: what it held then
+                shutil.copyfile(os.path.join(up["uploads"], f), os.path.join(hist, f))
+        manifest["nodes"].append(dict(name=name, listener=os.path.join(nd, "listener.db"),
+                                      taken_at=up["uploaded_at"], backups=hist))
+        baselines[name] = {"listener": os.path.join(nd, "listener.db"), "member": fp}
+        say(f"  {name} ({m['name'] or 'unnamed'}): its upload of {up['uploaded_at']}, "
+            f"clock {up['clock_offset_ms']:+d} ms, {up['rows']}")
     for name, path in (("manifest.json", manifest), ("baselines.json", baselines),
                        ("missing.json", missing)):
         with open(os.path.join(run, name), "w", encoding="utf-8", newline="\n") as fh:
@@ -269,10 +298,19 @@ def patch(plan, run):
         summary += ["**Missing from this run** -- they receive nothing until the next:", ""]
         summary += [f"- {n}: {why}" for n, why in sorted(missing.items())] + [""]
     ok = True
+    members = {}
     for name in sorted(baselines):
         pd = os.path.join(run, "patches", name)
         os.makedirs(pd, exist_ok=True)
         summary += [f"## {name}", ""]
+        if "member" in baselines[name]:
+            good, line = member_patch(baselines[name]["listener"], targets(plan, run, name)["listener"],
+                                      os.path.join(pd, "member.patch.json"))
+            ok = ok and good
+            summary += [line, ""]
+            members[name] = baselines[name]["member"]
+            say(f"  {name} {line[2:]}")
+            continue
         for half in ("listener", "library"):
             out = os.path.join(pd, f"{half}.patch.json")
             with contextlib.redirect_stdout(io.StringIO()):
@@ -293,7 +331,7 @@ def patch(plan, run):
         fh.write("\n".join(summary) + "\n")
     st = stamp_of(run)
     dplan = {"merge": os.path.join(run, "merge"), "patches": os.path.join(run, "patches"),
-             "prune": plan.get("prune"), "nodes": {}}
+             "prune": plan.get("prune"), "nodes": {}, "members": members}
     for name, n in plan["nodes"].items():
         if name in baselines:
             dplan["nodes"][name] = dict(
@@ -304,6 +342,41 @@ def patch(plan, run):
         json.dump(dplan, fh, indent=1, sort_keys=True)
     say(f"RESULT patch: {'every patch proven' if ok else 'a patch is NOT PROVEN'}; read {run}/SUMMARY.md")
     return 0 if ok else 1
+
+
+def member_patch(base, target, out):
+    """A member's patch [SPEC-MTR-030]: the shared tables only, as values, and
+    proven here -- the phone's own rule applied to a copy of what it uploaded
+    must give the merge's shared tables -- before it is offered."""
+    p = sp.make_member(base, target, meshmod.SHARED)
+    with open(out, "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(p, fh, separators=(",", ":"), sort_keys=True)
+    rows = {e["name"]: len(e["rows"]) for e in p["tables"]}
+    if not rows:
+        return True, "- shared edits: nothing to send"
+    with tempfile.TemporaryDirectory() as t:
+        copy = os.path.join(t, "proof.db")
+        shutil.copyfile(base, copy)
+        os.chmod(copy, 0o644)
+        sp.apply_member(copy, p, meshmod.SHARED)
+        good = sp.make_member(copy, target, meshmod.SHARED)["tables"] == []
+    return good, ("- shared edits: " + ", ".join(f"`{t}` {k}" for t, k in sorted(rows.items()))
+                  + ("" if good else " -- **NOT PROVEN: do not commit**"))
+
+
+def member_offer(plan, run, name, fp, commit):
+    """[REQ-AND-330]: a member is not reached from here. Its patch waits in
+    its outbox on the members' channel until it fetches it."""
+    say(f"== {name} (a mesh member, by its next contact) -- {'COMMIT' if commit else 'rehearsal'}")
+    with open(os.path.join(run, "patches", name, "member.patch.json"), encoding="utf-8") as fh:
+        p = json.load(fh)
+    n = sum(len(e["rows"]) for e in p["tables"])
+    if not commit:
+        say(f"RESULT {name}: {n} row(s) to offer; checked by the phone's own rule when it applies them")
+        return 0
+    meshmod.put_outbox(meshmod.mesh_dir(at_root(plan["hub"]["library"])), fp, stamp_of(run), p)
+    say(f"RESULT {name}: OFFERED -- {n} row(s) wait for it on the members' channel")
+    return 0
 
 
 def stamp_of(run):
@@ -390,12 +463,15 @@ def distribute(plan, run, names, commit):
     with open(os.path.join(run, "distribute-plan.json"), encoding="utf-8") as fh:
         dplan = json.load(fh)
     hub = plan["hub"]["name"]
-    names = names or [hub] + sorted(dplan["nodes"])
+    members = dplan.get("members", {})
+    names = names or [hub] + sorted(dplan["nodes"]) + sorted(members)
     state = load_state(plan) if commit else None
     worst = 0
     for name in names:
         if name == hub:
             rc = hub_apply(plan, run, commit)
+        elif name in members:
+            rc = member_offer(plan, run, name, members[name], commit)
         elif name not in dplan["nodes"]:
             say(f"RESULT {name}: not in this run")
             rc = 1
@@ -408,8 +484,8 @@ def distribute(plan, run, names, commit):
         if commit and rc == 0:
             t = targets(plan, run, name)
             entry = {"listener_sent": os.path.relpath(t["listener"], ROOT),
-                     "library_sent": os.path.relpath(t["library"], ROOT), "at": now().isoformat(),
-                     "run": stamp_of(run)}
+                     "library_sent": None if name in members else os.path.relpath(t["library"], ROOT),
+                     "at": now().isoformat(), "run": stamp_of(run)}
             if name == hub:
                 state["hub"] = entry
             else:

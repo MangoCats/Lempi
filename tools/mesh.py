@@ -21,6 +21,7 @@ Keystore key can present as a TLS client certificate [SPEC-MTR-100].
     python tools/mesh.py LIBRARY status
     python tools/mesh.py LIBRARY accept SESSION | reject SESSION
     python tools/mesh.py LIBRARY remove FINGERPRINT
+    python tools/mesh.py LIBRARY rename --mesh NAME  |  rename FINGERPRINT --name NAME
 
 The network side -- enrolment and the members' channel -- is served by
 `tools/intake.py` on its members' port [SPEC-MTR-200].
@@ -225,6 +226,22 @@ def member(mdir: str, fp: str) -> dict | None:
     return next((m for m in roster(mdir)["members"] if m["fingerprint"] == fp), None)
 
 
+def rename(mdir: str, name: str, fp: str | None = None) -> dict:
+    """A new name for the mesh, or for one member [SPEC-MTR-105]: a label, so
+    changing it changes no one's identity. A new roster version all the same,
+    so every member learns it."""
+    with locked(mdir):
+        r = roster(mdir)
+        if fp is None:
+            r["mesh"]["name"] = name
+        else:
+            hit = [m for m in r["members"] if m["fingerprint"].startswith(fp.replace(" ", ""))]
+            if len(hit) != 1:
+                raise SystemExit(f"{fp}: {'no' if not hit else len(hit)} member(s) match")
+            hit[0]["name"] = name
+        return publish(mdir, r)
+
+
 def remove(mdir: str, fp: str) -> dict:
     """[SPEC-MTR-140]: a member leaves by a new roster without it."""
     with locked(mdir):
@@ -385,6 +402,118 @@ def sessions(mdir: str) -> list[dict]:
     return out
 
 
+# ------------------------------------------------ a member's listening --
+#
+# [SPEC-MTR-030], [REQ-AND-330]. A phone uploads the household tables it
+# holds -- preferences, occasion values, flags; never its plays -- and the next
+# star sync merges it as a node. The patch that sync prepares for it waits in
+# its outbox until the phone fetches and applies it.
+
+SHARED = ("listener_preferences", "listener_characteristics", "listener_flags")
+# Last write wins compares the phone's own `updated_at` with every other
+# node's [SPEC-PREF-105]; a phone's clock is set by its network, not by the
+# fleet's chrony. Measured at each upload, and refused past this, so a wrong
+# clock is a visible refusal rather than an edit that silently wins or loses
+# [SPEC-MTR-920].
+CLOCK_TOLERANCE_MS = 120_000
+KEEP_UPLOADS = 10
+
+
+def member_dir(mdir: str, fp: str) -> str:
+    if not fp or not all(c in "0123456789abcdef" for c in fp):
+        raise ValueError("not a fingerprint")
+    return os.path.join(mdir, "members", fp)
+
+
+def store_upload(mdir: str, fp: str, data: bytes, clock_ms: int | None) -> dict:
+    """Keep a member's upload, once it proves to be what it should: an intact
+    SQLite database holding shared tables only, from a clock the hub agrees
+    with. The latest is `listener.db`; earlier ones are kept under
+    `uploads/` as the evidence of what the member has removed since
+    [SPEC-STAR-050]."""
+    import sqlite3
+    offset = None if clock_ms is None else clock_ms - int(time.time() * 1000)
+    if offset is None or abs(offset) > CLOCK_TOLERANCE_MS:
+        raise ValueError("this device's clock is " + ("not given" if offset is None else
+                         f"{offset / 1000:+.0f} s from the hub's") + ": its edits could not be ordered "
+                         "against the household's. Set its time automatically, then sync again.")
+    d = member_dir(mdir, fp)
+    os.makedirs(os.path.join(d, "uploads"), exist_ok=True)
+    part = os.path.join(d, "listener.db.part")
+    with open(part, "wb") as fh:
+        fh.write(data)
+    try:
+        c = sqlite3.connect(f"file:{part}?mode=ro", uri=True)
+        try:
+            if c.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise ValueError("the upload is not an intact database")
+            have = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if have - set(SHARED):
+                raise ValueError(f"the upload holds tables that are not shared: {sorted(have - set(SHARED))}")
+            rows = {t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in sorted(have)}
+        finally:
+            c.close()
+    except (sqlite3.Error, ValueError) as e:
+        os.remove(part)
+        raise ValueError(str(e)) from e
+    epoch = int(time.time())
+    os.replace(part, os.path.join(d, "listener.db"))
+    with open(os.path.join(d, "listener.db"), "rb") as src, \
+            open(os.path.join(d, "uploads", f"listener-{epoch}.db"), "wb") as dst:
+        dst.write(src.read())
+    for old in sorted(os.listdir(os.path.join(d, "uploads")))[:-KEEP_UPLOADS]:
+        os.remove(os.path.join(d, "uploads", old))
+    meta = {"uploaded_at": now(), "epoch": epoch, "clock_offset_ms": offset, "rows": rows,
+            "sha256": hashlib.sha256(data).hexdigest()}
+    atomic_write(os.path.join(d, "meta.json"), json.dumps(meta))
+    return meta
+
+
+def upload_of(mdir: str, fp: str) -> dict | None:
+    """A member's latest upload: its meta, with `path` and `uploads`."""
+    d = member_dir(mdir, fp)
+    if not os.path.isfile(os.path.join(d, "meta.json")):
+        return None
+    with open(os.path.join(d, "meta.json"), encoding="utf-8") as fh:
+        meta = json.load(fh)
+    return dict(meta, path=os.path.join(d, "listener.db"), uploads=os.path.join(d, "uploads"))
+
+
+def put_outbox(mdir: str, fp: str, run: str, patch: dict) -> None:
+    atomic_write(os.path.join(member_dir(mdir, fp), "outbox.json"),
+                 json.dumps({"run": run, "patch": patch}, ensure_ascii=False))
+
+
+def outbox(mdir: str, fp: str) -> dict | None:
+    p = os.path.join(member_dir(mdir, fp), "outbox.json")
+    if not os.path.isfile(p):
+        return None
+    with open(p, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def outbox_applied(mdir: str, fp: str, run: str, counts: dict) -> bool:
+    """The member has applied the patch of `run`: it leaves the outbox, and
+    what the member did with it is kept."""
+    o = outbox(mdir, fp)
+    if o is None or o["run"] != run:
+        return False
+    d = member_dir(mdir, fp)
+    os.makedirs(os.path.join(d, "applied"), exist_ok=True)
+    atomic_write(os.path.join(d, "applied", f"{run}.json"),
+                 json.dumps({"run": run, "applied_at": now(), "counts": counts}))
+    os.remove(os.path.join(d, "outbox.json"))
+    return True
+
+
+def sync_members(mdir: str) -> list[dict]:
+    """The members star sync takes as nodes by upload rather than ssh: the
+    phones, each named for its report `phone-<short fingerprint>`."""
+    if not initialised(mdir):
+        return []
+    return [dict(m, node=f"phone-{m['fingerprint'][:8]}") for m in roster(mdir)["members"] if m["role"] == "phone"]
+
+
 # --------------------------------------------------------------- display --
 
 def display_names(members: list[dict], show_all: bool = False) -> list[str]:
@@ -449,6 +578,13 @@ def main(argv: list[str]) -> int:
         s = accept(mdir, match[0]) if cmd == "accept" else reject(mdir, match[0])
         say(f"enrolment {s['session'][:8]}: {s['state']}"
             + (" -- waiting for the candidate to confirm too" if s["state"] == "comparing" else ""))
+        return 0
+    if cmd == "rename":
+        if not opt("--name") and not opt("--mesh"):
+            say("rename takes --mesh NAME, or FINGERPRINT --name NAME")
+            return 2
+        r = rename(mdir, opt("--mesh"), None) if opt("--mesh") else rename(mdir, opt("--name"), rest[0])
+        say(f"renamed; roster version {r['version']}")
         return 0
     if cmd == "remove":
         if not rest:

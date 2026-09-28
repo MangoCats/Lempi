@@ -143,6 +143,74 @@ def make(baseline, target, out):
     return 0
 
 
+def make_member(baseline, target, tables):
+    """A member's patch [SPEC-MTR-030]: for `tables` only, every row that
+    differs, with its old and new values themselves -- not digests, which the
+    phone's Rust could not reproduce for every float. Rows about a passage are
+    left out both ways: a passage id is the node's own [SPEC-STAR-049]."""
+    b, t = open_ro(baseline), open_ro(target)
+    patch = {"tables": []}
+    try:
+        for name in tables:
+            if name not in tables_of(t):
+                continue
+            cols = columns(t, name)
+            key = key_of(t, name)
+            local = "subject_kind" in cols
+            base = load(b, name, cols, key) if name in tables_of(b) and columns(b, name) == cols else {}
+            want = load(t, name, cols, key)
+            rows = []
+            for k in sorted(set(base) | set(want), key=repr):
+                was, now = base.get(k), want.get(k)
+                row = now or was
+                if was != now and not (local and row[cols.index("subject_kind")] == "passage"):
+                    rows.append({"key": [enc(v) for v in k],
+                                 "was": None if was is None else [enc(v) for v in was],
+                                 "now": None if now is None else [enc(v) for v in now]})
+            if rows:
+                patch["tables"].append({"name": name, "columns": cols, "key": key, "rows": rows})
+    finally:
+        b.close()
+        t.close()
+    return patch
+
+
+def tables_of(c):
+    return set(tables(c))
+
+
+def apply_member(db, patch, tables):
+    """The phone's rule, here, for proving a member patch before it leaves and
+    for tests: a row changes only where it still holds `was`; one changed
+    since is kept. Mirrors `lempi_core::mesh_sync::apply`."""
+    c = sqlite3.connect(db)
+    counts = {"applied": 0, "already": 0, "kept": 0}
+    try:
+        for e in patch["tables"]:
+            if e["name"] not in tables:
+                raise SystemExit(f"{e['name']} is not a shared table")
+            cols, key, name = e["columns"], e["key"], e["name"]
+            where = " AND ".join(f"{k} IS ?" for k in key)
+            for r in e["rows"]:
+                k = [dec(v) for v in r["key"]]
+                cur = c.execute(f"SELECT {', '.join(cols)} FROM {name} WHERE {where} LIMIT 1", k).fetchone()
+                now = None if r["now"] is None else tuple(dec(v) for v in r["now"])
+                was = None if r["was"] is None else tuple(dec(v) for v in r["was"])
+                if cur == now:
+                    counts["already"] += 1
+                elif cur == was:
+                    c.execute(f"DELETE FROM {name} WHERE {where}", k)
+                    if now is not None:
+                        c.execute(f"INSERT INTO {name} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", now)
+                    counts["applied"] += 1
+                else:
+                    counts["kept"] += 1
+        c.commit()
+    finally:
+        c.close()
+    return counts
+
+
 def column_decl(info):
     """`ALTER TABLE ... ADD COLUMN` text for a PRAGMA table_info row -- only
     what SQLite can add to a table that already has rows."""

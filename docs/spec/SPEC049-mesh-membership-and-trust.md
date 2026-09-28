@@ -249,7 +249,17 @@ The order agreed 2026-09-27:
    The hub's real mesh is created, and the phone enrolled in it, by the
    maintainer, who compares the codes;
 3. the phone's preference edits and flags up to the mesh, and the hub's updates
-   down `[REQ-AND-330]`;
+   down `[REQ-AND-330]`. *Built 2026-09-27* for the household's edits. The
+   phone's "Sync my edits with the mesh" does two things:
+   - down: it applies what the last star sync left in its outbox, by the
+     three-way rule, keeping any row changed on the phone since;
+   - up: it uploads the shared tables (`lempi_core::mesh_sync`).
+
+   Each enrolled phone is a star-sync node reached by upload: merged, reported
+   and gated by a person like any other `[SPEC-STAR-070]`. Its history is its
+   own earlier uploads, and a table it does not upload is never read as rows
+   it removed (`star_merge.removals`). Catalogue updates to the phone, which
+   bundles carry today, are the next part of this step;
 4. discovery;
 5. later, and optional: star sync onto node identities `[SPEC-MTR-220]`, and
    moving the hub `[SPEC-MTR-070]`.
@@ -261,8 +271,16 @@ The order agreed 2026-09-27:
 2. **`[SPEC-MTR-910]` The backoff schedule** for repeated queries, as `[GDE-NDS-910]` left it.
 3. **`[SPEC-MTR-920]` Clock and ordering for a phone's edits**: a phone's clock is
    not disciplined, and last-write-wins reads `updated_at` `[SPEC-PREF-105]`.
-   Whether the phone's edits carry the hub's time at receipt, or a version
-   vector, is decided with step 3.
+   *Settled with step 3, 2026-09-27:* the phone's edits keep their own times.
+   Stamping them with the hub's time at receipt would let an old edit,
+   uploaded late, override a newer one. Instead the hub measures the phone's
+   clock at each upload and refuses one more than two minutes off, saying by
+   how much. The Moto G measured +3.3 s.
+4. **`[SPEC-MTR-930]` A phone's edits about a single passage stay on it.** A
+   passage id is the node's own `[SPEC-STAR-049]`, and the phone does not
+   upload its catalogue, which is how an appliance's ids are translated. None
+   exist today on any node. They are counted and reported when the phone
+   syncs, and neither sent up nor down.
 
 ---
 

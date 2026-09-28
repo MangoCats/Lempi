@@ -45,7 +45,11 @@ vipunen-support = []
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# Exact to the last bit: a member patch carries values as JSON, and the
+# default fast parse moved 339 of the Moto G's preferences by one ulp
+# (1.1460000000000001 read as 1.146) on 2026-09-27, so every later sync would
+# have seen them differ [REQ-AND-330].
+serde_json = { version = "1", features = ["float_roundtrip"] }
 # The byte hash a bundle carries for each file `[REQ-AND-230]`, `[SPEC-PL-087]`:
 # how a host without ffmpeg -- a phone -- verifies what arrived, since
 # `audio_md5` needs ffmpeg to recompute `[SPEC-RLK-080]`. RustCrypto, pure

@@ -65,19 +65,26 @@ class MeshClient(private val base: String, private val pinHub: String?, private 
     }
 
     /** One request: its status and its JSON answer. */
-    fun call(method: String, path: String, body: JSONObject? = null): Pair<Int, JSONObject> {
+    fun call(method: String, path: String, body: JSONObject? = null): Pair<Int, JSONObject> =
+        send(method, path, body?.toString()?.toByteArray(), "application/json")
+
+    /** One request with a body of bytes, and any headers of its own. */
+    fun send(method: String, path: String, bytes: ByteArray?, type: String,
+             headers: Map<String, String> = emptyMap()): Pair<Int, JSONObject> {
         val c = URL(base + path).openConnection() as HttpsURLConnection
         c.sslSocketFactory = context.socketFactory
         // Who answered is settled by the pinned key above; a host name proves nothing here.
         c.hostnameVerifier = HostnameVerifier { _, _ -> true }
         c.requestMethod = method
         c.connectTimeout = 8000
-        c.readTimeout = 30000
+        c.readTimeout = 60000
         c.setRequestProperty("X-Lempi-Sender", "Lempi on ${android.os.Build.MODEL}")
-        if (body != null) {
+        headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
+        if (bytes != null) {
             c.doOutput = true
-            c.setRequestProperty("Content-Type", "application/json")
-            c.outputStream.use { it.write(body.toString().toByteArray()) }
+            c.setFixedLengthStreamingMode(bytes.size)
+            c.setRequestProperty("Content-Type", type)
+            c.outputStream.use { it.write(bytes) }
         }
         val code = c.responseCode
         val text = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.readText() ?: "{}"

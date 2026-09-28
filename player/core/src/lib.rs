@@ -47,6 +47,7 @@ pub mod bundle;
 pub mod db;
 pub mod director;
 pub mod fade;
+pub mod mesh_sync;
 pub mod queue;
 pub mod relink;
 /// What a file says about itself -- **the data half only**.

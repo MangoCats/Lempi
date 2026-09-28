@@ -246,6 +246,12 @@ class MeshActivity : Activity() {
         col.addView(all)
         col.addView(list)
         col.addView(Button(this).apply {
+            text = "Sync my edits with the mesh"
+            setOnClickListener { Thread({ syncEdits() }, "lempi-mesh-sync").start() }
+        })
+        col.addView(text("Takes what the household decided at the last sync, then sends this phone's " +
+            "preferences, occasion values and flags — never its plays — for the next one.", 13f))
+        col.addView(Button(this).apply {
             text = "Check the channel"
             setOnClickListener { Thread({ check() }, "lempi-mesh-check").start() }
         })
@@ -262,6 +268,44 @@ class MeshActivity : Activity() {
             }
         })
         name.isEnabled = false   // the name the hub holds is the one given at enrolment
+    }
+
+    /**
+     * [REQ-AND-330]: the household's edits down, then this phone's up.
+     *
+     * Down first: what the last star sync decided waits in this phone's
+     * outbox at the hub, and is applied by the three-way rule -- a row changed
+     * here since the upload it was merged from is kept. Then up: the shared
+     * tables as they now stand, for the next sync, with this phone's clock so
+     * the hub can refuse edits it could not order.
+     */
+    private fun syncEdits() {
+        try {
+            val listener = java.io.File(filesDir, "listener.db").path
+            val client = MeshClient(base(prefs.getString("hub", "")!!), pinHub = prefs.getString("hub_fp", null), present = true)
+            val (s, o) = client.call("GET", "/member/updates")
+            if (s != 200) return say("The hub answered $s: ${o.optString("error")}")
+            if (o.isNull("run")) {
+                say("Nothing waiting from the household.")
+            } else {
+                val run = o.getString("run")
+                val a = io.github.mangocats.lempi.ffi.meshApply(listener, o.getJSONObject("patch").toString())
+                client.call("POST", "/member/updates/applied", JSONObject().put("run", run)
+                    .put("applied", a.applied.toLong()).put("already", a.already.toLong()).put("kept", a.kept.toLong()))
+                say("From the household's sync of $run: ${a.applied} change(s) taken, ${a.already} already here" +
+                    (if (a.kept > 0u) ", ${a.kept} changed here since and kept — they go up now" else "") + ".")
+            }
+            val out = java.io.File(cacheDir, "mesh-upload.db")
+            val snap = io.github.mangocats.lempi.ffi.meshSnapshot(listener, out.path)
+            val (s2, up) = client.send("POST", "/member/listener", out.readBytes(), "application/octet-stream",
+                mapOf("X-Lempi-Clock" to System.currentTimeMillis().toString()))
+            out.delete()
+            if (s2 != 200) return say("Not sent: ${up.optString("error", "the hub answered $s2")}")
+            say("Sent ${snap.rows} edit(s) for the next sync; this phone's clock is ${up.getLong("clock_offset_ms")} ms " +
+                "from the hub's." + (if (snap.heldBack > 0u) " ${snap.heldBack} about single passages stay on the phone." else ""))
+        } catch (e: Exception) {
+            say("The sync failed: ${e.message ?: e}")
+        }
     }
 
     /** [SPEC-MTR-200] in use: a request only a member can make, to the hub

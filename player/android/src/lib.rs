@@ -447,6 +447,50 @@ pub struct BackupReady {
     pub bytes: u64,
 }
 
+/// What [`mesh_snapshot`] wrote `[REQ-AND-330]`.
+#[derive(uniffi::Record)]
+pub struct MeshSnapshot {
+    pub rows: u64,
+    /// Rows about a passage, kept on the phone: a passage id is its own.
+    pub held_back: u64,
+}
+
+/// The phone's shared edits -- preferences, occasion values, flags, and never
+/// its plays -- written to `out` for upload to the hub. See
+/// `lempi_player::mesh_sync::snapshot`.
+#[uniffi::export]
+pub fn mesh_snapshot(listener: String, out: String) -> Result<MeshSnapshot, LempiError> {
+    let r = guarded(|| lempi_player::mesh_sync::snapshot(std::path::Path::new(&listener), std::path::Path::new(&out)));
+    match &r {
+        Ok(s) => tracing::info!("mesh snapshot: {} row(s), {} held back", s.rows, s.held_back),
+        Err(e) => tracing::error!("mesh snapshot failed: {e}"),
+    }
+    let s = r.map_err(LempiError::from)?;
+    Ok(MeshSnapshot { rows: s.rows as u64, held_back: s.held_back as u64 })
+}
+
+/// What [`mesh_apply`] did.
+#[derive(uniffi::Record)]
+pub struct MeshApplied {
+    pub applied: u64,
+    pub already: u64,
+    /// Changed on the phone since its upload, and kept; it goes up next time.
+    pub kept: u64,
+}
+
+/// The household's merged edits, from the hub, into the phone's listener.
+/// See `lempi_player::mesh_sync::apply`.
+#[uniffi::export]
+pub fn mesh_apply(listener: String, patch: String) -> Result<MeshApplied, LempiError> {
+    let r = guarded(|| lempi_player::mesh_sync::apply(std::path::Path::new(&listener), &patch));
+    match &r {
+        Ok(a) => tracing::info!("mesh patch: {} applied, {} already, {} kept", a.applied, a.already, a.kept),
+        Err(e) => tracing::error!("mesh patch refused: {e}"),
+    }
+    let a = r.map_err(LempiError::from)?;
+    Ok(MeshApplied { applied: a.applied as u64, already: a.already as u64, kept: a.kept as u64 })
+}
+
 /// The newest backup of the listener at `listener` that passes SQLite's
 /// integrity check -- a fresh one if it can be taken -- for the app to write
 /// where the user chose `[REQ-AND-195]`. See `lempi_player::backup::for_export`.

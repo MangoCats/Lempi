@@ -158,8 +158,15 @@ def keys_in(conn: sqlite3.Connection, table: str, key: tuple) -> set | None:
 def removals(node: Node, table: str, key: tuple) -> dict:
     """[SPEC-STAR-050]: keys this node held in a backup and does not hold now,
     each with the time of the last backup that still held it -- the removal
-    happened after that."""
-    now = keys_in(node.db, table, key) or set()
+    happened after that.
+
+    A node whose copy lacks the table says nothing about it, as elsewhere in
+    the merge: its history is not evidence that it removed every row there.
+    A phone uploads its shared tables only [REQ-AND-330], and without this
+    every occasion its history held would have read as removed by it."""
+    now = keys_in(node.db, table, key)
+    if now is None:
+        return {}
     last_seen: dict = {}
     for when, conn in node.history:
         for k in keys_in(conn, table, key) or set():

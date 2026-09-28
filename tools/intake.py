@@ -440,10 +440,17 @@ class MemberHandler(BaseHTTPRequestHandler):
                                     "mesh": r["mesh"]["name"], "roster_version": r["version"]})
         if self.path == "/member/roster":
             return self.reply(200, meshmod.signed_roster(mdir))
+        if self.path == "/member/updates":
+            # [REQ-AND-330]: what the last star sync decided for this member,
+            # until it says it has applied it.
+            o = meshmod.outbox(mdir, m["fingerprint"])
+            return self.reply(200, o or {"run": None})
         self.reply(404, {"error": "unknown"})
 
     def do_POST(self):
         mdir = self.server.mdir
+        if self.path.startswith("/member/"):
+            return self.member_post(mdir)
         try:
             b = self.body()
             if self.path == "/enrol/start":
@@ -459,6 +466,37 @@ class MemberHandler(BaseHTTPRequestHandler):
                 return self.reply(200, meshmod.enrol_confirm(mdir, str(b.get("session")), str(b.get("signature"))))
         except (ValueError, KeyError, OSError) as e:
             return self.reply(400, {"error": str(e)})
+        self.reply(404, {"error": "unknown"})
+
+    def member_post(self, mdir: str):
+        """A member's writes [REQ-AND-330]: its upload of the shared tables, and
+        word that it has applied its patch."""
+        m = self.peer()
+        if m is None:
+            return self.reply(403, {"error": "members only: present an enrolled key"})
+        n = int(self.headers.get("Content-Length") or 0)
+        if self.path == "/member/listener":
+            if not 0 < n <= 50_000_000:
+                return self.reply(413, {"error": f"length {n} refused"})
+            data = self.rfile.read(n)
+            try:
+                clock = int(self.headers.get("X-Lempi-Clock") or "")
+            except ValueError:
+                clock = None
+            try:
+                meta = meshmod.store_upload(mdir, m["fingerprint"], data, clock)
+            except ValueError as e:
+                return self.reply(409, {"error": str(e)})
+            say(f"intake: {m['name'] or meshmod.show_fp(m['fingerprint'], True)} uploaded its shared edits: "
+                f"{meta['rows']}, clock {meta['clock_offset_ms']:+d} ms")
+            return self.reply(200, meta)
+        if self.path == "/member/updates/applied":
+            b = json.loads(self.rfile.read(n) or b"{}") if 0 < n <= 64_000 else {}
+            counts = {k: int(b.get(k, 0)) for k in ("applied", "already", "kept")}
+            if meshmod.outbox_applied(mdir, m["fingerprint"], str(b.get("run")), counts):
+                say(f"intake: {m['name'] or meshmod.show_fp(m['fingerprint'], True)} applied run {b.get('run')}: {counts}")
+                return self.reply(200, {"ok": True})
+            return self.reply(409, {"error": "no such patch waiting"})
         self.reply(404, {"error": "unknown"})
 
 
