@@ -781,9 +781,10 @@ case "$VERB" in
         systemctl stop "lempi-revert-$change_id.timer" >/dev/null 2>&1
         printf '{"ok":true}\n'
         ;;
-    pair)
+    mesh-pair)
         # Open the mesh pairing window `[SecurityReview3 R3]` -- the local
-        # "button". Sends SIGUSR1 to the player, which opens the window for its
+        # "button". (`pair` is already the Bluetooth-speaker verb above, so this
+        # is `mesh-pair`.) Sends SIGUSR1 to the player, which opens the window for its
         # configured length. Only something with local access does this -- a
         # GPIO button wired to this verb, the framebuffer UI, or an operator on
         # the console -- never a page on the LAN, which can neither signal the

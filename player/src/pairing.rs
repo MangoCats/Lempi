@@ -6,7 +6,7 @@
 //! stops a *browser* page doing it cross-site, but not a script talking to the
 //! appliance's open LAN port directly. So those changes are refused unless a
 //! **pairing window** is open, and the window can be opened only by a local,
-//! physical act -- a `SIGUSR1` to this process (`lempi-btctl pair`, wired to a
+//! physical act -- a `SIGUSR1` to this process (`lempi-btctl mesh-pair`, wired to a
 //! button, the framebuffer UI, or an operator on the console). A page on the
 //! LAN can neither send that signal nor read that it happened.
 //!

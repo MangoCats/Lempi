@@ -120,7 +120,7 @@ like the rest of its LAN UI, so the code comparison alone did not stop a host on
 the network from driving the whole enrolment itself (it can read the code from
 `GET /mesh`) `[SecurityReview3 R3]`. So those three changes need a **pairing
 window**, opened only by a local, physical act -- a `SIGUSR1` to the player
-(`lempi-btctl pair`, wired to a button, the framebuffer UI, or an operator on
+(`lempi-btctl mesh-pair`, wired to a button, the framebuffer UI, or an operator on
 the console). A page on the LAN can neither send that signal nor read that it
 happened. The window is five minutes by default, adjustable and clamped to
 1--60 minutes, and only adjustable while it is already open. A loopback-only
