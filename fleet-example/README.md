@@ -101,3 +101,6 @@ paths and how its player stops and starts, where each keeps the backups a
 sync takes, and where the hub's own backups are mirrored `[SPEC-STAR-086]`.
 The real one is `fleet/star-plan.json`, untracked like the rest of `fleet/`.
 A node marked `mirror` receives the hub's listener instead of its own.
+A node with a `member` fingerprint is a mesh player the signed transport
+reaches too: `star_sync.py PLAN shadow` takes it both ways and compares
+`[IMPL-NSH-300]`. Its fingerprint is the one the members' query answers with.

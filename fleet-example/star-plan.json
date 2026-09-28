@@ -5,7 +5,7 @@
  "backups": {"dir": "data/backups", "keep_daily": 14, "keep_monthly": 12, "max_age_hours": 30,
              "mirror": {"host": "someone@workshop", "dir": "/home/someone/lempi-hub-backups"}},
  "nodes": {
-  "speaker-a": {"host": "pi@speaker-a", "listener": "/var/lempi/listener.db", "library": "/srv/library/library.db",
+  "speaker-a": {"host": "pi@speaker-a", "member": "<the player's mesh fingerprint>", "listener": "/var/lempi/listener.db", "library": "/srv/library/library.db",
                 "backup_root": "/var/lempi", "library_backup_root": "/srv/library", "player": {"service": "lempi"}},
   "workshop": {"host": "someone@workshop", "mirror": true,
                "listener": "/home/someone/lempi-data/listener.db", "library": "/home/someone/lempi-data/library.db",

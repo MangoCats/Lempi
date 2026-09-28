@@ -126,6 +126,20 @@ playing `[SPEC-NSH-900]`.
 
 **Rollback:** the ssh path is untouched; stop using the new transport.
 
+**Built 2026-09-28**: the engine (`b0da89c`), the player's routes and
+`library-rw` (`c50c699`), the hub's transport and `star_sync.py PLAN shadow`
+(`9a459cb`), deployed everywhere at `9a459cb`. `library-rw` checked live: a
+no-op on lempi02w's writable root; on bose `/srv/library` went read-write and
+back to read-only with the player's pid unchanged.
+
+**Shadow run 1 of 3**, `20260928T2322Z`: all four players agreed both ways --
+shared tables and catalogue summary identical to the ssh snapshot, values
+patches equal in rows to the ssh patches, and each signed rehearsal clean (7 to
+apply on three nodes, none kept). No catalogue rows moved in that run, so the
+strict catalogue path is so far proven by its tests only, and the catalogue
+commit measurement `[SPEC-NSH-900]` waits for a run that carries one. The run
+itself was left uncommitted, for the maintainer.
+
 ## 4. Phase 3 -- cut over, and retire ssh from the data plane
 
 **`[IMPL-NSH-400]` Goal:** `[SPEC-NSH-100..120]`.
