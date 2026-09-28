@@ -159,15 +159,25 @@ fn host_ok(names: &std::collections::HashSet<String>, authority: &str) -> bool {
     if names.contains(&host) || host.parse::<std::net::IpAddr>().is_ok() {
         return true;
     }
-    // A single-label LAN short name -- how a household actually reaches a node
-    // (`lempi02w`, `lp3-wifi`), which is a DNS or hosts alias distinct from the
-    // node's kernel hostname, so the allow-list above cannot know it. A
-    // DNS-rebinding page uses a *registered* domain, which has a dot and stays
-    // refused; a dotless name only ever resolves on the local network, which
-    // is the boundary this appliance UI is already open on by design. Found
-    // 2026-09-28 in fleet verification: the strict list 403'd the very URLs the
-    // fleet is reached by `[SecurityReview2 C2 follow-up]`.
-    !host.contains('.') && !host.contains(':')
+    // A single-label LAN short name (`lempi02w`, `lp3-wifi`) -- a DNS or hosts
+    // alias distinct from the node's kernel hostname, so the allow-list above
+    // cannot know it.
+    if !host.contains('.') && !host.contains(':') {
+        return true;
+    }
+    // A name under a reserved local-use suffix (`lempi02w.lan`,
+    // `bose.home`, `x.local`). These carry the same security property as a
+    // dotless name and a bare IP: none is a *publicly registerable* domain, so
+    // none can be pointed at this node from off the LAN for a DNS-rebinding
+    // attack -- which is the whole and only thing the Host check defends. A
+    // registerable domain (`evil.com`) has a real TLD and stays refused; a
+    // `.lan`/`.home`/`.local` name resolves only through the local network,
+    // the boundary this appliance UI is already open on by design. Refusing
+    // them bought no protection and only broke the URLs the fleet is reached by
+    // `[SecurityReview2 C2 follow-up; corrected after the lempi02w.lan report]`.
+    const LOCAL_SUFFIXES: [&str; 7] =
+        [".local", ".lan", ".home", ".internal", ".intranet", ".corp", ".home.arpa"];
+    LOCAL_SUFFIXES.iter().any(|suf| host.ends_with(suf))
 }
 
 async fn same_origin(

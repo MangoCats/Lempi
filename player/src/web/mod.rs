@@ -1490,6 +1490,17 @@ mod tests {
         // is served -- how the fleet is actually reached `[C2 follow-up]`.
         assert!(ask("lp3-wifi:9", Some("http://lp3-wifi:9")).await.contains(" 200 "),
                 "a dotless LAN alias must be served");
+        // A name under a reserved local-use suffix is served too: it is
+        // local-only, so it cannot be used for rebinding any more than a
+        // dotless name can `[C2 follow-up; the lempi02w.lan report]`.
+        assert!(ask("lempi02w.lan:9", Some("http://lempi02w.lan:9")).await.contains(" 200 "),
+                "a .lan name must be served");
+        assert!(ask("bose.home:9", Some("http://bose.home:9")).await.contains(" 200 "),
+                "a .home name must be served");
+        // ...but a publicly registerable domain (a real TLD) is still refused,
+        // which is what actually stops rebinding.
+        assert!(ask("appliance.evil.com", Some("http://appliance.evil.com")).await.contains(" 403 "),
+                "a registerable domain must still be refused");
     }
 
     /// A host that forbids writing beside the audio refuses the lyrics
