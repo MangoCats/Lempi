@@ -1,0 +1,20 @@
+#!/bin/sh
+# Fake nmcli for the wifi verbs. Answers only what the guards read: a named
+# connection's type (from `$VT_STATE/nm_types`, `name=type` lines), and the
+# active wlan0 connection (from `$VT_STATE/nm_active`). `delete`/`modify`
+# succeed and are recorded, so a case can assert they were NOT reached when a
+# guard refused `[SecurityReview C5]`.
+printf '%s\n' "nmcli $*" >> "$VT_STATE/calls"
+case "$*" in
+    *"-t -f connection.type connection show "*)
+        name=$(printf '%s' "$*" | sed 's/.*connection show //')
+        t=$(sed -n "s/^$name=//p" "$VT_STATE/nm_types" 2>/dev/null)
+        [ -n "$t" ] && printf 'connection.type:%s\n' "$t"
+        exit 0 ;;
+    *"-t -f DEVICE,NAME connection show --active"*)
+        [ -f "$VT_STATE/nm_active" ] && printf 'wlan0:%s\n' "$(cat "$VT_STATE/nm_active")"
+        exit 0 ;;
+    *"connection delete"*|*"connection modify"*)
+        exit 0 ;;
+esac
+exit 0

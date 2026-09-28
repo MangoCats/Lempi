@@ -63,6 +63,19 @@ active_wifi_conn() {
     nmcli -t -f DEVICE,NAME connection show --active 2>/dev/null | sed -n 's/^wlan0://p'
 }
 
+# The type of a named connection, or empty if there is none. Used to refuse
+# forgetting or disabling anything that is not a Wi-Fi profile
+# `[SecurityReview C5]`: the UI lists only Wi-Fi connections, so a request
+# naming a wired, VPN or other system connection is not one the UI offered,
+# and must not be able to delete or disable it through this root helper.
+conn_type() {
+    nmcli -t -f connection.type connection show "$1" 2>/dev/null \
+        | sed -n 's/^connection\.type://p'
+}
+is_wifi_conn() {
+    [ "$(conn_type "$1")" = "802-11-wireless" ]
+}
+
 # bluetoothctl wants a login session's bus; sudo does not bring one.
 #
 # `$USER` is the fallback for a caller that already IS root without going
@@ -655,6 +668,7 @@ case "$VERB" in
     wifi-forget)
         name="${2:-}"
         [ -n "$name" ] || die "connection name required"
+        is_wifi_conn "$name" || die "not a Wi-Fi connection"
         [ "$name" != "$(active_wifi_conn)" ] || die "cannot forget the connection currently in use"
         nmcli connection delete "$name" >/dev/null 2>&1 || die "no such connection"
         printf '{"ok":true}\n'
@@ -662,6 +676,7 @@ case "$VERB" in
     wifi-autoconnect)
         name="${2:-}"; want="${3:-}"
         [ -n "$name" ] || die "connection name required"
+        is_wifi_conn "$name" || die "not a Wi-Fi connection"
         [[ "$want" =~ ^(on|off)$ ]] || die "not on or off"
         val=$([ "$want" = on ] && echo yes || echo no)
         nmcli connection modify "$name" autoconnect "$val" >/dev/null 2>&1 || die "no such connection"

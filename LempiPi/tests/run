@@ -109,6 +109,7 @@ MIDDL=20:64:DE:CF:F3:AD
 . "$HERE/cases-waitsink.sh"
 . "$HERE/cases-dbrecover.sh"
 . "$HERE/cases-btctl.sh"
+. "$HERE/cases-wifi.sh"
 . "$HERE/cases-btwatch.sh"
 . "$HERE/cases-units.sh"
 . "$HERE/cases-hci.sh"
