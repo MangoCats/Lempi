@@ -46,6 +46,10 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
+# The player's web port comes from the one place `[GDE-CLI-100]`, not a second
+# literal here -- `tools/cli/tests.rs` refuses a re-written default.
+from lempi_control import LEMPI_DEFAULT_PORT
+
 ROLES = ("hub", "leaf-vipunen", "player", "phone")
 MEMBER_PORT = 5732
 # An enrolment not finished within this is dropped: the person has walked away.
@@ -398,7 +402,7 @@ def _http(method: str, url: str, body: dict | None = None, timeout: float = 10.0
             raise ValueError(f"HTTP {e.code}") from e
 
 
-def invite(mdir: str, address: str, web_port: int = 5720, wait_s: int = ENROL_TTL_S) -> dict:
+def invite(mdir: str, address: str, web_port: int = LEMPI_DEFAULT_PORT, wait_s: int = ENROL_TTL_S) -> dict:
     """[SPEC-MTR-130] for a player, which has no HTTPS client: the hub invites
     it over its web port, and a person compares the code in the console with
     the one in the player's Settings. The invitation carries the mesh key
