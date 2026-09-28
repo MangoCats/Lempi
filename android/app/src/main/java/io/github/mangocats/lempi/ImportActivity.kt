@@ -18,7 +18,6 @@ import io.github.mangocats.lempi.ffi.LempiException
 import io.github.mangocats.lempi.ffi.RefusedReplacement
 import io.github.mangocats.lempi.ffi.importBundle
 import java.io.File
-import java.util.zip.ZipInputStream
 
 /**
  * Import a bundle from Vipunen [REQ-AND-230], by either route it can take:
@@ -281,19 +280,7 @@ class ImportActivity : Activity() {
         // the margin free as well.
         if (size != null) need("unpacking the bundle", size, staging)
         val input = contentResolver.openInputStream(uri) ?: throw IllegalStateException("cannot open $uri")
-        var files = 0
-        ZipInputStream(input.buffered()).use { z ->
-            while (true) {
-                val e = z.nextEntry ?: break
-                val name = e.name
-                if (e.isDirectory || !wanted(name)) continue
-                need("unpacking $name", maxOf(e.size, 0L), staging)
-                val out = File(staging, name)
-                out.parentFile?.mkdirs()
-                out.outputStream().use { z.copyTo(it) }
-                files++
-            }
-        }
+        val files = unzipBundle(input, staging) { name, bytes -> need("unpacking $name", bytes, staging) }
         say("Unpacked $files file(s).")
     }
 
@@ -315,7 +302,7 @@ class ImportActivity : Activity() {
                 val rel = prefix + c.getString(1)
                 if (c.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR) {
                     if (bundleDir(rel)) n += sizeOfTree(tree, c.getString(0), "$rel/")
-                } else if (wanted(rel) && !c.isNull(3)) {
+                } else if (bundleEntryWanted(rel) && !c.isNull(3)) {
                     n += c.getLong(3)
                 }
             }
@@ -339,7 +326,7 @@ class ImportActivity : Activity() {
                 val rel = prefix + name
                 if (c.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR) {
                     if (bundleDir(rel)) n += copyTree(tree, id, staging, "$rel/")
-                } else if (wanted(rel)) {
+                } else if (bundleEntryWanted(rel)) {
                     val out = File(staging, rel)
                     out.parentFile?.mkdirs()
                     contentResolver.openInputStream(DocumentsContract.buildDocumentUriUsingTree(tree, id))
@@ -349,15 +336,6 @@ class ImportActivity : Activity() {
             }
         }
         return n
-    }
-
-    /** Only what a bundle holds, and nothing that could leave the staging folder. */
-    private fun wanted(name: String): Boolean {
-        if (name.startsWith("/") || name.contains('\\')) return false
-        if (name.split('/').any { it == ".." || it.isEmpty() }) return false
-        // A payload in parts [SPEC-PL-095]: payload-001.json, payload-002.json, ...
-        val part = Regex("payload-[0-9]+\\.json")
-        return name == "payload.json" || part.matches(name) || name.startsWith("audio/") || name.startsWith("covers/")
     }
 
     companion object {

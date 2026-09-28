@@ -251,6 +251,18 @@ class MeshActivity : Activity() {
         })
         col.addView(text("Takes what the household decided at the last sync, then sends this phone's " +
             "preferences, occasion values and flags — never its plays — for the next one.", 13f))
+        val everything = CheckBox(this).apply { text = "all of it, not only what changed" }
+        col.addView(Button(this).apply {
+            text = "Get catalogue updates from the hub"
+            setOnClickListener {
+                isEnabled = false
+                val button = this
+                Thread({ getCatalogue(everything.isChecked); main.post { button.isEnabled = true } }, "lempi-mesh-catalogue").start()
+            }
+        })
+        col.addView(everything)
+        col.addView(text("Vipunen's names, credits, albums and covers for the music on this phone: " +
+            "only what changed since it last took them.", 13f))
         col.addView(Button(this).apply {
             text = "Check the channel"
             setOnClickListener { Thread({ check() }, "lempi-mesh-check").start() }
@@ -305,6 +317,82 @@ class MeshActivity : Activity() {
                 "from the hub's." + (if (snap.heldBack > 0u) " ${snap.heldBack} about single passages stay on the phone." else ""))
         } catch (e: Exception) {
             say("The sync failed: ${e.message ?: e}")
+        }
+    }
+
+    /**
+     * [REQ-AND-330]: Vipunen's catalogue for the music this phone holds, as a
+     * bundle carried by hand would bring it, asked for over the members'
+     * channel. The phone names its files; the hub bundles the ones whose data
+     * changed since it last delivered them; the phone imports that bundle with
+     * the importer every bundle goes through, and only then says so.
+     */
+    private fun getCatalogue(all: Boolean) {
+        try {
+            val library = java.io.File(filesDir, "library.db")
+            val files = org.json.JSONArray()
+            android.database.sqlite.SQLiteDatabase.openDatabase(library.path, null,
+                android.database.sqlite.SQLiteDatabase.OPEN_READONLY).use { db ->
+                db.rawQuery("SELECT sha256, audio_md5 FROM files", null).use { c ->
+                    while (c.moveToNext()) {
+                        files.put(JSONObject().put("sha256", c.getString(0) ?: "").put("audio_md5", c.getString(1) ?: ""))
+                    }
+                }
+            }
+            val client = MeshClient(base(prefs.getString("hub", "")!!), pinHub = prefs.getString("hub_fp", null), present = true)
+            val (s, _) = client.call("POST", "/member/catalogue", JSONObject().put("files", files).put("full", all))
+            if (s != 202) return say("The hub would not prepare an update (status $s).")
+            say("Asked about ${files.length()} file(s); the hub is working out what has changed…")
+            var st = JSONObject()
+            val until = System.currentTimeMillis() + 10 * 60_000L
+            while (System.currentTimeMillis() < until) {
+                Thread.sleep(2000)
+                st = client.call("GET", "/member/catalogue").second
+                if (st.optString("state") != "preparing") break
+            }
+            when (st.optString("state")) {
+                "up-to-date" -> return say("Up to date: the hub has nothing newer for the ${st.optInt("known")} file(s) it knows here" +
+                    (if (st.optInt("unknown") > 0) "; ${st.optInt("unknown")} are not Vipunen's." else "."))
+                "failed" -> return say("The hub could not prepare it: ${st.optString("error")}")
+                "ready" -> {}
+                else -> return say("No answer from the hub (${st.optString("state")}).")
+            }
+            val stamp = st.getString("stamp")
+            val zip = java.io.File(cacheDir, "mesh-catalogue.zip")
+            say("Fetching ${st.getInt("files")} file(s)' data, ${(st.getLong("bytes") + 999_999) / 1_000_000} MB…")
+            client.download("/member/catalogue/$stamp.zip", zip)
+            if (sha256(zip) != st.getString("sha256")) {
+                zip.delete()
+                return say("What arrived is not what the hub prepared; nothing imported.")
+            }
+            val staging = java.io.File(cacheDir, "mesh-catalogue-$stamp")
+            try {
+                staging.mkdirs()
+                zip.inputStream().use { unzipBundle(it, staging) }
+                val music = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_MUSIC), "Lempi")
+                val r = io.github.mangocats.lempi.ffi.importBundle(library.path, staging.path, music.path)
+                if (r.refused.isNotEmpty()) return say("The import refused it, and nothing changed: ${r.refused.joinToString("; ")}")
+                val counts = JSONObject().put("imported", r.imported.toLong()).put("already", r.already.toLong())
+                    .put("upgraded", r.upgraded.toLong()).put("rekeyed", r.rekeyed.toLong())
+                    .put("releases", r.releases.toLong()).put("covers", r.covers.toLong()).put("bad_covers", r.badCovers.size)
+                client.call("POST", "/member/catalogue/$stamp/imported", counts)
+                say("Imported: ${r.upgraded} file(s) given Vipunen's newer data, ${r.already} unchanged, " +
+                    "${r.releases} album(s) with ${r.covers} cover picture(s)" +
+                    (if (r.badCovers.isNotEmpty()) "; ${r.badCovers.size} cover(s) damaged in transit, not stored" else "") + ".")
+                if (r.upgraded > 0u || r.rekeyed > 0u || r.covers > 0u) {
+                    say(when (Lempi.reload()) {
+                        null -> "The player is not running; it takes this up when it starts."
+                        in 200..299 -> "The player is rebuilding its choices with it."
+                        else -> "The player will take this up at its next start."
+                    })
+                }
+            } finally {
+                staging.deleteRecursively()
+                zip.delete()
+            }
+        } catch (e: Exception) {
+            say("The update failed: ${e.message ?: e}")
         }
     }
 

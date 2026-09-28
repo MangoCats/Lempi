@@ -64,6 +64,17 @@ class MeshClient(private val base: String, private val pinHub: String?, private 
         init(if (present) arrayOf<KeyManager>(ownKey) else null, arrayOf(trust), null)
     }
 
+    /** A GET whose answer is a file, streamed to `dest`. */
+    fun download(path: String, dest: java.io.File) {
+        val c = URL(base + path).openConnection() as HttpsURLConnection
+        c.sslSocketFactory = context.socketFactory
+        c.hostnameVerifier = HostnameVerifier { _, _ -> true }
+        c.connectTimeout = 8000
+        c.readTimeout = 120000
+        if (c.responseCode != 200) throw IllegalStateException("the hub answered ${c.responseCode}")
+        c.inputStream.use { input -> dest.outputStream().use { input.copyTo(it) } }
+    }
+
     /** One request: its status and its JSON answer. */
     fun call(method: String, path: String, body: JSONObject? = null): Pair<Int, JSONObject> =
         send(method, path, body?.toString()?.toByteArray(), "application/json")

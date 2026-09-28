@@ -258,8 +258,8 @@ The order agreed 2026-09-27:
    Each enrolled phone is a star-sync node reached by upload: merged, reported
    and gated by a person like any other `[SPEC-STAR-070]`. Its history is its
    own earlier uploads, and a table it does not upload is never read as rows
-   it removed (`star_merge.removals`). Catalogue updates to the phone, which
-   bundles carry today, are the next part of this step;
+   it removed (`star_merge.removals`). Catalogue updates travel the same
+   channel, only what changed `[SPEC-PL-107]`;
 4. discovery;
 5. later, and optional: star sync onto node identities `[SPEC-MTR-220]`, and
    moving the hub `[SPEC-MTR-070]`.

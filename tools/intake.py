@@ -53,6 +53,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import pending as pendingmod  # noqa: E402  -- the decisions a person made [SPEC048]
 import mesh as meshmod  # noqa: E402  -- membership, enrolment and the members' channel [SPEC049]
+import member_updates  # noqa: E402  -- catalogue updates to a member [REQ-AND-330]
 
 # The application's own key [REQ-AND-287]: every copy of Lempi and Vipunen
 # carries it, so it keeps out a stray request, not a person. The phone's copy is
@@ -362,8 +363,8 @@ def serve(intake: Intake, host: str, port: int) -> ThreadingHTTPServer:
 class MemberServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, addr, handler, mdir: str):
-        self.mdir = mdir
+    def __init__(self, addr, handler, mdir: str, db: str | None = None):
+        self.mdir, self.db = mdir, db
         self._ctx, self._version = None, None
         super().__init__(addr, handler)
 
@@ -445,6 +446,21 @@ class MemberHandler(BaseHTTPRequestHandler):
             # until it says it has applied it.
             o = meshmod.outbox(mdir, m["fingerprint"])
             return self.reply(200, o or {"run": None})
+        if self.path == "/member/catalogue":
+            return self.reply(200, member_updates.status(mdir, m["fingerprint"]))
+        mt = re.fullmatch(r"/member/catalogue/([0-9TZ]+-[0-9a-f]{6})\.zip", self.path)
+        if mt:
+            # This member's own update, and only while it waits for it.
+            p = member_updates.bundle_path(mdir, m["fingerprint"], mt.group(1))
+            if p is None:
+                return self.reply(404, {"error": "no such update waiting"})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", str(os.path.getsize(p)))
+            self.end_headers()
+            with open(p, "rb") as fh:
+                shutil.copyfileobj(fh, self.wfile, 1 << 16)
+            return None
         self.reply(404, {"error": "unknown"})
 
     def do_POST(self):
@@ -490,6 +506,24 @@ class MemberHandler(BaseHTTPRequestHandler):
             say(f"intake: {m['name'] or meshmod.show_fp(m['fingerprint'], True)} uploaded its shared edits: "
                 f"{meta['rows']}, clock {meta['clock_offset_ms']:+d} ms")
             return self.reply(200, meta)
+        if self.path == "/member/catalogue":
+            # A manifest of what the phone holds; the answer is prepared in
+            # the background, and the phone polls for it.
+            if not 0 < n <= 20_000_000 or not self.server.db:
+                return self.reply(413 if self.server.db else 503, {"error": "manifest refused"})
+            b = json.loads(self.rfile.read(n))
+            files = [f for f in b.get("files", []) if isinstance(f, dict)]
+            member_updates.start(self.server.db, mdir, m["fingerprint"], files, bool(b.get("full")))
+            say(f"intake: {m['name'] or meshmod.show_fp(m['fingerprint'], True)} asks for catalogue updates "
+                f"for {len(files)} file(s){' (all of it)' if b.get('full') else ''}")
+            return self.reply(202, {"state": "preparing"})
+        mi = re.fullmatch(r"/member/catalogue/([0-9TZ]+-[0-9a-f]{6})/imported", self.path)
+        if mi:
+            b = json.loads(self.rfile.read(n) or b"{}") if 0 < n <= 64_000 else {}
+            if member_updates.delivered(mdir, m["fingerprint"], mi.group(1), b):
+                say(f"intake: {m['name'] or meshmod.show_fp(m['fingerprint'], True)} imported update {mi.group(1)}: {b}")
+                return self.reply(200, {"ok": True})
+            return self.reply(409, {"error": "no such update waiting"})
         if self.path == "/member/updates/applied":
             b = json.loads(self.rfile.read(n) or b"{}") if 0 < n <= 64_000 else {}
             counts = {k: int(b.get(k, 0)) for k in ("applied", "already", "kept")}
@@ -500,8 +534,8 @@ class MemberHandler(BaseHTTPRequestHandler):
         self.reply(404, {"error": "unknown"})
 
 
-def serve_members(mdir: str, host: str, port: int) -> MemberServer:
-    return MemberServer((host, port), MemberHandler, mdir)
+def serve_members(mdir: str, host: str, port: int, db: str | None = None) -> MemberServer:
+    return MemberServer((host, port), MemberHandler, mdir, db)
 
 
 def main(argv: list[str]) -> int:
@@ -549,7 +583,7 @@ def main(argv: list[str]) -> int:
     mdir = meshmod.mesh_dir(args.db)
     if meshmod.initialised(mdir):
         r = meshmod.roster(mdir)
-        members = serve_members(mdir, args.bind, args.member_port)
+        members = serve_members(mdir, args.bind, args.member_port, db=args.db)
         threading.Thread(target=members.serve_forever, daemon=True).start()
         say(f"intake: mesh    '{r['mesh']['name']}' {meshmod.show_fp(r['mesh']['fingerprint'], True)}, "
             f"{len(r['members'])} member(s); members' port {args.bind}:{args.member_port} (TLS)")

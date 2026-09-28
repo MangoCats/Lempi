@@ -158,6 +158,13 @@ Moto G:* one file, both answers, as described in `[REQ-AND-250]`.
 
 3. **`[SPEC-PL-106]` A file's own cover travels on its encoding.** *Emitted since 2026-09-27.* A file with no release has a cover of its own in `file_art`, by its signature `[SPEC-COV-040]`. It travels as an encoding's `cover`, in the same shape as a release's, naming `covers/file-<audio_md5>-<side>.<ext>`. The importer stores it in `file_art` under the same hash check. `--no-covers` drops it with the rest. Additive `[SPEC-PL-065]`.
 
+4. **`[SPEC-PL-107]` A mesh member asks for its catalogue updates, and is sent only what changed.** *Built 2026-09-28* (`tools/member_updates.py`, and the phone's "Get catalogue updates from the hub"). This is what a payload-only bundle carried by hand did `[SPEC-PL-095]`, asked for over the members' channel `[SPEC-MTR-200]`:
+   - **The ask:** the phone sends a manifest of its catalogue's files, by byte hash and signature.
+   - **The difference:** the hub builds the payload for the files it knows, and takes a digest of each file's share: its encoding, the recordings it credits, those recordings' releases (tracks narrowed to them) with their covers' hashes, and its own cover. A file whose digest differs from the one last delivered to that phone goes into a payload-only bundle, made by the same `export_bundle.py`. The phone can also ask for all of it.
+   - **The import:** the phone imports with the importer every bundle goes through. Only its acknowledgement records the digests as delivered.
+
+   *Measured on the Moto G:* the first ask sent all 5,649 files it shares with the hub, a 209 MB bundle that is mostly covers. It was prepared, fetched, checked by hash and imported in about four minutes, and all 5,649 were unchanged, which confirms the phone was current. Asked again, the answer was "up to date", prepared in about 9 s.
+
 ---
 
-**Traceability:** `[SPEC-PL-010..106]` · derived from `[SPEC-DF-050]`, `[SPEC-DF-065]`, `[SPEC-DF-093]`, `[SPEC-SUI-165]`, `[SPEC-SUI-180]`
+**Traceability:** `[SPEC-PL-010..107]` · derived from `[SPEC-DF-050]`, `[SPEC-DF-065]`, `[SPEC-DF-093]`, `[SPEC-SUI-165]`, `[SPEC-SUI-180]`
