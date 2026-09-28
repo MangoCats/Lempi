@@ -73,7 +73,7 @@ class SendActivity : Activity() {
         val prefs = getSharedPreferences("intake", MODE_PRIVATE)
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 32, 32, 32) }
         node = EditText(this).apply {
-            hint = "Vipunen's address, e.g. 192.168.67.95"
+            hint = "Vipunen's address, e.g. 192.0.2.10"
             setText(prefs.getString("node", ""))
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
         }

@@ -28,3 +28,11 @@ jobs:
       # exits non-zero if the file is missing or its token block is empty,
       # rather than reporting a clean scan it never performed [GOV-FBN-020].
       - run: python tools/check_forbidden_names.py --strict
+      # [SecurityReview N1] fleet-leak scan. There is no fleet/ in CI, so it
+      # runs generic-only and says so [GOV-FBN-020]. Report mode, not --strict:
+      # the existing tree carries private detail that history-as-is (decided
+      # 2026-09-28) leaves in place, so a tree-wide gate would fail on the
+      # backlog. New leaks are refused at commit time by .githooks/pre-commit
+      # (--staged --strict); a strict PR-diff gate here follows the redaction
+      # pass (SecurityRemediation §4).
+      - run: python tools/check_fleet_leaks.py

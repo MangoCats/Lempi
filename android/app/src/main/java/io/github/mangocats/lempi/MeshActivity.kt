@@ -84,7 +84,7 @@ class MeshActivity : Activity() {
         col.addView(text("\nNot in a mesh. To join, name the hub — the computer running Vipunen's intake — " +
             "and open its console's mesh page to confirm.", 14f))
         val hub = EditText(this).apply {
-            hint = "the hub's address, e.g. 192.168.67.95"
+            hint = "the hub's address, e.g. 192.0.2.10"
             setText(prefs.getString("hub", getSharedPreferences("intake", MODE_PRIVATE).getString("node", "")))
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
         }

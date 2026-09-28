@@ -46,8 +46,9 @@ ROOT=$(git rev-parse --show-toplevel)
 
 if [ "${LEMPI_SKIP_VERIFY:-0}" = "1" ]; then
     echo "pre-commit: SKIPPED by LEMPI_SKIP_VERIFY=1."
-    echo "pre-commit: staged scripts' executable bits are unchecked, and this commit's"
-    echo "pre-commit: cfg(unix) code is unverified; it may not build on the appliance."
+    echo "pre-commit: staged scripts' executable bits are unchecked, this commit's added"
+    echo "pre-commit: lines are unscanned for fleet leaks, and its cfg(unix) code is"
+    echo "pre-commit: unverified; it may not build on the appliance."
     exit 0
 fi
 
@@ -83,6 +84,26 @@ Windows has no executable bit, so it runs here and will not run on Linux --
 where every appliance, and CI, lives. Apply the `fix:` line above, which sets
 the mode in the index, and commit again. A file that is sourced rather than
 run says "Sourced, not run" in its header and is exempt.
+EOF
+    exit 1
+fi
+
+# ---- 1b. no new fleet leak in the lines this commit adds: every commit --
+#
+# Fast, like the exec-bit check, so it runs on every commit. It scans only the
+# ADDED lines (`--staged`), so the private detail already in the tree -- left
+# as-is by decision, 2026-09-28 -- does not block work, while a new leak is
+# refused `[SecurityReview N1]`. Generic patterns always; the real-name
+# denylist too when `fleet/private-tokens.txt` exists (it does not in CI).
+if ! "$PY" "$ROOT/tools/check_fleet_leaks.py" --staged --strict; then
+    cat <<'EOF'
+
+pre-commit: REFUSED -- a staged line looks like private fleet detail.
+
+Use a documentation address (192.0.2.x, RFC 5737), a role alias, or move the
+detail into the gitignored fleet/. A documented placeholder goes in the
+allow-list in tools/check_fleet_leaks.py. LEMPI_SKIP_VERIFY=1 commits anyway,
+out loud.
 EOF
     exit 1
 fi
