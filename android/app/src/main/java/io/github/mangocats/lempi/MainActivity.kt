@@ -100,6 +100,7 @@ class MainActivity : Activity() {
         menu.add(0, 3, 2, "Look for music on the phone")
         menu.add(0, 4, 3, "Export a backup…")
         menu.add(0, 5, 4, "Send new music to Vipunen…")
+        menu.add(0, 6, 5, "Mesh membership…")
         return true
     }
 
@@ -110,6 +111,10 @@ class MainActivity : Activity() {
         }
         if (item.itemId == 5) {
             startActivity(Intent(this, SendActivity::class.java))
+            return true
+        }
+        if (item.itemId == 6) {
+            startActivity(Intent(this, MeshActivity::class.java))
             return true
         }
         val action = when (item.itemId) {

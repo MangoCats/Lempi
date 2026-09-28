@@ -433,6 +433,25 @@ def retained(dates, keep_daily, keep_monthly):
     return keep
 
 
+MESH_FILES = ("node.key", "node.pem", "mesh.key", "roster.json")
+
+
+def mesh_archive(mdir: str, dest: str) -> None:
+    """The hub's mesh keys and roster [SPEC-MTR-110], as an SQLite archive:
+    `sqlite3 FILE -Ax` extracts it. An SQLite file so that it is stored,
+    mirrored, kept and pruned exactly as the two databases are. Deterministic,
+    so an unchanged mesh is the same object and is stored once. Enrolments in
+    progress are not kept: they last minutes."""
+    c = sqlite3.connect(dest)
+    c.execute("CREATE TABLE sqlar(name TEXT PRIMARY KEY, mode INT, mtime INT, sz INT, data BLOB)")
+    for name in MESH_FILES:
+        with open(os.path.join(mdir, name), "rb") as fh:
+            data = fh.read()
+        c.execute("INSERT INTO sqlar VALUES (?, ?, 0, ?, ?)", (name, 0o100600, len(data), data))
+    c.commit()
+    c.close()
+
+
 def backup(plan):
     b = plan["backups"]
     root = at_root(b["dir"])
@@ -459,6 +478,22 @@ def backup(plan):
                 else:
                     say(f"  {h}: unchanged, {h_sha[:12]} already held")
                 rec[h] = h_sha
+        # [SPEC-MTR-110]: losing the mesh key means enrolling every member
+        # again, so it is kept with the pair it belongs beside.
+        mdir = os.path.join(os.path.dirname(at_root(plan["hub"]["library"])), "mesh")
+        if os.path.isfile(os.path.join(mdir, "roster.json")):
+            with tempfile.TemporaryDirectory(dir=root) as t:
+                copy = os.path.join(t, "mesh.db")
+                mesh_archive(mdir, copy)
+                m_sha = sha256(copy)
+                dst = os.path.join(objs, f"{m_sha}.db")
+                if not os.path.exists(dst):
+                    shutil.move(copy, dst)
+                    seal(dst)
+                    say(f"  mesh keys and roster: stored {m_sha[:12]}")
+                else:
+                    say(f"  mesh keys and roster: unchanged, {m_sha[:12]} already held")
+                rec["mesh"] = m_sha
         with open(entry, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(rec, fh, indent=1, sort_keys=True)
     # Retention, then the objects nothing refers to any more.
@@ -472,7 +507,7 @@ def backup(plan):
     for d in keep:
         with open(os.path.join(days, f"{d}.json"), encoding="utf-8") as fh:
             rec = json.load(fh)
-        wanted |= {rec["listener"], rec["library"]}
+        wanted |= {rec["listener"], rec["library"]} | ({rec["mesh"]} if rec.get("mesh") else set())
     for f in os.listdir(objs):
         if f.endswith(".db") and f[:-3] not in wanted:
             os.chmod(os.path.join(objs, f), 0o644)

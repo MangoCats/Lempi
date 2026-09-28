@@ -72,6 +72,13 @@
             android:windowSoftInputMode="adjustResize"
             android:exported="false" />
 
+        <!-- [SPEC049]: joining a mesh, and this phone's membership. -->
+        <activity
+            android:name=".MeshActivity"
+            android:label="Mesh membership"
+            android:windowSoftInputMode="adjustResize"
+            android:exported="false" />
+
         <!-- [REQ-AND-130]: also the media session's service, which the system,
              Bluetooth and Android Auto bind to, and so exported. Media3
              answers them; nothing here plays audio for them. -->

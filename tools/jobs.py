@@ -531,6 +531,13 @@ class Runner:
         if kind == "pending":
             return self._pending(job_id, target)
 
+        if kind == "mesh":
+            # [SPEC049]: a `mesh.py` command, as a person would type it.
+            tools = os.path.dirname(os.path.abspath(__file__))
+            code, _ = self._spawn(job_id, "mesh", [sys.executable, os.path.join(tools, "mesh.py"),
+                                                   self.library, *json.loads(target)])
+            return self._finish(job_id, "done" if code == 0 else "failed")
+
         # 'induct' and 'reanalyze' `[SPEC-SUI-214]` are the same four-stage
         # pipeline, differing only in whether `identify` is told to retry
         # what it already tried -- anything else unrecognized also lands

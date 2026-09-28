@@ -47,6 +47,7 @@ from ingest_folder import AUDIO  # noqa: E402  -- one list of what counts as aud
 import jobs as jobmod  # noqa: E402
 import lempi_control  # noqa: E402  -- process/network side of the handoff
 import pending as pendingmod  # noqa: E402  -- what waits for a person [SPEC048]
+import mesh as meshmod  # noqa: E402  -- membership [SPEC049]
 
 WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "console_web")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1008,6 +1009,19 @@ class Handler(BaseHTTPRequestHandler):
                            if os.path.isdir(os.path.join(pdir, w)) else 0 for w in pendingmod.DONE}
                 return self.send_json({"waiting": pendingmod.entries(pdir), "decided": decided,
                                        "root": (STATE["roots"] or [""])[0], "folder": pdir})
+            if p == "/api/mesh":
+                # [SPEC049]: the roster and the enrolments in progress, read
+                # from `mesh/` beside the library. Written only by jobs.
+                mdir = meshmod.mesh_dir(STATE["library"] or STATE["path"])
+                if not meshmod.initialised(mdir):
+                    return self.send_json({"initialised": False})
+                r = meshmod.roster(mdir)
+                return self.send_json({
+                    "initialised": True, "mesh": {k: r["mesh"][k] for k in ("name", "fingerprint")},
+                    "version": r["version"],
+                    "members": [{k: m[k] for k in ("fingerprint", "name", "role", "enrolled_at")}
+                                for m in r["members"]],
+                    "sessions": meshmod.sessions(mdir)})
             if p.startswith("/intake/audio/"):
                 return self.send_pending_audio(p.rsplit("/", 1)[-1])
             if p == "/api/totals":
@@ -1195,6 +1209,25 @@ class Handler(BaseHTTPRequestHandler):
                 if not folder or not os.path.isdir(folder):
                     return self.send_json({"error": f"not a folder: {folder}"}, code=400)
                 return self.send_json({"job_id": STATE["jobs"].submit("propose", folder)})
+            if p.startswith("/api/mesh/"):
+                # [SPEC049]: each a `mesh.py` command, run as a job.
+                parts = p.strip("/").split("/")
+                hexish = lambda s: bool(s) and all(c in "0123456789abcdef" for c in s)  # noqa: E731
+                if parts[2:] == ["init"]:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    b = json.loads(self.rfile.read(n) or b"{}") if 0 < n < 4096 else {}
+                    if not str(b.get("mesh", "")).strip():
+                        return self.send_json({"error": "name the mesh"}, code=400)
+                    args = ["init", "--mesh", str(b["mesh"]).strip()]
+                    if str(b.get("name", "")).strip():
+                        args += ["--name", str(b["name"]).strip()]
+                elif len(parts) == 5 and parts[2] == "enrol" and parts[4] in ("accept", "reject") and hexish(parts[3]):
+                    args = [parts[4], parts[3]]
+                elif len(parts) == 5 and parts[2] == "member" and parts[4] == "remove" and hexish(parts[3]):
+                    args = ["remove", parts[3]]
+                else:
+                    return self.send_json({"error": "unknown"}, code=404)
+                return self.send_json({"job_id": STATE["jobs"].submit("mesh", json.dumps(args))})
             if p.startswith("/api/intake/"):
                 # A person's decision on a waiting file, run as a job: the
                 # same `pending.py` command a person could type [SPEC-SUI-015].

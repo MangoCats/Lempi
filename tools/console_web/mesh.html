@@ -9,6 +9,37 @@
   <span class="ro">library read-only</span>
 </header>
 <main>
+  <h2>Members</h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    The devices this hub has enrolled in its mesh <code style="font:12px var(--mono)">[SPEC049]</code>.
+    A device asks to join from its own screen — on a phone, Lempi's menu, "Mesh membership…" —
+    naming this computer and the intake's members' port. It then appears below with a six-digit
+    code. Accept it only if the device shows the <b>same</b> code: that is what proves the device
+    you are looking at is the one asking. It must be confirmed on the device too.
+    The intake (<code style="font:12px var(--mono)">tools/intake.py</code>) must be running to answer.
+  </p>
+  <div id="mesh-none" hidden>
+    <p class="empty">No mesh yet. Creating one makes this computer its hub and its authority:
+       a key that signs who belongs. Back up <code style="font:12px var(--mono)">data/mesh/</code> —
+       losing its key means enrolling every member again.</p>
+    <div class="controls">
+      <input type="search" id="mesh-name" placeholder="mesh name, e.g. Home" style="max-width:14rem">
+      <input type="search" id="hub-name" placeholder="this hub's name (optional)" style="max-width:14rem">
+      <button class="chip" id="mesh-init">create the mesh</button>
+    </div>
+  </div>
+  <div id="mesh-have" hidden>
+    <p id="mesh-id" style="font-size:.9rem"></p>
+    <label style="font-size:.85rem"><input type="checkbox" id="show-fps"> show fingerprints</label>
+    <table class="peers">
+      <thead><tr><th>member</th><th>role</th><th>enrolled</th><th></th></tr></thead>
+      <tbody id="member-rows"></tbody>
+    </table>
+    <h3 style="font-size:.95rem;margin-top:1rem">Asking to join</h3>
+    <div id="enrol-rows"></div>
+  </div>
+  <div id="mesh-out"></div>
+
   <h2>Peers</h2>
   <p class="empty" style="font-size:.85rem;padding:.2rem 0">
     Named installations this library can compare its catalog against
@@ -188,4 +219,81 @@ document.getElementById('run-diff').onclick = async () => {
     renderDiff(peer, job.result);
   });
 };
+</script>
+<script>
+// Members [SPEC049]. Names follow [SPEC-MTR-105]: an empty name shows the short
+// fingerprint, names two members share show theirs, and the box shows them all.
+(() => {
+  const $ = s => document.querySelector(s);
+  const short = fp => `${fp.slice(0, 4)} ${fp.slice(4, 8)}`;
+  const full = fp => fp.slice(0, 32).match(/.{4}/g).join(' ');
+  function names(members, all) {
+    const n = members.map(m => (m.name || '').trim());
+    return members.map((m, i) => !n[i] ? short(m.fingerprint)
+      : (all || n.filter(x => x === n[i]).length > 1) ? `${n[i]} (${short(m.fingerprint)})` : n[i]);
+  }
+  let last = null;
+  async function act(path, body) {
+    const r = await (await fetch(path, { method: 'POST', body: JSON.stringify(body || {}) })).json();
+    if (r.error) return $('#mesh-out').replaceChildren(S.el('div', { style: 'color:var(--bad)', text: r.error }));
+    S.watchJob(r.job_id, $('#mesh-out'), () => load());
+  }
+  function render(d) {
+    $('#mesh-none').hidden = d.initialised;
+    $('#mesh-have').hidden = !d.initialised;
+    if (!d.initialised) return;
+    const all = $('#show-fps').checked;
+    $('#mesh-id').textContent = `Mesh “${d.mesh.name}”, ${full(d.mesh.fingerprint)} · roster version ${d.version}`;
+    const shown = names(d.members, all);
+    $('#member-rows').replaceChildren(...d.members.map((m, i) => {
+      const rm = m.role === 'hub' ? '' : S.el('button', { class: 'chip', text: 'remove' });
+      if (rm) rm.onclick = () => confirm(`Remove ${shown[i]} from the mesh? It is refused from its next connection.`)
+        && act(`/api/mesh/member/${m.fingerprint}/remove`);
+      return S.el('tr', {}, S.el('td', { text: shown[i], title: full(m.fingerprint) }),
+        S.el('td', { text: m.role }), S.el('td', { text: m.enrolled_at }), S.el('td', {}, rm));
+    }));
+    const live = d.sessions.filter(s => s.state === 'started' || s.state === 'comparing');
+    const box = $('#enrol-rows');
+    box.replaceChildren();
+    if (!live.length) box.append(S.el('p', { class: 'empty', text: 'Nobody is asking right now.' }));
+    for (const s of live) {
+      const who = s.name ? `${s.name} (${short(s.fingerprint)})` : short(s.fingerprint);
+      const row = S.el('div', { class: 'controls', style: 'align-items:center' },
+        S.el('span', { text: `${who}, a ${s.role}, from ${s.sender}` }));
+      if (s.state === 'comparing') {
+        row.append(S.el('b', { style: 'font:1.4rem var(--mono);margin:0 .6rem', text: s.code }),
+          S.el('span', { style: 'color:var(--dim);font-size:.85rem',
+            text: s.candidate_confirmed ? 'confirmed on the device' : 'not yet confirmed on the device' }));
+        if (!s.hub_confirmed) {
+          const ok = S.el('button', { class: 'chip', text: 'the codes match — accept' });
+          ok.onclick = () => act(`/api/mesh/enrol/${s.session}/accept`);
+          row.append(ok);
+        } else {
+          row.append(S.el('span', { text: 'accepted here; waiting for the device' }));
+        }
+      } else {
+        row.append(S.el('span', { style: 'color:var(--dim)', text: 'waiting for the device to send its half of the code…' }));
+      }
+      const no = S.el('button', { class: 'chip', text: 'reject' });
+      no.onclick = () => act(`/api/mesh/enrol/${s.session}/reject`);
+      row.append(no);
+      box.append(row);
+    }
+  }
+  async function load() {
+    try {
+      const d = await S.get('/api/mesh');
+      // Redrawn only when something changed, so a button is not rebuilt under a click.
+      if (JSON.stringify(d) !== JSON.stringify(last)) { last = d; render(d); }
+    } catch (e) { S.fail('#mesh-out', e); }
+  }
+  $('#show-fps').onchange = () => last && render(last);
+  $('#mesh-init').onclick = () => {
+    const name = $('#mesh-name').value.trim();
+    if (!name) return alert('Name the mesh first.');
+    act('/api/mesh/init', { mesh: name, name: $('#hub-name').value.trim() });
+  };
+  load();
+  setInterval(load, 3000);   // an enrolment arrives from the device, not from this page
+})();
 </script>

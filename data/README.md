@@ -58,6 +58,11 @@ back from each node's disk: 5,709 of 5,709 files record `symphonia@0.5.5`, and
 still the old file's, 442 bytes too high. Size is a per-node column the sync
 takes from the copy it last sent, and no node's player reads it.
 
+**`mesh/`, once a mesh is created, holds the mesh's keys and roster** `[SPEC-MTR-110]`.
+It is untracked like the pair. Losing `mesh.key` means enrolling every member
+again, so the daily backup keeps it as an SQLite archive beside the pair's
+objects (`sqlite3 FILE -Ax` extracts it). Not yet created as of 2026-09-27.
+
 **Since 2026-09-27 the catalogue holds the covers found on disk** `[SPEC-COV-020]`.
 `tools/induct_covers.py --write` took 384 release covers into `cover_art` and 116
 file covers into the new `file_art`. The catalogue then held 1,256 and 116; the

@@ -52,6 +52,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import pending as pendingmod  # noqa: E402  -- the decisions a person made [SPEC048]
+import mesh as meshmod  # noqa: E402  -- membership, enrolment and the members' channel [SPEC049]
 
 # The application's own key [REQ-AND-287]: every copy of Lempi and Vipunen
 # carries it, so it keeps out a stray request, not a person. The phone's copy is
@@ -349,11 +350,129 @@ def serve(intake: Intake, host: str, port: int) -> ThreadingHTTPServer:
     return ThreadingHTTPServer((host, port), handler)
 
 
+# ------------------------------------------------------ the members' port --
+#
+# [SPEC-MTR-200]: TLS 1.3, the hub presenting its node key, and a client
+# certificate accepted only if its key is in the current roster -- the trust
+# store *is* the roster, rebuilt whenever its version changes, so a member
+# removed is refused from its next connection. No certificate at all is let in
+# too, for one purpose: a candidate asking to enrol, which a person must then
+# confirm on both sides [SPEC-MTR-130]. Every `/member/` route needs a member.
+
+class MemberServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, addr, handler, mdir: str):
+        self.mdir = mdir
+        self._ctx, self._version = None, None
+        super().__init__(addr, handler)
+
+    def context(self):
+        import ssl
+        r = meshmod.roster(self.mdir)
+        if r["version"] != self._version:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+            ctx.load_cert_chain(os.path.join(self.mdir, "node.pem"), os.path.join(self.mdir, "node.key"))
+            ctx.verify_mode = ssl.CERT_OPTIONAL
+            ctx.load_verify_locations(cadata="".join(m["certificate"] for m in r["members"]))
+            self._ctx, self._version = ctx, r["version"]
+        return self._ctx
+
+    def get_request(self):
+        sock, addr = self.socket.accept()
+        # The handshake is made in the request's own thread, not here: a slow
+        # or hostile client must not hold up everyone else's accept.
+        return self.context().wrap_socket(sock, server_side=True, do_handshake_on_connect=False), addr
+
+    def handle_error(self, request, client_address):
+        say(f"intake: members' port: {client_address[0]}: {sys.exc_info()[1]}")
+
+
+class MemberHandler(BaseHTTPRequestHandler):
+    server: MemberServer
+
+    def setup(self):
+        self.request.settimeout(20)
+        self.request.do_handshake()      # a stranger's certificate fails here
+        super().setup()
+
+    def log_message(self, fmt, *args):
+        say(f"intake: members' port: {self.client_address[0]} " + fmt % args)
+
+    def reply(self, code: int, body: dict):
+        data = json.dumps(body, ensure_ascii=False).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def body(self) -> dict:
+        n = int(self.headers.get("Content-Length") or 0)
+        if not 0 < n <= 64_000:
+            raise ValueError("no body, or too large")
+        return json.loads(self.rfile.read(n))
+
+    def peer(self) -> dict | None:
+        """The member at the other end, by the key its certificate proved."""
+        from cryptography import x509
+        der = self.request.getpeercert(binary_form=True)
+        if not der:
+            return None
+        return meshmod.member(self.server.mdir, meshmod.fingerprint(x509.load_der_x509_certificate(der)))
+
+    def do_GET(self):
+        mdir = self.server.mdir
+        if self.path.startswith("/enrol/status/"):
+            try:
+                return self.reply(200, meshmod.status(mdir, self.path.rsplit("/", 1)[-1]))
+            except (ValueError, OSError):
+                return self.reply(404, {"error": "no such enrolment"})
+        if not self.path.startswith("/member/"):
+            return self.reply(404, {"error": "unknown"})
+        m = self.peer()
+        if m is None:
+            return self.reply(403, {"error": "members only: present an enrolled key"})
+        if self.path == "/member/hello":
+            r = meshmod.roster(mdir)
+            return self.reply(200, {"you": m["fingerprint"], "name": m["name"], "role": m["role"],
+                                    "mesh": r["mesh"]["name"], "roster_version": r["version"]})
+        if self.path == "/member/roster":
+            return self.reply(200, meshmod.signed_roster(mdir))
+        self.reply(404, {"error": "unknown"})
+
+    def do_POST(self):
+        mdir = self.server.mdir
+        try:
+            b = self.body()
+            if self.path == "/enrol/start":
+                sender = str(self.headers.get("X-Lempi-Sender") or self.client_address[0])
+                out = meshmod.enrol_start(mdir, str(b.get("certificate", "")), str(b.get("name", "")),
+                                          str(b.get("role", "")), sender)
+                say(f"intake: enrolment asked by {sender} ({out['session'][:8]}): confirm it at the hub")
+                return self.reply(200, out)
+            if self.path == "/enrol/nonce":
+                return self.reply(200, meshmod.enrol_nonce(mdir, str(b.get("session")), str(b.get("nonce")),
+                                                           str(b.get("signature"))))
+            if self.path == "/enrol/confirm":
+                return self.reply(200, meshmod.enrol_confirm(mdir, str(b.get("session")), str(b.get("signature"))))
+        except (ValueError, KeyError, OSError) as e:
+            return self.reply(400, {"error": str(e)})
+        self.reply(404, {"error": "unknown"})
+
+
+def serve_members(mdir: str, host: str, port: int) -> MemberServer:
+    return MemberServer((host, port), MemberHandler, mdir)
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("db")
     ap.add_argument("--pending", help="where arrivals wait (default: pending-identification/ beside the library)")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
+    ap.add_argument("--member-port", type=int, default=5732,
+                    help="the members' TLS channel, served where a mesh exists [SPEC-MTR-200]")
     ap.add_argument("--bind", default="0.0.0.0",
                     help="address to listen on (default all -- a phone must reach it)")
     ap.add_argument("--key-file", help="a key of the user's own [REQ-AND-287]; default: the application's")
@@ -389,6 +508,16 @@ def main(argv: list[str]) -> int:
     say(f"intake: library {os.path.abspath(args.db)} (read-only)")
     say(f"intake: pending {pending}")
     say(f"intake: key     {'the application key' if key == APP_KEY else 'from ' + args.key_file}")
+    mdir = meshmod.mesh_dir(args.db)
+    if meshmod.initialised(mdir):
+        r = meshmod.roster(mdir)
+        members = serve_members(mdir, args.bind, args.member_port)
+        threading.Thread(target=members.serve_forever, daemon=True).start()
+        say(f"intake: mesh    '{r['mesh']['name']}' {meshmod.show_fp(r['mesh']['fingerprint'], True)}, "
+            f"{len(r['members'])} member(s); members' port {args.bind}:{args.member_port} (TLS)")
+    else:
+        say(f"intake: mesh    none in {mdir}, so no members' port "
+            f"(python tools/mesh.py {args.db} init --mesh NAME)")
     say(f"intake: listening on {args.bind}:{args.port}")
     with serve(intake, args.bind, args.port) as httpd:
         try:

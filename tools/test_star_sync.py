@@ -49,6 +49,24 @@ def main() -> int:
     check(ss.history_of(None, "", os.path.join(tmp, "none")) and
           os.listdir(os.path.join(tmp, "none")) == [], "a node never sent anything has no history")
 
+    # [SPEC-MTR-110]: the mesh's keys and roster, kept with the pair.
+    import mesh
+    import sqlite3
+    mdir = os.path.join(tmp, "mesh")
+    mesh.init(mdir, "Backup test", "hub")
+    os.makedirs(os.path.join(mdir, "enrol"), exist_ok=True)
+    open(os.path.join(mdir, "enrol", "x.json"), "w").write("{}")
+    a, b = os.path.join(tmp, "m1.db"), os.path.join(tmp, "m2.db")
+    ss.mesh_archive(mdir, a)
+    ss.mesh_archive(mdir, b)
+    check(ss.sha256(a) == ss.sha256(b), "an unchanged mesh archives to the same bytes, so it is stored once")
+    c = sqlite3.connect(a)
+    got = {n: d for n, d in c.execute("SELECT name, data FROM sqlar")}
+    c.close()
+    check(sorted(got) == sorted(ss.MESH_FILES)
+          and got["mesh.key"] == open(os.path.join(mdir, "mesh.key"), "rb").read(),
+          f"the archive holds the keys and roster, byte for byte, and no enrolment: {sorted(got)}")
+
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")

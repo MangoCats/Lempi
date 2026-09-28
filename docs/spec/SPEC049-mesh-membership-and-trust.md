@@ -1,6 +1,6 @@
 # SPEC049: Mesh Membership and Trust
 
-**Design Specification — Tier 2 · written 2026-09-27, from the maintainer's decisions that day · designed, not yet built**
+**Design Specification — Tier 2 · written 2026-09-27, from the maintainer's decisions that day · membership built 2026-09-27; discovery and the shared data not yet**
 
 Until now a node trusted another by one of two means, and neither was Lempi's own.
 Star sync reaches the appliances over ssh, whose keys the operating system
@@ -57,10 +57,14 @@ may still run Vipunen on a leaf and edit there `[SPEC-MTR-060]`.
 
 ## 2. Identity, membership and the roster
 
-**`[SPEC-MTR-100]` Every node has an identity of its own**: an Ed25519 keypair
-made at its first start, which never leaves it. It is shown as a fingerprint of
-the public key, eight groups of four hex digits, with the first two as the short
-form. A node's names (host name, network name, IP address, the name a person
+**`[SPEC-MTR-100]` Every node has an identity of its own**: an ECDSA P-256
+keypair made at its first start, which never leaves it. It is not Ed25519, as
+this was first written: the Keystore on Android 11, the floor, has no Ed25519,
+and P-256 is what a Keystore key can present as a TLS client certificate
+`[SPEC-MTR-200]`. The fingerprint is SHA-256 of the public key's DER
+(SubjectPublicKeyInfo), which is the same bytes on every platform. It is shown
+as eight groups of four hex digits from its first half, with the first two
+groups as the short form. A node's names (host name, network name, IP address, the name a person
 gives it `[GDE-NDS-040]`) are labels on that identity, and any of them may
 change. The private key is kept with the node's own state, never with the
 catalogue:
@@ -85,7 +89,10 @@ choice) three rules apply:
 **`[SPEC-MTR-110]` A mesh is its hub's key.** The hub has a second keypair, the
 mesh key; the mesh's identity is its fingerprint. Losing it means enrolling every
 member again, so it is backed up with the hub's pair `[SPEC-STAR-086]` and never
-travels anywhere else.
+travels anywhere else. It lives in `mesh/` beside the hub's catalogue, with the
+hub's node key and the signed roster (`tools/mesh.py`). The daily backup stores
+all three as an SQLite archive beside the pair's objects, mirrored and kept the
+same way; `sqlite3 FILE -Ax` extracts it.
 
 **`[SPEC-MTR-120]` The roster is the membership, signed by the hub.** For each
 member it lists:
@@ -110,6 +117,28 @@ for the same reason: a device in the middle cannot make the two codes agree.
   its web page. The framebuffer node is confirmed on its display as well.
 - Only then is the candidate added and the new roster sent out.
 
+As built, the candidate starts it, on the hub's members' port:
+1. `POST /enrol/start` sends its certificate, with no client certificate
+   presented. The hub answers with a commitment to its nonce, a hash, so it
+   cannot choose that nonce after seeing the candidate's.
+2. `POST /enrol/nonce` sends the candidate's nonce, signed by its key to prove
+   it holds the key it named. The hub reveals its nonce, and the candidate
+   checks it against the commitment.
+3. Each side computes the code from the hub's key as the candidate's own TLS
+   connection saw it, the candidate's key, and both nonces.
+4. `POST /enrol/confirm` is the candidate's person, signed again; the console's
+   Accept is the hub's person.
+5. `GET /enrol/status` returns the signed roster once both have confirmed.
+
+The candidate verifies the roster against the mesh key it was told at step 1,
+and pins both keys from then on.
+
+*Run 2026-09-27 on the Moto G against a test mesh:*
+- both screens showed 501 494;
+- the phone joined, verified the roster, and made a members-only request with
+  its Keystore key;
+- removed at the hub, its next connection was refused in the handshake.
+
 **`[SPEC-MTR-140]` Leaving is a new roster.** The hub removes a member, and
 every other member refuses it from the next roster on. A member may also leave
 of its own accord, dropping the roster and returning to unenrolled.
@@ -122,9 +151,13 @@ of its own accord, dropping the roster and returning to unenrolled.
 the roster.** Each side presents a certificate made from its node key. The
 other side accepts it only if that key is in the current roster, never because
 a certificate authority vouches for it. No certificate authority is involved,
-and no public name is needed. It is available as `rustls` in the player, `ssl`
-in Python for Vipunen, and in Android's platform. Everything between members
-goes this way:
+and no public name is needed. On the hub it is `tools/intake.py`'s members'
+port, 5732. That server's trust store *is* the roster's certificates, rebuilt at
+each new version, so a removed member fails the handshake. It also admits a
+client with no certificate, for enrolment only, and every `/member/` route
+requires a member. The phone presents its Keystore key and pins the hub by
+fingerprint, not by host name (`MeshClient`). The player's side will use
+`rustls`. Everything between members goes this way:
 - preference edits and flags up from the phone `[REQ-AND-330]`;
 - updates down from the hub;
 - a leaf's edits to the hub `[SPEC-MTR-060]`.
@@ -211,7 +244,10 @@ builds this. A phone holds a `MulticastLock` only while it is searching
 The order agreed 2026-09-27:
 1. this specification;
 2. identity, the roster, enrolment and the channel, with the phone as the first
-   member enrolled;
+   member enrolled. *Built 2026-09-27*: `tools/mesh.py`, the intake's members'
+   port, the console's mesh page, and the phone's "Mesh membership…" screen.
+   The hub's real mesh is created, and the phone enrolled in it, by the
+   maintainer, who compares the codes;
 3. the phone's preference edits and flags up to the mesh, and the hub's updates
    down `[REQ-AND-330]`;
 4. discovery;
