@@ -242,6 +242,14 @@ pub fn reject(id: &str) -> Result<Value, String> {
     })
 }
 
+/// Whether this player holds a membership at all, for the boot window
+/// `[SPEC-NSH-170]`. The file's presence, not its validity: one that exists
+/// but no longer parses still counts, so a damaged membership never opens a
+/// window at boot.
+pub fn enrolled(listener: &Path) -> bool {
+    state_dir(listener).join("mesh-member.json").exists()
+}
+
 /// Record which pairing window an invitation began in `[SPEC-NSH-140]`.
 pub fn stamp_invite_window(id: &str, window: u64) {
     let _ = with_invite(id, |inv| {

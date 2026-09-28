@@ -49,6 +49,29 @@ pub fn press() {
     OPEN_UNTIL_MS.store(now_ms() + WINDOW_SECS.load(Ordering::Relaxed) * 1000, Ordering::Relaxed);
 }
 
+/// Open the window for `secs` from now -- the boot window, whose length is
+/// what remains of the configured one rather than all of it.
+pub fn open_for(secs: u64) {
+    OPEN_UNTIL_MS.store(now_ms() + secs * 1000, Ordering::Relaxed);
+}
+
+/// How long a start should open the window for `[SPEC-NSH-170]`: a node in no
+/// mesh, starting within the first `window_secs` after the **machine** booted,
+/// gets what remains of that span; anything else gets 0. The machine, not the
+/// player: the web UI can restart the player but not the machine, so only a
+/// boot is presence. A member's boot opens nothing, so a power cut does not
+/// open every node at once.
+pub fn boot_window_secs(machine_uptime_secs: u64, enrolled: bool, window_secs: u64) -> u64 {
+    if enrolled { 0 } else { window_secs.saturating_sub(machine_uptime_secs) }
+}
+
+/// Seconds since the machine booted, from `/proc/uptime`; `None` where there
+/// is no such file, and so no boot window.
+pub fn machine_uptime_secs() -> Option<u64> {
+    let s = std::fs::read_to_string("/proc/uptime").ok()?;
+    s.split_whitespace().next()?.parse::<f64>().ok().map(|f| f as u64)
+}
+
 /// Close the window at once: one pairing per window `[SPEC-NSH-130]`, called
 /// after a successful confirmation or leave.
 pub fn close() {
@@ -130,7 +153,20 @@ mod tests {
         OPEN_UNTIL_MS.store(now_ms().saturating_sub(1000), Ordering::Relaxed);
         assert!(!open(), "the window closes at its end");
         assert_eq!(remaining_secs(), 0);
+        // The boot window's length alone opens it, like a press.
+        open_for(120);
+        assert!(open() && remaining_secs() > 110 && remaining_secs() <= 120, "open_for opens for that long");
         set_window_secs(300);
         close();
+    }
+
+    /// `[SPEC-NSH-170]`: pure, so it touches no global.
+    #[test]
+    fn a_boot_opens_the_window_only_for_a_node_in_no_mesh_and_only_early() {
+        assert_eq!(boot_window_secs(40, false, 300), 260, "in no mesh and early: what remains of the window");
+        assert_eq!(boot_window_secs(0, false, 300), 300, "at the very start: all of it");
+        assert_eq!(boot_window_secs(40, true, 300), 0, "a member's boot opens nothing");
+        assert_eq!(boot_window_secs(300, false, 300), 0, "at the window's end: nothing");
+        assert_eq!(boot_window_secs(86_400, false, 300), 0, "a player restarted a day after boot: nothing");
     }
 }

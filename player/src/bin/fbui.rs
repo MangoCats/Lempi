@@ -602,10 +602,25 @@ const VOL_ROW_Y: (i32, i32) = (30, 72);
 const QUEUE_ROW_HEIGHT: i32 = 44;
 const QUEUE_TOP_Y: i32 = 94;
 const QUEUE_ROW_GAP: i32 = 2;
-/// However many rows actually fit above the bottom margin -- not tied to
+/// However many rows actually fit above the pairing row -- not tied to
 /// any particular queue depth setting, since `[REQ-VIS-180]`-style depth
-/// changes must not silently need a layout change here too.
-const MAX_QUEUE_ROWS: usize = 5;
+/// changes must not silently need a layout change here too. Five until
+/// 2026-09-28, when the fifth (y 278..322, two pixels past a 320-high
+/// panel) gave its place to the pairing button.
+const MAX_QUEUE_ROWS: usize = 4;
+
+/// The pairing button `[SPEC-NSH-170]`: this node's physical way to open its
+/// mesh pairing window, in the row below the queue. Its outcome is written
+/// to the right of it, at `PAIR_NOTE_X`.
+const PAIR_X: (i32, i32) = (8, 150);
+const PAIR_ROW_Y: (i32, i32) = (280, 316);
+const PAIR_NOTE_X: i32 = 162;
+/// How long a press's outcome stays written beside the button.
+const PAIR_NOTE_SECS: u64 = 10;
+/// The appliance's root helper, the same path the player runs it by
+/// (`lempi_player::bluetooth::HELPER`, which this binary's features do not
+/// build).
+const BTCTL: &str = "/usr/local/bin/lempi-btctl";
 
 /// A queue row's three action buttons, right-aligned: "-"/"+" (sooner/
 /// later) grouped together since both reorder, "X" (remove) set apart at
@@ -619,7 +634,9 @@ fn queue_row_y(row: usize) -> (i32, i32) {
     (y0, y0 + QUEUE_ROW_HEIGHT)
 }
 
-fn render_settings(display: &mut FbDisplay, snap: &ClientSnapshot) -> Result<(), std::convert::Infallible> {
+/// `pair`: the outcome of a recent press of the pairing button, if any --
+/// `Some(true)` opened the window, `Some(false)` could not.
+fn render_settings(display: &mut FbDisplay, snap: &ClientSnapshot, pair: Option<bool>) -> Result<(), std::convert::Infallible> {
     Rectangle::new(Point::zero(), Size::new(display.width, display.height))
         .into_styled(PrimitiveStyle::with_fill(LCD_BG))
         .draw(display)?;
@@ -646,6 +663,18 @@ fn render_settings(display: &mut FbDisplay, snap: &ClientSnapshot) -> Result<(),
         draw_button_winamp(display, QUEUE_BTN_MINUS.0, QUEUE_BTN_MINUS.1, y0, y1, "-", false)?;
         draw_button_winamp(display, QUEUE_BTN_PLUS.0, QUEUE_BTN_PLUS.1, y0, y1, "+", false)?;
         draw_button_winamp(display, QUEUE_BTN_X.0, QUEUE_BTN_X.1, y0, y1, "X", false)?;
+    }
+
+    draw_button_winamp(display, PAIR_X.0, PAIR_X.1, PAIR_ROW_Y.0, PAIR_ROW_Y.1, "PAIR", pair == Some(true))?;
+    // What the press did, not what it was meant to do: the helper's own
+    // answer, so a refusal reads as one `[GOV-SRC-040]`.
+    let note = match pair {
+        Some(true) => "pairing open",
+        Some(false) => "could not open pairing",
+        None => "",
+    };
+    if !note.is_empty() {
+        draw_text(display, note, PAIR_NOTE_X, PAIR_ROW_Y.1 - 12);
     }
 
     draw_gear(display, LCD_BG)?;
@@ -680,6 +709,33 @@ fn render_disconnected(display: &mut FbDisplay) -> Result<(), std::convert::Infa
         }
     }
     Ok(())
+}
+
+/// Open this node's mesh pairing window `[SPEC-NSH-170]`: the Pair button.
+/// Through the root helper, as any other local "button" does, rather than a
+/// signal sent from here -- one path to the player, and it names it exactly
+/// `[SPEC-NSH-160]`. True only when the helper *says* it signalled the player:
+/// its answer, not its exit status, is what is checked.
+fn open_pairing_window() -> bool {
+    match std::process::Command::new("sudo").args(["-n", BTCTL, "mesh-pair"]).output() {
+        Ok(out) if String::from_utf8_lossy(&out.stdout).contains("\"ok\":true") => {
+            tracing::info!("fbui: pairing window opened");
+            true
+        }
+        Ok(out) => {
+            tracing::warn!("fbui: pairing window not opened: {}", String::from_utf8_lossy(&out.stdout).trim());
+            false
+        }
+        Err(e) => {
+            tracing::warn!("fbui: could not run {BTCTL}: {e}");
+            false
+        }
+    }
+}
+
+/// A pairing-button outcome still recent enough to show.
+fn pair_shown(note: Option<(bool, std::time::Instant)>) -> Option<bool> {
+    note.filter(|(_, at)| at.elapsed() < std::time::Duration::from_secs(PAIR_NOTE_SECS)).map(|(ok, _)| ok)
 }
 
 /// Fire-and-forget POST to `lempi`'s existing control API `[SPEC-FBUI-015]`
@@ -796,6 +852,7 @@ enum Zone {
     QueueSooner(u64),
     QueueRemove(u64),
     QueueLater(u64),
+    Pair,
 }
 
 fn in_rect(x: i32, y: i32, x0: i32, x1: i32, y0: i32, y1: i32) -> bool {
@@ -834,6 +891,9 @@ fn hit_test(page: Page, sx: f64, sy: f64, snap: &ClientSnapshot) -> Option<Zone>
             }
             if in_rect(x, y, VOL_UP_X.0, VOL_UP_X.1, VOL_ROW_Y.0, VOL_ROW_Y.1) {
                 return Some(Zone::VolUp);
+            }
+            if in_rect(x, y, PAIR_X.0, PAIR_X.1, PAIR_ROW_Y.0, PAIR_ROW_Y.1) {
+                return Some(Zone::Pair);
             }
             for (row, item) in snap.queue.iter().take(MAX_QUEUE_ROWS).enumerate() {
                 let (y0, y1) = queue_row_y(row);
@@ -1200,7 +1260,7 @@ mod tests {
     #[test]
     fn button_font_covers_every_real_label() {
         let labels = [
-            "PLAY", "PAUSE", "SKIP", "VOL -", "VOL +", "-", "+", "X",
+            "PLAY", "PAUSE", "SKIP", "VOL -", "VOL +", "-", "+", "X", "PAIR",
             "Cool", "Fun", "Mellow", "Soft", "Prog", "Light", "Loud", "Groove",
         ];
         for label in labels {
@@ -1363,6 +1423,9 @@ async fn main() {
     // of this all-radio sample library) is not re-requested on every
     // ~1s snapshot push for as long as it keeps playing.
     let mut art_cache: Option<(i64, Option<Vec<Rgb565>>)> = None;
+    // The last press of the pairing button and what it did, shown beside the
+    // button for `PAIR_NOTE_SECS` `[SPEC-NSH-170]`.
+    let mut pair_note: Option<(bool, std::time::Instant)> = None;
     loop {
         tracing::info!("fbui: connecting to {url}");
         let ws = match tokio_tungstenite::connect_async(&url).await {
@@ -1447,7 +1510,7 @@ async fn main() {
                         let started = std::time::Instant::now();
                         let result = match page {
                             Page::NowPlaying => render_now_playing(&mut display, &snap, art),
-                            Page::Settings => render_settings(&mut display, &snap),
+                            Page::Settings => render_settings(&mut display, &snap, pair_shown(pair_note)),
                         };
                         let elapsed = started.elapsed();
                         if elapsed > std::time::Duration::from_millis(20) {
@@ -1475,7 +1538,7 @@ async fn main() {
                             let art = art_cache.as_ref().and_then(|(_, px)| px.as_deref());
                             let result = match page {
                                 Page::NowPlaying => render_now_playing(&mut display, &snap, art),
-                                Page::Settings => render_settings(&mut display, &snap),
+                                Page::Settings => render_settings(&mut display, &snap, pair_shown(pair_note)),
                             };
                             if let Err(e) = result {
                                 tracing::warn!("fbui: render failed: {e:?}");
@@ -1521,6 +1584,16 @@ async fn main() {
                         }
                         Some(Zone::QueueRemove(qid)) => {
                             tokio::spawn(http_post(http_addr.clone(), format!("/queue/{qid}/remove")));
+                        }
+                        Some(Zone::Pair) => {
+                            // Awaited, not fired and forgotten: the person at
+                            // the screen is told what the press did. It is a
+                            // sudo and a pkill, well under a second.
+                            let ok = tokio::task::spawn_blocking(open_pairing_window).await.unwrap_or(false);
+                            pair_note = Some((ok, std::time::Instant::now()));
+                            if let Err(e) = render_settings(&mut display, &snap, pair_shown(pair_note)) {
+                                tracing::warn!("fbui: render failed: {e:?}");
+                            }
                         }
                         None => {}
                     }

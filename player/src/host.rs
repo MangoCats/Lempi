@@ -280,6 +280,27 @@ impl Player {
                 if let Ok(store) = crate::db::PlayerStore::open_split(&cfg.listener, &cfg.library) {
                     crate::pairing::set_window_secs(store.load_pairing_window_secs());
                 }
+                // The boot window `[SPEC-NSH-170]`: said either way, so a node
+                // that did not open one says why rather than staying silent.
+                let enrolled = crate::membership::enrolled(&cfg.listener);
+                let window = crate::pairing::window_secs();
+                match crate::pairing::machine_uptime_secs() {
+                    _ if enrolled => {}
+                    Some(up) => match crate::pairing::boot_window_secs(up, enrolled, window) {
+                        0 => tracing::info!(
+                            "pairing: in no mesh; the machine booted {up}s ago, past the {window}s boot window -- \
+                             press the pair button to enrol `[SPEC-NSH-170]`"),
+                        secs => {
+                            crate::pairing::open_for(secs);
+                            tracing::info!(
+                                "pairing: in no mesh and the machine booted {up}s ago -- window open for {secs}s \
+                                 `[SPEC-NSH-170]`");
+                        }
+                    },
+                    None => tracing::info!(
+                        "pairing: in no mesh; machine uptime is unreadable here, so no boot window -- \
+                         press the pair button to enrol `[SPEC-NSH-170]`"),
+                }
             }
             let app = crate::web::access::guard(crate::web::router(ui), cfg.web_secret.as_deref());
             let app = crate::web::access::origin_guard(app);

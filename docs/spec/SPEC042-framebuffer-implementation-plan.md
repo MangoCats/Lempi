@@ -168,7 +168,11 @@ done and verified against real `lempiplay3` hardware between
   programme grid) and the upcoming queue, each entry with the same
   sooner/remove/later actions `/queue/:qid/:action` already serves every
   browser skin — found already built and reused, not a new server-side
-  route.
+  route. Four queue rows since 2026-09-28, not five: the fifth ran two
+  pixels past the panel, and its place went to a **Pair** button, this
+  node's physical way to open its mesh pairing window
+  (`[SPEC-NSH-170]` in [SPEC054](SPEC054-mesh-without-ssh.md)). It runs
+  `lempi-btctl mesh-pair` and writes the helper's answer beside itself.
 - **Album name.** A third line under title/artist, from the real
   `Snapshot`'s own `album` field, blank rather than a placeholder string
   when unknown.
