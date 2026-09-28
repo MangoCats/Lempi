@@ -899,6 +899,30 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _same_origin(self) -> bool:
+        """Refuse a cross-site request to the loopback console
+        `[SecurityReview C1]`. The console binds `127.0.0.1` only, so a
+        legitimate caller is same-origin. A browser sets `Origin` on every
+        POST, and a cross-site page carries a foreign one -- so an `Origin`
+        that is present and not ours is refused. `Host` must name loopback
+        too, which turns away a DNS-rebinding name that resolves here.
+
+        Requiring `application/json` is *not* the gate: the console's own
+        no-body POSTs (shutdown, job stop, mesh accept) send no content type,
+        and it is precisely those the Origin check has to cover -- a bodyless
+        cross-site POST needs no CORS preflight. A non-browser client (curl,
+        the tests) sends no `Origin` and an explicit loopback `Host`, and is
+        allowed: the threat is a visited web page, which cannot forge either.
+        """
+        port = STATE.get("port")
+        ours = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
+        ok_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        origin = self.headers.get("Origin")
+        if origin is not None and origin not in ours:
+            return False
+        host = (self.headers.get("Host") or "").strip().lower()
+        return host in ok_hosts
+
     # Class-level default so the attribute always exists, whatever order a
     # future handler does things in -- `_close_db` must never be the thing
     # that raises while unwinding someone else's exception.
@@ -1171,6 +1195,8 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         p = u.path
         self._conn = None
+        if not self._same_origin():
+            return self.send_json({"error": "cross-site request refused"}, code=403)
         try:
             if p.startswith("/api/profile/") and p.endswith("/accept-remote"):
                 # [SPEC-DF-116..117]'s one deliberate exception to "the
