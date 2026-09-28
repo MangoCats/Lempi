@@ -140,10 +140,12 @@ def post(port, path, headers, body=None):
         c.close()
 
 
-def get(port, path):
+def get(port, path, headers=None):
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
     try:
-        c.request("GET", path)
+        # A `Host` in `headers` overrides http.client's own, so the test can
+        # forge the DNS-rebinding case.
+        c.request("GET", path, headers=headers or {})
         r = c.getresponse()
         return r.status, r.read().decode()
     finally:
@@ -182,6 +184,20 @@ def test_live() -> None:
             check(st == 200, f"a same-origin POST must still work, got {st}")
             _, back = get(port, "/api/remote")
             check("me@host" in back, f"the same-origin write must land, got {back}")
+
+            # [SecurityReview2 R2] GET is guarded too. A DNS-rebinding read
+            # (foreign Host) is refused; a normal loopback GET is served.
+            st, _ = get(port, "/api/remote", {"Host": "attacker.example"})
+            check(st == 403, f"a foreign-Host GET must be refused, got {st}")
+            st, _ = get(port, "/api/system", {"Origin": "http://evil.example"})
+            check(st == 403, f"a foreign-Origin GET must be refused, got {st}")
+            st, body = get(port, "/api/system")
+            check(st == 200, f"a normal loopback GET must be served, got {st}")
+            # handoff/ensure moved to POST: the GET is gone, the POST answers.
+            st, _ = get(port, "/api/handoff/ensure")
+            check(st == 404, f"GET /api/handoff/ensure must be gone, got {st}")
+            st, _ = post(port, "/api/handoff/ensure", {"Host": f"127.0.0.1:{port}"})
+            check(st == 200, f"POST /api/handoff/ensure must answer, got {st}")
         finally:
             proc.terminate()
             try:

@@ -44,7 +44,8 @@ function handoffBox(passageId, route, label) {
   (async () => {
     let r;
     try {
-      r = await S.get('/api/handoff/ensure');
+      r = await (await fetch('/api/handoff/ensure', { method: 'POST' })).json();
+      if (r && r.error) throw new Error(r.error);
     } catch (e) {
       box.replaceChildren(S.el('p', { class: 'err' },
         `Could not reach Vipunen's own server to ask: ${e.message}`));

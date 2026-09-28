@@ -1011,6 +1011,13 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         p, qs = u.path, parse_qs(u.query)
         self._conn = None
+        # A GET is guarded too `[SecurityReview2 R2]`: without the Host check a
+        # DNS-rebinding page (Host = the attacker's name, resolving to 127.0.0.1)
+        # could read the library, the real `user@host` peers, job logs and audio.
+        # A page load and a same-origin fetch pass; a foreign Host or Origin does
+        # not. Side-effecting actions are POSTs, which `<img>` cannot forge.
+        if not self._same_origin():
+            return self.send_json({"error": "cross-site request refused"}, code=403)
         try:
             if p == "/":
                 return self.send_file("index.html", "text/html; charset=utf-8")
@@ -1148,13 +1155,6 @@ class Handler(BaseHTTPRequestHandler):
                     STATE["scan"] = scan(self._db(), STATE["roots"])
                     STATE["scanned_at"] = time.time()
                 return self.send_json(STATE["scan"])
-            if p == "/api/handoff/ensure":
-                # Idempotent -- GET rather than a POST, the same reasoning as
-                # the folder scan above: asking twice costs nothing when a
-                # player is already there, which is the common case.
-                return self.send_json(lempi_control.ensure_lempi(
-                    db_path=STATE["path"], vipunen_build=STATE["build"],
-                    listener_path=STATE["listener"], library_path=STATE["library"]))
             self.send_error(404)
         except BrokenPipeError:
             pass
@@ -1550,6 +1550,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "message": "shutting down"})
                 threading.Thread(target=_shutdown_soon, args=(self.server,), daemon=True).start()
                 return
+            if p == "/api/handoff/ensure":
+                # A POST, not a GET `[SecurityReview2 R2]`: it starts a player
+                # process, so it must not be reachable by a cross-site `<img>`,
+                # which sends no Origin. Still idempotent -- asking twice when a
+                # player is already there costs nothing, the common case.
+                return self.send_json(lempi_control.ensure_lempi(
+                    db_path=STATE["path"], vipunen_build=STATE["build"],
+                    listener_path=STATE["listener"], library_path=STATE["library"]))
             if p == "/api/export/open-terminal":
                 # An action, not a query -- POST, the same reasoning
                 # `/api/jobs/:id/stop` already follows: it is not read-only
