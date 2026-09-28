@@ -63,6 +63,11 @@ proven by the Rust test, so no member is detached to show it live.
 
 **Rollback:** each item is independent; revert the commit.
 
+**Built 2026-09-28**, commit `d12b901`, deployed to all three appliances at
+`a9fb228`. Verified on lempi02w: `mesh-pair` opened a 300 s window, the player
+kept its pid and kept playing, and a leave naming the wrong mesh was refused
+(409) with the window still open and the membership untouched.
+
 ## 2. Phase 1 -- a physical way to pair on every node
 
 **`[IMPL-NSH-200]` Goal:** `[SPEC-NSH-170]`, so pairing never needs ssh or a
@@ -81,6 +86,12 @@ early -- open; a member -- closed; late -- closed.
 boot is proven by the test and, when a node is next enrolled from scratch, live.
 Any machine reboot is done only with the maintainer's leave, and the node is
 returned to playing.
+
+**Built 2026-09-28**, commit `a9fb228`. After the deploy restarted every
+player, all three appliances -- each a member -- came up with the window
+closed. On lp3-wifi the Pair button's own command, run as fbui's user, opened
+the window with the player's pid unchanged. The un-enrolled boot awaits a node
+enrolled from scratch, as planned.
 
 ## 3. Phase 2 -- signed star sync, alongside ssh
 

@@ -51,17 +51,26 @@ network `[SPEC-NSH-180]`.
 
 ## 3. What travels
 
-**`[SPEC-NSH-050]` Up: the shared tables, as a member's.** A player sends what
-the phone sends `[SPEC-MTR-030]`: preferences, occasion values and flags. Plays,
-programmes and node state never leave a node, as today `[SPEC-STAR-045]`
-`[SPEC-MTR-040]`, so appliances now send less than the whole-listener snapshot ssh
-carried.
+**`[SPEC-NSH-050]` Up: every table the merge shares, and none it keeps.** A
+player sends the listener tables the merge treats as shared -- its last-write-wins
+and union tables, `TABLES` in `tools/star_merge.py` -- and never the ones it keeps
+per node or takes from the hub: plays, programmes and node state never leave a
+node, as today `[SPEC-STAR-045]` `[SPEC-MTR-040]`. The phone sends three of these
+`[SPEC-MTR-030]`; an appliance sends all it holds, as the ssh path carried them,
+so a change of transport stops nothing from syncing. *Corrected 2026-09-28,
+before building:* this first read "what the phone sends", which would have
+silently dropped likes, occasions and reviews from every appliance.
 
-**`[SPEC-NSH-060]` A row about a passage travels with its portable anchor.** A
-passage id is local to a node `[SPEC-STAR-049]`. The phone holds such rows back;
-an appliance cannot, or passage flags would stop syncing. So each carries the
-passage's `(audio_md5, kind, start_ms, end_ms)` anchor `[SPEC-DF-109]`, and the
-hub translates it to its own passage as the merge does now.
+**`[SPEC-NSH-060]` A passage row keeps its node's id; the node says what the id
+means.** A passage id is local to a node `[SPEC-STAR-049]`. The phone holds such
+rows back; an appliance cannot, or passage flags would stop syncing. So beside its
+tables a player sends a **catalogue summary**: each passage's
+`(passage_id, audio_md5, kind, start_ms, end_ms)` anchor `[SPEC-DF-109]`, and each
+file's `audio_md5` with the node's own machine-scope columns `[SPEC-DF-030]`. That
+is all the merge reads of a node's catalogue -- it translates passage ids with the
+first and keeps the node's paths with the second -- so the catalogue itself never
+travels up. It is 1.27 GB on each appliance (measured 2026-09-28), and the ssh
+path copied it whole whenever it had moved.
 
 **`[SPEC-NSH-070]` Down: values, not digests.** A patch names each changed row
 with its old and new values, as the member patch does (`mesh_sync.rs`), because
@@ -69,6 +78,11 @@ the digest `star_patch.py` uses cannot be reproduced exactly from Rust. The shar
 tables keep the member rule: a row changed on the node since its upload is kept
 and decided next time. The catalogue is authored at the hub `[SPEC-STAR-085]`, so
 its patch is strict: one row not as expected writes nothing `[SPEC-STAR-080]`.
+Its baseline is what the hub last sent that node, and it covers the hub-authored
+columns only; the machine-scope columns are the node's and travel in neither
+direction. A node that changed hub-authored data itself is refused, visibly --
+which the shadow runs of IMPL017 Phase 2 exist to find before anything depends
+on it.
 
 **`[SPEC-NSH-080]` The player applies its own patch.** No stop, no ssh, no
 `sqlite3` run as another user. Before applying it backs up what it will change,
