@@ -1,0 +1,4 @@
+#!/bin/sh
+# Records timer stops etc.; nothing here really manages units in a test.
+printf '%s\n' "systemctl $*" >> "$VT_STATE/calls"
+exit 0

@@ -1072,8 +1072,11 @@
     const btn = $('wifi-connect-go');
     btn.disabled = true;
     try {
-      const q = new URLSearchParams({ ssid, password: wifiConnectPassword.value });
-      const body = await (await fetch(`/wifi/connect?${q}`, { method: 'POST' })).json();
+      // The password goes in the body, not the URL [SecurityReview C3].
+      const body = await (await fetch('/wifi/connect', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ssid, password: wifiConnectPassword.value }),
+      })).json();
       if (body.error) throw new Error(body.error);
       setHidden(wifiConnectForm, true);
       showWifiConfirm(body.change_id, body.minutes);
@@ -1087,10 +1090,14 @@
   apStartBtn.onclick = async () => {
     apStartBtn.disabled = true;
     try {
-      const q = new URLSearchParams();
-      if (apSsid.value) q.set('ssid', apSsid.value);
-      if (apPassword.value) q.set('password', apPassword.value);
-      const body = await (await fetch(`/wifi/ap/start?${q}`, { method: 'POST' })).json();
+      // ssid and password go in the body, not the URL [SecurityReview C3].
+      const payload = {};
+      if (apSsid.value) payload.ssid = apSsid.value;
+      if (apPassword.value) payload.password = apPassword.value;
+      const body = await (await fetch('/wifi/ap/start', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })).json();
       if (body.error) throw new Error(body.error);
       showWifiConfirm(body.change_id, body.minutes);
     } catch (e) {

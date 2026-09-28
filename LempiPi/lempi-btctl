@@ -54,6 +54,44 @@ need_addr() {
 # "five minutes is generous" figure, `[PI-SET-014]`.
 REVERT_MIN="${LEMPI_WIFI_REVERT_MIN:-5}"
 
+# Where NetworkManager keeps its connection keyfiles. A variable only so the
+# tests can point it at a scratch directory; in production it is the fixed
+# system path, and the psk is written here rather than onto any command line
+# `[SecurityReview C3]`.
+NM_DIR="${LEMPI_NM_DIR:-/etc/NetworkManager/system-connections}"
+# Where the AP's shared-mode dnsmasq drop-in goes. A variable only so the tests
+# can redirect it off the real /etc; production is the fixed path.
+DNSMASQ_DIR="${LEMPI_DNSMASQ_DIR:-/etc/NetworkManager/dnsmasq-shared.d}"
+
+# Put the network key into a connection's keyfile, replacing whatever psk the
+# profile was created with, so the real secret never reaches an argv (not
+# nmcli's, not awk's, not any child's) `[SecurityReview C3]`. The key lives
+# only in this shell variable and is written with the `printf` builtin, which
+# starts no process. The file stays root-owned and mode 600, as NetworkManager
+# writes it. Reads the psk from $2; the caller has it from stdin.
+set_psk() {
+    _conn="$1"; _psk="$2"
+    _f="$NM_DIR/$_conn.nmconnection"
+    [ -f "$_f" ] || return 1
+    _tmp="$(mktemp)" || return 1
+    chmod 600 "$_tmp"
+    _insec=0; _wrote=0
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        case "$_line" in
+            "[wifi-security]") _insec=1; printf '%s\n' "$_line"; continue ;;
+            "["*"]")           _insec=0; printf '%s\n' "$_line"; continue ;;
+        esac
+        if [ "$_insec" = 1 ] && [ "${_line#psk=}" != "$_line" ]; then
+            printf 'psk=%s\n' "$_psk"; _wrote=1; continue
+        fi
+        printf '%s\n' "$_line"
+    done < "$_f" > "$_tmp"
+    mv "$_tmp" "$_f" || { rm -f "$_tmp"; return 1; }
+    chmod 600 "$_f"; chown root:root "$_f" 2>/dev/null
+    nmcli connection reload >/dev/null 2>&1
+    [ "$_wrote" = 1 ]
+}
+
 # The connection NetworkManager currently has active on wlan0, however
 # many colons its own name happens to contain -- matched by the fixed
 # `wlan0:` prefix `nmcli`'s terse mode always puts first, never by
@@ -640,16 +678,23 @@ case "$VERB" in
             || die "could not list connections"
         ;;
     wifi-connect)
-        ssid="${2:-}"; password="${3:-}"
+        ssid="${2:-}"
         [ -n "$ssid" ] || die "ssid required"
+        # The password arrives on stdin, never as an argument `[SecurityReview
+        # C3]`. Empty stdin is an open network, exactly as an empty argument
+        # was before. `$(cat)` strips only trailing newlines; a psk carries none.
+        password="$(cat)"
         conn="wifi-$ssid"
         prev="$(active_wifi_conn)"
         change_id="wc$(date +%s)$$"
         nmcli connection delete "$conn" >/dev/null 2>&1
         if [ -n "$password" ]; then
+            # Created with a throwaway psk so the add is valid on every NM
+            # version; the real key is then written into the keyfile, off argv.
             nmcli connection add type wifi ifname wlan0 con-name "$conn" ssid "$ssid" \
-                wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$password" autoconnect yes \
+                wifi-sec.key-mgmt wpa-psk wifi-sec.psk 00000000 autoconnect yes \
                 >/dev/null 2>&1 || die "could not create the connection profile"
+            set_psk "$conn" "$password" || die "could not set the network key"
         else
             nmcli connection add type wifi ifname wlan0 con-name "$conn" ssid "$ssid" \
                 autoconnect yes >/dev/null 2>&1 || die "could not create the connection profile"
@@ -692,7 +737,11 @@ case "$VERB" in
         printf '{"ok":true}\n'
         ;;
     ap-start)
-        ssid="${2:-Lempi}"; password="${3:-Lempi321}"
+        ssid="${2:-Lempi}"
+        # The password arrives on stdin, never as an argument `[SecurityReview
+        # C3]`; empty stdin asks for the published default.
+        password="$(cat)"
+        [ -n "$password" ] || password="Lempi321"
         # Published, not secret -- `[PI-SET-030]`'s own reasoning, carried
         # over unchanged: a default any listener can look up is honest
         # about what it is, where a silently-blank password would not be.
@@ -703,19 +752,21 @@ case "$VERB" in
         prev="$(active_wifi_conn)"
         change_id="ap$(date +%s)$$"
         nmcli connection delete lempi-ap >/dev/null 2>&1
+        # Throwaway psk on the command line; the real key goes into the keyfile.
         nmcli connection add type wifi ifname wlan0 con-name lempi-ap autoconnect no ssid "$ssid" \
             802-11-wireless.mode ap 802-11-wireless.band bg \
             ipv4.method shared ipv4.addresses 10.42.0.1/24 \
-            wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$password" \
+            wifi-sec.key-mgmt wpa-psk wifi-sec.psk 00000000 \
             >/dev/null 2>&1 || die "could not create the access point profile"
+        set_psk lempi-ap "$password" || die "could not set the access point key"
         # The dnsmasq instance NetworkManager spawns for THIS shared
         # connection reads every file here automatically -- its own
         # extension point, not a guess `[SPEC034]`. `10.42.0.1` is not
         # discovered after the fact: it is the address just assigned
         # above, so the two can never disagree.
-        mkdir -p /etc/NetworkManager/dnsmasq-shared.d
+        mkdir -p "$DNSMASQ_DIR"
         printf 'address=/lempi/10.42.0.1\naddress=/lempi.lan/10.42.0.1\n' \
-            > /etc/NetworkManager/dnsmasq-shared.d/lempi.conf
+            > "$DNSMASQ_DIR/lempi.conf"
         systemd-run --unit="lempi-revert-$change_id" --on-active="${REVERT_MIN}min" \
             /usr/local/bin/lempi-wifi-revert "$prev" lempi-ap >/dev/null 2>&1
         if nmcli connection up lempi-ap >/dev/null 2>&1; then

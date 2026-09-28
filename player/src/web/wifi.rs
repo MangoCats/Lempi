@@ -13,9 +13,7 @@
 //! much with or without Vipunen installed, the same posture
 //! `preference.rs`/`bluetooth.rs`'s existing routes already take.
 
-use std::collections::HashMap;
-
-use axum::extract::{Path, Query};
+use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
@@ -48,17 +46,24 @@ pub(super) async fn known() -> Response {
     reply_rows(tokio::task::spawn_blocking(bluetooth::wifi_known).await)
 }
 
-/// Switch the client connection `[SPEC034]`. `?ssid=&password=` -- an
-/// absent or empty `password` means an open network, which is a real
-/// choice a listener's own target network may actually be, not a mistake
-/// to guess at. Returns `{change_id, minutes}` on an apparent success;
-/// the browser must still call `confirm` once it can prove it can reach
-/// this device on whatever the new network turns out to be.
-pub(super) async fn connect(Query(q): Query<HashMap<String, String>>) -> Response {
-    let Some(ssid) = q.get("ssid").filter(|s| !s.is_empty()).cloned() else {
-        return (StatusCode::BAD_REQUEST, "ssid is required").into_response();
+/// Switch the client connection `[SPEC034]`. Takes a JSON body
+/// `{ssid, password}` -- **not** a query string `[SecurityReview C3]`: a
+/// password in the URL lands in browser history and proxy/access logs, and
+/// the body does not. An absent or empty `password` means an open network,
+/// which is a real choice a listener's own target network may actually be,
+/// not a mistake to guess at. Returns `{change_id, minutes}` on an apparent
+/// success; the browser must still call `confirm` once it can prove it can
+/// reach this device on whatever the new network turns out to be.
+pub(super) async fn connect(body: String) -> Response {
+    let v: serde_json::Value = match serde_json::from_str(body.trim()) {
+        Ok(v) => v,
+        Err(_) => return (StatusCode::BAD_REQUEST, "expected a JSON body {ssid, password}").into_response(),
     };
-    let password = q.get("password").cloned().unwrap_or_default();
+    let ssid = v.get("ssid").and_then(|s| s.as_str()).unwrap_or("").to_string();
+    if ssid.is_empty() {
+        return (StatusCode::BAD_REQUEST, "ssid is required").into_response();
+    }
+    let password = v.get("password").and_then(|s| s.as_str()).unwrap_or("").to_string();
     reply(tokio::task::spawn_blocking(move || bluetooth::wifi_connect(&ssid, &password)).await)
 }
 
@@ -84,16 +89,26 @@ pub(super) async fn autoconnect(Path((name, state)): Path<(String, String)>) -> 
     reply(tokio::task::spawn_blocking(move || bluetooth::wifi_autoconnect(&name, on)).await)
 }
 
-/// Start the appliance's own access point `[SPEC034]`. `?ssid=&password=`
-/// both optional -- omitted, the helper uses the same published default
-/// `[PI-SET-030]` already named (`Lempi`/`Lempi321`), so there is exactly
-/// one thing to remember and it is already written down. Same
-/// `{change_id, minutes}` shape and the same confirm requirement as
-/// `connect`, since bringing the appliance's own AP up is just as likely
-/// to cut whatever connection asked for it.
-pub(super) async fn ap_start(Query(q): Query<HashMap<String, String>>) -> Response {
-    let ssid = q.get("ssid").filter(|s| !s.is_empty()).cloned();
-    let password = q.get("password").filter(|s| !s.is_empty()).cloned();
+/// Start the appliance's own access point `[SPEC034]`. Takes a JSON body
+/// `{ssid?, password?}`, both optional and both off the URL for the same
+/// reason as `connect` `[SecurityReview C3]`; an empty body `{}` is fine.
+/// Omitted, the helper uses the same published default `[PI-SET-030]`
+/// already named (`Lempi`/`Lempi321`), so there is exactly one thing to
+/// remember and it is already written down. Same `{change_id, minutes}`
+/// shape and the same confirm requirement as `connect`, since bringing the
+/// appliance's own AP up is just as likely to cut whatever connection asked
+/// for it.
+pub(super) async fn ap_start(body: String) -> Response {
+    let v: serde_json::Value = if body.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        match serde_json::from_str(body.trim()) {
+            Ok(v) => v,
+            Err(_) => return (StatusCode::BAD_REQUEST, "expected a JSON body {ssid?, password?}").into_response(),
+        }
+    };
+    let ssid = v.get("ssid").and_then(|s| s.as_str()).filter(|s| !s.is_empty()).map(String::from);
+    let password = v.get("password").and_then(|s| s.as_str()).filter(|s| !s.is_empty()).map(String::from);
     reply(tokio::task::spawn_blocking(move || bluetooth::ap_start(ssid.as_deref(), password.as_deref())).await)
 }
 

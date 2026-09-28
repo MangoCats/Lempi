@@ -1,0 +1,4 @@
+#!/bin/sh
+# Records the scheduled revert; the timer itself never fires in a test.
+printf '%s\n' "systemd-run $*" >> "$VT_STATE/calls"
+exit 0

@@ -1,20 +1,51 @@
 #!/bin/sh
-# Fake nmcli for the wifi verbs. Answers only what the guards read: a named
-# connection's type (from `$VT_STATE/nm_types`, `name=type` lines), and the
-# active wlan0 connection (from `$VT_STATE/nm_active`). `delete`/`modify`
-# succeed and are recorded, so a case can assert they were NOT reached when a
-# guard refused `[SecurityReview C5]`.
+# Fake nmcli for the wifi verbs. Records every call, and answers the reads the
+# guards make. For `connection add` it writes a NetworkManager-shaped keyfile
+# into $LEMPI_NM_DIR, so `set_psk`'s keyfile edit has something to edit and a
+# test can prove the real psk lands there and never on any argv
+# `[SecurityReview C3, C5]`.
 printf '%s\n' "nmcli $*" >> "$VT_STATE/calls"
+
+# The reads the wifi-forget/autoconnect guards make.
 case "$*" in
-    *"-t -f connection.type connection show "*)
-        name=$(printf '%s' "$*" | sed 's/.*connection show //')
-        t=$(sed -n "s/^$name=//p" "$VT_STATE/nm_types" 2>/dev/null)
-        [ -n "$t" ] && printf 'connection.type:%s\n' "$t"
-        exit 0 ;;
-    *"-t -f DEVICE,NAME connection show --active"*)
-        [ -f "$VT_STATE/nm_active" ] && printf 'wlan0:%s\n' "$(cat "$VT_STATE/nm_active")"
-        exit 0 ;;
-    *"connection delete"*|*"connection modify"*)
-        exit 0 ;;
+  *"-t -f connection.type connection show "*)
+    name=$(printf '%s' "$*" | sed 's/.*connection show //')
+    t=$(sed -n "s/^$name=//p" "$VT_STATE/nm_types" 2>/dev/null)
+    [ -n "$t" ] && printf 'connection.type:%s\n' "$t"
+    exit 0 ;;
+  *"-t -f DEVICE,NAME connection show --active"*)
+    [ -f "$VT_STATE/nm_active" ] && printf 'wlan0:%s\n' "$(cat "$VT_STATE/nm_active")"
+    exit 0 ;;
+esac
+
+# Everything else dispatches on the connection subcommand.
+[ "$1" = connection ] || exit 0
+sub="$2"; shift 2
+case "$sub" in
+  add)
+    conn=""; psk=""; secure=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        con-name) conn="$2"; shift 2 ;;
+        wifi-sec.psk) psk="$2"; secure=1; shift 2 ;;
+        wifi-sec.key-mgmt) secure=1; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    [ -n "$conn" ] && [ -n "$LEMPI_NM_DIR" ] || exit 0
+    mkdir -p "$LEMPI_NM_DIR"
+    f="$LEMPI_NM_DIR/$conn.nmconnection"
+    {
+      printf '[connection]\nid=%s\n\n[wifi]\nmode=infrastructure\n\n' "$conn"
+      [ "$secure" = 1 ] && printf '[wifi-security]\nkey-mgmt=wpa-psk\npsk=%s\n\n' "$psk"
+      printf '[ipv4]\nmethod=auto\n'
+    } > "$f"
+    chmod 600 "$f" 2>/dev/null
+    exit 0 ;;
+  delete)
+    [ -n "$LEMPI_NM_DIR" ] && rm -f "$LEMPI_NM_DIR/$1.nmconnection" 2>/dev/null
+    exit 0 ;;
+  modify|up|down|reload)
+    exit 0 ;;
 esac
 exit 0

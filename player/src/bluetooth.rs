@@ -196,6 +196,30 @@ fn run_helper(args: &[&str]) -> Result<std::process::Output, String> {
         .map_err(|e| format!("helper not available: {e}"))
 }
 
+/// Run the helper with `secret` fed on **stdin**, never as an argument
+/// `[SecurityReview C3]`. A Wi-Fi password on argv is visible in `ps` /
+/// `/proc/<pid>/cmdline` for anyone local; on stdin it is not. The helper
+/// reads it (an empty write means "no secret" -- an open network, or the
+/// AP's published default). Stdin is closed before the wait so the child
+/// sees EOF and cannot deadlock.
+fn run_helper_stdin(args: &[&str], secret: &str) -> Result<std::process::Output, String> {
+    use std::io::Write;
+    let mut child = Command::new("sudo")
+        .arg("-n")
+        .arg(HELPER)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("helper not available: {e}"))?;
+    {
+        let mut si = child.stdin.take().ok_or_else(|| "helper stdin unavailable".to_string())?;
+        si.write_all(secret.as_bytes()).map_err(|e| format!("could not send the secret: {e}"))?;
+    } // `si` dropped here -> the child sees EOF on stdin.
+    child.wait_with_output().map_err(|e| format!("helper did not complete: {e}"))
+}
+
 /// The helper's own `{"ok":false,"error":"..."}` shape, read off `stdout`
 /// -- `die()` in `lempi-btctl` never writes to `stderr`, so a failure is
 /// always valid JSON on the same stream a success would have used.
@@ -269,7 +293,9 @@ pub fn wifi_connect(ssid: &str, password: &str) -> Result<serde_json::Value, Str
     if ssid.is_empty() {
         return Err("ssid required".into());
     }
-    let out = run_helper(&["wifi-connect", ssid, password])?;
+    // The password goes on stdin, never argv `[SecurityReview C3]`. An empty
+    // write is an open network, exactly as an empty `$3` was before.
+    let out = run_helper_stdin(&["wifi-connect", ssid], password)?;
     let text = String::from_utf8_lossy(&out.stdout);
     serde_json::from_str(text.trim()).map_err(|_| helper_error(&out))
 }
@@ -312,17 +338,14 @@ pub fn wifi_autoconnect(name: &str, on: bool) -> Result<serde_json::Value, Strin
 /// to the same published, not-a-secret credential `[PI-SET-030]` already
 /// named -- passing `None` for either asks the helper to use it.
 pub fn ap_start(ssid: Option<&str>, password: Option<&str>) -> Result<serde_json::Value, String> {
+    // ssid is not a secret and stays an argument; the password goes on stdin
+    // `[SecurityReview C3]`. An empty write asks the helper for its published
+    // default (`Lempi321`), so a custom ssid with no password still gets one.
     let mut args = vec!["ap-start"];
     if let Some(s) = ssid {
         args.push(s);
-        // The helper's own positional parsing needs a password argument
-        // once an ssid is given at all, even to fall back to its default.
-        args.push(password.unwrap_or("Lempi321"));
-    } else if let Some(p) = password {
-        args.push("Lempi");
-        args.push(p);
     }
-    let out = run_helper(&args)?;
+    let out = run_helper_stdin(&args, password.unwrap_or(""))?;
     let text = String::from_utf8_lossy(&out.stdout);
     serde_json::from_str(text.trim()).map_err(|_| helper_error(&out))
 }
