@@ -1,6 +1,6 @@
 # SPEC051: Trusted Networks
 
-**Design Specification — Tier 2 · written 2026-09-28 · a design for later work, not yet built**
+**Design Specification — Tier 2 · written 2026-09-28 · a design for later work, not yet built · build decisions in [SPEC054](SPEC054-mesh-without-ssh.md) §6**
 
 A node should take part in Lempi's discovery and mesh only on networks its
 operator has chosen to trust. This is the answer to the disclosure and
