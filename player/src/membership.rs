@@ -248,6 +248,38 @@ pub fn take_roster(listener: &Path, id: &str, signed: &Value) -> Result<Value, S
     Ok(json!({"state": "joined", "version": r["version"]}))
 }
 
+/// A newer roster, pushed by the hub after a member joined, left, or was
+/// renamed `[SPEC-MTR-120]`: kept only if the mesh key pinned at joining
+/// signed it and it is newer than the one held. One that no longer names this
+/// player means it was removed, and it leaves `[SPEC-MTR-140]`.
+pub fn update_roster(listener: &Path, signed: &Value) -> Result<Value, String> {
+    let me = crate::discovery::identity(listener)?;
+    let held = membership(listener).ok_or("not a member of any mesh")?;
+    let body = signed["roster"].as_str().ok_or("no roster")?;
+    let r: Value = serde_json::from_str(body).map_err(|e| e.to_string())?;
+    let mesh_pub = p256::PublicKey::from_public_key_pem(r["mesh"]["public_key"].as_str().unwrap_or(""))
+        .map_err(|e| e.to_string())?;
+    let fp = sha256_hex(mesh_pub.to_public_key_der().map_err(|e| e.to_string())?.as_bytes());
+    if held["mesh_fp"].as_str() != Some(fp.as_str())
+        || !verify(&VerifyingKey::from(&mesh_pub), body, signed["signature"].as_str().unwrap_or(""))
+    {
+        return Err("the roster is not signed by this player's mesh".into());
+    }
+    let (new, old) = (r["version"].as_i64().unwrap_or(0), held["roster"]["version"].as_i64().unwrap_or(0));
+    if new <= old {
+        return Err(format!("roster version {new} is not newer than the {old} held"));
+    }
+    if !r["members"].as_array().is_some_and(|m| m.iter().any(|m| m["fingerprint"] == me.fingerprint)) {
+        leave(listener)?;
+        tracing::info!("mesh: removed from '{}' at roster version {new}; left", r["mesh"]["name"]);
+        return Ok(json!({"state": "removed", "version": new}));
+    }
+    let keep = json!({"roster": signed, "mesh_fp": held["mesh_fp"], "hub_fp": held["hub_fp"],
+                      "hub_address": held["hub_address"]});
+    std::fs::write(state_dir(listener).join("mesh-member.json"), keep.to_string()).map_err(|e| e.to_string())?;
+    Ok(json!({"state": "updated", "version": new}))
+}
+
 /// This player leaves its mesh here; the hub removes it from the roster there.
 pub fn leave(listener: &Path) -> Result<(), String> {
     let p = state_dir(listener).join("mesh-member.json");

@@ -1244,12 +1244,24 @@ class Handler(BaseHTTPRequestHandler):
                     if str(b.get("name", "")).strip():
                         args += ["--name", str(b["name"]).strip()]
                     return self.send_json({"job_id": STATE["jobs"].submit("mesh", json.dumps(args))})
+                # After a change the roster goes to every player, in the
+                # background: a player keeps the version it holds until told
+                # [SPEC-MTR-120], and after a removal it is found by the
+                # discovery key it still holds.
+                def push(key=None):
+                    threading.Thread(target=meshmod.push_roster, args=(mdir, key), daemon=True).start()
                 try:
                     if len(parts) == 5 and parts[2] == "enrol" and parts[4] in ("accept", "reject") and hexish(parts[3]):
                         s = (meshmod.accept if parts[4] == "accept" else meshmod.reject)(mdir, parts[3])
+                        if s["state"] == "accepted":
+                            push()
                         return self.send_json({"state": s["state"]})
                     if len(parts) == 5 and parts[2] == "member" and parts[4] == "remove" and hexish(parts[3]):
-                        return self.send_json({"version": meshmod.remove(mdir, parts[3])["version"]})
+                        import base64
+                        before = base64.b64decode(meshmod.roster(mdir)["discovery_key"])
+                        v = meshmod.remove(mdir, parts[3])["version"]
+                        push(before)
+                        return self.send_json({"version": v})
                 except SystemExit as e:
                     return self.send_json({"error": str(e)}, code=409)
                 if parts[2:] == ["invite"]:

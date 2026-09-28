@@ -105,6 +105,7 @@ pub(super) async fn mesh_step(
             ["invite", id, "reject"] => crate::membership::reject(id),
             ["invite", id, "roster"] => crate::membership::take_roster(&db, id, &b),
             ["leave"] => crate::membership::leave(&db).map(|()| serde_json::json!({"left": true})),
+            ["roster"] => crate::membership::update_roster(&db, &b),
             _ => Err("unknown".into()),
         }
     })

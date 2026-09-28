@@ -22,6 +22,7 @@ Keystore key can present as a TLS client certificate [SPEC-MTR-100].
     python tools/mesh.py LIBRARY accept SESSION | reject SESSION
     python tools/mesh.py LIBRARY invite ADDRESS [--port WEB_PORT]   a player, which has no HTTPS client
     python tools/mesh.py LIBRARY remove FINGERPRINT
+    python tools/mesh.py LIBRARY push                     the current roster to every player
     python tools/mesh.py LIBRARY rename --mesh NAME  |  rename FINGERPRINT --name NAME
 
 The network side -- enrolment and the members' channel -- is served by
@@ -253,6 +254,9 @@ def remove(mdir: str, fp: str) -> dict:
         if gone[0]["role"] == "hub":
             raise SystemExit("the hub cannot remove itself [SPEC-MTR-070]")
         r["members"] = [m for m in r["members"] if m is not gone[0]]
+        # A new discovery key: the removed member holds the old one, and with
+        # it could still answer the hub's members' query [SPEC-MTR-310].
+        r["discovery_key"] = base64.b64encode(secrets.token_bytes(32)).decode()
         return publish(mdir, r)
 
 
@@ -462,6 +466,24 @@ def invite(mdir: str, address: str, web_port: int = 5720, wait_s: int = ENROL_TT
                 _save_session(mdir, s)
             say("confirmed on the player" + ("" if s["state"] == "accepted" else "; waiting for the hub's accept"))
     raise SystemExit("no answer in time: the invitation lapses")
+
+
+def push_roster(mdir: str, key: bytes | None = None) -> dict:
+    """The current roster to every player that answers the members' query,
+    found with `key` -- the discovery key they hold, which after a removal is
+    the previous one [SPEC-MTR-120]. A player keeps it only if newer and
+    signed by its pinned mesh key; one it no longer names leaves."""
+    import discovery
+    r = roster(mdir)
+    key = key or base64.b64decode(r["discovery_key"])
+    out = {}
+    for a in discovery.query("members", mesh_fp=r["mesh"]["fingerprint"], key=key):
+        try:
+            got = _http("POST", f"http://{a['address']}:{a.get('web_port', 5720)}/mesh/roster", signed_roster(mdir))
+            out[a["name"] or a["fingerprint"][:8]] = got.get("state")
+        except (ValueError, OSError) as e:
+            out[a["name"] or a["fingerprint"][:8]] = f"not taken: {e}"
+    return out
 
 
 def status(mdir: str, sid: str) -> dict:
@@ -682,8 +704,13 @@ def main(argv: list[str]) -> int:
         if not rest:
             say("remove takes a fingerprint")
             return 2
+        before = base64.b64decode(roster(mdir)["discovery_key"])
         r = remove(mdir, rest[0])
         say(f"removed; roster version {r['version']}")
+        say(f"sent to the players: {push_roster(mdir, before)}")
+        return 0
+    if cmd == "push":
+        say(f"roster version {roster(mdir)['version']} sent to the players: {push_roster(mdir)}")
         return 0
     say(f"unknown command {cmd}")
     return 2

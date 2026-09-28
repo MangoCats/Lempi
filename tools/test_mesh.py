@@ -147,7 +147,10 @@ def main() -> int:
     mesh.reject(mdir, o["session"])
     st, o2, _ = kid.call(port, "GET", f"/enrol/status/{o['session']}")
     check(o2["state"] == "rejected" and "roster" not in o2, "a rejected enrolment gets no roster")
+    key_before = mesh.roster(mdir)["discovery_key"]
     mesh.remove(mdir, phone.fp[:12])
+    check(mesh.roster(mdir)["discovery_key"] != key_before,
+          "a removal changes the discovery key: the one removed holds the old")
     check(refused(lambda: phone.call(port, "GET", "/member/hello", present=True, pin=hub_pem)),
           "a member removed is refused from its next connection")
     check(mesh.roster(mdir)["version"] == 3, "each change is a new roster version")
