@@ -405,6 +405,11 @@ def lempi_docs():
     # 2026-09-28, when a run reporting 339 decisions failed the length limit
     # here and nowhere else. `data/README.md` is a document and is still checked.
     out = [p for p in out if not p.startswith("data/sync/")]
+    # Gitignored, machine-local working notes (`.gitignore`: `secrets/`) --
+    # security reviews and remediation plans that quote real values and cite
+    # code by `file.py#Lnnn`, which are not section anchors. Not repository
+    # documentation, and CI, on a clean checkout, never sees them.
+    out = [p for p in out if not p.startswith("secrets/")]
     reg = os.path.join(INHERITED_DIR, "README.md")
     if os.path.exists(reg):
         out.append(reg)
