@@ -110,5 +110,46 @@ teardown
 setup
 export LEMPI_NM_DIR="$VT_STATE/nm" LEMPI_DNSMASQ_DIR="$VT_STATE/dnsmasq"
 OUT=$(printf 'short' | btctl ap-start Studio)
-assert_in "$OUT" "at least 8 characters" "a too-short AP password is refused"
+assert_in "$OUT" "8-63 printable characters or 64 hex" "a too-short AP password is refused"
+teardown
+
+# --- the key is validated and escaped before it is written [SecurityReview2 R1] ---
+
+# A newline in the key (the keyfile-injection vector) is refused, and no
+# profile is created.
+setup
+export LEMPI_NM_DIR="$VT_STATE/nm" LEMPI_DNSMASQ_DIR="$VT_STATE/dnsmasq"
+OUT=$(printf 'abcdefgh\n[ipv4]\nmethod=manual' | btctl wifi-connect Evil)
+assert_in "$OUT" "printable characters" "a newline in the key is refused"
+if [ -e "$VT_STATE/nm/wifi-Evil.nmconnection" ]; then bad "no profile is left" "one exists"; else ok "no profile is left"; fi
+teardown
+
+# A 7-character key is refused; a 64-hex key is accepted.
+setup
+export LEMPI_NM_DIR="$VT_STATE/nm" LEMPI_DNSMASQ_DIR="$VT_STATE/dnsmasq"
+OUT=$(printf 'sevench' | btctl wifi-connect Net7)
+assert_in "$OUT" "printable characters" "a 7-character key is refused"
+OUT=$(printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' | btctl wifi-connect NetHex)
+assert_in "$OUT" '"ok":true' "a 64-hex key is accepted"
+teardown
+
+# A backslash in the key is GKeyFile-escaped in the file, and never on an argv.
+setup
+export LEMPI_NM_DIR="$VT_STATE/nm" LEMPI_DNSMASQ_DIR="$VT_STATE/dnsmasq"
+OUT=$(printf 'pa\\ss12word' | btctl wifi-connect BackNet)
+assert_in "$OUT" '"ok":true' "a key with a backslash connects"
+if grep -q '^psk=pa\\\\ss12word$' "$VT_STATE/nm/wifi-BackNet.nmconnection" 2>/dev/null; then
+    ok "the backslash is doubled for GKeyFile"
+else bad "the backslash is doubled for GKeyFile" "keyfile: $(grep '^psk=' "$VT_STATE/nm/wifi-BackNet.nmconnection" 2>/dev/null)"; fi
+assert_not_called 'pa\ss12word' "the raw key never appears in an nmcli argv"
+teardown
+
+# When set_psk cannot find the keyfile, the throwaway profile is deleted, not
+# left with psk=00000000.
+setup
+export LEMPI_NM_DIR="$VT_STATE/nm" LEMPI_DNSMASQ_DIR="$VT_STATE/dnsmasq" NM_UUID_MISMATCH=1
+OUT=$(printf 'goodpassword' | btctl wifi-connect Orphan)
+assert_in "$OUT" "could not set the network key" "a set_psk failure is reported"
+if [ -e "$VT_STATE/nm/wifi-Orphan.nmconnection" ]; then bad "the placeholder profile is deleted" "it remains"; else ok "the placeholder profile is deleted"; fi
+unset NM_UUID_MISMATCH
 teardown

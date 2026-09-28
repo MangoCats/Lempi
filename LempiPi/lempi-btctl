@@ -63,16 +63,41 @@ NM_DIR="${LEMPI_NM_DIR:-/etc/NetworkManager/system-connections}"
 # can redirect it off the real /etc; production is the fixed path.
 DNSMASQ_DIR="${LEMPI_DNSMASQ_DIR:-/etc/NetworkManager/dnsmasq-shared.d}"
 
+# A WPA-PSK is 8-63 printable ASCII characters, or exactly 64 hex
+# `[SecurityReview2 R1]`. Rejecting everything else -- before it is ever
+# written -- is what stops a newline (not printable) from injecting extra lines
+# into the root-owned keyfile, and stops an out-of-range key from being written
+# only to fail obscurely at connect time. `LC_ALL=C` is set at the top, so
+# `[:print:]` is exactly 0x20-0x7E.
+valid_psk() {
+    case "$1" in *[![:print:]]*) return 1 ;; esac
+    _n=${#1}
+    [ "$_n" -ge 8 ] && [ "$_n" -le 63 ] && return 0
+    case "$1" in *[!0-9A-Fa-f]*) return 1 ;; esac
+    [ "$_n" -eq 64 ]
+}
+
 # Put the network key into a connection's keyfile, replacing whatever psk the
 # profile was created with, so the real secret never reaches an argv (not
 # nmcli's, not awk's, not any child's) `[SecurityReview C3]`. The key lives
 # only in this shell variable and is written with the `printf` builtin, which
 # starts no process. The file stays root-owned and mode 600, as NetworkManager
 # writes it. Reads the psk from $2; the caller has it from stdin.
+#
+# The file is found by the connection's UUID, not by guessing its name from the
+# SSID: NetworkManager sanitises keyfile names, so a guessed path can miss and
+# leave the throwaway `00000000` in place `[SecurityReview2 R1]`. The value is
+# GKeyFile-escaped -- a backslash, and a leading or trailing space, which the
+# format would otherwise mangle.
 set_psk() {
     _conn="$1"; _psk="$2"
-    _f="$NM_DIR/$_conn.nmconnection"
-    [ -f "$_f" ] || return 1
+    _uuid="$(nmcli -g connection.uuid connection show "$_conn" 2>/dev/null)"
+    [ -n "$_uuid" ] || return 1
+    _f="$(grep -l "^uuid=$_uuid\$" "$NM_DIR"/*.nmconnection 2>/dev/null | head -1)"
+    [ -n "$_f" ] && [ -f "$_f" ] || return 1
+    _esc=${_psk//\\/\\\\}
+    case "$_esc" in " "*) _esc="\\s${_esc# }" ;; esac
+    case "$_esc" in *" ") _esc="${_esc% }\\s" ;; esac
     _tmp="$(mktemp)" || return 1
     chmod 600 "$_tmp"
     _insec=0; _wrote=0
@@ -82,7 +107,7 @@ set_psk() {
             "["*"]")           _insec=0; printf '%s\n' "$_line"; continue ;;
         esac
         if [ "$_insec" = 1 ] && [ "${_line#psk=}" != "$_line" ]; then
-            printf 'psk=%s\n' "$_psk"; _wrote=1; continue
+            printf 'psk=%s\n' "$_esc"; _wrote=1; continue
         fi
         printf '%s\n' "$_line"
     done < "$_f" > "$_tmp"
@@ -684,6 +709,10 @@ case "$VERB" in
         # C3]`. Empty stdin is an open network, exactly as an empty argument
         # was before. `$(cat)` strips only trailing newlines; a psk carries none.
         password="$(cat)"
+        # Reject an invalid key before creating anything `[SecurityReview2 R1]`.
+        if [ -n "$password" ] && ! valid_psk "$password"; then
+            die "the network key must be 8-63 printable characters or 64 hex digits"
+        fi
         conn="wifi-$ssid"
         prev="$(active_wifi_conn)"
         change_id="wc$(date +%s)$$"
@@ -694,7 +723,8 @@ case "$VERB" in
             nmcli connection add type wifi ifname wlan0 con-name "$conn" ssid "$ssid" \
                 wifi-sec.key-mgmt wpa-psk wifi-sec.psk 00000000 autoconnect yes \
                 >/dev/null 2>&1 || die "could not create the connection profile"
-            set_psk "$conn" "$password" || die "could not set the network key"
+            # On failure, delete the profile so no `00000000` is left behind.
+            set_psk "$conn" "$password" || { nmcli connection delete "$conn" >/dev/null 2>&1; die "could not set the network key"; }
         else
             nmcli connection add type wifi ifname wlan0 con-name "$conn" ssid "$ssid" \
                 autoconnect yes >/dev/null 2>&1 || die "could not create the connection profile"
@@ -745,10 +775,10 @@ case "$VERB" in
         # Published, not secret -- `[PI-SET-030]`'s own reasoning, carried
         # over unchanged: a default any listener can look up is honest
         # about what it is, where a silently-blank password would not be.
-        # The one thing still enforced is that it not be empty: an open
-        # access point into a device with no login of its own is a
-        # different order of exposure than a known one.
-        [ ${#password} -ge 8 ] || die "the access point password must be at least 8 characters"
+        # The key must be a valid WPA-PSK, checked before anything is created
+        # `[SecurityReview2 R1]` -- the old length-only check let a newline or
+        # an over-length key through.
+        valid_psk "$password" || die "the access point key must be 8-63 printable characters or 64 hex digits"
         prev="$(active_wifi_conn)"
         change_id="ap$(date +%s)$$"
         nmcli connection delete lempi-ap >/dev/null 2>&1
@@ -758,7 +788,8 @@ case "$VERB" in
             ipv4.method shared ipv4.addresses 10.42.0.1/24 \
             wifi-sec.key-mgmt wpa-psk wifi-sec.psk 00000000 \
             >/dev/null 2>&1 || die "could not create the access point profile"
-        set_psk lempi-ap "$password" || die "could not set the access point key"
+        # On failure, delete the profile so no `00000000` AP is left behind.
+        set_psk lempi-ap "$password" || { nmcli connection delete lempi-ap >/dev/null 2>&1; die "could not set the access point key"; }
         # The dnsmasq instance NetworkManager spawns for THIS shared
         # connection reads every file here automatically -- its own
         # extension point, not a guess `[SPEC034]`. `10.42.0.1` is not

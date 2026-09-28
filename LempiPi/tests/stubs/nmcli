@@ -6,12 +6,17 @@
 # `[SecurityReview C3, C5]`.
 printf '%s\n' "nmcli $*" >> "$VT_STATE/calls"
 
-# The reads the wifi-forget/autoconnect guards make.
+# The reads the guards make.
 case "$*" in
   *"-t -f connection.type connection show "*)
     name=$(printf '%s' "$*" | sed 's/.*connection show //')
     t=$(sed -n "s/^$name=//p" "$VT_STATE/nm_types" 2>/dev/null)
     [ -n "$t" ] && printf 'connection.type:%s\n' "$t"
+    exit 0 ;;
+  *"-g connection.uuid connection show "*)
+    # A deterministic uuid per connection name, so set_psk can find its keyfile.
+    name=$(printf '%s' "$*" | sed 's/.*connection show //')
+    [ -f "$LEMPI_NM_DIR/$name.nmconnection" ] && printf 'uuid-%s\n' "$name"
     exit 0 ;;
   *"-t -f DEVICE,NAME connection show --active"*)
     [ -f "$VT_STATE/nm_active" ] && printf 'wlan0:%s\n' "$(cat "$VT_STATE/nm_active")"
@@ -35,8 +40,11 @@ case "$sub" in
     [ -n "$conn" ] && [ -n "$LEMPI_NM_DIR" ] || exit 0
     mkdir -p "$LEMPI_NM_DIR"
     f="$LEMPI_NM_DIR/$conn.nmconnection"
+    # NM_UUID_MISMATCH=1 writes a uuid that `-g connection.uuid` will not
+    # report, so set_psk cannot find the file -- exercising delete-on-failure.
+    uuid="uuid-$conn"; [ "${NM_UUID_MISMATCH:-0}" = 1 ] && uuid="mismatch"
     {
-      printf '[connection]\nid=%s\n\n[wifi]\nmode=infrastructure\n\n' "$conn"
+      printf '[connection]\nid=%s\nuuid=%s\n\n[wifi]\nmode=infrastructure\n\n' "$conn" "$uuid"
       [ "$secure" = 1 ] && printf '[wifi-security]\nkey-mgmt=wpa-psk\npsk=%s\n\n' "$psk"
       printf '[ipv4]\nmethod=auto\n'
     } > "$f"
