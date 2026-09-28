@@ -71,6 +71,7 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import remote_peek as rp  # noqa: E402  -- run_remote_sql(), literal(): reused, not reinvented
+import remote_apply  # noqa: E402  -- the sudo-free-where-possible stop/patch/start [C4]
 
 MANIFEST_SQL = (
     "SELECT subject_kind, subject_id, rotation, recovery, restraint, updated_at "
@@ -512,10 +513,10 @@ def apply_remote(remote: str, sql_text: str) -> bool:
         r = subprocess.run(["scp", "-q", local_tmp, f"{host}:{PATCH_TMP}"], timeout=30)
         if r.returncode != 0:
             return False
+        # The player is stopped around the write only where a service holds the
+        # file, and never with sudo on a node that has none `[SecurityReview C4]`.
         r = subprocess.run(
-            ["ssh", host,
-             f"sudo systemctl stop lempi && sqlite3 {path} < {PATCH_TMP} "
-             f"&& sudo systemctl start lempi"],
+            ["ssh", host, remote_apply.apply_patch_cmd(path, PATCH_TMP)],
             timeout=60)
         return r.returncode == 0
     finally:
