@@ -400,6 +400,11 @@ def lempi_docs():
     # Untracked recovery evidence [SPEC-STAR-075]: merge reports generated from
     # snapshots, not documents -- and CI, on a clean checkout, never sees them.
     out = [p for p in out if not p.startswith("data/recovery/")]
+    # The same, for each routine sync [SPEC-STAR-087]: a run's `SUMMARY.md` and
+    # `merge/report.md` list what it decided, as long as that is. Found
+    # 2026-09-28, when a run reporting 339 decisions failed the length limit
+    # here and nowhere else. `data/README.md` is a document and is still checked.
+    out = [p for p in out if not p.startswith("data/sync/")]
     reg = os.path.join(INHERITED_DIR, "README.md")
     if os.path.exists(reg):
         out.append(reg)
