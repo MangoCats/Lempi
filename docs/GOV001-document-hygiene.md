@@ -211,6 +211,7 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-RIP-090..106]` | CD ripping: passage representation for hidden/pregap audio and multi-disc sets — designed, not yet built | [SPEC026-cd-ripping-passages.md](spec/SPEC026-cd-ripping-passages.md) |
 | `[SPEC-PREF-010..098]` | Editing an artist's or a recording's own rotation/recovery/restraint, and a recording's "special" tags — built | [SPEC029-listener-preference-editing.md](spec/SPEC029-listener-preference-editing.md) |
 | `[SPEC-PREF-100..150]` | Syncing listener preferences and specials between installations, last-write-wins — built | [SPEC030-preference-sync.md](spec/SPEC030-preference-sync.md) |
+| `[SPEC-DSC-*]` | Node discovery as built: the wire, who answers what, one responder per machine | [SPEC050-node-discovery.md](spec/SPEC050-node-discovery.md) |
 | `[SPEC-MTR-*]` | Mesh membership and trust: node identity, the hub's roster, enrolment, the members' channel, discovery | [SPEC049-mesh-membership-and-trust.md](spec/SPEC049-mesh-membership-and-trust.md) |
 | `[SPEC-PID-*]` | Pending identification: identifying what a node sent, and inducting, rejecting or repairing it | [SPEC048-pending-identification.md](spec/SPEC048-pending-identification.md) |
 | `[SPEC-COV-*]` | Covers: undisturbed beside the audio, inducted into the catalogue, shown from the catalogue alone | [SPEC047-covers.md](spec/SPEC047-covers.md) |

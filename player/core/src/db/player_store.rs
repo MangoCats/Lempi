@@ -1342,6 +1342,32 @@ impl PlayerStore {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
+    /// Whether this node answers discovery queries `[SPEC-MTR-020]`, `[SPEC050]`:
+    /// on, unless someone has switched it off in its Settings. Kept out of
+    /// `Settings` as the speaker address is, and for the same reason: it is
+    /// read by the responder, not round-tripped by the panel's snapshot.
+    pub fn load_announce(&self) -> bool {
+        self.conn
+            .query_row("SELECT value FROM player_settings WHERE key = 'discovery_announce'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .map(|v| v != "0")
+            .unwrap_or(true)
+    }
+
+    pub fn save_announce(&self, on: bool) -> Result<(), DbError> {
+        self.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES ('discovery_announce', ?1, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![if on { "1" } else { "0" }],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
     /// The speaker last chosen through `use` or `pair`, if any
     /// `[PI3-AIM-020]`, `[REQ-VIS-260]`. `None` on a library where nothing
     /// has ever been chosen this way -- the caller's job is to fall back to

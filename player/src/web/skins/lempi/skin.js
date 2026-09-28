@@ -1169,6 +1169,28 @@
     }
   };
 
+  // ------------------------------------------------------------- discovery
+  // `[SPEC050]`, `[SPEC-MTR-020]`: whether a hub looking for Lempi players on
+  // this network sees this one. On unless switched off here. Shown only where
+  // this player answers at all; a phone's never does.
+  const announce = $('announce');
+  const groups = fp => fp.slice(0, 32).match(/.{4}/g).join(' ');
+  function discovery() {
+    fetch('/discovery').then(r => (r.ok ? r.json() : null)).then(d => {
+      if (!d || !d.answering) return;
+      setHidden($('discovery-row'), false);
+      announce.checked = !!d.announce;
+      $('discovery-note').textContent = `This player is ${d.name}` +
+        (d.fingerprint ? `, fingerprint ${groups(d.fingerprint)}` : '') +
+        '. While this is on, a hub’s mesh page lists it among the devices it could include.';
+    }).catch(() => {});
+  }
+  discovery();
+  announce.onchange = async () => {
+    const r = await fetch(`/discovery/announce/${announce.checked ? 1 : 0}`, { method: 'POST' });
+    if (!r.ok) { alert('Could not change it.'); discovery(); }
+  };
+
   // --------------------------------------------------------------- history
   // Its own fetch rather than the socket's snapshot `[REQ-VIS-250]`: a page
   // of what has already happened is not "what is true right now", and

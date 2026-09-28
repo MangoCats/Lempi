@@ -491,6 +491,9 @@ pub fn router(ui: Ui) -> Router {
         .route("/echo/trim/reset", post(reset_echo_trim))
         .route("/echo/follow", post(set_echo_follow))
         .route("/echo/join/:now", post(set_echo_join_now))
+        // Being found on the network `[SPEC050]`.
+        .route("/discovery", get(discovery_status))
+        .route("/discovery/announce/:on", post(set_discovery_announce))
         .route("/skip/suppress/:hours", post(set_skip_suppress))
         .route("/dequeue/suppress/:hours", post(set_dequeue_suppress))
         .route("/queue/depth/:n", post(set_queue_depth))

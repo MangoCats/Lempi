@@ -360,6 +360,12 @@
          music, inducting new music and what a phone has sent. Opens in a new
          tab, starting Vipunen first if it is not running.</p>
     </div>
+    <!-- [SPEC050]: only where this player answers discovery -- never on a phone. -->
+    <div class="setting" id="discovery-row" hidden>
+      <label for="announce">Be found on this network</label>
+      <span><input type="checkbox" id="announce"> answer when a hub looks for Lempi players</span>
+      <p id="discovery-note"></p>
+    </div>
     <div class="setting" id="restart">
       <label>Restart the player</label>
       <span><button type="button" id="rs-ask">Restart Lempi</button></span>

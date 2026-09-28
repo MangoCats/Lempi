@@ -325,6 +325,18 @@ impl Player {
                     tracing::error!("server: {e}");
                 }
             });
+
+            // Being found `[SPEC050]`: only where the UI serves the network. A
+            // phone serves loopback alone, and is never a candidate anyone
+            // should see; it looks for hubs, it does not answer.
+            if !cfg.web_loopback_only {
+                match crate::discovery::identity(&cfg.listener) {
+                    Ok(me) => {
+                        runtime.spawn(crate::discovery::serve(me, cfg.listener.clone(), cfg.library.clone(), port));
+                    }
+                    Err(e) => tracing::warn!("discovery: no node identity, so not answering: {e}"),
+                }
+            }
         }
         drop(ended_tx);
 

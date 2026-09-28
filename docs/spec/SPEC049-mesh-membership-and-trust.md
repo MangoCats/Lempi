@@ -260,7 +260,7 @@ The order agreed 2026-09-27:
    own earlier uploads, and a table it does not upload is never read as rows
    it removed (`star_merge.removals`). Catalogue updates travel the same
    channel, only what changed `[SPEC-PL-107]`;
-4. discovery;
+4. discovery. *Built 2026-09-28* for candidates and hubs: [SPEC050](SPEC050-node-discovery.md);
 5. later, and optional: star sync onto node identities `[SPEC-MTR-220]`, and
    moving the hub `[SPEC-MTR-070]`.
 

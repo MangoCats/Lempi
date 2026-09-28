@@ -75,6 +75,7 @@ pub mod cli;
 pub mod covers;
 pub mod cue;
 pub mod decoder;
+pub mod discovery;
 pub mod echo;
 /// Following a master `[GDE-ECHO-330]`. Behind `echo-client` because it names
 /// `tokio-tungstenite` directly; the crate is already in the graph via axum's

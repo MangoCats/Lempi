@@ -37,6 +37,19 @@
     </table>
     <h3 style="font-size:.95rem;margin-top:1rem">Asking to join</h3>
     <div id="enrol-rows"></div>
+    <h3 style="font-size:.95rem;margin-top:1rem">On this network</h3>
+    <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+      Lempi players on this network segment that belong to no mesh and have not switched off
+      "Be found on this network" <code style="font:12px var(--mono)">[SPEC050]</code>. A list only:
+      nothing joins because it answered. A player beyond a router is not seen here, and is reached
+      by its name as before.
+    </p>
+    <div class="controls"><button class="chip" id="look">look for devices</button>
+      <span id="look-when" style="color:var(--dim);font-size:.85rem;align-self:center"></span></div>
+    <table class="peers" id="found-table" hidden>
+      <thead><tr><th>device</th><th>address</th><th>build</th><th></th></tr></thead>
+      <tbody id="found-rows"></tbody>
+    </table>
   </div>
   <div id="mesh-out"></div>
 
@@ -287,7 +300,28 @@ document.getElementById('run-diff').onclick = async () => {
       if (JSON.stringify(d) !== JSON.stringify(last)) { last = d; render(d); }
     } catch (e) { S.fail('#mesh-out', e); }
   }
-  $('#show-fps').onchange = () => last && render(last);
+  let found = [];
+  function renderFound() {
+    const shown = names(found, $('#show-fps').checked);
+    $('#found-table').hidden = !found.length;
+    $('#found-rows').replaceChildren(...found.map((a, i) => S.el('tr', {},
+      S.el('td', { text: shown[i], title: full(a.fingerprint) }),
+      S.el('td', { text: a.address }),
+      S.el('td', { text: String(a.version || '').slice(0, 8) }),
+      S.el('td', {}, S.el('a', { href: `http://${a.address}:${a.web_port}/`, target: '_blank', text: 'its page' })))));
+  }
+  $('#look').onclick = async () => {
+    $('#look').disabled = true;
+    $('#look-when').textContent = 'asking…';
+    try {
+      const d = await S.get('/api/mesh/discover');
+      found = d.candidates.filter(a => !a.member);
+      $('#look-when').textContent = `${found.length} answered at ${d.asked_at}`;
+      renderFound();
+    } catch (e) { S.fail('#mesh-out', e); $('#look-when').textContent = ''; }
+    $('#look').disabled = false;
+  };
+  $('#show-fps').onchange = () => { if (last) render(last); renderFound(); };
   $('#mesh-init').onclick = () => {
     const name = $('#mesh-name').value.trim();
     if (!name) return alert('Name the mesh first.');

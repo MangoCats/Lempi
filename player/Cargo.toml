@@ -145,6 +145,12 @@ log = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# A node's identity on the network `[SPEC-MTR-100]`, `[SPEC050]`: an ECDSA P-256
+# key as PKCS#8 PEM, the format the hub's Python writes, and its fingerprint.
+# Pure Rust, so the appliances' aarch64 build takes it as the desktop does.
+p256 = { version = "0.13", default-features = false, features = ["arithmetic", "pkcs8", "pem", "std"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+sha2 = "0.10"
 
 # One outbound call this player ever makes: MusicBrainz search, from the
 # review page, desktop-only `[SPEC-SUI-196]`. `rustls` rather than the default

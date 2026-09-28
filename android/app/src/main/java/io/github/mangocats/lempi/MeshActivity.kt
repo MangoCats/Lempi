@@ -89,6 +89,12 @@ class MeshActivity : Activity() {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
         }
         col.addView(hub)
+        val found = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(Button(this).apply {
+            text = "Look for hubs on this network"
+            setOnClickListener { Thread({ lookForHubs(found, hub) }, "lempi-look").start() }
+        })
+        col.addView(found)
         col.addView(Button(this).apply {
             text = "Ask to join"
             setOnClickListener {
@@ -98,6 +104,57 @@ class MeshActivity : Activity() {
                 Thread({ join(hub.text.toString().trim().removePrefix("https://").trimEnd('/'), nm) }, "lempi-join").start()
             }
         })
+    }
+
+    /**
+     * [SPEC050]: ask the network segment which hubs a device could join. The
+     * query is broadcast once; each hub answers this phone directly, so no
+     * multicast lock is held [GDE-NDS-130]. A list only -- choosing one fills
+     * in its address, and joining still goes through the code comparison.
+     */
+    private fun lookForHubs(found: LinearLayout, hub: EditText) {
+        val nonce = NodeIdentity.hex(ByteArray(8).also { SecureRandom().nextBytes(it) })
+        val answers = mutableListOf<Pair<String, JSONObject>>()
+        try {
+            java.net.DatagramSocket().use { s ->
+                s.broadcast = true
+                s.soTimeout = 2000
+                val q = JSONObject().put("lempi", 1).put("q", "hubs").put("nonce", nonce).toString().toByteArray()
+                s.send(java.net.DatagramPacket(q, q.size, java.net.InetAddress.getByName("255.255.255.255"), DISCOVERY_PORT))
+                val buf = ByteArray(4096)
+                val until = System.currentTimeMillis() + 2000
+                while (System.currentTimeMillis() < until) {
+                    val p = java.net.DatagramPacket(buf, buf.size)
+                    try {
+                        s.receive(p)
+                    } catch (_: java.net.SocketTimeoutException) {
+                        break
+                    }
+                    val a = try { JSONObject(String(p.data, 0, p.length)) } catch (_: Exception) { continue }
+                    if (a.optString("nonce") == nonce && a.optString("a") == "hub") {
+                        answers += (p.address.hostAddress ?: "") to a
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            return say("Could not look: ${e.message ?: e}")
+        }
+        main.post {
+            found.removeAllViews()
+            if (answers.isEmpty()) {
+                found.addView(text("No hub answered on this network. Type its address instead.", 13f))
+                return@post
+            }
+            for ((ip, a) in answers.distinctBy { it.first + it.second.optString("fingerprint") }) {
+                val port = a.optInt("members_port", MEMBER_PORT)
+                val addr = if (port == MEMBER_PORT) ip else "$ip:$port"
+                found.addView(Button(this).apply {
+                    text = "“${a.optString("mesh")}” — ${a.optString("name")} at $ip · hub " +
+                        NodeIdentity.show(a.optString("fingerprint"), short = true)
+                    setOnClickListener { hub.setText(addr) }
+                })
+            }
+        }
     }
 
     private fun base(host: String) = "https://" + (if (host.contains(':')) host else "$host:$MEMBER_PORT")
@@ -433,5 +490,6 @@ class MeshActivity : Activity() {
 
     companion object {
         const val MEMBER_PORT = 5732
+        const val DISCOVERY_PORT = 13492
     }
 }

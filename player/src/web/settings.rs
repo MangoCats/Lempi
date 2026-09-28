@@ -56,6 +56,43 @@ pub(super) async fn set_echo_join_now(
     StatusCode::NO_CONTENT
 }
 
+/// This node on the network `[SPEC050]`: whether it answers discovery, and
+/// the identity it answers with.
+pub(super) async fn discovery_status(State(ui): State<Ui>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let (db, lib) = (ui.db.clone(), ui.library.clone());
+    let out = tokio::task::spawn_blocking(move || {
+        let announce = crate::db::PlayerStore::open_split(&db, &lib).map(|s| s.load_announce()).unwrap_or(true);
+        let me = crate::discovery::identity(&db).ok();
+        serde_json::json!({
+            "answering": crate::discovery::ANSWERING.load(std::sync::atomic::Ordering::Relaxed),
+            "announce": announce,
+            "name": crate::discovery::host_name(),
+            "fingerprint": me.map(|m| m.fingerprint),
+        })
+    })
+    .await
+    .unwrap_or_else(|_| serde_json::json!({"error": "could not read"}));
+    axum::Json(out).into_response()
+}
+
+/// Answer discovery queries, or not `[SPEC-MTR-020]`.
+pub(super) async fn set_discovery_announce(
+    State(ui): State<Ui>,
+    axum::extract::Path(on): axum::extract::Path<String>,
+) -> StatusCode {
+    let on = matches!(on.as_str(), "1" | "true" | "on");
+    let (db, lib) = (ui.db.clone(), ui.library.clone());
+    let done = tokio::task::spawn_blocking(move || {
+        crate::db::PlayerStore::open_split(&db, &lib).map_err(|e| e.to_string())?.save_announce(on).map_err(|e| e.to_string())
+    })
+    .await;
+    match done {
+        Ok(Ok(())) => StatusCode::NO_CONTENT,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
 /// How often the resume point is written `[REQ-VIS-155]`.
 pub(super) async fn set_resume_save(
     State(ui): State<Ui>,

@@ -1022,6 +1022,16 @@ class Handler(BaseHTTPRequestHandler):
                     "members": [{k: m[k] for k in ("fingerprint", "name", "role", "enrolled_at")}
                                 for m in r["members"]],
                     "sessions": meshmod.sessions(mdir)})
+            if p == "/api/mesh/discover":
+                # [SPEC050]: who answers on this network segment. Read-only,
+                # and a list only: nothing is enrolled because it answered.
+                import discovery
+                mdir = meshmod.mesh_dir(STATE["library"] or STATE["path"])
+                members = ({m["fingerprint"] for m in meshmod.roster(mdir)["members"]}
+                           if meshmod.initialised(mdir) else set())
+                found = discovery.query("candidates", timeout=2.0)
+                return self.send_json({"candidates": [dict(a, member=a["fingerprint"] in members) for a in found],
+                                       "asked_at": time.strftime("%H:%M:%S")})
             if p.startswith("/intake/audio/"):
                 return self.send_pending_audio(p.rsplit("/", 1)[-1])
             if p == "/api/totals":
