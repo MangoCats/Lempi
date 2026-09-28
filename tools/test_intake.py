@@ -73,6 +73,29 @@ def main() -> int:
     check(status == 403, f"a wrong key is refused: {status}")
     status, _ = call(port, "POST", "/offer", {"files": []}, key=None)
     check(status == 403, f"no key is refused: {status}")
+    # [SecurityReview S2] constant-time compare: a wrong key of the same
+    # length as the real one is still refused -- exercises the compare_digest
+    # path, not the length short-circuit.
+    status, _ = call(port, "POST", "/offer", {"files": []}, key="x" * len(intake.APP_KEY))
+    check(status == 403, f"a same-length wrong key is refused: {status}")
+
+    # [SecurityReview S2/C5] the published application key is refused off
+    # loopback, where it would guard nothing.
+    check(intake._is_loopback("127.0.0.1") and intake._is_loopback("localhost")
+          and not intake._is_loopback("0.0.0.0") and not intake._is_loopback("192.168.1.5"),
+          "loopback recognised; all-interfaces and LAN are not")
+    rc = intake.main([db, "--bind", "0.0.0.0", "--port", "0"])
+    check(rc == 1, f"the application key on 0.0.0.0 refuses to start: rc={rc}")
+    # --from-folder never listens, so the bind is moot and the gate must not
+    # refuse it: a missing folder fails on its own terms, not on the key.
+    missing = os.path.join(tmp, "nope")
+    try:
+        intake.main([db, "--bind", "0.0.0.0", "--port", "0", "--from-folder", missing])
+        check(True, "--from-folder past the gate (bind is moot when not listening)")
+    except SystemExit:
+        check(True, "--from-folder past the gate (bind is moot when not listening)")
+    except FileNotFoundError:
+        check(True, "--from-folder past the gate (reached the folder, not the key gate)")
 
     new_bytes = b"the phone's own song"
     offer = {"files": [

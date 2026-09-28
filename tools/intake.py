@@ -40,6 +40,8 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import hmac
+import ipaddress
 import json
 import os
 import re
@@ -249,7 +251,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def authorised(self) -> bool:
-        if self.headers.get("X-Lempi-Key") == self.intake.key:
+        # Constant-time `[SecurityReview S2]`: the key keeps out a stray
+        # request, not a person, but `==` on a secret leaks its length and
+        # leading bytes through timing for no reason when the stdlib compares
+        # in constant time for free.
+        given = self.headers.get("X-Lempi-Key") or ""
+        if hmac.compare_digest(given, self.intake.key):
             return True
         self.reply(403, {"error": "wrong or missing key"})
         return False
@@ -538,6 +545,18 @@ def serve_members(mdir: str, host: str, port: int, db: str | None = None) -> Mem
     return MemberServer((host, port), MemberHandler, mdir, db)
 
 
+def _is_loopback(bind: str) -> bool:
+    """Whether a `--bind` address reaches only this machine. `localhost`
+    resolves to a loopback address; a literal is loopback only if it is one.
+    `0.0.0.0`/`::` (all interfaces) and any LAN address are not."""
+    if bind == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(bind).is_loopback
+    except ValueError:
+        return False
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("db")
@@ -562,6 +581,16 @@ def main(argv: list[str]) -> int:
         if not key:
             say(f"{args.key_file} is empty")
             return 1
+    # The published application key is safe only where nobody else can reach
+    # the port `[SecurityReview S2/C5]`. A bind that is not loopback exposes
+    # it to the LAN, where a key everyone can read from the repo is no gate at
+    # all -- so refuse to start with it, and say why, rather than listen with
+    # a guard that guards nothing `[GDE-DEP-060]`. `--from-folder` takes a
+    # hand-carried offer and never listens, so the bind is moot there.
+    if key == APP_KEY and not _is_loopback(args.bind) and not args.from_folder:
+        say(f"intake: refusing to serve the published application key on {args.bind} "
+            f"(reachable from the LAN). Pass --key-file, or --bind 127.0.0.1.")
+        return 1
     intake = Intake(args.db, pending, key)
     if args.from_folder:
         out = intake.from_folder(args.from_folder)
