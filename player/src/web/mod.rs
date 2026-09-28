@@ -494,6 +494,9 @@ pub fn router(ui: Ui) -> Router {
         // Being found on the network `[SPEC050]`.
         .route("/discovery", get(discovery_status))
         .route("/discovery/announce/:on", post(set_discovery_announce))
+        // Joining a mesh, and belonging to one `[SPEC-MTR-130]`.
+        .route("/mesh", get(mesh_status))
+        .route("/mesh/*step", post(mesh_step))
         .route("/skip/suppress/:hours", post(set_skip_suppress))
         .route("/dequeue/suppress/:hours", post(set_dequeue_suppress))
         .route("/queue/depth/:n", post(set_queue_depth))

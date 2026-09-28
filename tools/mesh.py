@@ -20,6 +20,7 @@ Keystore key can present as a TLS client certificate [SPEC-MTR-100].
     python tools/mesh.py LIBRARY init --mesh "Mango's mesh" [--name desktop]
     python tools/mesh.py LIBRARY status
     python tools/mesh.py LIBRARY accept SESSION | reject SESSION
+    python tools/mesh.py LIBRARY invite ADDRESS [--port WEB_PORT]   a player, which has no HTTPS client
     python tools/mesh.py LIBRARY remove FINGERPRINT
     python tools/mesh.py LIBRARY rename --mesh NAME  |  rename FINGERPRINT --name NAME
 
@@ -378,6 +379,91 @@ def _complete(mdir: str, s: dict) -> None:
     s["accepted_at"] = now()
 
 
+def _http(method: str, url: str, body: dict | None = None, timeout: float = 10.0) -> dict:
+    import urllib.error
+    import urllib.request
+    data = None if body is None else json.dumps(body).encode()
+    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            raise ValueError(json.loads(e.read()).get("error") or f"HTTP {e.code}") from e
+        except json.JSONDecodeError:
+            raise ValueError(f"HTTP {e.code}") from e
+
+
+def invite(mdir: str, address: str, web_port: int = 5720, wait_s: int = ENROL_TTL_S) -> dict:
+    """[SPEC-MTR-130] for a player, which has no HTTPS client: the hub invites
+    it over its web port, and a person compares the code in the console with
+    the one in the player's Settings. The invitation carries the mesh key
+    signed by the hub's own key, which the code covers; the player's answer is
+    signed by the key it names. Waits for both people, then sends the roster."""
+    import socket
+    r = roster(mdir)
+    hub_cert = hub_certificate(mdir)
+    hub_fp = fingerprint(hub_cert)
+    base = f"http://{address}:{web_port}"
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:     # the address the player reaches us by
+        s.connect((address, web_port))
+        here = s.getsockname()[0]
+    nonce_h = secrets.token_hex(16)
+    commit = hashlib.sha256(nonce_h.encode()).hexdigest()
+    ans = _http("POST", f"{base}/mesh/invite", {
+        "mesh": r["mesh"]["name"], "mesh_public_key": r["mesh"]["public_key"],
+        "hub_certificate": pem_of(hub_cert), "commit": commit, "hub_address": here,
+        "signature": sign(load_key(os.path.join(mdir, "node.key")), f"lempi-invite|{r['mesh']['fingerprint']}|{commit}".encode()),
+    })
+    cert = cert_from_pem(ans["certificate"])
+    if not verify(cert.public_key(), f"lempi-enrol|{ans['invite']}|{commit}|{ans['nonce']}".encode(), ans["signature"]):
+        raise SystemExit("the player's answer is not signed by the key it names: nothing done")
+    fp = fingerprint(cert)
+    if any(m["fingerprint"] == fp for m in r["members"]):
+        raise SystemExit(f"{address} is already a member")
+    s = {"session": secrets.token_hex(16), "state": "comparing", "started": time.time(), "certificate": pem_of(cert),
+         "fingerprint": fp, "name": str(ans.get("name") or "")[:120], "role": "player", "sender": address,
+         "nonce_h": nonce_h, "commit_h": commit, "nonce_c": ans["nonce"], "code": code(hub_fp, fp, nonce_h, ans["nonce"]),
+         "candidate_confirmed": False, "hub_confirmed": False, "invite": ans["invite"]}
+    with locked(mdir):
+        _save_session(mdir, s)
+    _http("POST", f"{base}/mesh/invite/{ans['invite']}/reveal", {"nonce": nonce_h})
+    say(f"invited {s['name'] or address} ({show_fp(fp, True)}): code {s['code']}")
+    say("accept it on this mesh page, and confirm it in the player's own Settings")
+    until = time.time() + wait_s
+    while time.time() < until:
+        time.sleep(2)
+        s = _load_session(mdir, s["session"])
+        if s["state"] == "accepted":
+            got = _http("POST", f"{base}/mesh/invite/{ans['invite']}/roster", signed_roster(mdir))
+            say(f"{s['name'] or address} joined; it holds roster version {got.get('version')}")
+            return s
+        if s["state"] in ("rejected", "expired"):
+            try:
+                _http("POST", f"{base}/mesh/invite/{ans['invite']}/reject")
+            except (ValueError, OSError):
+                pass
+            raise SystemExit(f"the invitation was {s['state']} here")
+        inv = (_http("GET", f"{base}/mesh").get("invite") or {})
+        if inv.get("id") != ans["invite"] or inv.get("state") == "rejected":
+            with locked(mdir):
+                s = _load_session(mdir, s["session"])
+                s["state"] = "rejected"
+                _save_session(mdir, s)
+            raise SystemExit("the player rejected it, or was invited by someone else meanwhile")
+        if inv.get("state") == "confirmed" and not s["candidate_confirmed"]:
+            if not verify(cert.public_key(), f"lempi-confirm|{ans['invite']}|{s['code']}".encode(),
+                          inv.get("confirmation") or ""):
+                raise SystemExit("the player's confirmation is not signed by its key: nothing done")
+            with locked(mdir):
+                s = _load_session(mdir, s["session"])
+                s["candidate_confirmed"] = True
+                _complete(mdir, s)
+                _save_session(mdir, s)
+            say("confirmed on the player" + ("" if s["state"] == "accepted" else "; waiting for the hub's accept"))
+    raise SystemExit("no answer in time: the invitation lapses")
+
+
 def status(mdir: str, sid: str) -> dict:
     """What a candidate polls for; the signed roster once it is a member."""
     s = _load_session(mdir, sid)
@@ -578,6 +664,12 @@ def main(argv: list[str]) -> int:
         s = accept(mdir, match[0]) if cmd == "accept" else reject(mdir, match[0])
         say(f"enrolment {s['session'][:8]}: {s['state']}"
             + (" -- waiting for the candidate to confirm too" if s["state"] == "comparing" else ""))
+        return 0
+    if cmd == "invite":
+        if not rest:
+            say("invite takes ADDRESS [--port WEB_PORT]")
+            return 2
+        invite(mdir, rest[0], int(opt("--port", "5720")))
         return 0
     if cmd == "rename":
         if not opt("--name") and not opt("--mesh"):

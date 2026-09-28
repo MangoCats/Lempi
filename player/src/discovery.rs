@@ -121,6 +121,23 @@ pub fn answer(q: &serde_json::Value, me: &Identity, listener: &Path, library: &P
     }
     let nonce = q["nonce"].as_str().filter(|n| n.len() <= 64)?;
     let kind = q["q"].as_str()?;
+    // A member answers its own mesh, and only one that proves it knows the
+    // discovery key its roster carries `[SPEC-MTR-310]`. Everyone else, other
+    // meshes included, learns nothing -- not even that a member is here.
+    if let Some((mesh_fp, key)) = crate::membership::discovery_key(listener) {
+        if kind != "members" || q["mesh"].as_str() != Some(mesh_fp.as_str()) {
+            return None;
+        }
+        let proof = hex_decode(q["proof"].as_str()?)?;
+        if !mac_ok(&key, &format!("lempi-members|{mesh_fp}|{nonce}"), &proof) {
+            return None;
+        }
+        return Some(serde_json::json!({
+            "lempi": 1, "a": "member", "nonce": nonce, "name": host_name(), "fingerprint": me.fingerprint,
+            "web_port": web_port, "version": crate::GIT,
+            "proof": mac_hex(&key, &format!("lempi-member|{nonce}|{}", me.fingerprint)),
+        }));
+    }
     if !matches!(kind, "candidates" | "hubs") || !announcing(listener, library) {
         return None;
     }
@@ -148,6 +165,29 @@ pub fn answer(q: &serde_json::Value, me: &Identity, listener: &Path, library: &P
         _ => return None,
     }
     Some(a)
+}
+
+type Mac = hmac::Hmac<sha2::Sha256>;
+
+fn mac_hex(key: &[u8], text: &str) -> String {
+    use hmac::Mac as _;
+    let mut m = <Mac as hmac::Mac>::new_from_slice(key).expect("any key length");
+    m.update(text.as_bytes());
+    m.finalize().into_bytes().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// In constant time, as a proof should be checked.
+fn mac_ok(key: &[u8], text: &str, proof: &[u8]) -> bool {
+    use hmac::Mac as _;
+    let mut m = <Mac as hmac::Mac>::new_from_slice(key).expect("any key length");
+    m.update(text.as_bytes());
+    m.verify_slice(proof).is_ok()
+}
+
+fn hex_decode(s: &str) -> Option<Vec<u8>> {
+    (s.len().is_multiple_of(2) && s.len() <= 128)
+        .then(|| (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect())
+        .flatten()
 }
 
 /// Answer queries until the runtime ends. A port already taken is one line

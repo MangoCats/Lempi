@@ -1030,8 +1030,14 @@ class Handler(BaseHTTPRequestHandler):
                 members = ({m["fingerprint"] for m in meshmod.roster(mdir)["members"]}
                            if meshmod.initialised(mdir) else set())
                 found = discovery.query("candidates")
+                online = {}
+                if meshmod.initialised(mdir):
+                    import base64
+                    r = meshmod.roster(mdir)
+                    online = {a["fingerprint"]: a["address"] for a in discovery.query(
+                        "members", mesh_fp=r["mesh"]["fingerprint"], key=base64.b64decode(r["discovery_key"]))}
                 return self.send_json({"candidates": [dict(a, member=a["fingerprint"] in members) for a in found],
-                                       "asked_at": time.strftime("%H:%M:%S")})
+                                       "online": online, "asked_at": time.strftime("%H:%M:%S")})
             if p.startswith("/intake/audio/"):
                 return self.send_pending_audio(p.rsplit("/", 1)[-1])
             if p == "/api/totals":
@@ -1235,6 +1241,15 @@ class Handler(BaseHTTPRequestHandler):
                     args = [parts[4], parts[3]]
                 elif len(parts) == 5 and parts[2] == "member" and parts[4] == "remove" and hexish(parts[3]):
                     args = ["remove", parts[3]]
+                elif parts[2:] == ["invite"]:
+                    # [SPEC-MTR-130] for a player: the job invites it and waits for
+                    # both people to confirm, then gives it the roster.
+                    n = int(self.headers.get("Content-Length") or 0)
+                    b = json.loads(self.rfile.read(n) or b"{}") if 0 < n < 4096 else {}
+                    address, port = str(b.get("address", "")), int(b.get("port") or 5720)
+                    if not address or not all(c in "0123456789." for c in address):
+                        return self.send_json({"error": "not an address"}, code=400)
+                    args = ["invite", address, "--port", str(port)]
                 else:
                     return self.send_json({"error": "unknown"}, code=404)
                 return self.send_json({"job_id": STATE["jobs"].submit("mesh", json.dumps(args))})

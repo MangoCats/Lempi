@@ -76,6 +76,46 @@ pub(super) async fn discovery_status(State(ui): State<Ui>) -> axum::response::Re
     axum::Json(out).into_response()
 }
 
+/// Membership of a mesh `[SPEC-MTR-130]`: the hub's invitation and its
+/// steps, this player's own confirmation from its Settings, and leaving.
+/// Each answers JSON; a refusal is 409 with the reason.
+pub(super) async fn mesh_status(State(ui): State<Ui>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    axum::Json(crate::membership::status(&ui.db)).into_response()
+}
+
+pub(super) async fn mesh_step(
+    State(ui): State<Ui>,
+    axum::extract::Path(path): axum::extract::Path<String>,
+    body: String,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let db = ui.db.clone();
+    let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        let b: serde_json::Value = if body.trim().is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_str(&body).map_err(|e| format!("not JSON: {e}"))?
+        };
+        let parts: Vec<&str> = path.split('/').collect();
+        match parts.as_slice() {
+            ["invite"] => crate::membership::invite(&db, &b),
+            ["invite", id, "reveal"] => crate::membership::reveal(&db, id, b["nonce"].as_str().unwrap_or("")),
+            ["invite", id, "confirm"] => crate::membership::confirm(&db, id),
+            ["invite", id, "reject"] => crate::membership::reject(id),
+            ["invite", id, "roster"] => crate::membership::take_roster(&db, id, &b),
+            ["leave"] => crate::membership::leave(&db).map(|()| serde_json::json!({"left": true})),
+            _ => Err("unknown".into()),
+        }
+    })
+    .await
+    .unwrap_or_else(|_| Err("failed".into()));
+    match out {
+        Ok(v) => axum::Json(v).into_response(),
+        Err(e) => (StatusCode::CONFLICT, axum::Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
 /// Answer discovery queries, or not `[SPEC-MTR-020]`.
 pub(super) async fn set_discovery_announce(
     State(ui): State<Ui>,

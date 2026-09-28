@@ -14,6 +14,8 @@ reached by typing its name, as before [GDE-NDS-920].
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import secrets
 import socket
@@ -21,7 +23,7 @@ import sys
 import time
 
 PORT = 13492
-KINDS = ("candidates", "hubs")
+KINDS = ("candidates", "hubs", "members")
 
 
 def local_addresses() -> list[str]:
@@ -43,7 +45,8 @@ def local_addresses() -> list[str]:
 REPEATS = (0.0, 0.5, 1.2)
 
 
-def query(kind: str, timeout: float = 3.0, targets=("255.255.255.255",)) -> list[dict]:
+def query(kind: str, timeout: float = 3.0, targets=("255.255.255.255",),
+          mesh_fp: str | None = None, key: bytes | None = None) -> list[dict]:
     """Every answer to one query, each with the address it came from.
 
     Sent once from each of this machine's addresses, not once from any: a
@@ -55,7 +58,14 @@ def query(kind: str, timeout: float = 3.0, targets=("255.255.255.255",)) -> list
         raise ValueError(f"not a query: {kind}")
     import selectors
     nonce = secrets.token_hex(8)
-    msg = json.dumps({"lempi": 1, "q": kind, "nonce": nonce}).encode()
+    q = {"lempi": 1, "q": kind, "nonce": nonce}
+    if kind == "members":
+        # [SPEC-MTR-310]: proven with the mesh's discovery key, so only its own
+        # members answer, and every answer proves membership back.
+        if not (mesh_fp and key):
+            raise ValueError("a members' query needs the mesh and its discovery key")
+        q.update(mesh=mesh_fp, proof=hmac.new(key, f"lempi-members|{mesh_fp}|{nonce}".encode(), hashlib.sha256).hexdigest())
+    msg = json.dumps(q).encode()
     sel = selectors.DefaultSelector()
     socks = []
     for addr in local_addresses() or ["0.0.0.0"]:
@@ -94,6 +104,11 @@ def query(kind: str, timeout: float = 3.0, targets=("255.255.255.255",)) -> list
                 # Only an answer to this query: the nonce is how an answer
                 # recorded earlier, or meant for someone else, is told apart.
                 if a.get("lempi") == 1 and a.get("nonce") == nonce and isinstance(a.get("fingerprint"), str):
+                    if kind == "members":
+                        want = hmac.new(key, f"lempi-member|{nonce}|{a['fingerprint']}".encode(),
+                                        hashlib.sha256).hexdigest()
+                        if not hmac.compare_digest(want, str(a.get("proof", ""))):
+                            continue
                     found[(a["fingerprint"], ip)] = dict(a, address=ip)
         # The same node heard on two adapters answers twice: one row, the LAN's.
         by_node = {}

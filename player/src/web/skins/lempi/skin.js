@@ -1186,6 +1186,57 @@
     }).catch(() => {});
   }
   discovery();
+
+  // `[SPEC-MTR-130]`: a hub invites this player; a person compares the code
+  // here with the one on the hub's mesh page and confirms on both. Polled
+  // while Settings is open, since an invitation arrives from outside.
+  const short = fp => (fp || '').slice(0, 8).replace(/(.{4})/, '$1 ');
+  let meshShown = '';
+  async function mesh() {
+    let d;
+    try {
+      const probe = await (await fetch('/discovery')).json();
+      if (!probe.answering) return;
+      d = await (await fetch('/mesh')).json();
+    } catch { return; }
+    const key = JSON.stringify(d);
+    if (key === meshShown) return;       // unchanged: leave the buttons under the finger alone
+    meshShown = key;
+    setHidden($('mesh-row'), false);
+    const buttons = $('mesh-buttons'), note = $('mesh-note');
+    buttons.replaceChildren();
+    const button = (label, path, ask) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.onclick = async () => {
+        if (ask && !confirm(ask)) return;
+        const r = await fetch(`/mesh/${path}`, { method: 'POST' });
+        if (!r.ok) alert(((await r.json().catch(() => ({}))).error) || 'Refused.');
+        meshShown = '';
+        mesh();
+      };
+      buttons.append(b);
+    };
+    const inv = d.invite && ['comparing', 'confirmed'].includes(d.invite.state) ? d.invite : null;
+    if (d.member) {
+      const m = d.member;
+      note.textContent = `A member of “${m.mesh}” (mesh ${short(m.mesh_fp)}), whose hub is ${short(m.hub_fp)}` +
+        ` at ${m.hub_address || 'its address'}; roster version ${m.version}, ${(m.members || []).length} member(s).`;
+      button('Leave the mesh', 'leave', 'Forget this mesh here? The hub lists this player until someone removes it there.');
+    } else if (inv && inv.state === 'comparing') {
+      note.textContent = `Invited to join “${inv.mesh}” by hub ${short(inv.hub_fp)}. Code ${inv.code} — ` +
+        'confirm only if the hub’s mesh page shows the same code.';
+      button('The codes match', `invite/${inv.id}/confirm`);
+      button('Reject', `invite/${inv.id}/reject`);
+    } else if (inv) {
+      note.textContent = `Confirmed here (code ${inv.code}); waiting for the hub to accept.`;
+    } else {
+      note.textContent = 'In no mesh. A hub’s mesh page can invite this player, and the code is compared here.';
+    }
+  }
+  mesh();
+  setInterval(() => { if (!$('panel-settings').hidden) mesh(); }, 3000);
   announce.onchange = async () => {
     const r = await fetch(`/discovery/announce/${announce.checked ? 1 : 0}`, { method: 'POST' });
     if (!r.ok) { alert('Could not change it.'); discovery(); }
