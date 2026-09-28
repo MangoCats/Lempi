@@ -96,6 +96,8 @@ pub mod host;
 pub mod logging;
 pub mod membership;
 pub mod pairing;
+/// The player's half of the signed star sync `[SPEC-NSH-020]`.
+pub mod star_node;
 /// Per-song lyrics where a client will find them `[SPEC-LYR-070]`.
 pub mod lyrics_cache;
 /// Lyrics beside the audio, for a client that reads the music folder

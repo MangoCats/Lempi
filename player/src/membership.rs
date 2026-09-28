@@ -250,6 +250,29 @@ pub fn enrolled(listener: &Path) -> bool {
     state_dir(listener).join("mesh-member.json").exists()
 }
 
+/// A request from the hub, checked against the mesh key this player pinned
+/// when it joined `[SPEC-NSH-030]`: the held roster's key must still be the
+/// pinned one, and it must have signed `text`. Returns the membership.
+pub fn mesh_signed(listener: &Path, text: &str, sig_b64: &str) -> Result<Value, String> {
+    let held = membership(listener).ok_or("this player is in no mesh")?;
+    let mesh_pub = p256::PublicKey::from_public_key_pem(held["roster"]["mesh"]["public_key"].as_str().unwrap_or(""))
+        .map_err(|e| format!("the held roster's mesh key: {e}"))?;
+    let fp = sha256_hex(mesh_pub.to_public_key_der().map_err(|e| e.to_string())?.as_bytes());
+    if held["mesh_fp"].as_str() != Some(fp.as_str()) {
+        return Err("the held roster's mesh key is not the one pinned at joining".into());
+    }
+    if !verify(&VerifyingKey::from(&mesh_pub), text, sig_b64) {
+        return Err("not signed by this player's mesh".into());
+    }
+    Ok(held)
+}
+
+/// `text` signed by this node's own key, for an answer the hub verifies
+/// against this member's certificate in the roster `[SPEC-NSH-030]`.
+pub fn sign_as_node(listener: &Path, text: &str) -> Result<String, String> {
+    sign(listener, text)
+}
+
 /// Record which pairing window an invitation began in `[SPEC-NSH-140]`.
 pub fn stamp_invite_window(id: &str, window: u64) {
     let _ = with_invite(id, |inv| {

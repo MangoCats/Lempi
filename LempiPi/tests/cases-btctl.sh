@@ -139,3 +139,65 @@ setup
 OUT=$(PKILL_RC=1 btctl mesh-pair)
 assert_in "$OUT" "could not signal the player" "mesh-pair with no player running says so"
 teardown
+
+# --- the catalogue's partition, for a signed star-sync commit ----------
+# [SPEC-NSH-080]: on or off, nothing else; the mount is found from the
+# catalogue the player runs with, never from the caller; only the
+# catalogue's own partition is remounted -- never the root, never an overlay.
+lib_setup() {
+    setup
+    mkdir -p "$VT_STATE/srv"
+    : > "$VT_STATE/srv/library.db"
+    export LEMPI_LIBRARY="$VT_STATE/srv/library.db" FINDMNT_TARGET=/srv/library FINDMNT_FSTYPE=ext4
+}
+lib_teardown() { unset LEMPI_LIBRARY FINDMNT_TARGET FINDMNT_FSTYPE FINDMNT_OPTIONS SYSTEMCTL_EXECSTART; teardown; }
+
+lib_setup
+OUT=$(btctl library-rw /srv/library)
+assert_in "$OUT" "takes on or off" "library-rw refuses anything but on or off"
+assert_not_called "mount " "and remounts nothing"
+lib_teardown
+
+lib_setup
+export FINDMNT_OPTIONS=ro,noatime
+OUT=$(btctl library-rw on)
+assert_in "$OUT" '"was":"ro"' "a read-only catalogue partition is reported as it was"
+assert_called "mount -o remount,rw /srv/library" "and remounted read-write"
+lib_teardown
+
+lib_setup
+export FINDMNT_OPTIONS=rw,noatime
+OUT=$(btctl library-rw on)
+assert_in "$OUT" '"was":"rw"' "an already writable partition says so"
+assert_not_called "mount " "and is not remounted"
+OUT=$(btctl library-rw off)
+assert_called "mount -o remount,ro /srv/library" "off returns it to read-only"
+lib_teardown
+
+lib_setup
+export FINDMNT_TARGET=/ FINDMNT_OPTIONS=rw,noatime
+OUT=$(btctl library-rw off)
+assert_in "$OUT" '"mount":"/"' "a catalogue on a writable root is left as it is"
+assert_not_called "mount " "the root is never remounted, even by off"
+export FINDMNT_OPTIONS=ro
+OUT=$(btctl library-rw on)
+assert_in "$OUT" "read-only root" "a catalogue on a read-only root is refused"
+assert_not_called "mount " "and the root is still not remounted"
+lib_teardown
+
+lib_setup
+export FINDMNT_FSTYPE=overlay FINDMNT_OPTIONS=ro
+OUT=$(btctl library-rw on)
+assert_in "$OUT" "overlay" "a catalogue on an overlay is refused"
+assert_not_called "mount " "and nothing is remounted"
+lib_teardown
+
+# The path is the one the running player was started with.
+lib_setup
+unset LEMPI_LIBRARY
+export SYSTEMCTL_EXECSTART="{ path=/usr/local/bin/lempi ; argv[]=/usr/local/bin/lempi --listener /x/l.db --library $VT_STATE/srv/library.db --device hw ; ignore_errors=no }"
+export FINDMNT_OPTIONS=ro
+OUT=$(btctl library-rw on)
+assert_in "$OUT" '"ok":true' "library-rw finds the catalogue from the player's own command line"
+assert_called "findmnt -no TARGET -T $VT_STATE/srv/library.db" "and asks for that file's mount"
+lib_teardown

@@ -1,0 +1,10 @@
+#!/bin/sh
+# Fake findmnt for `library-rw` [SPEC-NSH-080]: answers `-no FIELD -T PATH`
+# from FINDMNT_TARGET / FINDMNT_FSTYPE / FINDMNT_OPTIONS, and records the call.
+printf '%s\n' "findmnt $*" >> "$VT_STATE/calls"
+case "$2" in
+  TARGET)  printf '%s\n' "${FINDMNT_TARGET:-}" ;;
+  FSTYPE)  printf '%s\n' "${FINDMNT_FSTYPE:-ext4}" ;;
+  OPTIONS) printf '%s\n' "${FINDMNT_OPTIONS:-rw,noatime}" ;;
+esac
+exit 0

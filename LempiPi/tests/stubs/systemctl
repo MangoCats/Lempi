@@ -1,4 +1,10 @@
 #!/bin/sh
 # Records timer stops etc.; nothing here really manages units in a test.
+# `show -p ExecStart --value lempi` answers SYSTEMCTL_EXECSTART, as systemd
+# prints a unit's command line, so `library-rw` can be seen finding the
+# catalogue the player was started with [SPEC-NSH-080].
 printf '%s\n' "systemctl $*" >> "$VT_STATE/calls"
+if [ "$*" = "show -p ExecStart --value lempi" ]; then
+    printf '%s\n' "${SYSTEMCTL_EXECSTART:-}"
+fi
 exit 0

@@ -208,6 +208,43 @@ pub(super) async fn mesh_step(
     }
 }
 
+/// A step of the signed star sync `[SPEC-NSH-020..090]`, from the hub:
+/// `snapshot`, `rehearse` or `commit` (`crate::star_node`). Authenticated by
+/// the mesh key's signature on each request, so not behind the pairing
+/// window `[SPEC-NSH-040]`. Not served on a loopback-only host: a phone syncs
+/// over the members' channel instead `[SPEC-MTR-200]`. A commit that changed
+/// anything asks the engine for the same rebuild `/library/reload` asks for,
+/// so the player takes the new catalogue and preferences without a restart.
+pub(super) async fn mesh_sync(
+    State(ui): State<Ui>,
+    axum::extract::Path(op): axum::extract::Path<String>,
+    body: String,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if ui.web_loopback_only {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let (db, library) = (ui.db.clone(), ui.library.clone());
+    let out = tokio::task::spawn_blocking(move || {
+        let b: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("not JSON: {e}"))?;
+        crate::star_node::handle(&db, &library, &op, &b)
+    })
+    .await
+    .unwrap_or_else(|_| Err("failed".into()));
+    match out {
+        Ok(h) => {
+            if h.reload {
+                if let Ok(mut c) = ui.controls.lock() {
+                    c.reload_requested = true;
+                    c.reload_status = Some("requested by star sync".into());
+                }
+            }
+            axum::Json(h.answer).into_response()
+        }
+        Err(e) => (StatusCode::CONFLICT, axum::Json(serde_json::json!({"error": e}))).into_response(),
+    }
+}
+
 /// Answer discovery queries, or not `[SPEC-MTR-020]`.
 pub(super) async fn set_discovery_announce(
     State(ui): State<Ui>,

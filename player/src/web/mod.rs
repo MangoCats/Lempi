@@ -502,6 +502,13 @@ pub fn router(ui: Ui) -> Router {
         // Joining a mesh, and belonging to one `[SPEC-MTR-130]`.
         .route("/mesh", get(mesh_status))
         .route("/mesh/*step", post(mesh_step))
+        // The signed star sync `[SPEC-NSH-020]`. A commit carries the
+        // catalogue's patch, so the body may be far past axum's 2 MB default;
+        // raised for this route alone, which a signature check guards.
+        .route(
+            "/mesh/sync/:op",
+            post(mesh_sync).layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024)),
+        )
         // How long the pairing window stays open `[SecurityReview3 R3]`. Opening
         // it is the local button (SIGUSR1), never a route; this only sets the
         // length, and is under `/pairing` to stay clear of `/mesh/*step`.
@@ -1380,6 +1387,48 @@ mod tests {
         // And the server is up, so the 404s above are not a dead socket.
         let line = status("GET", "/audio/sink").await;
         assert!(line.contains(" 200 "), "GET /audio/sink answered {line:?}");
+    }
+
+    /// `[SPEC-NSH-020]`: the star sync's steps reach their own handler beside
+    /// `/mesh/*step`, which still answers the membership steps, and take a body
+    /// past axum's 2 MB default -- a catalogue patch can be.
+    #[tokio::test]
+    async fn the_star_sync_routes_are_their_own() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let d = std::env::temp_dir().join(format!("lempi-sync-route-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let (_e, h) = crate::engine::Engine::new(crate::path::PathHandle::silent(), 1);
+        let ui = Ui {
+            handle: Arc::new(h),
+            db: d.join("listener.db"),
+            library: d.join("library.db"),
+            why: Default::default(),
+            controls: Default::default(),
+            capabilities: Default::default(),
+            web_loopback_only: false,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router(ui)).await });
+        let post = |path: &'static str, body: String| async move {
+            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let head = format!("POST {path} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n\
+                                Content-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+            s.write_all(head.as_bytes()).await.unwrap();
+            s.write_all(body.as_bytes()).await.unwrap();
+            let mut buf = Vec::new();
+            s.read_to_end(&mut buf).await.unwrap();
+            String::from_utf8_lossy(&buf).to_string()
+        };
+        let r = post("/mesh/sync/snapshot", "{}".into()).await;
+        assert!(r.contains(" 409 ") && r.contains("no request"), "the sync handler answered: {r}");
+        let big = serde_json::json!({"request": "x".repeat(3 * 1024 * 1024), "signature": ""}).to_string();
+        let r = post("/mesh/sync/commit", big).await;
+        assert!(r.contains(" 409 ") && r.contains("in no mesh"), "a 3 MB request reached the signature check: {r}");
+        let r = post("/mesh/invite/x/reveal", "{}".into()).await;
+        assert!(r.contains(" 409 ") && !r.contains("no request"), "the membership steps still reach mesh_step: {r}");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// The launch key, end to end through the real router `[REQ-AND-160]`:

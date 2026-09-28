@@ -1,0 +1,4 @@
+#!/bin/sh
+# Fake mount: records the call and changes nothing; MOUNT_RC=1 makes it fail.
+printf '%s\n' "mount $*" >> "$VT_STATE/calls"
+exit "${MOUNT_RC:-0}"

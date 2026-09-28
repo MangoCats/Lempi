@@ -799,6 +799,41 @@ case "$VERB" in
             die "could not signal the player -- is it running?"
         fi
         ;;
+    library-rw)
+        # Let the player write its own catalogue for a signed star-sync
+        # commit, and then stop it `[SPEC-NSH-080]`. Takes `on` or `off` and
+        # nothing else: the catalogue is the one the running player was
+        # started with, and its mount is found here, never taken from the
+        # caller. Only the catalogue's own partition is ever remounted -- a
+        # catalogue on the root filesystem is already writable or is left
+        # alone, and an overlay is refused, since a write there is gone at
+        # the next reboot (CLAUDE.md section 4).
+        case "$ADDR" in on|off) ;; *) die "library-rw takes on or off" ;; esac
+        lib="${LEMPI_LIBRARY:-}"
+        if [ -z "$lib" ]; then
+            lib="$(systemctl show -p ExecStart --value lempi 2>/dev/null | tr ' ' '\n' \
+                   | sed -n -e 's/^--library=//p' -e '/^--library$/{n;p;}' | head -1)"
+        fi
+        lib="${lib:-/srv/library/library.db}"
+        [ -f "$lib" ] || die "no catalogue at $lib"
+        mnt="$(findmnt -no TARGET -T "$lib" 2>/dev/null)"
+        fstype="$(findmnt -no FSTYPE -T "$lib" 2>/dev/null)"
+        opts="$(findmnt -no OPTIONS -T "$lib" 2>/dev/null)"
+        [ -n "$mnt" ] || die "cannot find the mount holding $lib"
+        [ "$fstype" != overlay ] || die "$lib is on an overlay: a write there vanishes at reboot"
+        case ",$opts," in *,ro,*) was=ro ;; *) was=rw ;; esac
+        if [ "$mnt" = / ]; then
+            [ "$was" = rw ] || die "the catalogue is on a read-only root: not remounted"
+            printf '{"ok":true,"mount":"/","was":"rw"}\n'
+            exit 0
+        fi
+        if [ "$ADDR" = on ] && [ "$was" = ro ]; then
+            mount -o remount,rw "$mnt" >/dev/null 2>&1 || die "could not remount $mnt read-write"
+        elif [ "$ADDR" = off ] && [ "$was" = rw ]; then
+            mount -o remount,ro "$mnt" >/dev/null 2>&1 || die "could not remount $mnt read-only"
+        fi
+        printf '{"ok":true,"mount":"%s","was":"%s"}\n' "$mnt" "$was"
+        ;;
     ap-start)
         ssid="${2:-Lempi}"
         # The password arrives on stdin, never as an argument `[SecurityReview
