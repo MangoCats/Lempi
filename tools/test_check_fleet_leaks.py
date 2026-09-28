@@ -29,7 +29,7 @@ def leaks(line):
 
 def main() -> int:
     # Private IPv4 is a leak.
-    check(leaks("server 192.168.67.93 iburst"), "a 192.168.x address is flagged")
+    check(leaks("server 192.168.1.50 iburst"), "a 192.168.x address is flagged")
     check(leaks("ssh pi@10.0.0.5"), "a 10.x address is flagged")
     check(leaks("172.16.4.4"), "a 172.16-31.x address is flagged")
     # Documented / non-leaking addresses are not.
@@ -45,31 +45,31 @@ def main() -> int:
     check(not leaks("placeholder aa:bb:cc:dd:ee:ff"), "a placeholder MAC is not flagged")
 
     # Personal paths.
-    check(leaks("/home/mike/Music"), "a real /home/<name> is flagged")
+    check(leaks("/home/alice/Music"), "a real /home/<name> is flagged")
     check(not leaks("/home/pi/.ssh"), "/home/pi (the appliance default) is not flagged")
     check(not leaks("/home/<user>/Music"), "a redacted /home/<user> is not flagged")
-    check(leaks(r"C:\Users\Mango Cat\Dev"), "a real Windows user path is flagged")
+    check(leaks(r"C:\Users\Alice\Dev"), "a real Windows user path is flagged")
     check(not leaks(r"C:\Users\<user>\Music"), "a redacted Windows path is not flagged")
     check(not leaks(r"C:\Users\Public\Music"), "C:\\Users\\Public is not flagged")
 
     # ssh-target user@host: (a real login is invisible to IP/MAC/path scans).
-    check(leaks("scp x sw@teacherslounge:/home/sw/"), "a real user@host: is flagged")
-    check(leaks("deploy to mango@smartboardpc:/srv"), "another real login is flagged")
+    check(leaks("scp x admin@node-x:/srv/data"), "a real user@host: is flagged")
+    check(leaks("deploy to deploy@node-y:/srv"), "another real login is flagged")
     check(not leaks("ssh pi@speaker-a:/srv/library"), "a role-alias host is not flagged")
     check(not leaks("git@github.com:MangoCats/Lempi.git"), "the public git host is not flagged")
     check(not leaks("someone@workshop:/home/someone"), "a placeholder host is not flagged")
     check(not leaks("user@host:/path/to/library.db"), "the generic user@host: is not flagged")
 
     # The denylist path (compiled pattern), independent of the file.
-    pat = re.compile("|".join(re.escape(t) for t in ["lempi02w", "GMKtec"]), re.I)
-    check(cfl.denylist_hits("deploy to pi@lempi02w now", pat), "a denylisted hostname is flagged")
-    check(cfl.denylist_hits("the desktop GMKTEC answered", pat),
+    pat = re.compile("|".join(re.escape(t) for t in ["node-alpha", "buildbox"]), re.I)
+    check(cfl.denylist_hits("deploy to pi@node-alpha now", pat), "a denylisted hostname is flagged")
+    check(cfl.denylist_hits("the desktop BUILDBOX answered", pat),
           "the denylist is case-insensitive")
     check(not cfl.denylist_hits("nothing private here", pat), "a clean line with a denylist is clean")
     check(cfl.denylist_hits("x", None) == [], "no denylist means no denylist hits")
 
     # scan_line combines both.
-    hits = cfl.scan_line("pi@lempi02w at 192.168.67.20", pat)
+    hits = cfl.scan_line("pi@node-alpha at 192.168.1.20", pat)
     check(len(hits) == 2, f"scan_line reports both the IP and the denylisted host: {hits}")
 
     print()

@@ -1015,7 +1015,13 @@ class Handler(BaseHTTPRequestHandler):
         # DNS-rebinding page (Host = the attacker's name, resolving to 127.0.0.1)
         # could read the library, the real `user@host` peers, job logs and audio.
         # A page load and a same-origin fetch pass; a foreign Host or Origin does
-        # not. Side-effecting actions are POSTs, which `<img>` cannot forge.
+        # not. `/api/handoff/ensure` was moved to POST so an `<img>` (which sends
+        # no Origin) cannot start a player. Three GETs still run ssh to the
+        # *stored* peers -- `/api/profile/*/remote`, `/api/profile/*/flag`,
+        # `/api/peers/reachable` -- so an `<img>` can still trigger those (no
+        # attacker-chosen host, so the effect is a peer ssh, not command
+        # execution) `[SecurityReview3 R2a]`. They go away with the ssh removal
+        # that closes C1 links 2-3; until then they are known exceptions.
         if not self._same_origin():
             return self.send_json({"error": "cross-site request refused"}, code=403)
         try:
