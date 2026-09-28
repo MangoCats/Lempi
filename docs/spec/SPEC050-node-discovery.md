@@ -100,6 +100,16 @@ In order:
    pinned mesh key signed it and it names the player (`mesh-member.json`
    beside the listener, `lempi_player::membership`).
 
+**`[SPEC-DSC-080]` The hub sends each new roster to its players, and removal
+changes the key.** A player keeps the roster version it holds until told.
+After an accept or a removal, the hub finds its players by the members'
+query and posts them the roster. After a removal it uses the *previous*
+discovery key, the one they still hold, since removing a member makes a new
+one. A player keeps a roster only if it is newer and signed by its pinned
+mesh key. One that no longer names it means it was removed, and it leaves.
+The phone is not pushed to, as it listens on nothing: it takes the newest
+roster when it checks its channel or syncs.
+
 An invitation runs as its own process, since it waits minutes for two people.
 An Accept queued behind it in the console's one-at-a-time jobs was never
 reached. Accept, reject and remove are done at once.
@@ -119,6 +129,15 @@ address, and joining still goes through the code comparison `[SPEC-MTR-130]`.
   key `ddc6 0c85`;
 - the Moto G found it as "“Home” — GMKTEC at 192.168.67.95 · hub ddc6 0c85",
   through Windows' firewall;
+- the local fleet joined "Home" by invitation, each code the same on the
+  console and on the player's own Settings page: smartboardpc 106 355,
+  bose 759 347, lp3-wifi 780 573. Roster version 6 then held the hub, the
+  phone and the four players; no candidates were left, and all four answered
+  the members' query;
+- removing smartboardpc (version 7): it left on its own, answered as a
+  candidate again, and the new key's members' query no longer found it. The
+  other three took version 7. Invited again (578 427), it rejoined, and
+  every player held version 8;
 - lempi02w joined "Home" by invitation, the console and its own Settings both
   showing 017 830 and naming hub `ddc6 0c85`; roster version 3. Then the proven
   members' query found it at 192.168.67.20, a wrong key got silence, and it
@@ -146,4 +165,4 @@ within its three seconds and never re-sent on a schedule.
 
 ---
 
-**Traceability:** `[SPEC-DSC-010..070]` · builds `[SPEC-MTR-300..330]` · revises `[SPEC-MTR-310]` for hubs (`[SPEC-DSC-040]`)
+**Traceability:** `[SPEC-DSC-010..080]` · builds `[SPEC-MTR-300..330]` · revises `[SPEC-MTR-310]` for hubs (`[SPEC-DSC-040]`)
