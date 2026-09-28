@@ -53,7 +53,18 @@ case "$sub" in
   delete)
     [ -n "$LEMPI_NM_DIR" ] && rm -f "$LEMPI_NM_DIR/$1.nmconnection" 2>/dev/null
     exit 0 ;;
-  modify|up|down|reload)
+  modify)
+    # connection modify <name> connection.id <newid> -> rename the keyfile,
+    # so the atomic AP swap can be exercised [SecurityReview3 R1a].
+    if [ "${2:-}" = connection.id ] && [ -n "$LEMPI_NM_DIR" ]; then
+      old="$LEMPI_NM_DIR/$1.nmconnection"; new="$LEMPI_NM_DIR/$3.nmconnection"
+      if [ -f "$old" ]; then
+        sed -e "s/^id=$1\$/id=$3/" -e "s/^uuid=uuid-$1\$/uuid=uuid-$3/" "$old" > "$new"
+        rm -f "$old"
+      fi
+    fi
+    exit 0 ;;
+  up|down|reload)
     exit 0 ;;
 esac
 exit 0

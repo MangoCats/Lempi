@@ -106,6 +106,24 @@ if psk_in_keyfile lempi-ap "Lempi321"; then ok "the default AP psk is written to
 else bad "the default AP psk is written to the keyfile" "not found"; fi
 teardown
 
+# A failed ap-start must not destroy the existing lempi-ap that revert relies
+# on [SecurityReview3 R1a]: the new profile is built under a temporary name and
+# only swapped in once its key is set.
+setup
+export LEMPI_NM_DIR="$VT_STATE/nm" LEMPI_DNSMASQ_DIR="$VT_STATE/dnsmasq"
+mkdir -p "$VT_STATE/nm"
+printf '[connection]\nid=lempi-ap\nuuid=uuid-lempi-ap\n\n[wifi-security]\nkey-mgmt=wpa-psk\npsk=oldpass99\n' \
+    > "$VT_STATE/nm/lempi-ap.nmconnection"
+export NM_UUID_MISMATCH=1
+OUT=$(printf 'newpassword9' | btctl ap-start Studio)
+unset NM_UUID_MISMATCH
+assert_in "$OUT" "could not set the access point key" "a failed ap-start is reported"
+if [ -f "$VT_STATE/nm/lempi-ap.nmconnection" ] && grep -q '^psk=oldpass99$' "$VT_STATE/nm/lempi-ap.nmconnection"; then
+    ok "the existing lempi-ap survives a failed ap-start"
+else bad "the existing lempi-ap survives a failed ap-start" "it was destroyed"; fi
+if [ -e "$VT_STATE/nm/lempi-ap-pending.nmconnection" ]; then bad "the pending profile is cleaned up" "it remains"; else ok "the pending profile is cleaned up"; fi
+teardown
+
 # A too-short AP password is refused before anything is created.
 setup
 export LEMPI_NM_DIR="$VT_STATE/nm" LEMPI_DNSMASQ_DIR="$VT_STATE/dnsmasq"

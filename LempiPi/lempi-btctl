@@ -104,6 +104,10 @@ set_psk() {
     _conn="$1"; _psk="$2"
     _uuid="$(nmcli -g connection.uuid connection show "$_conn" 2>/dev/null)"
     [ -n "$_uuid" ] || return 1
+    # Two profiles sharing the name give two uuids on two lines; refuse the
+    # ambiguity rather than edit whichever file `grep -l | head -1` picks
+    # `[SecurityReview3 R1a, minor]`.
+    [ "$_uuid" = "${_uuid%%$'\n'*}" ] || return 1
     _f="$(grep -l "^uuid=$_uuid\$" "$NM_DIR"/*.nmconnection 2>/dev/null | head -1)"
     [ -n "$_f" ] && [ -f "$_f" ] || return 1
     _esc="$_psk"; _lead=""
@@ -792,15 +796,24 @@ case "$VERB" in
         valid_psk "$password" || die "the access point key must be 8-63 printable characters or 64 hex digits"
         prev="$(active_wifi_conn)"
         change_id="ap$(date +%s)$$"
-        nmcli connection delete lempi-ap >/dev/null 2>&1
+        # Build the new AP under a temporary name, set its key, and only then
+        # swap it in for `lempi-ap` `[SecurityReview3 R1a]`. The old `lempi-ap`
+        # is the fallback `lempi-wifi-revert` counts on being able to bring up,
+        # so a failure here must never leave the node with none: nothing touches
+        # the existing `lempi-ap` until the replacement is complete.
+        nmcli connection delete lempi-ap-pending >/dev/null 2>&1
         # Throwaway psk on the command line; the real key goes into the keyfile.
-        nmcli connection add type wifi ifname wlan0 con-name lempi-ap autoconnect no ssid "$ssid" \
+        nmcli connection add type wifi ifname wlan0 con-name lempi-ap-pending autoconnect no ssid "$ssid" \
             802-11-wireless.mode ap 802-11-wireless.band bg \
             ipv4.method shared ipv4.addresses 10.42.0.1/24 \
             wifi-sec.key-mgmt wpa-psk wifi-sec.psk 00000000 \
             >/dev/null 2>&1 || die "could not create the access point profile"
-        # On failure, delete the profile so no `00000000` AP is left behind.
-        set_psk lempi-ap "$password" || { nmcli connection delete lempi-ap >/dev/null 2>&1; die "could not set the access point key"; }
+        set_psk lempi-ap-pending "$password" || { nmcli connection delete lempi-ap-pending >/dev/null 2>&1; die "could not set the access point key"; }
+        # The key is set: replace the old profile atomically -- drop the old,
+        # rename the pending one into its place. Only now is `lempi-ap` touched.
+        nmcli connection delete lempi-ap >/dev/null 2>&1
+        nmcli connection modify lempi-ap-pending connection.id lempi-ap >/dev/null 2>&1 \
+            || die "could not put the new access point profile in place"
         # The dnsmasq instance NetworkManager spawns for THIS shared
         # connection reads every file here automatically -- its own
         # extension point, not a guess `[SPEC034]`. `10.42.0.1` is not
