@@ -1029,7 +1029,7 @@ class Handler(BaseHTTPRequestHandler):
                 mdir = meshmod.mesh_dir(STATE["library"] or STATE["path"])
                 members = ({m["fingerprint"] for m in meshmod.roster(mdir)["members"]}
                            if meshmod.initialised(mdir) else set())
-                found = discovery.query("candidates", timeout=2.0)
+                found = discovery.query("candidates")
                 return self.send_json({"candidates": [dict(a, member=a["fingerprint"] in members) for a in found],
                                        "asked_at": time.strftime("%H:%M:%S")})
             if p.startswith("/intake/audio/"):

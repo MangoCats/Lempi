@@ -118,17 +118,26 @@ class MeshActivity : Activity() {
         try {
             java.net.DatagramSocket().use { s ->
                 s.broadcast = true
-                s.soTimeout = 2000
                 val q = JSONObject().put("lempi", 1).put("q", "hubs").put("nonce", nonce).toString().toByteArray()
-                s.send(java.net.DatagramPacket(q, q.size, java.net.InetAddress.getByName("255.255.255.255"), DISCOVERY_PORT))
+                val to = java.net.InetAddress.getByName("255.255.255.255")
                 val buf = ByteArray(4096)
-                val until = System.currentTimeMillis() + 2000
+                val start = System.currentTimeMillis()
+                val until = start + 3000
+                // Asked again at 0.5 s and 1.2 s under the same nonce: Wi-Fi drops
+                // broadcasts, measured at one in two on a Pi Zero [SPEC-DSC-010].
+                val due = mutableListOf(0L, 500L, 1200L)
                 while (System.currentTimeMillis() < until) {
+                    val now = System.currentTimeMillis() - start
+                    if (due.isNotEmpty() && now >= due[0]) {
+                        due.removeAt(0)
+                        s.send(java.net.DatagramPacket(q, q.size, to, DISCOVERY_PORT))
+                    }
+                    s.soTimeout = (if (due.isNotEmpty()) (due[0] - now).coerceIn(50L, 3000L) else (until - System.currentTimeMillis()).coerceAtLeast(50L)).toInt()
                     val p = java.net.DatagramPacket(buf, buf.size)
                     try {
                         s.receive(p)
                     } catch (_: java.net.SocketTimeoutException) {
-                        break
+                        continue
                     }
                     val a = try { JSONObject(String(p.data, 0, p.length)) } catch (_: Exception) { continue }
                     if (a.optString("nonce") == nonce && a.optString("a") == "hub") {

@@ -84,9 +84,27 @@ address, and joining still goes through the code comparison `[SPEC-MTR-130]`.
   key `ddc6 0c85`;
 - the Moto G found it as "“Home” — GMKTEC at 192.168.67.95 · hub ddc6 0c85",
   through Windows' firewall;
-- a query answered from the same machine shows a virtual adapter's address
-  (172.19.112.1), as a query from elsewhere never does.
+- with ee247d0 deployed, the four players answered as candidates, each with a
+  key made at its first start: bose `3398 fb55`, lempi02w ("LempiPiHost")
+  `f101 e6e2`, lp3-wifi ("lempiplay3") `7cf0 4ccf`, smartboardpc ("Smart")
+  `3509 b81f`.
+
+Two things the fleet taught, both now in the asker:
+
+**`[SPEC-DSC-050]` A query leaves from each of the machine's addresses.**
+Windows sends a broadcast to 255.255.255.255 out of one adapter only. The
+desktop chose a Hyper-V virtual one (172.19.112.1), so none of the players on
+192.168.67.0/24 heard the first queries. Sent from a socket bound to each
+local address, the query leaves by every adapter.
+
+**`[SPEC-DSC-060]` A query is repeated, at 0, 0.5 and 1.2 s, under one nonce.**
+Wi-Fi delivers broadcasts to a sleeping radio unreliably. lempi02w, a Pi Zero
+2 W, answered 5 queries in 10, while the others answered all 10. With the
+repeats, and three seconds to answer, all four answered 10 in 10. The phone
+repeats its search for hubs the same way. This settles the backoff SPEC049
+left open `[SPEC-MTR-910]`: a query is a person's click, so it is repeated
+within its three seconds and never re-sent on a schedule.
 
 ---
 
-**Traceability:** `[SPEC-DSC-010..040]` · builds `[SPEC-MTR-300..330]` · revises `[SPEC-MTR-310]` for hubs (`[SPEC-DSC-040]`)
+**Traceability:** `[SPEC-DSC-010..060]` · builds `[SPEC-MTR-300..330]` · revises `[SPEC-MTR-310]` for hubs (`[SPEC-DSC-040]`)

@@ -24,38 +24,87 @@ PORT = 13492
 KINDS = ("candidates", "hubs")
 
 
-def query(kind: str, timeout: float = 2.0, targets=("255.255.255.255",)) -> list[dict]:
-    """Every answer to one query, each with the address it came from."""
+def local_addresses() -> list[str]:
+    """This machine's own IPv4 addresses, loopback aside."""
+    have = {a[4][0] for a in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)}
+    try:                       # the one the default route leaves by; sends nothing
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))
+            have.add(s.getsockname()[0])
+    except OSError:
+        pass
+    return sorted(a for a in have if not a.startswith("127."))
+
+
+# A query is sent again at these offsets, under the same nonce. Measured
+# 2026-09-28: lempi02w, a Pi Zero 2 W on Wi-Fi, answered one query in two;
+# Wi-Fi delivers a broadcast to a sleeping radio unreliably, and answers to
+# one nonce are counted once however many times it is asked [GDE-NDS-910].
+REPEATS = (0.0, 0.5, 1.2)
+
+
+def query(kind: str, timeout: float = 3.0, targets=("255.255.255.255",)) -> list[dict]:
+    """Every answer to one query, each with the address it came from.
+
+    Sent once from each of this machine's addresses, not once from any: a
+    broadcast to 255.255.255.255 leaves Windows by one adapter only. Measured
+    2026-09-28 on the desktop: it chose a Hyper-V virtual adapter
+    (172.19.112.1), and none of the four players on 192.168.67.0/24 heard it.
+    Bound to each address, the query leaves by that adapter."""
     if kind not in KINDS:
         raise ValueError(f"not a query: {kind}")
+    import selectors
     nonce = secrets.token_hex(8)
     msg = json.dumps({"lempi": 1, "q": kind, "nonce": nonce}).encode()
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    s.bind(("0.0.0.0", 0))
+    sel = selectors.DefaultSelector()
+    socks = []
+    for addr in local_addresses() or ["0.0.0.0"]:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            s.bind((addr, 0))
+        except OSError:
+            s.close()
+            continue
+        s.setblocking(False)
+        sel.register(s, selectors.EVENT_READ)
+        socks.append(s)
     try:
-        for t in targets:
-            s.sendto(msg, (t, PORT))
-        found, until = {}, time.monotonic() + timeout
-        while (left := until - time.monotonic()) > 0:
-            s.settimeout(left)
-            try:
-                data, (ip, _) = s.recvfrom(4096)
-            except (socket.timeout, TimeoutError):
-                break
-            except OSError:
-                continue          # a port-unreachable from somewhere: not an answer
-            try:
-                a = json.loads(data)
-            except ValueError:
-                continue
-            # Only an answer to this query: the nonce is how an answer recorded
-            # earlier, or meant for someone else, is told apart.
-            if a.get("lempi") == 1 and a.get("nonce") == nonce and isinstance(a.get("fingerprint"), str):
-                found[(a["fingerprint"], ip)] = dict(a, address=ip)
-        return sorted(found.values(), key=lambda a: (a.get("name") or "", a["address"]))
+        found, start = {}, time.monotonic()
+        until, due = start + timeout, list(REPEATS)
+        while (left := until - time.monotonic()) > 0 and socks:
+            if due and time.monotonic() - start >= due[0]:
+                due.pop(0)
+                for s in socks:
+                    for t in targets:
+                        try:
+                            s.sendto(msg, (t, PORT))
+                        except OSError:
+                            pass
+            wait = min(left, max(0.0, due[0] - (time.monotonic() - start))) if due else left
+            for key, _ in sel.select(wait):
+                try:
+                    data, (ip, _) = key.fileobj.recvfrom(4096)
+                except OSError:
+                    continue      # a port-unreachable from somewhere: not an answer
+                try:
+                    a = json.loads(data)
+                except ValueError:
+                    continue
+                # Only an answer to this query: the nonce is how an answer
+                # recorded earlier, or meant for someone else, is told apart.
+                if a.get("lempi") == 1 and a.get("nonce") == nonce and isinstance(a.get("fingerprint"), str):
+                    found[(a["fingerprint"], ip)] = dict(a, address=ip)
+        # The same node heard on two adapters answers twice: one row, the LAN's.
+        by_node = {}
+        for a in sorted(found.values(), key=lambda a: a["address"].startswith("172.")):
+            by_node.setdefault(a["fingerprint"], a)
+        return sorted(by_node.values(), key=lambda a: (a.get("name") or "", a["address"]))
     finally:
-        s.close()
+        for s in socks:
+            sel.unregister(s)
+            s.close()
+        sel.close()
 
 
 def main(argv: list[str]) -> int:
