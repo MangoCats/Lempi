@@ -528,6 +528,9 @@ class Runner:
         if kind == "cd-rip":
             return self._cd_rip(job_id, target)
 
+        if kind == "cd-preview":
+            return self._cd_preview(job_id, target)
+
         if kind == "pending":
             return self._pending(job_id, target)
 
@@ -1128,7 +1131,24 @@ class Runner:
         tools = os.path.dirname(os.path.abspath(__file__))
         argv = [sys.executable, os.path.join(tools, "ingest_cd.py"), self.library,
                 "--folder", payload["folder"], "--commit", "--json"]
+        # The import page's choices [SPEC-CDI-050]: the edition a person
+        # picked, and the album's permanent folder. Whether a FLAC copy is kept
+        # is the Lempi Settings switch, which `ingest_cd.py` reads itself.
+        if payload.get("release"):
+            argv += ["--release", payload["release"]]
+        if payload.get("into"):
+            argv += ["--into", payload["into"]]
         self._run_single_stage(job_id, "ingest", argv)
+
+    def _cd_preview(self, job_id: int, target: str):
+        """`[SPEC-CDI-040]` -- `target` is `{"folder"}`: what the import page
+        shows before anything is done, from `ingest_cd.py` without `--commit`,
+        which encodes nothing and writes nothing. Its result is the job's."""
+        payload = json.loads(target)
+        tools = os.path.dirname(os.path.abspath(__file__))
+        argv = [sys.executable, os.path.join(tools, "ingest_cd.py"), self.library,
+                "--folder", payload["folder"], "--json"]
+        self._run_single_stage(job_id, "preview", argv)
 
     def _analyze_amplitude(self, job_id: int, target: str):
         """`[SPEC-SA-075]` -- `target` is a folder path, or empty for the

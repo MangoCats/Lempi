@@ -110,11 +110,33 @@ def test_failure_surfaces_as_failed(tmp: str) -> None:
     check(j["result"]["error"] == "no .cue or .toc file found", f"got {j['result']}")
 
 
+def test_choices_and_preview(tmp: str) -> None:
+    print("the page's choices reach ingest_cd.py; a preview never commits [SPEC-CDI-040..050]")
+    runner, db = _runner(tmp, "lib3")
+    seen = []
+
+    def fake_spawn(self, job_id, stage, argv):
+        seen.append((stage, argv))
+        return 0, '{"ok": true, "dry_run": true, "tracks": 2, "releases": []}'
+
+    runner._spawn = fake_spawn.__get__(runner, jobmod.Runner)
+    j = wait_for(runner, runner.submit("cd-rip", json.dumps(
+        {"folder": "C:/rips/x", "release": "rel-1", "into": "C:/Music/A/B (2001)"})))
+    argv = seen[-1][1]
+    check(argv[argv.index("--release") + 1] == "rel-1", f"the chosen edition, got {argv}")
+    check(argv[argv.index("--into") + 1] == "C:/Music/A/B (2001)", f"the album folder, got {argv}")
+    j = wait_for(runner, runner.submit("cd-preview", json.dumps({"folder": "C:/rips/x"})))
+    stage, argv = seen[-1]
+    check(stage == "preview" and "--commit" not in argv and "--json" in argv, f"a preview, got {argv}")
+    check(j["state"] == "done" and j["result"]["dry_run"] is True, f"its result is the job's, got {j}")
+
+
 def main() -> int:
     test_skipped_names_it()
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         test_folder_reaches_ingest_cd(tmp)
         test_failure_surfaces_as_failed(tmp)
+        test_choices_and_preview(tmp)
 
     print()
     if FAILED:

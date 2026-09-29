@@ -104,7 +104,154 @@ def fixture() -> sqlite3.Connection:
     return c
 
 
+def test_chosen_edition():
+    """[SPEC-CDI-040]: an edition a person chose is the answer -- CD-TEXT no
+    longer sends its tracks to review, and the decision says a person chose."""
+    tmpdir = tempfile.mkdtemp()
+    mp3_path = os.path.join(tmpdir, "dao.mp3")
+    with open(mp3_path, "wb") as f:
+        f.write(b"\0" * 128)
+    rel = {"id": "rel-C", "title": "Release C", "media": [{"tracks": [
+        {"position": n, "recording": {"id": f"rec-c{n}", "title": f"Song {n}",
+         "artist-credit": [{"artist": {"id": "art-c", "name": "Artist C"}}]}} for n in (1, 2, 3)]}]}
+    toc = cd_toc.DiscToc(tracks=TRACKS[:3], leadout_sector=0, source="eac-cue")
+    c = fixture()
+    try:
+        r = ingest_cd.commit_rip(c, "/rip", toc, mp3_path, MD5, "exact", [rel], None, None, chosen=True)
+        print("commit_rip: a chosen edition")
+        check(r["identified"] == 3 and r["ambiguous"] == 0, f"all three from the chosen edition, got {r}")
+        check(c.execute("SELECT COUNT(*) FROM id_checks").fetchone()[0] == 0,
+              "no down-select waits in review")
+        row = c.execute("SELECT outcome, detail FROM ingest_decisions WHERE stage='rip'").fetchone()
+        check(row["outcome"] == "chosen" and json.loads(row["detail"])["chosen_by"] == "person",
+              f"the decision records a person chose, got {tuple(row)}")
+    finally:
+        c.close()
+
+
+def test_preview_pieces():
+    """[SPEC-CDI-040..050]: what the preview shows of an edition, the folder it
+    proposes, and a name Windows accepts."""
+    c = fixture()
+    try:
+        c.execute("INSERT INTO passage_recordings VALUES (1, 'rec-1', 1.0, 'x')")
+        rel = dict(RELEASES[0], date="1994-05-10", country="US",
+                   **{"artist-credit": [{"name": "A", "joinphrase": " & "}, {"name": "B"}]})
+        s = ingest_cd.release_summary(rel, 2, c)
+        print("release_summary: one edition, as the preview shows it")
+        check(s["artist"] == "A & B" and s["year"] == "1994", f"credit and year, got {s}")
+        check(s["in_library"] == 1, f"one of its two recordings is already held, got {s['in_library']}")
+        check(s["folder"] == os.path.join("A & B", "Release A (1994)"), f"got {s['folder']!r}")
+    finally:
+        c.close()
+    check(ingest_cd.safe_name('AC/DC: "Live"?.') == "AC_DC_ _Live__", ingest_cd.safe_name('AC/DC: "Live"?.'))
+
+
+def test_files_on_disk():
+    """[SPEC-CDI-020], [SPEC-RIP-040]: the rip moves home whole, never over
+    another; the CUE names the MP3 after, with only its extension and type
+    changed -- in bytes, so a Windows code-page title survives."""
+    src, dst = tempfile.mkdtemp(), os.path.join(tempfile.mkdtemp(), "Artist", "Album")
+    cue = 'REM DISCID B90E090E\r\nPERFORMER "Bj\xf6rk"\r\nFILE "Bj\xf6rk - Post.wav" WAVE\r\n  TRACK 01 AUDIO\r\n'
+    with open(os.path.join(src, "Bj\xf6rk - Post.cue"), "wb") as f:
+        f.write(cue.encode("cp1252"))
+    for n in ("Bj\xf6rk - Post.wav", "Bj\xf6rk - Post.log"):
+        with open(os.path.join(src, n), "wb") as f:
+            f.write(b"x")
+    print("move_rip and point_cue_at")
+    ingest_cd.move_rip(src, dst)
+    check(sorted(os.listdir(dst)) == sorted(["Bj\xf6rk - Post.cue", "Bj\xf6rk - Post.wav", "Bj\xf6rk - Post.log"]),
+          f"everything moved, got {os.listdir(dst)}")
+    check(not os.path.exists(src), "and the emptied inbox folder is gone")
+    again = tempfile.mkdtemp()
+    with open(os.path.join(again, "Bj\xf6rk - Post.log"), "wb") as f:
+        f.write(b"y")
+    try:
+        ingest_cd.move_rip(again, dst)
+        check(False, "a clash is refused")
+    except FileExistsError:
+        check(open(os.path.join(dst, "Bj\xf6rk - Post.log"), "rb").read() == b"x", "a clash is refused, nothing overwritten")
+    ingest_cd.point_cue_at(os.path.join(dst, "Bj\xf6rk - Post.cue"))
+    got = open(os.path.join(dst, "Bj\xf6rk - Post.cue"), "rb").read()
+    check(got == cue.replace('.wav" WAVE', '.mp3" MP3').encode("cp1252"),
+          f"only the extension and type changed, in bytes: {got!r}")
+
+
+def test_keep_lossless_setting():
+    """[SPEC-CDI-058]: the Lempi Settings switch, off unless it says on."""
+    p = os.path.join(tempfile.mkdtemp(), "lempi.db")
+    c = sqlite3.connect(p)
+    c.executescript(SCHEMA + "CREATE TABLE player_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);")
+    c.commit()
+    print("keep_lossless_setting")
+    check(ingest_cd.keep_lossless_setting(p) is False, "unset: off")
+    c.execute("INSERT INTO player_settings VALUES ('keep_lossless_rips', '1', 'now')")
+    c.commit()
+    check(ingest_cd.keep_lossless_setting(p) is True, "set: on")
+    c.close()
+    check(ingest_cd.keep_lossless_setting(os.path.join(tempfile.mkdtemp(), "none.db")) is False,
+          "unreadable: off")
+
+
+def test_end_to_end():
+    """[SPEC-CDI-040], [SPEC-CDI-050], with a real WAV and ffmpeg: the preview
+    leaves the rip byte-for-byte as it was; the commit files it in its album
+    folder, records that path, removes the WAV and points the CUE at the MP3.
+    Only the Disc ID lookup is stubbed -- the one network call."""
+    import hashlib
+    import subprocess
+    if not ingest_cd.FFMPEG:
+        check(False, "end to end needs ffmpeg")
+        return
+    inbox = tempfile.mkdtemp()
+    wav = os.path.join(inbox, "Artist - Album.wav")
+    subprocess.run([ingest_cd.FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
+                    "-ar", "44100", "-ac", "2", wav], check=True)
+    with open(os.path.join(inbox, "Artist - Album.cue"), "w", encoding="utf-8", newline="\r\n") as f:
+        f.write('PERFORMER "Artist"\nTITLE "Album"\nFILE "Artist - Album.wav" WAVE\n'
+                '  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    INDEX 01 00:02:00\n')
+    rel = {"id": "rel-E", "title": "Album", "date": "2001", "artist-credit": [{"name": "Artist"}],
+           "media": [{"tracks": [{"position": n, "title": f"Song {n}", "length": 2000,
+                                  "recording": {"id": f"rec-e{n}", "title": f"Song {n}"}} for n in (1, 2)]}]}
+    db = os.path.join(tempfile.mkdtemp(), "lempi.db")
+    c = sqlite3.connect(db)
+    c.executescript(SCHEMA + "CREATE TABLE player_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);")
+    c.commit()
+    c.close()
+
+    def snapshot(d):
+        return {n: hashlib.sha256(open(os.path.join(d, n), "rb").read()).hexdigest() for n in sorted(os.listdir(d))}
+
+    old = ingest_cd.lookup_disc_id
+    ingest_cd.lookup_disc_id = lambda toc: ("exact", [rel])
+    try:
+        print("end to end: preview, then commit")
+        before = snapshot(inbox)
+        p = ingest_cd.do_ingest(db, inbox, commit=False)
+        check(snapshot(inbox) == before, "the preview changes nothing on disk -- no MP3 left behind")
+        check(p["tracks"] == 2 and p["releases"][0]["title"] == "Album", f"it shows the disc, got {p}")
+        check(p["folder"] == os.path.join("Artist", "Album (2001)"), f"and proposes the folder, got {p['folder']!r}")
+        home = os.path.join(tempfile.mkdtemp(), "Artist", "Album (2001)")
+        r = ingest_cd.do_ingest(db, inbox, commit=True, release="rel-E", into=home, keep_flac=False)
+        names = sorted(os.listdir(home))
+        check(names == ["Artist - Album.cue", "Artist - Album.mp3"], f"filed, WAV removed, got {names}")
+        check(r["identified"] == 2 and r.get("wav_removed"), f"both tracks identified, got {r}")
+        cue = open(os.path.join(home, "Artist - Album.cue"), encoding="utf-8").read()
+        check('FILE "Artist - Album.mp3" MP3' in cue, f"the CUE names the MP3: {cue!r}")
+        c = sqlite3.connect(db)
+        path = c.execute("SELECT path FROM files").fetchone()[0]
+        c.close()
+        check(path == os.path.join(home, "Artist - Album.mp3"), f"the catalogue names the album's home, got {path!r}")
+    finally:
+        ingest_cd.lookup_disc_id = old
+
+
 def main() -> int:
+    test_end_to_end()
+    test_chosen_edition()
+    test_preview_pieces()
+    test_files_on_disk()
+    test_keep_lossless_setting()
     # `commit_rip` stats the encoded file for the `files` row -- a real,
     # empty file is enough; identification never actually reads it because
     # `segment_dao.identify_recording` is monkeypatched below.

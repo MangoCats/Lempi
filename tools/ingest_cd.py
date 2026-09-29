@@ -18,7 +18,24 @@ down-select, unconditionally, for any grade. See `SPEC028 §3` and this
 session's own build-out plan for why that queue needed no changes at all
 to serve this case.
 
-    python tools/ingest_cd.py <db> --folder <rip-output-dir> [--commit] [--json]
+    python tools/ingest_cd.py <db> --folder <rip-output-dir> [--json]
+    python tools/ingest_cd.py <db> --folder <rip-output-dir> --commit
+        [--release MBID] [--into ALBUM-FOLDER] [--keep-flac | --no-keep-flac] [--json]
+
+**Without `--commit` it is a preview, and a true one** `[SPEC-CDI-040]`: the CUE,
+the log and the Disc ID lookup, every candidate edition with its track list and
+how much of it the library already holds -- nothing encoded, nothing written.
+Until 2026-09-29 the "dry run" encoded the whole MP3 and left it on disk first.
+
+`--release` is the edition a person chose from the preview: it is the answer,
+so no track of it waits in the review queue for a down-select. `--into` is the
+album's permanent folder; the rip is moved there before anything is recorded,
+so the catalogue names where the album lives, not the inbox it was ripped into
+`[SPEC-CDI-020]`. After the catalogue is written the WAV is removed
+`[SPEC-RIP-040]` -- it was left beside every album until 2026-09-29 -- with a
+FLAC copy made first if `--keep-flac`, or if the desktop player's Settings
+switch says so when neither flag is given `[SPEC-CDI-058]`. The CUE's `FILE`
+line is then pointed at the MP3, so the sheet still names a file that exists.
 """
 
 from __future__ import annotations
@@ -26,6 +43,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -86,6 +104,86 @@ def encode_to_mp3(wav_path: str, out_path: str) -> bool:
          "-c:a", "libmp3lame", "-q:a", "4", out_path],
         capture_output=True, timeout=1800)
     return r.returncode == 0 and os.path.exists(out_path)
+
+
+def encode_to_flac(wav_path: str, out_path: str) -> bool:
+    """The lossless copy kept when a person asked for one `[SPEC-CDI-058]`."""
+    if not FFMPEG:
+        return False
+    r = subprocess.run([FFMPEG, "-v", "error", "-y", "-i", wav_path, "-c:a", "flac", out_path],
+                       capture_output=True, timeout=1800)
+    return r.returncode == 0 and os.path.exists(out_path)
+
+
+def keep_lossless_setting(db_path: str) -> bool:
+    """The Lempi skin's switch, *keep a lossless FLAC copy of CD rips*, from the
+    desktop player's own settings `[SPEC-CDI-058]`. Off when unset, and off
+    when it cannot be read: keeping a copy is what a person asks for."""
+    try:
+        conn = lempi_db.connect(db_path, lempi_db.ROLE_LISTENER)
+        try:
+            row = conn.execute(
+                "SELECT value FROM player_settings WHERE key = 'keep_lossless_rips'").fetchone()
+        finally:
+            conn.close()
+    except Exception:                                          # noqa: BLE001
+        return False
+    return row is not None and row[0] == "1"
+
+
+_BAD_NAME = str.maketrans({c: "_" for c in '<>:"/\\|?*'})
+
+
+def safe_name(text: str) -> str:
+    """A folder name Windows accepts: no reserved characters, no trailing dot
+    or space."""
+    return (text or "").translate(_BAD_NAME).strip().rstrip(". ") or "Unknown"
+
+
+def proposed_folder(artist: str | None, album: str | None, year: str | None) -> str:
+    """`Artist\\Album (Year)`, relative to the music folder `[SPEC-CDI-050]`."""
+    title = safe_name(album or "Unknown album")
+    if year:
+        title = f"{title} ({year})"
+    return os.path.join(safe_name(artist or "Unknown artist"), title)
+
+
+def move_rip(folder: str, into: str) -> str:
+    """Move everything the rip left in `folder` to `into`, the album's
+    permanent home; returns `into`. Refuses to write over a file already there
+    -- an album folder that exists may hold another edition."""
+    os.makedirs(into, exist_ok=True)
+    names = [n for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n))]
+    clash = [n for n in names if os.path.exists(os.path.join(into, n))]
+    if clash:
+        raise FileExistsError(f"{into!r} already holds {clash[:3]}: not moved over")
+    for n in names:
+        shutil.move(os.path.join(folder, n), os.path.join(into, n))
+    try:
+        os.rmdir(folder)                        # only if the rip left it empty
+    except OSError:
+        pass
+    return into
+
+
+_CUE_FILE = re.compile(rb'^(\s*FILE\s+"[^"]*?)\.[A-Za-z0-9]+("\s+)\S+', re.I)
+
+
+def point_cue_at(cue_path: str, ext: str = ".mp3", kind: bytes = b"MP3") -> None:
+    """Point the CUE's first `FILE` line at the same name with `ext`, as `kind`.
+    Only the extension and the type change, in bytes: EAC may write the sheet
+    in the Windows code page rather than UTF-8, and the name stays exactly as it
+    wrote it. Once the WAV is gone, a sheet naming it would send any player that
+    opens it to a file that does not exist."""
+    with open(cue_path, "rb") as fh:
+        lines = fh.read().split(b"\n")
+    for i, line in enumerate(lines):
+        new, n = _CUE_FILE.subn(lambda m: m.group(1) + ext.encode() + m.group(2) + kind, line, count=1)
+        if n:
+            lines[i] = new
+            break
+    with open(cue_path, "wb") as fh:
+        fh.write(b"\n".join(lines))
 
 
 # -------------------------------------------------------------- disc lookup
@@ -166,6 +264,29 @@ def _artists_for(release: dict, position: int) -> list[tuple[str, str]]:
             if isinstance(a.get("artist"), dict) and a["artist"].get("id")]
 
 
+def release_summary(release: dict, track_count: int, conn=None) -> dict:
+    """One candidate edition as the preview shows it `[SPEC-CDI-040]`: who,
+    what, when, its track list for this disc, the folder it would be filed
+    under, and how many of its recordings the library already plays -- the
+    "already in the library" signal `[SPEC-CDI-045]`."""
+    credit = "".join((a.get("name") or "") + (a.get("joinphrase") or "")
+                     for a in release.get("artist-credit") or []).strip()
+    media = release.get("media") or []
+    medium = next((m for m in media if len(m.get("tracks") or []) == track_count), media[0] if media else {})
+    tracks = [{"position": t.get("position"), "title": t.get("title"), "length_ms": t.get("length")}
+              for t in medium.get("tracks") or []]
+    mbids = [((t.get("recording") or {}).get("id")) for t in medium.get("tracks") or []]
+    mbids = [m for m in mbids if m]
+    held = 0
+    if conn is not None and mbids:
+        q = f"SELECT COUNT(DISTINCT mbid) FROM passage_recordings WHERE mbid IN ({','.join('?' * len(mbids))})"
+        held = conn.execute(q, mbids).fetchone()[0]
+    year = (release.get("date") or "")[:4] or None
+    return {"id": release.get("id"), "title": release.get("title"), "artist": credit or None,
+            "year": year, "country": release.get("country"), "tracks": tracks,
+            "in_library": held, "folder": proposed_folder(credit, release.get("title"), year)}
+
+
 # -------------------------------------------------------------------- commit
 
 def _now() -> str:
@@ -174,11 +295,17 @@ def _now() -> str:
 
 def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
                audio_md5: str, disc_outcome: str, releases: list[dict],
-               rip_report: "cd_toc.RipReport | None", acoustid_key: str | None) -> dict:
+               rip_report: "cd_toc.RipReport | None", acoustid_key: str | None,
+               chosen: bool = False) -> dict:
     """Register the file, write TOC-exact passages, resolve each track's
     identity, and record every decision -- the CD-ripping analogue of
     `segment_dao.commit_segments()`, same shape, ground-truth boundaries
     instead of an inferred cascade `[SPEC-RIP-010]`.
+
+    `chosen`: `releases` is the one edition a person picked from the preview
+    `[SPEC-CDI-040]`. It is then the answer for every track it names -- CD-TEXT
+    no longer sends those to the review queue `[SPEC-RIP-066]`, since a person
+    has already looked.
     """
     st = os.stat(mp3_path)
     total_ms = toc.tracks[-1].end_ms if toc.tracks else 0
@@ -227,7 +354,7 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
 
         cd_text_title = track.title or toc.title
 
-        if cd_text_title:
+        if cd_text_title and not (chosen and len(candidates) == 1):
             # CD-TEXT is the default shown identity when the disc carries
             # it `[SPEC-RIP-066]` -- always through the placeholder/review
             # path (no stable artist mbid comes from CD-TEXT alone, so
@@ -308,18 +435,19 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
                 failed += 1
 
     # ------------------------------------------------------------- disc decision
+    certain = chosen or (disc_outcome == "exact" and len(releases) == 1)
     detail = {
         "track_count": toc.track_count, "format": toc.source,
         "candidates": len(releases),
-        "chosen": releases[0].get("id") if disc_outcome == "exact" and len(releases) == 1
-        else None,
+        "chosen": releases[0].get("id") if certain and releases else None,
+        "chosen_by": "person" if chosen else None,
+        "disc_id": cd_toc.musicbrainz_disc_id(toc),
         "titles": [r.get("title") for r in releases[:5]],
     }
     conn.execute(
         "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
         "VALUES (?1,'rip',?2,?3,?4,?5)",
-        (audio_md5, disc_outcome,
-         1.0 if disc_outcome == "exact" and len(releases) == 1 else None,
+        (audio_md5, "chosen" if chosen else disc_outcome, 1.0 if certain else None,
          json.dumps(detail), now))
 
     return {"tracks": toc.track_count, "identified": identified,
@@ -350,34 +478,71 @@ def _write_id_check(conn, passage_id: int, stored_mbid: str,
 
 # ---------------------------------------------------------------------- main
 
-def do_ingest(db_path: str, folder: str, commit: bool) -> dict:
-    import sqlite3
-
+def open_rip(folder: str):
+    """The rip in `folder`, parsed and checked, before anything is decided:
+    `(fmt, cue_path, toc, audio_path, rip_report)`."""
     fmt, toc_path = find_rip(folder)
     toc = cd_toc.parse_eac_cue(toc_path) if fmt == "eac" else cd_toc.parse_cdrdao_toc(toc_path)
     if not toc.tracks:
         raise ValueError(f"no tracks found in {toc_path!r}")
     if not toc.data_file:
         raise ValueError(f"{toc_path!r} does not name its own audio file")
-
     wav_path = os.path.join(folder, toc.data_file)
     if not os.path.exists(wav_path):
         raise FileNotFoundError(f"{toc_path!r} names {wav_path!r}, which does not exist")
-
     total_ms = audio_duration.probe_duration_ms(wav_path)
     if not total_ms:
         raise ValueError(f"could not decode {wav_path!r}")
     cd_toc.finalize_leadout(toc, int(round(total_ms)))
-
-    rip_report = None
     log_path = find_log(folder)
-    if fmt == "eac" and log_path:
-        rip_report = cd_toc.parse_eac_log(log_path)
+    rip_report = cd_toc.parse_eac_log(log_path) if fmt == "eac" and log_path else None
+    return fmt, toc_path, toc, wav_path, rip_report
 
+
+def rip_verdict(rip_report) -> dict | None:
+    """The log's word on the rip, per track `[SPEC-CDI-035]`."""
+    if rip_report is None:
+        return None
+    return {"all_ok": rip_report.all_ok,
+            "tracks": [{"number": t.number, "ok": t.ok, "detail": t.detail} for t in rip_report.tracks]}
+
+
+def preview(db_path: str, folder: str) -> dict:
+    """Everything the page shows before anything is done `[SPEC-CDI-040]` --
+    nothing encoded, nothing written."""
+    fmt, _cue, toc, wav_path, rip_report = open_rip(folder)
+    disc_outcome, releases = lookup_disc_id(toc)
+    conn = lempi_db.connect(db_path, lempi_db.ROLE_LIBRARY)
+    try:
+        rels = [release_summary(r, toc.track_count, conn) for r in releases[:8]]
+    finally:
+        conn.close()
+    cd_folder = proposed_folder(toc.performer, toc.title, None) if toc.title else None
+    return {"dry_run": True, "format": fmt, "audio": os.path.basename(wav_path),
+            "audio_bytes": os.path.getsize(wav_path), "tracks": toc.track_count,
+            "track_list": [{"number": t.number, "start_ms": t.start_ms, "end_ms": t.end_ms,
+                            "title": t.title, "performer": t.performer} for t in toc.tracks],
+            "cd_text": {"title": toc.title, "performer": toc.performer},
+            "disc_id": cd_toc.musicbrainz_disc_id(toc), "disc_outcome": disc_outcome,
+            "candidates": len(releases), "releases": rels, "rip": rip_verdict(rip_report),
+            "folder": rels[0]["folder"] if len(rels) == 1 else cd_folder}
+
+
+def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = None,
+              into: str | None = None, keep_flac: bool | None = None) -> dict:
+    import sqlite3  # noqa: F401  -- the connection below is lempi_db's
+
+    if not commit:
+        return preview(db_path, folder)
+
+    fmt, _cue, toc, wav_path, rip_report = open_rip(folder)
+    if keep_flac is None:
+        keep_flac = keep_lossless_setting(db_path)
+
+    say("encoding the MP3 ...")
     mp3_path = os.path.splitext(wav_path)[0] + ".mp3"
     if not encode_to_mp3(wav_path, mp3_path):
         raise RuntimeError(f"ffmpeg failed to encode {wav_path!r}")
-
     audio_md5 = ingest_folder.audio_md5(mp3_path)
     if audio_md5 is None:
         raise RuntimeError(f"could not hash the encoded {mp3_path!r}")
@@ -386,27 +551,51 @@ def do_ingest(db_path: str, folder: str, commit: bool) -> dict:
     conn = lempi_db.connect(db_path, lempi_db.ROLE_LIBRARY, writable=True, timeout=60)
     conn.execute("PRAGMA busy_timeout = 60000")
     conn.execute("PRAGMA foreign_keys = ON")
-    existing = conn.execute(
-        "SELECT file_id FROM files WHERE audio_md5=?1", (audio_md5,)).fetchone()
-    if existing is not None:
-        conn.close()
-        raise RuntimeError(
-            f"a file with this audio already exists (file_id={existing[0]}) -- "
-            f"this disc appears to already be in the library")
+    try:
+        existing = conn.execute(
+            "SELECT file_id, path FROM files WHERE audio_md5=?1", (audio_md5,)).fetchone()
+        if existing is not None:
+            raise RuntimeError(
+                f"this disc is already in the library as {existing[1]!r} (file_id={existing[0]})")
 
-    disc_outcome, releases = lookup_disc_id(toc)
-    key = secret.acoustid_key(required=False)
+        say("looking the disc up ...")
+        disc_outcome, releases = lookup_disc_id(toc)
+        if release:
+            releases = [r for r in releases if r.get("id") == release]
+            if not releases:
+                raise ValueError(f"release {release} is not among this disc's matches")
 
-    result: dict = {}
-    if commit:
+        if into:
+            say(f"filing it in {into} ...")
+            folder = move_rip(folder, into)
+            wav_path = os.path.join(folder, os.path.basename(wav_path))
+            mp3_path = os.path.join(folder, os.path.basename(mp3_path))
+
+        say("writing the album ...")
         conn.execute("BEGIN IMMEDIATE")
-        result = commit_rip(conn, folder, toc, mp3_path, audio_md5,
-                             disc_outcome, releases, rip_report, key)
+        result = commit_rip(conn, folder, toc, mp3_path, audio_md5, disc_outcome, releases,
+                            rip_report, secret.acoustid_key(required=False), chosen=bool(release))
         conn.commit()
-    else:
-        result = {"tracks": toc.track_count, "disc_outcome": disc_outcome,
-                  "candidates": len(releases), "dry_run": True}
-    conn.close()
+    finally:
+        conn.close()
+
+    # The catalogue is written; only now is the WAV touched, and only once
+    # anything asked to be kept from it has been made `[SPEC-RIP-040]`.
+    result["folder"] = folder
+    result["flac"] = None
+    if keep_flac:
+        say("keeping a lossless FLAC copy ...")
+        flac_path = os.path.splitext(wav_path)[0] + ".flac"
+        if not encode_to_flac(wav_path, flac_path):
+            result["wav_kept"] = wav_path
+            say(f"the FLAC copy failed; the WAV is kept at {wav_path}")
+            return result
+        result["flac"] = flac_path
+    os.remove(wav_path)
+    result["wav_removed"] = True
+    cue = next((os.path.join(folder, n) for n in os.listdir(folder) if n.lower().endswith(".cue")), None)
+    if cue:
+        point_cue_at(cue)
     return result
 
 
@@ -418,11 +607,18 @@ def main() -> int:
                      help="informational only -- the setting lives in EAC/cdrdao "
                           "itself under the person-assisted flow [SPEC-RIP-050]")
     ap.add_argument("--commit", action="store_true")
+    ap.add_argument("--release", help="the edition chosen from the preview (a MusicBrainz release id)")
+    ap.add_argument("--into", help="the album's permanent folder; the rip is moved there first")
+    flac = ap.add_mutually_exclusive_group()
+    flac.add_argument("--keep-flac", dest="keep_flac", action="store_true", default=None,
+                      help="keep a lossless FLAC copy (default: the Lempi Settings switch)")
+    flac.add_argument("--no-keep-flac", dest="keep_flac", action="store_false")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
     try:
-        result = do_ingest(args.db, args.folder, args.commit)
+        result = do_ingest(args.db, args.folder, args.commit, release=args.release,
+                           into=args.into, keep_flac=args.keep_flac)
     except Exception as e:                                    # noqa: BLE001
         if args.json:
             print(json.dumps({"ok": False, "error": str(e)}))
@@ -435,14 +631,19 @@ def main() -> int:
     else:
         if result.get("dry_run"):
             say(f"{result['tracks']} track(s); disc {result['disc_outcome']} "
-                f"({result['candidates']} candidate release(s)) -- dry run, "
+                f"({result['candidates']} candidate release(s)) -- a preview, "
                 f"nothing written; re-run with --commit")
+            for r in result["releases"]:
+                say(f"  {r['id']}  {r['artist']} - {r['title']} ({r['year'] or '?'}, "
+                    f"{r['country'] or '?'})  {r['in_library']}/{len(r['tracks'])} already held")
         else:
             say(f"{result['tracks']} track(s): {result['identified']} identified, "
                 f"{result['ambiguous']} ambiguous (in the review queue), "
                 f"{result['unidentified']} unidentified, "
                 f"{result['verification_failed']} verification failure(s) "
                 f"(disc: {result['disc_outcome']}, {result['candidates']} candidate(s))")
+            say(f"in {result['folder']}; WAV {'removed' if result.get('wav_removed') else 'kept'}"
+                + (f"; FLAC kept at {result['flac']}" if result.get("flac") else ""))
     return 0
 
 
