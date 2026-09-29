@@ -144,44 +144,53 @@ def parse_eac_cue(path: str) -> DiscToc:
                 title=cur_title, performer=cur_performer))
         cur_track, cur_title, cur_performer, cur_indexes = None, None, None, {}
 
-    with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
-        for line in f:
-            m = _CUE_FILE.match(line)
-            if m and data_file is None:
-                # A single-file DAO image is the shape both the
-                # person-assisted flow and this module assume; a cue sheet
-                # naming more than one `FILE` (per-track rips) is read as
-                # its first reference only -- multi-file cue support is not
-                # in this pass's scope.
-                data_file = m.group(1)
-                continue
-            m = _CUE_TRACK.match(line)
-            if m:
-                flush()
-                cur_track = int(m.group(1))
-                seen_track_line = True
-                continue
-            m = _CUE_INDEX.match(line)
-            if m and cur_track is not None:
-                idx = int(m.group(1))
-                ms = frames_to_ms(int(m.group(2)), int(m.group(3)), int(m.group(4)))
-                cur_indexes[idx] = ms
-                continue
-            m = _CUE_TITLE.match(line)
-            if m:
-                if cur_track is not None:
-                    cur_title = m.group(1)
-                elif not seen_track_line:
-                    disc_title = m.group(1)
-                continue
-            m = _CUE_PERFORMER.match(line)
-            if m:
-                if cur_track is not None:
-                    cur_performer = m.group(1)
-                elif not seen_track_line:
-                    disc_performer = m.group(1)
-                continue
-        flush()
+    # UTF-8 when it is, else the Windows code page the rippers write in: a
+    # CUERipper sheet measured 2026-09-29 was cp1252, and read as UTF-8 its
+    # "I’m Gonna Be Strong" became "I�m" -- and a name with an accent would
+    # stop matching the audio file on disk.
+    with open(path, "rb") as f:
+        raw = f.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1252", errors="replace")
+    for line in text.splitlines(keepends=True):
+        m = _CUE_FILE.match(line)
+        if m and data_file is None:
+            # A single-file DAO image is the shape both the
+            # person-assisted flow and this module assume; a cue sheet
+            # naming more than one `FILE` (per-track rips) is read as
+            # its first reference only -- multi-file cue support is not
+            # in this pass's scope.
+            data_file = m.group(1)
+            continue
+        m = _CUE_TRACK.match(line)
+        if m:
+            flush()
+            cur_track = int(m.group(1))
+            seen_track_line = True
+            continue
+        m = _CUE_INDEX.match(line)
+        if m and cur_track is not None:
+            idx = int(m.group(1))
+            ms = frames_to_ms(int(m.group(2)), int(m.group(3)), int(m.group(4)))
+            cur_indexes[idx] = ms
+            continue
+        m = _CUE_TITLE.match(line)
+        if m:
+            if cur_track is not None:
+                cur_title = m.group(1)
+            elif not seen_track_line:
+                disc_title = m.group(1)
+            continue
+        m = _CUE_PERFORMER.match(line)
+        if m:
+            if cur_track is not None:
+                cur_performer = m.group(1)
+            elif not seen_track_line:
+                disc_performer = m.group(1)
+            continue
+    flush()
 
     no_real_cd_text = disc_title == "Unknown Title" and disc_performer == "Unknown Artist"
     if disc_title == "Unknown Title":

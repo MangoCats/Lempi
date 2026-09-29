@@ -339,6 +339,18 @@ def main() -> int:
     check(bad_report.tracks[1].ok is False,
           f"track 2 'could not be verified' must read as not-ok, got {bad_report.tracks[1]}")
 
+    # A sheet in the Windows code page, as CUERipper wrote one 2026-09-29:
+    # the title's curly apostrophe and the file name's accent both survive.
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "rip.cue")
+        with open(p, "wb") as f:
+            f.write('PERFORMER "Bj\xf6rk"\r\nTITLE "Post"\r\nFILE "Bj\xf6rk - Post.wav" WAVE\r\n'
+                    '  TRACK 01 AUDIO\r\n    TITLE "I’m Army of Me"\r\n    INDEX 01 00:00:00\r\n'
+                    .encode("cp1252"))
+        toc = cd_toc.parse_eac_cue(p)
+    check(toc.data_file == "Bj\xf6rk - Post.wav", f"the audio's name as written: {toc.data_file!r}")
+    check(toc.tracks[0].title == "I’m Army of Me", f"the title as written: {toc.tracks[0].title!r}")
+
     # EAC's own per-track strings [SPEC-CDI-035]: a mismatch is a failure in
     # either word order; a track AccurateRip has never seen is not.
     with tempfile.TemporaryDirectory() as d:
