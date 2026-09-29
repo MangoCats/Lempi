@@ -38,8 +38,12 @@ Open **EAC → Drive Options…** (F10).
   finds.
 - On **Offset / Speed**, tick **Use read sample offset correction** and press
   **Detect read sample offset correction…** with a popular CD in the drive. It
-  finds your drive's offset by comparing with other people's rips. A value of
-  0 almost always means this step has not been done.
+  finds your drive's offset by comparing with other people's rips, so it needs
+  a disc other people have ripped -- try two or three well-known ones. A value
+  of 0 almost always means this step has not been done. Every drive model's
+  offset is also listed at
+  [accuraterip.com/driveoffsets.htm](http://www.accuraterip.com/driveoffsets.htm),
+  to type in, or to check what detection found.
 - On the same tab, tick **Use AccurateRip with this drive**, and **CD-Text Read
   capable drive** if your drive supports it.
 
@@ -50,10 +54,12 @@ Open **EAC → EAC Options…** (F9), **Tools** tab, and tick:
 - **Automatically write status report after extraction** -- the log is how
   Vipunen knows the rip is finished and whether it is good.
 - **Append checksum to status report** -- proves the log was not edited.
-- **Create log files always in english language** -- Vipunen reads the log's
-  English wording.
 - **Use CD-Text information in CUE sheet generation** -- puts the disc's own
   titles in the CUE sheet, for discs MusicBrainz does not know.
+
+Then, on the **General** tab of the same window, tick **Create log files always
+in english language** -- Vipunen reads the log's English wording. (Not on the
+Tools tab, where the other log settings are.)
 
 ### 4. Where rips go
 

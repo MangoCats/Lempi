@@ -59,7 +59,7 @@ BEFORE = {"Extraction Options": {"DirectoryUse": b"\0\0\0\0", "DirectorySpecific
           "StartUp Options": {"CreateEnglishLogFile": b"\0"},
           "drives": {DRIVE: {"UseAccurateRip": b"\xff", "SampleOffset": b"\0\0\0\0"}}}
 INBOX = "C:\\Users\\someone\\Music\\_Rips"
-AFTER = {"Extraction Options": {"DirectoryUse": b"\x01\0\0\0", "DirectorySpecification": INBOX + "\\",
+AFTER = {"Extraction Options": {"DirectoryUse": b"\0\0\0\0", "DirectorySpecification": INBOX + "\\",
                                 "AutoSaveStatus": b"\xff", "AddChecksumLogFile": b"\xff", "AddCDTextToCUESheet": b"\xff"},
          "StartUp Options": {"CreateEnglishLogFile": b"\xff"},
          "drives": {DRIVE: {"UseAccurateRip": b"\xff", "SampleOffset": (6).to_bytes(4, "little", signed=True)}}}
@@ -73,6 +73,11 @@ def test_setup_checks():
           f"the desktop as it was: five to fix, got {fix}")
     check(before[f"secure:{DRIVE}"]["ok"] is None, "secure mode waits for calibration, never guessed")
     check(before["inbox"]["detail"].startswith("EAC's folder is C:\\tmp\\eac-test"), before["inbox"]["detail"])
+    asks = {k: dict(v) for k, v in AFTER.items()}
+    asks["Extraction Options"]["DirectoryUse"] = b"\x01\0\0\0"
+    inb = next(c for c in ci.checks(asks, INBOX, installed=True, ffmpeg=True) if c["key"] == "inbox")
+    check(inb["ok"] is False and "ask every time" in inb["detail"],
+          f"the right folder but EAC asking every time is not done: {inb}")
     after = [c for c in ci.checks(AFTER, INBOX, installed=True, ffmpeg=True) if c["ok"] is False]
     check(not after, f"after the guide's setup, nothing to fix: {[c['key'] for c in after]}")
     none = ci.checks(None, INBOX, installed=False, ffmpeg=False)

@@ -378,11 +378,17 @@ def checks(eac: dict | None, inbox_path: str, *, installed: bool, ffmpeg: bool) 
         one, any case -- on whatever machine this runs, since EAC's always is."""
         return str(p or "").replace("\\", "/").rstrip("/").lower()
     same = bool(ex.get("DirectorySpecification")) and win(ex.get("DirectorySpecification")) == win(inbox_path)
-    use = _on(ex.get("DirectoryUse"))
-    add("inbox", "Rips go to the inbox", True if same and use else (None if same else False),
+    # `DirectoryUse` is 0 when *Use this directory* is chosen -- observed
+    # 2026-09-29 with it just chosen, and consistent with the 2026-09-03 test
+    # rip, which landed in the configured folder while it read 0. So any other
+    # value is a different choice (asking every time), not the one wanted.
+    use = ex.get("DirectoryUse")
+    chosen = use is not None and not _on(use)
+    add("inbox", "Rips go to the inbox", same and chosen,
         f"In EAC Options, Directories: choose Use this directory, and set it to {inbox_path}.", "inbox",
-        detail=None if same and use else ("the folder is right; confirm Use this directory is chosen"
-                                          if same else f"EAC's folder is {ex.get('DirectorySpecification') or 'not set'}"))
+        detail=None if same and chosen else (
+            "the folder is right, but EAC is set to ask every time; choose Use this directory"
+            if same else f"EAC's folder is {ex.get('DirectorySpecification') or 'not set'}"))
     for key, name, label, fix in (
             ("AutoSaveStatus", "log", "The status report is written after each rip",
              "In EAC Options, Tools: tick Automatically write status report after extraction."),
@@ -392,7 +398,7 @@ def checks(eac: dict | None, inbox_path: str, *, installed: bool, ffmpeg: bool) 
              "In EAC Options, Tools: tick Use CD-Text information in CUE sheet generation.")):
         add(name, label, bool(_on(ex.get(key))), fix, "log")
     add("english", "The status report is in English", bool(_on(st.get("CreateEnglishLogFile"))),
-        "In EAC Options, Tools: tick Create log files always in english language.", "log")
+        "In EAC Options, General: tick Create log files always in english language.", "log")
     drives = eac.get("drives") or {}
     if not drives:
         add("drive", "A drive is set up in EAC", False,
