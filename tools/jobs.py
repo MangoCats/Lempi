@@ -531,6 +531,12 @@ class Runner:
         if kind == "cd-preview":
             return self._cd_preview(job_id, target)
 
+        if kind == "split-find":
+            return self._split_find(job_id, target)
+
+        if kind == "split-preview":
+            return self._split_preview(job_id, target)
+
         if kind == "pending":
             return self._pending(job_id, target)
 
@@ -1139,6 +1145,28 @@ class Runner:
         if payload.get("into"):
             argv += ["--into", payload["into"]]
         self._run_single_stage(job_id, "ingest", argv)
+
+    def _split_find(self, job_id: int, target: str):
+        """`[SPEC-CDI-060]` -- `target` is `{"file", "query"?}`: the releases an
+        album file may hold, each disc ranked by how well its length fits.
+        Writes only MusicBrainz's answers into the catalogue's cache."""
+        payload = json.loads(target)
+        tools = os.path.dirname(os.path.abspath(__file__))
+        argv = [sys.executable, os.path.join(tools, "split_album.py"), self.library,
+                "--file", payload["file"], "--json"]
+        if payload.get("query"):
+            argv += ["--query", payload["query"]]
+        self._run_single_stage(job_id, "find", argv)
+
+    def _split_preview(self, job_id: int, target: str):
+        """`[SPEC-CDI-060]` -- `target` is `{"file", "expect"}`: where
+        `segment_dao.py` would cut, given the chosen disc's lengths. Prints
+        only; the split itself is the `segment-dao` job."""
+        payload = json.loads(target)
+        tools = os.path.dirname(os.path.abspath(__file__))
+        argv = [sys.executable, os.path.join(tools, "segment_dao.py"), self.library,
+                "--file", payload["file"], "--expect", str(payload["expect"]), "--json"]
+        self._run_single_stage(job_id, "preview", argv)
 
     def _cd_preview(self, job_id: int, target: str):
         """`[SPEC-CDI-040]` -- `target` is `{"folder"}`: what the import page

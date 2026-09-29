@@ -32,6 +32,7 @@ import html
 import http.client
 import json
 import os
+import re
 import socketserver
 import sqlite3
 import subprocess
@@ -729,6 +730,37 @@ def import_state() -> dict:
             "rips": cd_import.scan(inbox)}
 
 
+def split_files(conn, q: str, limit: int = 40) -> list:
+    """Library files matching `q` by path, artist or album, longest first,
+    with how many tracks each already holds `[SPEC-CDI-060]`. A search, not a
+    list of guesses: the library's long single-passage files turned out to be
+    long songs, not unsplit albums (2026-09-29)."""
+    q = (q or "").strip()
+    if len(q) < 2:
+        return []
+    like = f"%{q}%"
+    rows = conn.execute(
+        "SELECT f.file_id, f.path, f.duration_ms, t.artist, t.album, "
+        "       (SELECT COUNT(*) FROM passages p WHERE p.file_id = f.file_id AND p.kind = 'radio') "
+        "FROM files f LEFT JOIN file_tags t ON t.file_id = f.file_id "
+        "WHERE f.path LIKE ?1 OR t.artist LIKE ?1 OR t.album LIKE ?1 "
+        "ORDER BY f.duration_ms DESC LIMIT ?2", (like, limit)).fetchall()
+    return [{"file_id": r[0], "path": r[1], "duration_ms": r[2], "artist": r[3], "album": r[4],
+             "tracks": r[5]} for r in rows]
+
+
+def file_passages(conn, path: str) -> list:
+    """A file's tracks as the split left them, each with the title it was
+    identified as -- for the page's links into the player's editor."""
+    rows = conn.execute(
+        "SELECT p.passage_id, p.start_ms, p.end_ms, "
+        "       (SELECT r.title FROM passage_recordings pr JOIN recordings r ON r.mbid = pr.mbid "
+        "        WHERE pr.passage_id = p.passage_id LIMIT 1) "
+        "FROM passages p JOIN files f ON f.file_id = p.file_id "
+        "WHERE f.path = ?1 AND p.kind = 'radio' ORDER BY p.start_ms", (path,)).fetchall()
+    return [{"passage_id": r[0], "start_ms": r[1], "end_ms": r[2], "title": r[3]} for r in rows]
+
+
 def system_status() -> dict:
     runner = STATE["jobs"]
     active = None
@@ -1131,6 +1163,12 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/import/guide":
                 # [SPEC-CDI-070]: GUIDE037, rendered for the panel -- one source.
                 return self.send_json({"html": cd_import.guide_html(), "anchors": cd_import.ANCHORS})
+            if p == "/api/import/files":
+                # [SPEC-CDI-060]: the album files a person can split, by what
+                # they type -- the library's own files, read only.
+                return self.send_json(split_files(self._db(), (qs.get("q") or [""])[0]))
+            if p == "/api/import/split/passages":
+                return self.send_json(file_passages(self._db(), (qs.get("file") or [""])[0]))
             if p == "/api/import/state":
                 # [SPEC-CDI-025..035]: EAC's setup ticked off, and the rips in
                 # the inbox. Read-only: a refresh every few seconds is harmless.
@@ -1320,6 +1358,21 @@ class Handler(BaseHTTPRequestHandler):
                 job = STATE["jobs"].submit("cd-rip", json.dumps(
                     {"folder": folder, "release": b.get("release") or None, "into": into}))
                 return self.send_json({"job_id": job, "into": into})
+            if p in ("/api/import/split/find", "/api/import/split/preview", "/api/import/split/commit"):
+                # [SPEC-CDI-060]: find the album's release; show the cuts; split.
+                b = self.json_body() or {}
+                path = b.get("file") or ""
+                if not self._db().execute("SELECT 1 FROM files WHERE path = ?1", (path,)).fetchone():
+                    return self.send_json({"error": "that file is not in the library"}, code=400)
+                if p.endswith("/find"):
+                    job = STATE["jobs"].submit("split-find", json.dumps({"file": path, "query": b.get("query")}))
+                    return self.send_json({"job_id": job})
+                expect = str(b.get("expect") or "")
+                if not re.fullmatch(r"\d+(\.\d+)?(,\d+(\.\d+)?)*", expect):
+                    return self.send_json({"error": "the track lengths, in seconds, separated by commas"}, code=400)
+                kind = "split-preview" if p.endswith("/preview") else "segment-dao"
+                job = STATE["jobs"].submit(kind, json.dumps({"file": path, "expect": expect}))
+                return self.send_json({"job_id": job})
             if p == "/api/induct/propose":
                 body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 folder = (json.loads(body or b"{}") or {}).get("folder", "")

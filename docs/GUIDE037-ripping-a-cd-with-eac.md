@@ -103,6 +103,20 @@ off unless you turn it on, and it applies to every rip after that.
 - Anything Vipunen could not identify for certain waits in the **review** queue,
   linked from the card.
 
+## Splitting an album file
+
+An album that came in as one file, with no CUE sheet beside it, plays as one
+long track. On the import page, under **Split an album file**:
+
+1. Type part of its artist, album or file name and press **find**, then **split
+   this** beside the file.
+2. Vipunen looks the album up. The edition closest to the file's length is first
+   and already chosen; if none fits, change the search words and search again.
+3. Press **Show where it would be cut**. Each cut is listed beside the track it
+   should be, with how many seconds it is off.
+4. Press **Split it**. Vipunen names each track by its sound, then lists them;
+   open any in Lempi's editor to move a cut that is not quite right.
+
 ## When something goes wrong
 
 - **No card appears** -- check the Directories setting (step 4) points at the

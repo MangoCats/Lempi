@@ -899,17 +899,20 @@ def main() -> int:
             for i, (s, e) in enumerate(spans, 1):
                 say(f"  {i:3d}  {s/60:6.2f}–{e/60:6.2f} min   ({e-s:6.1f}s)")
 
+        # Where each cut falls, in seconds -- what the import page draws against
+        # the release's own track list before anything is written [SPEC-CDI-060].
+        where = [[round(s, 3), round(e, 3)] for s, e in spans]
         if args.commit:
             rc = do_commit(args.db, args.file, spans, decision)
             if args.json:
                 say(json.dumps({"ok": rc == 0, "tracks": len(spans),
                                 "stage": decision.get("stage"),
-                                "confidence": decision.get("confidence")}))
+                                "confidence": decision.get("confidence"), "spans": where}))
             return rc
         if args.json:
             say(json.dumps({"ok": True, "tracks": len(spans),
                             "stage": decision.get("stage"),
-                            "confidence": decision.get("confidence")}))
+                            "confidence": decision.get("confidence"), "spans": where}))
         return 0
     say(__doc__)
     return 2

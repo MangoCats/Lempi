@@ -75,8 +75,9 @@ from choose_release import name_match  # noqa: E402  -- reused, not re-derived
 from fetch_releases import get as mb_get, RATE_S, CACHE_DDL  # noqa: E402
 
 SOURCE = "review:folder_release_match"
-SEARCH_BASE = "https://musicbrainz.org/ws/2/release"
-DETAIL_BASE = "https://musicbrainz.org/ws/2/release"
+# `LEMPI_MUSICBRAINZ_URL` points both elsewhere -- a test's own server.
+SEARCH_BASE = os.environ.get("LEMPI_MUSICBRAINZ_URL", "https://musicbrainz.org").rstrip("/") + "/ws/2/release"
+DETAIL_BASE = SEARCH_BASE
 DETAIL_INC = "media+recordings+artist-credits+release-groups"
 MAX_CANDIDATES = 5   # full-detail fetches per discovery run -- each one is a
                       # real, rate-limited MusicBrainz request

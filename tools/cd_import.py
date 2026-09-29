@@ -144,6 +144,7 @@ ANCHORS = {
     "rip": "ripping-a-disc",
     "add": "adding-it-in-vipunen",
     "after": "afterwards",
+    "split": "splitting-an-album-file",
     "trouble": "when-something-goes-wrong",
 }
 

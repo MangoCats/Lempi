@@ -69,6 +69,16 @@
       <h2>Just added <button class="help" data-guide="after" title="Afterwards">?</button></h2>
       <div id="added"></div>
     </div>
+
+    <h2>Split an album file <button class="help" data-guide="split" title="Splitting an album file">?</button></h2>
+    <p class="steps">An album that arrived as one file -- with no CUE sheet -- plays as one long
+      track. Find it, pick which album it is, check where it would be cut, then split it.</p>
+    <div class="controls">
+      <input type="search" id="splitq" placeholder="artist, album or file name" style="min-width:24rem">
+      <button class="chip" id="splitsearch">find</button>
+    </div>
+    <div id="splitfiles"></div>
+    <div id="splitwork"></div>
   </div>
 
   <aside id="guide" aria-label="How to">
@@ -259,6 +269,111 @@ function done(job, into, rel, area) {
       ? S.el('p', {}, S.el('a', { href: `${PLAYER}/review`, target: '_blank', text: 'Open the review queue' })) : null,
     S.el('div', { class: 'controls' }, reload, send, said, help('after')),
     S.el('p', { class: 'steps', text: 'A speaker plays an album only once its audio has been sent to it.' }));
+}
+
+// ------------------------------------------------- an album file, split [SPEC-CDI-060]
+const post = async (url, body) => (await fetch(url, { method: 'POST',
+  headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+const minutes = ms => `${Math.round((ms || 0) / 60000)} min`;
+const tail = p => p.split(/[\\/]/).slice(-3).join(' / ');
+
+async function splitSearch() {
+  const q = document.getElementById('splitq').value.trim();
+  const box = document.getElementById('splitfiles');
+  document.getElementById('splitwork').replaceChildren();
+  const files = await S.get('/api/import/files?q=' + encodeURIComponent(q));
+  if (!files.length) return box.replaceChildren(S.el('p', { class: 'empty', text: 'No file matches.' }));
+  box.replaceChildren(S.el('div', { class: 'list' }, ...files.map(f => {
+    const b = S.el('button', { class: 'chip', text: 'split this' });
+    b.onclick = () => splitFind(f);
+    return S.el('div', { style: 'display:flex;gap:.6rem;align-items:center;white-space:normal' },
+      S.el('span', { style: 'flex:1', text: tail(f.path) }),
+      S.el('span', { text: `${minutes(f.duration_ms)} · ${f.tracks} track${f.tracks === 1 ? '' : 's'}` }), b);
+  })));
+}
+document.getElementById('splitsearch').onclick = splitSearch;
+document.getElementById('splitq').onkeydown = e => { if (e.key === 'Enter') splitSearch(); };
+
+async function splitFind(f, query) {
+  const work = document.getElementById('splitwork');
+  work.replaceChildren(S.el('h3', { text: tail(f.path) }),
+    S.el('p', { class: 'empty', text: 'Looking the album up on MusicBrainz…' }));
+  if (f.tracks > 1) work.append(S.el('p', { class: 'verdict note',
+    text: `This file is already split into ${f.tracks} tracks. Splitting it again replaces them.` }));
+  const r = await post('/api/import/split/find', { file: f.path, query });
+  if (r.error) return S.fail(work, new Error(r.error));
+  S.watchJob(r.job_id, S.el('div'), job => splitChoose(f, job.result || {}, work));
+}
+
+function splitChoose(f, res, work) {
+  if (!res.ok) return S.fail(work, new Error(res.error || 'the search failed'));
+  const q = S.el('input', { type: 'search', value: res.query || '', style: 'min-width:24rem' });
+  const again = S.el('button', { class: 'chip', text: 'search again' });
+  again.onclick = () => splitFind(f, q.value.trim());
+  const pick = S.el('div');
+  let chosen = null;
+  const usable = (res.candidates || []).filter(c => c.lengths_known);
+  if (!usable.length) pick.append(S.el('p', { class: 'verdict note',
+    text: 'No album with known track lengths was found. Try the search with other words.' }));
+  usable.forEach((c, i) => {
+    const radio = S.el('input', { type: 'radio', name: 'split-ed', value: String(i) });
+    radio.onchange = () => { chosen = c; };
+    if (i === 0) { radio.checked = true; chosen = c; }
+    pick.append(S.el('label', { class: 'edition' }, radio,
+      S.el('b', { text: ` ${c.artist || '?'} — ${c.title || '?'}` }),
+      S.el('span', { class: 'meta', text: `  ${c.year || ''} ${c.country || ''}` +
+        (c.discs > 1 ? ` · disc ${c.disc} of ${c.discs}` : '') +
+        ` · ${c.tracks.length} tracks · ${Math.round(c.off_ms / 1000)} s from this file's length` }),
+      S.el('ol', { class: 'tracks' }, ...c.tracks.map(t => S.el('li', { text: `${t.title}  ${S.clock(t.length_ms)}` })))));
+  });
+  const show = S.el('button', { class: 'chip on', text: 'Show where it would be cut' });
+  show.onclick = () => chosen && splitPreview(f, chosen, work);
+  work.replaceChildren(S.el('h3', { text: tail(f.path) }),
+    S.el('p', { class: 'steps', text: `${minutes(f.duration_ms)} long. The closest match is first:` }), pick,
+    S.el('div', { class: 'controls' }, q, again), usable.length ? show : null);
+}
+
+async function splitPreview(f, c, work) {
+  const out = S.el('div');
+  work.append(out);
+  out.replaceChildren(S.el('p', { class: 'empty', text: 'Finding the silences between tracks…' }));
+  const r = await post('/api/import/split/preview', { file: f.path, expect: c.expect });
+  if (r.error) return S.fail(out, new Error(r.error));
+  S.watchJob(r.job_id, S.el('div'), job => {
+    const p = job.result || {};
+    if (!p.ok) return S.fail(out, new Error(p.error || 'it could not be split'));
+    const rows = (p.spans || []).map(([s, e], i) => {
+      const want = c.tracks[i];
+      const diff = want ? Math.round(e - s - want.length_ms / 1000) : null;
+      return S.el('div', { text: `${String(i + 1).padStart(2)}  ${S.clock(s * 1000)}–${S.clock(e * 1000)}  ` +
+        (want ? `${want.title}  (${diff >= 0 ? '+' : ''}${diff} s)` : '(no track for this cut)') });
+    });
+    const fits = p.tracks === c.tracks.length;
+    const go = S.el('button', { class: 'chip on', text: 'Split it' });
+    go.onclick = async () => {
+      go.disabled = true;
+      const s = await post('/api/import/split/commit', { file: f.path, expect: c.expect });
+      if (s.error) { go.disabled = false; return alert(s.error); }
+      const log = S.el('div');
+      out.append(log);
+      S.watchJob(s.job_id, log, job2 => splitDone(f, job2, out));
+    };
+    out.replaceChildren(
+      S.el('p', { class: 'verdict ' + (fits ? 'ok' : 'note'), text: fits
+        ? `${p.tracks} cuts, one for each track.`
+        : `${p.tracks} cuts for ${c.tracks.length} tracks -- check them in the editor after splitting.` }),
+      S.el('div', { class: 'list' }, ...rows), S.el('div', { class: 'controls', style: 'margin-top:.6rem' }, go));
+  });
+}
+
+async function splitDone(f, job, out) {
+  const res = job.result || {};
+  if (job.state !== 'done' || !res.ok) return out.append(S.el('p', { class: 'err', text: res.error || 'the split failed' }));
+  const parts = await S.get('/api/import/split/passages?file=' + encodeURIComponent(f.path));
+  out.append(S.el('p', { class: 'verdict ok', text: `Split into ${parts.length} tracks. Open any in the editor to adjust its cut:` }),
+    S.el('div', { class: 'list' }, ...parts.map((t, i) => S.el('div', {},
+      S.el('a', { href: `${PLAYER}/edit/${t.passage_id}`, target: '_blank',
+        text: `${String(i + 1).padStart(2)}  ${t.title || 'track ' + (i + 1)}  ${S.clock(t.start_ms)}–${S.clock(t.end_ms)}` })))));
 }
 
 // ---------------------------------------------------------------- refresh

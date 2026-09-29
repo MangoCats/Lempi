@@ -68,13 +68,25 @@ RELEASE = {"id": "rel-live", "title": "Album", "date": "2001", "country": "XE",
                                  for n in (1, 2)]}]}
 
 
+SPLIT = {"id": "rel-split", "title": "Tones", "date": "1999", "country": "XE",
+         "artist-credit": [{"name": "Tone Band", "artist": {"id": "art-tone", "name": "Tone Band"}}],
+         "media": [{"position": 1, "tracks": [
+             {"position": n, "title": f"Tone {n}", "length": 4000,
+              "recording": {"id": f"rec-tone-{n}", "title": f"Tone {n}", "length": 4000}} for n in (1, 2, 3)]}]}
+
+
 class FakeMusicBrainz(http.server.BaseHTTPRequestHandler):
-    """Any Disc ID lookup answers with the one release above."""
+    """A Disc ID lookup answers the CD's release; a release search and a
+    release's detail answer the album file's."""
     def log_message(self, *a):
         pass
 
     def do_GET(self):
-        body = json.dumps({"releases": [RELEASE]}).encode()
+        path = self.path.split("?")[0]
+        doc = ({"releases": [RELEASE]} if path.startswith("/ws/2/discid")
+               else {"releases": [{"id": "rel-split", "score": 100}]} if path == "/ws/2/release"
+               else SPLIT)
+        body = json.dumps(doc).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -94,6 +106,29 @@ def make_rip(inbox):
                 "Track  2  accurately ripped (confidence 9)\n")
 
 
+def make_album_file(music, db):
+    """Three four-second tones with two seconds of silence between, filed in
+    the library as one long passage -- an album that came in as one file."""
+    folder = os.path.join(music, "Tone Band", "Tones")
+    os.makedirs(folder)
+    path = os.path.join(folder, "Tones.mp3")
+    ff = shutil.which("ffmpeg")
+    graph = ("sine=frequency=440:duration=4[a];anullsrc=r=44100:cl=stereo:d=2[s1];"
+             "sine=frequency=550:duration=4[b];anullsrc=r=44100:cl=stereo:d=2[s2];"
+             "sine=frequency=660:duration=4[c];"
+             "[a]aformat=channel_layouts=stereo[a2];[b]aformat=channel_layouts=stereo[b2];"
+             "[c]aformat=channel_layouts=stereo[c2];[a2][s1][b2][s2][c2]concat=n=5:v=0:a=1")
+    subprocess.run([ff, "-v", "error", "-y", "-filter_complex", graph, "-ar", "44100", path], check=True)
+    c = sqlite3.connect(db)
+    fid = c.execute("INSERT INTO files (audio_md5, path, duration_ms) VALUES ('tones-md5', ?1, 16000)",
+                    (path,)).lastrowid
+    c.execute("INSERT INTO file_tags (file_id, title, artist, album) VALUES (?1, 'Tones', 'Tone Band', 'Tones')", (fid,))
+    c.execute("INSERT INTO passages (file_id, kind, start_ms, end_ms) VALUES (?1, 'radio', 0, 16000)", (fid,))
+    c.commit()
+    c.close()
+    return path
+
+
 def test_the_page_live():
     print("a live console: set the inbox, see the rip, preview it, add it, and the refusals")
     if not shutil.which("ffmpeg"):
@@ -107,6 +142,8 @@ def test_the_page_live():
     db = os.path.join(tmp, "lib.db")
     c = sqlite3.connect(db)
     c.executescript(tic.SCHEMA + "CREATE TABLE flavor (subject_kind TEXT, subject_id TEXT);"
+                    "CREATE TABLE file_tags (file_id INTEGER PRIMARY KEY, title TEXT, artist TEXT, album TEXT,"
+                    " has_art INTEGER, scanned_at TEXT, track_no INTEGER, disc_no INTEGER);"
                     "CREATE TABLE player_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);")
     c.commit()
     c.close()
@@ -162,6 +199,29 @@ def test_the_page_live():
         n = c.execute("SELECT COUNT(*) FROM passages").fetchone()[0]
         c.close()
         check(n == 4, f"two tracks, both kinds, in the catalogue: {n}")
+
+        # [SPEC-CDI-060]: an album file, found, its album picked, its cuts shown.
+        album = make_album_file(music, db)
+        st, files = call(port, "GET", "/api/import/files?q=Tone")
+        check(any(f["path"] == album and f["tracks"] == 1 for f in files), f"the album file is found: {files}")
+        st, bad = call(port, "POST", "/api/import/split/find", {"file": os.path.join(music, "nope.mp3")})
+        check(st == 400, "a file not in the library is refused")
+        st, fj = call(port, "POST", "/api/import/split/find", {"file": album})
+        j = wait_job(port, fj["job_id"])
+        cands = (j.get("result") or {}).get("candidates") or []
+        check(j["state"] == "done" and cands and cands[0]["id"] == "rel-split" and cands[0]["off_ms"] == 4000,
+              f"its album is found, 4 s from the file's length (the silences): {j}")
+        st, bad = call(port, "POST", "/api/import/split/preview", {"file": album, "expect": "4; rm -rf"})
+        check(st == 400, "track lengths are numbers, nothing else")
+        st, pj = call(port, "POST", "/api/import/split/preview", {"file": album, "expect": cands[0]["expect"]})
+        j = wait_job(port, pj["job_id"])
+        spans = (j.get("result") or {}).get("spans") or []
+        check(j["state"] == "done" and len(spans) == 3, f"three cuts, one per tone: {j}")
+        c = sqlite3.connect(db)
+        n = c.execute("SELECT COUNT(*) FROM passages p JOIN files f USING (file_id) WHERE f.path = ?1",
+                      (album,)).fetchone()[0]
+        c.close()
+        check(n == 1, "and the preview wrote nothing: still one passage")
     finally:
         call(port, "POST", "/api/system/shutdown")
         try:

@@ -46,6 +46,9 @@ def test_every_anchor_exists():
     ids = set(re.findall(r'id="([^"]+)"', ci.guide_html()))
     missing = [a for a in ci.ANCHORS.values() if a not in ids]
     check(not missing, f"anchors the page links but the guide lacks: {missing}")
+    page = open(os.path.join(HERE, "console_web", "import.html"), encoding="utf-8").read()
+    keys = set(re.findall(r'data-guide="([a-z]+)"', page)) | set(re.findall(r"help\('([a-z]+)'\)", page))
+    check(keys and keys <= set(ci.ANCHORS), f"every ? on the page names a known section: {keys - set(ci.ANCHORS)}")
 
 
 # EAC's registry as it read on the desktop 2026-09-29 -- before any setup -- and
