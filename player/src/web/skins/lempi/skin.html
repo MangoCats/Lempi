@@ -234,6 +234,17 @@
          the audio as it plays a track, so it may need to move off the track and
          back before it notices one.</p>
     </div>
+    <div class="setting" id="rips-row" hidden>
+      <label for="keeplossless">CD rips</label>
+      <span><input type="checkbox" id="keeplossless"> keep a lossless FLAC copy of CD rips
+        <small id="keeplosslessstatus"></small></span>
+      <p>When Vipunen adds a CD you ripped with EAC, it makes the MP3 the library
+         plays and removes the large WAV the rip produced. Ticking this keeps a
+         lossless FLAC copy beside the MP3 as well &mdash; about half the size of
+         the WAV, and an exact copy of the disc. <strong>This writes files into
+         your music folder.</strong> It applies to every rip added after you tick
+         it, never to one already added.</p>
+    </div>
     <div class="setting">
       <label>Server build</label>
       <span><small id="buildtext" title="The version and the commit it was built from.">&mdash;</small><button type="button" class="copy" id="buildcopy" title="Copy the server build to the clipboard">&#x29C9;</button></span>

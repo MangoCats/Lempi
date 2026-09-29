@@ -297,6 +297,42 @@ pub(super) async fn set_network_trust(
     }
 }
 
+/// *Keep a lossless FLAC copy of CD rips* `[SPEC-CDI-058]`: the standing choice
+/// Vipunen reads when it adds a rip. Offered only where Vipunen rips -- a
+/// player built with `vipunen-support` -- and 404 elsewhere.
+pub(super) async fn keep_lossless_rips(State(ui): State<Ui>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if !ui.capabilities.rips_cds {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let (db, library) = (ui.db.clone(), ui.library.clone());
+    let on = tokio::task::spawn_blocking(move || {
+        crate::db::PlayerStore::open_split(&db, &library).map(|s| s.load_keep_lossless_rips()).unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false);
+    axum::Json(serde_json::json!({ "on": on })).into_response()
+}
+
+pub(super) async fn set_keep_lossless_rips(
+    State(ui): State<Ui>,
+    axum::extract::Path(on): axum::extract::Path<String>,
+) -> StatusCode {
+    if !ui.capabilities.rips_cds {
+        return StatusCode::NOT_FOUND;
+    }
+    let want = on == "on" || on == "true" || on == "1";
+    let (db, library) = (ui.db.clone(), ui.library.clone());
+    let saved = tokio::task::spawn_blocking(move || {
+        crate::db::PlayerStore::open_split(&db, &library).map(|s| s.save_keep_lossless_rips(want).is_ok())
+    })
+    .await;
+    match saved {
+        Ok(Ok(true)) => StatusCode::NO_CONTENT,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
 /// Answer discovery queries, or not `[SPEC-MTR-020]`.
 pub(super) async fn set_discovery_announce(
     State(ui): State<Ui>,

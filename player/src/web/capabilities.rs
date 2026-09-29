@@ -39,6 +39,10 @@ pub struct Capabilities {
     /// music is shared and Lempi's files stay private `[REQ-AND-200]`. False
     /// here until the host says otherwise.
     pub writes_beside_audio: bool,
+    /// This player sits beside Vipunen, which rips CDs `[SPEC-CDI-058]`: its
+    /// Settings page offers *keep a lossless FLAC copy of CD rips*. A build
+    /// fact -- `vipunen-support`, the desktop's build -- so never an appliance.
+    pub rips_cds: bool,
 }
 
 impl Capabilities {
@@ -67,6 +71,7 @@ impl Capabilities {
             follow: cfg!(feature = "echo-client"),
             // Not measured here: the host's configuration says, after this.
             writes_beside_audio: false,
+            rips_cds: cfg!(feature = "vipunen-support"),
         };
         let why = if !has_helper {
             format!(" (no {helper})")
@@ -81,7 +86,11 @@ impl Capabilities {
     /// Not an appliance build: nothing to ask, and nothing offered.
     #[cfg(not(feature = "appliance"))]
     pub fn detect() -> (Self, String) {
-        let caps = Capabilities { follow: cfg!(feature = "echo-client"), ..Default::default() };
+        let caps = Capabilities {
+            follow: cfg!(feature = "echo-client"),
+            rips_cds: cfg!(feature = "vipunen-support"),
+            ..Default::default()
+        };
         (caps, " (built without the appliance feature)".into())
     }
 
@@ -131,7 +140,7 @@ mod tests {
     fn every_capability_is_on_the_wire() {
         let v = serde_json::to_value(Capabilities::default()).unwrap();
         for k in ["restart", "power_off", "wifi", "bluetooth", "led", "radios", "follow",
-                  "writes_beside_audio"] {
+                  "writes_beside_audio", "rips_cds"] {
             assert_eq!(v[k], serde_json::json!(false), "{k}");
         }
     }
@@ -142,8 +151,19 @@ mod tests {
     #[cfg(not(feature = "appliance"))]
     #[test]
     fn a_build_without_the_feature_offers_nothing() {
-        let expect = Capabilities { follow: cfg!(feature = "echo-client"), ..Default::default() };
+        let expect = Capabilities {
+            follow: cfg!(feature = "echo-client"),
+            rips_cds: cfg!(feature = "vipunen-support"),
+            ..Default::default()
+        };
         assert_eq!(Capabilities::detect().0, expect);
+    }
+
+    /// Keeping CD rips is offered exactly where Vipunen is built in
+    /// `[SPEC-CDI-058]` -- the desktop, never an appliance.
+    #[test]
+    fn cd_rips_are_offered_exactly_beside_vipunen() {
+        assert_eq!(Capabilities::detect().0.rips_cds, cfg!(feature = "vipunen-support"));
     }
 
     /// Following is a build fact: offered exactly when `echo-client` is in.

@@ -513,6 +513,9 @@ pub fn router(ui: Ui) -> Router {
         // it is the local button (SIGUSR1), never a route; this only sets the
         // length, and is under `/pairing` to stay clear of `/mesh/*step`.
         .route("/pairing/window/:secs", post(set_pairing_window))
+        // A lossless copy of each CD rip, or not `[SPEC-CDI-058]`.
+        .route("/rips/keep-lossless", get(keep_lossless_rips))
+        .route("/rips/keep-lossless/:on", post(set_keep_lossless_rips))
         .route("/skip/suppress/:hours", post(set_skip_suppress))
         .route("/dequeue/suppress/:hours", post(set_dequeue_suppress))
         .route("/queue/depth/:n", post(set_queue_depth))
@@ -1391,6 +1394,54 @@ mod tests {
         // And the server is up, so the 404s above are not a dead socket.
         let line = status("GET", "/audio/sink").await;
         assert!(line.contains(" 200 "), "GET /audio/sink answered {line:?}");
+    }
+
+    /// `[SPEC-CDI-058]`: the lossless-copy switch, stored where `ingest_cd.py`
+    /// reads it (`keep_lossless_rips` = "1"), and only on a player that rips.
+    #[tokio::test]
+    async fn the_lossless_switch_is_kept_and_offered_only_beside_vipunen() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let d = std::env::temp_dir().join(format!("lempi-rips-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let serve = |rips: bool| {
+            let d = d.clone();
+            async move {
+                let (_e, h) = crate::engine::Engine::new(crate::path::PathHandle::silent(), 1);
+                let ui = Ui {
+                    handle: Arc::new(h),
+                    db: d.join("listener.db"),
+                    library: d.join("listener.db"),
+                    why: Default::default(),
+                    controls: Default::default(),
+                    capabilities: crate::web::capabilities::Capabilities { rips_cds: rips, ..Default::default() },
+                    web_loopback_only: false,
+                };
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = listener.local_addr().unwrap();
+                tokio::spawn(async move { axum::serve(listener, router(ui)).await });
+                addr
+            }
+        };
+        let call = |addr: std::net::SocketAddr, method: &'static str, path: &'static str| async move {
+            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let req = format!("{method} {path} HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            s.write_all(req.as_bytes()).await.unwrap();
+            let mut buf = Vec::new();
+            s.read_to_end(&mut buf).await.unwrap();
+            String::from_utf8_lossy(&buf).to_string()
+        };
+        let a = serve(true).await;
+        assert!(call(a, "GET", "/rips/keep-lossless").await.contains(r#"{"on":false}"#), "off unless ticked");
+        assert!(call(a, "POST", "/rips/keep-lossless/on").await.contains(" 204 "));
+        assert!(call(a, "GET", "/rips/keep-lossless").await.contains(r#"{"on":true}"#), "kept once ticked");
+        let v: String = rusqlite::Connection::open(d.join("listener.db")).unwrap()
+            .query_row("SELECT value FROM player_settings WHERE key='keep_lossless_rips'", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, "1", "stored as ingest_cd.py reads it");
+        let b = serve(false).await;
+        assert!(call(b, "GET", "/rips/keep-lossless").await.contains(" 404 "), "not offered where nothing rips");
+        assert!(call(b, "POST", "/rips/keep-lossless/on").await.contains(" 404 "));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// `[SPEC-NSH-020]`: the star sync's steps reach their own handler beside

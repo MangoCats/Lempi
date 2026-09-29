@@ -250,6 +250,7 @@
     bluetooth: ['speakers'], led: ['led-row'], radios: ['radios'],
     follow: ['echo-trim-row', 'follow-row', 'join-row'],
     writes_beside_audio: ['sidecar-row'],
+    rips_cds: ['rips-row'],
   };
   function renderCapabilities(c) {
     caps = c || {};
@@ -1313,6 +1314,26 @@
   announce.onchange = async () => {
     const r = await fetch(`/discovery/announce/${announce.checked ? 1 : 0}`, { method: 'POST' });
     if (!r.ok) { alert('Could not change it.'); discovery(); }
+  };
+
+  // -------------------------------------------------------------- CD rips
+  // [SPEC-CDI-058]: a lossless FLAC copy of each CD rip Vipunen adds, or not.
+  // A standing choice, off unless ticked; shown only on a player built beside
+  // Vipunen, which answers 404 everywhere else.
+  const keepLossless = $('keeplossless');
+  function keepLosslessLoad() {
+    fetch('/rips/keep-lossless').then(r => (r.ok ? r.json() : null)).then(d => {
+      if (!d) return;
+      setHidden($('rips-row'), false);
+      keepLossless.checked = !!d.on;
+      setText($('keeplosslessstatus'), '');
+    }).catch(() => {});
+  }
+  keepLosslessLoad();
+  keepLossless.onchange = async () => {
+    const r = await fetch(`/rips/keep-lossless/${keepLossless.checked ? 'on' : 'off'}`, { method: 'POST' });
+    setText($('keeplosslessstatus'), r.ok ? 'saved' : 'could not save');
+    if (!r.ok) keepLosslessLoad();
   };
 
   // --------------------------------------------------------------- history

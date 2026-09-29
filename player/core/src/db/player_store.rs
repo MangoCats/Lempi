@@ -1368,6 +1368,30 @@ impl PlayerStore {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
+    /// Whether Vipunen keeps a lossless FLAC copy of each CD rip it adds
+    /// `[SPEC-CDI-058]`: off unless a person turned it on. Read by
+    /// `tools/ingest_cd.py`; written by the Lempi skin's Settings switch.
+    pub fn load_keep_lossless_rips(&self) -> bool {
+        self.conn
+            .query_row("SELECT value FROM player_settings WHERE key = 'keep_lossless_rips'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .is_ok_and(|v| v == "1")
+    }
+
+    pub fn save_keep_lossless_rips(&self, on: bool) -> Result<(), DbError> {
+        self.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES ('keep_lossless_rips', ?1, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![if on { "1" } else { "0" }],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
     /// The NetworkManager connections this node takes part in the mesh on,
     /// by UUID `[SPEC-NSH-185]`, `[SPEC-TN-030]`. `None` until the first
     /// start that records them -- which trusts the connection active then,
