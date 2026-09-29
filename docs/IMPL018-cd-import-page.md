@@ -1,0 +1,98 @@
+# IMPL018: The CD Import Page
+
+**Implementation Plan — Tier 3 · written 2026-09-29 · being built · decisions taken 2026-09-29, [SPEC056](spec/SPEC056-cd-import-with-eac.md) §10**
+
+How [SPEC056](spec/SPEC056-cd-import-with-eac.md) is built: a Vipunen page
+that takes a CD from EAC into the library with buttons, and the guide that
+opens beside it. Six phases, each shippable alone. The recommended decisions
+were taken, D3 with a standing switch rather than a per-disc offer.
+
+> **Related:** [SPEC056](spec/SPEC056-cd-import-with-eac.md) · [GUIDE037](GUIDE037-ripping-a-cd-with-eac.md) · `tools/ingest_cd.py`, `tools/jobs.py` (`cd-rip`, `segment-dao`), `tools/console.py`
+
+---
+
+## 1. Phase 0 -- the tool underneath, corrected
+
+**`[IMPL-CDI-100]`** `tools/ingest_cd.py`:
+
+1. **A real dry run** `[SPEC-CDI-040]`: parse the CUE and the log, look up the
+   Disc ID, and return the release candidates with their track lists -- no
+   encode, nothing on disk.
+2. **The chosen edition as an argument** (`--release MBID`), so a person who
+   picked one on the page is not asked again in the review queue.
+3. **A destination** (`--into FOLDER`): the rip is moved there before it is
+   encoded, so the catalogue records the album's permanent path.
+4. **The WAV removed** after a verified encode `[SPEC-RIP-040]`; a FLAC copy
+   kept first when the Lempi skin's switch is on `[SPEC-CDI-058]`, which is
+   built here too: the setting, its route, and the switch on a Vipunen-support
+   build's Settings page.
+
+**Tests.** A dry run leaves the folder byte-for-byte as it was; a commit with a
+chosen release writes no `id_checks` down-select; the WAV is gone and the MP3
+decodes; a failed encode leaves the WAV and writes nothing.
+
+## 2. Phase 1 -- the page and the guide panel
+
+**`[IMPL-CDI-200]`** A new console page, **import**, in the navigation. Its
+first version holds only the guide: a **How to** button, and a panel that
+renders [GUIDE037](GUIDE037-ripping-a-cd-with-eac.md) from Markdown -- headings, paragraphs, lists, code and
+links, anything else shown as text -- with each heading an anchor, so
+`/guide/ripping#one-time-setup` opens at that section `[SPEC-CDI-070]`.
+
+**Tests.** Every heading in GUIDE037 has an anchor the page's **?** links name;
+raw HTML in the Markdown is shown as text, not rendered.
+
+## 3. Phase 2 -- the setup check
+
+**`[IMPL-CDI-300]`** Read `HKCU\Software\AWSoftware\EACU` with `winreg`, never
+writing it. The on/off settings are checked now. **Calibration**, done once with
+the maintainer at the desk: each multi-valued setting (extraction mode, secure
+mode, offset) is changed in EAC while a script records the registry before and
+after, so the check reads their values from evidence, not guesswork. Until then
+they are shown for a person to confirm. EAC missing, no drive, ffmpeg missing:
+each a plain line `[SPEC-CDI-028]`.
+
+**Tests.** Against recorded registry snapshots: this desktop's today (four
+failures, SPEC056 §2), and one after setup (none).
+
+## 4. Phase 3 -- the inbox and the rip cards
+
+**`[IMPL-CDI-400]`** A read-only scan of the inbox every few seconds while the
+page is open, grouping by CUE sheet; in progress or finished by the log
+`[SPEC-CDI-030]`. The verdict from `cd_toc.parse_eac_log`, in words, and
+`CheckLog.exe` on the log where EAC wrote a checksum `[SPEC-CDI-035]`.
+
+**Tests.** Fixture folders: a rip mid-way (no log), a clean one, one with a
+track not accurately ripped, one not in AccurateRip, one with a tampered log.
+
+## 5. Phase 4 -- preview and add
+
+**`[IMPL-CDI-500]`** Opening a card runs the Phase 0 dry run as a job and shows
+the album: editions to choose from, track list, the proposed folder (editable),
+and whether the catalogue already holds it `[SPEC-CDI-045]`. **Add to library**
+runs `cd-rip` with the choices, streaming progress like every job. The finished
+card offers the player reload and *Send to the speakers*, which opens the Export
+page with the album chosen `[SPEC-CDI-055]`.
+
+**Verify.** A real disc, end to end, at the desk with the maintainer: inserted,
+ripped with one key, added with one button, played on the desktop player, sent
+to one speaker and played there.
+
+## 6. Phase 5 -- album files with no track list
+
+**`[IMPL-CDI-600]`** The second panel `[SPEC-CDI-060]`: the library's single
+files holding a whole album, a release search for each, the cascade's cuts
+shown, the existing boundary editor opened to adjust, and `segment-dao`
+committed. Skipped if D5 defers it.
+
+**Verify.** One of the library's own album files, split, reviewed and played.
+
+## 7. The guide
+
+**`[IMPL-CDI-700]`** GUIDE037 is written with Phase 1, from EAC 1.8's own
+language file, and corrected at the Phase 4 desk session wherever the real
+screens differ from it. A screenshot is added only where words fail.
+
+---
+
+**Traceability:** `[IMPL-CDI-100..700]` · builds [SPEC056](spec/SPEC056-cd-import-with-eac.md) · uses `[SPEC-RIP-040]`, `[SPEC-RIP-054]`, `[SPEC-RIP-088]`
