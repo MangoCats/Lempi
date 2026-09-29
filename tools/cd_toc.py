@@ -245,9 +245,19 @@ class RipReport:
 
 _LOG_TOC_ROW = re.compile(
     r'^\s*(\d+)\s*\|\s*[\d:.]+\s*\|\s*[\d:.]+\s*\|\s*(\d+)\s*\|\s*(\d+)\s*$')
+# Every per-track outcome EAC 1.8 writes, by its own strings (`Languages/
+# English.txt`, 1277/1278/1282/1283, read 2026-09-29): matched, a mismatch in
+# either word order, or absent from the database. Until then only "accurately
+# ripped" and two phrasings EAC does not use per track were matched -- so a real
+# mismatch ("not ripped accurately") matched nothing, fell back to "Copy OK", and
+# passed as good.
 _LOG_ACCURATERIP = re.compile(
-    r'Track\s+(\d+)\s+(accurately ripped|(?:could not be verified)'
-    r'|(?:differs from AccurateRip))', re.IGNORECASE)
+    r'Track\s+(\d+)\s+(accurately ripped|not ripped accurately|not accurately ripped'
+    r'|not present in AccurateRip database|could not be verified|differs from AccurateRip)',
+    re.IGNORECASE)
+# Outcomes that are not evidence of a bad read. "Not present" is no comparison
+# at all -- a rare pressing -- and is judged by the copy's own checks instead.
+_LOG_AR_FINE = ("accurately ripped", "not present in accuraterip database")
 _LOG_COPY_OK = re.compile(r'Copy\s+OK', re.IGNORECASE)
 # `\bError\b`, not a bare substring search: "No errors occurred" -- EAC's
 # own all-clear line -- contains "error" as a substring and would otherwise
@@ -270,7 +280,7 @@ def parse_eac_log(path: str) -> RipReport:
     verdicts: dict[int, tuple[bool, str]] = {}
     for m in _LOG_ACCURATERIP.finditer(text):
         n = int(m.group(1))
-        ok = m.group(2).lower() == "accurately ripped"
+        ok = m.group(2).lower() in _LOG_AR_FINE
         verdicts[n] = (ok, m.group(2))
     # A track AccurateRip never mentions (no DB entry, or the plugin was
     # absent) is judged by "Copy OK" elsewhere in its own range instead --

@@ -339,6 +339,24 @@ def main() -> int:
     check(bad_report.tracks[1].ok is False,
           f"track 2 'could not be verified' must read as not-ok, got {bad_report.tracks[1]}")
 
+    # EAC's own per-track strings [SPEC-CDI-035]: a mismatch is a failure in
+    # either word order; a track AccurateRip has never seen is not.
+    with tempfile.TemporaryDirectory() as d:
+        log_path = os.path.join(d, "rip.log")
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write("\n".join([
+                "Copy OK", "", "No errors occurred", "", "AccurateRip summary", "",
+                "Track  1  accurately ripped (confidence 12)  [0A0B0C0D]  (AR v2)",
+                "Track  2  not present in AccurateRip database",
+                "Track  3  not ripped accurately (confidence 4)  [11111111], AccurateRip returned [22222222]",
+                "Track  4  Not accurately ripped (confidence 2)  [33333333]", ""]))
+        r = cd_toc.parse_eac_log(log_path)
+    got = {t.number: (t.ok, t.detail.lower()) for t in r.tracks}
+    check(got[1][0] and got[2][0], f"matched, and not in the database, are not failures: {got}")
+    check(got[2][1] == "not present in accuraterip database", f"and the card can say which: {got}")
+    check(not got[3][0] and not got[4][0], f"a mismatch in either word order is a failure: {got}")
+    check(not r.all_ok, "and the rip is not all good")
+
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")
