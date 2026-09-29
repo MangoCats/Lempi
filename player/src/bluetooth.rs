@@ -288,6 +288,21 @@ pub fn connections() -> Result<Vec<serde_json::Value>, String> {
     Ok(parse_multiline(&String::from_utf8_lossy(&out.stdout), &CONNECTION_FIELDS))
 }
 
+/// The same list, read without root: NetworkManager lets any user list
+/// connection profiles, and the trusted-networks check reads it on a timer.
+/// Through `sudo lempi-btctl` that wrote three sudo lines to the journal every
+/// half minute on every appliance -- measured 2026-09-29, the day it shipped.
+pub fn connections_unprivileged() -> Result<Vec<serde_json::Value>, String> {
+    let out = Command::new("nmcli")
+        .args(["-m", "multiline", "-f", &CONNECTION_FIELDS.join(","), "connection", "show"])
+        .output()
+        .map_err(|e| format!("nmcli: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("nmcli: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(parse_multiline(&String::from_utf8_lossy(&out.stdout), &CONNECTION_FIELDS))
+}
+
 /// `lempi-btctl wifi-known`'s fields, in the order it asks nmcli for them.
 const CONNECTION_FIELDS: [&str; 5] = ["NAME", "UUID", "TYPE", "AUTOCONNECT", "ACTIVE"];
 

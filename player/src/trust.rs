@@ -31,7 +31,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-/// One connection, as `lempi-btctl wifi-known` reports it.
+/// One connection, as NetworkManager lists it -- read without root
+/// (`bluetooth::connections_unprivileged`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Conn {
     pub uuid: String,
@@ -80,7 +81,7 @@ fn is_uuid(s: &str) -> bool {
 
 #[cfg(all(feature = "appliance", not(test)))]
 fn read_connections() -> Result<Vec<Conn>, String> {
-    let rows = crate::bluetooth::connections()?;
+    let rows = crate::bluetooth::connections_unprivileged()?;
     Ok(rows
         .iter()
         .map(|r| Conn {
