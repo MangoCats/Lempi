@@ -1,6 +1,6 @@
 # SPEC055: Fleet Configuration Kept Private
 
-**Design Specification — Tier 2 · written 2026-09-28 · accepted 2026-09-28, being built · build plan in [IMPL017](../IMPL017-closing-the-mesh-arc.md)**
+**Design Specification — Tier 2 · written 2026-09-28 · accepted 2026-09-28 · built 2026-09-28 but `[SPEC-FCP-010]`, which awaits the maintainer's private repository · build plan in [IMPL017](../IMPL017-closing-the-mesh-arc.md)**
 
 The repository is public, and the household's real configuration -- machine
 logins, a time server's address, the star-sync plan -- has been reaching it

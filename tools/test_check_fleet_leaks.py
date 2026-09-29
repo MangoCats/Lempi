@@ -72,6 +72,20 @@ def main() -> int:
     hits = cfl.scan_line("pi@node-alpha at 192.168.1.20", pat)
     check(len(hits) == 2, f"scan_line reports both the IP and the denylisted host: {hits}")
 
+    # [SPEC-FCP-050], [SPEC-FCP-055]: the baseline. A finding is its file and
+    # its line's text, never the number; editing the line makes it a new one;
+    # the record is a hash, never the text.
+    k = cfl.line_key("a/b.md", "host at 192.168.1.20")
+    check(k == cfl.line_key("a/b.md", "host at 192.168.1.20  "), "trailing space does not make a new finding")
+    check(k != cfl.line_key("a/b.md", "host at 192.168.1.21"), "an edited line is a new finding, not an accepted one")
+    check(k != cfl.line_key("a/c.md", "host at 192.168.1.20"), "the same line in another file is its own finding")
+    check("192" not in k and len(k) == 24, "the key carries no text of the line")
+    import tempfile
+    p = os.path.join(tempfile.mkdtemp(), "baseline.txt")
+    check(cfl.read_baseline(p) is None, "no baseline file reads as None, not as empty")
+    cfl.write_baseline(p, {k, "abc"})
+    check(cfl.read_baseline(p) == {k, "abc"}, "the baseline round-trips, its header ignored")
+
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")

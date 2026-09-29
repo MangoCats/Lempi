@@ -206,6 +206,19 @@ Independent of Phases 0--4.
 node holds now. CI passes with the baseline, and fails on a branch that adds a
 private address.
 
+**Built 2026-09-28, steps 2--4; step 1 awaits D4.** `LEMPI_SOURCES` and
+`NTP_SERVER` live in `fleet/targets.env`, read through `build/lib-defaults.sh`;
+the example leaves `NTP_SERVER` unset, so a checkout without `fleet/` stops and
+names it. The three identical chrony files became one template,
+`build/lempi-fleet.sources.in`, rendered by `build/render-fleet-sources.sh`;
+rendered, it hashes `6f6db5d6...` -- the same as the durable copy on lempi02w,
+bose and lp3-wifi -- and lp3's `setup-lp3.sh` check, now comparing against the
+rendered file, reports every item as recorded. The whole-tree scan reads only
+what git tracks, and CI runs it strictly against `tools/fleet-leaks-baseline.txt`
+(186 hashes accepting the 331 findings the tree holds): a private address added
+to a tracked file failed it, exit 1. No denylist exists yet -- it arrives with
+the private repository.
+
 ---
 
 **Traceability:** `[IMPL-NSH-010..600]` · builds [SPEC054](spec/SPEC054-mesh-without-ssh.md) and [SPEC055](spec/SPEC055-fleet-configuration-kept-private.md) · on completion, update SPEC053's entries `[SPEC-SEC-040]`, `[SPEC-SEC-050]`, `[SPEC-SEC-110]`, `[SPEC-SEC-120]` and SPEC049 `[SPEC-MTR-220]` to built

@@ -27,11 +27,19 @@ Modes:
 
     python tools/check_fleet_leaks.py --staged [--strict]   # added lines in the index
     python tools/check_fleet_leaks.py [--strict]             # the whole tree
+    python tools/check_fleet_leaks.py --strict --baseline tools/fleet-leaks-baseline.txt
+                                                   # the tree, the accepted findings aside (CI)
+    python tools/check_fleet_leaks.py --write-baseline tools/fleet-leaks-baseline.txt [--admit-new]
+                                                   # shrink it; --admit-new, deliberately, to grow it
+
+"The whole tree" is what git tracks: an ignored file cannot be leaked by a
+commit, and it is what CI's checkout holds [SPEC-FCP-050].
 
 `--staged` scans only the lines a commit *adds*, so it blocks a new leak
 without tripping over everything already in the tree (history is left as-is,
 decided 2026-09-28). The pre-commit hook uses `--staged --strict`.
 """
+import hashlib
 import os
 import re
 import subprocess
@@ -138,7 +146,32 @@ def staged_added_lines():
                 yield path, line[1:]
 
 
+def tracked_files():
+    """The files git tracks, or None outside a repository. The tree scan reads
+    these and only these: a gitignored file -- `secrets/`, `data/`, `fleet/`
+    -- cannot be leaked by a commit, and CI's checkout holds exactly these, so
+    a baseline written here matches what CI scans [SPEC-FCP-050]."""
+    r = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True)
+    if r.returncode != 0:
+        return None
+    return [p for p in r.stdout.decode("utf-8", "replace").split("\0") if p]
+
+
 def walk_tree():
+    files = tracked_files()
+    if files is not None:
+        for rel in sorted(files):
+            top = rel.split("/", 1)[0]
+            if (top in SKIP_DIRS or rel in SKIP_SELF or any(rel.startswith(p + "/") for p in SKIP_PATHS)
+                    or os.path.splitext(rel)[1].lower() in SKIP_EXT):
+                continue
+            try:
+                with open(os.path.join(ROOT, rel), encoding="utf-8", errors="strict") as fh:
+                    for lineno, line in enumerate(fh, 1):
+                        yield rel, lineno, line.rstrip("\n")
+            except (UnicodeDecodeError, OSError):
+                continue
+        return
     for dirpath, dirnames, filenames in os.walk(ROOT):
         here = os.path.relpath(dirpath, ROOT).replace(os.sep, "/")
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS
@@ -155,9 +188,50 @@ def walk_tree():
                 continue
 
 
+# --- the baseline [SPEC-FCP-050], [SPEC-FCP-055] ------------------------------
+#
+# The findings already in the tree and accepted as they stand (history left
+# as-is, decided 2026-09-28), each recorded as a hash of its file and its line's
+# text -- never the text. A finding whose hash is listed passes; any other
+# fails. Editing an accepted line changes its hash, so touching an old leak
+# removes it rather than re-accepting it.
+
+
+def line_key(path: str, line: str) -> str:
+    """A finding's identity: its file and its line's text, not the line's
+    number, which moves whenever anything above it does."""
+    return hashlib.sha256(f"{path}\0{line.rstrip()}".encode("utf-8")).hexdigest()[:24]
+
+
+def read_baseline(path):
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as fh:
+        return {l.strip() for l in fh if l.strip() and not l.startswith("#")}
+
+
+def write_baseline(path, keys):
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("# Accepted fleet-leak findings, as hashes of file and line [SPEC-FCP-050].\n"
+                 "# It only shrinks: `--write-baseline` keeps what is still found, and\n"
+                 "# admits a new finding only with `--admit-new`, in a commit of its own\n"
+                 "# [SPEC-FCP-055]. Written by tools/check_fleet_leaks.py; do not edit.\n")
+        for k in sorted(keys):
+            fh.write(k + "\n")
+
+
+def arg_after(flag):
+    return sys.argv[sys.argv.index(flag) + 1] if flag in sys.argv and sys.argv.index(flag) + 1 < len(sys.argv) else None
+
+
 def main():
     strict = "--strict" in sys.argv
     staged = "--staged" in sys.argv
+    base_path = arg_after("--baseline")
+    write_path = arg_after("--write-baseline")
+    if (base_path or write_path) and staged:
+        print("check_fleet_leaks: a baseline is for the whole tree, not --staged", file=sys.stderr)
+        return 2
 
     tokens = load_denylist()
     if tokens is None:
@@ -178,19 +252,49 @@ def main():
         print("check_fleet_leaks: scanning the lines this commit adds.")
         for path, line in staged_added_lines():
             for why in scan_line(line, deny_pat):
-                hits.append((path, None, why, line.strip()[:100]))
+                hits.append((path, None, why, line.strip()[:100], None))
     else:
         print("check_fleet_leaks: scanning the whole tree.")
         for rel, lineno, line in walk_tree():
             for why in scan_line(line, deny_pat):
-                hits.append((rel, lineno, why, line.strip()[:100]))
+                hits.append((rel, lineno, why, line.strip()[:100], line_key(rel, line)))
+
+    if write_path:
+        old = read_baseline(write_path)
+        found = {h[4] for h in hits}
+        admit = "--admit-new" in sys.argv
+        if old is None and not admit:
+            print(f"check_fleet_leaks: {write_path} does not exist; creating a baseline admits every "
+                  "finding, so it needs --admit-new", file=sys.stderr)
+            return 2
+        keep = found if admit else found & old
+        write_baseline(write_path, keep)
+        gone = len(old - found) if old is not None else 0
+        new = len(found - old) if old is not None else len(found)
+        print(f"check_fleet_leaks: wrote {write_path}: {len(keep)} accepted, {gone} no longer found and "
+              f"dropped, {new if admit else 0} newly admitted" + ("" if admit or not new else
+              f"; {new} new finding(s) NOT admitted -- they still fail"))
+        return 0
+
+    if base_path is not None:
+        accepted = read_baseline(base_path)
+        if accepted is None:
+            print(f"check_fleet_leaks: BROKEN -- no baseline at {base_path}", file=sys.stderr)
+            return 2
+        found = {h[4] for h in hits}
+        before = len(hits)
+        hits = [h for h in hits if h[4] not in accepted]
+        stale = len(accepted - found)
+        print(f"check_fleet_leaks: {before - len(hits)} finding(s) accepted by {base_path}, "
+              f"{len(hits)} not" + (f"; {stale} accepted line(s) no longer found -- "
+              "`--write-baseline` drops them" if stale else "") + ".")
 
     if not hits:
         print("check_fleet_leaks: clean.")
         return 0
 
     print(f"check_fleet_leaks: {len(hits)} possible leak(s):", file=sys.stderr)
-    for path, lineno, why, snippet in hits:
+    for path, lineno, why, snippet, _key in hits:
         where = f"{path}:{lineno}" if lineno else path
         print(f"  {where}  [{why}]  {snippet}", file=sys.stderr)
     print("check_fleet_leaks: use a documentation address (192.0.2.x), a role "
