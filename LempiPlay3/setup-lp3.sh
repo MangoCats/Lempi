@@ -279,8 +279,13 @@ item "fbui installed" "test -x $P/usr/local/bin/fbui" "" \
 # ------------------------------------------------------------ clock and swap
 say ""
 say "clock and swap"
-file_item "chrony fleet sources [GDE-ECHO-300]" LempiPlay3/lempi-fleet.sources \
+# Rendered here from the template and `fleet/targets.env` `[SPEC-FCP-030]`, so
+# the node is compared with -- and receives -- the finished file.
+LP3_SOURCES=$(mktemp)
+build/render-fleet-sources.sh "$LP3_SOURCES" >/dev/null || die "the fleet sources could not be rendered"
+file_item "chrony fleet sources [GDE-ECHO-300]" "$LP3_SOURCES" \
     /etc/chrony/sources.d/lempi-fleet.sources 644
+rm -f "$LP3_SOURCES"
 # Debian's own pool stays on, as one more fallback every node shares -- the
 # maintainer's choice, 2026-09-25. This card always had it; the other two had
 # it commented out by hand, and now have it back.

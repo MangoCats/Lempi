@@ -13,8 +13,9 @@
 # overlay, no access point. Those are easier to add to a machine already known
 # to play music.
 #
-#   scp LempiPi/setup-appliance.sh pi@lempi02w:
-#   ssh pi@lempi02w 'sudo bash setup-appliance.sh'
+#   build/render-fleet-sources.sh /tmp/lempi-fleet.sources
+#   scp LempiPi/setup-appliance.sh /tmp/lempi-fleet.sources pi@speaker-a:
+#   ssh pi@speaker-a 'sudo bash setup-appliance.sh'
 #
 # Options:
 #   --speaker AA:BB:CC:DD:EE:FF   pair, trust and connect a Bluetooth sink
@@ -755,7 +756,13 @@ fi
 # one more fallback all of them share. All of this was done by hand until
 # then -- BOSE010 carried the commands as a worked example, and no script ran
 # them.
-if ! cmp -s "$HERE/lempi-fleet.sources" /etc/chrony/sources.d/lempi-fleet.sources; then
+#
+# The file is rendered on the operator's machine, where `fleet/` holds the
+# fleet's own time server, and copied here beside this script `[SPEC-FCP-030]`.
+# Absent, the step says so rather than passing for done.
+if [ ! -f "$HERE/lempi-fleet.sources" ]; then
+    note "chrony: fleet sources" "NOT SET -- render it beside this script (see the top)"
+elif ! cmp -s "$HERE/lempi-fleet.sources" /etc/chrony/sources.d/lempi-fleet.sources; then
     install -D -m644 "$HERE/lempi-fleet.sources" /etc/chrony/sources.d/lempi-fleet.sources
     chronyc reload sources >/dev/null 2>&1 || true
     did "chrony: fleet sources"

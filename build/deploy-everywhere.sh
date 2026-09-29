@@ -97,8 +97,10 @@ APPLIANCES=$(. "$ROOT/build/lib-defaults.sh"; lempi_fleet)
 # unit, so the predecessor is still the working system on that machine until
 # parity is confirmed; do not assume this leg proves anything about what is
 # playing there.
-SOURCES="sw@teacherslounge:/home/sw/Dev/Lempi
-mango@smartboardpc:/home/mango/Dev/Lempi"
+#
+# The list itself is the household's, so it lives in `fleet/targets.env` as
+# `LEMPI_SOURCES` beside the appliances, read the same way `[SPEC-FCP-020]`.
+SOURCES=$(. "$ROOT/build/lib-defaults.sh"; lempi_sources)
 
 # Where a named host sends its work. A host named on the command line is
 # looked up here, so `-- sw@teacherslounge` reaches the source-host leg with

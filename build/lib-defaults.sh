@@ -104,3 +104,11 @@ lempi_fleet() {
     _t=$(lempi_target LEMPI_FLEET)
     echo "${LEMPI_FLEET:-${_t:-pi@speaker-a pi@speaker-b}}"
 }
+
+# Every source host a fleet-wide deploy rebuilds, as `login@host:checkout`
+# `[SPEC-FCP-020]`. Real ones are a household's own, so they live in
+# `fleet/targets.env` like the appliances.
+lempi_sources() {
+    _t=$(lempi_target LEMPI_SOURCES)
+    echo "${LEMPI_SOURCES:-${_t:-someone@workshop:/home/someone/Dev/Lempi}}"
+}

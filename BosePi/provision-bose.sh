@@ -229,13 +229,19 @@ step "Fleet clock  [GDE-ECHO-300]"
 # choice, 2026-09-25, after it was found commented out by hand here and on
 # lempi02w but not on lempiplay3. Done by hand until then (BOSE010's worked
 # example); the file is identical in every machine folder.
-[ -f BosePi/lempi-fleet.sources ] || die "BosePi/lempi-fleet.sources missing"
-scp -q BosePi/lempi-fleet.sources "$HOST:/tmp/lempi-fleet.sources" || die "upload failed"
+# Rendered here from the template and `fleet/targets.env` `[SPEC-FCP-030]`:
+# the fleet's time server is a household's own, and the node receives only
+# the finished file.
+SOURCES_FILE=$(mktemp)
+build/render-fleet-sources.sh "$SOURCES_FILE" || die "the fleet sources could not be rendered"
+NTP_SERVER=$(sed -n 's/^server \([^ ]*\) .*prefer.*/\1/p' "$SOURCES_FILE")
+scp -q "$SOURCES_FILE" "$HOST:/tmp/lempi-fleet.sources" || die "upload failed"
+rm -f "$SOURCES_FILE"
 on "sudo install -D -m644 /tmp/lempi-fleet.sources /etc/chrony/sources.d/lempi-fleet.sources
     rm -f /tmp/lempi-fleet.sources
     sudo sed -i 's/^#.*\(pool 2\.debian\.pool\.ntp\.org\)/\1/' /etc/chrony/chrony.conf
     sudo systemctl restart chrony" || die "chrony configuration failed"
-say "verify: chronyc sources shows ^* 192.168.67.93"
+say "verify: chronyc sources shows ^* $NTP_SERVER"
 
 step "Overlay-safe remount-fs  [IMPL-BOS-170, found live on bose 2026-09-07]"
 # systemd-remount-fs.service tries to remount / per fstab's overlay entry --
