@@ -61,7 +61,9 @@ import secret                 # noqa: E402
 import segment_dao            # noqa: E402  -- identify_recording() (AcoustID)
 
 FFMPEG = shutil.which("ffmpeg")
-MB_DISCID_BASE = "https://musicbrainz.org/ws/2/discid"
+# `LEMPI_MUSICBRAINZ_URL` points the lookup elsewhere -- a test's own server,
+# answering one disc, so the page's whole path runs without the network.
+MB_DISCID_BASE = os.environ.get("LEMPI_MUSICBRAINZ_URL", "https://musicbrainz.org").rstrip("/") + "/ws/2/discid"
 
 
 def say(text: str) -> None:

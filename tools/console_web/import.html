@@ -1,0 +1,277 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Vipunen — import a CD</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/console.css">
+<style>
+  /* The guide sits beside the controls it explains [SPEC-CDI-070]; on a narrow
+     window it covers them instead, with its own close button. */
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.2rem; }
+  body.guide-open .layout { grid-template-columns: minmax(0, 1fr) minmax(20rem, 32rem); }
+  #guide { display: none; position: sticky; top: .8rem; align-self: start; max-height: calc(100vh - 2rem);
+           overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+           padding: .2rem 1rem 1rem; font-size: .9rem; line-height: 1.45; }
+  body.guide-open #guide { display: block; }
+  #guide h1 { font-size: 1.05rem; } #guide h2 { font-size: .98rem; margin-top: 1.3rem; }
+  #guide h3 { font-size: .92rem; } #guide blockquote { margin: .6rem 0; padding: .4rem .7rem;
+    border-left: 3px solid var(--warn); color: var(--dim); }
+  #guide .flash { background: color-mix(in srgb, var(--accent) 18%, transparent); transition: background 1.5s; }
+  #guide-top { display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0;
+               background: var(--panel); padding: .5rem 0; border-bottom: 1px solid var(--line); }
+  @media (max-width: 60rem) {
+    body.guide-open .layout { grid-template-columns: minmax(0, 1fr); }
+    body.guide-open #guide { position: fixed; inset: .5rem; max-height: none; z-index: 5; }
+  }
+  .help { font: 600 .75rem var(--mono); width: 1.3rem; height: 1.3rem; border-radius: 50%;
+          border: 1px solid var(--line); background: var(--panel); color: var(--accent); cursor: pointer;
+          padding: 0; margin-left: .35rem; vertical-align: middle; }
+  .check { display: flex; gap: .6rem; align-items: baseline; padding: .3rem 0; border-bottom: 1px solid var(--line); }
+  .check .mark { width: 1.2rem; text-align: center; font-weight: 700; }
+  .check .ok { color: var(--ok); } .check .bad { color: var(--bad); } .check .ask { color: var(--warn); }
+  .check small { display: block; color: var(--dim); }
+  .rip { border: 1px solid var(--line); border-radius: 6px; padding: .7rem .9rem; margin-bottom: .8rem; }
+  .rip h3 { margin: 0 0 .25rem; font-size: 1rem; }
+  .verdict { margin: .35rem 0; font-size: .88rem; }
+  .verdict.ok { color: var(--ok); } .verdict.bad { color: var(--bad); } .verdict.note { color: var(--warn); }
+  .edition { display: block; border: 1px solid var(--line); border-radius: 4px; padding: .45rem .6rem;
+             margin: .35rem 0; cursor: pointer; }
+  .edition:has(input:checked) { border-color: var(--accent); }
+  .edition .meta { color: var(--dim); font-size: .8rem; }
+  .tracks { font: 12px var(--mono); color: var(--dim); columns: 2 16rem; margin: .3rem 0 .2rem 1.3rem; }
+  .steps { color: var(--dim); font-size: .88rem; margin: .2rem 0 1rem; }
+</style>
+<header>
+  <h1>Vipunen</h1>
+  <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/import" class="on">import</a><a href="/export">export</a><a href="/flags">flags</a><a href="/intake">intake</a><a href="/mesh">mesh</a><a href="/system">system</a></nav>
+  <span class="ro">library read-only</span>
+</header>
+<main class="layout">
+  <div>
+    <h2>Import a CD <button class="chip" id="howto" style="margin-left:.6rem">How to</button></h2>
+    <p class="steps">Put the disc in, choose <b>Action → Copy Image &amp; Create CUE Sheet → Uncompressed…</b>
+      (Alt+F7) in EAC, and wait. The rip appears below by itself.
+      <button class="help" data-guide="rip" title="How to rip a disc">?</button></p>
+
+    <h2>Set up once <button class="help" data-guide="start" title="Before you start">?</button></h2>
+    <div id="setupsum" class="steps" aria-live="polite"></div>
+    <div id="checks"></div>
+    <div class="controls" style="margin-top:.7rem">
+      <span style="align-self:center;font-size:.88rem">Rips go to</span>
+      <input type="text" id="inbox" style="min-width:26rem">
+      <button class="chip" id="useinbox">use this folder</button>
+      <button class="help" data-guide="inbox" title="Where rips go">?</button>
+    </div>
+
+    <h2>Your rips <button class="help" data-guide="add" title="Adding it in Vipunen">?</button></h2>
+    <div id="rips" aria-live="polite"><p class="empty">Looking…</p></div>
+
+    <div id="addedwrap" hidden>
+      <h2>Just added <button class="help" data-guide="after" title="Afterwards">?</button></h2>
+      <div id="added"></div>
+    </div>
+  </div>
+
+  <aside id="guide" aria-label="How to">
+    <div id="guide-top"><b>How to rip a CD</b><button class="chip" id="closeguide">close</button></div>
+    <div id="guidebody"><p class="empty">Loading the guide…</p></div>
+  </aside>
+</main>
+<script src="/console.js"></script>
+<script>
+// The CD import page [SPEC056]. Everything a person does is a button; the
+// guide opens beside the controls, at the step asked about [SPEC-CDI-070].
+const PLAYER = '{{PLAYER_URL}}';
+let anchors = {}, state = null, guideLoaded = false;
+const open = {};            // rip id -> its preview/add area, kept across refreshes
+
+// ------------------------------------------------------------------ the guide
+async function openGuide(key) {
+  document.body.classList.add('guide-open');
+  if (!guideLoaded) {
+    const g = await S.get('/api/import/guide');
+    document.getElementById('guidebody').innerHTML = g.html;   // rendered and escaped server-side
+    anchors = g.anchors;
+    guideLoaded = true;
+  }
+  const el = key && document.getElementById(anchors[key] || key);
+  if (el) {
+    el.scrollIntoView({ block: 'start' });
+    el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 1500);
+  }
+}
+document.getElementById('howto').onclick = () => openGuide('start');
+document.getElementById('closeguide').onclick = () => document.body.classList.remove('guide-open');
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-guide]');
+  if (b) openGuide(b.dataset.guide);
+});
+const help = key => S.el('button', { class: 'help', 'data-guide': key, title: 'How to', text: '?' });
+
+// ---------------------------------------------------------------- the setup
+function renderSetup(s) {
+  const sum = document.getElementById('setupsum');
+  sum.textContent = s.todo === 0
+    ? (s.confirm ? `EAC is set up. ${s.confirm} setting to confirm in EAC yourself.` : 'EAC is set up.')
+    : `${s.todo} thing${s.todo === 1 ? '' : 's'} to set up in EAC, once.`;
+  document.getElementById('checks').replaceChildren(...s.checks.map(c => {
+    const mark = c.ok === true ? ['ok', '✓'] : c.ok === false ? ['bad', '✗'] : ['ask', '?'];
+    const text = S.el('div', {}, S.el('span', { text: c.label }),
+      c.ok === true ? null : S.el('small', { text: c.fix }),
+      c.detail ? S.el('small', { text: c.detail }) : null);
+    const guide = S.el('button', { class: 'help', 'data-guide': c.guide, title: 'How to', text: '?' });
+    return S.el('div', { class: 'check' }, S.el('span', { class: 'mark ' + mark[0], text: mark[1] }), text,
+      c.ok === true ? null : guide);
+  }));
+}
+
+document.getElementById('useinbox').onclick = async () => {
+  const path = document.getElementById('inbox').value.trim();
+  const r = await (await fetch('/api/import/inbox', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) })).json();
+  if (r.error) return alert(r.error);
+  render(r);
+};
+
+// ----------------------------------------------------------------- the rips
+function renderRips(rips) {
+  const box = document.getElementById('rips');
+  if (!rips.length) {
+    box.replaceChildren(S.el('p', { class: 'empty',
+      text: state.inbox_exists ? 'No rips waiting. Rip a disc with EAC and it appears here.'
+        : 'The inbox folder does not exist yet -- choose "use this folder" above.' }));
+    return;
+  }
+  const seen = new Set(rips.map(r => r.id));
+  for (const id of Object.keys(open)) if (!seen.has(id) && !open[id].keep && !open[id].moved) delete open[id];
+  box.replaceChildren(...rips.map(ripCard));
+}
+
+function ripCard(r) {
+  const card = S.el('div', { class: 'rip' });
+  const pill = r.state === 'finished' ? S.el('span', { class: 'pill ok', text: 'ready' })
+    : S.el('span', { class: 'pill warn', text: r.state === 'ripping' ? 'ripping…' : r.state });
+  card.append(S.el('h3', {}, S.el('span', { text: r.title + '  ' }), pill),
+    S.el('div', { class: 'steps', text: `${r.tracks} tracks · ${r.audio}` +
+      (r.audio_bytes ? ` · ${(r.audio_bytes / 1048576).toFixed(0)} MB` : '') }));
+  if (r.detail) card.append(S.el('div', { class: 'verdict note', text: r.detail }));
+  if (r.verdict) card.append(S.el('div', { class: 'verdict ' + r.verdict.level, text: r.verdict.text }));
+  if (open[r.id] && open[r.id].moved) {
+    card.append(S.el('p', { class: 'steps', text: 'Being added -- see below.' }));
+  } else if (r.state === 'finished') {
+    if (!open[r.id]) open[r.id] = { area: S.el('div') };
+    const area = open[r.id].area;
+    if (!area.childNodes.length) {
+      const b = S.el('button', { class: 'chip on', text: 'Open' });
+      b.onclick = () => preview(r, area);
+      area.append(b);
+    }
+    card.append(area);
+  }
+  return card;
+}
+
+async function preview(r, area) {
+  open[r.id].keep = true;
+  const res = await (await fetch('/api/import/preview', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: r.id }) })).json();
+  if (res.error) return S.fail(area, new Error(res.error));
+  if (res.id && res.id !== r.id) { open[res.id] = open[r.id]; delete open[r.id]; }
+  area.replaceChildren(S.el('p', { class: 'empty', text: 'Looking the disc up…' }));
+  const log = S.el('div');
+  S.watchJob(res.job_id, log, job => showPreview(job.result || {}, res.folder, area));
+}
+
+function showPreview(p, folder, area) {
+  if (!p.ok) return S.fail(area, new Error(p.error || 'the preview failed'));
+  const rels = p.releases || [];
+  const pick = S.el('div');
+  const into = S.el('input', { type: 'text', style: 'min-width:24rem', value: p.folder || '' });
+  let chosen = rels.length === 1 ? rels[0].id : null;
+  const warn = S.el('div', { class: 'verdict bad' });
+  const setWarn = rel => {
+    warn.textContent = rel && rel.in_library && rel.in_library >= rel.tracks.length
+      ? `Already in the library: every track of this edition is held. Adding it again makes a second copy.`
+      : rel && rel.in_library ? `${rel.in_library} of its ${rel.tracks.length} tracks are already in the library.` : '';
+  };
+  if (!rels.length) {
+    pick.append(S.el('p', { class: 'verdict note',
+      text: 'MusicBrainz does not know this disc. It will be added with the titles on the disc itself, '
+        + 'and its tracks will wait in the review queue to be identified.' }));
+  }
+  rels.forEach((rel, i) => {
+    const radio = S.el('input', { type: 'radio', name: 'ed-' + folder, value: rel.id });
+    if (rels.length === 1 || i === 0) radio.checked = rels.length === 1;
+    radio.onchange = () => { chosen = rel.id; into.value = rel.folder; setWarn(rel); };
+    const tl = S.el('ol', { class: 'tracks' }, ...rel.tracks.map(t => S.el('li', {
+      text: `${t.title || '?'}  ${t.length_ms ? S.clock(t.length_ms) : ''}` })));
+    pick.append(S.el('label', { class: 'edition' }, radio,
+      S.el('b', { text: ` ${rel.artist || '?'} — ${rel.title || '?'}` }),
+      S.el('span', { class: 'meta', text: `  ${rel.year || ''} ${rel.country || ''}` }), tl));
+  });
+  if (rels.length === 1) setWarn(rels[0]);
+  const add = S.el('button', { class: 'chip on', text: 'Add to library' });
+  add.onclick = async () => {
+    if (rels.length > 1 && !chosen) return alert('Choose which edition this is first.');
+    add.disabled = true;
+    const r = await (await fetch('/api/import/add', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder, release: chosen, into: into.value.trim() }) })).json();
+    if (r.error) { add.disabled = false; return alert(r.error); }
+    // The rip leaves the inbox while it is added, and its card with it: the
+    // work and its result move to "Just added", where they stay.
+    const id = Object.keys(open).find(k => open[k].area === area);
+    if (id) open[id].moved = true;
+    const holder = S.el('div', { class: 'rip' }, S.el('h3', { text: into.value.trim() }), area);
+    document.getElementById('added').prepend(holder);
+    document.getElementById('addedwrap').hidden = false;
+    const log = S.el('div');
+    area.replaceChildren(S.el('p', { class: 'steps', text: `Adding it to ${r.into}…` }), log);
+    S.watchJob(r.job_id, log, job => done(job, r.into, rels.find(x => x.id === chosen), area));
+  };
+  area.replaceChildren(
+    S.el('div', { class: 'steps' }, S.el('span', { text: rels.length > 1
+      ? 'MusicBrainz knows several editions of this disc -- choose yours:' : 'This is the disc:' }), help('add')),
+    pick, warn,
+    S.el('div', { class: 'controls' }, S.el('span', { style: 'align-self:center;font-size:.88rem',
+      text: 'Album folder, in your music folder:' }), into, add));
+}
+
+function done(job, into, rel, area) {
+  const res = job.result || {};
+  if (job.state !== 'done' || !res.ok) {
+    return area.append(S.el('p', { class: 'err', text: res.error || 'Adding it failed; the rip is still in the inbox.' }));
+  }
+  const title = rel ? rel.title : '';
+  const reload = S.el('button', { class: 'chip', text: 'Make it playable here' });
+  const said = S.el('span', { class: 'steps' });
+  reload.onclick = async () => {
+    try { await fetch(`${PLAYER}/library/reload`, { method: 'POST', mode: 'no-cors' }); said.textContent = ' asked.'; }
+    catch { said.textContent = ' the player did not answer.'; }
+  };
+  const send = S.el('a', { class: 'chip', href: '/export' + (title ? '?q=' + encodeURIComponent(title) : ''),
+    text: 'Send to the speakers' });
+  area.append(
+    S.el('p', { class: 'verdict ok', text: `Added: ${res.tracks} tracks, ${res.identified} identified` +
+      (res.ambiguous || res.unidentified ? `, ${res.ambiguous + res.unidentified} waiting in the review queue` : '') +
+      (res.flac ? '; a lossless FLAC copy kept' : '') + '.' }),
+    (res.ambiguous || res.unidentified)
+      ? S.el('p', {}, S.el('a', { href: `${PLAYER}/review`, target: '_blank', text: 'Open the review queue' })) : null,
+    S.el('div', { class: 'controls' }, reload, send, said, help('after')),
+    S.el('p', { class: 'steps', text: 'A speaker plays an album only once its audio has been sent to it.' }));
+}
+
+// ---------------------------------------------------------------- refresh
+function render(s) {
+  state = s;
+  const box = document.getElementById('inbox');
+  if (document.activeElement !== box) box.value = s.inbox;
+  renderSetup(s.setup);
+  renderRips(s.rips);
+}
+async function refresh() {
+  try { render(await S.get('/api/import/state')); } catch (e) { S.fail('#rips', e); }
+}
+refresh();
+setInterval(() => { if (!document.hidden) refresh(); }, 4000);
+</script>

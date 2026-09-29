@@ -48,6 +48,7 @@ import jobs as jobmod  # noqa: E402
 import lempi_control  # noqa: E402  -- process/network side of the handoff
 import pending as pendingmod  # noqa: E402  -- what waits for a person [SPEC048]
 import mesh as meshmod  # noqa: E402  -- membership [SPEC049]
+import cd_import  # noqa: E402  -- the CD import page [SPEC056]
 
 WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "console_web")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -714,6 +715,20 @@ def build_info(repo_root: str) -> dict:
     }
 
 
+def import_inbox() -> str:
+    """The rip inbox EAC writes into `[SPEC-CDI-020]`."""
+    return cd_import.inbox(STATE["jobs"].sidecar, (STATE["roots"] or [""])[0])
+
+
+def import_state() -> dict:
+    """The import page's whole view `[SPEC056]`: where rips land, the music
+    folder albums are filed in, EAC's setup, and the rips found."""
+    inbox = import_inbox()
+    return {"inbox": inbox, "inbox_exists": os.path.isdir(inbox),
+            "music_root": (STATE["roots"] or [""])[0], "setup": cd_import.setup(inbox),
+            "rips": cd_import.scan(inbox)}
+
+
 def system_status() -> dict:
     runner = STATE["jobs"]
     active = None
@@ -889,6 +904,15 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # quieter than the default
         if "--verbose" in sys.argv:
             super().log_message(fmt, *args)
+
+    def json_body(self) -> dict | None:
+        """The request's JSON body, or None when it is not JSON."""
+        raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        try:
+            v = json.loads(raw or b"{}")
+        except ValueError:
+            return None
+        return v if isinstance(v, dict) else None
 
     def send_json(self, obj, code=200):
         body = json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8")
@@ -1102,6 +1126,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(d) if d else self.send_error(404)
             if p == "/jobs":
                 return self.send_file("jobs.html", "text/html; charset=utf-8")
+            if p == "/import":
+                return self.send_file("import.html", "text/html; charset=utf-8")
+            if p == "/api/import/guide":
+                # [SPEC-CDI-070]: GUIDE037, rendered for the panel -- one source.
+                return self.send_json({"html": cd_import.guide_html(), "anchors": cd_import.ANCHORS})
+            if p == "/api/import/state":
+                # [SPEC-CDI-025..035]: EAC's setup ticked off, and the rips in
+                # the inbox. Read-only: a refresh every few seconds is harmless.
+                return self.send_json(import_state())
             if p == "/export":
                 return self.send_file("export.html", "text/html; charset=utf-8")
             if p == "/flags":
@@ -1251,6 +1284,42 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json(
                         {"error": "expected {kind: recording|passage, subject_id: ...}"}, code=400)
                 return self.send_json(unflag_subject_everywhere(kind, str(subject_id)))
+            if p == "/api/import/inbox":
+                # [SPEC-CDI-020]: the one folder EAC rips into, chosen once.
+                path = (self.json_body() or {}).get("path", "").strip()
+                if not path or not os.path.isabs(path):
+                    return self.send_json({"error": "a full folder path, please"}, code=400)
+                cd_import.set_inbox(STATE["jobs"].sidecar, path)
+                return self.send_json(import_state())
+            if p == "/api/import/preview":
+                # [SPEC-CDI-040]: a loose rip gets its own folder, then the
+                # preview job looks it up -- nothing encoded, nothing written.
+                rid = (self.json_body() or {}).get("id", "")
+                try:
+                    folder = cd_import.stage(import_inbox(), rid)
+                except (ValueError, OSError) as e:
+                    return self.send_json({"error": str(e)}, code=400)
+                job = STATE["jobs"].submit("cd-preview", json.dumps({"folder": folder}))
+                # Staging moved a loose rip into its own folder: its id is now
+                # that folder's CUE, which the page re-keys its open card to.
+                new_id = os.path.relpath(os.path.join(folder, os.path.basename(rid)), import_inbox())
+                return self.send_json({"job_id": job, "folder": folder, "id": new_id})
+            if p == "/api/import/add":
+                # [SPEC-CDI-050]: the chosen edition and folder name, relative
+                # to the music folder and never out of it.
+                b = self.json_body() or {}
+                root = (STATE["roots"] or [""])[0]
+                folder, name = b.get("folder", ""), (b.get("into") or "").strip()
+                inbox = os.path.abspath(import_inbox())
+                if not folder or os.path.commonpath([os.path.abspath(folder), inbox]) != inbox:
+                    return self.send_json({"error": "not a rip in the inbox"}, code=400)
+                if not root or not name or os.path.isabs(name) or ".." in name.replace("\\", "/").split("/"):
+                    return self.send_json({"error": "the album folder must be a name inside the music folder"},
+                                          code=400)
+                into = os.path.join(root, name)
+                job = STATE["jobs"].submit("cd-rip", json.dumps(
+                    {"folder": folder, "release": b.get("release") or None, "into": into}))
+                return self.send_json({"job_id": job, "into": into})
             if p == "/api/induct/propose":
                 body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 folder = (json.loads(body or b"{}") or {}).get("folder", "")
