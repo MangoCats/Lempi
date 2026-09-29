@@ -12,6 +12,8 @@ scikit-learn>=1.5     # the Stage-B models, 23 tools
 zstandard>=0.22       # AcousticBrainz dump decompression
 joblib>=1.4           # model persistence, via model_store
 cryptography>=45      # mesh membership: keys, the roster, the members' TLS [SPEC049]
+mutagen>=1.47         # cover art embedded in audio files, induct_covers [SPEC047]
+Pillow>=10            # cover thumbnails, induct_covers [SPEC047]
 
 # NOT a Python package, and required by tools/fingerprint_ids.py:
 #

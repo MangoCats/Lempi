@@ -383,6 +383,13 @@ class MemberServer(ThreadingHTTPServer):
             ctx.minimum_version = ssl.TLSVersion.TLSv1_3
             ctx.load_cert_chain(os.path.join(self.mdir, "node.pem"), os.path.join(self.mdir, "node.key"))
             ctx.verify_mode = ssl.CERT_OPTIONAL
+            # The store holds the members' own self-signed leaves, so each must
+            # be allowed to end its own chain. OpenSSL 3.0 took that as given;
+            # 3.5 refuses it as "self-signed certificate" -- found 2026-09-29
+            # when CI's Linux run of test_mesh failed where Windows passed. The
+            # flag loosens nothing about membership: a member is still whoever
+            # holds a key whose fingerprint the roster names (`member`, below).
+            ctx.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
             ctx.load_verify_locations(cadata="".join(m["certificate"] for m in r["members"]))
             self._ctx, self._version = ctx, r["version"]
         return self._ctx

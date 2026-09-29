@@ -154,18 +154,32 @@ jobs:
         with:
           python-version: "3.x"
 
-      # `numpy` is the only one the tests need -- measured, by running the
-      # suite in a clean container without it and getting exactly three
-      # failures, all `ModuleNotFoundError: No module named 'numpy'`. The
-      # rest of `tools/requirements.txt` is for feature-extraction work the
-      # tests do not reach `[tools/README.md]`. ffmpeg for the same reason
-      # the player job installs it.
+      # What the tests import, and no more: the rest of
+      # `tools/requirements.txt` is feature-extraction work they do not reach
+      # `[tools/README.md]`. ffmpeg for the same reason the player job installs
+      # it.
+      #
+      # **This read "numpy is the only one" and was true when measured; it
+      # went stale, and this job failed on every push from at least
+      # 2026-09-28 01:06 until 2026-09-29.** Reproduced then in a clean
+      # container running this job's own loop: 17 of 67 scripts failed --
+      # 14 importing `cryptography` (the mesh, through `mesh.py`), one
+      # `mutagen` and then `Pillow` (covers), and two wanting `hash_audio`,
+      # which the ingest tools refuse to run without `[SPEC-RLK-150]` and
+      # nothing here built. With those, one real fault was left: `test_mesh`
+      # on Linux's newer OpenSSL, fixed in `intake.py`. Re-measure the same
+      # way when a test grows a new import.
       - name: dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          sudo apt-get install -y --no-install-recommends ffmpeg libasound2-dev pkg-config
           python -m pip install --upgrade pip
-          pip install numpy
+          pip install numpy cryptography mutagen Pillow
+
+      # The one hasher `[SPEC-RLK-150]`, where `ingest_folder.hash_audio_binary`
+      # looks first: this checkout's release build.
+      - name: hash_audio
+        run: cargo build --manifest-path player/Cargo.toml --release --bin hash_audio --locked
 
       # **`pytest` is not the runner here.** These scripts pass their own
       # temporary directory in from a `__main__` block rather than taking a
