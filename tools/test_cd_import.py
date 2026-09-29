@@ -57,21 +57,23 @@ DRIVE = "HL-DT-STDVDRAM GP65NS60 PF00"
 BEFORE = {"Extraction Options": {"DirectoryUse": b"\0\0\0\0", "DirectorySpecification": "C:\\tmp\\eac-test\\",
                                  "AutoSaveStatus": b"\0", "AddChecksumLogFile": b"\0", "AddCDTextToCUESheet": b"\xff"},
           "StartUp Options": {"CreateEnglishLogFile": b"\0"},
-          "drives": {DRIVE: {"UseAccurateRip": b"\xff", "SampleOffset": b"\0\0\0\0"}}}
+          "drives": {DRIVE: {"UseAccurateRip": b"\xff", "SampleOffset": b"\0\0\0\0", "ExtractionMode": b"\0\0"}}}
 INBOX = "C:\\Users\\someone\\Music\\_Rips"
 AFTER = {"Extraction Options": {"DirectoryUse": b"\0\0\0\0", "DirectorySpecification": INBOX + "\\",
                                 "AutoSaveStatus": b"\xff", "AddChecksumLogFile": b"\xff", "AddCDTextToCUESheet": b"\xff"},
          "StartUp Options": {"CreateEnglishLogFile": b"\xff"},
-         "drives": {DRIVE: {"UseAccurateRip": b"\xff", "SampleOffset": (6).to_bytes(4, "little", signed=True)}}}
+         "drives": {DRIVE: {"UseAccurateRip": b"\xff", "SampleOffset": (6).to_bytes(4, "little", signed=True),
+                            "ExtractionMode": b"\x04\0"}}}
 
 
 def test_setup_checks():
     """[SPEC-CDI-025]: read, ticked, and the uncalibrated left to a person."""
     before = {c["key"]: c for c in ci.checks(BEFORE, INBOX, installed=True, ffmpeg=True)}
     fix = sorted(k for k, c in before.items() if c["ok"] is False)
-    check(fix == sorted(["inbox", "log", "checksum", "english", f"offset:{DRIVE}"]),
-          f"the desktop as it was: five to fix, got {fix}")
-    check(before[f"secure:{DRIVE}"]["ok"] is None, "secure mode waits for calibration, never guessed")
+    check(fix == sorted(["inbox", "log", "checksum", "english", f"offset:{DRIVE}", f"secure:{DRIVE}"]),
+          f"the desktop as it was: six to fix, got {fix}")
+    sec = before[f"secure:{DRIVE}"]
+    check(sec["ok"] is False and "burst" in sec["detail"], f"the desk before setup was in burst mode: {sec}")
     check(before["inbox"]["detail"].startswith("EAC's folder is C:\\tmp\\eac-test"), before["inbox"]["detail"])
     asks = {k: dict(v) for k, v in AFTER.items()}
     asks["Extraction Options"]["DirectoryUse"] = b"\x01\0\0\0"

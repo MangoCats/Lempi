@@ -36,16 +36,24 @@ Open **EAC → Drive Options…** (F10).
 - On **Extraction Method**, choose **Secure mode with following drive features
   (recommended)**, then press **Detect Read Features…** and accept what it
   finds.
-- On **Offset / Speed**, tick **Use read sample offset correction** and press
-  **Detect read sample offset correction…** with a popular CD in the drive. It
-  finds your drive's offset by comparing with other people's rips, so it needs
-  a disc other people have ripped -- try two or three well-known ones. A value
-  of 0 almost always means this step has not been done. Every drive model's
-  offset is also listed at
-  [accuraterip.com/driveoffsets.htm](http://www.accuraterip.com/driveoffsets.htm),
-  to type in, or to check what detection found.
-- On the same tab, tick **Use AccurateRip with this drive**, and **CD-Text Read
-  capable drive** if your drive supports it.
+- On **Offset / Speed**, set the read offset **before** turning AccurateRip on
+  -- ticking **Use AccurateRip with this drive** greys the offset controls out:
+  1. Untick **Use AccurateRip with this drive**.
+  2. Tick **Use read sample offset correction** and type your drive's offset,
+     from [accuraterip.com/driveoffsets.htm](http://www.accuraterip.com/driveoffsets.htm).
+     If your exact model is not listed, a sibling model with the same number
+     in its name (the letters around it vary) almost always shares it. Press
+     **OK**.
+  3. Open **Drive Options…** again and tick **Use AccurateRip with this drive**.
+     The offset stays, greyed out. Press **OK**.
+
+  **Detect read sample offset correction…** is not a shortcut: it works only
+  with a few particular reference CDs EAC lists, so an ordinary popular CD
+  says "not in database". A value of 0 almost always means the offset was
+  never set. Your first rip of a well-known disc is the proof: *accurately
+  ripped* means the offset is right.
+- On the same tab, tick **CD-Text Read capable drive** if your drive supports
+  it.
 
 ### 3. The log, in English, with a checksum
 

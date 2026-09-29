@@ -411,10 +411,26 @@ def checks(eac: dict | None, inbox_path: str, *, installed: bool, ffmpeg: bool) 
             "In Drive Options, Offset / Speed: tick Use read sample offset correction, then press "
             "Detect read sample offset correction with a popular CD in the drive.", "drive",
             detail=None if off is None else f"offset {off:+d}")
-        add(f"secure:{name}", f"Secure mode ({name.strip()})", None,
+        # `ExtractionMode`, calibrated at the desk 2026-09-29 by switching modes
+        # and nothing else: secure 04 00, burst 00 00. `SecureMode` did not
+        # move -- it records the drive-feature boxes, not the mode.
+        mode = _mode(d.get("ExtractionMode"))
+        add(f"secure:{name}", f"Secure mode ({name.strip()})", None if mode is None else mode == SECURE,
             "In Drive Options, Extraction Method: choose Secure mode with following drive features.", "drive",
-            detail="confirm in EAC -- this value is read once it is calibrated (IMPL018 Phase 2)")
+            detail=None if mode in (None, SECURE) else
+            "EAC is in burst mode: it reads once and never verifies" if mode == BURST else
+            f"EAC is in another mode (code {mode}), not the recommended secure mode")
     return out
+
+
+# EAC's `ExtractionMode` codes, as observed (IMPL018 Phase 2).
+SECURE, BURST = 4, 0
+
+
+def _mode(v) -> int | None:
+    if isinstance(v, (bytes, bytearray)) and len(v) >= 2:
+        return int.from_bytes(v[:2], "little")
+    return v if isinstance(v, int) else None
 
 
 def setup(inbox_path: str) -> dict:
