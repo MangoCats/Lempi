@@ -25,6 +25,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -171,10 +172,18 @@ def test_files_on_disk():
         check(False, "a clash is refused")
     except FileExistsError:
         check(open(os.path.join(dst, "Bj\xf6rk - Post.log"), "rb").read() == b"x", "a clash is refused, nothing overwritten")
-    ingest_cd.point_cue_at(os.path.join(dst, "Bj\xf6rk - Post.cue"))
-    got = open(os.path.join(dst, "Bj\xf6rk - Post.cue"), "rb").read()
-    check(got == cue.replace('.wav" WAVE', '.mp3" MP3').encode("cp1252"),
-          f"only the extension and type changed, in bytes: {got!r}")
+    sheet = os.path.join(dst, "Bj\xf6rk - Post.cue")
+    ingest_cd.point_cue_at(sheet)
+    got = open(sheet, "rb").read()
+    check(got == cue.replace('.wav" WAVE', '.mp3" MP3').encode("utf-8"),
+          f"the code-page sheet is UTF-8 now, repointed, its line endings kept: {got!r}")
+    check(not got.startswith(b"\xef\xbb\xbf"), "without a byte-order mark, as Lempi writes its own")
+    check(cd_toc.parse_eac_cue(sheet).data_file == "Bj\xf6rk - Post.mp3", "and it still names the MP3, accent and all")
+    before = os.path.getmtime(sheet)
+    time.sleep(0.05)
+    ingest_cd.point_cue_at(sheet)
+    check(open(sheet, "rb").read() == got and os.path.getmtime(sheet) == before,
+          "a second pass leaves it byte-for-byte, and does not even rewrite it")
 
 
 def test_keep_lossless_setting():

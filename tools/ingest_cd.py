@@ -35,7 +35,10 @@ so the catalogue names where the album lives, not the inbox it was ripped into
 `[SPEC-RIP-040]` -- it was left beside every album until 2026-09-29 -- with a
 FLAC copy made first if `--keep-flac`, or if the desktop player's Settings
 switch says so when neither flag is given `[SPEC-CDI-058]`. The CUE's `FILE`
-line is then pointed at the MP3, so the sheet still names a file that exists.
+line is then pointed at the MP3, so the sheet still names a file that exists,
+and the sheet is kept as UTF-8 whatever code page the ripper wrote it in. The
+log is left exactly as written: it is the rip's evidence, and EAC's carries a
+checksum over its exact text.
 """
 
 from __future__ import annotations
@@ -168,24 +171,33 @@ def move_rip(folder: str, into: str) -> str:
     return into
 
 
-_CUE_FILE = re.compile(rb'^(\s*FILE\s+"[^"]*?)\.[A-Za-z0-9]+("\s+)\S+', re.I)
+_CUE_FILE = re.compile(r'^(\s*FILE\s+"[^"]*?)\.[A-Za-z0-9]+("\s+)\S+', re.I)
 
 
-def point_cue_at(cue_path: str, ext: str = ".mp3", kind: bytes = b"MP3") -> None:
-    """Point the CUE's first `FILE` line at the same name with `ext`, as `kind`.
-    Only the extension and the type change, in bytes: EAC may write the sheet
-    in the Windows code page rather than UTF-8, and the name stays exactly as it
-    wrote it. Once the WAV is gone, a sheet naming it would send any player that
-    opens it to a file that does not exist."""
+def point_cue_at(cue_path: str, ext: str = ".mp3", kind: str = "MP3") -> None:
+    """Point the CUE's first `FILE` line at the same name with `ext`, as `kind`,
+    and keep the sheet as UTF-8 -- once the WAV is gone, a sheet naming it would
+    send any player that opens it to a file that does not exist.
+
+    The sheet is read as the ripper wrote it (`cd_toc.read_cue_text`: UTF-8, or
+    the Windows code page EAC and CUERipper use) and written back as UTF-8
+    without a byte-order mark, as Lempi's own sheets are (`player/src/cue.rs`):
+    a code-page sheet reads differently under each Windows locale, UTF-8 the
+    same everywhere. Its line endings are kept. Already in that form, it is
+    left byte-for-byte as it was, so running this again changes nothing."""
+    text = cd_toc.read_cue_text(cue_path)
+    out, done = [], False
+    for line in text.splitlines(keepends=True):
+        if not done:
+            line, n = _CUE_FILE.subn(lambda m: m.group(1) + ext + m.group(2) + kind, line, count=1)
+            done = bool(n)
+        out.append(line)
+    data = "".join(out).encode("utf-8")
     with open(cue_path, "rb") as fh:
-        lines = fh.read().split(b"\n")
-    for i, line in enumerate(lines):
-        new, n = _CUE_FILE.subn(lambda m: m.group(1) + ext.encode() + m.group(2) + kind, line, count=1)
-        if n:
-            lines[i] = new
-            break
+        if fh.read() == data:
+            return
     with open(cue_path, "wb") as fh:
-        fh.write(b"\n".join(lines))
+        fh.write(data)
 
 
 # -------------------------------------------------------------- disc lookup

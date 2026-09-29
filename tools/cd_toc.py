@@ -98,6 +98,19 @@ _CUE_PERFORMER = re.compile(r'^\s*PERFORMER\s+"(.*)"\s*$')
 _CUE_FILE = re.compile(r'^\s*FILE\s+"(.*)"\s+\w+\s*$')
 
 
+def read_cue_text(path: str) -> str:
+    """A CUE sheet's text: UTF-8 when it is, else the Windows code page the
+    rippers write in. A CUERipper sheet measured 2026-09-29 was cp1252; read as
+    UTF-8 its "I’m Gonna Be Strong" became "I�m", and a name with an accent
+    would stop matching the audio file on disk."""
+    with open(path, "rb") as f:
+        raw = f.read()
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return raw.decode("cp1252", errors="replace")
+
+
 def parse_eac_cue(path: str) -> DiscToc:
     """EAC's own `.cue` sheet. Real example (this session's test disc):
 
@@ -144,17 +157,7 @@ def parse_eac_cue(path: str) -> DiscToc:
                 title=cur_title, performer=cur_performer))
         cur_track, cur_title, cur_performer, cur_indexes = None, None, None, {}
 
-    # UTF-8 when it is, else the Windows code page the rippers write in: a
-    # CUERipper sheet measured 2026-09-29 was cp1252, and read as UTF-8 its
-    # "I’m Gonna Be Strong" became "I�m" -- and a name with an accent would
-    # stop matching the audio file on disk.
-    with open(path, "rb") as f:
-        raw = f.read()
-    try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = raw.decode("cp1252", errors="replace")
-    for line in text.splitlines(keepends=True):
+    for line in read_cue_text(path).splitlines(keepends=True):
         m = _CUE_FILE.match(line)
         if m and data_file is None:
             # A single-file DAO image is the shape both the
