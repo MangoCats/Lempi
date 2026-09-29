@@ -4,7 +4,7 @@
 
 Every machine that holds a Lempi or Vipunen database, what it is for, and where its data lives. This file is **mirrored**: it lives in the repository, so the desktop, `teacherslounge` and `smartboardpc` each carry it in their checkout. Updating it means committing here and pulling there. Keep it current at milestones and when the fleet changes — a node added, moved, rebuilt or retired, a role changed — not with every commit. Each fact carries the date it was read, so a stale one is visible as stale.
 
-> **Related:** [SPEC046](../docs/spec/SPEC046-star-sync.md) (how the databases are merged) · [`data/README.md`](../data/README.md) (the hub's own state) · [`fleet/targets.env`](targets.env) (what the deploy scripts address) · each node's own folder below
+> **Related:** [SPEC046](../docs/spec/SPEC046-star-sync.md) (how the databases are merged) · [`data/README.md`](../data/README.md) (the hub's own state) · `fleet/targets.env`, private, shaped like [`fleet-example/targets.env`](../fleet-example/targets.env) (what the deploy scripts address) · each node's own folder below
 
 ---
 
