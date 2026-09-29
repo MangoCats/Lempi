@@ -189,6 +189,17 @@ trusts exactly the active connection.
 **Verify.** On one node, untrust its network: discovery goes silent and the hub
 lists it missing; trust it again: it answers. The node keeps playing throughout.
 
+**Built 2026-09-28** (`bf49484`), deployed 2026-09-29 with `lempi-btctl` first,
+since the player reads its new UUID column. Each appliance's first start trusted
+exactly the Wi-Fi it was on and nothing else. On lempi02w: revoked over the LAN
+without the window -- dormant, silent to the members' query, the signed snapshot
+refused, the reason on its page; a grant without the window refused (409); after
+`mesh-pair`, granted, answering and accepting again. Playing throughout: 13,203,456
+to 26,433,536 frames across 300 s, 44,100 a second. The check found one fault of
+its own making, fixed in `236d2bb`: the reading went through `sudo` every 30 s on
+every node, three journal lines a time; unprivileged `nmcli` reads the same list,
+and after that deploy none ran and each node kept its record.
+
 ## 6. Phase 5 -- fleet configuration kept private
 
 **`[IMPL-NSH-600]` Goal:** [SPEC055](spec/SPEC055-fleet-configuration-kept-private.md).
