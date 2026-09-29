@@ -1,6 +1,6 @@
 # SPEC056: CD Import With EAC, From Vipunen's Own Page
 
-**Design Specification — Tier 2 · written 2026-09-29 · accepted 2026-09-29 (decisions in §10), being built · build plan in [IMPL018](../IMPL018-cd-import-page.md) · the guide it opens: [GUIDE037](../GUIDE037-ripping-a-cd-with-eac.md)**
+**Design Specification — Tier 2 · written 2026-09-29 · accepted 2026-09-29 (decisions in §10), built 2026-09-29 but for the desk session in IMPL018 §8 · build plan in [IMPL018](../IMPL018-cd-import-page.md) · the guide it opens: [GUIDE037](../GUIDE037-ripping-a-cd-with-eac.md)**
 
 Bringing a CD into the library works today, but only for someone who reads
 specifications and types command lines: rip in EAC with the right settings,
@@ -55,9 +55,10 @@ It **reads and never writes**: EAC owns its settings and must be closed to have
 them changed under it. The on/off values read unambiguously (`ff` on, `00` off,
 measured 2026-09-29); the multi-valued ones -- the extraction mode, the offset
 -- are shown for a person to confirm until each is calibrated against EAC 1.8
-(IMPL018 Phase 2). On this desktop the check would fail today on four counts:
-no automatic log, no log checksum, the directory still `C:\tmp\eac-test\` and
-not in use, and a read offset of 0 -- measured, not assumed.
+(IMPL018 Phase 2). On this desktop the check fails today on five counts: no
+automatic log, no log checksum, no English log, the directory still
+`C:\tmp\eac-test\` and not in use, and a read offset of 0 -- measured, not
+assumed.
 
 **`[SPEC-CDI-028]` Missing pieces are said plainly, not failed on.** EAC not
 installed, no optical drive, ffmpeg absent: each is a line on the page saying
@@ -114,8 +115,8 @@ audio has reached it -- a catalogue entry alone is refused by star sync
 ## 6. Album files with no track list
 
 **`[SPEC-CDI-060]` The same page splits an existing album file.** A second panel
-lists the library's single files that hold a whole album and no track list --
-the DAO captures `[SPEC024]` -- and splits one with the same preview-then-add
+finds, by search, a file that holds a whole album and no track list -- a DAO
+capture `[SPEC024]` -- and splits it with the same preview-then-add
 shape: find its release, show where the cascade would cut, open the existing
 boundary editor to adjust, then commit. Today that is the `segment-dao` job with
 a hand-typed track count or durations, and no page at all.

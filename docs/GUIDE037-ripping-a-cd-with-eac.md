@@ -1,16 +1,15 @@
 # GUIDE037: Ripping a CD With EAC
 
-**Guide — Tier 1 · written 2026-09-29 · for Vipunen's import page, designed in [SPEC056](spec/SPEC056-cd-import-with-eac.md); opens beside its controls once built**
+**Guide — Tier 1 · written 2026-09-29 · opens beside the controls of Vipunen's import page ([SPEC056](spec/SPEC056-cd-import-with-eac.md))**
 
 How to get a CD into your Lempi library: Exact Audio Copy (EAC) reads the disc,
 Vipunen does the rest. You set EAC up once; after that, each disc is one key in
 EAC and one button in Vipunen. EAC's menus and options are named here exactly
 as EAC 1.8 shows them.
 
-> **Until the import page exists** ([IMPL018](IMPL018-cd-import-page.md)), the
-> one-time setup and ripping below apply as written; the adding is done with
-> `python tools/ingest_cd.py <library> --folder <rip folder> --commit`, and the
-> rip folder must already be where the album will live.
+The import page is in Vipunen's console -- **import** in the menu along the
+top. Its **How to** button opens this guide beside it, and each **?** opens it
+at the step it sits next to.
 
 ---
 

@@ -1,6 +1,6 @@
 # IMPL018: The CD Import Page
 
-**Implementation Plan — Tier 3 · written 2026-09-29 · being built · decisions taken 2026-09-29, [SPEC056](spec/SPEC056-cd-import-with-eac.md) §10**
+**Implementation Plan — Tier 3 · written 2026-09-29 · built but for the desk session, §8 · decisions taken 2026-09-29, [SPEC056](spec/SPEC056-cd-import-with-eac.md) §10**
 
 How [SPEC056](spec/SPEC056-cd-import-with-eac.md) is built: a Vipunen page
 that takes a CD from EAC into the library with buttons, and the guide that
@@ -52,7 +52,7 @@ after, so the check reads their values from evidence, not guesswork. Until then
 they are shown for a person to confirm. EAC missing, no drive, ffmpeg missing:
 each a plain line `[SPEC-CDI-028]`.
 
-**Tests.** Against recorded registry snapshots: this desktop's today (four
+**Tests.** Against recorded registry snapshots: this desktop's today (five
 failures, SPEC056 §2), and one after setup (none).
 
 ## 4. Phase 3 -- the inbox and the rip cards
@@ -93,6 +93,41 @@ committed. Skipped if D5 defers it.
 language file, and corrected at the Phase 4 desk session wherever the real
 screens differ from it. A screenshot is added only where words fail.
 
+## 8. Status, 2026-09-29
+
+**`[IMPL-CDI-800]` Built, everything that needs no disc and no hand on EAC:**
+
+- **Phase 0** (`997e35d`): the true preview, `--release`, `--into`, the WAV
+  removed and the CUE repointed; tested end to end with a real WAV, ffmpeg and
+  `hash_audio`. The FLAC switch is on the Lempi skin's Settings page
+  (`08d5df8`).
+- **Phases 1, 3, 4** (`944b921`): the page, the guide panel, the inbox cards and
+  their verdicts, preview and add -- driven through HTTP by
+  `tools/test_console_import.py` against a real `console.py`, a real rip and a
+  local stand-in for MusicBrainz.
+- **Phase 2**, reading: against this desktop's registry the check finds five to
+  fix (inbox, status report, its checksum, the English log, a read offset of 0)
+  -- the plan above said four; `CreateEnglishLogFile` was off as well.
+- **Phase 5** (`393b186`): by **search**, not by a list. Measured first: the
+  library's long single-passage files are all long songs, so a list of
+  "unsplit albums" would have offered nine wrong answers and no right one.
+
+**Found on the way.** `cd_toc.parse_eac_log` matched only one of EAC's three
+per-track AccurateRip outcomes, so a real mismatch passed as a good rip
+(`606d912`). `CheckLog.exe` is not yet run: its command line is undocumented,
+and it is tried at the desk rather than guessed.
+
+**Left for the desk, 2026-09-30:**
+
+1. *Calibration* -- `python tools/eac_calibrate.py snapshot before`, change one
+   setting in EAC and press OK, `snapshot after`, `diff before after`; once each
+   for the extraction mode (secure mode on and off) and for *Use this
+   directory*. The check then reads those values instead of asking.
+2. *Setup* -- the five fixes, with the page's ticks as the check.
+3. *A real disc*, end to end (Phase 4's **Verify**), and one album file split
+   and played (Phase 5's). The guide corrected wherever EAC's real screens
+   differ from it.
+
 ---
 
-**Traceability:** `[IMPL-CDI-100..700]` · builds [SPEC056](spec/SPEC056-cd-import-with-eac.md) · uses `[SPEC-RIP-040]`, `[SPEC-RIP-054]`, `[SPEC-RIP-088]`
+**Traceability:** `[IMPL-CDI-100..800]` · builds [SPEC056](spec/SPEC056-cd-import-with-eac.md) · uses `[SPEC-RIP-040]`, `[SPEC-RIP-054]`, `[SPEC-RIP-088]`
