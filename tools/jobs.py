@@ -1235,6 +1235,10 @@ class Runner:
             if self._stopped(job_id):
                 return self._finish(job_id, "stopped")
             self._emit(job_id, "stage", stage, stage=stage)
+            self._emit(job_id, "log", {
+                "flavor": "starting Essentia -- each passage takes about half a minute, so the first "
+                          "progress line can take a while",
+                "amplitude": "starting -- a fraction of a second per passage"}[stage], stage=stage)
             code, out = self._spawn(job_id, stage, argv)
             if stage == "flavor":
                 # extract_library.py has no --json; its last summary line says it.
@@ -1243,6 +1247,11 @@ class Runner:
                 result["flavor"] = {"extracted": int(m.group(1)) if m else 0,
                                     "failed": int(m.group(2)) if m else 0,
                                     "todo": int(todo.group(1)) if todo else None}
+                # Some failed among many done exits 0, and must still not read
+                # as a clean finish: on 2026-10-01 all 218 failed under "done".
+                if code == 0 and result["flavor"]["failed"]:
+                    self._emit(job_id, "error", f"flavor: {result['flavor']['failed']} passage(s) could "
+                               "not be analyzed -- each is named above, with why", stage=stage)
             else:
                 result["amplitude"] = parse_json_tail(out) or {}
             if code != 0:

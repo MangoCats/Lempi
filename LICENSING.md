@@ -1,13 +1,18 @@
 # Licensing
 
-Two works, two licences, one repository.
+Two works, two licences, one repository — and one folder of other people's
+files, under their own terms.
 
 | Path | Work | Licence |
 | :--- | :--- | :--- |
 | `player/`, `docs/`, `build/`, `sql/`, root files | **Lempi** — the player | **MIT** |
 | `tools/` | **Vipunen** — the library builder | **AGPL-3.0-or-later** |
+| `vendor/essentia/` | **Essentia**'s extractor and models, by MTG — third party, unmodified | extractor **AGPL-3.0**; models **CC BY-NC-SA 4.0**, non-commercial |
 
 Full texts: [`LICENSE`](LICENSE) (MIT) and [`tools/LICENSE`](tools/LICENSE) (AGPL-3.0).
+[`vendor/essentia/README.md`](vendor/essentia/README.md) has the sources and
+terms of the third-party files. Vipunen uses them to analyse flavor; the player
+contains none of them.
 
 ## Why they differ
 

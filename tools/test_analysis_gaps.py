@@ -144,6 +144,12 @@ def test_job():
         check(not any("fingerprint_ids.py" in " ".join(a) for _, a in seen), "never re-identifies")
         check(j["result"]["flavor"] == {"extracted": 128, "failed": 2, "todo": 130}, f"{j['result']}")
         check(j["result"]["amplitude"].get("analyzed") == 130, f"{j['result']}")
+        errors = [e["text"] for e in j["events"] if e["kind"] == "error"]
+        check(any("2 passage(s) could not be analyzed" in t for t in errors),
+              f"some failed under a zero exit: still a red line, not a quiet done: {errors}")
+        logs = [e["text"] for e in j["events"] if e["kind"] == "log"]
+        check(any(t.startswith("starting Essentia") for t in logs),
+              f"each stage says it has started before its tool says anything: {logs}")
 
         r2, _, seen2 = runner_with(tmp, "bad", {"flavor": (1, "boom"),
                                                "amplitude": (0, '{"ok": true, "analyzed": 3}')})

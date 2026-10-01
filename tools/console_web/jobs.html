@@ -53,7 +53,7 @@
 </main>
 <script src="/console.js"></script>
 <script>
-let watching = null, es = null;
+let watching = null, es = null, beat = null;
 
 async function list() {
   try {
@@ -105,21 +105,45 @@ function actions(j) {
 // way -- state is in a file, not in this tab [SPEC-SUI-085].
 function watch(id) {
   if (es) es.close();
+  if (beat) clearInterval(beat);
   watching = id;
   const box = document.getElementById('live');
   box.replaceChildren(S.el('h2', {}, `Job ${id} `, S.el('small', { text: '— live' })));
   const log = S.el('div', { class: 'list' });
   const counts = S.el('div', { class: 'tiles' });
-  box.append(counts, log);
+  // A line that moves while the job does, so a quiet stretch -- Essentia's
+  // first passages take half a minute -- reads as working, not stuck.
+  const status = S.el('p', { class: 'empty', style: 'font-size:.85rem;padding:.2rem 0', text: 'connecting…' });
+  box.append(status, counts, log);
+  let last = Date.now(), stage = null, finished = false;
+  const tick = () => {
+    if (finished) return;
+    const s = Math.round((Date.now() - last) / 1000);
+    status.textContent = (stage ? `running: ${stage}` : 'waiting to start') +
+      (s >= 3 ? ` — last output ${s} s ago, still working` : '');
+  };
+  beat = setInterval(tick, 1000);
+  const seen = e => {
+    last = Date.now();
+    if (e.kind === 'stage') { stage = e.text; list(); }
+    if (e.kind === 'done') {
+      finished = true;
+      status.textContent = `finished: ${e.text}`;
+      clearInterval(beat);
+      beat = null;
+    }
+    tick();
+  };
 
   S.get(`/api/jobs/${id}`).then(j => {
-    for (const e of j.events) render(e, log, counts);
+    for (const e of j.events) { render(e, log, counts); seen(e); }
   }).catch(e => S.fail('#live', e));
 
   es = new EventSource(`/api/jobs/${id}/stream`);
   es.onmessage = m => {
     const e = JSON.parse(m.data);
     render(e, log, counts);
+    seen(e);
     if (e.kind === 'done') { es.close(); es = null; list(); gaps(); }
   };
 }

@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -22,7 +23,22 @@ sys.path.insert(0, str(Path(__file__).parent))
 import gaia_history as gh  # noqa: E402
 import gaia_predict as gp  # noqa: E402
 
-MODEL_DIR = Path("data/essentia/svm_beta1")
+# The extractor and the models are committed, in `vendor/essentia/` -- they
+# lived untracked in `data/essentia/` until 2026-10-01, and were lost with it
+# when the repository was re-seeded; flavor extraction then failed on every
+# passage without saying why. Found from the repository, not the working
+# directory, so it does not depend on where a tool is started.
+# `LEMPI_ESSENTIA_DIR` names another copy.
+ESSENTIA_DIR = Path(os.environ.get("LEMPI_ESSENTIA_DIR")
+                    or Path(__file__).resolve().parent.parent / "vendor" / "essentia")
+MODEL_DIR = ESSENTIA_DIR / "svm_beta1"
+CHAINS = 18
+
+
+class ModelsMissing(RuntimeError):
+    """Fewer classifier models than the 18 flavor needs. Raised rather than
+    classifying with what is there: with none, every passage would come out
+    "classified" into nothing, be cached, and never be tried again."""
 
 
 class Chain:
@@ -53,7 +69,12 @@ class Classifier:
     """All 18 chains, loaded once."""
 
     def __init__(self, model_dir: Path = MODEL_DIR):
-        self.chains = [Chain(p) for p in sorted(model_dir.glob("*.history"))]
+        found = sorted(Path(model_dir).glob("*.history"))
+        if len(found) != CHAINS:
+            raise ModelsMissing(
+                f"{len(found)} of {CHAINS} flavor classifier models found in {model_dir} -- "
+                "see vendor/essentia/README.md")
+        self.chains = [Chain(p) for p in found]
 
     def classify(self, doc: dict) -> dict[str, dict[str, float]]:
         return {c.name: c.apply(doc) for c in self.chains}

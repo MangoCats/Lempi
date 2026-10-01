@@ -39,7 +39,7 @@ import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import gaia_classify as gc  # noqa: E402
 import audio_duration  # noqa: E402
 
-EXTRACTOR = Path("data/essentia/streaming_extractor_music.exe").resolve()
+EXTRACTOR = gc.ESSENTIA_DIR / "streaming_extractor_music.exe"
 FFMPEG = shutil.which("ffmpeg")
 SOURCE = "local:essentia-2.1-beta2+gaia-beta1"
 
@@ -79,8 +79,10 @@ def probe_duration_ms(path: str) -> float | None:
 
 
 def extract_one(path: str, start_ms: int = 0, end_ms: int = -1,
-                duration_ms: int = 0) -> tuple[dict, bool] | None:
-    """Extract lowlevel features for one passage. `None` if it fails.
+                duration_ms: int = 0) -> tuple[dict, bool] | str:
+    """Extract lowlevel features for one passage -- or, if it fails, why, in
+    words. Every failure here was once a bare `None`, so a run in which the
+    extractor itself was missing reported "218 failed" and nothing more.
 
     A passage that is not the whole file is **decoded to a temporary WAV first**
     `[LOG-FEX-105]`. The extractor accepts `startTime`/`endTime` in a profile,
@@ -95,7 +97,7 @@ def extract_one(path: str, start_ms: int = 0, end_ms: int = -1,
     """
     src = Path(path)
     if not src.exists():
-        return None
+        return "the audio file is not there"
 
     # The stored duration can be badly wrong on VBR MP3 -- 29% of files differ
     # from the decoded length by more than 5 s, and one file overstates by 38
@@ -104,7 +106,7 @@ def extract_one(path: str, start_ms: int = 0, end_ms: int = -1,
     real_ms = probe_duration_ms(str(src))
     if real_ms and end_ms > 0:
         if start_ms >= real_ms - 1000:
-            return None  # phantom passage: nothing to extract
+            return "the passage starts past the end of its audio"
         end_ms = min(end_ms, real_ms)
         duration_ms = real_ms
 
@@ -128,7 +130,7 @@ def extract_one(path: str, start_ms: int = 0, end_ms: int = -1,
         )
         if not whole:
             if not FFMPEG:
-                return None
+                return "ffmpeg is needed to cut the passage out, and was not found"
             tmp_wav = Path(tempfile.gettempdir()) / f"ll_{tag}.wav"
             cut = subprocess.run(
                 [FFMPEG, "-v", "error", "-y",
@@ -137,16 +139,20 @@ def extract_one(path: str, start_ms: int = 0, end_ms: int = -1,
                 capture_output=True, timeout=300,
             )
             if cut.returncode != 0 or not tmp_wav.exists():
-                return None
+                return f"ffmpeg could not cut the passage (exit {cut.returncode})"
             target = str(tmp_wav)
 
         r = subprocess.run([str(EXTRACTOR), target, str(tmp_json)],
                            capture_output=True, timeout=600)
         if r.returncode != 0 or not tmp_json.exists():
-            return None
+            return f"the extractor failed (exit {r.returncode})"
         return json.loads(tmp_json.read_text(encoding="utf-8", errors="replace")), windowed
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError):
-        return None
+    except subprocess.TimeoutExpired:
+        return "timed out"
+    except json.JSONDecodeError:
+        return "the extractor wrote unreadable output"
+    except OSError as e:
+        return f"{type(e).__name__}: {e}"
     finally:
         tmp_json.unlink(missing_ok=True)
         if tmp_wav:
@@ -192,36 +198,56 @@ def main() -> int:
     todo = [r for r in rows if (r[0], r[3], r[4]) not in done]
     if limit:
         todo = todo[:limit]
-    print(f"{len(rows)} files, {len(done)} cached, {len(todo)} to extract, {jobs} jobs")
+    print(f"{len(rows)} files, {len(done)} cached, {len(todo)} to extract, {jobs} jobs", flush=True)
     if not todo:
         return 0
 
-    clf = gc.Classifier()
+    # Both tools, checked before any work: without them every passage fails,
+    # and on 2026-10-01 that read only as "0 extracted, 218 failed", after
+    # two silent minutes, under a job marked done.
+    if not EXTRACTOR.is_file():
+        print(f"ERROR: the Essentia extractor is missing: {EXTRACTOR}\n"
+              "  It is committed in vendor/essentia/ -- see vendor/essentia/README.md "
+              "for where it comes from.", flush=True)
+        return 2
+    try:
+        clf = gc.Classifier()
+    except gc.ModelsMissing as e:
+        print(f"ERROR: {e}", flush=True)
+        return 2
+    print(f"extracting {len(todo)} passage(s), {jobs} at a time -- about half a minute each, "
+          "so the first results take a while", flush=True)
+
     t0 = time.time()
     ok = fail = 0
+    reasons: dict[str, int] = {}
     with futures.ThreadPoolExecutor(max_workers=jobs) as pool:
         pending = {pool.submit(extract_one, r[1], r[3], r[4], r[5]): r for r in todo}
         for i, fut in enumerate(futures.as_completed(pending), 1):
             md5, path, mbid, start_ms, end_ms, _dur = pending[fut]
             result = fut.result()
-            if result is None:
+            if isinstance(result, str):
                 fail += 1
-                continue
-            doc, windowed = result
-            source = SOURCE + (WINDOW_SUFFIX if windowed else "")
-            con.execute(
-                "INSERT OR REPLACE INTO lowlevel_cache VALUES (?,?,?,?,?,datetime('now'))",
-                (md5, start_ms, end_ms, zlib.compress(json.dumps(doc).encode()),
-                 "essentia-2.1-beta2"),
-            )
-            for ch, classes in clf.classify(doc).items():
-                for cls, val in classes.items():
-                    con.execute(
-                        "INSERT OR REPLACE INTO flavor VALUES ('recording',?,?,?,?,?,NULL)",
-                        (mbid, ch, cls, val, source),
-                    )
-            ok += 1
-            if i % 10 == 0:
+                reasons[result] = reasons.get(result, 0) + 1
+                print(f"  failed: {path} [{start_ms}-{end_ms} ms]: {result}", flush=True)
+            else:
+                doc, windowed = result
+                source = SOURCE + (WINDOW_SUFFIX if windowed else "")
+                con.execute(
+                    "INSERT OR REPLACE INTO lowlevel_cache VALUES (?,?,?,?,?,datetime('now'))",
+                    (md5, start_ms, end_ms, zlib.compress(json.dumps(doc).encode()),
+                     "essentia-2.1-beta2"),
+                )
+                for ch, classes in clf.classify(doc).items():
+                    for cls, val in classes.items():
+                        con.execute(
+                            "INSERT OR REPLACE INTO flavor VALUES ('recording',?,?,?,?,?,NULL)",
+                            (mbid, ch, cls, val, source),
+                        )
+                ok += 1
+            # Every tenth passage, failed or not -- counting only successes is
+            # what kept an all-failing run silent to the end.
+            if i % 10 == 0 or i == len(todo):
                 el = time.time() - t0
                 con.commit()
                 print(f"  {i}/{len(todo)}  ok={ok} fail={fail}  "
@@ -230,9 +256,13 @@ def main() -> int:
     el = time.time() - t0
     print(f"\n{ok} extracted, {fail} failed in {el/60:.1f} min "
           f"({el/max(ok,1):.1f}s/passage wall, {jobs} jobs)")
-    print(f"full library estimate: {len(rows)*el/max(ok,1)/3600:.1f} h at this rate")
-    return 0
-
+    for why, n in sorted(reasons.items(), key=lambda kv: -kv[1]):
+        print(f"  {n} failed: {why}")
+    if ok:
+        print(f"full library estimate: {len(rows)*el/max(ok,1)/3600:.1f} h at this rate")
+    # Nothing done is a failure, not a quiet zero [CLAUDE.md section 6]; some
+    # failed among many done is reported above and in the job, and exits 0.
+    return 1 if ok == 0 else 0
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -63,7 +63,6 @@ data/*.log
 !data/migration_report.json
 data/missing_files.json
 player/target/
-data/essentia/svm_beta1/
 
 # Credentials. Never committed, never in a commit message, never in a log line.
 # An AcoustID application key is not a password, but it is tied to an account
