@@ -251,6 +251,45 @@ def test_end_to_end():
         path = c.execute("SELECT path FROM files").fetchone()[0]
         c.close()
         check(path == os.path.join(home, "Artist - Album.mp3"), f"the catalogue names the album's home, got {path!r}")
+
+        # [SPEC-CDI-047]: the same edition again -- a different rip, so the
+        # audio hash cannot catch it -- is refused before anything is encoded,
+        # and added only when asked.
+        print("end to end: a second copy of a whole edition, refused unless asked")
+        again = tempfile.mkdtemp()
+        subprocess.run([ingest_cd.FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=550:duration=4",
+                        "-ar", "44100", "-ac", "2", os.path.join(again, "Artist - Album.wav")], check=True)
+        with open(os.path.join(again, "Artist - Album.cue"), "w", encoding="utf-8", newline="\r\n") as f:
+            f.write('PERFORMER "Artist"\nTITLE "Album"\nFILE "Artist - Album.wav" WAVE\n'
+                    '  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    INDEX 01 00:02:00\n')
+        p2 = ingest_cd.do_ingest(db, again, commit=False)
+        check(p2["releases"][0]["duplicate"] is True and p2["releases"][0]["in_library"] == 2,
+              f"the preview says every track is held: {p2['releases'][0]}")
+        before = snapshot(again)
+        home2 = os.path.join(tempfile.mkdtemp(), "Artist", "Album (2001) 2")
+        try:
+            ingest_cd.do_ingest(db, again, commit=True, release="rel-E", into=home2, keep_flac=False)
+            check(False, "a whole edition already held is refused")
+        except ingest_cd.AlreadyHeld as e:
+            check("Add it again" in str(e) and "2 of 2" in str(e), f"and says how to add it anyway: {e}")
+        check(snapshot(again) == before and not os.path.exists(home2),
+              "refused before anything was encoded or moved -- no MP3 left behind")
+        r2 = ingest_cd.do_ingest(db, again, commit=True, release="rel-E", into=home2, keep_flac=False,
+                                 allow_duplicate=True)
+        check(r2["identified"] == 2 and sorted(os.listdir(home2)) == ["Artist - Album.cue", "Artist - Album.mp3"],
+              f"asked for, the second copy is added: {r2}")
+        c = sqlite3.connect(db)
+        check(c.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 2, "two copies, as asked")
+        c.close()
+
+        print("a partial overlap -- a compilation sharing a song -- is a note, not a refusal")
+        c = sqlite3.connect(db)
+        part = dict(rel, media=[{"tracks": [rel["media"][0]["tracks"][0],
+                                            {"position": 2, "recording": {"id": "rec-new", "title": "New"}}]}])
+        check(ingest_cd.held_of_edition(c, part, [1, 2]) == (1, 2), "one of two held")
+        ingest_cd.refuse_duplicate(c, [part], [1, 2], allow=False)          # does not raise
+        ingest_cd.refuse_duplicate(c, [rel, part], [1, 2], allow=False)     # several editions: the person picks
+        c.close()
     finally:
         ingest_cd.lookup_disc_id = old
 
@@ -358,6 +397,11 @@ def test_tracks_end_to_end():
               f"the damage, at the file's own first passage: {dec}")
         check(sum(1 for o, d in dec if o == "chosen" and d.get("tracks_mode")) == 2, f"a decision per file: {dec}")
         check(passage_hold.damaged(c) == [], "nothing left for --damaged: both passages already held")
+        # [SPEC-CDI-047]: a tracks rip is compared on the tracks it has -- the
+        # same two again are a whole duplicate, though the edition has three.
+        check(ingest_cd.held_of_edition(c, rel, [1, 2]) == (2, 2)
+              and ingest_cd.held_of_edition(c, rel, [1, 2, 3]) == (2, 3),
+              "held counted over the tracks this rip would add")
         c.close()
 
         print("which lookup: the sheet for an image, the log for tracks, the barcode without it")

@@ -141,8 +141,9 @@ long track. On the import page, under **Split an album file**:
   wrong (step 2).
 - **CUERipper says "Rip probably contains errors"** -- clean the disc and rip it
   again with **Test & Copy**.
-- **The album is already in the library** -- the card says so, and names the
-  album it matches, before anything is done.
+- **The album is already in the library** -- the card says so before anything
+  is done. If every track is already there, **Add to library** stays off until
+  you tick **Add it again anyway**: only then is a second copy added.
 - **EAC closes itself when it opens a file window** -- it does on some
   computers, reinstalled or not. Use CUERipper.
 

@@ -156,6 +156,13 @@ def test_choices_and_preview(tmp: str) -> None:
     argv = next(a for s, a in reversed(seen) if s == "ingest")
     check("--christmas" in argv and "--childrens" in argv and "--rm" not in argv and "----rm" not in argv,
           f"the two known occasions, and only they: {argv}")
+    check("--allow-duplicate" not in argv, f"no second copy unless asked: {argv}")
+    # [SPEC-CDI-047]: a second copy only when the page said so, in so many words.
+    for asked, want in ((True, True), ("yes", False), (1, False)):
+        wait_for(runner, runner.submit("cd-rip", json.dumps(
+            {"folder": "C:/rips/x", "into": "C:/Music/A/B", "duplicate_ok": asked})))
+        argv = next(a for s, a in reversed(seen) if s == "ingest")
+        check(("--allow-duplicate" in argv) is want, f"duplicate_ok={asked!r}: {argv}")
     j = wait_for(runner, runner.submit("cd-preview", json.dumps({"folder": "C:/rips/x"})))
     stage, argv = seen[-1]
     check(stage == "preview" and "--commit" not in argv and "--json" in argv, f"a preview, got {argv}")

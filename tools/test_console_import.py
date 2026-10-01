@@ -211,6 +211,29 @@ def test_the_page_live():
             ("user.christmas", "christmasy", 1.0), ("user.christmas", "not_christmasy", 0.0)] * 2,
               f"both recordings marked Christmas, nothing else: {res.get('occasions')} {marks}")
 
+        # [SPEC-CDI-047]: the same disc again. The preview says every track is
+        # held; the add, without "Add it again", fails and leaves the rip as it
+        # was; with it, the second copy goes in.
+        make_rip(inbox)
+        st, s = call(port, "GET", "/api/import/state")
+        st, p2 = call(port, "POST", "/api/import/preview", {"id": s["rips"][0]["id"]})
+        r2 = (wait_job(port, p2["job_id"]).get("result") or {})
+        check(r2["releases"][0]["duplicate"] is True, f"the preview flags the whole edition held: {r2['releases']}")
+        st, a2 = call(port, "POST", "/api/import/add", {"folder": p2["folder"], "release": "rel-live",
+                                                        "into": name + " again"})
+        j2 = wait_job(port, a2["job_id"])
+        check(j2["state"] == "failed" and "already in the library" in (j2.get("result") or {}).get("error", "")
+              and sorted(os.listdir(p2["folder"])) == ["Artist - Album.cue", "Artist - Album.log", "Artist - Album.wav"],
+              f"refused, the rip untouched: {j2.get('result')} {os.listdir(p2['folder'])}")
+        st, a3 = call(port, "POST", "/api/import/add", {"folder": p2["folder"], "release": "rel-live",
+                                                        "into": name + " again", "duplicate_ok": True})
+        j3 = wait_job(port, a3["job_id"])
+        # The same tone, ripped the same way, hashes the same: the exact-copy
+        # check still stops it -- asking for a second copy of an *edition* is
+        # not asking for the same file twice.
+        check(j3["state"] == "failed" and "already in the library as" in (j3.get("result") or {}).get("error", ""),
+              f"asked, it passes the edition check and meets the file check: {j3.get('result')}")
+
         # [SPEC-CDI-060]: an album file, found, its album picked, its cuts shown.
         album = make_album_file(music, db)
         st, files = call(port, "GET", "/api/import/files?q=Tone")

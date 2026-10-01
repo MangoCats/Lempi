@@ -129,6 +129,17 @@ leaves it on disk before its dry run reports (found 2026-09-29).
 disc whose Disc ID or chosen release the catalogue already holds is flagged on
 its card, with the album it matches.
 
+**`[SPEC-CDI-047]` A whole edition already held is added again only when asked.**
+Decided 2026-10-01. When the disc resolves to one edition and every recording
+the rip would add -- each track it has, for a tracks-mode rip -- is already in
+the library, the preview says so and offers **Add it again anyway**; **Add**
+stays off until it is ticked. The add refuses without it too, so a stale page
+or a command line (`--allow-duplicate`) cannot slip one past, and it refuses
+before anything is encoded or moved: the rip is left as it was. A partial
+overlap -- a compilation sharing a few songs -- is said, never refused. Asking
+for a second copy of an edition is not asking for the same file twice: an
+encoded track whose audio hash the library already holds is still refused.
+
 ## 5. Adding it
 
 **`[SPEC-CDI-050]` One button, a progress bar, and a finished album.** *Add to
@@ -265,4 +276,4 @@ result, the album stays added, and the Jobs page's *Not analyzed* list finishes 
 
 ---
 
-**Traceability:** `[SPEC-CDI-010..094]` (with `[SPEC-CDI-012]`, `[SPEC-CDI-058]`), `[SPEC-CDI-900]` · builds on `[SPEC-RIP-020]`, `[SPEC-RIP-088]`, `[SPEC024]`, `[SPEC028]` · corrects, when built, the dry run and WAV retention of `tools/ingest_cd.py`
+**Traceability:** `[SPEC-CDI-010..096]` (with `[SPEC-CDI-012]`, `[SPEC-CDI-047]`, `[SPEC-CDI-058]`), `[SPEC-CDI-900]` · builds on `[SPEC-RIP-020]`, `[SPEC-RIP-088]`, `[SPEC024]`, `[SPEC028]` · corrects, when built, the dry run and WAV retention of `tools/ingest_cd.py`

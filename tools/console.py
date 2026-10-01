@@ -1366,7 +1366,9 @@ class Handler(BaseHTTPRequestHandler):
                 occasions = [o for o in b.get("occasions") or [] if o in ("christmas", "childrens")]
                 job = STATE["jobs"].submit("cd-rip", json.dumps(
                     {"folder": folder, "release": b.get("release") or None, "into": into,
-                     "occasions": occasions}))
+                     "occasions": occasions,
+                     # [SPEC-CDI-047]: a second copy only when asked, in so many words.
+                     "duplicate_ok": b.get("duplicate_ok") is True}))
                 return self.send_json({"job_id": job, "into": into})
             if p in ("/api/import/split/find", "/api/import/split/preview", "/api/import/split/commit"):
                 # [SPEC-CDI-060]: find the album's release; show the cuts; split.

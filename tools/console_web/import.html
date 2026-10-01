@@ -207,11 +207,23 @@ function showPreview(p, folder, area) {
   const into = S.el('input', { type: 'text', style: 'min-width:24rem', value: p.folder || '' });
   let chosen = rels.length === 1 ? rels[0].id : null;
   const warn = S.el('div', { class: 'verdict bad' });
+  // [SPEC-CDI-047]: a whole edition already held is added again only when
+  // the person says so -- Add stays off until "Add it again" is ticked. The
+  // add itself refuses without it, so a stale page cannot slip one through.
+  const again = S.el('input', { type: 'checkbox' });
+  const againRow = S.el('label', { style: 'display:block;margin:.3rem 0' }, again,
+    ' Add it again anyway, as a second copy');
+  let duplicate = false;
   const setWarn = rel => {
-    warn.textContent = rel && rel.in_library && rel.in_library >= rel.tracks.length
+    duplicate = !!(rel && rel.duplicate);
+    again.checked = false;
+    warn.replaceChildren(duplicate
       ? `Already in the library: every track of this edition is held. Adding it again makes a second copy.`
-      : rel && rel.in_library ? `${rel.in_library} of its ${rel.tracks.length} tracks are already in the library.` : '';
+      : rel && rel.in_library ? `${rel.in_library} of its ${rel.tracks.length} tracks are already in the library.` : '',
+      duplicate ? againRow : '');
+    add.disabled = duplicate;
   };
+  again.onchange = () => { add.disabled = duplicate && !again.checked; };
   if (!rels.length) {
     pick.append(S.el('p', { class: 'verdict note',
       text: 'MusicBrainz does not know this disc. It will be added with the titles on the disc itself, '
@@ -227,7 +239,6 @@ function showPreview(p, folder, area) {
       S.el('b', { text: ` ${rel.artist || '?'} — ${rel.title || '?'}` }),
       S.el('span', { class: 'meta', text: `  ${rel.year || ''} ${rel.country || ''}` }), tl));
   });
-  if (rels.length === 1) setWarn(rels[0]);
   // [SPEC-CDI-096]: the whole disc marked as an occasion, ticked in advance
   // when its title suggests one -- "Christmas" in it -- and the person's to
   // change before anything is added. Unticked marks nothing.
@@ -241,13 +252,15 @@ function showPreview(p, folder, area) {
     S.el('span', { style: 'align-self:center;font-size:.88rem', text: 'Every track on this disc is:' }),
     box('christmas', 'Christmas music'), box('childrens', "children's music"));
   const add = S.el('button', { class: 'chip on', text: 'Add to library' });
+  if (rels.length === 1) setWarn(rels[0]);
   add.onclick = async () => {
     if (rels.length > 1 && !chosen) return alert('Choose which edition this is first.');
     add.disabled = true;
     const occasions = [...occ.querySelectorAll('input:checked')].map(c => c.value);
     const r = await (await fetch('/api/import/add', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folder, release: chosen, into: into.value.trim(), occasions }) })).json();
+      body: JSON.stringify({ folder, release: chosen, into: into.value.trim(), occasions,
+        duplicate_ok: duplicate && again.checked }) })).json();
     if (r.error) { add.disabled = false; return alert(r.error); }
     // The rip leaves the inbox while it is added, and its card with it: the
     // work and its result move to "Just added", where they stay.

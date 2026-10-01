@@ -1156,6 +1156,10 @@ class Runner:
         # [SPEC-CDI-096]: every recording on it marked fully Christmas, or
         # children's. Only the two names ingest_cd.py knows reach its argv.
         argv += [f"--{o}" for o in payload.get("occasions") or () if o in ("christmas", "childrens")]
+        # A second copy of an album the library already holds whole, only
+        # when the person ticked "Add it again" [SPEC-CDI-047].
+        if payload.get("duplicate_ok") is True:
+            argv.append("--allow-duplicate")
         self._emit(job_id, "stage", "ingest", stage="ingest")
         code, out = self._spawn(job_id, "ingest", argv)
         result = parse_json_tail(out) or {}

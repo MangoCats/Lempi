@@ -366,7 +366,42 @@ def mark_occasions(conn, mbids, occasions, now: str | None = None) -> dict:
     return out
 
 
-def release_summary(release: dict, track_count: int, conn=None) -> dict:
+class AlreadyHeld(RuntimeError):
+    """The whole edition is already in the library `[SPEC-CDI-047]`."""
+
+
+def held_of_edition(conn, release: dict, positions) -> tuple[int, int] | None:
+    """`(held, total)`: how many of the edition's recordings at `positions`
+    -- the tracks this rip would add -- the library already plays. `None`
+    when a position has no recording to compare."""
+    mbids = []
+    for n in positions:
+        rec = ((_track_at_position(release, n) or {}).get("recording") or {}).get("id")
+        if not rec:
+            return None
+        mbids.append(rec)
+    mbids = list(dict.fromkeys(mbids))
+    if not mbids:
+        return None
+    q = f"SELECT COUNT(DISTINCT mbid) FROM passage_recordings WHERE mbid IN ({','.join('?' * len(mbids))})"
+    return conn.execute(q, mbids).fetchone()[0], len(mbids)
+
+
+def refuse_duplicate(conn, releases: list[dict], positions, allow: bool) -> None:
+    """A second copy of an album is added only when a person asked for one
+    `[SPEC-CDI-047]`: the disc resolved to one edition, and every recording
+    this rip would add is already in the library. Checked before anything is
+    encoded or moved, so a refusal leaves the rip as it was."""
+    if allow or len(releases) != 1:
+        return
+    got = held_of_edition(conn, releases[0], positions)
+    if got and got[0] == got[1]:
+        raise AlreadyHeld(
+            f"every track of this edition is already in the library ({got[0]} of {got[1]}): a second copy "
+            "is added only when asked -- tick \"Add it again\" on the import page, or pass --allow-duplicate")
+
+
+def release_summary(release: dict, track_count: int, conn=None, positions=None) -> dict:
     """One candidate edition as the preview shows it `[SPEC-CDI-040]`: who,
     what, when, its track list for this disc, the folder it would be filed
     under, and how many of its recordings the library already plays -- the
@@ -384,9 +419,16 @@ def release_summary(release: dict, track_count: int, conn=None) -> dict:
         q = f"SELECT COUNT(DISTINCT mbid) FROM passage_recordings WHERE mbid IN ({','.join('?' * len(mbids))})"
         held = conn.execute(q, mbids).fetchone()[0]
     year = (release.get("date") or "")[:4] or None
+    # `duplicate`: every recording this rip would add -- its tracks at
+    # `positions`, all of them for an image -- already in the library. The page
+    # then asks before adding a second copy, and the add refuses without it
+    # `[SPEC-CDI-047]`.
+    dup = held_of_edition(conn, release, positions if positions is not None
+                          else [t["position"] for t in tracks]) if conn is not None else None
     return {"id": release.get("id"), "title": release.get("title"), "artist": credit or None,
             "year": year, "country": release.get("country"), "tracks": tracks,
-            "in_library": held, "folder": proposed_folder(credit, release.get("title"), year)}
+            "in_library": held, "duplicate": bool(dup and dup[0] == dup[1]),
+            "folder": proposed_folder(credit, release.get("title"), year)}
 
 
 # -------------------------------------------------------------------- commit
@@ -687,7 +729,8 @@ def preview_tracks(db_path: str, folder: str) -> dict:
     disc_outcome, releases, disc_id = identify_disc(toc, rip["log_toc"])
     conn = lempi_db.connect(db_path, lempi_db.ROLE_LIBRARY)
     try:
-        rels = [release_summary(r, toc.track_count, conn) for r in releases[:8]]
+        rels = [release_summary(r, toc.track_count, conn, [t.number for t, _p in rip["present"]])
+                for r in releases[:8]]
     finally:
         conn.close()
     cd_folder = proposed_folder(toc.performer, toc.title, None) if toc.title else None
@@ -785,39 +828,56 @@ def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[
             "disc_outcome": disc_outcome, "candidates": len(releases), "mode": "tracks"}
 
 
+def _drop(paths) -> None:
+    """MP3s made for an add that was then refused: the rip goes back to the
+    inbox as it was."""
+    for p in paths:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
 def ingest_tracks(db_path: str, folder: str, release: str | None, into: str | None,
-                  keep_flac: bool, occasions: tuple = ()) -> dict:
+                  keep_flac: bool, occasions: tuple = (), allow_duplicate: bool = False) -> dict:
     """`do_ingest` for a tracks-mode rip: each WAV encoded as the image's is,
     then the same order -- the catalogue written before any WAV is touched,
     and a FLAC copy made first when asked `[SPEC-RIP-040]`."""
     rip = open_tracks(folder)
     toc = rip["toc"]
-    encoded = []
-    for i, (t, wav) in enumerate(rip["present"], 1):
-        say(f"encoding track {t.number} ({i} of {len(rip['present'])}) ...")
-        mp3 = os.path.splitext(wav)[0] + ".mp3"
-        if not encode_to_mp3(wav, mp3):
-            raise RuntimeError(f"ffmpeg failed to encode {wav!r}")
-        md5 = ingest_folder.audio_md5(mp3)
-        if md5 is None:
-            raise RuntimeError(f"could not hash the encoded {mp3!r}")
-        encoded.append((t, wav, mp3, md5))
-
     conn = lempi_db.connect(db_path, lempi_db.ROLE_LIBRARY, writable=True, timeout=60)
     conn.execute("PRAGMA busy_timeout = 60000")
     conn.execute("PRAGMA foreign_keys = ON")
+    encoded = []
     try:
-        for t, _wav, _mp3, md5 in encoded:
-            existing = conn.execute("SELECT file_id, path FROM files WHERE audio_md5=?1", (md5,)).fetchone()
-            if existing is not None:
-                raise RuntimeError(f"track {t.number} is already in the library as {existing[1]!r} "
-                                   f"(file_id={existing[0]})")
+        # Looked up first, and a whole edition already held refused
+        # `[SPEC-CDI-047]` -- before anything is encoded or moved.
         say("looking the disc up ...")
         disc_outcome, releases, disc_id = identify_disc(toc, rip["log_toc"])
         if release:
             releases = [r for r in releases if r.get("id") == release]
             if not releases:
                 raise ValueError(f"release {release} is not among this disc's matches")
+        refuse_duplicate(conn, releases, [t.number for t, _w in rip["present"]], allow_duplicate)
+
+        for i, (t, wav) in enumerate(rip["present"], 1):
+            say(f"encoding track {t.number} ({i} of {len(rip['present'])}) ...")
+            mp3 = os.path.splitext(wav)[0] + ".mp3"
+            if not encode_to_mp3(wav, mp3):
+                raise RuntimeError(f"ffmpeg failed to encode {wav!r}")
+            encoded.append((t, wav, mp3, ingest_folder.audio_md5(mp3)))
+            if encoded[-1][3] is None:
+                raise RuntimeError(f"could not hash the encoded {mp3!r}")
+        for t, _wav, _mp3, md5 in encoded:
+            existing = conn.execute("SELECT file_id, path FROM files WHERE audio_md5=?1", (md5,)).fetchone()
+            if existing is not None:
+                raise RuntimeError(f"track {t.number} is already in the library as {existing[1]!r} "
+                                   f"(file_id={existing[0]})")
+    except Exception:
+        _drop(m for _t, _w, m, _h in encoded)
+        conn.close()
+        raise
+    try:
         if into:
             say(f"filing it in {into} ...")
             folder = move_rip(folder, into)
@@ -878,7 +938,8 @@ def preview(db_path: str, folder: str) -> dict:
 
 
 def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = None,
-              into: str | None = None, keep_flac: bool | None = None, occasions: tuple = ()) -> dict:
+              into: str | None = None, keep_flac: bool | None = None, occasions: tuple = (),
+              allow_duplicate: bool = False) -> dict:
     import sqlite3  # noqa: F401  -- the connection below is lempi_db's
 
     if not commit:
@@ -887,35 +948,41 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
     if keep_flac is None:
         keep_flac = keep_lossless_setting(db_path)
     if is_tracks_rip(folder):
-        return ingest_tracks(db_path, folder, release, into, keep_flac, occasions)
+        return ingest_tracks(db_path, folder, release, into, keep_flac, occasions, allow_duplicate)
     fmt, _cue, toc, wav_path, rip_report = open_rip(folder)
-
-    say("encoding the MP3 ...")
-    mp3_path = os.path.splitext(wav_path)[0] + ".mp3"
-    if not encode_to_mp3(wav_path, mp3_path):
-        raise RuntimeError(f"ffmpeg failed to encode {wav_path!r}")
-    audio_md5 = ingest_folder.audio_md5(mp3_path)
-    if audio_md5 is None:
-        raise RuntimeError(f"could not hash the encoded {mp3_path!r}")
 
     # Catalogue-only, and it writes -- library half as `main`.
     conn = lempi_db.connect(db_path, lempi_db.ROLE_LIBRARY, writable=True, timeout=60)
     conn.execute("PRAGMA busy_timeout = 60000")
     conn.execute("PRAGMA foreign_keys = ON")
+    mp3_path = os.path.splitext(wav_path)[0] + ".mp3"
     try:
-        existing = conn.execute(
-            "SELECT file_id, path FROM files WHERE audio_md5=?1", (audio_md5,)).fetchone()
-        if existing is not None:
-            raise RuntimeError(
-                f"this disc is already in the library as {existing[1]!r} (file_id={existing[0]})")
-
+        # Looked up first, and a whole edition already held refused
+        # `[SPEC-CDI-047]` -- before anything is encoded or moved.
         say("looking the disc up ...")
         disc_outcome, releases = lookup_disc_id(toc)
         if release:
             releases = [r for r in releases if r.get("id") == release]
             if not releases:
                 raise ValueError(f"release {release} is not among this disc's matches")
+        refuse_duplicate(conn, releases, [t.number for t in toc.tracks], allow_duplicate)
 
+        say("encoding the MP3 ...")
+        if not encode_to_mp3(wav_path, mp3_path):
+            raise RuntimeError(f"ffmpeg failed to encode {wav_path!r}")
+        audio_md5 = ingest_folder.audio_md5(mp3_path)
+        if audio_md5 is None:
+            raise RuntimeError(f"could not hash the encoded {mp3_path!r}")
+        existing = conn.execute(
+            "SELECT file_id, path FROM files WHERE audio_md5=?1", (audio_md5,)).fetchone()
+        if existing is not None:
+            raise RuntimeError(
+                f"this disc is already in the library as {existing[1]!r} (file_id={existing[0]})")
+    except Exception:
+        _drop([mp3_path])
+        conn.close()
+        raise
+    try:
         if into:
             say(f"filing it in {into} ...")
             folder = move_rip(folder, into)
@@ -966,6 +1033,8 @@ def main() -> int:
                       help="keep a lossless FLAC copy (default: the Lempi Settings switch)")
     flac.add_argument("--no-keep-flac", dest="keep_flac", action="store_false")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--allow-duplicate", action="store_true",
+                    help="add a second copy of an edition the library already holds whole [SPEC-CDI-047]")
     for occ, label in (("christmas", "Christmas"), ("childrens", "children's")):
         ap.add_argument(f"--{occ}", dest="occasions", action="append_const", const=occ,
                         help=f"mark every recording on the disc fully {label} [SPEC-CDI-096]")
@@ -974,7 +1043,7 @@ def main() -> int:
     try:
         result = do_ingest(args.db, args.folder, args.commit, release=args.release,
                            into=args.into, keep_flac=args.keep_flac,
-                           occasions=tuple(args.occasions or ()))
+                           occasions=tuple(args.occasions or ()), allow_duplicate=args.allow_duplicate)
     except Exception as e:                                    # noqa: BLE001
         if args.json:
             print(json.dumps({"ok": False, "error": str(e)}))
