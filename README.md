@@ -4,6 +4,9 @@
 > *"Your favourite song, and the one after it, without being asked."*
 
 ---
+# Technology Stack Architecture
+
+<img src="./docs/images/architecture.svg" width="100%" alt="Lempi Stack Architecture" />
 
 ## 📻 Overview
 
