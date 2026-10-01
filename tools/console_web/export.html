@@ -151,8 +151,16 @@ document.getElementById('find-missing').onclick = async () => {
   out.replaceChildren(S.el('p', { class: 'empty', text: 'starting…' }));
   let r;
   try {
-    r = await (await fetch('/api/export/missing', { method: 'POST',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ peers }) })).json();
+    const resp = await fetch('/api/export/missing', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ peers }) });
+    // A console started before this page was last updated serves the new page
+    // from disk but has no route for it, and answers 404 in HTML -- found
+    // 2026-10-01 as "Unexpected token '<'". Say that, not a JSON error.
+    if (!(resp.headers.get('content-type') || '').includes('json')) {
+      throw new Error(`the console answered ${resp.status} without data -- it was probably started `
+        + 'before this page was updated: restart the Vipunen console and try again');
+    }
+    r = await resp.json();
   } catch (e) { return S.fail('#miss-results', e); }
   if (r.error) return S.fail('#miss-results', new Error(r.error));
   out.replaceChildren(...r.jobs.map(info => {
