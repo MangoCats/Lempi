@@ -24,6 +24,7 @@ The Vipunen primary was lost when this repository was seeded (`data/README.md`),
 | :--- | :--- | :--- | :--- |
 | household listener edits | `listener_preferences`, `listener_characteristics`, `listener_settings` (its `utc_offset_minutes` is the node's own, rewritten by each player at start) | **last write wins** on `updated_at` `[SPEC-PREF-105]`; an exact tie with differing values is reported, not guessed | yes |
 | flags | `listener_flags` | union, with removals taken from the evidence in §3 | yes |
+| likes | `listener_likes` | union by (recording, `recorded_at`): a like or dislike is the household's judgment of a song, not listening data -- distinct from plays and skips, though usually given while listening (the maintainer, 2026-10-01) | yes |
 | occasions | `listener_occasions`, `…_occasion_points` | no timestamps: union, with removals from §3 | yes |
 | programmes | `listener_programs`, `…_program_seeds` | **never merged** since 2026-09-27: each node's own, copied between a node and the hub only by hand `[SPEC-MTR-040]`; unioned before that | never |
 | catalogue corrections | `id_reviews`, `boundary_reviews`, `artist_reviews` | union by (subject, `decided_at`); the latest `applied_at` is kept | yes, and applied to each catalogue |
