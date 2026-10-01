@@ -244,7 +244,8 @@ function showPreview(p, folder, area) {
     document.getElementById('added').prepend(holder);
     document.getElementById('addedwrap').hidden = false;
     const log = S.el('div');
-    area.replaceChildren(S.el('p', { class: 'steps', text: `Adding it to ${r.into}…` }), log);
+    area.replaceChildren(S.el('p', { class: 'steps',
+      text: `Adding it to ${r.into}, then analyzing it -- about half a minute of work a track, several at once…` }), log);
     S.watchJob(r.job_id, log, job => done(job, r.into, rels.find(x => x.id === chosen), area));
   };
   // A tracks-mode rip that stopped short [SPEC-CDI-094]: the tracks it has
@@ -281,6 +282,15 @@ function done(job, into, rel, area) {
       (res.ambiguous || res.unidentified ? `, ${res.ambiguous + res.unidentified} waiting in the review queue` : '') +
       (res.flac ? '; a lossless FLAC copy kept' : '') +
       (res.missing && res.missing.length ? `; track ${res.missing.join(', ')} not ripped, so not added` : '') + '.' }),
+    // Analysed as part of adding it [REQ-LIB-305]; a stage that failed is
+    // said, and the Jobs page's Not analyzed list can finish it.
+    res.analysis ? S.el('p', {
+      class: 'verdict ' + ((res.analysis_failed || []).length || (res.analysis.flavor || {}).failed ? 'bad' : 'ok'),
+      text: `Analyzed: ${(res.analysis.flavor || {}).extracted || 0} for flavor, `
+        + `${(res.analysis.amplitude || {}).analyzed || 0} for amplitude`
+        + ((res.analysis.flavor || {}).failed ? `; ${res.analysis.flavor.failed} could not be analyzed for flavor` : '')
+        + ((res.analysis_failed || []).length ? `; ${res.analysis_failed.join(' and ')} did not finish`
+          + ' -- the Jobs page lists what is still not analyzed' : '') + '.' }) : null,
     (res.ambiguous || res.unidentified)
       ? S.el('p', {}, S.el('a', { href: `${PLAYER}/review`, target: '_blank', text: 'Open the review queue' })) : null,
     S.el('div', { class: 'controls' }, reload, send, said, help('after')),

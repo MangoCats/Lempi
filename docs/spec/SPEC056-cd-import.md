@@ -245,8 +245,9 @@ on an appliance, which has no drive and no rips to keep.
 album to the speakers without the Export page's own confirmation is left to use.
 CUETools also ships a command-line ripper, `CUETools.Ripper.Console.exe`; whether
 it reopens SPEC027's automation question `[SPEC-RIP-088]` is not examined.
-Adding a rip does not yet analyse it; analysing on add, by default, is
-`[REQ-LIB-305]` -- until then the Jobs page's *Not analyzed* list does it.
+Adding a rip analyses it, flavor and amplitude, for the album's own folder, in
+the same job `[REQ-LIB-305]`; a stage that fails is said in red and in the
+result, the album stays added, and the Jobs page's *Not analyzed* list finishes it.
 
 ---
 

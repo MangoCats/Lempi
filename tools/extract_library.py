@@ -18,6 +18,7 @@ measurement, never for listening.
 Usage:
   python tools/extract_library.py <listener.db> [--limit N] [--jobs N]
   python tools/extract_library.py <listener.db> --passage <passage_id>
+  python tools/extract_library.py <listener.db> --folder <album folder>
 """
 
 from __future__ import annotations
@@ -172,6 +173,10 @@ def main() -> int:
     # re-running extraction over everything else that is already cached
     # and unaffected `[LOG-FEX-105]`.
     passage_id = int(args[args.index("--passage") + 1]) if "--passage" in args else None
+    # One album's folder -- a CD rip just added `[REQ-LIB-305]` -- by exact
+    # directory, not recursive: the convention `analyze_amplitude.py --folder`
+    # already has, so the two stages of one analysis cover the same passages.
+    folder = os.path.normpath(args[args.index("--folder") + 1]) if "--folder" in args else None
 
     # Catalogue-only, and it writes -- library half as `main`.
     con = lempi_db.connect(db, lempi_db.ROLE_LIBRARY, writable=True)
@@ -195,6 +200,8 @@ def main() -> int:
         sql += " AND p.passage_id = ?"
         params = (passage_id,)
     rows = con.execute(sql, params).fetchall()
+    if folder:
+        rows = [r for r in rows if os.path.normpath(os.path.dirname(r[1])) == folder]
     todo = [r for r in rows if (r[0], r[3], r[4]) not in done]
     if limit:
         todo = todo[:limit]

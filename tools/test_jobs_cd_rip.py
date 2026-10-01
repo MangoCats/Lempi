@@ -69,15 +69,18 @@ def _runner(tmp: str, name: str) -> "jobmod.Runner":
 
 
 def test_folder_reaches_ingest_cd(tmp: str) -> None:
-    print("a folder target reaches ingest_cd.py's own --folder unchanged")
+    print("a folder target reaches ingest_cd.py's own --folder unchanged; the album is then analysed")
     runner, db = _runner(tmp, "lib1")
-    seen = {}
+    seen = []
+    added = ('{"ok": true, "tracks": 14, "identified": 14, "ambiguous": 0, '
+             '"unidentified": 0, "verification_failed": 0, "disc_outcome": "exact", '
+             '"candidates": 1, "folder": "C:/Music/A/B (2001)"}')
 
     def fake_spawn(self, job_id, stage, argv):
-        seen["argv"] = argv
-        return 0, ('{"ok": true, "tracks": 14, "identified": 14, "ambiguous": 0, '
-                    '"unidentified": 0, "verification_failed": 0, "disc_outcome": "exact", '
-                    '"candidates": 1}')
+        seen.append((stage, argv))
+        return {"ingest": (0, added),
+                "flavor": (0, "14 files, 0 cached, 14 to extract, 7 jobs\n\n14 extracted, 0 failed in 1.0 min"),
+                "amplitude": (0, '{"ok": true, "analyzed": 14, "failed": 0}')}[stage]
 
     runner._spawn = fake_spawn.__get__(runner, jobmod.Runner)
 
@@ -85,20 +88,40 @@ def test_folder_reaches_ingest_cd(tmp: str) -> None:
     job_id = runner.submit("cd-rip", target)
     j = wait_for(runner, job_id)
     check(j["state"] == "done", f"got {j}")
-    argv = seen["argv"]
+    argv = seen[0][1]
     check("ingest_cd.py" in argv[1], f"got {argv}")
     check(db in argv, f"got {argv}")
     check("--folder" in argv and argv[argv.index("--folder") + 1] == "C:/rips/some-disc",
           f"got {argv}")
     check("--commit" in argv and "--json" in argv, f"got {argv}")
     check(j["result"]["disc_outcome"] == "exact", f"got {j['result']}")
+    # [REQ-LIB-305]: analysed at once, both stages, on the album's own folder.
+    check([s for s, _ in seen] == ["ingest", "flavor", "amplitude"], f"three stages: {[s for s, _ in seen]}")
+    for stage, a in seen[1:]:
+        check(a[a.index("--folder") + 1] == "C:/Music/A/B (2001)", f"{stage} scoped to the album: {a}")
+    check(j["result"]["analysis"]["flavor"]["extracted"] == 14
+          and j["result"]["analysis"]["amplitude"]["analyzed"] == 14 and j["result"]["analysis_failed"] == [],
+          f"the analysis in the job's result: {j['result']}")
+
+    print("an analysis that fails: the album is still added, and the failure is said")
+    seen.clear()
+    runner._spawn = (lambda self, job_id, stage, argv: seen.append((stage, argv)) or
+                     {"ingest": (0, added), "flavor": (2, "ERROR: the Essentia extractor is missing"),
+                      "amplitude": (0, '{"ok": true, "analyzed": 14}')}[stage]).__get__(runner, jobmod.Runner)
+    j = wait_for(runner, runner.submit("cd-rip", target))
+    errors = [e["text"] for e in j["events"] if e["kind"] == "error"]
+    check(j["state"] == "done" and j["result"]["ok"] and j["result"]["analysis_failed"] == ["flavor"]
+          and any("flavor exited 2" in t for t in errors) and [s for s, _ in seen][-1] == "amplitude",
+          f"done, flavor named as failed, amplitude still run: {j['state']} {j['result']} {errors}")
 
 
 def test_failure_surfaces_as_failed(tmp: str) -> None:
-    print("ingest_cd.py's own {\"ok\": false, ...} fails the job, not a crash")
+    print("ingest_cd.py's own {\"ok\": false, ...} fails the job, not a crash -- and nothing is analysed")
     runner, db = _runner(tmp, "lib2")
+    seen = []
 
     def fake_spawn(self, job_id, stage, argv):
+        seen.append(stage)
         return 1, '{"ok": false, "error": "no .cue or .toc file found"}'
 
     runner._spawn = fake_spawn.__get__(runner, jobmod.Runner)
@@ -108,6 +131,7 @@ def test_failure_surfaces_as_failed(tmp: str) -> None:
     j = wait_for(runner, job_id)
     check(j["state"] == "failed", f"got {j}")
     check(j["result"]["error"] == "no .cue or .toc file found", f"got {j['result']}")
+    check(seen == ["ingest"], f"no analysis of an album that was not added: {seen}")
 
 
 def test_choices_and_preview(tmp: str) -> None:

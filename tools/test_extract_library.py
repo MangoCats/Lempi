@@ -113,11 +113,25 @@ def test_every_passage_failing(tmp: str):
     check("1/1" in out, f"progress counts a failure too: {out}")
 
 
+def test_folder_scope(tmp: str):
+    print("--folder: only the album's own folder, as analyze_amplitude --folder [REQ-LIB-305]")
+    db = os.path.join(tmp, "scope.db")
+    library(db)                        # its one file is C:/nowhere/song.mp3
+    empty = os.path.join(tmp, "scope-empty")
+    os.makedirs(empty, exist_ok=True)
+    for folder, want in (("C:/elsewhere", "0 to extract"), ("C:/nowhere", "1 to extract")):
+        env = dict(os.environ, LEMPI_ESSENTIA_DIR=empty, PYTHONIOENCODING="utf-8")
+        r = subprocess.run([sys.executable, os.path.join(HERE, "extract_library.py"), db, "--folder", folder],
+                           capture_output=True, text=True, encoding="utf-8", env=env, timeout=120)
+        check(want in r.stdout, f"--folder {folder}: {want}, got {r.stdout[-200:]}")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         test_missing_tools(tmp)
         test_classifier_refuses_partial()
         test_every_passage_failing(tmp)
+        test_folder_scope(tmp)
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")

@@ -147,8 +147,9 @@ SKIPPED = [
                 "durations no folder scan can infer on its own"),
     ("releases", "needs a MusicBrainz id, which ingest does not invent"),
     ("cover art", "needs a release id; art beside the file is found by the player"),
-    ("amplitude", "built [SPEC-SA-075], not yet measured for Lempi -- offered as its "
-                  "own action (\"Analyze amplitude\"), never run silently by induct"),
+    ("amplitude", "built [SPEC-SA-075]; run when a CD rip is added [REQ-LIB-305] and by "
+                  "\"Analyze what's missing\", and offered per folder as \"Analyze amplitude\" -- "
+                  "not yet by induct"),
     ("cd-rip", "a physical rip has already happened by the time this runs -- "
                "[SPEC025..028], person-assisted per [SPEC-RIP-088] -- offered as its "
                "own action (\"Ingest a CD rip\"), never run silently by induct"),
@@ -1151,7 +1152,25 @@ class Runner:
             argv += ["--release", payload["release"]]
         if payload.get("into"):
             argv += ["--into", payload["into"]]
-        self._run_single_stage(job_id, "ingest", argv)
+        self._emit(job_id, "stage", "ingest", stage="ingest")
+        code, out = self._spawn(job_id, "ingest", argv)
+        result = parse_json_tail(out) or {}
+        self._save_result(job_id, result)
+        if code != 0 or not result.get("ok"):
+            return self._finish(job_id, "stopped" if code < 0 else "failed")
+        # Then analysed, at once, by default `[REQ-LIB-305]`: flavor and
+        # amplitude for the album just filed, so the Program Director can judge
+        # it without a second step. The album is added whatever becomes of
+        # this; a stage that fails says so in red and in the result, and the
+        # Jobs page's Not analyzed list still offers it.
+        if result.get("folder"):
+            analysis, failed, stopped = self._analysis(job_id, result["folder"])
+            result["analysis"] = analysis
+            result["analysis_failed"] = failed
+            self._save_result(job_id, result)
+            if stopped:
+                return self._finish(job_id, "stopped")
+        self._finish(job_id, "done")
 
     def _split_find(self, job_id: int, target: str):
         """`[SPEC-CDI-060]` -- `target` is `{"file", "query"?}`: the releases an
@@ -1228,15 +1247,26 @@ class Runner:
         a person pressing this wants whatever can be done -- and the job fails
         if either did. A passage that fails stays in the list.
         """
+        result, failed, stopped = self._analysis(job_id, None)
+        self._save_result(job_id, result)
+        self._finish(job_id, "stopped" if stopped else "failed" if failed else "done")
+
+    def _analysis(self, job_id: int, folder: str | None) -> tuple[dict, list, bool]:
+        """Flavor, then amplitude, for one album's folder or, with `folder`
+        None, the whole library: `(result, failed stages, stopped)`. Each tool
+        takes only what it has not done. Shared by *Analyse what's missing*
+        and by adding a CD rip, which runs it on the album just filed
+        `[REQ-LIB-305]`."""
         tools = os.path.dirname(os.path.abspath(__file__))
+        scope = ["--folder", folder] if folder else []
         result: dict = {}
         failed = []
         for stage, argv in (
-                ("flavor", [sys.executable, os.path.join(tools, "extract_library.py"), self.library]),
+                ("flavor", [sys.executable, os.path.join(tools, "extract_library.py"), self.library, *scope]),
                 ("amplitude", [sys.executable, os.path.join(tools, "analyze_amplitude.py"),
-                               self.library, "--json"])):
+                               self.library, *scope, "--json"])):
             if self._stopped(job_id):
-                return self._finish(job_id, "stopped")
+                return result, failed, True
             self._emit(job_id, "stage", stage, stage=stage)
             self._emit(job_id, "log", {
                 "flavor": "starting Essentia -- each passage takes about half a minute, so the first "
@@ -1259,13 +1289,11 @@ class Runner:
                 result["amplitude"] = parse_json_tail(out) or {}
             if code != 0:
                 if code < 0:
-                    self._save_result(job_id, result)
-                    return self._finish(job_id, "stopped")
+                    return result, failed, True
                 self._emit(job_id, "error", f"{stage} exited {code}", stage=stage)
                 failed.append(stage)
             self._emit(job_id, "counts", json.dumps(counts(self.library)), stage=stage)
-        self._save_result(job_id, result)
-        self._finish(job_id, "failed" if failed else "done")
+        return result, failed, False
 
     def _passage_hold(self, job_id: int, target: str):
         """Hold one passage back from the Program Director, or let it go

@@ -91,7 +91,13 @@ Open the card: Vipunen shows the album -- artist, title, year and track list.
 If MusicBrainz knows several editions, pick yours. Check the folder name it
 proposes, then press **Add to library**. It files the album, makes the MP3,
 removes the large WAV, and splits the album into its tracks from the disc's own
-track list.
+track list. Then it analyses the tracks -- how each one sounds, and how it fades
+in and out -- so the radio can choose them. That takes about half a minute of
+work a track, several at once; the card says when it is done.
+
+A disc ripped a file per track (CUERipper's **tracks** choice) is added the same
+way, each track its own MP3. A track the ripper never wrote -- a damaged one it
+stopped on -- is named on the card, and the album is added without it.
 
 To keep a lossless FLAC copy of every rip as well, turn on **Keep a lossless FLAC
 copy of CD rips** on the Lempi player's Settings page, on this computer. It is
