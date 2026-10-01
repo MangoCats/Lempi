@@ -20,6 +20,20 @@
   </div>
   <div id="plan"></div>
 
+  <h2>Not analyzed <small>— flavor and amplitude</small></h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    Passages the Program Director cannot judge yet: no <b>flavor</b> (how a passage
+    sounds, from Essentia) or no <b>amplitude</b> (how long it takes to fade in and
+    out). The button does both, for the whole library, and only what is missing;
+    it does not identify anything again. Gain is not listed: it is set by hand.
+  </p>
+  <div id="gapsum" class="tiles"></div>
+  <div class="controls">
+    <button class="chip" id="analyze">Analyze what's missing</button>
+    <span id="analyzesaid" style="color:var(--dim);font-size:.85rem;align-self:center"></span>
+  </div>
+  <div id="gaps"></div>
+
   <h2>Jobs</h2>
   <div id="list"></div>
   <div id="live"></div>
@@ -106,7 +120,7 @@ function watch(id) {
   es.onmessage = m => {
     const e = JSON.parse(m.data);
     render(e, log, counts);
-    if (e.kind === 'done') { es.close(); es = null; list(); }
+    if (e.kind === 'done') { es.close(); es = null; list(); gaps(); }
   };
 }
 
@@ -196,5 +210,47 @@ document.getElementById('reload').onclick = async () => {
   }
 };
 
+// ------------------------------------------------------------ not analyzed
+// Counted by each tool's own rule (analysis_gaps.py), so every number the
+// button can clear is one it will clear; what it cannot is said, with why.
+async function gaps() {
+  let d;
+  try { d = await S.get('/api/analysis/missing'); } catch (e) { return S.fail('#gaps', e); }
+  const t = d.totals, todo = t.flavor + t.amplitude;
+  document.getElementById('gapsum').replaceChildren(
+    ...[['without flavor', t.flavor], ['without amplitude', t.amplitude], ['folders', t.fixable]]
+      .map(([l, n]) => S.el('div', { class: 'tile' }, S.el('b', { text: S.n(n) }), S.el('span', { text: l }))));
+  const btn = document.getElementById('analyze');
+  btn.disabled = todo === 0;
+  document.getElementById('analyzesaid').textContent = todo === 0 ? 'Everything that can be analyzed has been.' : '';
+  const box = document.getElementById('gaps');
+  if (!d.folders.length) return box.replaceChildren();
+  const note = f => [f.unidentified && `${f.unidentified} not identified yet -- flavor needs a recording`,
+                     f.manual && `${f.manual} with a boundary set by hand -- never recomputed`]
+    .filter(Boolean).join('; ');
+  box.replaceChildren(S.el('table', {},
+    S.el('thead', {}, S.el('tr', {}, ...['folder', 'no flavor', 'no amplitude', '']
+      .map(h => S.el('th', { text: h })))),
+    S.el('tbody', {}, ...d.folders.map(f => S.el('tr', {},
+      S.el('td', {}, S.el('a', { href: `/profile/${f.first}`, title: 'open its first passage',
+                                 style: 'font:12px var(--mono)', text: f.folder })),
+      S.el('td', { class: 'num', text: f.flavor || '' }),
+      S.el('td', { class: 'num', text: f.amplitude || '' }),
+      S.el('td', { style: 'color:var(--dim);font-size:.85rem', text: note(f) }))))));
+}
+
+document.getElementById('analyze').onclick = async () => {
+  const said = document.getElementById('analyzesaid');
+  said.textContent = 'starting…';
+  let r;
+  try {
+    r = await (await fetch('/api/analysis/run', { method: 'POST' })).json();
+  } catch (e) { said.textContent = ''; return S.fail('#gaps', e); }
+  if (r.error) { said.textContent = ''; return S.fail('#gaps', new Error(r.error)); }
+  said.textContent = `job ${r.job_id} -- the list updates when it finishes.`;
+  list(); watch(r.job_id);
+};
+
 list();
+gaps();
 </script>

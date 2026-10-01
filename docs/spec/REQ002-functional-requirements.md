@@ -180,6 +180,8 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 
 **`[REQ-LIB-300]` When no automated match resolves at all, the person ripping can search MusicBrainz directly or enter track/artist/album metadata by hand, rather than accept an anonymous placeholder.** Designed in [SPEC028](SPEC028-cd-ripping-identification.md) §3 — reuses the recording/artist search Vipunen already built (`[REQ-LIB-180]`) rather than a second mechanism, and is a second, independent reason to finish that endpoint's still-unbuilt release/track-search half.
 
+**`[REQ-LIB-305]` A ripped album is analysed as part of adding it — flavor and amplitude, straight after its MP3 is encoded — by default.** *(Requested 2026-10-01; not built.)* Today *Add to library* encodes, catalogues and files the album, and stops: its passages have no flavor, so the Program Director cannot judge them, and no lead-in or lead-out until someone runs the analysis — the first ten albums added through the import page sat that way, 130 passages. Until this is built, the Jobs page lists every passage either analysis has not reached and fills both with one button, *Analyze what's missing* (`tools/analysis_gaps.py`, the `analyze-missing` job); that is also the fallback once it is, for a rip whose analysis failed. Building it settles a question this request reopens: amplitude analysis is deliberately opt-in today, kept out of every automatic path until measured for Lempi (`jobs.py`'s `SKIPPED`, `[SPEC-SA-075]`), and running it on every rip by default is the decision that it has been.
+
 ## 5. Portability — `PORT`
 
 **`[REQ-PORT-100]`** A Lempi installation with **no Vipunen** can receive derived data and use every advanced feature `[SPEC-DF-080]`.

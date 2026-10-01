@@ -26,6 +26,7 @@ the database has not accepted.
 import json
 import os
 import queue
+import re
 import sqlite3
 import subprocess
 import sys
@@ -524,6 +525,9 @@ class Runner:
 
         if kind == "analyze-flavor":
             return self._analyze_flavor(job_id, target)
+
+        if kind == "analyze-missing":
+            return self._analyze_missing(job_id)
 
         if kind == "cd-rip":
             return self._cd_rip(job_id, target)
@@ -1209,6 +1213,53 @@ class Runner:
         argv = [sys.executable, os.path.join(tools, "extract_library.py"), self.library,
                 "--passage", target]
         self._run_single_stage(job_id, "extract", argv, require_ok=False)
+
+    def _analyze_missing(self, job_id: int):
+        """The Jobs page's *Analyse what's missing*: flavor, then amplitude,
+        over the whole library -- each tool taking only what it has not done
+        (`analysis_gaps.py` counts by the same rules), so a press after a
+        finished one does nothing. Not `reanalyze`: that re-fingerprints every
+        passage through AcoustID, which this does not need.
+
+        Both stages run even when the first fails -- they are independent, and
+        a person pressing this wants whatever can be done -- and the job fails
+        if either did. A passage that fails stays in the list.
+        """
+        tools = os.path.dirname(os.path.abspath(__file__))
+        result: dict = {}
+        failed = []
+        for stage, argv in (
+                ("flavor", [sys.executable, os.path.join(tools, "extract_library.py"), self.library]),
+                ("amplitude", [sys.executable, os.path.join(tools, "analyze_amplitude.py"),
+                               self.library, "--json"])):
+            if self._stopped(job_id):
+                return self._finish(job_id, "stopped")
+            self._emit(job_id, "stage", stage, stage=stage)
+            code, out = self._spawn(job_id, stage, argv)
+            if stage == "flavor":
+                # extract_library.py has no --json; its last summary line says it.
+                m = re.search(r"(\d+) extracted, (\d+) failed", out or "")
+                todo = re.search(r"(\d+) to extract", out or "")
+                result["flavor"] = {"extracted": int(m.group(1)) if m else 0,
+                                    "failed": int(m.group(2)) if m else 0,
+                                    "todo": int(todo.group(1)) if todo else None}
+            else:
+                result["amplitude"] = parse_json_tail(out) or {}
+            if code != 0:
+                if code < 0:
+                    self._save_result(job_id, result)
+                    return self._finish(job_id, "stopped")
+                self._emit(job_id, "error", f"{stage} exited {code}", stage=stage)
+                failed.append(stage)
+            self._emit(job_id, "counts", json.dumps(counts(self.library)), stage=stage)
+        self._save_result(job_id, result)
+        self._finish(job_id, "failed" if failed else "done")
+
+    def _save_result(self, job_id: int, result: dict) -> None:
+        db = self._db()
+        db.execute("UPDATE jobs SET result=?1 WHERE job_id=?2", (json.dumps(result), job_id))
+        db.commit()
+        db.close()
 
     def _spawn(self, job_id, stage, argv):
         # UTF-8 on both sides. `ingest_folder.say()` falls back to the console

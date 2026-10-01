@@ -50,6 +50,7 @@ import lempi_control  # noqa: E402  -- process/network side of the handoff
 import pending as pendingmod  # noqa: E402  -- what waits for a person [SPEC048]
 import mesh as meshmod  # noqa: E402  -- membership [SPEC049]
 import cd_import  # noqa: E402  -- the CD import page [SPEC056]
+import analysis_gaps  # noqa: E402  -- the Jobs page's Not analysed list [REQ-LIB-305]
 
 WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "console_web")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1219,6 +1220,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"remote": STATE["jobs"].get_remote()})
             if p == "/api/jobs":
                 return self.send_json(STATE["jobs"].recent())
+            if p == "/api/analysis/missing":
+                # What flavor and amplitude analysis have not reached, by album
+                # folder -- counted by each tool's own rule, so the list names
+                # only what Analyse what's missing can clear. Read-only.
+                return self.send_json(analysis_gaps.missing(self._db()))
             if p.startswith("/api/jobs/") and p.endswith("/stream"):
                 return self.stream(int(p.split("/")[3]))
             if p.startswith("/api/jobs/"):
@@ -1466,6 +1472,10 @@ class Handler(BaseHTTPRequestHandler):
                 if not folder or not os.path.isdir(folder):
                     return self.send_json({"error": f"not a folder: {folder}"}, code=400)
                 return self.send_json({"job_id": STATE["jobs"].submit("reanalyze", folder)})
+            if p == "/api/analysis/run":
+                # The whole library's missing flavor and amplitude, one job; never
+                # `reanalyze`, which would re-fingerprint every passage as well.
+                return self.send_json({"job_id": STATE["jobs"].submit("analyze-missing", "")})
             if p == "/api/analyze-amplitude":
                 # `[SPEC-SA-075]`, deliberately opt-in -- see `jobs.py`'s own
                 # `SKIPPED` entry for why this is never part of `/api/reanalyze`
