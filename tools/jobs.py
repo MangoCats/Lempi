@@ -529,6 +529,9 @@ class Runner:
         if kind == "analyze-missing":
             return self._analyze_missing(job_id)
 
+        if kind == "passage-hold":
+            return self._passage_hold(job_id, target)
+
         if kind == "cd-rip":
             return self._cd_rip(job_id, target)
 
@@ -1263,6 +1266,19 @@ class Runner:
             self._emit(job_id, "counts", json.dumps(counts(self.library)), stage=stage)
         self._save_result(job_id, result)
         self._finish(job_id, "failed" if failed else "done")
+
+    def _passage_hold(self, job_id: int, target: str):
+        """Hold one passage back from the Program Director, or let it go
+        `[SPEC-HOLD-010]` -- `target` is `{"passage_id", "hold", "why"}`.
+        A person's own decision, so `passage_hold.py` writes it at once."""
+        payload = json.loads(target)
+        tools = os.path.dirname(os.path.abspath(__file__))
+        argv = [sys.executable, os.path.join(tools, "passage_hold.py"), self.library]
+        if payload["hold"]:
+            argv += ["--hold", str(payload["passage_id"]), "--why", payload.get("why") or "held by hand"]
+        else:
+            argv += ["--release", str(payload["passage_id"])]
+        self._run_single_stage(job_id, "hold" if payload["hold"] else "release", argv + ["--json"])
 
     def _save_result(self, job_id: int, result: dict) -> None:
         db = self._db()

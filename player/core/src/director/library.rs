@@ -9,7 +9,7 @@
 //! costs no I/O at all, which matters on a Pi where the queue is topped up
 //! every few seconds `[REQ-HW-140]`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
@@ -183,6 +183,9 @@ pub struct Director {
     /// no MBID can equal, so a tag never blocks an identified artist and is
     /// never blocked by one.
     tag_artist: HashMap<i64, String>,
+    /// Radio passages held back from selection by `passages.director_hold`
+    /// `[SPEC-HOLD-010]`. Empty for a catalogue that predates the column.
+    held: HashSet<i64>,
     last_played: HashMap<String, i64>,
     // (see `QueuedNote` for why the previous values are handed back)
     artist_last_played: HashMap<String, i64>,
@@ -319,6 +322,29 @@ impl Director {
             Err(e) => tracing::warn!(
                 "director: no file_tags ({e}); a passage with no credited artist \
                  rotates on its passage alone [REQ-AND-315]"
+            ),
+        }
+
+        // Passages held back by a mark of their own `[SPEC-HOLD-010]`. The
+        // column arrives on a speaker with the first catalogue sync after it
+        // exists on the desktop (`star_patch.py` adds a column the node
+        // lacks), so a player can meet a catalogue without it; it then holds
+        // nothing, and says so, rather than failing to load at all.
+        let mut held: HashSet<i64> = HashSet::new();
+        match conn.prepare(
+            "SELECT passage_id FROM __LIB__.passages \
+              WHERE kind = 'radio' AND director_hold IS NOT NULL AND director_hold <> ''",
+        ) {
+            Ok(mut stmt) => {
+                held = stmt
+                    .query_map([], |r| r.get::<_, i64>(0))
+                    .map_err(q)?
+                    .collect::<rusqlite::Result<HashSet<_>>>()
+                    .map_err(q)?;
+            }
+            Err(e) => tracing::warn!(
+                "director: no passages.director_hold ({e}); no passage is held \
+                 back [SPEC-HOLD-010]"
             ),
         }
 
@@ -463,6 +489,7 @@ impl Director {
             artist_tuning,
             artist_of,
             tag_artist,
+            held,
             last_played,
             artist_last_played,
             works_of,
@@ -571,6 +598,9 @@ impl Director {
         self.rows
             .iter()
             .map(|row| {
+                if self.held.contains(&row.entry.passage_id) {
+                    return (&row.entry, Weighing::excluded(Exclusion::Held));
+                }
                 let mbid = row.mbid.as_deref();
                 let recording = mbid
                     .and_then(|m| self.recording_tuning.get(m))
@@ -951,6 +981,8 @@ impl Director {
                 Some(Exclusion::SkipSuppressed) | Some(Exclusion::DequeueSuppressed) => {
                     c.suppressed += 1
                 }
+                // Apart from `filtered` too: the right shape, held by a mark.
+                Some(Exclusion::Held) => c.held += 1,
                 Some(_) => c.filtered += 1,
             }
         }
@@ -974,6 +1006,9 @@ pub struct Census {
     pub work_blocked: usize,
     pub below_min_weight: usize,
     pub filtered: usize,
+    /// Held back by a mark on the passage `[SPEC-HOLD-010]`: lasting, unlike
+    /// `suppressed`, and the right shape, unlike `filtered`.
+    pub held: usize,
     pub total_weight: f64,
 }
 
@@ -996,6 +1031,7 @@ impl Census {
             work_blocked,
             below_min_weight,
             filtered,
+            held,
             total_weight: _,
         } = self;
         eligible
@@ -1006,6 +1042,7 @@ impl Census {
             + work_blocked
             + below_min_weight
             + filtered
+            + held
     }
 }
 
@@ -1257,6 +1294,29 @@ mod tests {
         d.forget_queued(note);
         assert!(d.last_played.is_empty(), "no entry should remain");
         assert!(d.artist_last_played.is_empty());
+    }
+
+    /// A passage marked `director_hold` -- a damaged rip, or a person's choice
+    /// -- is never chosen, and is counted as held, not lost `[SPEC-HOLD-010]`.
+    /// An empty mark holds nothing. The fixture without the column is every
+    /// other test here: a catalogue that predates it holds nothing.
+    #[test]
+    fn a_held_passage_is_never_chosen() {
+        let c = fixture();
+        c.execute_batch(
+            "ALTER TABLE passages ADD COLUMN director_hold TEXT;
+             UPDATE passages SET director_hold = 'damaged rip: track 2' WHERE passage_id = 2;
+             UPDATE passages SET director_hold = '' WHERE passage_id = 3;",
+        )
+        .unwrap();
+        let d = Director::load(&c).unwrap();
+        let cen = d.census(NOW);
+        assert_eq!((cen.eligible, cen.held), (2, 1), "passage 2 held, the empty mark on 3 holds nothing");
+        assert_eq!(cen.total(), 3, "a held passage is still counted in the pool's total");
+        let mut rng = Rng::seeded(7);
+        for _ in 0..200 {
+            assert_ne!(d.choose(NOW, &mut rng).unwrap().passage_id, 2, "a held passage is never chosen");
+        }
     }
 
     #[test]

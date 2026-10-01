@@ -193,10 +193,15 @@ pub enum Exclusion {
     TooLong,
     TooDeep,
     BelowMinWeight,
+    /// Held back by a mark on the passage itself, `passages.director_hold`:
+    /// a damaged rip, or a person's own choice `[SPEC-HOLD-010]`. Never chosen
+    /// by the Director, while a person can still play it on purpose. Unlike
+    /// a suppression it does not lapse; it lasts until the mark is cleared.
+    Held,
 }
 
 impl Weighing {
-    fn excluded(reason: Exclusion) -> Self {
+    pub(crate) fn excluded(reason: Exclusion) -> Self {
         Self {
             artist_weight: 0.0,
             artist_blocked: reason == Exclusion::ArtistRotationBlock,

@@ -122,6 +122,11 @@ CREATE TABLE IF NOT EXISTS passages (
     fade_out_ms    INTEGER NOT NULL DEFAULT 20,
     fade_in_curve  TEXT    NOT NULL DEFAULT 'exponential',
     fade_out_curve TEXT    NOT NULL DEFAULT 'exponential',
+    -- Held back from the Program Director, and why: a damaged rip, or a
+    -- person's choice [SPEC-HOLD-010]. NULL or empty: the Director may pick it.
+    -- A person can still play it on purpose. Added to an existing library by
+    -- tools/passage_hold.py, and to a speaker's by star_patch.py.
+    director_hold  TEXT,
     CHECK (end_ms > start_ms)
 );
 CREATE INDEX IF NOT EXISTS passages_file ON passages(file_id);

@@ -400,6 +400,13 @@ def main() -> int:
         check(detail["track"] == 1, f"got {detail}")
         n_passages = c.execute("SELECT COUNT(*) FROM passages").fetchone()[0]
         check(n_passages == 10, f"a failed track is still written, not dropped, got {n_passages}")
+        # [SPEC-HOLD-010]: the damaged track's radio passage is held back from
+        # the Director at once -- its album passage, and the good track, not.
+        held = c.execute("SELECT kind, start_ms, director_hold FROM passages "
+                         "WHERE director_hold IS NOT NULL").fetchall()
+        check(len(held) == 1 and held[0]["kind"] == "radio" and held[0]["start_ms"] == 0
+              and held[0]["director_hold"] == "damaged rip: could not be verified",
+              f"track 1's radio passage, and only it, is held, saying why: {[tuple(h) for h in held]}")
     finally:
         segment_dao.identify_recording = old_identify
         c.close()

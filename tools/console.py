@@ -1488,6 +1488,19 @@ class Handler(BaseHTTPRequestHandler):
                 if folder and not os.path.isdir(folder):
                     return self.send_json({"error": f"not a folder: {folder}"}, code=400)
                 return self.send_json({"job_id": STATE["jobs"].submit("analyze-amplitude", folder)})
+            if p == "/api/passage-hold":
+                # [SPEC-HOLD-010]: hold one passage back from the Program
+                # Director, or let it go. A person's own decision, so it writes
+                # at once -- through passage_hold.py, as a job, since this
+                # process never writes the library itself.
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                req = json.loads(body or b"{}") or {}
+                passage_id, hold = req.get("passage_id"), req.get("hold")
+                if not isinstance(passage_id, int) or passage_id <= 0 or not isinstance(hold, bool):
+                    return self.send_json({"error": "needs passage_id and hold (true or false)"}, code=400)
+                target = json.dumps({"passage_id": passage_id, "hold": hold,
+                                     "why": str(req.get("why") or "").strip()[:200]})
+                return self.send_json({"job_id": STATE["jobs"].submit("passage-hold", target)})
             if p == "/api/analyze-flavor":
                 # Scoped to one passage, not a folder -- refreshing flavor
                 # after a boundary edit is a per-passage question, and

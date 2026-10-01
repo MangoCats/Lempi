@@ -60,6 +60,7 @@ import audio_duration        # noqa: E402
 import cd_toc                 # noqa: E402
 import fetch_releases         # noqa: E402  -- get(), UA, rate-limit/backoff
 import ingest_folder          # noqa: E402  -- audio_md5(), LOCAL_PREFIX
+import passage_hold           # noqa: E402  -- a damaged track held back [SPEC-HOLD-010]
 import secret                 # noqa: E402
 import segment_dao            # noqa: E402  -- identify_recording() (AcoustID)
 
@@ -446,6 +447,12 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
                     "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,"
                     "detail,decided_at) VALUES (?1,'rip','verification_failed',NULL,?2,?3)",
                     (audio_md5, json.dumps({"track": track.number, "detail": tr.detail}), now))
+                # And held back from the Program Director at once
+                # `[SPEC-HOLD-010]`: still on the album, and playable on
+                # purpose, but never chosen for the radio while it is damaged.
+                passage_hold.ensure_column(conn)
+                conn.execute(f"UPDATE passages SET {passage_hold.COLUMN} = ?1 WHERE passage_id = ?2",
+                             (passage_hold.damage_reason(tr.detail), radio_pid))
                 failed += 1
 
     # ------------------------------------------------------------- disc decision
