@@ -294,7 +294,10 @@ def test_tracks_end_to_end():
                                   "recording": {"id": f"rec-t{n}", "title": f"Song {n}"}} for n in (1, 2, 3)]}]}
     db = os.path.join(tempfile.mkdtemp(), "lempi.db")
     c = sqlite3.connect(db)
-    c.executescript(SCHEMA + "CREATE TABLE player_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);")
+    c.executescript(SCHEMA + "CREATE TABLE player_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);"
+                    "CREATE TABLE flavor (subject_kind TEXT, subject_id TEXT, characteristic TEXT, class TEXT, "
+                    "value REAL, source TEXT, accuracy REAL, "
+                    "PRIMARY KEY (subject_kind, subject_id, characteristic, class));")
     c.commit()
     c.close()
 
@@ -317,7 +320,9 @@ def test_tracks_end_to_end():
         check(p["rip"]["tracks"][1]["ok"] is False, f"and track 2's verdict is shown: {p['rip']}")
 
         home = os.path.join(tempfile.mkdtemp(), "Artist", "Album (2001)")
-        r = ingest_cd.do_ingest(db, inbox, commit=True, release="rel-T", into=home, keep_flac=False)
+        r = ingest_cd.do_ingest(db, inbox, commit=True, release="rel-T", into=home, keep_flac=False,
+                                occasions=("christmas",))
+        check(r.get("occasions") == {"christmas": 2}, f"both tracks marked Christmas [SPEC-CDI-096]: {r.get('occasions')}")
         names = sorted(os.listdir(home))
         check(names == ["01. One.mp3", "02. Two.mp3", "Artist - Album.cue", "Artist - Album.log"],
               f"a MP3 per track, filed, WAVs removed, got {names}")
@@ -371,9 +376,60 @@ def test_tracks_end_to_end():
         ingest_cd.lookup_disc_id, ingest_cd.lookup_barcode = old
 
 
+def test_occasions():
+    """[SPEC-CDI-096]: the disc's title suggests Christmas or children's;
+    ticked, every recording on the disc is marked fully that occasion, as
+    MuLibPlay's tagging was -- and a mark already there is left as it is."""
+    print("occasions: guessed from the title, then every recording marked")
+    g = ingest_cd.guess_occasions
+    check(g("Now That’s What I Call Christmas! 3") == ["christmas"], g("Now That’s What I Call Christmas! 3"))
+    check(g("Merry Christmas… Have a Nice Life!") == ["christmas"], "Cyndi Lauper's Christmas album")
+    check(g("A Very Special X-Mas") == ["christmas"] and g("Joyeux Noël") == ["christmas"], "other spellings")
+    check(g("Kidz Bop 5") == ["childrens"] and g("Songs for Children") == ["childrens"]
+          and g("Lullabies for Little Ones") == ["childrens"], "children's titles")
+    check(g("Sugar Ray") == [] and g("...Baby One More Time") == [] and g("Kidnapped") == [],
+          "an ordinary title suggests nothing -- not even 'Baby', or 'Kid' inside a word")
+    check(g(None, "", "Christmas Hits") == ["christmas"], "any of the titles given")
+
+    c = fixture()
+    c.execute("CREATE TABLE flavor (subject_kind TEXT, subject_id TEXT, characteristic TEXT, class TEXT, "
+              "value REAL, source TEXT, accuracy REAL, PRIMARY KEY (subject_kind, subject_id, characteristic, class))")
+    c.execute("INSERT INTO flavor VALUES ('recording','rec-old','user.christmas','christmasy',1.0,'inherited:mulib',NULL)")
+    c.execute("INSERT INTO flavor VALUES ('recording','rec-old','user.christmas','not_christmasy',0.0,'inherited:mulib',NULL)")
+    got = ingest_cd.mark_occasions(c, ["rec-new", "rec-old", "rec-new", None], ["christmas"])
+    rows = {(r["subject_id"], r["class"]): (r["value"], r["source"]) for r in
+            c.execute("SELECT subject_id, class, value, source FROM flavor")}
+    check(got == {"christmas": 2}, f"two recordings, a duplicate and a blank skipped: {got}")
+    check(rows[("rec-new", "christmasy")] == (1.0, "cd:import") and rows[("rec-new", "not_christmasy")] == (0.0, "cd:import"),
+          f"both classes of the pair, as the inherited tagging has them: {rows}")
+    check(rows[("rec-old", "christmasy")] == (1.0, "inherited:mulib"), f"an equal mark is left as it was: {rows}")
+    try:
+        ingest_cd.mark_occasions(c, ["x"], ["easter"])
+        check(False, "an unknown occasion is refused")
+    except ValueError:
+        pass
+
+    mp3 = os.path.join(tempfile.mkdtemp(), "dao.mp3")
+    with open(mp3, "wb") as f:
+        f.write(b"\0" * 128)
+    rel = {"id": "rel-X", "media": [{"tracks": [{"position": n, "recording": {"id": f"rec-x{n}", "title": f"S{n}"}}
+                                                for n in (1, 2)]}]}
+    r = ingest_cd.commit_rip(c, "/rip", cd_toc.DiscToc(tracks=TRACKS[:2], leadout_sector=0, source="eac-cue"),
+                             mp3, "md5-xmas", "exact", [rel], None, None, chosen=True,
+                             occasions=("christmas", "childrens"))
+    marked = sorted((r2["subject_id"], r2["characteristic"]) for r2 in c.execute(
+        "SELECT subject_id, characteristic FROM flavor WHERE class IN ('christmasy','for_children') "
+        "AND subject_id LIKE 'rec-x%'"))
+    check(r["occasions"] == {"christmas": 2, "childrens": 2} and marked == [
+        ("rec-x1", "user.childrens"), ("rec-x1", "user.christmas"),
+        ("rec-x2", "user.childrens"), ("rec-x2", "user.christmas")], f"commit_rip marks the disc: {r} {marked}")
+    c.close()
+
+
 def main() -> int:
     test_end_to_end()
     test_tracks_end_to_end()
+    test_occasions()
     test_chosen_edition()
     test_preview_pieces()
     test_files_on_disk()

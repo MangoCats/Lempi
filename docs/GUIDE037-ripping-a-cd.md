@@ -99,6 +99,12 @@ A disc ripped a file per track (CUERipper's **tracks** choice) is added the same
 way, each track its own MP3. A track the ripper never wrote -- a damaged one it
 stopped on -- is named on the card, and the album is added without it.
 
+A Christmas collection or a children's album can be marked as one, whole, as it
+is added: tick **Christmas music** or **children's music** under the editions.
+A title with "Christmas" or "Kids" in it ticks the box for you; untick it if
+that is wrong. Every track on the disc is then marked, as if you had set each
+one by hand, and you can still change any single track afterwards.
+
 To keep a lossless FLAC copy of every rip as well, turn on **Keep a lossless FLAC
 copy of CD rips** on the Lempi player's Settings page, on this computer. It is
 off unless you turn it on, and it applies to every rip after that.

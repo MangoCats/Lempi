@@ -314,6 +314,58 @@ def _artists_for(release: dict, position: int) -> list[tuple[str, str]]:
             if isinstance(a.get("artist"), dict) and a["artist"].get("id")]
 
 
+# ------------------------------------------------- occasions, for the whole disc
+#
+# A Christmas collection, or a children's album, is that from its first track
+# to its last; marking its recordings one by one in the preference panel is
+# the chore this saves `[SPEC-CDI-096]`. The disc's title suggests it; the
+# person decides, on the import page, before anything is added. Written as the
+# inherited MuLibPlay tagging is -- both classes of the pair, in `flavor` -- so
+# the panel shows it as inherited, a person's own value still overrides it,
+# and Reset returns to it `[SPEC-PREF-085]`. Unticked writes nothing: no
+# opinion, never "not Christmas".
+OCCASIONS = {
+    "christmas": ("user.christmas", "christmasy", "not_christmasy"),
+    "childrens": ("user.childrens", "for_children", "not_for_children"),
+}
+# Conservative on purpose: a box the guess left unticked is one click, and a
+# children's guess on "Baby One More Time" would be a wrong mark to undo.
+_OCCASION_GUESS = {
+    "christmas": re.compile(r"christmas|\bx-?mas\b|\bno[eë]l\b|navidad|weihnacht", re.I),
+    "childrens": re.compile(r"\bchildren|\bkids?\b|\bkidz\b|nursery|lullab|sing-?a-?long|toddlers?\b", re.I),
+}
+OCCASION_SOURCE = "cd:import"
+
+
+def guess_occasions(*titles: str | None) -> list[str]:
+    """Which occasions the disc's titles suggest, for the import page to tick
+    in advance: `["christmas"]` for "Now That's What I Call Christmas! 3"."""
+    text = " ".join(t for t in titles if t)
+    return [o for o, pat in _OCCASION_GUESS.items() if pat.search(text)]
+
+
+def mark_occasions(conn, mbids, occasions, now: str | None = None) -> dict:
+    """Every recording in `mbids` marked fully of each occasion -- the class
+    1.0, its opposite 0.0 -- unless already so. `{occasion: recordings}`."""
+    out = {}
+    for occ in occasions:
+        if occ not in OCCASIONS:
+            raise ValueError(f"no occasion {occ!r}")
+        ch, yes, no = OCCASIONS[occ]
+        n = 0
+        for mbid in dict.fromkeys(m for m in mbids if m):
+            for cls, value in ((yes, 1.0), (no, 0.0)):
+                conn.execute(
+                    "INSERT INTO flavor (subject_kind,subject_id,characteristic,class,value,source,accuracy) "
+                    "VALUES ('recording',?1,?2,?3,?4,?5,NULL) "
+                    "ON CONFLICT(subject_kind,subject_id,characteristic,class) DO UPDATE SET "
+                    "value=excluded.value, source=excluded.source WHERE flavor.value != excluded.value",
+                    (mbid, ch, cls, value, OCCASION_SOURCE))
+            n += 1
+        out[occ] = n
+    return out
+
+
 def release_summary(release: dict, track_count: int, conn=None) -> dict:
     """One candidate edition as the preview shows it `[SPEC-CDI-040]`: who,
     what, when, its track list for this disc, the folder it would be filed
@@ -436,7 +488,7 @@ def _resolve_track(conn, number: int, cd_text_title: str | None, radio_pid: int,
 def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
                audio_md5: str, disc_outcome: str, releases: list[dict],
                rip_report: "cd_toc.RipReport | None", acoustid_key: str | None,
-               chosen: bool = False) -> dict:
+               chosen: bool = False, occasions: tuple = ()) -> dict:
     """Register the file, write TOC-exact passages, resolve each track's
     identity, and record every decision -- the CD-ripping analogue of
     `segment_dao.commit_segments()`, same shape, ground-truth boundaries
@@ -463,6 +515,7 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
 
     boundary_src = f"imported:{'eac-cue' if toc.source == 'eac-cue' else 'cdrdao-toc'}"
     identified = ambiguous = unidentified = failed = 0
+    mbids: list[str] = []
 
     for track in toc.tracks:
         start_ms, end_ms = track.start_ms, track.end_ms
@@ -481,6 +534,7 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
         outcome, mbid, source = _resolve_track(
             conn, track.number, track.title or toc.title, radio_pid, mp3_path, start_ms, end_ms,
             audio_md5, disc_outcome, releases, chosen, acoustid_key, now)
+        mbids.append(mbid)
         identified += outcome == "identified"
         ambiguous += outcome == "ambiguous"
         unidentified += outcome == "unidentified"
@@ -508,6 +562,8 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
                              (passage_hold.damage_reason(tr.detail), radio_pid, album_pid))
                 failed += 1
 
+    marked = mark_occasions(conn, mbids, occasions, now) if occasions else {}
+
     # ------------------------------------------------------------- disc decision
     certain = chosen or (disc_outcome == "exact" and len(releases) == 1)
     detail = {
@@ -527,7 +583,7 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
     return {"tracks": toc.track_count, "identified": identified,
             "ambiguous": ambiguous, "unidentified": unidentified,
             "verification_failed": failed, "file_id": file_id,
-            "disc_outcome": disc_outcome, "candidates": len(releases)}
+            "disc_outcome": disc_outcome, "candidates": len(releases), "occasions": marked}
 
 
 def _write_id_check(conn, passage_id: int, stored_mbid: str,
@@ -644,12 +700,14 @@ def preview_tracks(db_path: str, folder: str) -> dict:
             "cd_text": {"title": toc.title, "performer": toc.performer},
             "barcode": toc.barcode, "disc_id": disc_id, "disc_outcome": disc_outcome,
             "candidates": len(releases), "releases": rels, "rip": rip_verdict(rip["rip_report"]),
+            "occasions": guess_occasions(toc.title, *(r.get("title") for r in releases[:8])),
             "folder": rels[0]["folder"] if len(rels) == 1 else cd_folder}
 
 
 def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[int],
                   disc_outcome: str, releases: list[dict], rip_report: "cd_toc.RipReport | None",
-                  acoustid_key: str | None, chosen: bool = False, disc_id: str | None = None) -> dict:
+                  acoustid_key: str | None, chosen: bool = False, disc_id: str | None = None,
+                  occasions: tuple = ()) -> dict:
     """A tracks-mode rip's catalogue `[SPEC-CDI-090]`: each track its own
     file, `tracks` as `(TocTrack, mp3_path, audio_md5)`, with one radio and one
     album passage, identified by the same rules as an image rip's
@@ -666,7 +724,7 @@ def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[
     now = _now()
     ingest_folder.ensure_md5_generator_column(conn)
     counts = {"identified": 0, "ambiguous": 0, "unidentified": 0}
-    failed, file_ids = 0, []
+    failed, file_ids, mbids = 0, [], []
     certain = chosen or (disc_outcome == "exact" and len(releases) == 1)
     for t, mp3_path, audio_md5 in tracks:
         st = os.stat(mp3_path)
@@ -689,6 +747,7 @@ def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[
             conn, t.number, t.title or toc.title, radio_pid, mp3_path, radio_start, end_ms,
             audio_md5, disc_outcome, releases, chosen, acoustid_key, now)
         counts[outcome] += 1
+        mbids.append(mbid)
         for pid in (radio_pid, album_pid):
             conn.execute("INSERT INTO passage_recordings (passage_id,mbid,weight,source) "
                          "VALUES (?1,?2,1.0,?3)", (pid, mbid, source))
@@ -719,13 +778,15 @@ def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[
             "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
             "VALUES (?1,'rip','track_missing',NULL,?2,?3)",
             (tracks[0][2], json.dumps({"track": n, "title": title}), now))
+    marked = mark_occasions(conn, mbids, occasions, now) if occasions else {}
     return {"tracks": len(tracks), **counts, "verification_failed": failed, "missing": missing,
+            "occasions": marked,
             "file_ids": file_ids, "file_id": file_ids[0] if file_ids else None,
             "disc_outcome": disc_outcome, "candidates": len(releases), "mode": "tracks"}
 
 
 def ingest_tracks(db_path: str, folder: str, release: str | None, into: str | None,
-                  keep_flac: bool) -> dict:
+                  keep_flac: bool, occasions: tuple = ()) -> dict:
     """`do_ingest` for a tracks-mode rip: each WAV encoded as the image's is,
     then the same order -- the catalogue written before any WAV is touched,
     and a FLAC copy made first when asked `[SPEC-RIP-040]`."""
@@ -766,7 +827,7 @@ def ingest_tracks(db_path: str, folder: str, release: str | None, into: str | No
         conn.execute("BEGIN IMMEDIATE")
         result = commit_tracks(conn, toc, [(t, m, md5) for t, _w, m, md5 in encoded], rip["missing"],
                                disc_outcome, releases, rip["rip_report"], secret.acoustid_key(required=False),
-                               chosen=bool(release), disc_id=disc_id)
+                               chosen=bool(release), disc_id=disc_id, occasions=occasions)
         conn.commit()
     finally:
         conn.close()
@@ -812,11 +873,12 @@ def preview(db_path: str, folder: str) -> dict:
             "cd_text": {"title": toc.title, "performer": toc.performer},
             "disc_id": cd_toc.musicbrainz_disc_id(toc), "disc_outcome": disc_outcome,
             "candidates": len(releases), "releases": rels, "rip": rip_verdict(rip_report),
+            "occasions": guess_occasions(toc.title, *(r.get("title") for r in releases[:8])),
             "folder": rels[0]["folder"] if len(rels) == 1 else cd_folder}
 
 
 def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = None,
-              into: str | None = None, keep_flac: bool | None = None) -> dict:
+              into: str | None = None, keep_flac: bool | None = None, occasions: tuple = ()) -> dict:
     import sqlite3  # noqa: F401  -- the connection below is lempi_db's
 
     if not commit:
@@ -825,7 +887,7 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
     if keep_flac is None:
         keep_flac = keep_lossless_setting(db_path)
     if is_tracks_rip(folder):
-        return ingest_tracks(db_path, folder, release, into, keep_flac)
+        return ingest_tracks(db_path, folder, release, into, keep_flac, occasions)
     fmt, _cue, toc, wav_path, rip_report = open_rip(folder)
 
     say("encoding the MP3 ...")
@@ -863,7 +925,8 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
         say("writing the album ...")
         conn.execute("BEGIN IMMEDIATE")
         result = commit_rip(conn, folder, toc, mp3_path, audio_md5, disc_outcome, releases,
-                            rip_report, secret.acoustid_key(required=False), chosen=bool(release))
+                            rip_report, secret.acoustid_key(required=False), chosen=bool(release),
+                            occasions=occasions)
         conn.commit()
     finally:
         conn.close()
@@ -903,11 +966,15 @@ def main() -> int:
                       help="keep a lossless FLAC copy (default: the Lempi Settings switch)")
     flac.add_argument("--no-keep-flac", dest="keep_flac", action="store_false")
     ap.add_argument("--json", action="store_true")
+    for occ, label in (("christmas", "Christmas"), ("childrens", "children's")):
+        ap.add_argument(f"--{occ}", dest="occasions", action="append_const", const=occ,
+                        help=f"mark every recording on the disc fully {label} [SPEC-CDI-096]")
     args = ap.parse_args()
 
     try:
         result = do_ingest(args.db, args.folder, args.commit, release=args.release,
-                           into=args.into, keep_flac=args.keep_flac)
+                           into=args.into, keep_flac=args.keep_flac,
+                           occasions=tuple(args.occasions or ()))
     except Exception as e:                                    # noqa: BLE001
         if args.json:
             print(json.dumps({"ok": False, "error": str(e)}))

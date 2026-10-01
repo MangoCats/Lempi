@@ -228,13 +228,26 @@ function showPreview(p, folder, area) {
       S.el('span', { class: 'meta', text: `  ${rel.year || ''} ${rel.country || ''}` }), tl));
   });
   if (rels.length === 1) setWarn(rels[0]);
+  // [SPEC-CDI-096]: the whole disc marked as an occasion, ticked in advance
+  // when its title suggests one -- "Christmas" in it -- and the person's to
+  // change before anything is added. Unticked marks nothing.
+  const guessed = new Set(p.occasions || []);
+  const box = (key, label) => {
+    const cb = S.el('input', { type: 'checkbox', value: key });
+    cb.checked = guessed.has(key);
+    return S.el('label', { style: 'margin-right:1.2rem' }, cb, ` ${label}`);
+  };
+  const occ = S.el('div', { class: 'controls' },
+    S.el('span', { style: 'align-self:center;font-size:.88rem', text: 'Every track on this disc is:' }),
+    box('christmas', 'Christmas music'), box('childrens', "children's music"));
   const add = S.el('button', { class: 'chip on', text: 'Add to library' });
   add.onclick = async () => {
     if (rels.length > 1 && !chosen) return alert('Choose which edition this is first.');
     add.disabled = true;
+    const occasions = [...occ.querySelectorAll('input:checked')].map(c => c.value);
     const r = await (await fetch('/api/import/add', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folder, release: chosen, into: into.value.trim() }) })).json();
+      body: JSON.stringify({ folder, release: chosen, into: into.value.trim(), occasions }) })).json();
     if (r.error) { add.disabled = false; return alert(r.error); }
     // The rip leaves the inbox while it is added, and its card with it: the
     // work and its result move to "Just added", where they stay.
@@ -258,7 +271,7 @@ function showPreview(p, folder, area) {
   area.replaceChildren(
     S.el('div', { class: 'steps' }, S.el('span', { text: rels.length > 1
       ? 'MusicBrainz knows several editions of this disc -- choose yours:' : 'This is the disc:' }), help('add')),
-    gap, pick, warn,
+    gap, pick, warn, occ,
     S.el('div', { class: 'controls' }, S.el('span', { style: 'align-self:center;font-size:.88rem',
       text: 'Album folder, in your music folder:' }), into, add));
 }
@@ -281,7 +294,9 @@ function done(job, into, rel, area) {
     S.el('p', { class: 'verdict ok', text: `Added: ${res.tracks} tracks, ${res.identified} identified` +
       (res.ambiguous || res.unidentified ? `, ${res.ambiguous + res.unidentified} waiting in the review queue` : '') +
       (res.flac ? '; a lossless FLAC copy kept' : '') +
-      (res.missing && res.missing.length ? `; track ${res.missing.join(', ')} not ripped, so not added` : '') + '.' }),
+      (res.missing && res.missing.length ? `; track ${res.missing.join(', ')} not ripped, so not added` : '') +
+      Object.entries(res.occasions || {}).map(([k, n]) =>
+        `; ${n} marked as ${k === 'christmas' ? 'Christmas' : "children's"} music`).join('') + '.' }),
     // Analysed as part of adding it [REQ-LIB-305]; a stage that failed is
     // said, and the Jobs page's Not analyzed list can finish it.
     res.analysis ? S.el('p', {

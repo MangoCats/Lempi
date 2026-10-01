@@ -1152,6 +1152,10 @@ class Runner:
             argv += ["--release", payload["release"]]
         if payload.get("into"):
             argv += ["--into", payload["into"]]
+        # The disc's occasions a person ticked on the import page
+        # [SPEC-CDI-096]: every recording on it marked fully Christmas, or
+        # children's. Only the two names ingest_cd.py knows reach its argv.
+        argv += [f"--{o}" for o in payload.get("occasions") or () if o in ("christmas", "childrens")]
         self._emit(job_id, "stage", "ingest", stage="ingest")
         code, out = self._spawn(job_id, "ingest", argv)
         result = parse_json_tail(out) or {}

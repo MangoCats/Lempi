@@ -147,6 +147,20 @@ to the speakers* opens the Export page with this album already chosen
 audio has reached it -- a catalogue entry alone is refused by star sync
 `[SPEC-STAR-080]`.
 
+**`[SPEC-CDI-096]` A whole disc can be marked Christmas, or children's, as it
+is added.** Asked for 2026-10-01: such a disc is that from its first track to
+its last, and marking each recording in the preference panel was the chore.
+The preview offers two boxes, ticked in advance when the disc's or an
+edition's title suggests the occasion ("Christmas", "Xmas", "Noël"; "Kids",
+"Children", "Lullabies"), and the person's to change before **Add**. Ticked,
+every recording on the disc is written fully that occasion in `flavor` --
+`user.christmas`/`christmasy` 1.0 and `not_christmasy` 0.0, or
+`user.childrens`/`for_children` -- the shape MuLibPlay's inherited tagging has,
+with source `cd:import`. So the panel shows it as inherited, a person's own
+value still overrides it, Reset returns to it `[SPEC-PREF-085]`, and the
+catalogue carries it to the speakers. An equal mark already there is left as
+it was; unticked writes nothing -- no opinion, never "not Christmas".
+
 ## 5a. A rip with a file per track
 
 **`[SPEC-CDI-090]` A tracks-mode rip is added as one MP3 per track, each with

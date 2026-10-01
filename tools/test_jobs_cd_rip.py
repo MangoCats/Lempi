@@ -149,6 +149,13 @@ def test_choices_and_preview(tmp: str) -> None:
     argv = seen[-1][1]
     check(argv[argv.index("--release") + 1] == "rel-1", f"the chosen edition, got {argv}")
     check(argv[argv.index("--into") + 1] == "C:/Music/A/B (2001)", f"the album folder, got {argv}")
+    check("--christmas" not in argv and "--childrens" not in argv, f"nothing ticked, nothing marked: {argv}")
+    # [SPEC-CDI-096]: the occasions ticked reach ingest_cd.py; anything else does not.
+    wait_for(runner, runner.submit("cd-rip", json.dumps(
+        {"folder": "C:/rips/x", "into": "C:/Music/A/B", "occasions": ["christmas", "childrens", "--rm"]})))
+    argv = next(a for s, a in reversed(seen) if s == "ingest")
+    check("--christmas" in argv and "--childrens" in argv and "--rm" not in argv and "----rm" not in argv,
+          f"the two known occasions, and only they: {argv}")
     j = wait_for(runner, runner.submit("cd-preview", json.dumps({"folder": "C:/rips/x"})))
     stage, argv = seen[-1]
     check(stage == "preview" and "--commit" not in argv and "--json" in argv, f"a preview, got {argv}")

@@ -141,7 +141,9 @@ def test_the_page_live():
     os.makedirs(music)
     db = os.path.join(tmp, "lib.db")
     c = sqlite3.connect(db)
-    c.executescript(tic.SCHEMA + "CREATE TABLE flavor (subject_kind TEXT, subject_id TEXT);"
+    c.executescript(tic.SCHEMA + "CREATE TABLE flavor (subject_kind TEXT, subject_id TEXT, characteristic TEXT,"
+                    " class TEXT, value REAL, source TEXT, accuracy REAL,"
+                    " PRIMARY KEY (subject_kind, subject_id, characteristic, class));"
                     "CREATE TABLE file_tags (file_id INTEGER PRIMARY KEY, title TEXT, artist TEXT, album TEXT,"
                     " has_art INTEGER, scanned_at TEXT, track_no INTEGER, disc_no INTEGER);"
                     "CREATE TABLE player_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);")
@@ -178,6 +180,7 @@ def test_the_page_live():
         r = j.get("result") or {}
         check(j["state"] == "done" and r.get("dry_run") and r["releases"][0]["id"] == "rel-live",
               f"the preview finds the edition: {j}")
+        check(r.get("occasions") == [], f"an ordinary title suggests no occasion: {r.get('occasions')}")
         check(sorted(os.listdir(p["folder"])) == ["Artist - Album.cue", "Artist - Album.log", "Artist - Album.wav"],
               f"and writes nothing: {os.listdir(p['folder'])}")
 
@@ -186,7 +189,8 @@ def test_the_page_live():
         st, bad = call(port, "POST", "/api/import/add", {"folder": music, "into": "A"})
         check(st == 400, "a folder that is not a rip in the inbox is refused")
         name = r["releases"][0]["folder"]
-        st, a = call(port, "POST", "/api/import/add", {"folder": p["folder"], "release": "rel-live", "into": name})
+        st, a = call(port, "POST", "/api/import/add", {"folder": p["folder"], "release": "rel-live", "into": name,
+                                                       "occasions": ["christmas", "bogus"]})
         j = wait_job(port, a["job_id"])
         res = j.get("result") or {}
         home = os.path.join(music, name)
@@ -197,8 +201,15 @@ def test_the_page_live():
         check(s["rips"] == [], f"and the inbox is empty again: {s['rips']}")
         c = sqlite3.connect(db)
         n = c.execute("SELECT COUNT(*) FROM passages").fetchone()[0]
+        marks = c.execute("SELECT characteristic, class, value FROM flavor WHERE source = 'cd:import' "
+                          "ORDER BY subject_id, class").fetchall()
         c.close()
         check(n == 4, f"two tracks, both kinds, in the catalogue: {n}")
+        # [SPEC-CDI-096]: the box ticked on the page marks every recording; the
+        # route passes only an occasion it knows.
+        check(res.get("occasions") == {"christmas": 2} and marks == [
+            ("user.christmas", "christmasy", 1.0), ("user.christmas", "not_christmasy", 0.0)] * 2,
+              f"both recordings marked Christmas, nothing else: {res.get('occasions')} {marks}")
 
         # [SPEC-CDI-060]: an album file, found, its album picked, its cuts shown.
         album = make_album_file(music, db)

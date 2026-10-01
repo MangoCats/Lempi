@@ -1361,8 +1361,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"error": "the album folder must be a name inside the music folder"},
                                           code=400)
                 into = os.path.join(root, name)
+                # [SPEC-CDI-096]: the occasions ticked for the whole disc --
+                # only the known ones, and only when ticked.
+                occasions = [o for o in b.get("occasions") or [] if o in ("christmas", "childrens")]
                 job = STATE["jobs"].submit("cd-rip", json.dumps(
-                    {"folder": folder, "release": b.get("release") or None, "into": into}))
+                    {"folder": folder, "release": b.get("release") or None, "into": into,
+                     "occasions": occasions}))
                 return self.send_json({"job_id": job, "into": into})
             if p in ("/api/import/split/find", "/api/import/split/preview", "/api/import/split/commit"):
                 # [SPEC-CDI-060]: find the album's release; show the cuts; split.
