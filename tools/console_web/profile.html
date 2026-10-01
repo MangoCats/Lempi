@@ -384,23 +384,27 @@ function releaseSuggestBox(pid, folder) {
       S.watchJob(r.job_id, box, job => { if (job.state === 'done') location.reload(); });
     };
 
-    // [SPEC-HOLD-010]: held back from the Program Director, or not. Only a
-    // radio passage is ever chosen by it, so only a radio passage offers this.
-    // `director_hold` is absent from a library that predates it, empty when a
-    // person released it, and the reason when held.
-    if (p.kind === 'radio') {
-      const held = !!p.director_hold;
+    // [SPEC-HOLD-010]: held back, or not. A held radio passage is never
+    // chosen by the Program Director; a held album passage is skipped or
+    // replaced when a whole album is played [SPEC-HOLD-070]. `director_hold`
+    // is absent from a library that predates it, empty when a person released
+    // it, and the reason when held.
+    {
+      const held = !!p.director_hold, radio = p.kind === 'radio';
       const why = S.el('input', { type: 'text', placeholder: 'why (optional)', style: 'min-width:18rem' });
       const btn = S.el('button', { class: 'chip', id: 'hold',
-        text: held ? 'let the Director pick it again' : 'hold it back from the Director' });
-      m.append(S.el('h2', {}, 'Program Director'));
+        text: held ? 'release it' : 'hold it back' });
+      m.append(S.el('h2', {}, radio ? 'Program Director' : 'Album play'));
       m.append(S.el('p', { style: 'font-size:.9rem' }, ...(held
         ? [S.el('span', { class: 'pill warn', text: 'held back' }), ` ${p.director_hold}`]
-        : ['May choose this passage' + (p.director_hold === '' ? ' -- released by hand.' : '.')])));
+        : [(radio ? 'The Director may choose this passage' : 'A whole-album play includes this passage')
+           + (p.director_hold === '' ? ' -- released by hand.' : '.')])));
       m.append(S.el('p', { class: 'empty', style: 'font-size:.85rem;padding:.2rem 0',
-        text: 'Held, it is never chosen for the radio; it still plays when picked by hand, '
-          + 'and with its album. The player sees a change when it reloads, and the speakers '
-          + 'at their next sync.' }));
+        text: (radio
+          ? 'Held, it is never chosen for the radio. '
+          : 'Held, a whole-album play skips it, or plays the same recording from another file. ')
+          + 'It still plays when picked by hand, and the album file itself is never changed. '
+          + 'The player sees a change when it reloads, and the speakers at their next sync.' }));
       m.append(S.el('div', { class: 'controls' }, held ? null : why, btn));
       m.append(S.el('div', { id: 'hold-result' }));
       btn.onclick = async () => {

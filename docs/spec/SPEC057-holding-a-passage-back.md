@@ -15,9 +15,11 @@ on the radio; the albums should still play whole when someone chooses them.
 
 ## 1. What a hold is
 
-**`[SPEC-HOLD-010]` A held passage is never chosen by the Program Director, and
-nothing else changes.** It stays in the library, on its album, in search, and in
-the queue when a person puts it there. It is a property of the **passage**,
+**`[SPEC-HOLD-010]` A held radio passage is never chosen by the Program
+Director; a held album passage is passed over when a whole album is played
+`[SPEC-HOLD-070]`; nothing else changes.** Either stays in the library, in
+search, and in the queue when a person puts it there, and the album's file is
+never touched -- a damaged track is still in it, as ripped. It is a property of the **passage**,
 not the recording: a damaged track on one disc says nothing about a clean copy
 of the same song on another, and a recording-level preference would have held
 both. The Director counts held passages as their own bucket of its pool, apart
@@ -39,12 +41,13 @@ behind their back `[SPEC-SA-080]`.
 
 **`[SPEC-HOLD-030]` A damaged rip's tracks are held when the rip is added.**
 Adding a CD rip already records each track its log names as failing
-verification `[SPEC-RIP-054]`; the same step now holds that track's radio
-passage, with the log's own words as the reason. The album passage is not
-held: an album is played whole, on purpose. For rips added before this
-existed, `tools/passage_hold.py --damaged` holds every recorded damaged track
-not yet decided -- a dry run unless `--commit`. Run on the desk library
-2026-10-01, it held the eight.
+verification `[SPEC-RIP-054]`; the same step now holds both of that track's
+passages, radio and album, with the log's own words as the reason -- the
+maintainer's direction, 2026-10-01. For rips added before this existed,
+`tools/passage_hold.py --damaged` holds both passages of every recorded
+damaged track not yet decided -- a dry run unless `--commit`. Run on the desk
+library 2026-10-01: the eight radio passages first, their eight album
+passages once the album rule was decided the same day.
 
 **`[SPEC-HOLD-040]` A person holds or releases any radio passage from its
 page.** The Vipunen console's passage page shows whether the Director may pick
@@ -70,7 +73,20 @@ A change is seen by the Director when it is next built: on the desktop, when
 the player reloads its library (the Jobs page's *ask the player to reload*);
 on a speaker, at the sync that delivers it.
 
-## 4. Limits, named
+## 4. Playing a whole album
+
+**`[SPEC-HOLD-070]` A whole-album play skips a held album passage, or plays
+an equal one from another file.** *Not built: there is no whole-album play
+yet* `[REQ-PD-127]`. When there is, it queues the album's passages in order,
+and for one that is held it queues, in its place, an unheld passage of the
+same recording from another file if the library has one -- a clean copy from a
+compilation, say -- and otherwise leaves the track out. Same recording means
+the same recording MBID, not the same title: a live take or a remaster is a
+different recording and is not a stand-in. The listener can still choose the
+held passage itself. Decided by the maintainer, 2026-10-01; the album passages
+are held now so that the play, when built, has the marks to read.
+
+## 5. Limits, named
 
 **`[SPEC-HOLD-060]` Re-segmenting a file drops its holds.** `segment_dao.py`
 and the phone's own ingest replace a file's passages; the new ones start
@@ -82,7 +98,7 @@ with no Vipunen, fed by bundle rather than by star sync
 ([SPEC014](SPEC014-payload-schema.md)), receives every passage unheld. Carrying
 it is a payload change, not made here.
 
-## 5. Open
+## 6. Open
 
 **`[SPEC-HOLD-900]`** Lempi's own passage page shows no hold and offers no
 control; a listener on a speaker cannot hold a passage there. Whether one
@@ -91,4 +107,4 @@ rule `[SPEC-STAR-085]` -- is left open.
 
 ---
 
-**Traceability:** `[SPEC-HOLD-010..065]`, `[SPEC-HOLD-900]` · for `[REQ-PD-125]` · builds on `[SPEC-RIP-054]`, `[SPEC-STAR-080]`, `[REQ-PD-120]`
+**Traceability:** `[SPEC-HOLD-010..070]`, `[SPEC-HOLD-900]` · for `[REQ-PD-125]`, `[REQ-PD-127]` · builds on `[SPEC-RIP-054]`, `[SPEC-STAR-080]`, `[REQ-PD-120]`

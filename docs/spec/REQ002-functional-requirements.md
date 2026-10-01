@@ -50,6 +50,8 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 
 **`[REQ-PD-125]` A passage can be held back from automatic selection, and a damaged rip's tracks are, by default.** *(Requested 2026-10-01; built 2026-10-01.)* A track a CD rip could not read cleanly should not come up on the radio, while it still plays with its album or when picked by hand — and the same choice is a person's to make for any passage. The mark is on the passage, not the recording, so a clean copy of the same song elsewhere is unaffected. Designed in [SPEC057](SPEC057-holding-a-passage-back.md).
 
+**`[REQ-PD-127]` Playing a whole album skips a held track — or plays the same recording from another file in its place.** *(Requested 2026-10-01; not built — there is no whole-album play yet.)* A damaged track's album passage is held as well as its radio passage, and the album's file is left as it is. When a whole-album play is built, it queues the album's passages in order and, for a held one, queues an unheld passage of the same recording from another file if the library has one, or leaves the track out. The held passage itself still plays when chosen. Designed in [SPEC057](SPEC057-holding-a-passage-back.md) `[SPEC-HOLD-070]`.
+
 **`[REQ-PD-130]`** Shape candidates by flavor distance `[SPEC-FD-040]` in two stages — prune against programme seeds, then order by similarity to the passage already queued — and apply randomness **last**, over the shaped pool `[GDE-PD-050]`.
 
 **`[REQ-PD-140]`** Express a programme as **a list of exemplar passages**, not tuned parameters `[GDE-PD-040]`. "What should 10 AM sound like?" is answered by naming songs.

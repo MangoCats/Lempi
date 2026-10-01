@@ -447,12 +447,14 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
                     "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,"
                     "detail,decided_at) VALUES (?1,'rip','verification_failed',NULL,?2,?3)",
                     (audio_md5, json.dumps({"track": track.number, "detail": tr.detail}), now))
-                # And held back from the Program Director at once
-                # `[SPEC-HOLD-010]`: still on the album, and playable on
-                # purpose, but never chosen for the radio while it is damaged.
+                # And held at once, both its passages `[SPEC-HOLD-030]`: the
+                # radio one, so the Director never chooses it, and the album
+                # one, so a whole-album play skips or replaces it
+                # `[SPEC-HOLD-070]`. The album's file is untouched, and either
+                # passage still plays when a person picks it.
                 passage_hold.ensure_column(conn)
-                conn.execute(f"UPDATE passages SET {passage_hold.COLUMN} = ?1 WHERE passage_id = ?2",
-                             (passage_hold.damage_reason(tr.detail), radio_pid))
+                conn.execute(f"UPDATE passages SET {passage_hold.COLUMN} = ?1 WHERE passage_id IN (?2, ?3)",
+                             (passage_hold.damage_reason(tr.detail), radio_pid, album_pid))
                 failed += 1
 
     # ------------------------------------------------------------- disc decision

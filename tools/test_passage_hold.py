@@ -65,28 +65,30 @@ def main() -> int:
         db = os.path.join(tmp, "lib.db")
         library(db)
 
-        print("--damaged: a dry run names track 2's radio passage, and writes nothing")
+        print("--damaged: a dry run names track 2's radio and album passages, and writes nothing")
         code, out = run(db, "--damaged")
-        check(code == 0 and "passage 20" in out and "1 damaged track(s) to hold" in out, out)
+        check(code == 0 and "radio passage 20" in out and "album passage 21" in out
+              and "2 passage(s) of damaged tracks to hold" in out, out)
         check(marks(db) is None, "not even the column")
 
-        print("--damaged --commit: adds the column, holds that passage only, saying why")
+        print("--damaged --commit: adds the column, holds that track's two passages only, saying why")
         run(db, "--damaged", "--commit")
         m = marks(db)
-        check(m == {10: None, 11: None, 20: "damaged rip: read errors at 0:00:01", 21: None, 30: None, 31: None},
-              f"{m}")
+        why = "damaged rip: read errors at 0:00:01"
+        check(m == {10: None, 11: None, 20: why, 21: why, 30: None, 31: None}, f"{m}")
 
         print("--release: a person's decision, which --damaged never undoes")
         code, out = run(db, "--release", "20", "--json")
         check(code == 0 and marks(db)[20] == "" and json.loads(out.splitlines()[-1])["held"] is False, out)
         run(db, "--damaged", "--commit")
-        check(marks(db)[20] == "", f"released stays released: {marks(db)[20]!r}")
+        check(marks(db)[20] == "" and marks(db)[21] == why,
+              f"released stays released; its album passage stays held: {marks(db)[20]!r} {marks(db)[21]!r}")
 
         print("--hold by hand, with a reason; --list shows only what is held")
         run(db, "--hold", "30", "--why", "the live version is better")
         check(marks(db)[30] == "the live version is better", f"{marks(db)}")
         code, out = run(db, "--list")
-        check("30  the live version is better" in out and "1 passage(s) held" in out, out)
+        check("30  the live version is better" in out and "21  damaged rip" in out and "2 passage(s) held" in out, out)
 
         print("a passage that does not exist is refused, out loud")
         code, out = run(db, "--hold", "999", "--json")
