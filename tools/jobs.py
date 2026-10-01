@@ -533,6 +533,9 @@ class Runner:
         if kind == "passage-hold":
             return self._passage_hold(job_id, target)
 
+        if kind == "export-missing":
+            return self._export_missing(job_id, target)
+
         if kind == "cd-rip":
             return self._cd_rip(job_id, target)
 
@@ -1315,6 +1318,74 @@ class Runner:
         else:
             argv += ["--release", str(payload["passage_id"])]
         self._run_single_stage(job_id, "hold" if payload["hold"] else "release", argv + ["--json"])
+
+    def _export_missing(self, job_id: int, target: str):
+        """The Export page's *Send what's missing* `[SPEC-STAR-090]` -- `target`
+        is `{"peer", "remote"}`, the remote resolved by the console from the
+        peer's name. Two stages: `mesh_diff.py` on `files` alone, read-only
+        against the speaker, for the audio it lacks; then `export_bundle.py`
+        with exactly those `audio_md5`s -- the audio and every fact about it.
+        Nothing is sent: the transfer stays a command a person runs.
+
+        Trusts the speaker's `files` table to name the audio on its disk:
+        checked on lempi02w 2026-10-01, 5,709 listed and 5,709 there."""
+        payload = json.loads(target)
+        tools = os.path.dirname(os.path.abspath(__file__))
+        base = os.path.join(os.path.dirname(tools), "out", f"missing-{payload['peer']}-{job_id}")
+        os.makedirs(base, exist_ok=True)
+        diff_path = os.path.join(base, "diff.json")
+        result: dict = {"peer": payload["peer"], "remote": payload["remote"]}
+
+        self._emit(job_id, "stage", "diff", stage="diff")
+        self._emit(job_id, "log", f"asking {payload['remote'].partition(':')[0]} which audio it holds "
+                   "(read-only) ...", stage="diff")
+        code, _ = self._spawn(job_id, "diff", [sys.executable, os.path.join(tools, "mesh_diff.py"),
+                                               self.library, payload["remote"], "--table", "files",
+                                               "-o", diff_path])
+        if code != 0 or not os.path.isfile(diff_path):
+            self._emit(job_id, "error", f"the diff against {payload['peer']} failed (exit {code}): "
+                       "nothing was built", stage="diff")
+            self._save_result(job_id, result)
+            return self._finish(job_id, "stopped" if code < 0 else "failed")
+        with open(diff_path, encoding="utf-8") as fh:
+            files = json.load(fh)["tables"]["files"]
+        md5s = [k[0] for k in files["local_only"]]
+        result.update(missing=len(md5s), peer_only=len(files["peer_only"]), albums=self._albums_of(md5s))
+        if not md5s:
+            self._emit(job_id, "log", f"{payload['peer']} already has every file this library has", stage="diff")
+            self._save_result(job_id, result)
+            return self._finish(job_id, "done")
+
+        md5_file = os.path.join(base, "missing.txt")
+        with open(md5_file, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("\n".join(md5s) + "\n")
+        out_dir = os.path.join(base, "bundle")
+        self._emit(job_id, "stage", "bundle", stage="bundle")
+        argv = [sys.executable, os.path.join(tools, "export_bundle.py"), self.library,
+                "--md5-file", md5_file, "--gzip", "-o", out_dir]
+        for root in self.roots:
+            argv += ["--root", root]
+        code, _ = self._spawn(job_id, "bundle", argv)
+        result["out_dir"] = out_dir
+        self._save_result(job_id, result)
+        self._finish(job_id, "done" if code == 0 else "stopped" if code < 0 else "failed")
+
+    def _albums_of(self, md5s: list) -> list:
+        """`[{"folder", "files"}]` for a list of `audio_md5`, so a person sees
+        what is about to be sent by album, not by hash."""
+        if not md5s:
+            return []
+        c = lempi_db.connect(self.library, lempi_db.ROLE_LIBRARY)
+        try:
+            paths = [p for (p,) in c.execute(
+                f"SELECT path FROM files WHERE audio_md5 IN ({','.join('?' * len(md5s))})", md5s)]
+        finally:
+            c.close()
+        by: dict = {}
+        for p in paths:
+            folder = re.sub(r"[\\/][^\\/]*$", "", p)
+            by[folder] = by.get(folder, 0) + 1
+        return [{"folder": f, "files": n} for f, n in sorted(by.items())]
 
     def _save_result(self, job_id: int, result: dict) -> None:
         db = self._db()

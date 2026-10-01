@@ -248,9 +248,11 @@ def test_end_to_end():
         cue = open(os.path.join(home, "Artist - Album.cue"), encoding="utf-8").read()
         check('FILE "Artist - Album.mp3" MP3' in cue, f"the CUE names the MP3: {cue!r}")
         c = sqlite3.connect(db)
-        path = c.execute("SELECT path FROM files").fetchone()[0]
+        path, sha = c.execute("SELECT path, sha256 FROM files").fetchone()
         c.close()
         check(path == os.path.join(home, "Artist - Album.mp3"), f"the catalogue names the album's home, got {path!r}")
+        from byte_hash import sha256_file
+        check(sha == sha256_file(path), f"and records its byte hash, as folder induction does [REQ-AND-960]: {sha}")
 
         # [SPEC-CDI-047]: the same edition again -- a different rip, so the
         # audio hash cannot catch it -- is refused before anything is encoded,
@@ -373,7 +375,10 @@ def test_tracks_end_to_end():
 
         c = sqlite3.connect(db)
         c.row_factory = sqlite3.Row
-        files = c.execute("SELECT file_id, path, duration_ms FROM files ORDER BY file_id").fetchall()
+        files = c.execute("SELECT file_id, path, duration_ms, sha256 FROM files ORDER BY file_id").fetchall()
+        from byte_hash import sha256_file
+        check(all(f["sha256"] == sha256_file(f["path"]) for f in files),
+              "each track's byte hash recorded [REQ-AND-960]")
         check([os.path.basename(f["path"]) for f in files] == ["01. One.mp3", "02. Two.mp3"]
               and all(os.path.dirname(f["path"]) == home for f in files), f"{[tuple(f) for f in files]}")
         ps = c.execute("SELECT f.path, p.kind, p.start_ms, p.end_ms, p.director_hold FROM passages p "

@@ -90,6 +90,29 @@ The recovery above was run by hand, once. From 2026-09-26 the same thing is one 
 
 **`[SPEC-STAR-087]` A sync runs when a person starts it.** `[SPEC-STAR-070]` stands: nothing is distributed until someone has read the run's summary and the merge's report. So the sync is not scheduled. `status` shows how long since each node was last synced. The backup, which changes nothing anywhere, is the part that runs by itself.
 
+**`[SPEC-STAR-090]` The audio a node lacks goes by bundle, found by asking it.**
+A star sync carries the catalogue, never audio, and refuses an entry for audio
+the node does not hold `[SPEC-STAR-080]`. So new music reaches a speaker as a
+bundle first. Built 2026-10-01 at the maintainer's request: the Export page's
+*Send what's missing* asks each speaker ticked which audio it holds --
+`mesh_diff.py` on `files` alone, one read-only query over ssh -- and builds one
+bundle of exactly the files this library has and it lacks
+(`export_bundle.py --md5-file`), each with every fact about it. It names what
+is missing by album, and shows that speaker's own commands -- `rsync`, a dry
+`import_bundle`, `--apply`, and a reload -- for a person to run: Vipunen still
+reaches no host to change it `[SPEC-SUI-110]`. It trusts a node's `files` table
+to name the audio on its disk; checked on lempi02w that day, 5,709 listed and
+5,709 there, and the 49 it lacked were exactly the albums added since its last
+sync. Corrections to what both already hold are not this: they are the sync's.
+
+Found building it: every remote read from the desktop decoded the reply in the
+Windows code page, so the first curly apostrophe in a speaker's catalogue
+crashed `mesh_diff.py` -- and the Mesh page's diff with it. `remote_peek._ssh`
+now reads replies as UTF-8, strictly, and says so when one is not. And the CD
+import had never recorded a file's byte hash (`files.sha256`, `[REQ-AND-960]`),
+so a bundle of a CD album could not check its copies against the catalogue; it
+does now, and `add_byte_hashes.py --write` filled the 49 already added.
+
 ## 8. Open
 
 1. ~~**`[SPEC-STAR-900]` bose was unreachable** when the first snapshots were taken~~ *(resolved: its snapshot was taken after a power cycle the same day, and is in every merge since)*.

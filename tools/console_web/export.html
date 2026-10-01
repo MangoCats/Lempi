@@ -9,6 +9,19 @@
   <span class="ro">library read-only</span>
 </header>
 <main>
+  <h2>Send what's missing to the speakers</h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    Asks each speaker you tick which audio it holds -- read-only, nothing on it
+    changes -- and builds one bundle of everything this library has that it
+    does not: the audio, and every fact about it. Then shows that speaker's own
+    commands to send and import it. Nothing is sent until you run them.
+  </p>
+  <div class="controls" id="miss-peers"><span class="empty">Loading the speakers…</span></div>
+  <div class="controls">
+    <button class="chip on" id="find-missing">find what's missing and build bundles</button>
+  </div>
+  <div id="miss-results"></div>
+
   <h2>Build a bundle for a remote Lempi</h2>
   <p class="empty" style="font-size:.85rem;padding:.2rem 0">
     A GUI over <code>export_bundle.py</code> — audio plus its derived facts for
@@ -115,6 +128,72 @@ function showDeploy(j) {
     `ssh {{PEER_SSH}} import_bundle --library {{PEER_LIBRARY}} --bundle {{PEER_INCOMING}}/${name} --apply\n` +
     `curl -X POST {{PEER_URL}}/library/reload`;
   document.getElementById('deploy').hidden = false;
+}
+
+// ------------------------------------------------ send what's missing [SPEC-STAR-090]
+(async () => {
+  const box = document.getElementById('miss-peers');
+  let peers;
+  try { peers = await S.get('/api/peers'); } catch (e) { return S.fail('#miss-peers', e); }
+  if (!peers.length) return box.replaceChildren(S.el('span', { class: 'empty',
+    text: 'No speakers added yet -- add them on the mesh page.' }));
+  box.replaceChildren(...peers.map(p => {
+    const cb = S.el('input', { type: 'checkbox', value: p.name });
+    cb.checked = !!p.enabled;
+    return S.el('label', { style: 'margin-right:1.2rem' }, cb, ` ${p.name}`);
+  }));
+})();
+
+document.getElementById('find-missing').onclick = async () => {
+  const peers = [...document.querySelectorAll('#miss-peers input:checked')].map(c => c.value);
+  if (!peers.length) return alert('Tick at least one speaker.');
+  const out = document.getElementById('miss-results');
+  out.replaceChildren(S.el('p', { class: 'empty', text: 'starting…' }));
+  let r;
+  try {
+    r = await (await fetch('/api/export/missing', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ peers }) })).json();
+  } catch (e) { return S.fail('#miss-results', e); }
+  if (r.error) return S.fail('#miss-results', new Error(r.error));
+  out.replaceChildren(...r.jobs.map(info => {
+    const panel = S.el('div', { class: 'rip' }, S.el('h3', { text: info.peer }));
+    const log = S.el('div');
+    panel.append(log);
+    S.watchJob(info.job_id, log, job => showMissing(panel, info, job));
+    return panel;
+  }));
+};
+
+function showMissing(panel, info, job) {
+  const res = job.result || {};
+  if (job.state !== 'done') {
+    return panel.append(S.el('p', { class: 'err', text: `Could not finish for ${info.peer}: see the log above.` }));
+  }
+  if (!res.missing) {
+    return panel.append(S.el('p', { class: 'verdict ok', text: `${info.peer} already has every file this library has.` }));
+  }
+  const name = res.out_dir.split(/[\\/]/).slice(-2, -1)[0];
+  const dest = `${info.incoming}/${name}`;
+  panel.append(
+    S.el('p', { class: 'verdict note', text: `${info.peer} is missing ${res.missing} file${res.missing === 1 ? '' : 's'}, `
+      + `from ${res.albums.length} folder${res.albums.length === 1 ? '' : 's'}:` }),
+    S.el('ul', { class: 'tracks' }, ...res.albums.map(a => S.el('li', {
+      text: `${a.folder.split(/[\\/]/).slice(-2).join(' / ')}  (${a.files})` }))),
+    S.el('p', { style: 'font-size:.85rem;color:var(--dim);margin:.6rem 0 .2rem',
+      text: `To send it to ${info.peer}, copy these into a terminal:` }),
+    S.el('pre', { class: 'list', style: 'white-space:pre-wrap;user-select:all', text:
+      `rsync -a "${res.out_dir}/" ${info.ssh}:${dest}/\n`
+      + `ssh ${info.ssh} import_bundle --library ${info.library} --bundle ${dest}\n`
+      + `ssh ${info.ssh} import_bundle --library ${info.library} --bundle ${dest} --apply\n`
+      + `curl -X POST ${info.url}/library/reload` }));
+  const term = S.el('button', { class: 'chip', text: 'open a terminal here' });
+  const said = S.el('span', { style: 'color:var(--dim);font-size:.85rem;align-self:center' });
+  term.onclick = async () => {
+    const t = await (await fetch('/api/export/open-terminal', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: res.out_dir }) })).json();
+    said.textContent = t.ok ? 'opened.' : (t.error || 'could not open a terminal');
+  };
+  panel.append(S.el('div', { class: 'controls' }, term, said));
 }
 
 document.getElementById('build').onclick = build;

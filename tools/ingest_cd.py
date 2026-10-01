@@ -61,6 +61,7 @@ import cd_toc                 # noqa: E402
 import fetch_releases         # noqa: E402  -- get(), UA, rate-limit/backoff
 import ingest_folder          # noqa: E402  -- audio_md5(), LOCAL_PREFIX
 import passage_hold           # noqa: E402  -- a damaged track held back [SPEC-HOLD-010]
+from byte_hash import ensure_sha256_column, sha256_file  # noqa: E402  -- [REQ-AND-960]
 import secret                 # noqa: E402
 import segment_dao            # noqa: E402  -- identify_recording() (AcoustID)
 
@@ -547,12 +548,16 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
     # `[SPEC-RLK-150]` precondition 3, through the same helper that computed
     # the hash -- one definition of what ffmpeg is here, not a second.
     ingest_folder.ensure_md5_generator_column(conn)
+    # The file's byte hash, as folder induction records it [REQ-AND-960]: what
+    # a bundle checks its copy against, and how a speaker or phone that already
+    # holds the file finds it. Missing from every CD add until 2026-10-01.
+    ensure_sha256_column(conn)
     cur = conn.execute(
         "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,"
-        "                   first_seen,last_seen,md5_generator)"
-        " VALUES (?1,?2,?3,?4,'mp3',?5,?6,?6,?7)",
+        "                   first_seen,last_seen,md5_generator,sha256)"
+        " VALUES (?1,?2,?3,?4,'mp3',?5,?6,?6,?7,?8)",
         (audio_md5, mp3_path, st.st_size, st.st_mtime, total_ms, now,
-         ingest_folder.md5_generator()))
+         ingest_folder.md5_generator(), sha256_file(mp3_path)))
     file_id = cur.lastrowid
 
     boundary_src = f"imported:{'eac-cue' if toc.source == 'eac-cue' else 'cdrdao-toc'}"
@@ -766,6 +771,7 @@ def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[
     A missing track is recorded against the album, never silently absent."""
     now = _now()
     ingest_folder.ensure_md5_generator_column(conn)
+    ensure_sha256_column(conn)
     counts = {"identified": 0, "ambiguous": 0, "unidentified": 0}
     failed, file_ids, mbids = 0, [], []
     certain = chosen or (disc_outcome == "exact" and len(releases) == 1)
@@ -774,10 +780,10 @@ def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[
         end_ms = t.end_ms
         file_id = conn.execute(
             "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,"
-            "                   first_seen,last_seen,md5_generator)"
-            " VALUES (?1,?2,?3,?4,'mp3',?5,?6,?6,?7)",
+            "                   first_seen,last_seen,md5_generator,sha256)"
+            " VALUES (?1,?2,?3,?4,'mp3',?5,?6,?6,?7,?8)",
             (audio_md5, mp3_path, st.st_size, st.st_mtime, end_ms, now,
-             ingest_folder.md5_generator())).lastrowid
+             ingest_folder.md5_generator(), sha256_file(mp3_path))).lastrowid
         file_ids.append(file_id)
         radio_start = min(t.index_points.get(1, 0), max(end_ms - 1, 0))
         radio_pid = conn.execute(

@@ -196,6 +196,23 @@ def _python_cmd(path: str, sql: str) -> str:
             f"{shlex.quote(path)} {shlex.quote(sql)}")
 
 
+def _ssh(argv: list, timeout: float) -> subprocess.CompletedProcess:
+    """Run `argv` and decode its reply as UTF-8, which is what `sqlite3 -json`
+    on the remote writes. Not `text=True`: on Windows that decodes in the
+    code page, and the first non-ASCII title in a reply killed the reader
+    thread and left `stdout` as None -- found 2026-10-01, when a diff of the
+    desktop against lempi02w crashed at byte 0x90 of a curly apostrophe.
+    Strict, so a reply that is not UTF-8 is said (`stdout` None, the reason in
+    `stderr`) rather than read with its titles quietly changed."""
+    r = subprocess.run(argv, capture_output=True, timeout=timeout)
+    err = (r.stderr or b"").decode("utf-8", errors="replace")
+    try:
+        out = (r.stdout or b"").decode("utf-8")
+    except UnicodeDecodeError as e:
+        out, err = None, f"{e}; {err}".strip()
+    return subprocess.CompletedProcess(argv, r.returncode, out, err)
+
+
 def run_remote_sql(remote: str, sql: str, timeout: float = TOTAL_TIMEOUT) -> dict:
     """The one round trip everything in this file, and `remote_flags.py`,
     is built on: `ssh <host> sqlite3 -json <path> "<sql>"`, `sql` already
@@ -227,7 +244,7 @@ def run_remote_sql(remote: str, sql: str, timeout: float = TOTAL_TIMEOUT) -> dic
     argv = ["ssh", "-o", f"ConnectTimeout={CONNECT_TIMEOUT}", "-o", "BatchMode=yes",
             host, remote_cmd]
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        r = _ssh(argv, timeout)
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"no answer from {host} within {timeout}s"}
     except OSError as e:
@@ -238,7 +255,7 @@ def run_remote_sql(remote: str, sql: str, timeout: float = TOTAL_TIMEOUT) -> dic
             argv_py = ["ssh", "-o", f"ConnectTimeout={CONNECT_TIMEOUT}", "-o", "BatchMode=yes",
                        host, _python_cmd(path, sql)]
             try:
-                r = subprocess.run(argv_py, capture_output=True, text=True, timeout=timeout)
+                r = _ssh(argv_py, timeout)
             except subprocess.TimeoutExpired:
                 return {"ok": False, "error": f"no answer from {host} within {timeout}s"}
             except OSError as e:
@@ -248,6 +265,8 @@ def run_remote_sql(remote: str, sql: str, timeout: float = TOTAL_TIMEOUT) -> dic
                         "error": (r.stderr or r.stdout or f"ssh exited {r.returncode}").strip()[:300]}
         else:
             return {"ok": False, "error": err[:300]}
+    if r.stdout is None:
+        return {"ok": False, "error": f"the reply from {host} is not UTF-8: {r.stderr}"}
     try:
         rows = parse_rows(r.stdout)
     except json.JSONDecodeError as e:

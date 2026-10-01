@@ -74,6 +74,19 @@ def music_folder(conn) -> str | None:
     return os.path.normpath(common)
 
 
+def peer_deploy(remote: str) -> dict:
+    """What a speaker's commands need, from its configured `user@host:/path`
+    `[SPEC-STAR-090]`: where to send a bundle, which library to import it into,
+    and the player to ask to reload. The incoming folder sits beside the
+    library, as `/srv/library/incoming` does beside `/srv/library/library.db`;
+    the player's port is the fleet's (`targets.env`, `LEMPI_PEER_PORT`)."""
+    ssh, _, library = remote.partition(":")
+    port = fleet_targets()["{{PEER_URL}}"].rsplit(":", 1)[-1]
+    return {"ssh": ssh, "library": library,
+            "incoming": library.rsplit("/", 1)[0] + "/incoming",
+            "url": f"http://{ssh.rpartition('@')[2]}:{port}"}
+
+
 def fleet_targets():
     """Who this console pushes to, as `{{TOKEN}}` -> text.
 
@@ -1679,6 +1692,23 @@ class Handler(BaseHTTPRequestHandler):
                 if not remote:
                     return self.send_json({"error": "no remote configured yet"}, code=400)
                 return self.send_json({"job_id": STATE["jobs"].submit("sync-preferences", remote)})
+            if p == "/api/export/missing":
+                # [SPEC-STAR-090]: for each speaker named, what it lacks, as a
+                # bundle. Names are resolved to their configured remote here,
+                # never taken from the page; nothing is sent to any of them.
+                req = self.json_body() or {}
+                peers = {pr["name"]: pr for pr in STATE["jobs"].list_peers()}
+                names = [n for n in req.get("peers") or [] if isinstance(n, str)]
+                unknown = [n for n in names if n not in peers]
+                if not names or unknown:
+                    return self.send_json({"error": f"no such speaker: {', '.join(unknown)}" if unknown
+                                           else "choose at least one speaker"}, code=400)
+                out = []
+                for n in names:
+                    job = STATE["jobs"].submit("export-missing", json.dumps(
+                        {"peer": n, "remote": peers[n]["remote"]}))
+                    out.append({"peer": n, "job_id": job, **peer_deploy(peers[n]["remote"])})
+                return self.send_json({"jobs": out})
             if p == "/api/export/bundle":
                 # A GUI over `export_bundle.py` `[IMPL007 Stage 4]`. `q`
                 # becomes a `LIKE` pattern the same way `library()`'s own

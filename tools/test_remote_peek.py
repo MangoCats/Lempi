@@ -212,10 +212,12 @@ def test_peek_error_handling() -> None:
     anchor = {"recording_mbid": REC}
 
     def fake(returncode=0, stdout="", stderr=""):
+        # Bytes, as the real call returns them since it stopped decoding in
+        # the Windows code page (`_ssh`, 2026-10-01).
         class R:
             pass
         r = R()
-        r.returncode, r.stdout, r.stderr = returncode, stdout, stderr
+        r.returncode, r.stdout, r.stderr = returncode, stdout.encode("utf-8"), stderr.encode("utf-8")
         return r
 
     print("peek() reports ok on a clean round trip with a row")
@@ -316,8 +318,24 @@ def test_python_fallback_command_shape():
           f"a path with a space must be quoted, got {tricky}")
 
 
+def test_reply_is_read_as_utf8():
+    """A remote reply is UTF-8, read as such whatever this machine's code page
+    -- found 2026-10-01, when a diff of the desktop against lempi02w crashed
+    on a curly apostrophe: `text=True` decoded it as cp1252, the reader thread
+    died, and `stdout` came back None. A reply that is not UTF-8 is said, not
+    read with its titles changed. A real child process, not a fake."""
+    say = "import sys; sys.stdout.buffer.write(sys.argv[1].encode('utf-8'))"
+    r = rp._ssh([sys.executable, "-c", say, '[{"title": "I’m Gonna Be Strong"}]'], 30)
+    check(r.returncode == 0 and r.stdout == '[{"title": "I’m Gonna Be Strong"}]',
+          f"a curly apostrophe survives: {r.stdout!r}")
+    check(rp.parse_rows(r.stdout) == [{"title": "I’m Gonna Be Strong"}], "and parses")
+    bad = rp._ssh([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'[\\x90]')"], 30)
+    check(bad.stdout is None and "utf-8" in bad.stderr.lower(), f"not UTF-8 is said: {bad.stdout!r} {bad.stderr!r}")
+
+
 def main() -> int:
     test_python_fallback_command_shape()
+    test_reply_is_read_as_utf8()
     with tempfile.TemporaryDirectory() as tmp:
         test_sql_mirrors_apply_changes(tmp)
         test_passage_flag_sql(tmp)
