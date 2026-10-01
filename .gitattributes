@@ -48,3 +48,10 @@ build/Dockerfile.*      text eol=lf
 # The `.bat` twin is Windows-only and keeps CRLF.
 android/gradlew         text eol=lf
 android/gradlew.bat     text eol=crlf
+
+# Third-party files, kept exactly as their publisher shipped them
+# (vendor/essentia/README.md). Git took the 18 `.param` files and the
+# accuracy report for text on their first commit, 2026-10-01, and a Windows
+# checkout would have rewritten their line endings -- `-text` stores and
+# checks out every byte as is, whatever `core.autocrlf` a clone has.
+vendor/**       -text
