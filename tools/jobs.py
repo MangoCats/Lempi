@@ -536,6 +536,9 @@ class Runner:
         if kind == "export-missing":
             return self._export_missing(job_id, target)
 
+        if kind == "send-bundle":
+            return self._send_bundle(job_id, target)
+
         if kind == "cd-rip":
             return self._cd_rip(job_id, target)
 
@@ -1368,6 +1371,27 @@ class Runner:
         code, _ = self._spawn(job_id, "bundle", argv)
         result["out_dir"] = out_dir
         self._save_result(job_id, result)
+        self._finish(job_id, "done" if code == 0 else "stopped" if code < 0 else "failed")
+
+    def _send_bundle(self, job_id: int, target: str):
+        """The Export page's *Send to <speaker>* `[SPEC-STAR-090]` -- `target` is
+        `{"peer", "remote", "bundle", "apply"}`, resolved and checked by the
+        console. Runs `send_bundle.py` against the speaker over ssh: without
+        `apply` it says what it found there and would do, and writes nothing;
+        with it, the audio goes into the speaker's music folder, the import
+        binds it, and a read-only library is written only inside
+        `BosePi/attended-import.sh`'s window. Like `remote-push`, the console
+        itself changes another host here -- only on a person's Send."""
+        payload = json.loads(target)
+        tools = os.path.dirname(os.path.abspath(__file__))
+        host, _, library = payload["remote"].partition(":")
+        argv = [sys.executable, os.path.join(tools, "send_bundle.py"), payload["bundle"], host,
+                "--library", library] + (["--apply"] if payload.get("apply") else [])
+        stage = "send" if payload.get("apply") else "check"
+        self._emit(job_id, "stage", stage, stage=stage)
+        code, _ = self._spawn(job_id, stage, argv)
+        self._save_result(job_id, {"peer": payload["peer"], "applied": bool(payload.get("apply")),
+                                   "bundle": payload["bundle"], "ok": code == 0})
         self._finish(job_id, "done" if code == 0 else "stopped" if code < 0 else "failed")
 
     def _albums_of(self, md5s: list) -> list:

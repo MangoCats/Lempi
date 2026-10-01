@@ -84,7 +84,10 @@ def peer_deploy(remote: str) -> dict:
     port = fleet_targets()["{{PEER_URL}}"].rsplit(":", 1)[-1]
     return {"ssh": ssh, "library": library,
             "incoming": library.rsplit("/", 1)[0] + "/incoming",
-            "url": f"http://{ssh.rpartition('@')[2]}:{port}"}
+            "url": f"http://{ssh.rpartition('@')[2]}:{port}",
+            # The one command that sends and imports a bundle, by its full path:
+            # the terminal the page opens starts in the bundle's folder.
+            "send_tool": os.path.join(REPO_ROOT, "tools", "send_bundle.py")}
 
 
 def fleet_targets():
@@ -1692,6 +1695,27 @@ class Handler(BaseHTTPRequestHandler):
                 if not remote:
                     return self.send_json({"error": "no remote configured yet"}, code=400)
                 return self.send_json({"job_id": STATE["jobs"].submit("sync-preferences", remote)})
+            if p == "/api/export/send":
+                # [SPEC-STAR-090]: send a built bundle to one speaker and import
+                # it -- a dry run, or with "apply" the real thing. The speaker
+                # is a configured name, resolved here; the bundle must be one
+                # this console built for it, in out/missing-<peer>-<job>/bundle.
+                req = self.json_body() or {}
+                peers = {pr["name"]: pr for pr in STATE["jobs"].list_peers()}
+                name = req.get("peer")
+                if name not in peers:
+                    return self.send_json({"error": f"no such speaker: {name}"}, code=400)
+                bundle = os.path.abspath(str(req.get("bundle") or ""))
+                out = os.path.abspath(os.path.join(REPO_ROOT, "out"))
+                folder = os.path.basename(os.path.dirname(bundle))
+                if (os.path.commonpath([bundle, out]) != out or os.path.basename(bundle) != "bundle"
+                        or not folder.startswith(f"missing-{name}-")
+                        or not os.path.isfile(os.path.join(bundle, "payload.json"))):
+                    return self.send_json({"error": "not a bundle built for that speaker"}, code=400)
+                job = STATE["jobs"].submit("send-bundle", json.dumps(
+                    {"peer": name, "remote": peers[name]["remote"], "bundle": bundle,
+                     "apply": req.get("apply") is True}))
+                return self.send_json({"job_id": job})
             if p == "/api/export/missing":
                 # [SPEC-STAR-090]: for each speaker named, what it lacks, as a
                 # bundle. Names are resolved to their configured remote here,

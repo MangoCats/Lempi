@@ -99,12 +99,30 @@ bundle first. Built 2026-10-01 at the maintainer's request: the Export page's
 `mesh_diff.py` on `files` alone, one read-only query over ssh -- and builds one
 bundle of exactly the files this library has and it lacks
 (`export_bundle.py --md5-file`), each with every fact about it. It names what
-is missing by album, and shows that speaker's own commands -- `rsync`, a dry
-`import_bundle`, `--apply`, and a reload -- for a person to run: Vipunen still
-reaches no host to change it `[SPEC-SUI-110]`. It trusts a node's `files` table
-to name the audio on its disk; checked on lempi02w that day, 5,709 listed and
-5,709 there, and the 49 it lacked were exactly the albums added since its last
-sync. Corrections to what both already hold are not this: they are the sync's.
+is missing by album. It trusts a node's `files` table to name the audio on its
+disk; checked on lempi02w that day, 5,709 listed and 5,709 there, and the 49 it
+lacked were exactly the albums added since its last sync. Corrections to what
+both already hold are not this: they are the sync's.
+
+**`[SPEC-STAR-092]` Sending is one press per speaker, over ssh.** *Send to
+<speaker>* runs `tools/send_bundle.py` as a console job: first a dry run that
+says what it found on the speaker and would do, then -- on a second press --
+the real one. `import_bundle` binds each file where it finds it and copies
+nothing, so the audio is streamed into the speaker's own music folder
+(`/srv/library/audio`, files 0644, folders 0755) *before* the import, never
+left in a staging folder the catalogue would then point into. A library on a
+read-only mount -- bose's, by design -- is written only inside
+`BosePi/attended-import.sh`'s window, with its WAL guard `[BOS-RUN-092]`, and
+the player is asked to reload only once the window is shut. The two command
+lines remain on the page, for a person to run by hand. `import_bundle` is
+installed on every appliance by `build/deploy-appliance.sh` since 2026-10-01;
+before, nothing installed it. This is within `[SPEC-SUI-110]`, which rules out
+a *Lempi endpoint* -- a speaker needing an API to receive -- not ssh: the target
+is still an ssh host and a directory, and the console changes it only on a
+person's press, as `remote-push` already does `[SPEC-DF-111]`. *(The first
+version of this section read `[SPEC-SUI-110]` as "Vipunen reaches no host to
+change it", and printed `rsync` commands for a person to paste; Windows has no
+`rsync`, and those commands also imported the audio where it was staged.)*
 
 Found building it: every remote read from the desktop decoded the reply in the
 Windows code page, so the first curly apostrophe in a speaker's catalogue

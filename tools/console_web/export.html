@@ -181,24 +181,62 @@ function showMissing(panel, info, job) {
   if (!res.missing) {
     return panel.append(S.el('p', { class: 'verdict ok', text: `${info.peer} already has every file this library has.` }));
   }
-  const name = res.out_dir.split(/[\\/]/).slice(-2, -1)[0];
-  const dest = `${info.incoming}/${name}`;
+  // [SPEC-STAR-090]: Send runs send_bundle.py as a job, over ssh -- first the
+  // dry run, which says what it found on the speaker and would do; then, on a
+  // second press, the real send and import. The console changes the speaker
+  // only on that press, as remote-push does.
+  const sendLog = S.el('div');
+  const send = S.el('button', { class: 'chip on', text: `Send to ${info.peer}` });
+  const now = S.el('button', { class: 'chip on', text: `Send now`, hidden: true });
+  const post = async apply => {
+    const resp = await fetch('/api/export/send', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ peer: info.peer, bundle: res.out_dir, apply }) });
+    if (!(resp.headers.get('content-type') || '').includes('json')) {
+      throw new Error(`the console answered ${resp.status} without data -- restart the Vipunen console`);
+    }
+    return resp.json();
+  };
+  send.onclick = async () => {
+    send.disabled = true;
+    let r;
+    try { r = await post(false); } catch (e) { send.disabled = false; return S.fail(sendLog, e); }
+    if (r.error) { send.disabled = false; return S.fail(sendLog, new Error(r.error)); }
+    S.watchJob(r.job_id, sendLog, job => {
+      if (job.state === 'done') {
+        now.hidden = false;
+        sendLog.append(S.el('p', { class: 'verdict ok', text: 'That is what it would do. Press Send now to do it.' }));
+      } else {
+        send.disabled = false;
+      }
+    });
+  };
+  now.onclick = async () => {
+    now.disabled = true;
+    let r;
+    try { r = await post(true); } catch (e) { now.disabled = false; return S.fail(sendLog, e); }
+    if (r.error) { now.disabled = false; return S.fail(sendLog, new Error(r.error)); }
+    S.watchJob(r.job_id, sendLog, job => {
+      sendLog.append(S.el('p', { class: 'verdict ' + (job.state === 'done' ? 'ok' : 'bad'),
+        text: job.state === 'done' ? `Sent and imported on ${info.peer}.`
+          : `Did not finish on ${info.peer} -- see the log above.` }));
+      if (job.state !== 'done') now.disabled = false;
+    });
+  };
   panel.append(
     S.el('p', { class: 'verdict note', text: `${info.peer} is missing ${res.missing} file${res.missing === 1 ? '' : 's'}, `
       + `from ${res.albums.length} folder${res.albums.length === 1 ? '' : 's'}:` }),
     S.el('ul', { class: 'tracks' }, ...res.albums.map(a => S.el('li', {
       text: `${a.folder.split(/[\\/]/).slice(-2).join(' / ')}  (${a.files})` }))),
+    S.el('div', { class: 'controls' }, send, now), sendLog,
     S.el('p', { style: 'font-size:.85rem;color:var(--dim);margin:.6rem 0 .2rem',
-      text: `To send it to ${info.peer}, copy these into a terminal:` }),
+      text: `Or by hand, in a terminal: the first line says what it would do; the second does it.` }),
+    // One tool, not a list of commands [SPEC-STAR-090]: the audio has to land
+    // in the speaker's own music folder before the import binds it, and a
+    // read-only library (bose's) is written only inside attended-import.sh's
+    // window -- found 2026-10-01, when the first send's commands could not run.
     S.el('pre', { class: 'list', style: 'white-space:pre-wrap;user-select:all', text:
-      // scp, not rsync: this PC's own OpenSSH has it, and Windows has no rsync
-      // -- found 2026-10-01 when the first send stopped at "'rsync' is not
-      // recognized". The folder is made first; only one speaker had it.
-      `ssh ${info.ssh} mkdir -p ${info.incoming}\n`
-      + `scp -r "${res.out_dir}" ${info.ssh}:${dest}\n`
-      + `ssh ${info.ssh} import_bundle --library ${info.library} --bundle ${dest}\n`
-      + `ssh ${info.ssh} import_bundle --library ${info.library} --bundle ${dest} --apply\n`
-      + `curl -X POST ${info.url}/library/reload` }));
+      `python "${info.send_tool}" "${res.out_dir}" ${info.ssh}\n`
+      + `python "${info.send_tool}" "${res.out_dir}" ${info.ssh} --apply` }));
   const term = S.el('button', { class: 'chip', text: 'open a terminal here' });
   const said = S.el('span', { style: 'color:var(--dim);font-size:.85rem;align-self:center' });
   term.onclick = async () => {

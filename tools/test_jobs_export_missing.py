@@ -142,10 +142,78 @@ def test_route(tmp):
         srv.server_close()
 
 
+def test_send(tmp):
+    print("send-bundle: send_bundle.py against the speaker, a dry run unless asked")
+    r, db, seen = runner_with(tmp, "send", [])
+    seen.clear()
+    target = {"peer": "speaker-a", "remote": "pi@speaker-a:/srv/library/library.db",
+              "bundle": "C:\\Lempi\\out\\missing-speaker-a-9\\bundle"}
+    j = wait_for(r, r.submit("send-bundle", json.dumps(target)))
+    stage, argv = seen[-1]
+    check(j["state"] == "done" and stage == "check" and "send_bundle.py" in argv[1]
+          and argv[2:7] == [target["bundle"], "pi@speaker-a", "--library", "/srv/library/library.db"][:5]
+          and "--apply" not in argv, f"a dry run: {stage} {argv}")
+    wait_for(r, r.submit("send-bundle", json.dumps(dict(target, apply=True))))
+    stage, argv = seen[-1]
+    check(stage == "send" and argv[-1] == "--apply", f"the real send: {stage} {argv}")
+
+
+def test_send_route(tmp):
+    print("the send route: a configured speaker, and only a bundle built for it")
+    import console
+    db = os.path.join(tmp, "sroute.db")
+    library(db)
+    runner = jobmod.Runner(db, os.path.join(tmp, "sroute.console.db"))
+    runner.upsert_peer("speaker-a", "pi@speaker-a:/srv/library/library.db")
+    submitted = []
+    runner.submit = lambda kind, target: submitted.append((kind, json.loads(target))) or 1
+    console.STATE["path"] = console.STATE["library"] = db
+    console.STATE["jobs"] = runner
+    good = os.path.join(console.REPO_ROOT, "out", "missing-speaker-a-test", "bundle")
+    other = os.path.join(console.REPO_ROOT, "out", "missing-speaker-b-test", "bundle")
+    for b in (good, other):
+        os.makedirs(b, exist_ok=True)
+        with open(os.path.join(b, "payload.json"), "w") as f:
+            f.write("{}")
+    srv = console.Server(("127.0.0.1", 0), console.Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    console.STATE["port"] = port
+    try:
+        def post(body):
+            h = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            h.request("POST", "/api/export/send", body=json.dumps(body),
+                      headers={"Host": f"127.0.0.1:{port}", "Content-Type": "application/json"})
+            resp = h.getresponse()
+            return resp.status, json.loads(resp.read() or b"{}")
+        st, _ = post({"peer": "speaker-a", "bundle": good})
+        check(st == 200 and submitted[-1] == ("send-bundle", {
+            "peer": "speaker-a", "remote": "pi@speaker-a:/srv/library/library.db",
+            "bundle": os.path.abspath(good), "apply": False}), f"a dry run unless asked: {submitted}")
+        st, _ = post({"peer": "speaker-a", "bundle": good, "apply": "yes"})
+        check(st == 200 and submitted[-1][1]["apply"] is False, "apply only when exactly true")
+        st, _ = post({"peer": "speaker-a", "bundle": good, "apply": True})
+        check(submitted[-1][1]["apply"] is True, "apply when asked")
+        n = len(submitted)
+        for body, why in (({"peer": "speaker-a", "bundle": other}, "another speaker's bundle"),
+                          ({"peer": "speaker-a", "bundle": tmp}, "a folder outside out/"),
+                          ({"peer": "nobody", "bundle": good}, "a speaker not configured")):
+            st, _ = post(body)
+            check(st == 400 and len(submitted) == n, f"{why} is refused: {st}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        import shutil
+        for b in (good, other):
+            shutil.rmtree(os.path.dirname(b), ignore_errors=True)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         test_job(tmp)
         test_route(tmp)
+        test_send(tmp)
+        test_send_route(tmp)
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")
