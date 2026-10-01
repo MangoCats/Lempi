@@ -200,6 +200,7 @@ cd /tmp/lempi-build
 cargo build --release --target aarch64-unknown-linux-gnu --manifest-path player/Cargo.toml $2
 mkdir -p /w/.deploy-out
 cp player/target/aarch64-unknown-linux-gnu/release/lempi /w/.deploy-out/lempi
+cp player/target/aarch64-unknown-linux-gnu/release/import_bundle /w/.deploy-out/import_bundle
 if [ -n "$3" ]; then
     cargo build --release --target aarch64-unknown-linux-gnu --manifest-path player/Cargo.toml --features fbui --bin fbui
     cp player/target/aarch64-unknown-linux-gnu/release/fbui /w/.deploy-out/fbui
@@ -220,6 +221,8 @@ EOS
         || die "cross-compile failed"
     mkdir -p "$(dirname "$OUT")"
     mv "$REPO_ROOT/.deploy-out/lempi" "$OUT"
+    mv "$REPO_ROOT/.deploy-out/import_bundle" "$(dirname "$OUT")/import_bundle" \
+        || die "the build produced no import_bundle"
     if [ -n "$HAS_FBUI" ]; then
         mv "$REPO_ROOT/.deploy-out/fbui" "$OUT_FBUI" || die "the fbui build produced no binary"
     fi
@@ -286,6 +289,20 @@ if [ -x "$(dirname "$0")/verify-playing.sh" ] || [ -f "$(dirname "$0")/verify-pl
     sh "$(dirname "$0")/verify-playing.sh" "$HOST" ||
         echo "deploy: WARNING -- $HOST installed correctly but could not be shown to be playing (see above; a paused player reads the same way)"
 fi
+
+# ---- the bundle importer, on every node `[SPEC-STAR-090]` -----------------
+# Built with the player all along and never installed, so a bundle sent to a
+# speaker had nothing to import it (2026-10-01). Not a service: nothing
+# restarts, and the music is not touched. After the player's checks, like
+# fbui, so it can never stand in the way of them.
+echo "deploy: putting import_bundle on $HOST"
+(cd "$REPO_ROOT" && "$REPO_ROOT/build/install-import-bundle.sh" "$HOST") \
+    || die "install-import-bundle.sh failed; see above"
+IREPORTED="$(ssh "$HOST" "sudo $DURABLE/usr/local/bin/import_bundle --version" 2>/dev/null \
+             | grep -o '[0-9a-f]\{12\}\(+dirty\)\?')"
+[ "$IREPORTED" = "$EXPECTED" ] \
+    || die "$HOST's durable import_bundle reports '${IREPORTED:-nothing}', expected '$EXPECTED'"
+echo "deploy: confirmed -- $HOST's import_bundle is $EXPECTED${DURABLE:+ (the durable copy)}"
 
 # ---- the screen's program, on a node that runs it `[GDE-DEP-120]` ---------
 # After the player and its checks, so a failure here can never stand in the
