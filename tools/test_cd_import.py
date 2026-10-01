@@ -98,8 +98,13 @@ def test_cueripper_checks():
     """[SPEC-CDI-012]: CUERipper's settings file, read and ticked off."""
     folder = tempfile.mkdtemp()
     path = os.path.join(folder, "settings.txt")
+    # Lines as the desk's own settings.txt has them, 2026-10-01 -- switches as
+    # 1/0, and values running over several lines, each continued with "=".
     with open(path, "w", encoding="utf-8-sig") as f:
-        f.write(f"PathFormat={ci.TEMPLATE}\nSecureMode=1\nComboImage=0\nCreateEACLOG=True\nTestAndCopy=False\n")
+        f.write("Version=226\nEmbedLog=1\nCreateEACLOG=1\nAdvanced={\n=  \"encoders\": [\n=  ]\n=}\n"
+                f"OutputAudioType=0\nComboImage=0\nPathFormat={ci.TEMPLATE}\nSecureMode=1\nTestAndCopy=0\n"
+                "CUERipper=<CUERipperConfig>\n=  <DefaultLosslessFormat>wav</DefaultLosslessFormat>\n"
+                "=</CUERipperConfig>\n")
     cfg = ci.read_cueripper(path)
     check(cfg and cfg["PathFormat"] == ci.TEMPLATE and cfg["SecureMode"] == "1", f"read, BOM and all: {cfg}")
     check(ci.read_cueripper(os.path.join(folder, "none.txt")) is None, "not yet written: None, not a failure")
@@ -107,8 +112,9 @@ def test_cueripper_checks():
     def by(cfg, inbox=INBOX):
         return {c["key"]: c for c in ci.cueripper_checks(cfg, inbox, MUSIC, ffmpeg=True)}
     good = by(cfg)
-    check([k for k, c in good.items() if c["ok"] is False] == [], f"set up as the guide says: {good}")
-    check(good["image"]["ok"] is None, "image/tracks is asked about until its index is calibrated")
+    check([k for k, c in good.items() if c["ok"] is not True] == [], f"the desk's file: every check ticked: {good}")
+    check(good["log"]["ok"] is True, "CreateEACLOG=1 is on -- the red cross of 2026-10-01")
+    check(by(dict(cfg, ComboImage="1"))["image"]["ok"] is False, "tracks, not image, is a fix")
     check(all(c["guide"] in ci.ANCHORS.values() for c in good.values()), "every fix links the guide")
 
     unset = by(None)
@@ -130,7 +136,8 @@ def test_cueripper_checks():
     check(burst["ok"] is False and "burst" in burst["detail"], f"burst mode: {burst}")
     check(by(dict(cfg, SecureMode="2"))["secure"]["ok"] is True, "paranoid is secure too")
     check(by({k: v for k, v in cfg.items() if k != "SecureMode"})["secure"]["ok"] is None, "absent: asked, not guessed")
-    check(by(dict(cfg, CreateEACLOG="False"))["log"]["ok"] is False, "a log Vipunen cannot read is a fix")
+    check(by(dict(cfg, CreateEACLOG="0"))["log"]["ok"] is False, "a log Vipunen cannot read is a fix")
+    check(by({k: v for k, v in cfg.items() if k != "CreateEACLOG"})["log"]["ok"] is None, "absent: asked")
 
     exe = os.path.join(folder, "CUERipper.exe")
     open(exe, "wb").close()

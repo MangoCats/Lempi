@@ -143,15 +143,18 @@ SPEC056's. The page's rip step and summary name whichever ripper was found.
 default output path and one two folders deep refused, with the fix naming the
 inbox; burst refused, paranoid accepted; nothing guessed where a key is absent.
 
+**Calibrated 2026-10-01**, from the first `settings.txt` CUERipper wrote at the
+desk: `ComboImage` 0 is *image*, and switches are `1`/`0`. The first version
+expected `True` and showed *EAC log style* as off while it was on -- the test
+fixture had been written from the same guess, so it passed. The fixture is now
+the desk file's own lines, and every check on the desk reads green.
+
 **Left:**
 
-1. *Close CUERipper once* -- it writes `settings.txt` only then, and until it
-   does the page has one thing to fix. Its `ComboImage` value, written with
-   *image* chosen, calibrates the one check that still asks.
-2. *Send to the speakers* and play there -- Phase 4's **Verify**, second half.
+1. *Send to the speakers* and play there -- Phase 4's **Verify**, second half.
    The four albums are catalogued but their audio is not on any speaker yet,
    and star sync refuses a catalogue entry without it `[SPEC-STAR-080]`.
-3. Phase 5's **Verify**: one album file split and played.
+2. Phase 5's **Verify**: one album file split and played.
 
 ---
 

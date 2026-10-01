@@ -63,13 +63,15 @@ portable zip:
 | :--- | :--- | :--- |
 | the output path, into the inbox | rips land where Vipunen looks, one folder each | `PathFormat` |
 | the mode slider on *Secure* | a verified read | `SecureMode` (0 Burst, 1 Secure, 2 Paranoid) |
-| *image*, not tracks | one file and a CUE sheet, as §3 reads | `ComboImage` -- asked until calibrated |
-| *EAC log style* (Options, Extraction) | Vipunen reads the log's EAC wording | `CreateEACLOG` |
+| *image*, not tracks | one file and a CUE sheet, as §3 reads | `ComboImage` (0 image) |
+| *EAC log style* (Options, Extraction) | Vipunen reads the log's EAC wording | `CreateEACLOG` (1 on) |
 
 The key names are read from CUERipper 2.2.6's own binaries, and the slider's
-values from the order of its own labels. Which `ComboImage` index is *image*
-is not in the binary, so that line asks a person to confirm until a settings
-file written with *image* chosen has been read.
+values from the order of its own labels. The rest was read from the desk's
+first `settings.txt`, 2026-10-01, written with *Secure* and *image* chosen:
+`SecureMode=1`, `ComboImage=0`, and every switch as `1` or `0` -- not `True`,
+which the first version of the check had assumed, showing a red cross on a log
+style that was on.
 
 EAC keeps its options in the registry (`HKCU\Software\AWSoftware\EACU`),
 readable by any program:

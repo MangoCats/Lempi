@@ -505,11 +505,20 @@ def music_folder() -> str:
 
 
 # CUERipper's slider, by the order of its own labels: Burst, Secure, Paranoid.
+# The desk's file, written with Secure chosen, reads 1.
 CR_MODES = {0: "burst", 1: "secure", 2: "paranoid"}
-# `ComboImage` is the image/tracks drop-down's index. Which index is *image*
-# is not in the binary; until a settings file written with it on image is
-# read, the check asks rather than guesses.
-CR_IMAGE: int | None = None
+# `ComboImage` is the image/tracks drop-down's index: 0 with *image* chosen,
+# read from the desk's first settings file, 2026-10-01.
+CR_IMAGE: int | None = 0
+
+
+def _cr_on(v: str | None) -> bool | None:
+    """A CUERipper switch. It writes `1` and `0` -- seen in the desk's file,
+    2026-10-01, after a first version of this check expected `True` and put a
+    red cross on a log style that was on."""
+    if v is None:
+        return None
+    return {"1": True, "true": True, "0": False, "false": False}.get(v.strip().lower())
 TEMPLATE = r"%music%\_Rips\%artist% - %album%\%artist% - %album%.cue"
 
 
@@ -559,8 +568,8 @@ def cueripper_checks(cfg: dict | None, inbox_path: str, music: str, *, ffmpeg: b
         None if CR_IMAGE is None or img is None else img == str(CR_IMAGE),
         "In CUERipper, choose image in the drop-down beside the audio format.", "cr-setup",
         detail="confirm it reads image in CUERipper" if CR_IMAGE is None else None)
-    log = cfg.get("CreateEACLOG")
-    add("log", "The log is in EAC's format", None if log is None else log.lower() == "true",
+    log = _cr_on(cfg.get("CreateEACLOG"))
+    add("log", "The log is in EAC's format", log,
         "In CUERipper's Options, under Extraction, set EAC log style to True.", "cr-setup",
         detail="confirm EAC log style is True in CUERipper's Options" if log is None else None)
     return out
