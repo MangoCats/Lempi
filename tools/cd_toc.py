@@ -263,13 +263,29 @@ _LOG_TOC_ROW = re.compile(
 # ripped" and two phrasings EAC does not use per track were matched -- so a real
 # mismatch ("not ripped accurately") matched nothing, fell back to "Copy OK", and
 # passed as good.
+#
+# **Any outcome not known to be fine is a failure** -- matched by shape, a
+# line `Track N <words>`, not by a list of phrasings. A list missed real damage
+# twice: EAC's "not ripped accurately" until 2026-09-29, and CUERipper's
+# "cannot be verified as accurate" until 2026-10-01, which left seven damaged
+# tracks of one disc and one of another recorded as nothing at all. A phrasing
+# nobody has seen yet now reads as a failure, with its own words as the detail,
+# rather than vanishing. One line at a time (`[ \t]`, not `\s`): EAC's
+# per-track logs head each section with a bare `Track  1`, and `\s` would read
+# the next line's words as its outcome. And `\r?` before the end: the logs are
+# CRLF, and a line with nothing after its words -- "not present in AccurateRip
+# database" -- would otherwise not match at all.
 _LOG_ACCURATERIP = re.compile(
-    r'Track\s+(\d+)\s+(accurately ripped|not ripped accurately|not accurately ripped'
-    r'|not present in AccurateRip database|could not be verified|differs from AccurateRip)',
-    re.IGNORECASE)
+    r'^[ \t]*Track[ \t]+(\d+)[ \t]+([A-Za-z][A-Za-z ]*?)[ \t]*(?:[(\[,].*?)?\r?$', re.MULTILINE)
 # Outcomes that are not evidence of a bad read. "Not present" is no comparison
 # at all -- a rare pressing -- and is judged by the copy's own checks instead.
 _LOG_AR_FINE = ("accurately ripped", "not present in accuraterip database")
+# A read the drive could not make cleanly, in an image rip's "Range status"
+# section: `Suspicious position 0:37:37 - 0:37:38`, times from the start of
+# the disc. Mapped to tracks through the log's own table of contents, since
+# AccurateRip alone can miss a track it has no entry for.
+_LOG_SUSPICIOUS = re.compile(
+    r'Suspicious position[ \t]+(\d+):(\d+):(\d+)(?:[ \t]*-[ \t]*(\d+):(\d+):(\d+))?', re.IGNORECASE)
 _LOG_COPY_OK = re.compile(r'Copy\s+OK', re.IGNORECASE)
 # `\bError\b`, not a bare substring search: "No errors occurred" -- EAC's
 # own all-clear line -- contains "error" as a substring and would otherwise
@@ -292,8 +308,12 @@ def parse_eac_log(path: str) -> RipReport:
     verdicts: dict[int, tuple[bool, str]] = {}
     for m in _LOG_ACCURATERIP.finditer(text):
         n = int(m.group(1))
-        ok = m.group(2).lower() in _LOG_AR_FINE
-        verdicts[n] = (ok, m.group(2))
+        words = m.group(2).strip()
+        ok = words.lower() in _LOG_AR_FINE
+        verdicts[n] = (ok, words)
+    for n, where in _suspicious_by_track(text).items():
+        ok, words = verdicts.get(n, (True, ""))
+        verdicts[n] = (False, f"read errors at {where}" + (f"; {words}" if words else ""))
     # A track AccurateRip never mentions (no DB entry, or the plugin was
     # absent) is judged by "Copy OK" elsewhere in its own range instead --
     # best effort, never silent `[SPEC-RIP-054]`. This module does not
@@ -303,6 +323,34 @@ def parse_eac_log(path: str) -> RipReport:
     tracks = [TrackRipReport(number=n, ok=ok, detail=detail)
               for n, (ok, detail) in sorted(verdicts.items())]
     return RipReport(tracks=tracks, all_ok=all_ok and all(t.ok for t in tracks))
+
+
+def _suspicious_by_track(text: str) -> dict[int, str]:
+    """An image rip's read errors, by the track each falls in: `{track:
+    "0:37:23, 0:37:37-0:37:38"}`. Only for an image rip -- one "Range status"
+    section, positions from the start of the disc -- whose log carries its
+    table of contents; a per-track log puts each track's positions under its
+    own heading, measured from that track's start, and is left alone here."""
+    if "Range status" not in text:
+        return {}
+    toc = [(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+           for m in (_LOG_TOC_ROW.match(line) for line in text.splitlines()) if m]
+    if not toc:
+        return {}
+    found: dict[int, list[str]] = {}
+    for m in _LOG_SUSPICIOUS.finditer(text):
+        h, mi, s = (int(x) for x in m.group(1, 2, 3))
+        a = (h * 3600 + mi * 60 + s) * 75
+        b = a + 74
+        label = f"{h}:{mi:02d}:{s:02d}"
+        if m.group(4):
+            h2, m2, s2 = (int(x) for x in m.group(4, 5, 6))
+            b = (h2 * 3600 + m2 * 60 + s2) * 75 + 74
+            label += f"-{h2}:{m2:02d}:{s2:02d}"
+        for n, first, last in toc:
+            if first <= b and a <= last:
+                found.setdefault(n, []).append(label)
+    return {n: ", ".join(v) for n, v in found.items()}
 
 
 def _read_log_text(path: str) -> str:

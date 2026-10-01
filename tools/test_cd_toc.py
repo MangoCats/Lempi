@@ -369,6 +369,47 @@ def main() -> int:
     check(not got[3][0] and not got[4][0], f"a mismatch in either word order is a failure: {got}")
     check(not r.all_ok, "and the rip is not all good")
 
+    # CUERipper's image log, as "At Last" was ripped 2026-09-29 (lines as
+    # written, CRLF and all). Its mismatch phrasing matched nothing until
+    # 2026-10-01, so seven damaged tracks were recorded as none.
+    print("parse_eac_log: CUERipper's phrasing, any unknown one, and read errors by track")
+    cue_log = "\r\n".join([
+        "     Track |   Start  |  Length  | Start sector | End sector ",
+        "    ---------------------------------------------------------",
+        "        1  |  0:00.00 |  2:45.01 |         0    |    12375   ",
+        "        2  |  2:45.01 |  4:33.55 |     12376    |    32905   ",
+        "        3  |  7:18.56 |  3:14.40 |     32906    |    47495   ",
+        "", "Range status and errors", "", "Selected range", "",
+        "     Suspicious position 0:02:00 - 0:02:12",
+        "     Suspicious position 0:07:18 - 0:07:20",       # spans the 2|3 boundary
+        "", "     Copy CRC 7C041490", "", "There were errors", "", "AccurateRip summary", "",
+        "Track  1  cannot be verified as accurate (confidence 458)  [22BA73ED], AccurateRip returned [5123CAC5]",
+        "Track  2  accurately ripped (confidence 144)  [6872D822]",
+        "Track  3  some phrasing nobody has seen yet",
+        "Track  4  not present in AccurateRip database", ""])
+    with tempfile.TemporaryDirectory() as d:
+        log_path = os.path.join(d, "rip.log")
+        with open(log_path, "w", encoding="utf-8", newline="") as f:
+            f.write(cue_log)
+        r = cd_toc.parse_eac_log(log_path)
+    got = {t.number: (t.ok, t.detail) for t in r.tracks}
+    check(got.get(1, (True,))[0] is False and "cannot be verified as accurate" in got[1][1]
+          and "read errors at 0:02:00-0:02:12" in got[1][1], f"CUERipper's mismatch, with its read errors: {got}")
+    check(got.get(2, (True,))[0] is False and "0:07:18-0:07:20" in got[2][1],
+          f"a read error spanning a boundary marks the track before it, even AccurateRip-matched: {got}")
+    check(got.get(3, (True,))[0] is False and "some phrasing nobody has seen yet" in got[3][1],
+          f"an unknown outcome is a failure, in its own words -- and the boundary's other side: {got}")
+    check(got.get(4) == (True, "not present in AccurateRip database"),
+          f"a line ending in its words, CRLF, still matches: {got}")
+    check(not r.all_ok, "the rip is not all good")
+
+    with tempfile.TemporaryDirectory() as d:
+        log_path = os.path.join(d, "rip.log")
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write("Track  1\n\n     Filename C:\\rip\\01.wav\n\n     Copy OK\n")
+        r = cd_toc.parse_eac_log(log_path)
+    check(r.tracks == [], f"a per-track log's bare heading is not an outcome: {r.tracks}")
+
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")
