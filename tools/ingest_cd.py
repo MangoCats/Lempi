@@ -176,9 +176,11 @@ _CUE_FILE = re.compile(r'^(\s*FILE\s+"[^"]*?)\.[A-Za-z0-9]+("\s+)\S+', re.I)
 
 
 def point_cue_at(cue_path: str, ext: str = ".mp3", kind: str = "MP3") -> None:
-    """Point the CUE's first `FILE` line at the same name with `ext`, as `kind`,
-    and keep the sheet as UTF-8 -- once the WAV is gone, a sheet naming it would
-    send any player that opens it to a file that does not exist.
+    """Point every `FILE` line of the CUE at the same name with `ext`, as
+    `kind` -- one for an image rip, one per track for a tracks-mode rip
+    `[SPEC-CDI-090]` -- and keep the sheet as UTF-8: once the WAVs are gone, a
+    sheet naming them would send any player that opens it to files that do not
+    exist.
 
     The sheet is read as the ripper wrote it (`cd_toc.read_cue_text`: UTF-8, or
     the Windows code page EAC and CUERipper use) and written back as UTF-8
@@ -187,12 +189,8 @@ def point_cue_at(cue_path: str, ext: str = ".mp3", kind: str = "MP3") -> None:
     same everywhere. Its line endings are kept. Already in that form, it is
     left byte-for-byte as it was, so running this again changes nothing."""
     text = cd_toc.read_cue_text(cue_path)
-    out, done = [], False
-    for line in text.splitlines(keepends=True):
-        if not done:
-            line, n = _CUE_FILE.subn(lambda m: m.group(1) + ext + m.group(2) + kind, line, count=1)
-            done = bool(n)
-        out.append(line)
+    out = [_CUE_FILE.sub(lambda m: m.group(1) + ext + m.group(2) + kind, line, count=1)
+           for line in text.splitlines(keepends=True)]
     data = "".join(out).encode("utf-8")
     with open(cue_path, "rb") as fh:
         if fh.read() == data:
@@ -237,6 +235,43 @@ def lookup_disc_id(toc: cd_toc.DiscToc) -> tuple[str, list[dict]]:
         return "fuzzy", doc["releases"]
 
     return "none", []
+
+
+MB_WS = MB_DISCID_BASE.rsplit("/", 1)[0]
+
+
+def lookup_barcode(barcode: str) -> tuple[str, list[dict]]:
+    """The releases carrying this barcode -- the sheet's `CATALOG` -- each
+    fetched with its track list, as `lookup_disc_id` returns them. For a rip
+    whose disc positions are unknown: a tracks-mode rip with no log
+    `[SPEC-CDI-092]`. A barcode names a product, not a pressing, so it can
+    match several editions; the person picks one, as for a Disc ID."""
+    q = urllib.parse.urlencode({"query": f"barcode:{barcode}", "fmt": "json", "limit": 8})
+    doc = fetch_releases.get(f"{MB_WS}/release/?{q}")
+    found = [r.get("id") for r in (doc or {}).get("releases") or [] if r.get("id")]
+    releases = []
+    for rid in found[:5]:
+        time.sleep(fetch_releases.RATE_S)
+        full = fetch_releases.get(f"{MB_WS}/release/{rid}?fmt=json&inc=recordings+artist-credits")
+        if full:
+            releases.append(full)
+    return ("barcode" if releases else "none"), releases
+
+
+def identify_disc(toc: cd_toc.DiscToc, log_toc: cd_toc.DiscToc | None) -> tuple[str, list[dict], str | None]:
+    """`(outcome, releases, disc_id)`: the Disc ID from the disc's own
+    positions -- the sheet's for an image rip, the log's table of contents
+    for a tracks-mode rip, whose sheet has only each file's own times -- then
+    the barcode if that finds nothing `[SPEC-CDI-092]`."""
+    positions = log_toc if toc.tracks_mode else toc
+    disc_id = None
+    outcome, releases = "none", []
+    if positions is not None and positions.leadout_sector:
+        disc_id = cd_toc.musicbrainz_disc_id(positions)
+        outcome, releases = lookup_disc_id(positions)
+    if outcome == "none" and toc.barcode:
+        outcome, releases = lookup_barcode(toc.barcode)
+    return outcome, releases, disc_id
 
 
 def _track_at_position(release: dict, position: int) -> dict | None:
@@ -308,6 +343,96 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 
+def _resolve_track(conn, number: int, cd_text_title: str | None, radio_pid: int, mp3_path: str,
+                   start_ms: int, end_ms: int, audio_md5: str, disc_outcome: str,
+                   releases: list[dict], chosen: bool, acoustid_key: str | None,
+                   now: str) -> tuple[str, str, str]:
+    """One track's identity, by the release's track at `number`, CD-TEXT, or
+    AcoustID -- `(outcome, mbid, source)`, `outcome` one of identified,
+    ambiguous, unidentified. Shared by an image rip and a tracks-mode rip
+    `[SPEC-CDI-090]`: the same rules whichever way the disc was ripped."""
+    # -------------------------------------------------- resolve identity
+    # `candidates` and `candidate_releases` stay index-aligned so the
+    # single-match branch below can find which release the one
+    # surviving candidate actually came from, for its artist credits --
+    # not necessarily `releases[0]`, if that release lacks this track.
+    candidates: list[dict] = []
+    candidate_releases: list[dict] = []
+    if disc_outcome != "none":
+        for rel in releases[:8]:
+            c = _candidate_for(rel, number)
+            if c is not None and all(c["mbid"] != seen["mbid"] for seen in candidates):
+                candidates.append(c)
+                candidate_releases.append(rel)
+
+    if cd_text_title and not (chosen and len(candidates) == 1):
+        # CD-TEXT is the default shown identity when the disc carries
+        # it `[SPEC-RIP-066]` -- always through the placeholder/review
+        # path (no stable artist mbid comes from CD-TEXT alone, so
+        # there is nothing to link even when a performer name is also
+        # printed), with any MusicBrainz answer sitting one click away
+        # `[SPEC-RIP-068]`, regardless of whether Disc ID resolved a
+        # single release or several.
+        mbid, source = f"local:audio:{audio_md5}:{start_ms}", "cd:text"
+        conn.execute(
+            "INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) "
+            "VALUES (?1,?2,?3,?4)",
+            (mbid, cd_text_title, end_ms - start_ms, source))
+        _write_id_check(conn, radio_pid, mbid, candidates, now)
+        outcome = 'ambiguous'
+    elif len(candidates) == 1:
+        c = candidates[0]
+        mbid, source = c["mbid"], "musicbrainz"
+        conn.execute(
+            "INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) "
+            "VALUES (?1,?2,?3,?4)", (mbid, c["title"], end_ms - start_ms, source))
+        for artist_mbid, name in _artists_for(candidate_releases[0], number):
+            conn.execute(
+                "INSERT OR IGNORE INTO artists (mbid,name,source) VALUES (?1,?2,?3)",
+                (artist_mbid, name, source))
+            conn.execute(
+                "INSERT OR IGNORE INTO recording_artists (mbid,artist_mbid,weight,source) "
+                "VALUES (?1,?2,1.0,?3)", (mbid, artist_mbid, source))
+        outcome = 'identified'
+    elif len(candidates) > 1:
+        mbid, source = f"local:audio:{audio_md5}:{start_ms}", "cd:ambiguous"
+        conn.execute(
+            "INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) "
+            "VALUES (?1,?2,?3,?4)",
+            (mbid, f"unidentified track {number} (disc ambiguous)",
+             end_ms - start_ms, source))
+        _write_id_check(conn, radio_pid, mbid, candidates, now)
+        outcome = 'ambiguous'
+    else:
+        rec = None
+        if acoustid_key:
+            start_s, end_s = start_ms / 1000.0, end_ms / 1000.0
+            rec = segment_dao.identify_recording(mp3_path, start_s, end_s, acoustid_key)
+        if rec is not None:
+            mbid, source = rec["mbid"], "cd:acoustid"
+            conn.execute(
+                "INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) "
+                "VALUES (?1,?2,?3,?4)", (mbid, rec["title"], end_ms - start_ms, source))
+            for artist_mbid, name in rec["artists"]:
+                conn.execute(
+                    "INSERT OR IGNORE INTO artists (mbid,name,source) VALUES (?1,?2,?3)",
+                    (artist_mbid, name, source))
+                conn.execute(
+                    "INSERT OR IGNORE INTO recording_artists (mbid,artist_mbid,weight,source) "
+                    "VALUES (?1,?2,1.0,?3)", (mbid, artist_mbid, source))
+            outcome = 'identified'
+        else:
+            mbid, source = f"local:audio:{audio_md5}:{start_ms}", "cd:unidentified"
+            conn.execute(
+                "INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) "
+                "VALUES (?1,?2,?3,?4)",
+                (mbid, f"unidentified track {number}", end_ms - start_ms, source))
+            _write_id_check(conn, radio_pid, mbid, [], now)
+            outcome = 'unidentified'
+
+    return outcome, mbid, source
+
+
 def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
                audio_md5: str, disc_outcome: str, releases: list[dict],
                rip_report: "cd_toc.RipReport | None", acoustid_key: str | None,
@@ -353,86 +478,12 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
             "VALUES (?1,'album',?2,?3,0,0,0.0,?4)",
             (file_id, start_ms, end_ms, boundary_src)).lastrowid
 
-        # -------------------------------------------------- resolve identity
-        # `candidates` and `candidate_releases` stay index-aligned so the
-        # single-match branch below can find which release the one
-        # surviving candidate actually came from, for its artist credits --
-        # not necessarily `releases[0]`, if that release lacks this track.
-        candidates: list[dict] = []
-        candidate_releases: list[dict] = []
-        if disc_outcome != "none":
-            for rel in releases[:8]:
-                c = _candidate_for(rel, track.number)
-                if c is not None and all(c["mbid"] != seen["mbid"] for seen in candidates):
-                    candidates.append(c)
-                    candidate_releases.append(rel)
-
-        cd_text_title = track.title or toc.title
-
-        if cd_text_title and not (chosen and len(candidates) == 1):
-            # CD-TEXT is the default shown identity when the disc carries
-            # it `[SPEC-RIP-066]` -- always through the placeholder/review
-            # path (no stable artist mbid comes from CD-TEXT alone, so
-            # there is nothing to link even when a performer name is also
-            # printed), with any MusicBrainz answer sitting one click away
-            # `[SPEC-RIP-068]`, regardless of whether Disc ID resolved a
-            # single release or several.
-            mbid, source = f"local:audio:{audio_md5}:{start_ms}", "cd:text"
-            conn.execute(
-                "INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) "
-                "VALUES (?1,?2,?3,?4)",
-                (mbid, cd_text_title, end_ms - start_ms, source))
-            _write_id_check(conn, radio_pid, mbid, candidates, now)
-            ambiguous += 1
-        elif len(candidates) == 1:
-            c = candidates[0]
-            mbid, source = c["mbid"], "musicbrainz"
-            conn.execute(
-                "INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) "
-                "VALUES (?1,?2,?3,?4)", (mbid, c["title"], end_ms - start_ms, source))
-            for artist_mbid, name in _artists_for(candidate_releases[0], track.number):
-                conn.execute(
-                    "INSERT OR IGNORE INTO artists (mbid,name,source) VALUES (?1,?2,?3)",
-                    (artist_mbid, name, source))
-                conn.execute(
-                    "INSERT OR IGNORE INTO recording_artists (mbid,artist_mbid,weight,source) "
-                    "VALUES (?1,?2,1.0,?3)", (mbid, artist_mbid, source))
-            identified += 1
-        elif len(candidates) > 1:
-            mbid, source = f"local:audio:{audio_md5}:{start_ms}", "cd:ambiguous"
-            conn.execute(
-                "INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) "
-                "VALUES (?1,?2,?3,?4)",
-                (mbid, f"unidentified track {track.number} (disc ambiguous)",
-                 end_ms - start_ms, source))
-            _write_id_check(conn, radio_pid, mbid, candidates, now)
-            ambiguous += 1
-        else:
-            rec = None
-            if acoustid_key:
-                start_s, end_s = start_ms / 1000.0, end_ms / 1000.0
-                rec = segment_dao.identify_recording(mp3_path, start_s, end_s, acoustid_key)
-            if rec is not None:
-                mbid, source = rec["mbid"], "cd:acoustid"
-                conn.execute(
-                    "INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) "
-                    "VALUES (?1,?2,?3,?4)", (mbid, rec["title"], end_ms - start_ms, source))
-                for artist_mbid, name in rec["artists"]:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO artists (mbid,name,source) VALUES (?1,?2,?3)",
-                        (artist_mbid, name, source))
-                    conn.execute(
-                        "INSERT OR IGNORE INTO recording_artists (mbid,artist_mbid,weight,source) "
-                        "VALUES (?1,?2,1.0,?3)", (mbid, artist_mbid, source))
-                identified += 1
-            else:
-                mbid, source = f"local:audio:{audio_md5}:{start_ms}", "cd:unidentified"
-                conn.execute(
-                    "INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) "
-                    "VALUES (?1,?2,?3,?4)",
-                    (mbid, f"unidentified track {track.number}", end_ms - start_ms, source))
-                _write_id_check(conn, radio_pid, mbid, [], now)
-                unidentified += 1
+        outcome, mbid, source = _resolve_track(
+            conn, track.number, track.title or toc.title, radio_pid, mp3_path, start_ms, end_ms,
+            audio_md5, disc_outcome, releases, chosen, acoustid_key, now)
+        identified += outcome == "identified"
+        ambiguous += outcome == "ambiguous"
+        unidentified += outcome == "unidentified"
 
         for pid in (radio_pid, album_pid):
             conn.execute(
@@ -510,6 +561,10 @@ def open_rip(folder: str):
         raise ValueError(f"no tracks found in {toc_path!r}")
     if not toc.data_file:
         raise ValueError(f"{toc_path!r} does not name its own audio file")
+    if toc.tracks_mode:
+        # A sheet naming a file per track is open_tracks' `[SPEC-CDI-090]`;
+        # read here, it would be track 1's file holding every track.
+        raise ValueError(f"{toc_path!r} is a tracks-mode rip, one file per track")
     wav_path = os.path.join(folder, toc.data_file)
     if not os.path.exists(wav_path):
         raise FileNotFoundError(f"{toc_path!r} names {wav_path!r}, which does not exist")
@@ -530,9 +585,218 @@ def rip_verdict(rip_report) -> dict | None:
             "tracks": [{"number": t.number, "ok": t.ok, "detail": t.detail} for t in rip_report.tracks]}
 
 
+# ------------------------------------------------------------- tracks mode
+
+def is_tracks_rip(folder: str) -> bool:
+    """A rip with a file per track `[SPEC-CDI-090]`: its CUE names more than one."""
+    fmt, path = find_rip(folder)
+    return fmt == "eac" and cd_toc.parse_eac_cue(path).tracks_mode
+
+
+def open_tracks(folder: str) -> dict:
+    """A tracks-mode rip, parsed and checked: each track with its file, or
+    named as missing. A track the ripper never wrote -- a damaged one it
+    stopped on -- is missing, said, and never the reason the rest cannot be
+    added `[SPEC-CDI-094]`. Each present track's span is its whole file, its
+    end where the audio ends; nothing is encoded or written."""
+    _fmt, cue = find_rip(folder)
+    toc = cd_toc.parse_eac_cue(cue)
+    log = find_log(folder)
+    present, missing = [], []
+    for t in toc.tracks:
+        path = os.path.join(folder, t.file or "")
+        if not t.file or not os.path.isfile(path):
+            missing.append(t.number)
+            continue
+        ms = audio_duration.probe_duration_ms(path)
+        if not ms:
+            raise ValueError(f"could not decode {path!r}")
+        t.end_ms = int(round(ms))
+        present.append((t, path))
+    if not present:
+        raise FileNotFoundError(f"{cue!r} names {len(toc.tracks)} track file(s), and none is there")
+    return {"cue": cue, "toc": toc, "present": present, "missing": missing,
+            "rip_report": cd_toc.parse_eac_log(log) if log else None,
+            "log_toc": cd_toc.toc_from_log(log) if log else None}
+
+
+def _missing_titles(toc: cd_toc.DiscToc, missing: list[int]) -> list[dict]:
+    return [{"number": t.number, "title": t.title} for t in toc.tracks if t.number in missing]
+
+
+def preview_tracks(db_path: str, folder: str) -> dict:
+    """`preview` for a tracks-mode rip `[SPEC-CDI-090]`."""
+    rip = open_tracks(folder)
+    toc = rip["toc"]
+    disc_outcome, releases, disc_id = identify_disc(toc, rip["log_toc"])
+    conn = lempi_db.connect(db_path, lempi_db.ROLE_LIBRARY)
+    try:
+        rels = [release_summary(r, toc.track_count, conn) for r in releases[:8]]
+    finally:
+        conn.close()
+    cd_folder = proposed_folder(toc.performer, toc.title, None) if toc.title else None
+    return {"dry_run": True, "format": "eac", "mode": "tracks",
+            "audio": f"{len(rip['present'])} of {toc.track_count} track files",
+            "audio_bytes": sum(os.path.getsize(p) for _t, p in rip["present"]),
+            "tracks": toc.track_count, "missing": _missing_titles(toc, rip["missing"]),
+            "track_list": [{"number": t.number, "start_ms": 0, "end_ms": t.end_ms, "title": t.title,
+                            "performer": t.performer, "file": t.file} for t, _p in rip["present"]],
+            "cd_text": {"title": toc.title, "performer": toc.performer},
+            "barcode": toc.barcode, "disc_id": disc_id, "disc_outcome": disc_outcome,
+            "candidates": len(releases), "releases": rels, "rip": rip_verdict(rip["rip_report"]),
+            "folder": rels[0]["folder"] if len(rels) == 1 else cd_folder}
+
+
+def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[int],
+                  disc_outcome: str, releases: list[dict], rip_report: "cd_toc.RipReport | None",
+                  acoustid_key: str | None, chosen: bool = False, disc_id: str | None = None) -> dict:
+    """A tracks-mode rip's catalogue `[SPEC-CDI-090]`: each track its own
+    file, `tracks` as `(TocTrack, mp3_path, audio_md5)`, with one radio and one
+    album passage, identified by the same rules as an image rip's
+    (`_resolve_track`).
+
+    The album passage is the whole file -- the track as the disc plays it,
+    with whatever gap the ripper wrote into the file -- so the album passages
+    played in order are the disc `[SPEC-SC-047]`. The radio passage starts at
+    the track's own INDEX 01, where the music does, and ends with the file;
+    amplitude analysis then sets the crossfade window inside it, as for any
+    radio passage `[SPEC-SA-075]`.
+
+    A missing track is recorded against the album, never silently absent."""
+    now = _now()
+    ingest_folder.ensure_md5_generator_column(conn)
+    counts = {"identified": 0, "ambiguous": 0, "unidentified": 0}
+    failed, file_ids = 0, []
+    certain = chosen or (disc_outcome == "exact" and len(releases) == 1)
+    for t, mp3_path, audio_md5 in tracks:
+        st = os.stat(mp3_path)
+        end_ms = t.end_ms
+        file_id = conn.execute(
+            "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,"
+            "                   first_seen,last_seen,md5_generator)"
+            " VALUES (?1,?2,?3,?4,'mp3',?5,?6,?6,?7)",
+            (audio_md5, mp3_path, st.st_size, st.st_mtime, end_ms, now,
+             ingest_folder.md5_generator())).lastrowid
+        file_ids.append(file_id)
+        radio_start = min(t.index_points.get(1, 0), max(end_ms - 1, 0))
+        radio_pid = conn.execute(
+            "INSERT INTO passages (file_id,kind,start_ms,end_ms,boundary_src) "
+            "VALUES (?1,'radio',?2,?3,'imported:tracks-cue')", (file_id, radio_start, end_ms)).lastrowid
+        album_pid = conn.execute(
+            "INSERT INTO passages (file_id,kind,start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db,boundary_src) "
+            "VALUES (?1,'album',0,?2,0,0,0.0,'imported:tracks-cue')", (file_id, end_ms)).lastrowid
+        outcome, mbid, source = _resolve_track(
+            conn, t.number, t.title or toc.title, radio_pid, mp3_path, radio_start, end_ms,
+            audio_md5, disc_outcome, releases, chosen, acoustid_key, now)
+        counts[outcome] += 1
+        for pid in (radio_pid, album_pid):
+            conn.execute("INSERT INTO passage_recordings (passage_id,mbid,weight,source) "
+                         "VALUES (?1,?2,1.0,?3)", (pid, mbid, source))
+        tr = next((r for r in rip_report.tracks if r.number == t.number), None) if rip_report else None
+        if tr is not None and not tr.ok:
+            # `in_file`: this track is the file's first and only one, so the
+            # damage tools find its passages there, not at position `track`.
+            conn.execute(
+                "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
+                "VALUES (?1,'rip','verification_failed',NULL,?2,?3)",
+                (audio_md5, json.dumps({"track": t.number, "in_file": 1, "detail": tr.detail}), now))
+            passage_hold.ensure_column(conn)
+            conn.execute(f"UPDATE passages SET {passage_hold.COLUMN} = ?1 WHERE passage_id IN (?2, ?3)",
+                         (passage_hold.damage_reason(tr.detail), radio_pid, album_pid))
+            failed += 1
+        detail = {"track": t.number, "tracks_mode": True, "track_count": toc.track_count,
+                  "missing": missing, "verified": rip_report is not None, "format": "tracks-cue",
+                  "candidates": len(releases), "chosen": releases[0].get("id") if certain and releases else None,
+                  "chosen_by": "person" if chosen else None, "disc_id": disc_id, "barcode": toc.barcode,
+                  "titles": [r.get("title") for r in releases[:5]]}
+        conn.execute(
+            "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
+            "VALUES (?1,'rip',?2,?3,?4,?5)",
+            (audio_md5, "chosen" if chosen else disc_outcome, 1.0 if certain else None, json.dumps(detail), now))
+    for n in missing:
+        title = next((t.title for t in toc.tracks if t.number == n), None)
+        conn.execute(
+            "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
+            "VALUES (?1,'rip','track_missing',NULL,?2,?3)",
+            (tracks[0][2], json.dumps({"track": n, "title": title}), now))
+    return {"tracks": len(tracks), **counts, "verification_failed": failed, "missing": missing,
+            "file_ids": file_ids, "file_id": file_ids[0] if file_ids else None,
+            "disc_outcome": disc_outcome, "candidates": len(releases), "mode": "tracks"}
+
+
+def ingest_tracks(db_path: str, folder: str, release: str | None, into: str | None,
+                  keep_flac: bool) -> dict:
+    """`do_ingest` for a tracks-mode rip: each WAV encoded as the image's is,
+    then the same order -- the catalogue written before any WAV is touched,
+    and a FLAC copy made first when asked `[SPEC-RIP-040]`."""
+    rip = open_tracks(folder)
+    toc = rip["toc"]
+    encoded = []
+    for i, (t, wav) in enumerate(rip["present"], 1):
+        say(f"encoding track {t.number} ({i} of {len(rip['present'])}) ...")
+        mp3 = os.path.splitext(wav)[0] + ".mp3"
+        if not encode_to_mp3(wav, mp3):
+            raise RuntimeError(f"ffmpeg failed to encode {wav!r}")
+        md5 = ingest_folder.audio_md5(mp3)
+        if md5 is None:
+            raise RuntimeError(f"could not hash the encoded {mp3!r}")
+        encoded.append((t, wav, mp3, md5))
+
+    conn = lempi_db.connect(db_path, lempi_db.ROLE_LIBRARY, writable=True, timeout=60)
+    conn.execute("PRAGMA busy_timeout = 60000")
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        for t, _wav, _mp3, md5 in encoded:
+            existing = conn.execute("SELECT file_id, path FROM files WHERE audio_md5=?1", (md5,)).fetchone()
+            if existing is not None:
+                raise RuntimeError(f"track {t.number} is already in the library as {existing[1]!r} "
+                                   f"(file_id={existing[0]})")
+        say("looking the disc up ...")
+        disc_outcome, releases, disc_id = identify_disc(toc, rip["log_toc"])
+        if release:
+            releases = [r for r in releases if r.get("id") == release]
+            if not releases:
+                raise ValueError(f"release {release} is not among this disc's matches")
+        if into:
+            say(f"filing it in {into} ...")
+            folder = move_rip(folder, into)
+            encoded = [(t, os.path.join(folder, os.path.basename(w)), os.path.join(folder, os.path.basename(m)), md5)
+                       for t, w, m, md5 in encoded]
+        say("writing the album ...")
+        conn.execute("BEGIN IMMEDIATE")
+        result = commit_tracks(conn, toc, [(t, m, md5) for t, _w, m, md5 in encoded], rip["missing"],
+                               disc_outcome, releases, rip["rip_report"], secret.acoustid_key(required=False),
+                               chosen=bool(release), disc_id=disc_id)
+        conn.commit()
+    finally:
+        conn.close()
+
+    result["folder"] = folder
+    result["flac"] = None
+    kept = []
+    for _t, wav, _mp3, _md5 in encoded:
+        if keep_flac:
+            flac = os.path.splitext(wav)[0] + ".flac"
+            if not encode_to_flac(wav, flac):
+                kept.append(wav)
+                say(f"the FLAC copy failed; the WAV is kept at {wav}")
+                continue
+            result["flac"] = os.path.dirname(flac)
+        os.remove(wav)
+    if kept:
+        result["wav_kept"] = kept
+    result["wav_removed"] = not kept
+    cue = os.path.join(folder, os.path.basename(rip["cue"]))
+    if os.path.isfile(cue):
+        point_cue_at(cue)
+    return result
+
+
 def preview(db_path: str, folder: str) -> dict:
     """Everything the page shows before anything is done `[SPEC-CDI-040]` --
     nothing encoded, nothing written."""
+    if is_tracks_rip(folder):
+        return preview_tracks(db_path, folder)
     fmt, _cue, toc, wav_path, rip_report = open_rip(folder)
     disc_outcome, releases = lookup_disc_id(toc)
     conn = lempi_db.connect(db_path, lempi_db.ROLE_LIBRARY)
@@ -558,9 +822,11 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
     if not commit:
         return preview(db_path, folder)
 
-    fmt, _cue, toc, wav_path, rip_report = open_rip(folder)
     if keep_flac is None:
         keep_flac = keep_lossless_setting(db_path)
+    if is_tracks_rip(folder):
+        return ingest_tracks(db_path, folder, release, into, keep_flac)
+    fmt, _cue, toc, wav_path, rip_report = open_rip(folder)
 
     say("encoding the MP3 ...")
     mp3_path = os.path.splitext(wav_path)[0] + ".mp3"

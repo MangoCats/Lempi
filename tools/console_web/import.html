@@ -247,10 +247,17 @@ function showPreview(p, folder, area) {
     area.replaceChildren(S.el('p', { class: 'steps', text: `Adding it to ${r.into}…` }), log);
     S.watchJob(r.job_id, log, job => done(job, r.into, rels.find(x => x.id === chosen), area));
   };
+  // A tracks-mode rip that stopped short [SPEC-CDI-094]: the tracks it has
+  // are added, each its own file, and the one it never wrote is named here.
+  const missing = (p.missing || []).map(t => `${t.number}${t.title ? ' (' + t.title + ')' : ''}`);
+  const gap = missing.length ? S.el('p', { class: 'verdict bad', text:
+    `Track${missing.length > 1 ? 's' : ''} ${missing.join(', ')} ${missing.length > 1 ? 'were' : 'was'} not ripped: `
+    + `the album is added without ${missing.length > 1 ? 'them' : 'it'}.`
+    + (p.rip ? '' : ' With no log, the tracks it has are added as unverified.') }) : null;
   area.replaceChildren(
     S.el('div', { class: 'steps' }, S.el('span', { text: rels.length > 1
       ? 'MusicBrainz knows several editions of this disc -- choose yours:' : 'This is the disc:' }), help('add')),
-    pick, warn,
+    gap, pick, warn,
     S.el('div', { class: 'controls' }, S.el('span', { style: 'align-self:center;font-size:.88rem',
       text: 'Album folder, in your music folder:' }), into, add));
 }
@@ -272,7 +279,8 @@ function done(job, into, rel, area) {
   area.append(
     S.el('p', { class: 'verdict ok', text: `Added: ${res.tracks} tracks, ${res.identified} identified` +
       (res.ambiguous || res.unidentified ? `, ${res.ambiguous + res.unidentified} waiting in the review queue` : '') +
-      (res.flac ? '; a lossless FLAC copy kept' : '') + '.' }),
+      (res.flac ? '; a lossless FLAC copy kept' : '') +
+      (res.missing && res.missing.length ? `; track ${res.missing.join(', ')} not ripped, so not added` : '') + '.' }),
     (res.ambiguous || res.unidentified)
       ? S.el('p', {}, S.el('a', { href: `${PLAYER}/review`, target: '_blank', text: 'Open the review queue' })) : null,
     S.el('div', { class: 'controls' }, reload, send, said, help('after')),

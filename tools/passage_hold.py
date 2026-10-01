@@ -70,15 +70,18 @@ def damaged(conn: sqlite3.Connection) -> list[dict]:
     for file_id, path, detail in rows:
         d = json.loads(detail)
         n = d.get("track")
+        # Its place among the file's passages: the track number for an image
+        # rip, 1 for a tracks-mode rip's own file (`in_file`) [SPEC-CDI-090].
+        at = d.get("in_file", n)
         for kind in ("radio", "album"):
             passages = conn.execute(
                 f"SELECT passage_id, {COLUMN if have else 'NULL'} FROM passages "
                 "WHERE file_id = ?1 AND kind = ?2 ORDER BY start_ms", (file_id, kind)).fetchall()
-            if not isinstance(n, int) or not 1 <= n <= len(passages):
+            if not isinstance(at, int) or not 1 <= at <= len(passages):
                 out.append({"passage_id": None, "kind": kind, "path": path, "track": n,
                             "why": f"no {kind} passage for track {n} -- {len(passages)} in the file"})
                 continue
-            pid, mark = passages[n - 1]
+            pid, mark = passages[at - 1]
             if mark is None:
                 out.append({"passage_id": pid, "kind": kind, "path": path, "track": n,
                             "why": damage_reason(d.get("detail", ""))})

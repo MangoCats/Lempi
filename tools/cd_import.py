@@ -234,6 +234,37 @@ def verdict(report) -> dict:
             "there was nothing to compare with -- usually fine."}
 
 
+def _tracks_card(toc, folder: str, log: str | None, now: float) -> dict:
+    """A tracks-mode rip's card `[SPEC-CDI-090]`: a file per track, some
+    perhaps never written -- a damaged track the ripper stopped on. Finished
+    once its log is written, or once its files have sat still with no log: a
+    rip that stopped. A missing track is named, and does not keep the rest
+    from being added `[SPEC-CDI-094]`."""
+    present = [t for t in toc.tracks if t.file and os.path.isfile(os.path.join(folder, t.file))]
+    missing = [t for t in toc.tracks if t not in present]
+    out = {"mode": "tracks", "audio": f"{len(present)} of {len(toc.tracks)} track files",
+           "missing": [{"number": t.number, "title": t.title} for t in missing]}
+    if not present:
+        return {**out, "state": "ripping", "detail": "Still being ripped."}
+    size = sum(os.path.getsize(os.path.join(folder, t.file)) for t in present)
+    newest = max(os.path.getmtime(os.path.join(folder, t.file)) for t in present)
+    if log and os.path.isfile(log):
+        v = verdict(cd_toc.parse_eac_log(log))
+    elif now - newest < SETTLED_S:
+        return {**out, "state": "ripping", "detail": "Still being ripped."}
+    else:
+        v = {"level": "note", "text": "There is no log beside it -- the rip stopped before the end, or "
+             "the log was turned off -- so these tracks cannot be checked against other people's rips. "
+             "They will be added as unverified."}
+    if missing:
+        names = ", ".join(f"{t.number}" + (f" ({t.title})" if t.title else "") for t in missing)
+        v = {"level": "bad" if v["level"] != "bad" else v["level"],
+             "text": f"Track{'s' if len(missing) > 1 else ''} {names} {'were' if len(missing) > 1 else 'was'} "
+                     f"not ripped; the album is added without {'them' if len(missing) > 1 else 'it'}. "
+                     + v["text"]}
+    return {**out, "state": "finished", "verdict": v, "audio_bytes": size}
+
+
 def scan(root: str, now: float | None = None) -> list[dict]:
     """The rips in the inbox, as the page's cards `[SPEC-CDI-030]`. Read-only."""
     now = time.time() if now is None else now
@@ -246,23 +277,27 @@ def scan(root: str, now: float | None = None) -> list[dict]:
             cards.append({"id": os.path.relpath(cue, root), "state": "unreadable", "title": stem,
                           "detail": f"the CUE sheet could not be read: {e}"})
             continue
-        audio = os.path.join(folder, toc.data_file or "")
         log = os.path.join(folder, stem + ".log")
         if not os.path.isfile(log):
             logs = [n for n in os.listdir(folder) if n.lower().endswith(".log")]
             log = os.path.join(folder, logs[0]) if folder != root and len(logs) == 1 else None
         card = {"id": os.path.relpath(cue, root), "folder": folder, "staged": folder != root,
                 "title": " - ".join(x for x in (toc.performer, toc.title) if x) or stem,
-                "tracks": len(toc.tracks), "audio": os.path.basename(audio)}
-        if not toc.data_file or not os.path.isfile(audio):
-            card.update(state="ripping", detail="Still being ripped.")
-        elif log and os.path.isfile(log):
-            card.update(state="finished", verdict=verdict(cd_toc.parse_eac_log(log)),
-                        audio_bytes=os.path.getsize(audio))
-        elif now - os.path.getmtime(audio) < SETTLED_S:
-            card.update(state="ripping", detail="Still being ripped.")
+                "tracks": len(toc.tracks)}
+        if toc.tracks_mode:
+            card.update(_tracks_card(toc, folder, log, now))
         else:
-            card.update(state="finished", verdict=verdict(None), audio_bytes=os.path.getsize(audio))
+            audio = os.path.join(folder, toc.data_file or "")
+            card["audio"] = os.path.basename(audio)
+            if not toc.data_file or not os.path.isfile(audio):
+                card.update(state="ripping", detail="Still being ripped.")
+            elif log and os.path.isfile(log):
+                card.update(state="finished", verdict=verdict(cd_toc.parse_eac_log(log)),
+                            audio_bytes=os.path.getsize(audio))
+            elif now - os.path.getmtime(audio) < SETTLED_S:
+                card.update(state="ripping", detail="Still being ripped.")
+            else:
+                card.update(state="finished", verdict=verdict(None), audio_bytes=os.path.getsize(audio))
         cards.append(card)
     return cards
 
@@ -286,7 +321,7 @@ def stage(root: str, card_id: str) -> str:
     while os.path.exists(target):
         target, n = os.path.join(root, f"{stem} ({n})"), n + 1
     os.makedirs(target)
-    names = {os.path.basename(cue), toc.data_file or "", stem + ".log"}
+    names = {os.path.basename(cue), stem + ".log", *toc.files}
     for name in names:
         p = os.path.join(root, name)
         if name and os.path.isfile(p):

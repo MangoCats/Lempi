@@ -70,6 +70,9 @@ class TocTrack:
     index_points: dict[int, int] = field(default_factory=dict)  # index -> ms
     title: str | None = None           # CD-TEXT, when present
     performer: str | None = None
+    file: str | None = None            # the audio this track is in, by name:
+                                        # one for every track of an image rip,
+                                        # its own of a tracks-mode rip
 
 
 @dataclass
@@ -83,10 +86,27 @@ class DiscToc:
                                         # resolved against the rip folder by
                                         # the caller, never an absolute path
                                         # this module invents itself
+    barcode: str | None = None         # the sheet's `CATALOG`: the disc's EAN/UPC
 
     @property
     def track_count(self) -> int:
         return len(self.tracks)
+
+    @property
+    def files(self) -> list[str]:
+        """Every audio file the sheet names, in order."""
+        out: list[str] = []
+        for t in self.tracks:
+            if t.file and t.file not in out:
+                out.append(t.file)
+        return out or ([self.data_file] if self.data_file else [])
+
+    @property
+    def tracks_mode(self) -> bool:
+        """A rip with a file per track, not one image `[SPEC-CDI-090]`. Its
+        times are each file's own, so they say nothing of where a track sits
+        on the disc: that is in the rip log's table of contents, or nowhere."""
+        return len(self.files) > 1
 
 
 # --------------------------------------------------------------------- EAC .cue
@@ -96,6 +116,7 @@ _CUE_INDEX = re.compile(r'^\s*INDEX\s+(\d+)\s+(\d+):(\d+):(\d+)\s*$')
 _CUE_TITLE = re.compile(r'^\s*TITLE\s+"(.*)"\s*$')
 _CUE_PERFORMER = re.compile(r'^\s*PERFORMER\s+"(.*)"\s*$')
 _CUE_FILE = re.compile(r'^\s*FILE\s+"(.*)"\s+\w+\s*$')
+_CUE_CATALOG = re.compile(r'^\s*CATALOG\s+(\d{12,14})\s*$')
 
 
 def read_cue_text(path: str) -> str:
@@ -140,6 +161,9 @@ def parse_eac_cue(path: str) -> DiscToc:
     disc_title: str | None = None
     disc_performer: str | None = None
     data_file: str | None = None
+    cur_file: str | None = None
+    cur_track_file: str | None = None
+    barcode: str | None = None
     tracks: list[TocTrack] = []
     cur_track: int | None = None
     cur_title: str | None = None
@@ -148,29 +172,37 @@ def parse_eac_cue(path: str) -> DiscToc:
     seen_track_line = False
 
     def flush():
-        nonlocal cur_track, cur_title, cur_performer, cur_indexes
+        nonlocal cur_track, cur_title, cur_performer, cur_indexes, cur_track_file
         if cur_track is not None:
             tracks.append(TocTrack(
                 number=cur_track, start_ms=0, end_ms=0,
                 start_sector=0, end_sector=0,
                 index_points=dict(cur_indexes),
-                title=cur_title, performer=cur_performer))
+                title=cur_title, performer=cur_performer, file=cur_track_file))
         cur_track, cur_title, cur_performer, cur_indexes = None, None, None, {}
+        cur_track_file = None
 
     for line in read_cue_text(path).splitlines(keepends=True):
         m = _CUE_FILE.match(line)
-        if m and data_file is None:
-            # A single-file DAO image is the shape both the
-            # person-assisted flow and this module assume; a cue sheet
-            # naming more than one `FILE` (per-track rips) is read as
-            # its first reference only -- multi-file cue support is not
-            # in this pass's scope.
-            data_file = m.group(1)
+        if m:
+            # Every `FILE`, each track under the one before it: one for an
+            # image rip, one per track for a tracks-mode rip
+            # `[SPEC-CDI-090]`. Until 2026-10-01 only the first was read, so
+            # a tracks-mode sheet came out as track 1's file holding every
+            # track, each at 0 ms and 0 ms long.
+            cur_file = m.group(1)
+            if data_file is None:
+                data_file = cur_file
+            continue
+        m = _CUE_CATALOG.match(line)
+        if m and not seen_track_line:
+            barcode = m.group(1)
             continue
         m = _CUE_TRACK.match(line)
         if m:
             flush()
             cur_track = int(m.group(1))
+            cur_track_file = cur_file
             seen_track_line = True
             continue
         m = _CUE_INDEX.match(line)
@@ -178,6 +210,11 @@ def parse_eac_cue(path: str) -> DiscToc:
             idx = int(m.group(1))
             ms = frames_to_ms(int(m.group(2)), int(m.group(3)), int(m.group(4)))
             cur_indexes[idx] = ms
+            if idx == 1:
+                # A track lives in the file that holds its INDEX 01. With
+                # gaps appended, its TRACK line and INDEX 00 sit at the end
+                # of the previous file, and the music starts in its own.
+                cur_track_file = cur_file
             continue
         m = _CUE_TITLE.match(line)
         if m:
@@ -229,15 +266,22 @@ def parse_eac_cue(path: str) -> DiscToc:
     for i, t in enumerate(tracks):
         t.start_ms = t.index_points.get(1, t.index_points.get(0, 0))
         t.pregap_ms = None
-        if 0 in t.index_points and 1 in t.index_points:
+        if 0 in t.index_points and 1 in t.index_points and t.index_points[1] >= t.index_points[0]:
+            # Only within one file: with gaps appended, INDEX 00 is timed in
+            # the previous track's file and INDEX 01 in this one's, and their
+            # difference measures nothing.
             t.pregap_ms = t.index_points[1] - t.index_points[0]
-        if i + 1 < len(tracks):
+        # The next track ends this one only within the same file; the last
+        # track in a file ends where the file does, which only the audio can
+        # say -- left 0 for the caller.
+        if i + 1 < len(tracks) and tracks[i + 1].file == t.file:
             nxt = tracks[i + 1]
             t.end_ms = nxt.index_points.get(0, nxt.index_points.get(1, 0))
         t.start_sector = round(t.start_ms * 75 / 1000)
 
     return DiscToc(tracks=tracks, leadout_sector=0, title=disc_title,
-                    performer=disc_performer, source="eac-cue", data_file=data_file)
+                    performer=disc_performer, source="eac-cue", data_file=data_file,
+                    barcode=barcode)
 
 
 # ------------------------------------------------------------------- EAC .log
@@ -323,6 +367,24 @@ def parse_eac_log(path: str) -> RipReport:
     tracks = [TrackRipReport(number=n, ok=ok, detail=detail)
               for n, (ok, detail) in sorted(verdicts.items())]
     return RipReport(tracks=tracks, all_ok=all_ok and all(t.ok for t in tracks))
+
+
+def toc_from_log(path: str) -> DiscToc | None:
+    """The disc's own table of contents, from a rip log's "Track | Start |
+    Length | Start sector | End sector" table: every track's place on the disc,
+    and the leadout -- what the Disc ID is computed from `[SPEC-RIP-060]`.
+    `None` when the log has none.
+
+    A tracks-mode rip's sheet cannot give this: its times are each file's own
+    `[SPEC-CDI-090]`. Nor can its files, once a track is missing. The log was
+    written from the disc itself, so it is the one source that can."""
+    rows = [(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            for m in (_LOG_TOC_ROW.match(line) for line in _read_log_text(path).splitlines()) if m]
+    if not rows:
+        return None
+    tracks = [TocTrack(number=n, start_ms=round(first * 1000 / 75), end_ms=round((last + 1) * 1000 / 75),
+                       start_sector=first, end_sector=last) for n, first, last in rows]
+    return DiscToc(tracks=tracks, leadout_sector=rows[-1][2] + 1, source="log-toc")
 
 
 def _suspicious_by_track(text: str) -> dict[int, str]:

@@ -220,6 +220,52 @@ def test_stage():
         pass
 
 
+def tracks_rip(folder, files, log=None, age=600):
+    """A tracks-mode rip of three tracks; `files` names which were written."""
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, "Artist - Album.cue"), "w", encoding="utf-8", newline="\r\n") as f:
+        f.write('PERFORMER "Artist"\nTITLE "Album"\n' + "".join(
+            f'FILE "0{n}. Song {n}.wav" WAVE\n  TRACK 0{n} AUDIO\n    TITLE "Song {n}"\n    INDEX 01 00:00:00\n'
+            for n in (1, 2, 3)))
+    t = time.time() - age
+    for n in files:
+        p = os.path.join(folder, f"0{n}. Song {n}.wav")
+        with open(p, "wb") as f:
+            f.write(b"RIFF" + b"\0" * 64)
+        os.utime(p, (t, t))
+    if log is not None:
+        with open(os.path.join(folder, "Artist - Album.log"), "w", encoding="utf-8") as f:
+            f.write(log)
+
+
+def test_tracks_scan_and_stage():
+    """[SPEC-CDI-090], [SPEC-CDI-094]: a tracks-mode rip's card -- the files
+    it has, a track it never wrote named, finished once it has stopped -- and
+    a loose one staged with every file it names."""
+    root = tempfile.mkdtemp()
+    tracks_rip(os.path.join(root, "Stopped"), (1, 2))
+    tracks_rip(os.path.join(root, "Writing"), (1, 2), age=5)
+    tracks_rip(os.path.join(root, "Logged"), (1, 2, 3), log=LOG_OK + "Track  3  accurately ripped\n")
+    cards = {c["id"].split(os.sep)[0]: c for c in ci.scan(root)}
+    s = cards["Stopped"]
+    check(s["state"] == "finished" and s["mode"] == "tracks" and s["audio"] == "2 of 3 track files"
+          and s["missing"] == [{"number": 3, "title": "Song 3"}], f"a stopped rip, its missing track named: {s}")
+    check(s["verdict"]["level"] == "bad" and "Track 3 (Song 3) was not ripped" in s["verdict"]["text"]
+          and "no log" in s["verdict"]["text"], f"and said: {s['verdict']}")
+    check(cards["Writing"]["state"] == "ripping", "files still moving, no log: still ripping")
+    logged = cards["Logged"]
+    check(logged["state"] == "finished" and logged["verdict"]["level"] == "ok" and not logged["missing"],
+          f"every track there, the log clean: {logged}")
+
+    loose = tempfile.mkdtemp()
+    tracks_rip(loose, (1, 2), log=LOG_OK)
+    with open(os.path.join(loose, "unrelated.txt"), "w") as f:
+        f.write("x")
+    folder = ci.stage(loose, "Artist - Album.cue")
+    check(sorted(os.listdir(folder)) == ["01. Song 1.wav", "02. Song 2.wav", "Artist - Album.cue", "Artist - Album.log"],
+          f"a loose tracks rip staged with every file it names, and nothing else: {os.listdir(folder)}")
+
+
 def test_inbox_setting():
     """The inbox is the console's own setting, with a default in the music folder."""
     side = os.path.join(tempfile.mkdtemp(), "console.db")
@@ -241,6 +287,7 @@ def main() -> int:
     test_cueripper_checks()
     test_scan()
     test_stage()
+    test_tracks_scan_and_stage()
     test_inbox_setting()
     print()
     if FAILED:

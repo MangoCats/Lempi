@@ -410,6 +410,48 @@ def main() -> int:
         r = cd_toc.parse_eac_log(log_path)
     check(r.tracks == [], f"a per-track log's bare heading is not an outcome: {r.tracks}")
 
+    # [SPEC-CDI-090]: a tracks-mode sheet. Gaps appended -- track 2's TRACK
+    # line and INDEX 00 at the end of track 1's file, its INDEX 01 in its own
+    # -- and CUERipper's own shape, as Sugar Ray's sheet was, 2026-10-01.
+    print("parse_eac_cue: a file per track, gaps appended, and the barcode")
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "rip.cue")
+        with open(p, "w", encoding="utf-8", newline="\r\n") as f:
+            f.write('PERFORMER "A"\nTITLE "B"\nCATALOG 0075678341427\n'
+                    'FILE "01. One.wav" WAVE\n  TRACK 01 AUDIO\n    PREGAP 00:00:32\n    INDEX 01 00:00:00\n'
+                    '  TRACK 02 AUDIO\n    INDEX 00 03:58:10\n'
+                    'FILE "02. Two.wav" WAVE\n    INDEX 01 00:00:00\n'
+                    'FILE "03. Three.wav" WAVE\n  TRACK 03 AUDIO\n    INDEX 01 00:00:00\n')
+        toc = cd_toc.parse_eac_cue(p)
+    check(toc.tracks_mode and toc.files == ["01. One.wav", "02. Two.wav", "03. Three.wav"], f"{toc.files}")
+    check([t.file for t in toc.tracks] == ["01. One.wav", "02. Two.wav", "03. Three.wav"],
+          f"track 2 lives in the file holding its INDEX 01: {[t.file for t in toc.tracks]}")
+    check([(t.start_ms, t.end_ms) for t in toc.tracks] == [(0, 0), (0, 0), (0, 0)],
+          f"each from its own file's start, its end left to the file: {[(t.start_ms, t.end_ms) for t in toc.tracks]}")
+    check(toc.tracks[1].pregap_ms is None, f"a gap measured across two files is not a length: {toc.tracks[1].pregap_ms}")
+    check(toc.barcode == "0075678341427", f"the barcode: {toc.barcode}")
+    image = cd_toc.DiscToc(tracks=[cd_toc.TocTrack(1, 0, 0, 0, 0, file="a.wav"),
+                                   cd_toc.TocTrack(2, 1, 0, 0, 0, file="a.wav")], leadout_sector=0)
+    check(not image.tracks_mode and image.files == ["a.wav"], "one image is not tracks mode")
+
+    # The log's table of contents is the disc's own [SPEC-RIP-060]: from it, the
+    # Disc ID a tracks-mode rip cannot get from its sheet.
+    print("toc_from_log: the disc's positions, and its Disc ID")
+    with tempfile.TemporaryDirectory() as d:
+        log_path = os.path.join(d, "rip.log")
+        with open(log_path, "w", encoding="utf-8", newline="\r\n") as f:
+            f.write("        1  |  0:00.00 |  3:00.00 |         0    |    13499   \n"
+                    "        2  |  3:00.00 |  2:00.00 |     13500    |    22499   \n")
+        lt = cd_toc.toc_from_log(log_path)
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write("No errors occurred\n")
+        none = cd_toc.toc_from_log(log_path)
+    check(lt and [t.start_sector for t in lt.tracks] == [0, 13500] and lt.leadout_sector == 22500,
+          f"starts and leadout, sectors: {lt}")
+    check(cd_toc.musicbrainz_toc_param(lt) == "1 2 22650 150 13650",
+          f"the lead-in added as for any disc: {cd_toc.musicbrainz_toc_param(lt) if lt else None}")
+    check(none is None, "a log with no table: None, not an empty disc")
+
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")

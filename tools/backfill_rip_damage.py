@@ -44,10 +44,22 @@ def plan(conn) -> list[dict]:
         have = {json.loads(d).get("track") for (d,) in conn.execute(
             "SELECT detail FROM ingest_decisions WHERE audio_md5 = ?1 AND stage = 'rip' "
             "AND outcome = 'verification_failed'", (md5,))}
+        # A tracks-mode rip's files share one log, each file one track
+        # [SPEC-CDI-090]: a file takes only its own track's verdict from it.
+        own = None
+        for (d,) in conn.execute(
+                "SELECT detail FROM ingest_decisions WHERE audio_md5 = ?1 AND stage = 'rip' "
+                "AND outcome NOT IN ('verification_failed', 'track_missing')", (md5,)):
+            dd = json.loads(d or "{}")
+            if dd.get("tracks_mode"):
+                own = dd.get("track")
         report = cd_toc.parse_eac_log(os.path.join(folder, logs[0]))
         for t in report.tracks:
+            if own is not None and t.number != own:
+                continue
             if not t.ok and t.number not in have:
-                out.append({"audio_md5": md5, "path": path, "track": t.number, "detail": t.detail})
+                out.append({"audio_md5": md5, "path": path, "track": t.number, "detail": t.detail,
+                            "in_file": 1 if own is not None else None})
     return out
 
 
@@ -72,7 +84,8 @@ def main() -> int:
             conn.execute(
                 "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
                 "VALUES (?1,'rip','verification_failed',NULL,?2,?3)",
-                (t["audio_md5"], json.dumps({"track": t["track"], "detail": t["detail"]}), now))
+                (t["audio_md5"], json.dumps({"track": t["track"], "detail": t["detail"],
+                                             **({"in_file": t["in_file"]} if t.get("in_file") else {})}), now))
     print(f"\n{len(tracks)} damaged track(s) recorded")
     return 0
 

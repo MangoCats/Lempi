@@ -68,6 +68,30 @@ def main() -> int:
         code, out = run(db, "--commit")
         check(failures(db) == [2] and "0 damaged track(s) recorded" in out, f"{failures(db)} {out}")
 
+        print("a tracks-mode rip: the files share one log, and each takes only its own track")
+        album = os.path.join(tmp, "Tracks", "Album (2001)")
+        os.makedirs(album)
+        with open(os.path.join(album, "Tracks - Album.log"), "w", encoding="utf-8") as f:
+            f.write("Track  1  accurately ripped (confidence 9)\nTrack  2  cannot be verified as accurate\n")
+        db2 = os.path.join(tmp, "tracks.db")
+        c = sqlite3.connect(db2)
+        c.executescript(open(SCHEMA, encoding="utf-8").read())
+        for n in (1, 2):
+            c.execute("INSERT INTO files (file_id, audio_md5, path, size_bytes, mtime, format, duration_ms, "
+                      "first_seen, last_seen) VALUES (?1, ?2, ?3, 1, 0, 'mp3', 1, 'x', 'x')",
+                      (n, f"md5-{n}", os.path.join(album, f"0{n}. Song.mp3")))
+            c.execute("INSERT INTO ingest_decisions (audio_md5, stage, outcome, detail, decided_at) "
+                      "VALUES (?1, 'rip', 'chosen', ?2, 'x')", (f"md5-{n}", json.dumps({"track": n, "tracks_mode": True})))
+        c.commit()
+        c.close()
+        run(db2, "--commit")
+        c = sqlite3.connect(db2)
+        got = [(md5, json.loads(d)) for md5, d in c.execute(
+            "SELECT audio_md5, detail FROM ingest_decisions WHERE outcome='verification_failed'")]
+        c.close()
+        check(got == [("md5-2", {"track": 2, "detail": "cannot be verified as accurate", "in_file": 1})],
+              f"track 2's file only, at its own first passage: {got}")
+
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")

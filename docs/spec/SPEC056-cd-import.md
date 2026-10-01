@@ -147,6 +147,38 @@ to the speakers* opens the Export page with this album already chosen
 audio has reached it -- a catalogue entry alone is refused by star sync
 `[SPEC-STAR-080]`.
 
+## 5a. A rip with a file per track
+
+**`[SPEC-CDI-090]` A tracks-mode rip is added as one MP3 per track, each with
+one radio and one album passage.** Built 2026-10-01, at the maintainer's
+direction, for a disc a damaged track would stop as one image. Its CUE names a
+`FILE` per track, and each track's times are its own file's. Every track is
+encoded and identified as an image rip's are (`_resolve_track`, shared), and
+the album passage is the whole file -- the track as the disc plays it, with any
+gap the ripper put in the file -- so the album passages played in order are
+the disc `[SPEC-SC-047]`. The radio passage starts at the track's own INDEX 01
+and ends with the file; amplitude analysis sets its crossfade window, as for
+any radio passage. A track lives in the file holding its INDEX 01: with gaps
+appended, its `TRACK` line and INDEX 00 sit at the end of the file before.
+
+**`[SPEC-CDI-092]` Where the disc's positions come from.** A tracks-mode sheet
+has none -- each file starts at zero -- so the Disc ID comes from the rip log's
+table of contents (`cd_toc.toc_from_log`), the disc's own sectors and leadout:
+on *The Essential Cyndi Lauper* it gives the Disc ID and the freedb id
+`B90E090E` that the image rip of 2026-09-03 gave. With no log, there is no
+Disc ID; the sheet's barcode (`CATALOG`) is looked up instead, and for any rip
+whose Disc ID finds nothing. A barcode names a product, not a pressing: on
+*Sugar Ray* (2001) it found two editions, German and US, for a person to choose.
+
+**`[SPEC-CDI-094]` A track the ripper never wrote is named, and does not keep
+the rest out.** CUERipper rips the whole disc in every mode and has no way to
+leave a track out; on *Sugar Ray* a scratch stopped secure, burst and
+tracks-mode rips alike at track 11, and an aborted rip writes no log. The
+card and the preview name the missing track; the tracks there are added,
+unverified when there is no log; the missing one is recorded
+(`ingest_decisions`, outcome `track_missing`). A damaged track that was
+written is recorded and held as an image rip's is `[SPEC-HOLD-030]`.
+
 ## 6. Album files with no track list
 
 **`[SPEC-CDI-060]` The same page splits an existing album file.** A second panel
@@ -218,4 +250,4 @@ Adding a rip does not yet analyse it; analysing on add, by default, is
 
 ---
 
-**Traceability:** `[SPEC-CDI-010..080]` (with `[SPEC-CDI-012]`, `[SPEC-CDI-058]`), `[SPEC-CDI-900]` · builds on `[SPEC-RIP-020]`, `[SPEC-RIP-088]`, `[SPEC024]`, `[SPEC028]` · corrects, when built, the dry run and WAV retention of `tools/ingest_cd.py`
+**Traceability:** `[SPEC-CDI-010..094]` (with `[SPEC-CDI-012]`, `[SPEC-CDI-058]`), `[SPEC-CDI-900]` · builds on `[SPEC-RIP-020]`, `[SPEC-RIP-088]`, `[SPEC024]`, `[SPEC028]` · corrects, when built, the dry run and WAV retention of `tools/ingest_cd.py`

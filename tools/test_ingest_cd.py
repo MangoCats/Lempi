@@ -255,8 +255,125 @@ def test_end_to_end():
         ingest_cd.lookup_disc_id = old
 
 
+def test_tracks_end_to_end():
+    """[SPEC-CDI-090..094], with real WAVs and ffmpeg: a tracks-mode rip --
+    a file per track, track 3 never written, track 2 damaged -- previewed
+    without a change on disk, then added: each track its own MP3 with one
+    radio and one album passage, the album passage the whole file and the
+    radio one from the track's own INDEX 01; the missing track recorded; the
+    damaged one held; the disc looked up by the log's table of contents."""
+    import hashlib
+    import subprocess
+    import passage_hold
+    if not ingest_cd.FFMPEG:
+        check(False, "tracks end to end needs ffmpeg")
+        return
+    inbox = tempfile.mkdtemp()
+    for name, secs in (("01. One.wav", 3), ("02. Two.wav", 2)):
+        subprocess.run([ingest_cd.FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i",
+                        f"sine=frequency=440:duration={secs}", "-ar", "44100", "-ac", "2",
+                        os.path.join(inbox, name)], check=True)
+    # Track 2's file opens with its own half-second gap (INDEX 00 at 0,
+    # INDEX 01 at 0:00:37): the album passage keeps it, the radio one starts
+    # after it. Track 3's file was never written.
+    with open(os.path.join(inbox, "Artist - Album.cue"), "w", encoding="utf-8", newline="\r\n") as f:
+        f.write('PERFORMER "Artist"\nTITLE "Album"\nCATALOG 0075678341427\n'
+                'FILE "01. One.wav" WAVE\n  TRACK 01 AUDIO\n    TITLE "One"\n    INDEX 01 00:00:00\n'
+                'FILE "02. Two.wav" WAVE\n  TRACK 02 AUDIO\n    TITLE "Two"\n    INDEX 00 00:00:00\n'
+                '    INDEX 01 00:00:37\n'
+                'FILE "03. Three.wav" WAVE\n  TRACK 03 AUDIO\n    TITLE "Three"\n    INDEX 01 00:00:00\n')
+    with open(os.path.join(inbox, "Artist - Album.log"), "w", encoding="utf-8", newline="\r\n") as f:
+        f.write("        1  |  0:00.00 |  0:03.00 |         0    |      224   \n"
+                "        2  |  0:03.00 |  0:02.37 |       225    |      411   \n"
+                "        3  |  0:05.37 |  0:04.00 |       412    |      711   \n\n"
+                "AccurateRip summary\n\n"
+                "Track  1  accurately ripped (confidence 12)  [0A0B0C0D]\n"
+                "Track  2  cannot be verified as accurate (confidence 30)  [11111111], AccurateRip returned [2]\n")
+    rel = {"id": "rel-T", "title": "Album", "date": "2001", "artist-credit": [{"name": "Artist"}],
+           "media": [{"tracks": [{"position": n, "title": f"Song {n}", "length": 3000,
+                                  "recording": {"id": f"rec-t{n}", "title": f"Song {n}"}} for n in (1, 2, 3)]}]}
+    db = os.path.join(tempfile.mkdtemp(), "lempi.db")
+    c = sqlite3.connect(db)
+    c.executescript(SCHEMA + "CREATE TABLE player_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);")
+    c.commit()
+    c.close()
+
+    def snapshot(d):
+        return {n: hashlib.sha256(open(os.path.join(d, n), "rb").read()).hexdigest() for n in sorted(os.listdir(d))}
+
+    looked = []
+    old = (ingest_cd.lookup_disc_id, ingest_cd.lookup_barcode)
+    ingest_cd.lookup_disc_id = lambda toc: (looked.append(("disc", toc.leadout_sector, toc.source)) or ("exact", [rel]))
+    ingest_cd.lookup_barcode = lambda code: (looked.append(("barcode", code)) or ("barcode", [rel]))
+    try:
+        print("tracks mode end to end: preview, then commit")
+        before = snapshot(inbox)
+        p = ingest_cd.do_ingest(db, inbox, commit=False)
+        check(snapshot(inbox) == before, "the preview changes nothing on disk")
+        check(p["mode"] == "tracks" and p["tracks"] == 3 and p["missing"] == [{"number": 3, "title": "Three"}]
+              and p["audio"] == "2 of 3 track files", f"it shows the rip as it is, got {p}")
+        check(looked and looked[0] == ("disc", 712, "log-toc") and p["disc_id"],
+              f"the disc is looked up by the log's table of contents, leadout and all: {looked}")
+        check(p["rip"]["tracks"][1]["ok"] is False, f"and track 2's verdict is shown: {p['rip']}")
+
+        home = os.path.join(tempfile.mkdtemp(), "Artist", "Album (2001)")
+        r = ingest_cd.do_ingest(db, inbox, commit=True, release="rel-T", into=home, keep_flac=False)
+        names = sorted(os.listdir(home))
+        check(names == ["01. One.mp3", "02. Two.mp3", "Artist - Album.cue", "Artist - Album.log"],
+              f"a MP3 per track, filed, WAVs removed, got {names}")
+        check(r["tracks"] == 2 and r["identified"] == 2 and r["missing"] == [3] and r["verification_failed"] == 1
+              and r.get("wav_removed"), f"got {r}")
+        cue = open(os.path.join(home, "Artist - Album.cue"), encoding="utf-8").read()
+        check('FILE "01. One.mp3" MP3' in cue and 'FILE "02. Two.mp3" MP3' in cue and ".wav" not in cue,
+              f"every FILE line names its MP3: {cue!r}")
+
+        c = sqlite3.connect(db)
+        c.row_factory = sqlite3.Row
+        files = c.execute("SELECT file_id, path, duration_ms FROM files ORDER BY file_id").fetchall()
+        check([os.path.basename(f["path"]) for f in files] == ["01. One.mp3", "02. Two.mp3"]
+              and all(os.path.dirname(f["path"]) == home for f in files), f"{[tuple(f) for f in files]}")
+        ps = c.execute("SELECT f.path, p.kind, p.start_ms, p.end_ms, p.director_hold FROM passages p "
+                       "JOIN files f USING (file_id) ORDER BY f.file_id, p.kind").fetchall()
+        two = {(row["kind"]): row for row in ps if row["path"].endswith("02. Two.mp3")}
+        check(len(ps) == 4 and two["album"]["start_ms"] == 0 and two["radio"]["start_ms"] == 493
+              and two["album"]["end_ms"] == two["radio"]["end_ms"] == files[1]["duration_ms"],
+              f"one radio and one album passage a track; the album whole, the radio from INDEX 01: "
+              f"{[tuple(x) for x in ps]}")
+        check(two["album"]["director_hold"] and two["radio"]["director_hold"]
+              and not any(row["director_hold"] for row in ps if row["path"].endswith("01. One.mp3")),
+              "the damaged track's two passages held, and only they")
+        mbids = [row[0] for row in c.execute("SELECT pr.mbid FROM passage_recordings pr JOIN passages p "
+                                             "USING (passage_id) WHERE p.kind='radio' ORDER BY p.file_id")]
+        check(mbids == ["rec-t1", "rec-t2"], f"each track its release's recording: {mbids}")
+        dec = [(row["outcome"], json.loads(row["detail"])) for row in
+               c.execute("SELECT outcome, detail FROM ingest_decisions ORDER BY decision_id")]
+        check(any(o == "track_missing" and d == {"track": 3, "title": "Three"} for o, d in dec),
+              f"the missing track is recorded: {dec}")
+        check(any(o == "verification_failed" and d.get("track") == 2 and d.get("in_file") == 1 for o, d in dec),
+              f"the damage, at the file's own first passage: {dec}")
+        check(sum(1 for o, d in dec if o == "chosen" and d.get("tracks_mode")) == 2, f"a decision per file: {dec}")
+        check(passage_hold.damaged(c) == [], "nothing left for --damaged: both passages already held")
+        c.close()
+
+        print("which lookup: the sheet for an image, the log for tracks, the barcode without it")
+        looked.clear()
+        img = cd_toc.DiscToc(tracks=[cd_toc.TocTrack(1, 0, 1000, 0, 74, file="a.wav")], leadout_sector=75,
+                             barcode="0075678341427")
+        ingest_cd.identify_disc(img, None)
+        check(looked == [("disc", 75, "")], f"an image: its own sheet: {looked}")
+        looked.clear()
+        trk = cd_toc.parse_eac_cue(os.path.join(home, "Artist - Album.cue"))
+        ingest_cd.lookup_disc_id = lambda toc: (looked.append(("disc", toc.leadout_sector, toc.source)) or ("none", []))
+        out = ingest_cd.identify_disc(trk, None)
+        check(looked == [("barcode", "0075678341427")] and out[0] == "barcode" and out[2] is None,
+              f"tracks with no log: no disc id at all, the barcode instead: {looked} {out[:1]}")
+    finally:
+        ingest_cd.lookup_disc_id, ingest_cd.lookup_barcode = old
+
+
 def main() -> int:
     test_end_to_end()
+    test_tracks_end_to_end()
     test_chosen_edition()
     test_preview_pieces()
     test_files_on_disk()
