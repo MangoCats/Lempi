@@ -123,7 +123,8 @@ function showDeploy(j) {
   outDir = j.result.out_dir;
   const name = outDir.split(/[\\/]/).pop();
   document.getElementById('commands').textContent =
-    `rsync -a "${outDir}/" {{PEER_SSH}}:{{PEER_INCOMING}}/${name}/\n` +
+    `ssh {{PEER_SSH}} mkdir -p {{PEER_INCOMING}}\n` +
+    `scp -r "${outDir}" {{PEER_SSH}}:{{PEER_INCOMING}}/${name}\n` +
     `ssh {{PEER_SSH}} import_bundle --library {{PEER_LIBRARY}} --bundle {{PEER_INCOMING}}/${name}\n` +
     `ssh {{PEER_SSH}} import_bundle --library {{PEER_LIBRARY}} --bundle {{PEER_INCOMING}}/${name} --apply\n` +
     `curl -X POST {{PEER_URL}}/library/reload`;
@@ -190,7 +191,11 @@ function showMissing(panel, info, job) {
     S.el('p', { style: 'font-size:.85rem;color:var(--dim);margin:.6rem 0 .2rem',
       text: `To send it to ${info.peer}, copy these into a terminal:` }),
     S.el('pre', { class: 'list', style: 'white-space:pre-wrap;user-select:all', text:
-      `rsync -a "${res.out_dir}/" ${info.ssh}:${dest}/\n`
+      // scp, not rsync: this PC's own OpenSSH has it, and Windows has no rsync
+      // -- found 2026-10-01 when the first send stopped at "'rsync' is not
+      // recognized". The folder is made first; only one speaker had it.
+      `ssh ${info.ssh} mkdir -p ${info.incoming}\n`
+      + `scp -r "${res.out_dir}" ${info.ssh}:${dest}\n`
       + `ssh ${info.ssh} import_bundle --library ${info.library} --bundle ${dest}\n`
       + `ssh ${info.ssh} import_bundle --library ${info.library} --bundle ${dest} --apply\n`
       + `curl -X POST ${info.url}/library/reload` }));
