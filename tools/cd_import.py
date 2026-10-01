@@ -8,8 +8,9 @@ Three things the page shows, and one it does:
   the controls `[SPEC-CDI-070]`: headings (each an anchor), paragraphs, lists,
   quotes, rules, bold, italics, inline code and links. Everything is escaped
   first, so the Markdown can carry no HTML of its own;
-- **EAC's setup** -- read from the registry and ticked off, never written
-  `[SPEC-CDI-025]`;
+- **the ripper's setup** -- CUERipper's settings file, or EAC's registry
+  when only EAC is found, read and ticked off, never written
+  `[SPEC-CDI-012]`, `[SPEC-CDI-025]`;
 - **the rip inbox** -- scanned for finished rips, each with its verdict in
   words `[SPEC-CDI-030]`, `[SPEC-CDI-035]`;
 - and **staging**: a rip EAC left loose in the inbox is given its own folder
@@ -19,6 +20,7 @@ Nothing here writes the library. Adding a rip is the `cd-rip` job.
 """
 from __future__ import annotations
 
+import glob
 import html
 import os
 import re
@@ -31,7 +33,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import cd_toc  # noqa: E402
 
-GUIDE = os.path.join(os.path.dirname(HERE), "docs", "GUIDE037-ripping-a-cd-with-eac.md")
+GUIDE = os.path.join(os.path.dirname(HERE), "docs", "GUIDE037-ripping-a-cd.md")
 
 # ------------------------------------------------------------------ the guide
 
@@ -137,10 +139,15 @@ def guide_html() -> str:
 # holds every one of these to a heading the guide actually has.
 ANCHORS = {
     "start": "before-you-start",
-    "wizard": "1-run-the-configuration-wizard",
-    "drive": "2-secure-reading-and-the-read-offset",
-    "log": "3-the-log-in-english-with-a-checksum",
-    "inbox": "4-where-rips-go",
+    "cr-install": "1-unpack-cueripper",
+    "cr-setup": "2-secure-reading-one-file-for-the-disc",
+    "inbox": "3-where-rips-go",
+    "cr-close": "4-close-it-once",
+    "eac": "using-eac-instead",
+    "wizard": "eac-1-run-the-configuration-wizard",
+    "drive": "eac-2-secure-reading-and-the-read-offset",
+    "log": "eac-3-the-log-in-english-with-a-checksum",
+    "eac-inbox": "eac-4-where-rips-go",
     "rip": "ripping-a-disc",
     "add": "adding-it-in-vipunen",
     "after": "afterwards",
@@ -207,7 +214,7 @@ def verdict(report) -> dict:
     `{"level": ok|note|bad, "text": ...}`."""
     if report is None:
         return {"level": "note", "text": "No status report beside it, so the rip cannot be checked. "
-                "Turn on EAC's status report (setup step 3) for the next disc."}
+                "Turn on the ripper's log (see setup) for the next disc."}
     bad = [t for t in report.tracks if not t.ok]
     unseen = [t for t in report.tracks if t.ok and "not present" in t.detail.lower()]
     if bad:
@@ -216,7 +223,7 @@ def verdict(report) -> dict:
                 "people's rips. Clean the disc and rip it again with Test & Copy. You can still add it; "
                 "it will be marked."}
     if not report.all_ok:
-        return {"level": "bad", "text": "EAC reported read errors. Clean the disc and rip it again with "
+        return {"level": "bad", "text": "The ripper reported read errors. Clean the disc and rip it again with "
                 "Test & Copy. You can still add it; it will be marked."}
     if report.tracks and not unseen:
         return {"level": "ok", "text": "Every track accurately ripped -- it matches other people's rips."}
@@ -248,12 +255,12 @@ def scan(root: str, now: float | None = None) -> list[dict]:
                 "title": " - ".join(x for x in (toc.performer, toc.title) if x) or stem,
                 "tracks": len(toc.tracks), "audio": os.path.basename(audio)}
         if not toc.data_file or not os.path.isfile(audio):
-            card.update(state="ripping", detail="EAC is still writing this rip.")
+            card.update(state="ripping", detail="Still being ripped.")
         elif log and os.path.isfile(log):
             card.update(state="finished", verdict=verdict(cd_toc.parse_eac_log(log)),
                         audio_bytes=os.path.getsize(audio))
         elif now - os.path.getmtime(audio) < SETTLED_S:
-            card.update(state="ripping", detail="EAC is still writing this rip.")
+            card.update(state="ripping", detail="Still being ripped.")
         else:
             card.update(state="finished", verdict=verdict(None), audio_bytes=os.path.getsize(audio))
         cards.append(card)
@@ -364,7 +371,7 @@ def checks(eac: dict | None, inbox_path: str, *, installed: bool, ffmpeg: bool) 
         out.append({"key": key, "label": label, "ok": ok, "fix": fix, "guide": ANCHORS[guide],
                     "detail": detail})
     add("installed", "Exact Audio Copy is installed", installed,
-        "Install EAC 1.8 from exactaudiocopy.de.", "start")
+        "Install EAC 1.8 from exactaudiocopy.de.", "eac")
     add("ffmpeg", "ffmpeg is available", ffmpeg,
         "Install ffmpeg, which makes the MP3s.", "start")
     if eac is None:
@@ -385,7 +392,7 @@ def checks(eac: dict | None, inbox_path: str, *, installed: bool, ffmpeg: bool) 
     use = ex.get("DirectoryUse")
     chosen = use is not None and not _on(use)
     add("inbox", "Rips go to the inbox", same and chosen,
-        f"In EAC Options, Directories: choose Use this directory, and set it to {inbox_path}.", "inbox",
+        f"In EAC Options, Directories: choose Use this directory, and set it to {inbox_path}.", "eac-inbox",
         detail=None if same and chosen else (
             "the folder is right, but EAC is set to ask every time; choose Use this directory"
             if same else f"EAC's folder is {ex.get('DirectorySpecification') or 'not set'}"))
@@ -433,10 +440,145 @@ def _mode(v) -> int | None:
     return v if isinstance(v, int) else None
 
 
+# ------------------------------------------------------- CUERipper's own setup
+#
+# The recommended ripper since 2026-09-29, when EAC 1.8 on the desktop crashed
+# in every file dialog it opened and CUERipper ripped the same disc cleanly
+# `[SPEC-CDI-012]`. It keeps no registry: `settings.txt`, `Key=Value` lines,
+# written when it *closes* -- in `%APPDATA%\CUERipper` when a file named
+# `user_profiles_enabled` sits beside the program (the portable zip ships
+# one), else beside the program. Key names read from CUERipper 2.2.6's own
+# binaries: `PathFormat`, `SecureMode`, `ComboImage` from CUERipper.exe,
+# `CreateEACLOG` from CUETools.Processor.dll.
+
+CUERIPPER_ENV = "LEMPI_CUERIPPER"
+
+
+def find_cueripper() -> str | None:
+    """CUERipper.exe where it is usually unpacked; `LEMPI_CUERIPPER` names
+    one anywhere else. It has no installer, so there is no one place."""
+    env = os.environ.get(CUERIPPER_ENV)
+    if env:
+        return env if os.path.isfile(env) else None
+    home = os.path.expanduser("~")
+    roots = [os.path.join(os.path.dirname(HERE), "data", "cuetools"),
+             os.environ.get("ProgramFiles", r"C:\Program Files"),
+             os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+             os.path.join(home, "Downloads"), os.path.join(home, "Desktop")]
+    for root in roots:
+        for pat in ("CUERipper.exe", os.path.join("CUETools*", "CUERipper.exe"),
+                    os.path.join("CUETools*", "CUETools*", "CUERipper.exe")):
+            hit = sorted(glob.glob(os.path.join(root, pat)))
+            if hit:
+                return hit[-1]
+    return None
+
+
+def cueripper_settings_path(exe: str) -> str:
+    here = os.path.dirname(exe)
+    if os.path.exists(os.path.join(here, "user_profiles_enabled")):
+        return os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "CUERipper", "settings.txt")
+    return os.path.join(here, "settings.txt")
+
+
+def read_cueripper(path: str) -> dict | None:
+    """`settings.txt` as `{key: value}`; `None` before CUERipper has first
+    closed and written it. Read only."""
+    try:
+        with open(path, encoding="utf-8-sig", errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return None
+    return dict(line.split("=", 1) for line in lines if "=" in line)
+
+
+def music_folder() -> str:
+    """What CUERipper's `%music%` stands for: Windows' own Music folder,
+    wherever it has been moved to."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders") as k:
+            return winreg.QueryValueEx(k, "My Music")[0]
+    except (ImportError, OSError):
+        return os.path.join(os.path.expanduser("~"), "Music")
+
+
+# CUERipper's slider, by the order of its own labels: Burst, Secure, Paranoid.
+CR_MODES = {0: "burst", 1: "secure", 2: "paranoid"}
+# `ComboImage` is the image/tracks drop-down's index. Which index is *image*
+# is not in the binary; until a settings file written with it on image is
+# read, the check asks rather than guesses.
+CR_IMAGE: int | None = None
+TEMPLATE = r"%music%\_Rips\%artist% - %album%\%artist% - %album%.cue"
+
+
+def _template_dir(fmt: str, music: str) -> tuple[str, int]:
+    """Where a path template puts its rips: the fixed folder before the first
+    part that varies, and how many varying folders follow it."""
+    parts = re.split(r"[\\/]", fmt.replace("%music%", music.rstrip("\\/")))[:-1]
+    fixed = []
+    for p in parts:
+        if "%" in p or "[" in p:
+            break
+        fixed.append(p)
+    return "\\".join(fixed), len(parts) - len(fixed)
+
+
+def cueripper_checks(cfg: dict | None, inbox_path: str, music: str, *, ffmpeg: bool) -> list[dict]:
+    """CUERipper's settings, ticked off as `checks` ticks off EAC's."""
+    out = []
+
+    def add(key, label, ok, fix, guide, detail=None):
+        out.append({"key": key, "label": label, "ok": ok, "fix": fix, "guide": ANCHORS[guide],
+                    "detail": detail})
+    add("installed", "CUERipper is found", True, "", "cr-install")
+    add("ffmpeg", "ffmpeg is available", ffmpeg, "Install ffmpeg, which makes the MP3s.", "start")
+    if cfg is None:
+        add("settings", "CUERipper's settings can be read", False,
+            "CUERipper saves its settings when it closes. Set it up, then close it once.", "cr-close")
+        return out
+    def win(p):
+        return str(p or "").replace("/", "\\").rstrip("\\").lower()
+    fmt = cfg.get("PathFormat") or ""
+    where, depth = _template_dir(fmt, music) if fmt else ("", 0)
+    good = win(where) == win(inbox_path) and depth == 1
+    want = (TEMPLATE if win(inbox_path) == win(os.path.join(music, "_Rips")) else
+            inbox_path.rstrip("\\/") + TEMPLATE[len(r"%music%\_Rips"):])
+    add("inbox", "Rips go to the inbox", good,
+        f"In CUERipper's output path box, type {want}", "inbox", detail=None if good else (
+            f"CUERipper's path is {fmt or 'not set'}" if win(where) != win(inbox_path) else
+            "the folder is right, but each rip needs a folder of its own directly inside it"))
+    mode = cfg.get("SecureMode", "")
+    name = CR_MODES.get(int(mode)) if mode.isdigit() else None
+    add("secure", "Secure mode", None if name is None else name != "burst",
+        "Move CUERipper's mode slider to Secure.", "cr-setup",
+        detail="CUERipper is in burst mode: it reads once and never verifies" if name == "burst" else None)
+    img = cfg.get("ComboImage")
+    add("image", "One file for the whole disc (image)",
+        None if CR_IMAGE is None or img is None else img == str(CR_IMAGE),
+        "In CUERipper, choose image in the drop-down beside the audio format.", "cr-setup",
+        detail="confirm it reads image in CUERipper" if CR_IMAGE is None else None)
+    log = cfg.get("CreateEACLOG")
+    add("log", "The log is in EAC's format", None if log is None else log.lower() == "true",
+        "In CUERipper's Options, under Extraction, set EAC log style to True.", "cr-setup",
+        detail="confirm EAC log style is True in CUERipper's Options" if log is None else None)
+    return out
+
+
 def setup(inbox_path: str) -> dict:
-    """The page's setup panel: EAC found or not, each check, and the count
-    still to do."""
-    exe = next((p for p in EAC_EXE if os.path.isfile(p)), None)
-    got = checks(read_eac(), inbox_path, installed=exe is not None, ffmpeg=shutil.which("ffmpeg") is not None)
-    return {"eac": exe, "checks": got, "todo": sum(1 for c in got if c["ok"] is False),
+    """The page's setup panel: which ripper, each check, and the count still
+    to do. CUERipper when it is found; EAC otherwise `[SPEC-CDI-012]`."""
+    ff = shutil.which("ffmpeg") is not None
+    cr = find_cueripper()
+    eac = next((p for p in EAC_EXE if os.path.isfile(p)), None)
+    if cr or not eac:
+        got = (cueripper_checks(read_cueripper(cueripper_settings_path(cr)), inbox_path, music_folder(),
+                                ffmpeg=ff) if cr else
+               [{"key": "installed", "label": "A ripper is installed", "ok": False, "guide": ANCHORS["cr-install"],
+                 "fix": "Download CUETools from cue.tools and unpack it.", "detail": None}])
+        ripper, exe = "CUERipper", cr
+    else:
+        got, ripper, exe = checks(read_eac(), inbox_path, installed=True, ffmpeg=ff), "EAC", eac
+    return {"ripper": ripper, "exe": exe, "checks": got, "todo": sum(1 for c in got if c["ok"] is False),
             "confirm": sum(1 for c in got if c["ok"] is None)}

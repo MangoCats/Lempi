@@ -90,10 +90,11 @@ there.
 | Automation | Pure CLI, built for scripting | **GUI-only** — checked directly against the real 1.8 build, corrected from an earlier, unverified claim; see [SPEC027](SPEC027-cd-ripping-windows-automation.md) |
 | Licence | GPL-2.0-or-later | Freeware, **not open source** |
 
-**Confirmed on real hardware, not only researched — 2026-09-03, see
-[LOG005](../LOG005-cd-ripping-hardware-findings.md).** The same physical
-USB drive failed DAE via `cdrdao` on Linux and extracted cleanly via
-EAC/SPTI on Windows, exactly as the reasoning above predicts.
+**Confirmed on real hardware, 2026-09-03 ([LOG005](../LOG005-cd-ripping-hardware-findings.md)):**
+the same USB drive failed DAE via `cdrdao` on Linux and extracted cleanly via
+EAC/SPTI on Windows. **The desktop rips with CUERipper since 2026-09-29**
+`[SPEC-CDI-012]` -- EAC there crashes in its own file windows -- and CUERipper
+is GPL-2.0-or-later, which settles `[SPEC-RIP-022]` below for that machine.
 
 **`[SPEC-RIP-022]` The one real tradeoff, named rather than absorbed
 silently.** Every other external tool Vipunen depends on — `ffmpeg`,

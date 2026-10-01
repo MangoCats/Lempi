@@ -117,7 +117,51 @@ correcting to match.
 
 ---
 
+## 2026-09-29 — EAC crashes in its own file windows; CUERipper rips the same drive
+
+**`[LOG-RIP-110]` EAC 1.8 on the desktop closes itself whenever it opens a
+file window.** At the first desk session for the import page
+([SPEC056](spec/SPEC056-cd-import.md)), *Copy Image & Create CUE Sheet* opened
+its Save window and EAC vanished -- sometimes before the window drew, sometimes
+on pressing **Save**. **Browse…** on the Directories tab did the same, so it is
+not the rip. Windows' Application log records each one as the same fault: an
+access violation (`0xc0000005`) in code with no module name -- code compiled at
+run time, not in any DLL on disk -- seventeen times between 13:18 and 13:49.
+Changed one at a time, none of these made a difference: burst instead of secure
+mode; a folder with no spaces in its path (`C:\tmp\eac-test`); the
+log checksum off; the metadata provider changed; the two network drives
+disconnected; Windows 8 and Windows 7 compatibility modes; Vipunen stopped;
+and EAC uninstalled and 1.8 reinstalled, its settings backed up first. A 32-bit
+program opening the same Save and folder windows from PowerShell did not crash,
+so Windows' dialogs themselves work. The cause is inside EAC on this machine,
+and not found.
+
+**`[LOG-RIP-120]` It predates the import page, and corrects SPEC027's reading
+of the 2026-09-03 session.** The earliest EAC crash in the Application log and
+in Windows' error reports is **2026-09-03, 23:35** -- the night of
+`[LOG-RIP-040]`'s rip, with the same exception code and the same unnamed-module
+signature. [SPEC027](spec/SPEC027-cd-ripping-windows-automation.md) says that
+session's UI automation "closed the whole application" with one imprecise
+click. The log fits this fault at least as well: a click that opened a file
+window would have closed EAC exactly so. The automation may have been less
+fragile than recorded; the decision it supported `[SPEC-RIP-088]` does not
+rest on it alone.
+
+**`[LOG-RIP-130]` CUERipper, same drive, same afternoon: a clean rip at the
+first attempt.** CUERipper 2.2.6 (CUETools, GPL-2.0-or-later), unpacked with no
+installer, in secure mode, one image file: every track accurately ripped,
+confirmed by AccurateRip and by CTDB, read offset **+6** -- the value EAC's log
+of 2026-09-03 used.
+Its log is in EAC's own format, and the existing parser read it unchanged. Its
+CUE sheet is in the Windows code page rather than UTF-8, found by a curly
+apostrophe in a title. The desktop rips with CUERipper from here on
+`[SPEC-CDI-012]`.
+
+---
+
 **Traceability:** first real-hardware validation of `[SPEC-RIP-052..056]`
 (SPEC025 §5a's failure-handling design); **confirms** `[SPEC-RIP-020]`'s
 tool-choice reasoning (the DAE question) and **corrects** its automation
-claim (`[LOG-RIP-060]`).
+claim (`[LOG-RIP-060]`); records why the desktop rips with CUERipper
+(`[LOG-RIP-110..130]`) and **questions** SPEC027's account of the 2026-09-03
+automation attempt (`[LOG-RIP-120]`).

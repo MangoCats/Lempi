@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for `cd_import.py` `[SPEC056]`: the guide as the panel shows it, EAC's
-setup as the page ticks it off, and the rip inbox as the page reads it.
+"""Tests for `cd_import.py` `[SPEC056]`: the guide as the panel shows it,
+CUERipper's and EAC's setup as the page ticks it off, and the rip inbox as the
+page reads it.
 
     python tools/test_cd_import.py
 """
@@ -47,7 +48,7 @@ def test_every_anchor_exists():
     missing = [a for a in ci.ANCHORS.values() if a not in ids]
     check(not missing, f"anchors the page links but the guide lacks: {missing}")
     page = open(os.path.join(HERE, "console_web", "import.html"), encoding="utf-8").read()
-    keys = set(re.findall(r'data-guide="([a-z]+)"', page)) | set(re.findall(r"help\('([a-z]+)'\)", page))
+    keys = set(re.findall(r'data-guide="([a-z-]+)"', page)) | set(re.findall(r"help\('([a-z-]+)'\)", page))
     check(keys and keys <= set(ci.ANCHORS), f"every ? on the page names a known section: {keys - set(ci.ANCHORS)}")
 
 
@@ -86,6 +87,62 @@ def test_setup_checks():
     check([c["key"] for c in none if c["ok"] is False] == ["installed", "ffmpeg", "settings"],
           f"no EAC at all: said, not failed on, got {[c['key'] for c in none]}")
     check(all(c["guide"] in ci.ANCHORS.values() for c in before.values()), "every fix links the guide")
+
+
+MUSIC = "C:\\Users\\someone\\Music"
+# CUERipper's own default path, as its binary carries it, and the guide's.
+CR_DEFAULT = "%music%\\%artist%\\[%year% - ]%album%\\%artist% - %album%.cue"
+
+
+def test_cueripper_checks():
+    """[SPEC-CDI-012]: CUERipper's settings file, read and ticked off."""
+    folder = tempfile.mkdtemp()
+    path = os.path.join(folder, "settings.txt")
+    with open(path, "w", encoding="utf-8-sig") as f:
+        f.write(f"PathFormat={ci.TEMPLATE}\nSecureMode=1\nComboImage=0\nCreateEACLOG=True\nTestAndCopy=False\n")
+    cfg = ci.read_cueripper(path)
+    check(cfg and cfg["PathFormat"] == ci.TEMPLATE and cfg["SecureMode"] == "1", f"read, BOM and all: {cfg}")
+    check(ci.read_cueripper(os.path.join(folder, "none.txt")) is None, "not yet written: None, not a failure")
+
+    def by(cfg, inbox=INBOX):
+        return {c["key"]: c for c in ci.cueripper_checks(cfg, inbox, MUSIC, ffmpeg=True)}
+    good = by(cfg)
+    check([k for k, c in good.items() if c["ok"] is False] == [], f"set up as the guide says: {good}")
+    check(good["image"]["ok"] is None, "image/tracks is asked about until its index is calibrated")
+    check(all(c["guide"] in ci.ANCHORS.values() for c in good.values()), "every fix links the guide")
+
+    unset = by(None)
+    check(unset["settings"]["ok"] is False and unset["settings"]["guide"] == ci.ANCHORS["cr-close"],
+          f"before CUERipper first closes: say so, and how: {unset['settings']}")
+
+    dflt = by(dict(cfg, PathFormat=CR_DEFAULT))
+    check(dflt["inbox"]["ok"] is False and CR_DEFAULT in dflt["inbox"]["detail"]
+          and ci.TEMPLATE in dflt["inbox"]["fix"], f"CUERipper's own default is not the inbox: {dflt['inbox']}")
+    deep = by(dict(cfg, PathFormat="%music%\\_Rips\\%artist%\\%album%\\%album%.cue"))
+    check(deep["inbox"]["ok"] is False and "folder of its own" in deep["inbox"]["detail"],
+          f"two folders down, the scan would not see it: {deep['inbox']}")
+    own = by(dict(cfg, PathFormat="D:\\Rips\\%artist% - %album%\\%artist% - %album%.cue"), inbox="D:\\Rips\\")
+    check(own["inbox"]["ok"] is True, f"a chosen inbox, written out: {own['inbox']}")
+    check(by(cfg, inbox="D:\\Rips")["inbox"]["fix"].startswith("In CUERipper's output path box, type D:\\Rips\\%artist%"),
+          "the fix names a chosen inbox, not %music%")
+
+    burst = by(dict(cfg, SecureMode="0"))["secure"]
+    check(burst["ok"] is False and "burst" in burst["detail"], f"burst mode: {burst}")
+    check(by(dict(cfg, SecureMode="2"))["secure"]["ok"] is True, "paranoid is secure too")
+    check(by({k: v for k, v in cfg.items() if k != "SecureMode"})["secure"]["ok"] is None, "absent: asked, not guessed")
+    check(by(dict(cfg, CreateEACLOG="False"))["log"]["ok"] is False, "a log Vipunen cannot read is a fix")
+
+    exe = os.path.join(folder, "CUERipper.exe")
+    open(exe, "wb").close()
+    check(ci.cueripper_settings_path(exe) == path, "without user_profiles_enabled: beside the program")
+    open(os.path.join(folder, "user_profiles_enabled"), "wb").close()
+    check(ci.cueripper_settings_path(exe).endswith(os.path.join("CUERipper", "settings.txt"))
+          and not ci.cueripper_settings_path(exe).startswith(folder), "with it: the user's profile")
+    os.environ[ci.CUERIPPER_ENV] = exe
+    try:
+        check(ci.find_cueripper() == exe, "LEMPI_CUERIPPER names one anywhere")
+    finally:
+        del os.environ[ci.CUERIPPER_ENV]
 
 
 CUE = ('PERFORMER "Artist"\nTITLE "Album"\nFILE "{stem}.wav" WAVE\n'
@@ -174,6 +231,7 @@ def main() -> int:
     test_markdown_is_safe()
     test_every_anchor_exists()
     test_setup_checks()
+    test_cueripper_checks()
     test_scan()
     test_stage()
     test_inbox_setting()

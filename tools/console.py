@@ -717,13 +717,13 @@ def build_info(repo_root: str) -> dict:
 
 
 def import_inbox() -> str:
-    """The rip inbox EAC writes into `[SPEC-CDI-020]`."""
+    """The rip inbox the ripper writes into `[SPEC-CDI-020]`."""
     return cd_import.inbox(STATE["jobs"].sidecar, (STATE["roots"] or [""])[0])
 
 
 def import_state() -> dict:
     """The import page's whole view `[SPEC056]`: where rips land, the music
-    folder albums are filed in, EAC's setup, and the rips found."""
+    folder albums are filed in, the ripper's setup, and the rips found."""
     inbox = import_inbox()
     return {"inbox": inbox, "inbox_exists": os.path.isdir(inbox),
             "music_root": (STATE["roots"] or [""])[0], "setup": cd_import.setup(inbox),
@@ -1170,7 +1170,7 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/import/split/passages":
                 return self.send_json(file_passages(self._db(), (qs.get("file") or [""])[0]))
             if p == "/api/import/state":
-                # [SPEC-CDI-025..035]: EAC's setup ticked off, and the rips in
+                # [SPEC-CDI-025..035]: the ripper's setup ticked off, and the rips in
                 # the inbox. Read-only: a refresh every few seconds is harmless.
                 return self.send_json(import_state())
             if p == "/export":
@@ -1323,7 +1323,7 @@ class Handler(BaseHTTPRequestHandler):
                         {"error": "expected {kind: recording|passage, subject_id: ...}"}, code=400)
                 return self.send_json(unflag_subject_everywhere(kind, str(subject_id)))
             if p == "/api/import/inbox":
-                # [SPEC-CDI-020]: the one folder EAC rips into, chosen once.
+                # [SPEC-CDI-020]: the one folder rips go into, chosen once.
                 path = (self.json_body() or {}).get("path", "").strip()
                 if not path or not os.path.isabs(path):
                     return self.send_json({"error": "a full folder path, please"}, code=400)

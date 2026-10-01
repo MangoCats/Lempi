@@ -47,6 +47,11 @@ dialog, on a custom-painted UI that does not expose standard accessible
 button roles to `UIAutomation`'s `Invoke` pattern, only raw bounding
 rectangles a caller must click blind.
 
+> **Questioned 2026-09-29** `[LOG-RIP-120]`: on this desktop EAC crashes
+> whenever it opens a file window, and Windows logged exactly that crash on the
+> night of this test. The application closing may have been that fault rather
+> than a misplaced click, so the fragility measured here is not clean evidence.
+
 ---
 
 ## 2. Three shapes — (c) decided
@@ -65,7 +70,10 @@ drive at all — is now answered independently of EAC specifically
 (`[LOG-RIP-050]`): any tool reaching the drive over SPTI, not only EAC,
 should see the same clean DAE this test measured. Whether a genuinely
 scriptable alternative exists with EAC's own accuracy reputation, or
-whether one would need to be built, is not researched here.
+whether one would need to be built, is not researched here. *Since
+2026-09-29 the desktop rips with CUERipper* `[SPEC-CDI-012]`, whose CUETools
+package also ships a command-line ripper -- a candidate for (b), not yet
+examined.
 
 **`[SPEC-RIP-088]` (c) A person-assisted flow — decided, and built
 2026-09-04.** Vipunen prepares (which disc, which release, where the output

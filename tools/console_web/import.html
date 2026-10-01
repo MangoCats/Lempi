@@ -48,8 +48,8 @@
 <main class="layout">
   <div>
     <h2>Import a CD <button class="chip" id="howto" style="margin-left:.6rem">How to</button></h2>
-    <p class="steps">Put the disc in, choose <b>Action → Copy Image &amp; Create CUE Sheet → Uncompressed…</b>
-      (Alt+F7) in EAC, and wait. The rip appears below by itself.
+    <p class="steps"><span id="ripstep">Put the disc in, press <b>Go</b> in CUERipper, and wait.</span>
+      The rip appears below by itself.
       <button class="help" data-guide="rip" title="How to rip a disc">?</button></p>
 
     <h2>Set up once <button class="help" data-guide="start" title="Before you start">?</button></h2>
@@ -120,10 +120,18 @@ const help = key => S.el('button', { class: 'help', 'data-guide': key, title: 'H
 
 // ---------------------------------------------------------------- the setup
 function renderSetup(s) {
+  // CUERipper when it is found, EAC otherwise [SPEC-CDI-012].
+  const name = s.ripper || 'CUERipper';
   const sum = document.getElementById('setupsum');
   sum.textContent = s.todo === 0
-    ? (s.confirm ? `EAC is set up. ${s.confirm} setting to confirm in EAC yourself.` : 'EAC is set up.')
-    : `${s.todo} thing${s.todo === 1 ? '' : 's'} to set up in EAC, once.`;
+    ? (s.confirm ? `${name} is set up. ${s.confirm} setting${s.confirm === 1 ? '' : 's'} to confirm in ${name} yourself.`
+      : `${name} is set up.`)
+    : `${s.todo} thing${s.todo === 1 ? '' : 's'} to set up in ${name}, once.`;
+  const step = document.getElementById('ripstep');
+  if (name === 'EAC') {
+    step.replaceChildren('Put the disc in, choose ', S.el('b', { text: 'Action → Copy Image & Create CUE Sheet → Uncompressed…' }),
+      ' (Alt+F7) in EAC, and wait.');
+  }
   document.getElementById('checks').replaceChildren(...s.checks.map(c => {
     const mark = c.ok === true ? ['ok', '✓'] : c.ok === false ? ['bad', '✗'] : ['ask', '?'];
     const text = S.el('div', {}, S.el('span', { text: c.label }),
@@ -148,7 +156,7 @@ function renderRips(rips) {
   const box = document.getElementById('rips');
   if (!rips.length) {
     box.replaceChildren(S.el('p', { class: 'empty',
-      text: state.inbox_exists ? 'No rips waiting. Rip a disc with EAC and it appears here.'
+      text: state.inbox_exists ? `No rips waiting. Rip a disc with ${state.setup.ripper || 'CUERipper'} and it appears here.`
         : 'The inbox folder does not exist yet -- choose "use this folder" above.' }));
     return;
   }
