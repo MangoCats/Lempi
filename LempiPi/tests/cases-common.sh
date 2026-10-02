@@ -19,6 +19,33 @@ if lempi_sink_present ""; then bad "sink_present rejects an empty name" "accepte
 # what `[PI3-FOUND-110]` was.
 assert_not_in "$(lempi_sinks)" "Sinks:" "lempi_sinks never returns a header row"
 
+# WirePlumber 0.5 (trixie) has no `Sink endpoints:` section to stop at, and
+# lists a stream by its target's name, and video nodes, after the sinks
+# [LP3-BT-010]. Only the audio sinks are sinks.
+cat > "$VT_STATE/sinks" <<'EOF'
+Audio
+ ├─ Devices:
+ │      41. Built-in Audio                      [alsa]
+ ├─ Sinks:
+ │  *   63. Built-in Audio Stereo               [vol: 0.86]
+ │      70. OontZ_Angle 3 U412                  [vol: 0.50]
+ ├─ Sources:
+ │      80. Built-in Audio Mono                 [vol: 1.00]
+ ├─ Filters:
+ ├─ Streams:
+ │      90. MIDDLETON
+Video
+ ├─ Devices:
+ │      30. bcm2835-isp                         [v4l2]
+ ├─ Sinks:
+ ├─ Sources:
+ │      31. bcm2835-isp (V4L2)
+Settings
+EOF
+assert_eq "$(lempi_sinks | tr '\n' ',')" "Built-in Audio Stereo,OontZ_Angle 3 U412," \
+    "lempi_sinks, WirePlumber 0.5: the audio sinks only"
+if lempi_sink_present "MIDDLETON"; then bad "a stream is not a sink (0.5)" "accepted"; else ok "a stream is not a sink (0.5)"; fi
+
 # The database the listener's choice actually lives in `[PI3-FOUND-280]`.
 printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
 assert_eq "$(lempi_speaker)" "$OONTZ" "lempi_speaker reads the chosen address"

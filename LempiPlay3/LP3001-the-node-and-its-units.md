@@ -129,3 +129,32 @@ since `[GDE-ECHO-300]`, and the file is on the read-only layer besides, so
 nothing will move it. **Expected, per the maintainer**: this Pi has no
 hardware clock, so some date must stand in until chrony answers. Noted
 because anything that runs before chrony's step sees that date.
+
+## 5. A Bluetooth speaker, as an output option
+
+**`[LP3-BT-010]` Since 2026-10-02 the player reaches its output through
+PipeWire, and a Bluetooth speaker is a choice beside the headphone jack.**
+Asked for by the maintainer; until then this node opened the jack directly and
+kept `bluetooth` disabled ("no speaker on this node"). It now runs `lempi02w`'s
+audio stack and speaker helpers, so the settings page's speaker controls --
+offered wherever `lempi-btctl` exists, and drawn here before they could work --
+pair, connect and choose a speaker as they do there. The player opens ALSA's
+`default`; PipeWire routes it to a connected speaker, else to the jack.
+
+What differs from `lempi02w`, and why:
+
+- **The overlay.** Packages went onto the durable layer through
+  `overlayroot-chroot` with the live nameserver lent for the run (the layer's
+  own `resolv.conf` names none); every file through `install-config.sh`; the
+  pairings live on STATE, bound over `/var/lib/bluetooth`; and the Pi 3's UART
+  radio, saved blocked in the image, is saved unblocked on the durable layer.
+- **WirePlumber 0.5** (trixie). `lempi02w`'s seat override is Lua for 0.4; here
+  it is `monitor.bluez.seat-monitoring = disabled`. And 0.5 has no `Sink
+  endpoints` section, which `lempi-common.sh`'s sink parser stopped at: it read
+  streams and video devices as sinks until fixed the same day.
+- **Volume.** WirePlumber starts a device it has not seen at 0.4³, which put the
+  jack at −19.9 dB, 20 dB below the 0 dB it played at before. The jack was set
+  back to 0 dB, and new outputs start there (`wireplumber-volume.conf`).
+
+[`setup-lp3.sh`](setup-lp3.sh) records all of it, and its `--check` reports
+every item as recorded on the durable layer.

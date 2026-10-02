@@ -177,7 +177,18 @@ say "packages"
 # left /media/root-ro read-write ("mount point is busy"). What worked: install
 # live (apt-get, which fetches), then `dpkg -i` the two cached .debs inside
 # overlayroot-chroot, offline. Verified on the durable layer, 2026-10-02.
-for p in overlayroot f2fs-tools chrony python3 sqlite3; do
+#
+# And a Bluetooth speaker as an output option, since 2026-10-02 [LP3-BT-010]:
+# lempi02w's audio stack (LempiPi/setup-appliance.sh says why each is there)
+# -- PipeWire with its ALSA and Bluetooth plugins, WirePlumber, upower (whose
+# absence makes WirePlumber tear down every A2DP endpoint [PI3-FOUND-030]),
+# and the D-Bus bindings lempi-bt-agent is written in. bluez and alsa-utils
+# came with the image; they are listed so the record says so. They went onto
+# the durable layer by apt-get in overlayroot-chroot, with the live
+# resolv.conf's nameserver lent for the run and the layer's own put back.
+for p in overlayroot f2fs-tools chrony python3 sqlite3 \
+         bluez alsa-utils pipewire pipewire-pulse pipewire-alsa wireplumber \
+         libspa-0.2-bluetooth upower python3-dbus python3-gi; do
     item "package $p" "dpkg --admindir=$P/var/lib/dpkg -s $p" \
          "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $p"
 done
@@ -205,7 +216,8 @@ for line in \
     "/var/lempi/log /var/log none bind 0 0" \
     "/var/lempi/etc-ssh /etc/ssh none bind 0 0" \
     "/var/lempi/home-pi /home/pi none bind 0 0" \
-    "/var/lempi/nm-connections /etc/NetworkManager/system-connections none bind 0 0"; do
+    "/var/lempi/nm-connections /etc/NetworkManager/system-connections none bind 0 0" \
+    "/var/lempi/bluetooth /var/lib/bluetooth none bind 0 0"; do
     item "fstab: ${line%% none bind*}" \
          "awk '{\$1=\$1};1' $P/etc/fstab | grep -qxF '$line'" \
          "echo '$line' | sudo tee -a /etc/fstab"
@@ -213,8 +225,10 @@ done
 # [IMPL-VP3-160]: the binds are what make a read-only root livable -- logs, ssh
 # host keys, the home directory and NetworkManager's saved networks. Their
 # contents are copied onto STATE before the binds first mount.
+# And Bluetooth's pairings [LP3-BT-010]: on the overlay, a speaker paired
+# today would be forgotten at the next reboot.
 for pair in log:/var/log etc-ssh:/etc/ssh home-pi:/home/pi \
-            nm-connections:/etc/NetworkManager/system-connections; do
+            nm-connections:/etc/NetworkManager/system-connections bluetooth:/var/lib/bluetooth; do
     d=${pair%%:*}; src=${pair#*:}
     item "STATE holds /var/lempi/$d" "test -d /var/lempi/$d" \
          "sudo mkdir -p /var/lempi/$d && sudo cp -a $src/. /var/lempi/$d/"
@@ -268,9 +282,43 @@ for u in lempi fbui chrony; do
     item "$u enabled" "test -L $P/etc/systemd/system/multi-user.target.wants/$u.service" \
          "sudo systemctl enable $u.service"
 done
-# No speaker on this node: the audio is the Pi's own output.
-item "bluetooth disabled" "! test -e $P/etc/systemd/system/bluetooth.target.wants/bluetooth.service" \
-     "sudo systemctl disable bluetooth.service"
+# A Bluetooth speaker is an output option since 2026-10-02 [LP3-BT-010]; until
+# then this said "No speaker on this node" and kept bluetooth disabled. The
+# units are lempi02w's (setup-appliance.sh writes them there): the keeper
+# that reconnects the chosen speaker, the watchdog for a wedged controller,
+# and the agent that decides who may connect.
+for pair in lempi-speaker.service lempi-speaker.timer lempi-btwatch.service \
+            lempi-btwatch.timer lempi-bt-agent.service; do
+    file_item "$pair" "LempiPlay3/$pair" "/etc/systemd/system/$pair" 644
+done
+file_item "/run/lempi for the agent" LempiPlay3/lempi-tmpfiles.conf /etc/tmpfiles.d/lempi.conf 644
+item "bluetooth enabled" "test -L $P/etc/systemd/system/bluetooth.target.wants/bluetooth.service" \
+     "sudo systemctl enable bluetooth.service"
+# upower ships wanted only by graphical.target, never reached here
+# [PI3-FOUND-030]; multi-user.target is told to want it.
+item "upower wanted by multi-user.target" \
+     "test -L $P/etc/systemd/system/multi-user.target.wants/upower.service" \
+     "sudo systemctl enable upower.service && sudo systemctl add-wants multi-user.target upower.service"
+item "lempi-bt-agent enabled" "test -L $P/etc/systemd/system/multi-user.target.wants/lempi-bt-agent.service" \
+     "sudo systemctl enable lempi-bt-agent.service"
+for t in lempi-speaker lempi-btwatch; do
+    item "$t.timer enabled" "test -L $P/etc/systemd/system/timers.target.wants/$t.timer" \
+         "sudo systemctl enable $t.timer"
+done
+# pi's PipeWire session, kept without a login: the player and the keeper both
+# reach it as pi.
+item "linger for pi" "test -f $P/var/lib/systemd/linger/pi" "sudo loginctl enable-linger pi"
+# The Pi 3's radio is on its UART; the image saved it blocked, and
+# systemd-rfkill restores what is saved at every boot.
+item "bluetooth radio unblocked at boot" \
+     "test \"\$(cat $P/var/lib/systemd/rfkill/platform-soc-amba-3f201000.serial:bluetooth)\" = 0" \
+     "echo 0 | sudo tee /var/lib/systemd/rfkill/platform-soc-amba-3f201000.serial:bluetooth"
+file_item "WirePlumber: bluez monitor not tied to seats [PI3-FOUND-040]" \
+    LempiPlay3/wireplumber-no-seat.conf /etc/wireplumber/wireplumber.conf.d/51-lempi-no-seat.conf 644
+file_item "WirePlumber: a new output starts at the jack's 0 dB" \
+    LempiPlay3/wireplumber-volume.conf /etc/wireplumber/wireplumber.conf.d/52-lempi-volume.conf 644
+file_item "PipeWire: 44.1 kHz, lempi02w's quantum" \
+    LempiPlay3/pipewire-lempi.conf /etc/pipewire/pipewire.conf.d/10-lempi.conf 644
 # fbui owns tty1 [LP3-REP-030]; a login prompt would draw over it.
 item "getty on tty1 disabled" "! test -e $P/etc/systemd/system/getty.target.wants/getty@tty1.service" \
      "sudo systemctl disable getty@tty1.service"
@@ -284,6 +332,13 @@ say ""
 say "helpers and binaries"
 file_item "lempi-preflight" LempiPi/lempi-preflight /usr/local/bin/lempi-preflight 755
 file_item "lempi-db-recover" LempiPi/lempi-db-recover /usr/local/bin/lempi-db-recover 755
+# The speaker helpers, as lempi02w has them [LP3-BT-010].
+file_item "lempi-common.sh" LempiPi/lempi-common.sh /usr/local/lib/lempi-common.sh 644
+file_item "lempi-wait-sink" LempiPi/lempi-wait-sink /usr/local/bin/lempi-wait-sink 755
+file_item "lempi-btctl" LempiPi/lempi-btctl /usr/local/bin/lempi-btctl 755
+file_item "lempi-speaker" LempiPi/lempi-speaker.sh /usr/local/bin/lempi-speaker 755
+file_item "lempi-btwatch" LempiPi/lempi-btwatch.sh /usr/local/bin/lempi-btwatch 755
+file_item "lempi-bt-agent" LempiPi/lempi-bt-agent /usr/local/bin/lempi-bt-agent 755
 item "lempi installed" "test -x $P/usr/local/bin/lempi" "" \
      "build/deploy-appliance.sh $HOST"
 item "fbui installed" "test -x $P/usr/local/bin/fbui" "" \

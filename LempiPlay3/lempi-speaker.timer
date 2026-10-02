@@ -1,0 +1,9 @@
+# lempi02w's unit, as LempiPi/setup-appliance.sh writes it [LP3-BT-010].
+[Unit]
+Description=Check the Lempi speaker every half minute
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=30s
+AccuracySec=5s
+[Install]
+WantedBy=timers.target

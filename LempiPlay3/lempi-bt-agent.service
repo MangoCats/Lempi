@@ -1,0 +1,16 @@
+# lempi02w's unit, as LempiPi/setup-appliance.sh writes it [LP3-BT-010]:
+# without an agent a trusted device barges in and an untrusted one is refused
+# forever [PI3-FOUND-610], [PI3-FOUND-630].
+[Unit]
+Description=Answer BlueZ authorisation, so the appliance decides who connects
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/lempi-bt-agent
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+# lempi02w's unit, as LempiPi/setup-appliance.sh writes it [LP3-BT-010].
+[Unit]
+Description=Keep the Lempi speaker connected
+After=bluetooth.target
+[Service]
+Type=oneshot
+User=pi
+ExecStart=/usr/local/bin/lempi-speaker
+# [PI3-FOUND-670]: a oneshot has no start timeout unless it is given one.
+TimeoutStartSec=45

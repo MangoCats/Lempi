@@ -22,12 +22,27 @@ After=local-fs.target sound.target
 # verified present in the two halves. Renaming a pointer to a deleted file
 # would have produced a setting that looks deliberate and resolves to nothing
 # `[LP3-REP-020]`.
+#
+# **Through PipeWire since 2026-10-02**, so a Bluetooth speaker is an output
+# option here as on lempi02w `[LP3-BT-010]`: the player opens ALSA's `default`,
+# which pipewire-alsa routes to the speaker when one is connected and to the
+# Pi's own headphone jack when not. Until then this unit opened the jack
+# directly. The three steps before the player, and the session environment,
+# are lempi02w's (LempiPi/setup-appliance.sh) for the reasons given there:
+# preflight names the tools recovery needs `[PI-PRE-010]`; the sink wait keeps
+# a player started too early from binding to PipeWire's Dummy Output for good
+# (it exits at once here, where the jack is always a real sink); and the
+# player reaches pi's PipeWire only with pi's runtime directory.
+ExecStartPre=/usr/local/bin/lempi-preflight
 ExecStartPre=/usr/local/bin/lempi-db-recover
+ExecStartPre=/usr/local/bin/lempi-wait-sink
 ExecStart=/usr/local/bin/lempi --listener /var/lempi/listener.db --library /srv/library/library.db --port 5720
 Restart=always
 RestartSec=2
 User=pi
 Nice=-5
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
 
 [Install]
 WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+# lempi02w's unit, as LempiPi/setup-appliance.sh writes it [LP3-BT-010].
+[Unit]
+Description=Notice a Bluetooth controller that has stopped answering
+After=bluetooth.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lempi-btwatch
+# [PI3-FOUND-670]: one 15 s probe, a 3 s unbind settle, an 8 s firmware
+# download and a second 15 s probe: ~41 s.
+TimeoutStartSec=75

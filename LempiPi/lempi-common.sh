@@ -42,8 +42,16 @@ lempi_speaker() {
 # mistaken for a sink -- the whole of `[PI3-FOUND-110]`, which is why this
 # lives in one place now.
 lempi_sinks() {
+    # The FIRST `Sinks:` block -- Audio's, which `wpctl` lists before Video's
+    # -- up to whichever section follows it. It was `/Sinks:/,/Sink
+    # endpoints/`, and WirePlumber 0.5 (trixie) has no endpoints section: the
+    # range ran to the end of the output, and sources, streams and video
+    # devices all came back as sinks. Found on lp3-wifi, 2026-10-02, the first
+    # node to run the speaker helpers on 0.5 [LP3-BT-010].
     wpctl status 2>/dev/null |
-        sed -n '/Sinks:/,/Sink endpoints/p' |
+        awk '/Sinks:/ && !done { on = 1; next }
+             on && /Sink endpoints|Sources:|Filters:|Streams:|^Video|^Settings/ { on = 0; done = 1 }
+             on' |
         sed -n 's/^[^0-9]*[0-9][0-9]*\.[[:space:]]*\(.*\)$/\1/p' |
         sed 's/[[:space:]]*\[vol.*$//; s/[[:space:]]*$//' |
         grep -v '^Dummy Output$'
