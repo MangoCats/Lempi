@@ -25,8 +25,10 @@
   // The heading must be derived the same way the server sorts, or the letters
   // stop being monotonic: strip a leading "The" here while the ORDER BY does
   // not, and "The Beatles" emits a stray B in the middle of the Ts. So this
-  // takes the first character as it stands. Everything outside A-Z lands under
-  // '#', which is where "10,000 Maniacs" and "'Til Tuesday" actually sort.
+  // takes the first character of the very key the server sorted by -- an
+  // artist's sort name, "Beatles, The", where it has one [REQ-VIS-182] --
+  // as it stands. Everything outside A-Z lands under '#', which is where
+  // "10,000 Maniacs" and "'Til Tuesday" actually sort.
   const initial = name => {
     const c = (name || '').trim().toUpperCase()[0] || '#';
     return c >= 'A' && c <= 'Z' ? c : '#';
@@ -179,7 +181,7 @@
     const anchors = new Map();
     let last = null;
     for (const r of rows) {
-      const label = kind === 'tracks' ? r.title : r.name;
+      const label = kind === 'tracks' ? r.title : (r.sort || r.name);
       const L = initial(label);
       if (byLetter && L !== last) {
         last = L;

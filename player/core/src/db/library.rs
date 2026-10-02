@@ -460,6 +460,14 @@ const ARTIST_EXPR: &str = "COALESCE( \
     (SELECT a.name FROM __LIB__.recording_artists ra JOIN __LIB__.artists a ON a.mbid = ra.artist_mbid \
       WHERE ra.mbid = m.mbid ORDER BY ra.weight DESC, a.name LIMIT 1), ft.artist)";
 
+/// The displayed artist's sort key `[REQ-VIS-182]`: the same winning credit
+/// as `ARTIST_EXPR`, by its `sort_name` where it has one -- "Adams, Bryan",
+/// "Beatles, The", as MuLibPlay kept them -- else its name, else the tag.
+const ARTIST_SORT_EXPR: &str = "COALESCE( \
+    (SELECT COALESCE(NULLIF(a.sort_name, ''), a.name) FROM __LIB__.recording_artists ra \
+      JOIN __LIB__.artists a ON a.mbid = ra.artist_mbid \
+      WHERE ra.mbid = m.mbid ORDER BY ra.weight DESC, a.name LIMIT 1), ft.artist)";
+
 /// The displayed album: MusicBrainz **Release** title, then the file's tag.
 const ALBUM_EXPR: &str = "COALESCE( \
     (SELECT rel.title FROM __LIB__.release_recordings rr JOIN __LIB__.releases rel ON rel.mbid = rr.release_mbid \
@@ -496,6 +504,10 @@ pub struct BrowseGroup {
     pub artist: Option<String>,
     pub passages: i64,
     pub plays: i64,
+    /// What an artist is sorted and lettered by `[REQ-VIS-182]`: its sort
+    /// name ("Adams, Bryan"), else its name. Absent for albums.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -899,14 +911,16 @@ impl BrowseFilter {
 }
 
 impl Library {
+    /// Shown by name, sorted by sort name `[REQ-VIS-182]`: Bryan Adams under
+    /// A, The Cars under C. An artist with no sort name sorts by its name.
     pub fn browse_artists(&self, f: &BrowseFilter) -> Result<Vec<BrowseGroup>, DbError> {
         let sql = format!(
-            "SELECT artist, COUNT(*), SUM(plays) FROM ( \
-               SELECT {ARTIST_EXPR} AS artist, {PLAYS_EXPR} AS plays \
+            "SELECT artist, COUNT(*), SUM(plays), NULL, MIN(sort) FROM ( \
+               SELECT {ARTIST_EXPR} AS artist, {ARTIST_SORT_EXPR} AS sort, {PLAYS_EXPR} AS plays \
                  FROM ({NAMED}) m LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id) \
              WHERE artist IS NOT NULL AND artist <> '' \
-               AND (?1 = '' OR artist LIKE ?1) \
-             GROUP BY artist ORDER BY artist COLLATE NOCASE"
+               AND (?1 = '' OR artist LIKE ?1 OR sort LIKE ?1) \
+             GROUP BY artist ORDER BY MIN(sort) COLLATE NOCASE, artist COLLATE NOCASE"
         );
         self.groups(&sql, rusqlite::params![f.like()], false)
     }
@@ -939,6 +953,8 @@ impl Library {
                     passages: r.get(1)?,
                     plays: r.get::<_, Option<i64>>(2)?.unwrap_or(0),
                     artist: if with_artist { r.get(3)? } else { None },
+                    // Only the artist listing selects a fifth column.
+                    sort: r.get::<_, Option<String>>(4).ok().flatten(),
                 })
             })
             .map_err(|e| DbError::Query(e.to_string()))?;
@@ -2707,6 +2723,48 @@ mod tests {
         let lib = Library::open(&path).unwrap();
         let got = lib.random_radio(1).expect("the refill query must run against the canonical schema");
         assert_eq!(got.len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `[REQ-VIS-182]` Shown by name, sorted by sort name, a missing sort name
+    /// sorting by the name -- and the key sent along for the letter bar.
+    #[test]
+    fn artists_sort_by_sort_name_and_show_by_name() {
+        let dir = std::env::temp_dir().join(format!("lempi-sortname-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lib.db");
+        let _ = std::fs::remove_file(&path);
+        {
+            let c = rusqlite::Connection::open(&path).unwrap();
+            c.execute_batch(include_str!("../../../../sql/schema.sql")).unwrap();
+            for (n, (name, sort)) in [("Cyndi Lauper", None), ("The Cars", Some("Cars, The")),
+                                       ("Bryan Adams", Some("Adams, Bryan"))].iter().enumerate() {
+                let n = n as i64 + 1;
+                c.execute("INSERT INTO files (file_id,audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen) \
+                           VALUES (?1,?2,'/x.mp3',1,1.0,'mp3',1000,'t','t')", rusqlite::params![n, format!("m{n}")]).unwrap();
+                c.execute("INSERT INTO passages (passage_id,file_id,kind,start_ms,end_ms,boundary_src) \
+                           VALUES (?1,?1,'radio',0,1000,'x')", [n]).unwrap();
+                c.execute("INSERT INTO recordings (mbid,title,source) VALUES (?1,'t','mb')", [format!("r{n}")]).unwrap();
+                c.execute("INSERT INTO passage_recordings (passage_id,mbid,weight,source) VALUES (?1,?2,1.0,'mb')",
+                          rusqlite::params![n, format!("r{n}")]).unwrap();
+                c.execute("INSERT INTO artists (mbid,name,sort_name,source) VALUES (?1,?2,?3,'mb')",
+                          rusqlite::params![format!("a{n}"), name, sort]).unwrap();
+                c.execute("INSERT INTO recording_artists (mbid,artist_mbid,weight,source) VALUES (?1,?2,1.0,'mb')",
+                          rusqlite::params![format!("r{n}"), format!("a{n}")]).unwrap();
+            }
+        }
+        let lib = Library::open(&path).unwrap();
+        let got: Vec<(String, Option<String>)> = lib
+            .browse_artists(&BrowseFilter::default())
+            .unwrap()
+            .into_iter()
+            .map(|g| (g.name, g.sort))
+            .collect();
+        assert_eq!(got, vec![("Bryan Adams".into(), Some("Adams, Bryan".into())),
+                             ("The Cars".into(), Some("Cars, The".into())),
+                             ("Cyndi Lauper".into(), Some("Cyndi Lauper".into()))]);
+        let found = lib.browse_artists(&BrowseFilter { q: Some("Adams".into()), ..Default::default() }).unwrap();
+        assert_eq!(found.len(), 1, "a search by either finds it");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

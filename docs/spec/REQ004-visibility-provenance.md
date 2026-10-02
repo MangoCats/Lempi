@@ -138,6 +138,8 @@ Artist and album have **no filename fallback**. Guessing a performer out of a pa
 
 **Browsing groups by the *displayed* name**, resolved exactly as `[REQ-VIS-170]` resolves it: MusicBrainz where it has an answer, the file's tag where it does not. What you can browse by is therefore precisely what you can see, rather than a second naming scheme that disagrees with the player.
 
+**`[REQ-VIS-182]` Artists are shown by name and sorted by sort name**, as MuLibPlay did: Bryan Adams under A, The Cars under C. The key is the displayed credit's `artists.sort_name` ("Adams, Bryan", "Cars, The"), else its name; the alphabet bar's letters come from the same key, so they stay in order. Asked for 2026-10-01. Measured that day: 467 of 565 artists have one, all inherited from MuLibPlay; the 98 added since by MusicBrainz identification have none yet, and sort by name.
+
 > **The player builds its own tag index, in the background, on first run.** Album names come from the files' own tags and reading them takes ~18 s for 5,590 files — fine once, impossible per request. Doing it at startup on a spare thread is the difference between a feature that works and one that waits for someone to remember a command: the browse pages first shipped needing a manual scan, and came up empty for exactly that reason. It is incremental, so every later start is a no-op, and it is off the audio path entirely. `tagscan` remains for libraries prepared before they are ever played, and for `--all` after files are re-tagged.
 >
 > **Browsing never dead-ends on an artist.** An artist with no album names yet shows their tracks instead, with a note saying why. "No albums" is a useless answer to "show me this artist", and while the background scan is still running it is a temporary one as well.
