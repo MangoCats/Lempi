@@ -95,6 +95,20 @@ cover, and the phone still held one of a release it had been sent before. The
 second bundle named 3,005 files (1,083 pictures, 123 MB). After it, on the Moto
 G, 16,076 of 16,076 passages shared with the hub show the hub's cover.
 
+**`[SPEC-COV-060]` Every album Browse shows is asked about, and only what it
+lacks is filled.** A probe of the Cover Art Archive, 2026-10-02, against the 903
+albums (chosen releases) behind radio passages: the archive held the front of
+all 17 showing none on some or all tracks -- that week's CDs, never asked,
+because the fetcher asked only about files tagged as having no picture and a
+CD add writes no tags -- and 41 backs for the 171 showing none on some or all.
+So `fetch_cover_art.py` asks about each such album lacking a front or a back
+of its own, fills only the missing side (MuLibPlay's, a folder's or an earlier
+fetch's is never replaced), asks again once its last asking (`caa_asked_at`)
+is 60 days old, and takes an archive that fails as unasked, not as empty. A CD
+add asks for its own disc's cover as soon as the release is recorded. The
+Export page's diff compares which sides each release has, so a speaker is
+sent a side it lacks with one file of the album, payload alone.
+
 ---
 
-**Traceability:** `[SPEC-COV-010..050]` · from the maintainer's direction of 2026-09-27 · refines `[REQ-AND-205]`, `[SPEC-PL-105]`, `[REQ-VIS-170]`
+**Traceability:** `[SPEC-COV-010..060]` · from the maintainer's direction of 2026-09-27 · refines `[REQ-AND-205]`, `[SPEC-PL-105]`, `[REQ-VIS-170]`

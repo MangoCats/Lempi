@@ -24,6 +24,7 @@ meant to be left running, and it can be stopped at any point with Ctrl-C.
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 
@@ -45,6 +46,9 @@ RATE_S = 1.0
 
 # Browse pages at 100; a recording on more than that is rare but real.
 PAGE = 100
+
+# A MusicBrainz recording id; anything else is a local placeholder.
+MBID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 # Columns the selection needs and the first pass did not collect. Added here
 # rather than in Lempi's schema because these are Vipunen's to fill: the player
@@ -201,11 +205,14 @@ def main() -> int:
 
     # Only recordings the library actually uses, and only those without links
     # already -- that is what makes the run resumable.
+    # And only MusicBrainz ids: a `local:` placeholder names nothing MusicBrainz
+    # knows, and asking about one is a failed request -- 148 of the 313 waiting
+    # on 2026-10-02 were placeholders.
     todo = [r[0] for r in conn.execute(
         "SELECT DISTINCT r.mbid FROM recordings r "
         "  JOIN passage_recordings pr ON pr.mbid = r.mbid "
         " WHERE NOT EXISTS (SELECT 1 FROM release_recordings rr WHERE rr.mbid = r.mbid) "
-        " ORDER BY r.mbid")]
+        " ORDER BY r.mbid") if MBID.match(r[0] or "")]
     if args.limit:
         todo = todo[: args.limit]
 

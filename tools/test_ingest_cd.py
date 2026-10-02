@@ -326,6 +326,8 @@ def test_end_to_end():
         names = sorted(os.listdir(home))
         check(names == ["Artist - Album.cue", "Artist - Album.mp3"], f"filed, WAV removed, got {names}")
         check(r["identified"] == 2 and r.get("wav_removed"), f"both tracks identified, got {r}")
+        check("rel-E" in COVERS_ASKED and (r.get("cover") or {}).get("fronts") == 1,
+              f"the disc's cover asked for, and its front kept: {r.get('cover')} {COVERS_ASKED}")
         cue = open(os.path.join(home, "Artist - Album.cue"), encoding="utf-8").read()
         check('FILE "Artist - Album.mp3" MP3' in cue, f"the CUE names the MP3: {cue!r}")
         c = sqlite3.connect(db)
@@ -554,6 +556,14 @@ def test_occasions():
         ("rec-x1", "user.childrens"), ("rec-x1", "user.christmas"),
         ("rec-x2", "user.childrens"), ("rec-x2", "user.christmas")], f"commit_rip marks the disc: {r} {marked}")
     c.close()
+
+
+# [SPEC-COV-060]: an add asks the archive for its disc's cover. Faked for the
+# whole suite -- no test reaches the network -- and what was asked, kept.
+COVERS_ASKED = []
+ingest_cd.fetch_cover_art.covers = (
+    lambda mbid, group=False: COVERS_ASKED.append(mbid) or (bytes([0xFF, 0xD8, 0xFF]) + b"f" * 400, None))
+ingest_cd.fetch_cover_art.time.sleep = lambda s: None
 
 
 def main() -> int:

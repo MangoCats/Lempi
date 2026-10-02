@@ -187,6 +187,23 @@ def test_holds_against_a_speaker_with_and_without_the_column():
         os.unlink(db)
 
 
+def test_covers_tolerate_a_library_with_none():
+    """`[SPEC-COV-060]` A speaker no cover ever reached has no `cover_art`:
+    every local cover is local-only, and the diff does not fail."""
+    db = local_db("CREATE TABLE cover_art (release_mbid TEXT PRIMARY KEY, front BLOB, back BLOB, "
+                  "source TEXT, fetched_at TEXT);"
+                  "INSERT INTO cover_art VALUES ('rel-1', zeroblob(300), NULL, 's', 't');"
+                  "INSERT INTO cover_art VALUES ('rel-tiny', zeroblob(10), NULL, 's', 't');")
+    real = rp.run_remote_sql
+    rp.run_remote_sql = lambda remote, sql, timeout=10.0: {"ok": False, "error": "Error: no such table: cover_art"}
+    try:
+        d = md.run(db, "pi@speaker-a:/lempi.db", tables=["covers"])["tables"]["covers"]
+        check(d["local_only"] == [["rel-1"]], f"a picture, not a stub: {d}")
+    finally:
+        rp.run_remote_sql = real
+        os.unlink(db)
+
+
 def test_unreachable_remote_reports_cleanly():
     db = local_db("")
     real = rp.run_remote_sql
@@ -208,6 +225,7 @@ def main() -> int:
     test_recordings_machine_disagreement_is_not_a_conflict()
     test_passages_join_produces_audio_md5_keyed_rows()
     test_holds_against_a_speaker_with_and_without_the_column()
+    test_covers_tolerate_a_library_with_none()
     test_unreachable_remote_reports_cleanly()
 
     print()

@@ -1347,7 +1347,7 @@ class Runner:
         code, _ = self._spawn(job_id, "diff", [sys.executable, os.path.join(tools, "mesh_diff.py"),
                                                self.library, payload["remote"], "--table", "files",
                                                "--table", "holds", "--table", "credits", "--table", "albums",
-                                               "--table", "sort_names", "-o", diff_path])
+                                               "--table", "sort_names", "--table", "covers", "-o", diff_path])
         if code != 0 or not os.path.isfile(diff_path):
             self._emit(job_id, "error", f"the diff against {payload['peer']} failed (exit {code}): "
                        "nothing was built", stage="diff")
@@ -1377,10 +1377,20 @@ class Runner:
         # one file of theirs carries it, in its recordings' credits.
         unsorted = {k[0] for k in (tables.get("sort_names") or {"local_only": []})["local_only"]}
         sort_md5s = self._a_file_per_artist(unsorted) - missing
-        present = sorted(hold_md5s | credit_md5s | album_md5s | sort_md5s)
+        # And a cover side it lacks `[SPEC-COV-060]` -- a release new to it,
+        # or one whose front or back only this library has. One file of the
+        # release carries the release, and its cover beside the payload.
+        cov = tables.get("covers") or {"local_only": [], "differ": []}
+        bare = {k[0] for k in cov["local_only"]} | {
+            d["key"][0] for d in cov["differ"]
+            if (d["local"].get("front") and not d["peer"].get("front"))
+            or (d["local"].get("back") and not d["peer"].get("back"))}
+        cover_md5s = self._a_file_per_release(bare) - missing
+        present = sorted(hold_md5s | credit_md5s | album_md5s | sort_md5s | cover_md5s)
         result.update(missing=len(md5s), peer_only=len(files["peer_only"]), albums=self._albums_of(md5s),
                       holds=len([k for k in changed if k[0] not in missing]), hold_files=len(hold_md5s),
-                      credit_files=len(credit_md5s), album_files=len(album_md5s), sort_names=len(sort_md5s))
+                      credit_files=len(credit_md5s), album_files=len(album_md5s), sort_names=len(sort_md5s),
+                      covers=len(cover_md5s))
         if hold_md5s:
             self._emit(job_id, "log", f"{result['holds']} hold(s) on {len(hold_md5s)} file(s) "
                        f"{payload['peer']} already has differ from this library's", stage="diff")
@@ -1393,9 +1403,12 @@ class Runner:
         if sort_md5s:
             self._emit(job_id, "log", f"artists' sort names {payload['peer']} lacks go with "
                        f"{len(sort_md5s)} file(s) of theirs", stage="diff")
+        if cover_md5s:
+            self._emit(job_id, "log", f"cover art {payload['peer']} lacks goes with {len(cover_md5s)} "
+                       "file(s), one per album", stage="diff")
         if not md5s and not present:
             self._emit(job_id, "log", f"{payload['peer']} already has every file this library has, "
-                       "every hold, artist credit, album and sort name", stage="diff")
+                       "every hold, artist credit, album, sort name and cover", stage="diff")
             self._save_result(job_id, result)
             return self._finish(job_id, "done")
 
@@ -1474,6 +1487,40 @@ class Runner:
                     "JOIN passage_recordings pr ON pr.mbid = ra.mbid "
                     "JOIN passages p ON p.passage_id = pr.passage_id JOIN files f ON f.file_id = p.file_id "
                     f"WHERE ra.artist_mbid IN ({','.join('?' * len(chunk))}) GROUP BY ra.artist_mbid", chunk))
+        finally:
+            c.close()
+        return out
+
+    def _a_file_per_release(self, releases: set) -> set:
+        """One `audio_md5` per release in `releases` with a file here whose
+        recording that release carries -- enough for the payload to name the
+        release, and so carry its cover."""
+        out: set = set()
+        if not releases:
+            return out
+        ids = sorted(releases)
+        c = lempi_db.connect(self.library, lempi_db.ROLE_LIBRARY)
+        try:
+            # The releases a payload carries (payload.releases_for): chosen, or
+            # with a front. Any other would be listed here on every run and
+            # never arrive. Either half is skipped on a library without its
+            # column or table -- sql/schema.sql has neither.
+            picks = []
+            if any(r[1] == "chosen" for r in c.execute("PRAGMA table_info(release_recordings)")):
+                picks.append("rr.chosen = 1")
+            if c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cover_art'").fetchone():
+                picks.append("EXISTS (SELECT 1 FROM cover_art a WHERE a.release_mbid = rr.release_mbid "
+                             "AND a.front IS NOT NULL)")
+            if not picks:
+                return out
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                out.update(m for (_, m) in c.execute(
+                    "SELECT rr.release_mbid, MIN(f.audio_md5) FROM release_recordings rr "
+                    "JOIN passage_recordings pr ON pr.mbid = rr.mbid "
+                    "JOIN passages p ON p.passage_id = pr.passage_id JOIN files f ON f.file_id = p.file_id "
+                    f"WHERE rr.release_mbid IN ({','.join('?' * len(chunk))}) "
+                    f"AND ({' OR '.join(picks)}) GROUP BY rr.release_mbid", chunk))
         finally:
             c.close()
         return out

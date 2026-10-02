@@ -88,6 +88,19 @@ TABLES = {
         "value": ("sort_name",),
         "manual_field": None,
     },
+    "covers": {
+        # Which sides of a release's cover each side holds `[SPEC-COV-060]` --
+        # whether, not the image: the bytes are the bundle's to carry. A
+        # speaker is sent a side it lacks; one it has is its own.
+        "sql": ("SELECT release_mbid, COALESCE(LENGTH(front), 0) >= 256 AS front, "
+                "COALESCE(LENGTH(back), 0) >= 256 AS back FROM cover_art "
+                "WHERE COALESCE(LENGTH(front), 0) >= 256 OR COALESCE(LENGTH(back), 0) >= 256"),
+        "key": ("release_mbid",),
+        "value": ("front", "back"),
+        "manual_field": None,
+        # A library no cover ever reached has no table: that is no covers.
+        "optional_table": True,
+    },
     "albums": {
         # Each recording's chosen release -- what names its album in Browse
         # `[SPEC-CDI-098]`. `chosen` is read as NULL where a library has no
@@ -129,7 +142,12 @@ def fetch_local(db_path: str, table: str) -> dict:
     conn.row_factory = sqlite3.Row
     try:
         sql = _sql(table, lambda t, c: conn.execute(_HAS_COLUMN.format(table=t, column=c)).fetchone() is not None)
-        rows = [dict(r) for r in conn.execute(sql)]
+        try:
+            rows = [dict(r) for r in conn.execute(sql)]
+        except sqlite3.OperationalError as e:
+            if not (TABLES[table].get("optional_table") and "no such table" in str(e)):
+                raise
+            rows = []
     finally:
         conn.close()
     return {_key_of(r, TABLES[table]["key"]): r for r in rows}
@@ -145,6 +163,8 @@ def fetch_remote(remote: str, table: str) -> dict:
             raise RuntimeError(f"{table}: {probe['error']}")
         return bool(probe["rows"])
     result = rp.run_remote_sql(remote, _sql(table, has_column))
+    if not result["ok"] and TABLES[table].get("optional_table") and "no such table" in str(result["error"]):
+        return {}
     if not result["ok"]:
         raise RuntimeError(f"{table}: {result['error']}")
     return {_key_of(r, TABLES[table]["key"]): r for r in result["rows"]}

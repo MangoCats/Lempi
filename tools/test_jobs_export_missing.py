@@ -139,6 +139,13 @@ def test_credits(tmp):
                   (pid, mbid))
     c.execute("INSERT INTO artists (mbid, name, source) VALUES ('art-3', 'Three', 's')")
     c.execute("INSERT INTO recording_artists (mbid, artist_mbid, weight, source) VALUES ('r3', 'art-3', 1.0, 's')")
+    # rel-new: chosen for r3's file. rel-back: on r1, whose file is missing (it brings its own).
+    # rel-theirs: the speaker's cover only.
+    c.execute("CREATE TABLE IF NOT EXISTS releases (mbid TEXT PRIMARY KEY, title TEXT NOT NULL, release_date TEXT, source TEXT NOT NULL)")
+    c.execute("INSERT INTO releases (mbid, title, source) VALUES ('rel-new', 'N', 's'), ('rel-back', 'B', 's'), ('rel-theirs', 'T', 's')")
+    c.execute("ALTER TABLE release_recordings ADD COLUMN chosen INTEGER DEFAULT 0")   # as the release tools add it
+    c.execute("INSERT INTO release_recordings (release_mbid, mbid, position, source, chosen) VALUES "
+              "('rel-new', 'r3', 1, 's', 1), ('rel-back', 'r1', 1, 's', 1), ('rel-theirs', 'r3', 2, 's', 0)")
     c.commit()
     c.close()
     real = r._spawn
@@ -152,6 +159,11 @@ def test_credits(tmp):
                                       "peer_only": [], "differ": [], "conflict": []}
             d["tables"]["albums"] = {"local_only": [["r3", "rel-x"]], "peer_only": [], "differ": [], "conflict": []}
             d["tables"]["sort_names"] = {"local_only": [["art-3"]], "peer_only": [], "differ": [], "conflict": []}
+            d["tables"]["covers"] = {"local_only": [["rel-new"]], "peer_only": [],
+                                     "differ": [{"key": ["rel-back"], "local": {"front": 1, "back": 1},
+                                                 "peer": {"front": 1, "back": 0}},
+                                                {"key": ["rel-theirs"], "local": {"front": 0, "back": 0},
+                                                 "peer": {"front": 1, "back": 0}}], "conflict": []}
             json.dump(d, open(path, "w", encoding="utf-8"))
         return code, out
     r._spawn = with_credits
@@ -162,6 +174,8 @@ def test_credits(tmp):
     present = open(bundle[bundle.index("--present-md5-file") + 1], encoding="utf-8").read().split()
     check("albums" in diff and j["result"]["album_files"] == 1, f"albums asked for, and said: {j['result']}")
     check("sort_names" in diff and j["result"]["sort_names"] == 1, f"sort names asked for, and said: {j['result']}")
+    check("covers" in diff and j["result"]["covers"] == 1,
+          f"a cover side the speaker lacks goes; one only it has does not: {j['result']}")
     check(present == ["md5-3"] and j["result"]["credit_files"] == 1,
           f"only the file the speaker has; a missing one brings its own, one with no file here nothing: "
           f"{present} {j['result']}")

@@ -60,6 +60,7 @@ import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import audio_duration        # noqa: E402
 import cd_toc                 # noqa: E402
 import artist_sort            # noqa: E402  -- an artist's sort name [REQ-VIS-182]
+import fetch_cover_art        # noqa: E402  -- the disc's cover [SPEC-COV-060]
 import fetch_releases         # noqa: E402  -- get(), UA, rate-limit/backoff
 import ingest_folder          # noqa: E402  -- audio_md5(), LOCAL_PREFIX
 import passage_hold           # noqa: E402  -- a damaged track held back [SPEC-HOLD-010]
@@ -366,6 +367,29 @@ def record_release(conn, release: dict, tracks) -> int:
             (rid, mbid, t.get("position") or position, t.get("length"), 0 if other_disc else 1, disc))
         linked += 1
     return linked
+
+
+def fetch_disc_cover(conn, release_id: str | None) -> dict | None:
+    """The disc's own cover, front and back, from the Cover Art Archive
+    `[SPEC-COV-060]`, once its release is recorded -- only the sides it lacks.
+    Asked for 2026-10-02: that week's CDs had no front at all, and the archive
+    had every one. A failure is said and does not fail the add; the cover
+    fetcher asks again later."""
+    if not release_id:
+        return None
+    try:
+        fetch_cover_art.prepare(conn)
+        todo = fetch_cover_art.wanted(conn, 0, [release_id])
+        if not todo:
+            return {"asked": 0, "fronts": 0, "backs": 0, "unavailable": 0}
+        say("asking the Cover Art Archive for the cover ...")
+        n = fetch_cover_art.fetch_for(conn, todo, say=lambda s: None)
+        say("  " + ("the archive did not answer; tools/fetch_cover_art.py asks again" if n["unavailable"] else
+                    f"front {'found' if n['fronts'] else 'not there'}, back {'found' if n['backs'] else 'not there'}"))
+        return n
+    except Exception as e:  # a cover is not worth failing an add over
+        say(f"  the cover was not fetched ({e}); tools/fetch_cover_art.py can, later")
+        return None
 
 
 def _artists_for(release: dict, position: int) -> list[tuple[str, str, str | None]]:
@@ -978,6 +1002,8 @@ def ingest_tracks(db_path: str, folder: str, release: str | None, into: str | No
                                disc_outcome, releases, rip["rip_report"], secret.acoustid_key(required=False),
                                chosen=bool(release), disc_id=disc_id, occasions=occasions)
         conn.commit()
+        if result.get("album_linked"):
+            result["cover"] = fetch_disc_cover(conn, releases[0].get("id"))
     finally:
         conn.close()
 
@@ -1084,6 +1110,8 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
                             rip_report, secret.acoustid_key(required=False), chosen=bool(release),
                             occasions=occasions)
         conn.commit()
+        if result.get("album_linked"):
+            result["cover"] = fetch_disc_cover(conn, releases[0].get("id"))
     finally:
         conn.close()
 
