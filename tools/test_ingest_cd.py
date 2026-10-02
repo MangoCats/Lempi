@@ -155,6 +155,12 @@ def test_record_release():
     rows = {tuple(r) for r in c.execute("SELECT release_mbid, mbid, chosen FROM release_recordings")}
     check(n == 1 and rows == {("rel-hits", "rec-1", 0), ("rel-A", "rec-1", 1)},
           f"one linked, the compilation no longer chosen, a recording not on the disc there not linked: {n} {rows}")
+    print("record_release: a second disc with the same recording links it, and leaves the first disc's choice")
+    for _ in range(2):
+        n2 = ingest_cd.record_release(c, RELEASES[1], [(1, "rec-1")])
+        rows = {tuple(r) for r in c.execute("SELECT release_mbid, mbid, chosen FROM release_recordings")}
+        check(n2 == 1 and rows == {("rel-hits", "rec-1", 0), ("rel-A", "rec-1", 1), ("rel-B", "rec-1", 0)},
+              f"settled, however often it is run: {rows}")
     c.close()
 
 

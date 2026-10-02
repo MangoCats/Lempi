@@ -50,8 +50,10 @@ def chosen_editions(conn) -> dict[str, set[str]]:
             out.setdefault(rid, set()).add(mbid)
     linked = set()
     try:
+        # Linked at all, chosen or not: a recording on two discs is chosen
+        # for one of them only, and is done for both.
         linked = {(r, m) for r, m in conn.execute(
-            "SELECT release_mbid, mbid FROM release_recordings WHERE chosen = 1 AND source = 'cd:import'")}
+            "SELECT release_mbid, mbid FROM release_recordings WHERE source = 'cd:import'")}
     except Exception:
         pass    # no table, or no chosen column yet: nothing linked
     return {rid: {m for m in mbids if (rid, m) not in linked} for rid, mbids in out.items()

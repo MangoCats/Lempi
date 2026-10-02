@@ -311,7 +311,8 @@ def record_release(conn, release: dict, tracks) -> int:
     radio passages had no album there, on the desktop and every speaker.
 
     `chosen` is set for these recordings alone and moved off any other
-    release they were on; `source` is `cd:import`, which `choose_release.py`
+    release they were on -- unless another disc held here has it already,
+    which keeps it; `source` is `cd:import`, which `choose_release.py`
     leaves standing -- knowing which record a rip came from settles it.
     Returns how many recordings were linked."""
     rid = release.get("id")
@@ -348,12 +349,20 @@ def record_release(conn, release: dict, tracks) -> int:
         if t is None or (t.get("recording") or {}).get("id") != mbid:
             continue    # not this release's recording at this place: not linked
         disc = next((m.get("position") for m in release.get("media") or [] if t in (m.get("tracks") or [])), None)
-        conn.execute("UPDATE release_recordings SET chosen = 0 WHERE mbid = ?1", (mbid,))
+        # A recording on two discs held here -- a hit on its album and on a
+        # compilation; thirteen such on 2026-10-01 -- keeps the first disc's
+        # choice. Each taking it from the last made the choice depend on
+        # order, and a backfill that never settled.
+        other_disc = conn.execute(
+            "SELECT 1 FROM release_recordings WHERE mbid = ?1 AND release_mbid <> ?2 "
+            "AND chosen = 1 AND source = 'cd:import'", (mbid, rid)).fetchone() is not None
+        if not other_disc:
+            conn.execute("UPDATE release_recordings SET chosen = 0 WHERE mbid = ?1", (mbid,))
         conn.execute(
             "INSERT INTO release_recordings (release_mbid, mbid, position, source, track_length_ms, chosen, disc) "
-            "VALUES (?1, ?2, ?3, 'cd:import', ?4, 1, ?5) "
-            "ON CONFLICT(release_mbid, mbid) DO UPDATE SET chosen = 1, source = 'cd:import'",
-            (rid, mbid, t.get("position") or position, t.get("length"), disc))
+            "VALUES (?1, ?2, ?3, 'cd:import', ?4, ?5, ?6) "
+            "ON CONFLICT(release_mbid, mbid) DO UPDATE SET chosen = excluded.chosen, source = 'cd:import'",
+            (rid, mbid, t.get("position") or position, t.get("length"), 0 if other_disc else 1, disc))
         linked += 1
     return linked
 
