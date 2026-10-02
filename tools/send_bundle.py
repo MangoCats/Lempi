@@ -42,6 +42,8 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
+import time
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -72,13 +74,75 @@ def must(host: str, cmd: str, what: str, stdin: bytes | None = None) -> str:
     return out
 
 
-def audio_tar(audio: str) -> tuple[bytes, int, int]:
-    """The bundle's audio as a tar stream with sane modes -- 0644 files, 0755
-    folders, whatever Windows reports -- so nothing lands world-writable, the
-    fault that once made the whole library so."""
-    buf = io.BytesIO()
+class _Closed(Exception):
+    """The far end stopped reading; its exit status and output say why."""
+
+
+def ssh_stream(host: str, cmd: str, feed) -> tuple[int, str]:
+    """`ssh`, with its input written by `feed(pipe)` as it is produced rather
+    than held whole in memory first -- 712 MB was, on 2026-10-01, before a
+    byte of it moved. Output goes to a file, so a chatty far end cannot fill
+    a pipe and stall the send."""
+    with tempfile.TemporaryFile() as out:
+        p = subprocess.Popen(["ssh", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=10",
+                              "-o", "BatchMode=yes", host, cmd],
+                             stdin=subprocess.PIPE, stdout=out, stderr=subprocess.STDOUT)
+        try:
+            feed(p.stdin)
+            p.stdin.close()
+        except _Closed:
+            pass
+        except BaseException:
+            p.kill()
+            p.wait()
+            raise
+        rc = p.wait()
+        out.seek(0)
+        return rc, out.read().decode("utf-8", errors="replace").rstrip()
+
+
+class Progress:
+    """A pipe that says how far it has got: about every tenth of the way, and
+    at least every 30 s, with the rate and the time left. The same 712 MB took
+    16 minutes to a Pi Zero 2W on wifi, and said nothing for all of them."""
+
+    def __init__(self, pipe, total: int, every: float = 30.0):
+        self.pipe, self.total, self.every = pipe, max(total, 1), every
+        self.sent, self.start = 0, time.monotonic()
+        self.said_at, self.said_tenth = self.start, 0
+
+    def write(self, b) -> int:
+        try:
+            self.pipe.write(b)
+        except OSError as e:          # BrokenPipeError, or EINVAL on Windows
+            raise _Closed() from e
+        self.sent += len(b)
+        now, tenth = time.monotonic(), self.sent * 10 // self.total
+        if tenth > self.said_tenth or now - self.said_at >= self.every:
+            self.said_at, self.said_tenth = now, tenth
+            rate = self.sent / max(now - self.start, 1e-6)
+            left = max(self.total - self.sent, 0) / rate if rate else 0
+            say(f"    sent {self.sent / 1e6:.1f} of {self.total / 1e6:.1f} MB "
+                f"({min(self.sent * 100 // self.total, 100)}%), {rate / 1e6:.2f} MB/s"
+                + (f", about {left / 60:.0f} min left" if left >= 60 else ""))
+        return len(b)
+
+
+def audio_size(audio: str) -> tuple[int, int]:
+    """Files and bytes under `audio`, to say before the copy how big it is."""
     files = size = 0
-    with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as tar:
+    for root, _, names in os.walk(audio):
+        for n in names:
+            files += 1
+            size += os.path.getsize(os.path.join(root, n))
+    return files, size
+
+
+def audio_tar(audio: str, out) -> None:
+    """The bundle's audio as a tar stream into `out`, with sane modes -- 0644
+    files, 0755 folders, whatever Windows reports -- so nothing lands
+    world-writable, the fault that once made the whole library so."""
+    with tarfile.open(fileobj=out, mode="w|", format=tarfile.PAX_FORMAT) as tar:
         for root, dirs, names in os.walk(audio):
             dirs.sort()
             for d in dirs:
@@ -91,9 +155,6 @@ def audio_tar(audio: str) -> tuple[bytes, int, int]:
                 ti.mode, ti.uid, ti.gid, ti.uname, ti.gname = 0o644, 0, 0, "", ""
                 with open(p, "rb") as fh:
                     tar.addfile(ti, fh)
-                files += 1
-                size += ti.size
-    return buf.getvalue(), files, size
 
 
 def stage(host: str, bundle: str, where: str) -> None:
@@ -128,10 +189,14 @@ def inside(host: str, bundle: str, library: str, audio_root: str, where: str) ->
     """The writes: the audio into place, the payload staged, the import. Run
     directly on a read-write library, or by attended-import.sh inside its
     window on a read-only one."""
-    data, files, size = audio_tar(os.path.join(bundle, "audio"))
+    audio = os.path.join(bundle, "audio")
+    files, size = audio_size(audio)
     say(f"  copying {files} audio file(s), {size / 1e6:.1f} MB, into {audio_root} ...")
-    must(host, f"mkdir -p {shlex.quote(audio_root)} && tar -xf - -C {shlex.quote(audio_root)} --no-same-owner",
-         "copy the audio", data)
+    rc, out = ssh_stream(host, f"mkdir -p {shlex.quote(audio_root)} && "
+                               f"tar -xf - -C {shlex.quote(audio_root)} --no-same-owner",
+                         lambda pipe: audio_tar(audio, Progress(pipe, size)))
+    if rc != 0:
+        raise Failed(f"copy the audio on {host} failed (exit {rc}): {out[-300:]}")
     stage(host, bundle, where)
     say("  importing ...")
     c = import_run(host, library, where, audio_root, apply=True)

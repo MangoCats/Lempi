@@ -71,12 +71,45 @@ const S = {
   // stops -- factored out of flags.html's own watchSync()/showResult(),
   // which a second job-launching page (profile.html's reanalyze button) was
   // about to duplicate rather than share [SPEC-SUI-214].
+  //
+  // The status line is jobs.html's heartbeat, brought here because its
+  // absence cost a person a long wait on 2026-10-01: a send to one speaker
+  // sat queued behind another's 16-minute copy -- the runner does one job
+  // at a time, and a queued job emits nothing -- and the panel showed an
+  // empty box. Now a queued job names what it waits behind, and a quiet
+  // running one says how long it has been quiet.
   watchJob(id, box, onDone) {
+    const status = S.el('p', { class: 'empty', style: 'font-size:.85rem;padding:.2rem 0', text: 'connecting…' });
     const log = S.el('div', { class: 'list' });
-    box.replaceChildren(log);
+    box.replaceChildren(status, log);
+    let last = Date.now(), stage = null, heard = false, ahead = null, polled = 0;
+    const tick = async () => {
+      if (!heard && Date.now() - polled > 3000) {
+        polled = Date.now();
+        try {
+          const jobs = await S.get('/api/jobs');
+          const me = jobs.find(j => j.job_id === id);
+          const run = jobs.find(j => j.state === 'running' && j.job_id !== id);
+          ahead = me && me.state === 'queued'
+            ? (run ? `job ${run.job_id} (${run.kind}${S.peerOf(run)})` : 'the job before it') : null;
+        } catch (e) { /* the next tick asks again */ }
+      }
+      const s = Math.round((Date.now() - last) / 1000);
+      status.textContent = ahead && !heard ? `queued — waiting for ${ahead} to finish; one job runs at a time`
+        : (stage ? `running: ${stage}` : 'waiting to start') + (s >= 3 ? ` — last output ${s} s ago, still working` : '');
+    };
+    const beat = setInterval(tick, 1000);
+    tick();
     const es = new EventSource(`/api/jobs/${id}/stream`);
     es.onmessage = async m => {
       const e = JSON.parse(m.data);
+      heard = true;
+      last = Date.now();
+      if (e.kind === 'stage') stage = e.text;
+      if (e.kind === 'done') {
+        clearInterval(beat);
+        status.textContent = `finished: ${e.text}`;
+      }
       if (e.kind === 'counts') return;
       const line = e.kind === 'stage' ? `── ${e.text} ──`
         : e.kind === 'done' ? `── finished: ${e.text} ──` : e.text;
@@ -92,6 +125,17 @@ const S = {
         if (onDone) onDone(job, box);
       }
     };
+  },
+
+  // ", for lempi02w" when a job's target names a speaker -- the sends and
+  // the exports do -- so "waiting for job 47" says which one.
+  peerOf(job) {
+    try {
+      const p = JSON.parse(job.target).peer;
+      return p ? `, for ${p}` : '';
+    } catch (e) {
+      return '';
+    }
   },
 
   // The default `onDone`: flat numeric tiles -- what most job results

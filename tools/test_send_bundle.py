@@ -59,19 +59,46 @@ class Fake:
             return 0, f"  imported  {self.imported}\n  already   0\n  awaiting  {self.awaiting}\n  corrupt   0"
         return 0, ""
 
+    def stream(self, host, cmd, feed):
+        buf = io.BytesIO()
+        feed(buf)
+        return self(host, cmd, buf.getvalue())
+
 
 def run(argv, fake, attended=None):
-    saved = (sb.ssh, sb.subprocess.run, sys.argv, sb.urllib.request.urlopen)
+    saved = (sb.ssh, sb.ssh_stream, sb.subprocess.run, sys.argv, sb.urllib.request.urlopen)
     reloads = []
-    sb.ssh = fake
-    sb.subprocess.run = attended or saved[1]
+    sb.ssh, sb.ssh_stream = fake, fake.stream
+    sb.subprocess.run = attended or saved[2]
     sb.urllib.request.urlopen = lambda req, timeout=0: reloads.append(req.full_url) or io.BytesIO(b"")
     sys.argv = ["send_bundle.py", *argv]
     try:
         rc = sb.main()
     finally:
-        sb.ssh, sb.subprocess.run, sys.argv, sb.urllib.request.urlopen = saved
+        sb.ssh, sb.ssh_stream, sb.subprocess.run, sys.argv, sb.urllib.request.urlopen = saved
     return rc, reloads
+
+
+def test_progress():
+    print("a long copy says how far it has got, not nothing for 16 minutes")
+    said, saved = [], sb.say
+    sb.say = said.append
+    try:
+        p = sb.Progress(io.BytesIO(), 1000, every=3600)
+        for _ in range(100):
+            p.write(b"x" * 10)
+    finally:
+        sb.say = saved
+    check(len(said) == 10 and "(100%)" in said[-1] and "MB/s" in said[0], f"once a tenth: {said}")
+
+    class Shut:
+        def write(self, b):
+            raise BrokenPipeError()
+    try:
+        sb.Progress(Shut(), 10).write(b"x")
+        check(False, "a closed far end is not swallowed as written")
+    except sb._Closed:
+        pass
 
 
 def main() -> int:
@@ -126,6 +153,8 @@ def main() -> int:
         f = Fake(tool=False)
         rc, _ = run([b, "pi@speaker-a", "--apply"], f)
         check(rc == 1 and not any(c.startswith(("tar", "mkdir")) for c, _ in f.calls), f"refused: {f.calls}")
+
+    test_progress()
 
     print()
     if FAILED:
