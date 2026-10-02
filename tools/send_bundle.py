@@ -120,7 +120,9 @@ class Progress:
         except OSError as e:          # BrokenPipeError, or EINVAL on Windows
             raise _Closed() from e
         self.sent += len(b)
-        now, tenth = time.monotonic(), self.sent * 10 // self.total
+        # Capped: a tar's headers carry it past the files' own total, and
+        # past 10 it said "100%" once more for each tenth over.
+        now, tenth = time.monotonic(), min(self.sent * 10 // self.total, 10)
         if tenth > self.said_tenth or now - self.said_at >= self.every:
             self.said_at, self.said_tenth = now, tenth
             rate = self.sent / max(now - self.start, 1e-6)
@@ -168,7 +170,11 @@ def stage(host: str, bundle: str, where: str) -> None:
     84.8 MB of covers, four minutes over wifi with nothing on the page, and
     was taken for a hang."""
     must(host, f"rm -rf {shlex.quote(where)} && mkdir -p {shlex.quote(where)}", "make the staging folder")
-    payload = os.path.join(bundle, "payload.json")
+    # The gzipped payload where the bundle has one, opened on the speaker:
+    # the same 2026-10-02 payload was 33.4 MB as JSON and 2.4 MB gzipped.
+    gz = os.path.join(bundle, "payload.json.gz")
+    payload = gz if os.path.isfile(gz) else os.path.join(bundle, "payload.json")
+    name = os.path.basename(payload)
     covers = os.path.join(bundle, "covers")
     files, size = audio_size(covers) if os.path.isdir(covers) else (0, 0)
     size += os.path.getsize(payload)
@@ -176,10 +182,12 @@ def stage(host: str, bundle: str, where: str) -> None:
 
     def feed(pipe):
         with tarfile.open(fileobj=Progress(pipe, size), mode="w|", format=tarfile.PAX_FORMAT) as tar:
-            tar.add(payload, "payload.json")
+            tar.add(payload, name)
             if files:
                 tar.add(covers, "covers")
-    rc, out = ssh_stream(host, f"tar -xf - -C {shlex.quote(where)}", feed)
+    unpack = f"tar -xf - -C {shlex.quote(where)}" + (
+        f" && gunzip -f {shlex.quote(posixpath.join(where, name))}" if name.endswith(".gz") else "")
+    rc, out = ssh_stream(host, unpack, feed)
     if rc != 0:
         raise Failed(f"stage the payload on {host} failed (exit {rc}): {out[-300:]}")
 

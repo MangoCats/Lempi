@@ -107,7 +107,11 @@ fetch's is never replaced), asks again once its last asking (`caa_asked_at`)
 is 60 days old, and takes an archive that fails as unasked, not as empty. A CD
 add asks for its own disc's cover as soon as the release is recorded. The
 Export page's diff compares which sides each release has, so a speaker is
-sent a side it lacks with one file of the album, payload alone.
+sent a side it lacks with one file of the album, payload alone -- and only
+that side: a release named just to carry an album name for a file the
+speaker holds goes without the sides it has. The first covers send to
+lempi02w carried every cover it named, 84.8 MB; the same send to bose now
+carries 33.1 MB, its payload gzipped (2.4 MB, not 33.4 MB) and opened there.
 
 ---
 

@@ -266,7 +266,30 @@ def test_a_file_the_target_has_goes_without_its_audio():
           f"the hold, and no byte hash for audio not sent: {encs['b' * 32]}")
 
 
+def test_only_the_covers_the_target_lacks():
+    """[SPEC-COV-060] A release named only for a held file sends only the sides
+    the target lacks; one whose audio is sent keeps its whole cover."""
+    def cov():
+        return {"source": "s", "fetched_at": "t", "front": {"file": "f"}, "back": {"file": "b"}}
+    doc = {"encodings": [
+        {"audio_md5": "held", "passages": [{"recordings": [{"mbid": "r-held"}]}]},
+        {"audio_md5": "new", "passages": [{"recordings": [{"mbid": "r-new"}]}]}],
+        "releases": [
+            {"mbid": "rel-has-it", "tracks": [{"recording": "r-held"}], "cover": cov()},
+            {"mbid": "rel-lacks-back", "tracks": [{"recording": "r-held"}], "cover": cov()},
+            {"mbid": "rel-lacks-both", "tracks": [{"recording": "r-held"}], "cover": cov()},
+            {"mbid": "rel-of-new", "tracks": [{"recording": "r-new"}], "cover": cov()},
+            {"mbid": "rel-bare", "tracks": [{"recording": "r-held"}]}]}
+    n = eb.trim_covers(doc, {"held"}, {"rel-lacks-back": {"back"}, "rel-lacks-both": {"front", "back"}})
+    sides = {r["mbid"]: sorted(k for k in ("front", "back") if k in r.get("cover", {})) for r in doc["releases"]}
+    check(n == 3 and sides == {"rel-has-it": [], "rel-lacks-back": ["back"], "rel-lacks-both": ["back", "front"],
+                               "rel-of-new": ["back", "front"], "rel-bare": []}, f"dropped {n}, sides {sides}")
+    check("cover" not in doc["releases"][0], "a cover with no side left goes entirely")
+    check(len(doc["releases"]) == 5, "every release still named, for its album")
+
+
 def main() -> int:
+    test_only_the_covers_the_target_lacks()
     test_a_file_the_target_has_goes_without_its_audio()
     test_md5_file_selects_the_listed_encodings()
     test_payload_only_by_byte_hash_in_parts()

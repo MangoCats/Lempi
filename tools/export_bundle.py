@@ -48,6 +48,10 @@ def main() -> int:
                     help="file of audio_md5 to include in the payload WITHOUT audio -- the target "
                          "holds them, and is sent only what changed about them: holds, credits, "
                          "albums, sort names, covers [SPEC-HOLD-080]")
+    ap.add_argument("--cover-releases",
+                    help="file of `release [front] [back]` lines: the cover sides the target lacks; with "
+                         "it, a release named only for a file the target holds sends only those "
+                         "[SPEC-COV-060]")
     ap.add_argument("--gzip", action="store_true", help="write payload.json.gz as well")
     ap.add_argument("--zip", action="store_true",
                     help="also write <out>.zip: the whole bundle as one file, for a phone's "
@@ -159,6 +163,9 @@ def main() -> int:
         bytes_out += os.path.getsize(dest)
         copied += 1
 
+    trimmed = 0
+    if args.cover_releases:
+        trimmed = trim_covers(doc, present, read_cover_releases(args.cover_releases))
     cover_bytes = write_covers(conn, doc, args.out, args, set())
     text = json.dumps(doc, indent=2, ensure_ascii=False)
     with open(os.path.join(args.out, "payload.json"), "w",
@@ -180,7 +187,8 @@ def main() -> int:
     if present:
         print(f"  no audio    {len(present & {e['audio_md5'] for e in doc['encodings']})} "
               "already on the target, sent without audio for what changed about them")
-    print(f"  releases    {len(doc.get('releases', []))}, covers {cover_bytes/1e6:.1f} MB")
+    print(f"  releases    {len(doc.get('releases', []))}, covers {cover_bytes/1e6:.1f} MB"
+          + (f"   ({trimmed} side(s) the target has already, not sent)" if trimmed else ""))
     print(f"  payload     {len(text.encode())/1024:.1f} KB"
           + (f"  ({gz_len/1024:.1f} KB gzipped)" if gz_len else ""))
     print(f"  byte hashes {agree} match the catalogue's record, {unrecorded} not recorded there"
@@ -206,6 +214,46 @@ def main() -> int:
             zip_covers(z, args.out)
         print(f"  zip         {dest}, {os.path.getsize(dest)/1e6:.1f} MB")
     return 0
+
+
+def trim_covers(doc, present: set, wanted: dict) -> int:
+    """Keep a release's cover only where the target needs it `[SPEC-COV-060]`:
+    the sides `wanted` names for it (the ones it lacks), or the whole cover of
+    a release carrying a recording whose audio is being sent (it has nothing
+    of that album). A release sent only to name an album for a file the
+    target holds goes without its cover, and the target keeps the one it has.
+    Returns how many sides were dropped.
+
+    A covers send to lempi02w on 2026-10-02 carried 84.8 MB of covers --
+    every cover of the 676 releases it named -- for a few hundred sides new
+    to it."""
+    sent = {c["mbid"] for e in doc.get("encodings", []) if e["audio_md5"] not in present
+            for p in e.get("passages", []) for c in p.get("recordings", [])}
+    dropped = 0
+    for rel in doc.get("releases", []):
+        cover = rel.get("cover")
+        if not cover or any(t.get("recording") in sent for t in rel.get("tracks", [])):
+            continue
+        keep = wanted.get(rel["mbid"], set())
+        for side in ("front", "back"):
+            if side in cover and side not in keep:
+                del cover[side]
+                dropped += 1
+        if "front" not in cover and "back" not in cover:
+            del rel["cover"]
+    return dropped
+
+
+def read_cover_releases(path: str) -> dict:
+    """`release [front] [back]` a line -- the sides the target lacks; a
+    release alone on its line lacks both."""
+    out = {}
+    with open(path, encoding="utf-8") as fh:
+        for ln in fh:
+            parts = ln.split()
+            if parts:
+                out[parts[0]] = set(parts[1:]) or {"front", "back"}
+    return out
 
 
 def write_covers(conn, doc, out, args, written: set) -> int:

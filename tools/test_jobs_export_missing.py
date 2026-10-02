@@ -173,6 +173,9 @@ def test_credits(tmp):
     present = open(bundle[bundle.index("--present-md5-file") + 1], encoding="utf-8").read().split()
     check("albums" in diff and j["result"]["album_files"] == 1, f"albums asked for, and said: {j['result']}")
     check("sort_names" in diff and j["result"]["sort_names"] == 1, f"sort names asked for, and said: {j['result']}")
+    covers_list = open(bundle[bundle.index("--cover-releases") + 1], encoding="utf-8").read().splitlines()
+    check(covers_list == ["rel-back back", "rel-new back front"],
+          f"the bundle told which cover sides the speaker lacks: {covers_list}")
     check("covers" in diff and j["result"]["covers"] == 1,
           f"a cover side the speaker lacks goes; one only it has does not: {j['result']}")
     check(present == ["md5-3"] and j["result"]["credit_files"] == 1,

@@ -184,6 +184,22 @@ def main() -> int:
               and any(c.startswith("import_bundle") for c in cmds) and reloads,
               f"no copy, the import, a reload: {cmds}")
 
+        print("a gzipped payload is staged gzipped, and opened on the speaker")
+        import gzip
+        gb = os.path.join(tmp, "missing-speaker-a-9", "bundle")
+        os.makedirs(gb)
+        doc = json.dumps({"encodings": [{"audio_md5": "a"}]}).encode()
+        open(os.path.join(gb, "payload.json"), "wb").write(doc)
+        open(os.path.join(gb, "payload.json.gz"), "wb").write(gzip.compress(doc))
+        f = Fake(imported=0)
+        rc, _ = run([gb, "pi@speaker-a", "--apply"], f)
+        staged = next((c, s) for c, s in f.calls if c.startswith("tar -xf - -C /tmp/lempi-bundle-missing-speaker-a-9"))
+        with tarfile.open(fileobj=io.BytesIO(staged[1])) as t:
+            names = t.getnames()
+        check(rc == 0 and names == ["payload.json.gz"]
+              and staged[0].endswith("gunzip -f /tmp/lempi-bundle-missing-speaker-a-9/payload.json.gz"),
+              f"the small one sent, opened there: {names} {staged[0]}")
+
     test_progress()
 
     print()

@@ -1381,10 +1381,14 @@ class Runner:
         # or one whose front or back only this library has. One file of the
         # release carries the release, and its cover beside the payload.
         cov = tables.get("covers") or {"local_only": [], "differ": []}
-        bare = {k[0] for k in cov["local_only"]} | {
-            d["key"][0] for d in cov["differ"]
-            if (d["local"].get("front") and not d["peer"].get("front"))
-            or (d["local"].get("back") and not d["peer"].get("back"))}
+        # Which sides each lacks: all a release new to it has here; for one
+        # it has, those only this library has.
+        sides = {k[0]: {"front", "back"} for k in cov["local_only"]}
+        for d in cov["differ"]:
+            lack = {s for s in ("front", "back") if d["local"].get(s) and not d["peer"].get(s)}
+            if lack:
+                sides[d["key"][0]] = lack
+        bare = set(sides)
         cover_md5s = self._a_file_per_release(bare) - missing
         present = sorted(hold_md5s | credit_md5s | album_md5s | sort_md5s | cover_md5s)
         result.update(missing=len(md5s), peer_only=len(files["peer_only"]), albums=self._albums_of(md5s),
@@ -1424,6 +1428,13 @@ class Runner:
             with open(present_file, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write("".join(m + "\n" for m in present))
             argv += ["--present-md5-file", present_file]
+        # Only the covers it lacks a side of [SPEC-COV-060] -- from the same
+        # diff, so an empty list rightly sends none with a held file.
+        if "covers" in tables:
+            covers_file = os.path.join(base, "cover-releases.txt")
+            with open(covers_file, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write("".join(f"{r} {' '.join(sorted(sides[r]))}\n" for r in sorted(bare)))
+            argv += ["--cover-releases", covers_file]
         for root in self.roots:
             argv += ["--root", root]
         code, _ = self._spawn(job_id, "bundle", argv)
