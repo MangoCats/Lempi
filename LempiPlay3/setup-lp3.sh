@@ -162,9 +162,22 @@ item "pi's ed25519 SSH key" "test -f /home/pi/.ssh/id_ed25519 && test -f /home/p
 say ""
 say "packages"
 # overlayroot for the root, f2fs-tools for STATE, chrony for the fleet clock,
-# python3 for lempi-db-recover -- the only runner here, since this node has no
-# sqlite3 [PI-PRE-030].
-for p in overlayroot f2fs-tools chrony python3; do
+# python3 for lempi-db-recover [PI-PRE-030], sqlite3 for Vipunen's remote
+# tooling (`ssh <host> sqlite3 -json ...`), as bose and the other appliances
+# have it [BOS-IMG-020]. Missing here until 2026-10-02, with no reason but
+# that the list never had it: this node's queries ran through python3's
+# fallback, and the Export page's diff failed on it when a table was new.
+#
+# No mpd, by the maintainer's decision of 2026-10-02: this node plays through
+# the player alone and has no use for the MPD backend [SPEC-BK-030].
+#
+# On the locked card, sqlite3 went in through `overlayroot-chroot` [IMPL-BOS-180]
+# -- but not by apt-get there: the durable layer's own resolv.conf does not
+# resolve, so apt fetched nothing, and overlayroot-chroot still exited 0 and
+# left /media/root-ro read-write ("mount point is busy"). What worked: install
+# live (apt-get, which fetches), then `dpkg -i` the two cached .debs inside
+# overlayroot-chroot, offline. Verified on the durable layer, 2026-10-02.
+for p in overlayroot f2fs-tools chrony python3 sqlite3; do
     item "package $p" "dpkg --admindir=$P/var/lib/dpkg -s $p" \
          "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $p"
 done
