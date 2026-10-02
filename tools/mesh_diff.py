@@ -179,9 +179,19 @@ def fetch_remote(remote: str, table: str) -> dict:
         if not probe["ok"]:
             raise RuntimeError(f"{table}: {probe['error']}")
         return bool(probe["rows"])
+    if TABLES[table].get("optional_table"):
+        # Asked, not read off an error: a host with no sqlite3 CLI answers
+        # through python3, whose traceback ends with "no such table" -- past
+        # the 300 characters an error is cut to. lp3-wifi, 2026-10-02, failed
+        # the whole diff on a file_releases table it did not have yet.
+        name = TABLES[table]["sql"].split(" FROM ", 1)[1].split()[0]
+        probe = rp.run_remote_sql(remote, f"SELECT name FROM sqlite_master WHERE type = 'table' AND name = '{name}'",
+                                  timeout=TIMEOUT)
+        if not probe["ok"]:
+            raise RuntimeError(f"{table}: {probe['error']}")
+        if not probe["rows"]:
+            return {}
     result = rp.run_remote_sql(remote, _sql(table, has_column), timeout=TIMEOUT)
-    if not result["ok"] and TABLES[table].get("optional_table") and "no such table" in str(result["error"]):
-        return {}
     if not result["ok"]:
         raise RuntimeError(f"{table}: {result['error']}")
     return {_key_of(r, TABLES[table]["key"]): r for r in result["rows"]}

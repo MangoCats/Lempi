@@ -195,7 +195,13 @@ def test_covers_tolerate_a_library_with_none():
                   "INSERT INTO cover_art VALUES ('rel-1', zeroblob(300), NULL, 's', 't');"
                   "INSERT INTO cover_art VALUES ('rel-tiny', zeroblob(10), NULL, 's', 't');")
     real = rp.run_remote_sql
-    rp.run_remote_sql = lambda remote, sql, timeout=10.0: {"ok": False, "error": "Error: no such table: cover_art"}
+    # Asked whether the table exists, the speaker says no; asked the query
+    # itself, it would answer as lp3-wifi's python3 did, 2026-10-02 -- a
+    # traceback cut to 300 characters before its "no such table".
+    clipped = ('Traceback (most recent call last):\n  File "<string>", line 1, in <module>\n'
+               "import sqlite3,json,sys;c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)")
+    rp.run_remote_sql = lambda remote, sql, timeout=10.0: (
+        {"ok": True, "rows": []} if "sqlite_master" in sql else {"ok": False, "error": clipped})
     try:
         d = md.run(db, "pi@speaker-a:/lempi.db", tables=["covers"])["tables"]["covers"]
         check(d["local_only"] == [["rel-1"]], f"a picture, not a stub: {d}")
