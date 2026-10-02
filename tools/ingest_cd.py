@@ -59,6 +59,7 @@ sys.path.insert(0, HERE)
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import audio_duration        # noqa: E402
 import cd_toc                 # noqa: E402
+import artist_sort            # noqa: E402  -- an artist's sort name [REQ-VIS-182]
 import fetch_releases         # noqa: E402  -- get(), UA, rate-limit/backoff
 import ingest_folder          # noqa: E402  -- audio_md5(), LOCAL_PREFIX
 import passage_hold           # noqa: E402  -- a damaged track held back [SPEC-HOLD-010]
@@ -367,16 +368,18 @@ def record_release(conn, release: dict, tracks) -> int:
     return linked
 
 
-def _artists_for(release: dict, position: int) -> list[tuple[str, str]]:
-    """`(artist_mbid, name)` pairs for `recording_artists`, from the same
+def _artists_for(release: dict, position: int) -> list[tuple[str, str, str | None]]:
+    """`(artist_mbid, name, sort_name)` for `recording_artists`, from the same
     embedded `artist-credit` `_candidate_for` reads for its own display
     string -- kept separate because `Suggestion`'s own shape has no room
-    for a real per-artist mbid, only the joined name a review card shows."""
+    for a real per-artist mbid, only the joined name a review card shows.
+    The sort name rides in the same answer, and is what Browse sorts by
+    `[REQ-VIS-182]`; until 2026-10-01 it was dropped here."""
     t = _track_at_position(release, position)
     if t is None:
         return []
     rec = t.get("recording") or {}
-    return [(a["artist"]["id"], a["artist"].get("name") or "?")
+    return [(a["artist"]["id"], a["artist"].get("name") or "?", a["artist"].get("sort-name"))
             for a in rec.get("artist-credit") or []
             if isinstance(a.get("artist"), dict) and a["artist"].get("id")]
 
@@ -547,10 +550,13 @@ def _resolve_track(conn, number: int, cd_text_title: str | None, radio_pid: int,
         conn.execute(
             "INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) "
             "VALUES (?1,?2,?3,?4)", (mbid, c["title"], end_ms - start_ms, source))
-        for artist_mbid, name in _artists_for(candidate_releases[0], number):
+        for artist_mbid, name, sort_name in _artists_for(candidate_releases[0], number):
             conn.execute(
-                "INSERT OR IGNORE INTO artists (mbid,name,source) VALUES (?1,?2,?3)",
-                (artist_mbid, name, source))
+                "INSERT OR IGNORE INTO artists (mbid,name,sort_name,source) VALUES (?1,?2,?3,?4)",
+                (artist_mbid, name, sort_name, source))
+            # One already here without a sort name gets this one; one with
+            # its own keeps it.
+            artist_sort.record(conn, artist_mbid, sort_name)
             conn.execute(
                 "INSERT OR IGNORE INTO recording_artists (mbid,artist_mbid,weight,source) "
                 "VALUES (?1,?2,1.0,?3)", (mbid, artist_mbid, source))
@@ -581,6 +587,12 @@ def _resolve_track(conn, number: int, cd_text_title: str | None, radio_pid: int,
                 conn.execute(
                     "INSERT OR IGNORE INTO recording_artists (mbid,artist_mbid,weight,source) "
                     "VALUES (?1,?2,1.0,?3)", (mbid, artist_mbid, source))
+            # AcoustID names an artist and not its sort name, so it is asked
+            # of MusicBrainz -- once per artist, only while it has none.
+            try:
+                artist_sort.fill(conn, [a for a, _ in rec["artists"]], say=say)
+            except Exception as e:  # a sort name is not worth failing an add over
+                say(f"  sort name not looked up ({e}); tools/artist_sort.py can, later")
             outcome = 'identified'
         else:
             mbid, source = f"local:audio:{audio_md5}:{start_ms}", "cd:unidentified"

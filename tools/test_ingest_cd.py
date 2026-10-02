@@ -50,7 +50,7 @@ CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER,
     kind TEXT NOT NULL, start_ms INTEGER, end_ms INTEGER,
     lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL, boundary_src TEXT);
 CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT, length_ms INTEGER, source TEXT);
-CREATE TABLE artists (mbid TEXT PRIMARY KEY, name TEXT, source TEXT);
+CREATE TABLE artists (mbid TEXT PRIMARY KEY, name TEXT, sort_name TEXT, source TEXT);
 CREATE TABLE recording_artists (mbid TEXT NOT NULL, artist_mbid TEXT NOT NULL,
     weight REAL, source TEXT);
 CREATE TABLE passage_recordings (passage_id INTEGER NOT NULL, mbid TEXT NOT NULL,
@@ -114,7 +114,8 @@ def test_chosen_edition():
         f.write(b"\0" * 128)
     rel = {"id": "rel-C", "title": "Release C", "media": [{"tracks": [
         {"position": n, "recording": {"id": f"rec-c{n}", "title": f"Song {n}",
-         "artist-credit": [{"artist": {"id": "art-c", "name": "Artist C"}}]}} for n in (1, 2, 3)]}]}
+         "artist-credit": [{"artist": {"id": "art-c", "name": "Artist C", "sort-name": "C, Artist"}}]}}
+        for n in (1, 2, 3)]}]}
     toc = cd_toc.DiscToc(tracks=TRACKS[:3], leadout_sector=0, source="eac-cue")
     c = fixture()
     try:
@@ -134,6 +135,9 @@ def test_chosen_edition():
               and r["album_linked"] == 3, f"each track linked to the disc, as chosen: {[tuple(x) for x in links]} {r}")
         check(c.execute("SELECT title FROM releases WHERE mbid='rel-C'").fetchone()[0] == "Release C",
               "the release, by its title")
+        # [REQ-VIS-182]: the artist's sort name, from the same answer.
+        check(c.execute("SELECT sort_name FROM artists WHERE mbid='art-c'").fetchone()[0] == "C, Artist",
+              "the artist's sort name is kept")
     finally:
         c.close()
 

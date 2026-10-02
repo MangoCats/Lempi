@@ -1347,7 +1347,7 @@ class Runner:
         code, _ = self._spawn(job_id, "diff", [sys.executable, os.path.join(tools, "mesh_diff.py"),
                                                self.library, payload["remote"], "--table", "files",
                                                "--table", "holds", "--table", "credits", "--table", "albums",
-                                               "-o", diff_path])
+                                               "--table", "sort_names", "-o", diff_path])
         if code != 0 or not os.path.isfile(diff_path):
             self._emit(job_id, "error", f"the diff against {payload['peer']} failed (exit {code}): "
                        "nothing was built", stage="diff")
@@ -1373,10 +1373,14 @@ class Runner:
         # `[SPEC-CDI-098]` -- the CD adds of that same week had none.
         unnamed = {k[0] for k in (tables.get("albums") or {"local_only": []})["local_only"]}
         album_md5s = self._files_of_recordings(unnamed) - missing
-        present = sorted(hold_md5s | credit_md5s | album_md5s)
+        # And an artist's sort name, which Browse sorts by `[REQ-VIS-182]`:
+        # one file of theirs carries it, in its recordings' credits.
+        unsorted = {k[0] for k in (tables.get("sort_names") or {"local_only": []})["local_only"]}
+        sort_md5s = self._a_file_per_artist(unsorted) - missing
+        present = sorted(hold_md5s | credit_md5s | album_md5s | sort_md5s)
         result.update(missing=len(md5s), peer_only=len(files["peer_only"]), albums=self._albums_of(md5s),
                       holds=len([k for k in changed if k[0] not in missing]), hold_files=len(hold_md5s),
-                      credit_files=len(credit_md5s), album_files=len(album_md5s))
+                      credit_files=len(credit_md5s), album_files=len(album_md5s), sort_names=len(sort_md5s))
         if hold_md5s:
             self._emit(job_id, "log", f"{result['holds']} hold(s) on {len(hold_md5s)} file(s) "
                        f"{payload['peer']} already has differ from this library's", stage="diff")
@@ -1386,9 +1390,12 @@ class Runner:
         if album_md5s:
             self._emit(job_id, "log", f"{len(album_md5s)} file(s) {payload['peer']} already has lack "
                        "the album this library names them by", stage="diff")
+        if sort_md5s:
+            self._emit(job_id, "log", f"artists' sort names {payload['peer']} lacks go with "
+                       f"{len(sort_md5s)} file(s) of theirs", stage="diff")
         if not md5s and not present:
             self._emit(job_id, "log", f"{payload['peer']} already has every file this library has, "
-                       "every hold, every artist credit and every album", stage="diff")
+                       "every hold, artist credit, album and sort name", stage="diff")
             self._save_result(job_id, result)
             return self._finish(job_id, "done")
 
@@ -1447,6 +1454,26 @@ class Runner:
                     "SELECT DISTINCT f.audio_md5 FROM passage_recordings pr "
                     "JOIN passages p ON p.passage_id = pr.passage_id JOIN files f ON f.file_id = p.file_id "
                     f"WHERE pr.mbid IN ({','.join('?' * len(chunk))})", chunk))
+        finally:
+            c.close()
+        return out
+
+    def _a_file_per_artist(self, artists: set) -> set:
+        """One `audio_md5` per artist in `artists` that has a file here --
+        enough to carry what is about the artist, not their recordings."""
+        out: set = set()
+        if not artists:
+            return out
+        ids = sorted(artists)
+        c = lempi_db.connect(self.library, lempi_db.ROLE_LIBRARY)
+        try:
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                out.update(m for (_, m) in c.execute(
+                    "SELECT ra.artist_mbid, MIN(f.audio_md5) FROM recording_artists ra "
+                    "JOIN passage_recordings pr ON pr.mbid = ra.mbid "
+                    "JOIN passages p ON p.passage_id = pr.passage_id JOIN files f ON f.file_id = p.file_id "
+                    f"WHERE ra.artist_mbid IN ({','.join('?' * len(chunk))}) GROUP BY ra.artist_mbid", chunk))
         finally:
             c.close()
         return out

@@ -80,6 +80,14 @@ TABLES = {
         "value": (),
         "manual_field": None,
     },
+    "sort_names": {
+        # What Browse sorts an artist by `[REQ-VIS-182]`. Only the artists
+        # with one: a speaker lacking it is sent it; one with its own keeps it.
+        "sql": "SELECT mbid, sort_name FROM artists WHERE sort_name IS NOT NULL AND sort_name <> ''",
+        "key": ("mbid",),
+        "value": ("sort_name",),
+        "manual_field": None,
+    },
     "albums": {
         # Each recording's chosen release -- what names its album in Browse
         # `[SPEC-CDI-098]`. `chosen` is read as NULL where a library has no

@@ -137,6 +137,8 @@ def test_credits(tmp):
         c.execute("INSERT INTO recordings (mbid, title, source) VALUES (?, 't', 's')", (mbid,))
         c.execute("INSERT INTO passage_recordings (passage_id, mbid, weight, source) VALUES (?, ?, 1.0, 's')",
                   (pid, mbid))
+    c.execute("INSERT INTO artists (mbid, name, source) VALUES ('art-3', 'Three', 's')")
+    c.execute("INSERT INTO recording_artists (mbid, artist_mbid, weight, source) VALUES ('r3', 'art-3', 1.0, 's')")
     c.commit()
     c.close()
     real = r._spawn
@@ -149,6 +151,7 @@ def test_credits(tmp):
             d["tables"]["credits"] = {"local_only": [["r1", "a1"], ["r3", "a1"], ["r-elsewhere", "a1"]],
                                       "peer_only": [], "differ": [], "conflict": []}
             d["tables"]["albums"] = {"local_only": [["r3", "rel-x"]], "peer_only": [], "differ": [], "conflict": []}
+            d["tables"]["sort_names"] = {"local_only": [["art-3"]], "peer_only": [], "differ": [], "conflict": []}
             json.dump(d, open(path, "w", encoding="utf-8"))
         return code, out
     r._spawn = with_credits
@@ -158,6 +161,7 @@ def test_credits(tmp):
     check("credits" in diff, f"credits asked for: {diff}")
     present = open(bundle[bundle.index("--present-md5-file") + 1], encoding="utf-8").read().split()
     check("albums" in diff and j["result"]["album_files"] == 1, f"albums asked for, and said: {j['result']}")
+    check("sort_names" in diff and j["result"]["sort_names"] == 1, f"sort names asked for, and said: {j['result']}")
     check(present == ["md5-3"] and j["result"]["credit_files"] == 1,
           f"only the file the speaker has; a missing one brings its own, one with no file here nothing: "
           f"{present} {j['result']}")

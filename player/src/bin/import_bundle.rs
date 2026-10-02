@@ -110,6 +110,7 @@ fn main() {
     println!("  holds     {}", rep.holds_set);
     // Written only on --apply, so a dry run says 0 here.
     println!("  credits   {}", rep.credits);
+    println!("  sort names {}", rep.sort_names);
     if rep.holds_unmatched > 0 {
         println!("  holds unmatched {} (no passage of that span here; left alone)", rep.holds_unmatched);
     }

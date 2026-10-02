@@ -137,6 +137,8 @@ pub struct Report {
     pub holds_unmatched: usize,
     /// Artist credits added to recordings `[SPEC-PL-054]`.
     pub credits: usize,
+    /// Sort names filled on artists already here that had none `[REQ-VIS-182]`.
+    pub sort_names: usize,
 }
 
 impl Report {
@@ -782,14 +784,25 @@ fn upsert_recording(tx: &rusqlite::Transaction, r: &Value, rep: &mut Report) -> 
         let known = tx
             .query_row("SELECT 1 FROM artists WHERE mbid = ?1", params![artist], |_| Ok(()))
             .is_ok();
+        let sort_name = a.get("sort_name").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
         if !known {
             // A credit to an artist nothing here can name would list as no
             // one; the sender's own row was missing too.
             let Some(name) = a.get("name").and_then(|v| v.as_str()) else { continue };
             tx.execute("INSERT INTO artists (mbid,name,sort_name,source) VALUES (?1,?2,?3,?4)",
-                       params![artist, name, a.get("sort_name").and_then(|v| v.as_str()), str_of(a, "source")])
+                       params![artist, name, sort_name, str_of(a, "source")])
                 .map_err(|e| e.to_string())?;
             rep.rows_written += 1;
+        } else if let Some(sort_name) = sort_name {
+            // What Browse sorts by `[REQ-VIS-182]`: filled where this library
+            // has none -- the artists sent before Vipunen had one, Cyndi
+            // Lauper's among them -- and never replaced.
+            let n = tx
+                .execute("UPDATE artists SET sort_name = ?2 WHERE mbid = ?1 AND (sort_name IS NULL OR sort_name = '')",
+                         params![artist, sort_name])
+                .map_err(|e| e.to_string())?;
+            rep.rows_written += n;
+            rep.sort_names += n;
         }
         let credited = tx
             .query_row("SELECT 1 FROM recording_artists WHERE mbid = ?1 AND artist_mbid = ?2",
@@ -1989,6 +2002,19 @@ mod tests {
         c.execute("UPDATE recording_artists SET weight=0.5", []).unwrap();
         let rep = import(&mut c, &d, "b3", &audio_dir, true, Some(TEST_HASHER)).unwrap();
         assert_eq!((rep.credits, credits(&c)), (0, vec![("a1".to_string(), 0.5)]));
+
+        // `[REQ-VIS-182]` A sort name this artist lacks is filled; one it has
+        // is kept.
+        let sort = |c: &Connection| -> Option<String> {
+            c.query_row("SELECT sort_name FROM artists WHERE mbid='a1'", [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(sort(&c).as_deref(), Some("Lauper, Cyndi"), "arrives with a new artist");
+        c.execute("UPDATE artists SET sort_name=NULL", []).unwrap();
+        let rep = import(&mut c, &d, "b4", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!((rep.sort_names, sort(&c).as_deref()), (1, Some("Lauper, Cyndi")));
+        c.execute("UPDATE artists SET sort_name='Mine'", []).unwrap();
+        let rep = import(&mut c, &d, "b5", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!((rep.sort_names, sort(&c).as_deref()), (0, Some("Mine")));
 
         std::fs::remove_dir_all(&audio_dir).ok();
     }

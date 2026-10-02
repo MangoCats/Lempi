@@ -178,9 +178,9 @@ function showMissing(panel, info, job) {
   if (job.state !== 'done') {
     return panel.append(S.el('p', { class: 'err', text: `Could not finish for ${info.peer}: see the log above.` }));
   }
-  if (!res.missing && !res.holds && !res.credit_files && !res.album_files) {
+  if (!res.missing && !res.holds && !res.credit_files && !res.album_files && !res.sort_names) {
     return panel.append(S.el('p', { class: 'verdict ok',
-      text: `${info.peer} already has every file this library has, every hold, artist credit and album.` }));
+      text: `${info.peer} already has every file this library has, every hold, artist credit, album and sort name.` }));
   }
   // [SPEC-STAR-090]: Send runs send_bundle.py as a job, over ssh -- first the
   // dry run, which says what it found on the speaker and would do; then, on a
@@ -241,6 +241,9 @@ function showMissing(panel, info, job) {
     // [SPEC-CDI-098]: the album a recording is named by, on files it has.
     ...(res.album_files ? [S.el('p', { class: 'verdict note', text: `${res.album_files} file${s(res.album_files)} `
       + `${info.peer} already has lack their album -- sent without audio, so they appear in Browse by Album there.` })] : []),
+    // [REQ-VIS-182]: artists' sort names it lacks, carried by a file of each.
+    ...(res.sort_names ? [S.el('p', { class: 'verdict note', text: `Artists' sort names ${info.peer} lacks go with `
+      + `${res.sort_names} file${s(res.sort_names)} of theirs -- without audio, so Browse there sorts them as here.` })] : []),
     S.el('div', { class: 'controls' }, send, now), sendLog,
     S.el('p', { style: 'font-size:.85rem;color:var(--dim);margin:.6rem 0 .2rem',
       text: `Or by hand, in a terminal: the first line says what it would do; the second does it.` }),
