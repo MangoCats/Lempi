@@ -62,7 +62,8 @@ def plan(conn) -> dict:
             "JOIN passage_recordings pr ON pr.passage_id = p.passage_id "
             "LEFT JOIN file_tags ft ON ft.file_id = f.file_id"):
         files.setdefault(fid, [md5, path, [], tag])[2].append(mbid)
-    kept = {m: s for m, s in conn.execute("SELECT audio_md5, source FROM file_releases")}
+    held = {m: (r, s) for m, r, s in conn.execute("SELECT audio_md5, release_mbid, source FROM file_releases")}
+    kept = {m: s for m, (_, s) in held.items()}
     title = dict(conn.execute("SELECT mbid, title FROM releases"))
     date = dict(conn.execute("SELECT mbid, release_date FROM releases"))
     chosen = dict(conn.execute("SELECT mbid, release_mbid FROM release_recordings WHERE chosen = 1"))
@@ -83,18 +84,22 @@ def plan(conn) -> dict:
 
     out = {"write": {}, "cd": 0, "folder": 0, "unmatched": 0, "no_releases": 0, "kept": 0, "changes": []}
 
-    def shown(m, tag):
-        return title.get(chosen.get(m)) or tag
+    def shown(md5, m, tag):
+        # What the player shows now: the file's recorded release, else the
+        # recording's chosen one, else the tag.
+        return title.get((held.get(md5) or (None,))[0]) or title.get(chosen.get(m)) or tag
 
     def decide(fid, rel, source):
         md5, _, recs, tag = files[fid]
         if kept.get(md5) in ("cd:import", "manual") and source != "cd:import":
             out["kept"] += 1
             return
+        if held.get(md5) == (rel, source):
+            return    # recorded already, as it would be
         out["write"][md5] = (rel, source)
         for m in recs:
-            if norm(shown(m, tag)) != norm(title.get(rel)):
-                out["changes"].append((shown(m, tag), title.get(rel), files[fid][1]))
+            if norm(shown(md5, m, tag)) != norm(title.get(rel)):
+                out["changes"].append((shown(md5, m, tag), title.get(rel), files[fid][1]))
 
     # Grouped by folder AND album tag: a folder can hold several albums --
     # `Music\Eagles` does, and as one group its tracks matched a boxed set

@@ -80,6 +80,13 @@ def main() -> int:
     check(sorted((a, b) for a, b, _ in p["changes"]) == [("She's So Unusual", "Twelve Deadly Cyns")] * 2,
           f"only the CD rip's tracks change name: {p['changes']}")
 
+    print("once recorded, a second run has nothing to do")
+    c.executemany("INSERT INTO file_releases VALUES (?, ?, ?, 't')",
+                  [(m, r, s) for m, (r, s) in p["write"].items()])
+    again = afr.plan(c)
+    check(not again["write"] and not again["changes"], f"{again['write']} {again['changes']}")
+    c.execute("DELETE FROM file_releases")
+
     print("a decision by hand stands; --commit records the rest, once")
     c.execute("INSERT INTO file_releases VALUES ('f1', 'twelve', 'manual', 't')")
     p = afr.plan(c)
