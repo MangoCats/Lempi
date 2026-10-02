@@ -80,6 +80,16 @@ TABLES = {
         "value": (),
         "manual_field": None,
     },
+    "albums": {
+        # Each recording's chosen release -- what names its album in Browse
+        # `[SPEC-CDI-098]`. `chosen` is read as NULL where a library has no
+        # such column, which then lists no chosen release at all.
+        "sql": "SELECT mbid, release_mbid FROM release_recordings WHERE {col} = 1",
+        "optional": ("release_recordings", "chosen", "chosen"),
+        "key": ("mbid", "release_mbid"),
+        "value": (),
+        "manual_field": None,
+    },
 }
 
 _HAS_COLUMN = "SELECT name FROM pragma_table_info('{table}') WHERE name = '{column}'"

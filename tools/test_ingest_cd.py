@@ -126,8 +126,79 @@ def test_chosen_edition():
         row = c.execute("SELECT outcome, detail FROM ingest_decisions WHERE stage='rip'").fetchone()
         check(row["outcome"] == "chosen" and json.loads(row["detail"])["chosen_by"] == "person",
               f"the decision records a person chose, got {tuple(row)}")
+        # [SPEC-CDI-098]: and the disc is each recording's album -- what Browse
+        # by Album names it by. None of this was written before 2026-10-01.
+        links = c.execute("SELECT mbid, position, chosen, source FROM release_recordings "
+                          "WHERE release_mbid='rel-C' ORDER BY position").fetchall()
+        check([tuple(r) for r in links] == [(f"rec-c{n}", n, 1, "cd:import") for n in (1, 2, 3)]
+              and r["album_linked"] == 3, f"each track linked to the disc, as chosen: {[tuple(x) for x in links]} {r}")
+        check(c.execute("SELECT title FROM releases WHERE mbid='rel-C'").fetchone()[0] == "Release C",
+              "the release, by its title")
     finally:
         c.close()
+
+
+def test_record_release():
+    """`record_release` links only the release's own recording at each place,
+    and moves `chosen` off any other release that recording was on."""
+    c = fixture()
+    c.executescript("CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT NOT NULL, release_date TEXT, "
+                    "source TEXT NOT NULL);"
+                    "CREATE TABLE release_recordings (release_mbid TEXT NOT NULL, mbid TEXT NOT NULL, "
+                    "position INTEGER, source TEXT NOT NULL, chosen INTEGER DEFAULT 0, "
+                    "PRIMARY KEY (release_mbid, mbid)) WITHOUT ROWID;"
+                    "INSERT INTO releases VALUES ('rel-hits', 'Greatest Hits', '2010', 'musicbrainz');"
+                    "INSERT INTO release_recordings (release_mbid, mbid, position, source, chosen) "
+                    "VALUES ('rel-hits', 'rec-1', 7, 'musicbrainz', 1);")
+    print("record_release: the disc's own recordings, chosen over a compilation")
+    n = ingest_cd.record_release(c, RELEASES[0], [(1, "rec-1"), (2, "rec-elsewhere")])
+    rows = {tuple(r) for r in c.execute("SELECT release_mbid, mbid, chosen FROM release_recordings")}
+    check(n == 1 and rows == {("rel-hits", "rec-1", 0), ("rel-A", "rec-1", 1)},
+          f"one linked, the compilation no longer chosen, a recording not on the disc there not linked: {n} {rows}")
+    c.close()
+
+
+def test_choose_release_leaves_a_disc_alone():
+    """`choose_release.py` re-scores every recording -- but not one whose
+    release a CD add recorded: the disc is the evidence it approximates."""
+    import choose_release
+    tmp = tempfile.mkdtemp()
+    db = os.path.join(tmp, "lib.db")
+    c = sqlite3.connect(db)
+    c.executescript(SCHEMA + "CREATE TABLE file_tags (file_id INTEGER PRIMARY KEY, album TEXT);"
+                    "CREATE TABLE musicbrainz_cache (response TEXT);"
+                    "CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT NOT NULL, release_date TEXT, "
+                    "source TEXT NOT NULL, release_group TEXT, status TEXT, primary_type TEXT, "
+                    "secondary_types TEXT, country TEXT, track_count INTEGER);"
+                    "CREATE TABLE release_recordings (release_mbid TEXT NOT NULL, mbid TEXT NOT NULL, "
+                    "position INTEGER, source TEXT NOT NULL, chosen INTEGER DEFAULT 0, "
+                    "PRIMARY KEY (release_mbid, mbid)) WITHOUT ROWID;"
+                    "INSERT INTO files (file_id, audio_md5) VALUES (1, 'md5-x');"
+                    "INSERT INTO passages (passage_id, file_id, kind) VALUES (1, 1, 'radio'), (2, 1, 'radio');"
+                    "INSERT INTO passage_recordings VALUES (1, 'rec-disc', 1.0, 's'), (2, 'rec-free', 1.0, 's');")
+    for rel, kind, src, chosen in (("rel-album", "Album", "musicbrainz", 0), ("rel-disc", "Album", "cd:import", 1)):
+        c.execute("INSERT INTO releases VALUES (?, 'T', '1990', 'musicbrainz', ?, 'Official', ?, NULL, NULL, 10)",
+                  (rel, rel, kind))
+        for rec in ("rec-disc", "rec-free"):
+            if rel == "rel-disc" and rec == "rec-free":
+                continue
+            c.execute("INSERT INTO release_recordings VALUES (?, ?, 1, ?, ?)",
+                      (rel, rec, src if rec == "rec-disc" else "musicbrainz", chosen if rec == "rec-disc" else 0))
+    c.commit()
+    c.close()
+    old = sys.argv
+    sys.argv = ["choose_release.py", db]
+    try:
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()):
+            choose_release.main()
+    finally:
+        sys.argv = old
+    c = sqlite3.connect(db)
+    chosen = dict(c.execute("SELECT mbid, release_mbid FROM release_recordings WHERE chosen = 1"))
+    c.close()
+    print("choose_release: a disc's choice stands")
+    check(chosen == {"rec-disc": "rel-disc", "rec-free": "rel-album"}, f"chosen afterwards: {chosen}")
 
 
 def test_preview_pieces():
@@ -480,6 +551,8 @@ def main() -> int:
     test_tracks_end_to_end()
     test_occasions()
     test_chosen_edition()
+    test_record_release()
+    test_choose_release_leaves_a_disc_alone()
     test_preview_pieces()
     test_files_on_disk()
     test_keep_lossless_setting()

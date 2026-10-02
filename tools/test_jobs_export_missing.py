@@ -148,6 +148,7 @@ def test_credits(tmp):
             d = json.load(open(path, encoding="utf-8"))
             d["tables"]["credits"] = {"local_only": [["r1", "a1"], ["r3", "a1"], ["r-elsewhere", "a1"]],
                                       "peer_only": [], "differ": [], "conflict": []}
+            d["tables"]["albums"] = {"local_only": [["r3", "rel-x"]], "peer_only": [], "differ": [], "conflict": []}
             json.dump(d, open(path, "w", encoding="utf-8"))
         return code, out
     r._spawn = with_credits
@@ -156,6 +157,7 @@ def test_credits(tmp):
     diff, bundle = seen[0][1], seen[1][1]
     check("credits" in diff, f"credits asked for: {diff}")
     present = open(bundle[bundle.index("--present-md5-file") + 1], encoding="utf-8").read().split()
+    check("albums" in diff and j["result"]["album_files"] == 1, f"albums asked for, and said: {j['result']}")
     check(present == ["md5-3"] and j["result"]["credit_files"] == 1,
           f"only the file the speaker has; a missing one brings its own, one with no file here nothing: "
           f"{present} {j['result']}")

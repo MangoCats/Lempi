@@ -48,6 +48,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -299,6 +300,62 @@ def _candidate_for(release: dict, position: int) -> dict | None:
                          if a.get("name"))
     return {"mbid": mbid, "title": rec.get("title") or t.get("title"),
             "artist": artists or None, "score": 1.0}
+
+
+def record_release(conn, release: dict, tracks) -> int:
+    """The disc in hand is its release `[SPEC-CDI-098]`: `release` (a
+    MusicBrainz release, `media[].tracks[]` with recordings) becomes the chosen
+    release of each recording in `tracks` -- `(position, mbid)` -- that it
+    carries at that position. That is what names the album in Browse; until
+    2026-10-01 a CD add wrote no release at all, so 162 of 169 newly added
+    radio passages had no album there, on the desktop and every speaker.
+
+    `chosen` is set for these recordings alone and moved off any other
+    release they were on; `source` is `cd:import`, which `choose_release.py`
+    leaves standing -- knowing which record a rip came from settles it.
+    Returns how many recordings were linked."""
+    rid = release.get("id")
+    if not rid:
+        return 0
+    conn.execute("CREATE TABLE IF NOT EXISTS releases (mbid TEXT PRIMARY KEY, title TEXT NOT NULL, "
+                 "release_date TEXT, source TEXT NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS release_recordings (release_mbid TEXT NOT NULL, "
+                 "mbid TEXT NOT NULL, position INTEGER, source TEXT NOT NULL, "
+                 "PRIMARY KEY (release_mbid, mbid)) WITHOUT ROWID")
+    for ddl in ("ALTER TABLE release_recordings ADD COLUMN chosen INTEGER DEFAULT 0",
+                "ALTER TABLE release_recordings ADD COLUMN track_length_ms INTEGER",
+                "ALTER TABLE release_recordings ADD COLUMN disc INTEGER"):
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError:
+            pass    # there already
+    have = {r[1] for r in conn.execute("PRAGMA table_info(releases)")}
+    group = release.get("release-group") or {}
+    row = {"mbid": rid, "title": release.get("title") or "?", "release_date": release.get("date"),
+           "source": "musicbrainz", "release_group": group.get("id"), "status": release.get("status"),
+           "primary_type": group.get("primary-type"),
+           "secondary_types": ",".join(group.get("secondary-types") or []) or None,
+           "country": release.get("country"),
+           "track_count": sum(m.get("track-count") or len(m.get("tracks") or []) for m in release.get("media") or [])
+           or None}
+    cols = [c for c in row if c in have]
+    # A release already known keeps its row: fetch_releases.py's is the fuller.
+    conn.execute(f"INSERT OR IGNORE INTO releases ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
+                 [row[c] for c in cols])
+    linked = 0
+    for position, mbid in tracks:
+        t = _track_at_position(release, position)
+        if t is None or (t.get("recording") or {}).get("id") != mbid:
+            continue    # not this release's recording at this place: not linked
+        disc = next((m.get("position") for m in release.get("media") or [] if t in (m.get("tracks") or [])), None)
+        conn.execute("UPDATE release_recordings SET chosen = 0 WHERE mbid = ?1", (mbid,))
+        conn.execute(
+            "INSERT INTO release_recordings (release_mbid, mbid, position, source, track_length_ms, chosen, disc) "
+            "VALUES (?1, ?2, ?3, 'cd:import', ?4, 1, ?5) "
+            "ON CONFLICT(release_mbid, mbid) DO UPDATE SET chosen = 1, source = 'cd:import'",
+            (rid, mbid, t.get("position") or position, t.get("length"), disc))
+        linked += 1
+    return linked
 
 
 def _artists_for(release: dict, position: int) -> list[tuple[str, str]]:
@@ -563,6 +620,7 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
     boundary_src = f"imported:{'eac-cue' if toc.source == 'eac-cue' else 'cdrdao-toc'}"
     identified = ambiguous = unidentified = failed = 0
     mbids: list[str] = []
+    placed: list[tuple[int, str]] = []
 
     for track in toc.tracks:
         start_ms, end_ms = track.start_ms, track.end_ms
@@ -582,6 +640,7 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
             conn, track.number, track.title or toc.title, radio_pid, mp3_path, start_ms, end_ms,
             audio_md5, disc_outcome, releases, chosen, acoustid_key, now)
         mbids.append(mbid)
+        placed.append((track.number, mbid))
         identified += outcome == "identified"
         ambiguous += outcome == "ambiguous"
         unidentified += outcome == "unidentified"
@@ -613,6 +672,7 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
 
     # ------------------------------------------------------------- disc decision
     certain = chosen or (disc_outcome == "exact" and len(releases) == 1)
+    albums = record_release(conn, releases[0], placed) if certain and releases else 0
     detail = {
         "track_count": toc.track_count, "format": toc.source,
         "candidates": len(releases),
@@ -629,7 +689,7 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
 
     return {"tracks": toc.track_count, "identified": identified,
             "ambiguous": ambiguous, "unidentified": unidentified,
-            "verification_failed": failed, "file_id": file_id,
+            "verification_failed": failed, "file_id": file_id, "album_linked": albums,
             "disc_outcome": disc_outcome, "candidates": len(releases), "occasions": marked}
 
 
@@ -828,8 +888,10 @@ def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[
             "VALUES (?1,'rip','track_missing',NULL,?2,?3)",
             (tracks[0][2], json.dumps({"track": n, "title": title}), now))
     marked = mark_occasions(conn, mbids, occasions, now) if occasions else {}
+    albums = (record_release(conn, releases[0], [(t.number, m) for (t, _, _), m in zip(tracks, mbids)])
+              if certain and releases else 0)
     return {"tracks": len(tracks), **counts, "verification_failed": failed, "missing": missing,
-            "occasions": marked,
+            "occasions": marked, "album_linked": albums,
             "file_ids": file_ids, "file_id": file_ids[0] if file_ids else None,
             "disc_outcome": disc_outcome, "candidates": len(releases), "mode": "tracks"}
 

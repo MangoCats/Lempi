@@ -1325,9 +1325,9 @@ class Runner:
     def _export_missing(self, job_id: int, target: str):
         """The Export page's *Send what's missing* `[SPEC-STAR-090]` -- `target`
         is `{"peer", "remote"}`, the remote resolved by the console from the
-        peer's name. Two stages: `mesh_diff.py` on `files`, `holds` and
-        `credits`, read-only against the speaker, for the audio it lacks and
-        the holds and artist credits it has not got; then `export_bundle.py`
+        peer's name. Two stages: `mesh_diff.py` on `files`, `holds`, `credits`
+        and `albums`, read-only against the speaker, for the audio it lacks and
+        the holds, artist credits and albums it has not got; then `export_bundle.py`
         with exactly those `audio_md5`s -- the missing ones with their audio
         and every fact about them, the rest as payload alone. Nothing is sent
         here: that is *Send to <speaker>*, on a person's press.
@@ -1346,7 +1346,8 @@ class Runner:
                    "(read-only) ...", stage="diff")
         code, _ = self._spawn(job_id, "diff", [sys.executable, os.path.join(tools, "mesh_diff.py"),
                                                self.library, payload["remote"], "--table", "files",
-                                               "--table", "holds", "--table", "credits", "-o", diff_path])
+                                               "--table", "holds", "--table", "credits", "--table", "albums",
+                                               "-o", diff_path])
         if code != 0 or not os.path.isfile(diff_path):
             self._emit(job_id, "error", f"the diff against {payload['peer']} failed (exit {code}): "
                        "nothing was built", stage="diff")
@@ -1368,19 +1369,26 @@ class Runner:
         # payload alone.
         lacking = {k[0] for k in (tables.get("credits") or {"local_only": []})["local_only"]}
         credit_md5s = self._files_of_recordings(lacking) - missing
-        present = sorted(hold_md5s | credit_md5s)
+        # And each recording's chosen release, which names its album
+        # `[SPEC-CDI-098]` -- the CD adds of that same week had none.
+        unnamed = {k[0] for k in (tables.get("albums") or {"local_only": []})["local_only"]}
+        album_md5s = self._files_of_recordings(unnamed) - missing
+        present = sorted(hold_md5s | credit_md5s | album_md5s)
         result.update(missing=len(md5s), peer_only=len(files["peer_only"]), albums=self._albums_of(md5s),
                       holds=len([k for k in changed if k[0] not in missing]), hold_files=len(hold_md5s),
-                      credit_files=len(credit_md5s))
+                      credit_files=len(credit_md5s), album_files=len(album_md5s))
         if hold_md5s:
             self._emit(job_id, "log", f"{result['holds']} hold(s) on {len(hold_md5s)} file(s) "
                        f"{payload['peer']} already has differ from this library's", stage="diff")
         if credit_md5s:
             self._emit(job_id, "log", f"{len(credit_md5s)} file(s) {payload['peer']} already has lack "
                        "artist credits this library has", stage="diff")
+        if album_md5s:
+            self._emit(job_id, "log", f"{len(album_md5s)} file(s) {payload['peer']} already has lack "
+                       "the album this library names them by", stage="diff")
         if not md5s and not present:
             self._emit(job_id, "log", f"{payload['peer']} already has every file this library has, "
-                       "every hold, and every artist credit", stage="diff")
+                       "every hold, every artist credit and every album", stage="diff")
             self._save_result(job_id, result)
             return self._finish(job_id, "done")
 

@@ -1152,13 +1152,23 @@ pub fn import_releases(db: &mut Connection, doc: &Value, bundle_root: &Path) -> 
             if !held {
                 continue;
             }
+            let chosen = int(t, "chosen").unwrap_or(0);
+            if chosen == 1 {
+                // One chosen release per recording, as Vipunen keeps it
+                // `[SPEC-CDI-098]`: a CD add moves `chosen` off a compilation
+                // onto the disc, and without this the speaker would keep both,
+                // and name the album by whichever sorted first.
+                tx.execute("UPDATE release_recordings SET chosen = 0 WHERE mbid = ?1 AND release_mbid <> ?2",
+                           params![rec, mbid])
+                    .map_err(|e| format!("release {mbid} track {rec}: {e}"))?;
+            }
             tx.execute(
                 "INSERT INTO release_recordings (release_mbid,mbid,position,source,track_length_ms,chosen,disc) \
                  VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(release_mbid,mbid) DO UPDATE SET \
                  position=excluded.position, source=excluded.source, track_length_ms=excluded.track_length_ms, \
                  chosen=excluded.chosen, disc=excluded.disc",
                 params![mbid, rec, int(t, "position"), str_of(t, "source"), int(t, "track_length_ms"),
-                        int(t, "chosen").unwrap_or(0), int(t, "disc")],
+                        chosen, int(t, "disc")],
             )
             .map_err(|e| format!("release {mbid} track {rec}: {e}"))?;
             rep.tracks += 1;
@@ -2886,6 +2896,34 @@ mod tests {
         let n: i64 = c.query_row("SELECT count(*) FROM release_recordings", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1, "idempotent");
         std::fs::remove_dir_all(&s.root).ok();
+    }
+
+    /// `[SPEC-CDI-098]` An arriving chosen release is the recording's one
+    /// chosen release: a compilation chosen before is chosen no longer.
+    #[test]
+    fn an_arriving_chosen_release_replaces_the_one_chosen_before() {
+        let mut c = empty_library();
+        c.execute_batch(
+            "INSERT INTO recordings VALUES ('m0','t',NULL,'mb');
+             CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT NOT NULL, release_date TEXT, source TEXT NOT NULL);
+             CREATE TABLE release_recordings (release_mbid TEXT NOT NULL, mbid TEXT NOT NULL, position INTEGER,
+                 source TEXT NOT NULL, track_length_ms INTEGER, chosen INTEGER DEFAULT 0, disc INTEGER,
+                 PRIMARY KEY (release_mbid, mbid)) WITHOUT ROWID;
+             INSERT INTO releases VALUES ('hits','Greatest Hits','2010','mb');
+             INSERT INTO release_recordings VALUES ('hits','m0',7,'mb',NULL,1,1);",
+        )
+        .unwrap();
+        let d = doc(r#"{"releases":[{"mbid":"disc","title":"The Album","source":"mb",
+                        "tracks":[{"recording":"m0","position":2,"disc":1,"chosen":1,"source":"cd:import"}]}]}"#);
+        import_releases(&mut c, &d, std::path::Path::new("/nowhere")).unwrap();
+        let chosen: Vec<(String, i64)> = c
+            .prepare("SELECT release_mbid, chosen FROM release_recordings ORDER BY 1")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(chosen, vec![("disc".to_string(), 1), ("hits".to_string(), 0)]);
     }
 
     /// A found file changed since its scan is checked again, and a found

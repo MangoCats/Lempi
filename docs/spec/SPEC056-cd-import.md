@@ -172,6 +172,16 @@ value still overrides it, Reset returns to it `[SPEC-PREF-085]`, and the
 catalogue carries it to the speakers. An equal mark already there is left as
 it was; unticked writes nothing -- no opinion, never "not Christmas".
 
+**`[SPEC-CDI-098]` The disc is its recordings' album.** When the edition is
+certain (one exact Disc ID match, or a person's pick), each track's recording
+is linked to it in `release_recordings`, `chosen`, source `cd:import`, and
+`chosen` comes off any other release it was on. Browse by Album names an
+album by that link; until 2026-10-01 an add wrote none, and 162 of 169 newly
+added radio passages had no album on the desktop or any speaker.
+`choose_release.py` does not re-score a disc's choice, and a speaker keeps one
+chosen release per recording as it imports one. `backfill_cd_releases.py`
+links the rips added before.
+
 ## 5a. A rip with a file per track
 
 **`[SPEC-CDI-090]` A tracks-mode rip is added as one MP3 per track, each with

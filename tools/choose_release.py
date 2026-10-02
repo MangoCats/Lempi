@@ -282,6 +282,13 @@ def main() -> int:
 
     decided = tagged = 0
     now = int(time.time())
+    # A recording whose release a CD add recorded is not re-scored: the disc
+    # in hand is the record it came from, which is the evidence this whole
+    # tool is approximating `[SPEC-CDI-098]`.
+    from_disc = {m for (m,) in conn.execute(
+        "SELECT mbid FROM release_recordings WHERE chosen = 1 AND source = 'cd:import'")}
+    if not args.explain:
+        mbids = [m for m in mbids if m not in from_disc]
     for mbid in mbids:
         rows = conn.execute(
             "SELECT rel.mbid, rel.title, rel.release_date, rel.status, "
