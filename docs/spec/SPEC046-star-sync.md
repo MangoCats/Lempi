@@ -96,15 +96,17 @@ A star sync carries the catalogue, never audio, and refuses an entry for audio
 the node does not hold `[SPEC-STAR-080]`. So new music reaches a speaker as a
 bundle first. Built 2026-10-01 at the maintainer's request: the Export page's
 *Send what's missing* asks each speaker ticked which audio it holds --
-`mesh_diff.py` on `files` and `holds`, read-only over ssh -- and builds one
+`mesh_diff.py` on `files`, `holds` and `credits`, read-only over ssh -- and builds one
 bundle of exactly the files this library has and it lacks
 (`export_bundle.py --md5-file`), each with every fact about it. It names what
 is missing by album. It trusts a node's `files` table to name the audio on its
 disk; checked on lempi02w that day, 5,709 listed and 5,709 there, and the 49 it
 lacked were exactly the albums added since its last sync. Corrections to what
-both already hold are not this: they are the sync's -- with one exception, a
-passage's hold, which goes in the same bundle as payload alone so a damaged
-track is not left choosable on a speaker until the next sync `[SPEC-HOLD-080]`.
+both already hold are not this: they are the sync's -- with two exceptions,
+each sent in the same bundle as payload alone: a passage's hold, so a damaged
+track is not left choosable on a speaker until the next sync `[SPEC-HOLD-080]`,
+and an artist credit the speaker lacks, so its music is not left out of
+Browse by Artist `[SPEC-PL-054]`.
 
 **`[SPEC-STAR-092]` Sending is one press per speaker, over ssh.** *Send to
 <speaker>* runs `tools/send_bundle.py` as a console job: first a dry run that

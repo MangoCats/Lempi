@@ -127,6 +127,40 @@ def test_holds(tmp):
           and "out_dir" in j2["result"], f"{j2['state']} {seen2} {j2['result']}")
 
 
+def test_credits(tmp):
+    print("artist credits the speaker lacks, on files it has, go as payload alone [SPEC-PL-054]")
+    r, db, seen = runner_with(tmp, "credits", ["md5-1"])
+    c = sqlite3.connect(db)
+    for pid, fid, mbid in ((1, 1, "r1"), (3, 3, "r3")):
+        c.execute("INSERT INTO passages (passage_id, file_id, kind, start_ms, end_ms, boundary_src) "
+                  "VALUES (?, ?, 'radio', 0, 1000, 'x')", (pid, fid))
+        c.execute("INSERT INTO recordings (mbid, title, source) VALUES (?, 't', 's')", (mbid,))
+        c.execute("INSERT INTO passage_recordings (passage_id, mbid, weight, source) VALUES (?, ?, 1.0, 's')",
+                  (pid, mbid))
+    c.commit()
+    c.close()
+    real = r._spawn
+
+    def with_credits(job_id, stage, argv):
+        code, out = real(job_id, stage, argv)
+        if stage == "diff":
+            path = argv[argv.index("-o") + 1]
+            d = json.load(open(path, encoding="utf-8"))
+            d["tables"]["credits"] = {"local_only": [["r1", "a1"], ["r3", "a1"], ["r-elsewhere", "a1"]],
+                                      "peer_only": [], "differ": [], "conflict": []}
+            json.dump(d, open(path, "w", encoding="utf-8"))
+        return code, out
+    r._spawn = with_credits
+    j = wait_for(r, r.submit("export-missing", json.dumps({"peer": "speaker-a",
+                                                           "remote": "pi@speaker-a:/srv/library/library.db"})))
+    diff, bundle = seen[0][1], seen[1][1]
+    check("credits" in diff, f"credits asked for: {diff}")
+    present = open(bundle[bundle.index("--present-md5-file") + 1], encoding="utf-8").read().split()
+    check(present == ["md5-3"] and j["result"]["credit_files"] == 1,
+          f"only the file the speaker has; a missing one brings its own, one with no file here nothing: "
+          f"{present} {j['result']}")
+
+
 def test_route(tmp):
     print("the route: names resolved to their configured remote, one job each, the commands each needs")
     import console
@@ -237,6 +271,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         test_job(tmp)
         test_holds(tmp)
+        test_credits(tmp)
         test_route(tmp)
         test_send(tmp)
         test_send_route(tmp)

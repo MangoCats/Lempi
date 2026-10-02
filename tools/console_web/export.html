@@ -178,8 +178,9 @@ function showMissing(panel, info, job) {
   if (job.state !== 'done') {
     return panel.append(S.el('p', { class: 'err', text: `Could not finish for ${info.peer}: see the log above.` }));
   }
-  if (!res.missing && !res.holds) {
-    return panel.append(S.el('p', { class: 'verdict ok', text: `${info.peer} already has every file this library has, and every hold.` }));
+  if (!res.missing && !res.holds && !res.credit_files) {
+    return panel.append(S.el('p', { class: 'verdict ok',
+      text: `${info.peer} already has every file this library has, every hold, and every artist credit.` }));
   }
   // [SPEC-STAR-090]: Send runs send_bundle.py as a job, over ssh -- first the
   // dry run, which says what it found on the speaker and would do; then, on a
@@ -234,6 +235,9 @@ function showMissing(panel, info, job) {
     ...(res.holds ? [S.el('p', { class: 'verdict note', text: `${res.holds} hold${s(res.holds)} on `
       + `${res.hold_files} file${s(res.hold_files)} ${info.peer} already has differ from this library's `
       + `-- sent without audio, so the Program Director there skips the same passages.` })] : []),
+    // [SPEC-PL-054]: artist credits the speaker lacks, on files it has.
+    ...(res.credit_files ? [S.el('p', { class: 'verdict note', text: `${res.credit_files} file${s(res.credit_files)} `
+      + `${info.peer} already has lack artist credits -- sent without audio, so their artists appear in Browse there.` })] : []),
     S.el('div', { class: 'controls' }, send, now), sendLog,
     S.el('p', { style: 'font-size:.85rem;color:var(--dim);margin:.6rem 0 .2rem',
       text: `Or by hand, in a terminal: the first line says what it would do; the second does it.` }),

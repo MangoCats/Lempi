@@ -78,6 +78,8 @@ The one payload `[SPEC-DF-065]` promises and does not contain. Written because `
 
 **`[SPEC-PL-052]` `lyrics` travel on their recording** `[SPEC-LYR-025]`, emitted since 2026-09-25 so a phone has words without writing them beside the audio `[REQ-AND-202]`. Absent, not `null`, when a recording has none — the common case. A receiver ranks them as it ranks flavor `[SPEC-DF-070]`: a `manual` text is kept, otherwise the later `fetched_at` wins, so a resend changes nothing.
 
+**`[SPEC-PL-054]` A recording's `artists` are written by the receiver, not only carried.** Each is the credit (`mbid`, `weight`, `source`) with the artist's `name` and `sort_name`. The payload had always carried them; `import_bundle` read none until 2026-10-01, when 49 files sent to three speakers arrived artist-less and Cyndi Lauper's eight albums were missing from Browse by Artist on every one. The receiver adds an `artists` row it lacks and a `recording_artists` credit it lacks, and overwrites or removes neither: a credit already there is its own. An artist with no name in the payload is not credited, since it would list as no one. The Export page's diff compares credits, so a file sent before this is repaired by its next send, payload alone `[SPEC-HOLD-080]`.
+
 ---
 
 ## 4. Acceptance

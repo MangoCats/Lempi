@@ -108,6 +108,8 @@ fn main() {
     // Always said, zero included: "holds 0" is the answer to whether a
     // bundle's holds reached passages already here `[SPEC-HOLD-080]`.
     println!("  holds     {}", rep.holds_set);
+    // Written only on --apply, so a dry run says 0 here.
+    println!("  credits   {}", rep.credits);
     if rep.holds_unmatched > 0 {
         println!("  holds unmatched {} (no passage of that span here; left alone)", rep.holds_unmatched);
     }

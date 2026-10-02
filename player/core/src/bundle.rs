@@ -49,7 +49,22 @@ CREATE TABLE IF NOT EXISTS lyrics (
     text       TEXT NOT NULL,
     source     TEXT NOT NULL,
     fetched_at TEXT NOT NULL
-)";
+);
+-- Who a recording is by `[SPEC-PL-054]`, in `sql/schema.sql`'s shape. Every
+-- speaker's library has them, from a star sync; a phone's may not.
+CREATE TABLE IF NOT EXISTS artists (
+    mbid       TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    sort_name  TEXT,
+    source     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS recording_artists (
+    mbid         TEXT NOT NULL REFERENCES recordings(mbid) ON DELETE CASCADE,
+    artist_mbid  TEXT NOT NULL REFERENCES artists(mbid),
+    weight       REAL NOT NULL DEFAULT 1.0,
+    source       TEXT NOT NULL,
+    PRIMARY KEY (mbid, artist_mbid)
+) WITHOUT ROWID";
 
 /// What became of one encoding `[SPEC-PL-075]`.
 #[derive(Debug, PartialEq)]
@@ -120,6 +135,8 @@ pub struct Report {
     /// Holds the payload carried for a passage this library has no passage of
     /// that exact span for: left alone, not guessed at.
     pub holds_unmatched: usize,
+    /// Artist credits added to recordings `[SPEC-PL-054]`.
+    pub credits: usize,
 }
 
 impl Report {
@@ -751,6 +768,41 @@ fn upsert_recording(tx: &rusqlite::Transaction, r: &Value, rep: &mut Report) -> 
     }
     if let Some(w) = r.get("lyrics").filter(|w| !w.is_null()) {
         upsert_lyrics(tx, &mbid, w, rep)?;
+    }
+    // Who it is by `[SPEC-PL-054]`. Every payload has carried this, and until
+    // 2026-10-01 nothing read it: 49 files sent to three speakers that evening
+    // arrived with no artist, and Cyndi Lauper -- eight albums -- was absent
+    // from Browse by Artist on all of them. Added where absent, never
+    // overwritten or removed: a credit already here is this library's own.
+    for a in r.get("artists").and_then(|v| v.as_array()).unwrap_or(&empty) {
+        let artist = str_of(a, "mbid");
+        if artist.is_empty() {
+            continue;
+        }
+        let known = tx
+            .query_row("SELECT 1 FROM artists WHERE mbid = ?1", params![artist], |_| Ok(()))
+            .is_ok();
+        if !known {
+            // A credit to an artist nothing here can name would list as no
+            // one; the sender's own row was missing too.
+            let Some(name) = a.get("name").and_then(|v| v.as_str()) else { continue };
+            tx.execute("INSERT INTO artists (mbid,name,sort_name,source) VALUES (?1,?2,?3,?4)",
+                       params![artist, name, a.get("sort_name").and_then(|v| v.as_str()), str_of(a, "source")])
+                .map_err(|e| e.to_string())?;
+            rep.rows_written += 1;
+        }
+        let credited = tx
+            .query_row("SELECT 1 FROM recording_artists WHERE mbid = ?1 AND artist_mbid = ?2",
+                       params![mbid, artist], |_| Ok(()))
+            .is_ok();
+        if !credited {
+            tx.execute("INSERT INTO recording_artists (mbid,artist_mbid,weight,source) VALUES (?1,?2,?3,?4)",
+                       params![mbid, artist, a.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0),
+                               str_of(a, "source")])
+                .map_err(|e| e.to_string())?;
+            rep.rows_written += 1;
+            rep.credits += 1;
+        }
     }
     Ok(())
 }
@@ -1887,6 +1939,46 @@ mod tests {
         let rep = import(&mut c, &with_hold("held", 999), "b5", &audio_dir, true, Some(TEST_HASHER)).unwrap();
         assert_eq!((rep.holds_set, rep.holds_unmatched), (0, 1));
         assert_eq!(hold_now(&c).as_deref(), Some(""));
+
+        std::fs::remove_dir_all(&audio_dir).ok();
+    }
+
+    /// `[SPEC-PL-054]` A recording's artists land: the artist and the credit,
+    /// each where absent -- on a new file, and on one already here, which is
+    /// how the 49 files sent artist-less on 2026-10-01 are repaired.
+    #[test]
+    fn a_recordings_artists_are_credited_and_a_local_credit_is_kept() {
+        let mut c = empty_library();
+        let audio_dir = std::env::temp_dir().join(format!("lempi-bundle-credit-{}", std::process::id()));
+        std::fs::create_dir_all(&audio_dir).unwrap();
+        let audio_path = audio_dir.join("a.wav");
+        write_tiny_wav(&audio_path);
+        let md5 = (TEST_HASHER.hash)(&audio_path).unwrap();
+        let mut d = one_encoding_bundle(&md5, "m1", 0.5, "computed:x@1");
+        d["recordings"][0]["artists"] = doc(
+            r#"[{"mbid":"a1","name":"Cyndi Lauper","sort_name":"Lauper, Cyndi","weight":1.0,"source":"musicbrainz"},
+                {"mbid":"a2","name":null,"sort_name":null,"weight":1.0,"source":"musicbrainz"}]"#);
+        let credits = |c: &Connection| -> Vec<(String, f64)> {
+            let mut s = c.prepare("SELECT artist_mbid, weight FROM recording_artists WHERE mbid='m1' ORDER BY 1").unwrap();
+            s.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(|r| r.unwrap()).collect()
+        };
+
+        let rep = import(&mut c, &d, "b1", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep.credits, 1);
+        assert_eq!(credits(&c), vec![("a1".to_string(), 1.0)], "an artist no one can name is not credited");
+        let name: String = c.query_row("SELECT name FROM artists WHERE mbid='a1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(name, "Cyndi Lauper");
+
+        // Already here, its credit gone (as on the speakers): a resend restores it.
+        c.execute("DELETE FROM recording_artists", []).unwrap();
+        let rep = import(&mut c, &d, "b2", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep.outcomes, vec![(md5.clone(), Landed::Already)]);
+        assert_eq!((rep.credits, credits(&c)), (1, vec![("a1".to_string(), 1.0)]));
+
+        // A credit this library has is its own: not overwritten.
+        c.execute("UPDATE recording_artists SET weight=0.5", []).unwrap();
+        let rep = import(&mut c, &d, "b3", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!((rep.credits, credits(&c)), (0, vec![("a1".to_string(), 0.5)]));
 
         std::fs::remove_dir_all(&audio_dir).ok();
     }

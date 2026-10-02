@@ -71,6 +71,15 @@ TABLES = {
         "value": ("hold",),
         "manual_field": None,
     },
+    "credits": {
+        # Who each recording is by `[SPEC-PL-054]` -- which credits each side
+        # has, nothing more: a credit a speaker lacks is added by a send, and
+        # one it has is its own.
+        "sql": "SELECT mbid, artist_mbid FROM recording_artists",
+        "key": ("mbid", "artist_mbid"),
+        "value": (),
+        "manual_field": None,
+    },
 }
 
 _HAS_COLUMN = "SELECT name FROM pragma_table_info('{table}') WHERE name = '{column}'"

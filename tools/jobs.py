@@ -1325,11 +1325,11 @@ class Runner:
     def _export_missing(self, job_id: int, target: str):
         """The Export page's *Send what's missing* `[SPEC-STAR-090]` -- `target`
         is `{"peer", "remote"}`, the remote resolved by the console from the
-        peer's name. Two stages: `mesh_diff.py` on `files` and `holds`,
-        read-only against the speaker, for the audio it lacks and the holds
-        it has not got; then `export_bundle.py` with exactly those
-        `audio_md5`s -- the missing ones with their audio and every fact about
-        them, the held-but-different ones as payload alone. Nothing is sent
+        peer's name. Two stages: `mesh_diff.py` on `files`, `holds` and
+        `credits`, read-only against the speaker, for the audio it lacks and
+        the holds and artist credits it has not got; then `export_bundle.py`
+        with exactly those `audio_md5`s -- the missing ones with their audio
+        and every fact about them, the rest as payload alone. Nothing is sent
         here: that is *Send to <speaker>*, on a person's press.
 
         Trusts the speaker's `files` table to name the audio on its disk:
@@ -1346,7 +1346,7 @@ class Runner:
                    "(read-only) ...", stage="diff")
         code, _ = self._spawn(job_id, "diff", [sys.executable, os.path.join(tools, "mesh_diff.py"),
                                                self.library, payload["remote"], "--table", "files",
-                                               "--table", "holds", "-o", diff_path])
+                                               "--table", "holds", "--table", "credits", "-o", diff_path])
         if code != 0 or not os.path.isfile(diff_path):
             self._emit(job_id, "error", f"the diff against {payload['peer']} failed (exit {code}): "
                        "nothing was built", stage="diff")
@@ -1362,15 +1362,25 @@ class Runner:
         holds = tables.get("holds") or {"local_only": [], "differ": []}
         changed = [k for k in holds["local_only"]] + [d["key"] for d in holds["differ"]]
         missing = set(md5s)
-        hold_md5s = sorted({k[0] for k in changed} - missing)
+        hold_md5s = {k[0] for k in changed} - missing
+        # Artist credits it lacks on recordings in files it has -- the 49 sent
+        # 2026-10-01 arrived with none `[SPEC-PL-054]`. Same remedy: the
+        # payload alone.
+        lacking = {k[0] for k in (tables.get("credits") or {"local_only": []})["local_only"]}
+        credit_md5s = self._files_of_recordings(lacking) - missing
+        present = sorted(hold_md5s | credit_md5s)
         result.update(missing=len(md5s), peer_only=len(files["peer_only"]), albums=self._albums_of(md5s),
-                      holds=len([k for k in changed if k[0] not in missing]), hold_files=len(hold_md5s))
+                      holds=len([k for k in changed if k[0] not in missing]), hold_files=len(hold_md5s),
+                      credit_files=len(credit_md5s))
         if hold_md5s:
             self._emit(job_id, "log", f"{result['holds']} hold(s) on {len(hold_md5s)} file(s) "
                        f"{payload['peer']} already has differ from this library's", stage="diff")
-        if not md5s and not hold_md5s:
+        if credit_md5s:
+            self._emit(job_id, "log", f"{len(credit_md5s)} file(s) {payload['peer']} already has lack "
+                       "artist credits this library has", stage="diff")
+        if not md5s and not present:
             self._emit(job_id, "log", f"{payload['peer']} already has every file this library has, "
-                       "and every hold", stage="diff")
+                       "every hold, and every artist credit", stage="diff")
             self._save_result(job_id, result)
             return self._finish(job_id, "done")
 
@@ -1381,10 +1391,10 @@ class Runner:
         self._emit(job_id, "stage", "bundle", stage="bundle")
         argv = [sys.executable, os.path.join(tools, "export_bundle.py"), self.library,
                 "--md5-file", md5_file, "--gzip", "-o", out_dir]
-        if hold_md5s:
-            present_file = os.path.join(base, "holds-only.txt")
+        if present:
+            present_file = os.path.join(base, "payload-only.txt")
             with open(present_file, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write("".join(m + "\n" for m in hold_md5s))
+                fh.write("".join(m + "\n" for m in present))
             argv += ["--present-md5-file", present_file]
         for root in self.roots:
             argv += ["--root", root]
@@ -1413,6 +1423,25 @@ class Runner:
         self._save_result(job_id, {"peer": payload["peer"], "applied": bool(payload.get("apply")),
                                    "bundle": payload["bundle"], "ok": code == 0})
         self._finish(job_id, "done" if code == 0 else "stopped" if code < 0 else "failed")
+
+    def _files_of_recordings(self, mbids: set) -> set:
+        """The `audio_md5` of every file here with a passage crediting one of
+        `mbids` -- a recording with no file here sends nothing."""
+        out: set = set()
+        if not mbids:
+            return out
+        ids = sorted(mbids)
+        c = lempi_db.connect(self.library, lempi_db.ROLE_LIBRARY)
+        try:
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                out.update(m for (m,) in c.execute(
+                    "SELECT DISTINCT f.audio_md5 FROM passage_recordings pr "
+                    "JOIN passages p ON p.passage_id = pr.passage_id JOIN files f ON f.file_id = p.file_id "
+                    f"WHERE pr.mbid IN ({','.join('?' * len(chunk))})", chunk))
+        finally:
+            c.close()
+        return out
 
     def _albums_of(self, md5s: list) -> list:
         """`[{"folder", "files"}]` for a list of `audio_md5`, so a person sees
