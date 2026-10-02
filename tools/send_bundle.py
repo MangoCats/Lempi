@@ -47,7 +47,11 @@ import time
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PORT = 5720           # the player's own, as the fleet runs it (fleet/targets.env)
+sys.path.insert(0, HERE)
+# The player's own port, from the one Python mirror of it `[GDE-CLI-100]` --
+# written out here as a number, it was a second definition the crate's
+# guard test refused.
+from lempi_control import LEMPI_DEFAULT_PORT as PORT  # noqa: E402
 
 
 def say(msg: str) -> None:
