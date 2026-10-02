@@ -137,8 +137,11 @@ def main() -> int:
         f = Fake(ro=True)
         seen = []
 
+        envs = []
+
         def attended(argv, **kw):
             seen.append(argv)
+            envs.append(kw.get("env") or {})
             return subprocess.CompletedProcess(argv, 0)
         rc, reloads = run([b, "pi@speaker-b", "--apply"], f, attended)
         cmds = [c for c, _ in f.calls]
@@ -148,6 +151,21 @@ def main() -> int:
         check(not any(c.startswith(("tar", "import_bundle")) for c in cmds),
               f"nothing written outside the window: {cmds}")
         check(reloads == ["http://speaker-b:5720/library/reload"], f"and the reload after it: {reloads}")
+        check(envs and envs[0].get("MSYS_NO_PATHCONV") == "1" and envs[0].get("MSYS2_ARG_CONV_EXCL") == "*",
+              "Git Bash told not to rewrite the speaker's paths into this PC's")
+
+        print("a speaker path a shell rewrote into this PC's is refused before anything is sent")
+        for argv in ([b, "pi@speaker-b", "--library", "C:/Program Files/Git/srv/library/library.db",
+                      "--apply", "--inside-window"],
+                     [b, "pi@speaker-a", "--library", "srv/library/library.db", "--apply"]):
+            f = Fake()
+            rc, reloads = run(argv, f)
+            check(rc == 1 and not f.calls and not reloads, f"refused, nothing asked of the speaker: {argv[3]} {f.calls}")
+
+        print("a failed import still removes its staging folder")
+        f = Fake(imported=1, awaiting=1)
+        rc, _ = run([b, "pi@speaker-a", "--apply"], f)
+        check(rc == 1 and any(c.startswith("rm -rf /tmp/lempi-bundle") for c, _ in f.calls), f"cleaned: {f.calls}")
 
         print("a speaker with no import_bundle is told so, before anything is sent")
         f = Fake(tool=False)

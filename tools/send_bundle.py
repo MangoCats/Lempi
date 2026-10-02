@@ -221,6 +221,15 @@ def main() -> int:
     try:
         if not os.path.isfile(os.path.join(bundle, "payload.json")):
             raise Failed(f"{bundle} has no payload.json -- is it a bundle folder?")
+        # Every path here is the speaker's, so it is absolute POSIX or it is
+        # wrong. On 2026-10-01 Git Bash, starting this script inside bose's
+        # window, rewrote `/srv/library/library.db` to `C:/Program
+        # Files/Git/srv/...`; on bose that is a relative path, and 680 MB
+        # went into ~pi/C:, beside an empty library.db the import made there.
+        for what, p in (("--library", library), ("the audio root", audio_root), ("the staging folder", where)):
+            if not p.startswith("/") or ":" in p or "\\" in p:
+                raise Failed(f"{what} {p!r} is not an absolute path on the speaker -- if it names this PC, "
+                             f"a shell rewrote it (Git Bash does, without MSYS_NO_PATHCONV=1); nothing was sent")
         if args.inside_window:
             return inside(host, bundle, library, audio_root, where)
 
@@ -244,18 +253,25 @@ def main() -> int:
             say("\nNothing done. Re-run with --apply to send and import it.")
             return 0
 
-        if ro:
-            bash = shutil.which("bash") or r"C:\Program Files\Git\bin\bash.exe"
-            me = [sys.executable, os.path.abspath(__file__), bundle, host, "--library", library,
-                  "--apply", "--inside-window"]
-            r = subprocess.run([bash, os.path.join(os.path.dirname(HERE), "BosePi", "attended-import.sh"),
-                                "--host", host, "--go", "--", *me])
-            if r.returncode != 0:
-                raise Failed(f"attended-import.sh exited {r.returncode} -- see above; it says whether B was closed")
-        else:
-            inside(host, bundle, library, audio_root, where)
-
-        ssh(host, f"rm -rf {shlex.quote(where)}")
+        try:
+            if ro:
+                bash = shutil.which("bash") or r"C:\Program Files\Git\bin\bash.exe"
+                me = [sys.executable, os.path.abspath(__file__), bundle, host, "--library", library,
+                      "--apply", "--inside-window"]
+                # Git Bash rewrites a POSIX-looking argument it hands to a
+                # Windows program -- this script, run inside the window -- into
+                # a path on this PC. Every one here is the speaker's.
+                env = dict(os.environ, MSYS_NO_PATHCONV="1", MSYS2_ARG_CONV_EXCL="*")
+                r = subprocess.run([bash, os.path.join(os.path.dirname(HERE), "BosePi", "attended-import.sh"),
+                                    "--host", host, "--go", "--", *me], env=env)
+                if r.returncode != 0:
+                    raise Failed(f"attended-import.sh exited {r.returncode} -- see above; it says whether B was closed")
+            else:
+                inside(host, bundle, library, audio_root, where)
+        finally:
+            # The staging folder goes whether or not the import landed; it
+            # was left behind on bose by the failure above.
+            ssh(host, f"rm -rf {shlex.quote(where)}")
         name = host.rpartition("@")[2]
         try:
             urllib.request.urlopen(urllib.request.Request(f"http://{name}:{PORT}/library/reload", method="POST"),
