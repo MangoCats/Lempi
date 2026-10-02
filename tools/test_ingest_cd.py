@@ -194,6 +194,8 @@ def test_choose_release_leaves_a_disc_alone():
                 continue
             c.execute("INSERT INTO release_recordings VALUES (?, ?, 1, ?, ?)",
                       (rel, rec, src if rec == "rec-disc" else "musicbrainz", chosen if rec == "rec-disc" else 0))
+    # Linked to a release, used by no passage: passed over, not a crash (2026-10-02).
+    c.execute("INSERT INTO release_recordings VALUES ('rel-album', 'rec-orphan', 2, 'musicbrainz', 0)")
     c.commit()
     c.close()
     old = sys.argv

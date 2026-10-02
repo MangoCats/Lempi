@@ -306,6 +306,12 @@ def main() -> int:
             "  LEFT JOIN file_tags ft ON ft.file_id = f.file_id "
             " WHERE pr.mbid = ?1 LIMIT 1", (mbid,)).fetchone()
         album_tag, md5 = (tag or (None, None))
+        if md5 is None:
+            # Linked to releases but used by no passage here -- nothing is shown
+            # under it, so there is nothing to choose for, and no file for the
+            # decision to name. On 2026-10-02 one such stopped the whole run
+            # at ingest_decisions' NOT NULL, leaving the rest unchosen.
+            continue
         if album_tag:
             tagged += 1
         years = [year(r[2]) for r in rows]
