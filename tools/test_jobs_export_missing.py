@@ -143,7 +143,6 @@ def test_credits(tmp):
     # rel-theirs: the speaker's cover only.
     c.execute("CREATE TABLE IF NOT EXISTS releases (mbid TEXT PRIMARY KEY, title TEXT NOT NULL, release_date TEXT, source TEXT NOT NULL)")
     c.execute("INSERT INTO releases (mbid, title, source) VALUES ('rel-new', 'N', 's'), ('rel-back', 'B', 's'), ('rel-theirs', 'T', 's')")
-    c.execute("ALTER TABLE release_recordings ADD COLUMN chosen INTEGER DEFAULT 0")   # as the release tools add it
     c.execute("INSERT INTO release_recordings (release_mbid, mbid, position, source, chosen) VALUES "
               "('rel-new', 'r3', 1, 's', 1), ('rel-back', 'r1', 1, 's', 1), ('rel-theirs', 'r3', 2, 's', 0)")
     c.commit()

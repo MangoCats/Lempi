@@ -91,11 +91,20 @@ CREATE TABLE IF NOT EXISTS artists (
     source     TEXT NOT NULL
 );
 
+-- The six after `source` are what `fetch_releases.py` and `choose_release.py`
+-- read a release by -- an album or a compilation, official or not. They were
+-- added to every library by those tools and missing here until 2026-10-02.
 CREATE TABLE IF NOT EXISTS releases (
-    mbid          TEXT PRIMARY KEY,
-    title         TEXT NOT NULL,
-    release_date  TEXT,
-    source        TEXT NOT NULL
+    mbid             TEXT PRIMARY KEY,
+    title            TEXT NOT NULL,
+    release_date     TEXT,
+    source           TEXT NOT NULL,
+    release_group    TEXT,
+    status           TEXT,
+    primary_type     TEXT,
+    secondary_types  TEXT,
+    country          TEXT,
+    track_count      INTEGER
 );
 
 -- ================================================================= passages
@@ -150,13 +159,40 @@ CREATE TABLE IF NOT EXISTS recording_artists (
     PRIMARY KEY (mbid, artist_mbid)
 ) WITHOUT ROWID;
 
+-- `chosen` marks the one release that names a recording's album -- Browse by
+-- Album and the cover lookup both order by it, and a library made from this
+-- file alone failed there until 2026-10-02, when it was added here. `disc`
+-- and `track_length_ms` are the release's own numbering and timing. All
+-- three in the order the tools append them to an existing library.
 CREATE TABLE IF NOT EXISTS release_recordings (
-    release_mbid  TEXT NOT NULL REFERENCES releases(mbid) ON DELETE CASCADE,
-    mbid          TEXT NOT NULL REFERENCES recordings(mbid) ON DELETE CASCADE,
-    position      INTEGER,
-    source        TEXT NOT NULL,
+    release_mbid     TEXT NOT NULL REFERENCES releases(mbid) ON DELETE CASCADE,
+    mbid             TEXT NOT NULL REFERENCES recordings(mbid) ON DELETE CASCADE,
+    position         INTEGER,
+    source           TEXT NOT NULL,
+    track_length_ms  INTEGER,
+    chosen           INTEGER DEFAULT 0,
+    disc             INTEGER,
     PRIMARY KEY (release_mbid, mbid)
 ) WITHOUT ROWID;
+
+-- Covers, from the catalogue alone [SPEC-COV-010]: a release's front and
+-- back, and a file's own where no release covers it [SPEC-COV-040].
+-- `caa_asked_at` is when the Cover Art Archive was last asked [SPEC-COV-060].
+CREATE TABLE IF NOT EXISTS cover_art (
+    release_mbid  TEXT PRIMARY KEY,
+    front         BLOB,
+    back          BLOB,
+    source        TEXT NOT NULL,
+    fetched_at    TEXT NOT NULL,
+    caa_asked_at  TEXT
+);
+CREATE TABLE IF NOT EXISTS file_art (
+    audio_md5   TEXT PRIMARY KEY,
+    front       BLOB,
+    back        BLOB,
+    source      TEXT NOT NULL,
+    fetched_at  TEXT NOT NULL
+);
 
 -- Related recordings: block and damp each other in selection [SPEC-DIR-115].
 -- Superseded for same-song blocking by `works`/`recording_works` [GDE-WRK-037],

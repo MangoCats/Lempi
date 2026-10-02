@@ -270,19 +270,12 @@ Both are append-only, intended to be bounded by retention (policy still open, `[
 **`[SPEC-SC-115]` Cover art storage — decided and built.** BLOBs, the MuLibPlay
 approach (`[GDE-BMK-030]`; MuLibPlay held them in `albums`, 95 MB db, mostly
 art), not the filesystem cache once floated here — but keyed by **release
-MBID** in its own table, not folded into `albums`:
-
-```sql
-CREATE TABLE cover_art (
-    release_mbid TEXT PRIMARY KEY,
-    front        BLOB,
-    back         BLOB,
-    source       TEXT NOT NULL,
-    fetched_at   TEXT NOT NULL
-);
-```
-
-Built by `tools/fetch_cover_art.py`; not yet emitted in payloads `[SPEC-PL-105]`.
+MBID** in its own table, not folded into `albums`; a file no release covers has
+its own row in `file_art` `[SPEC-COV-040]`. Both are in `sql/schema.sql`, with
+`releases`' type columns and `release_recordings.chosen`/`disc`/`track_length_ms`
+-- added to every library by the tools, and missing from that file until
+2026-10-02, when a library built from it alone could not browse by album.
+Filled by `tools/fetch_cover_art.py` and `induct_covers.py`; carried in payloads `[SPEC-PL-105]`.
 
 ---
 

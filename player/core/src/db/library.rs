@@ -2745,10 +2745,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         {
             let c = rusqlite::Connection::open(&path).unwrap();
+            // The canonical schema alone: it carries `release_recordings.chosen`,
+            // which Browse by Album orders by, since 2026-10-02.
             c.execute_batch(include_str!("../../../../sql/schema.sql")).unwrap();
-            // As the release tools and a bundle import add it; the canonical
-            // schema lacks it, and Browse by Album needs it.
-            c.execute("ALTER TABLE release_recordings ADD COLUMN chosen INTEGER DEFAULT 0", []).unwrap();
             for (n, album) in [(1, "Detour"), (2, "Detour"), (3, "At Last")] {
                 c.execute("INSERT INTO files (file_id,audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen) \
                            VALUES (?1,?2,'/x.mp3',1,1.0,'mp3',1000,'t','t')", rusqlite::params![n, format!("m{n}")]).unwrap();
