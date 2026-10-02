@@ -69,9 +69,29 @@ The Director then loads every radio passage as before, and logs that no
 passage can be held -- the same tolerance it has for a catalogue without
 `recording_works` -- rather than failing to load and leaving the queue empty.
 
+**`[SPEC-HOLD-080]` And with a bundle, which *Send what's missing* builds.**
+Found 2026-10-01: the first sends carried the music of eight damaged tracks
+without their holds, onto speakers whose libraries had no column, so the
+Director there could choose them. Now:
+
+- A passage's decided hold travels in the payload as `hold` (a reason, or
+  `""` for a release); undecided is absent, and leaves the receiver's value
+  alone.
+- `import_bundle` adds the column, writes the hold of a passage it creates,
+  and sets it on one already there, matched by exact span. A span with no
+  match is counted (`holds unmatched`), never guessed at. The sender's
+  decided value wins: holds are the household's, made on Vipunen.
+- The Export page's diff compares holds as well as files. A file the speaker
+  has whose holds differ goes into the bundle as payload alone, no audio, so
+  a hold changed here reaches every speaker at its next send.
+
+A hold made only on a speaker is the speaker's, and is not overwritten by an
+undecided one.
+
 A change is seen by the Director when it is next built: on the desktop, when
 the player reloads its library (the Jobs page's *ask the player to reload*);
-on a speaker, at the sync that delivers it.
+on a speaker, at the sync or send that delivers it -- a send asks the player
+to reload.
 
 ## 4. Playing a whole album
 

@@ -114,6 +114,18 @@ def test_fade_absent_from_a_pre_migration_source():
     check(pl.compatible(payload) == [], f"expected compatible, got {pl.compatible(payload)}")
 
 
+def test_a_decided_hold_travels_and_an_undecided_one_does_not():
+    """`[SPEC-HOLD-080]` A reason held and a person's release ("") travel;
+    NULL, undecided, is absent -- so it leaves a receiver's own value alone."""
+    conn = make_db(":memory:", SCHEMA)
+    conn.execute("ALTER TABLE passages ADD COLUMN director_hold TEXT")
+    for pid, start, hold in ((1, 0, "rip damaged"), (2, 3000, ""), (3, 6000, None)):
+        conn.execute("INSERT INTO passages (passage_id,file_id,kind,start_ms,end_ms,boundary_src,director_hold) "
+                     "VALUES (?,1,'radio',?,?,'x',?)", (pid, start, start + 2000, hold))
+    got = [p.get("hold", "ABSENT") for p in pl.build(conn, ["md5"])["encodings"][0]["passages"]]
+    check(got == ["rip damaged", "", "ABSENT"], f"holds in the payload: {got}")
+
+
 def test_committed_fixture_09_round_trips():
     """`fixtures/payload/09-fade-fields.json` `[SPEC-PL-032]` -- the same file
     `player/src/bundle.rs`'s own test checks with `unacceptable()`, checked
@@ -265,6 +277,7 @@ def main() -> int:
     test_lyrics_travel_on_their_recording()
     test_fade_travels_when_the_schema_has_it()
     test_fade_absent_from_a_pre_migration_source()
+    test_a_decided_hold_travels_and_an_undecided_one_does_not()
     test_committed_fixture_09_round_trips()
     test_byte_hash_is_optional_but_must_be_usable()
 

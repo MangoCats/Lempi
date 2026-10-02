@@ -148,6 +148,45 @@ def test_passages_join_produces_audio_md5_keyed_rows():
           f"passage identity must resolve through the files join, got {d['local_only']}")
 
 
+def test_holds_against_a_speaker_with_and_without_the_column():
+    """`[SPEC-HOLD-080]` A speaker's library made before holds has no
+    `director_hold`; the diff asks first, reads that as nothing decided
+    there, and does not fail on it. One that has the column is compared."""
+    db = local_db(
+        "ALTER TABLE passages ADD COLUMN director_hold TEXT;"
+        "INSERT INTO files VALUES (1,'md5-a','/a.mp3',1,1.0,'mp3',1000,'t','t');"
+        "INSERT INTO passages VALUES (1,1,'radio',0,900,0,50,-1.0,'x','rip damaged');"
+        "INSERT INTO passages VALUES (2,1,'album',0,1000,0,0,-1.0,'x',NULL);"
+    )
+    real = rp.run_remote_sql
+    asked = []
+
+    def without(remote, sql, timeout=10.0):
+        asked.append(sql)
+        return {"ok": True, "rows": []}
+    rp.run_remote_sql = without
+    try:
+        d = md.run(db, "pi@speaker-a:/lempi.db", tables=["holds"])["tables"]["holds"]
+        check(d["local_only"] == [["md5-a", "radio", 0, 900]] and not d["differ"],
+              f"only the decided hold, against a speaker with none: {d}")
+        check(any("pragma_table_info" in s for s in asked)
+              and any("NULL AS hold" in s for s in asked), f"asked, then read around the gap: {asked}")
+
+        def with_col(remote, sql, timeout=10.0):
+            if "pragma_table_info" in sql:
+                return {"ok": True, "rows": [{"name": "director_hold"}]}
+            check("p.director_hold AS hold" in sql, f"the speaker's own column: {sql}")
+            return {"ok": True, "rows": [{"audio_md5": "md5-a", "kind": "radio", "start_ms": 0,
+                                          "end_ms": 900, "hold": ""}]}
+        rp.run_remote_sql = with_col
+        d = md.run(db, "pi@speaker-a:/lempi.db", tables=["holds"])["tables"]["holds"]
+        check(not d["local_only"] and [e["key"] for e in d["differ"]] == [["md5-a", "radio", 0, 900]],
+              f"released there, held here: a difference: {d}")
+    finally:
+        rp.run_remote_sql = real
+        os.unlink(db)
+
+
 def test_unreachable_remote_reports_cleanly():
     db = local_db("")
     real = rp.run_remote_sql
@@ -168,6 +207,7 @@ def main() -> int:
     test_recordings_manual_disagreement_is_a_conflict()
     test_recordings_machine_disagreement_is_not_a_conflict()
     test_passages_join_produces_audio_md5_keyed_rows()
+    test_holds_against_a_speaker_with_and_without_the_column()
     test_unreachable_remote_reports_cleanly()
 
     print()

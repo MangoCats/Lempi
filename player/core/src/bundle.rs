@@ -114,6 +114,12 @@ pub struct Report {
     /// Files held under a retired key, re-keyed to its successor
     /// `[SPEC-PL-097]`.
     pub rekeyed: usize,
+    /// Passages already here whose hold the payload changed `[SPEC-HOLD-080]`
+    /// -- on a dry run, the ones it would.
+    pub holds_set: usize,
+    /// Holds the payload carried for a passage this library has no passage of
+    /// that exact span for: left alone, not guessed at.
+    pub holds_unmatched: usize,
 }
 
 impl Report {
@@ -411,8 +417,15 @@ fn import_bound(
         // which would take the whole batch down with it `[SPEC-RLK-150]`.
         crate::db::ensure_md5_generator_column(db);
         crate::db::ensure_sha256_column(db);
+        crate::db::ensure_director_hold_column(db);
         rep.rekeyed = apply_aliases(db, doc)?;
     }
+    // Asked, not assumed: a dry run adds no column, so on a library made
+    // before holds every one the payload carries reads as a change.
+    let hold_col = db
+        .prepare("SELECT 1 FROM pragma_table_info('passages') WHERE name = 'director_hold'")
+        .and_then(|mut s| s.exists([]))
+        .unwrap_or(false);
 
     let empty = Vec::new();
     let recordings: HashMap<String, &Value> = doc
@@ -461,6 +474,14 @@ fn import_bound(
                         }
                     }
                 }
+            }
+            // A hold is a decision about the passage, so unlike the passage
+            // itself it does reach one already here `[SPEC-HOLD-080]`: matched
+            // by its exact span, which is the passage's identity across
+            // installations `[SPEC-DF-030]`.
+            for p in e.get("passages").and_then(|v| v.as_array()).unwrap_or(&empty) {
+                let Some(hold) = p.get("hold").and_then(|v| v.as_str()) else { continue };
+                set_hold(&tx, held.unwrap_or_default(), p, hold, hold_col, apply, &mut rep)?;
             }
             rep.outcomes.push((md5, Landed::Already));
             continue;
@@ -585,8 +606,8 @@ fn import_bound(
             tx.execute(
                 "INSERT INTO passages \
                      (file_id,kind,start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db,boundary_src,\
-                      fade_in_ms,fade_out_ms,fade_in_curve,fade_out_curve)\
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                      fade_in_ms,fade_out_ms,fade_in_curve,fade_out_curve,director_hold)\
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
                 // NULL stays NULL for lead/gain: it means "not analysed",
                 // which is not zero, and the player acts on lead-out timing
                 // `[SPEC-PL-030]`. Fade `[SPEC-SC-046]` has no such state --
@@ -599,7 +620,10 @@ fn import_bound(
                         p.get("gain_db").and_then(|v| v.as_f64()),
                         str_of(p, "boundary_src"),
                         fade_ms(p, "fade_in_ms"), fade_ms(p, "fade_out_ms"),
-                        fade_curve(p, "fade_in_curve"), fade_curve(p, "fade_out_curve")],
+                        fade_curve(p, "fade_in_curve"), fade_curve(p, "fade_out_curve"),
+                        // Absent is undecided, NULL; "" is a release a person
+                        // made, and travels as one `[SPEC-HOLD-080]`.
+                        p.get("hold").and_then(|v| v.as_str())],
             )
             .map_err(|e| e.to_string())?;
             let passage_id = tx.last_insert_rowid();
@@ -642,6 +666,45 @@ fn import_bound(
         tx.commit().map_err(|e| e.to_string())?;
     }
     Ok(rep)
+}
+
+/// One arriving hold on a passage this library already has `[SPEC-HOLD-080]`.
+///
+/// The payload's decided value replaces this library's: a hold is the
+/// household's decision about a passage -- a damaged rip is damaged on every
+/// speaker -- and it is made on Vipunen, which sends it. A passage with no span
+/// matching exactly is counted, never guessed at; a dry run only counts.
+fn set_hold(tx: &rusqlite::Transaction, file_id: i64, p: &Value, hold: &str, hold_col: bool, apply: bool,
+            rep: &mut Report) -> Result<(), String> {
+    let span = params![file_id, str_of(p, "kind"), num(p, "start_ms"), num(p, "end_ms")];
+    let current: Option<Option<String>> = if hold_col {
+        tx.query_row("SELECT director_hold FROM passages WHERE file_id=?1 AND kind=?2 AND start_ms=?3 AND end_ms=?4",
+                     span, |r| r.get(0))
+            .map(Some)
+            .or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(e.to_string()) })?
+    } else {
+        // No column yet (a dry run on an old library): the passage's existence
+        // is still worth asking, so an unmatched one is not counted as set.
+        tx.query_row("SELECT 1 FROM passages WHERE file_id=?1 AND kind=?2 AND start_ms=?3 AND end_ms=?4",
+                     span, |_| Ok(()))
+            .map(|_| Some(None))
+            .or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(e.to_string()) })?
+    };
+    match current {
+        None => rep.holds_unmatched += 1,
+        Some(now) if now.as_deref() == Some(hold) => {}
+        Some(_) => {
+            rep.holds_set += 1;
+            if apply {
+                tx.execute("UPDATE passages SET director_hold=?5 \
+                            WHERE file_id=?1 AND kind=?2 AND start_ms=?3 AND end_ms=?4",
+                           params![file_id, str_of(p, "kind"), num(p, "start_ms"), num(p, "end_ms"), hold])
+                    .map_err(|e| e.to_string())?;
+                rep.rows_written += 1;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn upsert_recording(tx: &rusqlite::Transaction, r: &Value, rep: &mut Report) -> Result<(), String> {
@@ -1777,6 +1840,75 @@ mod tests {
         assert_eq!(v2, 0.9, "an already-held encoding must not gate updates to its recording's data");
 
         std::fs::remove_dir_all(&audio_dir).ok();
+    }
+
+    /// `[SPEC-HOLD-080]` A hold travels: onto a passage arriving with it, and
+    /// onto one already here, matched by exact span. `empty_library()` has no
+    /// `director_hold` -- every speaker's library as of 2026-10-01.
+    #[test]
+    fn a_hold_reaches_a_new_passage_and_one_already_here() {
+        let mut c = empty_library();
+        let audio_dir = std::env::temp_dir().join(format!("lempi-bundle-hold-{}", std::process::id()));
+        std::fs::create_dir_all(&audio_dir).unwrap();
+        let audio_path = audio_dir.join("a.wav");
+        write_tiny_wav(&audio_path);
+        let md5 = (TEST_HASHER.hash)(&audio_path).unwrap();
+        let with_hold = |hold: &str, end_ms: i64| {
+            let mut d = one_encoding_bundle(&md5, "m1", 0.5, "computed:x@1");
+            let p = &mut d["encodings"][0]["passages"][0];
+            p["hold"] = Value::String(hold.into());
+            p["end_ms"] = Value::from(end_ms);
+            d
+        };
+        let hold_now = |c: &Connection| -> Option<String> {
+            c.query_row("SELECT director_hold FROM passages", [], |r| r.get(0)).unwrap()
+        };
+
+        let rep = import(&mut c, &with_hold("rip damaged", 1000), "b1", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep.outcomes, vec![(md5.clone(), Landed::Imported)]);
+        assert_eq!(hold_now(&c).as_deref(), Some("rip damaged"), "arrives with its passage");
+
+        // A person's release, sent later, reaches the passage already here.
+        let rep = import(&mut c, &with_hold("", 1000), "b2", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep.outcomes, vec![(md5.clone(), Landed::Already)]);
+        assert_eq!((rep.holds_set, rep.holds_unmatched), (1, 0));
+        assert_eq!(hold_now(&c).as_deref(), Some(""));
+
+        // The same again changes nothing, and says so.
+        let rep = import(&mut c, &with_hold("", 1000), "b3", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep.holds_set, 0);
+
+        // A dry run counts and writes nothing.
+        let rep = import(&mut c, &with_hold("held again", 1000), "b4", &audio_dir, false, Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep.holds_set, 1);
+        assert_eq!(hold_now(&c).as_deref(), Some(""));
+
+        // A span this library has no passage of is left alone, not guessed at.
+        let rep = import(&mut c, &with_hold("held", 999), "b5", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!((rep.holds_set, rep.holds_unmatched), (0, 1));
+        assert_eq!(hold_now(&c).as_deref(), Some(""));
+
+        std::fs::remove_dir_all(&audio_dir).ok();
+    }
+
+    /// A dry run on a library from before holds adds no column, and still
+    /// counts what an `--apply` would set.
+    #[test]
+    fn a_dry_run_on_a_library_without_holds_counts_without_adding_the_column() {
+        let mut c = empty_library();
+        c.execute_batch("INSERT INTO files VALUES (1,'m5','/a.wav',1,0,'wav',1000,'x','x');
+                         INSERT INTO passages (file_id,kind,start_ms,end_ms,boundary_src) VALUES (1,'radio',0,1000,'x');")
+            .unwrap();
+        let mut d = one_encoding_bundle("m5", "m1", 0.5, "computed:x@1");
+        d["encodings"][0]["passages"][0]["hold"] = Value::String("rip damaged".into());
+        let rep = import(&mut c, &d, "b", std::path::Path::new("/nowhere"), false, None).unwrap();
+        assert_eq!((rep.holds_set, rep.holds_unmatched), (1, 0));
+        let col: bool = c
+            .prepare("SELECT 1 FROM pragma_table_info('passages') WHERE name='director_hold'")
+            .unwrap()
+            .exists([])
+            .unwrap();
+        assert!(!col, "a dry run writes nothing, a column included");
     }
 
     /// `[SPEC-RLK-150]` precondition 3: an imported row records *what hashed

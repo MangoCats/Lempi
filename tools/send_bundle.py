@@ -176,7 +176,7 @@ def import_run(host: str, library: str, where: str, audio_root: str, apply: bool
     for line in out.splitlines():
         say(f"    {line}")
     counts = {}
-    for key in ("imported", "already", "awaiting", "corrupt"):
+    for key in ("imported", "already", "awaiting", "corrupt", "holds"):
         for line in out.splitlines():
             parts = line.split()
             if len(parts) == 2 and parts[0] == key and parts[1].isdigit():
@@ -191,18 +191,24 @@ def inside(host: str, bundle: str, library: str, audio_root: str, where: str) ->
     window on a read-only one."""
     audio = os.path.join(bundle, "audio")
     files, size = audio_size(audio)
-    say(f"  copying {files} audio file(s), {size / 1e6:.1f} MB, into {audio_root} ...")
-    rc, out = ssh_stream(host, f"mkdir -p {shlex.quote(audio_root)} && "
-                               f"tar -xf - -C {shlex.quote(audio_root)} --no-same-owner",
-                         lambda pipe: audio_tar(audio, Progress(pipe, size)))
-    if rc != 0:
-        raise Failed(f"copy the audio on {host} failed (exit {rc}): {out[-300:]}")
+    if not files:
+        # A bundle of what changed about music the speaker already has -- its
+        # holds `[SPEC-HOLD-080]` -- carries no audio at all.
+        say("  no audio to copy: the speaker has these files already")
+    else:
+        say(f"  copying {files} audio file(s), {size / 1e6:.1f} MB, into {audio_root} ...")
+        rc, out = ssh_stream(host, f"mkdir -p {shlex.quote(audio_root)} && "
+                                   f"tar -xf - -C {shlex.quote(audio_root)} --no-same-owner",
+                             lambda pipe: audio_tar(audio, Progress(pipe, size)))
+        if rc != 0:
+            raise Failed(f"copy the audio on {host} failed (exit {rc}): {out[-300:]}")
     stage(host, bundle, where)
     say("  importing ...")
     c = import_run(host, library, where, audio_root, apply=True)
     if c["rc"] != 0 or c.get("corrupt") or c.get("awaiting"):
         raise Failed(f"the import did not land whole: {c}")
-    say(f"  imported {c.get('imported', 0)}, already there {c.get('already', 0)}")
+    say(f"  imported {c.get('imported', 0)}, already there {c.get('already', 0)}"
+        + (f", holds set {c['holds']}" if "holds" in c else ""))
     return 0
 
 

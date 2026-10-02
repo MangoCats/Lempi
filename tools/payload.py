@@ -158,6 +158,7 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
     # this source predates the columns entirely, and a receiver seeing them
     # absent falls back to `passages`' own schema default `[SPEC008 §3]`.
     have_fade = has_column(conn, "passages", "fade_in_ms")
+    have_hold = has_column(conn, "passages", "director_hold")
     # A file with no release has a cover of its own [SPEC-COV-040]: it travels
     # on its encoding, as a release's travels on the release.
     have_file_art = has_table(conn, "file_art")
@@ -195,6 +196,11 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
                 passage.update(
                     fade_in_ms=p["fade_in_ms"], fade_out_ms=p["fade_out_ms"],
                     fade_in_curve=p["fade_in_curve"], fade_out_curve=p["fade_out_curve"])
+            if have_hold and p["director_hold"] is not None:
+                # A decision, so only a decided one travels: a reason held,
+                # "" released by a person. Undecided is absent, and leaves a
+                # receiver's own value alone `[SPEC-HOLD-080]`.
+                passage["hold"] = p["director_hold"]
             passage["recordings"] = credits
             passages.append(passage)
         # The file's own tags travel, though they are cheap to re-derive from

@@ -1325,10 +1325,12 @@ class Runner:
     def _export_missing(self, job_id: int, target: str):
         """The Export page's *Send what's missing* `[SPEC-STAR-090]` -- `target`
         is `{"peer", "remote"}`, the remote resolved by the console from the
-        peer's name. Two stages: `mesh_diff.py` on `files` alone, read-only
-        against the speaker, for the audio it lacks; then `export_bundle.py`
-        with exactly those `audio_md5`s -- the audio and every fact about it.
-        Nothing is sent: the transfer stays a command a person runs.
+        peer's name. Two stages: `mesh_diff.py` on `files` and `holds`,
+        read-only against the speaker, for the audio it lacks and the holds
+        it has not got; then `export_bundle.py` with exactly those
+        `audio_md5`s -- the missing ones with their audio and every fact about
+        them, the held-but-different ones as payload alone. Nothing is sent
+        here: that is *Send to <speaker>*, on a person's press.
 
         Trusts the speaker's `files` table to name the audio on its disk:
         checked on lempi02w 2026-10-01, 5,709 listed and 5,709 there."""
@@ -1344,28 +1346,46 @@ class Runner:
                    "(read-only) ...", stage="diff")
         code, _ = self._spawn(job_id, "diff", [sys.executable, os.path.join(tools, "mesh_diff.py"),
                                                self.library, payload["remote"], "--table", "files",
-                                               "-o", diff_path])
+                                               "--table", "holds", "-o", diff_path])
         if code != 0 or not os.path.isfile(diff_path):
             self._emit(job_id, "error", f"the diff against {payload['peer']} failed (exit {code}): "
                        "nothing was built", stage="diff")
             self._save_result(job_id, result)
             return self._finish(job_id, "stopped" if code < 0 else "failed")
         with open(diff_path, encoding="utf-8") as fh:
-            files = json.load(fh)["tables"]["files"]
+            tables = json.load(fh)["tables"]
+        files = tables["files"]
         md5s = [k[0] for k in files["local_only"]]
-        result.update(missing=len(md5s), peer_only=len(files["peer_only"]), albums=self._albums_of(md5s))
-        if not md5s:
-            self._emit(job_id, "log", f"{payload['peer']} already has every file this library has", stage="diff")
+        # Holds decided here that the speaker does not have, on files it
+        # does: those go too, without their audio `[SPEC-HOLD-080]`. A hold
+        # decided only there is the speaker's, and is left alone.
+        holds = tables.get("holds") or {"local_only": [], "differ": []}
+        changed = [k for k in holds["local_only"]] + [d["key"] for d in holds["differ"]]
+        missing = set(md5s)
+        hold_md5s = sorted({k[0] for k in changed} - missing)
+        result.update(missing=len(md5s), peer_only=len(files["peer_only"]), albums=self._albums_of(md5s),
+                      holds=len([k for k in changed if k[0] not in missing]), hold_files=len(hold_md5s))
+        if hold_md5s:
+            self._emit(job_id, "log", f"{result['holds']} hold(s) on {len(hold_md5s)} file(s) "
+                       f"{payload['peer']} already has differ from this library's", stage="diff")
+        if not md5s and not hold_md5s:
+            self._emit(job_id, "log", f"{payload['peer']} already has every file this library has, "
+                       "and every hold", stage="diff")
             self._save_result(job_id, result)
             return self._finish(job_id, "done")
 
         md5_file = os.path.join(base, "missing.txt")
         with open(md5_file, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write("\n".join(md5s) + "\n")
+            fh.write("".join(m + "\n" for m in md5s))
         out_dir = os.path.join(base, "bundle")
         self._emit(job_id, "stage", "bundle", stage="bundle")
         argv = [sys.executable, os.path.join(tools, "export_bundle.py"), self.library,
                 "--md5-file", md5_file, "--gzip", "-o", out_dir]
+        if hold_md5s:
+            present_file = os.path.join(base, "holds-only.txt")
+            with open(present_file, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write("".join(m + "\n" for m in hold_md5s))
+            argv += ["--present-md5-file", present_file]
         for root in self.roots:
             argv += ["--root", root]
         code, _ = self._spawn(job_id, "bundle", argv)

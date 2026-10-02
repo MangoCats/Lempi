@@ -44,6 +44,10 @@ def main() -> int:
                     help="audio root to make bundle_path relative to; repeatable")
     ap.add_argument("-o", "--out", required=True, help="bundle directory to write")
     ap.add_argument("--have", help="file of audio_md5 the target already holds, one per line")
+    ap.add_argument("--present-md5-file",
+                    help="file of audio_md5 to include in the payload WITHOUT audio -- the target "
+                         "holds them, and is sent only what changed about them: their holds "
+                         "[SPEC-HOLD-080]")
     ap.add_argument("--gzip", action="store_true", help="write payload.json.gz as well")
     ap.add_argument("--zip", action="store_true",
                     help="also write <out>.zip: the whole bundle as one file, for a phone's "
@@ -78,6 +82,11 @@ def main() -> int:
                 if r[1] in wanted]
         md5s += [r[0] for r in hits]
         print(f"by byte hash: {len(wanted)} listed, {len(hits)} held here")
+    present = set()
+    if args.present_md5_file:
+        with open(args.present_md5_file, encoding="utf-8") as fh:
+            present = {ln.strip() for ln in fh if ln.strip()}
+        md5s += sorted(present)
     md5s = sorted(set(md5s))
     if not md5s:
         print("nothing selected", file=sys.stderr)
@@ -123,6 +132,8 @@ def main() -> int:
     differ = []
     bytes_out = 0
     for e in doc["encodings"]:
+        if e["audio_md5"] in present:
+            continue    # held there already: the payload is the whole of it
         src = conn.execute("SELECT path FROM files WHERE audio_md5 = ?",
                            (e["audio_md5"],)).fetchone()[0]
         dest = os.path.join(audio_dir, *e["bundle_path"].split("/"))
@@ -166,6 +177,9 @@ def main() -> int:
     print(f"  recordings  {len(doc['recordings'])}")
     print(f"  audio       {copied} files, {bytes_out/1e6:.1f} MB"
           + (f"   ({missing} MISSING)" if missing else ""))
+    if present:
+        print(f"  no audio    {len(present & {e['audio_md5'] for e in doc['encodings']})} "
+              "already on the target, sent for their holds")
     print(f"  releases    {len(doc.get('releases', []))}, covers {cover_bytes/1e6:.1f} MB")
     print(f"  payload     {len(text.encode())/1024:.1f} KB"
           + (f"  ({gz_len/1024:.1f} KB gzipped)" if gz_len else ""))

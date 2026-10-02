@@ -58,7 +58,32 @@ TABLES = {
         "value": ("lead_in_ms", "lead_out_ms", "gain_db", "boundary_src"),
         "manual_field": "boundary_src",
     },
+    "holds": {
+        # Decided holds only `[SPEC-HOLD-080]`: a reason, or "" for a person's
+        # release. `{col}` is `p.director_hold`, or NULL on a library made
+        # before the column -- every speaker's until a bundle first brings it,
+        # and an absent column is "nothing decided here", not an error.
+        "sql": ("SELECT f.audio_md5 AS audio_md5, p.kind AS kind, p.start_ms AS start_ms, "
+                "p.end_ms AS end_ms, {col} AS hold "
+                "FROM passages p JOIN files f ON f.file_id = p.file_id WHERE {col} IS NOT NULL"),
+        "optional": ("passages", "director_hold", "p.director_hold"),
+        "key": ("audio_md5", "kind", "start_ms", "end_ms"),
+        "value": ("hold",),
+        "manual_field": None,
+    },
 }
+
+_HAS_COLUMN = "SELECT name FROM pragma_table_info('{table}') WHERE name = '{column}'"
+
+
+def _sql(table: str, has_column) -> str:
+    """The table's query, with its one optional column read as NULL where
+    `has_column(table, column)` says the library lacks it."""
+    spec = TABLES[table]
+    if "optional" not in spec:
+        return spec["sql"]
+    t, column, expr = spec["optional"]
+    return spec["sql"].format(col=expr if has_column(t, column) else "NULL")
 
 
 def say(text: str) -> None:
@@ -76,7 +101,8 @@ def fetch_local(db_path: str, table: str) -> dict:
     conn = lempi_db.connect(db_path, lempi_db.ROLE_LIBRARY)
     conn.row_factory = sqlite3.Row
     try:
-        rows = [dict(r) for r in conn.execute(TABLES[table]["sql"])]
+        sql = _sql(table, lambda t, c: conn.execute(_HAS_COLUMN.format(table=t, column=c)).fetchone() is not None)
+        rows = [dict(r) for r in conn.execute(sql)]
     finally:
         conn.close()
     return {_key_of(r, TABLES[table]["key"]): r for r in rows}
@@ -84,8 +110,14 @@ def fetch_local(db_path: str, table: str) -> dict:
 
 def fetch_remote(remote: str, table: str) -> dict:
     """The same shape as `fetch_local`, over one `ssh ... sqlite3 -json ...`
-    round trip `[SPEC-DF-116]` instead of a local connection."""
-    result = rp.run_remote_sql(remote, TABLES[table]["sql"])
+    round trip `[SPEC-DF-116]` instead of a local connection -- two for a
+    table with an optional column, the first asking whether it is there."""
+    def has_column(t, c):
+        probe = rp.run_remote_sql(remote, _HAS_COLUMN.format(table=t, column=c))
+        if not probe["ok"]:
+            raise RuntimeError(f"{table}: {probe['error']}")
+        return bool(probe["rows"])
+    result = rp.run_remote_sql(remote, _sql(table, has_column))
     if not result["ok"]:
         raise RuntimeError(f"{table}: {result['error']}")
     return {_key_of(r, TABLES[table]["key"]): r for r in result["rows"]}

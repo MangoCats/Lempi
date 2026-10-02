@@ -172,6 +172,18 @@ def main() -> int:
         rc, _ = run([b, "pi@speaker-a", "--apply"], f)
         check(rc == 1 and not any(c.startswith(("tar", "mkdir")) for c, _ in f.calls), f"refused: {f.calls}")
 
+        print("a bundle of holds alone copies nothing, and imports [SPEC-HOLD-080]")
+        hb = os.path.join(tmp, "missing-speaker-a-8", "bundle")
+        os.makedirs(hb)
+        with open(os.path.join(hb, "payload.json"), "w", encoding="utf-8") as fh:
+            json.dump({"encodings": [{"audio_md5": "a"}]}, fh)
+        f = Fake(imported=0)
+        rc, reloads = run([hb, "pi@speaker-a", "--apply"], f)
+        cmds = [c for c, _ in f.calls]
+        check(rc == 0 and not any(c.startswith("mkdir -p /srv/library/audio") for c in cmds)
+              and any(c.startswith("import_bundle") for c in cmds) and reloads,
+              f"no copy, the import, a reload: {cmds}")
+
     test_progress()
 
     print()

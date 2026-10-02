@@ -48,6 +48,14 @@ pub fn ensure_sha256_column(conn: &rusqlite::Connection) {
     let _ = conn.execute("CREATE INDEX IF NOT EXISTS files_sha256 ON files(sha256)", []);
 }
 
+/// `passages.director_hold` `[SPEC-HOLD-010]`, on a library made before it
+/// existed -- every speaker's, measured 2026-10-01, which is how a bundle's
+/// holds arrive at all. Same idiom as `ensure_sha256_column`: the error on a
+/// second run is the column already being there.
+pub fn ensure_director_hold_column(conn: &rusqlite::Connection) {
+    let _ = conn.execute("ALTER TABLE passages ADD COLUMN director_hold TEXT", []);
+}
+
 #[derive(Debug)]
 pub enum DbError {
     Open(String),

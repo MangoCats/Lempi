@@ -52,7 +52,7 @@ def library(path):
     c.close()
 
 
-def runner_with(tmp, name, local_only, diff_code=0):
+def runner_with(tmp, name, local_only, diff_code=0, holds=None):
     db = os.path.join(tmp, f"{name}.db")
     library(db)
     r = jobmod.Runner(db, os.path.join(tmp, f"{name}.console.db"), roots=["C:\\Music"])
@@ -63,8 +63,11 @@ def runner_with(tmp, name, local_only, diff_code=0):
         if stage == "diff":
             if diff_code == 0:
                 with open(argv[argv.index("-o") + 1], "w", encoding="utf-8") as f:
-                    json.dump({"tables": {"files": {"local_only": [[m] for m in local_only], "peer_only": [],
-                                                    "differ": [], "conflict": []}}}, f)
+                    tables = {"files": {"local_only": [[m] for m in local_only], "peer_only": [],
+                                        "differ": [], "conflict": []}}
+                    if holds is not None:
+                        tables["holds"] = holds
+                    json.dump({"tables": tables}, f)
             return diff_code, ""
         return 0, ""
     r._spawn = fake_spawn.__get__(r, jobmod.Runner)
@@ -100,6 +103,28 @@ def test_job(tmp):
     errors = [e["text"] for e in j3["events"] if e["kind"] == "error"]
     check(j3["state"] == "failed" and [s for s, _ in seen3] == ["diff"] and any("nothing was built" in t for t in errors),
           f"{j3['state']} {seen3} {errors}")
+
+
+def test_holds(tmp):
+    print("holds the speaker lacks go too: with the music, or alone for files it has [SPEC-HOLD-080]")
+    holds = {"local_only": [["md5-1", "radio", 0, 900], ["md5-3", "radio", 0, 900]],
+             "differ": [{"key": ["md5-3", "album", 0, 1000]}], "peer_only": [["md5-2", "radio", 0, 1]]}
+    r, _, seen = runner_with(tmp, "holds", ["md5-1"], holds=holds)
+    j = wait_for(r, r.submit("export-missing", json.dumps({"peer": "speaker-a",
+                                                           "remote": "pi@speaker-a:/srv/library/library.db"})))
+    diff, bundle = seen[0][1], seen[1][1]
+    check(diff[diff.index("--table", diff.index("--table") + 1) + 1] == "holds", f"holds asked for: {diff}")
+    present = open(bundle[bundle.index("--present-md5-file") + 1], encoding="utf-8").read().split()
+    check(present == ["md5-3"], f"a missing file carries its own hold; the speaker's own decision is its: {present}")
+    check(j["result"]["holds"] == 2 and j["result"]["hold_files"] == 1 and j["result"]["missing"] == 1,
+          f"said: {j['result']}")
+
+    print("nothing missing but a hold still builds a bundle")
+    r2, _, seen2 = runner_with(tmp, "holdsonly", [], holds={"local_only": [["md5-3", "radio", 0, 900]], "differ": []})
+    j2 = wait_for(r2, r2.submit("export-missing", json.dumps({"peer": "speaker-b",
+                                                              "remote": "pi@speaker-b:/srv/library/library.db"})))
+    check(j2["state"] == "done" and [s for s, _ in seen2] == ["diff", "bundle"] and j2["result"]["missing"] == 0
+          and "out_dir" in j2["result"], f"{j2['state']} {seen2} {j2['result']}")
 
 
 def test_route(tmp):
@@ -211,6 +236,7 @@ def test_send_route(tmp):
 def main() -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         test_job(tmp)
+        test_holds(tmp)
         test_route(tmp)
         test_send(tmp)
         test_send_route(tmp)

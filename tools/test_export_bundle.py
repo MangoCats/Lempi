@@ -227,7 +227,47 @@ def test_payload_only_by_byte_hash_in_parts():
     check(names == parts, f"the zip holds the parts and no audio: {names}")
 
 
+def test_a_file_the_target_has_goes_without_its_audio():
+    """`[SPEC-HOLD-080]` --present-md5-file: in the payload, for its holds,
+    and no audio -- its source is not even read, so a path that is not there
+    proves it."""
+    import json
+    tmp = tempfile.mkdtemp()
+    db_path = os.path.join(tmp, "lempi.db")
+    audio_path = os.path.join(tmp, "a.wav")
+    with open(audio_path, "wb") as fh:
+        fh.write(b"sent")
+    build_library(db_path, audio_path, "a" * 32)
+    c = sqlite3.connect(db_path)
+    c.execute("ALTER TABLE passages ADD COLUMN director_hold TEXT")
+    c.execute("INSERT INTO files VALUES (2,?,?,4,1.0,'wav',1000,'t','t')", ("b" * 32, os.path.join(tmp, "gone.wav")))
+    c.execute("INSERT INTO passages VALUES (2,2,'radio',0,1000,NULL,NULL,NULL,'x','rip damaged')")
+    c.execute("INSERT INTO passage_recordings VALUES (2,'m1',1.0,'s')")
+    c.commit()
+    c.close()
+    missing, present = os.path.join(tmp, "missing.txt"), os.path.join(tmp, "present.txt")
+    with open(missing, "w", encoding="utf-8") as fh:
+        fh.write("a" * 32 + "\n")
+    with open(present, "w", encoding="utf-8") as fh:
+        fh.write("b" * 32 + "\n")
+    out_dir = os.path.join(tmp, "bundle")
+    old_argv = sys.argv
+    sys.argv = ["export_bundle.py", db_path, "--md5-file", missing, "--present-md5-file", present, "-o", out_dir]
+    try:
+        rc = eb.main()
+    finally:
+        sys.argv = old_argv
+    with open(os.path.join(out_dir, "payload.json"), encoding="utf-8") as fh:
+        encs = {e["audio_md5"]: e for e in json.load(fh)["encodings"]}
+    shipped = sorted(os.listdir(os.path.join(out_dir, "audio")))
+    check(rc == 0 and set(encs) == {"a" * 32, "b" * 32} and shipped == ["a.wav"],
+          f"both in the payload, one file's audio: {rc} {sorted(encs)} {shipped}")
+    check(encs["b" * 32]["passages"][0].get("hold") == "rip damaged" and "sha256" not in encs["b" * 32],
+          f"the hold, and no byte hash for audio not sent: {encs['b' * 32]}")
+
+
 def main() -> int:
+    test_a_file_the_target_has_goes_without_its_audio()
     test_md5_file_selects_the_listed_encodings()
     test_payload_only_by_byte_hash_in_parts()
     test_zip_is_the_whole_bundle_in_one_file()
