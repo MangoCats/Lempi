@@ -508,6 +508,12 @@ pub struct BrowseGroup {
     /// name ("Adams, Bryan"), else its name. Absent for albums.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sort: Option<String>,
+    /// One of an album's radio passages, whose `/art/<passage>` is the
+    /// album's front `[REQ-VIS-184]`: the cover lookup resolves it through
+    /// the recording's chosen release, which is what names the album.
+    /// Absent for artists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passage: Option<i64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -927,8 +933,9 @@ impl Library {
 
     pub fn browse_albums(&self, f: &BrowseFilter) -> Result<Vec<BrowseGroup>, DbError> {
         let sql = format!(
-            "SELECT album, COUNT(*), SUM(plays), artist FROM ( \
-               SELECT {ALBUM_EXPR} AS album, {ARTIST_EXPR} AS artist, {PLAYS_EXPR} AS plays \
+            "SELECT album, COUNT(*), SUM(plays), artist, NULL, MIN(pid) FROM ( \
+               SELECT {ALBUM_EXPR} AS album, {ARTIST_EXPR} AS artist, {PLAYS_EXPR} AS plays, \
+                      m.passage_id AS pid \
                  FROM ({NAMED}) m LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id) \
              WHERE album IS NOT NULL AND album <> '' \
                AND (?1 = '' OR album LIKE ?1) \
@@ -955,6 +962,8 @@ impl Library {
                     artist: if with_artist { r.get(3)? } else { None },
                     // Only the artist listing selects a fifth column.
                     sort: r.get::<_, Option<String>>(4).ok().flatten(),
+                    // And only the album listing a sixth.
+                    passage: r.get::<_, Option<i64>>(5).ok().flatten(),
                 })
             })
             .map_err(|e| DbError::Query(e.to_string()))?;
@@ -2723,6 +2732,41 @@ mod tests {
         let lib = Library::open(&path).unwrap();
         let got = lib.random_radio(1).expect("the refill query must run against the canonical schema");
         assert_eq!(got.len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `[REQ-VIS-184]` Each album names one of its passages, for its front;
+    /// an artist names none.
+    #[test]
+    fn an_album_names_a_passage_for_its_cover() {
+        let dir = std::env::temp_dir().join(format!("lempi-albumart-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lib.db");
+        let _ = std::fs::remove_file(&path);
+        {
+            let c = rusqlite::Connection::open(&path).unwrap();
+            c.execute_batch(include_str!("../../../../sql/schema.sql")).unwrap();
+            // As the release tools and a bundle import add it; the canonical
+            // schema lacks it, and Browse by Album needs it.
+            c.execute("ALTER TABLE release_recordings ADD COLUMN chosen INTEGER DEFAULT 0", []).unwrap();
+            for (n, album) in [(1, "Detour"), (2, "Detour"), (3, "At Last")] {
+                c.execute("INSERT INTO files (file_id,audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen) \
+                           VALUES (?1,?2,'/x.mp3',1,1.0,'mp3',1000,'t','t')", rusqlite::params![n, format!("m{n}")]).unwrap();
+                c.execute("INSERT INTO passages (passage_id,file_id,kind,start_ms,end_ms,boundary_src) \
+                           VALUES (?1,?1,'radio',0,1000,'x')", [n]).unwrap();
+                c.execute("INSERT INTO file_tags (file_id,title,artist,album,scanned_at) VALUES (?1,'t','Cyndi Lauper',?2,0)",
+                          rusqlite::params![n, album]).unwrap();
+            }
+        }
+        let lib = Library::open(&path).unwrap();
+        let albums: Vec<(String, Option<i64>)> = lib
+            .browse_albums(&BrowseFilter { artist: Some("Cyndi Lauper".into()), ..Default::default() })
+            .unwrap()
+            .into_iter()
+            .map(|g| (g.name, g.passage))
+            .collect();
+        assert_eq!(albums, vec![("At Last".into(), Some(3)), ("Detour".into(), Some(1))]);
+        assert!(lib.browse_artists(&BrowseFilter::default()).unwrap().iter().all(|g| g.passage.is_none()));
         std::fs::remove_dir_all(&dir).ok();
     }
 

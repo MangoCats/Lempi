@@ -79,6 +79,16 @@
                 font-size: 1.1rem; text-decoration: none; color: inherit;
                 opacity: .6; }
   .rows .info:hover, .rows .info:focus { opacity: 1; }
+  /* An artist's albums, each with its front: a fingertip-sized square, the
+     name beside it [REQ-VIS-184]. A missing cover keeps its square. */
+  .rows .thumb { flex: none; width: 2.75rem; height: 2.75rem; object-fit: cover;
+                 border-radius: 3px; background: rgba(128,128,128,.15); }
+  .rows .thumb.none { visibility: hidden; }
+  /* An album opened: its sleeve, front and back, at the MuLibPlay player's
+     200px, centred above the first track; stacked when two will not fit. */
+  .rows .sleeves { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px;
+                   padding: .75rem 0; border: none; cursor: default; min-height: 0; }
+  .rows .sleeves img { width: 200px; height: 200px; max-width: 100%; object-fit: contain; }
   .note { font-size: .8125rem; opacity: .7; margin: .75rem .2rem; }
   .note.bad { opacity: 1; }
 </style>

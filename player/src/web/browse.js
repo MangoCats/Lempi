@@ -200,6 +200,24 @@
     const byLetter = !(kind === 'tracks' && filter.album);
     $('az').textContent = '';
 
+    // An album opened shows its sleeve, front and back, above its first track
+    // [REQ-VIS-184] -- at the MuLibPlay player's 200px, side by side, stacked
+    // on a phone too narrow for two. Through the first track's passage: the
+    // cover lookup resolves it through the release that names the album.
+    // A side the catalogue lacks is left out, and with neither the row goes.
+    if (kind === 'tracks' && filter.album && rows.length) {
+      const sleeves = document.createElement('li');
+      sleeves.className = 'sleeves';
+      for (const [side, alt] of [['', 'front cover'], ['/back', 'back cover']]) {
+        const img = document.createElement('img');
+        img.alt = alt;
+        img.src = `/art/${rows[0].passage_id}${side}`;
+        img.onerror = () => { img.remove(); if (!sleeves.querySelector('img')) sleeves.remove(); };
+        sleeves.appendChild(img);
+      }
+      body.appendChild(sleeves);
+    }
+
     const anchors = new Map();
     let last = null;
     for (const r of rows) {
@@ -249,11 +267,24 @@
         li.onclick = () => { box.checked = !box.checked; armed(); };
         body.appendChild(li);
       } else if (kind === 'albums') {
-        body.appendChild(row(
+        const li = row(
           r.name, r.artist ?? '',
           `${plural(r.passages, 'track')}\n${r.plays}×`,
           () => { filter = { artist: r.artist ?? undefined, album: r.name };
-                  show('tracks'); }));
+                  show('tracks'); });
+        // An artist's albums, each with its front [REQ-VIS-184]. Lazy, so a
+        // long discography fetches only what scrolls into view; a missing
+        // cover keeps its square, so the names stay in one column.
+        if (filter.artist && r.passage) {
+          const img = document.createElement('img');
+          img.className = 'thumb';
+          img.alt = '';
+          img.loading = 'lazy';
+          img.src = `/art/${r.passage}`;
+          img.onerror = () => img.classList.add('none');
+          li.prepend(img);
+        }
+        body.appendChild(li);
       } else {
         body.appendChild(row(
           r.name, '',
