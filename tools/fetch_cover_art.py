@@ -129,6 +129,18 @@ def get(url: str, want_json: bool = False) -> bytes | None:
     raise Unavailable("no answer")
 
 
+def thumbnail(image: dict) -> str | None:
+    """The thumbnail to take of one manifest image.
+
+    500 is the smallest with headroom over a 200px box on a high-density
+    screen; 250 for releases that lack it. The original is never taken --
+    that is what cost 2.9 MB a cover. Older entries name the same two
+    `large` and `small`: on 2026-10-02 that was every image of three CDs
+    added that week, and asking only for "500"/"250" took none of them."""
+    thumbs = image.get("thumbnails") or {}
+    return thumbs.get("500") or thumbs.get("large") or thumbs.get("250") or thumbs.get("small")
+
+
 def covers(mbid: str, group: bool = False) -> tuple[bytes | None, bytes | None]:
     """The front and back of one release, via its manifest.
 
@@ -152,11 +164,7 @@ def covers(mbid: str, group: bool = False) -> tuple[bytes | None, bytes | None]:
         for im in images:
             if not im.get(flag):
                 continue
-            thumbs = im.get("thumbnails") or {}
-            # 500 is the smallest with headroom over a 200px box on a
-            # high-density screen; 250 for releases that lack it. The
-            # original is never taken -- that is what cost 2.9 MB a cover.
-            url = thumbs.get("500") or thumbs.get("250")
+            url = thumbnail(im)
             if not url:
                 continue
             data = get(url)

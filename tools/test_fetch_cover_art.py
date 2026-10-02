@@ -89,6 +89,11 @@ def main() -> int:
         check([r for r, _, _ in fca.wanted(c, 60)][0] == "rel-cd", "and it is asked next time")
     finally:
         fca.covers, fca.time.sleep = real, sleep
+    print("a thumbnail by either naming: 500 or large, else 250 or small; never the original")
+    check(fca.thumbnail({"thumbnails": {"large": "L", "small": "S"}}) == "L", "the older naming")
+    check(fca.thumbnail({"thumbnails": {"250": "a", "500": "b", "1200": "c"}}) == "b", "the newer")
+    check(fca.thumbnail({"thumbnails": {"small": "S"}}) == "S" and fca.thumbnail({"image": "orig"}) is None,
+          "the smallest when that is all; none rather than the original")
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")
