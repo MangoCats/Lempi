@@ -93,13 +93,35 @@
       b.textContent = L;
       const target = anchors.get(L);
       if (target) {
-        b.onclick = () => target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        b.onclick = () => jump(target);
       } else {
         b.disabled = true;
       }
       bar.appendChild(b);
     }
+    stickUnderBar();
   }
+
+  // Where a letter's heading sits in the list, worked out from the first row
+  // under it -- not from the heading, which is sticky. `scrollIntoView` on a
+  // sticky heading measured where it was stuck, so every heading already
+  // scrolled past read as in view: the first tap worked and a tap back up the
+  // list did nothing. Reproduced in Chrome at phone width on lempi02w,
+  // 2026-10-01: M, then C, stayed in the Ms.
+  function jump(head) {
+    const first = head.nextElementSibling || head;
+    const y = first.getBoundingClientRect().top + window.scrollY
+      - $('az').offsetHeight - head.offsetHeight;
+    window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+  }
+
+  // A heading sticks just under the bar, however tall the bar is: on a phone
+  // its 27 letters wrap to two or three rows -- 107 px measured at 400 px
+  // wide -- and a fixed offset left the heading hidden behind it.
+  function stickUnderBar() {
+    document.documentElement.style.setProperty('--az-h', `${$('az').offsetHeight}px`);
+  }
+  window.addEventListener('resize', stickUnderBar);
 
   const plural = (n, one) => `${n.toLocaleString()} ${one}${n === 1 ? '' : 's'}`;
 
