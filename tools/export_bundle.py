@@ -46,8 +46,8 @@ def main() -> int:
     ap.add_argument("--have", help="file of audio_md5 the target already holds, one per line")
     ap.add_argument("--present-md5-file",
                     help="file of audio_md5 to include in the payload WITHOUT audio -- the target "
-                         "holds them, and is sent only what changed about them: their holds "
-                         "[SPEC-HOLD-080]")
+                         "holds them, and is sent only what changed about them: holds, credits, "
+                         "albums, sort names, covers [SPEC-HOLD-080]")
     ap.add_argument("--gzip", action="store_true", help="write payload.json.gz as well")
     ap.add_argument("--zip", action="store_true",
                     help="also write <out>.zip: the whole bundle as one file, for a phone's "
@@ -179,7 +179,7 @@ def main() -> int:
           + (f"   ({missing} MISSING)" if missing else ""))
     if present:
         print(f"  no audio    {len(present & {e['audio_md5'] for e in doc['encodings']})} "
-              "already on the target, sent for their holds")
+              "already on the target, sent without audio for what changed about them")
     print(f"  releases    {len(doc.get('releases', []))}, covers {cover_bytes/1e6:.1f} MB")
     print(f"  payload     {len(text.encode())/1024:.1f} KB"
           + (f"  ({gz_len/1024:.1f} KB gzipped)" if gz_len else ""))

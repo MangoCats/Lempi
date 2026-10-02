@@ -745,25 +745,34 @@ fn upsert_recording(tx: &rusqlite::Transaction, r: &Value, rep: &mut Report) -> 
         // Provenance outranks recency, and `manual` outranks everything
         // `[SPEC-DF-070]`. A user's correction is never silently overwritten,
         // so an arriving value that would replace one is simply not applied.
-        let local: Option<String> = tx
+        let local: Option<(String, f64, Option<f64>)> = tx
             .query_row(
-                "SELECT source FROM flavor WHERE subject_kind='recording' AND subject_id=?1 \
+                "SELECT source, value, accuracy FROM flavor WHERE subject_kind='recording' AND subject_id=?1 \
                  AND characteristic=?2 AND class=?3",
                 params![mbid, ch, cl],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .ok();
-        if let Some(src) = local {
+        let value = f.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let accuracy = f.get("accuracy").and_then(|v| v.as_f64());
+        if let Some((src, v, acc)) = local {
             if src == "manual" {
                 rep.kept_local += 1;
+                continue;
+            }
+            // The same value from the same source is not written again. A send
+            // of what changed about music a speaker holds carries every flavor
+            // of every recording it names: 260,181 rows rewritten to lempi02w
+            // on 2026-10-02 for a send of cover art -- three minutes of a Pi
+            // Zero 2W's SD card, for nothing.
+            if src == str_of(f, "source") && v == value && acc == accuracy {
                 continue;
             }
         }
         tx.execute(
             "INSERT OR REPLACE INTO flavor (subject_kind,subject_id,characteristic,class,value,source,accuracy)\
              VALUES ('recording',?1,?2,?3,?4,?5,?6)",
-            params![mbid, ch, cl, f.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                    str_of(f, "source"), f.get("accuracy").and_then(|v| v.as_f64())],
+            params![mbid, ch, cl, value, str_of(f, "source"), accuracy],
         )
         .map_err(|e| e.to_string())?;
         rep.rows_written += 1;
@@ -1190,10 +1199,14 @@ pub fn import_releases(db: &mut Connection, doc: &Value, bundle_root: &Path) -> 
         let sides = read_cover(cover, bundle_root, &mbid, &mut rep);
         if sides.iter().any(Option::is_some) {
             let [front, back] = sides;
+            // Written only when it changes something: a send rewrote every
+            // cover it named, 1,156 on 2026-10-02, a few hundred of them new.
             tx.execute(
                 "INSERT INTO cover_art (release_mbid,front,back,source,fetched_at) VALUES (?1,?2,?3,?4,?5) \
                  ON CONFLICT(release_mbid) DO UPDATE SET front=COALESCE(excluded.front, cover_art.front), \
-                 back=COALESCE(excluded.back, cover_art.back), source=excluded.source, fetched_at=excluded.fetched_at",
+                 back=COALESCE(excluded.back, cover_art.back), source=excluded.source, fetched_at=excluded.fetched_at \
+                 WHERE cover_art.front IS NOT COALESCE(excluded.front, cover_art.front) \
+                    OR cover_art.back IS NOT COALESCE(excluded.back, cover_art.back) OR cover_art.source IS NOT excluded.source",
                 params![mbid, front, back, str_of(cover, "source"), str_of(cover, "fetched_at")],
             )
             .map_err(|e| format!("cover of {mbid}: {e}"))?;
@@ -1207,7 +1220,9 @@ pub fn import_releases(db: &mut Connection, doc: &Value, bundle_root: &Path) -> 
             tx.execute(
                 "INSERT INTO file_art (audio_md5,front,back,source,fetched_at) VALUES (?1,?2,?3,?4,?5) \
                  ON CONFLICT(audio_md5) DO UPDATE SET front=COALESCE(excluded.front, file_art.front), \
-                 back=COALESCE(excluded.back, file_art.back), source=excluded.source, fetched_at=excluded.fetched_at",
+                 back=COALESCE(excluded.back, file_art.back), source=excluded.source, fetched_at=excluded.fetched_at \
+                 WHERE file_art.front IS NOT COALESCE(excluded.front, file_art.front) \
+                    OR file_art.back IS NOT COALESCE(excluded.back, file_art.back) OR file_art.source IS NOT excluded.source",
                 params![md5, front, back, str_of(cover, "source"), str_of(cover, "fetched_at")],
             )
             .map_err(|e| format!("cover of file {md5}: {e}"))?;
@@ -1913,6 +1928,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(v2, 0.9, "an already-held encoding must not gate updates to its recording's data");
+
+        // The same again changes nothing, and so writes nothing.
+        let rep3 = import(&mut c, &second, "body3", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep3.rows_written, 0, "an unchanged value is not rewritten");
 
         std::fs::remove_dir_all(&audio_dir).ok();
     }
@@ -2917,8 +2936,14 @@ mod tests {
         assert_eq!(r2, 0, "a cover that does not match is not stored");
         // `[REQ-AND-205]`: the phone's import keeps covers in the archive only.
         assert!(!s.music.join("cover.jpg").exists(), "nothing written beside the audio");
+        // Counted by trigger: the same cover again is not rewritten.
+        c.execute_batch("CREATE TABLE rewrites (n INTEGER);
+                         CREATE TRIGGER cover_rewritten AFTER UPDATE ON cover_art BEGIN INSERT INTO rewrites VALUES (1); END;")
+            .unwrap();
         let again = import_staged(&mut c, &s.staging, &s.music, None).unwrap();
         assert_eq!(again.imported, 0, "{again:?}");
+        let rewrites: i64 = c.query_row("SELECT count(*) FROM rewrites", [], |r| r.get(0)).unwrap();
+        assert_eq!(rewrites, 0, "an unchanged cover is not written again");
         let n: i64 = c.query_row("SELECT count(*) FROM release_recordings", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1, "idempotent");
         std::fs::remove_dir_all(&s.root).ok();

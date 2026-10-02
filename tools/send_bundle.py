@@ -33,7 +33,6 @@ do, uploads nothing, and writes nothing.
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import os
 import posixpath
@@ -162,15 +161,27 @@ def audio_tar(audio: str, out) -> None:
 
 
 def stage(host: str, bundle: str, where: str) -> None:
-    """The payload, and covers if any, to `where` on the speaker -- small."""
+    """The payload, and covers if any, to `where` on the speaker.
+
+    Not small, and so streamed with its progress said, as the audio is: a
+    covers send to lempi02w on 2026-10-02 staged a 33.5 MB payload and
+    84.8 MB of covers, four minutes over wifi with nothing on the page, and
+    was taken for a hang."""
     must(host, f"rm -rf {shlex.quote(where)} && mkdir -p {shlex.quote(where)}", "make the staging folder")
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as tar:
-        tar.add(os.path.join(bundle, "payload.json"), "payload.json")
-        covers = os.path.join(bundle, "covers")
-        if os.path.isdir(covers):
-            tar.add(covers, "covers")
-    must(host, f"tar -xf - -C {shlex.quote(where)}", "stage the payload", buf.getvalue())
+    payload = os.path.join(bundle, "payload.json")
+    covers = os.path.join(bundle, "covers")
+    files, size = audio_size(covers) if os.path.isdir(covers) else (0, 0)
+    size += os.path.getsize(payload)
+    say(f"  staging the payload{f' and {files} cover file(s)' if files else ''}, {size / 1e6:.1f} MB ...")
+
+    def feed(pipe):
+        with tarfile.open(fileobj=Progress(pipe, size), mode="w|", format=tarfile.PAX_FORMAT) as tar:
+            tar.add(payload, "payload.json")
+            if files:
+                tar.add(covers, "covers")
+    rc, out = ssh_stream(host, f"tar -xf - -C {shlex.quote(where)}", feed)
+    if rc != 0:
+        raise Failed(f"stage the payload on {host} failed (exit {rc}): {out[-300:]}")
 
 
 def import_run(host: str, library: str, where: str, audio_root: str, apply: bool) -> dict:
