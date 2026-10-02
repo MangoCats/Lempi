@@ -209,6 +209,36 @@ def test_retired_keys_travel_with_every_payload():
           f"every alias, in a stable order: {got}")
 
 
+def test_a_files_release_travels_with_it():
+    """[SPEC-SC-125] A file's own release travels on its encoding, and that
+    release -- neither chosen nor pictured -- with its track for the file's
+    recording, so the receiver can name the album."""
+    conn = make_db(":memory:", SCHEMA)
+    conn.execute("INSERT INTO passages VALUES (1,1,'radio',0,10000,NULL,NULL,NULL,'x',"
+                 "20,20,'exponential','exponential')")
+    conn.execute("INSERT INTO recordings VALUES ('m1','t',NULL,'s')")
+    conn.execute("INSERT INTO passage_recordings VALUES (1,'m1',1.0,'s')")
+    conn.executescript("""
+        CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT NOT NULL, release_date TEXT,
+            source TEXT NOT NULL, release_group TEXT, status TEXT, primary_type TEXT,
+            secondary_types TEXT, country TEXT, track_count INTEGER);
+        CREATE TABLE release_recordings (release_mbid TEXT NOT NULL, mbid TEXT NOT NULL,
+            position INTEGER, source TEXT NOT NULL, track_length_ms INTEGER, chosen INTEGER DEFAULT 0,
+            disc INTEGER, PRIMARY KEY (release_mbid, mbid)) WITHOUT ROWID;
+        CREATE TABLE file_releases (audio_md5 TEXT PRIMARY KEY, release_mbid TEXT NOT NULL,
+            source TEXT NOT NULL, decided_at TEXT);
+        INSERT INTO releases (mbid,title,source) VALUES ('album','Album','mb'), ('comp','Compilation','mb');
+        INSERT INTO release_recordings VALUES ('album','m1',3,'mb',NULL,1,1), ('comp','m1',9,'mb',NULL,0,1);
+        INSERT INTO file_releases VALUES ('md5','comp','cd:import','t');
+    """)
+    doc = pl.build(conn, ["md5"])
+    check(doc["encodings"][0].get("release") == {"mbid": "comp", "source": "cd:import", "decided_at": "t"},
+          f"on the encoding: {doc['encodings'][0].get('release')}")
+    rels = {r["mbid"]: r for r in doc.get("releases", [])}
+    check("comp" in rels and [t["position"] for t in rels["comp"]["tracks"]] == [9],
+          f"the file's release, with its track: {sorted(rels)}")
+
+
 def test_covers_travel_as_files_named_by_the_payload():
     """`[SPEC-PL-105]`: a recording's chosen release, and any release of it
     with a front cover, travel with its tracks for the payload's recordings
@@ -271,6 +301,7 @@ def test_a_files_own_cover_travels_on_its_encoding():
 
 
 def main() -> int:
+    test_a_files_release_travels_with_it()
     test_covers_travel_as_files_named_by_the_payload()
     test_a_files_own_cover_travels_on_its_encoding()
     test_retired_keys_travel_with_every_payload()

@@ -304,7 +304,7 @@ def _candidate_for(release: dict, position: int) -> dict | None:
             "artist": artists or None, "score": 1.0}
 
 
-def record_release(conn, release: dict, tracks) -> int:
+def record_release(conn, release: dict, tracks, files=()) -> int:
     """The disc in hand is its release `[SPEC-CDI-098]`: `release` (a
     MusicBrainz release, `media[].tracks[]` with recordings) becomes the chosen
     release of each recording in `tracks` -- `(position, mbid)` -- that it
@@ -316,7 +316,9 @@ def record_release(conn, release: dict, tracks) -> int:
     release they were on -- unless another disc held here has it already,
     which keeps it; `source` is `cd:import`, which `choose_release.py`
     leaves standing -- knowing which record a rip came from settles it.
-    Returns how many recordings were linked."""
+    And `files` -- the rip's audio_md5s -- are recorded as taken from it
+    `[SPEC-SC-125]`, so each is shown under this disc whatever its
+    recordings' chosen releases are. Returns how many recordings were linked."""
     rid = release.get("id")
     if not rid:
         return 0
@@ -366,6 +368,15 @@ def record_release(conn, release: dict, tracks) -> int:
             "ON CONFLICT(release_mbid, mbid) DO UPDATE SET chosen = excluded.chosen, source = 'cd:import'",
             (rid, mbid, t.get("position") or position, t.get("length"), 0 if other_disc else 1, disc))
         linked += 1
+    if files:
+        conn.execute("CREATE TABLE IF NOT EXISTS file_releases (audio_md5 TEXT PRIMARY KEY, "
+                     "release_mbid TEXT NOT NULL, source TEXT NOT NULL, decided_at TEXT)")
+        now = _now()
+        for md5 in files:
+            conn.execute("INSERT INTO file_releases (audio_md5, release_mbid, source, decided_at) "
+                         "VALUES (?1, ?2, 'cd:import', ?3) ON CONFLICT(audio_md5) DO UPDATE SET "
+                         "release_mbid = excluded.release_mbid, source = excluded.source, "
+                         "decided_at = excluded.decided_at", (md5, rid, now))
     return linked
 
 
@@ -717,7 +728,7 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
 
     # ------------------------------------------------------------- disc decision
     certain = chosen or (disc_outcome == "exact" and len(releases) == 1)
-    albums = record_release(conn, releases[0], placed) if certain and releases else 0
+    albums = record_release(conn, releases[0], placed, [audio_md5]) if certain and releases else 0
     detail = {
         "track_count": toc.track_count, "format": toc.source,
         "candidates": len(releases),
@@ -933,7 +944,8 @@ def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[
             "VALUES (?1,'rip','track_missing',NULL,?2,?3)",
             (tracks[0][2], json.dumps({"track": n, "title": title}), now))
     marked = mark_occasions(conn, mbids, occasions, now) if occasions else {}
-    albums = (record_release(conn, releases[0], [(t.number, m) for (t, _, _), m in zip(tracks, mbids)])
+    albums = (record_release(conn, releases[0], [(t.number, m) for (t, _, _), m in zip(tracks, mbids)],
+                             [md5 for _, _, md5 in tracks])
               if certain and releases else 0)
     return {"tracks": len(tracks), **counts, "verification_failed": failed, "missing": missing,
             "occasions": marked, "album_linked": albums,

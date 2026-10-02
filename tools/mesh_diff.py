@@ -101,6 +101,15 @@ TABLES = {
         # A library no cover ever reached has no table: that is no covers.
         "optional_table": True,
     },
+    "file_releases": {
+        # The release each file was taken from `[SPEC-SC-125]`. A speaker
+        # lacking one, or holding another, is sent this library's.
+        "sql": "SELECT audio_md5, release_mbid FROM file_releases",
+        "key": ("audio_md5",),
+        "value": ("release_mbid",),
+        "manual_field": None,
+        "optional_table": True,
+    },
     "albums": {
         # Each recording's chosen release -- what names its album in Browse
         # `[SPEC-CDI-098]`. `chosen` is read as NULL where a library has no

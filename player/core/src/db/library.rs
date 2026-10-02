@@ -28,20 +28,33 @@ pub struct Library {
 /// weighting that names have nothing to do with. Display metadata is fetched
 /// for the dozen passages actually on screen, where it costs under a
 /// millisecond each.
-const DESCRIBE: &str = "\
-    SELECT (SELECT r.title FROM __LIB__.recordings r WHERE r.mbid = m.mbid), \
-           (SELECT a.name FROM __LIB__.recording_artists ra \
-              JOIN __LIB__.artists a ON a.mbid = ra.artist_mbid \
-             WHERE ra.mbid = m.mbid ORDER BY ra.weight DESC, a.name LIMIT 1), \
-           (SELECT rel.title FROM __LIB__.release_recordings rr \
-              JOIN __LIB__.releases rel ON rel.mbid = rr.release_mbid \
-             WHERE rr.mbid = m.mbid ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1), \
-           (SELECT COUNT(*) FROM listener_play_history h WHERE h.mbid = m.mbid), \
-           (SELECT MAX(h.played_at) FROM listener_play_history h WHERE h.mbid = m.mbid), \
-           (SELECT ra.artist_mbid FROM __LIB__.recording_artists ra \
-              JOIN __LIB__.artists a ON a.mbid = ra.artist_mbid \
-             WHERE ra.mbid = m.mbid ORDER BY ra.weight DESC, a.name LIMIT 1) \
-      FROM (SELECT ?1 AS mbid) m";
+///
+/// `?1` is the recording, `?2` the passage (NULL where there is none): the
+/// album is the passage's file's release where that is known
+/// `[SPEC-SC-125]`, else the recording's chosen one.
+fn describe_sql(file_releases: bool) -> String {
+    let album = if file_releases {
+        format!(
+            "COALESCE({}, {CHOSEN_ALBUM})",
+            file_release_title("(SELECT p2.file_id FROM __LIB__.passages p2 WHERE p2.passage_id = m.passage_id)")
+        )
+    } else {
+        CHOSEN_ALBUM.to_string()
+    };
+    format!(
+        "SELECT (SELECT r.title FROM __LIB__.recordings r WHERE r.mbid = m.mbid), \
+                (SELECT a.name FROM __LIB__.recording_artists ra \
+                   JOIN __LIB__.artists a ON a.mbid = ra.artist_mbid \
+                  WHERE ra.mbid = m.mbid ORDER BY ra.weight DESC, a.name LIMIT 1), \
+                {album}, \
+                (SELECT COUNT(*) FROM listener_play_history h WHERE h.mbid = m.mbid), \
+                (SELECT MAX(h.played_at) FROM listener_play_history h WHERE h.mbid = m.mbid), \
+                (SELECT ra.artist_mbid FROM __LIB__.recording_artists ra \
+                   JOIN __LIB__.artists a ON a.mbid = ra.artist_mbid \
+                  WHERE ra.mbid = m.mbid ORDER BY ra.weight DESC, a.name LIMIT 1) \
+           FROM (SELECT ?1 AS mbid, ?2 AS passage_id) m"
+    )
+}
 
 /// The one place the passage/file join is written. Every loader below selects
 /// these columns in this order, so `row_to_entry` can stay a single function.
@@ -236,7 +249,7 @@ impl Library {
     /// `describe()`'s tag fallback already exists to avoid where it can.
     pub fn recording_names(&self, mbid: &str) -> (Option<String>, Option<String>, Option<String>) {
         self.conn
-            .query_row(DESCRIBE, [mbid], |r| {
+            .query_row(&describe_sql(self.has_file_releases()), rusqlite::params![mbid, Option::<i64>::None], |r| {
                 Ok((
                     r.get::<_, Option<String>>(0)?,
                     r.get::<_, Option<String>>(1)?,
@@ -248,7 +261,7 @@ impl Library {
 
     pub fn describe(&self, e: &mut QueueEntry) {
         let Some(mbid) = e.mbid.clone() else { return };
-        let got = self.conn.query_row(DESCRIBE, [&mbid], |r| {
+        let got = self.conn.query_row(&describe_sql(self.has_file_releases()), rusqlite::params![mbid, e.passage_id], |r| {
             Ok((
                 r.get::<_, Option<String>>(0)?,
                 r.get::<_, Option<String>>(1)?,
@@ -468,10 +481,43 @@ const ARTIST_SORT_EXPR: &str = "COALESCE( \
       JOIN __LIB__.artists a ON a.mbid = ra.artist_mbid \
       WHERE ra.mbid = m.mbid ORDER BY ra.weight DESC, a.name LIMIT 1), ft.artist)";
 
-/// The displayed album: MusicBrainz **Release** title, then the file's tag.
-const ALBUM_EXPR: &str = "COALESCE( \
-    (SELECT rel.title FROM __LIB__.release_recordings rr JOIN __LIB__.releases rel ON rel.mbid = rr.release_mbid \
-      WHERE rr.mbid = m.mbid ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1), ft.album)";
+/// The recording's chosen release's title -- one per recording, however
+/// many of the library's discs it is on.
+const CHOSEN_ALBUM: &str = "(SELECT rel.title FROM __LIB__.release_recordings rr \
+    JOIN __LIB__.releases rel ON rel.mbid = rr.release_mbid \
+      WHERE rr.mbid = m.mbid ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1)";
+
+/// The title of the release the file `file` (an SQL expression for its
+/// `file_id`) was taken from `[SPEC-SC-125]`, or NULL.
+fn file_release_title(file: &str) -> String {
+    format!(
+        "(SELECT rel.title FROM __LIB__.files ff \
+           JOIN __LIB__.file_releases fr ON fr.audio_md5 = ff.audio_md5 \
+           JOIN __LIB__.releases rel ON rel.mbid = fr.release_mbid WHERE ff.file_id = {file})"
+    )
+}
+
+/// The track's place on the release its file was taken from, else on the
+/// recording's chosen release `[SPEC-SC-125]` -- `col` is `position` or
+/// `disc`. A file whose release does not carry this recording has no number
+/// there, rather than another album's.
+fn release_place(col: &str, file_releases: bool) -> String {
+    let chosen = format!(
+        "(SELECT rr.{col} FROM __LIB__.release_recordings rr WHERE rr.mbid = m.mbid AND rr.chosen = 1)"
+    );
+    if !file_releases {
+        return chosen;
+    }
+    format!(
+        "(CASE WHEN EXISTS (SELECT 1 FROM __LIB__.files ff JOIN __LIB__.file_releases fr \
+                             ON fr.audio_md5 = ff.audio_md5 WHERE ff.file_id = m.file_id) \
+          THEN (SELECT rr.{col} FROM __LIB__.files ff \
+                  JOIN __LIB__.file_releases fr ON fr.audio_md5 = ff.audio_md5 \
+                  JOIN __LIB__.release_recordings rr ON rr.release_mbid = fr.release_mbid \
+                 WHERE ff.file_id = m.file_id AND rr.mbid = m.mbid) \
+          ELSE {chosen} END)"
+    )
+}
 
 const TITLE_EXPR: &str =
     "COALESCE((SELECT r.title FROM __LIB__.recordings r WHERE r.mbid = m.mbid), ft.title)";
@@ -496,6 +542,42 @@ const HIST_ARTIST_MBID_EXPR: &str = "(SELECT ra.artist_mbid FROM __LIB__.recordi
 const HIST_ALBUM_EXPR: &str = "(SELECT rel.title FROM __LIB__.release_recordings rr \
     JOIN __LIB__.releases rel ON rel.mbid = rr.release_mbid \
     WHERE rr.mbid = u.mbid ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1)";
+
+impl Library {
+    /// Whether this catalogue says which release each file came from
+    /// `[SPEC-SC-125]`. A speaker's is read-only and a phone's may predate
+    /// the table, and a query naming a missing table fails rather than
+    /// returning nothing -- so every use is built on this.
+    fn has_file_releases(&self) -> bool {
+        self.has_table("file_releases") && self.has_table("releases")
+    }
+
+    /// The displayed album: the release the passage's file was taken from,
+    /// then its recording's chosen release, then the file's tag. `file` is
+    /// the SQL expression for the file's id. Before 2026-10-02 the file's own
+    /// release was not known, and a hit ripped from four discs was shown four
+    /// times under one of them `[SPEC-SC-125]`.
+    fn album_expr(&self, file: &str) -> String {
+        if self.has_file_releases() {
+            format!("COALESCE({}, {CHOSEN_ALBUM}, ft.album)", file_release_title(file))
+        } else {
+            format!("COALESCE({CHOSEN_ALBUM}, ft.album)")
+        }
+    }
+
+    /// History's album: the played passage's file's release where the
+    /// passage still exists, else the recording's chosen release.
+    fn hist_album_expr(&self) -> String {
+        if self.has_file_releases() {
+            format!(
+                "COALESCE({}, {HIST_ALBUM_EXPR})",
+                file_release_title("(SELECT p2.file_id FROM __LIB__.passages p2 WHERE p2.passage_id = u.passage_id)")
+            )
+        } else {
+            HIST_ALBUM_EXPR.to_string()
+        }
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BrowseGroup {
@@ -932,9 +1014,10 @@ impl Library {
     }
 
     pub fn browse_albums(&self, f: &BrowseFilter) -> Result<Vec<BrowseGroup>, DbError> {
+        let album = self.album_expr("m.file_id");
         let sql = format!(
             "SELECT album, COUNT(*), SUM(plays), artist, NULL, MIN(pid) FROM ( \
-               SELECT {ALBUM_EXPR} AS album, {ARTIST_EXPR} AS artist, {PLAYS_EXPR} AS plays, \
+               SELECT {album} AS album, {ARTIST_EXPR} AS artist, {PLAYS_EXPR} AS plays, \
                       m.passage_id AS pid \
                  FROM ({NAMED}) m LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id) \
              WHERE album IS NOT NULL AND album <> '' \
@@ -1020,9 +1103,10 @@ impl Library {
         // makes AcoustID disagree with anything. Joined by `m.mbid` -- the
         // passage's CURRENT recording link, which `NAMED` already computes --
         // not by passage, since the table is keyed by recording.
+        let album = self.album_expr("m.file_id");
         let sql = format!(
             "SELECT c.passage_id, c.stored_mbid, c.score, c.suggested, \
-                    {TITLE_EXPR}, {ARTIST_EXPR}, {ALBUM_EXPR}, \
+                    {TITLE_EXPR}, {ARTIST_EXPR}, {album}, \
                     v.decision, v.chosen_mbid, v.chosen_release_mbid, v.applied_at, \
                     a.artist_name, a.applied_at, c.checked_at \
                FROM __LIB__.id_checks c \
@@ -1112,9 +1196,10 @@ impl Library {
         {
             return None;
         }
+        let album = self.album_expr("m.file_id");
         let sql = format!(
             "SELECT m.passage_id, COALESCE(m.mbid, 'local:none'), c.score, c.suggested, \
-                    {TITLE_EXPR}, {ARTIST_EXPR}, {ALBUM_EXPR}, \
+                    {TITLE_EXPR}, {ARTIST_EXPR}, {album}, \
                     v.decision, v.chosen_mbid, v.chosen_release_mbid, v.applied_at, \
                     a.artist_name, a.applied_at, c.checked_at \
                FROM ({NAMED_ANY}) m \
@@ -1258,7 +1343,31 @@ impl Library {
                 )
                 .ok()
         };
-        let data = by_release().filter(big).or_else(|| by_file().filter(big))?;
+        // The cover of the disc the file was taken from comes first
+        // `[SPEC-SC-125]`: a hit ripped from a compilation shows the
+        // compilation's sleeve, not its album's.
+        let by_file_release = || -> Option<Vec<u8>> {
+            if !self.has_file_releases() || !self.has_table("cover_art") {
+                return None;
+            }
+            self.conn
+                .query_row(
+                    &format!(
+                        "SELECT a.{col} FROM __LIB__.cover_art a \
+                           JOIN __LIB__.file_releases fr ON fr.release_mbid = a.release_mbid \
+                           JOIN __LIB__.files f ON f.audio_md5 = fr.audio_md5 \
+                           JOIN __LIB__.passages p ON p.file_id = f.file_id \
+                          WHERE p.passage_id = ?1 AND a.{col} IS NOT NULL"
+                    ),
+                    [passage_id],
+                    |r| r.get(0),
+                )
+                .ok()
+        };
+        let data = by_file_release()
+            .filter(big)
+            .or_else(|| by_release().filter(big))
+            .or_else(|| by_file().filter(big))?;
         // Sniffed rather than stored: the archive serves JPEG and PNG, and a
         // wrong Content-Type would render as a broken image.
         let media_type = if data.starts_with(&[0x89, b'P', b'N', b'G']) {
@@ -1366,9 +1475,10 @@ impl Library {
         // `ALBUM_EXPR`/`TITLE_EXPR` already establish, rebuilt locally rather
         // than reused: `NAMED` restricts to `kind = 'radio'`, and the
         // cascade's `album` passages `[SPEC024 §1]` belong in this queue too.
+        let album = self.album_expr("p.file_id");
         let sql = format!(
             "SELECT p.passage_id, f.path, p.kind, p.start_ms, p.end_ms, p.boundary_src, \
-                    {TITLE_EXPR}, {ARTIST_EXPR}, {ALBUM_EXPR}, \
+                    {TITLE_EXPR}, {ARTIST_EXPR}, {album}, \
                     {confidence_expr}, {outcome_expr}, \
                     EXISTS (SELECT 1 FROM boundary_reviews br2 WHERE br2.passage_id = p.passage_id) \
                FROM __LIB__.passages p \
@@ -1507,16 +1617,16 @@ impl Library {
         } else {
             "ORDER BY title COLLATE NOCASE"
         };
+        let album = self.album_expr("m.file_id");
+        let track = release_place("position", self.has_file_releases());
+        let disc = release_place("disc", self.has_file_releases());
         let sql = format!(
             "SELECT passage_id, title, artist, album, plays, \
                     COALESCE(mb_track, track_no), COALESCE(mb_disc, disc_no) FROM ( \
                SELECT m.passage_id, {TITLE_EXPR} AS title, {ARTIST_EXPR} AS artist, \
-                      {ALBUM_EXPR} AS album, {PLAYS_EXPR} AS plays, \
+                      {album} AS album, {PLAYS_EXPR} AS plays, \
                       ft.track_no AS track_no, ft.disc_no AS disc_no, \
-                      (SELECT rr.position FROM __LIB__.release_recordings rr \
-                        WHERE rr.mbid = m.mbid AND rr.chosen = 1) AS mb_track, \
-                      (SELECT rr.disc FROM __LIB__.release_recordings rr \
-                        WHERE rr.mbid = m.mbid AND rr.chosen = 1) AS mb_disc \
+                      {track} AS mb_track, {disc} AS mb_disc \
                  FROM ({NAMED}) m LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id) \
              WHERE title IS NOT NULL AND title <> '' \
                AND (?1 = '' OR title LIKE ?1) \
@@ -1683,10 +1793,11 @@ impl Library {
         // unidentified case someone most wants to flag. `passage_id` here is
         // never a stale one: `ON DELETE SET NULL` already blanks it the
         // moment the passage it named stops existing.
+        let hist_album = self.hist_album_expr();
         let sql = format!(
             "SELECT at, kind, heard_ms, span_ms, \
                     {HIST_TITLE_EXPR} AS title, {HIST_ARTIST_EXPR} AS artist, \
-                    {HIST_ALBUM_EXPR} AS album, \
+                    {hist_album} AS album, \
                     CASE WHEN u.mbid IS NOT NULL THEN 'recording' \
                          WHEN u.passage_id IS NOT NULL THEN 'passage' END AS subject_kind, \
                     COALESCE(u.mbid, CAST(u.passage_id AS TEXT)) AS subject_id, \
@@ -2732,6 +2843,56 @@ mod tests {
         let lib = Library::open(&path).unwrap();
         let got = lib.random_radio(1).expect("the refill query must run against the canonical schema");
         assert_eq!(got.len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `[SPEC-SC-125]` One recording on two discs, a file ripped from each:
+    /// each file is shown under its own disc, at its own track number, with
+    /// its own cover -- not both under the recording's chosen release.
+    #[test]
+    fn a_file_is_shown_under_the_release_it_was_taken_from() {
+        let dir = std::env::temp_dir().join(format!("lempi-filerel-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lib.db");
+        let _ = std::fs::remove_file(&path);
+        let front = |tag: u8| -> Vec<u8> { [&[0xFF, 0xD8, 0xFF][..], &[tag; 400][..]].concat() };
+        {
+            let c = rusqlite::Connection::open(&path).unwrap();
+            c.execute_batch(include_str!("../../../../sql/schema.sql")).unwrap();
+            c.execute_batch(
+                "INSERT INTO recordings (mbid,title,source) VALUES ('girls','Girls Just Want to Have Fun','mb');
+                 INSERT INTO releases (mbid,title,source) VALUES ('unusual','She''s So Unusual','mb'),
+                                                                 ('twelve','Twelve Deadly Cyns','mb');
+                 INSERT INTO release_recordings (release_mbid,mbid,position,source,chosen) VALUES
+                     ('unusual','girls',2,'mb',1), ('twelve','girls',1,'mb',0);",
+            )
+            .unwrap();
+            for (n, rel) in [(1, "unusual"), (2, "twelve")] {
+                c.execute("INSERT INTO files (file_id,audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen) \
+                           VALUES (?1,?2,'/x.mp3',1,1.0,'mp3',1000,'t','t')", rusqlite::params![n, format!("m{n}")]).unwrap();
+                c.execute("INSERT INTO passages (passage_id,file_id,kind,start_ms,end_ms,boundary_src) \
+                           VALUES (?1,?1,'radio',0,1000,'x')", [n]).unwrap();
+                c.execute("INSERT INTO passage_recordings (passage_id,mbid,weight,source) VALUES (?1,'girls',1.0,'mb')", [n])
+                    .unwrap();
+                c.execute("INSERT INTO file_releases (audio_md5,release_mbid,source) VALUES (?1,?2,'cd:import')",
+                          rusqlite::params![format!("m{n}"), rel]).unwrap();
+                c.execute("INSERT INTO cover_art (release_mbid,front,source,fetched_at) VALUES (?1,?2,'t','t')",
+                          rusqlite::params![rel, front(n as u8)]).unwrap();
+            }
+        }
+        let lib = Library::open(&path).unwrap();
+        let albums: Vec<(String, i64)> =
+            lib.browse_albums(&BrowseFilter::default()).unwrap().into_iter().map(|g| (g.name, g.passages)).collect();
+        assert_eq!(albums, vec![("She's So Unusual".into(), 1), ("Twelve Deadly Cyns".into(), 1)]);
+        let twelve = lib
+            .browse_tracks(&BrowseFilter { album: Some("Twelve Deadly Cyns".into()), ..Default::default() })
+            .unwrap();
+        assert_eq!((twelve.len(), twelve[0].passage_id, twelve[0].track_no), (1, 2, Some(1)),
+                   "its own file, at its own place on that disc");
+        assert_eq!(lib.stored_art(2, false).unwrap().data, front(2), "that disc's own cover");
+        let mut e = lib.passage(2).unwrap();
+        lib.describe(&mut e);
+        assert_eq!(e.naming.mb_album.as_deref(), Some("Twelve Deadly Cyns"), "and now playing says so");
         std::fs::remove_dir_all(&dir).ok();
     }
 

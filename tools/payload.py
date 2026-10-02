@@ -77,7 +77,7 @@ def has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
     return any(row[1] == column for row in conn.execute(f"PRAGMA table_info({table})"))
 
 
-def releases_for(conn: sqlite3.Connection, mbids) -> list[dict]:
+def releases_for(conn: sqlite3.Connection, mbids, file_releases=None) -> list[dict]:
     """`[SPEC-PL-105]`: the releases a receiver needs to show these recordings'
     covers, as the player looks one up -- the chosen release first, else any
     release that has a picture. So: each recording's chosen release, and each
@@ -85,7 +85,12 @@ def releases_for(conn: sqlite3.Connection, mbids) -> list[dict]:
     catalogue knows of. Each carries its tracks for these recordings only, and
     its cover as `covers/<release>-<side>.<ext>` with the image's byte hash:
     the image itself travels as that file, beside the payload, not inside it.
-    Empty where the catalogue has no releases."""
+    Empty where the catalogue has no releases.
+
+    `file_releases` -- release -> recordings -- adds each file's own release
+    `[SPEC-SC-125]` with its tracks for those recordings, chosen or not: it
+    names the album the file is shown under, and the receiver needs its
+    title."""
     if not (has_table(conn, "releases") and has_table(conn, "release_recordings")):
         return []
     art = has_table(conn, "cover_art")
@@ -98,6 +103,15 @@ def releases_for(conn: sqlite3.Connection, mbids) -> list[dict]:
             tracks.setdefault(r[0], []).append({
                 "recording": m, "position": r[1], "disc": r[2], "chosen": r[3] or 0,
                 "track_length_ms": r[4], "source": r[5]})
+    for rel, recs in (file_releases or {}).items():
+        have = {t["recording"] for t in tracks.get(rel, [])}
+        tracks.setdefault(rel, [])
+        for m in sorted(set(recs) - have):
+            r = conn.execute("SELECT release_mbid, position, disc, chosen, track_length_ms, source "
+                             "FROM release_recordings WHERE release_mbid = ? AND mbid = ?", (rel, m)).fetchone()
+            if r:
+                tracks[rel].append({"recording": m, "position": r[1], "disc": r[2], "chosen": r[3] or 0,
+                                    "track_length_ms": r[4], "source": r[5]})
     out = []
     for mbid in sorted(tracks):
         r = conn.execute("SELECT mbid, title, release_date, source, release_group, status, primary_type, "
@@ -162,6 +176,8 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
     # A file with no release has a cover of its own [SPEC-COV-040]: it travels
     # on its encoding, as a release's travels on the release.
     have_file_art = has_table(conn, "file_art")
+    have_file_releases = has_table(conn, "file_releases")
+    file_rels: dict[str, set] = {}
 
     encodings, wanted = [], set()
     for f in conn.execute(
@@ -232,6 +248,15 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
                 (f["audio_md5"],)).fetchone())
             if cover:
                 encodings[-1]["cover"] = cover
+        if have_file_releases:
+            # The release this file was taken from [SPEC-SC-125]: the album it
+            # is shown under, wherever its recordings' chosen releases lie.
+            fr = conn.execute("SELECT release_mbid, source, decided_at FROM file_releases WHERE audio_md5 = ?",
+                              (f["audio_md5"],)).fetchone()
+            if fr:
+                encodings[-1]["release"] = {"mbid": fr[0], "source": fr[1], "decided_at": fr[2]}
+                file_rels.setdefault(fr[0], set()).update(
+                    c["mbid"] for p in passages for c in p["recordings"])
 
     have_lyrics = has_table(conn, "lyrics")
     recordings = []
@@ -278,7 +303,7 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
         "encodings": encodings,
         "recordings": recordings,
     }
-    releases = releases_for(conn, [r["mbid"] for r in recordings])
+    releases = releases_for(conn, [r["mbid"] for r in recordings], file_rels)
     if releases:
         doc["releases"] = releases
     # `[SPEC-PL-097]`: every retired key, not only those of the encodings sent.

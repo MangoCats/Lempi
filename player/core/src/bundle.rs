@@ -64,7 +64,14 @@ CREATE TABLE IF NOT EXISTS recording_artists (
     weight       REAL NOT NULL DEFAULT 1.0,
     source       TEXT NOT NULL,
     PRIMARY KEY (mbid, artist_mbid)
-) WITHOUT ROWID";
+) WITHOUT ROWID;
+-- The release each file was taken from `[SPEC-SC-125]`, as sql/schema.sql has it.
+CREATE TABLE IF NOT EXISTS file_releases (
+    audio_md5     TEXT PRIMARY KEY,
+    release_mbid  TEXT NOT NULL,
+    source        TEXT NOT NULL,
+    decided_at    TEXT
+)";
 
 /// What became of one encoding `[SPEC-PL-075]`.
 #[derive(Debug, PartialEq)]
@@ -139,6 +146,9 @@ pub struct Report {
     pub credits: usize,
     /// Sort names filled on artists already here that had none `[REQ-VIS-182]`.
     pub sort_names: usize,
+    /// Files whose release -- the disc or album they were taken from -- was
+    /// recorded or changed `[SPEC-SC-125]`.
+    pub file_releases: usize,
 }
 
 impl Report {
@@ -502,6 +512,9 @@ fn import_bound(
                 let Some(hold) = p.get("hold").and_then(|v| v.as_str()) else { continue };
                 set_hold(&tx, held.unwrap_or_default(), p, hold, hold_col, apply, &mut rep)?;
             }
+            if apply {
+                set_file_release(&tx, &md5, e, &mut rep)?;
+            }
             rep.outcomes.push((md5, Landed::Already));
             continue;
         }
@@ -603,6 +616,7 @@ fn import_bound(
         .map_err(|e| e.to_string())?;
         let file_id = tx.last_insert_rowid();
         rep.rows_written += 1;
+        set_file_release(&tx, &md5, e, &mut rep)?;
 
         if let Some(t) = e.get("tags").filter(|v| !v.is_null()) {
             // Tags travel although they are re-derivable: for audio with no
@@ -685,6 +699,30 @@ fn import_bound(
         tx.commit().map_err(|e| e.to_string())?;
     }
     Ok(rep)
+}
+
+/// The release a file was taken from `[SPEC-SC-125]`, as the payload names it
+/// (`"release": {"mbid", "source"}`). The sender's wins, as for a hold: it is
+/// the household's, decided on Vipunen. Written only when it changes.
+fn set_file_release(tx: &rusqlite::Transaction, md5: &str, e: &Value, rep: &mut Report) -> Result<(), String> {
+    let Some(r) = e.get("release").filter(|v| v.is_object()) else { return Ok(()) };
+    let release = str_of(r, "mbid");
+    if release.is_empty() {
+        return Ok(());
+    }
+    let n = tx
+        .execute(
+            "INSERT INTO file_releases (audio_md5, release_mbid, source, decided_at) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(audio_md5) DO UPDATE SET release_mbid = excluded.release_mbid, \
+               source = excluded.source, decided_at = excluded.decided_at \
+             WHERE file_releases.release_mbid IS NOT excluded.release_mbid \
+                OR file_releases.source IS NOT excluded.source",
+            params![md5, release, str_of(r, "source"), r.get("decided_at").and_then(|v| v.as_str())],
+        )
+        .map_err(|e| format!("file release of {md5}: {e}"))?;
+    rep.rows_written += n;
+    rep.file_releases += n;
+    Ok(())
 }
 
 /// One arriving hold on a passage this library already has `[SPEC-HOLD-080]`.
@@ -1057,13 +1095,21 @@ pub fn place_covers(db: &Connection, releases: &std::collections::HashSet<String
     // recordings -- empty for a file with none.
     let mut folders: HashMap<PathBuf, Vec<std::collections::HashSet<String>>> = HashMap::new();
     {
+        // A file whose own release is known has that one alone
+        // `[SPEC-SC-125]`: a compilation rip's recordings are each chosen on
+        // their own albums, which read as a folder of several releases.
+        let own = if crate::db::has_table(db, "file_releases") {
+            "(SELECT fr.release_mbid FROM file_releases fr WHERE fr.audio_md5 = f.audio_md5)"
+        } else {
+            "NULL"
+        };
         let mut q = db
-            .prepare(
-                "SELECT f.path, (SELECT group_concat(rr.release_mbid, char(31)) FROM passages p \
+            .prepare(&format!(
+                "SELECT f.path, COALESCE({own}, (SELECT group_concat(rr.release_mbid, char(31)) FROM passages p \
                    JOIN passage_recordings pr ON pr.passage_id = p.passage_id \
                    JOIN release_recordings rr ON rr.mbid = pr.mbid AND rr.chosen = 1 \
-                  WHERE p.file_id = f.file_id) FROM files f",
-            )
+                  WHERE p.file_id = f.file_id)) FROM files f",
+            ))
             .map_err(|e| e.to_string())?;
         let rows = q
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))
@@ -1982,6 +2028,33 @@ mod tests {
         assert_eq!((rep.holds_set, rep.holds_unmatched), (0, 1));
         assert_eq!(hold_now(&c).as_deref(), Some(""));
 
+        std::fs::remove_dir_all(&audio_dir).ok();
+    }
+
+    /// `[SPEC-SC-125]` A file's release arrives with it, reaches a file already
+    /// here, and is written only when it changes.
+    #[test]
+    fn a_files_release_arrives_and_follows_a_change() {
+        let mut c = empty_library();
+        let audio_dir = std::env::temp_dir().join(format!("lempi-bundle-filerel-{}", std::process::id()));
+        std::fs::create_dir_all(&audio_dir).unwrap();
+        let audio_path = audio_dir.join("a.wav");
+        write_tiny_wav(&audio_path);
+        let md5 = (TEST_HASHER.hash)(&audio_path).unwrap();
+        let with = |rel: &str| {
+            let mut d = one_encoding_bundle(&md5, "m1", 0.5, "computed:x@1");
+            d["encodings"][0]["release"] = doc(&format!(r#"{{"mbid":"{rel}","source":"cd:import"}}"#));
+            d
+        };
+        let now = |c: &Connection| -> String {
+            c.query_row("SELECT release_mbid FROM file_releases", [], |r| r.get(0)).unwrap()
+        };
+        let rep = import(&mut c, &with("twelve"), "b1", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!((rep.file_releases, now(&c)), (1, "twelve".into()), "arrives with its file");
+        let rep = import(&mut c, &with("twelve"), "b2", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep.file_releases, 0, "the same again writes nothing");
+        let rep = import(&mut c, &with("essential"), "b3", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!((rep.file_releases, now(&c)), (1, "essential".into()), "a correction reaches a file already here");
         std::fs::remove_dir_all(&audio_dir).ok();
     }
 

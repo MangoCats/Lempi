@@ -175,6 +175,19 @@ CREATE TABLE IF NOT EXISTS release_recordings (
     PRIMARY KEY (release_mbid, mbid)
 ) WITHOUT ROWID;
 
+-- The release each FILE was taken from [SPEC-SC-125] -- the disc a rip came
+-- off, the album a folder holds. A recording is on many releases, and a
+-- chosen one per recording files every copy of a hit under one album; this
+-- names the album a passage is shown under, its track number and its cover,
+-- before the recording's chosen release. Keyed by audio_md5, as file_art is,
+-- so it travels. `source`: cd:import, folder:match, manual.
+CREATE TABLE IF NOT EXISTS file_releases (
+    audio_md5     TEXT PRIMARY KEY,
+    release_mbid  TEXT NOT NULL,
+    source        TEXT NOT NULL,
+    decided_at    TEXT
+);
+
 -- Covers, from the catalogue alone [SPEC-COV-010]: a release's front and
 -- back, and a file's own where no release covers it [SPEC-COV-040].
 -- `caa_asked_at` is when the Cover Art Archive was last asked [SPEC-COV-060].

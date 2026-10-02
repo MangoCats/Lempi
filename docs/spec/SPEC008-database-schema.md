@@ -277,6 +277,18 @@ its own row in `file_art` `[SPEC-COV-040]`. Both are in `sql/schema.sql`, with
 2026-10-02, when a library built from it alone could not browse by album.
 Filled by `tools/fetch_cover_art.py` and `induct_covers.py`; carried in payloads `[SPEC-PL-105]`.
 
+**`[SPEC-SC-125]` A file knows the release it was taken from.** `file_releases`
+(`audio_md5` → `release_mbid`, `source`) names the album a passage is shown
+under -- in Browse, now playing and history -- its track number and its cover,
+before the recording's chosen release. Found 2026-10-02: one chosen release
+per recording put every copy of a hit under one album, so *She's So Unusual*
+listed tracks ripped from two compilations and those looked short. A CD add
+records it (`cd:import`); `align_file_releases.py` fills the library, a CD
+rip by its recorded edition and a folder by the release titled like its tag
+or name that holds most of it (`folder:match`), matched per album tag and
+never by a folder named for its artist. Keyed by `audio_md5`, it travels in
+payloads and by star sync; a library without the table names albums as before.
+
 ---
 
-**Traceability:** `[SPEC-SC-010..120]` · derived from `[GDE-ARC-040]`, `[GDE-BMK-030]`, `[SPEC-DF-030]`, `[SPEC-SA-025]`
+**Traceability:** `[SPEC-SC-010..125]` · derived from `[GDE-ARC-040]`, `[GDE-BMK-030]`, `[SPEC-DF-030]`, `[SPEC-SA-025]`

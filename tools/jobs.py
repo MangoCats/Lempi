@@ -1347,7 +1347,8 @@ class Runner:
         code, _ = self._spawn(job_id, "diff", [sys.executable, os.path.join(tools, "mesh_diff.py"),
                                                self.library, payload["remote"], "--table", "files",
                                                "--table", "holds", "--table", "credits", "--table", "albums",
-                                               "--table", "sort_names", "--table", "covers", "-o", diff_path])
+                                               "--table", "sort_names", "--table", "covers",
+                                               "--table", "file_releases", "-o", diff_path])
         if code != 0 or not os.path.isfile(diff_path):
             self._emit(job_id, "error", f"the diff against {payload['peer']} failed (exit {code}): "
                        "nothing was built", stage="diff")
@@ -1390,11 +1391,15 @@ class Runner:
                 sides[d["key"][0]] = lack
         bare = set(sides)
         cover_md5s = self._a_file_per_release(bare) - missing
-        present = sorted(hold_md5s | credit_md5s | album_md5s | sort_md5s | cover_md5s)
+        # And the release each file was taken from [SPEC-SC-125], where the
+        # speaker lacks it or holds another: the file itself carries it.
+        fr = tables.get("file_releases") or {"local_only": [], "differ": []}
+        filerel_md5s = ({k[0] for k in fr["local_only"]} | {d["key"][0] for d in fr["differ"]}) - missing
+        present = sorted(hold_md5s | credit_md5s | album_md5s | sort_md5s | cover_md5s | filerel_md5s)
         result.update(missing=len(md5s), peer_only=len(files["peer_only"]), albums=self._albums_of(md5s),
                       holds=len([k for k in changed if k[0] not in missing]), hold_files=len(hold_md5s),
                       credit_files=len(credit_md5s), album_files=len(album_md5s), sort_names=len(sort_md5s),
-                      covers=len(cover_md5s))
+                      covers=len(cover_md5s), file_releases=len(filerel_md5s))
         if hold_md5s:
             self._emit(job_id, "log", f"{result['holds']} hold(s) on {len(hold_md5s)} file(s) "
                        f"{payload['peer']} already has differ from this library's", stage="diff")
@@ -1410,9 +1415,12 @@ class Runner:
         if cover_md5s:
             self._emit(job_id, "log", f"cover art {payload['peer']} lacks goes with {len(cover_md5s)} "
                        "file(s), one per album", stage="diff")
+        if filerel_md5s:
+            self._emit(job_id, "log", f"{len(filerel_md5s)} file(s) {payload['peer']} already has are shown "
+                       "under another album than the one they were taken from", stage="diff")
         if not md5s and not present:
             self._emit(job_id, "log", f"{payload['peer']} already has every file this library has, "
-                       "every hold, artist credit, album, sort name and cover", stage="diff")
+                       "every hold, artist credit, album, sort name, cover and file's album", stage="diff")
             self._save_result(job_id, result)
             return self._finish(job_id, "done")
 

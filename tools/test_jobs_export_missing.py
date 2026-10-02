@@ -158,6 +158,8 @@ def test_credits(tmp):
                                       "peer_only": [], "differ": [], "conflict": []}
             d["tables"]["albums"] = {"local_only": [["r3", "rel-x"]], "peer_only": [], "differ": [], "conflict": []}
             d["tables"]["sort_names"] = {"local_only": [["art-3"]], "peer_only": [], "differ": [], "conflict": []}
+            d["tables"]["file_releases"] = {"local_only": [["md5-3"]], "peer_only": [], "conflict": [],
+                                            "differ": [{"key": ["md5-1"], "local": {}, "peer": {}}]}
             d["tables"]["covers"] = {"local_only": [["rel-new"]], "peer_only": [],
                                      "differ": [{"key": ["rel-back"], "local": {"front": 1, "back": 1},
                                                  "peer": {"front": 1, "back": 0}},
@@ -173,6 +175,8 @@ def test_credits(tmp):
     present = open(bundle[bundle.index("--present-md5-file") + 1], encoding="utf-8").read().split()
     check("albums" in diff and j["result"]["album_files"] == 1, f"albums asked for, and said: {j['result']}")
     check("sort_names" in diff and j["result"]["sort_names"] == 1, f"sort names asked for, and said: {j['result']}")
+    check("file_releases" in diff and j["result"]["file_releases"] == 1,
+          f"a file's own album, for a file the speaker has (not one it is sent whole): {j['result']}")
     covers_list = open(bundle[bundle.index("--cover-releases") + 1], encoding="utf-8").read().splitlines()
     check(covers_list == ["rel-back back", "rel-new back front"],
           f"the bundle told which cover sides the speaker lacks: {covers_list}")

@@ -71,15 +71,26 @@ pub fn generate(conn: &Connection, dry_run: bool) -> Result<Written, String> {
         *per_dir.entry(dir).or_insert(0) += 1;
     }
 
+    // The release the capture was taken from first `[SPEC-SC-125]`, then
+    // its recordings' chosen releases, then any of theirs.
+    let own = if crate::db::has_table(conn, "file_releases") {
+        "SELECT ca.front, 0 AS rank FROM files f \
+           JOIN file_releases fr ON fr.audio_md5 = f.audio_md5 \
+           JOIN cover_art ca ON ca.release_mbid = fr.release_mbid \
+          WHERE f.file_id = ?1 AND ca.front IS NOT NULL UNION ALL "
+    } else {
+        ""
+    };
     let mut art = conn
-        .prepare(
-            "SELECT ca.front FROM passages p \
-               JOIN passage_recordings pr ON pr.passage_id = p.passage_id \
-               JOIN release_recordings rr ON rr.mbid = pr.mbid \
-               JOIN cover_art ca ON ca.release_mbid = rr.release_mbid \
-             WHERE p.file_id = ?1 AND p.kind = 'radio' AND ca.front IS NOT NULL \
-             ORDER BY rr.chosen DESC LIMIT 1",
-        )
+        .prepare(&format!(
+            "SELECT front FROM ({own} \
+               SELECT ca.front, CASE WHEN rr.chosen = 1 THEN 1 ELSE 2 END AS rank FROM passages p \
+                 JOIN passage_recordings pr ON pr.passage_id = p.passage_id \
+                 JOIN release_recordings rr ON rr.mbid = pr.mbid \
+                 JOIN cover_art ca ON ca.release_mbid = rr.release_mbid \
+               WHERE p.file_id = ?1 AND p.kind = 'radio' AND ca.front IS NOT NULL) \
+             ORDER BY rank LIMIT 1",
+        ))
         .map_err(|e| e.to_string())?;
 
     let mut rep = Written::default();

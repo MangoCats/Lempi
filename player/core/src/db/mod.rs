@@ -48,6 +48,14 @@ pub fn ensure_sha256_column(conn: &rusqlite::Connection) {
     let _ = conn.execute("CREATE INDEX IF NOT EXISTS files_sha256 ON files(sha256)", []);
 }
 
+/// Whether `conn`'s main schema has the table `name` -- for code holding a
+/// bare connection; a `Library` has its own, split-aware.
+pub fn has_table(conn: &rusqlite::Connection, name: &str) -> bool {
+    conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")
+        .and_then(|mut s| s.exists([name]))
+        .unwrap_or(false)
+}
+
 /// `passages.director_hold` `[SPEC-HOLD-010]`, on a library made before it
 /// existed -- every speaker's, measured 2026-10-01, which is how a bundle's
 /// holds arrive at all. Same idiom as `ensure_sha256_column`: the error on a

@@ -135,6 +135,10 @@ def test_chosen_edition():
               and r["album_linked"] == 3, f"each track linked to the disc, as chosen: {[tuple(x) for x in links]} {r}")
         check(c.execute("SELECT title FROM releases WHERE mbid='rel-C'").fetchone()[0] == "Release C",
               "the release, by its title")
+        # [SPEC-SC-125]: and the rip's file is taken from it, whatever its
+        # recordings' chosen releases.
+        check(tuple(c.execute("SELECT release_mbid, source FROM file_releases WHERE audio_md5=?", (MD5,)).fetchone()
+                    or ()) == ("rel-C", "cd:import"), "the file is recorded as taken from the disc")
         # [REQ-VIS-182]: the artist's sort name, from the same answer.
         check(c.execute("SELECT sort_name FROM artists WHERE mbid='art-c'").fetchone()[0] == "C, Artist",
               "the artist's sort name is kept")
