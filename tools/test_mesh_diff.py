@@ -204,6 +204,21 @@ def test_covers_tolerate_a_library_with_none():
         os.unlink(db)
 
 
+def test_a_whole_table_is_given_time():
+    """Every remote query -- a column probe as much as a table -- is given
+    the diff's own backstop, not remote_peek's 10 s for one row: a Pi Zero
+    took longer than that while busy, 2026-10-02."""
+    db = local_db("ALTER TABLE passages ADD COLUMN director_hold TEXT;")
+    real, given = rp.run_remote_sql, []
+    rp.run_remote_sql = lambda remote, sql, timeout=10.0: given.append(timeout) or {"ok": True, "rows": []}
+    try:
+        md.run(db, "pi@speaker-a:/lempi.db", tables=["files", "holds"])
+    finally:
+        rp.run_remote_sql = real
+        os.unlink(db)
+    check(len(given) == 3 and all(t == md.TIMEOUT >= 60 for t in given), f"timeouts given: {given}")
+
+
 def test_unreachable_remote_reports_cleanly():
     db = local_db("")
     real = rp.run_remote_sql
@@ -226,6 +241,7 @@ def main() -> int:
     test_passages_join_produces_audio_md5_keyed_rows()
     test_holds_against_a_speaker_with_and_without_the_column()
     test_covers_tolerate_a_library_with_none()
+    test_a_whole_table_is_given_time()
     test_unreachable_remote_reports_cleanly()
 
     print()

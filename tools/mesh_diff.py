@@ -113,6 +113,14 @@ TABLES = {
     },
 }
 
+# The whole round trip for one table, ssh included. remote_peek's 10 s is
+# for one row; a whole table from a Pi Zero 2W took 1-4 s idle on
+# 2026-10-02 -- 0.9 s of it the ssh connection alone -- and the albums query
+# ran past 10 s while lempi02w was busy, failing the diff with nothing
+# built. An unreachable host still fails in seconds, on ssh's own connect
+# timeout.
+TIMEOUT = 60.0
+
 _HAS_COLUMN = "SELECT name FROM pragma_table_info('{table}') WHERE name = '{column}'"
 
 
@@ -158,11 +166,11 @@ def fetch_remote(remote: str, table: str) -> dict:
     round trip `[SPEC-DF-116]` instead of a local connection -- two for a
     table with an optional column, the first asking whether it is there."""
     def has_column(t, c):
-        probe = rp.run_remote_sql(remote, _HAS_COLUMN.format(table=t, column=c))
+        probe = rp.run_remote_sql(remote, _HAS_COLUMN.format(table=t, column=c), timeout=TIMEOUT)
         if not probe["ok"]:
             raise RuntimeError(f"{table}: {probe['error']}")
         return bool(probe["rows"])
-    result = rp.run_remote_sql(remote, _sql(table, has_column))
+    result = rp.run_remote_sql(remote, _sql(table, has_column), timeout=TIMEOUT)
     if not result["ok"] and TABLES[table].get("optional_table") and "no such table" in str(result["error"]):
         return {}
     if not result["ok"]:
