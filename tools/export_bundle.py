@@ -48,6 +48,9 @@ def main() -> int:
                     help="file of audio_md5 to include in the payload WITHOUT audio -- the target "
                          "holds them, and is sent only what changed about them: holds, credits, "
                          "albums, sort names, covers [SPEC-HOLD-080]")
+    ap.add_argument("--slim-md5-file",
+                    help="file of audio_md5 (of --present-md5-file) sent only for what is about the file -- "
+                         "its release: their passages go without their recordings [SPEC-SC-125]")
     ap.add_argument("--cover-releases",
                     help="file of `release [front] [back]` lines: the cover sides the target lacks; with "
                          "it, a release named only for a file the target holds sends only those "
@@ -113,7 +116,11 @@ def main() -> int:
     roots = ";".join(args.root)
     if args.payload_only:
         return payload_only(conn, md5s, roots, args)
-    doc = payloadmod.build(conn, md5s, roots)
+    slim = set()
+    if args.slim_md5_file:
+        with open(args.slim_md5_file, encoding="utf-8") as fh:
+            slim = {ln.strip() for ln in fh if ln.strip()} & present
+    doc = payloadmod.build(conn, md5s, roots, slim)
 
     bad = payloadmod.compatible(doc)
     if bad:

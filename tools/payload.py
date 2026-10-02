@@ -160,8 +160,14 @@ def cover_files(conn: sqlite3.Connection, doc: dict) -> dict[str, bytes]:
     return files
 
 
-def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
-    """The payload for a set of encodings, plus everything they reference."""
+def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "", slim=frozenset()) -> dict:
+    """The payload for a set of encodings, plus everything they reference.
+
+    An encoding in `slim` -- one the receiver holds, sent only for what is
+    about the FILE, its release [SPEC-SC-125] -- carries its passages without
+    their recordings, so none of theirs is sent for it. The whole library
+    realigned at once was 5,545 such files, 2026-10-02: in full that is some
+    140 MB of JSON, read whole by a speaker with 464 MB of memory."""
     conn.row_factory = sqlite3.Row
     q = ",".join("?" * len(md5s))
     # `fade_*` `[SPEC-SUI-226]` predate this on any source database still on a
@@ -183,6 +189,7 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
     for f in conn.execute(
             f"SELECT * FROM files WHERE audio_md5 IN ({q}) ORDER BY audio_md5", md5s):
         passages = []
+        file_recs: set = set()
         for p in conn.execute(
                 "SELECT * FROM passages WHERE file_id = ? ORDER BY kind, start_ms",
                 (f["file_id"],)):
@@ -191,7 +198,9 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
                 for r in conn.execute(
                     "SELECT * FROM passage_recordings WHERE passage_id = ? ORDER BY mbid",
                     (p["passage_id"],))]
-            wanted.update(c["mbid"] for c in credits)
+            file_recs.update(c["mbid"] for c in credits)
+            if f["audio_md5"] not in slim:
+                wanted.update(c["mbid"] for c in credits)
             passage = {
                 "kind": p["kind"],
                 "start_ms": p["start_ms"],
@@ -217,7 +226,8 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
                 # "" released by a person. Undecided is absent, and leaves a
                 # receiver's own value alone `[SPEC-HOLD-080]`.
                 passage["hold"] = p["director_hold"]
-            passage["recordings"] = credits
+            if f["audio_md5"] not in slim:
+                passage["recordings"] = credits
             passages.append(passage)
         # The file's own tags travel, though they are cheap to re-derive from
         # audio that is arriving anyway. Without them an unidentified passage
@@ -255,8 +265,7 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "") -> dict:
                               (f["audio_md5"],)).fetchone()
             if fr:
                 encodings[-1]["release"] = {"mbid": fr[0], "source": fr[1], "decided_at": fr[2]}
-                file_rels.setdefault(fr[0], set()).update(
-                    c["mbid"] for p in passages for c in p["recordings"])
+                file_rels.setdefault(fr[0], set()).update(file_recs)
 
     have_lyrics = has_table(conn, "lyrics")
     recordings = []

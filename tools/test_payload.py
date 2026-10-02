@@ -237,6 +237,13 @@ def test_a_files_release_travels_with_it():
     rels = {r["mbid"]: r for r in doc.get("releases", [])}
     check("comp" in rels and [t["position"] for t in rels["comp"]["tracks"]] == [9],
           f"the file's release, with its track: {sorted(rels)}")
+    # Slim: the receiver holds the file; only its release is news. No
+    # recording is sent for it, and its release still names its track.
+    thin = pl.build(conn, ["md5"], slim={"md5"})
+    check(thin["recordings"] == [] and "recordings" not in thin["encodings"][0]["passages"][0]
+          and thin["encodings"][0]["release"]["mbid"] == "comp"
+          and [t["position"] for r in thin["releases"] if r["mbid"] == "comp" for t in r["tracks"]] == [9],
+          f"slim: {thin['recordings']} {thin['encodings'][0]}")
 
 
 def test_covers_travel_as_files_named_by_the_payload():

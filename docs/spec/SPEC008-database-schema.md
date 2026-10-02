@@ -288,6 +288,8 @@ rip by its recorded edition and a folder by the release titled like its tag
 or name that holds most of it (`folder:match`), matched per album tag and
 never by a folder named for its artist. Keyed by `audio_md5`, it travels in
 payloads and by star sync; a library without the table names albums as before.
+A file a speaker holds, sent for its release alone, goes slim -- its passages
+without their recordings: the realigned library was 1.1 MB gzipped, not ~140 MB.
 
 ---
 

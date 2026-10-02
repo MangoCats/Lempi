@@ -249,7 +249,7 @@ function showMissing(panel, info, job) {
       + `${res.covers} file${s(res.covers)}, one per album -- without audio.` })] : []),
     // [SPEC-SC-125]: files shown there under another album than their own.
     ...(res.file_releases ? [S.el('p', { class: 'verdict note', text: `${res.file_releases} file${s(res.file_releases)} `
-      + `${info.peer} has are shown under another album than the one they were taken from -- sent without audio.` })] : []),
+      + `${info.peer} has lack the record of the album they were taken from -- sent without audio or recordings.` })] : []),
     S.el('div', { class: 'controls' }, send, now), sendLog,
     S.el('p', { style: 'font-size:.85rem;color:var(--dim);margin:.6rem 0 .2rem',
       text: `Or by hand, in a terminal: the first line says what it would do; the second does it.` }),

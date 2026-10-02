@@ -1416,8 +1416,8 @@ class Runner:
             self._emit(job_id, "log", f"cover art {payload['peer']} lacks goes with {len(cover_md5s)} "
                        "file(s), one per album", stage="diff")
         if filerel_md5s:
-            self._emit(job_id, "log", f"{len(filerel_md5s)} file(s) {payload['peer']} already has are shown "
-                       "under another album than the one they were taken from", stage="diff")
+            self._emit(job_id, "log", f"{len(filerel_md5s)} file(s) {payload['peer']} already has lack the record "
+                       "of the release they were taken from, or hold another", stage="diff")
         if not md5s and not present:
             self._emit(job_id, "log", f"{payload['peer']} already has every file this library has, "
                        "every hold, artist credit, album, sort name, cover and file's album", stage="diff")
@@ -1436,6 +1436,14 @@ class Runner:
             with open(present_file, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write("".join(m + "\n" for m in present))
             argv += ["--present-md5-file", present_file]
+            # Those sent only for their release go slim [SPEC-SC-125]: the
+            # whole library realigned was 5,545 files at once, 2026-10-02.
+            slim = sorted(filerel_md5s - hold_md5s - credit_md5s - album_md5s - sort_md5s - cover_md5s)
+            if slim:
+                slim_file = os.path.join(base, "slim.txt")
+                with open(slim_file, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write("".join(m + "\n" for m in slim))
+                argv += ["--slim-md5-file", slim_file]
         # Only the covers it lacks a side of [SPEC-COV-060] -- from the same
         # diff, so an empty list rightly sends none with a held file.
         if "covers" in tables:
