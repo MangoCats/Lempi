@@ -35,11 +35,8 @@ fn rss() -> u64 {
 fn main() {
     let args = opt::SPEC.parse();
     let db = PathBuf::from(args.need(&opt::LISTENER));
-    // A second, optional path exercises Director::load across a genuinely
-    // split pair -- exactly the shape [PI-DB-020]/[IMPL-DBSPLIT-025]
-    // describe, and the one this tool otherwise never sees since its own
-    // single-path default (`open_split(db, db)`) never attaches anything.
-    let library = args.text(&opt::LIBRARY).map(PathBuf::from).unwrap_or_else(|| db.clone());
+    // Both halves, as every installation has them [PI-DB-020]/[IMPL-DBSPLIT-025].
+    let library = PathBuf::from(args.need(&opt::LIBRARY));
     let lib = match Library::open_split(&db, &library) {
         Ok(l) => l,
         Err(e) => {

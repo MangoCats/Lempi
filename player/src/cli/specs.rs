@@ -35,8 +35,11 @@ pub mod common {
         "PATH",
         "the listener database: plays, preferences, programmes",
     ).short("lis");
-    /// The catalogue half. Equal to the listener half on any installation
-    /// that has not split `[IMPL-DBSPLIT-025]`.
+    /// The catalogue half. Every installation has been split since 2026-09
+    /// `[IMPL-DBSPLIT-025]`, so a program that reads both halves needs both
+    /// named: an absent one was once quietly taken to be the listener file,
+    /// and a unit that lost its `--library` then wrote plays into the
+    /// catalogue without a word.
     pub const LIBRARY: Opt = Opt::text(
         "--library",
         "PATH",
@@ -109,9 +112,7 @@ pub mod lempi {
     use crate::cli::{Cli, Opt};
 
     pub const LISTENER: Opt = common::LISTENER.needed().was(0).bootstrap();
-    pub const LIBRARY: Opt =
-        common::LIBRARY.saying("the catalogue half, where the database has been split")
-        .short("lib").bootstrap();
+    pub const LIBRARY: Opt = common::LIBRARY.needed().short("lib").bootstrap();
     pub const PORT: Opt =
         // No retired name to answer to any more: the one this carried was
         // dropped once no deploy script or unit in the fleet exported it.
@@ -260,7 +261,7 @@ pub mod dircheck {
     use crate::cli::{Cli, Opt};
 
     pub const LISTENER: Opt = common::LISTENER.needed().was(0).bootstrap();
-    pub const LIBRARY: Opt = common::LIBRARY.was(1)
+    pub const LIBRARY: Opt = common::LIBRARY.needed().was(1)
         .short("lib").bootstrap();
 
     pub const SPEC: Cli = Cli {
@@ -582,7 +583,7 @@ pub mod mpd_direct {
     pub const ADDR: crate::cli::Opt = common::ADDR.or("127.0.0.1:6600").was(0);
     pub const LISTENER: crate::cli::Opt = common::LISTENER.needed().formerly(&["--db"]).bootstrap();
     pub const ROOT: crate::cli::Opt = common::ROOT.needed();
-    pub const LIBRARY: crate::cli::Opt = common::LIBRARY
+    pub const LIBRARY: crate::cli::Opt = common::LIBRARY.needed()
         .short("lib").bootstrap();
     pub const DEPTH: crate::cli::Opt =
         common::DEPTH.or(crate::default_queue_depth!()).setting("queue_depth");

@@ -285,7 +285,19 @@ After=local-fs.target sound.target
 ExecStartPre=/usr/local/bin/lempi-preflight
 ExecStartPre=/usr/local/bin/lempi-db-recover
 ExecStartPre=/usr/local/bin/lempi-wait-sink
-ExecStart=/usr/local/bin/lempi --listener /srv/library/library.db --port 5720
+# The node's whole command line, here and nowhere else, as on bose and
+# lp3-wifi. Until 2026-10-02 this line was the pre-split single-file form and
+# a drop-in, mpd-guest.conf, blanked it and supplied the real one -- so a
+# rebuild that lost the drop-in would have run the catalogue as the listener
+# store. Both halves are named [IMPL-DBSPLIT-025], and the player now refuses
+# to start without either.
+#
+# --mpd attaches MPD as a guest backend [SPEC-BK-020]: idle until a switch
+# asks for it, and the control is offered only because the flag is here.
+# **There is no After=mpd.service, on purpose.** It would hold the player
+# behind MPD's ~10 s start, on a machine whose priority is audio first, for a
+# backend that is idle until somebody switches to it.
+ExecStart=/usr/local/bin/lempi --listener /var/lempi/listener.db --library /srv/library/library.db --port 5720 --mpd 127.0.0.1:6600 --mpd-root /srv/library/audio
 Restart=always
 RestartSec=2
 # Runs as the LOGIN user, not a service account. PipeWire is a per-user
@@ -603,9 +615,19 @@ Nice=10
 WantedBy=multi-user.target
 EOF
 
+# Retired 2026-10-02: the drop-in that carried the node's real command line,
+# and the copy kept beside it at the CLI migration. The base unit carries the
+# line now; left in place, the drop-in would go on overriding it.
+for old in /etc/systemd/system/lempi.service.d/mpd-guest.conf \
+           /etc/systemd/system/lempi.service.d/mpd-guest.conf.pre-cli-migration; do
+    if [ -e "$old" ]; then
+        rm -f "$old" && did "removed retired $(basename "$old")"
+        NEED_RELOAD=1
+    fi
+done
+
 # Drop-ins and card tuning, all staged beside this script.
 for pair in \
-    "lempi-mpd-guest.conf:/etc/systemd/system/lempi.service.d/mpd-guest.conf" \
     "lempi-io-priority.conf:/etc/systemd/system/lempi.service.d/20-lempi-io.conf" \
     "mpd-polite.conf:/etc/systemd/system/mpd.service.d/10-lempi-polite.conf" \
     "lempi-quiet-tick.conf:/etc/systemd/system/lempi-speaker.service.d/10-lempi-quiet.conf" \

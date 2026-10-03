@@ -145,9 +145,10 @@ def test_push_lands_a_change(tmp: str) -> None:
     build_library(library)
     sidecar = os.path.join(tmp, "library.console.db")
     runner = jobmod.Runner(library, sidecar)
+    runner.set_remote_listener("pi@speaker-a:/var/lempi/listener.db")
     captured = {}
     runner._spawn = fake_spawn_success(CHANGES_DOC, captured).__get__(runner, jobmod.Runner)
-    job_id = runner.submit("remote-push", "pi@lempi02w:/srv/library/library.db")
+    job_id = runner.submit("remote-push", "pi@speaker-a:/srv/library/library.db")
     j = wait_for(runner, job_id)
     check(j["state"] == "done", f"expected done, got {j}")
     stages = [e["stage"] for e in j["events"] if e["kind"] == "stage"]
@@ -175,7 +176,7 @@ def test_push_lands_a_change(tmp: str) -> None:
     logs = [e["text"] for e in j["events"] if e["kind"] == "log"]
     check(any("1 change(s) to push" in t for t in logs),
           f"a one-sentence summary must say what is about to be pushed, got {logs}")
-    check(any("lempi02w now has these changes" in t for t in logs),
+    check(any("speaker-a now has these changes" in t for t in logs),
           f"a final confirmation must say the push actually landed, got {logs}")
 
 
@@ -185,9 +186,10 @@ def test_push_nothing_pending(tmp: str) -> None:
     build_library(library)
     sidecar = os.path.join(tmp, "library3.console.db")
     runner = jobmod.Runner(library, sidecar)
+    runner.set_remote_listener("pi@speaker-a:/var/lempi/listener.db")
     empty = {"format_version": 1, "changes": []}
     runner._spawn = fake_spawn_success(empty).__get__(runner, jobmod.Runner)
-    job_id = runner.submit("remote-push", "pi@lempi02w:/srv/library/library.db")
+    job_id = runner.submit("remote-push", "pi@speaker-a:/srv/library/library.db")
     j = wait_for(runner, job_id)
     check(j["state"] == "done", f"expected done, got {j}")
     stages = [e["stage"] for e in j["events"] if e["kind"] == "stage"]
@@ -206,8 +208,9 @@ def test_snapshot_unreachable_fails_before_compare(tmp: str) -> None:
     build_library(library)
     sidecar = os.path.join(tmp, "library2.console.db")
     runner = jobmod.Runner(library, sidecar)
+    runner.set_remote_listener("pi@speaker-a:/var/lempi/listener.db")
     runner._spawn = fake_spawn_snapshot_unreachable.__get__(runner, jobmod.Runner)
-    job_id = runner.submit("remote-push", "pi@lempi02w:/srv/library/library.db")
+    job_id = runner.submit("remote-push", "pi@speaker-a:/srv/library/library.db")
     j = wait_for(runner, job_id)
     check(j["state"] == "failed", f"expected failed, got {j}")
     stages = [e["stage"] for e in j["events"] if e["kind"] == "stage"]
@@ -248,14 +251,21 @@ def test_a_split_peer_is_patched_through_its_listener_half(tmp: str) -> None:
           f"and never straight at the catalogue, which is what planted the shadows: {cmd!r}")
 
 
-def test_an_unsplit_peer_keeps_the_single_file_command(tmp: str) -> None:
+def test_a_peer_with_no_listener_half_is_refused(tmp: str) -> None:
     print()
-    print("an unsplit peer is unchanged -- one file, nothing attached")
-    cmd = _apply_cmd_for(tmp, "whole", None)
-    check("sqlite3 /srv/library/library.db < /tmp/lempi-sync-patch.sql" in cmd,
-          f"one file, as before, got: {cmd!r}")
-    check("ATTACH" not in cmd,
-          f"an installation that never split must carry none of this, got: {cmd!r}")
+    print("a peer with no listener half recorded is refused before anything runs")
+    # Every node is split since 2026-09; the single-file command this once
+    # sent would plant the review tables in the catalogue.
+    library = os.path.join(tmp, "whole.db")
+    build_library(library)
+    runner = jobmod.Runner(library, os.path.join(tmp, "whole.console.db"))
+    captured = {}
+    runner._spawn = fake_spawn_success(CHANGES_DOC, captured).__get__(runner, jobmod.Runner)
+    j = wait_for(runner, runner.submit("remote-push", "pi@speaker-a:/srv/library/library.db"))
+    check(j["state"] == "failed", f"expected failed, got {j['state']}")
+    check(not captured, f"nothing may run, got {sorted(captured)}")
+    errors = " ".join(e.get("text") or "" for e in j["events"] if e["kind"] == "error")
+    check("no listener half" in errors, f"the refusal must say why, got {errors!r}")
 
 
 def test_the_player_restarts_even_when_the_patch_fails(tmp: str) -> None:
@@ -407,7 +417,7 @@ def main() -> int:
         test_push_nothing_pending(tmp)
         test_snapshot_unreachable_fails_before_compare(tmp)
         test_a_split_peer_is_patched_through_its_listener_half(tmp)
-        test_an_unsplit_peer_keeps_the_single_file_command(tmp)
+        test_a_peer_with_no_listener_half_is_refused(tmp)
         test_the_player_restarts_even_when_the_patch_fails(tmp)
         test_push_all_visits_every_ticked_peer(tmp)
         test_one_failing_peer_does_not_stop_the_others(tmp)

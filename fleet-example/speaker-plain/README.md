@@ -14,27 +14,18 @@ out loud per node rather than remembering which is which `[GDE-DEP-060]`.
 
 ---
 
-## Two ExecStart lines, and only the second runs
+## One unit, one command line
 
-`systemctl show lempi -p ExecStart` on a node of this shape reports **two**
-commands. That is not a fault:
-
-1. [`lempi.service`](lempi.service) — the base unit, as a setup script
-   writes it, naming a single database.
-2. [`lempi.service.d/mpd-guest.conf`](lempi.service.d/mpd-guest.conf) — a
-   drop-in. Its empty `ExecStart=` discards the base unit's line, and the one
-   after it is what actually runs.
-
-**Both are kept correct.** The drop-in is what runs today; the base unit is
-what a rebuild from the repository would produce, and a node that came up on
-it would be reading its catalogue as its listener store. That has happened.
+[`lempi.service`](lempi.service) carries the node's whole command line, both
+database halves named. Until 2026-10-02 this shape had two `ExecStart` lines:
+a base unit naming a single database, and a drop-in that blanked it and
+supplied the real one. A rebuild that lost the drop-in ran the catalogue as
+the listener store. The player now refuses to start without both halves, and
+the drop-in is gone.
 
 ```sh
 scp fleet-example/speaker-plain/lempi.service pi@speaker-b:/tmp/
 ssh pi@speaker-b 'sudo install -m644 /tmp/lempi.service /etc/systemd/system/lempi.service'
-ssh pi@speaker-b 'sudo mkdir -p /etc/systemd/system/lempi.service.d'
-scp fleet-example/speaker-plain/lempi.service.d/mpd-guest.conf pi@speaker-b:/tmp/
-ssh pi@speaker-b 'sudo install -m644 /tmp/mpd-guest.conf /etc/systemd/system/lempi.service.d/'
 ssh pi@speaker-b 'sudo systemctl daemon-reload && sudo systemctl restart lempi'
 ```
 

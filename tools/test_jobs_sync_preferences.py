@@ -69,6 +69,7 @@ def _runner(tmp: str, name: str) -> "jobmod.Runner":
 def test_target_reaches_sync_preferences(tmp: str) -> None:
     print("a remote target reaches sync_preferences.py's own argv, one subprocess call")
     runner, db = _runner(tmp, "lib1")
+    runner.set_remote_listener("pi@speaker-a:/var/lempi/listener.db")
     seen = {}
 
     def fake_spawn(self, job_id, stage, argv):
@@ -86,6 +87,8 @@ def test_target_reaches_sync_preferences(tmp: str) -> None:
     check(db in argv, f"got {argv}")
     check("pi@lempi02w:/srv/library/library.db" in argv, f"got {argv}")
     check("--commit" in argv and "--json" in argv, f"got {argv}")
+    check(argv[argv.index("--remote-listener") + 1] == "/var/lempi/listener.db",
+          f"the listener half must be passed, got {argv}")
     check(j["result"]["pull"] == 2 and j["result"]["push"] == 1, f"got {j['result']}")
 
 

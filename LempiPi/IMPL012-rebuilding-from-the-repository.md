@@ -34,7 +34,7 @@ Four more pieces existed only on the SD card:
 
 | Missing | What its absence costs |
 |---|---|
-| `lempi.service.d/mpd-guest.conf` | The **real command line**. The base unit's argument is the pre-split single database, so the player would read the catalog as its listener store `[IMPL-DBSPLIT-025]` |
+| `lempi.service.d/mpd-guest.conf` | The **real command line**. The base unit's argument is the pre-split single database, so the player would read the catalog as its listener store `[IMPL-DBSPLIT-025]`. *Retired 2026-10-02: the base unit carries the whole line* `[PI-PRE-080]` |
 | `lempi.service.d/20-lempi-io.conf` | The player's I/O precedence |
 | `mpd.service.d/10-lempi-polite.conf` | `mpd` competing for the card during startup — 19 s of it `[PI3-FOUND-210]` |
 | `/etc/tmpfiles.d/lempi-readahead.conf` | `bfq`, without which every I/O-priority setting here is inert `[PI3-FOUND-250]` |

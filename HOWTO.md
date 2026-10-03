@@ -61,93 +61,52 @@ feature only adds routes Vipunen's console links to.
 
 ## 3. Get a library
 
-Lempi and Vipunen both need a `lempi.db` — a SQLite file matching
-`sql/schema.sql`. If you don't already have one:
+A library is **two SQLite files**: `library.db`, the catalogue (files,
+passages, recordings, flavor, cover art), and `listener.db`, everything the
+listener created (play history, preferences, programmes). Every installation
+has run this way since 2026-09 `[PI023]`; the player refuses to start unless
+both are named.
+
+The usual way to get one is a copy of the hub's catalogue: a new node is sent
+`library.db`, and the player creates an empty `listener.db` on its first
+start. To build one from nothing instead, `sql/schema.sql` makes a single
+file holding both halves' tables, which is inducted and then split:
 
 ```
-python3 -c "import sqlite3; sqlite3.connect('lempi.db').executescript(open('sql/schema.sql', encoding='utf-8').read())"
+python3 -c "import sqlite3; sqlite3.connect('build.db').executescript(open('sql/schema.sql', encoding='utf-8').read())"
+python tools/ingest_folder.py build.db "/path/to/some/album" --commit
+python tools/extract_library.py build.db
+python tools/fingerprint_ids.py build.db
+python tools/fingerprint_ids.py build.db --merge
+python tools/split_database.py build.db     --library-out library.db --listener-out listener.db --commit
 ```
 
-That gives you an empty, valid library — enough to run both tools and look
-around, but nothing plays until it has music in it. To induct a real
-folder, run Vipunen's pipeline against it in order:
-
-```
-python tools/ingest_folder.py lempi.db "/path/to/some/album" --commit
-python tools/extract_library.py lempi.db
-python tools/fingerprint_ids.py lempi.db
-python tools/fingerprint_ids.py lempi.db --merge
-```
-
-- Drop `--commit` from the first command to see what it *would* do first —
-  every one of these tools rehearses by default except where `--commit` is
-  given.
+- Drop `--commit` to see what a step *would* do first — every one of these
+  tools rehearses by default except where `--commit` is given.
 - `fingerprint_ids.py` needs network access (AcoustID) and can take a
   while over a large folder; skip it for a quick local test and Lempi will
   still play the music, just without identified recordings for it yet.
+- `split_database.py` never modifies its source, refuses to overwrite an
+  output, and verifies row counts table-for-table, `integrity_check` and
+  every index before reporting success.
 - All of this is also reachable from Vipunen's own browser console (§5,
   the "jobs" and "export" pages) once it's running, rather than the CLI.
 
----
-
-## 3b. One database or two
-
-A library can be one file or two, and everything here works either way.
-
-**One file** is the simple case and the default: `lempi.db` holds the
-catalogue (files, passages, recordings, flavor) and the listener's own
-state (play history, preferences, programmes) together. Nothing below needs
-a second path.
-
-**Two files** separate them — `library.db` for the catalogue, `listener.db`
-for everything the listener created. The appliance needs this because it
-keeps the catalogue on a read-only partition `[PI023]`; the desktop was
-split on 2026-09-11 so that the split shape is the one being exercised
-daily, rather than a shape only the Pi ever runs and only the Pi ever finds
-bugs in.
-
-```
-python tools/split_database.py lempi.db \
-    --library-out library.db --listener-out listener.db          # rehearse
-python tools/split_database.py lempi.db \
-    --library-out library.db --listener-out listener.db --commit
-```
-
-It never modifies the source, refuses to overwrite an existing output, and
-verifies row counts table-for-table, `integrity_check` and every index
-before reporting success. Keep the original: it is the rollback.
-
-Afterwards, **Vipunen's tools take either path and find the other one**, so
-long as the two sit in the same directory under those names. Where they do
-not — the appliance keeps them on separate mounts — name the second one:
+**Vipunen's tools take either half and find the other one**, so long as the
+two sit in the same directory under those names. Where they do not — the
+appliances keep them on separate mounts — name the second one:
 
 ```
 python tools/load_occasions.py listener.db --library /srv/library/library.db
 LEMPI_LIBRARY=/srv/library/library.db python tools/export_flags.py listener.db -o flags.json
 ```
 
-**Vipunen's console keeps a sidecar beside whichever database it was given**
-— `<name>.console.db`, holding job history and the remote-peer
-configuration. Splitting changes the name, so the sidecar has to come with
-it, or the console starts with an empty job list and no configured peer and
-nothing says why:
-
-```
-cp lempi.console.db library.console.db
-```
-
-`python tools/audit_split_readiness.py` lists every script and whether it
-goes through the shared opener; `python tools/test_split_parity.py --pair
-DIR --whole lempi.db` runs the read-only ones against both shapes and
-compares the answers.
-
 ---
 
 ## 4. Run Lempi
 
 ```
-player/target/release/lempi --listener lempi.db --port 5720                 # one file
-player/target/release/lempi --listener listener.db --library library.db --port 5720   # two
+player/target/release/lempi --listener listener.db --library library.db --port 5720
 ```
 
 Open `http://127.0.0.1:5720/` for the player UI. **`lempi --help` lists
@@ -156,8 +115,8 @@ the list below is a summary, not the definition `[GDE-CLI-010]`. `--port`
 defaults to `5720` if omitted; `--device NAME` picks an output device by a
 case-insensitive substring match if the default one isn't what you want, and
 `--list-devices` prints what this machine offers. `--library` is the
-catalogue half where the database has been split; the player attaches it
-read-only and writes only the listener half.
+catalogue half; the player attaches it read-only and writes only the
+listener half.
 
 Every option is named — there are no bare arguments `[GDE-CLI-020]`. The old
 form, with the listener database as the first bare word, is still read and
@@ -170,12 +129,11 @@ prints the corrected line on stderr `[GDE-CLI-040]`.
 Vipunen's console is a plain Python script, no build step:
 
 ```
-python tools/console.py lempi.db --root "/path/to/your/Music"       # one file
-python tools/console.py library.db --root "/path/to/your/Music"    # two
+python tools/console.py library.db --root "/path/to/your/Music"
 ```
 
-Given either half of a split library it finds the other beside it, so there
-is no second path to pass here.
+It finds the listener half beside the catalogue, so there is no second path
+to pass here.
 
 Open `http://127.0.0.1:5730/`. `--port` defaults to `5730`. `--root` is
 repeatable and points at the audio folder(s) the "folder" view compares

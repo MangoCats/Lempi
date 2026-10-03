@@ -59,10 +59,11 @@ fn main() {
     // environment and their defaults only -- they name the database the
     // stored settings live in, and cannot be answered by it.
     let db = PathBuf::from(args.need(&opt::LISTENER));
-    // The catalog-side file. Equal to `db` on every installation that
-    // hasn't split `[IMPL-DBSPLIT-025]`, `[IMPL-DBSPLIT-030]` -- lempi02w,
-    // once split, is the first to ever pass a genuinely different one.
-    let library = args.text(&opt::LIBRARY).map(PathBuf::from).unwrap_or_else(|| db.clone());
+    // The catalog-side file, required since 2026-10-02: it once defaulted to
+    // `db`, the unsplit shape no installation still has, and so a unit that
+    // lost its `--library` ran on quietly writing plays into the catalogue
+    // `[IMPL-DBSPLIT-025]`.
+    let library = PathBuf::from(args.need(&opt::LIBRARY));
 
     // Layer 2 is attached here and not before. Everything read after this
     // line resolves through all four layers; everything above it, through

@@ -150,7 +150,7 @@ After=local-fs.target sound.target
 # sound device, never on the network [REQ-HW-010B]
 
 [Service]
-ExecStart=/usr/local/bin/lempi --listener /srv/library/library.db --port 5720
+ExecStart=/usr/local/bin/lempi --listener /var/lempi/listener.db --library /srv/library/library.db --port 5720
 Restart=always
 User=lempi
 Nice=-5

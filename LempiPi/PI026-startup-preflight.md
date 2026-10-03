@@ -257,9 +257,14 @@ named is gone.
 
 ## 7. Open
 
-**`[PI-PRE-080]`** `lempi02w`'s unit template in `setup-appliance.sh` still names
-the pre-split `/srv/library/library.db` in its base `ExecStart`; the live
-machine is correct only because `mpd-guest.conf` overrides it.
+**`[PI-PRE-080]`** *Closed in the repository 2026-10-02.* `lempi02w`'s unit
+template in `setup-appliance.sh` named the pre-split `/srv/library/library.db`
+in its base `ExecStart`; the live machine was correct only because
+`mpd-guest.conf` overrode it. The base unit now carries the whole line,
+`setup-appliance.sh` removes the drop-in, and the player refuses to start
+without both `--listener` and `--library`. **The machine itself still has the
+old base unit and the drop-in** until the unit is installed there; its
+running line is already the right one.
 
 Deleting those copies `[PI-PRE-098]` improved this by accident, and the
 direction is worth noting.
@@ -267,9 +272,10 @@ While that file existed, losing the drop-in meant the player would open a
 database four days stale and **run**, reporting nothing wrong — plays going
 into a file nobody reads. Now the file is gone, so the same mistake is a
 refusal to start: loud, immediate, and obvious. Deleting the fallback made
-the failure mode better, which is the usual shape of it. Still worth fixing
-properly by naming the halves in the template, once the fresh-install path —
-which has no split to name — is settled.
+the failure mode better, which is the usual shape of it. The fresh-install
+path this once waited on turned out to have a split to name after all: a
+fresh card is seeded with the hub's catalogue, and the player creates an
+empty listener file on its first start.
 
 **`[PI-PRE-085]` Closed** by `[PI-PRE-090]` on the same day it was raised.
 `lempi-db-recover` no longer opens the pre-split original once the split

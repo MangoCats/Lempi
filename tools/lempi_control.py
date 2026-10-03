@@ -495,16 +495,20 @@ def ensure_lempi(port: int = LEMPI_PORT, db_path: str | None = None,
     # The two paths come from `console.STATE`, which took them from its own
     # connection's `PRAGMA database_list` -- what Vipunen genuinely has open, not
     # a filename convention and not a second content sniff, which is the one
-    # thing the contamination above would itself have corrupted. Equal on an
-    # unsplit installation, where `--library` is then correctly omitted.
-    listener = listener_path or db_path
+    # thing the contamination above would itself have corrupted.
+    #
+    # **Both required since 2026-10-02.** Equal paths were once the unsplit
+    # case and dropped `--library`; no installation is unsplit now, and the
+    # player refuses to start without both. One path standing in for both is
+    # the contamination above, so it is refused here, by name.
+    listener = listener_path
     library = library_path or db_path
-    # Named, not positional `[GDE-CLI-020]`. The positional form is still
-    # read and warns, but Vipunen is in this repository and moves with it.
-    argv = [binary, "--listener", listener]
-    if library and library != listener:
-        argv += ["--library", library]
-    argv += ["--port", str(port)]
+    if not listener or os.path.normcase(os.path.abspath(listener)) ==             os.path.normcase(os.path.abspath(library)):
+        return {"ok": False, "port": port,
+                "error": "Vipunen has no separate listener database open -- "
+                         "the player needs both halves (--listener and --library)"}
+    # Named, not positional `[GDE-CLI-020]`.
+    argv = [binary, "--listener", listener, "--library", library, "--port", str(port)]
     try:
         subprocess.Popen(
             argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

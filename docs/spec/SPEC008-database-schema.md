@@ -2,7 +2,7 @@
 
 **Design Specification — Tier 2**
 
-The `lempi.db` relational model. Reconciles MuLibPlay's six-years-proven structure `[GDE-BMK-020]` with McRhythm's entity definitions `[GDE-MCR-050]` and the identity/portability rules of [SPEC006](SPEC006-data-flow-and-portability.md).
+The `lempi.db` relational model. On disk it is two files on every installation — `library.db`, the catalogue, and `listener.db`, the listener's own state `[IMPL-DBSPLIT-025]` — and `lempi.db` names the two together. Reconciles MuLibPlay's six-years-proven structure `[GDE-BMK-020]` with McRhythm's entity definitions `[GDE-MCR-050]` and the identity/portability rules of [SPEC006](SPEC006-data-flow-and-portability.md).
 
 > **Related:** [SPEC023 Domain Vocabulary](SPEC023-domain-vocabulary.md) for what file/passage/recording/release/album/artist/track each mean and do not mean · [GUIDE002 §2.4](../GUIDE002-rearchitecture-plan.md#2-architectural-decisions) · [SPEC005 Flavor Distance](SPEC005-flavor-distance.md) · [SPEC007 Vipunen](SPEC007-vipunen-architecture.md) · inherited [MCR-REQ002 Entities](../inherited/mcrhythm/MCR-REQ002-entity_definitions.md)
 

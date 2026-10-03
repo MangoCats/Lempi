@@ -85,11 +85,8 @@ fn main() {
         None => Rng::from_clock(),
     };
 
-    // `--library` names a genuinely separate `library.db`, for exercising a
-    // split installation from this dev tool too; absent, it defaults to
-    // `db_path` itself, the same unsplit case every other caller has.
-    let library_path =
-        args.text(&opt::LIBRARY).map(str::to_string).unwrap_or_else(|| db_path.clone());
+    // Both halves, as every installation has them `[IMPL-DBSPLIT-025]`.
+    let library_path = args.need(&opt::LIBRARY).to_string();
     let conn = QualifyingConn::open(
         std::path::Path::new(&db_path),
         std::path::Path::new(&library_path),

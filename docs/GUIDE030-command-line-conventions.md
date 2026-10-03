@@ -162,14 +162,15 @@ was sent.
 | Host | Unit | Apply |
 |---|---|---|
 | `bose` | `/etc/systemd/system/lempi.service` — tracked here as [`BosePi/lempi-bose.service`](../BosePi/lempi-bose.service) | ☑ 2026-09-25, both layers, no shim line since |
-| `lempi02w` | base unit `/etc/systemd/system/lempi.service`, written by [`LempiPi/setup-appliance.sh`](../LempiPi/setup-appliance.sh) | ☐ named, but reads `--listener /srv/library/lempi.db` (2026-09-25); the drop-in overrides it |
-| `lempi02w` | drop-in `/etc/systemd/system/lempi.service.d/mpd-guest.conf` — tracked as [`LempiPi/lempi-mpd-guest.conf`](../LempiPi/lempi-mpd-guest.conf) | ☑ read back 2026-09-25 |
+| `lempi02w` | `/etc/systemd/system/lempi.service`, written by [`LempiPi/setup-appliance.sh`](../LempiPi/setup-appliance.sh) | ☐ the repository's unit carries the whole line since 2026-10-02 `[PI-PRE-080]`; the machine still runs it from the drop-in `mpd-guest.conf` until the unit is installed and the drop-in removed |
 | `lp3-wifi` | `/etc/systemd/system/lempi.service` — tracked here as [`LempiPlay3/lempi.service`](../LempiPlay3/lempi.service) since 2026-09-21 `[LP3-REP-010]` | ☑ 2026-09-25, both layers, no shim line since |
 
-**lempi02w reports two `ExecStart` lines because it has two.** The drop-in
-blanks the base unit's with an empty `ExecStart=` and supplies its own; the
-drop-in is what actually runs. Both need changing, because whichever survives
-a future edit must be right.
+**One `ExecStart` per node, in the repository since 2026-10-02.** lempi02w
+had two: a base unit naming a single database, and a drop-in,
+`mpd-guest.conf`, that blanked it and supplied the real line. The base unit
+now carries the whole line, as bose's and lp3-wifi's always did, and
+`setup-appliance.sh` removes the drop-in. Until it is re-run there, the
+machine keeps both — correctly, since the drop-in's line is the same one.
 
 The exact lines:
 
@@ -177,10 +178,7 @@ The exact lines:
 # bose
 ExecStart=/usr/local/bin/lempi --listener /var/lempi/listener.db --library /srv/library/library.db --device hifiberry --mpd 127.0.0.1:6600 --mpd-root /srv/library/audio
 
-# lempi02w, base unit
-ExecStart=/usr/local/bin/lempi --listener /srv/library/library.db --port 5720
-
-# lempi02w, drop-in mpd-guest.conf (this is the one that runs)
+# lempi02w
 ExecStart=/usr/local/bin/lempi --listener /var/lempi/listener.db --library /srv/library/library.db --port 5720 --mpd 127.0.0.1:6600 --mpd-root /srv/library/audio
 
 # lp3-wifi
@@ -188,7 +186,7 @@ ExecStart=/usr/local/bin/lempi --listener /var/lempi/listener.db --library /srv/
 ```
 
 Each is `systemctl daemon-reload` then `systemctl restart lempi`, and on
-`bose` the file must be written through both overlay layers
+`bose` and `lp3-wifi` the file must be written through both overlay layers
 `[IMPL-BOS-185]` — use [`build/install-config.sh`](../build/install-config.sh),
 and verify the durable copy, not the running one `[GDE-DEP-070]`.
 

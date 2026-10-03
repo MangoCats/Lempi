@@ -97,7 +97,7 @@ fn a_malformed_value_is_refused_rather_than_silently_defaulted() {
     assert!(matches!(run(&specs::lempi::SPEC, "--listener x --port -1"), Outcome::Usage(_)));
     assert!(matches!(run(&specs::mpd_fill::SPEC, "--listener a --root b --for soon"), Outcome::Usage(_)));
     // And a value that is fine still is.
-    assert!(matches!(run(&specs::lempi::SPEC, "--listener x --port 5721"), Outcome::Run(_)));
+    assert!(matches!(run(&specs::lempi::SPEC, "--listener x --library y --port 5721"), Outcome::Run(_)));
 }
 
 #[test]
@@ -127,8 +127,8 @@ fn a_required_option_is_required() {
 
 #[test]
 fn both_the_spaced_and_the_equals_form_are_accepted() {
-    let a = run(&specs::lempi::SPEC, "--listener x.db --port=5721");
-    let b = run(&specs::lempi::SPEC, "--listener=x.db --port 5721");
+    let a = run(&specs::lempi::SPEC, "--listener x.db --library y.db --port=5721");
+    let b = run(&specs::lempi::SPEC, "--listener=x.db --library y.db --port 5721");
     for o in [a, b] {
         match o {
             Outcome::Run(a) => {
@@ -154,7 +154,7 @@ fn the_same_option_twice_is_refused() {
 /// `[GDE-ARC-033]`.
 #[test]
 fn an_absent_option_reads_as_the_default_its_declaration_carries() {
-    let Outcome::Run(a) = run(&specs::lempi::SPEC, "--listener x.db") else {
+    let Outcome::Run(a) = run(&specs::lempi::SPEC, "--listener x.db --library y.db") else {
         panic!("refused a minimal line")
     };
     assert_eq!(a.int(&specs::lempi::PORT), Some(5720));
@@ -303,7 +303,7 @@ fn the_short_form_and_the_long_form_are_the_same_option() {
         }
     }
     // And a real line parses either way.
-    let Outcome::Run(a) = run(&specs::lempi::SPEC, "-lis x.db -p 5721") else {
+    let Outcome::Run(a) = run(&specs::lempi::SPEC, "-lis x.db -lib y.db -p 5721") else {
         panic!("the short forms were refused")
     };
     assert_eq!(a.text(&specs::lempi::LISTENER), Some("x.db"));
@@ -407,7 +407,7 @@ fn a_bare_argument_with_no_slot_left_is_refused() {
 
 #[test]
 fn naming_an_option_and_also_passing_it_bare_is_refused() {
-    assert!(matches!(run(&specs::lempi::SPEC, "--listener a.db"), Outcome::Run(_)));
+    assert!(matches!(run(&specs::lempi::SPEC, "--listener a.db --library b.db"), Outcome::Run(_)));
     assert!(matches!(run(&specs::dircheck::SPEC, "--listener a.db b.db"), Outcome::Usage(_)));
 }
 
@@ -567,14 +567,14 @@ fn an_option_shaped_value_is_never_swallowed_as_a_path() {
 
     // **Exemption 1: a bare `-`** is the standard-input convention and names
     // no option. Refusing it would break a meaning people expect.
-    match spec.parse_argv(argv("--listener -")) {
+    match spec.parse_argv(argv("--listener - --library y.db")) {
         Outcome::Run(a) => assert_eq!(a.text(&specs::lempi::LISTENER), Some("-")),
         _ => panic!("a bare `-` should still be usable as a path"),
     }
 
     // **Exemption 2: the inline form** is unambiguous, so a path that really
     // does start with a dash has a way to be said.
-    match spec.parse_argv(argv("--listener=-odd-name.db")) {
+    match spec.parse_argv(argv("--listener=-odd-name.db --library y.db")) {
         Outcome::Run(a) => {
             assert_eq!(a.text(&specs::lempi::LISTENER), Some("-odd-name.db"))
         }
@@ -712,19 +712,19 @@ fn the_four_layers_resolve_highest_first() {
     let port = &specs::lempi::PORT;
 
     // 4: nothing said, so the declared default.
-    let Outcome::Run(a) = with_env(spec, "--listener x.db", &[]) else { panic!() };
+    let Outcome::Run(a) = with_env(spec, "--listener x.db --library y.db", &[]) else { panic!() };
     assert_eq!(a.int(port), Some(super::as_number(crate::default_port!())));
     assert_eq!(a.source_of(port), Source::Default);
 
     // 3: the environment beats the default.
-    let Outcome::Run(a) = with_env(spec, "--listener x.db", &[("LEMPI_PORT", "13491")]) else {
+    let Outcome::Run(a) = with_env(spec, "--listener x.db --library y.db", &[("LEMPI_PORT", "13491")]) else {
         panic!()
     };
     assert_eq!(a.int(port), Some(13491));
     assert_eq!(a.source_of(port), Source::Environment);
 
     // 2: a stored setting beats the environment.
-    let Outcome::Run(mut a) = with_env(spec, "--listener x.db", &[("LEMPI_DEPTH", "9")]) else {
+    let Outcome::Run(mut a) = with_env(spec, "--listener x.db --library y.db", &[("LEMPI_DEPTH", "9")]) else {
         panic!()
     };
     assert_eq!(a.int(&specs::lempi::DEPTH), Some(9));
@@ -733,7 +733,7 @@ fn the_four_layers_resolve_highest_first() {
     assert_eq!(a.source_of(&specs::lempi::DEPTH), Source::Settings);
 
     // 1: the command line beats everything.
-    let Outcome::Run(mut a) = with_env(spec, "--listener x.db --depth 3", &[("LEMPI_DEPTH", "9")])
+    let Outcome::Run(mut a) = with_env(spec, "--listener x.db --library y.db --depth 3", &[("LEMPI_DEPTH", "9")])
     else {
         panic!()
     };
@@ -765,7 +765,7 @@ fn an_option_used_to_find_the_settings_never_reads_them() {
         }
     }
     // And attaching settings cannot change one.
-    let Outcome::Run(mut a) = run(&specs::lempi::SPEC, "--listener from-cli.db") else { panic!() };
+    let Outcome::Run(mut a) = run(&specs::lempi::SPEC, "--listener from-cli.db --library lib.db") else { panic!() };
     a.with_settings(|_| Some("from-settings.db".to_string()));
     assert_eq!(a.text(&specs::lempi::LISTENER), Some("from-cli.db"));
     assert_eq!(a.source_of(&specs::lempi::LISTENER), Source::CommandLine);
@@ -993,7 +993,7 @@ fn a_malformed_environment_value_is_refused_and_names_the_variable() {
 #[test]
 fn a_stored_setting_that_cannot_be_read_complains_and_falls_through() {
     use super::Source;
-    let Outcome::Run(mut a) = run(&specs::lempi::SPEC, "--listener x.db") else { panic!() };
+    let Outcome::Run(mut a) = run(&specs::lempi::SPEC, "--listener x.db --library y.db") else { panic!() };
     let said = a.with_settings(|k| (k == "queue_depth").then(|| "lots".to_string()));
     assert_eq!(said.len(), 1, "a rejected setting said nothing");
     assert!(said[0].contains("queue_depth"), "{}", said[0]);
@@ -1021,7 +1021,7 @@ fn a_scaled_setting_arrives_in_the_options_own_unit() {
 #[test]
 fn the_resolved_layer_is_reportable() {
     let Outcome::Run(a) =
-        with_env(&specs::lempi::SPEC, "--listener x.db --port 13491", &[("LEMPI_DEPTH", "9")])
+        with_env(&specs::lempi::SPEC, "--listener x.db --library y.db --port 13491", &[("LEMPI_DEPTH", "9")])
     else {
         panic!()
     };

@@ -97,7 +97,7 @@ Two separate programs sharing one SQLite file, decided in [GUIDE002](docs/GUIDE0
 - **`player/` — Lempi, the player. Rust from the start** (`symphonia` + `rubato` + `cpal` + `axum`), MIT-licensed, portable to the Pi Zero 2W (`≤150MB` RSS) and to desktop. Nothing AGPL is ever linked into it.
 - **`tools/` — Vipunen, the library builder. Python**, AGPL-3.0-or-later (because Essentia is), x86-desktop-only, invoked as a subprocess. Scanning, fingerprinting, MusicBrainz, DAO segmentation, feature extraction, review UI. Never runs on the appliance.
 
-They interoperate only through the shared `lempi.db` file — no linked code, no RPC, no shared process in either direction.
+They interoperate only through the shared database — two files, `library.db` and `listener.db` `[IMPL-DBSPLIT-025]` — no linked code, no RPC, no shared process in either direction.
 
 ---
 

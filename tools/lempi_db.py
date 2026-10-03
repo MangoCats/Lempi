@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""One way for a `tools/` script to open a Lempi database, split or not.
+"""One way for a `tools/` script to open a Lempi database's two halves.
+
+Every installation is split since 2026-09. A *whole* file -- both halves'
+tables in one -- still exists in exactly two places, and this opens it
+plainly for both: a test fixture built from `sql/schema.sql`, and a fresh
+library being inducted before `split_database.py` divides it (HOWTO §3).
+No node runs on one.
 
 The player got `QualifyingConn` and the `__LIB__` placeholder when lempi02w
 split `[IMPL-DBSPLIT-035]`, so Rust genuinely does not care which shape it
@@ -279,9 +285,8 @@ def connect(path: str, role: str, *, writable: bool = False,
     `role` is the half this script owns -- the one it writes and creates
     tables in -- and becomes `main`. `path` may name either half (or a
     whole database); the file's own contents decide, and the peer is looked
-    up per `find_peer`. A whole database is opened exactly as before, with
-    no attach and no authorizer, so an unsplit installation carries none of
-    this.
+    up per `find_peer`. A whole database -- a fixture, or a fresh build not
+    yet split -- is opened plainly, with no attach and no authorizer.
 
     Raises `SplitError` rather than guessing when the peer cannot be found:
     a script that silently ran against half a database would produce
@@ -306,8 +311,8 @@ def connect(path: str, role: str, *, writable: bool = False,
                                **({} if timeout is None else {"timeout": timeout}))
 
     if this == WHOLE:
-        # Both markers: either a genuine single-file installation, or a
-        # half that a shadow has made look like one. Only the presence of a
+        # Both markers: either a whole file (a fixture, or a build not yet
+        # split), or a half that a shadow has made look like one. Only the presence of a
         # peer file distinguishes them, so look before concluding.
         candidate = (find_peer(path, ROLE_LISTENER, peer)
                      or find_peer(path, ROLE_LIBRARY, peer))

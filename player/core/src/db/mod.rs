@@ -108,22 +108,16 @@ pub(crate) const BUSY_WAIT: std::time::Duration = std::time::Duration::from_secs
 /// `db_path`, and returns the schema prefix every catalog query should use
 /// from then on `[IMPL-DBSPLIT-025]`.
 ///
-/// The two paths are equal for every installation that hasn't split its
-/// database -- `bose`, today's lempi02w, every existing test fixture. In
-/// that case nothing is attached and this returns `"main"`, so a query
-/// written `{lib}.recordings` reads the same table through the same
-/// connection it always has, and the one player binary needs no
-/// environment-specific build. Only an installation with a genuinely
-/// separate `library.db` (lempi02w, once split -- `[PI-DB-020]`) ever
-/// attaches anything or ever sees `"lib"` come back.
+/// Every installation is split since 2026-09 `[PI-DB-020]`, and the
+/// binaries require both paths, so in service the two always differ and
+/// `"lib"` comes back. Equal paths remain for one caller: a test fixture
+/// that holds both halves' tables in one file. Then nothing is attached and
+/// this returns `"main"`, so a query written `{lib}.recordings` reads the
+/// same table through the same connection.
 ///
-/// Equality is the caller's to guarantee, by construction rather than by
-/// canonicalizing paths here: the CLI defaults `--library` to a clone of
-/// `--db` when the flag is absent, so the two `Path`s are byte-identical
-/// in the common case rather than merely referring to the same file on
-/// disk. A caller that passes two different spellings of the same path
-/// gets a harmless self-attach, not a silent bug -- see the doc comment on
-/// the URI mode below for why that's still safe.
+/// Equality is compared as given, not canonicalized: a caller that passes
+/// two spellings of one file gets a harmless self-attach, not a silent bug
+/// -- see the doc comment on the URI mode below for why that's still safe.
 ///
 /// Requires the connection to have been opened with `OpenFlags::SQLITE_OPEN_URI`
 /// -- `mode=ro` in the attach URI is SQLite's own documented way to attach
@@ -176,8 +170,8 @@ pub struct QualifyingConn {
 
 impl QualifyingConn {
     /// Opens `db_path`, runs [`attach_library`] against `library_path`, and
-    /// wraps the result. `db_path == library_path` is the common,
-    /// unsplit case -- see `attach_library`'s own doc comment.
+    /// wraps the result. `db_path == library_path` is a single-file test
+    /// fixture -- see `attach_library`'s own doc comment.
     pub fn open(
         db_path: &std::path::Path,
         library_path: &std::path::Path,
@@ -192,8 +186,8 @@ impl QualifyingConn {
         // SQLite defaults `PRAGMA foreign_keys` to ON -- confirmed by
         // asking it directly, not by grepping this crate for an explicit
         // enable, which is exactly the check `[IMPL002 §7.7]` stopped one
-        // step short of and got wrong as a result. Harmless on every
-        // unsplit installation (`listener_play_history`/`selection_decisions`
+        // step short of and got wrong as a result. Harmless on a
+        // single-file fixture (`listener_play_history`/`selection_decisions`
         // and the `passages` they reference all sit in the same file, so
         // the lookup always succeeds) -- and fatal to every write on a
         // split one, since SQLite only ever checks a FOREIGN KEY against a

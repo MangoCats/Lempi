@@ -98,6 +98,7 @@ def test_pull_lands_a_flag(tmp: str) -> None:
     build_library(library)
     sidecar = os.path.join(tmp, "library.console.db")
     runner = jobmod.Runner(library, sidecar)
+    runner.set_remote_listener("pi@speaker-a:/var/lempi/listener.db")
     inner = fake_spawn_success({"format_version": 1, "flags": [
         {"subject_kind": "recording", "anchor": {"recording_mbid": SONG_A},
          "flagged_at": "2026-08-29 09:00:00", "origin": "lempi02w"},
@@ -124,6 +125,7 @@ def test_unreachable_fails_before_import(tmp: str) -> None:
     build_library(library)
     sidecar = os.path.join(tmp, "library2.console.db")
     runner = jobmod.Runner(library, sidecar)
+    runner.set_remote_listener("pi@speaker-a:/var/lempi/listener.db")
     runner._spawn = fake_spawn_unreachable.__get__(runner, jobmod.Runner)
     job_id = runner.submit("remote-pull", "pi@lempi02w:/srv/library/library.db")
     j = wait_for(runner, job_id)

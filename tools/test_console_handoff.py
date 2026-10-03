@@ -244,6 +244,26 @@ def main() -> int:
         lempi_control._lempi_binary = old_which
 
     print()
+    print("one file standing for both halves: refused, nothing started")
+    # Every installation is split; the player once ran with the catalogue as
+    # its listener and planted eleven listener tables in it.
+    started = []
+    old_which, old_popen = lempi_control._lempi_binary, lempi_control.subprocess.Popen
+    lempi_control._lempi_binary = lambda: "lempi"
+    lempi_control.subprocess.Popen = lambda *a, **k: started.append(a)
+    try:
+        lib = os.path.join(HERE, "..", "data", "library.db")
+        for listener in (None, lib):
+            result = lempi_control.ensure_lempi(port=free_port(), db_path=lib,
+                                                 listener_path=listener, library_path=lib)
+            check(result["ok"] is False, f"listener={listener!r}: expected a refusal, got {result}")
+            check("both halves" in result.get("error", ""),
+                  f"the reason must name both halves, got {result}")
+        check(not started, f"no player may be started, got {started}")
+    finally:
+        lempi_control._lempi_binary, lempi_control.subprocess.Popen = old_which, old_popen
+
+    print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")
         return 1

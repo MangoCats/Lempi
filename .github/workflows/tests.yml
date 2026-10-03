@@ -186,13 +186,6 @@ jobs:
       # fixture, so pytest reports 59 errors, every one `fixture 'tmp' not
       # found`, and every test is fine `[tools/README.md]`.
       #
-      # `test_split_parity.py` is excluded by name because it is a harness,
-      # not a self-contained test: it takes `--pair DIR --whole lempi.db` and
-      # compares the read-only tools across both database shapes, so run bare
-      # it exits 2 on its own argument parser. That is not a failure of
-      # anything it tests, and it needs a real split pair this repository
-      # does not carry.
-      #
       # The count guard is `[GDE-ECHO-547]`: a scan that reads nothing must
       # not pass by finding no fault. A glob that matches no file would
       # otherwise report success for work it never did, which is the exact
@@ -202,10 +195,6 @@ jobs:
           ran=0
           fail=0
           for f in tools/test_*.py; do
-            if [ "$f" = "tools/test_split_parity.py" ]; then
-              echo "skip $f (harness: needs --pair/--whole)"
-              continue
-            fi
             ran=$((ran + 1))
             if python3 "$f" > /tmp/out 2>&1; then
               echo "ok   $f"

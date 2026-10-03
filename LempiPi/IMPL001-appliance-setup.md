@@ -202,7 +202,7 @@ Type=simple
 # Every option is named [GDE-CLI-020]. Output selection is --device NAME (a
 # substring match against the audio device), omitted for the system default
 # -- there is no --output flag or profile enum.
-ExecStart=/usr/local/bin/lempi --listener /var/lib/lempi/listener.db --device ${LEMPI_DEVICE}
+ExecStart=/usr/local/bin/lempi --listener /var/lib/lempi/listener.db --library /srv/library/library.db --device ${LEMPI_DEVICE}
 EnvironmentFile=/etc/lempi.conf
 Restart=always
 RestartSec=2
@@ -230,6 +230,11 @@ WantedBy=multi-user.target
 > `--db`/`--music`/`--output` shape was never real for this binary — recorded
 > per this project's own discipline of not silently overwriting a decision
 > once something built on it.
+>
+> **Split 2026-09, and required since 2026-10-02:** the listener and the
+> catalogue are two files, and the player refuses to start unless both are
+> named. Every node's exact line is in
+> [GUIDE030 §5](../docs/GUIDE030-command-line-conventions.md).
 
 **`[IMPL-SVC-030]`** `MemoryMax=200M` turns the `[REQ-HW-100]` budget into an enforced limit rather than an aspiration: exceeding it kills the service and `Restart=always` recovers, which is loud and diagnosable instead of the machine silently thrashing into swap.
 

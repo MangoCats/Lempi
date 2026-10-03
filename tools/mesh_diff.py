@@ -258,7 +258,7 @@ def summarize(report: dict) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("local_db", help="path to this installation's lempi.db")
+    ap.add_argument("local_db", help="path to this installation's library.db")
     ap.add_argument("remote", help="user@host:/path/to/listener.db")
     ap.add_argument("--table", action="append", dest="tables",
                      choices=list(TABLES), help="limit to one table (repeatable)")

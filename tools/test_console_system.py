@@ -232,6 +232,8 @@ def test_shutdown_refused_while_a_job_runs() -> None:
                          {"Content-Type": "application/json"})
             conn.getresponse().read()
             conn.close()
+            # Every peer is split; a pull with no listener half is refused.
+            console.STATE["jobs"].set_remote_listener("nobody@speaker-a:/srv/listener.db")
             status, d = post_json(port, "/api/remote/pull")
             check(status == 200 and "job_id" in d, f"got {status} {d}")
             job_id = d["job_id"]

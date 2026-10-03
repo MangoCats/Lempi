@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS remote_config (
 -- exactly `set_remote(peer.remote)` -- this table is only where names live.
 CREATE TABLE IF NOT EXISTS sync_peers (
     name    TEXT PRIMARY KEY,
-    remote  TEXT NOT NULL,             -- user@host:/path/to/library.db (or lempi.db, unsplit)
+    remote  TEXT NOT NULL,             -- user@host:/path/to/library.db
     enabled INTEGER NOT NULL DEFAULT 1
 );
 """
@@ -88,9 +88,10 @@ CREATE TABLE IF NOT EXISTS sync_peers (
 # `remote_listener` is additive, not part of `DDL` above, because `sync_peers`
 # already exists on every console this ships to and `CREATE TABLE IF NOT
 # EXISTS` never adds a column to a table that's already there
-# `[IMPL002 §7.4]`. NULL means "same file as `remote`" -- true for every
-# peer that hasn't split, `bose` and today's lempi02w included, so nothing
-# already configured needs re-entering. Needed because `sync_preferences.py`/
+# `[IMPL002 §7.4]`. NULL once meant "same file as `remote`", for a peer that
+# had not split; every node is split since 2026-09, so NULL now means only
+# that the peer was recorded without it, and the jobs that need it refuse.
+# Needed because `sync_preferences.py`/
 # `remote_flags.py`/`export_flags.py` all join listener-side tables against
 # catalog-side ones through a peer's remote path, and a split peer can't
 # serve both halves from the one path `remote` already carries.
@@ -315,10 +316,9 @@ class Runner:
 
     def get_remote_listener(self) -> str | None:
         """The listener-side path for whichever peer is active, or `None`
-        when it's the same file as `get_remote()` -- true for every peer
-        that hasn't split `[IMPL002 §7.4]`. Callers that need a listener
-        path unconditionally should do
-        `runner.get_remote_listener() or runner.get_remote()`.
+        when none was recorded `[IMPL002 §7.4]`. Every node is split, so a
+        caller that needs it refuses on `None` rather than falling back to
+        `get_remote()`, which is the catalogue.
         """
         db = self._db()
         r = db.execute(
@@ -646,8 +646,11 @@ class Runner:
         # that needed it. Against a split peer without this, `remote_flags.py`
         # reports "nothing flagged" from the catalogue half -- lempi02w has 19.
         listener = self.get_remote_listener()
-        if listener:
-            fetch += ["--remote-listener", listener.partition(":")[2] or listener]
+        if not listener:
+            self._emit(job_id, "error", f"no listener half recorded for {target} -- "
+                       "flags live there, and every node is split")
+            return self._finish(job_id, "failed")
+        fetch += ["--remote-listener", listener.partition(":")[2] or listener]
         code, _ = self._spawn(job_id, "fetch-flags", fetch)
         if code != 0:
             return self._finish(job_id, "failed")
@@ -678,11 +681,15 @@ class Runner:
         # `get_remote_listener()` have existed since that review; nothing
         # read them, so this job addressed a split peer's catalogue with
         # queries only its listener half can answer and reported a clean
-        # "nothing to do" `[SPEC-PREF-155]`. `None` -- every peer that has
-        # not split -- passes nothing and behaves exactly as before.
+        # "nothing to do" `[SPEC-PREF-155]`. No listener half recorded is
+        # refused: every node is split, and the catalogue alone answers
+        # "nothing to do" without a word.
         listener = self.get_remote_listener()
-        if listener:
-            argv += ["--remote-listener", listener.partition(":")[2] or listener]
+        if not listener:
+            self._emit(job_id, "error", f"no listener half recorded for {target} -- "
+                       "preferences live there, and every node is split")
+            return self._finish(job_id, "failed")
+        argv += ["--remote-listener", listener.partition(":")[2] or listener]
         self._run_single_stage(job_id, "sync", argv)
 
     def _mesh_resolve(self, job_id: int, target: str):
@@ -878,20 +885,24 @@ class Runner:
         # Measured both ways before being relied on, the same rule
         # `lempi_db`'s own module docstring documents.
         #
-        # Unsplit peers -- no `remote_listener`, or the same file -- keep the
-        # single-file command they always had, with nothing attached.
+        # **Every peer is split, and one that is not recorded so is refused**
+        # (2026-10-02). An unsplit peer once got the single-file command; no
+        # installation is unsplit now, so a missing `remote_listener` means
+        # the peer was added without it -- and the single-file command would
+        # plant the review tables in its catalogue, the shadow above.
         lis_host, _, lis_path = (listener or "").partition(":")
-        split = bool(lis_path) and lis_path != remote_path
-        if split and lis_host != host:
+        if not lis_path or lis_path == remote_path:
+            msg = (f"no listener half recorded for {target} -- every node is split; "
+                   "record the peer's listener.db (Flags page, or POST /api/peers)")
+            self._emit(job_id, "error", msg)
+            return False, {"error": msg}
+        if lis_host != host:
             msg = (f"the two halves name different hosts ({host} and {lis_host}); "
                    "a peer's halves must live on one machine")
             self._emit(job_id, "error", msg)
             return False, {"error": msg}
-        if split:
-            apply_sql = ("{ echo \"ATTACH DATABASE '" + remote_path + "' AS lib;\"; "
-                         "cat /tmp/lempi-sync-patch.sql; } | sqlite3 " + lis_path)
-        else:
-            apply_sql = "sqlite3 " + remote_path + " < /tmp/lempi-sync-patch.sql"
+        apply_sql = ("{ echo \"ATTACH DATABASE '" + remote_path + "' AS lib;\"; "
+                     "cat /tmp/lempi-sync-patch.sql; } | sqlite3 " + lis_path)
 
         self._emit(job_id, "stage", "export", stage="export")
         code, _ = self._spawn(job_id, "export", [
@@ -907,8 +918,7 @@ class Runner:
         # the snapshot looks "bare" and the patch re-ships `CREATE TABLE`/
         # `ALTER TABLE` statements the remote already has -- which sqlite3
         # reports as errors, failing a push that in fact landed everything.
-        if split:
-            snap_argv += ["--remote-listener", listener]
+        snap_argv += ["--remote-listener", listener]
         code, _ = self._spawn(job_id, "snapshot", snap_argv)
         if code != 0:
             return False, {"error": "could not read the remote"}
