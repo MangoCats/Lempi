@@ -51,7 +51,7 @@ every change is made twice, the way
 
 Nothing restarts the player. Written 2026-10-02, after lempi02w's `--go`, at
 the maintainer's request that bose and lp3-wifi be brought level the same
-way. **Its overlay path had not run when it was committed.**
+way. First run, and proven across a reboot, the same evening (below).
 
 A file is compared byte for byte. A copy that differs only in its comments
 still `DIFFERS`: what is on the node is either the repository's file or it is
@@ -116,8 +116,14 @@ maintainer: every item `ok` or `CHANGED`, and a `--check` after it reported
 all items as recorded, with the player playing throughout. It found one fault
 of its own: `setup-appliance.sh` exited 1 after a run that changed something
 under `--no-boot-tune`, its last line being a false `[ ] && echo` — fixed.
-bose and lp3-wifi are still to do, with the same command since the overlay
-path `[APP-SET-030]`.
+**bose and lp3-wifi, applied the same evening** by
+`build/setup-appliances.sh --go bose lp3-wifi`, run by the maintainer — the
+overlay path's first run: 5 and 11 items `CHANGED`, the durable layer back
+read-only on both, nothing left staged. Then **both rebooted**, and a `--check`
+of all three reported every item as recorded on fresh boots: no failed units,
+both players back and playing (lp3-wifi to the Oontz, re-measuring its echo
+after the boot's clock step), zram swap at 1.8 GB and 905 MB, the journal
+keeping earlier boots, cloud-init gone from bose's boot.
 
 ---
 
