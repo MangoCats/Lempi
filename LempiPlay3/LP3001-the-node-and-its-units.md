@@ -158,3 +158,14 @@ What differs from `lempi02w`, and why:
 
 [`setup-lp3.sh`](setup-lp3.sh) records all of it, and its `--check` reports
 every item as recorded on the durable layer.
+
+**Measured the same day.** After a reboot everything came back from the
+durable layer -- root overlay read-only, pairings bound from STATE, radio
+unblocked, `pi`'s PipeWire up by linger, the jack playing at 0.01 dB, no failed
+units. The maintainer paired an OontZ Angle 3 from the settings page; it became
+the chosen speaker and the stream moved to it, at the new-output level. Then,
+with the speaker disconnected from this side: the stream was on the jack, still
+audible, within **3 s**; the keeper reconnected the speaker and the stream was
+back on it at **+23 s**; the jack's PCM went idle after, and the stream linked
+to the speaker alone. Not yet measured: this node's alignment in a synchronized
+group, through PipeWire's quantum and a speaker's Bluetooth latency.
