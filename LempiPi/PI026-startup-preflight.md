@@ -262,9 +262,9 @@ template in `setup-appliance.sh` named the pre-split `/srv/library/library.db`
 in its base `ExecStart`; the live machine was correct only because
 `mpd-guest.conf` overrode it. The base unit now carries the whole line,
 `setup-appliance.sh` removes the drop-in, and the player refuses to start
-without both `--listener` and `--library`. **The machine itself still has the
-old base unit and the drop-in** until the unit is installed there; its
-running line is already the right one.
+without both `--listener` and `--library`. **Applied on the machine the same
+day** by `setup-lempi02w.sh --go`; its `--check` read the unit back as the
+repository's, with the drop-in, its copy and the single-file stub gone.
 
 Deleting those copies `[PI-PRE-098]` improved this by accident, and the
 direction is worth noting.

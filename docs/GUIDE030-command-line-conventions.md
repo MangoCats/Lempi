@@ -162,15 +162,14 @@ was sent.
 | Host | Unit | Apply |
 |---|---|---|
 | `bose` | `/etc/systemd/system/lempi.service` — tracked here as [`BosePi/lempi-bose.service`](../BosePi/lempi-bose.service) | ☑ 2026-09-25, both layers, no shim line since |
-| `lempi02w` | `/etc/systemd/system/lempi.service`, written by [`LempiPi/setup-appliance.sh`](../LempiPi/setup-appliance.sh) | ☐ the repository's unit carries the whole line since 2026-10-02 `[PI-PRE-080]`; the machine still runs it from the drop-in `mpd-guest.conf` until the unit is installed and the drop-in removed |
+| `lempi02w` | `/etc/systemd/system/lempi.service`, written by [`LempiPi/setup-appliance.sh`](../LempiPi/setup-appliance.sh) | ☑ 2026-10-02, by `setup-lempi02w.sh --go`: the whole line in the base unit, the drop-in removed, read back by its `--check` `[PI-PRE-080]` |
 | `lp3-wifi` | `/etc/systemd/system/lempi.service` — tracked here as [`LempiPlay3/lempi.service`](../LempiPlay3/lempi.service) since 2026-09-21 `[LP3-REP-010]` | ☑ 2026-09-25, both layers, no shim line since |
 
 **One `ExecStart` per node, in the repository since 2026-10-02.** lempi02w
 had two: a base unit naming a single database, and a drop-in,
 `mpd-guest.conf`, that blanked it and supplied the real line. The base unit
 now carries the whole line, as bose's and lp3-wifi's always did, and
-`setup-appliance.sh` removes the drop-in. Until it is re-run there, the
-machine keeps both — correctly, since the drop-in's line is the same one.
+`setup-appliance.sh` removes the drop-in. Applied on the machine the same day.
 
 The exact lines:
 

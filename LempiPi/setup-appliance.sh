@@ -667,5 +667,12 @@ if [ "$CHANGED" -eq 0 ]; then
     echo "No changes: the machine already matches this script."
 else
     echo "Done. Re-run to confirm it settles with no further changes."
-    [ "$BOOT_TUNE" -eq 1 ] && echo "A reboot is needed for the config.txt changes."
+    # An `if`, not `[ ] && echo`: as the script's last command, a false test
+    # made its exit status 1, and under --no-boot-tune a run that changed
+    # anything reported itself failed -- found 2026-10-02 by
+    # setup-lempi02w.sh --go, the first caller to read the status.
+    if [ "$BOOT_TUNE" -eq 1 ]; then
+        echo "A reboot is needed for the config.txt changes."
+    fi
 fi
+exit 0

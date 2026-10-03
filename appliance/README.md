@@ -88,8 +88,13 @@ set included:
 | `bose` | 5 | the journal and swap files; **cloud-init not disabled**; its unlock-check unit has CRLF line endings on the card; `mpd.conf` differs in comments only |
 | `lempi02w` | 17 | the journal file and its old name; the unit and the three files retired with the single-file mode `[PI-PRE-080]`; the five units (heredocs, no comments); the clock file and its two retired halves; the timeout drop-in; and two helpers older than the repository — the host's old name in comments, and a test hook in `lempi-btwatch` that changes nothing unset |
 
-Nothing was applied by this work. Each `DIFFERS` is a change still to make on
-that node.
+**lempi02w, applied 2026-10-02** with `setup-lempi02w.sh --go`, run by the
+maintainer: every item `ok` or `CHANGED`, and a `--check` after it reported
+all items as recorded, with the player playing throughout. It found one fault
+of its own: `setup-appliance.sh` exited 1 after a run that changed something
+under `--no-boot-tune`, its last line being a false `[ ] && echo` — fixed.
+bose and lp3-wifi are locked, so `--go` refuses there; each `DIFFERS` on them
+is a file still to put through `build/install-config.sh`.
 
 ---
 
