@@ -13,9 +13,11 @@
 # overlay, no access point. Those are easier to add to a machine already known
 # to play music.
 #
-#   build/render-fleet-sources.sh /tmp/lempi-fleet.sources
-#   scp LempiPi/setup-appliance.sh /tmp/lempi-fleet.sources pi@speaker-a:
-#   ssh pi@speaker-a 'sudo bash setup-appliance.sh'
+# **Run it through LempiPi/setup-lempi02w.sh --go**, which applies what every
+# appliance has (appliance/common.sh) from the development host, then stages
+# this script and its files on the node and runs it there. Since 2026-10-02
+# this script is the node's own part only: run alone, it leaves out the clock,
+# the journal, swap and the recovery helpers.
 #
 # Options:
 #   --speaker AA:BB:CC:DD:EE:FF   pair, trust and connect a Bluetooth sink
@@ -68,14 +70,14 @@ NEED=""
 # point; iw is what confirmed live that this board's driver supports AP
 # mode in the first place, and is worth keeping installed for the same
 # diagnostic reason on every appliance, not just the one it was checked on.
-# chrony is the fleet's clock `[GDE-ECHO-300]`, configured under "platform"
-# below; it was installed by hand on every node until 2026-09-25.
+# chrony, sqlite3 and python3 are every appliance's: appliance/common.sh
+# installs them, with the fleet clock's configuration `[GDE-ECHO-300]`.
 # No ffmpeg since 2026-09-27: it was here for relink's hash, which is
 # in-process now `[SPEC-RLK-152]`. A node that plays through MPD gets ffmpeg's
 # libraries as MPD's own dependency, not from this list.
 for p in pipewire pipewire-pulse pipewire-alsa wireplumber libspa-0.2-bluetooth \
-         bluez libasound2 alsa-utils sqlite3 upower evtest \
-         dnsmasq iw python3-dbus python3-gi chrony; do
+         bluez libasound2 alsa-utils upower evtest \
+         dnsmasq iw python3-dbus python3-gi; do
     dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"
 done
 if [ -n "$NEED" ]; then
@@ -350,7 +352,9 @@ fi
 
 echo "bluetooth helper"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-for f in lempi-btctl lempi-wait-sink lempi-db-recover lempi-preflight \
+# lempi-preflight and lempi-db-recover are every appliance's, installed by
+# appliance/common.sh since 2026-10-02.
+for f in lempi-btctl lempi-wait-sink \
          lempi-underruns lempi-led-boot \
          lempi-wifi-revert lempi-radio-test lempi-startup-sample \
          lempi-hci-capture lempi-linkstate lempi-afh-seed lempi-vitals \
@@ -632,7 +636,6 @@ for pair in \
     "mpd-polite.conf:/etc/systemd/system/mpd.service.d/10-lempi-polite.conf" \
     "lempi-quiet-tick.conf:/etc/systemd/system/lempi-speaker.service.d/10-lempi-quiet.conf" \
     "lempi-quiet-tick.conf:/etc/systemd/system/lempi-btwatch.service.d/10-lempi-quiet.conf" \
-    "journald-lempi.conf:/etc/systemd/journald.conf.d/10-lempi.conf" \
     "sd-tuning.conf:/etc/tmpfiles.d/lempi-readahead.conf" \
     "pipewire-quantum.conf:/etc/pipewire/pipewire.conf.d/10-lempi-quantum.conf" ; do
     src="$HERE/${pair%%:*}"; dst="${pair#*:}"
@@ -641,9 +644,6 @@ for pair in \
     if ! cmp -s "$src" "$dst"; then
         install -m644 "$src" "$dst" && did "installed $(basename "$dst")"
         NEED_RELOAD=1
-        # journald reads its config only when it starts; daemon-reload does
-        # not reach it.
-        case "$dst" in */journald.conf.d/*) RESTART_JOURNALD=1 ;; esac
     else
         ok "$(basename "$dst") current"
     fi
@@ -654,10 +654,6 @@ done
 systemd-tmpfiles --create /etc/tmpfiles.d/lempi-readahead.conf >/dev/null 2>&1 || true
 
 [ "${NEED_RELOAD:-0}" = 1 ] && systemctl daemon-reload
-# Also what creates /var/log/journal on a fresh card, for Storage=persistent.
-if [ "${RESTART_JOURNALD:-0}" = 1 ]; then
-    systemctl restart systemd-journald && did "restarted journald for its new config"
-fi
 if ! systemctl is-enabled --quiet lempi-speaker.timer 2>/dev/null; then
     systemctl enable --now lempi-speaker.timer >/dev/null 2>&1
     did "enabled lempi-speaker.timer"
@@ -716,89 +712,11 @@ UNIT
 fi
 
 # ---------------------------------------------------------------- platform
-# Set here explicitly, even where the imager already set them, so this script
-# is the whole record of how the node was built -- not the imager's
-# customisation screen, which leaves no trace in the repository. Both were
-# found only on the card on 2026-09-25 [PI3-FOUND-770].
-echo "platform"
-
-# The Wi-Fi regulatory country: which channels and powers the radio may use.
-# The imager wrote it to cmdline.txt (`cfg80211.ieee80211_regdom=US`);
-# raspi-config is the tool that owns that line.
-WIFI_COUNTRY="${WIFI_COUNTRY:-US}"
-if [ "$(raspi-config nonint get_wifi_country 2>/dev/null)" != "$WIFI_COUNTRY" ]; then
-    raspi-config nonint do_wifi_country "$WIFI_COUNTRY"
-    did "wifi country $WIFI_COUNTRY (reboot to apply)"
-else
-    ok "wifi country $WIFI_COUNTRY"
-fi
-
-# The service account's own SSH key, for reaching other machines -- not the
-# host keys, which sshd makes itself. No node had one until 2026-09-25, when
-# bose was found without any and the maintainer asked that every node's
-# script make one. Made once, never replaced: a new key would silently undo
-# wherever the old one was authorised. No passphrase: used unattended.
-KEY="/home/$RUN_USER/.ssh/id_ed25519"
-if [ ! -f "$KEY" ]; then
-    install -d -m700 -o "$RUN_USER" -g "$RUN_USER" "/home/$RUN_USER/.ssh"
-    sudo -u "$RUN_USER" ssh-keygen -q -t ed25519 -N "" -C "$RUN_USER@$(hostname)" -f "$KEY"
-    did "ssh key $KEY (authorise its .pub where needed)"
-else
-    ok "ssh key $KEY"
-fi
-
-# Root's files stay root's. bose's provisioning once handed pi its /etc/ssh
-# and /var/log through a recursive chown (fixed 2026-09-25); this node never
-# ran that script, and this makes sure nothing else does the same here.
-if [ -n "$(find /etc/ssh -not -user root -print -quit)" ] || [ "$(stat -c %U /var/log)" != root ]; then
-    chown -R root:root /etc/ssh
-    chown root:root /var/log
-    did "/etc/ssh and /var/log back to root"
-else
-    ok "/etc/ssh and /var/log owned by root"
-fi
-
-# Swap: a 512 MB file through dphys-swapfile, as this node has run it -- a
-# swapfile on the root, which [SD-RISK-150] names as SD wear worth moving to
-# zram one day. Recorded as it is, not as it might be.
-SWAP_MB=512
-if ! grep -qx "CONF_SWAPSIZE=$SWAP_MB" /etc/dphys-swapfile 2>/dev/null; then
-    sed -i "s/^#\{0,1\}CONF_SWAPSIZE=.*/CONF_SWAPSIZE=$SWAP_MB/" /etc/dphys-swapfile
-    dphys-swapfile swapoff >/dev/null 2>&1 || true
-    dphys-swapfile setup >/dev/null 2>&1 && dphys-swapfile swapon >/dev/null 2>&1
-    did "swap ${SWAP_MB} MB (dphys-swapfile)"
-else
-    ok "swap ${SWAP_MB} MB (dphys-swapfile)"
-fi
-
-# The fleet clock `[GDE-ECHO-300]`: one LAN reference for every node, and the
-# same fallbacks on every node -- the fleet file's, plus the distribution's own
-# pool, left on. That pool was commented out by hand on two nodes and left on
-# the third; the maintainer chose on 2026-09-25 that every node keep it, as
-# one more fallback all of them share. All of this was done by hand until
-# then -- BOSE010 carried the commands as a worked example, and no script ran
-# them.
-#
-# The file is rendered on the operator's machine, where `fleet/` holds the
-# fleet's own time server, and copied here beside this script `[SPEC-FCP-030]`.
-# Absent, the step says so rather than passing for done.
-if [ ! -f "$HERE/lempi-fleet.sources" ]; then
-    note "chrony: fleet sources" "NOT SET -- render it beside this script (see the top)"
-elif ! cmp -s "$HERE/lempi-fleet.sources" /etc/chrony/sources.d/lempi-fleet.sources; then
-    install -D -m644 "$HERE/lempi-fleet.sources" /etc/chrony/sources.d/lempi-fleet.sources
-    chronyc reload sources >/dev/null 2>&1 || true
-    did "chrony: fleet sources"
-else
-    ok "chrony: fleet sources"
-fi
-if ! grep -q '^pool 2\.debian\.pool\.ntp\.org' /etc/chrony/chrony.conf 2>/dev/null; then
-    # Uncomments however it was commented -- by hand it was `#lempi-fleet# `.
-    sed -i 's/^#.*\(pool 2\.debian\.pool\.ntp\.org\)/\1/' /etc/chrony/chrony.conf
-    systemctl restart chrony
-    did "chrony: distribution pool on"
-else
-    ok "chrony: distribution pool on"
-fi
+# The Wi-Fi country, pi's SSH key, root's ownership of /etc/ssh and /var/log,
+# swap, the fleet clock, the timezone and the journal are every appliance's,
+# and since 2026-10-02 are appliance/common.sh's, which
+# LempiPi/setup-lempi02w.sh runs from the development host. They were here
+# until then, and each fix to one of them was made once per node.
 
 # -------------------------------------------------------------- boot tuning
 # Safe, reversible settings only. The riskier work -- initramfs trimming, unit

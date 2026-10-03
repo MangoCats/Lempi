@@ -104,7 +104,7 @@ which writes both layers.
 
 The first run found two differences, and the maintainer settled both on
 2026-09-25. **No swap at all** — bose's `[IMPL-BOS-170]` fault, measured as
-`free` Swap 0 — fixed by [`rpi-swap-lempi.conf`](rpi-swap-lempi.conf) on both
+`free` Swap 0 — fixed by [`rpi-swap-lempi.conf`](../appliance/rpi-swap-lempi.conf) on both
 layers; after a reboot, 904 MB of zram swap and no failed units. **Debian's own
 NTP pool**, on here and commented out by hand on the other two: kept, and
 turned back on for them, so every node shares it as one more fallback
@@ -115,7 +115,7 @@ turned back on for them, so every node shares it as one more fallback
 the image ships `40-rpi-volatile-storage.conf` with `Storage=volatile`, so
 journald wrote to RAM. Found by a fleet ownership audit, which saw the
 journal's file path under `/run`. Fixed with bose's own override,
-[`journald-lempi.conf`](journald-lempi.conf), on both layers; the flush kept
+[`journald-lempi.conf`](../appliance/journald-lempi.conf), on both layers; the flush kept
 that boot's history.
 
 **`[LP3-SET-030]` The clock starts ten days behind**, as that reboot showed.

@@ -30,6 +30,9 @@ set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PI="$(dirname "$HERE")"
+# Every appliance's helpers -- lempi-db-recover among them -- live in
+# appliance/ since 2026-10-02 [APP-SET-020].
+APPLIANCE="$(dirname "$PI")/appliance"
 export LEMPI_COMMON="$PI/lempi-common.sh"
 ORIG_PATH="$PATH"
 PASS=0

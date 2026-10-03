@@ -6,7 +6,7 @@ group dbrecover || return 0
 printf '\ndbrecover\n'
 
 recover() { PATH="$REALPATH" LEMPI_DB="$1" LEMPI_LIBRARY_DB="$2" LEMPI_LISTENER_DB="$3" \
-    sh "$PI/lempi-db-recover" 2>&1; }
+    sh "$APPLIANCE/lempi-db-recover" 2>&1; }
 
 setup
 REALPATH="$ORIG_PATH"
@@ -109,7 +109,7 @@ assert_in "$OUT" "could not open" "reports a database it cannot open"
 
 # It must never stop the boot, whatever it finds.
 PATH="$REALPATH" LEMPI_DB="$D/broken.db" LEMPI_LIBRARY_DB="$D/absent.db" \
-    LEMPI_LISTENER_DB="$D/absent2.db" sh "$PI/lempi-db-recover" >/dev/null 2>&1
+    LEMPI_LISTENER_DB="$D/absent2.db" sh "$APPLIANCE/lempi-db-recover" >/dev/null 2>&1
 assert_eq "$?" "0" "always exits 0, so a bad database never blocks the boot"
 
 # **`[PI-PRE-090]` The pre-split whole database, once the halves exist.**
@@ -167,7 +167,7 @@ ln -sf "$SH" "$NONE/sh"
 PY="$(PATH="$REALPATH" command -v python3 2>/dev/null || true)"
 [ -n "$PY" ] && ln -sf "$PY" "$SANE/python3"
 
-recover_pathless() { PATH="$1" LEMPI_DB="$2" LEMPI_LIBRARY_DB="$D/absent.db"     LEMPI_LISTENER_DB="$D/absent2.db" sh "$PI/lempi-db-recover" 2>&1; }
+recover_pathless() { PATH="$1" LEMPI_DB="$2" LEMPI_LIBRARY_DB="$D/absent.db"     LEMPI_LISTENER_DB="$D/absent2.db" sh "$APPLIANCE/lempi-db-recover" 2>&1; }
 
 if [ -n "$PY" ]; then
     # A healthy WAL database, recovered by python3 alone. Silence proves the
@@ -193,6 +193,6 @@ fi
 OUT=$(recover_pathless "$NONE" "$D/wal.db")
 assert_in "$OUT" "no sqlite3 and no python3" "names the missing tools instead of blaming the database"
 
-PATH="$NONE" LEMPI_DB="$D/wal.db" LEMPI_LIBRARY_DB="$D/absent.db"     LEMPI_LISTENER_DB="$D/absent2.db" sh "$PI/lempi-db-recover" >/dev/null 2>&1
+PATH="$NONE" LEMPI_DB="$D/wal.db" LEMPI_LIBRARY_DB="$D/absent.db"     LEMPI_LISTENER_DB="$D/absent2.db" sh "$APPLIANCE/lempi-db-recover" >/dev/null 2>&1
 assert_eq "$?" "0" "still exits 0 when no runner exists at all"
 teardown

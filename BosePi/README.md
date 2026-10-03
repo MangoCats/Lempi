@@ -45,6 +45,14 @@ state.
 | [`lempi-unlock-check.sh`](lempi-unlock-check.sh) + [`.service`](lempi-unlock-check.service) | the lock-in escape hatch, checked every boot | deployed by phase 3 | **Yes, fully** — first version called `raspi-config nonint do_overlayfs 1`, which silently did nothing once `[IMPL-BOS-165]`'s own fix was in place (`[IMPL-BOS-166]`); rewritten to edit `cmdline.txt` directly, then proven against a real enabled-to-disabled transition, not only the already-unlocked no-op case |
 | [`request-unlock.sh`](request-unlock.sh) | writes the C-side marker, asks twice | dev host, over SSH | Same as above — proven both ways now |
 
+**`[BOS-SET-010]` [`setup-bose.sh`](setup-bose.sh) is the record of the finished node**, not a step of the
+build: `--check` compares `bose`'s durable layer with this folder and with what
+every appliance has [`appliance/`](../appliance/README.md) `[APP-SET-020]`, and
+changes nothing. Written 2026-10-02; its first run found five differences, among
+them cloud-init never disabled on this card. The one difference between the
+appliances that buys something is here too: no PipeWire — the player opens the
+DAC through ALSA directly.
+
 **`bose` is playing, audibly, on a clean traceable build (`358c5b176833`), fully `--lock-in`'d, as of 2026-09-06.** A is overlay-protected; B and C are both genuinely mounted directly — `ro` and `rw` respectively, no overlay wrapper on either. Getting there found two real bugs in the lock-in mechanism itself, both in the same evening, both by checking `findmnt`'s actual output rather than trusting an exit code:
 
 - **`[IMPL-BOS-165]`**: `do_overlayfs 0`'s underlying implementation on this trixie-era image is Debian's own `overlayroot` package, not the historic Pi-specific mechanism reading the wrapper function had suggested — and its default (`recurse=1`) overlays **every** mount, not only A. B and C both came back wrapped in their own writable RAM layer on the first `--lock-in` attempt; `/var/lempi/listener.db` would have silently discarded every write on the next reboot — `[REQ-HW-120]` violated by the very mechanism meant to protect it. Fixed with `overlayroot=tmpfs:recurse=0`, now automatic in `finalize-bose.sh`.

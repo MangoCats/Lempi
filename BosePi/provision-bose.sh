@@ -283,12 +283,12 @@ step "zram-only swap, not zram+file  [IMPL-BOS-170]"
 # Since 2026-09-25 a tracked drop-in, stating the size as well as the
 # mechanism, rather than a sed on the package's own file: the size had been
 # whatever rpi-swap's defaults gave, recorded nowhere.
-[ -f BosePi/rpi-swap-lempi.conf ] || die "BosePi/rpi-swap-lempi.conf missing"
-scp -q BosePi/rpi-swap-lempi.conf "$HOST:/tmp/rpi-swap-lempi.conf" || die "upload failed"
+[ -f appliance/rpi-swap-lempi.conf ] || die "appliance/rpi-swap-lempi.conf missing"
+scp -q appliance/rpi-swap-lempi.conf "$HOST:/tmp/rpi-swap-lempi.conf" || die "upload failed"
 on "sudo install -D -m644 /tmp/rpi-swap-lempi.conf /etc/rpi/swap.conf.d/10-lempi.conf
     rm -f /tmp/rpi-swap-lempi.conf
     sudo systemctl daemon-reload"
-say "zram, 1x RAM, at most 2048 MiB (BosePi/rpi-swap-lempi.conf)"
+say "zram, 1x RAM, at most 2048 MiB (appliance/rpi-swap-lempi.conf)"
 say "verify after the next boot: systemctl cat dev-zram0.swap | grep zram)"
 say "should say '(zram)', not '(zram+file)', with no rpi-setup-loop binding"
 

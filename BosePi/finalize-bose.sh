@@ -67,7 +67,7 @@ if [ "$MODE" = "--start" ]; then
     # crash loop lempi-db-recover exists to prevent. Ship them BEFORE the unit
     # that names them; half a mechanism is the recurring mistake here
     # [BOS-RUN-085].
-    scp -q LempiPi/lempi-preflight LempiPi/lempi-db-recover "$HOST:/tmp/" ||
+    scp -q appliance/lempi-preflight appliance/lempi-db-recover "$HOST:/tmp/" ||
         die "scp helpers failed"
     for h in lempi-preflight lempi-db-recover; do
         run "install $h" ssh "$HOST" "sudo install -m755 /tmp/$h /usr/local/bin/$h"

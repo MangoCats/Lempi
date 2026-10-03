@@ -35,14 +35,12 @@
 # Wi-Fi credentials are the imager's, and are never in this repository.
 # journald needs a setting of its own, and until 2026-09-25 lacked one: the
 # image's `Storage=volatile` kept the journal in RAM, so binding /var/log onto
-# STATE was not enough -- see journald-lempi.conf. (This header said the
+# STATE was not enough -- see appliance/journald-lempi.conf. (This header said the
 # opposite when first written; the fleet audit that day found it wrong.)
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 HOST="${HOST:-pi@lp3-wifi}"
-WIFI_COUNTRY="${WIFI_COUNTRY:-US}"
-TIMEZONE="${TIMEZONE:-America/New_York}"
 NAME=lempiplay3
 CFG=/boot/firmware/config.txt
 MODE=check
@@ -53,62 +51,14 @@ case "${1:---check}" in
     *) echo "usage: setup-lp3.sh [--check|--go|--lock]" >&2; exit 2 ;;
 esac
 
-DIFFER=0
-on()    { ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" "$@"; }
-say()   { printf '%s\n' "$*"; }
-ok()    { printf '  %-58s ok\n' "$1"; }
-did()   { printf '  %-58s CHANGED\n' "$1"; }
-differ(){ DIFFER=$((DIFFER + 1)); printf '  %-58s DIFFERS%s\n' "$1" "${2:+ -- $2}"; }
-die()   { printf 'setup-lp3: %s\n' "$*" >&2; exit 1; }
-
-# item NAME CHECK [APPLY] -- CHECK and APPLY are commands run on the node.
-item() {
-    if on "$2" >/dev/null 2>&1; then ok "$1"; return; fi
-    if [ "$MODE" = go ] && [ -n "${3:-}" ]; then
-        if on "$3" >/dev/null 2>&1 && on "$2" >/dev/null 2>&1; then did "$1"
-        else differ "$1" "apply failed"; fi
-    else
-        differ "$1" "${4:-}"
-    fi
-}
-
-# file_item NAME LOCAL REMOTE MODE -- the node's file must be this file.
-file_item() {
-    local want have
-    [ -f "$2" ] || die "$2 missing from the repository"
-    want=$(md5sum < "$2" | cut -c1-32)
-    have=$(on "test -f '$P$3' && md5sum < '$P$3' | cut -c1-32")
-    if [ "$want" = "$have" ]; then ok "$1"; return; fi
-    if [ "$MODE" = go ]; then
-        if scp -q "$2" "$HOST:/tmp/setup-lp3.part" \
-           && on "sudo install -D -m $4 /tmp/setup-lp3.part '$3' && rm -f /tmp/setup-lp3.part"; then
-            did "$1"
-        else
-            differ "$1" "apply failed"
-        fi
-    elif [ -z "$have" ]; then
-        differ "$1" "absent"
-    else
-        differ "$1" "not this repository's file"
-    fi
-}
+# The engine and what every appliance has [APP-SET-010]; this file is what
+# lp3-wifi has besides.
+SETUP_NAME=setup-lp3
+. appliance/setup-lib.sh
+. appliance/common.sh
 
 # ------------------------------------------------------------ preconditions
-say "setup-lp3 $MODE against $HOST"
-on true || die "$HOST is not reachable; nothing was checked"
-ROOTFS=$(on "findmnt -no FSTYPE /")
-# Say what the target is before acting on it [GDE-DEP-060]. On an overlay
-# root the durable files are under /media/root-ro, and those are what is
-# checked [GDE-DEP-070]; a write to / there would vanish at the next reboot
-# [IMPL-BOS-185], so --go refuses.
-if [ "$ROOTFS" = overlay ]; then
-    P=/media/root-ro
-    say "$HOST has an OVERLAY root: checking the durable layer under $P"
-    [ "$MODE" = check ] || die "--$MODE needs a writable root. On a locked card use --check, and build/install-config.sh for a single file [LP3-SET-020]."
-else
-    P=""
-    say "$HOST has a writable root ($ROOTFS)"
-fi
+setup_target
 PT=$(on "sudo blkid -s PTUUID -o value /dev/mmcblk0")
 [ -n "$PT" ] || die "could not read the card's partition-table id"
 say "card partition-table id $PT"
@@ -143,30 +93,20 @@ item "hostname $NAME" "test \"\$(cat $P/etc/hostname)\" = $NAME" \
      "echo $NAME | sudo tee /etc/hostname && sudo hostname $NAME"
 item "/etc/hosts names it" "grep -q '^127.0.1.1[[:space:]]*$NAME\$' $P/etc/hosts" \
      "sudo sed -i 's/^127\.0\.1\.1.*/127.0.1.1\t$NAME/' /etc/hosts"
-# The imager set it; stated here so the script is the record [PI3-FOUND-770].
-item "Wi-Fi country $WIFI_COUNTRY" \
-     "grep -q 'cfg80211.ieee80211_regdom=$WIFI_COUNTRY' /boot/firmware/cmdline.txt" \
-     "sudo raspi-config nonint do_wifi_country $WIFI_COUNTRY"
 
-# pi's own SSH key, for reaching other machines -- not the host keys. No node
-# had one until 2026-09-25; the maintainer asked that every node's script make
-# one. Here, before the binds below: on a new card it is made in /home/pi and
-# copied onto STATE with the rest of it; once the bind is up, /home/pi *is*
-# STATE, so it is checked there directly, not under $P. Made once, never
-# replaced -- a new key would silently undo wherever the old one was
-# authorised.
-item "pi's ed25519 SSH key" "test -f /home/pi/.ssh/id_ed25519 && test -f /home/pi/.ssh/id_ed25519.pub" \
-     "ssh-keygen -q -t ed25519 -N '' -C pi@$NAME -f /home/pi/.ssh/id_ed25519"
+# Everything every appliance has, but the items about STATE and LIBRARY,
+# which follow the binds below. pi's SSH key is in here, so on a new card it
+# is made in /home/pi before that is copied onto STATE.
+common_base_items
 
 # ------------------------------------------------------------------ packages
 say ""
 say "packages"
-# overlayroot for the root, f2fs-tools for STATE, chrony for the fleet clock,
-# python3 for lempi-db-recover [PI-PRE-030], sqlite3 for Vipunen's remote
-# tooling (`ssh <host> sqlite3 -json ...`), as bose and the other appliances
-# have it [BOS-IMG-020]. Missing here until 2026-10-02, with no reason but
-# that the list never had it: this node's queries ran through python3's
-# fallback, and the Export page's diff failed on it when a table was new.
+# overlayroot for the root and f2fs-tools for STATE; chrony, python3 and
+# sqlite3 are every appliance's (appliance/common.sh). sqlite3 was missing
+# here until 2026-10-02, with no reason but that this list never had it:
+# this node's queries ran through python3's fallback, and the Export page's
+# diff failed on it when a table was new.
 #
 # No mpd, by the maintainer's decision of 2026-10-02: this node plays through
 # the player alone and has no use for the MPD backend [SPEC-BK-030].
@@ -186,7 +126,7 @@ say "packages"
 # came with the image; they are listed so the record says so. They went onto
 # the durable layer by apt-get in overlayroot-chroot, with the live
 # resolv.conf's nameserver lent for the run and the layer's own put back.
-for p in overlayroot f2fs-tools chrony python3 sqlite3 \
+for p in overlayroot f2fs-tools \
          bluez alsa-utils pipewire pipewire-pulse pipewire-alsa wireplumber \
          libspa-0.2-bluetooth upower python3-dbus python3-gi; do
     item "package $p" "dpkg --admindir=$P/var/lib/dpkg -s $p" \
@@ -233,30 +173,15 @@ for pair in log:/var/log etc-ssh:/etc/ssh home-pi:/home/pi \
     item "STATE holds /var/lempi/$d" "test -d /var/lempi/$d" \
          "sudo mkdir -p /var/lempi/$d && sudo cp -a $src/. /var/lempi/$d/"
 done
-# What moved onto STATE must keep its owner. bose's provisioning once handed
-# pi its whole /etc/ssh and /var/log with a recursive chown of STATE
-# (fixed 2026-09-25); checked on the live paths, which *are* STATE here.
-item "/etc/ssh all owned by root" "test -z \"\$(sudo find /etc/ssh -not -user root)\"" \
-     "sudo chown -R root:root /etc/ssh"
-item "/var/log owned by root" "test \"\$(stat -c %U /var/log)\" = root" \
-     "sudo chown root:root /var/log"
+# What every appliance has about STATE and LIBRARY: ownership, sudoers,
+# nothing world-writable (appliance/common.sh). Checked on the live paths,
+# which *are* STATE here.
+common_data_items
+# lp3-wifi binds NetworkManager's saved networks onto STATE, and what moved
+# there must keep its owner.
 item "saved networks' directory owned by root" \
      "test \"\$(stat -c %U /etc/NetworkManager/system-connections)\" = root" \
      "sudo chown root:root /etc/NetworkManager/system-connections"
-# pi's passwordless sudo: made at image time here, typed by hand on bose
-# [IMPL-BOS-090b], where it came out 644. 440 is what every other sudoers file
-# in the fleet is.
-item "sudoers: pi's drop-in is root, mode 440" \
-     "test \"\$(stat -c %U:%a $P/etc/sudoers.d/010-pi-nopasswd)\" = root:440" \
-     "sudo chmod 440 /etc/sudoers.d/010-pi-nopasswd"
-item "/var/lempi owned by pi" "test \"\$(stat -c %U /var/lempi)\" = pi" "sudo chown pi:pi /var/lempi"
-# Nothing on STATE or LIBRARY writable by everyone. A copy from a Windows
-# drive arrives 0777 under `rsync -a`, which is how bose's and lempi02w's
-# libraries ended up (2026-09-25); symlinks and sticky directories excepted.
-item "nothing world-writable on STATE or LIBRARY" \
-     "test -z \"\$(sudo find /var/lempi /srv/library -xdev -perm -0002 ! -type l ! -perm -1000 -print -quit)\"" \
-     "sudo find /var/lempi /srv/library -xdev -type d -perm -0002 ! -perm -1000 -exec chmod 755 {} + ; sudo find /var/lempi /srv/library -xdev -type f -perm -0002 -exec chmod 644 {} +"
-item "/srv/library owned by pi" "test \"\$(stat -c %U /srv/library)\" = pi" "sudo chown pi:pi /srv/library"
 
 # -------------------------------------------------------------------- overlay
 say ""
@@ -278,7 +203,7 @@ say ""
 say "services"
 file_item "lempi.service" LempiPlay3/lempi.service /etc/systemd/system/lempi.service 644
 file_item "fbui.service" LempiPlay3/fbui.service /etc/systemd/system/fbui.service 644
-for u in lempi fbui chrony; do
+for u in lempi fbui; do
     item "$u enabled" "test -L $P/etc/systemd/system/multi-user.target.wants/$u.service" \
          "sudo systemctl enable $u.service"
 done
@@ -322,16 +247,10 @@ file_item "PipeWire: 44.1 kHz, lempi02w's quantum" \
 # fbui owns tty1 [LP3-REP-030]; a login prompt would draw over it.
 item "getty on tty1 disabled" "! test -e $P/etc/systemd/system/getty.target.wants/getty@tty1.service" \
      "sudo systemctl disable getty@tty1.service"
-# Disabled by hand on 2026-09-08, after the imager's first boot had done its
-# work; otherwise it re-runs its datasource on every boot.
-item "cloud-init disabled" "test -e $P/etc/cloud/cloud-init.disabled" \
-     "sudo touch /etc/cloud/cloud-init.disabled"
 
 # --------------------------------------------------------------------- helpers
 say ""
 say "helpers and binaries"
-file_item "lempi-preflight" LempiPi/lempi-preflight /usr/local/bin/lempi-preflight 755
-file_item "lempi-db-recover" LempiPi/lempi-db-recover /usr/local/bin/lempi-db-recover 755
 # The speaker helpers, as lempi02w has them [LP3-BT-010].
 file_item "lempi-common.sh" LempiPi/lempi-common.sh /usr/local/lib/lempi-common.sh 644
 file_item "lempi-wait-sink" LempiPi/lempi-wait-sink /usr/local/bin/lempi-wait-sink 755
@@ -344,41 +263,7 @@ item "lempi installed" "test -x $P/usr/local/bin/lempi" "" \
 item "fbui installed" "test -x $P/usr/local/bin/fbui" "" \
      "build/deploy-appliance.sh $HOST (installs fbui where fbui.service exists) [GDE-DEP-120]"
 
-# ------------------------------------------------------------ clock and swap
-say ""
-say "clock and swap"
-# Rendered here from the template and `fleet/targets.env` `[SPEC-FCP-030]`, so
-# the node is compared with -- and receives -- the finished file.
-LP3_SOURCES=$(mktemp)
-build/render-fleet-sources.sh "$LP3_SOURCES" >/dev/null || die "the fleet sources could not be rendered"
-file_item "chrony fleet sources [GDE-ECHO-300]" "$LP3_SOURCES" \
-    /etc/chrony/sources.d/lempi-fleet.sources 644
-rm -f "$LP3_SOURCES"
-# Debian's own pool stays on, as one more fallback every node shares -- the
-# maintainer's choice, 2026-09-25. This card always had it; the other two had
-# it commented out by hand, and now have it back.
-item "chrony distribution pool on" \
-     "grep -q '^pool 2\.debian\.pool\.ntp\.org' $P/etc/chrony/chrony.conf" \
-     "sudo sed -i 's/^#.*\(pool 2\.debian\.pool\.ntp\.org\)/\1/' /etc/chrony/chrony.conf"
-# The household's zone, as the other nodes have. The image came up in
-# Europe/London and nothing here said otherwise, so lp3's listener recorded
-# +60 minutes where every other node recorded -240, and anything that follows
-# the clock ran five hours off [FLT-ISS-030]. Found 2026-09-26.
-item "timezone $TIMEZONE" \
-     "test \"\$(readlink $P/etc/localtime)\" = /usr/share/zoneinfo/$TIMEZONE && test \"\$(cat $P/etc/timezone)\" = $TIMEZONE" \
-     "sudo timedatectl set-timezone $TIMEZONE && echo $TIMEZONE | sudo tee /etc/timezone"
-file_item "journal kept on STATE (overrides the image's volatile)" \
-    LempiPlay3/journald-lempi.conf /etc/systemd/journald.conf.d/lempi.conf 644
-file_item "swap: zram, 1x RAM, <= 2 GiB" LempiPlay3/rpi-swap-lempi.conf \
-    /etc/rpi/swap.conf.d/10-lempi.conf 644
-
-say ""
-if [ "$DIFFER" -eq 0 ]; then
-    say "All items as recorded."
-else
-    say "$DIFFER item(s) differ from this script."
-fi
-[ "$DIFFER" -eq 0 ]
+setup_finish
 
 # --check against the live card, 2026-09-25: first run, every item agreed but
 # two -- no swap at all (the [IMPL-BOS-170] fault) and Debian's pool, which

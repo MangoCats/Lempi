@@ -184,8 +184,9 @@ section used to say the journal had been restored to `Storage=volatile` after
 a spell of investigation. It had not: `lempi02w` has run `Storage=persistent`,
 `SystemMaxUse=64M`, `MaxRetentionSec=1week` since 2026-09-09, set by hand in
 `/etc/systemd/journald.conf` and written by no script. Captured 2026-09-25 as
-[`journald-lempi.conf`](journald-lempi.conf), which `setup-appliance.sh`
-installs as a drop-in, so a rebuilt card gets what this one runs; the hand
+[`journald-lempi.conf`](../appliance/journald-lempi.conf), installed as a drop-in
+-- by `setup-appliance.sh` then, by `appliance/common.sh` for every appliance
+since 2026-10-02 -- so a rebuilt card gets what this one runs; the hand
 edit in the main file is left in place, identical and now redundant.
 
 Why on, and not only for a mystery: the appliance is power-cut on every

@@ -59,7 +59,8 @@ for prog in $(sed -n 's|^ExecStart\(Pre\)\{0,1\}=/usr/local/bin/\([a-z-]*\).*|\2
     # `lempi` itself is the compiled player, cross-built and deployed
     # separately; everything else is a script that ships beside this setup.
     [ "$prog" = lempi ] && continue
-    [ -f "$PI/$prog" ] || [ -f "$PI/$prog.sh" ] || BADEXEC="$BADEXEC $prog"
+    [ -f "$PI/$prog" ] || [ -f "$PI/$prog.sh" ] || [ -f "$APPLIANCE/$prog" ] \
+        || BADEXEC="$BADEXEC $prog"
 done
 if [ -z "$BADEXEC" ]; then
     ok "every unit's ExecStart/ExecStartPre names a helper that ships here"

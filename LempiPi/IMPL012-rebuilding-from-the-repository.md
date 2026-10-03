@@ -63,3 +63,11 @@ them automatically and behaves identically — see
 `[IMPL-AUD-005]` in section 5, which records what actually makes this a
 Bluetooth-only player.
 
+**`[PI-SET-090]` Since 2026-10-02 the entry point is
+[`setup-lempi02w.sh`](setup-lempi02w.sh)**, run on the development host: it
+applies what every appliance has from [`appliance/`](../appliance/README.md)
+`[APP-SET-020]`, then stages `setup-appliance.sh` and its files on the node and
+runs it there. `setup-appliance.sh` alone no longer sets the clock, the
+journal, swap or the recovery helpers. `--check` covers the common items and
+the unit; `setup-appliance.sh` has no check mode, and the script says so
+rather than counting its items as agreed.

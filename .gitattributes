@@ -14,6 +14,7 @@
 # a different machine either.
 *.sh            text eol=lf
 LempiPi/lempi-*    text eol=lf
+appliance/lempi-*  text eol=lf
 
 # The same argument, for the files systemd and its neighbours read. Every
 # `.service`, `.timer` and `.conf` in this tree is consumed on the Pi and

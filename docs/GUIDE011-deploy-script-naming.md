@@ -74,7 +74,10 @@ about to be touched without opening the file.
 development host and reaches out to something else*. A machine folder
 (`BosePi/`, `LempiPi/`, `SmartPC/`) means *this material is about that machine
 and should not be pointed anywhere else*. Nothing generic belongs in a machine
-folder, and nothing machine-specific belongs in `build/`.
+folder, and nothing machine-specific belongs in `build/`. Since 2026-10-02
+[`appliance/`](../appliance/README.md) means *installed on every appliance*:
+the shared setup engine, the items all three have, and the helpers they share
+— which until then lived in `LempiPi/` because lempi02w had them first.
 
 **`[GDE-DEP-050]` Irreversible steps keep an explicit verb and a second
 confirmation.** Already the practice worth preserving —
