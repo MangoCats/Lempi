@@ -105,6 +105,29 @@ case "$ver" in
     *) fail "binary reports '$ver', which is not $(echo "$want" | cut -c1-12) -- it did not rebuild" ;;
 esac
 
+# ---- import_bundle, for the Export page's sends [SPEC-STAR-094] -----------
+# A source host that keeps music is a speaker a bundle can be sent to, and
+# send_bundle.py asks `command -v import_bundle` over a non-interactive ssh,
+# whose PATH has /usr/local/bin and nothing of $HOME. So it is built here and
+# linked there -- a link, not a copy, so every later update keeps it current.
+# Missing on smartboardpc and teacherslounge until 2026-10-02, when they were
+# made speakers.
+cargo build --release --manifest-path player/Cargo.toml --bin import_bundle 2>&1 \
+    | grep -vE '^\s+Compiling|^\s+Finished|^warning|^\s+-->|^\s+\||^\s+=|^[0-9]+ \|' \
+    | grep -v '^$' | tail -5
+[ "${PIPESTATUS[0]}" -eq 0 ] || fail "import_bundle build failed"
+ib="$(pwd)/player/target/release/import_bundle"
+if [ "$(readlink /usr/local/bin/import_bundle 2>/dev/null)" != "$ib" ]; then
+    sudo -n ln -sfn "$ib" /usr/local/bin/import_bundle \
+        || fail "could not link /usr/local/bin/import_bundle (needs passwordless sudo)"
+    say "linked /usr/local/bin/import_bundle -> $ib"
+fi
+ibver=$(import_bundle --version 2>&1 | head -1)
+case "$ibver" in
+    *"$(echo "$want" | cut -c1-12)"*) say "import_bundle reports: $ibver" ;;
+    *) fail "import_bundle reports '$ibver', which is not $(echo "$want" | cut -c1-12)" ;;
+esac
+
 # ---- a player running from this checkout (see the header) -----------------
 bin="$(pwd)/player/target/release/lempi"
 # Processes still on the file the build replaced: the kernel names their
