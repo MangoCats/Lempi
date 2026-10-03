@@ -257,9 +257,13 @@ function showMissing(panel, info, job) {
     // in the speaker's own music folder before the import binds it, and a
     // read-only library (bose's) is written only inside attended-import.sh's
     // window -- found 2026-10-01, when the first send's commands could not run.
-    S.el('pre', { class: 'list', style: 'white-space:pre-wrap;user-select:all', text:
-      `python "${info.send_tool}" "${res.out_dir}" ${info.ssh}\n`
-      + `python "${info.send_tool}" "${res.out_dir}" ${info.ssh} --apply` }));
+    // The speaker's own library and music folder, named: the defaults are the
+    // Pis', and smartboardpc and teacherslounge have neither [SPEC-STAR-094].
+    S.el('pre', { class: 'list', style: 'white-space:pre-wrap;user-select:all', text: (() => {
+      const own = ` --library "${info.library}"` + (info.audio_root ? ` --audio-root "${info.audio_root}"` : '');
+      return `python "${info.send_tool}" "${res.out_dir}" ${info.ssh}${own}\n`
+        + `python "${info.send_tool}" "${res.out_dir}" ${info.ssh}${own} --apply`;
+    })() }));
   const term = S.el('button', { class: 'chip', text: 'open a terminal here' });
   const said = S.el('span', { style: 'color:var(--dim);font-size:.85rem;align-self:center' });
   term.onclick = async () => {

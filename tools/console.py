@@ -74,7 +74,7 @@ def music_folder(conn) -> str | None:
     return os.path.normpath(common)
 
 
-def peer_deploy(remote: str) -> dict:
+def peer_deploy(remote: str, audio_root: str | None = None) -> dict:
     """What a speaker's commands need, from its configured `user@host:/path`
     `[SPEC-STAR-090]`: where to send a bundle, which library to import it into,
     and the player to ask to reload. The incoming folder sits beside the
@@ -87,7 +87,9 @@ def peer_deploy(remote: str) -> dict:
             "url": f"http://{ssh.rpartition('@')[2]}:{port}",
             # The one command that sends and imports a bundle, by its full path:
             # the terminal the page opens starts in the bundle's folder.
-            "send_tool": os.path.join(REPO_ROOT, "tools", "send_bundle.py")}
+            "send_tool": os.path.join(REPO_ROOT, "tools", "send_bundle.py"),
+            # Where the audio goes, when not beside the library [SPEC-STAR-094].
+            "audio_root": audio_root}
 
 
 def fleet_targets():
@@ -1634,12 +1636,22 @@ class Handler(BaseHTTPRequestHandler):
                 # (`[IMPL002 §7.4]`) has a second path at all -- absent or
                 # blank both mean "same file as remote", not an error.
                 remote_listener = (payload.get("remote_listener") or "").strip() or None
+                # Optional too: the speaker's own music folder, where a send
+                # puts the audio [SPEC-STAR-094]. Absent keeps what is
+                # recorded; blank clears it, back to beside the library.
+                audio_root = payload.get("audio_root")
+                if audio_root is not None:
+                    audio_root = str(audio_root).strip()
+                    if audio_root and not audio_root.startswith("/"):
+                        return self.send_json({"error": "audio_root must be an absolute path on the speaker"},
+                                              code=400)
                 if not name or not remote or ":" not in remote:
                     return self.send_json(
                         {"error": "expected {name, remote: user@host:/path/to/library.db, "
                                   "remote_listener: user@host:/path/to/listener.db (optional)}"}, code=400)
-                STATE["jobs"].upsert_peer(name, remote, remote_listener)
-                return self.send_json({"name": name, "remote": remote, "remote_listener": remote_listener})
+                STATE["jobs"].upsert_peer(name, remote, remote_listener, audio_root)
+                return self.send_json({"name": name, "remote": remote, "remote_listener": remote_listener,
+                                       "audio_root": audio_root})
             if p.startswith("/api/peers/") and p.endswith("/delete"):
                 name = p.split("/")[3]
                 STATE["jobs"].delete_peer(name)
@@ -1714,7 +1726,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"error": "not a bundle built for that speaker"}, code=400)
                 job = STATE["jobs"].submit("send-bundle", json.dumps(
                     {"peer": name, "remote": peers[name]["remote"], "bundle": bundle,
-                     "apply": req.get("apply") is True}))
+                     "apply": req.get("apply") is True,
+                     # The speaker's own music folder, as configured [SPEC-STAR-094].
+                     "audio_root": peers[name].get("audio_root")}))
                 return self.send_json({"job_id": job})
             if p == "/api/export/missing":
                 # [SPEC-STAR-090]: for each speaker named, what it lacks, as a
@@ -1731,7 +1745,8 @@ class Handler(BaseHTTPRequestHandler):
                 for n in names:
                     job = STATE["jobs"].submit("export-missing", json.dumps(
                         {"peer": n, "remote": peers[n]["remote"]}))
-                    out.append({"peer": n, "job_id": job, **peer_deploy(peers[n]["remote"])})
+                    out.append({"peer": n, "job_id": job,
+                                **peer_deploy(peers[n]["remote"], peers[n].get("audio_root"))})
                 return self.send_json({"jobs": out})
             if p == "/api/export/bundle":
                 # A GUI over `export_bundle.py` `[IMPL007 Stage 4]`. `q`

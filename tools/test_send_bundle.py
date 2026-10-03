@@ -46,8 +46,9 @@ def bundle(tmp):
 class Fake:
     """Answers the speaker's questions; records what was asked, in order."""
 
-    def __init__(self, ro=False, imported=2, awaiting=0, tool=True):
+    def __init__(self, ro=False, imported=2, awaiting=0, tool=True, root_exists=True, free=500 << 30):
         self.calls, self.ro, self.imported, self.awaiting, self.tool = [], ro, imported, awaiting, tool
+        self.root_exists, self.free = root_exists, free
 
     def __call__(self, host, cmd, stdin=None):
         self.calls.append((cmd, stdin))
@@ -55,6 +56,10 @@ class Fake:
             return 0, "/usr/local/bin/import_bundle" if self.tool else "MISSING"
         if cmd.startswith("findmnt"):
             return 0, f"/srv/library ext4 {'ro' if self.ro else 'rw'},noatime"
+        if cmd.startswith("test -d"):
+            return (0 if self.root_exists else 1), ""
+        if cmd.startswith("df "):
+            return 0, f"/dev/sda1 2000000000000 1 {self.free} 99% /media/mango/PortableSSD"
         if cmd.startswith("import_bundle"):
             return 0, f"  imported  {self.imported}\n  already   0\n  awaiting  {self.awaiting}\n  corrupt   0"
         return 0, ""
@@ -199,6 +204,27 @@ def main() -> int:
         check(rc == 0 and names == ["payload.json.gz"]
               and staged[0].endswith("gunzip -f /tmp/lempi-bundle-missing-speaker-a-9/payload.json.gz"),
               f"the small one sent, opened there: {names} {staged[0]}")
+
+        print("a speaker's own music folder [SPEC-STAR-094]: used, and checked before anything is sent")
+        music = "/media/mango/PortableSSD/Media/Music"
+        f = Fake()
+        rc, _ = run([b, "pi@speaker-c", "--library", "/var/lempi/library.db", "--audio-root", music, "--apply"], f)
+        cmds = [c for c, _ in f.calls]
+        check(rc == 0 and any(c.startswith(f"mkdir -p {music}") for c in cmds)
+              and any("--audio-root " + music in c for c in cmds if c.startswith("import_bundle")),
+              f"copied into it and bound there: {cmds}")
+        f = Fake(root_exists=False)
+        rc, _ = run([b, "pi@speaker-c", "--library", "/var/lempi/library.db", "--audio-root", music, "--apply"], f)
+        check(rc == 1 and not any(c.startswith(("mkdir", "tar", "import_bundle")) for c, _ in f.calls),
+              f"absent -- an unmounted drive -- refused, nothing sent: {[c for c, _ in f.calls]}")
+        f = Fake(free=(1 << 30) // 2)
+        rc, _ = run([b, "pi@speaker-c", "--apply"], f)
+        check(rc == 1 and not any(c.startswith(("mkdir", "tar", "import_bundle")) for c, _ in f.calls),
+              "too little room after the send: refused, nothing sent")
+        f = Fake(ro=True)
+        seen.clear()
+        rc, _ = run([b, "pi@speaker-b", "--audio-root", music, "--apply"], f, attended)
+        check(seen and seen[-1][-2:] == ["--audio-root", music], f"the window is given the folder too: {seen[-1:]}")
 
     test_progress()
 

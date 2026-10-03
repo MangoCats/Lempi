@@ -128,6 +128,15 @@ version of this section read `[SPEC-SUI-110]` as "Vipunen reaches no host to
 change it", and printed `rsync` commands for a person to paste; Windows has no
 `rsync`, and those commands also imported the audio where it was staged.)*
 
+**`[SPEC-STAR-094]` A speaker's music folder is its own, and is checked before a
+send.** The Pis keep their music beside the library, which is the default; a
+speaker that does not -- `smartboardpc`, on a USB drive mounted on demand;
+`teacherslounge`, in `~/Music` -- has its folder recorded with it
+(`sync_peers.audio_root`, set where a node is added). A recorded folder must
+exist, or nothing is sent: on a drive not mounted, writing there would fill the
+disk under its mount point. And the audio must fit with a GiB to spare, on
+every speaker -- smartboardpc's drive had 11 GB free of 1.9 TB, 2026-10-02.
+
 Found building it: every remote read from the desktop decoded the reply in the
 Windows code page, so the first curly apostrophe in a speaker's catalogue
 crashed `mesh_diff.py` -- and the Mesh page's diff with it. `remote_peek._ssh`

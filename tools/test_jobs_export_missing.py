@@ -241,6 +241,19 @@ def test_send(tmp):
     wait_for(r, r.submit("send-bundle", json.dumps(dict(target, apply=True))))
     stage, argv = seen[-1]
     check(stage == "send" and argv[-1] == "--apply", f"the real send: {stage} {argv}")
+    # [SPEC-STAR-094]: a speaker's own music folder reaches the tool.
+    wait_for(r, r.submit("send-bundle", json.dumps(dict(target, audio_root="/media/x/Music"))))
+    stage, argv = seen[-1]
+    check(argv[-2:] == ["--audio-root", "/media/x/Music"], f"the music folder passed: {argv}")
+
+    print("a speaker's music folder: recorded, kept by a caller that does not know of it, cleared by ''")
+    r.upsert_peer("speaker-c", "pi@speaker-c:/var/lempi/library.db", None, "/media/x/Music")
+    r.upsert_peer("speaker-c", "pi@speaker-c:/var/lempi/library.db", "/var/lempi/listener.db")
+    got = {p["name"]: p for p in r.list_peers()}["speaker-c"]
+    check(got["audio_root"] == "/media/x/Music" and got["remote_listener"] == "/var/lempi/listener.db",
+          f"kept: {got}")
+    r.upsert_peer("speaker-c", "pi@speaker-c:/var/lempi/library.db", None, "")
+    check({p["name"]: p for p in r.list_peers()}["speaker-c"]["audio_root"] is None, "cleared")
 
 
 def test_send_route(tmp):
@@ -250,6 +263,7 @@ def test_send_route(tmp):
     library(db)
     runner = jobmod.Runner(db, os.path.join(tmp, "sroute.console.db"))
     runner.upsert_peer("speaker-a", "pi@speaker-a:/srv/library/library.db")
+    runner.upsert_peer("speaker-c", "pi@speaker-c:/var/lempi/library.db", None, "/media/x/Music")
     submitted = []
     runner.submit = lambda kind, target: submitted.append((kind, json.loads(target))) or 1
     console.STATE["path"] = console.STATE["library"] = db
@@ -274,7 +288,7 @@ def test_send_route(tmp):
         st, _ = post({"peer": "speaker-a", "bundle": good})
         check(st == 200 and submitted[-1] == ("send-bundle", {
             "peer": "speaker-a", "remote": "pi@speaker-a:/srv/library/library.db",
-            "bundle": os.path.abspath(good), "apply": False}), f"a dry run unless asked: {submitted}")
+            "bundle": os.path.abspath(good), "apply": False, "audio_root": None}), f"a dry run unless asked: {submitted}")
         st, _ = post({"peer": "speaker-a", "bundle": good, "apply": "yes"})
         check(st == 200 and submitted[-1][1]["apply"] is False, "apply only when exactly true")
         st, _ = post({"peer": "speaker-a", "bundle": good, "apply": True})

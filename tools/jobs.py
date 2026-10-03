@@ -96,6 +96,9 @@ CREATE TABLE IF NOT EXISTS sync_peers (
 # serve both halves from the one path `remote` already carries.
 _MIGRATIONS = [
     "ALTER TABLE sync_peers ADD COLUMN remote_listener TEXT",
+    # A speaker's own music folder, where a send puts the audio
+    # [SPEC-STAR-094]. NULL is the Pis' layout: `audio` beside the library.
+    "ALTER TABLE sync_peers ADD COLUMN audio_root TEXT",
 ]
 
 # Stage 0 ran these by hand in this order and the transcript is the reference
@@ -337,17 +340,21 @@ class Runner:
     def list_peers(self) -> list:
         db = self._db()
         rows = [dict(r) for r in db.execute(
-            "SELECT name, remote, remote_listener, enabled FROM sync_peers ORDER BY name")]
+            "SELECT name, remote, remote_listener, enabled, audio_root FROM sync_peers ORDER BY name")]
         db.close()
         return rows
 
-    def upsert_peer(self, name: str, remote: str, remote_listener: str | None = None) -> None:
+    def upsert_peer(self, name: str, remote: str, remote_listener: str | None = None,
+                    audio_root: str | None = None) -> None:
+        """`audio_root` None leaves the one recorded alone -- a caller that
+        does not know of it must not erase it; "" clears it."""
         db = self._db()
         db.execute(
-            "INSERT INTO sync_peers (name, remote, remote_listener) VALUES (?1, ?2, ?3) "
+            "INSERT INTO sync_peers (name, remote, remote_listener, audio_root) VALUES (?1, ?2, ?3, NULLIF(?4, '')) "
             "ON CONFLICT(name) DO UPDATE SET remote=excluded.remote, "
-            "remote_listener=excluded.remote_listener",
-            (name, remote, remote_listener))
+            "remote_listener=excluded.remote_listener, "
+            "audio_root=CASE WHEN ?4 IS NULL THEN sync_peers.audio_root ELSE NULLIF(?4, '') END",
+            (name, remote, remote_listener, audio_root))
         db.commit()
         db.close()
 
@@ -1472,6 +1479,9 @@ class Runner:
         host, _, library = payload["remote"].partition(":")
         argv = [sys.executable, os.path.join(tools, "send_bundle.py"), payload["bundle"], host,
                 "--library", library] + (["--apply"] if payload.get("apply") else [])
+        if payload.get("audio_root"):
+            # The speaker's own music folder [SPEC-STAR-094].
+            argv += ["--audio-root", payload["audio_root"]]
         stage = "send" if payload.get("apply") else "check"
         self._emit(job_id, "stage", stage, stage=stage)
         code, _ = self._spawn(job_id, stage, argv)

@@ -77,6 +77,8 @@
     <input type="search" id="new-peer-name" placeholder="name, e.g. {{EXAMPLE_PEER}}" style="max-width:9rem">
     <input type="search" id="new-peer-remote" placeholder="user@host:/path/to/library.db" style="min-width:20rem">
     <input type="search" id="new-peer-listener" placeholder="listener.db path, only if split" style="min-width:18rem">
+    <!-- [SPEC-STAR-094]: where a send puts the audio, if not beside the library -->
+    <input type="search" id="new-peer-audio" placeholder="music folder, if not beside the library" style="min-width:18rem">
     <button class="chip" id="add-peer">add node</button>
   </div>
   <div class="controls">
@@ -233,7 +235,8 @@ function peerRow(p) {
   return S.el('tr', {},
     S.el('td', {}, S.el('b', { text: p.name })),
     S.el('td', { style: 'font:12px var(--mono);color:var(--dim)' },
-      p.remote + (p.remote_listener ? '  (+ ' + p.remote_listener + ')' : '')),
+      p.remote + (p.remote_listener ? '  (+ ' + p.remote_listener + ')' : '')
+        + (p.audio_root ? '  music: ' + p.audio_root : '')),
     S.el('td', { style: `text-align:center;color:${dotColour}`, title: dotTitle }, dot),
     S.el('td', { style: 'text-align:center' }, push),
     S.el('td', { style: 'text-align:center' }, pull),
@@ -268,18 +271,20 @@ document.getElementById('add-peer').onclick = async () => {
   const name = document.getElementById('new-peer-name').value.trim();
   const remote = document.getElementById('new-peer-remote').value.trim();
   const listener = document.getElementById('new-peer-listener').value.trim();
+  const audio = document.getElementById('new-peer-audio').value.trim();
   if (!name || !remote) {
     return S.fail('#sync-result', new Error(
       'a node needs both a name and a user@host:/path address'));
   }
   const r = await (await fetch('/api/peers', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, remote, remote_listener: listener || null }),
+    body: JSON.stringify({ name, remote, remote_listener: listener || null, audio_root: audio || null }),
   })).json();
   if (r.error) return S.fail('#sync-result', new Error(r.error));
   document.getElementById('new-peer-name').value = '';
   document.getElementById('new-peer-remote').value = '';
   document.getElementById('new-peer-listener').value = '';
+  document.getElementById('new-peer-audio').value = '';
   loadPeers();
 };
 

@@ -192,6 +192,31 @@ def stage(host: str, bundle: str, where: str) -> None:
         raise Failed(f"stage the payload on {host} failed (exit {rc}): {out[-300:]}")
 
 
+# What a send leaves free on the speaker's music drive, at the least. The drive
+# smartboardpc keeps its music on had 11 GB free of 1.9 TB on 2026-10-02.
+FLOOR = 1 << 30
+
+
+def room(host: str, audio_root: str, configured: bool, library: str, need: int) -> None:
+    """Whether the audio fits where it is going, said before anything is sent
+    [SPEC-STAR-094]. A configured music folder must already exist: on a drive
+    mounted on demand -- smartboardpc's -- an absent folder means the drive is
+    not mounted, and writing there would fill the disk underneath its mount
+    point instead. The default, beside the library, is made if need be, so its
+    room is measured at the library's folder."""
+    if configured:
+        rc, _ = ssh(host, f"test -d {shlex.quote(audio_root)}")
+        if rc != 0:
+            raise Failed(f"{audio_root} does not exist on {host} -- is its drive mounted? Nothing was sent")
+    at = audio_root if configured else posixpath.dirname(library)
+    out = must(host, f"df -P -B1 {shlex.quote(at)} | tail -1", "measure free space").split()
+    free, mount = int(out[3]), out[5]
+    say(f"  room: {free / 1e9:.1f} GB free on {mount}; {need / 1e6:.1f} MB of audio to send")
+    if need and need + FLOOR > free:
+        raise Failed(f"not enough room on {host}'s {mount}: {need / 1e6:.0f} MB of audio would leave less "
+                     f"than {FLOOR >> 30} GiB free ({free / 1e9:.1f} GB now). Nothing was sent")
+
+
 def import_run(host: str, library: str, where: str, audio_root: str, apply: bool) -> dict:
     cmd = (f"import_bundle --library {shlex.quote(library)} --bundle {shlex.quote(where)} "
            f"--audio-root {shlex.quote(audio_root)}" + (" --apply" if apply else ""))
@@ -240,12 +265,18 @@ def main() -> int:
     ap.add_argument("bundle", help="the bundle folder this PC built (payload.json, audio/)")
     ap.add_argument("host", help="the speaker, user@host")
     ap.add_argument("--library", default="/srv/library/library.db")
+    ap.add_argument("--audio-root",
+                    help="the speaker's music folder, where the audio goes; it must exist already. "
+                         "Default: an `audio` folder beside --library, as on the Pis")
     ap.add_argument("--apply", action="store_true", help="do it; without it, only say what")
     ap.add_argument("--inside-window", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
     bundle, host = os.path.abspath(args.bundle), args.host
     library = args.library
-    audio_root = posixpath.join(posixpath.dirname(library), "audio")
+    # A speaker's own music folder where it has one elsewhere [SPEC-STAR-094]:
+    # smartboardpc keeps its music on a USB drive, teacherslounge in ~/Music.
+    # The default is the Pis' layout, /srv/library/audio beside the library.
+    audio_root = args.audio_root or posixpath.join(posixpath.dirname(library), "audio")
     where = f"/tmp/lempi-bundle-{os.path.basename(os.path.dirname(bundle)) or 'x'}"
     try:
         if not os.path.isfile(os.path.join(bundle, "payload.json")):
@@ -276,6 +307,7 @@ def main() -> int:
         n = len(payload.get("encodings") or [])
         say(f"{host}: library {library} on {opts[1]} at {opts[0]}, mounted {'read-only' if ro else 'read-write'}")
         say(f"  bundle: {n} encoding(s); audio into {audio_root}; payload staged in {where}")
+        room(host, audio_root, bool(args.audio_root), library, audio_size(os.path.join(bundle, "audio"))[1])
         say("  " + ("read-only: copy and import inside BosePi/attended-import.sh's window, then reload"
                     if ro else "read-write: copy and import with the player playing, then reload"))
         if not args.apply:
@@ -286,7 +318,7 @@ def main() -> int:
             if ro:
                 bash = shutil.which("bash") or r"C:\Program Files\Git\bin\bash.exe"
                 me = [sys.executable, os.path.abspath(__file__), bundle, host, "--library", library,
-                      "--apply", "--inside-window"]
+                      "--apply", "--inside-window"] + (["--audio-root", args.audio_root] if args.audio_root else [])
                 # Git Bash rewrites a POSIX-looking argument it hands to a
                 # Windows program -- this script, run inside the window -- into
                 # a path on this PC. Every one here is the speaker's.
