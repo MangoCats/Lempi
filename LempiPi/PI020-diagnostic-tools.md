@@ -207,7 +207,7 @@ Deactivated successfully" for `lempi-speaker` (every 30 s) and
 `lempi-btwatch` (every minute) — three lines a run whether or not anything
 happened. The journal costs about 3 KB an entry, so they, not the player,
 filled the 64 MB, which held 2.7 days of the week asked for.
-[`lempi-quiet-tick.conf`](lempi-quiet-tick.conf), a drop-in on both units,
+[`lempi-quiet-tick.conf`](../appliance/bluetooth/lempi-quiet-tick.conf), a drop-in on both units,
 sets `LogLevelMax=notice` — on systemd 252 that also silences the service
 manager's lines about the unit, while failure still logs at notice, warning
 and err — and `SyslogLevel=notice`, so what the scripts themselves print

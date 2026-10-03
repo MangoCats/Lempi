@@ -33,7 +33,8 @@ PI="$(dirname "$HERE")"
 # Every appliance's helpers -- lempi-db-recover among them -- live in
 # appliance/ since 2026-10-02 [APP-SET-020].
 APPLIANCE="$(dirname "$PI")/appliance"
-export LEMPI_COMMON="$PI/lempi-common.sh"
+BT="$APPLIANCE/bluetooth"
+export LEMPI_COMMON="$BT/lempi-common.sh"
 ORIG_PATH="$PATH"
 PASS=0
 FAIL=0

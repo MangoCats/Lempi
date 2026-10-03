@@ -3,7 +3,7 @@
 group waitsink || return 0
 printf '\nwaitsink\n'
 
-gate() { LEMPI_SINK_WAIT="${1:-5}" LEMPI_SPEAKER_WAIT="${2:-3}" sh "$PI/lempi-wait-sink" 2>&1; }
+gate() { LEMPI_SINK_WAIT="${1:-5}" LEMPI_SPEAKER_WAIT="${2:-3}" sh "$BT/lempi-wait-sink" 2>&1; }
 
 # --- the chosen speaker is already there: release immediately ------------
 setup

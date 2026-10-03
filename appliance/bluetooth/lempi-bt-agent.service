@@ -1,4 +1,4 @@
-# lempi02w's unit, as LempiPi/setup-appliance.sh writes it [LP3-BT-010]:
+# A Bluetooth appliance's unit, lempi02w's and lp3-wifi's alike [APP-BT-010]:
 # without an agent a trusted device barges in and an untrusted one is refused
 # forever [PI3-FOUND-610], [PI3-FOUND-630].
 [Unit]

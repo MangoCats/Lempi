@@ -5,6 +5,18 @@ printf '\nunits\n'
 
 setup
 SETUP="$PI/setup-appliance.sh"
+# And the units every Bluetooth appliance has, files in appliance/bluetooth
+# since 2026-10-02 [APP-BT-010]: rewritten into the heredoc shape the checks
+# below read, so a unit is checked the same wherever it is written.
+UNITS="$VT_STATE/units"
+{
+    cat "$SETUP"
+    for f in "$BT"/*.service "$BT"/*.timer; do
+        printf 'install_unit %s <<EOF\n' "$(basename "$f")"
+        cat "$f"
+        printf 'EOF\n'
+    done
+} > "$UNITS"
 
 # **`[PI3-FOUND-670]` Every `Type=oneshot` needs a ceiling.** systemd defaults
 # `TimeoutStartSec` to infinity for oneshot services, so a unit that blocks is
@@ -18,7 +30,7 @@ MISSING=$(awk '
     /^Type=oneshot/      { oneshot = 1 }
     /^TimeoutStartSec=/  { timeout = 1 }
     /^EOF$/              { if (oneshot && !timeout) print unit; oneshot = 0 }
-' "$SETUP")
+' "$UNITS")
 if [ -z "$MISSING" ]; then
     ok "every Type=oneshot unit has a finite TimeoutStartSec"
 else
@@ -27,7 +39,7 @@ fi
 
 # A ceiling of zero or `infinity` is the same as none at all, written in a way
 # that looks deliberate.
-INFINITE=$(grep -n '^TimeoutStartSec=\(0\|infinity\)$' "$SETUP" || true)
+INFINITE=$(grep -n '^TimeoutStartSec=\(0\|infinity\)$' "$UNITS" || true)
 if [ -z "$INFINITE" ]; then
     ok "no unit disables its start timeout explicitly"
 else
@@ -36,7 +48,7 @@ fi
 
 # The keeper's ceiling must clear its own tick budget, or systemd kills work
 # that was going to finish. The budget is 25 s `[PI3-FOUND-670]`.
-KEEPER_TIMEOUT=$(awk '/^install_unit lempi-speaker.service/,/^EOF$/' "$SETUP" |
+KEEPER_TIMEOUT=$(awk '/^install_unit lempi-speaker.service/,/^EOF$/' "$UNITS" |
     sed -n 's/^TimeoutStartSec=//p')
 if [ -n "$KEEPER_TIMEOUT" ] && [ "$KEEPER_TIMEOUT" -gt 25 ]; then
     ok "the keeper's timeout (${KEEPER_TIMEOUT}s) clears its tick budget"
@@ -55,12 +67,12 @@ fi
 # with `Restart=always` that is a boot loop: strictly worse than the case this
 # was written for, and invisible to it.
 BADEXEC=""
-for prog in $(sed -n 's|^ExecStart\(Pre\)\{0,1\}=/usr/local/bin/\([a-z-]*\).*|\2|p' "$SETUP" | sort -u); do
+for prog in $(sed -n 's|^ExecStart\(Pre\)\{0,1\}=/usr/local/bin/\([a-z-]*\).*|\2|p' "$UNITS" | sort -u); do
     # `lempi` itself is the compiled player, cross-built and deployed
     # separately; everything else is a script that ships beside this setup.
     [ "$prog" = lempi ] && continue
     [ -f "$PI/$prog" ] || [ -f "$PI/$prog.sh" ] || [ -f "$APPLIANCE/$prog" ] \
-        || BADEXEC="$BADEXEC $prog"
+        || [ -f "$BT/$prog" ] || [ -f "$BT/$prog.sh" ] || BADEXEC="$BADEXEC $prog"
 done
 if [ -z "$BADEXEC" ]; then
     ok "every unit's ExecStart/ExecStartPre names a helper that ships here"

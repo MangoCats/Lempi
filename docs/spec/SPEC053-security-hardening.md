@@ -68,7 +68,7 @@ Full behaviour and the two exterior-access features left for later are in
 `SecurityReview C3`: it travels in a POST body, then to `lempi-btctl` on stdin,
 and into the root-owned NetworkManager keyfile written by shell builtins — never
 a process argument. Fix: `player/src/web/wifi.rs`, `player/src/bluetooth.rs`,
-`LempiPi/lempi-btctl`. Test: `LempiPi/tests/cases-wifi.sh`, verified on real
+`appliance/bluetooth/lempi-btctl`. Test: `LempiPi/tests/cases-wifi.sh`, verified on real
 NetworkManager. Done.
 
 **`[SPEC-SEC-080]` R1 / R1a — the key is validated and the AP swap is atomic.**
@@ -77,13 +77,13 @@ backslash key before anything is written (closing the keyfile-injection the C3
 writer opened), the keyfile is found by UUID, and a failure deletes the
 half-made profile. `SecurityReview3 R1a`: `ap-start` builds the new AP under a
 temporary name and swaps it in only once its key is set, so a failure never
-destroys the `lempi-ap` the revert relies on. Fix: `LempiPi/lempi-btctl`. Test:
+destroys the `lempi-ap` the revert relies on. Fix: `appliance/bluetooth/lempi-btctl`. Test:
 `LempiPi/tests/cases-wifi.sh`. Done.
 
 **`[SPEC-SEC-090]` C5 — only Wi-Fi connections can be forgotten or toggled.**
 `SecurityReview C5`: `wifi-forget`/`wifi-autoconnect` now require an
 `802-11-wireless` connection, so the root helper cannot delete a wired or VPN
-profile. Fix: `LempiPi/lempi-btctl`. Test: `LempiPi/tests/cases-wifi.sh`. Done.
+profile. Fix: `appliance/bluetooth/lempi-btctl`. Test: `LempiPi/tests/cases-wifi.sh`. Done.
 The Android cleartext and bind-address items are recorded there as accepted.
 
 ## 5. Mesh trust
@@ -138,4 +138,4 @@ redaction pass, by stated plan.
 | S2 per-device AP password; C5 Android cleartext | Accepted / not built |
 | Exterior web access (private-IP restriction; domain allow-list) | Recorded in [SPEC052](SPEC052-web-access-guard.md) `[SPEC-WAG-900..910]` |
 
-**Traceability:** `[SPEC-SEC-010..130]` · records the fixes in `player/src/web/`, `tools/`, `LempiPi/lempi-btctl` and their tracked tests · fuller design in [SPEC050](SPEC050-node-discovery.md), [SPEC052](SPEC052-web-access-guard.md), [SPEC051](SPEC051-trusted-networks.md)
+**Traceability:** `[SPEC-SEC-010..130]` · records the fixes in `player/src/web/`, `tools/`, `appliance/bluetooth/lempi-btctl` and their tracked tests · fuller design in [SPEC050](SPEC050-node-discovery.md), [SPEC052](SPEC052-web-access-guard.md), [SPEC051](SPEC051-trusted-networks.md)

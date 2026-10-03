@@ -21,7 +21,7 @@ script, run on the development host, reaching the node over SSH:
 | :--- | :--- | :--- |
 | `lp3-wifi` | [`LempiPlay3/setup-lp3.sh`](../LempiPlay3/setup-lp3.sh) | the panel and fbui, the binds, the overlay, Bluetooth output |
 | `bose` | [`BosePi/setup-bose.sh`](../BosePi/setup-bose.sh) | the DAC, MPD, the binds, the overlay and its escape hatch |
-| `lempi02w` | [`LempiPi/setup-lempi02w.sh`](../LempiPi/setup-lempi02w.sh) | its unit; the rest is `setup-appliance.sh`, run on the node |
+| `lempi02w` | [`LempiPi/setup-lempi02w.sh`](../LempiPi/setup-lempi02w.sh) | its unit and WirePlumber 0.4; the rest is `setup-appliance.sh`, run on the node |
 
 Each takes `--check` (the default: compare, change nothing) or `--go` (apply
 what differs). Every item prints `ok`, `CHANGED` or `DIFFERS`. On an overlay
@@ -56,27 +56,41 @@ nodes before it was written; each item was already true of at least one.
 The journal file is named `lempi.conf` for its **sort order**: trixie's image
 ships `40-rpi-volatile-storage.conf`, and a `10-` name sorts before it and loses.
 
+## What every Bluetooth appliance has
+
+**`[APP-BT-010]` One set, in [`bluetooth/`](bluetooth/items.sh)**, for the nodes
+that play to a Bluetooth speaker: `lempi02w`, and `lp3-wifi` since 2026-10-02.
+`bose` plays to its DAC and has none of it.
+
+- the stack: PipeWire with its ALSA and Bluetooth plugins, WirePlumber, BlueZ,
+  upower (wanted by `multi-user.target`), and the agent's D-Bus bindings
+- the helpers: the shared shell library, the sink gate, `lempi-btctl` and its
+  one sudoers rule, the keeper, the watchdog and the agent
+- their five units, `/run/lempi`, and the keeper's and watchdog's routine ticks
+  kept out of the journal
+- linger for pi, and PipeWire's clock: 44.1 kHz and a 4096-frame quantum, in one file
+
+Until 2026-10-02 lempi02w's copy was heredocs in `setup-appliance.sh` and
+lp3-wifi's was files copied from them. Read off both first: the units matched
+but for one start timeout, which lempi02w carried in a drop-in; the clock's five
+values were the same, in two files on lempi02w and one on lp3-wifi. What stays
+per node is WirePlumber — 0.4's Lua on lempi02w's bookworm, 0.5's conf on
+lp3-wifi's trixie — and lp3-wifi's radio, on a UART the image saved blocked.
+
 ## First run, 2026-10-02
 
-`--check` against all three, before anything was applied:
+`--check` against all three, before anything was applied, with the Bluetooth
+set included:
 
 | node | differs | what |
 | :--- | ---: | :--- |
-| `lp3-wifi` | 2 | the journal and swap files, combined that day |
-| `bose` | 5 | those two; **cloud-init not disabled**; its unlock-check unit has CRLF line endings on the card; `mpd.conf` differs in comments only |
-| `lempi02w` | 6 | the journal file and its old name; the unit and the three files retired with the single-file mode `[PI-PRE-080]` |
+| `lp3-wifi` | 11 | the journal and swap files; the five units and the clock file, comments only; the sudoers rule and the quiet-tick drop-ins, which it never had |
+| `bose` | 5 | the journal and swap files; **cloud-init not disabled**; its unlock-check unit has CRLF line endings on the card; `mpd.conf` differs in comments only |
+| `lempi02w` | 17 | the journal file and its old name; the unit and the three files retired with the single-file mode `[PI-PRE-080]`; the five units (heredocs, no comments); the clock file and its two retired halves; the timeout drop-in; and two helpers older than the repository — the host's old name in comments, and a test hook in `lempi-btwatch` that changes nothing unset |
 
 Nothing was applied by this work. Each `DIFFERS` is a change still to make on
 that node.
 
-## Not yet here
-
-The **Bluetooth family** — the speaker keeper, the watchdog, the agent, their
-units and helpers — is shared by `lempi02w` and `lp3-wifi`, but still lives in
-`LempiPi/`, and lempi02w's units are written by `setup-appliance.sh` while
-lp3-wifi carries them as files. The settings match but for one start timeout,
-which lempi02w carries in a drop-in. Moving them here is the next step.
-
 ---
 
-**Traceability:** `[APP-SET-010]`, `[APP-SET-020]` · `[GDE-DEP-040]`
+**Traceability:** `[APP-SET-010]`, `[APP-SET-020]`, `[APP-BT-010]` · `[GDE-DEP-040]`

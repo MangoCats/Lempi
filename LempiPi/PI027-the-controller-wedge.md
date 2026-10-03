@@ -49,7 +49,7 @@ Before the reboot the adapter had transmitted 1,646,286,166 bytes across
 `Discovering: no`, and a full, healthy UUID list throughout.
 
 **`[PI3-FOUND-720]` The cause was the keeper's own cadence, and no single
-bound was wrong.** Every limit in [`lempi-speaker.sh`](lempi-speaker.sh) is
+bound was wrong.** Every limit in [`lempi-speaker.sh`](../appliance/bluetooth/lempi-speaker.sh) is
 scoped to one tick: `[PI3-AIM-060]` keeps a chase from interrupting audio,
 `[PI3-FOUND-670]` keeps a tick inside its timer's period, `[PI3-FOUND-140]`
 keeps two pages from overlapping. Each holds. None of them asks what a

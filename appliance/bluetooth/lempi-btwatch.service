@@ -1,4 +1,4 @@
-# lempi02w's unit, as LempiPi/setup-appliance.sh writes it [LP3-BT-010].
+# A Bluetooth appliance's unit, lempi02w's and lp3-wifi's alike [APP-BT-010].
 [Unit]
 Description=Notice a Bluetooth controller that has stopped answering
 After=bluetooth.target

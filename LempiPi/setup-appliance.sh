@@ -75,9 +75,10 @@ NEED=""
 # No ffmpeg since 2026-09-27: it was here for relink's hash, which is
 # in-process now `[SPEC-RLK-152]`. A node that plays through MPD gets ffmpeg's
 # libraries as MPD's own dependency, not from this list.
-for p in pipewire pipewire-pulse pipewire-alsa wireplumber libspa-0.2-bluetooth \
-         bluez libasound2 alsa-utils upower evtest \
-         dnsmasq iw python3-dbus python3-gi; do
+# The Bluetooth stack above is appliance/bluetooth's since 2026-10-02
+# [APP-BT-010]; the reasons stay here, where they were found. What is
+# installed here is this node's own.
+for p in libasound2 evtest dnsmasq iw; do
     dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"
 done
 if [ -n "$NEED" ]; then
@@ -134,22 +135,15 @@ fi
 
 # ------------------------------------------------------------ audio session
 # PipeWire runs as the LOGIN user, not as root and not as the lempi service
-# user. `linger` is what lets that session exist without anyone logged in --
-# without it the audio graph disappears the moment the ssh session closes,
-# which reads as "Bluetooth stopped working after I disconnected".
+# user. Its linger, which keeps the session without a login, and its clock
+# are appliance/bluetooth's since 2026-10-02; what is here is this node's
+# own: WirePlumber 0.4, configured in Lua on bookworm.
 echo "audio session"
-if [ "$(loginctl show-user "$RUN_USER" -p Linger --value 2>/dev/null)" != "yes" ]; then
-    loginctl enable-linger "$RUN_USER"
-    did "enable-linger $RUN_USER"
-else
-    ok "linger enabled"
-fi
-
 sudo -u "$RUN_USER" XDG_RUNTIME_DIR="/run/user/$RUN_UID" \
     systemctl --user enable pipewire pipewire-pulse wireplumber >/dev/null 2>&1 || true
 ok "user services enabled"
 
-# `linger` above keeps the audio graph alive across logouts, but it does NOT
+# `linger` keeps the audio graph alive across logouts, but it does NOT
 # stop WirePlumber reacting to them. WirePlumber gates the entire BlueZ monitor
 # on logind seat state, to arbitrate which of several logged-in users owns
 # Bluetooth audio -- sensible on a desktop with GDM, ruinous here. Every ssh
@@ -170,26 +164,6 @@ LUA
         systemctl --user restart wireplumber >/dev/null 2>&1 || true
 else
     ok "bluez monitor detached from seat state"
-fi
-
-# ------------------------------------------------------------- sample rate
-# PipeWire's graph defaults to 48 kHz. The library is 44.1 and the speaker
-# accepts 44.1, so a default install resamples for nothing and the sink may
-# resample back. [PI2-RATE-010]
-echo "sample rate"
-CONF_DIR="/home/$RUN_USER/.config/pipewire/pipewire.conf.d"
-RATE_CONF="$CONF_DIR/10-rate.conf"
-WANT_RATE='context.properties = {
-    default.clock.rate          = 44100
-    default.clock.allowed-rates = [ 44100 ]
-}'
-if [ ! -f "$RATE_CONF" ] || [ "$(cat "$RATE_CONF")" != "$WANT_RATE" ]; then
-    install -d -o "$RUN_USER" -g "$RUN_USER" "$CONF_DIR"
-    printf '%s\n' "$WANT_RATE" > "$RATE_CONF"
-    chown "$RUN_USER:$RUN_USER" "$RATE_CONF"
-    did "44100 Hz pinned"
-else
-    ok "44100 Hz pinned"
 fi
 
 # -------------------------------------------------------------- lempi user
@@ -334,31 +308,16 @@ else
     ok "enabled"
 fi
 
-# --------------------------------------------------------------- bt helper
-# The privileged helper for speaker selection [PI-SET-030]. A narrow sudoers
-# rule rather than broader rights for the player: the web process gets exactly
-# these verbs, with the device address validated before it reaches BlueZ.
-# The shared shell library, before the helpers that source it. One copy of
-# where the database lives, how to read the chosen speaker, how to parse a sink
-# name and how to decode an AFH map `[PI3-AIM-090]`.
-HERE="${HERE:-$(cd "$(dirname "$0")" && pwd)}"
-if [ -f "$HERE/lempi-common.sh" ]; then
-    install -d /usr/local/lib
-    if ! cmp -s "$HERE/lempi-common.sh" /usr/local/lib/lempi-common.sh; then
-        install -m644 "$HERE/lempi-common.sh" /usr/local/lib/lempi-common.sh &&
-            did "installed lempi-common.sh"
-    fi
-fi
-
-echo "bluetooth helper"
+# ----------------------------------------------------------------- helpers
+# This node's own instruments. The Bluetooth helpers, the shared shell
+# library and lempi-btctl's sudoers rule are appliance/bluetooth's since
+# 2026-10-02 [APP-BT-010], and lempi-preflight and lempi-db-recover are
+# appliance/common.sh's.
+echo "helpers"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-# lempi-preflight and lempi-db-recover are every appliance's, installed by
-# appliance/common.sh since 2026-10-02.
-for f in lempi-btctl lempi-wait-sink \
-         lempi-underruns lempi-led-boot \
+for f in lempi-underruns lempi-led-boot \
          lempi-wifi-revert lempi-radio-test lempi-startup-sample \
-         lempi-hci-capture lempi-linkstate lempi-afh-seed lempi-vitals \
-         lempi-bt-agent; do
+         lempi-hci-capture lempi-linkstate lempi-afh-seed lempi-vitals; do
     if [ -f "$HERE/$f" ]; then
         if ! cmp -s "$HERE/$f" "/usr/local/bin/$f"; then
             install -m755 "$HERE/$f" "/usr/local/bin/$f" && did "installed $f"
@@ -372,38 +331,12 @@ for f in lempi-btctl lempi-wait-sink \
     fi
 done
 
-SUDOERS=/etc/sudoers.d/lempi-btctl
-WANT="$RUN_USER ALL=(root) NOPASSWD: /usr/local/bin/lempi-btctl"
-if [ "$(cat "$SUDOERS" 2>/dev/null)" != "$WANT" ]; then
-    printf '%s
-' "$WANT" > "$SUDOERS"
-    chmod 0440 "$SUDOERS"
-    # A malformed sudoers file can lock the machine out of sudo altogether, so
-    # it is validated and REMOVED if wrong rather than left in place.
-    if visudo -cf "$SUDOERS" >/dev/null 2>&1; then
-        did "sudoers rule"
-    else
-        rm -f "$SUDOERS"; note "sudoers rule" "REJECTED — removed"
-    fi
-else
-    ok "sudoers rule"
-fi
-
-# ------------------------------------------------------------ speaker keeper
-# **The reconnect timer, and everything that had only ever lived on the card.**
-#
-# Audited 2026-09-09: none of this was installed by this script. `lempi-speaker`
-# is what reconnects the chosen speaker after a power cycle `[PI3-FOUND-090]`,
-# re-asserts the trust that lets the speaker reach back `[PI3-FOUND-130]`, and
-# notices when the player's stream is not where the speaker is `[PI3-AIM-050]`
-# -- the entire mechanism a day of work went into. A card rebuilt from this
-# repository would have come up without it, and without the drop-in carrying
-# the appliance's real command line, and nothing would have said so.
-echo "speaker keeper"
+# ------------------------------------------------------------------ rocker
+# The keeper, the watchdog and their units were here until 2026-10-02, and
+# are every Bluetooth appliance's now: appliance/bluetooth [APP-BT-010].
+echo "rocker"
 HERE="${HERE:-$(cd "$(dirname "$0")" && pwd)}"
 
-# Named with a `.sh` in the repository and without one on the machine, because
-# the unit has always called it `lempi-speaker`.
 # **`[PI3-FOUND-710]` One rocker, and it is the one with the fix.** Two copies
 # lived here: `lempi-rocker` at 84 lines and `lempi-rocker.sh` at 124, and the
 # install loop took the shorter one. The longer is a superset -- it adds
@@ -412,7 +345,7 @@ HERE="${HERE:-$(cd "$(dirname "$0")" && pwd)}"
 # reading `/dev/input/22:25:46 waiting...event2`. The appliance had been
 # running the version with that bug. The stale copy is deleted rather than
 # left to be picked again, and the `.sh` source installs under the bare name,
-# which is the convention `lempi-speaker.sh` already follows.
+# which is the convention `lempi-speaker.sh` follows (appliance/bluetooth).
 if [ -f "$HERE/lempi-rocker.sh" ]; then
     if ! cmp -s "$HERE/lempi-rocker.sh" /usr/local/bin/lempi-rocker; then
         install -m755 "$HERE/lempi-rocker.sh" /usr/local/bin/lempi-rocker &&
@@ -420,30 +353,8 @@ if [ -f "$HERE/lempi-rocker.sh" ]; then
     fi
 fi
 
-if [ -f "$HERE/lempi-speaker.sh" ]; then
-    if ! cmp -s "$HERE/lempi-speaker.sh" /usr/local/bin/lempi-speaker; then
-        install -m755 "$HERE/lempi-speaker.sh" /usr/local/bin/lempi-speaker
-        did "installed lempi-speaker"
-    else
-        ok "lempi-speaker current"
-    fi
-else
-    note "lempi-speaker" "ABSENT — stage it beside this script"
-fi
-
-if [ -f "$HERE/lempi-btwatch.sh" ]; then
-    if ! cmp -s "$HERE/lempi-btwatch.sh" /usr/local/bin/lempi-btwatch; then
-        install -m755 "$HERE/lempi-btwatch.sh" /usr/local/bin/lempi-btwatch
-        did "installed lempi-btwatch"
-    else
-        ok "lempi-btwatch current"
-    fi
-else
-    note "lempi-btwatch" "ABSENT — stage it beside this script"
-fi
-
-# Every-30-seconds, oneshot, as the login user: it talks to the user session's
-# PipeWire through `GET /audio/sink`, and a root timer could not.
+# The node's own units, written here: its diagnostics and its experiment.
+# The keeper, the watchdog and the agent are appliance/bluetooth's.
 install_unit() {   # install_unit <name> <<'EOF' ... EOF
     local name="$1" tmp
     tmp="$(mktemp)"
@@ -456,66 +367,6 @@ install_unit() {   # install_unit <name> <<'EOF' ... EOF
     fi
     rm -f "$tmp"
 }
-
-install_unit lempi-speaker.service <<EOF
-[Unit]
-Description=Keep the Lempi speaker connected
-After=bluetooth.target
-[Service]
-Type=oneshot
-User=$RUN_USER
-ExecStart=/usr/local/bin/lempi-speaker
-# **`[PI3-FOUND-670]` A oneshot has no start timeout unless it is given one.**
-# systemd defaults `TimeoutStartSec` to infinity for Type=oneshot, so a tick
-# that blocks inside `bluetoothctl` is never killed -- and the timer cannot
-# fire again while the last tick is still running. Measured 2026-09-10: the
-# service sat in `activating` for minutes after the speaker holding the audio
-# was switched off, and the appliance was not slow to recover, it was not
-# running at all. 45 s is comfortably past a healthy worst case of ~25 s.
-TimeoutStartSec=45
-EOF
-
-install_unit lempi-speaker.timer <<'EOF'
-[Unit]
-Description=Check the Lempi speaker every half minute
-[Timer]
-OnBootSec=20s
-OnUnitActiveSec=30s
-AccuracySec=5s
-[Install]
-WantedBy=timers.target
-EOF
-
-# **`[PI3-FOUND-750]` Notice a wedged controller while music is playing.**
-# Root, unlike the keeper, because putting the adapter back means writing the
-# serdev driver's `unbind`/`bind` in sysfs. Every minute: the probe is one
-# HCI command, measured at zero cost against a live A2DP stream, and the
-# failure it watches for is permanent rather than fleeting, so there is
-# nothing to be gained by asking more often.
-install_unit lempi-btwatch.service <<'EOF'
-[Unit]
-Description=Notice a Bluetooth controller that has stopped answering
-After=bluetooth.target
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/lempi-btwatch
-# `[PI3-FOUND-670]`, the same ceiling the keeper needs and for the same
-# reason. A worst case here is one 15 s probe, a 3 s unbind settle, an 8 s
-# firmware download and a second 15 s probe: ~41 s.
-TimeoutStartSec=75
-EOF
-
-install_unit lempi-btwatch.timer <<'EOF'
-[Unit]
-Description=Check the Bluetooth controller every minute
-[Timer]
-OnBootSec=90s
-OnUnitActiveSec=60s
-AccuracySec=10s
-[Install]
-WantedBy=timers.target
-EOF
-
 # Diagnostic, installed but NOT enabled: it costs a subprocess a second and an
 # idle appliance should not pay for an instrument nobody is reading
 # `[PI3-FOUND-240]`. Turn it on when something needs measuring.
@@ -531,29 +382,6 @@ IOSchedulingClass=idle
 [Install]
 WantedBy=multi-user.target
 EOF
-
-# The agent, and it IS enabled: without one, BlueZ has only two reflexes and
-# neither is wanted -- a trusted device barges in and takes the transport, an
-# untrusted one is refused forever and knocks every nine seconds
-# `[PI3-FOUND-610]`. This turns both into a decision `[PI3-FOUND-630]`.
-echo 'd /run/lempi 0755 pi pi -' > /etc/tmpfiles.d/lempi.conf
-systemd-tmpfiles --create /etc/tmpfiles.d/lempi.conf 2>/dev/null || true
-install_unit lempi-bt-agent.service <<'EOF'
-[Unit]
-Description=Answer BlueZ authorisation, so the appliance decides who connects
-After=bluetooth.service
-Wants=bluetooth.service
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/lempi-bt-agent
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl enable lempi-bt-agent >/dev/null 2>&1 && did "enabled lempi-bt-agent"
 
 # Diagnostic, installed but NOT enabled `[PI3-FOUND-610]`. Samples vital signs
 # to a file rather than the journal, because on 2026-09-10 the journal was the
@@ -634,10 +462,7 @@ done
 for pair in \
     "lempi-io-priority.conf:/etc/systemd/system/lempi.service.d/20-lempi-io.conf" \
     "mpd-polite.conf:/etc/systemd/system/mpd.service.d/10-lempi-polite.conf" \
-    "lempi-quiet-tick.conf:/etc/systemd/system/lempi-speaker.service.d/10-lempi-quiet.conf" \
-    "lempi-quiet-tick.conf:/etc/systemd/system/lempi-btwatch.service.d/10-lempi-quiet.conf" \
-    "sd-tuning.conf:/etc/tmpfiles.d/lempi-readahead.conf" \
-    "pipewire-quantum.conf:/etc/pipewire/pipewire.conf.d/10-lempi-quantum.conf" ; do
+    "sd-tuning.conf:/etc/tmpfiles.d/lempi-readahead.conf" ; do
     src="$HERE/${pair%%:*}"; dst="${pair#*:}"
     [ -f "$src" ] || { note "${pair%%:*}" "ABSENT — stage it beside this script"; continue; }
     mkdir -p "$(dirname "$dst")"
@@ -654,18 +479,6 @@ done
 systemd-tmpfiles --create /etc/tmpfiles.d/lempi-readahead.conf >/dev/null 2>&1 || true
 
 [ "${NEED_RELOAD:-0}" = 1 ] && systemctl daemon-reload
-if ! systemctl is-enabled --quiet lempi-speaker.timer 2>/dev/null; then
-    systemctl enable --now lempi-speaker.timer >/dev/null 2>&1
-    did "enabled lempi-speaker.timer"
-else
-    ok "lempi-speaker.timer enabled"
-fi
-if ! systemctl is-enabled --quiet lempi-btwatch.timer 2>/dev/null; then
-    systemctl enable --now lempi-btwatch.timer >/dev/null 2>&1
-    did "enabled lempi-btwatch.timer"
-else
-    ok "lempi-btwatch.timer enabled"
-fi
 
 # ---------------------------------------------------------------- act led
 # The green ACT LED, under listener control [PI3-LED-010].

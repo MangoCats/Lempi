@@ -5,7 +5,7 @@
 group btctl || return 0
 printf '\nbtctl\n'
 
-btctl() { LEMPI_DB="$VT_STATE/fake.db" bash "$PI/lempi-btctl" "$@" 2>&1; }
+btctl() { LEMPI_DB="$VT_STATE/fake.db" bash "$BT/lempi-btctl" "$@" 2>&1; }
 
 # --- the untrusted input ------------------------------------------------
 # Shape-checked before it reaches bluetoothctl or SQL. Every one of these
@@ -62,7 +62,7 @@ teardown
 # the remembered speakers in it. On 2026-09-20 the listener saw exactly that
 # seven times while the adapter was wedged, and the panel answered "put yours
 # in pairing mode".
-scanctl() { SCAN_SECONDS=0 LEMPI_DB="$VT_STATE/fake.db" bash "$PI/lempi-btctl" scan 2>&1; }
+scanctl() { SCAN_SECONDS=0 LEMPI_DB="$VT_STATE/fake.db" bash "$BT/lempi-btctl" scan 2>&1; }
 
 setup
 speaker "$MIDDL" "MIDDLETON" no yes
@@ -116,7 +116,7 @@ touch "$VT_STATE/scan_fails"
 # stdout only, deliberately: the other cases fold stderr in with `2>&1` and
 # match substrings, which tolerates it, but the contract being checked here
 # is that *stdout alone* is a JSON document a caller can parse.
-OUT=$(SCAN_SECONDS=0 LEMPI_DB="$VT_STATE/fake.db" bash "$PI/lempi-btctl" scan 2>/dev/null)
+OUT=$(SCAN_SECONDS=0 LEMPI_DB="$VT_STATE/fake.db" bash "$BT/lempi-btctl" scan 2>/dev/null)
 if printf '%s' "$OUT" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then
     ok "a failed scan is still valid JSON on stdout alone"
 else

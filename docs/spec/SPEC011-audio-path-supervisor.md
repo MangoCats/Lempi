@@ -18,8 +18,8 @@ path to the chosen speaker" is implemented across:
 | `player/src/output.rs` | device lifecycle, the `failed` / `silent` flags |
 | `player/src/sink.rs` | polls `wpctl` to learn where audio actually goes |
 | `player/src/bluetooth.rs` → `lempi-btctl` | BlueZ policy, in shell, behind sudo |
-| `LempiPi/lempi-speaker.sh` + timer | reconnect policy, in systemd |
-| `LempiPi/lempi-wait-sink` | startup ordering, in shell |
+| `appliance/bluetooth/lempi-speaker.sh` + timer | reconnect policy, in systemd |
+| `appliance/bluetooth/lempi-wait-sink` | startup ordering, in shell |
 | `player/src/engine/` (formerly `engine.rs`) | held the retry/backoff state machine, inside the mix loop, before extraction |
 
 No component owns the concern, so no component can be tested for it, and (at

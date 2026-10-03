@@ -13,8 +13,8 @@
 # Runs on the development host, over SSH, on appliance/setup-lib.sh, with
 # everything every appliance has from appliance/common.sh [APP-SET-020].
 #
-# **Two halves, unlike the other two.** This node's own part -- the speaker
-# keeper and its units, the ACT LED, the boot tuning, the PipeWire session --
+# **Two halves, unlike the other two.** This node's own part -- its
+# instruments and their units, the ACT LED, the boot tuning, WirePlumber 0.4 --
 # is LempiPi/setup-appliance.sh, which runs *on* the node and has no check
 # mode. --go stages it and runs it there; --check cannot look inside it, and
 # says so rather than reporting it as agreed. What --check does compare from
@@ -40,6 +40,7 @@ esac
 SETUP_NAME=setup-lempi02w
 . appliance/setup-lib.sh
 . appliance/common.sh
+. appliance/bluetooth/items.sh
 
 setup_target
 
@@ -50,6 +51,14 @@ item "hostname $NAME" "test \"\$(cat $P/etc/hostname)\" = $NAME" "" \
      "renaming it is a decision, not a fix"
 
 common_items
+# Before its own part: the helpers and units the on-node script expects to
+# find, and the player's ExecStartPre lempi-wait-sink among them.
+bluetooth_items
+# Its own Bluetooth piece: WirePlumber 0.4, configured in Lua on bookworm,
+# written by setup-appliance.sh [PI3-FOUND-040].
+item "WirePlumber 0.4: bluez monitor not tied to seats" \
+     "test -f $P/etc/wireplumber/bluetooth.lua.d/51-lempi-no-logind.lua" "" \
+     "setup-appliance.sh writes it"
 
 # ------------------------------------------------------------- its own part
 say ""

@@ -13,7 +13,7 @@ printf '\nbtwatch\n'
 watch() {
     LEMPI_BT_DRIVER="$VT_STATE/driver" LEMPI_BT_SERDEV=serial0-0 \
     LEMPI_BTWATCH_MISSES="${MISSES:-3}" LEMPI_BTWATCH_RESET="${RESET:-1}" \
-        sh "$PI/lempi-btwatch.sh" 2>&1
+        sh "$BT/lempi-btwatch.sh" 2>&1
 }
 
 driver() { mkdir -p "$VT_STATE/driver"; : > "$VT_STATE/driver/unbind"; : > "$VT_STATE/driver/bind"; }
@@ -139,7 +139,7 @@ teardown
 setup
 driver
 OUT=$(LEMPI_HCICONFIG=hciconfig-absent-on-purpose \
-      LEMPI_BT_DRIVER="$VT_STATE/driver" sh "$PI/lempi-btwatch.sh" 2>&1)
+      LEMPI_BT_DRIVER="$VT_STATE/driver" sh "$BT/lempi-btwatch.sh" 2>&1)
 case "$OUT" in
     *"not installed"*) ok "says the controller could not be checked when hciconfig is absent" ;;
     *) bad "says the controller could not be checked when hciconfig is absent" "got: $OUT" ;;

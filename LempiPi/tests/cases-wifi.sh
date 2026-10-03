@@ -6,7 +6,7 @@
 group wifi || return 0
 printf '\nwifi\n'
 
-btctl() { bash "$PI/lempi-btctl" "$@" 2>&1; }
+btctl() { bash "$BT/lempi-btctl" "$@" 2>&1; }
 
 # A wifi connection that is not the active one: forgotten.
 setup

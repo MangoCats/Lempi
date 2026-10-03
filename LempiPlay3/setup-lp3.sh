@@ -56,6 +56,7 @@ esac
 SETUP_NAME=setup-lp3
 . appliance/setup-lib.sh
 . appliance/common.sh
+. appliance/bluetooth/items.sh
 
 # ------------------------------------------------------------ preconditions
 setup_target
@@ -118,17 +119,9 @@ say "packages"
 # live (apt-get, which fetches), then `dpkg -i` the two cached .debs inside
 # overlayroot-chroot, offline. Verified on the durable layer, 2026-10-02.
 #
-# And a Bluetooth speaker as an output option, since 2026-10-02 [LP3-BT-010]:
-# lempi02w's audio stack (LempiPi/setup-appliance.sh says why each is there)
-# -- PipeWire with its ALSA and Bluetooth plugins, WirePlumber, upower (whose
-# absence makes WirePlumber tear down every A2DP endpoint [PI3-FOUND-030]),
-# and the D-Bus bindings lempi-bt-agent is written in. bluez and alsa-utils
-# came with the image; they are listed so the record says so. They went onto
-# the durable layer by apt-get in overlayroot-chroot, with the live
-# resolv.conf's nameserver lent for the run and the layer's own put back.
-for p in overlayroot f2fs-tools \
-         bluez alsa-utils pipewire pipewire-pulse pipewire-alsa wireplumber \
-         libspa-0.2-bluetooth upower python3-dbus python3-gi; do
+# The Bluetooth stack is every Bluetooth appliance's (appliance/bluetooth),
+# below.
+for p in overlayroot f2fs-tools; do
     item "package $p" "dpkg --admindir=$P/var/lib/dpkg -s $p" \
          "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $p"
 done
@@ -208,31 +201,10 @@ for u in lempi fbui; do
          "sudo systemctl enable $u.service"
 done
 # A Bluetooth speaker is an output option since 2026-10-02 [LP3-BT-010]; until
-# then this said "No speaker on this node" and kept bluetooth disabled. The
-# units are lempi02w's (setup-appliance.sh writes them there): the keeper
-# that reconnects the chosen speaker, the watchdog for a wedged controller,
-# and the agent that decides who may connect.
-for pair in lempi-speaker.service lempi-speaker.timer lempi-btwatch.service \
-            lempi-btwatch.timer lempi-bt-agent.service; do
-    file_item "$pair" "LempiPlay3/$pair" "/etc/systemd/system/$pair" 644
-done
-file_item "/run/lempi for the agent" LempiPlay3/lempi-tmpfiles.conf /etc/tmpfiles.d/lempi.conf 644
-item "bluetooth enabled" "test -L $P/etc/systemd/system/bluetooth.target.wants/bluetooth.service" \
-     "sudo systemctl enable bluetooth.service"
-# upower ships wanted only by graphical.target, never reached here
-# [PI3-FOUND-030]; multi-user.target is told to want it.
-item "upower wanted by multi-user.target" \
-     "test -L $P/etc/systemd/system/multi-user.target.wants/upower.service" \
-     "sudo systemctl enable upower.service && sudo systemctl add-wants multi-user.target upower.service"
-item "lempi-bt-agent enabled" "test -L $P/etc/systemd/system/multi-user.target.wants/lempi-bt-agent.service" \
-     "sudo systemctl enable lempi-bt-agent.service"
-for t in lempi-speaker lempi-btwatch; do
-    item "$t.timer enabled" "test -L $P/etc/systemd/system/timers.target.wants/$t.timer" \
-         "sudo systemctl enable $t.timer"
-done
-# pi's PipeWire session, kept without a login: the player and the keeper both
-# reach it as pi.
-item "linger for pi" "test -f $P/var/lib/systemd/linger/pi" "sudo loginctl enable-linger pi"
+# then this said "No speaker on this node" and kept bluetooth disabled. What
+# every Bluetooth appliance has is appliance/bluetooth's [APP-BT-010]; what
+# follows is this node's own: its radio, and WirePlumber 0.5's configuration.
+bluetooth_items
 # The Pi 3's radio is on its UART; the image saved it blocked, and
 # systemd-rfkill restores what is saved at every boot.
 item "bluetooth radio unblocked at boot" \
@@ -242,8 +214,6 @@ file_item "WirePlumber: bluez monitor not tied to seats [PI3-FOUND-040]" \
     LempiPlay3/wireplumber-no-seat.conf /etc/wireplumber/wireplumber.conf.d/51-lempi-no-seat.conf 644
 file_item "WirePlumber: a new output starts at the jack's 0 dB" \
     LempiPlay3/wireplumber-volume.conf /etc/wireplumber/wireplumber.conf.d/52-lempi-volume.conf 644
-file_item "PipeWire: 44.1 kHz, lempi02w's quantum" \
-    LempiPlay3/pipewire-lempi.conf /etc/pipewire/pipewire.conf.d/10-lempi.conf 644
 # fbui owns tty1 [LP3-REP-030]; a login prompt would draw over it.
 item "getty on tty1 disabled" "! test -e $P/etc/systemd/system/getty.target.wants/getty@tty1.service" \
      "sudo systemctl disable getty@tty1.service"
@@ -251,13 +221,6 @@ item "getty on tty1 disabled" "! test -e $P/etc/systemd/system/getty.target.want
 # --------------------------------------------------------------------- helpers
 say ""
 say "helpers and binaries"
-# The speaker helpers, as lempi02w has them [LP3-BT-010].
-file_item "lempi-common.sh" LempiPi/lempi-common.sh /usr/local/lib/lempi-common.sh 644
-file_item "lempi-wait-sink" LempiPi/lempi-wait-sink /usr/local/bin/lempi-wait-sink 755
-file_item "lempi-btctl" LempiPi/lempi-btctl /usr/local/bin/lempi-btctl 755
-file_item "lempi-speaker" LempiPi/lempi-speaker.sh /usr/local/bin/lempi-speaker 755
-file_item "lempi-btwatch" LempiPi/lempi-btwatch.sh /usr/local/bin/lempi-btwatch 755
-file_item "lempi-bt-agent" LempiPi/lempi-bt-agent /usr/local/bin/lempi-bt-agent 755
 item "lempi installed" "test -x $P/usr/local/bin/lempi" "" \
      "build/deploy-appliance.sh $HOST"
 item "fbui installed" "test -x $P/usr/local/bin/fbui" "" \

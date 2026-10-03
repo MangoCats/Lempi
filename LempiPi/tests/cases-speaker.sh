@@ -6,7 +6,7 @@
 group speaker || return 0
 printf '\nspeaker\n'
 
-keeper() { LEMPI_TICK_SECONDS=4 LEMPI_CHASE_SECONDS=2 sh "$PI/lempi-speaker.sh" 2>&1; }
+keeper() { LEMPI_TICK_SECONDS=4 LEMPI_CHASE_SECONDS=2 sh "$BT/lempi-speaker.sh" 2>&1; }
 
 # --- 1. nothing connected, the chosen speaker is reachable ----------------
 # The regression of 2026-09-10 made this path unreachable: an `exit 0` above
@@ -115,7 +115,7 @@ speaker "$MIDDL" "MIDDLETON" no no
 printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
 sinks "Dummy Output"
 START=$(date +%s)
-LEMPI_TICK_SECONDS=6 LEMPI_CHASE_SECONDS=3 sh "$PI/lempi-speaker.sh" >/dev/null 2>&1
+LEMPI_TICK_SECONDS=6 LEMPI_CHASE_SECONDS=3 sh "$BT/lempi-speaker.sh" >/dev/null 2>&1
 ELAPSED=$(( $(date +%s) - START ))
 if [ "$ELAPSED" -le 14 ]; then
     ok "a tick with nothing reachable stays inside its budget (${ELAPSED}s)"
