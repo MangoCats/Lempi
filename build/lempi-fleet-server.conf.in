@@ -1,0 +1,7 @@
+# Lempi fleet time: serving the fleet [GDE-ECHO-300]. One reference for every
+# node makes a common-mode offset cancel in node-to-node comparison, where a
+# differential one would not.
+allow @NTP_SUBNET@
+# Keep serving through a WAN outage. The fleet staying mutually coherent
+# matters more here than being right about UTC.
+local stratum 10

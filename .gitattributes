@@ -16,6 +16,7 @@
 LempiPi/lempi-*    text eol=lf
 appliance/lempi-*  text eol=lf
 appliance/bluetooth/lempi-*  text eol=lf
+build/*.in         text eol=lf
 
 # The same argument, for the files systemd and its neighbours read. Every
 # `.service`, `.timer` and `.conf` in this tree is consumed on the Pi and

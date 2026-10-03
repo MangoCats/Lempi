@@ -10,7 +10,7 @@
 #
 #     HOST=pi@other bash LempiPi/setup-lempi02w.sh ...   # default pi@lempi02w
 #
-# Runs on the development host, over SSH, on appliance/setup-lib.sh, with
+# Runs on the development host, over SSH, on build/setup-lib.sh, with
 # everything every appliance has from appliance/common.sh [APP-SET-020].
 #
 # **Two halves, unlike the other two.** This node's own part -- its
@@ -38,7 +38,7 @@ case "${1:---check}" in
 esac
 
 SETUP_NAME=setup-lempi02w
-. appliance/setup-lib.sh
+. build/setup-lib.sh
 . appliance/common.sh
 . appliance/bluetooth/items.sh
 

@@ -54,7 +54,7 @@ esac
 # The engine and what every appliance has [APP-SET-010]; this file is what
 # lp3-wifi has besides.
 SETUP_NAME=setup-lp3
-. appliance/setup-lib.sh
+. build/setup-lib.sh
 . appliance/common.sh
 . appliance/bluetooth/items.sh
 

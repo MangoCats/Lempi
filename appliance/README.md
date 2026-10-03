@@ -31,8 +31,8 @@ the mount itself names it `[GDE-DEP-070]`.
 All three at once, one after another, with a summary naming each:
 
 ```
-bash build/setup-appliances.sh            # --check
-bash build/setup-appliances.sh --go       # or name nodes: --go bose lp3-wifi
+bash build/setup-fleet.sh            # --check
+bash build/setup-fleet.sh --go       # or name nodes: --go bose lp3-wifi
 ```
 
 **`[APP-SET-030]` `--go` on an overlay root writes both layers.** A write to
@@ -57,7 +57,7 @@ A file is compared byte for byte. A copy that differs only in its comments
 still `DIFFERS`: what is on the node is either the repository's file or it is
 not.
 
-[`setup-lib.sh`](setup-lib.sh) is the engine (`item`, `file_item`,
+[`build/setup-lib.sh`](../build/setup-lib.sh) is the engine (`item`, `file_item`,
 `retired_item`, and the target's root and OS, said before anything runs
 `[GDE-DEP-060]`). It came from `setup-lp3.sh`, where it was first written.
 
@@ -117,7 +117,7 @@ all items as recorded, with the player playing throughout. It found one fault
 of its own: `setup-appliance.sh` exited 1 after a run that changed something
 under `--no-boot-tune`, its last line being a false `[ ] && echo` — fixed.
 **bose and lp3-wifi, applied the same evening** by
-`build/setup-appliances.sh --go bose lp3-wifi`, run by the maintainer — the
+`build/setup-fleet.sh --go bose lp3-wifi`, run by the maintainer — the
 overlay path's first run: 5 and 11 items `CHANGED`, the durable layer back
 read-only on both, nothing left staged. Then **both rebooted**, and a `--check`
 of all three reported every item as recorded on fresh boots: no failed units,

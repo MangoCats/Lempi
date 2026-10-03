@@ -20,6 +20,10 @@
 # after lempi02w's --go, so that bose and lp3-wifi could be brought level by
 # one command each, not a file at a time.
 #
+# **Every machine that plays, since the same evening** [FLT-SHP-030]: moved
+# here from appliance/ when smartboardpc and teacherslounge were set up on it
+# too, since it is no longer an appliance's alone.
+#
 # A caller sets HOST and MODE, sources this, and calls `setup_target` before
 # any item and `setup_finish` after the last. It must have `cd`'d to the
 # repository root: file items name their local copy by path from there.
@@ -148,6 +152,32 @@ file_item() {
             did "$1"
         else
             differ "$1" "apply failed${5:+ (or $5 refused it)}"
+        fi
+    elif [ -z "$have" ]; then
+        differ "$1" "absent"
+    else
+        differ "$1" "not this repository's file"
+    fi
+}
+
+# user_file_item NAME LOCAL REMOTE MODE [AFTER] -- file_item for a file in
+# the SSH user's own home: REMOTE is relative to it, and the file is the
+# user's, not root's -- a systemd user unit, say. AFTER, if given, runs on
+# the node once the file is placed (a `systemctl --user daemon-reload`).
+user_file_item() {
+    local want have
+    [ -f "$2" ] || die "$2 missing from the repository"
+    want=$(md5sum < "$2" | cut -c1-32)
+    have=$(on "test -f '$3' && md5sum '$3' | cut -c1-32")
+    if [ "$want" = "$have" ]; then ok "$1"; return; fi
+    if [ "$MODE" = go ]; then
+        if scp -q "$2" "$HOST:/tmp/lempi-setup.part" \
+           && on "mkdir -p \"\$(dirname '$3')\" && install -m $4 /tmp/lempi-setup.part '$3' && rm -f /tmp/lempi-setup.part" \
+           && { [ -z "${5:-}" ] || on "$5"; } \
+           && [ "$(on "md5sum '$3' | cut -c1-32")" = "$want" ]; then
+            did "$1"
+        else
+            differ "$1" "apply failed"
         fi
     elif [ -z "$have" ]; then
         differ "$1" "absent"

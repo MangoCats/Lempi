@@ -9,7 +9,7 @@
 #
 #     HOST=pi@other bash BosePi/setup-bose.sh ...   # default pi@bose
 #
-# Runs on the development host, over SSH, on appliance/setup-lib.sh, with
+# Runs on the development host, over SSH, on build/setup-lib.sh, with
 # everything every appliance has from appliance/common.sh [APP-SET-020].
 #
 # **This is not how a bose card is built.** That is the five-phase pipeline
@@ -35,7 +35,7 @@ case "${1:---check}" in
 esac
 
 SETUP_NAME=setup-bose
-. appliance/setup-lib.sh
+. build/setup-lib.sh
 . appliance/common.sh
 
 setup_target

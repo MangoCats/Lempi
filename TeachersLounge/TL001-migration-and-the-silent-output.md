@@ -140,6 +140,12 @@ boot suits neither. So it stays in `SOURCES`, not `APPLIANCES`. A manual
 start must still carry `[TL-OPS-020]`'s environment, or it will start and be
 silent. Do not add a unit here without asking.
 
+**`[TL-SET-010]` This machine's setup is a script since 2026-10-03:**
+[`setup-tl.sh`](setup-tl.sh), `--check` to compare and `--go` to apply, on the
+engine every node uses `[FLT-SHP-030]`. It records the decision above as an item
+— no player service, user or system — so a unit added later shows as a
+difference rather than passing unnoticed.
+
 **`[TL-OPN-030]` The predecessor is still installed and still runnable**, with
 its checkout and a 3.3 G data directory that includes a pre-split monolith and
 its backup. Removing it is a separate decision from this migration, and

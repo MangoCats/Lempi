@@ -1,0 +1,6 @@
+# Lempi fleet time, on the fleet's own time server [GDE-ECHO-300]. The other
+# nodes prefer this machine; it takes its own time from the same fallback
+# every node has, so a WAN source that wanders moves the whole fleet
+# together. Both are non-leap-smearing.
+pool us.pool.ntp.org iburst maxsources 3
+server time.nist.gov iburst

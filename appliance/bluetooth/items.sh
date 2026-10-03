@@ -2,7 +2,7 @@
 #
 # Sourced, not run. What every appliance that plays to a Bluetooth speaker
 # has [APP-BT-010] -- lempi02w and lp3-wifi; bose plays to its DAC and has
-# none of it. Needs appliance/setup-lib.sh sourced and `setup_target` run.
+# none of it. Needs build/setup-lib.sh sourced and `setup_target` run.
 #
 # Until 2026-10-02 lempi02w's copy was heredocs in setup-appliance.sh and
 # lp3-wifi's was files in LempiPlay3/, copied from it; they matched but for
