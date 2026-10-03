@@ -1,10 +1,10 @@
 # FLEET001: The Fleet
 
-**Machine Record — the fleet as a whole · established 2026-09-26 · update at milestones**
+**Machine Record — the fleet as a whole · established 2026-09-26 · updated 2026-10-02 · update at milestones**
 
 Every machine that holds a Lempi or Vipunen database, what it is for, and where its data lives. This file is **mirrored**: it lives in the repository, so the desktop, `teacherslounge` and `smartboardpc` each carry it in their checkout. Updating it means committing here and pulling there. Keep it current at milestones and when the fleet changes — a node added, moved, rebuilt or retired, a role changed — not with every commit. Each fact carries the date it was read, so a stale one is visible as stale.
 
-> **Related:** [SPEC046](../docs/spec/SPEC046-star-sync.md) (how the databases are merged) · [`data/README.md`](../data/README.md) (the hub's own state) · `fleet/targets.env`, private, shaped like [`fleet-example/targets.env`](../fleet-example/targets.env) (what the deploy scripts address) · each node's own folder below
+> **Related:** [SPEC046](../docs/spec/SPEC046-star-sync.md) (how the databases are merged) · [appliance/](../appliance/README.md) (how each appliance is set up and checked) · [`data/README.md`](../data/README.md) (the hub's own state) · `fleet/targets.env`, private, shaped like [`fleet-example/targets.env`](../fleet-example/targets.env) (what the deploy scripts address) · each node's own folder below
 
 ---
 
@@ -15,18 +15,20 @@ Every machine that holds a Lempi or Vipunen database, what it is for, and where 
 | node | ssh | role | hardware · OS | root | own folder |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `GMKtec` (the desktop) | — | **hub**: Vipunen, the primary pair in `data/`, the build host for everything | Windows 11 | — | this repository |
-| `teacherslounge` | `sw@teacherslounge` | **mirror** of the hub, validating the tools under Linux; the acoustic instrument `[LOG008]` | Latitude 5590 · Ubuntu 22.04 | ext4 | [TeachersLounge/](../TeachersLounge/TL001-migration-and-the-silent-output.md) |
-| `smartboardpc` ("Smart") | `mango@smartboardpc` | Linux build host; playback node; the fleet's chrony reference | Quieter HD3 · Ubuntu 24.04 | ext4 | [SmartPC/](../SmartPC/SMART001-survey.md) |
-| `lempi02w` | `pi@lempi02w` | appliance; Bluetooth speaker; where most listener edits are made | Pi Zero 2 W · bookworm | ext4 | [LempiPi/](../LempiPi/IMPL001-appliance-setup.md) |
+| `teacherslounge` | `sw@teacherslounge` | **mirror** of the hub, validating the tools under Linux; the acoustic instrument `[LOG008]`; a speaker the Export page sends to since 2026-10-02 | Latitude 5590 · Ubuntu 22.04 | ext4 | [TeachersLounge/](../TeachersLounge/TL001-migration-and-the-silent-output.md) |
+| `smartboardpc` ("Smart") | `mango@smartboardpc` | Linux build host; playback node; the fleet's chrony reference; a speaker the Export page sends to since 2026-10-02 | Quieter HD3 · Ubuntu 24.04 | ext4 | [SmartPC/](../SmartPC/SMART001-survey.md) |
+| `lempi02w` | `pi@lempi02w` | appliance; Bluetooth speaker; where most listener edits are made; kept on bookworm and plain ext4 on purpose `[FLT-ISS-040]` | Pi Zero 2 W · bookworm | ext4 | [LempiPi/](../LempiPi/IMPL001-appliance-setup.md) |
 | `bose` | `pi@bose` | appliance; HiFiBerry DAC+; echo leader | Pi 4 · trixie | **overlay** | [BosePi/](../BosePi/BOSE004-operating-health.md) |
-| `lp3-wifi` (`lempiplay3`) | `pi@lp3-wifi` | appliance; framebuffer UI; echo follower | Pi 3 B · trixie | **overlay** | [LempiPlay3/](../LempiPlay3/LP3001-the-node-and-its-units.md) |
+| `lp3-wifi` (`lempiplay3`) | `pi@lp3-wifi` | appliance; framebuffer UI; echo follower; the jack, or a Bluetooth speaker since 2026-10-02 `[LP3-BT-010]` | Pi 3 B · trixie | **overlay** | [LempiPlay3/](../LempiPlay3/LP3001-the-node-and-its-units.md) |
 | the Moto G | adb, see `android/README.md` | Android test phone — no database in the fleet yet | moto g power (2021) · Android 11 | — | [android/](../android/README.md) |
 
 The overlay nodes need both layers written, and any write must go through the scripts CLAUDE.md §4 names.
 
-## 2. Where each database lives — read 2026-09-26
+**`[FLT-SHP-020]` Each appliance is set up, and checked, by one script on one engine** `[APP-SET-010]`: `setup-lp3.sh`, `setup-bose.sh`, `setup-lempi02w.sh`, each with `--check`, which compares the node's durable layer with the repository and changes nothing. What all three have is one list, `appliance/common.sh` `[APP-SET-020]`. Since 2026-10-02; the first run's differences are in `[FLT-ISS-050]`.
 
-**`[FLT-DAT-010]` Listener and catalogue, per node.** The appliances run `lempi --listener … --library …`. The paths are from each node's running unit.
+## 2. Where each database lives — read 2026-10-02
+
+**`[FLT-DAT-010]` Listener and catalogue, per node.** Every node runs the split pair, and nothing else: the single-file mode was removed on 2026-10-02, and the player now refuses to start without both halves `[IMPL-DBSPLIT-025]`. The paths are from each node's running unit; unchanged since 2026-09-26.
 
 | node | listener (its own) | catalogue | backups |
 | :--- | :--- | :--- | :--- |
@@ -38,6 +40,16 @@ The overlay nodes need both layers written, and any write must go through the sc
 | `lp3-wifi` | `/var/lempi/listener.db` | `/srv/library/library.db` | `/var/lempi/listener-backups/` |
 
 The desktop's pair went missing when this repository was seeded, and was rebuilt by merging every node's `[SPEC046]`; `data/README.md` records both.
+
+**`[FLT-DAT-015]` The speakers the Export page sends to** — the hub's `sync_peers`, read 2026-10-02. A send puts the audio in the speaker's own music folder, checked to exist and to have room first `[SPEC-STAR-094]`.
+
+| speaker | catalogue | music folder | free, 2026-10-02 |
+| :--- | :--- | :--- | ---: |
+| `lempi02w`, `bose`, `lp3-wifi` | `/srv/library/library.db` | `/srv/library/audio` (the default) | — |
+| `smartboardpc` | `/var/lempi/library.db` | `/media/mango/PortableSSD/Media/Music`, a USB drive | 11 GB of 1.9 TB |
+| `teacherslounge` | `~/lempi-data/library.db` | `~/Music` | 78 GB |
+
+The Moto G is not a speaker here: a send is pushed over ssh, and the phone has none. It imports the same bundles by hand, and a phone that asks for what it lacks is the shape it would take as an everyday player.
 
 **`[FLT-DAT-020]` The 2026-09-26 merge reached every node, and each keeps what it had before.** Each node received its own copy by patch `[SPEC-STAR-080]`: the household's merged edits, its own plays and state untouched `[REQ-PD-113]`, and the merged catalogue with its own paths. On every node the backup was taken with the player stopped, both patches applied with no conflict, and every governed table read back from disk identical to the target. The evidence is in `data/recovery/2026-09-26/distribute/`.
 
@@ -57,15 +69,27 @@ Beside each backup, `pre-star-2026-09-26-tools/` holds the tool and the two patc
 - Each node keeps the backups of its three most recent syncs as `pre-sync-<run>/`, beside its listener and its catalogue. The recovery's `pre-star-2026-09-26/` is never pruned.
 - The first routine sync, `20260926T1952Z`, carried the file hashes and that afternoon's edits to every node.
 
-## 3. What each runs — read 2026-09-26
+## 3. What each runs — read 2026-10-02
 
 **`[FLT-RUN-010]`** The appliances' build is from `lempi --version`. The source hosts' is their checkout.
 
 | node | player | notes |
 | :--- | :--- | :--- |
-| `lempi02w`, `bose`, `lp3-wifi` | `bca6e7a`, deployed 2026-09-26 evening (the skins' progress-bar fix, `[LOG-SPK-900]`) | lempi02w is plain ext4; the other two were written to both layers and their durable copy checked |
-| `teacherslounge` | no player service, **on purpose**: started by hand only `[TL-OPN-020]`; its checkout follows this repository | mirrors this file |
-| `smartboardpc` | `6e38ab4`, built there 2026-09-26 by `build/update-source-host.sh` | migrated that day `[FLT-ISS-020]`; a `systemd --user` unit since the same evening `[SMT-SVC-010]` |
+| `lempi02w`, `bose`, `lp3-wifi` | `e1e27b9`, and `import_bundle` the same | lempi02w is plain ext4; the other two hold durable copies, and lp3-wifi's fbui is the same build |
+| `teacherslounge` | `ca8313f`, built there 2026-10-02 by `build/update-source-host.sh`, which now also links `import_bundle` onto the PATH; no player service, **on purpose**: started by hand only `[TL-OPN-020]` | mirrors this file |
+| `smartboardpc` | `ca8313f`, built there the same way, its `systemd --user` player restarted onto it `[SMT-SVC-010]` | migrated 2026-09-26 `[FLT-ISS-020]` |
+
+**`[FLT-RUN-020]` How each plays, and what MPD is where.** The appliances' audio paths differ on purpose only where the difference buys something.
+
+| node | output | MPD |
+| :--- | :--- | :--- |
+| `lempi02w` | PipeWire → a Bluetooth speaker | guest backend, idle until switched to |
+| `bose` | ALSA → the HiFiBerry DAC, directly — the one difference kept for what it gives | guest backend |
+| `lp3-wifi` | PipeWire → the jack, or the paired Oontz | none, by decision |
+| `smartboardpc` | PulseAudio's default device | not installed |
+| `teacherslounge` | by hand | not installed |
+
+MPD stays on lempi02w and bose for now, by the maintainer's decision of 2026-10-02; if the difference from lp3-wifi causes friction, the answer is to add it there rather than remove it.
 
 ## 4. Standing issues
 
@@ -87,8 +111,16 @@ Related but distinct, and not counted: on 2026-09-25 `bose` lost only *unmarked*
 
 The same evening it gained a unit, set up by `SmartPC/setup-smart.sh` `[SMT-SVC-010]`. A reboot on 2026-09-26 brought it back playing, and following `bose`'s echo, with no one touching it. That machine logs its desktop in automatically, so the reboot did not test the case with no login at all, which the unit is also built for.
 
+**`[FLT-ISS-040]` `lempi02w` stays at risk, as a trial.** It is the node a power cut stops — its speaker supplies it — and the only appliance with a plain writable root and bookworm. The maintainer's decision, 2026-10-02: leave it so. If its card fails, that is a data point, and the repair is a rebuild with the catalogue and music from the other nodes. **At that rebuild, choose its data paths for whoever will run it**, rather than copying today's by default.
+
+**`[FLT-ISS-050]` What `--check` found on 2026-10-02, not yet applied** `[APP-SET-020]`. Read-only, against each node's durable layer:
+- every node: the combined journal file, and on the trixie nodes the combined swap file, not yet installed — the settings are the same but for the journal's added bounds
+- `lempi02w`: its unit still the two-line form, with the drop-in, its pre-migration copy and the single-file stub, all retired `[PI-PRE-080]` — its running command line is already the right one
+- `bose`: **cloud-init never disabled**, so it runs the imager's datasource at every boot; its unlock-check unit has CRLF line endings on the card; `mpd.conf` differs in comments only
+- `bose`'s unit omits `--port`, which defaults to the same 5720 — fixed at its next touch, by the maintainer's choice
+
 ~~**`[FLT-ISS-030]` `lp3-wifi` keeps UK time.**~~ *Resolved 2026-09-26.* Its listener recorded a UTC offset of +60 minutes where every other node had −240, so anything that follows the clock — a programme that starts at a set time `[SPEC-DIR-180]` — ran five hours off there. The image had come up in `Europe/London`, and no script said otherwise. `LempiPlay3/setup-lp3.sh` now carries the zone, `America/New_York`. It was written to both layers, and the player recorded −240 at its restart. `overlayroot-chroot` could not remount the durable layer read-only on exit ("mount point is busy"). A second `remount,ro` a moment later succeeded; check `findmnt -no OPTIONS /media/root-ro` after using it.
 
 ---
 
-**Traceability:** `[FLT-SHP-010]`, `[FLT-DAT-010..030]`, `[FLT-RUN-010]`, `[FLT-ISS-010..030]` · read from the machines 2026-09-26
+**Traceability:** `[FLT-SHP-010..020]`, `[FLT-DAT-010..030]`, `[FLT-RUN-010..020]`, `[FLT-ISS-010..050]` · read from the machines 2026-09-26 and 2026-10-02
