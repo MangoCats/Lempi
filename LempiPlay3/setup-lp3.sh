@@ -5,7 +5,7 @@
 # node, and the means of making another like it.
 #
 #     bash LempiPlay3/setup-lp3.sh            # --check: compare, change nothing
-#     bash LempiPlay3/setup-lp3.sh --go       # apply, on a card with a writable root
+#     bash LempiPlay3/setup-lp3.sh --go       # apply -- on the locked card, to both layers
 #     bash LempiPlay3/setup-lp3.sh --lock     # last: put the root on an overlay
 #
 #     HOST=pi@other bash LempiPlay3/setup-lp3.sh ...   # default pi@lp3-wifi
@@ -60,6 +60,9 @@ SETUP_NAME=setup-lp3
 
 # ------------------------------------------------------------ preconditions
 setup_target
+# --lock puts the overlay on; a card already on one has nothing to lock, and
+# its boot partition is read-only besides.
+[ "$MODE" = lock ] && [ -n "$P" ] && die "$HOST is already on an overlay; --lock is for a writable root"
 PT=$(on "sudo blkid -s PTUUID -o value /dev/mmcblk0")
 [ -n "$PT" ] || die "could not read the card's partition-table id"
 say "card partition-table id $PT"
@@ -163,7 +166,7 @@ done
 for pair in log:/var/log etc-ssh:/etc/ssh home-pi:/home/pi \
             nm-connections:/etc/NetworkManager/system-connections bluetooth:/var/lib/bluetooth; do
     d=${pair%%:*}; src=${pair#*:}
-    item "STATE holds /var/lempi/$d" "test -d /var/lempi/$d" \
+    state_item "STATE holds /var/lempi/$d" "test -d /var/lempi/$d" \
          "sudo mkdir -p /var/lempi/$d && sudo cp -a $src/. /var/lempi/$d/"
 done
 # What every appliance has about STATE and LIBRARY: ownership, sudoers,
@@ -172,7 +175,7 @@ done
 common_data_items
 # lp3-wifi binds NetworkManager's saved networks onto STATE, and what moved
 # there must keep its owner.
-item "saved networks' directory owned by root" \
+state_item "saved networks' directory owned by root" \
      "test \"\$(stat -c %U /etc/NetworkManager/system-connections)\" = root" \
      "sudo chown root:root /etc/NetworkManager/system-connections"
 

@@ -5,7 +5,7 @@
 # against it, as LempiPlay3/setup-lp3.sh is for lp3-wifi.
 #
 #     bash BosePi/setup-bose.sh            # --check: compare, change nothing
-#     bash BosePi/setup-bose.sh --go       # apply, on a card with a writable root
+#     bash BosePi/setup-bose.sh --go       # apply -- on the locked card, to both layers
 #
 #     HOST=pi@other bash BosePi/setup-bose.sh ...   # default pi@bose
 #
@@ -18,8 +18,9 @@
 # like, so a difference shows as a line rather than as a surprise. Written
 # 2026-10-02 from the node's durable layer and this folder's own files.
 #
-# The node is locked [IMPL-BOS-120], so --go refuses; a single file goes
-# through build/install-config.sh, which writes both layers [IMPL-BOS-185].
+# The node is locked [IMPL-BOS-120]: --go writes every change live and to the
+# durable layer, as build/install-config.sh does for one file, and reads the
+# durable copy back [APP-SET-030].
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 

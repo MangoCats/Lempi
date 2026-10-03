@@ -42,7 +42,7 @@ bluetooth_items() {
     # verbs and no more. lp3-wifi had none until 2026-10-02 -- pi's blanket
     # rule covered it, which is why nothing failed. A malformed sudoers file
     # can take sudo away altogether, so it is validated before it is placed.
-    file_item_sudoers "sudoers: lempi-btctl" $B/lempi-btctl.sudoers /etc/sudoers.d/lempi-btctl
+    file_item "sudoers: lempi-btctl" $B/lempi-btctl.sudoers /etc/sudoers.d/lempi-btctl 440 visudo
 
     # The keeper, the watchdog and the agent [PI3-FOUND-090], [PI3-FOUND-750],
     # [PI3-FOUND-630]; /run/lempi for the agent; and the keeper's and the
@@ -86,29 +86,7 @@ bluetooth_items() {
     retired_item "PipeWire: lempi02w's 10-lempi-quantum.conf (in 10-lempi.conf now)" \
         /etc/pipewire/pipewire.conf.d/10-lempi-quantum.conf
     # Live, not under $P: on an overlay node /home/pi is STATE.
-    item "PipeWire: pi's own 10-rate.conf retired (in 10-lempi.conf now)" \
+    state_item "PipeWire: pi's own 10-rate.conf retired (in 10-lempi.conf now)" \
          "! test -e /home/pi/.config/pipewire/pipewire.conf.d/10-rate.conf" \
          "rm -f /home/pi/.config/pipewire/pipewire.conf.d/10-rate.conf" "retired, still present"
-}
-
-# file_item_sudoers NAME LOCAL REMOTE -- file_item, but checked by visudo on
-# the node before it is placed, and only ever mode 440.
-file_item_sudoers() {
-    local want have
-    [ -f "$2" ] || die "$2 missing from the repository"
-    want=$(md5sum < "$2" | cut -c1-32)
-    have=$(on "sudo test -f '$P$3' && sudo md5sum '$P$3' | cut -c1-32")
-    if [ "$want" = "$have" ]; then ok "$1"; return; fi
-    if [ "$MODE" = go ]; then
-        if scp -q "$2" "$HOST:/tmp/lempi-setup.sudoers" \
-           && on "sudo visudo -cf /tmp/lempi-setup.sudoers >/dev/null && sudo install -m 440 -o root -g root /tmp/lempi-setup.sudoers '$3'; rm -f /tmp/lempi-setup.sudoers; sudo test -f '$3'"; then
-            did "$1"
-        else
-            differ "$1" "apply failed (or visudo refused it)"
-        fi
-    elif [ -z "$have" ]; then
-        differ "$1" "absent"
-    else
-        differ "$1" "not this repository's file"
-    fi
 }

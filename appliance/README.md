@@ -25,10 +25,33 @@ script, run on the development host, reaching the node over SSH:
 
 Each takes `--check` (the default: compare, change nothing) or `--go` (apply
 what differs). Every item prints `ok`, `CHANGED` or `DIFFERS`. On an overlay
-root, `--check` reads the **durable** layer under `/media/root-ro`
-`[GDE-DEP-070]`, and `--go` refuses: a write to `/` there is gone at the next
-reboot `[IMPL-BOS-185]`. Use [`build/install-config.sh`](../build/install-config.sh)
-for one file on a locked node.
+root, `--check` reads the **durable** layer, the overlay's lower directory as
+the mount itself names it `[GDE-DEP-070]`.
+
+All three at once, one after another, with a summary naming each:
+
+```
+bash build/setup-appliances.sh            # --check
+bash build/setup-appliances.sh --go       # or name nodes: --go bose lp3-wifi
+```
+
+**`[APP-SET-030]` `--go` on an overlay root writes both layers.** A write to
+`/` there lands in a tmpfs and is gone at the next reboot `[IMPL-BOS-185]`, so
+every change is made twice, the way
+[`build/install-config.sh`](../build/install-config.sh) writes one file:
+
+- a file goes live and to the durable layer, and the durable copy is read back
+- a retired file is removed from both
+- any other change runs live, then again inside `overlayroot-chroot`; its check
+  reads the durable layer, so that is what decides whether it took
+- what lives on STATE or LIBRARY — pi's home, `/etc/ssh`, `/var/log`, the data
+  trees — is changed live only (`state_item`): a live write there is durable
+- the durable layer is put back read-only at the end, or a warning says it
+  could not be, and units that changed are reloaded
+
+Nothing restarts the player. Written 2026-10-02, after lempi02w's `--go`, at
+the maintainer's request that bose and lp3-wifi be brought level the same
+way. **Its overlay path had not run when it was committed.**
 
 A file is compared byte for byte. A copy that differs only in its comments
 still `DIFFERS`: what is on the node is either the repository's file or it is
@@ -93,9 +116,9 @@ maintainer: every item `ok` or `CHANGED`, and a `--check` after it reported
 all items as recorded, with the player playing throughout. It found one fault
 of its own: `setup-appliance.sh` exited 1 after a run that changed something
 under `--no-boot-tune`, its last line being a false `[ ] && echo` — fixed.
-bose and lp3-wifi are locked, so `--go` refuses there; each `DIFFERS` on them
-is a file still to put through `build/install-config.sh`.
+bose and lp3-wifi are still to do, with the same command since the overlay
+path `[APP-SET-030]`.
 
 ---
 
-**Traceability:** `[APP-SET-010]`, `[APP-SET-020]`, `[APP-BT-010]` · `[GDE-DEP-040]`
+**Traceability:** `[APP-SET-010..030]`, `[APP-BT-010]` · `[GDE-DEP-040]`

@@ -24,7 +24,7 @@ Every machine that holds a Lempi or Vipunen database, what it is for, and where 
 
 The overlay nodes need both layers written, and any write must go through the scripts CLAUDE.md §4 names.
 
-**`[FLT-SHP-020]` Each appliance is set up, and checked, by one script on one engine** `[APP-SET-010]`: `setup-lp3.sh`, `setup-bose.sh`, `setup-lempi02w.sh`, each with `--check`, which compares the node's durable layer with the repository and changes nothing. What all three have is one list, `appliance/common.sh` `[APP-SET-020]`. Since 2026-10-02; the first run's differences are in `[FLT-ISS-050]`.
+**`[FLT-SHP-020]` Each appliance is set up, and checked, by one script on one engine** `[APP-SET-010]`: `setup-lp3.sh`, `setup-bose.sh`, `setup-lempi02w.sh`, each with `--check`, which compares the node's durable layer with the repository and changes nothing. What all three have is one list, `appliance/common.sh` `[APP-SET-020]`. Since 2026-10-02; the first run's differences are in `[FLT-ISS-050]`. `build/setup-appliances.sh` runs all three in turn, `--check` or `--go`; on bose and lp3-wifi `--go` writes both layers `[APP-SET-030]`.
 
 ## 2. Where each database lives — read 2026-10-02
 

@@ -52,7 +52,7 @@ common_base_items() {
     # maintainer asked that every node's script make one (2026-09-25). Made
     # once, never replaced: a new key would silently undo wherever the old
     # one was authorised. Checked live: on an overlay node /home/pi is STATE.
-    item "pi's ed25519 SSH key" "test -f /home/pi/.ssh/id_ed25519 && test -f /home/pi/.ssh/id_ed25519.pub" \
+    state_item "pi's ed25519 SSH key" "test -f /home/pi/.ssh/id_ed25519 && test -f /home/pi/.ssh/id_ed25519.pub" \
          "ssh-keygen -q -t ed25519 -N '' -C pi@\$(hostname) -f /home/pi/.ssh/id_ed25519"
 
     # The fleet clock [GDE-ECHO-300]: the fleet's own reference, rendered here
@@ -116,9 +116,9 @@ common_base_items() {
 common_data_items() {
     # Root's files stay root's. bose's provisioning once handed pi its whole
     # /etc/ssh and /var/log with a recursive chown (fixed 2026-09-25).
-    item "/etc/ssh all owned by root" "test -z \"\$(sudo find /etc/ssh -not -user root)\"" \
+    state_item "/etc/ssh all owned by root" "test -z \"\$(sudo find /etc/ssh -not -user root)\"" \
          "sudo chown -R root:root /etc/ssh"
-    item "/var/log owned by root" "test \"\$(stat -c %U /var/log)\" = root" \
+    state_item "/var/log owned by root" "test \"\$(stat -c %U /var/log)\" = root" \
          "sudo chown root:root /var/log"
     # Every sudoers drop-in root's and 440, whatever it is called -- the
     # image names pi's `010_pi-nopasswd` on bookworm and `010-pi-nopasswd`
@@ -130,9 +130,9 @@ common_data_items() {
     # The two data trees: pi's, and nothing in them writable by everyone. A
     # copy from a Windows drive arrives 0777 under `rsync -a`, which is how two
     # libraries ended up (2026-09-25); symlinks and sticky directories excepted.
-    item "/var/lempi owned by pi" "test \"\$(stat -c %U /var/lempi)\" = pi" "sudo chown pi:pi /var/lempi"
-    item "/srv/library owned by pi" "test \"\$(stat -c %U /srv/library)\" = pi" "sudo chown pi:pi /srv/library"
-    item "nothing world-writable on /var/lempi or /srv/library" \
+    state_item "/var/lempi owned by pi" "test \"\$(stat -c %U /var/lempi)\" = pi" "sudo chown pi:pi /var/lempi"
+    state_item "/srv/library owned by pi" "test \"\$(stat -c %U /srv/library)\" = pi" "sudo chown pi:pi /srv/library"
+    state_item "nothing world-writable on /var/lempi or /srv/library" \
          "test -z \"\$(sudo find /var/lempi /srv/library -xdev -perm -0002 ! -type l ! -perm -1000 -print -quit)\"" \
          "sudo find /var/lempi /srv/library -xdev -type d -perm -0002 ! -perm -1000 -exec chmod 755 {} + ; sudo find /var/lempi /srv/library -xdev -type f -perm -0002 -exec chmod 644 {} +"
 }
