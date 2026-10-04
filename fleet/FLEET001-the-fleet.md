@@ -30,7 +30,7 @@ The overlay nodes need both layers written, and any write must go through the sc
 
 ## 2. Where each database lives — read 2026-10-02
 
-**`[FLT-DAT-010]` Listener and catalogue, per node.** Every node runs the split pair, and nothing else: the single-file mode was removed on 2026-10-02, and the player now refuses to start without both halves `[IMPL-DBSPLIT-025]`. The paths are from each node's running unit; unchanged since 2026-09-26.
+**`[FLT-DAT-010]` Listener and catalogue, per node.** Every node runs the split pair, and nothing else: the single-file mode was removed on 2026-10-02, and the player now refuses to start without both halves `[IMPL-DBSPLIT-025]`. The last single-file database anywhere — the predecessor's, on teacherslounge — was removed on 2026-10-04 after every play in it was matched in the hub's listener `[TL-OPN-030]`; smartboardpc's predecessor data holds only split halves, and its never-pruned recovery copy `[FLT-DAT-030]`. The paths are from each node's running unit; unchanged since 2026-09-26.
 
 | node | listener (its own) | catalogue | backups |
 | :--- | :--- | :--- | :--- |

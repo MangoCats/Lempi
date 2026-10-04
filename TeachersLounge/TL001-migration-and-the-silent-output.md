@@ -146,7 +146,22 @@ engine every node uses `[FLT-SHP-030]`. It records the decision above as an item
 — no player service, user or system — so a unit added later shows as a
 difference rather than passing unnoticed.
 
-**`[TL-OPN-030]` The predecessor is still installed and still runnable**, with
+~~**`[TL-OPN-030]` The predecessor is still installed and still runnable**, with
 its checkout and a 3.3 G data directory that includes a pre-split monolith and
-its backup. Removing it is a separate decision from this migration, and
-`[TL-OPN-010]` should be settled first.
+its backup.~~ *Removed 2026-10-04, at the maintainer's direction* — the checkout
+(479 MB) and the data directory (3.3 G), the fleet's last single-file database
+among them. Checked first, not assumed:
+
+- nothing ran from either, opened them, or pointed at them — no process, unit,
+  cron entry, launcher or link
+- the checkout had no unpushed commits; its two untracked items were an empty
+  `.part` file and a launcher for the monolith
+- **every play survived elsewhere**: all 37,762 in its listener matched the
+  hub's `data/listener.db` by time and recording, with its 3,263 preferences
+  and 13 flags; the monolith, its pre-split backup and three listener backups
+  each held the same 37,762 and nothing more
+- the catalogue it held is the one this machine's own pair was copied from
+  `[TL-MIG-020]`, and the hub's merged catalogue since
+
+`[TL-OPN-010]` had been asked to settle first; it does not depend on the
+predecessor, and stays open on its own.
