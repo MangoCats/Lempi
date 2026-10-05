@@ -151,6 +151,10 @@ SIGNED_TABLES = sorted(t for t, s in sm.TABLES.items() if s["rule"] in (sm.LWW, 
 SIGNED_EXCLUDE = {"files": sorted(sm.MACHINE_SCOPE["files"])}
 NATURAL_KEYS_NEEDED = 1    # [SPEC-NKP-075]: the catalogue patch by natural key
 CATALOGUE_PATCH_MAX = 16 << 20   # [SPEC-NKP-920]: the most a player is sent in one request, in bytes of JSON
+PART_MAX = 8 << 20               # [SPEC-NKP-930]: the most JSON in one part of a patch sent in parts
+NATURAL_PART_MAX = 32 << 20      # the natural entries stay whole in the first part; the player takes no more than this
+PARTS_MAX = 400                  # and no more parts than this
+CATALOGUE_TOTAL_MAX = 1 << 30    # a patch past this is not a patch: say so
 START_WAIT_S = 90          # [SPEC-STAR-101]: how long an on-demand player has to answer
 
 
@@ -240,6 +244,105 @@ def catalogue_words(st):
     if st["state"] in ("other-ids", "changed"):
         text += f" ({st['files']} files, {st['passages']} passages)"
     return text
+
+
+class PartsUnsupported(Exception):
+    """A catalogue patch the hub will not send, even in parts, and why."""
+
+
+def json_size(x):
+    return len(json.dumps(x, separators=(",", ":")))
+
+
+def split_catalogue(cat, limit=None):
+    """[SPEC-NKP-930]: a catalogue patch cut into parts of at most `limit` bytes of JSON.
+
+    The natural entries stay whole in the first part, so the node's check, which sees
+    the database as it was before the patch, still sees every one of them. Every other
+    table is cut by rows, in table order, and packed; a table's `add_columns` and `create`
+    ride only in the first piece that names it, which the node applies before the rest."""
+    limit = limit or PART_MAX
+    natural = [e for e in cat["tables"] if "natural" in e]
+    plain = [e for e in cat["tables"] if "natural" not in e]
+    nat_bytes = sum(json_size(e) for e in natural)
+    if nat_bytes > NATURAL_PART_MAX:
+        raise PartsUnsupported(f"the tables that hold ids come to {nat_bytes / 1048576:.0f} MB, more than the "
+                               f"{NATURAL_PART_MAX >> 20} MB one part may be, and cannot be cut: the node checks them together")
+    pieces = []
+    for e in plain:
+        head = {k: v for k, v in e.items() if k != "rows"}
+        budget = max(limit - json_size(head), 1)       # the table's header rides in every piece, so it counts
+        chunk, chunk_bytes, first = [], 0, True
+
+        def piece(rows, first):
+            d = dict(head, rows=rows)
+            if not first:
+                d.pop("add_columns", None)
+                d.pop("create", None)
+            return d
+
+        for r in e["rows"]:
+            rb = json_size(r)
+            if rb > NATURAL_PART_MAX:
+                raise PartsUnsupported(f"one row of {e['name']} is {rb / 1048576:.0f} MB, more than a part may be")
+            if chunk and chunk_bytes + rb > budget:
+                pieces.append(piece(chunk, first))
+                chunk, chunk_bytes, first = [], 0, False
+            chunk.append(r)
+            chunk_bytes += rb
+        if chunk or first:                      # a table with only a schema change is still one piece
+            pieces.append(piece(chunk, first))
+    parts = [{"tables": natural}] if natural else []
+    cur, cur_bytes = [], 0
+    for pc in pieces:
+        pb = json_size(pc)
+        if cur and cur_bytes + pb > limit:
+            parts.append({"tables": cur})
+            cur, cur_bytes = [], 0
+        cur.append(pc)
+        cur_bytes += pb
+    if cur:
+        parts.append({"tables": cur})
+    if len(parts) > PARTS_MAX:
+        raise PartsUnsupported(f"{len(parts)} parts, more than the {PARTS_MAX} a node takes")
+    return parts
+
+
+def write_parts(pd, parts):
+    """The parts as files beside the patch, and the manifest that names them with their digests."""
+    for old in os.listdir(pd):
+        if old.startswith("catalogue."):
+            os.remove(os.path.join(pd, old))
+    metas, total = [], 0
+    for i, part in enumerate(parts, 1):
+        name = f"catalogue.part-{i:03d}.json"
+        write_json(os.path.join(pd, name), part)
+        with open(os.path.join(pd, name), "rb") as fh:
+            data = fh.read()
+        total += len(data)
+        metas.append({"file": name, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)})
+    manifest = {"of": len(parts), "total_bytes": total, "parts": metas}
+    write_json(os.path.join(pd, "catalogue.parts.json"), manifest)
+    return manifest
+
+
+def stage_parts(plan, run, name, player, manifest, pd):
+    """[SPEC-NKP-925]: send the parts the node does not hold, and only those. What a rehearsal
+    staged is on the node still, so the commit sends nothing twice."""
+    mdir = mesh_of(plan)
+    have = (meshmod.sync_step(mdir, player, "staged", stamp_of(run)) or {}).get("catalogue", {})
+    sent = 0
+    for i, meta in enumerate(manifest["parts"], 1):
+        if have.get(str(i)) == meta["sha256"]:
+            continue
+        with open(os.path.join(pd, meta["file"]), "rb") as fh:
+            text = fh.read().decode("utf-8")
+        say(f"  {name}: staging part {i} of {manifest['of']} ({len(text) / 1048576:.1f} MB)")
+        meshmod.sync_step(mdir, player, "stage", stamp_of(run), timeout=1800.0, extra={"part": {
+            "half": "catalogue", "n": i, "of": manifest["of"], "sha256": meta["sha256"],
+            "total_bytes": manifest["total_bytes"], "text": text}})
+        sent += 1
+    return sent
 
 
 def players_up(plan, names, started):
@@ -704,7 +807,10 @@ def patch(plan, run):
             rows = {e["name"]: len(e["rows"]) for e in lis["tables"]}
             summary.append("- shared edits: " + (", ".join(f"`{k}` {v}" for k, v in sorted(rows.items())) or "nothing to send")
                            + ("" if good else " -- **NOT PROVEN: do not commit**"))
-            cat, unsupported = None, None
+            cat, unsupported, parts = None, None, None
+            for old in os.listdir(pd):                # nothing of an earlier patch lingers
+                if old.startswith("catalogue."):
+                    os.remove(os.path.join(pd, old))
             if b.get("catalogue_in_step"):
                 # A player that can apply it gets the tables that hold ids named by
                 # what identifies them everywhere [SPEC-NKP-075]; any other, the
@@ -715,15 +821,27 @@ def patch(plan, run):
                 except sp.NaturalUnsupported as err:
                     unsupported = f"the hub cannot name what changed: {err} [SPEC-NKP-080]"
             if cat is not None:
-                size = len(json.dumps(cat, separators=(",", ":")))
+                size = json_size(cat)
                 if size > CATALOGUE_PATCH_MAX:
-                    # A Pi has little memory to parse a request in, and the player's own limit is 64 MB.
-                    # The first patch after a long gap is mostly cover art; sending it in parts is
-                    # [SPEC-NKP-920], not built. The listener half still goes.
-                    unsupported = (f"the patch is {size / 1048576:.0f} MB, more than the {CATALOGUE_PATCH_MAX >> 20} MB a player is "
-                                   "sent in one request; sending it in parts is not built [SPEC-NKP-920]")
-                    cat = None
-            if cat is not None:
+                    # A Pi has little memory to parse a request in, and the player's own limit is 64 MB. The first
+                    # patch after a long gap is mostly cover art, so it goes in parts, staged on the node and
+                    # committed there in one transaction [SPEC-NKP-920].
+                    try:
+                        if size > CATALOGUE_TOTAL_MAX:
+                            raise PartsUnsupported(f"the patch is {size / 1048576:.0f} MB, more than the "
+                                                   f"{CATALOGUE_TOTAL_MAX >> 30} GB that will be sent")
+                        parts = split_catalogue(cat)
+                    except PartsUnsupported as err:
+                        unsupported = f"the patch is {size / 1048576:.0f} MB and cannot be sent in parts: {err} [SPEC-NKP-930]"
+                        cat = None
+            if cat is not None and parts is not None:
+                man = write_parts(pd, parts)
+                crow = {e["name"]: len(e["rows"]) for e in cat["tables"]}
+                summary.append("- catalogue: " + ", ".join(f"`{k}` {v}" for k, v in sorted(crow.items()))
+                               + (" by natural key" if any("natural" in e for e in cat["tables"]) else "")
+                               + f", {size / 1048576:.0f} MB in {man['of']} parts, staged on the node and committed there in one "
+                                 "transaction [SPEC-NKP-920] (proven by the player's own rehearsal, strictly)")
+            elif cat is not None:
                 write_json(os.path.join(pd, "catalogue.values.json"), cat)
                 crow = {e["name"]: len(e["rows"]) for e in cat["tables"]}
                 summary.append("- catalogue: " + (", ".join(f"`{k}` {v}" for k, v in sorted(crow.items())) or "nothing to send")
@@ -827,16 +945,24 @@ def player_step(plan, run, name, player, commit):
     pd = os.path.join(run, "patches", name)
     lis = read_json(os.path.join(pd, "listener.values.json"))
     cat = read_json(os.path.join(pd, "catalogue.values.json"))
+    parts = read_json(os.path.join(pd, "catalogue.parts.json"))
     say(f"== {name} (signed) -- {'COMMIT' if commit else 'rehearsal: nothing is kept'}")
     if player is None:
         say(f"RESULT {name}: REFUSED -- its player did not answer the members' query")
         return 1
-    if not has_rows(lis) and not has_rows(cat):
+    if not has_rows(lis) and not has_rows(cat) and not parts:
         say(f"RESULT {name}: nothing to send")
         return 0
     try:
+        extra = None
+        if parts:
+            sent = stage_parts(plan, run, name, player, parts, pd)
+            extra = {"catalogue_parts": {"of": parts["of"], "sha256": [p["sha256"] for p in parts["parts"]]}}
+            say(f"  {name}: the catalogue's {parts['of']} parts are staged ({sent} sent now, "
+                f"{parts['of'] - sent} already there)")
         got = meshmod.sync_step(mdir, player, "commit" if commit else "rehearse", stamp_of(run),
-                                cat if has_rows(cat) else None, lis if has_rows(lis) else None)
+                                cat if has_rows(cat) else None, lis if has_rows(lis) else None,
+                                timeout=3600.0 if parts else 600.0, extra=extra)
     except (ValueError, OSError) as err:
         say(f"RESULT {name}: REFUSED -- {err}")
         return 1
@@ -972,7 +1098,9 @@ def distribute(plan, run, names, commit, excuse=None, bulk=False):
                 t = targets(plan, run, name)
                 old = state["nodes"].get(name, {}) if name != hub else state.get("hub", {})
                 lib_sent = old.get("library_sent")
-                if name == hub or (name in signed and os.path.exists(os.path.join(run, "patches", name, "catalogue.values.json"))):
+                pdn = os.path.join(run, "patches", name)
+                if name == hub or (name in signed and (os.path.exists(os.path.join(pdn, "catalogue.values.json"))
+                                                       or os.path.exists(os.path.join(pdn, "catalogue.parts.json")))):
                     lib_sent = os.path.relpath(t["library"], ROOT)
                 entry = {"listener_sent": os.path.relpath(t["listener"], ROOT), "library_sent": lib_sent,
                          "at": now().isoformat(), "run": stamp_of(run)}

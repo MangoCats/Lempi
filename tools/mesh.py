@@ -625,7 +625,7 @@ def outbox_applied(mdir: str, fp: str, run: str, counts: dict) -> bool:
 # answer signed by the player's own key and checked against its certificate
 # in the roster. The player's half is `player/src/star_node.rs`.
 
-SYNC_STEPS = ("snapshot", "rehearse", "commit")
+SYNC_STEPS = ("snapshot", "rehearse", "commit", "stage", "staged")   # [SPEC-NKP-925]
 
 
 def sync_players(mdir: str) -> dict:
@@ -639,7 +639,7 @@ def sync_players(mdir: str) -> dict:
 
 
 def sync_step(mdir: str, player: dict, op: str, run: str, catalogue_patch: dict | None = None,
-              listener_patch: dict | None = None, timeout: float = 600.0) -> dict:
+              listener_patch: dict | None = None, timeout: float = 600.0, extra: dict | None = None) -> dict:
     """One step on one player; its result, once the answer is proven to be the
     player's, and to this request."""
     if op not in SYNC_STEPS:
@@ -651,6 +651,8 @@ def sync_step(mdir: str, player: dict, op: str, run: str, catalogue_patch: dict 
         raise ValueError(f"{fp[:8]} is not a player in this mesh")
     req = {"op": op, "run": run, "node": fp, "mesh": r["mesh"]["fingerprint"], "nonce": os.urandom(16).hex(),
            "at_ms": int(time.time() * 1000), "catalogue_patch": catalogue_patch, "listener_patch": listener_patch}
+    # `[SPEC-NKP-925]`: a part to stage, or the parts a rehearsal or commit is to apply.
+    req.update(extra or {})
     text = json.dumps(req, ensure_ascii=False, separators=(",", ":"))
     got = _http("POST", f"http://{player['address']}:{player.get('web_port', LEMPI_DEFAULT_PORT)}/mesh/sync/{op}",
                 {"request": text, "signature": sign(load_key(os.path.join(mdir, "mesh.key")), text.encode())},

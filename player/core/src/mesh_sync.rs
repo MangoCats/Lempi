@@ -164,13 +164,32 @@ pub fn apply_with(db: &Path, patch: &Json, allowed: Option<&[&str]>, rule: Rule,
 /// under the strict rule -- each must still hold what the patch wrote, or
 /// nothing is undone -- then the tables and columns the patch added, dropped.
 pub fn undo(db: &Path, inverse: &Json) -> Result<Applied, String> {
+    undo_parts(db, &mut std::iter::once(Ok(inverse.clone())))
+}
+
+/// `[SPEC-NKP-940]`: the inverses of a patch sent in parts, each put back in the
+/// order given -- the last part's first -- all in one transaction, so the undo
+/// is whole or not at all, as the commit it reverses was.
+pub fn undo_parts(db: &Path, inverses: &mut dyn Iterator<Item = Result<Json, String>>) -> Result<Applied, String> {
     let mut c = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .map_err(|e| format!("open {}: {e}", db.display()))?;
     c.busy_timeout(std::time::Duration::from_secs(10)).map_err(|e| e.to_string())?;
     let tx = c.transaction().map_err(|e| e.to_string())?;
+    let mut total = Applied::default();
+    for inverse in inverses {
+        let counts = undo_tx(&tx, &inverse?)?;
+        total.applied += counts.applied;
+        total.already += counts.already;
+        total.kept += counts.kept;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(total)
+}
+
+fn undo_tx(tx: &Connection, inverse: &Json) -> Result<Applied, String> {
     let entries = inverse["tables"].as_array().ok_or("an inverse has tables")?;
     let rows: Vec<&Json> = entries.iter().filter(|t| t["drop_table"] != true).collect();
-    let counts = apply_tx(&tx, &serde_json::json!({ "tables": rows }), None, Rule::Strict)?.counts;
+    let counts = apply_tx(tx, &serde_json::json!({ "tables": rows }), None, Rule::Strict)?.counts;
     for t in entries {
         let name = ident(t["name"].as_str().unwrap_or(""))?;
         if t["drop_table"] == true {
@@ -182,8 +201,41 @@ pub fn undo(db: &Path, inverse: &Json) -> Result<Applied, String> {
             tx.execute_batch(&format!("ALTER TABLE {name} DROP COLUMN {col}")).map_err(|e| format!("{name}.{col}: {e}"))?;
         }
     }
-    tx.commit().map_err(|e| e.to_string())?;
     Ok(counts)
+}
+
+/// `[SPEC-NKP-920]`: a patch sent in parts, applied in order in **one**
+/// transaction, so one row not as expected writes nothing from any part. Only
+/// one part is held in memory at a time: `parts` yields them as they are wanted,
+/// and `sink` is handed each part's inverse as it is made, to be put on disk and
+/// dropped, never kept here. Each part is checked against the database as the
+/// parts before it left it, which is why the natural entries are all in the first
+/// `[SPEC-NKP-930]`. With `commit` false it is a rehearsal and nothing is kept.
+pub fn apply_parts(
+    db: &Path,
+    parts: &mut dyn Iterator<Item = Result<Json, String>>,
+    allowed: Option<&[&str]>,
+    rule: Rule,
+    commit: bool,
+    sink: &mut dyn FnMut(usize, &Json) -> Result<(), String>,
+) -> Result<Applied, String> {
+    let mut c = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_WRITE)
+        .map_err(|e| format!("open {}: {e}", db.display()))?;
+    c.busy_timeout(std::time::Duration::from_secs(10)).map_err(|e| e.to_string())?;
+    let tx = c.transaction().map_err(|e| e.to_string())?;
+    let mut total = Applied::default();
+    for (i, part) in parts.enumerate() {
+        let patch = part.map_err(|e| format!("part {}: {e}", i + 1))?;
+        let out = apply_tx(&tx, &patch, allowed, rule).map_err(|e| format!("part {}: {e}", i + 1))?;
+        sink(i, &out.inverse)?;
+        total.applied += out.counts.applied;
+        total.already += out.counts.already;
+        total.kept += out.counts.kept;
+    }
+    if commit {
+        tx.commit().map_err(|e| e.to_string())?;
+    }
+    Ok(total)
 }
 
 fn apply_tx(tx: &Connection, patch: &Json, allowed: Option<&[&str]>, rule: Rule) -> Result<Outcome, String> {
@@ -1461,5 +1513,63 @@ mod tests {
         assert_eq!((again.counts.applied, again.counts.already), (0, applied), "a second apply finds it all already there");
         undo(&db, &out.inverse).unwrap();
         assert_eq!(raw(&db), before, "and the undo of the first puts back every id and value");
+    }
+
+    // ---- a patch in parts [SPEC-NKP-920..940] -----------------------------
+
+    fn three_parts() -> Vec<Json> {
+        let span = serde_json::json!(["D", "radio", 0, 900]);
+        vec![
+            serde_json::json!({"tables": [files_entry(serde_json::json!([{"key": ["D"], "was": null, "now": ["D", "/hub/d"], "also": {"first_seen": "t"}}]))]}),
+            serde_json::json!({"tables": [passages_entry(serde_json::json!([{"key": ["D", "radio", 0, 900], "was": null, "now": ["D", "radio", 0, 900]}]))]}),
+            serde_json::json!({"tables": [recs_entry(serde_json::json!([{"key": [span, "m-d"], "was": null, "now": [span, "m-d", 1.0]}]))]}),
+        ]
+    }
+
+    fn run_parts(db: &Path, parts: Vec<Json>, commit: bool, inverses: &mut Vec<Json>) -> Result<Applied, String> {
+        let mut it = parts.into_iter().map(Ok);
+        apply_parts(db, &mut it, None, Rule::Strict, commit, &mut |_, inv| {
+            inverses.push(inv.clone());
+            Ok(())
+        })
+    }
+
+    /// Each part is checked against the database as the parts before it left it, in one
+    /// transaction: a child in the third part finds the parent the first part wrote.
+    #[test]
+    fn parts_apply_in_order_in_one_transaction() {
+        let (_d, db) = permuted("nk-parts");
+        let mut inv = Vec::new();
+        let got = run_parts(&db, three_parts(), true, &mut inv).unwrap();
+        assert_eq!((got.applied, got.already), (3, 0));
+        assert!(nform(&db).contains(&"rec D 0-900 m-d".to_string()), "{:?}", nform(&db));
+        assert_eq!(inv.len(), 3, "each part's inverse was handed over as it was made, not kept");
+    }
+
+    #[test]
+    fn a_bad_row_in_a_later_part_writes_nothing_from_any() {
+        let (_d, db) = permuted("nk-parts-bad");
+        let before = raw(&db);
+        let mut parts = three_parts();
+        parts[2]["tables"][0]["rows"][0]["key"] = serde_json::json!([["Z", "radio", 0, 1], "m-d"]);
+        parts[2]["tables"][0]["rows"][0]["now"] = serde_json::json!([["Z", "radio", 0, 1], "m-d", 1.0]);
+        let err = run_parts(&db, parts, true, &mut Vec::new()).unwrap_err();
+        assert!(err.starts_with("part 3:"), "the part is named: {err}");
+        assert_eq!(raw(&db), before, "and the first two parts were rolled back with it");
+    }
+
+    #[test]
+    fn a_rehearsal_of_parts_writes_nothing_and_the_undo_is_one_transaction() {
+        let (_d, db) = permuted("nk-parts-undo");
+        let before = raw(&db);
+        let got = run_parts(&db, three_parts(), false, &mut Vec::new()).unwrap();
+        assert_eq!(got.applied, 3);
+        assert_eq!(raw(&db), before, "a rehearsal keeps nothing");
+        let mut inv = Vec::new();
+        run_parts(&db, three_parts(), true, &mut inv).unwrap();
+        assert_ne!(raw(&db), before);
+        let mut back = inv.into_iter().rev().map(Ok);
+        undo_parts(&db, &mut back).unwrap();
+        assert_eq!(raw(&db), before, "the undo puts back every row, last part first");
     }
 }

@@ -12,6 +12,7 @@ on-demand player started and stopped around a stage.
     python tools/test_star_sync_flow.py
 """
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -91,6 +92,8 @@ class Fleet:
         self.nodes = {}
         self.runs = []
         self.natural = set()        # the players that report natural_keys [SPEC-NKP-075]
+        self.staged = {}            # (node, run) -> {n: (sha256, text)}  [SPEC-NKP-925]
+        self.parts_applied = {}     # (node, run) -> the parts a commit applied
 
     def add(self, name, prefs, always_up=True):
         d = os.path.join(self.tmp, name)
@@ -109,9 +112,27 @@ class Fleet:
     def sync_players(self, mdir):
         return {f"fp-{n}": {"fingerprint": f"fp-{n}", "address": n, "web_port": 0} for n in sorted(self.up)}
 
-    def sync_step(self, mdir, player, op, run, catalogue_patch=None, listener_patch=None, timeout=0):
+    def sync_step(self, mdir, player, op, run, catalogue_patch=None, listener_patch=None, timeout=0, extra=None):
         name = player["address"]
         node = self.nodes[name]
+        if op == "stage":
+            part = (extra or {})["part"]
+            if hashlib.sha256(part["text"].encode("utf-8")).hexdigest() != part["sha256"]:
+                raise ValueError(f"part {part['n']} did not arrive intact")
+            self.staged.setdefault((name, run), {})[part["n"]] = (part["sha256"], part["text"])
+            self.log.append((name, "stage", run, True, False))
+            return {"staged": part["n"], "of": part["of"], "bytes": len(part["text"])}
+        if op == "staged":
+            return {"catalogue": {str(n): sha for n, (sha, _) in self.staged.get((name, run), {}).items()}}
+        parts = (extra or {}).get("catalogue_parts")
+        if parts:
+            have = self.staged.get((name, run), {})
+            for i, sha in enumerate(parts["sha256"], 1):
+                if i not in have or have[i][0] != sha:
+                    raise ValueError(f"catalogue part {i} of {parts['of']} is not staged here")
+            if op == "commit":
+                self.parts_applied[(name, run)] = [json.loads(have[i][1]) for i in range(1, parts["of"] + 1)]
+                del self.staged[(name, run)]
         if op == "snapshot":
             self.log.append((name, "snapshot", run, False, False))
             res = {"listener": export(node["listener"], ss.SIGNED_TABLES), "catalogue": summary(node["library"]),
@@ -119,7 +140,7 @@ class Fleet:
             if name in self.natural:
                 res["natural_keys"] = 1
             return res
-        self.log.append((name, op, run, bool(catalogue_patch), bool(listener_patch)))
+        self.log.append((name, op, run, bool(catalogue_patch) or bool(parts), bool(listener_patch)))
         if not listener_patch:
             return {"listener": None, "catalogue": None}
         target = node["listener"]
@@ -353,7 +374,7 @@ def test_catalogue_moved(tmp):
           "a catalogue patch for a, none for b")
 
 
-def catalogue_scenario(tmp, b_current):
+def catalogue_scenario(tmp, b_current, artists=0):
     """a holds the hub's new music under the hub's ids, b under its own -- the case found on every player on
     2026-10-05. a's player is old; b's is current if `b_current`."""
     fleet = Fleet(tmp)
@@ -368,6 +389,12 @@ def catalogue_scenario(tmp, b_current):
         c = sqlite3.connect(db)
         for q in new(fid, pid):
             c.execute(q)
+        c.commit()
+        c.close()
+    if artists:
+        c = sqlite3.connect(hub["library"])
+        for i in range(artists):
+            c.execute(f"INSERT INTO artists VALUES ('mb{i:03d}', 'Artist number {i}', 'manual')")
         c.commit()
         c.close()
     # c also holds a file the hub has never heard of.
@@ -426,18 +453,94 @@ def test_catalogue_old_player(tmp):
           f"the summary says why, and names both old players: {summary}")
 
 
-def test_oversize_catalogue_patch(tmp):
-    """[SPEC-NKP-920]: a catalogue patch too big to send in one request is not built, loudly; the listener half goes."""
-    real = ss.CATALOGUE_PATCH_MAX
-    ss.CATALOGUE_PATCH_MAX = 50
+def test_catalogue_in_parts(tmp):
+    """[SPEC-NKP-920..935]: a patch too big for one request is cut, the natural entries whole in the first part; the parts
+    are staged once, a rehearsal's upload is not repeated by the commit, and one commit applies them all."""
+    real = (ss.CATALOGUE_PATCH_MAX, ss.PART_MAX)
+    ss.CATALOGUE_PATCH_MAX, ss.PART_MAX = 50, 600
+    try:
+        fleet, plan, hub, run, base = catalogue_scenario(tmp, b_current=True, artists=40)
+    finally:
+        ss.CATALOGUE_PATCH_MAX, ss.PART_MAX = real
+    pd = os.path.join(run, "patches", "b")
+    man = json.load(open(os.path.join(pd, "catalogue.parts.json")))
+    check(man["of"] > 2 and not os.path.exists(os.path.join(pd, "catalogue.values.json")), f"b's catalogue goes in parts: {man['of']}")
+    parts = [json.load(open(os.path.join(pd, m["file"]))) for m in man["parts"]]
+    check({e["name"] for e in parts[0]["tables"]} == {"files", "passages"} and all("natural" in e for e in parts[0]["tables"]),
+          f"the natural entries are whole, in the first part: {[e['name'] for e in parts[0]['tables']]}")
+    check(all("natural" not in e for p in parts[1:] for e in p["tables"]) and
+          sum(len(e["rows"]) for p in parts[1:] for e in p["tables"] if e["name"] == "artists") == 40,
+          "and the other table is cut by rows, every row once")
+    check(all(m["bytes"] <= 600 + 200 for m in man["parts"][1:]), f"each cut part is about the size asked: {[m['bytes'] for m in man['parts']]}")
+    check(man["total_bytes"] == sum(m["bytes"] for m in man["parts"]), "the manifest holds the total")
+    for m in man["parts"]:
+        check(hashlib.sha256(open(os.path.join(pd, m["file"]), "rb").read()).hexdigest() == m["sha256"], f"{m['file']} is as its digest says")
+    summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
+    check(f"in {man['of']} parts, staged on the node and committed there in one transaction" in summary, f"the summary says so: {summary}")
+    with faked(fleet):
+        stages(plan, "b")
+        staged_after_rehearsal = sum(1 for e in fleet.log if e[0] == "b" and e[1] == "stage")
+        check(staged_after_rehearsal == man["of"], f"a rehearsal stages every part: {staged_after_rehearsal}")
+        check(stages(plan, "b", commit=True) == 0, "the commit succeeds")
+        total = sum(1 for e in fleet.log if e[0] == "b" and e[1] == "stage")
+        check(total == man["of"], f"and sends none of them again: {total} stage requests in all")
+    applied = fleet.parts_applied.get(("b", os.path.basename(run)))
+    check(applied is not None and len(applied) == man["of"], "one commit applied every part")
+    st = ss.load_state(plan)
+    check(st["nodes"]["b"]["library_sent"].endswith("library.db") and st["nodes"]["b"]["run"] == os.path.basename(run),
+          "and b's last-sent catalogue is now this one")
+
+
+def test_a_patch_that_cannot_be_cut(tmp):
+    """[SPEC-NKP-930]: natural entries that pass a part's limit cannot be cut, and are not sent; the listener half is."""
+    real = (ss.CATALOGUE_PATCH_MAX, ss.NATURAL_PART_MAX)
+    ss.CATALOGUE_PATCH_MAX, ss.NATURAL_PART_MAX = 50, 10
     try:
         fleet, plan, hub, run, base = catalogue_scenario(tmp, b_current=True)
     finally:
-        ss.CATALOGUE_PATCH_MAX = real
-    check(not os.path.exists(os.path.join(run, "patches", "b", "catalogue.values.json")), "no catalogue patch for b")
-    check(os.path.exists(os.path.join(run, "patches", "b", "listener.values.json")), "but its listener patch is made")
+        ss.CATALOGUE_PATCH_MAX, ss.NATURAL_PART_MAX = real
+    pd = os.path.join(run, "patches", "b")
+    check(not [f for f in os.listdir(pd) if f.startswith("catalogue.")], "no catalogue patch for b")
+    check(os.path.exists(os.path.join(pd, "listener.values.json")), "but its listener patch is made")
     summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
-    check("none sent** -- the patch is" in summary and "not built [SPEC-NKP-920]" in summary, f"and the summary says why: {summary}")
+    check("cannot be sent in parts" in summary and "cannot be cut" in summary, f"and the summary says why: {summary}")
+
+
+def test_split_catalogue():
+    """[SPEC-NKP-930]: the splitter, on its own."""
+    def entry(name, n, **more):
+        return dict({"name": name, "columns": ["a", "b"], "key": ["a"], "rows": [{"key": [i], "was": None, "now": [i, "x" * 20]} for i in range(n)]}, **more)
+    nat = entry("files", 3, natural={"surrogate": "file_id", "refs": []})
+    cat = {"tables": [entry("artists", 30, add_columns=["c TEXT"]), nat, entry("releases", 2, create=["CREATE TABLE releases (a)"])]}
+    parts = ss.split_catalogue(cat, limit=500)
+    check([e["name"] for e in parts[0]["tables"]] == ["files"], "the natural entries come first, and whole")
+    rest = [e for p in parts[1:] for e in p["tables"]]
+    check([e["name"] for e in rest][:1] == ["artists"] and sum(len(e["rows"]) for e in rest if e["name"] == "artists") == 30,
+          "the others in table order, every row once")
+    first = [e for e in rest if e["name"] == "artists"]
+    check("add_columns" in first[0] and all("add_columns" not in e for e in first[1:]), "a table's schema change rides in its first piece only")
+    check(any(e["name"] == "releases" and "create" in e for e in rest), "and a small table keeps its `create`")
+    check(all(ss.json_size(p) <= 500 + 80 for p in parts[1:]), f"parts about the limit: {[ss.json_size(p) for p in parts]}")
+    check(ss.split_catalogue({"tables": [entry("artists", 1)]}, limit=10)[0]["tables"][0]["rows"][0]["key"] == [0],
+          "a row bigger than the limit is a part of its own, not an error")
+    real = ss.NATURAL_PART_MAX
+    ss.NATURAL_PART_MAX = 10
+    try:
+        ss.split_catalogue({"tables": [nat]})
+        check(False, "natural entries past the limit must be refused")
+    except ss.PartsUnsupported as err:
+        check("cannot be cut" in str(err), f"{err}")
+    finally:
+        ss.NATURAL_PART_MAX = real
+    ss.PARTS_MAX, real_max = 3, ss.PARTS_MAX
+    try:
+        ss.split_catalogue({"tables": [entry("artists", 30)]}, limit=100)
+        check(False, "too many parts must be refused")
+    except ss.PartsUnsupported as err:
+        check("parts, more than" in str(err), f"{err}")
+    finally:
+        ss.PARTS_MAX = real_max
+    check(ss.split_catalogue({"tables": []}) == [], "an empty patch has no parts")
 
 
 def test_selection(tmp):
@@ -514,8 +617,9 @@ def test_old_players(tmp):
 
 
 def main() -> int:
+    test_split_catalogue()
     for test in (test_quiet, test_conflict, test_approve_all, test_on_demand, test_catalogue_moved,
-                 test_catalogue_states, test_catalogue_old_player, test_oversize_catalogue_patch, test_selection,
+                 test_catalogue_states, test_catalogue_old_player, test_catalogue_in_parts, test_a_patch_that_cannot_be_cut, test_selection,
                  test_old_players):
         tmp = tempfile.mkdtemp()
         try:
