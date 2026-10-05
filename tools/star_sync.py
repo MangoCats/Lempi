@@ -21,7 +21,10 @@ its mirror.
     python tools/star_sync.py PLAN patch              every patch, each proven (merging again if a
                                                       verdict changed an outcome)
     python tools/star_sync.py PLAN rehearse [NODE..]  read-only, against the live files
-    python tools/star_sync.py PLAN commit [NODE..]    for real: the hub, then the nodes
+    python tools/star_sync.py PLAN commit [NODE..]    for real: the hub, then the nodes; with names, only
+                                                      those, and the hub is a node too (named by the plan,
+                                                      `desktop`), so `commit lempi02w` leaves the hub's own
+                                                      half unapplied
                                                       [--approve-all] [--console-pid N]
     python tools/star_sync.py PLAN backup             the hub's daily backup, and its mirror
     python tools/star_sync.py PLAN status             exits 1 when a backup has gone stale
