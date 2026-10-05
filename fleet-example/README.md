@@ -96,11 +96,11 @@ any change: `systemctl daemon-reload`, then `systemctl restart lempi`, then
 ## The fleet's sync plan
 
 [`star-plan.json`](star-plan.json) is the shape of the plan
-`tools/star_sync.py` reads `[SPEC-STAR-085]`: the hub, every node with its
-paths and how its player stops and starts, where each keeps the backups a
-sync takes, and where the hub's own backups are mirrored `[SPEC-STAR-086]`.
-The real one is `fleet/star-plan.json`, untracked like the rest of `fleet/`.
-A node marked `mirror` receives the hub's listener instead of its own.
-A node with a `member` fingerprint is a mesh player the signed transport
-reaches too: `star_sync.py PLAN shadow` takes it both ways and compares
-`[IMPL-NSH-300]`. Its fingerprint is the one the members' query answers with.
+`tools/star_sync.py` reads `[SPEC-STAR-085]`: the hub, every node, and where
+the hub's own backups are mirrored `[SPEC-STAR-086]`. The real one is
+`fleet/star-plan.json`, untracked like the rest of `fleet/`.
+Every node is a mesh player reached by signed requests `[SPEC-STAR-100]`, and
+its `member` is the fingerprint the members' query answers with. A node whose
+player is not kept running names `on_demand` commands, run over ssh: the sync
+starts it for a stage and stops it after `[SPEC-STAR-101]`. `host` is only for
+those and for the backup mirror.

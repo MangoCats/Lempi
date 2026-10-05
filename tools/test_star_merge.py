@@ -26,6 +26,8 @@ CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY, played_at INTEG
 CREATE TABLE player_state (id INTEGER PRIMARY KEY, passage_id INTEGER, updated_at TEXT);
 CREATE TABLE listener_programs (program_id INTEGER PRIMARY KEY, name TEXT);
 CREATE TABLE listener_program_seeds (program_id INTEGER, mbid TEXT, PRIMARY KEY (program_id, mbid));
+CREATE TABLE listener_settings (id INTEGER PRIMARY KEY, artist_time_scale REAL,
+    utc_offset_minutes INTEGER, updated_at TEXT);
 """
 
 FAILED = []
@@ -319,9 +321,122 @@ def test_rust_agrees():
           "Rust MACHINE_SCOPE must be the merge's machine-scope files columns")
 
 
+def prefs(path, rows, extra=()):
+    db(path, *[f"INSERT INTO listener_preferences VALUES ('{k}','{i}',{r},{r},0,'{t}')"
+               for k, i, r, t in rows], *extra)
+
+
+def run_items(tmp, tag, base, hub, a, b, verdicts=None, sent=("desktop", "a", "b"), extra=None):
+    """Three nodes that were last sent `base`, now holding what they hold."""
+    paths = {}
+    for n, rws in (("base", base), ("desktop", hub), ("a", a), ("b", b)):
+        paths[n] = os.path.join(tmp, f"{tag}-{n}.lis")
+        prefs(paths[n], rws, (extra or {}).get(n, ()))
+    vp = None
+    if verdicts:
+        vp = os.path.join(tmp, f"{tag}-verdicts.json")
+        json.dump({i: {"verdict": v, "by": "item"} for i, v in verdicts.items()}, open(vp, "w"))
+    out = os.path.join(tmp, f"{tag}-out")
+    nodes = [dict(name=n, listener=paths[n], taken_at="2026-09-26T00:00:00Z", **(
+        {"sent": paths["base"]} if n in sent else {}), **({"backups": paths[n] + ".bk"} if os.path.isdir(paths[n] + ".bk") else {}))
+        for n in ("a", "b", "desktop")]
+    return sm.build({"hub_state_from": "desktop", "verdicts": vp, "nodes": nodes}, out), out
+
+
+def test_items(tmp):
+    """[SPEC-STAR-110..114]: an item is a change the merge would discard."""
+    X0, Y0 = ("artist", "X", 1, "2026-09-01 00:00:00"), ("artist", "Y", 1, "2026-09-01 00:00:00")
+    base = [X0, Y0]
+    rot = lambda out, who="X": rows(os.path.join(out, "listener.db"),
+                                    f"SELECT rotation FROM listener_preferences WHERE subject_id='{who}'")[0][0]
+
+    rep, out = run_items(tmp, "i1", base, base, base, base)
+    check(rep.data["items"] == [] and rep.data["propagated"] == {},
+          "every node holding what the hub holds: nothing to approve, nothing even carried")
+
+    rep, out = run_items(tmp, "i2", base, base, [("artist", "X", 3, "2026-09-05 00:00:00"), Y0], base)
+    check(rep.data["items"] == [] and rep.data["propagated"] == {"listener_preferences": 1} and rot(out) == 3,
+          f"one node changed a row and the merge takes it: carried, not an item: {rep.data['items']}")
+
+    a3, b5 = ("artist", "X", 3, "2026-09-05 00:00:00"), ("artist", "X", 5, "2026-09-07 00:00:00")
+    rep, out = run_items(tmp, "i3", base, base, [a3, Y0], [b5, Y0])
+    (it,) = rep.data["items"]
+    check(it["kind"] == "conflict" and it["default"] == "b" and it["chosen"] == "b" and rot(out) == 5,
+          f"two nodes changed one row differently: the most recent is the default: {it}")
+    check([c["node"] for c in it["candidates"]] == ["a", "b"] and it["table"] == "listener_preferences",
+          "and both changes are listed as candidates")
+    ident = it["id"]
+    rep2, out2 = run_items(tmp, "i3b", base, base, [a3, Y0], [b5, Y0])
+    check(rep2.data["items"][0]["id"] == ident, "the same situation has the same id")
+    rep3, out3 = run_items(tmp, "i3c", base, base, [a3, Y0], [b5, Y0], {ident: "chose:a"})
+    check(rep3.data["items"][0]["chosen"] == "a" and rot(out3) == 3, "a verdict can take the other change")
+    for n in ("a", "b"):
+        got = rows(os.path.join(out3, "nodes", n, "listener.db"),
+                   "SELECT rotation FROM listener_preferences WHERE subject_id='X'")
+        check(got == [(3,)], f"and every node's own copy gets it, {n}'s too: {got}")
+    rep4, out4 = run_items(tmp, "i3d", base, base, [a3, Y0], [b5, Y0], {ident: "approved"})
+    check(rot(out4) == 5 and rep4.data["items"][0]["chosen"] == "b", "approved takes the default")
+    rep5, out5 = run_items(tmp, "i3e", base, base, [a3, Y0], [b5, Y0], {ident: "chose:nobody"})
+    check(rot(out5) == 5, "a verdict naming a node that is no candidate changes nothing")
+
+    rep, out = run_items(tmp, "i4", base, base, [("artist", "X", 3, "2026-09-05 00:00:00"), Y0],
+                         [("artist", "X", 3, "2026-09-07 00:00:00"), Y0])
+    check(rep.data["items"] == [], "the same settings made at two times are one change, not a conflict")
+
+    rep, out = run_items(tmp, "i5", base, [("artist", "X", 2, "2026-09-03 00:00:00"), Y0],
+                         [("artist", "X", 3, "2026-09-04 00:00:00"), Y0], base)
+    (it,) = rep.data["items"]
+    check(it["default"] == "a" and {c["node"] for c in it["candidates"]} == {"a", "desktop"},
+          f"the hub's own change counts too, and the later one is the default: {it}")
+
+    rep, out = run_items(tmp, "i6", base, base, [("artist", "X", 3, "2026-08-30 00:00:00"), Y0], base)
+    (it,) = rep.data["items"]
+    check(it["default"] == "b" and rot(out) == 1 and {c["node"] for c in it["candidates"]} == {"a", "b"},
+          f"a change with an older stamp loses to the row the hub holds (b's, by name), and says so: {it}")
+
+    rep, out = run_items(tmp, "i7", base, base, base, [("artist", "X", 9, "2026-09-06 00:00:00"), Y0], sent=("a", "desktop"))
+    check(rep.data["items"] == [] and rot(out) == 9,
+          "a node with no last-sent copy is taken as in step with the hub: only its difference counts")
+
+    rep, out = run_items(tmp, "i8", base, base, [("artist", "X", 3, "2026-09-05 00:00:00"), Y0],
+                         [("artist", "X", 4, "2026-09-05 00:00:00"), Y0])
+    (it,) = rep.data["items"]
+    check(it["kind"] == "tie" and it["default"] == "a", f"equal stamps: a tie, the first node by name: {it}")
+
+    own = lambda off, t: (f"INSERT INTO listener_settings VALUES (1,1.0,{off},'{t}')",)
+    rep, out = run_items(tmp, "i9", base, base, base, base, extra={
+        "base": own(-240, "2026-09-01 00:00:00"), "desktop": own(-240, "2026-09-01 00:00:00"),
+        "a": own(-60, "2026-09-09 00:00:00"), "b": own(-240, "2026-09-01 00:00:00")})
+    check(rep.data["items"] == [] and rep.data["propagated"] == {},
+          "a node's own zone offset is never a change to review")
+
+    # A removal against an edit is an item; a removal alone is carried.
+    flag = lambda n, o: f"INSERT INTO listener_flags VALUES ('recording','{n}','2026-08-01 00:00:00',{o})"
+    bk = os.path.join(tmp, "i10-a.lis.bk")
+    os.makedirs(bk)
+    db(os.path.join(bk, "listener-1789000000.db"), flag("F", "NULL"), flag("G", "NULL"))
+    rep, out = run_items(tmp, "i10", [], [], [], [], extra={
+        "base": (flag("F", "NULL"), flag("G", "NULL")), "desktop": (flag("F", "NULL"), flag("G", "NULL")),
+        "a": (), "b": (flag("F", "'edited'"), flag("G", "NULL"))})
+    (it,) = rep.data["items"]
+    left = {r[0] for r in rows(os.path.join(out, "listener.db"), "SELECT subject_id FROM listener_flags")}
+    check(it["kind"] == "delete-vs-edit" and it["default"] == "a" and it["key"] == ["recording", "F"],
+          f"a flag a removed and b edited is an item, removal the default (not re-added): {it}")
+    check(left == set(), f"both removals took effect by default, G with no question asked: {left}")
+    bk = os.path.join(tmp, "i10b-a.lis.bk")
+    os.makedirs(bk)
+    db(os.path.join(bk, "listener-1789000000.db"), flag("F", "NULL"), flag("G", "NULL"))
+    rep, out = run_items(tmp, "i10b", [], [], [], [], {it["id"]: "chose:b"}, extra={
+        "base": (flag("F", "NULL"), flag("G", "NULL")), "desktop": (flag("F", "NULL"), flag("G", "NULL")),
+        "a": (), "b": (flag("F", "'edited'"), flag("G", "NULL"))})
+    left = {r[0] for r in rows(os.path.join(out, "listener.db"), "SELECT subject_id FROM listener_flags")}
+    check(left == {"F"}, f"a verdict for the edit keeps the flag, and G is still removed: {left}")
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp()
     test_rust_agrees()
+    test_items(tmp)
     test_rekeyed(tmp)
     test_catalogue(tmp)
     test_receivers(tmp)

@@ -1,0 +1,32 @@
+# teacherslounge's player, kept on demand, as a systemd --user unit
+# [TL-OPN-040], [SPEC-STAR-101].
+#
+# **Never enabled at boot, and has no [Install] section to enable it by.**
+# [TL-OPN-020] keeps this laptop from playing at every start: it is the
+# fleet's acoustic instrument and a machine somebody sits at. This unit is
+# started over ssh for one star-sync stage and stopped after it, by
+# `tools/star_sync.py`:
+#
+#     XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user start lempi-ondemand.service
+#
+# A user unit, in the desktop session's own manager, for the reason
+# [TL-OPS-020] found: a player started outside it serves HTTP and plays
+# nothing. It needs that session to be logged in; if it is not, the start
+# fails and the node is missing from the run, which says so.
+#
+# **--paused**: it comes up silent whatever it was doing when it last stopped,
+# so a sync never starts music in a room. Press play when music is wanted; by
+# hand, as before, the player is started without this flag and resumes.
+#
+# %h is the user's home, so no machine's path is written here.
+# Installed by TeachersLounge/setup-tl.sh to ~/.config/systemd/user/.
+
+[Unit]
+Description=Lempi player, on demand for a star sync
+Wants=pipewire-pulse.service
+After=pipewire-pulse.service
+
+[Service]
+WorkingDirectory=%h/Dev/Lempi
+ExecStart=%h/Dev/Lempi/player/target/release/lempi --listener %h/lempi-data/listener.db --library %h/lempi-data/library.db --paused
+Restart=no

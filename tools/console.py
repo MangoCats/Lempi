@@ -49,6 +49,7 @@ import jobs as jobmod  # noqa: E402
 import lempi_control  # noqa: E402  -- process/network side of the handoff
 import pending as pendingmod  # noqa: E402  -- what waits for a person [SPEC048]
 import mesh as meshmod  # noqa: E402  -- membership [SPEC049]
+import sync_console  # noqa: E402  -- the Sync page [SPEC-STAR-120]
 import cd_import  # noqa: E402  -- the CD import page [SPEC056]
 import analysis_gaps  # noqa: E402  -- the Jobs page's Not analysed list [REQ-LIB-305]
 
@@ -1080,6 +1081,55 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # -- the Sync page [SPEC-STAR-120..128] --------------------------------
+    # Thin on purpose: everything that decides anything is `star_sync.py`'s,
+    # reached through `sync_console.py`, and the stages are jobs.
+
+    def _sync_get(self, p, qs):
+        plan, why = sync_console.load_plan()
+        if plan is None:
+            return self.send_json({"plan": False, "why": why})
+        run = sync_console.newest(plan)
+        one = lambda k, d="": (qs.get(k) or [d])[0]                       # noqa: E731
+        if p == "/api/sync/state":
+            return self.send_json(dict(sync_console.state(plan), plan=True))
+        if run is None:
+            return self.send_json({"error": "there is no run yet: take a snapshot"}, code=404)
+        if p == "/api/sync/items":
+            try:
+                return self.send_json(sync_console.items_page(
+                    run, self._db(), kind=one("kind") or None, table=one("table") or None, node=one("node") or None,
+                    status=one("status") or None, after=int(one("after", "0")), limit=min(int(one("limit", "100")), 500)))
+            except SystemExit as err:
+                return self.send_json({"error": str(err)}, code=404)
+        if p == "/api/sync/summary":
+            return self.send_json(sync_console.summary(run))
+        return self.send_error(404)
+
+    def _sync_post(self, p):
+        plan, why = sync_console.load_plan()
+        if plan is None:
+            return self.send_json({"error": why}, code=409)
+        run = sync_console.newest(plan)
+        body = self.json_body()
+        if body is None:
+            return self.send_json({"error": "expected a JSON object"}, code=400)
+        if p == "/api/sync/stage":
+            target, why = sync_console.stage_target(plan, run, body.get("stage", ""), list(body.get("nodes") or []))
+            if target is None:
+                return self.send_json({"error": why}, code=409)
+            return self.send_json({"job_id": STATE["jobs"].submit("star-sync", target)})
+        if run is None:
+            return self.send_json({"error": "there is no run yet: take a snapshot"}, code=404)
+        try:
+            if p == "/api/sync/verdicts":
+                return self.send_json(sync_console.set_verdicts(run, body.get("verdicts") or {}))
+            if p == "/api/sync/approve-all":
+                return self.send_json({"approved": sync_console.ss.approve_all(run, "approve-all")})
+        except SystemExit as err:
+            return self.send_json({"error": str(err)}, code=409)
+        return self.send_error(404)
+
     # GET only. There is no `do_POST` in this file and that is the stage 2
     # safety claim in its most direct form `[IMPL-SUI-040]`.
     def do_GET(self):
@@ -1200,6 +1250,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(flags(self._db()))
             if p == "/mesh":
                 return self.send_file("mesh.html", "text/html; charset=utf-8")
+            if p == "/sync":
+                return self.send_file("sync.html", "text/html; charset=utf-8")
+            if p.startswith("/api/sync/"):
+                return self._sync_get(p, qs)
             if p == "/api/peers":
                 # `active` is which peer a pull reads, and it is not a column:
                 # `remote_config.sync_remote` has always been that, and giving
@@ -1298,7 +1352,15 @@ class Handler(BaseHTTPRequestHandler):
         self._conn = None
         if not self._same_origin():
             return self.send_json({"error": "cross-site request refused"}, code=403)
+        # [SPEC-STAR-126]: while the hub's own pair is patched from here, this
+        # console writes nothing of its own. A job's stop, and the sync page's
+        # own routes, still answer.
+        if sync_console.locked() and not (p.startswith("/api/sync/") or p.startswith("/api/jobs/")):
+            return self.send_json({"error": "the console is patching the hub's pair for a star sync; "
+                                            "try again when it has finished"}, code=409)
         try:
+            if p.startswith("/api/sync/"):
+                return self._sync_post(p)
             if p.startswith("/api/profile/") and p.endswith("/accept-remote"):
                 # [SPEC-DF-116..117]'s one deliberate exception to "the
                 # console never writes the library" -- the anchor is

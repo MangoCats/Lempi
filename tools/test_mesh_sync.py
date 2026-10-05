@@ -129,6 +129,7 @@ def main() -> int:
         run = sorted(os.path.join(plan["runs"], d) for d in os.listdir(plan["runs"]) if d.startswith("2026"))[-1]
         ss.merge(plan, run)
         ss.patch(plan, run)
+        ss.distribute(plan, run, [node], commit=False)     # [SPEC-STAR-116]: rehearsed first
         ss.distribute(plan, run, [node], commit=True)
         return rc, run
 

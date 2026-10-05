@@ -23,8 +23,11 @@ MANIFEST.json:
               "catalogue": "its library.db",   (optional: translates its ids)
               "files": "a db holding its files table",  (optional: its
                                                  catalogue copy's own paths)
-              "mirror": true,   (optional: it receives the hub's listener)
+              "mirror": true,   (optional, unused since 2026-10-04 [SPEC-STAR-103]: it receives the hub's listener)
+              "sent": "the copy it was last sent",   (optional: its baseline,
+                                [SPEC-STAR-110]; none means in step with the hub)
               "taken_at": "2026-09-26T15:32:35Z"}, ...],
+   "verdicts": "path/to/verdicts.json",   (optional) [SPEC-STAR-114]
    "hub_state_from": "desktop",   the node whose own plays, player_* and
                                    selection_decisions the hub keeps
    "catalogue": {...} | "hub_library": "data/library.db"}
@@ -35,6 +38,7 @@ from __future__ import annotations
 
 import datetime as dt
 import glob
+import hashlib
 import json
 import os
 import pathlib
@@ -73,7 +77,9 @@ TABLES = {
     "listener_preferences": dict(rule=LWW, key=("subject_kind", "subject_id"), stamp="updated_at"),
     "listener_characteristics": dict(rule=LWW, key=("subject_kind", "subject_id",
                                                     "characteristic", "class"), stamp="updated_at"),
-    "listener_settings": dict(rule=LWW, key=("id",), stamp="updated_at"),
+    # `own`: columns that are each node's own and never a change to review
+    # [SPEC-STAR-110] -- a player rewrites its zone's offset at every start.
+    "listener_settings": dict(rule=LWW, key=("id",), stamp="updated_at", own=("utc_offset_minutes",)),
     "listener_flags": dict(rule=UNION, key=("subject_kind", "subject_id"),
                            stamp="flagged_at", removals=True),
     "listener_occasions": dict(rule=UNION, key=("characteristic", "class"), removals=True),
@@ -121,31 +127,62 @@ class Node:
                 if m:
                     self.history.append((norm_time(int(m.group(1))), open_ro(p)))
         self.history.sort(key=lambda h: h[0])
+        # [SPEC-STAR-110]: the copy this node was last sent, which is what it
+        # held when it was last in step with the hub. A node with none is
+        # taken as having been in step with the hub's current rows.
+        sent = spec.get("sent")
+        self.base = open_ro(sent) if sent and os.path.exists(sent) else None
+        self.base_tables = ({r[0] for r in self.base.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")} if self.base else set())
+        self._base_rows: dict = {}
+
+    def close(self) -> None:
+        """Let go of the inputs: a folder holding an open file cannot be moved on Windows."""
+        for conn in [self.db, self.base, *(c for _, c in self.history)]:
+            if conn is not None:
+                conn.close()
 
     def cols(self, table: str) -> list[str]:
         return [r[1] for r in self.db.execute(f"PRAGMA table_info({table})")]
 
-    def rows(self, table: str) -> list[dict]:
-        if table not in self.tables:
-            return []
-        cols = self.cols(table)
-        rows = [dict(zip(cols, r)) for r in self.db.execute(f"SELECT * FROM {table}")]
+    def _read(self, conn: sqlite3.Connection, table: str, count: bool) -> list[dict]:
+        cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+        rows = [dict(zip(cols, r)) for r in conn.execute(f"SELECT * FROM {table}")]
         if self.aliases and "audio_md5" in cols:
             for r in rows:
                 if r["audio_md5"] in self.aliases:
                     r["audio_md5"] = self.aliases[r["audio_md5"]]
-                    self.remapped[table] = self.remapped.get(table, 0) + 1
+                    if count:
+                        self.remapped[table] = self.remapped.get(table, 0) + 1
         if self.remap:
             for r in rows:
                 if r.get("passage_id") in self.remap:
                     r["passage_id"] = self.remap[r["passage_id"]]
-                    self.remapped[table] = self.remapped.get(table, 0) + 1
+                    if count:
+                        self.remapped[table] = self.remapped.get(table, 0) + 1
                 elif (r.get("subject_kind") == "passage"
                       and _int(r.get("subject_id")) in self.remap):
                     new = self.remap[_int(r["subject_id"])]
                     r["subject_id"] = type(r["subject_id"])(new)
-                    self.remapped[table] = self.remapped.get(table, 0) + 1
+                    if count:
+                        self.remapped[table] = self.remapped.get(table, 0) + 1
         return rows
+
+    def rows(self, table: str) -> list[dict]:
+        if table not in self.tables:
+            return []
+        return self._read(self.db, table, True)
+
+    def base_rows(self, table: str, key: tuple) -> dict | None:
+        """What this node held of `table` when last sent its copy, by key; None
+        where it has no such copy. A table that copy lacks holds nothing."""
+        if self.base is None:
+            return None
+        if table not in self._base_rows:
+            self._base_rows[table] = {} if table not in self.base_tables else {
+                tuple(r.get(c) for c in key): r for r in self._read(self.base, table, False)
+                if all(c in r for c in key)}
+        return self._base_rows[table]
 
 
 def keys_in(conn: sqlite3.Connection, table: str, key: tuple) -> set | None:
@@ -174,14 +211,79 @@ def removals(node: Node, table: str, key: tuple) -> dict:
     return {k: t for k, t in last_seen.items() if k not in now}
 
 
+def _jdefault(v):
+    """A blob (cover art) as a digest, so an item's identity does not hold its bytes."""
+    if isinstance(v, (bytes, bytearray)):
+        return f"<{len(v)} bytes {hashlib.sha256(bytes(v)).hexdigest()[:16]}>"
+    return str(v)
+
+
+def item_id(table: str, key, column, kind: str, candidates: dict) -> str:
+    """[SPEC-STAR-112]: what a verdict is about -- the row, the kind, and every
+    candidate's node and value, but not which the rule would take, so the same
+    situation keeps the same id however it was decided."""
+    blob = json.dumps([table, list(key) if isinstance(key, tuple) else key, column, kind,
+                       sorted(candidates.items())], sort_keys=True, default=_jdefault)
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
 class Report:
-    def __init__(self):
+    def __init__(self, verdicts: dict | None = None, hub: str | None = None):
         self.lines: list[str] = []
-        self.data: dict = {"tables": {}, "decisions": []}
+        self.data: dict = {"tables": {}, "decisions": [], "items": [], "propagated": {}}
+        # [SPEC-STAR-114]: id -> "approved" | "chose:<node>"
+        self.verdicts = {i: (v["verdict"] if isinstance(v, dict) else v)
+                         for i, v in (verdicts or {}).items()}
+        self.hub = hub
 
     def decide(self, table: str, key, what: str, rule: str):
         self.data["decisions"].append(dict(table=table, key=list(key) if isinstance(key, tuple) else key,
                                            what=what, rule=rule))
+
+    def propagated(self, table: str):
+        self.data["propagated"][table] = self.data["propagated"].get(table, 0) + 1
+
+    def item(self, table: str, key, kind: str, candidates: dict, default: str, rule: str,
+             column=None, stamps: dict | None = None) -> str:
+        """[SPEC-STAR-110]: a change the merge would discard. Records the item
+        and returns the node whose value is taken -- the default, unless a
+        verdict names another candidate."""
+        ident = item_id(table, key, column, kind, candidates)
+        verdict = self.verdicts.get(ident)
+        chosen = default
+        if verdict and verdict.startswith("chose:") and verdict[6:] in candidates:
+            chosen = verdict[6:]
+        stamps = stamps or {}
+        self.data["items"].append(dict(
+            id=ident, table=table, key=list(key) if isinstance(key, tuple) else key, column=column,
+            kind=kind, rule=rule, default=default, chosen=chosen,
+            candidates=[dict(node=n, value=v, stamp=stamps.get(n)) for n, v in sorted(candidates.items())]))
+        return chosen
+
+
+def _same(a, b, skip=()) -> bool:
+    """Whether two rows hold the same values, over the columns both have and
+    leaving out `skip`: the same settings made at two times are one change."""
+    if a is None or b is None:
+        return a is None and b is None
+    return all(a[c] == b[c] for c in a.keys() & b.keys() if c not in skip)
+
+
+def _was(rep: Report, node: Node, table: str, key: tuple, k: tuple, held: dict):
+    """The row `node` held when last sent its copy. With no such copy, the
+    hub's current row: the node is taken to have been in step with the hub, so
+    only what it differs by counts as its change [SPEC-STAR-110]. The hub with
+    none is unchanged by definition."""
+    rows = node.base_rows(table, key)
+    if rows is not None:
+        return rows.get(k)
+    if node.name == rep.hub:
+        return held.get(node.name)
+    return held.get(rep.hub)
+
+
+def _order(k: tuple) -> tuple:
+    return tuple("" if x is None else str(x) for x in k)
 
 
 def merge_table(table: str, spec: dict, nodes: list[Node], hub: str, rep: Report):
@@ -194,15 +296,18 @@ def merge_table(table: str, spec: dict, nodes: list[Node], hub: str, rep: Report
         return chosen
 
     key = spec["key"]
+    by_name = {n.name: n for n in nodes}
     merged: dict = {}
     source: dict = {}
     holders: dict = {}
+    held: dict = {}          # key -> {node: its row as read}, for [SPEC-STAR-110]
     for n in nodes:                                  # name order: the tie-break
         for row in per_node[n.name]:
             if any(k not in row for k in key):
                 continue
             k = tuple(row[c] for c in key)
             holders.setdefault(k, set()).add(n.name)
+            held.setdefault(k, {})[n.name] = row
             if k not in merged:
                 merged[k], source[k] = dict(row), n.name
                 continue
@@ -227,24 +332,43 @@ def merge_table(table: str, spec: dict, nodes: list[Node], hub: str, rep: Report
                         rep.decide(table, k, f"{c}: kept {source[k]}'s {have.get(c)!r}, "
                                    f"{n.name} has {v!r}", "SPEC-STAR-030")
 
+    stamp = spec.get("stamp")
+    if rule == LWW:
+        _items_lww(table, spec, key, by_name, held, merged, source, rep)
+    else:
+        _items_union(table, spec, key, by_name, held, merged, source, rep)
+
     removed = 0
     if spec.get("removals"):
-        stamp = spec.get("stamp")
         for n in nodes:
             for k, seen in removals(n, table, key).items():
                 if k not in merged:
                     continue
                 re_added = stamp and norm_time(merged[k].get(stamp)) > seen
-                if re_added:
+                # [SPEC-STAR-110]: a removal is only an item where another node
+                # changed the same row, so an edit would be lost with it.
+                editors = {nm: r for nm, r in held.get(k, {}).items() if nm != n.name
+                           and not _same(r, _was(rep, by_name[nm], table, key, k, held[k]))}
+                remove = not re_added
+                if editors:
+                    newest = sorted(editors, key=lambda nm: (norm_time(editors[nm].get(stamp)) if stamp else "", nm))[-1]
+                    default = n.name if remove else newest
+                    cands = {n.name: None, **editors}
+                    took = rep.item(table, k, "delete-vs-edit", cands, default, "SPEC-STAR-050",
+                                    stamps={nm: norm_time(r.get(stamp)) if stamp else None
+                                            for nm, r in editors.items()})
+                    remove = took == n.name
+                if not remove:
                     rep.decide(table, k, f"removed on {n.name} after {seen}, but "
-                               f"{stamp} {merged[k].get(stamp)} is newer: kept", "SPEC-STAR-050")
+                               f"{stamp} {merged[k].get(stamp)} is newer: kept" if re_added else
+                               f"removed on {n.name} after {seen}, but a verdict keeps it", "SPEC-STAR-050")
                 else:
                     del merged[k]
                     removed += 1
                     rep.decide(table, k, f"removed: {n.name} held it in its backup of "
                                f"{seen} and not since", "SPEC-STAR-050")
 
-    rows = [merged[k] for k in sorted(merged, key=lambda k: tuple("" if x is None else str(x) for x in k))]
+    rows = [merged[k] for k in sorted(merged, key=_order)]
     only: dict = {}
     for k in merged:
         if len(holders[k]) == 1:
@@ -255,8 +379,81 @@ def merge_table(table: str, spec: dict, nodes: list[Node], hub: str, rep: Report
     return rows
 
 
+def _items_lww(table, spec, key, by_name, held, merged, source, rep):
+    """[SPEC-STAR-110] for a last-write-wins table: a row is an item where some
+    node changed it to a value the merge does not take."""
+    stamp = spec["stamp"]
+    skip = {stamp, *spec.get("own", ())}
+    for k in sorted(held, key=_order):
+        rows = held[k]
+        changed = {nm: r for nm, r in rows.items()
+                   if not _same(r, _was(rep, by_name[nm], table, key, k, rows), skip)}
+        if not changed:
+            continue
+        win, win_row = source[k], merged[k]
+        lost = {nm: r for nm, r in changed.items() if not _same(r, win_row, skip)}
+        if not lost:
+            rep.propagated(table)
+            continue
+        cands = dict(changed)
+        cands.setdefault(win, win_row)
+        stamps = {nm: norm_time(r.get(stamp)) for nm, r in cands.items()}
+        kind = "tie" if any(stamps[nm] == stamps[win] for nm in lost) else "conflict"
+        took = rep.item(table, k, kind, {nm: dict(r) for nm, r in cands.items()}, win,
+                        "SPEC-STAR-030" if kind == "tie" else "SPEC-PREF-105", stamps=stamps)
+        if took != win:
+            merged[k], source[k] = dict(rows[took]), took
+            rep.decide(table, k, f"verdict: {took}'s over {win}'s", "SPEC-STAR-114")
+
+
+def _items_union(table, spec, key, by_name, held, merged, source, rep):
+    """[SPEC-STAR-110] for a union table, per column: a column is an item where
+    some node changed it to a value other than the one kept. A stamp, an
+    `origin` and a `latest` column are timing and labels, never a choice."""
+    skip = {*spec.get("latest", ()), "origin", *key, *([spec["stamp"]] if spec.get("stamp") else [])}
+    for k in sorted(held, key=_order):
+        rows = held[k]
+        any_change = False
+        lost_any = False
+        for c in sorted({c for r in rows.values() for c in r} - skip):
+            changed = {}
+            for nm, r in rows.items():
+                v = r.get(c)
+                if v is None:
+                    continue
+                was = _was(rep, by_name[nm], table, key, k, rows)
+                if was is None or was.get(c) != v:
+                    changed[nm] = v
+            if not changed:
+                continue
+            any_change = True
+            kept = merged[k].get(c)
+            lost = {nm: v for nm, v in changed.items() if v != kept}
+            if not lost:
+                continue
+            lost_any = True
+            first = sorted(nm for nm, r in rows.items() if r.get(c) == kept)
+            default = first[0] if first else sorted(changed)[0]
+            cands = dict(changed)
+            cands.setdefault(default, kept)
+            took = rep.item(table, k, "conflict", cands, default, "SPEC-STAR-030", column=c)
+            if took != default:
+                merged[k][c] = cands[took]
+                rep.decide(table, k, f"verdict: {c} from {took}", "SPEC-STAR-114")
+        if any_change and not lost_any:
+            rep.propagated(table)
+
+
+def load_verdicts(path: str | None) -> dict:
+    """`verdicts.json` [SPEC-STAR-114]: id -> {"verdict": ..., "at": ..., "by": ...}."""
+    if not path or not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
 def build(manifest: dict, out: str) -> Report:
-    rep = Report()
+    rep = Report(load_verdicts(manifest.get("verdicts")), manifest.get("hub_state_from"))
     os.makedirs(out, exist_ok=True)
     if os.listdir(out):
         raise SystemExit(f"{out} is not empty: the merge writes a new directory, never over one")
@@ -289,9 +486,12 @@ def aliases(hub_cat: str) -> dict:
     file by now. A node that has not yet received a re-key still holds the old
     value, and it is the same file, not a different one."""
     c = open_ro(hub_cat)
-    if not c.execute("SELECT 1 FROM sqlite_master WHERE name = 'audio_md5_aliases'").fetchone():
-        return {}
-    return dict(c.execute("SELECT old_md5, new_md5 FROM audio_md5_aliases"))
+    try:
+        if not c.execute("SELECT 1 FROM sqlite_master WHERE name = 'audio_md5_aliases'").fetchone():
+            return {}
+        return dict(c.execute("SELECT old_md5, new_md5 FROM audio_md5_aliases"))
+    finally:
+        c.close()
 
 
 def passage_remap(node_cat: str, hub_cat: str):
@@ -301,8 +501,13 @@ def passage_remap(node_cat: str, hub_cat: str):
     q = ("SELECT p.passage_id, f.audio_md5, p.kind, p.start_ms FROM passages p "
          "JOIN files f USING (file_id)")
     alias = aliases(hub_cat)
-    node = {r[0]: (alias.get(r[1], r[1]),) + r[2:] for r in open_ro(node_cat).execute(q)}
-    hub = {r[0]: r[1:] for r in open_ro(hub_cat).execute(q)}
+    nc, hc = open_ro(node_cat), open_ro(hub_cat)
+    try:
+        node = {r[0]: (alias.get(r[1], r[1]),) + r[2:] for r in nc.execute(q)}
+        hub = {r[0]: r[1:] for r in hc.execute(q)}
+    finally:
+        nc.close()
+        hc.close()
     def by_file(m):
         out = {}
         for pid, (md5, kind, start) in m.items():
@@ -334,6 +539,14 @@ def _int(v):
 
 def build_listener(manifest: dict, out: str, rep: Report, hub_cat: str | None = None):
     nodes = sorted((Node(s) for s in manifest["nodes"]), key=lambda n: n.name)
+    try:
+        _build_listener(nodes, manifest, out, rep, hub_cat)
+    finally:
+        for n in nodes:
+            n.close()
+
+
+def _build_listener(nodes: list, manifest: dict, out: str, rep: Report, hub_cat: str | None):
     rep.data["translations"] = {}
     for n in nodes:
         if hub_cat:
@@ -372,7 +585,7 @@ def build_listener(manifest: dict, out: str, rep: Report, hub_cat: str | None = 
             shutil.copyfile(os.path.join(out, "listener.db"), path)
             rep.data["copies"][n.name] = dict(listener="the hub's: a mirror")
             continue
-        scratch = Report()
+        scratch = Report(rep.verdicts, rep.hub)     # the same verdicts as the hub's own copy
         ok = write_listener(nodes, n.name, path, scratch, schema_of=n)
         own = {t: s["merged"] for t, s in scratch.data["tables"].items()
                if s["rule"] in (LOCAL, HUB)}
@@ -419,7 +632,9 @@ def catalogue_copies(manifest: dict, out: str, rep: Report):
     own `files` table as `files`; one that names none gets no catalogue, and
     the report says so."""
     hub_cat = os.path.join(out, "library.db")
-    held = {r[1] for r in open_ro(hub_cat).execute("PRAGMA table_info(files)")}
+    hc = open_ro(hub_cat)
+    held = {r[1] for r in hc.execute("PRAGMA table_info(files)")}
+    hc.close()
     cols = sorted(MACHINE_SCOPE["files"] & held)
     for spec in sorted(manifest["nodes"], key=lambda s: s["name"]):
         name = spec["name"]
@@ -430,8 +645,12 @@ def catalogue_copies(manifest: dict, out: str, rep: Report):
             entry["catalogue"] = "none: the manifest names no `files` for this node"
             continue
         alias = aliases(hub_cat)
-        theirs = {alias.get(r[0], r[0]): r[1:] for r in open_ro(spec["files"]).execute(
-            f"SELECT audio_md5, {', '.join(cols)} FROM files")}
+        fc = open_ro(spec["files"])
+        try:
+            theirs = {alias.get(r[0], r[0]): r[1:] for r in fc.execute(
+                f"SELECT audio_md5, {', '.join(cols)} FROM files")}
+        finally:
+            fc.close()
         d = os.path.join(out, "nodes", name)
         os.makedirs(d, exist_ok=True)
         path = os.path.join(d, "library.db")
@@ -591,10 +810,15 @@ def build_catalogue(cat: dict, out: str, rep: Report):
                     mods = {n: r for n, r in changes.items() if r is not None}
                     pool = mods or changes     # a modification outranks a deletion
                     who = sorted(pool, key=lambda n: (-rank(pool[n]), _neg(row_time(pool[n])), n))[0]
-                    chosen = pool[who]
+                    values = {n: (None if r is None else {c: r.get(c) for c in compare}) for n, r in changes.items()}
+                    # [SPEC-STAR-110]: a catalogue conflict is an item, and a
+                    # verdict may take any copy's change, a deletion included.
+                    who = rep.item(table, k, "delete-vs-edit" if None in changes.values() else "conflict",
+                                   values, who, "SPEC-STAR-047",
+                                   stamps={n: row_time(r) for n, r in changes.items() if r is not None})
+                    chosen = changes[who]
                     rep.data["catalogue"]["conflicts"].append(dict(
-                        table=table, key=list(k), chose=who,
-                        values={n: (None if r is None else {c: r.get(c) for c in compare}) for n, r in changes.items()},
+                        table=table, key=list(k), chose=who, values=values,
                         base=None if base_row is None else {c: base_row.get(c) for c in compare}))
                 if chosen is None:
                     deleted += 1
@@ -670,6 +894,11 @@ def write_report(rep: Report, out: str):
         # this file 600 MB on 2026-09-26.
         json.dump(d, fh, indent=1, sort_keys=True,
                   default=lambda v: f"<{len(v)} bytes>" if isinstance(v, (bytes, bytearray)) else str(v))
+    # [SPEC-STAR-112]: the items alone, so the console and the gate need not
+    # read a report that holds the whole catalogue's decisions.
+    with open(os.path.join(out, "items.json"), "w", encoding="utf-8", newline="\n") as fh:
+        json.dump({"items": d.get("items", []), "propagated": d.get("propagated", {})}, fh, indent=1,
+                  sort_keys=True, default=lambda v: f"<{len(v)} bytes>" if isinstance(v, (bytes, bytearray)) else str(v))
     L = ["# Star merge report", "",
          "Read it before promoting this output to `data/` [SPEC-STAR-070]."]
     if "nodes" in d:
@@ -680,10 +909,40 @@ def write_report(rep: Report, out: str):
         L += ["", "# Catalogue half", "",
               f"The hub's own, taken as it stands [SPEC-STAR-085]: `{d['hub_library']['source']}`. "
               f"Integrity **{d['hub_library']['integrity']}**."]
+    L += items_section(d)
     if d.get("copies"):
         L += copies_section(d["copies"])
     with open(os.path.join(out, "report.md"), "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(L) + "\n")
+
+
+def items_section(d: dict) -> list[str]:
+    """[SPEC-STAR-110]: what needs a verdict, and what was only carried."""
+    items = d.get("items", [])
+    L = ["", "# Items for a verdict [SPEC-STAR-110]", "",
+         "A change the merge would discard. Each takes its default, the most recent change, unless a",
+         "verdict names another candidate; the gate wants one for every item [SPEC-STAR-116]."]
+    prop = d.get("propagated", {})
+    if prop:
+        L += ["", "Carried without question, one node having changed the row: "
+              + ", ".join(f"`{t}` {n}" for t, n in sorted(prop.items())) + "."]
+    if not items:
+        return L + ["", "None: nothing is being discarded."]
+    kinds = {}
+    for x in items:
+        kinds.setdefault(x["kind"], []).append(x)
+    for kind, xs in sorted(kinds.items()):
+        L += ["", f"## {kind}: {len(xs)}", ""]
+        for x in xs[:25]:
+            col = f" `{x['column']}`" if x.get("column") else ""
+            cands = "; ".join(
+                f"{c['node']}: " + ("removed" if c["value"] is None else _show(c["value"]) if isinstance(c["value"], dict)
+                                    else repr(c["value"])) + (f" ({c['stamp']})" if c.get("stamp") else "")
+                for c in x["candidates"])
+            L.append(f"- `{x['id']}` `{x['table']}` {x['key']}{col}: default **{x['default']}** -- {cands}")
+        if len(xs) > 25:
+            L.append(f"- ... and {len(xs) - 25} more in report.json")
+    return L
 
 
 def catalogue_section(c: dict) -> list[str]:
@@ -785,7 +1044,12 @@ def main(argv: list[str]) -> int:
         return 2
     with open(argv[0], encoding="utf-8") as fh:
         manifest = json.load(fh)
-    rep = build(manifest, argv[2])
+    return run(manifest, argv[2])
+
+
+def run(manifest: dict, out: str) -> int:
+    """Build the merge into `out` from a manifest already in hand, and say what came of it."""
+    rep = build(manifest, out)
     checks = {}
     if "integrity" in rep.data:
         checks["listener"] = rep.data["integrity"]
@@ -794,8 +1058,9 @@ def main(argv: list[str]) -> int:
     if "hub_library" in rep.data:
         checks["catalogue"] = rep.data["hub_library"]["integrity"]
     conflicts = len(rep.data.get("catalogue", {}).get("conflicts", []))
-    print(f"merged into {argv[2]}: integrity {checks}, {len(rep.data['decisions'])} listener "
-          f"decision(s), {conflicts} catalogue conflict(s) -- see report.md")
+    print(f"merged into {out}: integrity {checks}, {len(rep.data['decisions'])} listener "
+          f"decision(s), {conflicts} catalogue conflict(s), {len(rep.data['items'])} item(s) "
+          f"for a verdict -- see report.md")
     return 0 if all(v == "ok" for v in checks.values()) else 1
 
 

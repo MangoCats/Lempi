@@ -5,15 +5,10 @@
  "backups": {"dir": "data/backups", "keep_daily": 14, "keep_monthly": 12, "max_age_hours": 30,
              "mirror": {"host": "someone@workshop", "dir": "/home/someone/lempi-hub-backups"}},
  "nodes": {
-  "speaker-a": {"host": "pi@speaker-a", "member": "<the player's mesh fingerprint>", "listener": "/var/lempi/listener.db", "library": "/srv/library/library.db",
-                "backup_root": "/var/lempi", "library_backup_root": "/srv/library", "player": {"service": "lempi"}},
-  "workshop": {"host": "someone@workshop", "mirror": true,
-               "listener": "/home/someone/lempi-data/listener.db", "library": "/home/someone/lempi-data/library.db",
-               "backup_root": "/home/someone/lempi-data", "player": {"none": true}},
-  "speaker-b": {"host": "someone@speaker-b",
-                "listener": "/var/lempi/listener.db", "library": "/var/lempi/library.db",
-                "backup_root": "/var/lempi",
-                "player": {"stop": "pkill -f 'release/[l]empi --listener'",
-                           "start": "cd /home/someone/Dev/Lempi && nohup ./player/target/release/lempi --listener /var/lempi/listener.db --library /var/lempi/library.db --port 13491 >> /var/lempi/player.log 2>&1 < /dev/null &"}}
+  "speaker-a": {"host": "pi@speaker-a", "member": "<the player's mesh fingerprint>"},
+  "speaker-b": {"host": "someone@speaker-b", "member": "<its mesh fingerprint>"},
+  "workshop": {"host": "someone@workshop", "member": "<its mesh fingerprint>",
+               "on_demand": {"start": "XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user start lempi-ondemand.service",
+                             "stop": "XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user stop lempi-ondemand.service"}}
  }
 }

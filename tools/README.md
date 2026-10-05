@@ -68,8 +68,9 @@ Folding reviewed decisions into the library, and syncing them — and flags — 
 | `push_file_tags.py` | Push locally-known `file_tags` to a remote whose own copy is behind. |
 | `star_merge.py` | Merge every node's snapshot into the hub's pair, and write each node's own copy `[SPEC046]`. Plays are never merged `[REQ-PD-113]`. |
 | `star_patch.py` | Turn a node's snapshot and its copy into a patch; on the node, apply it only where nothing changed since, and back up, restore or fingerprint a live database `[SPEC-STAR-080]`. |
-| `star_distribute.py` | Carry the patches to one node: rehearse read-only against its live files, then `--commit` with the node's current pair kept as a backup there. |
-| `star_sync.py` | The routine sync, one command per stage (`snapshot`, `merge`, `patch`, `rehearse`, `commit`), plus the hub's daily `backup` and a `status` that fails when it goes stale `[SPEC-STAR-085..087]`. Reads `fleet/star-plan.json`. |
+| `star_distribute.py` | The ssh node path, a manual tool since 2026-10-04 `[SPEC-STAR-100]`: carry the patches to one node: rehearse read-only against its live files, then `--commit` with the node's current pair kept as a backup there. |
+| `star_sync.py` | The routine sync, one command per stage (`snapshot`, `merge`, `items`, `verdict`, `approve-all`, `patch`, `rehearse`, `commit`), every node reached by signed request `[SPEC-STAR-100]`; refuses a commit until every conflict has a verdict `[SPEC-STAR-116]`. Plus the hub's daily `backup` and a `status` that fails when it goes stale `[SPEC-STAR-085..087]`. Reads `fleet/star-plan.json`. |
+| `sync_console.py` | What the console's `/sync` page knows: where a run stands, its conflicts in words and in pages, verdicts, and what blocks a commit `[SPEC-STAR-120]`. |
 | `hub_backup.cmd` | What Task Scheduler runs each night: `star_sync.py … backup`, with a message on screen if it fails `[SPEC-STAR-086]`. |
 
 ## Flavor extraction & classifier training

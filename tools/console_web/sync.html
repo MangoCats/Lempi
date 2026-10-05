@@ -1,0 +1,262 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Vipunen — fleet sync</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/console.css">
+<header>
+  <h1>Vipunen</h1>
+  <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/import">import</a><a href="/export">export</a><a href="/flags">flags</a><a href="/intake">intake</a><a href="/mesh">mesh</a><a href="/sync" class="on">sync</a><a href="/system">system</a></nav>
+  <span class="ro">the hub's pair is patched only by a commit</span>
+</header>
+<main>
+  <h2>Fleet sync <small>[SPEC-STAR-120]</small></h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    The desktop is the source of truth. A sync takes each node's edits, merges them here, and sends the
+    result back out — by signed request to each node's own player, which applies it itself and is not
+    stopped. Nothing is sent until every conflict below has a verdict, the patches are proven and each node
+    has been rehearsed clean <code style="font:12px var(--mono)">[SPEC-STAR-116]</code>.
+  </p>
+  <div id="noplan" class="caveat" hidden></div>
+
+  <div id="body" hidden>
+    <h2>Nodes</h2>
+    <p id="backup" style="font-size:.85rem;color:var(--dim);margin:.1rem 0 .5rem"></p>
+    <table class="peers">
+      <thead><tr><th>node</th><th>player</th><th>last synced</th><th>this run</th><th>catalogue</th></tr></thead>
+      <tbody id="node-rows"></tbody>
+    </table>
+
+    <h2>This run <small id="run-id"></small></h2>
+    <div class="controls" id="stages"></div>
+    <div id="blockers" style="font-size:.85rem"></div>
+    <div id="job-box"></div>
+
+    <h2>Items for a verdict <small>[SPEC-STAR-110]</small></h2>
+    <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+      A row is listed only where the merge would discard a change somebody made. The default is the most recent
+      change; <b>Use</b> takes another node's instead. A row only one node changed is carried without question.
+    </p>
+    <div class="tiles" id="tiles"></div>
+    <div class="controls" id="filters">
+      <select id="f-kind"><option value="">any kind</option></select>
+      <select id="f-table"><option value="">any table</option></select>
+      <select id="f-node"><option value="">any node</option></select>
+      <select id="f-status">
+        <option value="">any state</option><option value="pending">no verdict</option>
+        <option value="approved">approved</option><option value="changed">changed by a verdict</option>
+        <option value="stale">awaiting a new merge</option>
+      </select>
+      <button class="chip" id="approve-all"></button>
+    </div>
+    <table class="peers">
+      <thead><tr><th>kind</th><th>what</th><th>the changes</th><th>verdict</th></tr></thead>
+      <tbody id="item-rows"></tbody>
+    </table>
+    <div class="controls" style="margin-top:.6rem"><button class="chip" id="more" hidden>show more</button>
+      <span id="shown" style="color:var(--dim);font-size:.85rem;align-self:center"></span></div>
+
+    <details style="margin-top:1.2rem"><summary>The run's summary and the merge's report</summary>
+      <pre id="summary" class="list" style="white-space:pre-wrap"></pre>
+    </details>
+  </div>
+</main>
+<script src="/console.js"></script>
+<script>
+const PAGE = 100;
+let STATE = null, shown = 0, busy = false;
+const $ = id => document.getElementById(id);
+
+const kindPill = k => S.el('span', { class: 'pill ' + (k === 'delete-vs-edit' ? 'bad' : k === 'tie' ? 'warn' : ''), text: k });
+
+function ago(hours) {
+  if (hours == null) return 'never';
+  return hours < 48 ? `${Math.round(hours)} h ago` : `${Math.round(hours / 24)} days ago`;
+}
+
+async function post(path, body) {
+  const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(body || {}) });
+  const d = await r.json();
+  if (d.error) throw new Error(d.error);
+  return d;
+}
+
+// ---- nodes and the run's stages --------------------------------------------
+function paintNodes(st) {
+  const b = st.backup || {};
+  $('backup').textContent = b.newest
+    ? `hub backup: newest ${b.newest}, ${ago(b.hours)}${b.hours > 30 ? ' — STALE' : ''}`
+    : 'the hub has never been backed up';
+  $('node-rows').replaceChildren(...st.nodes.map(n => S.el('tr', {},
+    S.el('td', {}, n.name),
+    S.el('td', {}, n.kind === 'phone' ? 'phone (its own channel)' : n.on_demand ? 'on demand' : 'always running',
+         n.enrolled ? null : S.el('span', { class: 'pill bad', style: 'margin-left:.4rem', text: 'not enrolled' })),
+    S.el('td', {}, ago(n.hours)),
+    S.el('td', {}, n.in_run === 'missing' ? S.el('span', { class: 'pill bad', text: 'missing' }) :
+                   n.in_run === 'taken' ? S.el('span', { class: 'pill ok', text: 'taken' }) : '—',
+         n.why ? S.el('div', { style: 'color:var(--dim);font-size:.8rem', text: n.why }) : null),
+    S.el('td', {}, n.catalogue ? S.el('span', { class: 'pill ' + (n.catalogue === 'as last sent' ? 'ok' : 'warn'),
+                                                text: n.catalogue }) : '—'))));
+}
+
+function stageButton(label, stage, enabled, nodes, danger) {
+  const b = S.el('button', { class: 'chip' + (danger ? ' danger' : '') }, label);
+  b.disabled = busy || !enabled;
+  if (b.disabled) b.style.opacity = .5;
+  b.onclick = () => runStage(stage, nodes, label);
+  return b;
+}
+
+function paintRun(st) {
+  const r = st.run;
+  $('run-id').textContent = r ? r.id : '(no run yet)';
+  const step = (ok, text) => S.el('span', { class: 'pill ' + (ok ? 'ok' : ''), text: (ok ? '✓ ' : '') + text });
+  const bar = $('stages');
+  bar.replaceChildren(
+    stageButton('1 · Snapshot (a new run)', 'snapshot', true),
+    stageButton('2 · Merge', 'merge', r && r.snapshot),
+    stageButton('3 · Prepare patches', 'patch', r && r.merged),
+    stageButton('4 · Rehearse', 'rehearse', r && r.proven),
+    stageButton('5 · Commit', 'commit', r && r.ready, [], true));
+  const marks = S.el('div', { style: 'display:flex;gap:.4rem;flex-wrap:wrap;margin:.2rem 0 .6rem' });
+  if (r) {
+    marks.append(step(r.snapshot, 'snapshot'), step(r.merged, 'merged'),
+      step(r.merged && !r.pending && !r.stale, 'every item has a verdict'), step(r.proven, 'patches proven'),
+      step(r.names && r.names.length && r.names.every(n => r.rehearsal[n] === 0), 'rehearsed clean'),
+      step(r.committed && r.committed.length, `committed: ${(r.committed || []).join(', ') || 'none'}`));
+  }
+  bar.after(marks);
+  document.querySelectorAll('.stage-marks').forEach(e => e.remove());
+  marks.className = 'stage-marks';
+  const bl = $('blockers');
+  bl.replaceChildren(...((r && r.blockers) || []).map(t => S.el('div', { style: 'color:var(--warn)', text: '• ' + t })));
+}
+
+async function runStage(stage, nodes, label) {
+  if (stage === 'commit') {
+    const od = STATE.nodes.filter(n => n.on_demand).map(n => n.name);
+    const msg = `Commit run ${STATE.run.id} to ${STATE.run.names.join(', ')}?\n\n` +
+      `The hub's own pair is patched first, and the desktop player is paused for it.` +
+      (od.length ? `\n${od.join(', ')} will have its player started for this and stopped after.` : '') +
+      `\n\nThis changes the household's data on every node.`;
+    if (!confirm(msg)) return;
+  }
+  busy = true;
+  let job;
+  try { job = await post('/api/sync/stage', { stage, nodes }); }
+  catch (e) { busy = false; paintRun(STATE); return S.fail('#job-box', e); }
+  paintRun(STATE);
+  S.watchJob(job.job_id, $('job-box'), async () => { busy = false; await reload(true); });
+}
+
+// ---- items -------------------------------------------------------------------
+function valueText(c, others) {
+  if (c.value === null) return 'removed';
+  if (typeof c.value !== 'object') return String(c.value);
+  const keys = Object.keys(c.value).filter(k => !/(_at|stamp)$/.test(k) &&
+    others.some(o => o.value && typeof o.value === 'object' && o.value[k] !== c.value[k]));
+  const shownKeys = keys.length ? keys : Object.keys(c.value).filter(k => !/(_at|stamp)$/.test(k));
+  return shownKeys.map(k => `${k}: ${String(c.value[k]).slice(0, 60)}`).join(' · ');
+}
+
+function itemRow(x) {
+  const verdict = async value => {
+    try { await post('/api/sync/verdicts', { verdicts: { [x.id]: value } }); await reload(false); }
+    catch (e) { alert(e.message); }
+  };
+  const cands = x.candidates.map(c => S.el('div', { style: 'margin:.1rem 0' },
+    S.el('b', { text: c.node }),
+    c.node === x.default ? S.el('span', { class: 'pill', style: 'margin-left:.3rem', text: 'default' }) : null,
+    c.stamp ? S.el('span', { style: 'color:var(--dim);margin-left:.4rem;font-size:.8rem', text: c.stamp }) : null,
+    S.el('div', { style: 'font:12px var(--mono);color:var(--dim)', text: valueText(c, x.candidates.filter(o => o !== c)) })));
+  const actions = S.el('div', { style: 'display:flex;gap:.3rem;flex-wrap:wrap' });
+  const approve = S.el('button', { class: 'chip' + (x.status === 'approved' ? ' on' : '') }, 'Approve');
+  approve.onclick = () => verdict('approved');
+  actions.append(approve);
+  for (const c of x.candidates.filter(c => c.node !== x.default)) {
+    const b = S.el('button', { class: 'chip' + (x.verdict && x.verdict.verdict === 'chose:' + c.node ? ' on' : '') },
+                   `Use ${c.node}`);
+    b.onclick = () => verdict('chose:' + c.node);
+    actions.append(b);
+  }
+  const state = x.status === 'pending' ? S.el('span', { class: 'pill warn', text: 'no verdict' })
+    : S.el('span', { class: 'pill ' + (x.status === 'stale' ? 'warn' : 'ok'),
+                     text: x.status === 'stale' ? 'awaiting a new merge' : x.status === 'changed' ? 'changed' : 'approved' });
+  return S.el('tr', {},
+    S.el('td', {}, kindPill(x.kind)),
+    S.el('td', {}, x.name.text, x.column ? S.el('span', { style: 'color:var(--dim)', text: ` · ${x.column}` }) : null,
+         S.el('div', { style: 'color:var(--dim);font-size:.78rem', text: x.table + (x.name.resolved ? '' : ' (unresolved)') })),
+    S.el('td', {}, ...cands),
+    S.el('td', {}, actions, S.el('div', { style: 'margin-top:.25rem' }, state,
+      x.verdict && x.verdict.by === 'approve-all' ? S.el('span', { style: 'color:var(--dim);font-size:.75rem;margin-left:.3rem', text: 'in bulk' }) : null)));
+}
+
+function query(after) {
+  const q = new URLSearchParams({ after, limit: PAGE });
+  for (const [k, id] of [['kind', 'f-kind'], ['table', 'f-table'], ['node', 'f-node'], ['status', 'f-status']])
+    if ($(id).value) q.set(k, $(id).value);
+  return '/api/sync/items?' + q;
+}
+
+function fill(sel, values) {
+  const keep = sel.value;
+  sel.replaceChildren(sel.firstElementChild, ...values.map(v => S.el('option', { value: v, text: v })));
+  sel.value = values.includes(keep) ? keep : '';
+}
+
+async function loadItems(append) {
+  const after = append ? shown : 0;
+  let d;
+  try { d = await S.get(query(after)); }
+  catch (e) { if (!append) $('item-rows').replaceChildren(); return S.fail('#shown', e); }
+  const c = d.counts;
+  $('tiles').replaceChildren(
+    ...[['items', c.total], ['no verdict', c.pending], ['approved', c.approved], ['changed', c.changed],
+        ['awaiting merge', c.stale]].map(([label, n]) => S.el('div', { class: 'tile' + (label === 'no verdict' && n ? ' warn' : '') },
+        S.el('b', { text: S.n(n) }), S.el('span', { text: label }))),
+    ...Object.entries(d.propagated || {}).length ? [S.el('div', { class: 'tile' }, S.el('b', { text: S.n(Object.values(d.propagated).reduce((a, b) => a + b, 0)) }),
+      S.el('span', { text: 'carried without question' }))] : []);
+  fill($('f-kind'), Object.keys(c.by_kind));
+  fill($('f-table'), d.tables);
+  fill($('f-node'), d.nodes);
+  const rows = d.items.map(itemRow);
+  if (append) $('item-rows').append(...rows); else $('item-rows').replaceChildren(...rows);
+  shown = after + d.items.length;
+  $('more').hidden = shown >= d.matching;
+  $('shown').textContent = d.matching ? `showing ${shown} of ${d.matching}` : (c.total ? 'nothing matches the filters' : 'nothing to approve');
+  const ab = $('approve-all');
+  ab.textContent = `Approve all ${c.pending} remaining`;
+  ab.disabled = !c.pending;
+  ab.style.opacity = c.pending ? 1 : .5;
+  ab.onclick = async () => {
+    const kinds = Object.entries(c.pending_by_kind).map(([k, n]) => `${n} ${k}`).join(', ');
+    if (!confirm(`Approve all ${c.pending} remaining items (${kinds})?\n\nEach takes its default: the most recent change. ` +
+                 `A verdict you have already given is kept. This is recorded as approved in bulk.`)) return;
+    try { await post('/api/sync/approve-all', {}); await reload(false); } catch (e) { alert(e.message); }
+  };
+}
+
+// ---- the page ----------------------------------------------------------------
+async function reload(withItems) {
+  let st;
+  try { st = await S.get('/api/sync/state'); } catch (e) { return S.fail('#noplan', e); }
+  if (st.plan === false) {
+    $('noplan').hidden = false; $('noplan').textContent = st.why; $('body').hidden = true; return;
+  }
+  STATE = st;
+  $('noplan').hidden = true; $('body').hidden = false;
+  paintNodes(st); paintRun(st);
+  if (st.run && st.run.merged) {
+    await loadItems(false);
+    try { const s = await S.get('/api/sync/summary'); $('summary').textContent = (s.summary || '') + '\n\n' + (s.report || ''); }
+    catch (e) { /* no summary yet */ }
+  } else {
+    $('item-rows').replaceChildren(); $('tiles').replaceChildren(); $('shown').textContent = 'merge the run to list its items';
+    $('approve-all').textContent = 'Approve all'; $('approve-all').disabled = true;
+  }
+}
+
+for (const id of ['f-kind', 'f-table', 'f-node', 'f-status']) $(id).onchange = () => loadItems(false);
+$('more').onclick = () => loadItems(true);
+reload(true);
+</script>

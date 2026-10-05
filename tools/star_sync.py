@@ -3,21 +3,31 @@
 """The routine star sync, and the hub's own backup [SPEC-STAR-085..087].
 
 One command per stage, each working in a dated run folder under the plan's
-`runs`, so a stage can be read, re-run or stopped between:
+`runs`, so a stage can be read, re-run or stopped between. Every node is a
+member player, reached by signed requests [SPEC-STAR-100]; ssh only starts and
+stops a player kept on demand [SPEC-STAR-101], and carries the hub's backup to
+its mirror.
 
-    python tools/star_sync.py PLAN snapshot           a new run: every node's listener,
-                                                      and its catalogue only if it moved
-    python tools/star_sync.py PLAN merge              the hub's pair and each node's copy
-    python tools/star_sync.py PLAN patch              every patch, each proven offline
+    python tools/star_sync.py PLAN snapshot           a new run: the hub's pair here, and every
+                                                      node's shared tables and catalogue summary
+    python tools/star_sync.py PLAN merge              the hub's pair and each node's copy, and the
+                                                      items for a verdict [SPEC-STAR-110]
+    python tools/star_sync.py PLAN items              each item, and where its verdict stands
+    python tools/star_sync.py PLAN verdict ID V       one verdict: approved | chose:NODE
+    python tools/star_sync.py PLAN approve-all        every item still without one takes its default
+    python tools/star_sync.py PLAN patch              every patch, each proven (merging again if a
+                                                      verdict changed an outcome)
     python tools/star_sync.py PLAN rehearse [NODE..]  read-only, against the live files
     python tools/star_sync.py PLAN commit [NODE..]    for real: the hub, then the nodes
-    python tools/star_sync.py PLAN shadow             the signed transport beside ssh, read-only
+                                                      [--approve-all] [--console-pid N]
     python tools/star_sync.py PLAN backup             the hub's daily backup, and its mirror
     python tools/star_sync.py PLAN status             exits 1 when a backup has gone stale
 
-`merge`, `patch`, `rehearse` and `commit` act on the newest run unless
-`--run DIR` names one. Nothing is committed until a person has read the
-run's SUMMARY.md and the merge's report.md [SPEC-STAR-070].
+`merge`, `items`, `verdict`, `approve-all`, `patch`, `rehearse` and `commit` act
+on the newest run unless `--run DIR` names one. Nothing is committed until a
+person has read the run's SUMMARY.md and the merge's report.md, every item has
+a verdict, the patches are proven and each node has been rehearsed clean
+[SPEC-STAR-070, SPEC-STAR-116].
 
 The plan is the fleet's real roster, so it lives untracked in `fleet/`;
 `fleet-example/star-plan.json` shows its shape. The run's state -- what was
@@ -27,25 +37,26 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
-import gzip
+import gc
 import hashlib
 import io
 import json
 import os
-import shlex
 import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
-import star_distribute as sd  # noqa: E402
+import star_distribute as sd  # noqa: E402  -- ssh, for a player's start and stop and the mirror
 import star_merge as sm  # noqa: E402
 import star_patch as sp  # noqa: E402
-import mesh as meshmod  # noqa: E402  -- members reached by upload [REQ-AND-330]
+import mesh as meshmod  # noqa: E402  -- the signed transport, and phones by upload [REQ-AND-330]
+
 
 SSH = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=5",
        "-o", "ServerAliveCountMax=6"]
@@ -128,41 +139,107 @@ def newest_run(plan, given=None):
     return os.path.join(runs, found[-1])
 
 
+
+# --------------------------------------------------------------- the players --
+# [SPEC-STAR-100]: every node is a member player, reached by signed requests.
+# What the merge shares, and what a node keeps for itself, as lempi-core names
+# them (held equal by test_star_merge).
+SIGNED_TABLES = sorted(t for t, s in sm.TABLES.items() if s["rule"] in (sm.LWW, sm.UNION))
+SIGNED_EXCLUDE = {"files": sorted(sm.MACHINE_SCOPE["files"])}
+START_WAIT_S = 90          # [SPEC-STAR-101]: how long an on-demand player has to answer
+
+
+def mesh_of(plan):
+    return meshmod.mesh_dir(at_root(plan["hub"]["library"]))
+
+
+def db_of(export, path):
+    """A database from `mesh_sync::export`'s shape. A table the export gives
+    no creating statement for -- the catalogue summary's -- is made from its
+    columns, keyed by its first."""
+    c = sqlite3.connect(path)
+    try:
+        for t in export["tables"]:
+            for s in t.get("create") or [f"CREATE TABLE {t['name']} ({', '.join(t['columns'])}, "
+                                         f"PRIMARY KEY ({', '.join(t['key'])}))"]:
+                c.execute(s)
+            c.executemany(f"INSERT INTO {t['name']} ({', '.join(t['columns'])}) VALUES "
+                          f"({', '.join('?' * len(t['columns']))})",
+                          [[sp.dec(v) for v in r] for r in t["rows"]])
+        c.commit()
+    finally:
+        c.close()
+
+
+def differs(a_db, b_db, spec):
+    """Rows held by one side and not the other, per table: `spec` maps a table
+    to the columns compared. Values compared as a patch carries them."""
+    out = {}
+    a, b = sp.open_ro(a_db), sp.open_ro(b_db)
+    try:
+        for t, cols in spec.items():
+            def rows(c):
+                if t not in sp.tables_of(c):
+                    return set()
+                have = [x for x in cols if x in sp.columns(c, t)]
+                return {json.dumps([sp.enc(v) for v in r]) for r in c.execute(f"SELECT {', '.join(have)} FROM {t}")}
+            ra, rb = rows(a), rows(b)
+            if ra != rb:
+                out[t] = {"only_first": len(ra - rb), "only_second": len(rb - ra)}
+    finally:
+        a.close()
+        b.close()
+    return out
+
+
+def players_up(plan, names, started):
+    """[SPEC-STAR-101]: each named node's player, as the members' query finds
+    it, or None. A node planned `on_demand` whose player is down is started,
+    over ssh, and waited for; `started` records which, so that only those are
+    stopped afterwards."""
+    mdir = mesh_of(plan)
+    found = meshmod.sync_players(mdir)
+    got, waiting = {}, []
+    for name in names:
+        n = plan["nodes"][name]
+        fp = n.get("member")
+        if fp and fp in found:
+            got[name] = found[fp]
+        elif fp and n.get("on_demand"):
+            rc, out = sd.ssh(n["host"], n["on_demand"]["start"], quiet=True)
+            if rc == 0:
+                say(f"  {name}: its player started, on demand")
+                started[name] = True
+                waiting.append(name)
+            else:
+                say(f"  {name}: its player could not be started: {out}")
+                got[name] = None
+        else:
+            got[name] = None
+    deadline = time.time() + START_WAIT_S
+    while waiting and time.time() < deadline:
+        time.sleep(5)
+        found = meshmod.sync_players(mdir)
+        for name in list(waiting):
+            fp = plan["nodes"][name]["member"]
+            if fp in found:
+                got[name] = found[fp]
+                waiting.remove(name)
+    for name in waiting:
+        got[name] = None
+    return got
+
+
+def stop_started(plan, started):
+    """Stop what this stage started, and only that [SPEC-STAR-101]."""
+    for name in sorted(started):
+        n = plan["nodes"][name]
+        rc, out = sd.ssh(n["host"], n["on_demand"]["stop"], quiet=True)
+        say(f"  {name}: its player stopped" if rc == 0 else
+            f"  {name}: its player could NOT be stopped ({out}); stop it by hand")
+
+
 # --------------------------------------------------------------- snapshot --
-def remote_fetch(host, src, dest, work, tool):
-    """[SPEC-STAR-075]: backup API on the node, gzip there, bring the .gz,
-    keep it only if both hashes match the node's own."""
-    name = os.path.basename(src)
-    line = sd.must(host, f"rm -f {work}/{name} {work}/{name}.gz && "
-                         f"python3 {tool} backup {shlex.quote(src)} {work}/{name}", f"snapshot {src}", quiet=True)
-    parts = line.split()
-    if parts[0] != "BACKUP" or parts[-1] != "ok":
-        raise sd.Failed(f"snapshot of {src}: {line}")
-    db_sha = parts[3]
-    gz_sha = sd.must(host, f"gzip -1 -c {work}/{name} > {work}/{name}.gz && sha256sum {work}/{name}.gz",
-                     "gzip", quiet=True).split()[0]
-    got = None
-    for attempt in range(4):
-        try:
-            subprocess.run(["scp", "-q", *SSH, f"{host}:{work}/{name}.gz", dest + ".gz"], timeout=3600)
-        except subprocess.TimeoutExpired:
-            pass
-        got = sha256(dest + ".gz") if os.path.exists(dest + ".gz") else None
-        if got == gz_sha:
-            break
-        say(f"    retry {attempt + 1}: {name}.gz did not arrive intact")
-    if got != gz_sha:
-        raise sd.Failed(f"{name}: no intact copy after 4 tries")
-    with gzip.open(dest + ".gz", "rb") as fi, open(dest, "wb") as fo:
-        shutil.copyfileobj(fi, fo, 1 << 20)
-    os.remove(dest + ".gz")
-    if sha256(dest) != db_sha:
-        raise sd.Failed(f"{name}: decompressed copy differs from the node's")
-    seal(dest)
-    sd.ssh(host, f"rm -f {work}/{name} {work}/{name}.gz", quiet=True)
-    return db_sha
-
-
 def history_of(sent, at, folder):
     """[SPEC-STAR-085]: what a node was last sent is what it held then -- the
     evidence of anything it has removed since [SPEC-STAR-050]."""
@@ -175,63 +252,82 @@ def history_of(sent, at, folder):
     return folder
 
 
+def sent_path(entry, key):
+    """The copy a node was last sent, if the state names one and it is still there."""
+    p = (entry or {}).get(key)
+    return at_root(p) if p and os.path.exists(at_root(p)) else None
+
+
 def snapshot(plan):
     state = load_state(plan)
     run = os.path.join(at_root(plan["runs"]), stamp())
     os.makedirs(run)
     say(f"run {run}")
     hub = plan["hub"]
-    taken = {}
     # The hub, here.
     hd = os.path.join(run, hub["name"])
     for half in ("listener", "library"):
         local_backup(at_root(hub[half]), os.path.join(hd, f"{half}.db"))
         seal(os.path.join(hd, f"{half}.db"))
     hs = state.get("hub", {})
-    manifest = {"hub_state_from": hub["name"], "hub_library": os.path.join(hd, "library.db"),
+    manifest = {"hub_library": os.path.join(hd, "library.db"), "hub_state_from": hub["name"],
                 "nodes": [dict(name=hub["name"], listener=os.path.join(hd, "listener.db"),
-                               taken_at=now().isoformat(),
+                               taken_at=now().isoformat(), sent=sent_path(hs, "listener_sent"),
                                backups=history_of(hs.get("listener_sent"), hs.get("at", ""), os.path.join(hd, "history")))]}
     baselines = {hub["name"]: {"listener": os.path.join(hd, "listener.db"), "library": os.path.join(hd, "library.db")}}
     say(f"  {hub['name']}: both halves copied here")
     missing = {}
-    for name, n in sorted(plan["nodes"].items()):
-        nd = os.path.join(run, name)
-        os.makedirs(nd)
-        ns = state["nodes"].get(name, {})
-        work = f"{n['backup_root']}/star-snap"
-        tool = f"{work}/star_patch.py"
-        try:
-            sd.must(n["host"], f"mkdir -p {work}", "reach", quiet=True)
-            sd.upload(n["host"], os.path.join(HERE, "star_patch.py"), tool)
-            sha = remote_fetch(n["host"], n["listener"], os.path.join(nd, "listener.db"), work, tool)
-            say(f"  {name}: listener {sha[:12]}, verified")
-            # The catalogue only if it moved: its fingerprint on the node,
-            # read with its WAL, against what it was last sent.
-            sent = ns.get("library_sent")
-            rc, out = sd.ssh(n["host"], f"python3 {tool} fingerprint {shlex.quote(n['library'])}", quiet=True)
-            if sent and rc == 0 and out.strip() == quiet_prints(at_root(sent)).strip():
-                lib = at_root(sent)
-                say(f"  {name}: catalogue exactly as last sent, not copied")
+    # [SPEC-STAR-100]: every node, by signed request. An on-demand player is
+    # started for this stage and stopped after it.
+    mdir = mesh_of(plan)
+    names = sorted(plan["nodes"])
+    started = {}
+    try:
+        up = players_up(plan, names, started)
+        for name in names:
+            n = plan["nodes"][name]
+            ns = state["nodes"].get(name, {})
+            player = up.get(name)
+            if not n.get("member"):
+                missing[name] = "no `member` fingerprint in the plan: it is not enrolled"
+            elif player is None:
+                missing[name] = "its player did not answer the members' query"
             else:
-                lib = os.path.join(nd, "library.db")
-                sha = remote_fetch(n["host"], n["library"], lib, work, tool)
-                say(f"  {name}: catalogue has moved since it was last sent -- copied, {sha[:12]}")
-            sd.ssh(n["host"], f"rm -rf {work}", quiet=True)
-        except (sd.Failed, OSError, subprocess.SubprocessError) as err:
-            missing[name] = str(err)
-            say(f"  {name}: MISSING from this run -- {err}")
-            shutil.rmtree(nd, ignore_errors=True)
-            continue
-        manifest["nodes"].append(dict(
-            name=name, listener=os.path.join(nd, "listener.db"), taken_at=now().isoformat(),
-            backups=history_of(ns.get("listener_sent"), ns.get("at", ""), os.path.join(nd, "history")),
-            catalogue=lib, files=lib, mirror=bool(n.get("mirror"))))
-        baselines[name] = {"listener": os.path.join(nd, "listener.db"), "library": lib}
+                try:
+                    snap = meshmod.sync_step(mdir, player, "snapshot", stamp_of(run))
+                except (ValueError, OSError) as err:
+                    missing[name] = f"snapshot refused: {err}"
+            if name in missing:
+                say(f"  {name}: MISSING from this run -- {missing[name]}")
+                continue
+            nd = os.path.join(run, name)
+            os.makedirs(nd)
+            for part, fname in (("listener", "listener.db"), ("catalogue", "summary.db")):
+                db_of(snap[part], os.path.join(nd, fname))
+                seal(os.path.join(nd, fname))
+            # [SPEC-STAR-940]: the catalogue is patched strictly, against what the
+            # hub last sent. It can be only if the node still holds exactly that,
+            # as far as its summary shows.
+            sent_lib = sent_path(ns, "library_sent")
+            summ = {t["name"]: [c for c in t["columns"] if c not in sm.MACHINE_SCOPE["files"]]
+                    for t in snap["catalogue"]["tables"]}
+            moved = differs(sent_lib, os.path.join(nd, "summary.db"), summ) if sent_lib else None
+            say(f"  {name}: {sum(len(t['rows']) for t in snap['listener']['tables'])} shared row(s), "
+                + ("catalogue as last sent" if sent_lib and not moved else
+                   "catalogue has NO copy last sent" if not sent_lib else f"catalogue has moved {moved}"))
+            manifest["nodes"].append(dict(
+                name=name, listener=os.path.join(nd, "listener.db"), taken_at=now().isoformat(),
+                sent=sent_path(ns, "listener_sent"),
+                backups=history_of(ns.get("listener_sent"), ns.get("at", ""), os.path.join(nd, "history")),
+                catalogue=os.path.join(nd, "summary.db"), files=os.path.join(nd, "summary.db")))
+            baselines[name] = {"listener": os.path.join(nd, "listener.db"), "signed": n["member"],
+                               "library": sent_lib, "catalogue_in_step": bool(sent_lib and not moved),
+                               "catalogue_moved": moved}
+    finally:
+        stop_started(plan, started)
     # [REQ-AND-330]: enrolled phones, by what each last uploaded over the
-    # members' channel -- a node reached by upload rather than ssh. Only the
-    # shared tables travel, so only they are merged for it.
-    mdir = meshmod.mesh_dir(at_root(hub["library"]))
+    # members' channel -- a node reached by upload rather than by request. Only
+    # the shared tables travel, so only they are merged for it.
     for m in meshmod.sync_members(mdir):
         name, fp = m["node"], m["fingerprint"]
         up = meshmod.upload_of(mdir, fp)
@@ -252,7 +348,8 @@ def snapshot(plan):
             if f != f"listener-{up['epoch']}.db":     # earlier uploads: what it held then
                 shutil.copyfile(os.path.join(up["uploads"], f), os.path.join(hist, f))
         manifest["nodes"].append(dict(name=name, listener=os.path.join(nd, "listener.db"),
-                                      taken_at=up["uploaded_at"], backups=hist))
+                                      taken_at=up["uploaded_at"], backups=hist,
+                                      sent=sent_path(state["nodes"].get(name), "listener_sent")))
         baselines[name] = {"listener": os.path.join(nd, "listener.db"), "member": fp}
         say(f"  {name} ({m['name'] or 'unnamed'}): its upload of {up['uploaded_at']}, "
             f"clock {up['clock_offset_ms']:+d} ms, {up['rows']}")
@@ -264,13 +361,167 @@ def snapshot(plan):
     return 0 if not missing else 3
 
 
-# ------------------------------------------------------------ merge, patch --
+# ------------------------------------------------------------ merge, review --
+def rm(path):
+    if os.path.isdir(path):
+        shutil.rmtree(path, onerror=lambda f, p, e: (os.chmod(p, 0o644), f(p)))
+    elif os.path.exists(path):
+        os.chmod(path, 0o644)
+        os.remove(path)
+
+
+def void_merge(run):
+    """[SPEC-STAR-114]: a merge made void by a verdict is kept beside the run,
+    and with it goes everything made from it."""
+    m = os.path.join(run, "merge")
+    if os.path.isdir(m):
+        vd = os.path.join(run, "void")
+        os.makedirs(vd, exist_ok=True)
+        n = 1
+        while os.path.exists(os.path.join(vd, f"merge-{n}")):
+            n += 1
+        gc.collect()           # Windows will not move a folder holding a file something still has open
+        try:
+            os.replace(m, os.path.join(vd, f"merge-{n}"))
+        except PermissionError:
+            shutil.copytree(m, os.path.join(vd, f"merge-{n}"))
+            rm(m)
+    for f in ("patches", "SUMMARY.md", "distribute-plan.json", "proven.json", "rehearsal.json"):
+        rm(os.path.join(run, f))
+
+
 def merge(plan, run):
     with open(os.path.join(run, "manifest.json"), encoding="utf-8") as fh:
         manifest = json.load(fh)
-    return sm.main([os.path.join(run, "manifest.json"), "--out", os.path.join(run, "merge")])
+    void_merge(run)
+    if os.path.exists(verdicts_path(run)):
+        manifest["verdicts"] = verdicts_path(run)
+    return sm.run(manifest, os.path.join(run, "merge"))
 
 
+def verdicts_path(run):
+    return os.path.join(run, "verdicts.json")
+
+
+def load_verdicts(run):
+    if not os.path.exists(verdicts_path(run)):
+        return {}
+    with open(verdicts_path(run), encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def save_verdicts(run, verdicts):
+    tmp = verdicts_path(run) + ".new"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(verdicts, fh, indent=1, sort_keys=True)
+    os.replace(tmp, verdicts_path(run))
+
+
+def merge_items(run):
+    p = os.path.join(run, "merge", "items.json")
+    if not os.path.exists(p):
+        raise SystemExit(f"no merge in {run}: `merge` makes one")
+    with open(p, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def verdict_node(x, v):
+    """The node whose value a verdict takes for item `x`."""
+    return x["default"] if v["verdict"] == "approved" else v["verdict"][6:]
+
+
+def review(run):
+    """[SPEC-STAR-116]: where each item of the run's merge stands. `pending`
+    has no verdict; `stale` has one the merge does not yet reflect; `void` are
+    verdicts naming no item of this merge."""
+    items = merge_items(run)["items"]
+    verdicts = load_verdicts(run)
+    ids = {x["id"] for x in items}
+    return dict(items=items, verdicts=verdicts,
+                pending=[x for x in items if x["id"] not in verdicts],
+                stale=[x for x in items if x["id"] in verdicts and verdict_node(x, verdicts[x["id"]]) != x["chosen"]],
+                void=sorted(set(verdicts) - ids))
+
+
+def give_verdict(run, ident, value, by="item"):
+    """[SPEC-STAR-114]: `approved`, or `chose:<node>` naming one of the item's candidates."""
+    items = {x["id"]: x for x in merge_items(run)["items"]}
+    if ident not in items:
+        raise SystemExit(f"{ident} is not an item of this merge")
+    x = items[ident]
+    if value != "approved" and not (value.startswith("chose:") and value[6:] in {c["node"] for c in x["candidates"]}):
+        raise SystemExit(f"a verdict is `approved` or `chose:NODE`, NODE one of "
+                         f"{[c['node'] for c in x['candidates']]}: {value!r} is neither")
+    v = load_verdicts(run)
+    v[ident] = {"verdict": value, "at": now().isoformat(), "by": by}
+    save_verdicts(run, v)
+    return x
+
+
+def approve_all(run, by="approve-all"):
+    """[SPEC-STAR-118]: every item still without a verdict takes its default,
+    the most recent change, and says it was approved in bulk. A verdict a
+    person has given is never replaced."""
+    rv = review(run)
+    v = load_verdicts(run)
+    for x in rv["pending"]:
+        v[x["id"]] = {"verdict": "approved", "at": now().isoformat(), "by": by}
+    save_verdicts(run, v)
+    kinds = {}
+    for x in rv["pending"]:
+        kinds[x["kind"]] = kinds.get(x["kind"], 0) + 1
+    return kinds
+
+
+def show_items(run):
+    rv = review(run)
+    say(f"run {os.path.basename(run)}: {len(rv['items'])} item(s), {len(rv['pending'])} without a verdict, "
+        f"{len(rv['stale'])} awaiting a new merge, {len(rv['void'])} void verdict(s)")
+    for x in rv["items"]:
+        v = rv["verdicts"].get(x["id"])
+        col = f".{x['column']}" if x.get("column") else ""
+        say(f"  {x['id']} {x['kind']:14} {x['table']} {x['key']}{col}: default {x['default']}"
+            + (f" -> {v['verdict']} ({v['by']})" if v else " -- NO VERDICT"))
+        for c in x["candidates"]:
+            say(f"      {c['node']:15} {c['stamp'] or ''}  "
+                + ("removed" if c["value"] is None else json.dumps(c["value"], default=str)[:160]))
+    prop = merge_items(run).get("propagated", {})
+    if prop:
+        say("  carried without question: " + ", ".join(f"{t} {n}" for t, n in sorted(prop.items())))
+    return 0
+
+
+def gate(run, names):
+    """[SPEC-STAR-116]: no commit until every item has a verdict the merge
+    reflects, the patches are proven and each node has been rehearsed clean."""
+    problems = gate_problems(run, names)
+    if problems:
+        raise SystemExit("refusing to commit [SPEC-STAR-116]:\n  " + "\n  ".join(problems))
+
+
+def gate_problems(run, names):
+    """What stands between this run and a commit, in words; empty when nothing does."""
+    problems = []
+    try:
+        rv = review(run)
+    except SystemExit as err:
+        return [str(err)]
+    if rv["pending"]:
+        problems.append(f"{len(rv['pending'])} item(s) have no verdict: `items`, then `verdict` or `approve-all`")
+    if rv["stale"]:
+        problems.append(f"{len(rv['stale'])} verdict(s) change an outcome the merge does not reflect: `patch` merges again")
+    pr = os.path.join(run, "proven.json")
+    if not os.path.exists(pr) or not json.load(open(pr, encoding="utf-8")).get("ok"):
+        problems.append("the patches are not proven: run `patch`")
+    rh = os.path.join(run, "rehearsal.json")
+    done = json.load(open(rh, encoding="utf-8")) if os.path.exists(rh) else {}
+    for name in names:
+        if done.get(name) != 0:
+            problems.append(f"{name} has no clean rehearsal: run `rehearse {name}`")
+    return problems
+
+
+# ------------------------------------------------------------ merge, patch --
 def targets(plan, run, name):
     m = os.path.join(run, "merge")
     d = m if name == plan["hub"]["name"] else os.path.join(m, "nodes", name)
@@ -288,57 +539,100 @@ def prove(base, patch, target):
         return rc == 0 and quiet_prints(copy) == quiet_prints(target)
 
 
+def write_json(path, obj):
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(obj, fh, separators=(",", ":"), sort_keys=True)
+
+
+def values_patch(base, target):
+    """A player's listener patch [SPEC-NSH-070]: the shared tables as values,
+    proven here -- the member rule applied to a copy of what it sent must give
+    the merge's shared tables -- before it is offered."""
+    p = sp.make_values(base, target, tables=SIGNED_TABLES)
+    with tempfile.TemporaryDirectory() as t:
+        copy = os.path.join(t, "proof.db")
+        shutil.copyfile(base, copy)
+        os.chmod(copy, 0o644)
+        sp.apply_member(copy, p, set(SIGNED_TABLES))
+        good = sp.make_values(copy, target, tables=SIGNED_TABLES)["tables"] == []
+    return p, good
+
+
 def patch(plan, run):
+    rv = review(run)
+    if rv["stale"]:
+        say(f"  {len(rv['stale'])} verdict(s) change an outcome: merging again")
+        if merge(plan, run):
+            return 1
     with open(os.path.join(run, "baselines.json"), encoding="utf-8") as fh:
         baselines = json.load(fh)
+    for f in ("proven.json", "rehearsal.json"):
+        rm(os.path.join(run, f))
+    rv = review(run)
     summary = ["# Sync summary", "", f"Run `{os.path.basename(run)}`. Read this and `merge/report.md` "
                "before `commit` [SPEC-STAR-070].", ""]
+    summary += [f"**Items for a verdict:** {len(rv['items'])}, {len(rv['pending'])} without one "
+                "[SPEC-STAR-116].", ""]
     with open(os.path.join(run, "missing.json"), encoding="utf-8") as fh:
         missing = json.load(fh)
     if missing:
         summary += ["**Missing from this run** -- they receive nothing until the next:", ""]
         summary += [f"- {n}: {why}" for n, why in sorted(missing.items())] + [""]
     ok = True
-    members = {}
+    members, signed = {}, {}
+    hub = plan["hub"]["name"]
     for name in sorted(baselines):
+        b = baselines[name]
         pd = os.path.join(run, "patches", name)
         os.makedirs(pd, exist_ok=True)
+        t = targets(plan, run, name)
         summary += [f"## {name}", ""]
-        if "member" in baselines[name]:
-            good, line = member_patch(baselines[name]["listener"], targets(plan, run, name)["listener"],
-                                      os.path.join(pd, "member.patch.json"))
+        if "member" in b:
+            good, line = member_patch(b["listener"], t["listener"], os.path.join(pd, "member.patch.json"))
             ok = ok and good
             summary += [line, ""]
-            members[name] = baselines[name]["member"]
+            members[name] = b["member"]
             say(f"  {name} {line[2:]}")
-            continue
-        for half in ("listener", "library"):
-            out = os.path.join(pd, f"{half}.patch.json")
-            with contextlib.redirect_stdout(io.StringIO()):
-                sp.make(baselines[name][half], targets(plan, run, name)[half], out)
-            with open(out, encoding="utf-8") as fh:
-                p = json.load(fh)
-            rows = {e["name"]: len(e["rows"]) for e in p["tables"]}
-            if not p["tables"]:
-                summary.append(f"- {half}: nothing to send")
-                continue
-            good = prove(baselines[name][half], out, targets(plan, run, name)[half])
+        elif "signed" in b:
+            lis, good = values_patch(b["listener"], t["listener"])
             ok = ok and good
-            summary.append(f"- {half}: " + ", ".join(f"`{t}` {k}" for t, k in sorted(rows.items()))
+            write_json(os.path.join(pd, "listener.values.json"), lis)
+            rows = {e["name"]: len(e["rows"]) for e in lis["tables"]}
+            summary.append("- shared edits: " + (", ".join(f"`{k}` {v}" for k, v in sorted(rows.items())) or "nothing to send")
                            + ("" if good else " -- **NOT PROVEN: do not commit**"))
-            say(f"  {name} {half}: {sum(rows.values())} row(s), {'proven' if good else 'NOT PROVEN'}")
+            if b.get("catalogue_in_step"):
+                cat = sp.make_values(b["library"], t["library"], exclude=SIGNED_EXCLUDE)
+                write_json(os.path.join(pd, "catalogue.values.json"), cat)
+                crow = {e["name"]: len(e["rows"]) for e in cat["tables"]}
+                summary.append("- catalogue: " + (", ".join(f"`{k}` {v}" for k, v in sorted(crow.items())) or "nothing to send")
+                               + " (proven by the player's own rehearsal, strictly)")
+            else:
+                why = ("no copy was last sent" if not b.get("library") else
+                       f"its catalogue has moved since it was sent {b.get('catalogue_moved')}")
+                summary.append(f"- catalogue: **none sent** -- {why} [SPEC-STAR-940]")
+            say(f"  {name}: {sum(rows.values())} shared row(s), {'proven' if good else 'NOT PROVEN'}")
+            signed[name] = b["signed"]
+        else:                                    # the hub, whose pair is here
+            for half in ("listener", "library"):
+                out = os.path.join(pd, f"{half}.patch.json")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    sp.make(b[half], t[half], out)
+                with open(out, encoding="utf-8") as fh:
+                    p = json.load(fh)
+                rows = {e["name"]: len(e["rows"]) for e in p["tables"]}
+                if not p["tables"]:
+                    summary.append(f"- {half}: nothing to send")
+                    continue
+                good = prove(b[half], out, t[half])
+                ok = ok and good
+                summary.append(f"- {half}: " + ", ".join(f"`{k}` {v}" for k, v in sorted(rows.items()))
+                               + ("" if good else " -- **NOT PROVEN: do not commit**"))
+                say(f"  {name} {half}: {sum(rows.values())} row(s), {'proven' if good else 'NOT PROVEN'}")
         summary.append("")
     with open(os.path.join(run, "SUMMARY.md"), "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(summary) + "\n")
-    st = stamp_of(run)
-    dplan = {"merge": os.path.join(run, "merge"), "patches": os.path.join(run, "patches"),
-             "prune": plan.get("prune"), "nodes": {}, "members": members}
-    for name, n in plan["nodes"].items():
-        if name in baselines:
-            dplan["nodes"][name] = dict(
-                host=n["host"], listener=n["listener"], library=n["library"], player=n["player"],
-                backup=f"{n['backup_root']}/{plan['prune']['prefix']}{st}",
-                library_backup=f"{n.get('library_backup_root', n['backup_root'])}/{plan['prune']['prefix']}{st}")
+    write_json(os.path.join(run, "proven.json"), {"ok": ok, "at": now().isoformat()})
+    dplan = {"hub": hub, "signed": signed, "members": members, "prune": plan.get("prune")}
     with open(os.path.join(run, "distribute-plan.json"), "w", encoding="utf-8", newline="\n") as fh:
         json.dump(dplan, fh, indent=1, sort_keys=True)
     say(f"RESULT patch: {'every patch proven' if ok else 'a patch is NOT PROVEN'}; read {run}/SUMMARY.md")
@@ -368,7 +662,7 @@ def member_patch(base, target, out):
 def member_offer(plan, run, name, fp, commit):
     """[REQ-AND-330]: a member is not reached from here. Its patch waits in
     its outbox on the members' channel until it fetches it."""
-    say(f"== {name} (a mesh member, by its next contact) -- {'COMMIT' if commit else 'rehearsal'}")
+    say(f"== {name} (a phone, by its next contact) -- {'COMMIT' if commit else 'rehearsal'}")
     with open(os.path.join(run, "patches", name, "member.patch.json"), encoding="utf-8") as fh:
         p = json.load(fh)
     n = sum(len(e["rows"]) for e in p["tables"])
@@ -384,21 +678,73 @@ def stamp_of(run):
     return os.path.basename(os.path.normpath(run))
 
 
+# ----------------------------------------------------------- a player, signed --
+def read_json(path):
+    if not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def has_rows(p):
+    return bool(p and p.get("tables"))
+
+
+def player_step(plan, run, name, player, commit):
+    """[SPEC-STAR-100]: one player's rehearsal or commit, by signed request.
+    The player applies its own patch, and is not stopped."""
+    mdir = mesh_of(plan)
+    pd = os.path.join(run, "patches", name)
+    lis = read_json(os.path.join(pd, "listener.values.json"))
+    cat = read_json(os.path.join(pd, "catalogue.values.json"))
+    say(f"== {name} (signed) -- {'COMMIT' if commit else 'rehearsal: nothing is kept'}")
+    if player is None:
+        say(f"RESULT {name}: REFUSED -- its player did not answer the members' query")
+        return 1
+    if not has_rows(lis) and not has_rows(cat):
+        say(f"RESULT {name}: nothing to send")
+        return 0
+    try:
+        got = meshmod.sync_step(mdir, player, "commit" if commit else "rehearse", stamp_of(run),
+                                cat if has_rows(cat) else None, lis if has_rows(lis) else None)
+    except (ValueError, OSError) as err:
+        say(f"RESULT {name}: REFUSED -- {err}")
+        return 1
+    kept = (got.get("listener") or {}).get("kept", 0)
+    note = f"; {kept} row(s) it had changed since its snapshot were kept, and travel next time" if kept else ""
+    warn = got.get("warning")
+    say(f"RESULT {name}: " + (f"COMMITTED {got}" if commit else f"rehearsal CLEAN {got}") + note
+        + (f"; WARNING {warn}" if warn else ""))
+    return 0
+
+
 # ---------------------------------------------------------- the hub, here --
-def console_running():
-    """The Vipunen console writes to the hub's pair; it must not be running
-    while the hub is patched. None when this cannot be told -- said so."""
+def console_running(excuse=None):
+    """The Vipunen console writes to the hub's pair, and so does a player beside
+    it; neither must be running while the hub is patched. `excuse` is the pid
+    of a console that has paused its player and will reload it
+    [SPEC-STAR-126]: that process, and the co-resident `lempi` it paused, are
+    not counted; any other still is. None when this cannot be told -- said so."""
     try:
         r = subprocess.run(["powershell", "-NoProfile", "-Command",
                             "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match "
-                            "'console\\.py|\\\\lempi\\.exe' } | ForEach-Object { $_.ProcessId }"],
+                            "'console\\.py|\\\\lempi\\.exe' } | ForEach-Object "
+                            "{ \"$($_.ProcessId) $($_.Name)\" }"],
                            capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
         return None
-    return [p for p in r.stdout.split() if p.isdigit() and int(p) != os.getpid()]
+    found = []
+    for line in r.stdout.splitlines():
+        pid, _, name = line.strip().partition(" ")
+        if not pid.isdigit() or int(pid) == os.getpid():
+            continue
+        if excuse and (int(pid) == int(excuse) or name.lower().startswith("lempi")):
+            continue
+        found.append(pid)
+    return found
 
 
-def hub_apply(plan, run, commit):
+def hub_apply(plan, run, commit, excuse=None):
     hub = plan["hub"]
     pd = os.path.join(run, "patches", hub["name"])
     halves = [h for h in ("listener", "library") if sd.patch_rows(os.path.join(pd, f"{h}.patch.json"))]
@@ -412,11 +758,13 @@ def hub_apply(plan, run, commit):
             rc |= sp.check(at_root(hub[h]), os.path.join(pd, f"{h}.patch.json"))
         say(f"RESULT {hub['name']}: rehearsal {'CLEAN' if rc == 0 else 'NOT CLEAN'}")
         return rc
-    busy = console_running()
+    busy = console_running(excuse)
     if busy is None:
         raise SystemExit("cannot tell whether the Vipunen console is running: refusing to patch the hub")
     if busy:
         raise SystemExit(f"process(es) {busy} may be using the hub's pair: close the console first")
+    if excuse:
+        say(f"  run from the console (pid {excuse}), which has paused its player [SPEC-STAR-126]")
     bk = os.path.join(at_root(plan["backups"]["dir"]), f"pre-sync-{stamp_of(run)}")
     if os.path.exists(bk):
         raise SystemExit(f"{bk} exists: a backup is never written over")
@@ -460,39 +808,53 @@ def hub_apply(plan, run, commit):
     return 0 if ok else 1
 
 
-def distribute(plan, run, names, commit):
+def distribute(plan, run, names, commit, excuse=None, bulk=False):
     with open(os.path.join(run, "distribute-plan.json"), encoding="utf-8") as fh:
         dplan = json.load(fh)
     hub = plan["hub"]["name"]
-    members = dplan.get("members", {})
-    names = names or [hub] + sorted(dplan["nodes"]) + sorted(members)
+    signed, members = dplan.get("signed", {}), dplan.get("members", {})
+    names = names or [hub] + sorted(signed) + sorted(members)
+    if commit:
+        if bulk:
+            kinds = approve_all(run)
+            say("  approve-all: " + (", ".join(f"{n} {k}" for k, n in sorted(kinds.items())) or "no item was waiting"))
+        gate(run, names)
     state = load_state(plan) if commit else None
+    done = read_json(os.path.join(run, "rehearsal.json")) or {}
+    started = {}
     worst = 0
-    for name in names:
-        if name == hub:
-            rc = hub_apply(plan, run, commit)
-        elif name in members:
-            rc = member_offer(plan, run, name, members[name], commit)
-        elif name not in dplan["nodes"]:
-            say(f"RESULT {name}: not in this run")
-            rc = 1
-        else:
-            try:
-                rc = sd.run(dplan, name, commit)
-            except sd.Failed as err:
-                say(f"RESULT {name}: REFUSED -- {err}")
-                rc = 1
-        if commit and rc == 0:
-            t = targets(plan, run, name)
-            entry = {"listener_sent": os.path.relpath(t["listener"], ROOT),
-                     "library_sent": None if name in members else os.path.relpath(t["library"], ROOT),
-                     "at": now().isoformat(), "run": stamp_of(run)}
+    try:
+        up = players_up(plan, [n for n in names if n in signed], started) if any(n in signed for n in names) else {}
+        for name in names:
             if name == hub:
-                state["hub"] = entry
+                rc = hub_apply(plan, run, commit, excuse)
+            elif name in members:
+                rc = member_offer(plan, run, name, members[name], commit)
+            elif name in signed:
+                rc = player_step(plan, run, name, up.get(name), commit)
             else:
-                state["nodes"][name] = entry
-            save_state(plan, state)
-        worst = max(worst, rc)
+                say(f"RESULT {name}: not in this run")
+                rc = 1
+            if not commit:
+                done[name] = rc
+            if commit and rc == 0:
+                t = targets(plan, run, name)
+                old = state["nodes"].get(name, {}) if name != hub else state.get("hub", {})
+                lib_sent = old.get("library_sent")
+                if name == hub or (name in signed and os.path.exists(os.path.join(run, "patches", name, "catalogue.values.json"))):
+                    lib_sent = os.path.relpath(t["library"], ROOT)
+                entry = {"listener_sent": os.path.relpath(t["listener"], ROOT), "library_sent": lib_sent,
+                         "at": now().isoformat(), "run": stamp_of(run)}
+                if name == hub:
+                    state["hub"] = entry
+                else:
+                    state["nodes"][name] = entry
+                save_state(plan, state)
+            worst = max(worst, rc)
+    finally:
+        stop_started(plan, started)
+        if not commit:
+            write_json(os.path.join(run, "rehearsal.json"), done)
     return worst
 
 
@@ -665,145 +1027,17 @@ def status(plan):
     return 1 if bad else 0
 
 
-# ---------------------------------------------- the signed transport, shadowed --
-# [IMPL-NSH-300]: before any run depends on it, each player's snapshot is
-# taken both ways and each patch rehearsed both ways, and the two must agree.
-# Nothing here writes to a node: a rehearsal checks and keeps nothing.
 
-# The merge's shared listener tables and per-machine catalogue columns, which
-# lempi-core names as MERGED and MACHINE_SCOPE (held equal by test_star_merge).
-SIGNED_TABLES = sorted(t for t, s in sm.TABLES.items() if s["rule"] in (sm.LWW, sm.UNION))
-SIGNED_EXCLUDE = {"files": sorted(sm.MACHINE_SCOPE["files"])}
-
-
-def db_of(export, path):
-    """A database from `mesh_sync::export`'s shape. A table the export gives
-    no creating statement for -- the catalogue summary's -- is made from its
-    columns, keyed by its first."""
-    c = sqlite3.connect(path)
-    try:
-        for t in export["tables"]:
-            for s in t.get("create") or [f"CREATE TABLE {t['name']} ({', '.join(t['columns'])}, "
-                                         f"PRIMARY KEY ({', '.join(t['key'])}))"]:
-                c.execute(s)
-            c.executemany(f"INSERT INTO {t['name']} ({', '.join(t['columns'])}) VALUES "
-                          f"({', '.join('?' * len(t['columns']))})",
-                          [[sp.dec(v) for v in r] for r in t["rows"]])
-        c.commit()
-    finally:
-        c.close()
-
-
-def differs(a_db, b_db, spec):
-    """Rows held by one side and not the other, per table: `spec` maps a table
-    to the columns compared. Values compared as a patch carries them."""
-    out = {}
-    a, b = sp.open_ro(a_db), sp.open_ro(b_db)
-    try:
-        for t, cols in spec.items():
-            def rows(c):
-                if t not in sp.tables_of(c):
-                    return set()
-                have = [x for x in cols if x in sp.columns(c, t)]
-                return {json.dumps([sp.enc(v) for v in r]) for r in c.execute(f"SELECT {', '.join(have)} FROM {t}")}
-            ra, rb = rows(a), rows(b)
-            if ra != rb:
-                out[t] = {"only_first": len(ra - rb), "only_second": len(rb - ra)}
-    finally:
-        a.close()
-        b.close()
-    return out
-
-
-def shadow(plan, run):
-    """Every planned player with a `member` fingerprint, over the signed
-    transport, beside what the ssh path took for this run."""
-    with open(os.path.join(run, "baselines.json"), encoding="utf-8") as fh:
-        baselines = json.load(fh)
-    mdir = meshmod.mesh_dir(at_root(plan["hub"]["library"]))
-    found = meshmod.sync_players(mdir)
-    out = os.path.join(run, "shadow")
-    os.makedirs(out, exist_ok=True)
-    report = ["# Signed transport, shadowed", "",
-              f"Run `{stamp_of(run)}`, beside its ssh snapshot and patches [IMPL-NSH-300]. "
-              "Rows that moved on a node between the two snapshots show as differences; "
-              "take the shadow soon after the snapshot.", ""]
-    ok = True
-    for name, n in sorted(plan["nodes"].items()):
-        fp = n.get("member")
-        if not fp:
-            report += [f"## {name}", "", "- skipped: no `member` fingerprint in the plan", ""]
-            continue
-        report += [f"## {name}", ""]
-        if name not in baselines:
-            report += ["- skipped: missing from this run's ssh snapshot", ""]
-            continue
-        if fp not in found:
-            report += [f"- MISSING: {fp[:8]} did not answer the members' query", ""]
-            ok = False
-            continue
-        nd = os.path.join(out, name)
-        os.makedirs(nd, exist_ok=True)
-        try:
-            snap = meshmod.sync_step(mdir, found[fp], "snapshot", stamp_of(run))
-        except (ValueError, OSError) as err:
-            report += [f"- snapshot REFUSED: {err}", ""]
-            ok = False
-            continue
-        for part, fname in (("listener", "listener.db"), ("catalogue", "summary.db")):
-            p = os.path.join(nd, fname)
-            if os.path.exists(p):
-                os.remove(p)
-            db_of(snap[part], p)
-        # The inputs: the shared tables, and the catalogue as the merge reads it.
-        c = sp.open_ro(baselines[name]["listener"])
-        try:
-            spec = {t: sp.columns(c, t) for t in SIGNED_TABLES if t in sp.tables_of(c)}
-        finally:
-            c.close()
-        d_lis = differs(baselines[name]["listener"], os.path.join(nd, "listener.db"), spec)
-        summ = {t["name"]: t["columns"] for t in snap["catalogue"]["tables"]}
-        d_cat = differs(at_root(baselines[name]["library"]), os.path.join(nd, "summary.db"), summ)
-        report.append("- snapshot, shared tables: " + ("the same both ways" if not d_lis else f"DIFFER {d_lis}"))
-        report.append("- snapshot, catalogue as the merge reads it: "
-                      + ("the same both ways" if not d_cat else f"DIFFER {d_cat}"))
-        # The patches, as values, against the same target the ssh patch was made for.
-        t = targets(plan, run, name)
-        lis = sp.make_values(os.path.join(nd, "listener.db"), t["listener"], tables=SIGNED_TABLES)
-        cat = sp.make_values(at_root(baselines[name]["library"]), t["library"], exclude=SIGNED_EXCLUDE)
-        for half, p in (("listener", lis), ("catalogue", cat)):
-            with open(os.path.join(nd, f"{half}.values.json"), "w", encoding="utf-8", newline="\n") as fh:
-                json.dump(p, fh, separators=(",", ":"), sort_keys=True)
-        counts = lambda p: {e["name"]: len(e["rows"]) for e in p["tables"]}       # noqa: E731
-        ssh = {}
-        for half, f in (("listener", "listener.patch.json"), ("catalogue", "library.patch.json")):
-            pth = os.path.join(run, "patches", name, f)
-            if os.path.isfile(pth):
-                with open(pth, encoding="utf-8") as fh:
-                    ssh[half] = {e["name"]: len(e["rows"]) for e in json.load(fh)["tables"]
-                                 if half == "catalogue" or e["name"] in SIGNED_TABLES}
-            else:
-                ssh[half] = {}
-        for half, p in (("listener", lis), ("catalogue", cat)):
-            same = counts(p) == ssh[half]
-            report.append(f"- {half} patch: {counts(p) or 'nothing'}"
-                          + ("" if same else f" -- the ssh patch has {ssh[half] or 'nothing'}"))
-            ok = ok and same
-        try:
-            got = meshmod.sync_step(mdir, found[fp], "rehearse", stamp_of(run),
-                                    cat if cat["tables"] else None, lis if lis["tables"] else None)
-            report.append(f"- signed rehearsal: CLEAN {got}")
-        except (ValueError, OSError) as err:
-            report.append(f"- signed rehearsal: REFUSED -- {err}")
-            ok = False
-        ok = ok and not d_lis and not d_cat
-        report.append("")
-        say(f"  {name}: " + ("agrees" if not (d_lis or d_cat) else "DIFFERS") + " -- see the report")
-    with open(os.path.join(out, "REPORT.md"), "w", encoding="utf-8", newline="\n") as fh:
-        fh.write("\n".join(report) + "\n")
-    say(f"RESULT shadow: {'every player agrees both ways' if ok else 'a player DIFFERS or refused'}; "
-        f"read {out}/REPORT.md")
-    return 0 if ok else 1
+def take(rest, flag, valued=True):
+    """Remove `flag` (and its value) from `rest`: its value, or whether it was there."""
+    if flag not in rest:
+        return (None if valued else False), rest
+    i = rest.index(flag)
+    if not valued:
+        return True, rest[:i] + rest[i + 1:]
+    if i + 1 >= len(rest):
+        raise SystemExit(f"{flag} takes a value")
+    return rest[i + 1], rest[:i] + rest[i + 2:]
 
 
 def main(argv):
@@ -813,27 +1047,37 @@ def main(argv):
     with open(at_root(argv[0]), encoding="utf-8") as fh:
         plan = json.load(fh)
     cmd, rest = argv[1], argv[2:]
-    given = None
-    if "--run" in rest:
-        i = rest.index("--run")
-        given = rest[i + 1]
-        rest = rest[:i] + rest[i + 2:]
+    given, rest = take(rest, "--run")
+    excuse, rest = take(rest, "--console-pid")
+    bulk, rest = take(rest, "--approve-all", valued=False)
+    by, rest = take(rest, "--by")
     if cmd == "snapshot":
         return snapshot(plan)
-    if cmd == "merge":
-        return merge(plan, newest_run(plan, given))
-    if cmd == "patch":
-        return patch(plan, newest_run(plan, given))
-    if cmd in ("rehearse", "commit"):
-        return distribute(plan, newest_run(plan, given), rest, cmd == "commit")
-    if cmd == "shadow":
-        return shadow(plan, newest_run(plan, given))
     if cmd == "backup":
         return backup(plan)
     if cmd == "status":
         return status(plan)
-    print(__doc__)
-    return 2
+    if cmd not in ("merge", "items", "verdict", "approve-all", "patch", "rehearse", "commit"):
+        print(__doc__)
+        return 2
+    run = newest_run(plan, given)
+    if cmd == "merge":
+        return merge(plan, run)
+    if cmd == "items":
+        return show_items(run)
+    if cmd == "verdict":
+        if len(rest) != 2:
+            raise SystemExit("verdict takes an item id and `approved` or `chose:NODE`")
+        x = give_verdict(run, rest[0], rest[1], by or "item")
+        say(f"{x['table']} {x['key']}: {rest[1]}")
+        return 0
+    if cmd == "approve-all":
+        kinds = approve_all(run, by or "approve-all")
+        say("approved: " + (", ".join(f"{n} {k}" for k, n in sorted(kinds.items())) or "nothing was waiting"))
+        return 0
+    if cmd == "patch":
+        return patch(plan, run)
+    return distribute(plan, run, rest, cmd == "commit", excuse, bulk)
 
 
 if __name__ == "__main__":

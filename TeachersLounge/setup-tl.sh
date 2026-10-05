@@ -47,7 +47,7 @@ source_host_items "$REPO" client
 
 say ""
 say "its library and its player"
-# The hub's mirror [FLT-SHP-010]: the pair, in the user's own data folder.
+# Its own pair [FLT-SHP-010], in the user's own data folder.
 for f in library.db listener.db; do
     item "$DATA/$f" "test -s $DATA/$f" "" "a mirror without its $f -- see FLEET001"
 done
@@ -55,9 +55,21 @@ done
 item "music folder ~/Music" "test -d Music" "" "the sends' audio_root; create it, or change the peer"
 item "player built" "test -x $REPO/player/target/release/lempi" "" \
      "build/update-source-host.sh $HOST $REPO"
-# Started by hand only [TL-OPN-020]: no unit, user or system, starts it.
-item "no player service, by choice [TL-OPN-020]" \
+# Started by hand, or on demand for a sync, and never at boot [TL-OPN-020]:
+# no unit that starts the player by itself, user or system.
+item "no player service at boot, by choice [TL-OPN-020]" \
      "! systemctl --user is-enabled lempi.service && ! systemctl is-enabled lempi.service" "" \
      "a unit starts the player here, which was decided against"
+# The on-demand unit [TL-OPN-040]: this repository's, and never enabled -- it
+# has no [Install] section, so nothing can wire it to a target.
+user_file_item "user unit lempi-ondemand.service is this repository's" \
+    TeachersLounge/lempi-ondemand.service .config/systemd/user/lempi-ondemand.service 644 \
+    "XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl --user daemon-reload"
+item "lempi-ondemand.service is wanted by no target" \
+     "! ls .config/systemd/user/*.wants/lempi-ondemand.service"  "" \
+     "it is enabled: undo it, a sync starts this player and stops it after"
+# The player must know --paused [TL-OPN-040]: an older build would refuse it.
+item "the player accepts --paused" "$REPO/player/target/release/lempi --help 2>&1 | grep -q -- --paused" "" \
+     "build/update-source-host.sh $HOST $REPO"
 
 setup_finish

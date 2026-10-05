@@ -33,6 +33,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import lempi_control  # noqa: E402  -- pause/resume/reload the co-resident player
+import sync_console  # noqa: E402  -- the Sync page's lock, and the plan [SPEC-STAR-126]
 import threading
 import time
 
@@ -45,7 +46,7 @@ CREATE TABLE IF NOT EXISTS jobs (
                                         -- | 'suggest-release' | 'accept-release'
                                         -- | 'analyze-amplitude' | 'analyze-flavor'
                                         -- | 'segment-dao' | 'cd-rip'
-                                        -- | 'sync-preferences'
+                                        -- | 'sync-preferences' | 'star-sync'
                                         -- | 'mesh-diff' | 'mesh-resolve'
                                         -- | 'apply-reviews'
     target     TEXT NOT NULL,          -- the folder, or a remote's user@host:/path
@@ -545,6 +546,9 @@ class Runner:
 
         if kind == "send-bundle":
             return self._send_bundle(job_id, target)
+
+        if kind == "star-sync":
+            return self._star_sync(job_id, target)
 
         if kind == "cd-rip":
             return self._cd_rip(job_id, target)
@@ -1059,6 +1063,57 @@ class Runner:
         db.close()
         return self._finish(job_id, "done" if not failed else "failed")
 
+
+    def _star_sync(self, job_id: int, target: str):
+        """`[SPEC-STAR-120]`: one stage of `star_sync.py`, run as a person would
+        run it, and its own lines shown as they come. The page holds no sync
+        logic of its own `[SPEC-SUI-015]`.
+
+        `commit` is bracketed as every job that writes the live library is
+        (`_apply_reviews`): the desktop player is asked whether it was playing,
+        paused, and afterwards reloaded and put back as it was found. The
+        console also locks its own writing routes while the hub's pair is
+        patched, and tells `star_sync.py` which process it is, so that this
+        console and the player it paused are not mistaken for strangers
+        holding the pair `[SPEC-STAR-126]`.
+        """
+        t = json.loads(target)
+        stage, nodes = t["stage"], list(t.get("nodes") or [])
+        tools = os.path.dirname(os.path.abspath(__file__))
+        argv = [sys.executable, os.path.join(tools, "star_sync.py"), sync_console.plan_path(), stage, *nodes]
+        bracket = stage == "commit"
+        was_playing = False
+        if bracket:
+            try:
+                c = lempi_db.connect(self.library, lempi_db.ROLE_LISTENER)
+                try:
+                    row = c.execute("SELECT playing FROM player_state WHERE id = 1").fetchone()
+                    was_playing = bool(row and row[0])
+                finally:
+                    c.close()
+            except Exception:
+                pass                      # no player_state at all is "not playing"
+            self._emit(job_id, "stage", "pause", stage="pause")
+            self._emit(job_id, "log", "player paused" if lempi_control.pause_lempi()
+                       else "no local player answering; nothing to interrupt")
+            sync_console.lock(True)
+            argv += ["--console-pid", str(os.getpid())]
+        self._emit(job_id, "stage", stage, stage=stage)
+        try:
+            code, _ = self._spawn(job_id, stage, argv)
+        finally:
+            if bracket:
+                sync_console.lock(False)
+                self._emit(job_id, "stage", "reload", stage="reload")
+                if lempi_control.reload_lempi_library():
+                    self._emit(job_id, "log", "player asked to rebuild against the new library")
+                if was_playing:
+                    self._emit(job_id, "log", "playback resumed" if lempi_control.play_lempi()
+                               else "could not resume playback -- press play in Lempi")
+        # A snapshot that left a node missing exits 3: the stage ran, and the
+        # page says who is missing.
+        ok = code == 0 or (stage == "snapshot" and code == 3)
+        self._finish(job_id, "done" if ok else "failed")
 
     def _run_single_stage(self, job_id: int, stage: str, argv: list, *, require_ok: bool = True) -> None:
         """Spawn one stage, save its `--json` tail as the job's result, and
