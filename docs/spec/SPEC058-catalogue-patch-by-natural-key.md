@@ -1,6 +1,6 @@
 # SPEC058: The Catalogue Patch by Natural Key
 
-**Design Specification — Tier 2 · written 2026-10-05 · built 2026-10-05, tested on fixtures and the real catalogues, not yet applied to a node**
+**Design Specification — Tier 2 · written 2026-10-05 · built 2026-10-05, parts included, tested on fixtures and the real catalogues, not yet applied to a node**
 
 The star sync's catalogue patch names a row by its numeric key, and a numeric key is local to one database `[SPEC-DF-035]`. Music the Export page sends a node is imported under the *node's* numbering, so from then on the hub and that node hold the same music under different ids, and the strict patch cannot be applied to it `[SPEC-STAR-940]`. This specifies a patch that names rows by what identifies them on every installation, so that a node's numbering stops mattering.
 
@@ -77,17 +77,27 @@ The vocabulary is fixed, in Rust and in `star_patch.py`, and a test holds the tw
 3. *Across the two:* one fixture of patch and catalogues under `fixtures/`, applied by both, as the snapshot fixtures are `[GDE-HST-060]`.
 4. *The real data:* `rehearse`, which writes nothing, against the four players: expect 49, 338 and 338 rows *already*, and no conflict. Then the first signed commit, attended `[SPEC-STAR-102]`.
 
-**Built 2026-10-05:** steps (1) to (5), in `mesh_sync.rs` (17 tests, among them one that applies the Python builder's patch from the fixture), `star_patch.py` and `test_natural_patch.py`; the hub's state check, summary and page; and a loud warning for any player that reports no `natural_keys` `[SPEC-STAR-132]`. Step (6) waits on a current player on a node, which none yet is.
+**Built 2026-10-05:** steps (1) to (5), in `mesh_sync.rs` (17 tests, among them one that applies the Python builder's patch from the fixture), `star_patch.py` and `test_natural_patch.py`; the hub's state check, summary and page; and a loud warning for any player that reports no `natural_keys` `[SPEC-STAR-132]`. Step (6) waits on a current player on a node, which none yet is. **Parts `[SPEC-NKP-920..940]`, built the same day:** the player's `stage` and `staged` steps and a commit from parts (nine node tests, run on Linux as well as Windows), `apply_parts` and `undo_parts` in `mesh_sync.rs`, and the hub's splitter, which cuts the real 144 MB patch into 21 parts of at most 8 MB, the natural entries first and whole (4.7 MB), every one of the 37,509 rows once.
 
 **Order.** (1) `first_seen` as machine-scope, both lists, with the test. (2) The Rust resolve and apply, with its tests. (3) The capability in `snapshot`. (4) `make_values` in natural mode and the registry, with the Python tests and the shared fixture. (5) The hub's state check, the summary and the page. (6) The rehearsal against the nodes. Each step is useful alone and leaves the sync no worse: until (5) a node is simply sent no catalogue patch, as now.
 
-## 8. Open
+## 8. Sending a patch in parts
 
-0. **`[SPEC-NKP-920]` A patch too big for one request.** Built for the real data, the patch from `bose`'s last-sent catalogue to the hub's now is **144 MB**: cover art is 76% of it (590 images, 110 MB), `ingest_decisions` 12 MB, `musicbrainz_cache` and `lowlevel_cache` 8 MB each, everything else about 7 MB. A player's request limit is 64 MB and a Pi has little memory to parse one in, so the hub builds none over 16 MB, says so in the summary, and still sends the listener half. Sending a patch in parts needs a decision about atomicity across them (the run is committed once, `[SPEC-NSH-030]`), and is not built. Until it is, a catalogue patch reaches a node only when it is small, which a node kept in step with frequent syncs will be.
+**`[SPEC-NKP-920]` A catalogue patch over 16 MB is sent in parts, staged on the node and committed in one transaction.** Found on the real data: the patch from `bose`'s last-sent catalogue to the hub's now is **144 MB**, 76% of it cover art (590 images, 110 MB), `ingest_decisions` 12 MB, `musicbrainz_cache` and `lowlevel_cache` 8 MB each, the rest about 7 MB. A player's request limit is 64 MB and a Pi has little memory to parse one in. Parts are not separate commits, since a node never keeps half a switch `[SPEC-NSH-080]`, and no transaction can stay open across requests. Each part is **staged**: stored on the node, checked against its hash. The commit then applies every part, in order, in **one SQLite transaction**, so one row not as expected writes nothing from any part.
+
+**`[SPEC-NKP-925]` Two new steps, and two that change.** `stage` carries one part: the run, its number and the count, the SHA-256 of its text *as sent* (the patch is a string, so nothing depends on how a number is spelled), the total of all parts, and the text. The node checks the hash, refuses a part for a run no newer than the last it committed, and stores it atomically under `staged-<run>/`. `staged` says which parts of a run the node holds, by digest, so a rehearsal's upload is not repeated by the commit. `rehearse` and `commit` name `catalogue_parts: {of, sha256: [...]}` in place of `catalogue_patch`, and apply what is staged, each part checked against its digest again. All are signed, fresh and bound to the run, like every step `[SPEC-NSH-030]`.
+
+**`[SPEC-NKP-930]` How the hub cuts.** Every part is at most 8 MB of JSON. The natural entries `[SPEC-NKP-040]` stay whole in the first part, so that the check of §4, which sees the database as it was before the patch, still sees all of them; they come to about 5 MB, and a patch whose natural entries alone pass 32 MB is not sent, and says so. Every other table is cut by rows, in table order; a table's `add_columns` ride in the first part that names it. A patch of 16 MB or less is one request, as before.
+
+**`[SPEC-NKP-935]` The node's memory and disk are bounded, and it says so when they are not.** *(On `lp3-wifi`, 2026-10-05: 2.4 GB free on `/var/lempi` against about 0.3 GB to stage and keep, 905 MB of memory against a part of 8 MB.)* One part is parsed at a time. The inverse of each part is written to disk as it is made, not kept in memory. Before it takes a first part the node checks that its state partition has twice the staged total and 256 MB to spare, and refuses with the figures if it has not. Staged parts are removed when their run commits, and any for a run no newer than the last committed, or a day old, at the next step.
+
+**`[SPEC-NKP-940]` The undo of a multi-part commit is one transaction as well.** The parts' inverses are kept as `inverse-<run>-c<n>.json` beside `inverse-<run>.json`, which lists them, and applied in reverse. The keep of three counts runs, not files. The first patch after a long gap costs the disk its size twice over, staged and inverse; syncing often keeps patches small.
+
+## 9. Open
 
 1. **`[SPEC-NKP-900]` How long the check takes on the smallest node.** About 50,000 rows by indexed lookup is expected to be small beside the 1.27 GB it avoids reading; measure it on `lempi02w` as `[SPEC-NSH-900]` asks of the catalogue commit.
 2. **`[SPEC-NKP-910]` A node that lacks `passages_span`.** The lookup is still correct without the index, only slower; whether to refuse instead is decided when a node is found without it.
 
 ---
 
-**Traceability:** `[SPEC-NKP-010..910]` · answers `[SPEC-STAR-940]` · applies `[SPEC-DF-035]`, `[SPEC-DF-030]` · changes `[SPEC-NSH-070]` only for the six tables of `[SPEC-NKP-020]`
+**Traceability:** `[SPEC-NKP-010..940]` · answers `[SPEC-STAR-940]` · applies `[SPEC-DF-035]`, `[SPEC-DF-030]` · changes `[SPEC-NSH-070]` only for the six tables of `[SPEC-NKP-020]`
