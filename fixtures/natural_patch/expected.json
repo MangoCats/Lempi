@@ -1,0 +1,13 @@
+[
+ "file A",
+ "file B",
+ "file C2",
+ "file D",
+ "passage A 0-1000",
+ "passage B 0-450",
+ "passage C2 0-700",
+ "passage D 0-900",
+ "rec B 0-450 m-b 1.0",
+ "rec C2 0-700 m-c 0.5",
+ "rec D 0-900 m-d 1.0"
+]

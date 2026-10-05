@@ -1,0 +1,206 @@
+{
+ "tables": [
+  {
+   "columns": [
+    "audio_md5"
+   ],
+   "key": [
+    "audio_md5"
+   ],
+   "name": "files",
+   "natural": {
+    "refs": [],
+    "surrogate": "file_id"
+   },
+   "rows": [
+    {
+     "key": [
+      "C"
+     ],
+     "now": [
+      "C2"
+     ],
+     "was": [
+      "C"
+     ]
+    },
+    {
+     "also": {
+      "first_seen": "hub-time",
+      "path": "/hub/d"
+     },
+     "key": [
+      "D"
+     ],
+     "now": [
+      "D"
+     ],
+     "was": null
+    }
+   ]
+  },
+  {
+   "columns": [
+    "file_id",
+    "kind",
+    "start_ms",
+    "end_ms",
+    "gain"
+   ],
+   "key": [
+    "file_id",
+    "kind",
+    "start_ms",
+    "end_ms"
+   ],
+   "name": "passages",
+   "natural": {
+    "refs": [
+     {
+      "col": "file_id",
+      "kind": "file"
+     }
+    ],
+    "surrogate": "passage_id"
+   },
+   "rows": [
+    {
+     "key": [
+      "B",
+      "radio",
+      0,
+      500
+     ],
+     "now": [
+      "B",
+      "radio",
+      0,
+      450,
+      null
+     ],
+     "was": [
+      "B",
+      "radio",
+      0,
+      500,
+      null
+     ]
+    },
+    {
+     "key": [
+      "D",
+      "radio",
+      0,
+      900
+     ],
+     "now": [
+      "D",
+      "radio",
+      0,
+      900,
+      null
+     ],
+     "was": null
+    }
+   ]
+  },
+  {
+   "columns": [
+    "passage_id",
+    "mbid",
+    "weight"
+   ],
+   "key": [
+    "passage_id",
+    "mbid"
+   ],
+   "name": "passage_recordings",
+   "natural": {
+    "refs": [
+     {
+      "col": "passage_id",
+      "kind": "passage"
+     }
+    ],
+    "surrogate": null
+   },
+   "rows": [
+    {
+     "key": [
+      [
+       "A",
+       "radio",
+       0,
+       1000
+      ],
+      "m-a"
+     ],
+     "now": null,
+     "was": [
+      [
+       "A",
+       "radio",
+       0,
+       1000
+      ],
+      "m-a",
+      1.0
+     ]
+    },
+    {
+     "key": [
+      [
+       "C",
+       "radio",
+       0,
+       700
+      ],
+      "m-c"
+     ],
+     "now": [
+      [
+       "C2",
+       "radio",
+       0,
+       700
+      ],
+      "m-c",
+      0.5
+     ],
+     "was": [
+      [
+       "C",
+       "radio",
+       0,
+       700
+      ],
+      "m-c",
+      1.0
+     ]
+    },
+    {
+     "key": [
+      [
+       "D",
+       "radio",
+       0,
+       900
+      ],
+      "m-d"
+     ],
+     "now": [
+      [
+       "D",
+       "radio",
+       0,
+       900
+      ],
+      "m-d",
+      1.0
+     ],
+     "was": null
+    }
+   ]
+  }
+ ]
+}

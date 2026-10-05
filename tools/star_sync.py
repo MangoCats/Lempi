@@ -8,8 +8,11 @@ member player, reached by signed requests [SPEC-STAR-100]; ssh only starts and
 stops a player kept on demand [SPEC-STAR-101], and carries the hub's backup to
 its mirror.
 
-    python tools/star_sync.py PLAN snapshot           a new run: the hub's pair here, and every
-                                                      node's shared tables and catalogue summary
+    python tools/star_sync.py PLAN snapshot [--nodes A,B]
+                                                      a new run: the hub's pair here, and the shared
+                                                      tables and catalogue summary of the nodes chosen
+                                                      (all, if none are); a node not chosen is left
+                                                      alone, untouched [SPEC-STAR-130]
     python tools/star_sync.py PLAN merge              the hub's pair and each node's copy, and the
                                                       items for a verdict [SPEC-STAR-110]
     python tools/star_sync.py PLAN items              each item, and where its verdict stands
@@ -146,6 +149,8 @@ def newest_run(plan, given=None):
 # them (held equal by test_star_merge).
 SIGNED_TABLES = sorted(t for t, s in sm.TABLES.items() if s["rule"] in (sm.LWW, sm.UNION))
 SIGNED_EXCLUDE = {"files": sorted(sm.MACHINE_SCOPE["files"])}
+NATURAL_KEYS_NEEDED = 1    # [SPEC-NKP-075]: the catalogue patch by natural key
+CATALOGUE_PATCH_MAX = 16 << 20   # [SPEC-NKP-920]: the most a player is sent in one request, in bytes of JSON
 START_WAIT_S = 90          # [SPEC-STAR-101]: how long an on-demand player has to answer
 
 
@@ -275,6 +280,22 @@ def players_up(plan, names, started):
     return got
 
 
+def old_player_banner(old):
+    """[SPEC-NKP-075]: an old player is said loudly, wherever a sync meets one.
+    It still syncs its listener edits; what it cannot take is a catalogue patch."""
+    if not old:
+        return
+    say("")
+    say("!" * 78)
+    say(f"!!!  OLD PLAYER{'S' if len(old) > 1 else ''}: {', '.join(sorted(old))}")
+    for name, why in sorted(old.items()):
+        say(f"!!!    {name}: {why}")
+    say("!!!  Their listener edits sync as usual. Their catalogue is sent NO patch until they run")
+    say("!!!  a current build [SPEC-NKP-075]: deploy one, then take a new snapshot.")
+    say("!" * 78)
+    say("")
+
+
 def stop_started(plan, started):
     """Stop what this stage started, and only that [SPEC-STAR-101]."""
     for name in sorted(started):
@@ -303,11 +324,34 @@ def sent_path(entry, key):
     return at_root(p) if p and os.path.exists(at_root(p)) else None
 
 
-def snapshot(plan):
+def chosen(plan, only):
+    """[SPEC-STAR-130]: the nodes a run is to take part with, validated; None is all.
+    A node not chosen is not contacted, not started and not written to."""
+    if only is None:
+        return None
+    only = set(only)
+    known = set(plan["nodes"]) | {m["node"] for m in meshmod.sync_members(mesh_of(plan))}
+    if not only:
+        raise SystemExit("no node chosen: a run touches only the nodes it is given")
+    unknown = sorted(only - known)
+    if unknown:
+        raise SystemExit(f"not nodes of this fleet: {unknown}")
+    return only
+
+
+def snapshot(plan, only=None):
     state = load_state(plan)
+    only = chosen(plan, only)
     run = os.path.join(at_root(plan["runs"]), stamp())
     os.makedirs(run)
     say(f"run {run}")
+    everyone = sorted(set(plan["nodes"]) | {m["node"] for m in meshmod.sync_members(mesh_of(plan))})
+    take_part = everyone if only is None else sorted(only)
+    write_json(os.path.join(run, "selected.json"), {"nodes": take_part,
+                                                    "left_alone": [n for n in everyone if n not in take_part]})
+    if only is not None:
+        say(f"  taking part: {', '.join(take_part)}; left alone, untouched: "
+            f"{', '.join(n for n in everyone if n not in take_part) or 'none'}")
     hub = plan["hub"]
     # The hub, here.
     hd = os.path.join(run, hub["name"])
@@ -325,8 +369,9 @@ def snapshot(plan):
     # [SPEC-STAR-100]: every node, by signed request. An on-demand player is
     # started for this stage and stopped after it.
     mdir = mesh_of(plan)
-    names = sorted(plan["nodes"])
+    names = [n for n in sorted(plan["nodes"]) if only is None or n in only]
     started = {}
+    old = {}
     try:
         up = players_up(plan, names, started)
         for name in names:
@@ -341,7 +386,7 @@ def snapshot(plan):
                 try:
                     snap = meshmod.sync_step(mdir, player, "snapshot", stamp_of(run))
                 except (ValueError, OSError) as err:
-                    missing[name] = f"snapshot refused: {err}"
+                    missing[name] = f"snapshot refused: {err} (a player too old for the sync routes answers like this)"
             if name in missing:
                 say(f"  {name}: MISSING from this run -- {missing[name]}")
                 continue
@@ -352,6 +397,9 @@ def snapshot(plan):
                 seal(os.path.join(nd, fname))
             # [SPEC-STAR-940]: the catalogue is patched strictly, against what the
             # hub last sent. Whether it can be is read from the node's summary.
+            cap = snap.get("natural_keys", 0) or 0
+            if cap < NATURAL_KEYS_NEEDED:
+                old[name] = "reports no natural_keys: a build older than the catalogue patch by natural key"
             sent_lib = sent_path(ns, "library_sent")
             cat = catalogue_state(sent_lib, os.path.join(nd, "summary.db"), os.path.join(hd, "library.db"))
             say(f"  {name}: {sum(len(t['rows']) for t in snap['listener']['tables'])} shared row(s), "
@@ -362,8 +410,9 @@ def snapshot(plan):
                 backups=history_of(ns.get("listener_sent"), ns.get("at", ""), os.path.join(nd, "history")),
                 catalogue=os.path.join(nd, "summary.db"), files=os.path.join(nd, "summary.db")))
             baselines[name] = {"listener": os.path.join(nd, "listener.db"), "signed": n["member"],
-                               "library": sent_lib, "catalogue": cat,
-                               "catalogue_in_step": cat["state"] in ("as-sent", "holds-hub-rows")}
+                               "library": sent_lib, "catalogue": cat, "natural_keys": cap,
+                               "catalogue_in_step": cat["state"] in ("as-sent", "holds-hub-rows")
+                               or (cat["state"] == "other-ids" and cap >= NATURAL_KEYS_NEEDED)}
     finally:
         stop_started(plan, started)
     # [REQ-AND-330]: enrolled phones, by what each last uploaded over the
@@ -371,6 +420,9 @@ def snapshot(plan):
     # the shared tables travel, so only they are merged for it.
     for m in meshmod.sync_members(mdir):
         name, fp = m["node"], m["fingerprint"]
+        if only is not None and name not in only:
+            say(f"  {name}: left alone, as chosen")
+            continue
         up = meshmod.upload_of(mdir, fp)
         if up is None:
             missing[name] = "enrolled, but has not uploaded its edits yet"
@@ -395,10 +447,12 @@ def snapshot(plan):
         say(f"  {name} ({m['name'] or 'unnamed'}): its upload of {up['uploaded_at']}, "
             f"clock {up['clock_offset_ms']:+d} ms, {up['rows']}")
     for name, path in (("manifest.json", manifest), ("baselines.json", baselines),
-                       ("missing.json", missing)):
+                       ("missing.json", missing), ("old_players.json", old)):
         with open(os.path.join(run, name), "w", encoding="utf-8", newline="\n") as fh:
             json.dump(path, fh, indent=1, sort_keys=True)
-    say(f"RESULT snapshot: {len(baselines)} taken" + (f", MISSING {sorted(missing)}" if missing else ""))
+    old_player_banner(old)
+    say(f"RESULT snapshot: {len(baselines)} taken" + (f", MISSING {sorted(missing)}" if missing else "")
+        + (f", OLD PLAYER(S) {sorted(old)}" if old else ""))
     return 0 if not missing else 3
 
 
@@ -614,6 +668,15 @@ def patch(plan, run):
                "before `commit` [SPEC-STAR-070].", ""]
     summary += [f"**Items for a verdict:** {len(rv['items'])}, {len(rv['pending'])} without one "
                 "[SPEC-STAR-116].", ""]
+    old = read_json(os.path.join(run, "old_players.json")) or {}
+    if old:
+        summary += ["**WARNING -- OLD PLAYER" + ("S" if len(old) > 1 else "") + ": " + ", ".join(sorted(old))
+                    + ".** Their listener edits sync as usual. Their catalogue is sent no patch until they "
+                    "run a current build [SPEC-NKP-075].", ""]
+    left = (read_json(os.path.join(run, "selected.json")) or {}).get("left_alone", [])
+    if left:
+        summary += ["**Left alone, as chosen** -- not read, not written, not started: " + ", ".join(left)
+                    + " [SPEC-STAR-130].", ""]
     with open(os.path.join(run, "missing.json"), encoding="utf-8") as fh:
         missing = json.load(fh)
     if missing:
@@ -641,17 +704,41 @@ def patch(plan, run):
             rows = {e["name"]: len(e["rows"]) for e in lis["tables"]}
             summary.append("- shared edits: " + (", ".join(f"`{k}` {v}" for k, v in sorted(rows.items())) or "nothing to send")
                            + ("" if good else " -- **NOT PROVEN: do not commit**"))
+            cat, unsupported = None, None
             if b.get("catalogue_in_step"):
-                cat = sp.make_values(b["library"], t["library"], exclude=SIGNED_EXCLUDE)
+                # A player that can apply it gets the tables that hold ids named by
+                # what identifies them everywhere [SPEC-NKP-075]; any other, the
+                # strict id-keyed patch, which only reaches a catalogue numbered as ours.
+                natural = (b.get("natural_keys", 0) or 0) >= NATURAL_KEYS_NEEDED
+                try:
+                    cat = sp.make_values(b["library"], t["library"], exclude=SIGNED_EXCLUDE, natural=natural)
+                except sp.NaturalUnsupported as err:
+                    unsupported = f"the hub cannot name what changed: {err} [SPEC-NKP-080]"
+            if cat is not None:
+                size = len(json.dumps(cat, separators=(",", ":")))
+                if size > CATALOGUE_PATCH_MAX:
+                    # A Pi has little memory to parse a request in, and the player's own limit is 64 MB.
+                    # The first patch after a long gap is mostly cover art; sending it in parts is
+                    # [SPEC-NKP-920], not built. The listener half still goes.
+                    unsupported = (f"the patch is {size / 1048576:.0f} MB, more than the {CATALOGUE_PATCH_MAX >> 20} MB a player is "
+                                   "sent in one request; sending it in parts is not built [SPEC-NKP-920]")
+                    cat = None
+            if cat is not None:
                 write_json(os.path.join(pd, "catalogue.values.json"), cat)
                 crow = {e["name"]: len(e["rows"]) for e in cat["tables"]}
                 summary.append("- catalogue: " + (", ".join(f"`{k}` {v}" for k, v in sorted(crow.items())) or "nothing to send")
+                               + (" by natural key" if any("natural" in e for e in cat["tables"]) else "")
                                + " (proven by the player's own rehearsal, strictly)")
+            elif unsupported:
+                summary.append(f"- catalogue: **none sent** -- {unsupported}")
+                say(f"  {name}: NO CATALOGUE PATCH -- {unsupported}")
             else:
                 cs = b.get("catalogue") or {"state": "no-copy"}
                 why = catalogue_words(cs)
                 if cs["state"] == "other-ids":
-                    why += ": the same music as the hub, numbered differently, which a strict patch cannot reach"
+                    why += (": the same music as the hub, numbered differently, which only a patch by natural key "
+                            "reaches, and this player is OLD: it cannot take one" if b.get("natural_keys", 0) < NATURAL_KEYS_NEEDED
+                            else ": the same music as the hub, numbered differently")
                 summary.append(f"- catalogue: **none sent** -- {why} [SPEC-STAR-940]")
             say(f"  {name}: {sum(rows.values())} shared row(s), {'proven' if good else 'NOT PROVEN'}")
             signed[name] = b["signed"]
@@ -857,6 +944,7 @@ def distribute(plan, run, names, commit, excuse=None, bulk=False):
     hub = plan["hub"]["name"]
     signed, members = dplan.get("signed", {}), dplan.get("members", {})
     names = names or [hub] + sorted(signed) + sorted(members)
+    old_player_banner({n: w for n, w in (read_json(os.path.join(run, "old_players.json")) or {}).items() if n in names})
     if commit:
         if bulk:
             kinds = approve_all(run)
@@ -1094,8 +1182,11 @@ def main(argv):
     excuse, rest = take(rest, "--console-pid")
     bulk, rest = take(rest, "--approve-all", valued=False)
     by, rest = take(rest, "--by")
+    only, rest = take(rest, "--nodes")
+    if only is not None:
+        only = [n for n in only.split(",") if n]
     if cmd == "snapshot":
-        return snapshot(plan)
+        return snapshot(plan, only)
     if cmd == "backup":
         return backup(plan)
     if cmd == "status":

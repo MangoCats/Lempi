@@ -211,7 +211,127 @@ def apply_member(db, patch, tables):
     return counts
 
 
-def make_values(baseline, target, tables=None, exclude=None):
+# ---------------------------------------------------------------- natural keys --
+# [SPEC-NKP-020..045]: the tables that hold ids, and how each is named without
+# them. `lempi-core`'s `mesh_sync.rs` applies what this builds, and a fixture
+# both read holds the two to the same meaning (`fixtures/natural_patch/`).
+#
+#   surrogate  the table's own id, which a patch never carries
+#   refs       (column, "file" | "passage"[, (when_column, when_value)])
+#   key        what names a row in the patch, as the node finds it
+NATURAL = {
+    "files": dict(surrogate="file_id", refs=[], key=["audio_md5"]),
+    "passages": dict(surrogate="passage_id", refs=[("file_id", "file")],
+                     key=["file_id", "kind", "start_ms", "end_ms"]),
+    "file_tags": dict(surrogate=None, refs=[("file_id", "file")], key=["file_id"]),
+    "passage_recordings": dict(surrogate=None, refs=[("passage_id", "passage")], key=["passage_id", "mbid"]),
+    "id_checks": dict(surrogate=None, refs=[("passage_id", "passage")], key=["passage_id"]),
+    "flavor": dict(surrogate=None, refs=[("subject_id", "passage", ("subject_kind", "passage"))],
+                   key=["subject_kind", "subject_id", "characteristic", "class"]),
+}
+# Parents before the rows that name them: the node writes in this order.
+NATURAL_ORDER = ["files", "passages", "file_tags", "passage_recordings", "id_checks", "flavor"]
+
+
+class NaturalUnsupported(Exception):
+    """A catalogue pair this builder will not make a natural patch for, and why."""
+
+
+def id_maps(c):
+    """Each local id's natural name: a file's audio_md5, a passage's [md5, kind, start, end]."""
+    files = {r[0]: r[1] for r in c.execute("SELECT file_id, audio_md5 FROM files")}
+    passages = {r[0]: [r[1], r[2], r[3], r[4]] for r in c.execute(
+        "SELECT p.passage_id, f.audio_md5, p.kind, p.start_ms, p.end_ms FROM passages p JOIN files f USING (file_id)")}
+    return files, passages
+
+
+def natural_values(name, d, cols, files, passages):
+    """A row's carried values with each reference replaced by what it names."""
+    out = []
+    for c in cols:
+        v = d[c]
+        for ref in NATURAL[name]["refs"]:
+            if ref[0] != c or v is None:
+                continue
+            if len(ref) == 3 and d[ref[2][0]] != ref[2][1]:
+                continue
+            maps = files if ref[1] == "file" else passages
+            try:
+                key = int(v)
+            except (TypeError, ValueError):
+                raise NaturalUnsupported(f"{name}.{c}: {v!r} is not an id")
+            if key not in maps:
+                raise NaturalUnsupported(f"{name}.{c}: {v!r} names a {ref[1]} the catalogue does not hold")
+            v = maps[key]
+            break
+        out.append(enc(v))
+    return out
+
+
+def natural_entry(b, t, name, skip):
+    """The patch entry for one id-bearing table, or None where nothing changed
+    [SPEC-NKP-040]. Rows are paired by the hub's own key, which both catalogues
+    share, so a row whose natural key changed -- a boundary edited, a file
+    re-keyed -- is one change, not a delete and an add [SPEC-NKP-045]."""
+    spec = NATURAL[name]
+    if name not in tables_of(t):
+        return None
+    if name not in tables_of(b):
+        raise NaturalUnsupported(f"{name}: the baseline lacks the table")
+    full = columns(t, name)
+    bcols = columns(b, name)
+    if set(bcols) - set(full):
+        raise NaturalUnsupported(f"{name}: the target lacks column(s) {sorted(set(bcols) - set(full))}: a patch never drops one")
+    # A column the node's copy lacks is added as the player adds it on open, and the
+    # rows read with its default meanwhile, as `make_values` does for the rest.
+    added = [r for r in t.execute(f"PRAGMA table_info({name})") if r[1] not in bcols]
+    try:
+        decls = [column_decl(r) for r in added]
+    except SystemExit as err:
+        raise NaturalUnsupported(f"{name}: {err}")
+    fill = {r[1]: default_of(r) for r in added}
+    cols = [c for c in full if c != spec["surrogate"] and c not in skip]
+    if any(k not in cols for k in spec["key"]):
+        raise NaturalUnsupported(f"{name}: its natural key is not among the columns carried")
+    pk = key_of(t, name)
+
+    def load(c, have, extra):
+        files, passages = id_maps(c)
+        rows = {}
+        for row in c.execute(f"SELECT {', '.join(have)} FROM {name}"):
+            d = dict(zip(have, row), **extra)
+            rows[tuple(d[k] for k in pk)] = (d, natural_values(name, d, cols, files, passages))
+        return rows
+
+    old, new = load(b, bcols, fill), load(t, full, {})
+    rows = []
+    for ident in sorted(set(old) | set(new), key=repr):
+        bd, bn = old.get(ident, (None, None))
+        td, tn = new.get(ident, (None, None))
+        carried = [c for c in full if c not in skip]
+        if bd is not None and td is not None and all(bd[c] == td[c] for c in carried):
+            continue                       # the same row in the hub's own terms, whatever it is now called
+        named = dict(zip(cols, bn if bn is not None else tn))
+        rec = {"key": [named[k] for k in spec["key"]], "was": bn, "now": tn}
+        if bd is None and skip:
+            rec["also"] = {c: enc(td[c]) for c in full if c in skip}
+        rows.append(rec)
+    if not rows and not decls:
+        return None
+    refs = []
+    for ref in spec["refs"]:
+        r = {"col": ref[0], "kind": ref[1]}
+        if len(ref) == 3:
+            r["when"] = list(ref[2])
+        refs.append(r)
+    entry = {"name": name, "natural": {"surrogate": spec["surrogate"], "refs": refs},
+             "columns": cols, "key": spec["key"], "rows": rows}
+    if decls:
+        entry["add_columns"] = decls
+    return entry
+
+
+def make_values(baseline, target, tables=None, exclude=None, natural=False):
     """A patch as values, for the player to apply itself over the signed
     transport [SPEC-NSH-070] -- `lempi_core::mesh_sync::apply_with` reads it.
 
@@ -222,7 +342,12 @@ def make_values(baseline, target, tables=None, exclude=None):
     columns that travel in neither direction -- a node's own machine-scope
     `files` columns [SPEC-DF-030] -- which a row the node lacks takes from the
     target, as `also`. A table or column the baseline lacks is made, as
-    `make` makes it."""
+    `make` makes it.
+
+    `natural` names the tables that hold ids by what identifies them on every
+    installation instead, for a player that can apply that `[SPEC-NKP-040]`;
+    they follow the rest, parents first. It raises `NaturalUnsupported` for a
+    pair it will not make one for."""
     exclude = exclude or {}
     b, t = open_ro(baseline), open_ro(target)
     patch = {"tables": []}
@@ -231,6 +356,8 @@ def make_values(baseline, target, tables=None, exclude=None):
         if extra:
             raise SystemExit(f"the target lacks table(s) {extra}: a patch never drops a table")
         for name in sorted(tables_of(t) & set(tables or tables_of(t))):
+            if natural and name in NATURAL:
+                continue
             full = columns(t, name)
             skip = set(exclude.get(name, ()))
             cols = [c for c in full if c not in skip]
@@ -271,6 +398,13 @@ def make_values(baseline, target, tables=None, exclude=None):
                     entry["rows"].append(r)
             if entry["rows"] or "create" in entry or "add_columns" in entry:
                 patch["tables"].append(entry)
+        if natural:
+            for name in NATURAL_ORDER:
+                if tables is not None and name not in tables:
+                    continue
+                entry = natural_entry(b, t, name, set(exclude.get(name, ())))
+                if entry:
+                    patch["tables"].append(entry)
     finally:
         b.close()
         t.close()

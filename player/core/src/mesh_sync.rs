@@ -18,10 +18,11 @@
 //! star_patch's digest is SHA-256 over Python's JSON spelling of a row, which
 //! Rust does not reproduce for every float (`1e-06` against `0.000001`).
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use rusqlite::types::Value;
-use rusqlite::{params_from_iter, Connection, OpenFlags};
+use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
 use serde_json::Value as Json;
 
 /// The household's edits a member shares: preferences, occasion values and
@@ -111,9 +112,10 @@ pub const MERGED: [&str; 10] = [
 ];
 
 /// Each node's own columns of the catalogue, never merged `[SPEC-DF-030]`:
-/// `MACHINE_SCOPE` in `tools/star_merge.py`. They travel in neither direction
+/// `MACHINE_SCOPE` in `tools/star_merge.py`. `first_seen` is when *this*
+/// installation first saw the file, and joined them with `[SPEC-NKP-050]`. They travel in neither direction
 /// `[SPEC-NSH-070]`; the summary reports them so the hub keeps them as they are.
-pub const MACHINE_SCOPE: [&str; 4] = ["path", "size_bytes", "mtime", "last_seen"];
+pub const MACHINE_SCOPE: [&str; 5] = ["path", "size_bytes", "mtime", "last_seen", "first_seen"];
 
 /// What a row that no longer holds the patch's `was` means `[SPEC-NSH-070]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,7 +189,18 @@ pub fn undo(db: &Path, inverse: &Json) -> Result<Applied, String> {
 fn apply_tx(tx: &Connection, patch: &Json, allowed: Option<&[&str]>, rule: Rule) -> Result<Outcome, String> {
     let mut counts = Applied::default();
     let mut inverse = Vec::new();
-    for t in patch["tables"].as_array().ok_or("a patch has tables")? {
+    let entries = patch["tables"].as_array().ok_or("a patch has tables")?;
+    // `[SPEC-NKP-060]`: every natural entry is checked, against the database as it
+    // is before the patch writes anything, so that a parent whose key the patch
+    // changes cannot make its children unfindable.
+    let mut natural = plan_natural(tx, entries, allowed, rule)?;
+    for (at, t) in entries.iter().enumerate() {
+        if let Some(np) = natural.remove(&at) {
+            if let Some(inv) = write_natural(tx, t, &np, &mut counts)? {
+                inverse.push(inv);
+            }
+            continue;
+        }
         let name = ident(t["name"].as_str().ok_or("a table has a name")?)?;
         if allowed.is_some_and(|a| !a.contains(&name)) {
             return Err(format!("{name} is not a shared table: refused, and nothing written"));
@@ -330,6 +343,427 @@ fn apply_tx(tx: &Connection, patch: &Json, allowed: Option<&[&str]>, rule: Rule)
     }
     inverse.reverse();
     Ok(Outcome { counts, inverse: serde_json::json!({ "tables": inverse }) })
+}
+
+// ---------------------------------------------------------------------
+// The catalogue patch by natural key `[SPEC-NKP-010..075]`.
+//
+// A catalogue's numeric ids are its own `[SPEC-DF-035]`, so a patch for the
+// tables that hold them names rows by what identifies them everywhere: a file
+// by its `audio_md5`, a passage by `(audio_md5, kind, start_ms, end_ms)`. The
+// node finds its own row by that, compares the row as named by that, and
+// writes with its own ids. A patch entry says which columns are references:
+//
+//   {"name": "passages", "natural": {"surrogate": "passage_id",
+//                                    "refs": [{"col": "file_id", "kind": "file"}]},
+//    "columns": [...N-form, no surrogate...], "key": [...], "rows": [...]}
+// ---------------------------------------------------------------------
+
+/// What a column holding a local id names. The vocabulary is fixed
+/// `[SPEC-NKP-030]`: a word outside it is refused, never guessed at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RefKind {
+    File,
+    Passage,
+}
+
+/// One reference column; `when` is `flavor`'s way of naming a passage only on
+/// the rows whose kind column says so. A reference with `when` is stored as
+/// text on the node, as `subject_id` is.
+struct RefSpec {
+    col: String,
+    kind: RefKind,
+    when: Option<(String, String)>,
+}
+
+struct Natural {
+    /// The table's own id, which the patch never carries.
+    surrogate: Option<String>,
+    refs: Vec<RefSpec>,
+}
+
+impl Natural {
+    /// The reference `col` is in this row, if it is one. `ctx` and `vals` are the
+    /// row's columns and values, as far as the caller has them.
+    fn ref_for(&self, col: &str, ctx: &[String], vals: &[Value]) -> Option<&RefSpec> {
+        self.refs.iter().find(|r| {
+            r.col == col
+                && r.when.as_ref().is_none_or(|(wc, wv)| {
+                    ctx.iter().position(|c| c == wc).is_some_and(|i| matches!(&vals[i], Value::Text(t) if t == wv))
+                })
+        })
+    }
+}
+
+fn natural_of(name: &str, t: &Json, cols: &[String], have: &[String]) -> Result<Natural, String> {
+    let n = &t["natural"];
+    if t["create"].is_array() {
+        return Err(format!("{name}: a natural entry makes no table; nothing written"));
+    }
+    let surrogate = match n["surrogate"].as_str() {
+        Some(s) => {
+            let s = ident(s)?;
+            if !have.iter().any(|h| h == s) {
+                return Err(format!("{name}: no surrogate column {s} here; nothing written"));
+            }
+            if cols.iter().any(|c| c == s) {
+                return Err(format!("{name}: the surrogate {s} is carried, and must not be; nothing written"));
+            }
+            Some(s.to_string())
+        }
+        None => None,
+    };
+    let mut refs = Vec::new();
+    for r in n["refs"].as_array().ok_or(format!("{name}: a natural entry has refs"))? {
+        let col = ident(r["col"].as_str().unwrap_or(""))?;
+        if !cols.iter().any(|c| c == col) {
+            return Err(format!("{name}: reference column {col} is not among the patch's columns"));
+        }
+        let kind = match r["kind"].as_str() {
+            Some("file") => RefKind::File,
+            Some("passage") => RefKind::Passage,
+            other => return Err(format!("{name}: {other:?} is not a kind of reference; nothing written")),
+        };
+        let when = match r["when"].as_array() {
+            None => None,
+            Some(w) if w.len() == 2 => {
+                let wc = ident(w[0].as_str().unwrap_or(""))?;
+                if !cols.iter().any(|c| c == wc) {
+                    return Err(format!("{name}: condition column {wc} is not among the patch's columns"));
+                }
+                Some((wc.to_string(), w[1].as_str().ok_or(format!("{name}: a condition is a column and a word"))?.to_string()))
+            }
+            Some(_) => return Err(format!("{name}: a condition is a column and a word")),
+        };
+        refs.push(RefSpec { col: col.to_string(), kind, when });
+    }
+    Ok(Natural { surrogate, refs })
+}
+
+fn es(e: rusqlite::Error) -> String {
+    e.to_string()
+}
+
+/// This node's id for what `nat` names, if it holds it.
+fn to_local(tx: &Connection, kind: RefKind, nat: &Value) -> Result<Option<i64>, String> {
+    let Value::Text(text) = nat else { return Ok(None) };
+    match kind {
+        RefKind::File => tx
+            .prepare_cached("SELECT file_id FROM files WHERE audio_md5 = ?1")
+            .map_err(es)?
+            .query_row([text], |r| r.get::<_, i64>(0))
+            .optional()
+            .map_err(es),
+        RefKind::Passage => {
+            let p: Json = serde_json::from_str(text).map_err(|_| format!("not a passage reference: {text}"))?;
+            let a = p.as_array().filter(|a| a.len() == 4).ok_or_else(|| format!("not a passage reference: {text}"))?;
+            tx.prepare_cached(
+                "SELECT p.passage_id FROM passages p JOIN files f ON f.file_id = p.file_id \
+                 WHERE f.audio_md5 = ?1 AND p.kind = ?2 AND p.start_ms = ?3 AND p.end_ms = ?4",
+            )
+            .map_err(es)?
+            .query_row(
+                params![a[0].as_str().unwrap_or(""), a[1].as_str().unwrap_or(""), a[2].as_i64().unwrap_or(-1), a[3].as_i64().unwrap_or(-1)],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(es)
+        }
+    }
+}
+
+/// What this node's local id names, in the patch's own spelling: a file's
+/// `audio_md5`, a passage's `[md5, kind, start, end]` as compact JSON text.
+fn to_natural(tx: &Connection, kind: RefKind, local: &Value) -> Result<Option<Value>, String> {
+    let id = match local {
+        Value::Integer(i) => *i,
+        Value::Text(s) => match s.parse::<i64>() {
+            Ok(i) => i,
+            Err(_) => return Ok(None),
+        },
+        _ => return Ok(None),
+    };
+    Ok(match kind {
+        RefKind::File => tx
+            .prepare_cached("SELECT audio_md5 FROM files WHERE file_id = ?1")
+            .map_err(es)?
+            .query_row([id], |r| r.get::<_, String>(0))
+            .optional()
+            .map_err(es)?
+            .map(Value::Text),
+        RefKind::Passage => tx
+            .prepare_cached(
+                "SELECT f.audio_md5, p.kind, p.start_ms, p.end_ms FROM passages p JOIN files f ON f.file_id = p.file_id \
+                 WHERE p.passage_id = ?1",
+            )
+            .map_err(es)?
+            .query_row([id], |r| {
+                Ok(serde_json::json!([r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?]))
+            })
+            .optional()
+            .map_err(es)?
+            .map(|j| Value::Text(j.to_string())),
+    })
+}
+
+/// A local row in the patch's own terms `[SPEC-NKP-035]`. A reference to
+/// something that is not there is made to equal nothing.
+fn naturalize(tx: &Connection, nat: &Natural, cols: &[String], vals: Vec<Value>) -> Result<Vec<Value>, String> {
+    let mut out = vals.clone();
+    for (i, c) in cols.iter().enumerate() {
+        if let Some(r) = nat.ref_for(c, cols, &vals) {
+            if matches!(vals[i], Value::Null) {
+                continue;
+            }
+            out[i] = to_natural(tx, r.kind, &vals[i])?.unwrap_or_else(|| Value::Text(format!("<no {:?}: {:?}>", r.kind, vals[i])));
+        }
+    }
+    Ok(out)
+}
+
+fn local_value(r: &RefSpec, id: i64) -> Value {
+    if r.when.is_some() { Value::Text(id.to_string()) } else { Value::Integer(id) }
+}
+
+/// A patch row's values with each reference turned into this node's id. A
+/// reference to what the node does not hold is an error: nothing is written.
+fn localize(tx: &Connection, name: &str, nat: &Natural, cols: &[String], vals: &[Value]) -> Result<Vec<Value>, String> {
+    let mut out = vals.to_vec();
+    for (i, c) in cols.iter().enumerate() {
+        if let Some(r) = nat.ref_for(c, cols, vals) {
+            if matches!(vals[i], Value::Null) {
+                continue;
+            }
+            match to_local(tx, r.kind, &vals[i])? {
+                Some(id) => out[i] = local_value(r, id),
+                None => return Err(format!("{name}: {c} names a {:?} this node does not hold; nothing written", r.kind)),
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// A natural key as this node's own key, or `None` where something it names
+/// is not here.
+fn resolve_key(tx: &Connection, nat: &Natural, key: &[String], k: &[Value]) -> Result<Option<Vec<Value>>, String> {
+    let mut out = Vec::with_capacity(k.len());
+    for (i, c) in key.iter().enumerate() {
+        match nat.ref_for(c, key, k) {
+            Some(r) if !matches!(k[i], Value::Null) => match to_local(tx, r.kind, &k[i])? {
+                Some(id) => out.push(local_value(r, id)),
+                None => return Ok(None),
+            },
+            _ => out.push(k[i].clone()),
+        }
+    }
+    Ok(Some(out))
+}
+
+fn where_key(key: &[String], from: usize) -> String {
+    key.iter().enumerate().map(|(i, k)| format!("{k} IS ?{}", from + i)).collect::<Vec<_>>().join(" AND ")
+}
+
+/// The row at a local key, in the patch's terms.
+fn select_n(tx: &Connection, name: &str, nat: &Natural, cols: &[String], key: &[String], lk: &[Value]) -> Result<Option<Vec<Value>>, String> {
+    let sql = format!("SELECT {} FROM {name} WHERE {} LIMIT 1", cols.join(", "), where_key(key, 1));
+    let row: Option<Vec<Value>> = tx
+        .prepare_cached(&sql)
+        .map_err(es)?
+        .query_row(params_from_iter(lk.iter()), |r| (0..cols.len()).map(|i| r.get::<_, Value>(i)).collect())
+        .optional()
+        .map_err(es)?;
+    row.map(|v| naturalize(tx, nat, cols, v)).transpose()
+}
+
+/// The whole row, every column, as this node holds it: what the undo keeps.
+fn select_full(tx: &Connection, name: &str, have: &[String], key: &[String], lk: &[Value]) -> Result<Vec<Value>, String> {
+    let sql = format!("SELECT {} FROM {name} WHERE {} LIMIT 1", have.join(", "), where_key(key, 1));
+    tx.prepare_cached(&sql)
+        .map_err(es)?
+        .query_row(params_from_iter(lk.iter()), |r| (0..have.len()).map(|i| r.get::<_, Value>(i)).collect())
+        .map_err(|e| format!("{name}: the row just written cannot be read back: {e}"))
+}
+
+/// What the check decided for one row.
+struct Planned {
+    /// This node's key for the row, where it holds one.
+    local_key: Option<Vec<Value>>,
+    /// Already as the patch makes it: nothing to do.
+    already: bool,
+}
+
+/// One natural entry, checked.
+struct NaturalPlan {
+    name: String,
+    cols: Vec<String>,
+    key: Vec<String>,
+    have: Vec<String>,
+    nat: Natural,
+    rows: Vec<Planned>,
+    /// Columns this patch added, which the undo drops.
+    added: Vec<String>,
+}
+
+fn names_of(name: &str, t: &Json, k: &str) -> Result<Vec<String>, String> {
+    t[k].as_array()
+        .ok_or(format!("{name}: no {k}"))?
+        .iter()
+        .map(|v| v.as_str().ok_or(format!("{name}: {k} holds a non-name")).and_then(ident).map(str::to_string))
+        .collect()
+}
+
+/// `[SPEC-NKP-060]`, the check: every natural row is resolved to this node's own
+/// row, in the database as it is before the patch, and is *already* as the
+/// patch makes it, or *to apply* because it is as the patch says it was, or a
+/// refusal of the whole patch. Nothing is written here.
+fn plan_natural(tx: &Connection, entries: &[Json], allowed: Option<&[&str]>, rule: Rule) -> Result<HashMap<usize, NaturalPlan>, String> {
+    let mut plans = HashMap::new();
+    for (at, t) in entries.iter().enumerate() {
+        if t["natural"].is_null() {
+            continue;
+        }
+        let name = ident(t["name"].as_str().ok_or("a table has a name")?)?;
+        if rule != Rule::Strict || allowed.is_some() {
+            return Err(format!("{name}: a natural entry is the catalogue's, under the strict rule; nothing written"));
+        }
+        let (cols, key) = (names_of(name, t, "columns")?, names_of(name, t, "key")?);
+        let mut have = columns(tx, name)?;
+        if have.is_empty() {
+            return Err(format!("{name}: not a table here; nothing written"));
+        }
+        // A column the node lacks is added, in this transaction, as the id-keyed path
+        // adds one: a rehearsal rolls it back, and the undo drops it.
+        let mut added = Vec::new();
+        for d in t["add_columns"].as_array().into_iter().flatten() {
+            let decl = d.as_str().unwrap_or("");
+            let col = ident(decl.split_whitespace().next().unwrap_or(""))?;
+            if decl.contains(';') {
+                return Err(format!("{name}: not a column declaration: {decl}"));
+            }
+            if !have.iter().any(|h| h == col) {
+                tx.execute_batch(&format!("ALTER TABLE {name} ADD COLUMN {decl}")).map_err(|e| format!("{name}: {e}"))?;
+                added.push(col.to_string());
+            }
+        }
+        if !added.is_empty() {
+            have = columns(tx, name)?;
+        }
+        if let Some(c) = cols.iter().find(|c| !have.contains(c)) {
+            return Err(format!("{name}: no column {c} here; nothing written"));
+        }
+        if let Some(k) = key.iter().find(|k| !cols.contains(k)) {
+            return Err(format!("{name}: key column {k} is not among the patch's columns"));
+        }
+        let nat = natural_of(name, t, &cols, &have)?;
+        let at_of = |c: &String| cols.iter().position(|x| x == c);
+        let mut rows = Vec::new();
+        for r in t["rows"].as_array().ok_or(format!("{name}: no rows"))? {
+            let k: Vec<Value> = r["key"].as_array().ok_or("a row has a key")?.iter().map(to_sql).collect();
+            let (now, was) = (row_of(&r["now"]), row_of(&r["was"]));
+            let lk = resolve_key(tx, &nat, &key, &k)?;
+            let cur = match &lk {
+                Some(lk) => select_n(tx, name, &nat, &cols, &key, lk)?,
+                None => None,
+            };
+            if same(&cur, &now) {
+                rows.push(Planned { local_key: lk, already: true });
+                continue;
+            }
+            // A row whose key the patch changes may already be at its new key.
+            if let Some(nv) = &now {
+                let nk: Vec<Value> = key.iter().filter_map(|c| at_of(c).map(|i| nv[i].clone())).collect();
+                if nk != k {
+                    if let Some(nlk) = resolve_key(tx, &nat, &key, &nk)? {
+                        if same(&select_n(tx, name, &nat, &cols, &key, &nlk)?, &now) {
+                            rows.push(Planned { local_key: Some(nlk), already: true });
+                            continue;
+                        }
+                    }
+                }
+            }
+            if !same(&cur, &was) {
+                return Err(format!("{name}: the row keyed {} is not as the patch expects; nothing written", r["key"]));
+            }
+            rows.push(Planned { local_key: lk, already: false });
+        }
+        plans.insert(at, NaturalPlan { name: name.to_string(), cols, key, have, nat, rows, added });
+    }
+    Ok(plans)
+}
+
+/// `[SPEC-NKP-060]`, the write: updates and deletes by the key the check found,
+/// inserts with each reference resolved once its parent is here and the
+/// table's own id left to SQLite. The inverse is in this node's own terms
+/// `[SPEC-NKP-070]`, so `undo` is the id-keyed one.
+fn write_natural(tx: &Connection, t: &Json, np: &NaturalPlan, counts: &mut Applied) -> Result<Option<Json>, String> {
+    let NaturalPlan { name, cols, key, have, nat, rows, added } = np;
+    let pk = key_of(tx, name)?;
+    let pk_at: Vec<usize> = pk.iter().filter_map(|c| have.iter().position(|h| h == c)).collect();
+    let others: Vec<&String> = have.iter().filter(|h| !cols.contains(h) && nat.surrogate.as_ref() != Some(*h)).collect();
+    let at_of = |c: &String| cols.iter().position(|x| x == c);
+    let json_row = |v: &[Value]| Json::Array(v.iter().map(to_json).collect());
+    let pk_of = |v: &[Value]| Json::Array(pk_at.iter().map(|&i| to_json(&v[i])).collect());
+    let mut inv_rows = Vec::new();
+    for (r, p) in t["rows"].as_array().ok_or(format!("{name}: no rows"))?.iter().zip(rows) {
+        if p.already {
+            counts.already += 1;
+            continue;
+        }
+        let (was, now) = (row_of(&r["was"]), row_of(&r["now"]));
+        match (&was, &now) {
+            (None, Some(v)) => {
+                let mut names = cols.clone();
+                let mut vals = localize(tx, name, nat, cols, v)?;
+                let lk: Vec<Value> = key.iter().filter_map(|c| at_of(c).map(|i| vals[i].clone())).collect();
+                for (col, val) in r["also"].as_object().into_iter().flatten() {
+                    let col = ident(col)?;
+                    if !others.iter().any(|o| *o == col) {
+                        return Err(format!("{name}: `also` names {col}, which is not a column outside the patch's"));
+                    }
+                    names.push(col.to_string());
+                    vals.push(to_sql(val));
+                }
+                let sql = format!(
+                    "INSERT INTO {name} ({}) VALUES ({})",
+                    names.join(", "),
+                    (1..=names.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(", ")
+                );
+                tx.execute(&sql, params_from_iter(vals.iter())).map_err(|e| format!("{name}: {e}"))?;
+                let after = select_full(tx, name, have, key, &lk)?;
+                inv_rows.push(serde_json::json!({"key": pk_of(&after), "was": json_row(&after), "now": null}));
+            }
+            (Some(_), None) => {
+                let lk = p.local_key.clone().ok_or(format!("{name}: a row to remove is not here; nothing written"))?;
+                let before = select_full(tx, name, have, key, &lk)?;
+                tx.execute(&format!("DELETE FROM {name} WHERE {}", where_key(key, 1)), params_from_iter(lk.iter()))
+                    .map_err(|e| format!("{name}: {e}"))?;
+                inv_rows.push(serde_json::json!({"key": pk_of(&before), "was": null, "now": json_row(&before)}));
+            }
+            (Some(_), Some(v)) => {
+                let lk = p.local_key.clone().ok_or(format!("{name}: a row to change is not here; nothing written"))?;
+                let before = select_full(tx, name, have, key, &lk)?;
+                let vals = localize(tx, name, nat, cols, v)?;
+                let sets = cols.iter().enumerate().map(|(i, c)| format!("{c} = ?{}", i + 1)).collect::<Vec<_>>().join(", ");
+                let params: Vec<&Value> = vals.iter().chain(lk.iter()).collect();
+                tx.execute(&format!("UPDATE {name} SET {sets} WHERE {}", where_key(key, cols.len() + 1)), params_from_iter(params))
+                    .map_err(|e| format!("{name}: {e}"))?;
+                let nk: Vec<Value> = key.iter().filter_map(|c| at_of(c).map(|i| vals[i].clone())).collect();
+                let after = select_full(tx, name, have, key, &nk)?;
+                inv_rows.push(serde_json::json!({"key": pk_of(&after), "was": json_row(&after), "now": json_row(&before)}));
+            }
+            (None, None) => unreachable!("a row absent both before and after equals `now`"),
+        }
+        counts.applied += 1;
+    }
+    if inv_rows.is_empty() && added.is_empty() {
+        return Ok(None);
+    }
+    inv_rows.reverse();
+    let mut inv = serde_json::json!({"name": name, "columns": have, "key": pk, "rows": inv_rows});
+    if !added.is_empty() {
+        inv["drop_columns"] = serde_json::json!(added);
+    }
+    Ok(Some(inv))
 }
 
 /// A table, column or index name, as the only thing ever spliced into SQL
@@ -732,5 +1166,300 @@ mod tests {
         assert_eq!(s["tables"][1]["rows"][0], serde_json::json!([10, 1, "track", 0, 1000]));
         let text = s.to_string();
         assert!(!text.contains("\"flac\"") && !text.contains("-3.5"), "no hub-authored column leaves: {s}");
+    }
+
+    // ---- the catalogue patch by natural key [SPEC-NKP-010..075] ----------
+
+    /// A catalogue as a node holds it. `files` are (file_id, audio_md5), `passages`
+    /// (passage_id, file_id, start, end) -- all radio -- and `recs` (passage_id, mbid).
+    fn numbered(path: &Path, files: &[(i64, &str)], passages: &[(i64, i64, i64, i64)], recs: &[(i64, &str)]) {
+        let c = Connection::open(path).unwrap();
+        c.execute_batch(
+            "CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT NOT NULL UNIQUE, path TEXT, first_seen TEXT);
+             CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, kind TEXT NOT NULL,
+                 start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, gain REAL);
+             CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
+             CREATE TABLE passage_recordings (passage_id INTEGER NOT NULL, mbid TEXT NOT NULL, weight REAL,
+                 PRIMARY KEY (passage_id, mbid));",
+        )
+        .unwrap();
+        for (id, md5) in files {
+            c.execute("INSERT INTO files VALUES (?1, ?2, ?3, 'node-time')", params![id, md5, format!("/node/{md5}")]).unwrap();
+        }
+        for (id, f, s, e) in passages {
+            c.execute("INSERT INTO passages VALUES (?1, ?2, 'radio', ?3, ?4, NULL)", params![id, f, s, e]).unwrap();
+        }
+        for (p, m) in recs {
+            c.execute("INSERT INTO passage_recordings VALUES (?1, ?2, 1.0)", params![p, m]).unwrap();
+        }
+    }
+
+    /// The same catalogue named without ids, so two numbered differently compare equal.
+    fn nform(path: &Path) -> Vec<String> {
+        let c = Connection::open(path).unwrap();
+        let mut out: Vec<String> = Vec::new();
+        let mut q = c.prepare("SELECT audio_md5 FROM files").unwrap();
+        out.extend(q.query_map([], |r| Ok(format!("file {}", r.get::<_, String>(0)?))).unwrap().filter_map(Result::ok));
+        let mut q = c
+            .prepare("SELECT f.audio_md5, p.start_ms, p.end_ms FROM passages p JOIN files f USING (file_id)")
+            .unwrap();
+        out.extend(
+            q.query_map([], |r| Ok(format!("passage {} {}-{}", r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))
+                .unwrap()
+                .filter_map(Result::ok),
+        );
+        let mut q = c
+            .prepare("SELECT f.audio_md5, p.start_ms, p.end_ms, r.mbid FROM passage_recordings r JOIN passages p USING (passage_id) JOIN files f USING (file_id)")
+            .unwrap();
+        out.extend(
+            q.query_map([], |r| {
+                Ok(format!("rec {} {}-{} {}", r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?))
+            })
+            .unwrap()
+            .filter_map(Result::ok),
+        );
+        out.sort();
+        out
+    }
+
+    /// Everything in it, ids included, to prove a refused patch changed nothing.
+    fn raw(path: &Path) -> String {
+        let c = Connection::open(path).unwrap();
+        let mut s = String::new();
+        for t in ["files", "passages", "passage_recordings"] {
+            let mut q = c.prepare(&format!("SELECT * FROM {t} ORDER BY 1, 2")).unwrap();
+            let n = q.column_count();
+            let rows: Vec<String> = q
+                .query_map([], |r| Ok((0..n).map(|i| format!("{:?}", r.get::<_, Value>(i).unwrap())).collect::<Vec<_>>().join(",")))
+                .unwrap()
+                .filter_map(Result::ok)
+                .collect();
+            s += &format!("{t}: {rows:?}\n");
+        }
+        s
+    }
+
+    fn files_entry(rows: Json) -> Json {
+        serde_json::json!({"name": "files", "natural": {"surrogate": "file_id", "refs": []},
+                           "columns": ["audio_md5", "path"], "key": ["audio_md5"], "rows": rows})
+    }
+
+    fn passages_entry(rows: Json) -> Json {
+        serde_json::json!({"name": "passages", "natural": {"surrogate": "passage_id", "refs": [{"col": "file_id", "kind": "file"}]},
+                           "columns": ["file_id", "kind", "start_ms", "end_ms"], "key": ["file_id", "kind", "start_ms", "end_ms"], "rows": rows})
+    }
+
+    fn recs_entry(rows: Json) -> Json {
+        serde_json::json!({"name": "passage_recordings",
+                           "natural": {"surrogate": null, "refs": [{"col": "passage_id", "kind": "passage"}]},
+                           "columns": ["passage_id", "mbid", "weight"], "key": ["passage_id", "mbid"], "rows": rows})
+    }
+
+    /// The hub numbers A, B, C as 1, 2, 3; this node numbers them 1, 3, 2.
+    fn permuted(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let d = tmp(name);
+        let db = d.join("library.db");
+        numbered(&db, &[(1, "A"), (3, "B"), (2, "C")], &[(10, 1, 0, 1000), (11, 3, 0, 500), (12, 2, 0, 700)],
+                  &[(10, "m-a"), (11, "m-b"), (12, "m-c")]);
+        (d, db)
+    }
+
+    fn apply_n(db: &Path, entries: Vec<Json>, commit: bool) -> Result<Outcome, String> {
+        apply_with(db, &serde_json::json!({ "tables": entries }), None, Rule::Strict, commit)
+    }
+
+    /// A new file, its passage and its recording arrive under the node's own ids, the
+    /// children resolved against the parents the same patch has just written.
+    #[test]
+    fn a_natural_patch_adds_what_is_new_under_the_nodes_own_ids() {
+        let (_d, db) = permuted("nk-add");
+        let span = serde_json::json!(["D", "radio", 0, 900]);
+        let out = apply_n(&db, vec![
+            files_entry(serde_json::json!([{"key": ["D"], "was": null, "now": ["D", "/hub/d"], "also": {"first_seen": "hub-time"}}])),
+            passages_entry(serde_json::json!([{"key": ["D", "radio", 0, 900], "was": null, "now": ["D", "radio", 0, 900]}])),
+            recs_entry(serde_json::json!([{"key": [span, "m-d"], "was": null, "now": [span, "m-d", 1.0]}])),
+        ], true).unwrap();
+        assert_eq!((out.counts.applied, out.counts.already, out.counts.kept), (3, 0, 0), "{:?}", out.counts);
+        let c = Connection::open(&db).unwrap();
+        let id: i64 = c.query_row("SELECT file_id FROM files WHERE audio_md5 = 'D'", [], |r| r.get(0)).unwrap();
+        assert_eq!(id, 4, "the node numbers it as its own database counts, never as the hub did");
+        let first: String = c.query_row("SELECT first_seen FROM files WHERE audio_md5 = 'D'", [], |r| r.get(0)).unwrap();
+        assert_eq!(first, "hub-time", "a column outside the patch comes from `also`, for a row that is new");
+        assert!(nform(&db).contains(&"rec D 0-900 m-d".to_string()), "{:?}", nform(&db));
+    }
+
+    /// The case found on every player: the node already holds the music, under other ids.
+    #[test]
+    fn rows_the_node_already_holds_under_other_ids_are_already_there() {
+        let (_d, db) = permuted("nk-already");
+        let before = raw(&db);
+        let b = serde_json::json!(["B", "radio", 0, 500]);
+        let out = apply_n(&db, vec![
+            files_entry(serde_json::json!([{"key": ["B"], "was": null, "now": ["B", "/node/B"]}])),
+            passages_entry(serde_json::json!([{"key": ["B", "radio", 0, 500], "was": null, "now": ["B", "radio", 0, 500]}])),
+            recs_entry(serde_json::json!([{"key": [b, "m-b"], "was": null, "now": [b, "m-b", 1.0]}])),
+        ], true).unwrap();
+        assert_eq!((out.counts.applied, out.counts.already), (0, 3), "{:?}", out.counts);
+        assert_eq!(raw(&db), before, "nothing was written");
+    }
+
+    /// A boundary edit changes a passage's natural key. The node updates the row it
+    /// has, so its id, and whatever of its own points at that id, stay.
+    #[test]
+    fn a_changed_key_is_an_update_in_place_and_undo_puts_it_back() {
+        let (_d, db) = permuted("nk-key");
+        let before = raw(&db);
+        let out = apply_n(&db, vec![passages_entry(serde_json::json!([
+            {"key": ["B", "radio", 0, 500], "was": ["B", "radio", 0, 500], "now": ["B", "radio", 0, 450]}]))], true).unwrap();
+        assert_eq!(out.counts.applied, 1);
+        let c = Connection::open(&db).unwrap();
+        let (id, end): (i64, i64) = c.query_row("SELECT passage_id, end_ms FROM passages WHERE file_id = 3", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((id, end), (11, 450), "the same local row, its span changed");
+        let child: i64 = c.query_row("SELECT passage_id FROM passage_recordings WHERE mbid = 'm-b'", [], |r| r.get(0)).unwrap();
+        assert_eq!(child, 11, "and its recording still points at it, untouched");
+        drop(c);
+        undo(&db, &out.inverse).unwrap();
+        assert_eq!(raw(&db), before, "the undo restores every id and value");
+    }
+
+    /// One row not as the patch expects refuses the whole patch, in the check, before a
+    /// single write -- including the valid row that came first.
+    #[test]
+    fn one_row_not_as_expected_writes_nothing() {
+        let (_d, db) = permuted("nk-refuse");
+        let before = raw(&db);
+        let err = apply_n(&db, vec![
+            files_entry(serde_json::json!([{"key": ["D"], "was": null, "now": ["D", "/hub/d"]}])),
+            passages_entry(serde_json::json!([{"key": ["A", "radio", 0, 1000], "was": ["A", "radio", 0, 999], "now": ["A", "radio", 0, 800]}])),
+        ], true).unwrap_err();
+        assert!(err.contains("not as the patch expects"), "{err}");
+        assert_eq!(raw(&db), before, "nothing written, the earlier insert included");
+        let err = apply_n(&db, vec![recs_entry(serde_json::json!([
+            {"key": [["Z", "radio", 0, 1], "m-z"], "was": null, "now": [["Z", "radio", 0, 1], "m-z", 1.0]}]))], true).unwrap_err();
+        assert!(err.contains("does not hold"), "a child of a passage the node lacks is refused, not guessed: {err}");
+        assert_eq!(raw(&db), before);
+    }
+
+    #[test]
+    fn a_rehearsal_of_a_natural_patch_writes_nothing() {
+        let (_d, db) = permuted("nk-rehearse");
+        let before = raw(&db);
+        let out = apply_n(&db, vec![files_entry(serde_json::json!([{"key": ["D"], "was": null, "now": ["D", "/hub/d"]}]))], false).unwrap();
+        assert_eq!(out.counts.applied, 1, "it says what it would do");
+        assert_eq!(raw(&db), before, "and does none of it");
+    }
+
+    #[test]
+    fn a_natural_entry_must_be_in_the_vocabulary_and_the_catalogues() {
+        let (_d, db) = permuted("nk-vocab");
+        let mut bad = passages_entry(serde_json::json!([]));
+        bad["natural"]["refs"][0]["kind"] = serde_json::json!("recording");
+        assert!(apply_n(&db, vec![bad], true).unwrap_err().contains("not a kind of reference"));
+        let mut carried = passages_entry(serde_json::json!([]));
+        carried["columns"] = serde_json::json!(["passage_id", "file_id", "kind", "start_ms", "end_ms"]);
+        assert!(apply_n(&db, vec![carried], true).unwrap_err().contains("is carried"));
+        let mut creates = files_entry(serde_json::json!([]));
+        creates["create"] = serde_json::json!(["CREATE TABLE x (a)"]);
+        assert!(apply_n(&db, vec![creates], true).unwrap_err().contains("makes no table"));
+        let member = apply_with(&db, &serde_json::json!({"tables": [files_entry(serde_json::json!([]))]}), None, Rule::Member, true);
+        assert!(member.unwrap_err().contains("strict rule"), "a natural entry is the catalogue's alone");
+        let shared = apply_with(&db, &serde_json::json!({"tables": [files_entry(serde_json::json!([]))]}), Some(&SHARED), Rule::Strict, true);
+        assert!(shared.is_err(), "and never a member's shared tables");
+    }
+
+    /// A column the hub has gained since the last sync is added to the node's table as the
+    /// id-keyed path adds one: in the transaction, rolled back by a rehearsal, dropped by the undo.
+    #[test]
+    fn a_natural_entry_may_add_a_column() {
+        let (_d, db) = permuted("nk-addcol");
+        let before = raw(&db);
+        let mut e = passages_entry(serde_json::json!([
+            {"key": ["B", "radio", 0, 500], "was": ["B", "radio", 0, 500, 0], "now": ["B", "radio", 0, 500, 1]}]));
+        e["columns"] = serde_json::json!(["file_id", "kind", "start_ms", "end_ms", "held"]);
+        e["add_columns"] = serde_json::json!(["held INTEGER DEFAULT 0"]);
+        let rehearsed = apply_n(&db, vec![e.clone()], false).unwrap();
+        assert_eq!(rehearsed.counts.applied, 1);
+        assert_eq!(raw(&db), before, "a rehearsal adds no column and writes no row");
+        let out = apply_n(&db, vec![e], true).unwrap();
+        let c = Connection::open(&db).unwrap();
+        let held: Vec<i64> = c.prepare("SELECT held FROM passages ORDER BY passage_id").unwrap()
+            .query_map([], |r| r.get(0)).unwrap().filter_map(Result::ok).collect();
+        assert_eq!(held, [0, 1, 0], "the other passages read the default, the one the patch names its new value");
+        drop(c);
+        undo(&db, &out.inverse).unwrap();
+        assert_eq!(raw(&db), before, "and the undo takes the column away again");
+    }
+
+    /// A row the hub removed goes, with its own id; the other rows keep theirs.
+    #[test]
+    fn a_natural_delete_removes_the_nodes_own_row() {
+        let (_d, db) = permuted("nk-delete");
+        let out = apply_n(&db, vec![
+            recs_entry(serde_json::json!([{"key": [["C", "radio", 0, 700], "m-c"], "was": [["C", "radio", 0, 700], "m-c", 1.0], "now": null}])),
+            passages_entry(serde_json::json!([{"key": ["C", "radio", 0, 700], "was": ["C", "radio", 0, 700], "now": null}])),
+        ], true).unwrap();
+        assert_eq!(out.counts.applied, 2);
+        let n = nform(&db);
+        assert!(!n.iter().any(|x| x.contains("C 0-700")) && n.contains(&"passage A 0-1000".to_string()), "{n:?}");
+        let c = Connection::open(&db).unwrap();
+        let left: i64 = c.query_row("SELECT count(*) FROM passages WHERE passage_id = 12", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0);
+    }
+
+    /// The fixture both languages read: the Python builder's patch, applied by this
+    /// applier to a node numbered differently, gives what the Python reference gave
+    /// `[SPEC-NKP-090]`.
+    #[test]
+    fn the_builders_patch_applied_here_gives_the_same_catalogue() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/natural_patch");
+        let read = |n: &str| std::fs::read_to_string(dir.join(n)).unwrap_or_else(|e| panic!("{n}: {e}"));
+        let d = tmp("nk-fixture");
+        let db = d.join("library.db");
+        let c = Connection::open(&db).unwrap();
+        c.execute_batch(&read("schema.sql")).unwrap();
+        c.execute_batch(&read("node.sql")).unwrap();
+        drop(c);
+        let before = raw(&db);
+        let patch: Json = serde_json::from_str(&read("patch.json")).unwrap();
+        let out = apply_with(&db, &patch, None, Rule::Strict, true).unwrap();
+        let expected: Vec<String> = serde_json::from_str(&read("expected.json")).unwrap();
+        let c = Connection::open(&db).unwrap();
+        let got = {
+            let mut got: Vec<String> = Vec::new();
+            let mut q = c.prepare("SELECT audio_md5 FROM files").unwrap();
+            got.extend(q.query_map([], |r| Ok(format!("file {}", r.get::<_, String>(0)?))).unwrap().filter_map(Result::ok));
+            let mut q = c.prepare("SELECT f.audio_md5, p.start_ms, p.end_ms FROM passages p JOIN files f USING (file_id)").unwrap();
+            got.extend(
+                q.query_map([], |r| Ok(format!("passage {} {}-{}", r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))
+                    .unwrap()
+                    .filter_map(Result::ok),
+            );
+            let mut q = c
+                .prepare("SELECT f.audio_md5, p.start_ms, p.end_ms, r.mbid, r.weight FROM passage_recordings r JOIN passages p USING (passage_id) JOIN files f USING (file_id)")
+                .unwrap();
+            got.extend(
+                q.query_map([], |r| {
+                    Ok(format!("rec {} {}-{} {} {:?}", r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, f64>(4)?))
+                })
+                .unwrap()
+                .filter_map(Result::ok),
+            );
+            got.sort();
+            got
+        };
+        assert_eq!(got, expected, "the same catalogue as the Python reference gives");
+        let (d_id, c2_id, b_id): (i64, i64, i64) = (
+            c.query_row("SELECT file_id FROM files WHERE audio_md5 = 'D'", [], |r| r.get(0)).unwrap(),
+            c.query_row("SELECT file_id FROM files WHERE audio_md5 = 'C2'", [], |r| r.get(0)).unwrap(),
+            c.query_row("SELECT file_id FROM files WHERE audio_md5 = 'B'", [], |r| r.get(0)).unwrap(),
+        );
+        assert_eq!((d_id, c2_id, b_id), (4, 2, 3), "the node numbered the new file itself and kept its ids for the rest");
+        drop(c);
+        let applied = out.counts.applied;
+        assert!(applied > 0 && out.counts.already == 0, "{:?}", out.counts);
+        let again = apply_with(&db, &patch, None, Rule::Strict, true).unwrap();
+        assert_eq!((again.counts.applied, again.counts.already), (0, applied), "a second apply finds it all already there");
+        undo(&db, &out.inverse).unwrap();
+        assert_eq!(raw(&db), before, "and the undo of the first puts back every id and value");
     }
 }

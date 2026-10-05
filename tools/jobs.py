@@ -1080,7 +1080,10 @@ class Runner:
         t = json.loads(target)
         stage, nodes = t["stage"], list(t.get("nodes") or [])
         tools = os.path.dirname(os.path.abspath(__file__))
-        argv = [sys.executable, os.path.join(tools, "star_sync.py"), sync_console.plan_path(), stage, *nodes]
+        argv = [sys.executable, os.path.join(tools, "star_sync.py"), sync_console.plan_path(), stage]
+        # A snapshot is told which nodes to take part with, and the later stages
+        # stay inside them [SPEC-STAR-130]; the others are never reached.
+        argv += (["--nodes", ",".join(nodes)] if stage == "snapshot" else nodes)
         bracket = stage == "commit"
         was_playing = False
         if bracket:

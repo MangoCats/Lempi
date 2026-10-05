@@ -90,6 +90,7 @@ class Fleet:
         self.ssh_log = []
         self.nodes = {}
         self.runs = []
+        self.natural = set()        # the players that report natural_keys [SPEC-NKP-075]
 
     def add(self, name, prefs, always_up=True):
         d = os.path.join(self.tmp, name)
@@ -112,8 +113,12 @@ class Fleet:
         name = player["address"]
         node = self.nodes[name]
         if op == "snapshot":
-            return {"listener": export(node["listener"], ss.SIGNED_TABLES), "catalogue": summary(node["library"]),
-                    "last_run": None}
+            self.log.append((name, "snapshot", run, False, False))
+            res = {"listener": export(node["listener"], ss.SIGNED_TABLES), "catalogue": summary(node["library"]),
+                   "last_run": None}
+            if name in self.natural:
+                res["natural_keys"] = 1
+            return res
         self.log.append((name, op, run, bool(catalogue_patch), bool(listener_patch)))
         if not listener_patch:
             return {"listener": None, "catalogue": None}
@@ -348,12 +353,14 @@ def test_catalogue_moved(tmp):
           "a catalogue patch for a, none for b")
 
 
-def test_catalogue_states(tmp):
-    """[SPEC-STAR-940]: what a node's catalogue summary says about it. One node holds the hub's new music
-    under the hub's ids, one under its own -- the case found on every player on 2026-10-05."""
+def catalogue_scenario(tmp, b_current):
+    """a holds the hub's new music under the hub's ids, b under its own -- the case found on every player on
+    2026-10-05. a's player is old; b's is current if `b_current`."""
     fleet = Fleet(tmp)
     same = [("X", 1, "2026-09-01 00:00:00")]
     plan, hub = build(tmp, fleet, same, {"a": (same, False), "b": (same, False), "c": (same, False)})
+    if b_current:
+        fleet.natural.add("b")
     new = lambda fid, pid: (f"INSERT INTO files VALUES ({fid},'C','/x/c.mp3',100,1,1)",
                             f"INSERT INTO passages VALUES ({pid},{fid},'radio',0,500)")
     for db, (fid, pid) in ((hub["library"], (9, 20)), (fleet.nodes["a"]["library"], (9, 20)),
@@ -370,22 +377,34 @@ def test_catalogue_states(tmp):
     c.close()
     with faked(fleet):
         # c has a file the hub lacks, so its own copy cannot be made: leave it out of this merge.
-        plan["nodes"].pop("c")
-        ss.snapshot(plan)
+        ss.snapshot(plan, {"a", "b"})
         run = ss.newest_run(plan)
         base = json.load(open(os.path.join(run, "baselines.json")))
         ss.merge(plan, run)
         ss.patch(plan, run)
+    return fleet, plan, hub, run, base
+
+
+def test_catalogue_states(tmp):
+    """[SPEC-STAR-940], [SPEC-NKP-075]: what a node's catalogue summary says about it, and what each kind
+    of player is sent for it."""
+    fleet, plan, hub, run, base = catalogue_scenario(tmp, b_current=True)
     check(base["a"]["catalogue"]["state"] == "holds-hub-rows" and base["a"]["catalogue_in_step"],
           f"a holds the hub's new rows under the hub's ids: patchable, the rehearsal decides: {base['a']['catalogue']}")
-    check(base["b"]["catalogue"] == {"state": "other-ids", "files": 1, "passages": 1} and not base["b"]["catalogue_in_step"],
-          f"b holds the same music under its own ids: {base['b']['catalogue']}")
+    check(base["b"]["catalogue"] == {"state": "other-ids", "files": 1, "passages": 1} and base["b"]["catalogue_in_step"],
+          f"b holds the same music under its own ids, and its player is current, so it can be patched: {base['b']['catalogue']}")
     check(ss.catalogue_words(base["b"]["catalogue"]) == "the hub's music under other ids (1 files, 1 passages)", "and says so in words")
+    pa = json.load(open(os.path.join(run, "patches", "a", "catalogue.values.json")))
+    pb = json.load(open(os.path.join(run, "patches", "b", "catalogue.values.json")))
+    check(not any("natural" in e for e in pa["tables"]), "an old player is sent the strict patch by id")
+    check({e["name"] for e in pb["tables"] if "natural" in e} == {"files", "passages"},
+          f"a current one is sent the tables that hold ids by natural key: {[e['name'] for e in pb['tables']]}")
+    fe = next(e for e in pb["tables"] if e["name"] == "files")
+    check("file_id" not in fe["columns"] and fe["rows"][0]["key"] == ["C"] and "also" in fe["rows"][0],
+          f"carrying no id, the new file's machine-scope values as `also`: {fe}")
     summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
-    check("numbered differently" in summary, f"the summary says why a strict patch cannot reach it: {summary}")
-    check(os.path.exists(os.path.join(run, "patches", "a", "catalogue.values.json"))
-          and not os.path.exists(os.path.join(run, "patches", "b", "catalogue.values.json")),
-          "a catalogue patch for a, none for b")
+    check("by natural key" in summary, f"the summary says so: {summary}")
+    check("WARNING -- OLD PLAYER: a" in summary and "OLD PLAYER: b" not in summary, "and warns of a alone, which is old")
     # And the direct call, for the case the merge could not take.
     ch = ss.catalogue_state(os.path.join(tmp, "sent", "c.library.db"), os.path.join(run, "a", "summary.db"),
                             os.path.join(run, "desktop", "library.db"))
@@ -397,9 +416,107 @@ def test_catalogue_states(tmp):
     check(ss.catalogue_state(None, cn, cn) == {"state": "no-copy"}, "and with nothing last sent it says so")
 
 
+def test_catalogue_old_player(tmp):
+    """An old player holding the music under other ids is sent no catalogue patch, and is told so loudly."""
+    fleet, plan, hub, run, base = catalogue_scenario(tmp, b_current=False)
+    check(not base["b"]["catalogue_in_step"] and base["b"]["natural_keys"] == 0, f"{base['b']}")
+    check(not os.path.exists(os.path.join(run, "patches", "b", "catalogue.values.json")), "no patch for b")
+    summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
+    check("OLD: it cannot take one" in summary and "WARNING -- OLD PLAYERS: a, b" in summary,
+          f"the summary says why, and names both old players: {summary}")
+
+
+def test_oversize_catalogue_patch(tmp):
+    """[SPEC-NKP-920]: a catalogue patch too big to send in one request is not built, loudly; the listener half goes."""
+    real = ss.CATALOGUE_PATCH_MAX
+    ss.CATALOGUE_PATCH_MAX = 50
+    try:
+        fleet, plan, hub, run, base = catalogue_scenario(tmp, b_current=True)
+    finally:
+        ss.CATALOGUE_PATCH_MAX = real
+    check(not os.path.exists(os.path.join(run, "patches", "b", "catalogue.values.json")), "no catalogue patch for b")
+    check(os.path.exists(os.path.join(run, "patches", "b", "listener.values.json")), "but its listener patch is made")
+    summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
+    check("none sent** -- the patch is" in summary and "not built [SPEC-NKP-920]" in summary, f"and the summary says why: {summary}")
+
+
+def test_selection(tmp):
+    """[SPEC-STAR-130]: a run takes part with the nodes it is given, and leaves the rest untouched --
+    not contacted, not started, not written, and their last-sent record as it was."""
+    fleet = Fleet(tmp)
+    base = [("X", 1, "2026-09-01 00:00:00")]
+    plan, hub = build(tmp, fleet, base, {"a": (base, False), "b": (base, False), "t": (base, True)})
+    for n in ("a", "b", "t"):
+        c = sqlite3.connect(fleet.nodes[n]["listener"])
+        c.execute("UPDATE listener_preferences SET rotation=7, recovery=7, updated_at='2026-10-02 00:00:00'")
+        c.commit()
+        c.close()
+    state_before = json.load(open(os.path.join(plan["runs"], "state.json")))
+    b_before = open(fleet.nodes["b"]["listener"], "rb").read()
+    with faked(fleet):
+        for bad, word in ((set(), "no node chosen"), ({"ghost"}, "not nodes of this fleet")):
+            why = refused(lambda: ss.snapshot(plan, bad))
+            check(why and word in why, f"a choice that is empty or names a stranger is refused: {why}")
+        ss.snapshot(plan, {"a"})
+        run = ss.newest_run(plan)
+        check([e[0] for e in fleet.log if e[1] == "snapshot"] == ["a"], f"only a was asked: {fleet.log}")
+        check(fleet.ssh_log == [] and "t" not in fleet.up, f"the on-demand player was never started: {fleet.ssh_log}")
+        sel = json.load(open(os.path.join(run, "selected.json")))
+        check(sel == {"nodes": ["a"], "left_alone": ["b", "t"]}, f"the run records who took part and who was left alone: {sel}")
+        check(sorted(json.load(open(os.path.join(run, "baselines.json")))) == ["a", "desktop"], "and only they are in it")
+        ss.merge(plan, run)
+        ss.patch(plan, run)
+        ss.approve_all(run)
+        check(stages(plan) == 0 and stages(plan, commit=True) == 0, "rehearsed and committed")
+        check(ss.distribute(plan, run, ["b"], False) == 1, "a node left alone is not in the run, and is not reached by naming it")
+    check(open(fleet.nodes["b"]["listener"], "rb").read() == b_before, "b's database is byte for byte as it was")
+    check(json.load(open(os.path.join(plan["runs"], "state.json")))["nodes"]["b"] == state_before["nodes"]["b"]
+          and json.load(open(os.path.join(plan["runs"], "state.json")))["nodes"]["t"] == state_before["nodes"]["t"],
+          "and the record of what b and t were last sent is as it was")
+    check(prefs_of(fleet.nodes["a"]["listener"])["X"] == 7 and prefs_of(hub["listener"])["X"] == 7, "while a and the hub took part")
+    check(not [e for e in fleet.log if e[0] in ("b", "t")], f"nothing was asked of b or t at any stage: {fleet.log}")
+
+
+def test_old_players(tmp):
+    """[SPEC-NKP-075]: an old player is said loudly -- at the snapshot, in the summary, and again
+    before a rehearsal or a commit -- and a current one is not."""
+    fleet = Fleet(tmp)
+    same = [("X", 1, "2026-09-01 00:00:00")]
+    plan, hub = build(tmp, fleet, same, {"a": (same, False), "b": (same, False)})
+    fleet.natural.add("b")                     # b is current; a is not
+    with faked(fleet) as out:
+        ss.snapshot(plan)
+        text = out.getvalue()
+        check("!!!  OLD PLAYER: a" in text and "OLD PLAYER(S) ['a']" in text and "b: reports no" not in text,
+              f"the snapshot names a, loudly, and not b: {text}")
+        run = ss.newest_run(plan)
+        check(json.load(open(os.path.join(run, "old_players.json"))).keys() == {"a"}, "and keeps the list with the run")
+        ss.merge(plan, run)
+        out.truncate(0)
+        out.seek(0)
+        ss.patch(plan, run)
+        summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
+        check("WARNING -- OLD PLAYER: a" in summary, f"the summary opens with it: {summary[:300]}")
+        out.truncate(0)
+        out.seek(0)
+        ss.distribute(plan, run, [], False)
+        check("OLD PLAYER: a" in out.getvalue(), "and a rehearsal says it again before it reaches anyone")
+        out.truncate(0)
+        out.seek(0)
+        ss.distribute(plan, run, ["b"], False)
+        check("OLD PLAYER" not in out.getvalue(), "but not when only the current player is named")
+    fleet2 = Fleet(tempfile.mkdtemp())
+    plan2, _ = build(fleet2.tmp, fleet2, same, {"a": (same, False)})
+    fleet2.natural.add("a")
+    with faked(fleet2) as out:
+        ss.snapshot(plan2)
+        check("OLD PLAYER" not in out.getvalue(), "a fleet of current players says nothing")
+
+
 def main() -> int:
     for test in (test_quiet, test_conflict, test_approve_all, test_on_demand, test_catalogue_moved,
-                 test_catalogue_states):
+                 test_catalogue_states, test_catalogue_old_player, test_oversize_catalogue_patch, test_selection,
+                 test_old_players):
         tmp = tempfile.mkdtemp()
         try:
             test(tmp)
@@ -409,6 +526,8 @@ def main() -> int:
             traceback.print_exc()
     print()
     if FAILED:
+        for m in FAILED:                     # again, since a check inside the fake fleet's redirect is not seen
+            print(f"  FAIL  {m}", file=sys.__stdout__)
         print(f"{len(FAILED)} check(s) failed")
         return 1
     print("star_sync flow: all checks passed")

@@ -144,6 +144,8 @@ def main() -> int:
 
     print()
     if FAILED:
+        for m in FAILED:                     # again, since a check inside the fake fleet's redirect is not seen
+            print(f"  FAIL  {m}", file=sys.__stdout__)
         print(f"{len(FAILED)} check(s) failed")
         return 1
     print("console sync (live): all checks passed")

@@ -93,6 +93,9 @@ def state(plan) -> dict:
     run = newest(plan)
     missing = _json(os.path.join(run, "missing.json")) or {} if run else {}
     base = _json(os.path.join(run, "baselines.json")) or {} if run else {}
+    old = _json(os.path.join(run, "old_players.json")) or {} if run else {}
+    sel = _json(os.path.join(run, "selected.json")) if run else None     # [SPEC-STAR-130]
+    left = set((sel or {}).get("left_alone", []))
     rid = os.path.basename(run) if run else None
     sent = st.get("nodes", {})
     nodes = []
@@ -105,18 +108,24 @@ def state(plan) -> dict:
             cat_ok = bool(b.get("catalogue_in_step"))
         nodes.append(dict(name=name, kind="player", on_demand=bool(n.get("on_demand")), enrolled=bool(n.get("member")),
                           last_sent=e.get("at"), hours=_age_hours(e.get("at")),
-                          in_run="missing" if name in missing else "taken" if name in base else None,
-                          why=missing.get(name), catalogue=cat, catalogue_ok=cat_ok))
+                          in_run="left alone" if name in left else "missing" if name in missing
+                          else "taken" if name in base else None,
+                          why=missing.get(name), catalogue=cat, catalogue_ok=cat_ok,
+                          old_player=name in old, old_why=old.get(name)))
     for name in sorted(set(base) | set(missing)):
         if name not in plan["nodes"] and name != plan["hub"]["name"]:
             e = sent.get(name, {})
             nodes.append(dict(name=name, kind="phone", on_demand=False, enrolled=True, last_sent=e.get("at"),
                               hours=_age_hours(e.get("at")), in_run="missing" if name in missing else "taken",
-                              why=missing.get(name), catalogue=None))
+                              why=missing.get(name), catalogue=None, old_player=False, old_why=None))
+    for name in sorted(left - {n["name"] for n in nodes}):            # a phone left alone
+        nodes.append(dict(name=name, kind="phone", on_demand=False, enrolled=True, last_sent=None, hours=None,
+                          in_run="left alone", why=None, catalogue=None, old_player=False, old_why=None))
     out = {"hub": plan["hub"]["name"], "backup": hub_backup(plan), "nodes": nodes, "run": None}
     if not run:
         return out
-    info = {"id": rid, "snapshot": os.path.exists(os.path.join(run, "manifest.json")),
+    info = {"id": rid, "old_players": old, "left_alone": sorted(left),
+            "snapshot": os.path.exists(os.path.join(run, "manifest.json")),
             "merged": os.path.exists(os.path.join(run, "merge", "items.json")),
             "proven": bool((_json(os.path.join(run, "proven.json")) or {}).get("ok")),
             "rehearsal": _json(os.path.join(run, "rehearsal.json")) or {},
@@ -246,10 +255,21 @@ def stage_target(plan, run, stage, nodes):
     anything runs [SPEC-STAR-124]."""
     if stage not in STAGES:
         return None, f"not a stage: {stage}"
+    if stage == "snapshot":
+        # [SPEC-STAR-130]: the page never takes a snapshot of every node by default.
+        if not nodes:
+            return None, "choose the nodes this run takes part with: the others are left alone, untouched"
+        known = set(plan["nodes"]) | {m["node"] for m in ss.meshmod.sync_members(ss.mesh_of(plan))}
+        if [n for n in nodes if n not in known]:
+            return None, f"not nodes of this fleet: {[n for n in nodes if n not in known]}"
+        return json.dumps({"stage": stage, "nodes": nodes}), None
     unknown = [n for n in nodes if n not in plan["nodes"] and n != plan["hub"]["name"]
                and n not in ((_json(os.path.join(run, "baselines.json")) or {}) if run else {})]
     if unknown:
         return None, f"not in the plan or this run: {unknown}"
+    out_of_run = [n for n in nodes if run and n not in committed_names(run) and committed_names(run)]
+    if out_of_run:
+        return None, f"left alone in this run, so not reached by it: {out_of_run}"
     if stage != "snapshot" and not run:
         return None, "there is no run: take a snapshot first"
     if stage == "commit":

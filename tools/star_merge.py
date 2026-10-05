@@ -647,8 +647,12 @@ def catalogue_copies(manifest: dict, out: str, rep: Report):
         alias = aliases(hub_cat)
         fc = open_ro(spec["files"])
         try:
+            # What the node's summary has: a player older than [SPEC-NKP-050] sends
+            # no `first_seen`, and the hub's value stands for it.
+            have = {r[1] for r in fc.execute("PRAGMA table_info(files)")}
+            use = [c for c in cols if c in have]
             theirs = {alias.get(r[0], r[0]): r[1:] for r in fc.execute(
-                f"SELECT audio_md5, {', '.join(cols)} FROM files")}
+                f"SELECT audio_md5, {', '.join(use)} FROM files")}
         finally:
             fc.close()
         d = os.path.join(out, "nodes", name)
@@ -662,12 +666,12 @@ def catalogue_copies(manifest: dict, out: str, rep: Report):
             dest.close()
             raise SystemExit(f"{name} has no file for {len(missing)} of the hub's, e.g. {missing[:3]}: "
                              "its catalogue would name paths it does not have [SPEC-STAR-080]")
-        dest.executemany(f"UPDATE files SET {', '.join(c + ' = ?' for c in cols)} WHERE audio_md5 = ?",
+        dest.executemany(f"UPDATE files SET {', '.join(c + ' = ?' for c in use)} WHERE audio_md5 = ?",
                          [(*theirs[m], m) for m in md5s])
         dest.commit()
         ok = dest.execute("PRAGMA integrity_check").fetchone()[0]
         dest.close()
-        entry["catalogue"] = f"the hub's, with its own {', '.join(cols)}; integrity {ok}"
+        entry["catalogue"] = f"the hub's, with its own {', '.join(use)}; integrity {ok}"
         entry["only_theirs"] = len(set(theirs) - set(md5s))
 
 
@@ -675,7 +679,8 @@ def catalogue_copies(manifest: dict, out: str, rep: Report):
 # [SPEC-STAR-047]: three ways, against the oldest common ancestor.
 
 # Each machine's own, never merged [SPEC-DF-030]: the hub keeps its own.
-MACHINE_SCOPE = {"files": {"path", "size_bytes", "mtime", "last_seen"}}
+# `first_seen` since [SPEC-NKP-050]: when this installation first saw the file.
+MACHINE_SCOPE = {"files": {"path", "size_bytes", "mtime", "last_seen", "first_seen"}}
 TIME_COLUMNS = ("updated_at", "fetched_at", "decided_at", "applied_at", "scanned_at")
 PROVENANCE = ("source", "boundary_src")
 

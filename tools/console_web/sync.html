@@ -19,14 +19,26 @@
   <div id="noplan" class="caveat" hidden></div>
 
   <div id="body" hidden>
-    <h2>Nodes</h2>
+    <h2>Nodes <small>[SPEC-STAR-130]</small></h2>
+    <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+      Tick the nodes a new run is to take part with. <b>A node not ticked is left alone</b>: not read, not
+      started, not written to, and what it was last sent is kept. The desktop always takes part. Nothing is ticked
+      until you do it, and your choice is remembered here.
+    </p>
     <p id="backup" style="font-size:.85rem;color:var(--dim);margin:.1rem 0 .5rem"></p>
     <table class="peers">
-      <thead><tr><th>node</th><th>player</th><th>last synced</th><th>this run</th><th>catalogue</th></tr></thead>
+      <thead><tr><th>take part</th><th>node</th><th>player</th><th>last synced</th><th>this run</th><th>catalogue</th></tr></thead>
       <tbody id="node-rows"></tbody>
     </table>
 
+    <div class="controls">
+      <button class="chip" id="pick-all">choose all</button><button class="chip" id="pick-none">choose none</button>
+      <span id="picked" style="color:var(--dim);font-size:.85rem;align-self:center"></span>
+    </div>
+
     <h2>This run <small id="run-id"></small></h2>
+    <div id="oldbanner" hidden style="border:2px solid var(--bad);background:var(--panel);padding:.6rem .8rem;margin:.4rem 0;font-size:.9rem"></div>
+    <div id="leftalone" style="font-size:.85rem;color:var(--dim);margin:.2rem 0"></div>
     <div class="controls" id="stages"></div>
     <div id="blockers" style="font-size:.85rem"></div>
     <div id="job-box"></div>
@@ -66,6 +78,18 @@ const PAGE = 100;
 let STATE = null, shown = 0, busy = false;
 const $ = id => document.getElementById(id);
 
+// Which nodes the next run takes part with: the person's own choice, kept in this browser only.
+// Nothing is chosen until they choose it [SPEC-STAR-130].
+function chosenSet() {
+  try { return new Set(JSON.parse(localStorage.getItem('sync.chosen') || '[]')); } catch (e) { return new Set(); }
+}
+function setChosen(set) {
+  try { localStorage.setItem('sync.chosen', JSON.stringify([...set])); } catch (e) { /* kept for this visit only */ }
+  LIVE = set;
+}
+let LIVE = null;
+const chosen = () => [...(LIVE || chosenSet())].filter(n => STATE && STATE.nodes.some(x => x.name === n)).sort();
+
 const kindPill = k => S.el('span', { class: 'pill ' + (k === 'delete-vs-edit' ? 'bad' : k === 'tie' ? 'warn' : ''), text: k });
 
 function ago(hours) {
@@ -87,12 +111,25 @@ function paintNodes(st) {
   $('backup').textContent = b.newest
     ? `hub backup: newest ${b.newest}, ${ago(b.hours)}${b.hours > 30 ? ' — STALE' : ''}`
     : 'the hub has never been backed up';
+  const picks = LIVE || chosenSet();
   $('node-rows').replaceChildren(...st.nodes.map(n => S.el('tr', {},
-    S.el('td', {}, n.name),
+    S.el('td', {}, (() => {
+      const box = S.el('input', { type: 'checkbox', title: 'take part in the next run' });
+      box.checked = picks.has(n.name);
+      box.onchange = () => {
+        const set = new Set(LIVE || chosenSet());
+        if (box.checked) set.add(n.name); else set.delete(n.name);
+        setChosen(set);
+        paintRun(STATE);
+      };
+      return box;
+    })()),
+    S.el('td', {}, n.name, n.old_player ? S.el('span', { class: 'pill bad', style: 'margin-left:.4rem', text: 'OLD PLAYER', title: n.old_why || '' }) : null),
     S.el('td', {}, n.kind === 'phone' ? 'phone (its own channel)' : n.on_demand ? 'on demand' : 'always running',
          n.enrolled ? null : S.el('span', { class: 'pill bad', style: 'margin-left:.4rem', text: 'not enrolled' })),
     S.el('td', {}, ago(n.hours)),
     S.el('td', {}, n.in_run === 'missing' ? S.el('span', { class: 'pill bad', text: 'missing' }) :
+                   n.in_run === 'left alone' ? S.el('span', { class: 'pill', text: 'left alone' }) :
                    n.in_run === 'taken' ? S.el('span', { class: 'pill ok', text: 'taken' }) : '—',
          n.why ? S.el('div', { style: 'color:var(--dim);font-size:.8rem', text: n.why }) : null),
     S.el('td', {}, n.catalogue ? S.el('span', { class: 'pill ' + (n.catalogue_ok ? 'ok' : 'warn'),
@@ -113,7 +150,7 @@ function paintRun(st) {
   const step = (ok, text) => S.el('span', { class: 'pill ' + (ok ? 'ok' : ''), text: (ok ? '✓ ' : '') + text });
   const bar = $('stages');
   bar.replaceChildren(
-    stageButton('1 · Snapshot (a new run)', 'snapshot', true),
+    stageButton(`1 · Snapshot (${chosen().length} chosen)`, 'snapshot', chosen().length > 0, chosen()),
     stageButton('2 · Merge', 'merge', r && r.snapshot),
     stageButton('3 · Prepare patches', 'patch', r && r.merged),
     stageButton('4 · Rehearse', 'rehearse', r && r.proven),
@@ -128,14 +165,29 @@ function paintRun(st) {
   bar.after(marks);
   document.querySelectorAll('.stage-marks').forEach(e => e.remove());
   marks.className = 'stage-marks';
+  $('picked').textContent = chosen().length ? `the next run takes part with: ${chosen().join(', ')}` : 'no node chosen yet';
+  const old = (r && r.old_players) || {};
+  const ob = $('oldbanner');
+  ob.hidden = !Object.keys(old).length;
+  if (!ob.hidden) {
+    ob.replaceChildren(
+      S.el('b', { style: 'color:var(--bad)', text: `OLD PLAYER${Object.keys(old).length > 1 ? 'S' : ''}: ${Object.keys(old).sort().join(', ')}` }),
+      S.el('div', { text: 'Their listener edits sync as usual. Their catalogue is sent no patch until they run a current build [SPEC-NKP-075]: deploy one, then take a new snapshot.' }),
+      ...Object.entries(old).sort().map(([n, why]) => S.el('div', { style: 'color:var(--dim);font-size:.8rem', text: `${n}: ${why}` })));
+  }
+  $('leftalone').textContent = r && r.left_alone && r.left_alone.length
+    ? `This run left alone, untouched: ${r.left_alone.join(', ')}` : '';
   const bl = $('blockers');
   bl.replaceChildren(...((r && r.blockers) || []).map(t => S.el('div', { style: 'color:var(--warn)', text: '• ' + t })));
 }
 
 async function runStage(stage, nodes, label) {
   if (stage === 'commit') {
-    const od = STATE.nodes.filter(n => n.on_demand).map(n => n.name);
+    const od = STATE.nodes.filter(n => n.on_demand && STATE.run.names.includes(n.name)).map(n => n.name);
+    const old = Object.keys(STATE.run.old_players || {});
     const msg = `Commit run ${STATE.run.id} to ${STATE.run.names.join(', ')}?\n\n` +
+      (STATE.run.left_alone && STATE.run.left_alone.length ? `Left alone, untouched: ${STATE.run.left_alone.join(', ')}.\n\n` : '') +
+      (old.length ? `WARNING: old player${old.length > 1 ? 's' : ''} ${old.join(', ')} will get their listener edits but no catalogue patch.\n\n` : '') +
       `The hub's own pair is patched first, and the desktop player is paused for it.` +
       (od.length ? `\n${od.join(', ')} will have its player started for this and stopped after.` : '') +
       `\n\nThis changes the household's data on every node.`;
@@ -257,6 +309,8 @@ async function reload(withItems) {
 }
 
 for (const id of ['f-kind', 'f-table', 'f-node', 'f-status']) $(id).onchange = () => loadItems(false);
+$('pick-all').onclick = () => { setChosen(new Set(STATE.nodes.map(n => n.name))); paintNodes(STATE); paintRun(STATE); };
+$('pick-none').onclick = () => { setChosen(new Set()); paintNodes(STATE); paintRun(STATE); };
 $('more').onclick = () => loadItems(true);
 reload(true);
 </script>

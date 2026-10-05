@@ -111,11 +111,16 @@ fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
+/// What this build can apply, so the hub never hands a patch to a player that would
+/// misread it `[SPEC-NKP-075]`. 1 is the catalogue patch by natural key.
+const NATURAL_KEYS: i64 = 1;
+
 fn snapshot(listener: &Path, library: &Path) -> Result<Value, String> {
     Ok(json!({
         "listener": mesh_sync::export(listener, &mesh_sync::MERGED)?,
         "catalogue": mesh_sync::catalogue_summary(library)?,
         "last_run": last_run(listener),
+        "natural_keys": NATURAL_KEYS,
     }))
 }
 
@@ -435,6 +440,7 @@ mod tests {
         assert!(node_key.verifying_key().verify(answer.as_bytes(), &p256::ecdsa::Signature::from_der(&sig).unwrap()).is_ok(),
                 "the answer is signed by this node's key");
         let a: Value = serde_json::from_str(answer).unwrap();
+        assert_eq!(a["result"]["natural_keys"], 1, "the build says what it can apply [SPEC-NKP-075]");
         assert_eq!(a["result"]["listener"]["tables"][0]["name"], "listener_preferences");
         assert_eq!(a["result"]["catalogue"]["tables"][1]["rows"][0], json!([10, 1, "track", 0, 1000]));
 

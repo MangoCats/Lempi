@@ -62,7 +62,7 @@ def test_page():
     tmp = tempfile.mkdtemp()
     fleet = fl.Fleet(tmp)
     base = [("X", 1, "2026-09-01 00:00:00"), ("Y", 1, "2026-09-01 00:00:00")]
-    plan, hub = fl.build(tmp, fleet, base, {"a": (base, False), "b": (base, False)})
+    plan, hub = fl.build(tmp, fleet, base, {"a": (base, False), "b": (base, False), "c": (base, False)})
     for n, (r, t) in (("a", (3, "2026-10-02 00:00:00")), ("b", (5, "2026-10-03 00:00:00"))):
         c = sqlite3.connect(fleet.nodes[n]["listener"])
         c.execute(f"UPDATE listener_preferences SET rotation={r}, recovery={r}, updated_at='{t}'")
@@ -74,23 +74,35 @@ def test_page():
     check(sc.load_plan()[0] is not None, "and a present one loads")
 
     st = sc.state(plan)
-    check(st["run"] is None and [n["name"] for n in st["nodes"]] == ["a", "b"], "before any run there are nodes and no run")
+    check(st["run"] is None and [n["name"] for n in st["nodes"]] == ["a", "b", "c"], "before any run there are nodes and no run")
     with fl.faked(fleet):
         why = sc.stage_target(plan, None, "merge", [])[1]
         check(why and "no run" in why, f"a stage before a snapshot is refused: {why}")
-        check(sc.stage_target(plan, None, "snapshot", [])[0] is not None, "a snapshot may always be asked for")
+        why = sc.stage_target(plan, None, "snapshot", [])[1]
+        check(why and "choose the nodes" in why, f"a snapshot with no nodes chosen is refused, never all by default: {why}")
+        check(sc.stage_target(plan, None, "snapshot", ["ghost"])[1].startswith("not nodes of this fleet"), "and one naming a stranger")
+        check(json.loads(sc.stage_target(plan, None, "snapshot", ["a"])[0]) == {"stage": "snapshot", "nodes": ["a"]},
+              "a snapshot of the nodes chosen may be asked for")
         check(sc.stage_target(plan, None, "wipe", [])[1].startswith("not a stage"), "an unknown stage is refused")
-        ss.snapshot(plan)
+        ss.snapshot(plan, {"a", "b"})
         run = sc.newest(plan)
         ss.merge(plan, run)
         ss.patch(plan, run)
         st = sc.state(plan)
         r = st["run"]
+        by = {n["name"]: n for n in st["nodes"]}
+        check(by["a"]["in_run"] == "taken" and by["c"]["in_run"] == "left alone" and r["left_alone"] == ["c"],
+              f"the page says who took part and who was left alone: {by['a']['in_run']}, {by['c']['in_run']}")
+        check(set(r["old_players"]) == {"a", "b"} and by["a"]["old_player"] and not by["c"]["old_player"],
+              f"and which players are old (the fake ones report no natural_keys): {r['old_players']}")
+        check(sc.stage_target(plan, run, "rehearse", ["c"])[1].startswith("left alone in this run"),
+              "a later stage cannot name a node the run left alone")
         check(r["merged"] and r["proven"] and r["items"] == 2 and r["pending"] == 2 and not r["ready"],
               f"merged, proven, two items waiting, not ready: {r}")
         check(any("no verdict" in b for b in r["blockers"]), f"and the blocker says so: {r['blockers']}")
         check(sc.stage_target(plan, run, "commit", [])[0] is None, "a commit is refused while the gate stands")
-        check(all(n["catalogue"] == "as last sent" and n["in_run"] == "taken" for n in st["nodes"]), "both nodes taken, catalogue in step")
+        check(all(n["catalogue"] == "as last sent" and n["in_run"] == "taken" for n in st["nodes"] if n["name"] != "c"),
+              "both nodes taken, catalogue in step")
 
         page = sc.items_page(run, catalogue(), after=0, limit=1)
         check(page["matching"] == 2 and len(page["items"]) == 1 and page["counts"]["pending"] == 2, f"paged, counts for the whole run: {page['counts']}")
@@ -137,6 +149,8 @@ def main() -> int:
     test_page()
     print()
     if FAILED:
+        for m in FAILED:                     # again, since a check inside the fake fleet's redirect is not seen
+            print(f"  FAIL  {m}", file=sys.__stdout__)
         print(f"{len(FAILED)} check(s) failed")
         return 1
     print("sync_console: all checks passed")
