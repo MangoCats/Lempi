@@ -17,6 +17,12 @@ someone wants the two reconciled.
 > remote (service stopped, patched, restarted, confirmed running), and a
 > follow-up dry-run reported the two sides converged.
 
+> **Since 2026-09-26** the fleet's preference and flag changes travel by the
+> star sync, which merges the same tables last-write-wins across every node
+> and sends the result back out `[SPEC-STAR-040]` ([SPEC046](SPEC046-star-sync.md)).
+> This two-node tool still works and is kept for a change between two
+> installations alone; for the fleet, run the star sync.
+
 > **Related:** [SPEC029](SPEC029-listener-preference-editing.md) for the
 > editing surface this syncs the result of · [SPEC006 §3](SPEC006-data-flow-and-portability.md#3-what-travels-and-what-must-not)
 > for the Class-D boundary §1 below crosses, and §9 for the review-decision

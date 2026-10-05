@@ -10,6 +10,8 @@ findings left deferred in [SPEC053](SPEC053-security-hardening.md)
 plane, hardens the pairing window per the fourth review, and settles the build
 decisions [SPEC051](SPEC051-trusted-networks.md) left open.
 
+> **Decision, 2026-10-04:** star sync now uses the signed transport for **every** node, one transport and not two `[SPEC-STAR-100]`. `teacherslounge`, which ran no player, gets one started on demand for each stage, over one ssh command `[SPEC-STAR-101]`. The ssh node path is no longer a stage (`star_distribute.py` stays as a manual tool). §4's other removals, the console's peer chain and the cross-node keys, are neither scheduled nor required; §§2–3 are unchanged and are what carries every node.
+
 > **Related:** [SPEC049](SPEC049-mesh-membership-and-trust.md) `[SPEC-MTR-030]` `[SPEC-MTR-220]` · [SPEC050](SPEC050-node-discovery.md) `[SPEC-DSC-080]` `[SPEC-DSC-090]` · [SPEC046](SPEC046-star-sync.md) `[SPEC-STAR-080]` `[SPEC-STAR-087]` · [SPEC051](SPEC051-trusted-networks.md) · [SPEC055](SPEC055-fleet-configuration-kept-private.md) (the fleet's own config, the other half of this work)
 
 ---

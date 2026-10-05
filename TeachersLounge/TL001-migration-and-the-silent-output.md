@@ -135,15 +135,32 @@ Half of what that document assumes is therefore untested.
 ~~**`[TL-OPN-020]` There is no unit, so nothing survives a reboot.**~~
 *Decided 2026-09-26 by the maintainer: no unit, on purpose.* The player
 runs on this machine only when started by hand. It is the fleet's acoustic
-instrument and the hub's mirror, and a laptop that starts playing at every
-boot suits neither. So it stays in `SOURCES`, not `APPLIANCES`. A manual
+instrument, and a laptop that starts playing at every boot suits neither. So it stays in `SOURCES`, not `APPLIANCES`. A manual
 start must still carry `[TL-OPS-020]`'s environment, or it will start and be
 silent. Do not add a unit here without asking.
 
+**`[TL-OPN-040]` An on-demand player, for the star sync.** *Decided 2026-10-05 by the
+maintainer, which is the asking `[TL-OPN-020]` asks for.* Every node in a sync is a
+member player `[SPEC-STAR-100]`, and this one has none running. So a *user* unit,
+`lempi-ondemand.service` ([`lempi-ondemand.service`](lempi-ondemand.service)), is started
+over ssh for a stage and stopped after it `[SPEC-STAR-101]`: never enabled, no `[Install]`
+section, in the desktop session's own manager `[TL-OPS-020]`, and with `--paused`, so it
+plays nothing whatever it was doing when it last stopped. Started by hand it still
+resumes, as before. The machine no longer mirrors the hub's listener: it keeps its own
+plays and state like every node `[SPEC-STAR-103]`.
+
+*Not yet done, and waiting on a commit:* the unit is in the repository and `setup-tl.sh`
+records it, but neither is on the machine. Its `lempi` has to be rebuilt for `--paused`
+(`build/update-source-host.sh`, which pulls from origin), then `setup-tl.sh --go`, then
+the player enrolled in the mesh (a pairing window on the laptop, the invitation from the
+console's mesh page, the six digits compared on both screens), and its fingerprint put in
+`fleet/star-plan.json` as `member`.
+
 **`[TL-SET-010]` This machine's setup is a script since 2026-10-03:**
 [`setup-tl.sh`](setup-tl.sh), `--check` to compare and `--go` to apply, on the
-engine every node uses `[FLT-SHP-030]`. It records the decision above as an item
-— no player service, user or system — so a unit added later shows as a
+engine every node uses `[FLT-SHP-030]`. It records the decisions above as items
+— no player service at boot, user or system `[TL-OPN-020]`, and the on-demand unit
+`[TL-OPN-040]` never enabled — so a unit that starts the player by itself shows as a
 difference rather than passing unnoticed.
 
 ~~**`[TL-OPN-030]` The predecessor is still installed and still runnable**, with

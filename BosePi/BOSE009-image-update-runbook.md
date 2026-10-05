@@ -247,7 +247,11 @@ onto B (a fresh seed, `split_database.py`) must be switched before B closes.
 **`[BOS-RUN-095]` Nothing in this project reads a catalogue with
 `immutable=1`, and nothing should start.** Checked: every use of that flag
 is against a genuinely frozen external file — `mulib.db`, AcousticBrainz
-dump shards — which is what it is for. Against a live catalogue it is the
+dump shards — which is what it is for. *One exception, since 2026-09-26:*
+`star_patch.py`'s `open_current` falls back to `immutable=1` to fingerprint
+`bose`'s catalogue, where `mode=ro` cannot make a `-shm` on the read-only
+mount, and only when no non-empty `-wal` sits beside it. That is exact
+because of `[BOS-RUN-092]`: rollback journal, no sidecar to miss. Against a live catalogue it is the
 one configuration that answers wrongly without saying so, in every dirty
 case above. `remote_peek.py`'s python fallback carries a comment saying so,
 because its own wording had used "immutable" loosely to mean "does not

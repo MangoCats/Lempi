@@ -1,6 +1,6 @@
 # FLEET001: The Fleet
 
-**Machine Record — the fleet as a whole · established 2026-09-26 · updated 2026-10-02 · update at milestones**
+**Machine Record — the fleet as a whole · established 2026-09-26 · updated 2026-10-04 · update at milestones**
 
 Every machine that holds a Lempi or Vipunen database, what it is for, and where its data lives. This file is **mirrored**: it lives in the repository, so the desktop, `teacherslounge` and `smartboardpc` each carry it in their checkout. Updating it means committing here and pulling there. Keep it current at milestones and when the fleet changes — a node added, moved, rebuilt or retired, a role changed — not with every commit. Each fact carries the date it was read, so a stale one is visible as stale.
 
@@ -15,14 +15,14 @@ Every machine that holds a Lempi or Vipunen database, what it is for, and where 
 | node | ssh | role | hardware · OS | root | own folder |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `GMKtec` (the desktop) | — | **hub**: Vipunen, the primary pair in `data/`, the build host for everything | Windows 11 | — | this repository |
-| `teacherslounge` | `sw@teacherslounge` | **mirror** of the hub, validating the tools under Linux; the acoustic instrument `[LOG008]`; a speaker the Export page sends to since 2026-10-02 | Latitude 5590 · Ubuntu 22.04 | ext4 | [TeachersLounge/](../TeachersLounge/TL001-migration-and-the-silent-output.md) |
+| `teacherslounge` | `sw@teacherslounge` | validates the tools under Linux, and keeps its own plays like any node `[SPEC-STAR-103]`; the acoustic instrument `[LOG008]`; a speaker the Export page sends to since 2026-10-02 | Latitude 5590 · Ubuntu 22.04 | ext4 | [TeachersLounge/](../TeachersLounge/TL001-migration-and-the-silent-output.md) |
 | `smartboardpc` ("Smart") | `mango@smartboardpc` | Linux build host; playback node; the fleet's chrony reference; a speaker the Export page sends to since 2026-10-02 | Quieter HD3 · Ubuntu 24.04 | ext4 | [SmartPC/](../SmartPC/SMART001-survey.md) |
 | `lempi02w` | `pi@lempi02w` | appliance; Bluetooth speaker; where most listener edits are made; kept on bookworm and plain ext4 on purpose `[FLT-ISS-040]` | Pi Zero 2 W · bookworm | ext4 | [LempiPi/](../LempiPi/IMPL001-appliance-setup.md) |
 | `bose` | `pi@bose` | appliance; HiFiBerry DAC+; echo leader | Pi 4 · trixie | **overlay** | [BosePi/](../BosePi/BOSE004-operating-health.md) |
 | `lp3-wifi` (`lempiplay3`) | `pi@lp3-wifi` | appliance; framebuffer UI; echo follower; the jack, or a Bluetooth speaker since 2026-10-02 `[LP3-BT-010]` | Pi 3 B · trixie | **overlay** | [LempiPlay3/](../LempiPlay3/LP3001-the-node-and-its-units.md) |
 | the Moto G | adb, see `android/README.md` | Android test phone — no database in the fleet yet | moto g power (2021) · Android 11 | — | [android/](../android/README.md) |
 
-The overlay nodes need both layers written, and any write must go through the scripts CLAUDE.md §4 names.
+The overlay nodes need both layers written for anything on the root filesystem, and such a write must go through the scripts CLAUDE.md §4 names. A star sync writes none: its targets are the data partitions, `/var/lempi` (f2fs, read-write) and `/srv/library` (ext4; read-only on `bose`, remounted for the write and put back), read on all three appliances on 2026-10-04. `star_distribute.py` refuses a database that is on an overlay `[SPEC-STAR-080]`.
 
 **`[FLT-SHP-020]` Each appliance is set up, and checked, by one script on one engine** `[APP-SET-010]`: `setup-lp3.sh`, `setup-bose.sh`, `setup-lempi02w.sh`, each with `--check`, which compares the node's durable layer with the repository and changes nothing. What all three have is one list, `appliance/common.sh` `[APP-SET-020]`. Since 2026-10-02; the first run's differences are in `[FLT-ISS-050]`. `build/setup-fleet.sh` runs all three in turn, `--check` or `--go`; on bose and lp3-wifi `--go` writes both layers `[APP-SET-030]`.
 
@@ -60,7 +60,7 @@ The Moto G is not a speaker here: a send is pushed over ssh, and the phone has n
 | `bose` | 103 | 258 | `/var/lempi/pre-star-2026-09-26/` |
 | `lp3-wifi` | 114 | 396 | `/var/lempi/pre-star-2026-09-26/` |
 | `lempi02w` | 73 | 6,447 | `/var/lempi/pre-star-2026-09-26/` |
-| `teacherslounge` | 90 (the hub's listener, as its mirror) | 14,071 | `~/lempi-data/pre-star-2026-09-26/` |
+| `teacherslounge` | 90 (the hub's listener, as it was sent as a mirror until 2026-10-04) | 14,071 | `~/lempi-data/pre-star-2026-09-26/` |
 | `smartboardpc` | 3,519 | 13,786 | `pre-star-2026-09-26/` in the previous build's data directory |
 
 Beside each backup, `pre-star-2026-09-26-tools/` holds the tool and the two patches that were applied, so what changed can be read on the node itself. Rolling a node back is `star_patch.py restore`, with the player stopped.
@@ -73,7 +73,7 @@ Beside each backup, `pre-star-2026-09-26-tools/` holds the tool and the two patc
 
 ## 3. What each runs — read 2026-10-02
 
-**`[FLT-RUN-010]`** The appliances' build is from `lempi --version`. The source hosts' is their checkout.
+**`[FLT-RUN-010]`** The appliances' build is from `lempi --version`, re-read on 2026-10-04: `e1e27b9f81ea` on all three, `import_bundle` present. The source hosts' is their checkout, as read on 2026-10-02.
 
 | node | player | notes |
 | :--- | :--- | :--- |
@@ -120,6 +120,8 @@ The same evening it gained a unit, set up by `SmartPC/setup-smart.sh` `[SMT-SVC-
 
 ~~**`[FLT-ISS-030]` `lp3-wifi` keeps UK time.**~~ *Resolved 2026-09-26.* Its listener recorded a UTC offset of +60 minutes where every other node had −240, so anything that follows the clock — a programme that starts at a set time `[SPEC-DIR-180]` — ran five hours off there. The image had come up in `Europe/London`, and no script said otherwise. `LempiPlay3/setup-lp3.sh` now carries the zone, `America/New_York`. It was written to both layers, and the player recorded −240 at its restart. `overlayroot-chroot` could not remount the durable layer read-only on exit ("mount point is busy"). A second `remount,ro` a moment later succeeded; check `findmnt -no OPTIONS /media/root-ro` after using it.
 
+**`[FLT-ISS-060]` Every player's catalogue has moved from what the hub last sent it, by the same 49 files and 338 passages, 2026-10-05.** They are the hub's own music, put there by the Export page's bundle send under the node's own ids (node file 5710 is the hub's 5719) `[SPEC-STAR-090]`, and the star sync's strict catalogue patch cannot apply over them. The listener half syncs; the catalogue half waits for a remedy `[SPEC-STAR-940]`, and the four nodes need one reconciliation whichever is chosen. **At each further bundle send, expect the same.**
+
 ---
 
-**Traceability:** `[FLT-SHP-010..020]`, `[FLT-DAT-010..030]`, `[FLT-RUN-010..020]`, `[FLT-ISS-010..050]` · read from the machines 2026-09-26 and 2026-10-02
+**Traceability:** `[FLT-SHP-010..020]`, `[FLT-DAT-010..030]`, `[FLT-RUN-010..020]`, `[FLT-ISS-010..060]` · read from the machines 2026-09-26 and 2026-10-02

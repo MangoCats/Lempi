@@ -127,7 +127,7 @@ playing `[SPEC-NSH-900]`.
 **Rollback:** the ssh path is untouched; stop using the new transport.
 
 **Built 2026-09-28**: the engine (`b0da89c`), the player's routes and
-`library-rw` (`c50c699`), the hub's transport and `star_sync.py PLAN shadow`
+`library-rw` (`c50c699`), the hub's transport and `star_sync.py PLAN shadow` (retired as a stage 2026-10-05)
 (`9a459cb`), deployed everywhere at `9a459cb`. `library-rw` checked live: a
 no-op on lempi02w's writable root; on bose `/srv/library` went read-write and
 back to read-only with the player's pid unchanged.
@@ -141,6 +141,8 @@ commit measurement `[SPEC-NSH-900]` waits for a run that carries one. The run
 itself was left uncommitted, for the maintainer.
 
 ## 4. Phase 3 -- cut over, and retire ssh from the data plane
+
+> **Reframed 2026-10-04.** Item 1 below is done by [SPEC046](spec/SPEC046-star-sync.md) §8 `[SPEC-STAR-100]`: star sync uses the signed transport for every node, `teacherslounge` through a player started on demand. Removing the console's peer chain and the cross-node keys (items 3 and 4) is not scheduled, and ssh stays for starting that player and for the hub's backup mirror.
 
 **`[IMPL-NSH-400]` Goal:** `[SPEC-NSH-100..120]`.
 
