@@ -234,9 +234,11 @@ def catalogue_state(sent_lib, summary_db, hub_lib):
         return {"state": "holds-hub-rows"}
     added = {t: node_nat[t] - sent_nat[t] for t in node_nat}
     gone = {t: sent_nat[t] - node_nat[t] for t in node_nat}
-    detail = {"files": len(added["files"]), "passages": len(added["passages"])}
     if all(added[t] <= hub_nat[t] for t in added) and not any(gone.values()):
-        return {"state": "other-ids", **detail}
+        # What differs is how the node numbers music the hub also holds: the rows it holds that neither
+        # the copy last sent nor the hub's own has, by id -- the 49 files and 338 passages of a bundle send.
+        return {"state": "other-ids", **{t: len(node_id[t] - sent_id[t] - hub_id[t]) for t in node_id}}
+    detail = {"files": len(added["files"]), "passages": len(added["passages"])}
     return {"state": "changed", **detail, "gone_files": len(gone["files"]), "gone_passages": len(gone["passages"]),
             "not_the_hubs": sum(len(added[t] - hub_nat[t]) for t in added)}
 
