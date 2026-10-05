@@ -105,6 +105,10 @@ pub struct Config {
     pub backup: bool,
     /// Read the files' own tags in the background, for browsing by album.
     pub tag_scan: bool,
+    /// Come up paused, whatever the listener's state says it was doing when it
+    /// last stopped: a player started to take part in a sync, not to play
+    /// `[SPEC-STAR-101]`. False resumes as it always has.
+    pub paused: bool,
 }
 
 /// What stopped a running player.
@@ -203,6 +207,7 @@ impl Player {
             mpd_addr: cfg.mpd_addr.clone(),
             mpd_root: cfg.mpd_root.clone(),
             writes_beside_audio: cfg.writes_beside_audio,
+            paused: cfg.paused,
         };
         let signal = Signal(ended_tx.clone(), Ended::Engine);
         std::thread::Builder::new()
@@ -473,6 +478,7 @@ struct EngineSetup {
     mpd_addr: Option<String>,
     mpd_root: Option<String>,
     writes_beside_audio: bool,
+    paused: bool,
 }
 
 /// The published state, so the loop can read the listener's settings after the
@@ -482,7 +488,7 @@ fn state_of(h: &EngineHandle) -> Arc<Mutex<PlayerState>> {
 }
 
 fn engine_thread(setup: EngineSetup, tx: SyncSender<Started>) {
-    let EngineSetup { db, library, depth, device, mpd_addr, mpd_root, writes_beside_audio } =
+    let EngineSetup { db, library, depth, device, mpd_addr, mpd_root, writes_beside_audio, paused } =
         setup;
     let mut session = match Session::open(&db, &library, depth) {
         Ok(s) => s,
@@ -530,7 +536,15 @@ fn engine_thread(setup: EngineSetup, tx: SyncSender<Started>) {
     // makes `path.audible()` false, and the engine advances nothing while
     // nobody can hear it. So this resumes into silence only for as long as it
     // takes to notice, and the position is not spent.
-    if session.resume_playing() {
+    if paused {
+        // `--paused` `[SPEC-STAR-101]`: said, not silent -- a node that was
+        // playing and is not now is exactly what a listener would ask about.
+        tracing::info!("starting paused, as asked{}", if session.resume_playing() {
+            " (it was playing when it last stopped)"
+        } else {
+            ""
+        });
+    } else if session.resume_playing() {
         tracing::info!("resuming playback: it was playing when it last stopped");
         engine.play_on_resume();
     }
@@ -858,6 +872,7 @@ mod tests {
             writes_beside_audio: false,
             backup: false,
             tag_scan: false,
+            paused: false,
         };
         match Player::start(cfg) {
             Err(StartError::Engine(e)) => assert!(!e.is_empty()),

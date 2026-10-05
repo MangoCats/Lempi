@@ -201,6 +201,7 @@ pub fn start(listener: String, library: String, port: u16, key: String) -> Resul
             writes_beside_audio: false,
             backup: true,
             tag_scan: false,
+            paused: false,
         };
         let player = Player::start(cfg).map_err(|e| e.to_string())?;
         *slot = Some(player);

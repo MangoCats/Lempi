@@ -185,18 +185,52 @@ fn commit(listener: &Path, library: &Path, req: &Value, run: &str, apply_listene
         };
         Ok((c, l))
     })();
+    // `[SPEC-STAR-104]`: a catalogue on read-only media must be in rollback-
+    // journal mode, because a WAL file there has no sidecar to open and the
+    // player crash-loops `[BOS-RUN-092]`. Checked before the partition goes back,
+    // and left read-write -- harmless to the player -- rather than closed over
+    // a file that would not open. A check that cannot run says so, too.
+    let mut warning: Option<String> = None;
     if opened {
-        if let Err(e) = library_rw(false) {
-            tracing::warn!("star sync: the catalogue's partition could not be returned to read-only: {e}");
+        match wal_mode(library) {
+            Some(false) => {
+                if let Err(e) = library_rw(false) {
+                    tracing::warn!("star sync: the catalogue's partition could not be returned to read-only: {e}");
+                    warning = Some(format!("the catalogue's partition could not be returned to read-only: {e}"));
+                }
+            }
+            Some(true) => {
+                warning = Some("the catalogue is in WAL mode, which read-only media cannot open: its partition was left read-write [BOS-RUN-092]".into());
+            }
+            None => {
+                warning = Some("the catalogue's journal mode could not be read: its partition was left read-write".into());
+            }
+        }
+        if let Some(w) = &warning {
+            tracing::warn!("star sync: {w}");
         }
     }
     let (c, l) = applied?;
     keep_inverse(listener, run, c.as_ref().map(|o| &o.inverse), l.as_ref().map(|o| &o.inverse))?;
     set_last_run(listener, run)?;
-    let result = json!({"catalogue": c.as_ref().map(|o| counts(&o.counts)),
-                        "listener": l.as_ref().map(|o| counts(&o.counts))});
+    let mut result = json!({"catalogue": c.as_ref().map(|o| counts(&o.counts)),
+                            "listener": l.as_ref().map(|o| counts(&o.counts))});
+    if let Some(w) = warning {
+        result["warning"] = json!(w);
+    }
     tracing::info!("star sync: run {run} committed here: {result}");
     Ok((result, true))
+}
+
+/// Whether a SQLite file is in WAL mode, from its own header: bytes 18 and 19
+/// are the write and read format versions, 1 for a rollback journal and 2 for
+/// WAL. Read from the file rather than asked of a connection, so it needs no
+/// lock the player's own connection holds. `None` when the header cannot be read.
+fn wal_mode(p: &Path) -> Option<bool> {
+    use std::io::Read;
+    let mut h = [0u8; 20];
+    std::fs::File::open(p).and_then(|mut f| f.read_exact(&mut h)).ok()?;
+    Some(h[18] == 2 || h[19] == 2)
 }
 
 fn sync_dir(listener: &Path) -> PathBuf {
@@ -289,6 +323,27 @@ mod tests {
         assert!(check(&r, "commit", "me", "m", now).unwrap_err().contains("not a run"));
         assert!(check(&req("commit"), "commit", "me", "m", now + FRESH_MS + 1).unwrap_err().contains("stale"));
         assert!(check(&req("commit"), "commit", "me", "m", now - FRESH_MS - 1).unwrap_err().contains("stale"));
+    }
+
+    /// `[SPEC-STAR-104]`: the journal mode is read from the header, so a catalogue
+    /// in WAL mode is told from one that is not without opening it.
+    #[test]
+    fn the_journal_mode_is_read_from_the_header() {
+        let dir = std::env::temp_dir().join(format!("lempi-star-wal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (plain, wal) = (dir.join("plain.db"), dir.join("wal.db"));
+        let c = rusqlite::Connection::open(&plain).unwrap();
+        c.execute_batch("PRAGMA journal_mode=DELETE; CREATE TABLE t (a);").unwrap();
+        drop(c);
+        let c = rusqlite::Connection::open(&wal).unwrap();
+        c.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE t (a);").unwrap();
+        drop(c);
+        assert_eq!(wal_mode(&plain), Some(false), "a rollback journal");
+        assert_eq!(wal_mode(&wal), Some(true), "WAL");
+        assert_eq!(wal_mode(&dir.join("absent.db")), None, "a file that cannot be read says so");
+        std::fs::write(dir.join("short.db"), b"SQLite").unwrap();
+        assert_eq!(wal_mode(&dir.join("short.db")), None, "and so does one too short to have a header");
     }
 
     #[test]

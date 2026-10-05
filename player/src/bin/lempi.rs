@@ -126,6 +126,7 @@ fn main() {
         writes_beside_audio: true,
         backup: true,
         tag_scan: true,
+        paused: args.has(&opt::PAUSED),
     };
 
     let player = match Player::start(config) {

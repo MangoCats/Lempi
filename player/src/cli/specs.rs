@@ -173,12 +173,24 @@ pub mod lempi {
         .stops()
         .not_from_env();
 
+    /// A player kept on demand, started to take part in a sync and not to play
+    /// `[SPEC-STAR-101]`: it comes up paused, whatever it was doing when it last
+    /// stopped, and the listener presses play when they want music. A flag and
+    /// never an environment variable or a stored setting, since the same node
+    /// started by hand is meant to resume as it always has.
+    pub const PAUSED: Opt = Opt::flag(
+        "--paused",
+        "start with playback paused, whatever it was doing when it last stopped",
+    )
+        .short("pa")
+        .not_from_env();
+
     pub const SPEC: Cli = Cli {
         program: "lempi",
         summary: "continuous radio with a web UI",
         opts: &[
             LISTENER, LIBRARY, PORT, DEPTH, DEVICE, LIST_DEVICES, ECHO_OFFSET,
-            ECHO_FLEET_MIN, ECHO_RATE, FOLLOW, MPD, MPD_ROOT,
+            ECHO_FLEET_MIN, ECHO_RATE, FOLLOW, MPD, MPD_ROOT, PAUSED,
         ],
         notes: &[],
     };
