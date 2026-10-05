@@ -171,25 +171,70 @@ def db_of(export, path):
         c.close()
 
 
-def differs(a_db, b_db, spec):
-    """Rows held by one side and not the other, per table: `spec` maps a table
-    to the columns compared. Values compared as a patch carries them."""
-    out = {}
-    a, b = sp.open_ro(a_db), sp.open_ro(b_db)
+# What a node's catalogue summary covers [SPEC-NSH-060]: every file and passage, by
+# the node's own ids and the columns that identify them. The natural keys are the
+# ones that cross installations [SPEC-DF-035]: a file by its `audio_md5`, a passage
+# by (`audio_md5`, kind, start, end).
+SUMMARY_COLS = {"files": ["file_id", "audio_md5"], "passages": ["passage_id", "file_id", "kind", "start_ms", "end_ms"]}
+
+
+def summary_rows(db):
+    """(rows by id, natural keys) of the files and passages a summary or a catalogue holds."""
+    c = sp.open_ro(db)
     try:
-        for t, cols in spec.items():
-            def rows(c):
-                if t not in sp.tables_of(c):
-                    return set()
-                have = [x for x in cols if x in sp.columns(c, t)]
-                return {json.dumps([sp.enc(v) for v in r]) for r in c.execute(f"SELECT {', '.join(have)} FROM {t}")}
-            ra, rb = rows(a), rows(b)
-            if ra != rb:
-                out[t] = {"only_first": len(ra - rb), "only_second": len(rb - ra)}
+        by_id = {t: {tuple(r) for r in c.execute(f"SELECT {', '.join(cols)} FROM {t}")}
+                 for t, cols in SUMMARY_COLS.items()}
+        nat = {"files": {r[0] for r in c.execute("SELECT audio_md5 FROM files")},
+               "passages": {tuple(r) for r in c.execute(
+                   "SELECT f.audio_md5, p.kind, p.start_ms, p.end_ms FROM passages p JOIN files f USING (file_id)")}}
     finally:
-        a.close()
-        b.close()
-    return out
+        c.close()
+    return by_id, nat
+
+
+CATALOGUE_STATES = {
+    "as-sent": "as last sent",
+    "holds-hub-rows": "holds the hub's new rows already",
+    "other-ids": "the hub's music under other ids",
+    "changed": "changed on the node",
+    "no-copy": "no copy was last sent",
+}
+
+
+def catalogue_state(sent_lib, summary_db, hub_lib):
+    """[SPEC-STAR-940]: where a node's catalogue stands against what the hub last
+    sent it and what the hub holds now, as far as the summary shows.
+
+    `as-sent` and `holds-hub-rows` can take the strict patch: every row the node
+    has is one the patch expects or one it already makes. `other-ids` cannot, and
+    is the common case (found 2026-10-05): the node holds the hub's own music,
+    which a bundle send imported under the node's own ids. `changed` is a real
+    difference. The player's own rehearsal is the check that decides; this says
+    what to expect, and why."""
+    if not sent_lib:
+        return {"state": "no-copy"}
+    node_id, node_nat = summary_rows(summary_db)
+    sent_id, sent_nat = summary_rows(sent_lib)
+    if node_id == sent_id:
+        return {"state": "as-sent"}
+    hub_id, hub_nat = summary_rows(hub_lib)
+    if all(node_id[t] <= sent_id[t] | hub_id[t] for t in SUMMARY_COLS):
+        return {"state": "holds-hub-rows"}
+    added = {t: node_nat[t] - sent_nat[t] for t in node_nat}
+    gone = {t: sent_nat[t] - node_nat[t] for t in node_nat}
+    detail = {"files": len(added["files"]), "passages": len(added["passages"])}
+    if all(added[t] <= hub_nat[t] for t in added) and not any(gone.values()):
+        return {"state": "other-ids", **detail}
+    return {"state": "changed", **detail, "gone_files": len(gone["files"]), "gone_passages": len(gone["passages"]),
+            "not_the_hubs": sum(len(added[t] - hub_nat[t]) for t in added)}
+
+
+def catalogue_words(st):
+    """A catalogue state as a person reads it."""
+    text = CATALOGUE_STATES[st["state"]]
+    if st["state"] in ("other-ids", "changed"):
+        text += f" ({st['files']} files, {st['passages']} passages)"
+    return text
 
 
 def players_up(plan, names, started):
@@ -306,23 +351,19 @@ def snapshot(plan):
                 db_of(snap[part], os.path.join(nd, fname))
                 seal(os.path.join(nd, fname))
             # [SPEC-STAR-940]: the catalogue is patched strictly, against what the
-            # hub last sent. It can be only if the node still holds exactly that,
-            # as far as its summary shows.
+            # hub last sent. Whether it can be is read from the node's summary.
             sent_lib = sent_path(ns, "library_sent")
-            summ = {t["name"]: [c for c in t["columns"] if c not in sm.MACHINE_SCOPE["files"]]
-                    for t in snap["catalogue"]["tables"]}
-            moved = differs(sent_lib, os.path.join(nd, "summary.db"), summ) if sent_lib else None
+            cat = catalogue_state(sent_lib, os.path.join(nd, "summary.db"), os.path.join(hd, "library.db"))
             say(f"  {name}: {sum(len(t['rows']) for t in snap['listener']['tables'])} shared row(s), "
-                + ("catalogue as last sent" if sent_lib and not moved else
-                   "catalogue has NO copy last sent" if not sent_lib else f"catalogue has moved {moved}"))
+                f"catalogue {catalogue_words(cat)}")
             manifest["nodes"].append(dict(
                 name=name, listener=os.path.join(nd, "listener.db"), taken_at=now().isoformat(),
                 sent=sent_path(ns, "listener_sent"),
                 backups=history_of(ns.get("listener_sent"), ns.get("at", ""), os.path.join(nd, "history")),
                 catalogue=os.path.join(nd, "summary.db"), files=os.path.join(nd, "summary.db")))
             baselines[name] = {"listener": os.path.join(nd, "listener.db"), "signed": n["member"],
-                               "library": sent_lib, "catalogue_in_step": bool(sent_lib and not moved),
-                               "catalogue_moved": moved}
+                               "library": sent_lib, "catalogue": cat,
+                               "catalogue_in_step": cat["state"] in ("as-sent", "holds-hub-rows")}
     finally:
         stop_started(plan, started)
     # [REQ-AND-330]: enrolled phones, by what each last uploaded over the
@@ -607,8 +648,10 @@ def patch(plan, run):
                 summary.append("- catalogue: " + (", ".join(f"`{k}` {v}" for k, v in sorted(crow.items())) or "nothing to send")
                                + " (proven by the player's own rehearsal, strictly)")
             else:
-                why = ("no copy was last sent" if not b.get("library") else
-                       f"its catalogue has moved since it was sent {b.get('catalogue_moved')}")
+                cs = b.get("catalogue") or {"state": "no-copy"}
+                why = catalogue_words(cs)
+                if cs["state"] == "other-ids":
+                    why += ": the same music as the hub, numbered differently, which a strict patch cannot reach"
                 summary.append(f"- catalogue: **none sent** -- {why} [SPEC-STAR-940]")
             say(f"  {name}: {sum(rows.values())} shared row(s), {'proven' if good else 'NOT PROVEN'}")
             signed[name] = b["signed"]

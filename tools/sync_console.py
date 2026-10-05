@@ -99,14 +99,14 @@ def state(plan) -> dict:
     for name, n in sorted(plan["nodes"].items()):
         e = sent.get(name, {})
         b = base.get(name) or {}
-        cat = None
+        cat, cat_ok = None, None
         if "signed" in b:
-            cat = ("as last sent" if b.get("catalogue_in_step") else
-                   "no copy was last sent" if not b.get("library") else "has moved since it was sent")
+            cat = ss.catalogue_words(b.get("catalogue") or {"state": "no-copy"})
+            cat_ok = bool(b.get("catalogue_in_step"))
         nodes.append(dict(name=name, kind="player", on_demand=bool(n.get("on_demand")), enrolled=bool(n.get("member")),
                           last_sent=e.get("at"), hours=_age_hours(e.get("at")),
                           in_run="missing" if name in missing else "taken" if name in base else None,
-                          why=missing.get(name), catalogue=cat))
+                          why=missing.get(name), catalogue=cat, catalogue_ok=cat_ok))
     for name in sorted(set(base) | set(missing)):
         if name not in plan["nodes"] and name != plan["hub"]["name"]:
             e = sent.get(name, {})

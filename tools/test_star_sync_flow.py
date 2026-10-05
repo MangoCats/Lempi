@@ -341,14 +341,65 @@ def test_catalogue_moved(tmp):
         ss.merge(plan, run)
         ss.patch(plan, run)
     summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
-    check("catalogue: **none sent**" in summary and "moved" in summary, f"the summary says b gets no catalogue: {summary}")
+    check("catalogue: **none sent**" in summary and "changed on the node" in summary,
+          f"the summary says b gets no catalogue, and why: {summary}")
     check(os.path.exists(os.path.join(run, "patches", "a", "catalogue.values.json"))
           and not os.path.exists(os.path.join(run, "patches", "b", "catalogue.values.json")),
           "a catalogue patch for a, none for b")
 
 
+def test_catalogue_states(tmp):
+    """[SPEC-STAR-940]: what a node's catalogue summary says about it. One node holds the hub's new music
+    under the hub's ids, one under its own -- the case found on every player on 2026-10-05."""
+    fleet = Fleet(tmp)
+    same = [("X", 1, "2026-09-01 00:00:00")]
+    plan, hub = build(tmp, fleet, same, {"a": (same, False), "b": (same, False), "c": (same, False)})
+    new = lambda fid, pid: (f"INSERT INTO files VALUES ({fid},'C','/x/c.mp3',100,1,1)",
+                            f"INSERT INTO passages VALUES ({pid},{fid},'radio',0,500)")
+    for db, (fid, pid) in ((hub["library"], (9, 20)), (fleet.nodes["a"]["library"], (9, 20)),
+                           (fleet.nodes["b"]["library"], (7, 15)), (fleet.nodes["c"]["library"], (9, 20))):
+        c = sqlite3.connect(db)
+        for q in new(fid, pid):
+            c.execute(q)
+        c.commit()
+        c.close()
+    # c also holds a file the hub has never heard of.
+    c = sqlite3.connect(fleet.nodes["c"]["library"])
+    c.execute("INSERT INTO files VALUES (10,'D','/x/d.mp3',100,1,1)")
+    c.commit()
+    c.close()
+    with faked(fleet):
+        # c has a file the hub lacks, so its own copy cannot be made: leave it out of this merge.
+        plan["nodes"].pop("c")
+        ss.snapshot(plan)
+        run = ss.newest_run(plan)
+        base = json.load(open(os.path.join(run, "baselines.json")))
+        ss.merge(plan, run)
+        ss.patch(plan, run)
+    check(base["a"]["catalogue"]["state"] == "holds-hub-rows" and base["a"]["catalogue_in_step"],
+          f"a holds the hub's new rows under the hub's ids: patchable, the rehearsal decides: {base['a']['catalogue']}")
+    check(base["b"]["catalogue"] == {"state": "other-ids", "files": 1, "passages": 1} and not base["b"]["catalogue_in_step"],
+          f"b holds the same music under its own ids: {base['b']['catalogue']}")
+    check(ss.catalogue_words(base["b"]["catalogue"]) == "the hub's music under other ids (1 files, 1 passages)", "and says so in words")
+    summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
+    check("numbered differently" in summary, f"the summary says why a strict patch cannot reach it: {summary}")
+    check(os.path.exists(os.path.join(run, "patches", "a", "catalogue.values.json"))
+          and not os.path.exists(os.path.join(run, "patches", "b", "catalogue.values.json")),
+          "a catalogue patch for a, none for b")
+    # And the direct call, for the case the merge could not take.
+    ch = ss.catalogue_state(os.path.join(tmp, "sent", "c.library.db"), os.path.join(run, "a", "summary.db"),
+                            os.path.join(run, "desktop", "library.db"))
+    check(ch["state"] == "holds-hub-rows", f"the classifier on its own: {ch}")
+    cn = os.path.join(tmp, "c-summary.db")
+    shutil.copyfile(fleet.nodes["c"]["library"], cn)
+    ch = ss.catalogue_state(os.path.join(tmp, "sent", "c.library.db"), cn, os.path.join(run, "desktop", "library.db"))
+    check(ch["state"] == "changed" and ch["not_the_hubs"] == 1, f"a file the hub lacks is a real change: {ch}")
+    check(ss.catalogue_state(None, cn, cn) == {"state": "no-copy"}, "and with nothing last sent it says so")
+
+
 def main() -> int:
-    for test in (test_quiet, test_conflict, test_approve_all, test_on_demand, test_catalogue_moved):
+    for test in (test_quiet, test_conflict, test_approve_all, test_on_demand, test_catalogue_moved,
+                 test_catalogue_states):
         tmp = tempfile.mkdtemp()
         try:
             test(tmp)

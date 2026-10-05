@@ -95,7 +95,7 @@ function paintNodes(st) {
     S.el('td', {}, n.in_run === 'missing' ? S.el('span', { class: 'pill bad', text: 'missing' }) :
                    n.in_run === 'taken' ? S.el('span', { class: 'pill ok', text: 'taken' }) : '—',
          n.why ? S.el('div', { style: 'color:var(--dim);font-size:.8rem', text: n.why }) : null),
-    S.el('td', {}, n.catalogue ? S.el('span', { class: 'pill ' + (n.catalogue === 'as last sent' ? 'ok' : 'warn'),
+    S.el('td', {}, n.catalogue ? S.el('span', { class: 'pill ' + (n.catalogue_ok ? 'ok' : 'warn'),
                                                 text: n.catalogue }) : '—'))));
 }
 
