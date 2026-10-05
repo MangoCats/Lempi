@@ -73,13 +73,15 @@ Beside each backup, `pre-star-2026-09-26-tools/` holds the tool and the two patc
 
 ## 3. What each runs — read 2026-10-02
 
-**`[FLT-RUN-010]`** The appliances' build is from `lempi --version`, re-read on 2026-10-04: `e1e27b9f81ea` on `lempi02w` and `bose`, and `1a72c72f6e53` on `lp3-wifi`, deployed 2026-10-05, `import_bundle` present; `lempi02w` was redeployed the same day and runs `da52627b12be` (live and durable, `import_bundle` the same). The source hosts' is their checkout, as read on 2026-10-02.
+**`[FLT-RUN-010]`** The appliances' build is from `lempi --version`, re-read on 2026-10-04: `e1e27b9f81ea` on `lempi02w` and `bose`, and `1a72c72f6e53` on `lp3-wifi`, deployed 2026-10-05, `import_bundle` present; `lempi02w` was redeployed the same day and runs `da52627b12be` (live and durable, `import_bundle` the same); `bose` was redeployed at 13:39 the same day and runs `0a161fd452ab` (live, and the durable copy confirmed), and `smartboardpc` was rebuilt and its user player restarted onto the same commit by `build/update-source-host.sh` at 13:39. Neither was synced: their data is as it was, the first test's backups `[FLT-ISS-060]`. The source hosts' is their checkout, as read on 2026-10-02.
 
 | node | player | notes |
 | :--- | :--- | :--- |
-| `lempi02w`, `bose`, `lp3-wifi` | `e1e27b9`, and `import_bundle` the same | lempi02w is plain ext4; the other two hold durable copies, and lp3-wifi's fbui is the same build |
+| `lempi02w` | `da52627`, `import_bundle` the same | plain ext4 |
+| `bose` | `0a161fd`, `import_bundle` the same (the durable copy) | overlay root. The new player's start-up tag scan logs `49 file(s) could not be stored` on every start while the 49 bundle-sent files lack tag rows: its `/srv/library` is read-only on purpose, so it cannot store them; harmless, and it goes when a sync gives it those rows |
+| `lp3-wifi` | `1a72c72`, `import_bundle` the same | overlay root; holds durable copies, and its fbui is the same build |
 | `teacherslounge` | `ca8313f`, built there 2026-10-02 by `build/update-source-host.sh`, which now also links `import_bundle` onto the PATH; no player service, **on purpose**: started by hand only `[TL-OPN-020]` | mirrors this file |
-| `smartboardpc` | `ca8313f`, built there the same way, its `systemd --user` player restarted onto it `[SMT-SVC-010]` | migrated 2026-09-26 `[FLT-ISS-020]` |
+| `smartboardpc` | `0a161fd`, built there the same way, its `systemd --user` player restarted onto it `[SMT-SVC-010]` | migrated 2026-09-26 `[FLT-ISS-020]` |
 
 **`[FLT-RUN-020]` How each plays, and what MPD is where.** The appliances' audio paths differ on purpose only where the difference buys something.
 
