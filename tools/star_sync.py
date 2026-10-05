@@ -22,9 +22,8 @@ its mirror.
                                                       verdict changed an outcome)
     python tools/star_sync.py PLAN rehearse [NODE..]  read-only, against the live files
     python tools/star_sync.py PLAN commit [NODE..]    for real: the hub, then the nodes; with names, only
-                                                      those, and the hub is a node too (named by the plan,
-                                                      `desktop`), so `commit lempi02w` leaves the hub's own
-                                                      half unapplied
+                                                      those, and the hub (this machine) always takes part,
+                                                      named or not [SPEC-STAR-134]
                                                       [--approve-all] [--console-pid N]
     python tools/star_sync.py PLAN backup             the hub's daily backup, and its mirror
     python tools/star_sync.py PLAN status             exits 1 when a backup has gone stale
@@ -440,10 +439,10 @@ def chosen(plan, only):
     A node not chosen is not contacted, not started and not written to."""
     if only is None:
         return None
-    only = set(only)
+    only = set(only) - {plan["hub"]["name"]}      # the hub always takes part; it is never "chosen"
     known = set(plan["nodes"]) | {m["node"] for m in meshmod.sync_members(mesh_of(plan))}
     if not only:
-        raise SystemExit("no node chosen: a run touches only the nodes it is given")
+        raise SystemExit("no node chosen: the hub always takes part, but a run needs at least one other node")
     unknown = sorted(only - known)
     if unknown:
         raise SystemExit(f"not nodes of this fleet: {unknown}")
@@ -1077,7 +1076,9 @@ def distribute(plan, run, names, commit, excuse=None, bulk=False):
         dplan = json.load(fh)
     hub = plan["hub"]["name"]
     signed, members = dplan.get("signed", {}), dplan.get("members", {})
-    names = names or [hub] + sorted(signed) + sorted(members)
+    names = [hub] + [n for n in (names or sorted(signed) + sorted(members)) if n != hub]
+    if len(names) < 2:
+        raise SystemExit("no node chosen: the hub always takes part, but a run needs at least one other node")
     old_player_banner({n: w for n, w in (read_json(os.path.join(run, "old_players.json")) or {}).items() if n in names})
     if commit:
         if bulk:

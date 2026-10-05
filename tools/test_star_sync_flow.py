@@ -557,7 +557,8 @@ def test_selection(tmp):
     state_before = json.load(open(os.path.join(plan["runs"], "state.json")))
     b_before = open(fleet.nodes["b"]["listener"], "rb").read()
     with faked(fleet):
-        for bad, word in ((set(), "no node chosen"), ({"ghost"}, "not nodes of this fleet")):
+        for bad, word in ((set(), "no node chosen"), ({"desktop"}, "at least one other node"),
+                          ({"ghost"}, "not nodes of this fleet")):
             why = refused(lambda: ss.snapshot(plan, bad))
             check(why and word in why, f"a choice that is empty or names a stranger is refused: {why}")
         ss.snapshot(plan, {"a"})
@@ -572,6 +573,10 @@ def test_selection(tmp):
         ss.approve_all(run)
         check(stages(plan) == 0 and stages(plan, commit=True) == 0, "rehearsed and committed")
         check(ss.distribute(plan, run, ["b"], False) == 1, "a node left alone is not in the run, and is not reached by naming it")
+        done = json.load(open(os.path.join(run, "rehearsal.json")))
+        check(done.get("a") == 0 and done.get("desktop") == 0, f"the hub always takes part, named or not [SPEC-STAR-134]: {done}")
+        check("at least one other node" in (refused(lambda: ss.distribute(plan, run, ["desktop"], False)) or ""),
+              "and the hub alone is not a run")
     check(open(fleet.nodes["b"]["listener"], "rb").read() == b_before, "b's database is byte for byte as it was")
     check(json.load(open(os.path.join(plan["runs"], "state.json")))["nodes"]["b"] == state_before["nodes"]["b"]
           and json.load(open(os.path.join(plan["runs"], "state.json")))["nodes"]["t"] == state_before["nodes"]["t"],

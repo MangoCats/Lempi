@@ -273,7 +273,8 @@ def stage_target(plan, run, stage, nodes):
     if stage != "snapshot" and not run:
         return None, "there is no run: take a snapshot first"
     if stage == "commit":
-        names = nodes or committed_names(run)
+        hub = plan["hub"]["name"]
+        names = [hub] + [n for n in (nodes or committed_names(run)) if n != hub]    # the hub always takes part [SPEC-STAR-134]
         problems = ss.gate_problems(run, names)
         if problems:
             return None, "; ".join(problems)

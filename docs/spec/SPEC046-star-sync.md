@@ -213,6 +213,8 @@ GET  /api/sync/summary              SUMMARY.md and the merge's report
 
 **`[SPEC-STAR-132]` An old player is said loudly, wherever a sync meets one.** An old player is one whose snapshot reports no `natural_keys` `[SPEC-NKP-075]`: its listener edits still sync, and its catalogue is sent no patch. The snapshot prints a boxed warning and ends its `RESULT` line with `OLD PLAYER(S)`; the run keeps the list (`old_players.json`); `SUMMARY.md` opens with it; a rehearsal or commit says it again before it reaches anyone; and the page shows a red banner, a mark on the node, and a line in the commit confirmation. A player too old to answer the sync routes at all is missing from the run, and its reason says so.
 
+**`[SPEC-STAR-134]` The hub always takes part, and a run needs at least one other node.** Vipunen runs on the machine that is the star's hub, so the hub is not a choice: it is in every run, and naming it is neither needed nor an error. `snapshot`, `rehearse` and `commit` add it themselves, so `commit lempi02w` lands the node and the hub's own half together; a choice of the hub alone, or of no one, is refused with "no node chosen", on the command line and by the page (whose Snapshot stays disabled until a node is ticked). *Found 2026-10-05:* before this, `commit lempi02w` applied the node and left the hub's half (`lempi02w`'s preference edits) for a second command.
+
 ## 11. Open
 
 1. **`[SPEC-STAR-920]` Rolling a signed commit back from the page.** The player keeps each commit's inverse three deep; no command yet reads one for the person.
