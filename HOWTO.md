@@ -141,8 +141,10 @@ against what the database claims — omit it and everything else still
 works, just with an empty folder view.
 
 The console opens the database `mode=ro`: it cannot write to your library
-no matter what happens in the browser. Everything that writes runs as a
-separate job, subprocessing the same CLI tools shown in §3.
+by itself. Everything that writes runs as a separate job, subprocessing the
+same CLI tools shown in §3. The one job that writes the *hub's own* databases
+is the star sync's commit (§7): it pauses the local Lempi, takes the console's
+write lock, applies the patch, and reloads the player `[SPEC-STAR-120]`.
 
 ---
 
@@ -163,6 +165,59 @@ to work, and keep it at `player/target/release/lempi[.exe]` (or on `PATH`)
 
 ---
 
+## 7. Syncing the fleet (star sync)
+
+If you have appliances (a Pi with a speaker) as well as this desktop, the
+**star sync** brings their preferences, flags and catalogue together. This
+machine is the **hub**: the source of truth, and the machine Vipunen runs on.
+Each appliance is a **node**. The design is `docs/spec/SPEC046-star-sync.md`;
+this is only how to drive it.
+
+**Before a sync**
+
+1. **Rebuild the local Lempi after every pull that touches `player/`** (§2,
+   with `--features vipunen-support`). The console runs the binary at
+   `player/target/release/lempi[.exe]`, and a stale one is the most common
+   reason the hub is older than its nodes. `lempi --version` shows the build.
+2. **Put a current player on each node** with `build/deploy-appliance.sh
+   pi@HOST` (cross-compiles in Docker, installs it, restarts the player and
+   checks the result). A node on an older build is warned about loudly,
+   `OLD PLAYER`, and its catalogue is sent nothing `[SPEC-STAR-132]`.
+3. **Write the plan, `fleet/star-plan.json`** (untracked): copy
+   `fleet-example/star-plan.json` and fill in the hub (this machine's
+   `data/listener.db` and `data/library.db`) and each node's `member`
+   fingerprint. A node must first be **enrolled** in the mesh, by a person
+   confirming a code on both sides `[SPEC-MTR-130]`. `LEMPI_STAR_PLAN`
+   names another plan file.
+4. Start the console on the hub's own databases:
+   `python tools/console.py data/library.db`.
+
+**In the console: `http://127.0.0.1:5730/sync`**
+
+1. **Tick the nodes this run takes part with.** The hub always takes part and
+   has no box. A node you leave unticked is not read, not started, not written
+   and keeps its last-sent record; nothing is ticked until you do it, and a
+   run needs at least one node `[SPEC-STAR-130, 134]`.
+2. Press the stages in order: **Snapshot, Merge, Prepare patches, Rehearse,
+   Commit.** Rehearse changes nothing anywhere. Commit stays disabled until
+   every item has a verdict and every chosen node has rehearsed clean.
+3. **Items** are changes the merge would otherwise discard (two nodes changed
+   the same thing differently, or one deleted what another edited). Each shows
+   its default, the most recent change; pick another per item, or press
+   **Approve all** to take every default. One-sided changes carry over without
+   asking, and a node that already matches the hub has nothing to approve.
+4. A big catalogue patch goes in parts and takes minutes on a Pi; the page
+   shows progress. Close other users of the hub's databases first.
+
+**The same from a terminal**, stage by stage, to read a run between steps:
+`python tools/star_sync.py fleet/star-plan.json snapshot --nodes lempi02w`,
+then `merge`, `items`, `patch`, `rehearse`, `commit` (`--help` lists them all).
+The hub is included in each. From a terminal the hub is patched by the
+command itself, so **close the console and the local Lempi first** (or let the
+console's own job do it); the command says so and stops if one is open.
+
+---
+
 ## Where to go next
 
 - Once Lempi is running (§4), it serves its own in-app user's guide at
@@ -176,5 +231,6 @@ to work, and keep it at `player/target/release/lempi[.exe]` (or on `PATH`)
 - `docs/spec/SPEC013-vipunen-console.md` — the console's own design.
 - `docs/IMPL003-vipunen-console-build.md`, `IMPL006`, `IMPL007` — what's
   actually built, stage by stage, with measured results.
+- `docs/spec/SPEC046-star-sync.md` and `SPEC058-catalogue-patch-by-natural-key.md` — the star sync and its catalogue patch; `fleet/FLEET001-the-fleet.md` — which nodes exist and what each runs.
 - `LempiPi/` — building and deploying the Raspberry Pi appliance image.
 - `build/README.md` — cross-compilation and the Windows `CC` trap in full.
