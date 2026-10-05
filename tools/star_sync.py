@@ -149,6 +149,9 @@ def newest_run(plan, given=None):
 # them (held equal by test_star_merge).
 SIGNED_TABLES = sorted(t for t, s in sm.TABLES.items() if s["rule"] in (sm.LWW, sm.UNION))
 SIGNED_EXCLUDE = {"files": sorted(sm.MACHINE_SCOPE["files"])}
+# [SPEC-NKP-082]: the hub's own bookkeeping, which no node needs and which travels in neither direction.
+# `caa_asked_at` is when Vipunen last asked the Cover Art Archive; only `fetch_cover_art.py` reads it.
+SIGNED_OMIT = {"cover_art": ["caa_asked_at"]}
 NATURAL_KEYS_NEEDED = 1    # [SPEC-NKP-075]: the catalogue patch by natural key
 CATALOGUE_PATCH_MAX = 16 << 20   # [SPEC-NKP-920]: the most a player is sent in one request, in bytes of JSON
 PART_MAX = 8 << 20               # [SPEC-NKP-930]: the most JSON in one part of a patch sent in parts
@@ -817,7 +820,7 @@ def patch(plan, run):
                 # strict id-keyed patch, which only reaches a catalogue numbered as ours.
                 natural = (b.get("natural_keys", 0) or 0) >= NATURAL_KEYS_NEEDED
                 try:
-                    cat = sp.make_values(b["library"], t["library"], exclude=SIGNED_EXCLUDE, natural=natural)
+                    cat = sp.make_values(b["library"], t["library"], exclude=SIGNED_EXCLUDE, natural=natural, omit=SIGNED_OMIT)
                 except sp.NaturalUnsupported as err:
                     unsupported = f"the hub cannot name what changed: {err} [SPEC-NKP-080]"
             if cat is not None:

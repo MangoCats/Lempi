@@ -331,7 +331,7 @@ def natural_entry(b, t, name, skip):
     return entry
 
 
-def make_values(baseline, target, tables=None, exclude=None, natural=False):
+def make_values(baseline, target, tables=None, exclude=None, natural=False, omit=None):
     """A patch as values, for the player to apply itself over the signed
     transport [SPEC-NSH-070] -- `lempi_core::mesh_sync::apply_with` reads it.
 
@@ -347,8 +347,13 @@ def make_values(baseline, target, tables=None, exclude=None, natural=False):
     `natural` names the tables that hold ids by what identifies them on every
     installation instead, for a player that can apply that `[SPEC-NKP-040]`;
     they follow the rest, parents first. It raises `NaturalUnsupported` for a
-    pair it will not make one for."""
+    pair it will not make one for.
+
+    `omit` maps a table to columns that are the hub's own bookkeeping: they travel in
+    neither direction and, unlike `exclude`, a row the node lacks is not given the
+    hub's value either -- the node need not even have the column `[SPEC-NKP-082]`."""
     exclude = exclude or {}
+    omit = omit or {}
     b, t = open_ro(baseline), open_ro(target)
     patch = {"tables": []}
     try:
@@ -358,7 +363,8 @@ def make_values(baseline, target, tables=None, exclude=None, natural=False):
         for name in sorted(tables_of(t) & set(tables or tables_of(t))):
             if natural and name in NATURAL:
                 continue
-            full = columns(t, name)
+            dropped = set(omit.get(name, ()))
+            full = [c for c in columns(t, name) if c not in dropped]
             skip = set(exclude.get(name, ()))
             cols = [c for c in full if c not in skip]
             key = key_of(t, name)
@@ -367,10 +373,10 @@ def make_values(baseline, target, tables=None, exclude=None, natural=False):
             entry = {"name": name, "columns": cols, "key": key, "rows": []}
             base = {}
             if name in tables_of(b):
-                have = columns(b, name)
+                have = [c for c in columns(b, name) if c not in dropped]
                 if set(have) - set(full):
                     raise SystemExit(f"{name}: the target lacks column(s) {sorted(set(have) - set(full))}")
-                added = [r for r in t.execute(f"PRAGMA table_info({name})") if r[1] not in have]
+                added = [r for r in t.execute(f"PRAGMA table_info({name})") if r[1] not in have and r[1] not in dropped]
                 if added:
                     entry["add_columns"] = [column_decl(r) for r in added]
                 fill = {r[1]: default_of(r) for r in added}

@@ -274,6 +274,33 @@ def main() -> int:
     c.close()
     check(held == {"A": 0, "B": 0, "C2": 0, "D": 1} and dump(n3) == expected, f"applied, the column is there with the right values: {held}")
 
+    # [SPEC-NKP-082]: a column that is the hub's own bookkeeping travels in neither direction: not as a change, not as
+    # a new column, and not as `also` on a row the node lacks. (Found live: a node refused a cover_art row identical to
+    # the hub's but for the hub's `caa_asked_at`, a column the node does not have.)
+    ob, ot = os.path.join(tmp, "ob.db"), os.path.join(tmp, "ot.db")
+    for db_, extra in ((ob, ""), (ot, ", note TEXT")):
+        c = sqlite3.connect(db_)
+        c.execute(f"CREATE TABLE cover_art (release_mbid TEXT PRIMARY KEY, front BLOB{extra})")
+        c.commit()
+        c.close()
+    c = sqlite3.connect(ob)
+    c.execute("INSERT INTO cover_art VALUES ('r1', x'01')")
+    c.commit()
+    c.close()
+    c = sqlite3.connect(ot)
+    c.execute("INSERT INTO cover_art VALUES ('r1', x'01', 'asked on the 2nd')")
+    c.execute("INSERT INTO cover_art VALUES ('r2', x'02', 'asked on the 3rd')")
+    c.commit()
+    c.close()
+    with_note = sp.make_values(ob, ot, tables=["cover_art"], exclude={})
+    check(with_note["tables"][0].get("add_columns") == ["note TEXT"] and len(with_note["tables"][0]["rows"]) == 2,
+          "without `omit`, the column is added and both rows differ (what refused the real node)")
+    quiet = sp.make_values(ob, ot, tables=["cover_art"], exclude={}, omit={"cover_art": ["note"]})
+    rows = quiet["tables"][0]["rows"]
+    check("add_columns" not in quiet["tables"][0] and quiet["tables"][0]["columns"] == ["release_mbid", "front"],
+          f"with it, no column is added and none is carried: {quiet['tables'][0]}")
+    check([r["key"] for r in rows] == [["r2"]] and "also" not in rows[0], f"only the genuinely new row is sent, and with no `also`: {rows}")
+
     # Nothing to send when nothing changed.
     same = sp.make_values(target, target, tables=tables, exclude=MACHINE, natural=True)
     check(same["tables"] == [], "an unchanged catalogue gives an empty patch")

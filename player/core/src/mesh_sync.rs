@@ -153,7 +153,10 @@ pub fn apply_with(db: &Path, patch: &Json, allowed: Option<&[&str]>, rule: Rule,
         .map_err(|e| format!("open {}: {e}", db.display()))?;
     c.busy_timeout(std::time::Duration::from_secs(10)).map_err(|e| e.to_string())?;
     let tx = c.transaction().map_err(|e| e.to_string())?;
+    tx.execute_batch("PRAGMA defer_foreign_keys = ON").map_err(es)?;
+    let before = fk_before(&tx, patch, &mut HashMap::new())?;
     let out = apply_tx(&tx, patch, allowed, rule)?;
+    fk_after(&tx, &before)?;
     if commit {
         tx.commit().map_err(|e| e.to_string())?;
     }
@@ -175,6 +178,7 @@ pub fn undo_parts(db: &Path, inverses: &mut dyn Iterator<Item = Result<Json, Str
         .map_err(|e| format!("open {}: {e}", db.display()))?;
     c.busy_timeout(std::time::Duration::from_secs(10)).map_err(|e| e.to_string())?;
     let tx = c.transaction().map_err(|e| e.to_string())?;
+    tx.execute_batch("PRAGMA defer_foreign_keys = ON").map_err(es)?;
     let mut total = Applied::default();
     for inverse in inverses {
         let counts = undo_tx(&tx, &inverse?)?;
@@ -223,19 +227,65 @@ pub fn apply_parts(
         .map_err(|e| format!("open {}: {e}", db.display()))?;
     c.busy_timeout(std::time::Duration::from_secs(10)).map_err(|e| e.to_string())?;
     let tx = c.transaction().map_err(|e| e.to_string())?;
+    tx.execute_batch("PRAGMA defer_foreign_keys = ON").map_err(es)?;
+    let mut before = HashMap::new();
     let mut total = Applied::default();
     for (i, part) in parts.enumerate() {
         let patch = part.map_err(|e| format!("part {}: {e}", i + 1))?;
+        fk_before(&tx, &patch, &mut before).map_err(|e| format!("part {}: {e}", i + 1))?;
         let out = apply_tx(&tx, &patch, allowed, rule).map_err(|e| format!("part {}: {e}", i + 1))?;
         sink(i, &out.inverse)?;
         total.applied += out.counts.applied;
         total.already += out.counts.already;
         total.kept += out.counts.kept;
     }
+    fk_after(&tx, &before)?;
     if commit {
         tx.commit().map_err(|e| e.to_string())?;
     }
     Ok(total)
+}
+
+/// Rows of `table` whose foreign keys point at nothing; 0 for a table with none.
+fn fk_violations(tx: &Connection, table: &str) -> Result<usize, String> {
+    let keys: i64 = tx
+        .query_row(&format!("SELECT count(*) FROM pragma_foreign_key_list('{table}')"), [], |r| r.get(0))
+        .map_err(es)?;
+    if keys == 0 {
+        return Ok(0);
+    }
+    let mut q = tx.prepare(&format!("PRAGMA foreign_key_check({table})")).map_err(es)?;
+    let n = q.query_map([], |_| Ok(())).map_err(es)?.count();
+    Ok(n)
+}
+
+/// What the tables a patch names hold, in dangling references, before it writes anything.
+/// A table already counted -- named by an earlier part -- is left as it was first counted.
+fn fk_before(tx: &Connection, patch: &Json, seen: &mut HashMap<String, usize>) -> Result<HashMap<String, usize>, String> {
+    for t in patch["tables"].as_array().into_iter().flatten() {
+        let name = ident(t["name"].as_str().unwrap_or(""))?;
+        if !seen.contains_key(name) {
+            seen.insert(name.to_string(), fk_violations(tx, name)?);
+        }
+    }
+    Ok(seen.clone())
+}
+
+/// A patch's tables are applied in the order it names them, so a row can arrive before the row
+/// it points at. Foreign keys are therefore checked at the end of the transaction, not row by
+/// row, and the patch is refused only if it leaves more dangling references than it found: a
+/// reference the node already had broken is not the patch's to answer for.
+fn fk_after(tx: &Connection, before: &HashMap<String, usize>) -> Result<(), String> {
+    let mut tables: Vec<&String> = before.keys().collect();
+    tables.sort();
+    for t in tables {
+        let now = fk_violations(tx, t)?;
+        if now > before[t] {
+            return Err(format!("{t}: the patch would leave {} row(s) pointing at nothing, {} more than before; nothing written",
+                               now, now - before[t]));
+        }
+    }
+    Ok(())
 }
 
 fn apply_tx(tx: &Connection, patch: &Json, allowed: Option<&[&str]>, rule: Rule) -> Result<Outcome, String> {
@@ -1571,5 +1621,78 @@ mod tests {
         let mut back = inv.into_iter().rev().map(Ok);
         undo_parts(&db, &mut back).unwrap();
         assert_eq!(raw(&db), before, "the undo puts back every row, last part first");
+    }
+
+    // ---- foreign keys across a patch's own order [found live on lp3-wifi, 2026-10-05] ----
+
+    fn fk_db(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let d = tmp(name);
+        let db = d.join("library.db");
+        let c = Connection::open(&db).unwrap();
+        c.execute_batch(
+            "CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT);
+             CREATE TABLE release_recordings (release_mbid TEXT NOT NULL REFERENCES releases(mbid), mbid TEXT NOT NULL,
+                 PRIMARY KEY (release_mbid, mbid));
+             INSERT INTO releases VALUES ('r0', 'old');",
+        )
+        .unwrap();
+        let on: i64 = c.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
+        assert_eq!(on, 1, "this build enforces foreign keys by default, which is what the test is about");
+        (d, db)
+    }
+
+    fn child(mbid: &str, rel: &str) -> Json {
+        serde_json::json!({"name": "release_recordings", "columns": ["release_mbid", "mbid"], "key": ["release_mbid", "mbid"],
+                           "rows": [{"key": [rel, mbid], "was": null, "now": [rel, mbid]}]})
+    }
+
+    fn parent(mbid: &str) -> Json {
+        serde_json::json!({"name": "releases", "columns": ["mbid", "title"], "key": ["mbid"],
+                           "rows": [{"key": [mbid], "was": null, "now": [mbid, "new"]}]})
+    }
+
+    fn count(db: &Path, t: &str) -> i64 {
+        Connection::open(db).unwrap().query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0)).unwrap()
+    }
+
+    /// Tables are applied in the order a patch names them, which is alphabetical, so a child can come before the
+    /// parent it points at. That is not a fault: the keys are checked when the patch is whole.
+    #[test]
+    fn a_child_may_come_before_its_parent_in_a_patch_and_across_parts() {
+        let (_d, db) = fk_db("fk-order");
+        let one = serde_json::json!({"tables": [child("m1", "r1"), parent("r1")]});
+        let out = apply_with(&db, &one, None, Rule::Strict, true).unwrap();
+        assert_eq!((out.counts.applied, count(&db, "release_recordings")), (2, 1));
+        let (_d2, db2) = fk_db("fk-order-parts");
+        let mut it = vec![
+            serde_json::json!({"tables": [child("m1", "r1")]}),
+            serde_json::json!({"tables": [parent("r1")]}),
+        ]
+        .into_iter()
+        .map(Ok);
+        apply_parts(&db2, &mut it, None, Rule::Strict, true, &mut |_, _| Ok(())).unwrap();
+        assert_eq!((count(&db2, "releases"), count(&db2, "release_recordings")), (2, 1), "or across parts, which is how it was found");
+    }
+
+    /// What the patch leaves pointing at nothing refuses it, with nothing written; what was already
+    /// pointing at nothing is not the patch's to answer for.
+    #[test]
+    fn a_patch_may_not_leave_a_reference_pointing_at_nothing() {
+        let (_d, db) = fk_db("fk-dangling");
+        let err = apply_with(&db, &serde_json::json!({"tables": [child("m1", "nobody")]}), None, Rule::Strict, true).unwrap_err();
+        assert!(err.contains("pointing at nothing") && err.contains("release_recordings"), "{err}");
+        assert_eq!(count(&db, "release_recordings"), 0, "nothing written");
+        let mut it = vec![serde_json::json!({"tables": [child("m1", "nobody")]})].into_iter().map(Ok);
+        let err = apply_parts(&db, &mut it, None, Rule::Strict, true, &mut |_, _| Ok(())).unwrap_err();
+        assert!(err.contains("pointing at nothing"), "the same for parts: {err}");
+        assert_eq!(count(&db, "release_recordings"), 0);
+
+        // A reference the node had already broken (written with keys off, say) is not blamed on a patch that adds a good row.
+        let c = Connection::open(&db).unwrap();
+        c.execute_batch("PRAGMA foreign_keys = OFF; INSERT INTO release_recordings VALUES ('ghost', 'm9'); PRAGMA foreign_keys = ON;").unwrap();
+        drop(c);
+        let ok = apply_with(&db, &serde_json::json!({"tables": [child("m2", "r0")]}), None, Rule::Strict, true).unwrap();
+        assert_eq!(ok.counts.applied, 1, "an old dangling row does not stop an unrelated good one");
+        assert_eq!(count(&db, "release_recordings"), 2);
     }
 }

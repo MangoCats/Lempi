@@ -62,6 +62,8 @@ The vocabulary is fixed, in Rust and in `star_patch.py`, and a test holds the tw
 
 **`[SPEC-NKP-085]` What a first patch to the four nodes does** is nothing but record the facts: the 49 files, 338 passages and 338 passage-recordings the hub sent as new are *already* there, each by natural key, and the node's baseline becomes the hub's copy. The catalogue edits made at the hub since 2026-09-28 follow in the same patch.
 
+**`[SPEC-NKP-082]` A column that is the hub's own bookkeeping travels in neither direction.** Unlike a machine-scope column `[SPEC-NKP-050]`, whose value a node's new row takes from the hub, the node needs no value and not even the column: the builder's `omit` drops it from the comparison, from the columns carried, from `add_columns` and from `also`. Today that is `cover_art.caa_asked_at`, when Vipunen last asked the Cover Art Archive, which only `fetch_cover_art.py` reads. **Found live, 2026-10-05:** the first rehearsal against `lp3-wifi` was refused over a `cover_art` row identical to the hub's in everything but that column, which the node did not yet have and so read as NULL against the hub's value; omitting it also took 52 MB out of the patch, which had been carrying every cover row's images because the new column made each one differ. What remains, 92 MB, is real: 258 covers re-fetched and 58 new.
+
 ## 6. What it does not do
 
 - It does not make ids equal, and nothing depends on their being so. A node's numbering is its own.
