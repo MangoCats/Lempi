@@ -123,6 +123,10 @@ fn now_ms() -> i64 {
 /// What this build can apply, so the hub never hands a patch to a player that would
 /// misread it `[SPEC-NKP-075]`. 1 is the catalogue patch by natural key.
 const NATURAL_KEYS: i64 = 1;
+/// `[SPEC-STAR-104]`: this build opens a catalogue on a read-only partition itself, for the
+/// rehearsal as well as the commit, and says whether the catalogue is on one. A node that
+/// does not report it is sent no catalogue patch to a read-only partition: it would refuse it.
+const CATALOGUE_WINDOW: i64 = 1;
 
 fn snapshot(listener: &Path, library: &Path) -> Result<Value, String> {
     Ok(json!({
@@ -130,6 +134,8 @@ fn snapshot(listener: &Path, library: &Path) -> Result<Value, String> {
         "catalogue": mesh_sync::catalogue_summary(library)?,
         "last_run": last_run(listener),
         "natural_keys": NATURAL_KEYS,
+        "catalogue_window": CATALOGUE_WINDOW,
+        "library_readonly": library.exists() && !writable(library),
     }))
 }
 
@@ -144,7 +150,19 @@ fn counts(c: &mesh_sync::Applied) -> Value {
 /// Both patches against the live files, nothing kept. The catalogue under the
 /// strict rule refuses on its first mismatch; the listener under the member
 /// rule counts what it would keep.
+/// The `rehearse` step. A rehearsal applies the patch and rolls it back, which needs the
+/// catalogue open for writing, so on a read-only partition it too is inside the window.
 fn rehearse(listener: &Path, library: &Path, req: &Value) -> Result<Value, String> {
+    let has_cat = req.get("catalogue_parts").is_some_and(|v| !v.is_null()) || has_rows(&req["catalogue_patch"]);
+    let win = Window::open(library, has_cat)?;
+    let out = rehearse_in(listener, library, req);
+    if let Some(w) = win.close(library) {
+        tracing::warn!("star sync: after a rehearsal: {w}");
+    }
+    out
+}
+
+fn rehearse_in(listener: &Path, library: &Path, req: &Value) -> Result<Value, String> {
     let (cat, lis) = (&req["catalogue_patch"], &req["listener_patch"]);
     let mut out = json!({});
     if let Some(spec) = req.get("catalogue_parts").filter(|v| !v.is_null()) {
@@ -181,18 +199,19 @@ fn commit(listener: &Path, library: &Path, req: &Value, run: &str, apply_listene
     let (cat, lis) = (&req["catalogue_patch"], &req["listener_patch"]);
     let parts = req.get("catalogue_parts").filter(|v| !v.is_null());
     let has_cat = parts.is_some() || has_rows(cat);
-    // Rehearsed first, here, whatever the hub rehearsed before: the files may
-    // have moved since.
-    rehearse(listener, library, req)?;
     if !has_cat && !has_rows(lis) {
         set_last_run(listener, run)?;
         return Ok((json!({"catalogue": null, "listener": null}), false));
     }
     // The root verb only when the file cannot be written where it is -- a
     // read-only partition, as on bose. A catalogue already writable (on the
-    // root filesystem, or anywhere a test puts one) never reaches it.
-    let opened = if has_cat && !writable(library) { library_rw(true)? } else { false };
+    // root filesystem, or anywhere a test puts one) never reaches it. The window spans
+    // the rehearsal as well as the apply: both write, the first to roll back.
+    let win = Window::open(library, has_cat)?;
     let applied = (|| -> Result<(Option<(mesh_sync::Applied, CatInverse)>, Option<mesh_sync::Outcome>), String> {
+        // Rehearsed first, here, whatever the hub rehearsed before: the files may
+        // have moved since.
+        rehearse_in(listener, library, req)?;
         let c = if let Some(spec) = parts {
             // One transaction over every part; each part's inverse goes to disk as it is made.
             let paths = part_paths(listener, run, spec)?;
@@ -246,30 +265,9 @@ fn commit(listener: &Path, library: &Path, req: &Value, run: &str, apply_listene
         };
         Ok((c, l))
     })();
-    // `[SPEC-STAR-104]`: a catalogue on read-only media must be in rollback-
-    // journal mode, because a WAL file there has no sidecar to open and the
-    // player crash-loops `[BOS-RUN-092]`. Checked before the partition goes back,
-    // and left read-write -- harmless to the player -- rather than closed over
-    // a file that would not open. A check that cannot run says so, too.
-    let mut warning: Option<String> = None;
-    if opened {
-        match wal_mode(library) {
-            Some(false) => {
-                if let Err(e) = library_rw(false) {
-                    tracing::warn!("star sync: the catalogue's partition could not be returned to read-only: {e}");
-                    warning = Some(format!("the catalogue's partition could not be returned to read-only: {e}"));
-                }
-            }
-            Some(true) => {
-                warning = Some("the catalogue is in WAL mode, which read-only media cannot open: its partition was left read-write [BOS-RUN-092]".into());
-            }
-            None => {
-                warning = Some("the catalogue's journal mode could not be read: its partition was left read-write".into());
-            }
-        }
-        if let Some(w) = &warning {
-            tracing::warn!("star sync: {w}");
-        }
+    let warning = win.close(library);
+    if let Some(w) = &warning {
+        tracing::warn!("star sync: {w}");
     }
     let (c, l) = applied?;
     let (mem, n_parts) = match c.as_ref().map(|(_, inv)| inv) {
@@ -505,10 +503,41 @@ fn writable(p: &Path) -> bool {
     std::fs::OpenOptions::new().write(true).open(p).is_ok()
 }
 
-/// Make the catalogue's partition writable for the commit, through the one
-/// root verb for it; true when it was read-only and so must be put back.
-#[cfg(feature = "appliance")]
-fn library_rw(on: bool) -> Result<bool, String> {
+/// The catalogue's partition opened for writing, where it is read-only `[SPEC-STAR-104]`.
+struct Window {
+    opened: bool,
+}
+
+impl Window {
+    /// Opened only when a catalogue is to be written and cannot be where it is.
+    fn open(library: &Path, needed: bool) -> Result<Window, String> {
+        let opened = if needed && !writable(library) { library_rw(library, true)? } else { false };
+        Ok(Window { opened })
+    }
+
+    /// `[SPEC-STAR-104]`: a catalogue on read-only media must be in rollback-
+    /// journal mode, because a WAL file there has no sidecar to open and the
+    /// player crash-loops `[BOS-RUN-092]`. Checked before the partition goes back,
+    /// and left read-write -- harmless to the player -- rather than closed over
+    /// a file that would not open. A check that cannot run says so, too.
+    fn close(self, library: &Path) -> Option<String> {
+        if !self.opened {
+            return None;
+        }
+        match wal_mode(library) {
+            Some(false) => library_rw(library, false)
+                .err()
+                .map(|e| format!("the catalogue's partition could not be returned to read-only: {e}")),
+            Some(true) => Some("the catalogue is in WAL mode, which read-only media cannot open: its partition was left read-write [BOS-RUN-092]".into()),
+            None => Some("the catalogue's journal mode could not be read: its partition was left read-write".into()),
+        }
+    }
+}
+
+/// Make the catalogue's partition writable through the one root verb for it;
+/// true when it was read-only and so must be put back.
+#[cfg(all(feature = "appliance", not(test)))]
+fn library_rw(_library: &Path, on: bool) -> Result<bool, String> {
     let out = std::process::Command::new("sudo")
         .args(["-n", crate::bluetooth::HELPER, "library-rw", if on { "on" } else { "off" }])
         .output()
@@ -522,9 +551,25 @@ fn library_rw(on: bool) -> Result<bool, String> {
 }
 
 /// A host without the root helper keeps its catalogue on a writable disk.
-#[cfg(not(feature = "appliance"))]
-fn library_rw(_on: bool) -> Result<bool, String> {
+#[cfg(all(not(feature = "appliance"), not(test)))]
+fn library_rw(_library: &Path, _on: bool) -> Result<bool, String> {
     Ok(false)
+}
+
+// In a test, the "partition" is the file's own permission bit, and each call is recorded.
+#[cfg(test)]
+thread_local! {
+    static WINDOW_CALLS: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn library_rw(library: &Path, on: bool) -> Result<bool, String> {
+    WINDOW_CALLS.with(|c| c.borrow_mut().push(if on { "on" } else { "off" }));
+    let mut perm = std::fs::metadata(library).map_err(|e| e.to_string())?.permissions();
+    let was_ro = perm.readonly();
+    perm.set_readonly(!on);
+    std::fs::set_permissions(library, perm).map_err(|e| e.to_string())?;
+    Ok(was_ro)
 }
 
 #[cfg(test)]
@@ -721,6 +766,84 @@ mod tests {
     // ---- a catalogue patch in parts [SPEC-NKP-920..940] --------------------
 
     /// Three parts: change a file, add a file, add its passage.
+    fn calls() -> Vec<&'static str> {
+        WINDOW_CALLS.with(|c| c.borrow().clone())
+    }
+
+    fn make_read_only(lib: &Path) -> bool {
+        let mut perm = std::fs::metadata(lib).unwrap().permissions();
+        perm.set_readonly(true);
+        std::fs::set_permissions(lib, perm).unwrap();
+        !writable(lib)           // false when the tests run as root, which a permission bit does not stop
+    }
+
+    /// `[SPEC-STAR-104]`: a catalogue on a read-only partition is opened for the rehearsal as
+    /// well as the commit -- both write, the first to roll back -- and closed again after
+    /// each, whether the step succeeded or not. The snapshot says it is read-only.
+    #[test]
+    fn a_read_only_catalogue_is_opened_for_the_check_and_the_commit_and_closed_after() {
+        let n = node("ro");
+        if !make_read_only(&n.lib) {
+            eprintln!("SKIPPED: a permission bit does not make a file read-only to this user (root?)");
+            let _ = std::fs::remove_dir_all(&n.dir);
+            return;
+        }
+        WINDOW_CALLS.with(|c| c.borrow_mut().clear());
+        let snap = handle(&n.l, &n.lib, "snapshot", &signed(&n.mesh, &request(&n, "snapshot", "20260929T0000Z", json!(null), json!(null)))).unwrap();
+        let a: Value = serde_json::from_str(snap.answer["answer"].as_str().unwrap()).unwrap();
+        assert_eq!(a["result"]["library_readonly"], true, "the snapshot says the catalogue is on a read-only partition");
+        assert_eq!(a["result"]["catalogue_window"], 1, "and that this build can open it");
+        assert!(calls().is_empty(), "a snapshot only reads: the partition is never opened for it");
+
+        let r = request(&n, "rehearse", "20260929T0000Z", cat_patch(), json!(null));
+        let done = handle(&n.l, &n.lib, "rehearse", &signed(&n.mesh, &r)).unwrap();
+        assert_eq!(done.answer["answer"].as_str().map(|t| serde_json::from_str::<Value>(t).unwrap()).unwrap()["result"]["catalogue"]["applied"], 1);
+        assert_eq!(calls(), ["on", "off"], "a rehearsal opens the partition and closes it");
+        assert!(!writable(&n.lib), "and it is read-only again");
+        assert_eq!(format_of(&n.lib), "flac", "nothing was kept");
+
+        let bad = json!({"tables": [{"name": "files", "columns": ["file_id","audio_md5","format"], "key": ["file_id"],
+                         "rows": [{"key": [1], "was": [1,"m1","mp3"], "now": [1,"m1","opus"]}]}]});
+        let r = request(&n, "rehearse", "20260929T0000Z", bad, json!(null));
+        assert!(handle(&n.l, &n.lib, "rehearse", &signed(&n.mesh, &r)).is_err(), "a patch the node does not expect is refused");
+        assert_eq!(calls(), ["on", "off", "on", "off"], "and the partition is closed after a refusal too");
+        assert!(!writable(&n.lib));
+
+        let r = request(&n, "commit", "20260929T0000Z", cat_patch(), lis_patch());
+        let done = handle(&n.l, &n.lib, "commit", &signed(&n.mesh, &r)).unwrap();
+        assert!(done.reload);
+        assert_eq!(format_of(&n.lib), "opus", "the commit landed through the window");
+        assert_eq!(calls(), ["on", "off", "on", "off", "on", "off"], "one window, around the rehearsal inside it and the apply");
+        assert!(!writable(&n.lib), "and the partition is back to read-only");
+        let _ = std::fs::remove_dir_all(&n.dir);
+    }
+
+    /// `[SPEC-STAR-104]`, `[BOS-RUN-092]`: a catalogue in WAL mode cannot be opened on read-only
+    /// media, so after the commit the partition is left read-write, and the answer says so.
+    #[test]
+    fn a_wal_catalogue_leaves_the_partition_open_and_says_so() {
+        let n = node("rowal");
+        {
+            let c = rusqlite::Connection::open(&n.lib).unwrap();
+            c.query_row("PRAGMA journal_mode=WAL", [], |r| r.get::<_, String>(0)).unwrap();
+        }
+        let _ = std::fs::remove_file(n.lib.with_extension("db-wal"));
+        let _ = std::fs::remove_file(n.lib.with_extension("db-shm"));
+        if !make_read_only(&n.lib) {
+            eprintln!("SKIPPED: a permission bit does not make a file read-only to this user (root?)");
+            let _ = std::fs::remove_dir_all(&n.dir);
+            return;
+        }
+        WINDOW_CALLS.with(|c| c.borrow_mut().clear());
+        let r = request(&n, "commit", "20260929T0001Z", cat_patch(), json!(null));
+        let done = handle(&n.l, &n.lib, "commit", &signed(&n.mesh, &r)).unwrap();
+        let a: Value = serde_json::from_str(done.answer["answer"].as_str().unwrap()).unwrap();
+        assert!(a["result"]["warning"].as_str().unwrap_or("").contains("WAL"), "the answer says why: {a}");
+        assert_eq!(calls(), ["on"], "the partition was not closed over a WAL file");
+        assert!(writable(&n.lib));
+        let _ = std::fs::remove_dir_all(&n.dir);
+    }
+
     fn part_texts() -> Vec<String> {
         vec![
             json!({"tables": [{"name": "files", "columns": ["file_id","audio_md5","format"], "key": ["file_id"],

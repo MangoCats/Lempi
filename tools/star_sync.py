@@ -150,11 +150,15 @@ def newest_run(plan, given=None):
 # What the merge shares, and what a node keeps for itself, as lempi-core names
 # them (held equal by test_star_merge).
 SIGNED_TABLES = sorted(t for t, s in sm.TABLES.items() if s["rule"] in (sm.LWW, sm.UNION))
-SIGNED_EXCLUDE = {"files": sorted(sm.MACHINE_SCOPE["files"])}
+# [SPEC-NKP-050]: a node's own columns. `file_tags.scanned_at` is when *this* machine's tag scan
+# ran: the hub and a node scan the same audio independently, so two rows alike in every tag differ
+# in it, and the strict check refused a row the node already held (found 2026-10-05).
+SIGNED_EXCLUDE = {"files": sorted(sm.MACHINE_SCOPE["files"]), "file_tags": ["scanned_at"]}
 # [SPEC-NKP-082]: the hub's own bookkeeping, which no node needs and which travels in neither direction.
 # `caa_asked_at` is when Vipunen last asked the Cover Art Archive; only `fetch_cover_art.py` reads it.
 SIGNED_OMIT = {"cover_art": ["caa_asked_at"]}
 NATURAL_KEYS_NEEDED = 1    # [SPEC-NKP-075]: the catalogue patch by natural key
+CATALOGUE_WINDOW_NEEDED = 1  # [SPEC-STAR-104]: a player that opens a read-only catalogue's partition to rehearse a patch too
 CATALOGUE_PATCH_MAX = 16 << 20   # [SPEC-NKP-920]: the most a player is sent in one request, in bytes of JSON
 PART_MAX = 8 << 20               # [SPEC-NKP-930]: the most JSON in one part of a patch sent in parts
 NATURAL_PART_MAX = 32 << 20      # the natural entries stay whole in the first part; the player takes no more than this
@@ -510,6 +514,18 @@ def snapshot(plan, only=None):
             cap = snap.get("natural_keys", 0) or 0
             if cap < NATURAL_KEYS_NEEDED:
                 old[name] = "reports no natural_keys: a build older than the catalogue patch by natural key"
+            # [SPEC-STAR-104]: a catalogue on a read-only partition (bose's, by design) is opened by
+            # the player itself, for the check and the commit. A build that does not say it can
+            # would be sent 14 parts and refuse at the first, so it is said now instead.
+            blocked = None
+            if snap.get("library_readonly"):
+                if (snap.get("catalogue_window", 0) or 0) < CATALOGUE_WINDOW_NEEDED:
+                    blocked = ("its catalogue is on a read-only partition and this build cannot open it to check a patch "
+                               "(it reports no catalogue_window): deploy a current build")
+                    old[name] = blocked
+                else:
+                    say(f"  {name}: its catalogue is on a read-only partition: the player opens it for the check "
+                        f"and the commit, and closes it again [SPEC-STAR-104]")
             sent_lib = sent_path(ns, "library_sent")
             cat = catalogue_state(sent_lib, os.path.join(nd, "summary.db"), os.path.join(hd, "library.db"))
             say(f"  {name}: {sum(len(t['rows']) for t in snap['listener']['tables'])} shared row(s), "
@@ -521,8 +537,9 @@ def snapshot(plan, only=None):
                 catalogue=os.path.join(nd, "summary.db"), files=os.path.join(nd, "summary.db")))
             baselines[name] = {"listener": os.path.join(nd, "listener.db"), "signed": n["member"],
                                "library": sent_lib, "catalogue": cat, "natural_keys": cap,
-                               "catalogue_in_step": cat["state"] in ("as-sent", "holds-hub-rows")
-                               or (cat["state"] == "other-ids" and cap >= NATURAL_KEYS_NEEDED)}
+                               "catalogue_blocked": blocked,
+                               "catalogue_in_step": not blocked and (cat["state"] in ("as-sent", "holds-hub-rows")
+                               or (cat["state"] == "other-ids" and cap >= NATURAL_KEYS_NEEDED))}
     finally:
         stop_started(plan, started)
     # [REQ-AND-330]: enrolled phones, by what each last uploaded over the
@@ -859,8 +876,8 @@ def patch(plan, run):
                 say(f"  {name}: NO CATALOGUE PATCH -- {unsupported}")
             else:
                 cs = b.get("catalogue") or {"state": "no-copy"}
-                why = catalogue_words(cs)
-                if cs["state"] == "other-ids":
+                why = b.get("catalogue_blocked") or catalogue_words(cs)
+                if cs["state"] == "other-ids" and not b.get("catalogue_blocked"):
                     why += (": the same music as the hub, numbered differently, which only a patch by natural key "
                             "reaches, and this player is OLD: it cannot take one" if b.get("natural_keys", 0) < NATURAL_KEYS_NEEDED
                             else ": the same music as the hub, numbered differently")

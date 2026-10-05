@@ -301,6 +301,30 @@ def main() -> int:
           f"with it, no column is added and none is carried: {quiet['tables'][0]}")
     check([r["key"] for r in rows] == [["r2"]] and "also" not in rows[0], f"only the genuinely new row is sent, and with no `also`: {rows}")
 
+    # [SPEC-NKP-050]: a node's own column. `file_tags.scanned_at` is when this machine's tag scan ran.
+    # A row rescanned on the hub, alike in every tag, is not a change; a new row is sent, with the
+    # hub's `scanned_at` as `also`, and the node's own is never compared.
+    sa, sb = os.path.join(tmp, "sa.db"), os.path.join(tmp, "sb.db")
+    schema = ("CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT, format TEXT);"
+              "CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT, start_ms INTEGER, end_ms INTEGER);"
+              "CREATE TABLE file_tags (file_id INTEGER PRIMARY KEY, title TEXT, scanned_at INTEGER);"
+              "INSERT INTO files VALUES (1,'m1','flac');INSERT INTO file_tags VALUES (1,'One',100);")
+    for path in (sa, sb):
+        c = sqlite3.connect(path)
+        c.executescript(schema)
+        c.commit()
+        c.close()
+    c = sqlite3.connect(sb)
+    c.executescript("UPDATE file_tags SET scanned_at=200 WHERE file_id=1;"
+                    "INSERT INTO files VALUES (2,'m2','flac');INSERT INTO file_tags VALUES (2,'Two',300);")
+    c.commit()
+    c.close()
+    ft = sp.make_values(sa, sb, tables=["files", "file_tags"], exclude={"file_tags": ["scanned_at"]}, natural=True)
+    entry = [t for t in ft["tables"] if t["name"] == "file_tags"][0]
+    check(entry["columns"] == ["file_id", "title"], f"scanned_at is not carried: {entry['columns']}")
+    check([r["key"] for r in entry["rows"]] == [["m2"]] and entry["rows"][0]["also"] == {"scanned_at": 300},
+          f"the rescanned row is no change; the new one goes with the hub's scan time as `also`: {entry['rows']}")
+
     # Nothing to send when nothing changed.
     same = sp.make_values(target, target, tables=tables, exclude=MACHINE, natural=True)
     check(same["tables"] == [], "an unchanged catalogue gives an empty patch")

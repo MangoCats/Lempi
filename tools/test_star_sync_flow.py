@@ -92,6 +92,8 @@ class Fleet:
         self.nodes = {}
         self.runs = []
         self.natural = set()        # the players that report natural_keys [SPEC-NKP-075]
+        self.readonly = set()       # players whose catalogue is on a read-only partition [SPEC-STAR-104]
+        self.window = set()         # ... and which of them can open it themselves
         self.staged = {}            # (node, run) -> {n: (sha256, text)}  [SPEC-NKP-925]
         self.parts_applied = {}     # (node, run) -> the parts a commit applied
 
@@ -139,6 +141,10 @@ class Fleet:
                    "last_run": None}
             if name in self.natural:
                 res["natural_keys"] = 1
+            if name in self.readonly:
+                res["library_readonly"] = True
+            if name in self.window:
+                res["catalogue_window"] = 1
             return res
         self.log.append((name, op, run, bool(catalogue_patch) or bool(parts), bool(listener_patch)))
         if not listener_patch:
@@ -585,6 +591,30 @@ def test_selection(tmp):
     check(not [e for e in fleet.log if e[0] in ("b", "t")], f"nothing was asked of b or t at any stage: {fleet.log}")
 
 
+def test_read_only_catalogue(tmp):
+    """[SPEC-STAR-104]: a catalogue on a read-only partition is said at the snapshot. A player that
+    can open it itself is told so and sent its patch; one that cannot is warned about loudly and
+    sent no catalogue patch, instead of being staged 14 parts and refusing at the first."""
+    fleet = Fleet(tmp)
+    same = [("X", 1, "2026-09-01 00:00:00")]
+    plan, hub = build(tmp, fleet, same, {"a": (same, False), "b": (same, False), "c": (same, False)})
+    fleet.natural.update({"a", "b", "c"})
+    fleet.readonly.update({"a", "b"})          # a and b are on read-only partitions, c is not
+    fleet.window.update({"b", "c"})            # b's build can open its own; a's cannot
+    with faked(fleet) as out:
+        ss.snapshot(plan)
+        text = out.getvalue()
+        run = ss.newest_run(plan)
+    check("!!!  OLD PLAYER: a" in text and "!!!    a: its catalogue is on a read-only partition" in text,
+          f"a is named loudly with the reason: {text}")
+    check("b: its catalogue is on a read-only partition: the player opens it" in text and "OLD PLAYER: b" not in text
+          and "OLD PLAYER: c" not in text, f"b is told the window is the player's, and not warned: {text}")
+    base = json.load(open(os.path.join(run, "baselines.json")))
+    check(base["a"]["catalogue_blocked"] and not base["a"]["catalogue_in_step"], f"a is in no catalogue step: {base['a']}")
+    check(base["b"]["catalogue_blocked"] is None and base["c"]["catalogue_blocked"] is None, "b and c are not blocked")
+    check(sorted(json.load(open(os.path.join(run, "old_players.json")))) == ["a"], "only a is warned about")
+
+
 def test_old_players(tmp):
     """[SPEC-NKP-075]: an old player is said loudly -- at the snapshot, in the summary, and again
     before a rehearsal or a commit -- and a current one is not."""
@@ -624,7 +654,7 @@ def test_old_players(tmp):
 def main() -> int:
     test_split_catalogue()
     for test in (test_quiet, test_conflict, test_approve_all, test_on_demand, test_catalogue_moved,
-                 test_catalogue_states, test_catalogue_old_player, test_catalogue_in_parts, test_a_patch_that_cannot_be_cut, test_selection,
+                 test_catalogue_states, test_catalogue_old_player, test_catalogue_in_parts, test_a_patch_that_cannot_be_cut, test_selection, test_read_only_catalogue,
                  test_old_players):
         tmp = tempfile.mkdtemp()
         try:
