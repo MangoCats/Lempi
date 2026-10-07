@@ -101,6 +101,9 @@ impl Engine {
     /// shutdown. Writes immediately when the passage or play state changes, so
     /// the interesting transitions are never the ones lost to a power cut.
     pub(super) fn persist(&mut self, force: bool) {
+        if self.shutdown_saved {
+            return;
+        }
         let Some(store) = &self.store else { return };
         let key = (self.live.first().map(|l| l.entry.passage_id).unwrap_or(-1), self.playing);
         let changed = self.saved != Some(key);

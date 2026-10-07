@@ -122,6 +122,8 @@ struct QueueItem {
     qid: u64,
     title: String,
     artist: Option<String>,
+    #[serde(default)]
+    is_shutdown: bool,
 }
 
 /// Only the fields this phase draws. Unknown incoming fields are ignored by
@@ -660,8 +662,10 @@ fn render_settings(display: &mut FbDisplay, snap: &ClientSnapshot, pair: Option<
             None => item.title.clone(),
         };
         draw_text(display, &truncate_display(&normalize_for_display(&label), 34), 8, y1 - 12);
-        draw_button_winamp(display, QUEUE_BTN_MINUS.0, QUEUE_BTN_MINUS.1, y0, y1, "-", false)?;
-        draw_button_winamp(display, QUEUE_BTN_PLUS.0, QUEUE_BTN_PLUS.1, y0, y1, "+", false)?;
+        if !item.is_shutdown {
+            draw_button_winamp(display, QUEUE_BTN_MINUS.0, QUEUE_BTN_MINUS.1, y0, y1, "-", false)?;
+            draw_button_winamp(display, QUEUE_BTN_PLUS.0, QUEUE_BTN_PLUS.1, y0, y1, "+", false)?;
+        }
         draw_button_winamp(display, QUEUE_BTN_X.0, QUEUE_BTN_X.1, y0, y1, "X", false)?;
     }
 
@@ -897,10 +901,10 @@ fn hit_test(page: Page, sx: f64, sy: f64, snap: &ClientSnapshot) -> Option<Zone>
             }
             for (row, item) in snap.queue.iter().take(MAX_QUEUE_ROWS).enumerate() {
                 let (y0, y1) = queue_row_y(row);
-                if in_rect(x, y, QUEUE_BTN_MINUS.0, QUEUE_BTN_MINUS.1, y0, y1) {
+                if !item.is_shutdown && in_rect(x, y, QUEUE_BTN_MINUS.0, QUEUE_BTN_MINUS.1, y0, y1) {
                     return Some(Zone::QueueLater(item.qid));
                 }
-                if in_rect(x, y, QUEUE_BTN_PLUS.0, QUEUE_BTN_PLUS.1, y0, y1) {
+                if !item.is_shutdown && in_rect(x, y, QUEUE_BTN_PLUS.0, QUEUE_BTN_PLUS.1, y0, y1) {
                     return Some(Zone::QueueSooner(item.qid));
                 }
                 if in_rect(x, y, QUEUE_BTN_X.0, QUEUE_BTN_X.1, y0, y1) {

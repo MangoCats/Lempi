@@ -87,6 +87,9 @@ pub struct QueueEntry {
     /// provenance survives exactly as far as the entry that earned it
     /// does.
     pub selected_by: Option<String>,
+    /// Whether this entry is a scheduled appliance shutdown marker
+    /// `[SPEC-QSD-030]`.
+    pub is_shutdown: bool,
 }
 
 /// Names from both sources, kept apart rather than merged on arrival.
@@ -213,6 +216,32 @@ impl QueueEntry {
             (Some(_), _) => Source::MusicBrainz,
             (None, Some(_)) => Source::FileTags,
             _ => Source::Unknown,
+        }
+    }
+
+    /// Construct a scheduled appliance shutdown event `[SPEC-QSD-030]`.
+    pub fn shutdown() -> Self {
+        Self {
+            qid: 0,
+            passage_id: 0,
+            path: PathBuf::new(),
+            start_ms: 0,
+            end_ms: 0,
+            file_ms: 0,
+            lead_in_ms: 0,
+            lead_out_ms: 0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+            fade_in_curve: Curve::Exponential,
+            fade_out_curve: Curve::Exponential,
+            gain_db: 0.0,
+            mbid: None,
+            naming: Naming {
+                tag_title: Some("Shutdown".into()),
+                ..Default::default()
+            },
+            selected_by: None,
+            is_shutdown: true,
         }
     }
 }
@@ -366,13 +395,36 @@ impl Queue {
         }
     }
 
+    /// Whether a scheduled shutdown event is currently queued `[SPEC-QSD-030]`.
+    pub fn has_shutdown(&self) -> bool {
+        self.entries.iter().any(|e| e.is_shutdown)
+    }
+
+    /// Append a scheduled shutdown event to the tail of the queue if absent
+    /// `[SPEC-QSD-030]`. Returns its unique monotonic `qid`, or `None` if
+    /// a shutdown marker is already present.
+    pub fn push_shutdown(&mut self) -> Option<u64> {
+        if self.has_shutdown() {
+            return None;
+        }
+        let e = self.stamp(QueueEntry::shutdown());
+        let qid = e.qid;
+        self.entries.push_back(e);
+        Some(qid)
+    }
+
     /// Move a queued passage `delta` places, clamped to the ends. Returns
     /// whether anything moved -- false when it is already first or last, which
     /// a UI should treat as "nothing to do" rather than as a failure.
+    ///
+    /// The shutdown event itself cannot be shifted directly (`[SPEC-QSD-020]`).
     pub fn shift(&mut self, qid: u64, delta: isize) -> bool {
         let Some(at) = self.entries.iter().position(|e| e.qid == qid) else {
             return false;
         };
+        if self.entries[at].is_shutdown {
+            return false;
+        }
         let to = (at as isize + delta).clamp(0, self.entries.len() as isize - 1) as usize;
         if to == at {
             return false;
@@ -628,6 +680,7 @@ mod tests {
             mbid: None,
             naming: Default::default(),
             selected_by: None,
+            is_shutdown: false,
         }
     }
 
@@ -776,5 +829,58 @@ mod tests {
         let mut q = Queue::new(3);
         q.push(entry(1, 10_000, 0, 5_000));
         assert!(!q.should_admit_next(10_000), "nothing to admit");
+    }
+
+    #[test]
+    fn push_shutdown_appends_marker_and_enforces_cardinality() {
+        let mut q = Queue::new(3);
+        q.push(entry(1, 1000, 0, 0));
+        assert!(!q.has_shutdown());
+
+        let qid = q.push_shutdown().expect("first push_shutdown succeeds");
+        assert!(q.has_shutdown());
+        assert_eq!(q.len(), 2);
+        let last = q.iter().last().expect("has tail");
+        assert!(last.is_shutdown);
+        assert_eq!(last.qid, qid);
+        assert_eq!(last.title(), "Shutdown");
+
+        assert!(q.push_shutdown().is_none(), "cannot push duplicate shutdown marker");
+        assert_eq!(q.len(), 2);
+    }
+
+    #[test]
+    fn shutdown_entry_cannot_be_shifted_directly() {
+        let mut q = Queue::new(3);
+        q.push(entry(1, 1000, 0, 0));
+        let s_qid = q.push_shutdown().unwrap();
+        q.push(entry(2, 1000, 0, 0));
+
+        assert!(!q.shift(s_qid, -1), "shutdown cannot shift earlier");
+        assert!(!q.shift(s_qid, 1), "shutdown cannot shift later");
+    }
+
+    #[test]
+    fn normal_tracks_can_shift_across_shutdown() {
+        let mut q = Queue::new(3);
+        q.push(entry(1, 1000, 0, 0));
+        let _ = q.push_shutdown().unwrap();
+        q.push(entry(2, 1000, 0, 0));
+        let qid_2 = q.iter().nth(2).unwrap().qid;
+
+        assert!(q.shift(qid_2, -1), "track 2 can shift sooner across shutdown");
+        let entries: Vec<_> = q.iter().collect();
+        assert_eq!(entries[0].passage_id, 1);
+        assert_eq!(entries[1].passage_id, 2);
+        assert!(entries[2].is_shutdown);
+    }
+
+    #[test]
+    fn removing_shutdown_by_qid_works() {
+        let mut q = Queue::new(3);
+        let s_qid = q.push_shutdown().unwrap();
+        assert!(q.has_shutdown());
+        assert!(q.remove(s_qid));
+        assert!(!q.has_shutdown());
     }
 }

@@ -1190,6 +1190,7 @@ mod tests {
             mbid: None,
             naming: Default::default(),
             selected_by: None,
+            is_shutdown: false,
         }
     }
 

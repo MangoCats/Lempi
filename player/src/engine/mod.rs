@@ -207,6 +207,7 @@ pub struct PlayerState {
     /// mixed figure would resume ~14 s late every time.
     pub position_ms: u64,
     pub queue_len: usize,
+    pub shutdown_queued: bool,
     /// What an echo node needs from this one `[GDE-ECHO-310]`. Empty on a
     /// node that cannot place itself in time, which is a fact rather than an
     /// omission -- see `EchoState::voided_by`.
@@ -415,6 +416,8 @@ pub enum Command {
     /// seconds of position to a timer would be a shame in exactly the case a
     /// person took care over.
     Persist,
+    /// Enqueue a shutdown event at the tail of the queue `[IMPL-QSD-020]`.
+    EnqueueShutdown,
     /// Terminate the process. Deliberately NOT a playback state -- it ends the
     /// engine rather than putting playback into a third mode.
     Shutdown,
@@ -576,6 +579,8 @@ pub struct Engine {
     rx: Receiver<Command>,
     playing: bool,
     shutdown: bool,
+    pub power_off_allowed: bool,
+    shutdown_saved: bool,
     volume: f32,
     /// Skip transition shape, adjustable while playing `[REQ-AUD-162]`.
     skip_fade_ms: u64,
@@ -798,6 +803,8 @@ impl Engine {
             rx,
             playing: false,
             shutdown: false,
+            power_off_allowed: false,
+            shutdown_saved: false,
             volume: 1.0,
             skip_fade_ms: crate::SKIP_FADE_MS,
             skip_lead_ms: crate::SKIP_LEAD_MS,
@@ -841,6 +848,11 @@ impl Engine {
     /// it the engine runs identically and simply forgets across restarts.
     pub fn attach_store(&mut self, store: PlayerStore) {
         self.store = Some(store);
+    }
+
+    /// Whether this host is allowed to initiate an OS-level poweroff upon scheduled shutdown.
+    pub fn set_power_off_allowed(&mut self, allowed: bool) {
+        self.power_off_allowed = allowed;
     }
 
     /// Open the next admitted passage `position_ms` in, for resuming.
@@ -901,6 +913,7 @@ impl Engine {
         // `[REQ-VIS-250]`.
         self.finalize_draining_plays();
         self.advance_shown();
+        self.check_queued_shutdown();
         // Throttled by time, but never at the cost of a late answer to the
         // question anyone actually asks: a change of audible passage is
         // published the moment it happens, and the clock only governs the
@@ -1305,7 +1318,7 @@ impl Engine {
                     let declined = self
                         .queue
                         .iter()
-                        .find(|e| e.qid == id)
+                        .find(|e| e.qid == id && !e.is_shutdown && e.passage_id > 0)
                         .map(|e| (e.passage_id, e.mbid.clone()));
                     self.queue_edited = true;
                     if self.queue.remove(id) {
@@ -1324,6 +1337,11 @@ impl Engine {
                     self.queue.shift(id, delta);
                     self.queue_edited = true;
                 }
+                Ok(Command::EnqueueShutdown) => {
+                    if self.queue.push_shutdown().is_some() {
+                        self.queue_edited = true;
+                    }
+                }
                 Ok(Command::Persist) => self.persist(true),
                 Ok(Command::Shutdown) | Err(TryRecvError::Disconnected) => {
                     self.shutdown = true;
@@ -1338,6 +1356,9 @@ impl Engine {
     /// submit: the output ring would otherwise play on for its full depth.
     /// Producers are untouched, so the buffers stay primed [REQ-AUD-142].
     fn set_playing(&mut self, on: bool) {
+        if on {
+            self.shutdown_saved = false;
+        }
         self.playing = on;
         self.path.set_playing(on);
     }
@@ -1401,9 +1422,20 @@ impl Engine {
         if self.live.is_empty() {
             return;
         }
+        let is_shutdown = self.queue.peek().map_or(false, |e| e.is_shutdown);
         let ch = self.out_channels.max(1);
         let rate = self.out_rate as u64;
         let fade_samples = (self.skip_fade_ms * rate / 1000) as usize * ch;
+
+        if is_shutdown {
+            self.live.clear();
+            self.shown = None;
+            self.cut_ring_to_incoming(fade_samples, self.skip_lead_ms);
+            self.republish_after_cut(0);
+            self.queue_edited = true;
+            self.publish();
+            return;
+        }
 
         // Everything sounding is already mixed into the ring and will be faded
         // there, together. Nothing upstream is worth keeping -- including a
@@ -1661,6 +1693,9 @@ impl Engine {
     ///
     /// Position-driven via the shared rule, never buffer-driven `[XFD-BEH-C1-020]`.
     fn admit_due(&mut self) {
+        if self.queue.peek().map_or(false, |e| e.is_shutdown) {
+            return;
+        }
         // **Split once, from the pair that is actually about to hand over.**
         // The overlap the coarse knob spends belongs to *this* transition, and
         // everything below either reads the queue head or removes it -- so
@@ -1869,6 +1904,10 @@ impl Engine {
             return;
         }
         let Some(next) = self.queue.peek() else { return };
+        if next.is_shutdown {
+            self.ready = None;
+            return;
+        }
         if self.ready.as_ref().map(|l| l.entry.passage_id) == Some(next.passage_id) {
             return; // already standing by
         }
@@ -2781,6 +2820,50 @@ placing at the ring's own depth, which sounds early",
         }
     }
 
+    fn check_queued_shutdown(&mut self) {
+        if self.queue.peek().map_or(false, |e| e.is_shutdown)
+            && self.live.is_empty()
+            && self.out_buffered_frames() == 0
+        {
+            self.execute_queued_shutdown();
+        }
+    }
+
+    fn execute_queued_shutdown(&mut self) {
+        self.resolve_pending_finish_now();
+        self.queue.advance();
+        self.queue_edited = true;
+        self.shown = None;
+        self.draining = None;
+        let remaining: Vec<i64> = self
+            .queue
+            .iter()
+            .filter(|e| !e.is_shutdown && e.passage_id > 0)
+            .map(|e| e.passage_id)
+            .collect();
+        if let Some(store) = &self.store {
+            if let Err(e) = store.save_queue(&remaining) {
+                tracing::error!("save queue on shutdown: {e}");
+            }
+            if let Err(e) = store.save(None, 0, true) {
+                tracing::error!("save player state on shutdown: {e}");
+            }
+            self.saved = Some((-1, false));
+            self.last_save = std::time::Instant::now();
+            self.shutdown_saved = true;
+        }
+        if self.power_off_allowed {
+            tracing::info!("queued shutdown: executing system poweroff");
+            let _ = std::process::Command::new("sudo")
+                .args(["-n", "systemctl", "poweroff"])
+                .spawn();
+        } else {
+            tracing::info!("queued shutdown: power off not allowed on this host, stopping playback");
+            self.set_playing(false);
+        }
+        self.publish();
+    }
+
     /// Write the snapshot everything else reads.
     fn publish(&mut self) {
         self.published = self.shown.as_ref().map(|(e, _)| e.passage_id);
@@ -2841,6 +2924,7 @@ placing at the ring's own depth, which sounds early",
             };
             let pending = self.live.iter().skip(after).map(|l| l.entry.clone());
             s.queue_len = self.live.len().saturating_sub(after) + self.queue.len();
+            s.shutdown_queued = self.queue.has_shutdown();
             s.queue = pending
                 .chain(self.queue.iter().cloned())
                 .take(crate::QUEUE_SHOWN)
@@ -3411,6 +3495,7 @@ mod tests {
             mbid: None,
             naming: Default::default(),
             selected_by: None,
+            is_shutdown: false,
         }
     }
 
@@ -5260,5 +5345,90 @@ than one mix block");
         e.tick();
         let s = h.snapshot();
         assert_eq!(s.queue_len + s.active_streams, 0, "unopenable passage clears");
+    }
+
+    #[test]
+    fn enqueue_shutdown_adds_marker_and_updates_snapshot() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.enqueue(entry(1, "track1.mp3"));
+        h.send(Command::EnqueueShutdown);
+        e.drain_commands();
+        e.publish();
+        let s = h.snapshot();
+        assert!(s.shutdown_queued, "shutdown_queued must be published");
+        assert_eq!(s.queue.len(), 2);
+        assert!(s.queue[1].is_shutdown, "second item is shutdown");
+
+        // Duplicate enqueue is ignored
+        h.send(Command::EnqueueShutdown);
+        e.drain_commands();
+        e.publish();
+        let s = h.snapshot();
+        assert_eq!(s.queue.len(), 2);
+    }
+
+    #[test]
+    fn remove_shutdown_clears_flag_without_recording_rejection() {
+        let (st, path) = store();
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+        h.send(Command::EnqueueShutdown);
+        e.drain_commands();
+        e.publish();
+        let s = h.snapshot();
+        assert!(s.shutdown_queued);
+        let qid = s.queue[0].qid;
+
+        h.send(Command::RemoveQueued(qid));
+        e.drain_commands();
+        e.publish();
+        let s = h.snapshot();
+        assert!(!s.shutdown_queued, "shutdown_queued cleared after removal");
+        assert_eq!(s.queue.len(), 0);
+
+        // Verify zero rejections were written
+        assert_eq!(
+            st.rejection_count(),
+            0,
+            "removing shutdown marker must never record a rejection"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn shutdown_marker_suppresses_prepare_next_and_admit_due() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        h.send(Command::EnqueueShutdown);
+        e.tick();
+        e.enqueue(entry(42, "behind_shutdown.mp3"));
+        h.send(Command::Play);
+        e.tick();
+
+        let s = h.snapshot();
+        assert_eq!(s.active_streams, 0, "tracks behind shutdown must not be admitted");
+        assert!(e.ready.is_none(), "decoder must not be prepared across shutdown");
+    }
+
+    #[test]
+    fn idle_engine_executes_shutdown_immediately_persisting_queue_and_state() {
+        let (st, path) = store();
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+        // Enqueue shutdown, followed by passages behind shutdown
+        h.send(Command::EnqueueShutdown);
+        e.drain_commands();
+        e.enqueue(entry(99, "track99.mp3"));
+        e.enqueue(entry(100, "track100.mp3"));
+
+        // Tick on idle engine executes shutdown
+        e.tick();
+
+        let remaining = st.load_queue();
+        assert_eq!(remaining, vec![99, 100], "passages behind shutdown must persist");
+
+        let state = st.load().unwrap();
+        assert_eq!(state, Some((None, 0, true)), "player_state must be saved as (None, 0, true)");
+        assert!(!h.snapshot().playing, "simulated shutdown cleanly pauses playback");
+        let _ = std::fs::remove_file(path);
     }
 }

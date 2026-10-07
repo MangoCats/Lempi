@@ -2097,6 +2097,13 @@ impl PlayerStore {
             .unwrap_or(0)
     }
 
+    /// How many rejections are on record. For diagnostics and tests.
+    pub fn rejection_count(&self) -> i64 {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM listener_rejections", [], |r| r.get(0))
+            .unwrap_or(0)
+    }
+
     /// When each recording was last rejected in this way. Only the most recent
     /// matters: suppression is a window, not an accumulation.
     pub fn last_rejected(

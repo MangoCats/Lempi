@@ -157,6 +157,8 @@ body { background-color: black; color: #ccc; }
 /* One row, not a stack: three destinations, not a menu of programmes. */
 .browserow { display: flex; gap: .5rem; }
 .browserow .button { font-size: 18px; padding: 8px 16px; }
+.shutdown-slot { flex: 1; display: flex; justify-content: center; }
+#b-shutdown:disabled { background-color: #2010a0; opacity: .3; cursor: default; border: 2px solid #402080; }
 .stations { text-align: right; }
 .stations h3 { margin: 0 0 .3rem; }
 /* One row per programme: the engagement time to the left, the button at the

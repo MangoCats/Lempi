@@ -193,10 +193,16 @@ impl Playback for crate::engine::Engine {
         Engine::enqueue(self, entry)
     }
     fn queued_ids(&self) -> Vec<i64> {
-        Engine::queued(self).map(|e| e.passage_id).collect()
+        Engine::queued(self)
+            .filter(|e| !e.is_shutdown && e.passage_id > 0)
+            .map(|e| e.passage_id)
+            .collect()
     }
     fn queued_ms(&self) -> u64 {
-        Engine::queued(self).map(|e| e.end_ms.saturating_sub(e.start_ms)).sum()
+        Engine::queued(self)
+            .filter(|e| !e.is_shutdown)
+            .map(|e| e.end_ms.saturating_sub(e.start_ms))
+            .sum()
     }
     fn shortfall(&self) -> usize {
         Engine::shortfall(self)
@@ -294,6 +300,7 @@ mod tests {
             mbid: None,
             naming: Default::default(),
             selected_by: None,
+            is_shutdown: false,
         }
     }
 

@@ -107,6 +107,7 @@ pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEnt
         // Reconstructed from a stored passage, not a fresh selection -- no
         // real provenance event to report `[REQ-VIS-300]`.
         selected_by: None,
+        is_shutdown: false,
     })
 }
 

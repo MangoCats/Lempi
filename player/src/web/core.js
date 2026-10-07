@@ -271,7 +271,7 @@ const Lempi = (() => {
   // shift at both ends and answers 204 either way `[REQ-VIS-185]`, so the
   // button that cannot move anything looked exactly like one that could and
   // was indistinguishable from a control that had failed. Disabled instead.
-  function queueControls(qid, editable = true, ends = {}) {
+  function queueControls(qid, editable = true, ends = {}, is_shutdown = false) {
       const box = document.createElement('span');
       box.className = 'qedit';
       delegateQueueEdits();
@@ -280,6 +280,7 @@ const Lempi = (() => {
       // queue: a column of identical buttons is one target to learn, where
       // buttons that shift with the length of a title are three.
       for (const [label, action, title] of Lempi.VERBS.edit) {
+          if (is_shutdown && action !== 'remove') continue;
           const b = document.createElement('button');
           b.type = 'button';
           b.textContent = label;
@@ -504,24 +505,28 @@ const Lempi = (() => {
     // set on every row. Both are honest arrangements; which suits depends on
     // whether the skin has a notion of a selected track.
     if (opts.controls !== false) {
-      row.appendChild(queueControls(item.qid, item.editable, opts.ends));
+      row.appendChild(queueControls(item.qid, item.editable, opts.ends, item.is_shutdown));
     }
     const title = document.createElement('span');
     title.className = 'qtitle';
-    // `opts.linkable`: title/artist become their own clickable spans,
-    // reaching the preference panel `[REQ-VIS-285]`, instead of one plain
-    // text node -- a skin opts in because its own `label()` string is no
-    // longer what gets shown. Skins that don't ask stay byte-for-byte
-    // unchanged (WinAmp's marquee has no separate artist node to link).
-    if (opts.linkable) {
-      linkableTrack(title, item);
+    if (item.is_shutdown) {
+      title.appendChild(document.createTextNode('Shutdown'));
     } else {
-      title.appendChild(document.createTextNode(label(item) + ' '));
+      // `opts.linkable`: title/artist become their own clickable spans,
+      // reaching the preference panel `[REQ-VIS-285]`, instead of one plain
+      // text node -- a skin opts in because its own `label()` string is no
+      // longer what gets shown. Skins that don't ask stay byte-for-byte
+      // unchanged (WinAmp's marquee has no separate artist node to link).
+      if (opts.linkable) {
+        linkableTrack(title, item);
+      } else {
+        title.appendChild(document.createTextNode(label(item) + ' '));
+      }
+      const dur = document.createElement('span');
+      dur.className = 'dur';
+      dur.textContent = fmt.clock(item.duration_ms);
+      title.appendChild(dur);
     }
-    const dur = document.createElement('span');
-    dur.className = 'dur';
-    dur.textContent = fmt.clock(item.duration_ms);
-    title.appendChild(dur);
     row.appendChild(title);
     return row;
   }

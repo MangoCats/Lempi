@@ -26,6 +26,13 @@
     // preference panel `[REQ-VIS-285]`.
     { linkable: true, artistJoin: ' by ' });
 
+  const btnShutdown = $('b-shutdown');
+  if (btnShutdown) {
+    btnShutdown.onclick = () => {
+      fetch('/queue/shutdown', { method: 'POST' });
+    };
+  }
+
   // Checked means the clock is choosing, which is Lempi's "no manual override".
   // Unchecking has to name something to switch TO -- "manual" is a programme
   // id, not a bare flag -- so it freezes on whatever is engaged right now
@@ -186,6 +193,9 @@
     lit($('b-pause'), !s.playing);
     showVolume(s);
     showQueue(s);
+    if (btnShutdown) {
+      btnShutdown.disabled = Boolean(s.shutdown_queued);
+    }
     renderStations(s);
     $('why').textContent = s.why
       ? `${s.why.program ? s.why.program + ': ' : ''}weight ` +

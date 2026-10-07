@@ -847,7 +847,11 @@ impl Session {
     /// Best-effort. Failing to remember the queue costs a restart its place;
     /// interrupting the music over it would cost more.
     fn remember_queue(&mut self, engine: &dyn Playback) {
-        let ids = engine.queued_ids();
+        let ids: Vec<i64> = engine
+            .queued_ids()
+            .into_iter()
+            .filter(|&id| id > 0)
+            .collect();
         if ids == self.saved_queue {
             return;
         }

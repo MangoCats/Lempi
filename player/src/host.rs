@@ -209,6 +209,13 @@ impl Player {
 
         let (ended_tx, ended) = channel::<Ended>();
         let (tx, rx) = sync_channel::<Started>(1);
+        // Measured once, here, off the engine's thread, and stated
+        // `[GDE-HST-360]`: which host controls the page will offer.
+        let (mut capabilities, why_not) = crate::web::capabilities::Capabilities::detect();
+        capabilities.writes_beside_audio = cfg.writes_beside_audio;
+        tracing::info!("{}", capabilities.describe(&why_not));
+        let power_off_allowed = capabilities.power_off;
+
         let setup = EngineSetup {
             db: cfg.listener.clone(),
             library: cfg.library.clone(),
@@ -218,6 +225,7 @@ impl Player {
             mpd_root: cfg.mpd_root.clone(),
             writes_beside_audio: cfg.writes_beside_audio,
             paused: cfg.paused,
+            power_off_allowed,
         };
         let signal = Signal(ended_tx.clone(), Ended::Engine);
         std::thread::Builder::new()
@@ -274,11 +282,6 @@ impl Player {
         }
 
         if let Some(port) = cfg.web_port {
-            // Measured once, here, off the engine's thread, and stated
-            // `[GDE-HST-360]`: which host controls the page will offer.
-            let (mut capabilities, why_not) = crate::web::capabilities::Capabilities::detect();
-            capabilities.writes_beside_audio = cfg.writes_beside_audio;
-            tracing::info!("{}", capabilities.describe(&why_not));
             let ui = crate::web::Ui {
                 handle: handle.clone(),
                 why,
@@ -502,6 +505,7 @@ struct EngineSetup {
     mpd_root: Option<String>,
     writes_beside_audio: bool,
     paused: bool,
+    power_off_allowed: bool,
 }
 
 /// The published state, so the loop can read the listener's settings after the
@@ -511,7 +515,7 @@ fn state_of(h: &EngineHandle) -> Arc<Mutex<PlayerState>> {
 }
 
 fn engine_thread(setup: EngineSetup, tx: SyncSender<Started>) {
-    let EngineSetup { db, library, depth, device, mpd_addr, mpd_root, writes_beside_audio, paused } =
+    let EngineSetup { db, library, depth, device, mpd_addr, mpd_root, writes_beside_audio, paused, power_off_allowed } =
         setup;
     let mut session = match Session::open(&db, &library, depth) {
         Ok(s) => s,
@@ -530,6 +534,7 @@ fn engine_thread(setup: EngineSetup, tx: SyncSender<Started>) {
     tracing::info!("{why}");
 
     let (mut engine, handle) = Engine::new(path, session.depth());
+    engine.set_power_off_allowed(power_off_allowed);
     // Taken before the handle is sent away: the loop below reads the listener's
     // settings from here once the engine has become an anonymous backend.
     let published = state_of(&handle);

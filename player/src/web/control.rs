@@ -77,6 +77,18 @@ pub(super) async fn seek_to(
 /// * `remove` — out of the queue.
 /// * `sooner` / `later` — one place each way, clamped at the ends.
 ///
+/// Enqueue a shutdown event at the tail of the queue `[IMPL-QSD-020]`.
+///
+/// The queue enforces cardinality 0 <= n <= 1; returns 204 No Content on success
+/// and 409 Conflict if a shutdown event is already queued.
+pub(super) async fn queue_shutdown(State(ui): State<Ui>) -> StatusCode {
+    if ui.handle.snapshot().shutdown_queued {
+        return StatusCode::CONFLICT;
+    }
+    ui.handle.send(Command::EnqueueShutdown);
+    StatusCode::NO_CONTENT
+}
+
 /// The first three take a passage from the library; the last three act on one
 /// already queued, and need no library read at all.
 pub(super) async fn queue_passage(

@@ -563,7 +563,7 @@
     $('nowrow').classList.toggle('picked', picked == null);
     const on = picked != null ? (s.queue || []).find(q => q.qid === picked) : null;
     setText($('whotitle'), on
-      ? (on.artist ? `${on.title} — ${on.artist}` : on.title)
+      ? (on.is_shutdown ? 'Shutdown' : (on.artist ? `${on.title} — ${on.artist}` : on.title))
       : 'this passage');
     renderWhy(picked == null ? s.why : pickedWhy);
 
@@ -580,11 +580,11 @@
     const items = s.queue || [];
     const at = items.indexOf(on);
     const ends = { first: at === 0, last: at === items.length - 1 };
-    const sig = JSON.stringify([on.qid, on.editable, ends]);
+    const sig = JSON.stringify([on.qid, on.editable, ends, on.is_shutdown]);
     if (sig === qpickSig) return;
     qpickSig = sig;
     box.textContent = '';
-    box.appendChild(Lempi.queueControls(on.qid, on.editable, ends));
+    box.appendChild(Lempi.queueControls(on.qid, on.editable, ends, on.is_shutdown));
   }
 
   // ------------------------------------------------------------- speakers

@@ -178,6 +178,8 @@ pub struct QueueItem {
     /// the mixer has it: its audio is already partly in the ring, so removing
     /// it from the queue would change nothing anyone could hear.
     pub editable: bool,
+    #[serde(default)]
+    pub is_shutdown: bool,
 }
 
 #[derive(Serialize)]
@@ -217,6 +219,7 @@ pub struct Snapshot {
     pub position_ms: u64,
     pub duration_ms: u64,
     pub queue_len: usize,
+    pub shutdown_queued: bool,
     /// The echo messages `[GDE-ECHO-310]`, riding the snapshot rather than a
     /// socket of their own. A browser ignores the field; an echo node reads
     /// only this one. That is what makes the transport choice uninteresting
@@ -343,6 +346,7 @@ impl From<&PlayerState> for Snapshot {
             position_ms: s.position_ms,
             duration_ms: s.current.as_ref().map(|e| e.duration_ms()).unwrap_or(0),
             queue_len: s.queue_len,
+            shutdown_queued: s.shutdown_queued,
             echo: s.echo.clone(),
             echo_node: s.echo_node.clone(),
             queue: s
@@ -358,6 +362,7 @@ impl From<&PlayerState> for Snapshot {
                     artist_mbid: e.naming.artist_mbid.clone(),
                     duration_ms: e.duration_ms(),
                     editable: i >= s.mixing_ahead,
+                    is_shutdown: e.is_shutdown,
                 })
                 .collect(),
             volume_db: Volume::db_for(s.volume),
@@ -481,6 +486,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/vipunen/ensure", post(vipunen_ensure));
 
     appliance_routes(router)
+        .route("/queue/shutdown", post(queue_shutdown))
         .route("/queue/:passages/:action", post(queue_passage))
         .route("/ws", get(ws_upgrade))
         .route("/audio/sink", get(audio_sink))
@@ -777,6 +783,7 @@ mod tests {
             mbid: None,
             naming: Default::default(),
             selected_by: None,
+            is_shutdown: false,
         };
         e.naming.mb_title = Some(title.into());
         e
