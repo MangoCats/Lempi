@@ -286,6 +286,7 @@ RestartSec=2
 # needs PipeWire running system-wide or a shared socket to work. That is a
 # decision for the appliance image, not for the machine under test.
 User=RUNUSER
+SupplementaryGroups=input
 Nice=-5
 Environment=XDG_RUNTIME_DIR=/run/user/RUNUID
 Environment=PULSE_SERVER=unix:/run/user/RUNUID/pulse/native
@@ -332,25 +333,10 @@ for f in lempi-underruns lempi-led-boot \
 done
 
 # ------------------------------------------------------------------ rocker
-# The keeper, the watchdog and their units were here until 2026-10-02, and
-# are every Bluetooth appliance's now: appliance/bluetooth [APP-BT-010].
-echo "rocker"
-HERE="${HERE:-$(cd "$(dirname "$0")" && pwd)}"
-
-# **`[PI3-FOUND-710]` One rocker, and it is the one with the fix.** Two copies
-# lived here: `lempi-rocker` at 84 lines and `lempi-rocker.sh` at 124, and the
-# install loop took the shorter one. The longer is a superset -- it adds
-# `WAIT_FOR` and `MAP_ONLY`, and it fixes `say()` writing to stdout, which was
-# captured into the device name `await_dev` returns and produced a first run
-# reading `/dev/input/22:25:46 waiting...event2`. The appliance had been
-# running the version with that bug. The stale copy is deleted rather than
-# left to be picked again, and the `.sh` source installs under the bare name,
-# which is the convention `lempi-speaker.sh` follows (appliance/bluetooth).
-if [ -f "$HERE/lempi-rocker.sh" ]; then
-    if ! cmp -s "$HERE/lempi-rocker.sh" /usr/local/bin/lempi-rocker; then
-        install -m755 "$HERE/lempi-rocker.sh" /usr/local/bin/lempi-rocker &&
-            did "installed lempi-rocker"
-    fi
+# Native AVRCP transport control handling is integrated directly into the
+# Lempi player binary [IMPL-BT-010], replacing the standalone lempi-rocker.
+if [ -e /usr/local/bin/lempi-rocker ]; then
+    rm -f /usr/local/bin/lempi-rocker && did "retired lempi-rocker"
 fi
 
 # The node's own units, written here: its diagnostics and its experiment.

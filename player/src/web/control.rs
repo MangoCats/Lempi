@@ -343,6 +343,7 @@ pub(super) async fn command(
     match name.as_str() {
         "play" => h.send(Command::Play),
         "pause" => h.send(Command::Pause),
+        "toggle" => h.send(Command::TogglePlayPause),
         "skip" => h.send(Command::Skip),
         // Named rather than folded into a settings write because it is an
         // action with an audible consequence, not a stored preference: the

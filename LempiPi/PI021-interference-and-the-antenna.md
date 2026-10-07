@@ -123,7 +123,10 @@ offers five gestures, which under AVRCP arrive as ordinary key events from a
 uinput device BlueZ creates -- play/pause, previous/next, volume. Worth building
 regardless of the interference question: an appliance whose only control
 surface is a web page is a poor appliance, and it is the thing that makes any
-Wi-Fi-off-while-playing scheme usable at all.
+Wi-Fi-off-while-playing scheme usable at all. Integrated natively into `lempi-player`
+(`avrcp.rs`) across all Bluetooth appliances `[IMPL019]`, dispatching atomic
+`Command::TogglePlayPause` and `Command::Skip` directly to the engine and retiring
+the standalone shell prototype `lempi-rocker.sh`.
 
 **`[PI3-ROCKER-010]` The rocker's assignment. Measured 2026-08-16.** Five
 gestures were pressed in order; three arrived as key events and two produced
@@ -149,7 +152,9 @@ in writing is what stops it being spent on something lesser later.
 
 **`[PI3-ROCKER-030]` The uinput device appears with audio, not with the
 connection.** Anything reading it must wait for it, and must wait again when it
-goes: it is removed on every disconnect.
+goes: it is removed on every disconnect. Native handling in `avrcp.rs` rescans
+`/proc/bus/input/devices` dynamically without path caching and detects teardown
+cleanly via `libc::poll` and `ENODEV` `[IMPL-BT-030]`.
 
 **`[PI3-ROCKER-020]` Play and pause switch the radios. Withdrawn 2026-08-16.**
 Centre press is a plain play/pause toggle and touches no radio.

@@ -292,6 +292,8 @@ pub enum Placement {
 pub enum Command {
     Play,
     Pause,
+    /// Toggle between playing and paused, flipping state and publishing immediately.
+    TogglePlayPause,
     /// Drop the playing passage and start the next immediately.
     Skip,
     /// Master volume, clamped to 0.0..=1.0.
@@ -1079,6 +1081,11 @@ impl Engine {
             match self.rx.try_recv() {
                 Ok(Command::Play) => self.set_playing(true),
                 Ok(Command::Pause) => self.set_playing(false),
+                Ok(Command::TogglePlayPause) => {
+                    let next = !self.playing;
+                    self.set_playing(next);
+                    self.publish();
+                }
                 Ok(Command::ReopenOutput) => self.path.reopen(),
                 Ok(Command::Skip) => self.skip(),
                 Ok(Command::SetEchoDelayTrim(ms)) => {
@@ -3443,6 +3450,22 @@ mod tests {
         drop(h);
         e.tick();
         assert!(e.is_shutdown(), "a vanished controller must not leave it running");
+    }
+
+    #[test]
+    fn toggle_play_pause_alternates_and_publishes_state() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        assert!(!h.snapshot().playing);
+
+        h.send(Command::TogglePlayPause);
+        e.tick();
+        assert!(e.playing);
+        assert!(h.snapshot().playing, "snapshot must reflect toggle immediately");
+
+        h.send(Command::TogglePlayPause);
+        e.tick();
+        assert!(!e.playing);
+        assert!(!h.snapshot().playing, "snapshot must reflect toggle immediately");
     }
 
     #[test]

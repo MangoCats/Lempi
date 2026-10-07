@@ -66,6 +66,9 @@ pub use lempi_core::{
     SKIP_SUPPRESS_H, SKIP_SUPPRESS_MAX_H, SKIP_SUPPRESS_MIN_H,
 };
 
+/// Native Bluetooth AVRCP transport control handling `[IMPL-BT-010]`.
+#[cfg(feature = "appliance")]
+pub mod avrcp;
 pub mod backup;
 /// One command line, seventeen binaries `[GDE-CLI-010]`. The only argument
 /// parser in the repository; each binary contributes a table of options and

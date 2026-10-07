@@ -40,6 +40,7 @@ ExecStart=/usr/local/bin/lempi --listener /var/lempi/listener.db --library /srv/
 Restart=always
 RestartSec=2
 User=pi
+SupplementaryGroups=input
 Nice=-5
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native

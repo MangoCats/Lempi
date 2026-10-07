@@ -92,6 +92,7 @@ that play to a Bluetooth speaker: `lempi02w`, and `lp3-wifi` since 2026-10-02.
 - their five units, `/run/lempi`, and the keeper's and watchdog's routine ticks
   kept out of the journal
 - linger for pi, and PipeWire's clock: 44.1 kHz and a 4096-frame quantum, in one file
+- native AVRCP transport control handling: the player reads the speaker's rocker or adapter buttons directly ([`IMPL019`](../docs/IMPL019-native-bluetooth-controls.md)), replacing the retired standalone `lempi-rocker` script
 
 Until 2026-10-02 lempi02w's copy was heredocs in `setup-appliance.sh` and
 lp3-wifi's was files copied from them. Read off both first: the units matched

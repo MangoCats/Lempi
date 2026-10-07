@@ -161,6 +161,16 @@ pub struct Player {
     ended: Receiver<Ended>,
     /// Dropped to end the backup thread's hourly wait.
     _stop_background: Sender<()>,
+    _stop_avrcp: AvrcpStopper,
+}
+
+/// Signals the AVRCP background worker to terminate when dropped.
+struct AvrcpStopper(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for AvrcpStopper {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// Sends `Ended` when dropped -- at the end of a thread's work, and during an
@@ -379,7 +389,19 @@ impl Player {
         }
         drop(ended_tx);
 
-        Ok(Player { handle, runtime: Some(runtime), ended, _stop_background: stop_background })
+        let stop_avrcp = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        #[cfg(all(target_os = "linux", feature = "appliance"))]
+        {
+            crate::avrcp::spawn(handle.clone(), stop_avrcp.clone());
+        }
+
+        Ok(Player {
+            handle,
+            runtime: Some(runtime),
+            ended,
+            _stop_background: stop_background,
+            _stop_avrcp: AvrcpStopper(stop_avrcp),
+        })
     }
 
     /// The engine's control surface, for anything that commands it directly.
@@ -415,6 +437,7 @@ impl Player {
     /// guest is live `[SPEC-BK-030]`, and this reports `false` rather than
     /// hanging on it.
     pub fn shutdown(mut self) -> bool {
+        self._stop_avrcp.0.store(true, std::sync::atomic::Ordering::Relaxed);
         self.command(Command::Shutdown);
         let stopped = wait_for_engine(&self.ended, Duration::from_secs(5));
         if let Some(rt) = self.runtime.take() {
