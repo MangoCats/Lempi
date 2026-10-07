@@ -57,6 +57,13 @@ else
 fi
 rm -f "$VT_STATE/db_fails"
 
+# The audio output the listener actually directed to [IMPL-POV-048].
+printf 'dac\n' > "$VT_STATE/db_active_output"
+assert_eq "$(lempi_active_output)" "dac" "lempi_active_output reads the chosen active output"
+assert_eq "$(LEMPI_ACTIVE_OUTPUT=bt:12:34:56:78:9A:BC lempi_active_output)" "bt:12:34:56:78:9A:BC" \
+    "lempi_active_output honours the environment override"
+rm -f "$VT_STATE/db_active_output"
+
 # AFH decoding: three readers, one hex parser. The settled map measured on the
 # appliance is the fixture.
 MAP=000000fcffffffffff3f

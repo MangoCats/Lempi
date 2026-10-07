@@ -13,6 +13,11 @@ case "$*" in
         # A database that cannot be read exits non-zero, exactly as the real
         # one does -- which is the distinction PI3-FOUND-700 turns on.
         [ -f "$VT_STATE/db_fails" ] && exit 1
+        case "$*" in
+            *active_output*)
+                cat "$VT_STATE/db_active_output" 2>/dev/null
+                exit 0 ;;
+        esac
         cat "$VT_STATE/db_speaker" 2>/dev/null
         exit 0 ;;
 esac

@@ -226,3 +226,16 @@ sinks "Dummy Output"
 keeper >/dev/null
 assert_called "bluetoothctl connect $OONTZ" "treats an unreadable backoff state as no backoff"
 teardown
+
+# --- 15. DAC selected: do not chase or page Bluetooth [SPEC-POV-020.3] ---
+setup
+speaker "$OONTZ" "OontZ_Angle 3 U412" no yes
+printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
+printf '%s\n' "$OONTZ" > "$VT_STATE/reachable"
+printf 'dac\n' > "$VT_STATE/db_active_output"
+sinks "Dummy Output"
+keeper >/dev/null
+assert_not_called "bluetoothctl connect $OONTZ" "does not chase Bluetooth when active output is dac"
+assert_not_called "bluetoothctl trust $OONTZ" "does not trust speakers when active output is dac"
+teardown
+

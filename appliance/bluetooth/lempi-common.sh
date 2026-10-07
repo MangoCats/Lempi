@@ -37,6 +37,13 @@ lempi_speaker() {
         "SELECT value FROM player_settings WHERE key = 'speaker_address'" 2>/dev/null
 }
 
+# The audio output the listener chose ("dac" or "bt:<address>"), or empty.
+lempi_active_output() {
+    [ -n "${LEMPI_ACTIVE_OUTPUT:-}" ] && { printf '%s\n' "$LEMPI_ACTIVE_OUTPUT"; return; }
+    sqlite3 "$(lempi_db)" \
+        "SELECT value FROM player_settings WHERE key = 'active_output'" 2>/dev/null
+}
+
 # **Every sink PipeWire currently offers**, one name per line, dummy excluded.
 # Parsed from the numbered rows only, so no header or box-drawing line can be
 # mistaken for a sink -- the whole of `[PI3-FOUND-110]`, which is why this

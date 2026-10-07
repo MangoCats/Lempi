@@ -370,3 +370,8 @@ body:has(#panel-history:not([hidden])) main {
    one so nobody misses that the appliance is waiting on them. */
 #bt-confirm { border: 1px solid #e0a030; border-radius: 4px; padding: .5rem; }
 #bt-countdown { opacity: .8; font-size: .9em; }
+
+#output-volume-row span { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+#outvol-status { opacity: .85; }
+#bt-timeout-input { width: 5em; padding: .2rem .4rem; }
+

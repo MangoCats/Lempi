@@ -95,6 +95,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `OWE` — What a fix on one installation owes another that shares its shape, see [PI025](../LempiPi/PI025-what-the-local-split-owes-lempi02w.md)
 - `PRE` — What an appliance's startup path depends on, verified and reported at every boot rather than assumed, see [PI026](../LempiPi/PI026-startup-preflight.md)
 - `OPS` — An appliance measured **in service** rather than at build time: the health baseline, the false alarms, the standing findings. Prefixed per machine (`BOS` for `bose`), because the numbers are only meaningful against one box — see [BOSE004](../BosePi/BOSE004-operating-health.md)
+- `POV` — Per-Output Volume: independent volume state, memory, and persistence across DAC and Bluetooth outputs, see [SPEC060](spec/SPEC060-per-output-volume.md)
 
 ### Development Guidance Domains (`GDE`)
 - `BMK` — MuLibPlay benchmark measurements

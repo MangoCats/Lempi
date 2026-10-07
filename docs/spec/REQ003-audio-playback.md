@@ -37,6 +37,8 @@ Split from [REQ002](REQ002-functional-requirements.md) on 2026-09-10, which had 
 > This is the same buffer-depth trap as pausing by declining to submit `[REQ-AUD-142]`, and it recurs for any control the listener expects to act *now*. The rule generalises: per-passage properties (gain `[SPEC-SC-040]`, crossfade) belong before the mixer, because each side of a crossfade carries its own level; listening controls belong at the device.
 >
 > The value crosses to the callback as an atomic, not behind the ring's mutex. The callback must never block, and must be able to change level even on a tick where it cannot take that lock.
+>
+> Per-output volume levels (physical DAC vs. Bluetooth speakers) and automatic level restoration across output handoffs are governed by [REQ-POV-010] and [SPEC060](SPEC060-per-output-volume.md).
 
 **`[REQ-AUD-154]` The master level is expressed in decibels, −72 dB to 0 dB**, `amplitude = 10^(dB/20)`. Loudness is perceived in ratios, so dB is the unit in which a listener's judgements are actually even; amplitude is not.
 

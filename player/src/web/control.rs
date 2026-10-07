@@ -36,6 +36,14 @@ pub(super) async fn set_volume(
     axum::extract::Path(db): axum::extract::Path<f32>,
 ) -> StatusCode {
     ui.handle.send(Command::SetVolume(Volume::amplitude_at_db(db)));
+    let db_path = ui.db.clone();
+    let library = ui.library.clone();
+    tokio::task::spawn_blocking(move || {
+        if let Ok(store) = crate::db::PlayerStore::open_split(&db_path, &library) {
+            let active = store.get_active_output();
+            let _ = store.save_output_volume(&active, db, false);
+        }
+    });
     StatusCode::NO_CONTENT
 }
 

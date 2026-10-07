@@ -513,7 +513,9 @@ case "$VERB" in
             sleep 3
         fi
 
-        conn="$(patient_connect "$ADDR" "${LEMPI_GRAB_SECONDS:-45}")"
+        grab_timeout="${3:-${LEMPI_GRAB_SECONDS:-45}}"
+        [[ "$grab_timeout" =~ ^[0-9]+$ ]] || grab_timeout=45
+        conn="$(patient_connect "$ADDR" "$grab_timeout")"
         # Make it the default sink. The caller must still reopen the player's
         # output: the stream does not dependably follow [PI3-WHY-020].
         # **`[PI3-FOUND-270]` The sink has to be THIS device's sink.** This

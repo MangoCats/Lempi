@@ -32,6 +32,14 @@ set -u
 DB=$(lempi_db)
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 
+# **`[SPEC-POV-020.3]` Respect DAC output selection.**
+# If the listener directed audio to the physical DAC, the appliance must
+# not chase or page any Bluetooth speaker [IMPL-POV-048].
+ACTIVE_OUTPUT=$(lempi_active_output)
+if [ "$ACTIVE_OUTPUT" = "dac" ]; then
+    exit 0
+fi
+
 # The address is whatever the player last recorded through `use`/`pair`
 # [PI3-AIM-020], [REQ-VIS-260] -- not a hard-coded guess. A speaker chosen
 # once through the settings panel is the one this timer chases from then on,

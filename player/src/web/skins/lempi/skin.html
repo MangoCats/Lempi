@@ -357,6 +357,22 @@
       </span>
       <p id="bt-countdown"></p>
     </div>
+    <div class="setting" id="output-volume-row">
+      <label>Output volume</label>
+      <span>
+        <strong id="outvol-name">DAC / Onboard Audio</strong>: <span id="outvol-status">Last used</span>
+        <button type="button" id="outvol-remember">Remember</button>
+        <button type="button" id="outvol-clear" hidden>Clear</button>
+      </span>
+      <p id="outvol-hint">Independent volume level for the active audio output. Pinned volumes are restored whenever this output is active.</p>
+    </div>
+    <div class="setting" id="bt-timeout-row">
+      <label for="bt-timeout-input">Bluetooth timeout</label>
+      <span>
+        <input type="number" id="bt-timeout-input" min="5" max="300" step="5" value="45"> s
+      </span>
+      <p id="bt-timeout-hint">How long to wait for a Bluetooth speaker to connect before falling back to DAC audio (5–300 seconds).</p>
+    </div>
     <div class="setting">
       <label for="prog">Programme</label>
       <span><select id="prog"></select></span>

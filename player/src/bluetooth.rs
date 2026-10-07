@@ -88,6 +88,15 @@ pub fn is_address(s: &str) -> bool {
 
 /// Run a verb. `Err` carries a message fit to show a listener.
 pub fn run(verb: Verb, address: Option<&str>) -> Result<serde_json::Value, String> {
+    run_with_timeout(verb, address, None)
+}
+
+/// Run a verb with an optional timeout in seconds.
+pub fn run_with_timeout(
+    verb: Verb,
+    address: Option<&str>,
+    timeout_s: Option<u32>,
+) -> Result<serde_json::Value, String> {
     if verb.needs_address() {
         match address {
             Some(a) if is_address(a) => {}
@@ -98,6 +107,10 @@ pub fn run(verb: Verb, address: Option<&str>) -> Result<serde_json::Value, Strin
     cmd.arg("-n").arg(HELPER).arg(verb.as_str());
     if let Some(a) = address.filter(|_| verb.needs_address()) {
         cmd.arg(a);
+    }
+    if let Some(t) = timeout_s {
+        cmd.arg(t.to_string());
+        cmd.env("LEMPI_GRAB_SECONDS", t.to_string());
     }
     let out = cmd.output().map_err(|e| format!("helper not available: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout);
@@ -112,6 +125,68 @@ pub fn run(verb: Verb, address: Option<&str>) -> Result<serde_json::Value, Strin
             format!("helper gave no usable answer: {}", err.trim())
         }
     })
+}
+
+/// Resolve Bluetooth speaker alias or fallback to address.
+pub fn device_name(address: &str) -> String {
+    if let Ok(out) = Command::new("bluetoothctl").arg("info").arg(address).output() {
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if let Some(alias) = trimmed.strip_prefix("Alias: ") {
+                if !alias.is_empty() {
+                    return alias.to_string();
+                }
+            }
+        }
+    }
+    address.to_string()
+}
+
+/// Disconnect active Bluetooth speakers and restore WirePlumber default sink to DAC.
+pub fn restore_dac_sink() {
+    if let Ok(out) = Command::new("bluetoothctl").args(["devices", "Connected"]).output() {
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 && parts[0] == "Device" {
+                let addr = parts[1];
+                let _ = Command::new("bluetoothctl").args(["disconnect", addr]).output();
+            }
+        }
+    }
+    if let Ok(out) = Command::new("wpctl").arg("status").output() {
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut in_sinks = false;
+        for line in text.lines() {
+            if line.contains("Sinks:") {
+                in_sinks = true;
+                continue;
+            }
+            if in_sinks {
+                if line.contains("Sink endpoints")
+                    || line.contains("Sources:")
+                    || line.contains("Filters:")
+                    || line.contains("Streams:")
+                    || line.starts_with("Video")
+                {
+                    break;
+                }
+                if line.contains("Dummy Output") {
+                    continue;
+                }
+                let trimmed = line.trim_start_matches(|c: char| {
+                    c.is_whitespace() || c == '*' || c == '│' || c == '├' || c == '─'
+                });
+                if let Some((id_str, _)) = trimmed.split_once('.') {
+                    if let Ok(id) = id_str.trim().parse::<u32>() {
+                        let _ = Command::new("wpctl").args(["set-default", &id.to_string()]).output();
+                        break;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Switch one radio `[PI3-RF-020]`.

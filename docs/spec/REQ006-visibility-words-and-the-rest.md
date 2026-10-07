@@ -115,7 +115,7 @@ stands and the hash reads `unknown`.
 
 **`[REQ-VIS-155]` What the listener sets, the player remembers.** Master volume, skip fade and skip lead survive a restart. They are written the moment a control moves rather than on the resume point's one-second timer: they change when a hand moves them and not otherwise, so saving them on that schedule would be a write per second to record that nothing had happened — and a setting that survives everything except a crash before the next tick is not really saved.
 
-> **Volume already had a column and was never written to it.** The resume row saved position and playing state and quietly left the level behind, so it came back at full scale every start. That had been true since the row existed, and reads as "it persists" from the schema alone.
+> **Volume already had a column and was never written to it.** The resume row saved position and playing state and quietly left the level behind, so it came back at full scale every start. That had been true since the row existed, and reads as "it persists" from the schema alone. Master volume is further associated with each output device (physical DAC and each known Bluetooth speaker) with pinning and last-used memory [REQ-POV-010], [SPEC060](SPEC060-per-output-volume.md).
 >
 > Values from disk are clamped exactly as values from the network are — a number that has been sitting in a file deserves no more trust than one that just arrived.
 >

@@ -247,7 +247,7 @@
   // only means something inside an echo fleet [REQ-AND-170].
   const CAP_SECTIONS = {
     restart: ['restart'], power_off: ['power'], wifi: ['wifi-row'],
-    bluetooth: ['speakers'], led: ['led-row'], radios: ['radios'],
+    bluetooth: ['speakers', 'output-volume-row', 'bt-timeout-row'], led: ['led-row'], radios: ['radios'],
     follow: ['echo-trim-row', 'follow-row', 'join-row'],
     writes_beside_audio: ['sidecar-row'],
     rips_cds: ['rips-row'],
@@ -661,6 +661,7 @@
   async function choose(device, verb) {
     const before = await sinkNow();
     const body = await act(verb, device.address);
+    await updateOutputVolume();
     if (!body) { refresh(); return; }
     if (body.audible === false) {
       hint('Connected, but the sound is not reaching it yet.');
@@ -674,7 +675,7 @@
 
   function askConfirm(device) {
     setHidden($('bt-confirm'), false);
-    let left = 30;
+    let left = parseInt($('bt-timeout-input')?.value, 10) || 30;
     const tick = () => {
       $('bt-countdown').textContent =
         `Going back to what worked in ${left}s if you do not answer.`;
@@ -701,8 +702,74 @@
     // the dummy, which is to say silence. Reopening is still right -- it is
     // how the player is told to look again.
     if (back && back.address) await act('use', back.address);
-    else await fetch('/command/reopen-output', { method: 'POST' });
+    else await fetch('/audio/output/use/dac', { method: 'POST' });
+    await updateOutputVolume();
     refresh();
+  }
+
+  function dacRow(volStatus, output) {
+    const li = document.createElement('li');
+    const isDac = !volStatus || volStatus.output_id === 'dac';
+    const playing = isDac && output && (!output.dummy);
+    li.className = 'bt ' + (playing ? 'playing' : (isDac ? 'connected' : 'paired'));
+
+    const name = document.createElement('span');
+    name.className = 'btname';
+    setText(name, 'DAC / Onboard Audio');
+    const said = document.createElement('span');
+    said.className = 'btstate';
+    setText(said, playing ? 'Playing here' : (isDac ? 'Connected, but silent' : 'Available'));
+    li.append(name, said);
+
+    if (!isDac) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      setText(b, 'Use this one');
+      b.onclick = async () => {
+        hint('Switching to DAC / Onboard Audio…');
+        const before = await sinkNow();
+        try {
+          const r = await fetch('/audio/output/use/dac', { method: 'POST' });
+          if (r.ok) {
+            previous = before;
+            askConfirm({ name: 'DAC / Onboard Audio' });
+          }
+        } catch (e) {
+          hint('Could not switch to DAC.');
+        }
+        await updateOutputVolume();
+        refresh();
+      };
+      li.appendChild(b);
+    }
+    return li;
+  }
+
+  async function updateOutputVolume() {
+    try {
+      const r = await fetch('/audio/output/volume');
+      if (!r.ok) return null;
+      const v = await r.json();
+      if ($('outvol-name')) setText($('outvol-name'), v.name);
+      if ($('outvol-status')) {
+        if (v.has_pinned && v.pinned_db !== null && v.pinned_db !== undefined) {
+          setText($('outvol-status'), `Pinned (${v.pinned_db.toFixed(1)} dB)`);
+          setHidden($('outvol-clear'), false);
+        } else if (v.last_used_db !== null && v.last_used_db !== undefined) {
+          setText($('outvol-status'), `Last used (${v.last_used_db.toFixed(1)} dB)`);
+          setHidden($('outvol-clear'), true);
+        } else {
+          setText($('outvol-status'), `${v.current_db.toFixed(1)} dB`);
+          setHidden($('outvol-clear'), true);
+        }
+      }
+      if ($('bt-timeout-input')) {
+        $('bt-timeout-input').value = v.connect_timeout_s;
+      }
+      return v;
+    } catch (e) {
+      return null;
+    }
   }
 
   async function sinkNow() {
@@ -721,10 +788,12 @@
     const list = $('bt-list');
     if (scan) hint('Looking for speakers — about twenty seconds…');
     try {
+      const volStatus = await updateOutputVolume();
       const r = await fetch(scan ? '/audio/speakers/scan' : '/audio/speakers',
                             { method: scan ? 'POST' : 'GET' });
       const body = await r.json();
       list.textContent = '';
+      list.appendChild(dacRow(volStatus, body.output));
       const devices = body.devices || [];
       for (const d of devices) list.appendChild(speakerRow(d, body.output));
       // **`[PI3-FOUND-740]` A scan that did not happen must not read as one
@@ -870,6 +939,27 @@
   }
 
   $('bt-scan').onclick = () => refresh(true);
+  $('outvol-remember').onclick = async () => {
+    try {
+      await fetch('/audio/output/volume/remember', { method: 'POST' });
+      await updateOutputVolume();
+    } catch {}
+  };
+  $('outvol-clear').onclick = async () => {
+    try {
+      await fetch('/audio/output/volume/clear', { method: 'POST' });
+      await updateOutputVolume();
+    } catch {}
+  };
+  $('bt-timeout-input').onchange = async () => {
+    const secs = parseInt($('bt-timeout-input').value, 10);
+    if (!isNaN(secs)) {
+      try {
+        await fetch(`/audio/output/timeout/${secs}`, { method: 'POST' });
+        await updateOutputVolume();
+      } catch {}
+    }
+  };
 
   // ------------------------------------------------------------------- led
   // Four modes, not a checkbox `[PI3-LED-010]`: solid on (with a

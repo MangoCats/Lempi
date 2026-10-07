@@ -10,6 +10,7 @@ use axum::response::{IntoResponse, Response};
 
 use crate::bluetooth;
 use crate::engine::Command;
+use crate::output::Volume;
 
 use super::Ui;
 
@@ -71,37 +72,121 @@ pub(super) async fn speaker_verb_on(
     let Some(v) = bluetooth::Verb::parse(&verb) else {
         return (StatusCode::NOT_FOUND, "unknown verb").into_response();
     };
-    let result = bluetooth::run(v, Some(&address));
-    let reopen = result.is_ok() && matches!(v, bluetooth::Verb::Use | bluetooth::Verb::Pair);
-    if reopen {
-        // Remembered so the appliance's own reconnect timer knows which
-        // absent device is worth paging `[PI3-AIM-020]`, `[REQ-VIS-260]` --
-        // best-effort, since a listener whose speaker just started working
-        // should not be told it failed over a bookkeeping write.
+
+    if v == bluetooth::Verb::Forget {
         let db = ui.db.clone();
         let library = ui.library.clone();
-        let addr2 = address.clone();
-        let _ = tokio::task::spawn_blocking(move || match crate::db::PlayerStore::open_split(&db, &library) {
-            Ok(store) => match store.save_speaker_address(&addr2) {
-                // A listener-visible action deserves a journal line saying
-                // so, not just silence on success -- otherwise a later
-                // change from a different path (or a bug) looks identical
-                // to this one, and there is nothing to tell them apart by
-                // `[PI3-LED-010]`'s own lesson.
-                Ok(()) => tracing::info!("speaker address set to {addr2} via web request"),
-                Err(e) => tracing::error!("save speaker address: {e}"),
-            },
-            Err(e) => tracing::error!("save speaker address: {e}"),
+        let addr = address.clone();
+        let forgotten_was_active = tokio::task::spawn_blocking(move || {
+            if let Ok(store) = crate::db::PlayerStore::open_split(&db, &library) {
+                let active = store.get_active_output();
+                let was_active = active == format!("bt:{addr}");
+                let _ = store.forget_output(&format!("bt:{addr}"));
+                was_active
+            } else {
+                false
+            }
         })
-        .await;
-        ui.handle.send(Command::ReopenOutput);
-        // Wait for the reopen to land before reporting where the audio went.
-        // Reading the sink immediately gives sink:null with dummy:false, which
-        // reads as healthy and is merely early -- the precise shape of
-        // reassuring answer that hid this fault in the first place.
-        tokio::time::sleep(Duration::from_millis(1_500)).await;
+        .await
+        .unwrap_or(false);
+
+        let result = bluetooth::run(v, Some(&address));
+        if forgotten_was_active {
+            let db = ui.db.clone();
+            let library = ui.library.clone();
+            let current_amp = ui.handle.snapshot().volume;
+            let current_db = Volume::db_for(current_amp);
+            let dac_amp = tokio::task::spawn_blocking(move || {
+                crate::bluetooth::restore_dac_sink();
+                let store = crate::db::PlayerStore::open_split(&db, &library).ok()?;
+                let dac_db = store.resolve_output_volume("dac", current_db);
+                Some(Volume::amplitude_at_db(dac_db))
+            })
+            .await
+            .unwrap_or(None)
+            .unwrap_or(current_amp);
+
+            ui.handle.send(Command::ReopenOutput);
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            ui.handle.send(Command::SetVolume(dac_amp));
+            tokio::time::sleep(Duration::from_millis(1_300)).await;
+        }
+        return bt_reply(result, forgotten_was_active);
     }
-    bt_reply(result, reopen)
+
+    if matches!(v, bluetooth::Verb::Use | bluetooth::Verb::Pair) {
+        let db = ui.db.clone();
+        let library = ui.library.clone();
+        let current_amp = ui.handle.snapshot().volume;
+        let current_db = Volume::db_for(current_amp);
+        let target_output = format!("bt:{address}");
+
+        let (timeout_s, target_amp, dac_amp) = tokio::task::spawn_blocking({
+            let db = db.clone();
+            let library = library.clone();
+            let target_output = target_output.clone();
+            move || {
+                let store = crate::db::PlayerStore::open_split(&db, &library).ok()?;
+                let outgoing = store.get_active_output();
+                if outgoing != target_output {
+                    let _ = store.save_output_volume(&outgoing, current_db, false);
+                }
+                let timeout = store.get_speaker_connect_timeout();
+                let target_db = store.resolve_output_volume(&target_output, current_db);
+                let target_amp = Volume::amplitude_at_db(target_db);
+                let dac_db = store.resolve_output_volume("dac", current_db);
+                let dac_amp = Volume::amplitude_at_db(dac_db);
+                Some((timeout, target_amp, dac_amp))
+            }
+        })
+        .await
+        .unwrap_or(None)
+        .unwrap_or((45, current_amp, current_amp));
+
+        let result = bluetooth::run_with_timeout(v, Some(&address), Some(timeout_s));
+        let is_connected = result
+            .as_ref()
+            .map(|val| val.get("ok").and_then(|o| o.as_bool()).unwrap_or(false))
+            .unwrap_or(false);
+
+        if is_connected {
+            let db = ui.db.clone();
+            let library = ui.library.clone();
+            let addr2 = address.clone();
+            let target_out = target_output.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Ok(store) = crate::db::PlayerStore::open_split(&db, &library) {
+                    let _ = store.save_speaker_address(&addr2);
+                    let _ = store.set_active_output(&target_out);
+                }
+            })
+            .await;
+            ui.handle.send(Command::ReopenOutput);
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            ui.handle.send(Command::SetVolume(target_amp));
+            tokio::time::sleep(Duration::from_millis(1_300)).await;
+            return bt_reply(result, true);
+        } else {
+            // Connection failed or timed out: automatic fallback to DAC [IMPL-POV-045]
+            let db = ui.db.clone();
+            let library = ui.library.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Ok(store) = crate::db::PlayerStore::open_split(&db, &library) {
+                    let _ = store.set_active_output("dac");
+                }
+                crate::bluetooth::restore_dac_sink();
+            })
+            .await;
+            ui.handle.send(Command::ReopenOutput);
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            ui.handle.send(Command::SetVolume(dac_amp));
+            tokio::time::sleep(Duration::from_millis(1_300)).await;
+            return bt_reply(result, false);
+        }
+    }
+
+    let result = bluetooth::run(v, Some(&address));
+    bt_reply(result, false)
 }
 
 /// The appliance's status LED: which of the four modes, and the brightness
@@ -184,6 +269,168 @@ pub(super) async fn set_led(
     }
 }
 
+/// Output volume status payload `[SPEC-POV-060]`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OutputVolumeStatus {
+    pub output_id: String,
+    pub name: String,
+    pub current_db: f32,
+    pub pinned_db: Option<f32>,
+    pub last_used_db: Option<f32>,
+    pub has_pinned: bool,
+    pub connect_timeout_s: u32,
+}
+
+pub(super) fn get_output_volume_status(ui: &Ui) -> Result<OutputVolumeStatus, String> {
+    let store = crate::db::PlayerStore::open_split(&ui.db, &ui.library)
+        .map_err(|e| e.message().to_string())?;
+    let output_id = store.get_active_output();
+    let vol = store.load_output_volume(&output_id).unwrap_or_default();
+    let connect_timeout_s = store.get_speaker_connect_timeout();
+    let current_amp = ui.handle.snapshot().volume;
+    let current_db = ((Volume::db_for(current_amp) * 10.0).round()) / 10.0;
+    let name = if output_id == "dac" {
+        "DAC / Onboard Audio".to_string()
+    } else if let Some(addr) = output_id.strip_prefix("bt:") {
+        crate::bluetooth::device_name(addr)
+    } else {
+        output_id.clone()
+    };
+    Ok(OutputVolumeStatus {
+        has_pinned: vol.pinned_db.is_some(),
+        pinned_db: vol.pinned_db,
+        last_used_db: vol.last_used_db,
+        output_id,
+        name,
+        current_db,
+        connect_timeout_s,
+    })
+}
+
+pub(super) async fn output_volume(State(ui): State<Ui>) -> Response {
+    let ui_clone = ui.clone();
+    match tokio::task::spawn_blocking(move || get_output_volume_status(&ui_clone)).await {
+        Ok(Ok(st)) => axum::Json(st).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+pub(super) async fn remember_output_volume(State(ui): State<Ui>) -> Response {
+    let ui_clone = ui.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        let store = crate::db::PlayerStore::open_split(&ui_clone.db, &ui_clone.library)
+            .map_err(|e| e.message().to_string())?;
+        let active = store.get_active_output();
+        let current_amp = ui_clone.handle.snapshot().volume;
+        let current_db = Volume::db_for(current_amp);
+        store
+            .save_output_volume(&active, current_db, true)
+            .map_err(|e| e.message().to_string())?;
+        get_output_volume_status(&ui_clone)
+    })
+    .await;
+    match res {
+        Ok(Ok(st)) => axum::Json(st).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+pub(super) async fn clear_output_volume(State(ui): State<Ui>) -> Response {
+    let ui_clone = ui.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        let store = crate::db::PlayerStore::open_split(&ui_clone.db, &ui_clone.library)
+            .map_err(|e| e.message().to_string())?;
+        let active = store.get_active_output();
+        store
+            .clear_output_pinned_volume(&active)
+            .map_err(|e| e.message().to_string())?;
+        get_output_volume_status(&ui_clone)
+    })
+    .await;
+    match res {
+        Ok(Ok(st)) => axum::Json(st).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+pub(super) async fn set_output_timeout(
+    State(ui): State<Ui>,
+    axum::extract::Path(secs): axum::extract::Path<u32>,
+) -> Response {
+    let db = ui.db.clone();
+    let library = ui.library.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        let store = crate::db::PlayerStore::open_split(&db, &library)
+            .map_err(|e| e.message().to_string())?;
+        store
+            .set_speaker_connect_timeout(secs)
+            .map_err(|e| e.message().to_string())?;
+        Ok::<u32, String>(store.get_speaker_connect_timeout())
+    })
+    .await;
+    match res {
+        Ok(Ok(val)) => {
+            axum::Json(serde_json::json!({ "ok": true, "connect_timeout_s": val })).into_response()
+        }
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+pub(super) async fn use_dac(State(ui): State<Ui>) -> Response {
+    let db = ui.db.clone();
+    let library = ui.library.clone();
+    let current_amp = ui.handle.snapshot().volume;
+    let current_db = Volume::db_for(current_amp);
+
+    let target_amp = match tokio::task::spawn_blocking(move || {
+        let store = crate::db::PlayerStore::open_split(&db, &library)
+            .map_err(|e| e.message().to_string())?;
+        let outgoing = store.get_active_output();
+        if outgoing != "dac" {
+            let _ = store.save_output_volume(&outgoing, current_db, false);
+        }
+        store
+            .set_active_output("dac")
+            .map_err(|e| e.message().to_string())?;
+        let target_db = store.resolve_output_volume("dac", current_db);
+        crate::bluetooth::restore_dac_sink();
+        Ok::<f32, String>(Volume::amplitude_at_db(target_db))
+    })
+    .await {
+        Ok(Ok(amp)) => amp,
+        Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    ui.handle.send(Command::ReopenOutput);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    ui.handle.send(Command::SetVolume(target_amp));
+    tokio::time::sleep(Duration::from_millis(1_300)).await;
+
+    let ui_clone = ui.clone();
+    let status = tokio::task::spawn_blocking(move || get_output_volume_status(&ui_clone)).await;
+    let mut resp = serde_json::json!({
+        "ok": true,
+        "active_output": "dac",
+        "reopened": true,
+    });
+    if let Ok(Ok(st)) = status {
+        if let Ok(st_val) = serde_json::to_value(st) {
+            resp["volume_status"] = st_val;
+        }
+    }
+    let where_to = crate::sink::current();
+    resp["audible"] = audible_json(where_to.audible);
+    if let Ok(s) = serde_json::to_value(where_to) {
+        resp["output"] = s;
+    }
+    axum::Json(resp).into_response()
+}
+
 /// The reply's `audible`: `true`, `false`, or `null` for "could not tell".
 ///
 /// The skin tests `=== false`, so `null` never reads as silence -- and, which
@@ -233,5 +480,24 @@ mod tests {
         assert_eq!(audible_json(Tristate::Yes), serde_json::json!(true));
         assert_eq!(audible_json(Tristate::No), serde_json::json!(false));
         assert_eq!(audible_json(Tristate::Unknown), serde_json::Value::Null);
+    }
+
+    #[test]
+    fn output_volume_status_serialization() {
+        let st = super::OutputVolumeStatus {
+            output_id: "dac".into(),
+            name: "DAC / Onboard Audio".into(),
+            current_db: -12.0,
+            pinned_db: Some(-15.0),
+            last_used_db: Some(-12.0),
+            has_pinned: true,
+            connect_timeout_s: 45,
+        };
+        let val = serde_json::to_value(&st).unwrap();
+        assert_eq!(val["output_id"], "dac");
+        assert_eq!(val["name"], "DAC / Onboard Audio");
+        assert_eq!(val["has_pinned"], true);
+        assert_eq!(val["pinned_db"], -15.0);
+        assert_eq!(val["connect_timeout_s"], 45);
     }
 }

@@ -150,6 +150,22 @@ pub struct FrequencyRow {
     pub counts: [i64; 5],
 }
 
+/// Associated pinned and last-used volume in dB for an audio output `[SPEC-POV-030]`, `[IMPL-POV-020]`.
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct OutputVolume {
+    pub pinned_db: Option<f32>,
+    pub last_used_db: Option<f32>,
+}
+
+/// Decibel limits for master volume attenuation `[REQ-AUD-154]`, `[SPEC-POV-035]`.
+pub const OUTPUT_VOL_MIN_DB: f32 = -72.0;
+pub const OUTPUT_VOL_MAX_DB: f32 = 0.0;
+
+/// Limits and default for Bluetooth connection attempts before DAC fallback `[REQ-POV-040]`, `[SPEC-POV-025]`.
+pub const SPEAKER_CONNECT_TIMEOUT_MIN: u32 = 5;
+pub const SPEAKER_CONNECT_TIMEOUT_MAX: u32 = 300;
+pub const SPEAKER_CONNECT_TIMEOUT_DEFAULT: u32 = 45;
+
 pub(crate) const PREFERENCES_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS listener_preferences (
         subject_kind TEXT NOT NULL CHECK (subject_kind IN ('recording','artist')),
@@ -1458,6 +1474,143 @@ impl PlayerStore {
                 |r| r.get(0),
             )
             .ok()
+    }
+
+    /// Save an output device's volume `[SPEC-POV-030]`, `[IMPL-POV-020]`.
+    ///
+    /// Stores under `volume_pinned:<output>` if `pinned`, or `volume_last:<output>`
+    /// otherwise. Clamped to `[OUTPUT_VOL_MIN_DB, OUTPUT_VOL_MAX_DB]`.
+    pub fn save_output_volume(&self, output: &str, db: f32, pinned: bool) -> Result<(), DbError> {
+        let clamped = db.clamp(OUTPUT_VOL_MIN_DB, OUTPUT_VOL_MAX_DB);
+        let key = if pinned {
+            format!("volume_pinned:{output}")
+        } else {
+            format!("volume_last:{output}")
+        };
+        self.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES (?1, ?2, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![key, clamped.to_string()],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Clear the explicit pinned volume for an output `[REQ-POV-030.3]`, `[IMPL-POV-020]`.
+    pub fn clear_output_pinned_volume(&self, output: &str) -> Result<(), DbError> {
+        let key = format!("volume_pinned:{output}");
+        self.conn
+            .execute("DELETE FROM player_settings WHERE key = ?1", rusqlite::params![key])
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Load pinned and last-used volume records for an output `[SPEC-POV-035]`, `[IMPL-POV-020]`.
+    pub fn load_output_volume(&self, output: &str) -> Result<OutputVolume, DbError> {
+        let pinned_key = format!("volume_pinned:{output}");
+        let last_key = format!("volume_last:{output}");
+
+        let pinned_db: Option<f32> = self.conn
+            .query_row("SELECT value FROM player_settings WHERE key = ?1", rusqlite::params![pinned_key], |r| {
+                r.get::<_, String>(0)
+            })
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .map(|v: f32| v.clamp(OUTPUT_VOL_MIN_DB, OUTPUT_VOL_MAX_DB));
+
+        let last_used_db: Option<f32> = self.conn
+            .query_row("SELECT value FROM player_settings WHERE key = ?1", rusqlite::params![last_key], |r| {
+                r.get::<_, String>(0)
+            })
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .map(|v: f32| v.clamp(OUTPUT_VOL_MIN_DB, OUTPUT_VOL_MAX_DB));
+
+        Ok(OutputVolume { pinned_db, last_used_db })
+    }
+
+    /// Resolve effective volume level for an output device `[REQ-POV-030]`, `[SPEC-POV-040]`.
+    ///
+    /// Precedence order:
+    /// 1. Pinned volume if set
+    /// 2. Last-used volume if set
+    /// 3. Inherited `current_db`
+    pub fn resolve_output_volume(&self, output: &str, current_db: f32) -> f32 {
+        let record = self.load_output_volume(output).unwrap_or(OutputVolume {
+            pinned_db: None,
+            last_used_db: None,
+        });
+        record
+            .pinned_db
+            .or(record.last_used_db)
+            .unwrap_or_else(|| current_db.clamp(OUTPUT_VOL_MIN_DB, OUTPUT_VOL_MAX_DB))
+    }
+
+    /// The currently active audio output identifier (`"dac"` or `"bt:<MAC>"`), default `"dac"` `[SPEC-POV-030]`.
+    pub fn get_active_output(&self) -> String {
+        self.conn
+            .query_row("SELECT value FROM player_settings WHERE key = 'active_output'", [], |r| {
+                r.get(0)
+            })
+            .unwrap_or_else(|_| "dac".to_string())
+    }
+
+    pub fn set_active_output(&self, output: &str) -> Result<(), DbError> {
+        self.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES ('active_output', ?1, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![output],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Bluetooth connection attempt timeout in seconds before DAC fallback `[REQ-POV-040]`, `[SPEC-POV-025]`.
+    pub fn get_speaker_connect_timeout(&self) -> u32 {
+        self.conn
+            .query_row("SELECT value FROM player_settings WHERE key = 'speaker_connect_timeout_s'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .map(|s: u32| s.clamp(SPEAKER_CONNECT_TIMEOUT_MIN, SPEAKER_CONNECT_TIMEOUT_MAX))
+            .unwrap_or(SPEAKER_CONNECT_TIMEOUT_DEFAULT)
+    }
+
+    pub fn set_speaker_connect_timeout(&self, secs: u32) -> Result<(), DbError> {
+        let clamped = secs.clamp(SPEAKER_CONNECT_TIMEOUT_MIN, SPEAKER_CONNECT_TIMEOUT_MAX);
+        self.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES ('speaker_connect_timeout_s', ?1, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![clamped.to_string()],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Clean up volume rows for an output and reset active output to `"dac"` if forgotten `[IMPL-POV-020]`.
+    pub fn forget_output(&self, output: &str) -> Result<(), DbError> {
+        let pinned_key = format!("volume_pinned:{output}");
+        let last_key = format!("volume_last:{output}");
+        self.conn
+            .execute(
+                "DELETE FROM player_settings WHERE key IN (?1, ?2)",
+                rusqlite::params![pinned_key, last_key],
+            )
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        if self.get_active_output() == output {
+            self.set_active_output("dac")?;
+        }
+        Ok(())
     }
 
     /// The appliance's status LED `[PI3-LED-010]` -- one of four modes
@@ -3457,5 +3610,123 @@ mod tests {
         let rows = store.play_frequency("recording", id).unwrap();
         let labels: Vec<&str> = rows.iter().skip(2).map(|r| r.label.as_str()).collect();
         assert_eq!(labels, vec!["Soft", "Quiet"], "Soft has three plays, Quiet has one");
+    }
+
+    fn settings_store() -> PlayerStore {
+        let conn = historyable();
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS player_settings (
+                 key        TEXT PRIMARY KEY,
+                 value      TEXT NOT NULL,
+                 updated_at TEXT NOT NULL)",
+            [],
+        )
+        .unwrap();
+        PlayerStore { conn: QualifyingConn::wrap_unsplit(conn) }
+    }
+
+    #[test]
+    fn test_output_volume_pin_and_clear() {
+        let store = settings_store();
+        let output = "bt:AA:BB:CC:DD:EE:FF";
+
+        // Initial resolution with no stored records inherits fallback
+        assert_eq!(store.resolve_output_volume(output, -18.0), -18.0);
+
+        // Save last-used volume
+        store.save_output_volume(output, -9.0, false).unwrap();
+        let loaded = store.load_output_volume(output).unwrap();
+        assert_eq!(loaded.pinned_db, None);
+        assert_eq!(loaded.last_used_db, Some(-9.0));
+        assert_eq!(store.resolve_output_volume(output, -18.0), -9.0);
+
+        // Pin a preset volume; resolution must prefer pinned over last-used
+        store.save_output_volume(output, -12.0, true).unwrap();
+        let loaded = store.load_output_volume(output).unwrap();
+        assert_eq!(loaded.pinned_db, Some(-12.0));
+        assert_eq!(loaded.last_used_db, Some(-9.0));
+        assert_eq!(store.resolve_output_volume(output, -18.0), -12.0);
+
+        // Clear pinned volume; reverts resolution to last-used
+        store.clear_output_pinned_volume(output).unwrap();
+        let loaded = store.load_output_volume(output).unwrap();
+        assert_eq!(loaded.pinned_db, None);
+        assert_eq!(loaded.last_used_db, Some(-9.0));
+        assert_eq!(store.resolve_output_volume(output, -18.0), -9.0);
+    }
+
+    #[test]
+    fn test_output_volume_inheritance() {
+        let store = settings_store();
+        let output = "dac";
+
+        // Brand new output inherits current playing level
+        assert_eq!(store.resolve_output_volume(output, -6.5), -6.5);
+    }
+
+    #[test]
+    fn test_output_volume_clamping() {
+        let store = settings_store();
+        let output = "dac";
+
+        // Volume below -72.0 dB clamps to -72.0 dB
+        store.save_output_volume(output, -120.0, true).unwrap();
+        assert_eq!(store.load_output_volume(output).unwrap().pinned_db, Some(OUTPUT_VOL_MIN_DB));
+
+        // Volume above 0.0 dB clamps to 0.0 dB
+        store.save_output_volume(output, 15.0, false).unwrap();
+        assert_eq!(store.load_output_volume(output).unwrap().last_used_db, Some(OUTPUT_VOL_MAX_DB));
+    }
+
+    #[test]
+    fn test_speaker_connect_timeout_persistence() {
+        let store = settings_store();
+
+        // Defaults to 45 seconds when unset
+        assert_eq!(store.get_speaker_connect_timeout(), SPEAKER_CONNECT_TIMEOUT_DEFAULT);
+
+        // Persists custom setting
+        store.set_speaker_connect_timeout(60).unwrap();
+        assert_eq!(store.get_speaker_connect_timeout(), 60);
+
+        // Below minimum clamps to 5
+        store.set_speaker_connect_timeout(2).unwrap();
+        assert_eq!(store.get_speaker_connect_timeout(), SPEAKER_CONNECT_TIMEOUT_MIN);
+
+        // Above maximum clamps to 300
+        store.set_speaker_connect_timeout(999).unwrap();
+        assert_eq!(store.get_speaker_connect_timeout(), SPEAKER_CONNECT_TIMEOUT_MAX);
+    }
+
+    #[test]
+    fn test_active_output_persistence() {
+        let store = settings_store();
+
+        // Default is "dac"
+        assert_eq!(store.get_active_output(), "dac");
+
+        // Setting a Bluetooth speaker persists
+        store.set_active_output("bt:AA:BB:CC:DD:EE:FF").unwrap();
+        assert_eq!(store.get_active_output(), "bt:AA:BB:CC:DD:EE:FF");
+    }
+
+    #[test]
+    fn test_forget_output_cleanup() {
+        let store = settings_store();
+        let output = "bt:12:34:56:78:9A:BC";
+
+        store.save_output_volume(output, -15.0, true).unwrap();
+        store.save_output_volume(output, -10.0, false).unwrap();
+        store.set_active_output(output).unwrap();
+
+        assert_eq!(store.get_active_output(), output);
+        assert!(store.load_output_volume(output).unwrap().pinned_db.is_some());
+
+        // Forgetting the output clears volume rows and resets active output to "dac"
+        store.forget_output(output).unwrap();
+        let loaded = store.load_output_volume(output).unwrap();
+        assert_eq!(loaded.pinned_db, None);
+        assert_eq!(loaded.last_used_db, None);
+        assert_eq!(store.get_active_output(), "dac");
     }
 }

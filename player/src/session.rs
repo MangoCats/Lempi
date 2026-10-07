@@ -577,9 +577,16 @@ impl Session {
     pub fn prime(&mut self, engine: &mut Engine) {
         // Before the store is handed over, since it is the thing that holds
         // them: volume and the skip shape as they were last left
-        // `[REQ-VIS-155]`.
-        if let Some(saved) = self.store.as_ref().and_then(|s| s.load_settings()) {
-            engine.apply_settings(&saved);
+        // `[REQ-VIS-155]`. Volume is resolved for the active output
+        // `[SPEC-POV-030.4]`.
+        if let Some(store) = self.store.as_ref() {
+            let active = store.get_active_output();
+            if let Some(mut saved) = store.load_settings() {
+                let current_db = crate::output::Volume::db_for(saved.volume);
+                let resolved_db = store.resolve_output_volume(&active, current_db);
+                saved.volume = crate::output::Volume::amplitude_at_db(resolved_db);
+                engine.apply_settings(&saved);
+            }
         }
         if let Some(s) = self.store.take() {
             engine.attach_store(s);
