@@ -46,7 +46,7 @@ fires only on reopen therefore almost never fires. So the engine also confirms,
 every twenty seconds while playing, that the audio still reaches something
 real.
 
-**`[PI3-API-030]` (original) Never settle for a dummy.** `lempi-wait-sink` guards
+**As first written, `[PI3-API-030]`: never settle for a dummy.** `lempi-wait-sink` guards
 boot; the engine now guards every reopen and every recovery. Opening
 successfully says nothing about whether anyone can hear it -- the dummy accepts
 audio perfectly -- so a reopen that lands there is marked failed and the retry

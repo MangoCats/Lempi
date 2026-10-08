@@ -140,7 +140,7 @@ The `[SPEC-FD-060]` retrieval test, run under three provenance regimes over 1,50
 
 Two caveats bound that negative result, neither yet resolved:
 - The student here is the **iteration-1 shared MLP** (median err/β 0.223), not the final per-characteristic selection (0.152) `[LOG-I5-030]`. A rerun with the final models would likely close or reverse a 1.2-point gap.
-- `[LOG-FEX-057]` found the dump holds a mean of 77 submissions per library recording. Regime A used single submissions; **averaged references would make the dump stronger still**, cutting against a rerun's favour.
+- LOG002's `[LOG-FEX-057]` found the dump holds a mean of 77 submissions per library recording. Regime A used single submissions; **averaged references would make the dump stronger still**, cutting against a rerun's favour.
 
 So the honest ordering is **A ≈ B ≫ C**, with A and B within noise of each other and the gap between them unresolved.
 

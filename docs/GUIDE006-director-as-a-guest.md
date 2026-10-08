@@ -61,7 +61,7 @@ With the catalogue itself under DRM, there is no third route. **A Lempi Director
 
 **`[GDE-EXT-040]` The lesson is one this project already wrote down, and has now paid for twice.**
 
-> `[REQ-LIB-120]` — *Compute flavor locally, with no dependence on any live external service.*
+> REQ002's `[REQ-LIB-120]` — *Compute flavor locally, with no dependence on any live external service.*
 
 AcousticBrainz's API died within seven months of a successful bulk query `[GDE-MCR-045]`. Spotify's descriptors died three years later. **Acoustic descriptors computed by somebody else have now failed twice, from two unrelated directions**, and in both cases the failure was announced rather than negotiated. The requirement was written before the second failure and predicted it exactly.
 

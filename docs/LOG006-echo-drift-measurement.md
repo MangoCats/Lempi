@@ -173,8 +173,8 @@ Two consequences, and they pull in opposite directions:
 - **The rate half is fine.** 13,209,552 frames in 300 s is 44,032/s against a
   nominal 44,100 — the counter tracks, and it is the only instrument `lempi02w`
   can have `[LOG-DRIFT-070]`.
-- **The offset half must come from somewhere else.** Presentation offset
-  `[GDE-ECHO-430]` has to be read from `/proc/asound`'s `delay`, or from ALSA
+- **The offset half must come from somewhere else.** Presentation
+  offset `[GDE-ECHO-430]` has to be read from `/proc/asound`'s `delay`, or from ALSA
   directly, not from cpal. That is a correction to the design, not a bug in it.
 
 Had `[GDE-ECHO-290]`'s three-state detection not been built, `delay=0` would

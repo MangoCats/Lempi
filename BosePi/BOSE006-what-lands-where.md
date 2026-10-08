@@ -116,8 +116,8 @@ not B — and B holds only audio, cover art, and MPD's own derived index.
 > paragraph above still explains why the *listener* half cannot live on B; the
 > catalogue can, because after the split nothing writes it in normal
 > operation. Every `/var/lempi/listener.db` elsewhere in this directory is a
-> record of what was done before that date and is left as written
-> `[GOV-DOC-050]`.
+> record of what was done before that date and is left as
+> written `[GOV-DOC-050]`.
 >
 > One consequence is live and unresolved: because B is genuinely `ro`, a
 > **Vipunen push cannot land on `bose`** — `sqlite3` against the catalogue half

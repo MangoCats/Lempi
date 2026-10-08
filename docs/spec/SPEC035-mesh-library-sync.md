@@ -14,8 +14,8 @@ an Ubuntu laptop) joining a family that already has a desktop, `lempi02w`, and
 > of one** *(corrected 2026-09-22)*. It ran the previous repository until
 > 2026-09-21 `[GDE-NAM-030]`; it now runs Lempi against a verified copy of the
 > same catalogue, audibly, per
-> [TL001](../../TeachersLounge/TL001-migration-and-the-silent-output.md)
-> `[TL-MIG-030]`. The Vipunen half this section assumes is still untested
+> [TL001](../../TeachersLounge/TL001-migration-and-the-silent-output.md) `[TL-MIG-030]`.
+> The Vipunen half this section assumes is still untested
 > there — `tools/console.py` has never been pointed at that machine's
 > database `[TL-OPN-010]` — so read the mesh design below as still resting on
 > a node that has not yet exercised it.

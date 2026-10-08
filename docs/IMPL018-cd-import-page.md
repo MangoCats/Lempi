@@ -124,8 +124,8 @@ and it is tried at the desk rather than guessed.
    (`1fc45dd`). The guide corrected where EAC's screens differed: the English
    log is on the General tab, and the offset is typed with AccurateRip off,
    since ticking it greys the offset out (`aab766c`).
-2. *Setup* -- every check green, and then EAC crashed on every rip, as
-   `[LOG-RIP-110]` records.
+2. *Setup* -- every check green, and then EAC crashed on every rip,
+   as `[LOG-RIP-110]` records.
 3. *Real discs*, end to end, with CUERipper instead: four albums added through
    the page. The first CUE sheet was in the Windows code page and misread a
    curly apostrophe; fixed, and sheets are now stored as UTF-8 (`2673e87`,

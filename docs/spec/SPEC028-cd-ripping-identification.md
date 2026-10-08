@@ -11,8 +11,8 @@ mechanics, not because it is unrelated. Read
 [SPEC025 §1](SPEC025-cd-ripping.md#1-why-a-discs-own-toc-beats-inference)
 and §3 first for the TOC read this depends on entirely.
 
-> **Status.** Built 2026-09-04, per `[REQ-LIB-235]`, `[REQ-LIB-270]`,
-> `[REQ-LIB-295]`, `[REQ-LIB-300]`. §§1-2's cascade is `tools/ingest_cd.py`
+> **Status.** Built 2026-09-04, per `[REQ-LIB-235]`, `[REQ-LIB-270]`, `[REQ-LIB-295]`
+> and `[REQ-LIB-300]`. §§1-2's cascade is `tools/ingest_cd.py`
 > (Disc ID exact/fuzzy lookup, CD-TEXT-as-default, AcoustID fallback). §3's
 > down-select and freeform entry needed **no new page**: an ambiguous or
 > unresolved track is written with the ordinary `local:audio:...`

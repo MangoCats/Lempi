@@ -81,8 +81,8 @@ bose's):
 1. Off-device backup of lempi02w's current `lempi.db`, per `[PI-C-030]` —
    mandatory, not conditional on anything else in this list.
 2. Stop `lempi` and `mpd` on lempi02w.
-3. Copy `lempi.db` aside on lempi02w itself (timestamped, not deleted —
-   `[IMPL-DBSPLIT-045]`).
+3. Copy `lempi.db` aside on lempi02w itself (timestamped, not
+   deleted — `[IMPL-DBSPLIT-045]`).
 4. Run `split_database.py --commit` against that copy, producing
    `library.db` on B and `listener.db` on C.
 5. Verify (step 3 of the tool's own procedure) before touching the running

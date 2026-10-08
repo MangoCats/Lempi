@@ -174,7 +174,7 @@ carries 37 K. Exactly one core's worth on a 4-core box is the signature of the
 quirk rather than of a workload. Recorded here so it is not diagnosed as an I/O
 problem during a future incident, which is when it will look most convincing.
 
-**`[BOS-OPS-045]` The startup ALSA noise and the `:80` refusal are both
+**`[BOS-OPS-047]` The startup ALSA noise and the `:80` refusal are both
 expected.** `lempi` logs three `pcm_dmix` / `pcm_asym` complaints at start —
 that is ALSA's `default` device failing before `lempi` opens the hardware device
 directly, which it then reports as

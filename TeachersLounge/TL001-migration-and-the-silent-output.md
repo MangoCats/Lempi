@@ -177,8 +177,8 @@ among them. Checked first, not assumed:
   hub's `data/listener.db` by time and recording, with its 3,263 preferences
   and 13 flags; the monolith, its pre-split backup and three listener backups
   each held the same 37,762 and nothing more
-- the catalogue it held is the one this machine's own pair was copied from
-  `[TL-MIG-020]`, and the hub's merged catalogue since
+- the catalogue it held is the one this machine's own pair was copied
+  from `[TL-MIG-020]`, and the hub's merged catalogue since
 
-`[TL-OPN-010]` had been asked to settle first; it does not depend on the
+The question `[TL-OPN-010]` had been asked to settle first; it does not depend on the
 predecessor, and stays open on its own.

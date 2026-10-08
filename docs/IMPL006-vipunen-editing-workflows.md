@@ -76,7 +76,7 @@ With Stage 10 done, both features `[REQ-LIB-175]` and `[REQ-LIB-180]` requested 
 
 **`[IMPL-SUI-095]` "Never a web click" was the wrong rule; "never thoughtless" was the right one.** `[IMPL-SUI-055]`'s reasoning — *"an edit changes what a passage is, and the library is Vipunen's to write, not a web click's"* — is an argument against an edit landing as a **side effect**: on a timer, folded into a larger workflow, or as the second half of some other action. It is not an argument for making a deliberate, understood action expensive. A command typed into a rarely-used terminal, against a path a person has to look up, is not safer than a button. It is the same act with worse odds of being done right, and with no record of what happened afterwards.
 
-`[IMPL-SUI-055]` itself is **unchanged and still true**: nothing writes the library through the HTTP handler. The `apply-reviews` job spawns the same `apply_boundary_reviews.py` / `apply_reviews.py` Stage 8 built, as subprocesses, through the same job model as every other write. What changed is who types them.
+The rule `[IMPL-SUI-055]` itself is **unchanged and still true**: nothing writes the library through the HTTP handler. The `apply-reviews` job spawns the same `apply_boundary_reviews.py` / `apply_reviews.py` Stage 8 built, as subprocesses, through the same job model as every other write. What changed is who types them.
 
 Three things keep it deliberate rather than easy:
 

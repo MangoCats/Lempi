@@ -137,7 +137,7 @@ A lead longer than the fade is legal and leaves silence between the two; the UI 
 >
 > This previously read "gated by an automated test playing the 244.9-minute file at ≤150 MB RSS and ≤500 ms skip latency". Two parts of that were untrue: nothing invoked the gate at all, and **no test measures skip latency** — `memcheck` does not, and the word now means the Skip control `[REQ-AUD-158]`, which is 0.6–1.0 s by design. `[REQ-AUD-120]` — playing a passage as a span of a larger file without decoding the rest — is exercised by the decoder's own tests and by every DAO passage the player opens, not by a dedicated gate.
 >
-> `[REQ-AUD-140]` verified end-to-end on desktop hardware (48 kHz device, 44.1 kHz sources, 8,079-passage library): a run interrupted at ~16 s saved 15.01 s, and the next run resumed the same passage at 15.0 s and went on to save 25.01 s — position advancing *from* the resume point, not restarting. The 15.01 s figure is also the check on audible-versus-mixed position: had the mixed figure been saved it would have read ~29 s.
+> Requirement `[REQ-AUD-140]` verified end-to-end on desktop hardware (48 kHz device, 44.1 kHz sources, 8,079-passage library): a run interrupted at ~16 s saved 15.01 s, and the next run resumed the same passage at 15.0 s and went on to save 25.01 s — position advancing *from* the resume point, not restarting. The 15.01 s figure is also the check on audible-versus-mixed position: had the mixed figure been saved it would have read ~29 s.
 
 > ### Known, accepted, and deferred
 >

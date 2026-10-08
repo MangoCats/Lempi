@@ -40,8 +40,8 @@ this part — see the caveat below):
    — it rebinds every row by content hash rather than the dev-host path baked
    into the db. It needed `ffmpeg` on `PATH` to do it until 2026-09-27; the
    hash is compiled in since `[SPEC-RLK-152]`.
-3. Install the relinked db as `/var/lempi/listener.db` — C, not B, per
-   `[IMPL-BOS-078]` — as the deliberate "swap it in" step.
+3. Install the relinked db as `/var/lempi/listener.db` — C, not
+   B, per `[IMPL-BOS-078]` — as the deliberate "swap it in" step.
 
 **This host has no `rsync`** — confirmed while building this card, the same
 absence `[IMPL-BOS-100]` §1 already found for a card reader. The transfer ran

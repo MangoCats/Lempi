@@ -2,7 +2,7 @@
 
 **Development Guidance — what a hosted flavor service would be, and whether $9 once pays for it**
 
-`[GDE-IOS-050]` named decoupling the phone from Vipunen as the thing that changes adoption by orders of magnitude. This is what that would actually be.
+GUIDE004's `[GDE-IOS-050]` named decoupling the phone from Vipunen as the thing that changes adoption by orders of magnitude. This is what that would actually be.
 
 > **Related:** [GUIDE004 §5](GUIDE004-phone-port-strategy.md#5-would-anyone-use-it-an-estimate-not-a-measurement) · [SPEC007](spec/SPEC007-vipunen-architecture.md) · [GUIDE003](GUIDE003-feature-extraction-strategy.md) · [LICENSING.md](../LICENSING.md)
 

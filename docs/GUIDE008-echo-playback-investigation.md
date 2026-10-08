@@ -185,8 +185,8 @@ it has to be the same on both. Verifying that on the fleet is Phase 0 of
 
 ## 4. Is re-synchronising once per passage enough?
 
-> **Superseded 2026-09-12 for any pair including `smartboardpc`.** Measured in
-> `[LOG-DRIFT-045]` — Smart **+9.96 ppm**, and `bose` **≈+14** as corrected
+> **Superseded 2026-09-12 for any pair including `smartboardpc`.** Measured
+> in `[LOG-DRIFT-045]` — Smart **+9.96 ppm**, and `bose` **≈+14** as corrected
 > in `[LOG-FIX-030]`; ~4 ppm relative — ~1.0 ms across a four-minute passage,
 > inside the comb-filtering band. The conditional below required both nodes to
 > be sub-ppm and **neither is**, so it fails for every measured pair, not only

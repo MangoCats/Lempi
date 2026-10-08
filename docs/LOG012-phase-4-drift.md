@@ -172,7 +172,7 @@ discontinuity anywhere.
 
 Three consequences:
 
-- **`[GDE-ECHO-420]` does not disqualify `lempiplay3`.** Its *offset* is stable
+- **`lempiplay3` is not disqualified by `[GDE-ECHO-420]`.** Its *offset* is stable
   to microseconds. The disqualifying property is variability in the sound, and
   there is none.
 - **`[GDE-ECHO-430]`'s measured half is unreliable on this node.** Taking

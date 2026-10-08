@@ -259,7 +259,7 @@ write".
 
 ## 6. Open
 
-**`[BOS-RUN-070]` Executed 2026-09-11.** The ordering was the whole of the
+**`[BOS-RUN-072]` Executed 2026-09-11.** The ordering was the whole of the
 answer: `[BOS-RUN-035]` alone would have produced a `bose` quietly
 manufacturing shadow tables on every boot, and the post-split check found
 none.
