@@ -401,7 +401,11 @@ fn free_bytes(dir: &Path) -> Result<u64, String> {
     if rc != 0 {
         return Err(format!("cannot read the free space of {}", dir.display()));
     }
-    Ok(s.f_bavail as u64 * s.f_frsize as u64)
+    // A no-op on the 64-bit targets built today, and not on a 32-bit one,
+    // where `fsblkcnt_t` and the block size are `c_ulong`: kept, and said so.
+    #[allow(clippy::unnecessary_cast)]
+    let bytes = s.f_bavail as u64 * s.f_frsize as u64;
+    Ok(bytes)
 }
 
 /// A host that is not unix has no state partition to fill: no limit is read.

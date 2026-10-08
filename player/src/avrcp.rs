@@ -158,7 +158,6 @@ pub fn spawn(_handle: Arc<EngineHandle>, _shutdown: Arc<AtomicBool>) {
 #[cfg(all(target_os = "linux", feature = "appliance"))]
 fn run_worker(handle: Arc<EngineHandle>, shutdown: Arc<AtomicBool>) {
     use std::os::unix::fs::OpenOptionsExt;
-    use std::os::unix::io::AsRawFd;
 
     tracing::info!("avrcp: native Bluetooth control worker started");
     let mut last_eacces_warn: Option<Instant> = None;

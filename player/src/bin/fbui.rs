@@ -212,7 +212,7 @@ impl FbDisplay {
                  know how to draw into this format"
             ));
         }
-        Ok(Self { fb, width, height, bytes_per_pixel: (bits_per_pixel / 8) as u32 })
+        Ok(Self { fb, width, height, bytes_per_pixel: bits_per_pixel / 8 })
     }
 
     fn put_pixel(&mut self, x: u32, y: u32, color: Rgb565) {
