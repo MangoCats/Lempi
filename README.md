@@ -30,6 +30,8 @@ The name describes the design, and the design has two pillars:
 
 Lempi is the third attempt at this idea, not the first. **MuLibPlay** — a Qt5 C++ player — has run this listener's library continuously since 2020 and is the benchmark every measured decision here is checked against. **McRhythm** was an ambitious, stalled six-microservice rewrite; its requirements were the most refined in the lineage and are inherited deliberately, while its architecture is explicitly rejected. An earlier **Lempi v1** attempt also failed, on measured grounds (whole-file decode, silently-inherited descriptors). None of this is a clean slate: it is a rearchitecture built on three prior systems' evidence. See [GUIDE001: Project Lineage & Lessons Learned](docs/GUIDE001-lineage-and-lessons.md) for the measurements behind every claim in this paragraph.
 
+This project utilizes Claude Code and occasionally other LLM agents for assisted development, with all architecture, code review, and maintenance handled entirely by MangoCats (a real person, and cat).
+
 ---
 
 ## 🔑 Key Features & Architecture Pillars
