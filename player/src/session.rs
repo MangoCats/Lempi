@@ -104,7 +104,11 @@ pub struct Controls {
     /// **local engine** and a seek has to reach whichever side is sounding.
     /// The engine channel would have moved Lempi's own playback while MPD
     /// carried on regardless.
-    pub seek_requested: Option<u64>,
+    ///
+    /// The passage, when the client named one, travels with it: the side
+    /// that is sounding refuses a seek aimed at a passage that is no longer
+    /// on air, rather than moving the next one (review O-01).
+    pub seek_requested: Option<(Option<i64>, u64)>,
 
     /// A request to change sides. The same intent-cell pattern as
     /// `reload_requested`, and for the same reason: the backends are not `Sync`

@@ -976,18 +976,23 @@ impl Playback for MpdBackend {
     /// Addressed to the song that is *current*, not to the first this backend
     /// offered: the listener may be on something they queued themselves
     /// `[SPEC-MPD-115]`, and seeking the wrong song is worse than not seeking.
-    fn seek_to(&mut self, position_ms: u64) {
+    fn seek_to(&mut self, asked: Option<i64>, position_ms: u64) -> bool {
+        // Asked for one passage while another is current: a click that raced
+        // a track change, refused rather than applied to the wrong song.
+        if asked.is_some_and(|p| self.head.map(|(h, _)| h) != Some(p)) {
+            return false;
+        }
         let Some((id, span)) = self
             .head
             .and_then(|(passage, _)| {
                 self.ours.iter().find(|(_, o)| o.passage_id == passage).map(|(id, o)| (id.clone(), o.span_ms))
             })
         else {
-            return;
+            return false;
         };
         let at = position_ms.min(span.saturating_sub(SEEK_MARGIN_MS));
         if self.mpd.cmd(&format!("seekid {id} {:.3}", at as f64 / 1000.0)).is_err() {
-            return;
+            return false;
         }
         // Immediately, rather than leaving it to the watchdog three seconds
         // later: this is an interactive action and the listener is waiting on
@@ -1000,6 +1005,7 @@ impl Playback for MpdBackend {
             o.seen_at_ms = None;
         }
         self.head = self.head.map(|(passage, _)| (passage, at));
+        true
     }
 
     fn tick(&mut self) -> usize {
@@ -1306,7 +1312,7 @@ mod tests {
         let mut b = mpd.backend();
         b.enqueue(queued(7));
         b.tick(); // a poll, so the backend knows what is current
-        b.seek_to(10_000);
+        b.seek_to(None, 10_000);
 
         let sent = mpd.commands();
         let seek = sent.iter().rposition(|c| c.starts_with("seekid")).expect("it seeks");

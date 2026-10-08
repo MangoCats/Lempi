@@ -35,7 +35,7 @@
 //! Phase 4 wires that calibration to an actual transport UI: play/pause,
 //! skip, +-3dB volume, and tap-to-seek on the position bar, hit-tested
 //! against the concrete regions `render` draws and posted to `lempi`'s
-//! existing `/command/:name`, `/volume/:db`, `/seek/:ms` routes
+//! existing `/command/:name`, `/volume/:db`, `/seek/:passage/:ms` routes
 //! `[SPEC-FBUI-015]` -- the exact three real command names `control.rs`
 //! serves (`play`, `pause`, `skip`; there is deliberately no "prev" or
 //! "stop" `[REQ-AUD-142]`), not assumed ones. Touch is read on its own OS
@@ -1577,7 +1577,13 @@ async fn main() {
                             if snap.duration_ms > 0 {
                                 let frac = ((sx - 8.0) / (display.width as f64 - 16.0)).clamp(0.0, 1.0);
                                 let ms = (frac * snap.duration_ms as f64).round() as u64;
-                                tokio::spawn(http_post(http_addr.clone(), format!("/seek/{ms}")));
+                                // Named, so a touch that races a track change
+                                // is refused rather than moving the next one.
+                                let to = match snap.passage_id {
+                                    Some(id) => format!("/seek/{id}/{ms}"),
+                                    None => format!("/seek/{ms}"),
+                                };
+                                tokio::spawn(http_post(http_addr.clone(), to));
                             }
                         }
                         Some(Zone::QueueSooner(qid)) => {

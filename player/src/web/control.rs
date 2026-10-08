@@ -70,7 +70,24 @@ pub(super) async fn seek_to(
     axum::extract::Path(ms): axum::extract::Path<u64>,
 ) -> StatusCode {
     let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
-    c.seek_requested = Some(ms);
+    c.seek_requested = Some((None, ms));
+    StatusCode::ACCEPTED
+}
+
+/// The same, naming the passage the offset was measured against
+/// `[REQ-VIS-225]`.
+///
+/// A click can race a track change: the browser measured against one
+/// passage, and by the time the seek arrives another is on air. Named, the
+/// sounding side refuses it rather than moving the wrong passage (review
+/// O-01). Still 202: whether it moved is decided on the playback thread,
+/// after this has answered.
+pub(super) async fn seek_passage(
+    State(ui): State<Ui>,
+    axum::extract::Path((passage, ms)): axum::extract::Path<(i64, u64)>,
+) -> StatusCode {
+    let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
+    c.seek_requested = Some((Some(passage), ms));
     StatusCode::ACCEPTED
 }
 

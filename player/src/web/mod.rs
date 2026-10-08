@@ -491,6 +491,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/command/:name", post(command))
         .route("/volume/:db", post(set_volume))
         .route("/seek/:ms", post(seek_to))
+        .route("/seek/:passage/:ms", post(seek_passage))
         .route("/underruns/restart", post(restart_underruns))
         .route("/skip/fade/:ms", post(set_skip_fade))
         .route("/skip/lead/:ms", post(set_skip_lead))

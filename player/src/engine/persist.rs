@@ -297,7 +297,7 @@ impl Engine {
     /// its best estimate first rather than dropped.
     pub(super) fn queue_pending_finish(&mut self, next: PendingFinish) {
         if let Some(prev) = self.pending_finish.take() {
-            self.write_finish(prev.play_id, prev.estimate());
+            self.write_finish(prev.play_id, prev.estimate(self.sounding.now()));
         }
         self.pending_finish = Some(next);
     }
@@ -309,7 +309,7 @@ impl Engine {
     /// every time rather than computing it once `[REQ-VIS-240]`.
     pub(super) fn finalize_draining_plays(&mut self) {
         let Some(pending) = &self.pending_finish else { return };
-        let estimate = pending.estimate();
+        let estimate = pending.estimate(self.sounding.now());
         if estimate >= pending.span_ms {
             let play_id = pending.play_id;
             self.pending_finish = None;
@@ -323,7 +323,7 @@ impl Engine {
     /// interrupted tail count toward it forever.
     pub(super) fn resolve_pending_finish_now(&mut self) {
         if let Some(pending) = self.pending_finish.take() {
-            self.write_finish(pending.play_id, pending.estimate());
+            self.write_finish(pending.play_id, pending.estimate(self.sounding.now()));
         }
     }
 

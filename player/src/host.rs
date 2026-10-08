@@ -785,8 +785,8 @@ fn engine_thread(setup: EngineSetup, tx: SyncSender<Started>) {
         // sounding `[REQ-VIS-225]`. Taken here for the same reason a switch is:
         // the backends live on this thread and nowhere else.
         let seek_ask = controls_for_switch.lock().ok().and_then(|mut c| c.seek_requested.take());
-        if let Some(ms) = seek_ask {
-            crate::playback::Playback::seek_to(&mut backend, ms);
+        if let Some((passage, ms)) = seek_ask {
+            crate::playback::Playback::seek_to(&mut backend, passage, ms);
         }
 
         // What the side now sounding can do, published where the browser can

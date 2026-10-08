@@ -161,7 +161,13 @@ pub trait Playback {
     /// Distinct from `resume_at`, which places a passage that has not started
     /// yet. A backend whose `capabilities().seek` is false may leave this
     /// unimplemented; one that advertises it must not.
-    fn seek_to(&mut self, _position_ms: u64) {}
+    ///
+    /// `passage`, when given, must be the one on air: a click that races a
+    /// track change is refused rather than applied to the next passage
+    /// (review O-01). Returns whether it moved.
+    fn seek_to(&mut self, _passage: Option<i64>, _position_ms: u64) -> bool {
+        false
+    }
 
     /// Do a slice of work. For the local engine this mixes; for a remote
     /// backend it polls the server and reconciles.
@@ -213,8 +219,8 @@ impl Playback for crate::engine::Engine {
     fn resume_at(&mut self, position_ms: u64) {
         Engine::resume_at(self, position_ms)
     }
-    fn seek_to(&mut self, position_ms: u64) {
-        Engine::seek_to(self, position_ms)
+    fn seek_to(&mut self, passage: Option<i64>, position_ms: u64) -> bool {
+        Engine::seek_to(self, passage, position_ms)
     }
     fn tick(&mut self) -> usize {
         Engine::tick(self)

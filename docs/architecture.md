@@ -221,11 +221,10 @@ assume. The specifications stay the statement of intent: each line here is a
 fault in the code, to be fixed there, and found 2026-10-08 unless it says
 otherwise.
 
-* **A seek in a passage's last ~15 s moves the next passage.** The browser
-  sends an offset against the passage it shows; `seek_to` applies it to the
-  first passage still being mixed, which for a ring's depth before the end
-  (`BUFFER_FRAMES`) is already the next one. A seek during a crossfade discards
-  the incoming passage, unplayed and unrecorded `[REQ-VIS-225]`.
+* **A seek in a passage's last ~15 s is refused.** For a ring's depth before the
+  end (`BUFFER_FRAMES`) the passage on air has already left the mixer, and play
+  accounting still follows the mixer, so `seek_to` declines rather than moving
+  the next passage `[REQ-VIS-225]`.
 * **The live Director never hears of in-session rejections, or of a person's
   own picks.** Skip and dequeue windows are read when the Director is built, so
   they take effect only after a restart or a library reload. Until then a
@@ -234,9 +233,6 @@ otherwise.
   backend un-notes a removed passage as `[IMPL-MPD-045]` requires, but without
   the dequeue window of `[SPEC-PLAY-055]` the recording is eligible again at
   once. A passage a person queues marks nothing at all `[REQ-PD-112]`.
-* **The draining clock runs while paused.** A passage's last ring-depth of audio
-  is timed by the wall clock, so pausing there runs the progress bar to the end
-  and records the tail as heard `[REQ-VIS-250]`.
 * **The no-Director fallback is uniform random.** On a first start, with no
   remembered queue, or when every candidate is blocked, `random_radio` fills
   the queue, ignoring holds `[SPEC-HOLD-010]`, characteristic exclusions,

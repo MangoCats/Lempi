@@ -1175,7 +1175,13 @@ const Lempi = (() => {
     artUrl: id => `/art/${id}`,
     command: name => post(`/command/${name}`),
     volume: db => post(`/volume/${db}`),
-    seek: ms => post(`/seek/${Math.max(0, Math.round(ms))}`),
+    // The passage the offset was measured against travels with it, so a
+    // click that races a track change is refused rather than moving the next
+    // passage (review O-01).
+    seek: (ms, passage) => {
+      const at = Math.max(0, Math.round(ms));
+      return post(passage != null ? `/seek/${passage}/${at}` : `/seek/${at}`);
+    },
     restartUnderruns: () => post('/underruns/restart'),
     // A unix second to something a person reads. Local time, because the
     // listener is standing in it.
@@ -1198,7 +1204,7 @@ const Lempi = (() => {
         // Clamped: a click on the very edge of a padded hit area can land
         // fractionally outside the bar itself.
         const at = Math.min(Math.max((e.clientX - box.left) / box.width, 0), 1);
-        Lempi.seek(at * s.duration_ms);
+        Lempi.seek(at * s.duration_ms, s.passage_id);
       });
     },
     program: id => post(`/program/${id}`),
