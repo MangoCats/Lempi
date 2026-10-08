@@ -218,11 +218,15 @@ fresh clone has the gate in the tree and switched off — which is the worst of
 both, because the file reads like a guard that is running. One command, and
 `git config core.hooksPath` answers whether it is on.
 
-[`.githooks/pre-commit`](.githooks/pre-commit) runs two checks. On **every**
+[`.githooks/pre-commit`](.githooks/pre-commit) runs three checks. On **every**
 commit, [`tools/check_exec_bits.py`](tools/check_exec_bits.py) refuses a staged
 script that opens with `#!` and is not executable — well under a second, and it
 reads the mode from git's index, so it works on Windows, where `[ -x ]` passes
-for everything. On a commit touching `player/` or `sql/`, it also runs
+for everything. Also on every commit,
+[`tools/check_fleet_leaks.py`](tools/check_fleet_leaks.py) `--staged` refuses
+an added line that looks like private fleet detail — a LAN address, a MAC, a
+personal path, a `user@host:` — and with `fleet/private-tokens.txt` present,
+the real names too `[SPEC-FCP-050]`. On a commit touching `player/` or `sql/`, it also runs
 `build/verify-targets.sh --quick` — a Linux `cargo clippy` and the `lempi-core`
 boundary; a docs-only commit skips that. Clippy rather than `check` since
 2026-09-24: the same compile plus the lints, so a module's
@@ -241,12 +245,17 @@ to catch exactly that for weeks. The check was not missing. Running it was.
 **To commit past it, use `LEMPI_SKIP_VERIFY=1`, not `--no-verify`.** Both work;
 only one prints why the code is unverified. That is the same distinction §5
 draws — a skipped guard must be a visible line, not a silent success — and
-`--no-verify` leaves no trace at all.
+`--no-verify` leaves no trace at all. `LEMPI_SKIP_VERIFY` skips only the slow
+Linux gate; the leak scan has its own escape, `LEMPI_SKIP_LEAKS=1`, so skipping
+the compile never quietly skips the privacy check. The executable-bit check has
+none.
 
 ## 11. The Vipunen library is not in git — know where it is before using it
 
 **The primary library pair lives in `data/` on the Windows desktop (`GMKtec`),
-with a mirror on `teacherslounge` in `~/lempi-data/`.** It is untracked, so a
+the hub of star sync.** Every other node, `teacherslounge` included, holds its
+own pair with its own plays — a spoke, not a mirror ([FLEET001](fleet/FLEET001-the-fleet.md)).
+The hub's pair is untracked, so a
 fresh clone, a re-seeded repository or a worktree has none. Nothing in the tree
 fails until a tool is pointed at it.
 

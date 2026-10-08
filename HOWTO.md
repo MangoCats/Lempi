@@ -6,9 +6,10 @@ and `docs/` for that). Two things get built and run:
 
 - **Lempi** (`player/`) — the Rust player. Plays music, serves the web UI.
 - **Vipunen** (`tools/`) — the Python library builder and its browser console.
-  Reads and writes the same SQLite file Lempi plays from; the two never
-  talk to each other directly except through that file, plus one narrow
-  handoff described at the end.
+  Reads and writes the same library Lempi plays from — a pair of SQLite
+  files, `library.db` and `listener.db` (§3); the two never talk to each
+  other directly except through those files, plus one narrow handoff
+  described at the end.
 
 Every command below is verified against this repository as it stands.
 
@@ -110,8 +111,10 @@ player/target/release/lempi --listener listener.db --library library.db --port 5
 ```
 
 Open `http://127.0.0.1:5720/` for the player UI. **`lempi --help` lists
-every option**, and so does `--help` on any of the other sixteen binaries;
-the list below is a summary, not the definition `[GDE-CLI-010]`. `--port`
+every option**, and so does `--help` on any of the other binaries in
+`player/src/bin/` (a few build only with a feature: `mpd`, `fbui` or
+`echo-client`); the list below is a summary, not the definition
+`[GDE-CLI-010]`. `--port`
 defaults to `5720` if omitted; `--device NAME` picks an output device by a
 case-insensitive substring match if the default one isn't what you want, and
 `--list-devices` prints what this machine offers. `--library` is the

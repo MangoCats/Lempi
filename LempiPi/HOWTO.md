@@ -62,17 +62,19 @@ something with no commit to point back to later; commit first, or pass
 To deploy a specific tagged version instead of whatever's checked out:
 
 ```
-build/deploy-appliance.sh pi-audio-stable-2026-08-16
+build/deploy-appliance.sh <tag>
 ```
 
 This builds that tag in an isolated copy made just for the build — your own
 checkout is never touched, so this is safe to run regardless of what you
-currently have checked out or edited locally. `git tag` lists what exists.
+currently have checked out or edited locally. `git tag` lists what exists —
+`pre-WiFi-update`, for example. The tags cited in older documents belong to the
+previous repository and do not resolve here `[GDE-NAM-030]`.
 
 To deploy to a different appliance, name it as the last argument:
 
 ```
-build/deploy-appliance.sh pi-audio-stable-2026-08-16 pi@other-host
+build/deploy-appliance.sh <tag> pi@other-host
 build/deploy-appliance.sh pi@other-host            # latest, elsewhere
 ```
 

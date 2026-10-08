@@ -4,10 +4,11 @@
 
 **The arrangement, as the maintainer describes it:** the Vipunen primary is in
 this directory on **the Windows desktop**, `GMKtec` (Windows 11, where the 44 GB
-of music is under `C:\Users\Mango Cat\Music`). **`teacherslounge`** (Ubuntu
-22.04) keeps a mirror in `/home/sw/lempi-data/`, which validates the same tools
-under Linux. Each appliance keeps its own catalogue copy and its **own** listener
-history, and those are not mirrors of this one.
+of music is under `%USERPROFILE%\Music`). This pair is the hub of star sync
+`[SPEC-STAR-010]`. **`teacherslounge`** (Ubuntu 22.04) validates the same tools
+under Linux and, like every other node, keeps its own pair in `~/lempi-data/`
+with its **own** listener history: a spoke, not a mirror of this one. Each
+appliance likewise keeps its own catalogue copy and its own listener history.
 
 **2026-09-26: the primary was lost, and rebuilt.** It lived in `data/` of the
 previous repository's checkout on this PC, a sibling of `Dev\Lempi` whose path
