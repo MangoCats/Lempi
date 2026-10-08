@@ -1428,7 +1428,7 @@ impl Engine {
         if self.live.is_empty() {
             return;
         }
-        let is_shutdown = self.queue.peek().map_or(false, |e| e.is_shutdown);
+        let is_shutdown = self.queue.peek().is_some_and(|e| e.is_shutdown);
         let ch = self.out_channels.max(1);
         let rate = self.out_rate as u64;
         let fade_samples = (self.skip_fade_ms * rate / 1000) as usize * ch;
@@ -1699,7 +1699,7 @@ impl Engine {
     ///
     /// Position-driven via the shared rule, never buffer-driven `[XFD-BEH-C1-020]`.
     fn admit_due(&mut self) {
-        if self.queue.peek().map_or(false, |e| e.is_shutdown) {
+        if self.queue.peek().is_some_and(|e| e.is_shutdown) {
             return;
         }
         // **Split once, from the pair that is actually about to hand over.**
@@ -2827,7 +2827,7 @@ placing at the ring's own depth, which sounds early",
     }
 
     fn check_queued_shutdown(&mut self) {
-        if self.queue.peek().map_or(false, |e| e.is_shutdown)
+        if self.queue.peek().is_some_and(|e| e.is_shutdown)
             && self.live.is_empty()
             && self.out_buffered_frames() == 0
         {

@@ -169,7 +169,7 @@ fn rehearse_in(listener: &Path, library: &Path, req: &Value) -> Result<Value, St
         // `[SPEC-NKP-920]`: what was staged, every part against its digest again, all in
         // one transaction that is rolled back.
         let paths = part_paths(listener, req["run"].as_str().unwrap_or(""), spec)?;
-        let mut it = paths.iter().map(|p| load_part(p));
+        let mut it = paths.iter().map(load_part);
         out["catalogue"] = counts(&mesh_sync::apply_parts(library, &mut it, None, Rule::Strict, false, &mut |_, _| Ok(()))
             .map_err(|e| format!("catalogue: {e}"))?);
     } else if has_rows(cat) {
@@ -194,6 +194,10 @@ enum CatInverse {
     Parts(usize),
 }
 
+/// What a commit applied: the catalogue's counts and how to undo them, if it
+/// had a catalogue half, and the listener's outcome, if it had that half.
+type Committed = (Option<(mesh_sync::Applied, CatInverse)>, Option<mesh_sync::Outcome>);
+
 fn commit(listener: &Path, library: &Path, req: &Value, run: &str, apply_listener: ListenerApply)
     -> Result<(Value, bool), String> {
     let (cat, lis) = (&req["catalogue_patch"], &req["listener_patch"]);
@@ -208,7 +212,7 @@ fn commit(listener: &Path, library: &Path, req: &Value, run: &str, apply_listene
     // root filesystem, or anywhere a test puts one) never reaches it. The window spans
     // the rehearsal as well as the apply: both write, the first to roll back.
     let win = Window::open(library, has_cat)?;
-    let applied = (|| -> Result<(Option<(mesh_sync::Applied, CatInverse)>, Option<mesh_sync::Outcome>), String> {
+    let applied = (|| -> Result<Committed, String> {
         // Rehearsed first, here, whatever the hub rehearsed before: the files may
         // have moved since.
         rehearse_in(listener, library, req)?;
@@ -218,7 +222,7 @@ fn commit(listener: &Path, library: &Path, req: &Value, run: &str, apply_listene
             let n = paths.len();
             let dir = sync_dir(listener);
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            let mut it = paths.iter().map(|p| load_part(p));
+            let mut it = paths.iter().map(load_part);
             let done = mesh_sync::apply_parts(library, &mut it, None, Rule::Strict, true, &mut |i, inv| {
                 write_atomic(&dir.join(format!("inverse-{run}-c{}.json", i + 1)), &inv.to_string())
             });
