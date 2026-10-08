@@ -116,13 +116,23 @@ def main() -> int:
     except ValueError as e:
         check("not shared" in str(e), f"an upload holding plays is refused: {e}")
 
+    # The hub takes part in every run since `fb766de` [SPEC-STAR-134], so a
+    # commit reaches `hub_apply`: it backs the hub's pair up first, and it
+    # refuses while it can see a console or a player on this machine. The
+    # first needs somewhere to write; the second is the machine running the
+    # test, not the one under test, so it is stubbed as
+    # `test_star_sync_flow.py` stubs it.
     plan = {"hub": {"name": "desktop", "listener": hub_l, "library": hub_c},
-            "runs": os.path.join(tmp, "runs"), "prune": {"prefix": "pre-sync-", "keep": 3}, "nodes": {}}
+            "runs": os.path.join(tmp, "runs"), "prune": {"prefix": "pre-sync-", "keep": 3},
+            "backups": {"dir": os.path.join(tmp, "backups"), "keep_daily": 14, "keep_monthly": 12},
+            "nodes": {}}
     os.makedirs(plan["runs"])
+    os.makedirs(plan["backups"]["dir"])
     with open(os.path.join(plan["runs"], "state.json"), "w") as fh:
         json.dump({"hub": {}, "nodes": {}}, fh)
     stamps = iter(["20260927T0001Z", "20260927T0002Z"])
     ss.stamp = lambda t=None: next(stamps)
+    ss.console_running = lambda excuse=None: []
 
     def round_():
         rc = ss.snapshot(plan)
