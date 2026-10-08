@@ -80,6 +80,10 @@ IP_OK = re.compile(r"^(?:192\.0\.2\.|198\.51\.100\.|203\.0\.113\."   # RFC 5737
                    r"|0\.0\.0\.0$|127\.0\.0\.1$|255\.255\.255\.255$)")
 MAC_OK = {"00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff", "aa:bb:cc:dd:ee:ff",
           "de:ad:be:ef:00:00", "12:34:56:78:9a:bc"}
+# A documented placeholder *range*, not only the one address above: a test that
+# needs two distinct devices numbers them `AA:BB:CC:DD:EE:01`, `...:02`, as
+# `lempi-bt-agent`'s self-test does. No vendor sits behind the prefix.
+MAC_OK_PREFIX = "aa:bb:cc:dd:ee:"
 NAME_OK = {"user", "users", "public", "default", "pi", "root", "shared",
            "someone", "you", "example"}
 # Placeholder / public hosts for the `user@host:` check -- the role aliases the
@@ -96,7 +100,8 @@ def generic_hits(line: str):
         if not IP_OK.match(ip):
             out.append(f"private IP {ip}")
     for mac in MAC.findall(line):
-        if mac.lower() not in MAC_OK and "x" not in mac.lower():
+        m = mac.lower()
+        if m not in MAC_OK and not m.startswith(MAC_OK_PREFIX) and "x" not in m:
             out.append(f"MAC {mac}")
     for name in HOME.findall(line):
         if name.lower() not in NAME_OK and not name.startswith("<"):

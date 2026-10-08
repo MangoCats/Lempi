@@ -43,6 +43,9 @@ def main() -> int:
     check(leaks("Marshall 20:64:DE:CF:F3:AD"), "a full MAC is flagged")
     check(not leaks("keep the vendor 20:64:DE:xx:xx:xx"), "a masked MAC is not flagged")
     check(not leaks("placeholder aa:bb:cc:dd:ee:ff"), "a placeholder MAC is not flagged")
+    check(not leaks('INCUMBENT_ADDR = "AA:BB:CC:DD:EE:01"'),
+          "the placeholder range numbered for a test is not flagged")
+    check(leaks("AA:BB:CC:DD:EF:01"), "an address merely near the placeholder range is flagged")
 
     # Personal paths.
     check(leaks("/home/alice/Music"), "a real /home/<name> is flagged")
