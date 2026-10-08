@@ -22,6 +22,19 @@ playback behavior:</p>
     distinct from the Cooldown dial in Preference Tuning, and shorter.</li>
   <li><strong>Keep queued ahead</strong> — how many tracks Lempi tries to
     keep lined up in the queue at once.</li>
+  <li><strong>Speaker delay</strong>, <strong>Follow another player</strong>
+    and <strong>Get in step</strong> — for playing the same programme on two
+    or more players at once, in step: this player's own delay in
+    milliseconds, the name of the player to follow (empty means play this
+    player's own programme), and whether to fall into step straight away
+    (cutting what is playing, the way a skip does) or at the other player's
+    next track. The panel explains the trade-off, and that being exactly in
+    step needs both players' clocks set by the same time server.</li>
+  <li><strong>Output volume</strong> — a volume level remembered for each
+    output, the DAC or a Bluetooth speaker: <em>Remember</em> pins the
+    current level for the output in use, <em>Clear</em> forgets it.
+    <strong>Bluetooth timeout</strong> is how long to wait for a Bluetooth
+    speaker before falling back to the DAC.</li>
   <li><strong>Guest sampling interval</strong> — only relevant if another
     playback backend (like MPD) is attached alongside Lempi.</li>
   <li><strong>Playing through</strong> — which backend is actually driving
@@ -38,11 +51,12 @@ playback behavior:</p>
     reduced power — this LED has no true hardware dimmer. Has no effect
     on playback either way, and the choice is remembered and reapplied
     automatically at every restart, including a full power cycle.</li>
-  <li>Four file-writing toggles, each with its own on-screen explanation:
+  <li>Five file-writing toggles, each with its own on-screen explanation:
     naming capture tracks for other clients (cue sheets), saving album art
-    for captures, keeping per-song lyrics for a local client, and keeping
-    lyrics files beside the audio itself. Some of these only take effect
-    after a restart — the panel says which.</li>
+    for captures, keeping per-song lyrics for a local client, keeping
+    lyrics files beside the audio itself, and keeping a lossless FLAC copy
+    of each CD rip Vipunen adds. Some of these only take effect after a
+    restart — the panel says which.</li>
 </ul>
 <p>The same panel also shows the exact build you're running (with a
 copy-to-clipboard button), which branch and commit it came from, and
@@ -56,7 +70,9 @@ this page can't be switched off from here, for the obvious reason. The
 speaker chooser scans for, pairs with, connects to ("use this one"), or
 forgets a Bluetooth speaker. After connecting, a "can you hear it?" check
 gives you thirty seconds to confirm before automatically reverting if you
-don't — so a bad connection can't strand you silently.</p>
+don't — so a bad connection can't strand you silently. On a Raspberry Pi
+appliance the speaker's own buttons work too: play/pause and skip on the
+speaker control Lempi directly.</p>
 
 <h3>Travel, offline playback, and automatic Wi-Fi failover (Lempi skin
 only, Raspberry Pi appliance only)</h3>
@@ -100,8 +116,9 @@ the appliance onto a venue Wi-Fi network or a phone's personal hotspot:</p>
 <p><strong>Finding Lempi on a hotspot:</strong> Once Lempi joins your phone's
 hotspot, you can reach it at <code>http://&lt;ip&gt;/</code> (on iOS hotspots,
 Lempi is usually <code>http://172.20.10.x</code>; on Android, check the IP listed
-under Hotspot Connected Devices) or by opening the Lempi mobile app, which
-finds the player automatically via local network broadcast.</p>
+under Hotspot Connected Devices). The Lempi mobile app's network search
+looks for a Vipunen hub to join, not for players, so it will not find the
+appliance this way.</p>
 <p class="note"><strong>Confirm-or-revert safety &amp; reload persistence:</strong>
 Switching networks temporarily severs your browser connection. Every switch
 schedules a safety timer (3&ndash;5 minutes). When you rejoin on the new
@@ -153,19 +170,41 @@ consists of.</p>
 confirmation before acting. <strong>Shutdown is one-way from the web
 interface</strong> — nothing on this page can turn the appliance back on
 once it's off; you'll need physical access to it.</p>
+<p>To shut down after the music rather than now, the MuLibPlay skin's
+<strong>Enqueue Shutdown</strong> button puts a Shutdown entry at the end of
+the queue. The track before it plays to its end, with no crossfade into
+anything after it; then the appliance powers off, and whatever was queued
+behind it is still there at the next power-on. The entry shows in the queue
+in every skin and can be removed like any queued track; there is only ever
+one.</p>
 
 <h3>Sending music to another Lempi</h3>
-<p>Vipunen's <strong>Export</strong> page bundles up matching tracks (search
-by artist/album/title) plus everything Vipunen knows about them into a
-folder, for a Lempi installation that doesn't have that music yet. It
-doesn't copy your whole library — just what matches — and it shows you the
-exact commands to actually move that bundle to the other machine and tell
-it to notice the new music; it doesn't run those commands for you.</p>
+<p>Vipunen's <strong>Export</strong> page has two ways to get music to a
+Lempi that doesn't have it yet:</p>
+<ul>
+  <li><strong>Send what's missing to the speakers</strong> — for the
+    household's own players. It asks each speaker you tick which audio it
+    holds (nothing on it changes), and builds one bundle of everything this
+    library has that it lacks. <strong>Send to</strong> that speaker shows
+    what the send would do; <strong>Send now</strong> then copies it into
+    the speaker's own music folder and imports it there.</li>
+  <li><strong>Build a bundle for a remote Lempi</strong> — for any other
+    installation. It bundles whatever matches your search (artist, album,
+    title) plus everything Vipunen knows about it, and shows the commands
+    to move it there; for this one, nothing runs on another machine until
+    you run those commands yourself.</li>
+</ul>
 
-<h3>Keeping two libraries in sync</h3>
-<p>Vipunen's <strong>Flags</strong> page also has a "sync with a remote"
-section, once you've told it about another library (a host and file path):
-</p>
+<h3>Keeping libraries in sync</h3>
+<p>The household's routine is Vipunen's <strong>Sync</strong> page: it takes
+each ticked player's edits — preferences, flags, likes, corrections —
+merges them on the desktop, asks you for a verdict wherever two of them
+disagree, and sends the result back out. Each player applies it itself,
+without stopping. Plays are never shared: each player keeps its own
+history.</p>
+<p>For a one-off between two libraries, Vipunen's <strong>Flags</strong>
+page also has a "sync with a remote" section, once you've told it about
+another library (a host and file path):</p>
 <ul>
   <li><strong>Pull flags from remote</strong> — brings in anything flagged
     for review on the other system.</li>
@@ -193,6 +232,8 @@ you expect it, this is almost always why:</p>
 <tr><td>Bluetooth &amp; radios</td><td>✓</td><td>—</td><td>—</td></tr>
 <tr><td>Play History</td><td>✓</td><td>—</td><td>—</td></tr>
 <tr><td>Restart / shutdown</td><td>✓</td><td>—</td><td>—</td></tr>
+<tr><td>Enqueue a shutdown after the music</td><td>—</td><td>✓</td><td>—</td></tr>
+<tr><td>Output volume per output</td><td>✓</td><td>—</td><td>—</td></tr>
 <tr><td>Lyrics</td><td>—</td><td>✓</td><td>—</td></tr>
 <tr><td>Back cover art</td><td>—</td><td>✓</td><td>—</td></tr>
 <tr><td>Program override</td><td>dropdown</td><td>buttons + checkbox</td><td>dropdown</td></tr>

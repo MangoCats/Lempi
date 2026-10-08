@@ -82,8 +82,10 @@ music, an unusual remaster). Decide with <strong>Use the match</strong>,
 box lets you fix just the artist credit.</p>
 
 <p class="note">A review decision is a <em>draft</em> until it's applied —
-Vipunen's profile page will show a banner reminding you a decision is
-waiting to be folded in, with the exact command to run. This two-step
+Vipunen's profile page shows a banner while one is waiting, linking to the
+<strong>Flags</strong> page's "Apply pending edits", which shows you the
+exact before and after first and pauses the player while the library is
+rewritten (the command the banner names still works by hand). This two-step
 design exists because changing what a track <em>is</em> also has to
 correctly carry over its play history.</p>
 
@@ -121,14 +123,17 @@ being validated</strong> — treat results as a good starting point, always
 worth a listen through the boundaries it finds. It works by being told
 roughly how long each track should be (or the exact expected lengths, if
 you have them), and searches the audio for the actual silences or track
-breaks near those points.</p>
+breaks near those points. On Vipunen's <strong>import</strong> page,
+<strong>Split an album file</strong> does this: find the file, pick which
+album it is, check where it would be cut, then split it.</p>
 
 <h3>Ripping a CD directly</h3>
-<p>Lempi can bring in a physical CD, but it doesn't operate the drive
-itself — you rip the disc first with separate ripping software (on
-Windows, Exact Audio Copy is the supported route today; the equivalent
-Linux path isn't reliable yet), then point the ingest tool at the folder
-that rip produced. Given the disc's own table of contents, track
+<p>Vipunen's <strong>import</strong> page brings in a physical CD. Lempi
+doesn't operate the drive itself: CUERipper (free, from cue.tools, on
+Windows) reads the disc — set it up once, then each disc is one button
+there — and the rip appears on the import page by itself, ready to add. The
+page's <strong>How to</strong> button opens the step-by-step guide beside
+it; Exact Audio Copy works too. Given the disc's own table of contents, track
 boundaries are exact — no guesswork like the whole-album case above — and
 if the disc is recognized, Vipunen pulls its real track titles and artist
 credits directly rather than relying on a fingerprint match per track.

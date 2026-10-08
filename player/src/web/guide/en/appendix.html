@@ -57,8 +57,10 @@ character — the clearest example is holiday music. A curve maps the day of
 year to a multiplier, and a song's own "how seasonal is this" value decides
 how strongly that multiplier applies to it specifically; a song with no
 seasonal character at all is untouched year-round. This is why certain
-songs seem to show up only around a particular time of year, entirely
-apart from anything in Preference Tuning.</p>
+songs seem to show up only around a particular time of year. The "how
+seasonal is this" value comes with the library, and you can set your own
+for any recording in the preference panel's <strong>Specials</strong> (see
+Preference Tuning).</p>
 
 <h3>Does it fit right now: flavor</h3>
 <p>Every recording has a large set of measurements describing what it
@@ -101,7 +103,9 @@ picking among them is the only lever you currently have.</p>
 <table>
 <tr><th>Data</th><th>Feeds automatic selection?</th></tr>
 <tr><td>Preference Tuning (Cooldown/Recovery/Preference)</td><td>Yes — read directly, this is a first-class input.</td></tr>
-<tr><td>Your play/skip history</td><td>Yes — this is literally what starts the Cooldown/Recovery clock for each song.</td></tr>
+<tr><td>Your play history</td><td>Yes — a play is what starts the Cooldown/Recovery clock for each song. Skips and removals are kept separately, and only hold a song out for their own window.</td></tr>
+<tr><td>Specials (Christmas, Winter, Summer, Children's…) in the preference panel</td><td>Yes — your own value for a recording replaces the library's, through the time-of-year curves above. Profanity and Spiritual are recorded but change nothing today.</td></tr>
+<tr><td>A hold on a passage (Vipunen's passage page)</td><td>Yes — a held passage is never picked automatically, though you can still queue it yourself. It is for a damaged rip, or anything you would rather not hear unasked.</td></tr>
 <tr><td>The Play Frequency table (Preference Tuning)</td><td>No — it's a read-only report for you, computed from the same history above but not consulted when picking what plays next.</td></tr>
 <tr><td>"Flag for review" (Play History / Advanced Features)</td><td>No — this is purely a note-to-self for library curation in Vipunen; it has no effect on playback at all.</td></tr>
 </table>

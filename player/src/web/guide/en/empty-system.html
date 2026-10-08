@@ -21,9 +21,9 @@ finding it once it's there.</p>
     country — the appliance joins it automatically on first boot, no
     screen or keyboard involved.
     Otherwise — taking the appliance travelling or into a new home where
-    it hasn't seen the network yet — just power it on. When it can't find
-    any known network after 45 seconds, it automatically starts its own
-    broadcast network named <code>Lempi</code> (password:
+    it hasn't seen the network yet — just power it on. After a 45-second grace at boot and a further 30
+    seconds without any known network — about a minute and a half in all —
+    it automatically starts its own broadcast network named <code>Lempi</code> (password:
     <code>Lempi321</code>). Join that network from a phone or laptop, open
     <code>http://lempi/</code> or <code>http://10.42.0.1/</code>, and either
     enjoy full offline playback immediately, or open Settings &rarr; Wi-Fi
@@ -65,14 +65,17 @@ and how to run Vipunen's console once you have it. Come back here once you
 can run both.</p>
 
 <h3>1. Create an empty library</h3>
-<p>A library is a single database file. An empty one is valid — Vipunen and
-Lempi will both open it and run fine, there's simply nothing in it yet to
-play. <code>HOWTO.md</code> has the exact one-line command that builds this
-empty file from the project's own schema; run it once to get a
-<code>lempi.db</code> to work with.</p>
+<p>A library is a pair of database files: <code>library.db</code>, the
+catalogue of what your music is, and <code>listener.db</code>, everything you
+do with it. An empty pair is valid — Vipunen and Lempi will both open it and
+run fine, there's simply nothing in it yet to play. <code>HOWTO.md</code>
+(§3, "Get a library") has the exact commands, which build a library from the
+project's own schema and split it into the pair. If another Lempi system
+already exists, a copy of its <code>library.db</code> is the quicker start:
+Lempi makes an empty <code>listener.db</code> the first time it runs.</p>
 
 <h3>2. Point Vipunen at your music folder</h3>
-<p>Start Vipunen's console against that new, empty database, telling it
+<p>Start Vipunen's console against that new, empty library, telling it
 where your actual music files live. Vipunen won't touch anything yet — this
 just lets its <strong>Folder</strong> page compare what's on disk against
 what the (currently empty) library knows about, and lets the
@@ -88,8 +91,9 @@ work end to end before doing it at scale.</p>
 
 <h3>4. Start Lempi pointed at the same library</h3>
 <p>Once at least one folder has been inducted, start the Lempi player
-against that same database file. Open its web page and you should see
-your inducted music available to browse and queue.</p>
+against the same pair — <code>--listener</code> and <code>--library</code>
+each name one file, and Lempi will not start without both. Open its web page
+and you should see your inducted music available to browse and queue.</p>
 
 <h3>What a brand-new system actually looks like</h3>
 <p>A few things are worth expecting rather than being surprised by, the
