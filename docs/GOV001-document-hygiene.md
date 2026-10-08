@@ -97,6 +97,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `OPS` — An appliance measured **in service** rather than at build time: the health baseline, the false alarms, the standing findings. Prefixed per machine (`BOS` for `bose`), because the numbers are only meaningful against one box — see [BOSE004](../BosePi/BOSE004-operating-health.md)
 - `POV` — Per-Output Volume: independent volume state, memory, and persistence across DAC and Bluetooth outputs, see [SPEC060](spec/SPEC060-per-output-volume.md)
 - `WFO` — Travel Wi-Fi Failover: autonomous access point failover, standalone offline operation, and hotspot pivot, see [SPEC061](spec/SPEC061-travel-wifi-failover.md)
+- `WIFI` · `MESH` · `FBUI` · `DLY` · `ECHO` · `STAR` · `COV` · `PID` · `MTR` · `DSC` · `TN` · `WAG` · `SEC` · `NSH` · `FCP` · `CDI` · `HOLD` · `NKP` · `QSD` — the specification domains of SPEC034 to SPEC059, in document order; §3's index names each one's document
 
 ### Development Guidance Domains (`GDE`)
 - `BMK` — MuLibPlay benchmark measurements
@@ -148,7 +149,7 @@ grep -rn "SPEC-PD" docs/
 | `[GDE-FEX-*]` | Feature extraction strategy (P0 critical path) — current strategy only; reverse-engineering and validation history split out per `[GOV-DOC-050]` | [GUIDE003-feature-extraction-strategy.md](GUIDE003-feature-extraction-strategy.md) |
 | `[GDE-AND-*]` | Phone ports (Android, iOS): fork vs ground-up, and the licence that decides it | [GUIDE004-phone-port-strategy.md](GUIDE004-phone-port-strategy.md) |
 | `[GDE-APP-*]` | The Android app: the decisions its requirements wait on, each with a recommendation | [GUIDE034-android-decisions-before-requirements.md](GUIDE034-android-decisions-before-requirements.md) |
-| `[GDE-NDS-*]` | Node discovery on a LAN — a future idea, recorded and not scheduled | [GUIDE035-node-discovery.md](GUIDE035-node-discovery.md) |
+| `[GDE-NDS-*]` | Node discovery on a LAN — the sketch [SPEC050](spec/SPEC050-node-discovery.md) (`[SPEC-DSC-*]`) was built from, 2026-09-27; its open questions are settled there | [GUIDE035-node-discovery.md](GUIDE035-node-discovery.md) |
 | `[GDE-OCP-*]` | Node occasion policies — a profanity ceiling and ramp, curve overrides; designed, not scheduled | [GUIDE036-node-occasion-policies.md](GUIDE036-node-occasion-policies.md) |
 | `[GDE-HST-*]` | What the player assumes about its host; groundwork for a phone target; logging with `tracing` | [GUIDE033-the-player-without-an-appliance.md](GUIDE033-the-player-without-an-appliance.md) |
 | `[GDE-CLD-*]` | Hosted flavor lookup instead of Vipunen on the device | [GUIDE005-flavor-service.md](GUIDE005-flavor-service.md) |
@@ -165,7 +166,7 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-BK-*]` | Moving a session between Lempi's engine and MPD without stopping | [SPEC018-switching-backends.md](spec/SPEC018-switching-backends.md), [SPEC020-the-handoff.md](spec/SPEC020-the-handoff.md) |
 | `[SPEC-LYR-*]` | Lyrics, and what a guest protocol will not carry | [SPEC019-lyrics.md](spec/SPEC019-lyrics.md) |
 | `[SPEC-VOC-*]`, `[ENT-FILE-*]`, `[ENT-PASSAGE-*]`, `[ENT-RECORDING-*]`, `[ENT-RELEASE-*]`, `[ENT-ALBUM-*]`, `[ENT-ARTIST-*]`, `[ENT-TRACK-*]` | Domain vocabulary: file/passage/recording/release/album/artist/track, precisely | [SPEC023-domain-vocabulary.md](spec/SPEC023-domain-vocabulary.md) |
-| `[IMPL-*]` | Pi Zero 2W appliance setup procedure | [IMPL001-appliance-setup.md](../LempiPi/IMPL001-appliance-setup.md) |
+| `[IMPL-ACC-*]`, `[IMPL-AUD-*]`, `[IMPL-BASE-*]`, `[IMPL-BOM-*]`, `[IMPL-OS-*]`, `[IMPL-PROF-*]`, `[IMPL-STOR-*]`, `[IMPL-SVC-*]`, `[IMPL-TRIM-*]` | Pi Zero 2W appliance setup procedure | [IMPL001-appliance-setup.md](../LempiPi/IMPL001-appliance-setup.md) |
 | `[IMPL-DBSPLIT-*]` | Splitting one database into a read-only catalog and a writable listener store: design, plan, review, and what was built | [IMPL002-database-split.md](../LempiPi/IMPL002-database-split.md), [IMPL009-database-split-plan.md](../LempiPi/IMPL009-database-split-plan.md), [IMPL010-database-split-review.md](../LempiPi/IMPL010-database-split-review.md), [IMPL011-database-split-built.md](../LempiPi/IMPL011-database-split-built.md) |
 | `[PI3-REPRO-*]` | Rebuilding the appliance from a fresh card and this tree alone, and what that claim rests on | [IMPL012-rebuilding-from-the-repository.md](../LempiPi/IMPL012-rebuilding-from-the-repository.md) |
 | *(no tags — procedure)* | Deploying a build of Lempi to the running appliance, by commit or by release | [HOWTO.md](../LempiPi/HOWTO.md) |
@@ -190,7 +191,7 @@ grep -rn "SPEC-PD" docs/
 | `[BOS-IMG-*]` | What to add to `bose`'s image and what to refuse, judged on ease of maintaining the ecosystem rather than on `bose` in isolation | [BOSE008-image-update-plan.md](../BosePi/BOSE008-image-update-plan.md) |
 | `[BOS-RUN-*]` | Executing the `bose` update: order, rollback per step, and the failures found by trying to break the plan | [BOSE009-image-update-runbook.md](../BosePi/BOSE009-image-update-runbook.md) |
 | `[BOS-PWR-*]` | `bose`'s first hard power cut: what survived, and the card-renumbering and stale-clock findings the boot itself produced | [BOSE005-power-loss-test.md](../BosePi/BOSE005-power-loss-test.md) |
-| `[LOG-I*-*]` | Extraction iteration history & measured results (Route 3, distillation — not what ships) | [LOG001-extraction-iterations.md](LOG001-extraction-iterations.md) |
+| `[LOG-I*-*]`, `[LOG-CAV-*]`, `[LOG-MET-*]`, `[LOG-NEXT-*]` | Extraction iteration history & measured results (Route 3, distillation — not what ships) | [LOG001-extraction-iterations.md](LOG001-extraction-iterations.md) |
 | `[LOG-FEX-*]` | Route 2 (Gaia/SVM chain reproduction) reverse-engineering and production validation — what ships | [LOG002-feature-reproduction-investigation.md](LOG002-feature-reproduction-investigation.md), [LOG003-feature-reproduction-verification.md](LOG003-feature-reproduction-verification.md) |
 | `[LOG-WFE-*]` | Waveform boundary editor: incident and build history behind SPEC021's usability pass and fade addition | [LOG004-waveform-editor-build-log.md](LOG004-waveform-editor-build-log.md) |
 | `[LOG-RIP-*]` | CD ripping: real-hardware findings behind SPEC025 §5a's failure-handling design | [LOG005-cd-ripping-hardware-findings.md](LOG005-cd-ripping-hardware-findings.md) |
@@ -199,7 +200,7 @@ grep -rn "SPEC-PD" docs/
 | `[INH-*]` | Inherited-document provenance register & hazards | [inherited/README.md](inherited/README.md) |
 | `[SPEC-FD-030]` | Total-variation per-characteristic distance | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#2-the-metric) |
 | `[SPEC-FD-050]` | Measured per-characteristic reliability & scale constants | [SPEC005-flavor-distance.md](spec/SPEC005-flavor-distance.md#3-reliability--measured-not-assumed) |
-| `[REQ-*]` (AUD/PD/VIS/LIB/PORT/HW) | Functional requirements -- supersedes REQ001. REQ002 indexes them and holds PD/LIB/PORT/HW; `[REQ-AUD-*]` is REQ003; `[REQ-VIS-*]` is REQ004 (provenance), REQ005 (the listening surface) and REQ006 (words); `[REQ-AND-*]`, Android, is REQ007 | [REQ002-functional-requirements.md](spec/REQ002-functional-requirements.md) |
+| `[REQ-*]` (AUD/PD/VIS/LIB/PORT/HW) | Functional requirements -- supersedes REQ001. REQ002 indexes them and holds PD/LIB/PORT/HW; `[REQ-AUD-*]` is REQ003; `[REQ-VIS-*]` is REQ004 (provenance), REQ005 (the listening surface) and REQ006 (words); `[REQ-AND-*]`, Android, is REQ007; `[REQ-QSD-*]`, `[REQ-POV-*]` and `[REQ-WFO-*]` live in SPEC059, SPEC060 and SPEC061 | [REQ002-functional-requirements.md](spec/REQ002-functional-requirements.md) |
 | `[SPEC-DIR-100]` | Frequency vs character orthogonality | [SPEC009-program-director.md](spec/SPEC009-program-director.md#1-the-governing-idea) |
 | `[SPEC-DIR-150]` | Where Like/Dislike Taste enters selection | [SPEC009-program-director.md](spec/SPEC009-program-director.md#4-stage-b--pool-shaping) |
 | `[SPEC-SC-030]` | Identity spine: files / recordings / passages DDL | [SPEC008-database-schema.md](spec/SPEC008-database-schema.md#2-identity-spine) |
@@ -221,7 +222,35 @@ grep -rn "SPEC-PD" docs/
 | `[FLT-*]` | The fleet: each node's role, databases, build and standing issues; mirrored via git to the source hosts | [FLEET001-the-fleet.md](../fleet/FLEET001-the-fleet.md) |
 | `[SPEC-FREQ-*]` | How often a subject has played, by window and by who chose each play — built | [SPEC031-play-frequency.md](spec/SPEC031-play-frequency.md) |
 | `[SPEC-WIFI-010..050]` | Wi-Fi network switching and access-point mode on the Pi appliance, confirm-or-revert safety, on NetworkManager, plain `http://lempi/` on :80 — built | [SPEC034-wifi-configuration.md](spec/SPEC034-wifi-configuration.md) |
-| `[SPEC-WFO-010..080]` | Autonomous travel Wi-Fi failover, standalone offline operation, and hotspot pivot — design | [SPEC061-travel-wifi-failover.md](spec/SPEC061-travel-wifi-failover.md) |
+| `[REQ-WFO-*]`, `[SPEC-WFO-010..080]`, `[IMPL-WFO-*]` | Autonomous travel Wi-Fi failover, standalone offline operation, and hotspot pivot — built 2026-10-07 | [SPEC061-travel-wifi-failover.md](spec/SPEC061-travel-wifi-failover.md), [IMPL022](IMPL022-travel-wifi-failover.md) |
+| `[SPEC-HOLD-*]` | Holding a passage back from the Director: the mark, who sets it, how it travels — built | [SPEC057-holding-a-passage-back.md](spec/SPEC057-holding-a-passage-back.md) |
+| `[REQ-QSD-*]`, `[SPEC-QSD-*]`, `[IMPL-QSD-*]` | Queued shutdown: power off when the music reaches it — built | [SPEC059-queued-shutdown.md](spec/SPEC059-queued-shutdown.md), [IMPL020](IMPL020-queued-shutdown.md) |
+| `[REQ-POV-*]`, `[SPEC-POV-*]`, `[IMPL-POV-*]` | Per-output volume: a level remembered for each output — built | [SPEC060-per-output-volume.md](spec/SPEC060-per-output-volume.md), [IMPL021](IMPL021-per-output-volume.md) |
+| `[SPEC-ECHO-*]` | Echo mode: independent or follower, and whom to follow | [SPEC044-echo-mode-control.md](spec/SPEC044-echo-mode-control.md) |
+| `[SPEC-DLY-*]` | Per-node presentation delay, and who decides it | [SPEC043-node-delay-control.md](spec/SPEC043-node-delay-control.md) |
+| `[GDE-ECHO-*]`, `[LOG-DRIFT-*]`, `[LOG-FIX-*]`, `[LOG-CAL-*]`, `[LOG-ECHO-*]`, `[LOG-P4-*]`, `[LOG-CPAL-*]` | Echo playback: the investigation, plan, build and measurements; GUIDE029 is the standing model | [GUIDE008](GUIDE008-echo-playback-investigation.md) onward, [GUIDE029](GUIDE029-what-is-known-about-alignment.md), [LOG006](LOG006-echo-drift-measurement.md) to [LOG012](LOG012-phase-4-drift.md) |
+| `[SPEC-MESH-*]` | Mesh sync between Vipunen peers: the diff, its review and conflict resolution, the peer registry — partly built; whether the rest is superseded by star sync is open ([ROADMAP](ROADMAP.md)) | [SPEC035](spec/SPEC035-mesh-library-sync.md), [SPEC040](spec/SPEC040-peer-registry-and-review-ui.md) |
+| `[SPEC-NSH-*]`, `[IMPL-NSH-*]` | The mesh without ssh: signed requests, and the player's half of star sync | [SPEC054-mesh-without-ssh.md](spec/SPEC054-mesh-without-ssh.md), [IMPL017](IMPL017-closing-the-mesh-arc.md) |
+| `[SPEC-NKP-*]` | The catalogue patch named by natural key rather than local id, and sent in parts | [SPEC058-catalogue-patch-by-natural-key.md](spec/SPEC058-catalogue-patch-by-natural-key.md) |
+| `[SPEC-TN-*]` | Trusted networks: discovery and the mesh only on networks the operator chose | [SPEC051-trusted-networks.md](spec/SPEC051-trusted-networks.md) |
+| `[SPEC-WAG-*]` | The web access guard: which HTTP requests the player answers | [SPEC052-web-access-guard.md](spec/SPEC052-web-access-guard.md) |
+| `[SPEC-SEC-*]` | Security reviews: each finding, its fix, and the test that holds it | [SPEC053-security-hardening.md](spec/SPEC053-security-hardening.md) |
+| `[SPEC-FCP-*]` | Fleet configuration kept private: where real values live, and the leak gate | [SPEC055-fleet-configuration-kept-private.md](spec/SPEC055-fleet-configuration-kept-private.md) |
+| `[SPEC-FBUI-*]` | The framebuffer touch UI: design, constraints and phased build — built | [SPEC036](spec/SPEC036-framebuffer-touch-ui.md), [SPEC041](spec/SPEC041-framebuffer-constraints.md), [SPEC042](spec/SPEC042-framebuffer-implementation-plan.md) |
+| `[SPEC-CDI-*]`, `[IMPL-CDI-*]` | The CD import page — built | [SPEC056-cd-import.md](spec/SPEC056-cd-import.md), [IMPL018](IMPL018-cd-import-page.md) |
+| `[IMPL-BT-*]` | A speaker's own buttons (AVRCP), handled in the player — built | [IMPL019](IMPL019-native-bluetooth-controls.md) |
+| `[IMPL-VP3-*]` | Converting the third appliance, `lempiplay3` | [IMPL016](IMPL016-converting-lempiplay3.md) |
+| `[GDE-CLI-*]` | Command-line conventions, and where an option gets its value | [GUIDE030](GUIDE030-command-line-conventions.md), [GUIDE031](GUIDE031-where-an-option-gets-its-value.md) |
+| `[GDE-DEP-*]` | Deploy scripts: what each acts on, and what its name must say | [GUIDE011](GUIDE011-deploy-script-naming.md) |
+| `[GDE-IOS-*]` | The phone port, iOS specifics | [GUIDE004](GUIDE004-phone-port-strategy.md) |
+| `[GDE-SPIN-*]`, `[GDE-MSA-*]` | Sendspin, Music Assistant and OpenSubsonic: watch, do not build | [SPIN001](../sendspin/SPIN001-protocol-and-integration-analysis.md) onward |
+| `[GDE-MCR-*]`, `[GDE-PD-*]`, `[GDE-V1-*]`, `[GDE-OPN-*]` | Predecessors: McRhythm's findings, MuLibPlay's algorithm, v1's failures, and the open questions | [GUIDE001-lineage-and-lessons.md](GUIDE001-lineage-and-lessons.md) |
+| `[GDE-CHT-*]` | The re-architecture charter | [GUIDE002-rearchitecture-plan.md](GUIDE002-rearchitecture-plan.md) |
+| `[GOV-*]` | Governance: these rules, and ranking two sources of truth | [GOV001](GOV001-document-hygiene.md), [GOV002](GOV002-sources-of-truth.md) |
+| `[PI-*]`, `[PI2-*]`, `[PI5-PWR-*]`, `[LP3-BT-*]` | The Pi appliances' other per-machine records: image and partitions, the split on disk, settings, the test image, power | the documents in [LempiPi/](../LempiPi/) and [LempiPlay3/](../LempiPlay3/) |
+| `[BOS-*]`, `[PI-BOS-*]`, `[APP-*]` | `bose`'s other records, and the appliance setup engine | [BosePi/README.md](../BosePi/README.md), [appliance/README.md](../appliance/README.md) |
+| `[SMT-*]` | `smartboardpc`: the survey of a build host that also plays | [SMART001-survey.md](../SmartPC/SMART001-survey.md) |
+| `[TL-SET-*]` | `teacherslounge`'s setup script | [TL001-migration-and-the-silent-output.md](../TeachersLounge/TL001-migration-and-the-silent-output.md) |
 | `[SPEC-DF-030]` | Identity keys: audio_md5 / recording_mbid / file_path | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
 | `[SPEC-DF-035]` | Local sequence numbers: when a `passage_id` may be used | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
 | `[SPEC-DF-060]` | Metadata transports: embedded tags, sidecar, db migration | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#4-three-transports) |

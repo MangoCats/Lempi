@@ -22,6 +22,10 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 > remaining domains, the non-requirements and the coverage gaps.
 > **Android** is [REQ007](REQ007-android.md) `[REQ-AND-*]`, added 2026-09-25
 > as a draft: what differs on a phone, citing these for what does not.
+> Three later features carry their requirements in their own specifications:
+> queued shutdown `[REQ-QSD-*]` ([SPEC059](SPEC059-queued-shutdown.md)),
+> per-output volume `[REQ-POV-*]` ([SPEC060](SPEC060-per-output-volume.md)) and
+> travel Wi-Fi failover `[REQ-WFO-*]` ([SPEC061](SPEC061-travel-wifi-failover.md)).
 ## 2. Program Director — `PD`
 
 **`[REQ-PD-100]`** Select the next passage automatically, continuously, without user intervention. The queue never empties while eligible passages exist.

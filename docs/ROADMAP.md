@@ -34,7 +34,7 @@ folded into one spec.
 | Library relink — the identity hash (re-keyed to Symphonia 2026-09-27; one file it cannot read remains) | [SPEC045](spec/SPEC045-the-identity-hash.md) | [§3 Done, 2026-09-27](spec/SPEC045-the-identity-hash.md#3-done-2026-09-27) |
 | Vipunen console | [SPEC013](spec/SPEC013-vipunen-console.md) | [§6 Open](spec/SPEC013-vipunen-console.md#6-open) |
 | Payload schema | [SPEC014](spec/SPEC014-payload-schema.md) | [§6 Open](spec/SPEC014-payload-schema.md#6-open) |
-| Mesh library sync — N Vipunen-capable peers (designed 2026-09-06, not yet built) | [SPEC035](spec/SPEC035-mesh-library-sync.md) | [§8 Open](spec/SPEC035-mesh-library-sync.md#8-what-remains-open-after-this-document) |
+| Mesh library sync — N Vipunen-capable peers (partly built: the diff, its review and conflict resolution, the peer registry and the console's `/mesh` page; whether the rest is superseded by star sync is open question 5 below) | [SPEC035](spec/SPEC035-mesh-library-sync.md) | [§8 Open](spec/SPEC035-mesh-library-sync.md#8-what-remains-open-after-this-document) |
 | MPD Director | [SPEC015](spec/SPEC015-mpd-director.md) | [§8 Open](spec/SPEC015-mpd-director.md#8-open) |
 | Waveform boundary editor | [SPEC021](spec/SPEC021-waveform-boundary-editor.md) | [§6 Not yet measured](spec/SPEC021-waveform-boundary-editor.md#6-not-yet-measured) |
 | Phone ports | [GUIDE004](GUIDE004-phone-port-strategy.md) | [§7 Open](GUIDE004-phone-port-strategy.md#7-open) |
@@ -43,7 +43,7 @@ folded into one spec.
 | Director as a guest | [GUIDE006](GUIDE006-director-as-a-guest.md) | [§5 Open](GUIDE006-director-as-a-guest.md#5-open) |
 | Deploy script naming and target signposting (renamed 2026-09-11; config persistence built; appliances built without `vipunen-support` from 2026-09-12 `[GDE-DEP-098]`) — **open: a worktree cross-compile cannot stamp its commit `[GDE-DEP-100]`, and the final cross-check misreports why `[GDE-DEP-110]`** | [GUIDE011](GUIDE011-deploy-script-naming.md) | [§7 Configuration, and what is still open](GUIDE011-deploy-script-naming.md#7-configuration-and-what-is-still-open) |
 | External backends | [GUIDE007](GUIDE007-external-backends-investigation.md) | [§7 Open](GUIDE007-external-backends-investigation.md#7-open) |
-| Echo drift measurement (Phase 1 campaign, t0 taken 2026-09-12, second reads due 2026-09-13) | [LOG006](LOG006-echo-drift-measurement.md) | [§4 Open](LOG006-echo-drift-measurement.md#4-open) |
+| Echo drift measurement (the Phase 1 campaign from 2026-09-12; a longer re-read and three unplanned nodes remain) | [LOG006](LOG006-echo-drift-measurement.md) | [§4 Open](LOG006-echo-drift-measurement.md#4-open) |
 | Echo playback — two or more instances, one programme, each from its own files. **Phases 0-6 built**: phase 4 measured in [LOG012](LOG012-phase-4-drift.md) (concluded 2026-09-18), phase 5 in [GUIDE017](GUIDE017-echo-correction.md) (offset and rate correction, both 2026-09-18), phase 6 in [GUIDE018](GUIDE018-echo-invalidation.md) | [GUIDE008](GUIDE008-echo-playback-investigation.md) · [GUIDE009](GUIDE009-echo-playback-plan.md) · [GUIDE010](GUIDE010-echo-node-capabilities.md) · [GUIDE013](GUIDE013-audio-stack-reporting.md) · [LOG006](LOG006-echo-drift-measurement.md) | [GUIDE016 §6 Explicitly not in v1](GUIDE016-echo-playback-plan-build.md#6-explicitly-not-in-v1) |
 | Same-song blocking across different recordings (**built 2026-09-12** — three identity tiers, passage → recording MBID → work MBID, covers included; [SPEC037](spec/SPEC037-eligibility-and-frequency.md) `[SPEC-DIR-119]`) | [GUIDE012](GUIDE012-work-based-song-blocking.md) | [§7 Open](GUIDE012-work-based-song-blocking.md#7-open) |
 | Appliance setup | [LempiPi/IMPL001](../LempiPi/IMPL001-appliance-setup.md) | [IMPL012 §9 Open](../LempiPi/IMPL012-rebuilding-from-the-repository.md#9-open) |
@@ -68,9 +68,17 @@ folded into one spec.
 | Listener preference editing | [SPEC029](spec/SPEC029-listener-preference-editing.md) | [§8. Open](spec/SPEC029-listener-preference-editing.md#8-open) |
 | Play frequency readout | [SPEC031](spec/SPEC031-play-frequency.md) | [§6. Open](spec/SPEC031-play-frequency.md#6-open) |
 | The Android device spike | [LOG013](LOG013-the-android-spike.md) | [§4. Open](LOG013-the-android-spike.md#4-open) |
-| Node discovery — a future idea, not scheduled | [GUIDE035](GUIDE035-node-discovery.md) | [§3. Open, for when it is taken up](GUIDE035-node-discovery.md#3-open-for-when-it-is-taken-up) |
-| Wi-Fi watchdog — a future feature, decided by how often a link dies | [FLEET001](../fleet/FLEET001-the-fleet.md) | [§4. Standing issues](../fleet/FLEET001-the-fleet.md#4-standing-issues) `[FLT-ISS-015]` |
-| Framebuffer UI — implementation plan | [SPEC042](spec/SPEC042-framebuffer-implementation-plan.md) | [§8. Implementation plan, phased](spec/SPEC042-framebuffer-implementation-plan.md#8-implementation-plan-phased-against-the-open-items-above) |
+| Wi-Fi watchdog — a future feature, decided by how often a link dies (the travel failover of [SPEC061](spec/SPEC061-travel-wifi-failover.md) acts when the link is lost; a link that stays up while its gateway stops answering is still this row's case) | [FLEET001](../fleet/FLEET001-the-fleet.md) | [§4. Standing issues](../fleet/FLEET001-the-fleet.md#4-standing-issues) `[FLT-ISS-015]` |
+| Framebuffer UI — built 2026-09-07, all seven phases; seek on the touch screen not yet confirmed | [SPEC042](spec/SPEC042-framebuffer-implementation-plan.md) | [§8. Implementation plan, phased](spec/SPEC042-framebuffer-implementation-plan.md#8-implementation-plan-phased-against-the-open-items-above) |
+| Star sync — the hub merges and distributes both halves | [SPEC046](spec/SPEC046-star-sync.md) | [§11. Open](spec/SPEC046-star-sync.md#11-open) |
+| Mesh membership and trust | [SPEC049](spec/SPEC049-mesh-membership-and-trust.md) | [§6. Order of work, and what is open](spec/SPEC049-mesh-membership-and-trust.md#6-order-of-work-and-what-is-open) |
+| Mesh without ssh — the signed transport | [SPEC054](spec/SPEC054-mesh-without-ssh.md) | [§7. Open, to settle when built](spec/SPEC054-mesh-without-ssh.md#7-open-to-settle-when-built) |
+| Fleet configuration kept private (`[SPEC-FCP-010]` awaits the private repository) | [SPEC055](spec/SPEC055-fleet-configuration-kept-private.md) | [§4. Open](spec/SPEC055-fleet-configuration-kept-private.md#4-open) |
+| CD import | [SPEC056](spec/SPEC056-cd-import.md) | [§11. Open](spec/SPEC056-cd-import.md#11-open) |
+| Holding a passage back (whole-album play, `[REQ-PD-127]`, not built) | [SPEC057](spec/SPEC057-holding-a-passage-back.md) | [§6. Open](spec/SPEC057-holding-a-passage-back.md#6-open) |
+| Catalogue patch by natural key | [SPEC058](spec/SPEC058-catalogue-patch-by-natural-key.md) | [§9. Open](spec/SPEC058-catalogue-patch-by-natural-key.md#9-open) |
+| A node's own occasion policy, a profanity ceiling first (designed, not scheduled) | [GUIDE036](GUIDE036-node-occasion-policies.md) | [§2. The design](GUIDE036-node-occasion-policies.md#2-the-design-a-nodes-own-policy) |
+| Android requirements (draft) | [REQ007](spec/REQ007-android.md) | [§7. Open](spec/REQ007-android.md#7-open--to-be-settled-before-this-leaves-draft) |
 
 ## 2. Sendspin — a whole directory of "watch, don't build yet"
 
@@ -111,7 +119,7 @@ for what shipped. Two pieces remain genuinely open, both detailed in
 
 **Independent re-verification against Lempi's own library — partial.**
 `[GOV-SRC-020]`: no CI-portable ground-truth corpus exists in this repo —
-`segment_dao.py --validate` checks against the user's own live `lempi.db`
+`segment_dao.py --validate` checks against the user's own live library
 (188 files / 2,676 boundaries). A 40-file sample, run 2026-09-03: 40/40
 exact track count (100%), 94% of boundary starts within 2s, all resolved
 by Stage 2 alone — see [SPEC024](spec/SPEC024-dao-segmentation-cascade.md)'s
@@ -125,6 +133,7 @@ their synthetic unit tests, remain unrun.
 2. **Wall Art / Kiosk display mode — dropped, or merely unrevisited?** The pre-rearchitecture plan (`docs/user-interface.md`, now deleted) specified a fullscreen wall-tablet mode: large album art, clock, upcoming-track cards, OLED/LCD burn-in protection. Grep for `wall.art|kiosk|burn.in` across `player/` and `tools/` returns nothing — it was never built, and the current skin model (`lempi`/`mulibplay`/`winamp`, all document-shaped, `[REQ-VIS-160]`) has no kiosk-style skin among them. Nothing in `REQ002` accepts or rejects it. If wanted, it is a fourth skin under the existing contract; if not, this line is where that should be said.
 3. **The Phase 7 feature list — dropped, or merely unrevisited?** The old roadmap's final phase (`docs/roadmap.md`, now deleted) named station-ID/jingle injection between tracks, news/weather TTS announcements, and MQTT/smart-home hooks. None appear in `REQ002` or any current `SPEC`, and none exist in code. This is *not* the same question as scrobbling — `[SPEC-MPD-100]` already, deliberately, declines that one for the MPD guest path specifically, reasoning that guest clients already scrobble. The other three were simply never revisited after the rearchitecture and carry no decision either way.
 4. **Library-browse pagination — was the REQ001-era page-size selector dropped on purpose?** The deleted `REQ001`'s `[REQ-UI-020K]` specified a page-size dropdown (`10`/`25`/`50`/`100`/`250`) with dynamic Prev/Next controls. The built `/browse` route (`player/src/web/browse.rs`, split out of `web.rs` 2026-09-02) instead caps every response at a flat 2,000 rows with no selector `[REQ-VIS-180]`. That may be the right call for a LAN player with a "Built for a phone" design brief — a flat cap is simpler and 2,000 rows is generous — but it was never stated as a deliberate simplification, only as an absence.
+5. **Mesh sync between N Vipunen peers — superseded, or still wanted?** [SPEC035](spec/SPEC035-mesh-library-sync.md) and [SPEC040](spec/SPEC040-peer-registry-and-review-ui.md) designed peers that each ingest and sync with one another; the diff, its review and conflict resolution, the peer registry and the console's `/mesh` page are built. Since 2026-09-26 the household syncs as a star instead — one hub, every other node a spoke ([SPEC046](spec/SPEC046-star-sync.md)). Whether the rest of the peer design is still wanted, or superseded by the star, is undecided.
 
 ## 4. The appliance's still-open speaker questions
 

@@ -1,6 +1,6 @@
 # System Architecture
 
-**Orientation — Tier 1 · describes what is built, as of 2026-08-22**
+**Orientation — Tier 1 · describes what is built, as of 2026-10-08**
 
 How Lempi is put together: the components, the interfaces between them, and the
 few rules that decide where a new piece belongs. Written against the tree rather
@@ -14,19 +14,25 @@ than against a plan — where something is designed but not built, it says so.
 
 ---
 
-## 1. Two programs, one database
+## 1. Two programs, one library
 
 | | language | licence | writes |
 | :--- | :--- | :--- | :--- |
-| `player/` | Rust | MIT | listener state only |
-| `tools/` — "Vipunen", 90 files, flat, no subpackages | Python | AGPL-3.0 | reference data only |
+| `player/` | Rust | MIT | listener state; applies catalogue data the hub derived |
+| `tools/` — "Vipunen", about a hundred scripts, flat, no subpackages | Python | AGPL-3.0 | reference data, and the hub's sync runs |
 
+The library is a pair of SQLite files on every node — `library.db`, the
+catalogue, and `listener.db`, the listener's own state `[IMPL-DBSPLIT-025]`.
 Everything that plays, or is played to, is in `player/`. Everything that *makes*
 reference data — ingest, identification, flavor extraction, lyrics import — is
-Vipunen's. **The player never writes what Vipunen owns**, for the reason
-`[SPEC-LYR-030]` gives about lyrics and which generalises: derived data has one
-writer, and a player that edits it becomes a second source of truth for
-something it only reads.
+Vipunen's, and the hub's library is the one star sync carries to every other
+node. **The player never authors what Vipunen owns**,
+for the reason `[SPEC-LYR-030]` gives about lyrics and which generalises:
+derived data has one writer, and a player that edits it becomes a second source
+of truth for something it only reads. A node with no Vipunen still has to
+*receive* that data, so the player crate carries the two ways it arrives —
+`import_bundle`, for a bundle the hub sends, and the star-sync commit the hub
+signs (`player/src/star_node.rs`) — and both apply the hub's rows unchanged.
 
 ---
 
@@ -35,7 +41,7 @@ something it only reads.
 ```
  browser ──ws snapshot──┐        ┌─ Controls (intent cells) ─┐
                         ▼        ▼                           │
-   web/    ──Command──▶ EngineHandle ──▶ lempi.rs loop ───────┘
+   web/    ──Command──▶ EngineHandle ──▶ host.rs loop ────────┘
                                             │
                                     Session (session.rs)
                                        │         │
@@ -46,9 +52,14 @@ something it only reads.
                                                   └── MpdBackend  (guest)
 ```
 
-`lempi.rs` owns one thread and everything audio-related on it: `cpal`'s stream is
-not `Send`, so the engine is built and pumped where it lives. The tokio web
-server touches playback only through the two channels above.
+`host.rs` — `Player::start`, which the `lempi` binary calls with its resolved
+command line and the Android app calls through `player/android` — owns one
+thread and everything audio-related on it: `cpal`'s stream is not `Send`, so the
+engine is built and pumped where it lives `[GDE-HST-040]`. The tokio web server
+touches playback only through the two channels above. The Director, the
+queue and the database layer live in `lempi-core` (`player/core/`), the crate
+that decides what to play and holds nothing that makes a sound — a boundary
+Cargo enforces.
 
 **Two channels, and the difference matters.** A `Command` down `EngineHandle`
 reaches the **local engine** and nothing else. An intent written into `Controls`
@@ -120,7 +131,7 @@ Three things worth knowing before changing anything here:
 
 ## 5. The Director
 
-`director/` splits selection into `library` (the pool, and `decide`), `frequency`
+`player/core/src/director/` splits selection into `library` (the pool, and `decide`), `frequency`
 (suppression windows and rotation), `flavor` (acoustic distance), `occasion`,
 `shape` and `program`. It returns an `Explanation` with every choice, which is
 what `/why` shows and what a guest's clients read as an MPD sticker.
@@ -132,13 +143,20 @@ no idea whether its choice will be decoded locally or handed to MPD.
 
 ## 6. Data
 
-`db/` is the only gateway to SQLite (`db/{mod,library,player_store}.rs`, split from a single `db.rs` 2026-09-01). Two classes of data, and the distinction
-is load-bearing `[SPEC-DF-055]`:
+`player/core/src/db/` is the only gateway to SQLite (`mod`, `library`,
+`player_store`). Each connection opens `listener.db` and attaches `library.db`
+read-only as `lib`; a query names a catalogue table `__LIB__.name`, and
+`QualifyingConn` is the one place that resolves it `[IMPL-DBSPLIT-035]`. Two
+classes of data, and the distinction is load-bearing `[SPEC-DF-055]`:
 
 * **Class C — reference data** (recordings, artists, releases, flavor, lyrics,
-  cover art). Derived, reproducible, and it **travels** between installations.
+  cover art), in `library.db`. Derived, reproducible, and it **travels** between
+  installations.
 * **Class D — listener state** (plays, rejections, resume point, settings,
-  programmes). Personal, irreplaceable, and it **never travels**.
+  programmes), in `listener.db`. Personal, irreplaceable, and it **never travels
+  with music**. A node's plays never leave it `[REQ-PD-113]`; the listener's
+  edits — preferences, likes, flags — are merged across the household's own
+  nodes by star sync ([SPEC046](spec/SPEC046-star-sync.md)).
 
 Identity is `audio_md5` > `recording_mbid` > `file_path` `[SPEC-DF-030]`. That
 ladder is why a lyrics import is a join rather than a matching problem, and why
@@ -154,7 +172,11 @@ actions. Three skins — `lempi`, `mulibplay`, `winamp` — served from
 
 **`core.js` owns anything two skins would otherwise implement twice**: the queue
 edit verbs, the seek arithmetic, art and lyrics fetching, formatting. A skin
-styles and places; it does not decide what a control does.
+styles and places; it does not decide what a control does. Skins do differ in
+which panels they carry — Settings, Bluetooth, Play History and Restart/Shutdown
+are in `lempi` only, lyrics in `mulibplay` only, and a new browser starts on
+`mulibplay` — so a built feature can still be absent from the skin in use. The
+in-app guide's *Advanced Features* page keeps the table.
 
 A test asserts the snapshot's **field names**, because renaming one silently
 blanks part of every skin and no Rust test would otherwise catch it.
@@ -177,9 +199,10 @@ moves over the network in that arrangement is control, not sound.
 
 ## 9. Conventions that hold everywhere
 
-* **Every tunable default is defined once in `lib.rs`** and referenced —
-  `SKIP_SUPPRESS_H`, `QUEUE_DEPTH`, `SAMPLE_INTERVAL_MS`. A number that appears
-  twice will diverge.
+* **Every tunable default is defined once**, with its bounds, in `lempi-core`'s
+  `player/core/src/settings.rs`, and re-exported from the player's `lib.rs`
+  under the same names — `SKIP_SUPPRESS_H`, `QUEUE_DEPTH`,
+  `SAMPLE_INTERVAL_MS`. A number that appears twice will diverge.
 * **A measured constant carries its measurement** in the doc comment beside it.
   The comment is where the reasoning lives; a threshold with no number behind it
   is a preference pretending to be a finding `[GOV-SRC-040]`.
@@ -209,6 +232,28 @@ moves over the network in that arrangement is control, not sound.
   cross-module agreements no single module's unit tests can reach — the cue
   numbering against `cue_uris` named here as the example was the first one
   written.
+
+---
+
+## 11. The subsystems around the spine
+
+Each is specified in its own document; this table is where to start reading.
+
+| subsystem | where | specified in |
+| :--- | :--- | :--- |
+| Echo playback: several players, one programme, in step | `player/src/echo.rs`, `player/src/echo_client.rs` | [SPEC044](spec/SPEC044-echo-mode-control.md), [SPEC043](spec/SPEC043-node-delay-control.md), [GUIDE029](GUIDE029-what-is-known-about-alignment.md) |
+| Star sync: the hub merges both halves and distributes them | `tools/star_sync.py` and its siblings on the hub; `player/src/star_node.rs` and `player/core/src/mesh_sync.rs` on a node | [SPEC046](spec/SPEC046-star-sync.md), [SPEC054](spec/SPEC054-mesh-without-ssh.md), [SPEC058](spec/SPEC058-catalogue-patch-by-natural-key.md) |
+| Mesh membership, pairing, discovery, trusted networks | `player/src/membership.rs`, `pairing.rs`, `discovery.rs`, `trust.rs` | [SPEC049](spec/SPEC049-mesh-membership-and-trust.md), [SPEC050](spec/SPEC050-node-discovery.md), [SPEC051](spec/SPEC051-trusted-networks.md) |
+| Web access: the Origin/Host guard, and a phone's launch key | `player/src/web/access.rs` | [SPEC052](spec/SPEC052-web-access-guard.md), [SPEC053](spec/SPEC053-security-hardening.md) |
+| The Android host | `player/android/`, `android/` | [REQ007](spec/REQ007-android.md), [GUIDE033](GUIDE033-the-player-without-an-appliance.md) |
+| Framebuffer touch UI | `player/src/bin/fbui.rs` | [SPEC036](spec/SPEC036-framebuffer-touch-ui.md) |
+| Bluetooth speakers, and their own buttons (AVRCP) | `player/src/bluetooth.rs`, `player/src/avrcp.rs`, `appliance/bluetooth/` | [SPEC011](spec/SPEC011-audio-path-supervisor.md), [IMPL019](IMPL019-native-bluetooth-controls.md) |
+| Wi-Fi, and the travel access point | `player/src/web/wifi.rs`, `appliance/bluetooth/lempi-wifi-failover` | [SPEC034](spec/SPEC034-wifi-configuration.md), [SPEC061](spec/SPEC061-travel-wifi-failover.md) |
+| Per-output volume | `player/core/src/db/player_store.rs` | [SPEC060](spec/SPEC060-per-output-volume.md) |
+| Queued shutdown | `player/src/engine/` | [SPEC059](spec/SPEC059-queued-shutdown.md) |
+| Holding a passage back | `player/core/src/director/library.rs`, `tools/passage_hold.py` | [SPEC057](spec/SPEC057-holding-a-passage-back.md) |
+| CD import | `tools/cd_import.py`, and the console's import page | [SPEC056](spec/SPEC056-cd-import.md), [GUIDE037](GUIDE037-ripping-a-cd.md) |
+| Listener backups | `player/src/backup.rs` | `[REQ-LIB-160]` |
 
 ---
 
