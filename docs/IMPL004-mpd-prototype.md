@@ -166,7 +166,7 @@ It reports what it *would* record. It does not write `listener_play_history`, do
 
 **`[IMPL-MPD-040]` Swap the random selector for `Director::decide`.** The exclusion set is the queued passage ids and the flow tail is the last of them `[SPEC-DIR-160]`, which is what `Session::refill` already does — this stage is mostly about *not* reimplementing that.
 
-**`[IMPL-MPD-045]` And the bookkeeping is the part to get right, not the selection.** `note_queued` when a passage is added; `forget_queued` when one leaves without playing `[REQ-PD-112]`. Locally that is driven by `take_dropped`; here it is a queue diff after `idle playlist`, and a deletion by a person must reach the same place as a file that would not open.
+**`[IMPL-MPD-045]` And the bookkeeping is the part to get right, not the selection.** `note_queued` when a passage is added; `forget_queued` when one leaves without playing `[REQ-PD-112]`. Locally that is driven by `take_dropped`; here it is a queue diff after `idle playlist`, and a deletion by a person must reach the same place as a file that would not open. Both backends now also report what became of each passage through `take_outcomes`: a deletion of the Director's pick reaches the Director as a dequeue, which gives the mark back and starts its window `[SPEC-PLAY-055]`, while a person's own pick taken out is only dropped.
 
 > **Claims.** Over a session, the census `[GDE-PD-010]` behaves as it does locally: rotation suppresses what has just played, artists block, and a passage deleted from the queue by hand does **not** stay suppressed *by its queueing mark*.
 >

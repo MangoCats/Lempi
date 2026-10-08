@@ -11,9 +11,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::db::{DbError, Library, PlayerStore};
-use crate::director::library::{Director, Explanation, Rng};
+use crate::director::library::{Director, Explanation, QueuedNote, Rng};
 use crate::engine::Engine;
-use crate::playback::Playback;
+use crate::playback::{Outcome, Playback};
 use crate::switch::Progress;
 
 /// What the next pick follows, for flow `[SPEC-DIR-160]`: the last passage
@@ -241,6 +241,19 @@ const KEEP_EXPLANATIONS: usize = 32;
 /// programme's own length; asking costs a syscall and one small read.
 const UTC_RESYNC: std::time::Duration = std::time::Duration::from_secs(3600);
 
+/// How long a marked passage may be neither queued nor sounding, with no word
+/// of what became of it, before its mark is settled as a play. Every backend
+/// says within a tick or two; this bounds a path that never does.
+const NOTE_GRACE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// The marks the Director holds for one passage, oldest first -- a person may
+/// queue one passage twice -- and since when it has been out of sight.
+#[derive(Default)]
+struct Marks {
+    notes: VecDeque<QueuedNote>,
+    unseen_since: Option<std::time::Instant>,
+}
+
 #[derive(Default)]
 pub struct ExplanationLog {
     by_passage: HashMap<i64, Explanation>,
@@ -281,13 +294,11 @@ pub struct Session {
     decisions: Option<PlayerStore>,
     explanations: Explanations,
     controls: SharedControls,
-    /// What the Director was told about each queued passage, kept until the
-    /// engine confirms it could be opened `[REQ-PD-112]`.
-    ///
-    /// Bounded by the queue: an entry goes when its passage is dropped, and
-    /// the rest are pruned to what is still queued -- a passage that has been
-    /// admitted can no longer fail to open, so its note is dead weight.
-    notes: HashMap<i64, crate::director::library::QueuedNote>,
+    /// The Director's mark on each passage coming, held until the backend says
+    /// what became of it `[REQ-PD-112]`: played, and the mark stays; declined,
+    /// dropped or lost, and it is taken back -- a rejection earns no mark
+    /// `[SPEC-PLAY-050]`. Bounded by the queue and `NOTE_GRACE`.
+    notes: HashMap<i64, Marks>,
     /// The listener-side file, so a rebuild can open its own connection
     /// `[IMPL-SUI-075]`. A path rather than a shared handle, for the reason
     /// `Ui` keeps one: `rusqlite`'s `Connection` is not `Sync`.
@@ -576,14 +587,86 @@ impl Session {
         // `[GDE-WRK-010]`.
         let sounding = engine.head_position().map(|(id, _)| id);
         let ids: Vec<i64> = sounding.into_iter().chain(engine.queued_ids()).collect();
-        if let Some(d) = self.director.as_mut() {
-            for id in ids {
-                if let Some(note) = d.note_queued(id, now) {
-                    self.notes.insert(id, note);
+        for id in ids {
+            self.mark(id, now);
+        }
+        self.publish_pool();
+    }
+
+    /// Mark a passage as coming, in the running Director `[REQ-PD-112]`.
+    fn mark(&mut self, passage: i64, now: i64) {
+        if let Some(note) = self.director.as_mut().and_then(|d| d.note_queued(passage, now)) {
+            self.notes.entry(passage).or_default().notes.push_back(note);
+        }
+    }
+
+    /// Resolve the oldest mark on a passage: kept as a play, or taken back.
+    fn resolve_mark(&mut self, passage: i64, played: bool) {
+        let Some(marks) = self.notes.get_mut(&passage) else { return };
+        let note = marks.notes.pop_front();
+        if marks.notes.is_empty() {
+            self.notes.remove(&passage);
+        }
+        if let (Some(note), Some(d)) = (note, self.director.as_mut()) {
+            if played {
+                d.settle(note);
+            } else {
+                d.forget_queued(note);
+            }
+        }
+    }
+
+    /// What became of passages since the last pass, as the backend saw it.
+    fn hear_outcomes(&mut self, engine: &mut dyn crate::switch::Backend, now: i64) {
+        // Never played: it could not be opened, or a person took out their own
+        // pick. Either way its mark goes, and nothing else happens.
+        for id in engine.take_dropped() {
+            self.resolve_mark(id, false);
+        }
+        for outcome in engine.take_outcomes() {
+            match outcome {
+                Outcome::Queued { passage } => self.mark(passage, now),
+                Outcome::Played { passage } => self.resolve_mark(passage, true),
+                // A rejection earns no play, so the mark set when it was queued
+                // is taken back, and its window starts now rather than at the
+                // next rebuild `[SPEC-PLAY-050]`, `[SPEC-PLAY-055]`.
+                Outcome::Rejected { passage, kind, mbid, at } => {
+                    self.resolve_mark(passage, false);
+                    if let (Some(d), Some(mbid)) = (self.director.as_mut(), mbid) {
+                        d.note_rejection(kind, &mbid, at);
+                    }
                 }
             }
         }
-        self.publish_pool();
+        self.settle_unseen(&*engine);
+    }
+
+    /// Settle, as played, the marks of a passage gone from sight for
+    /// `NOTE_GRACE` with no word of it. Rotation errs toward what it already
+    /// believed was coming, and the map stays bounded.
+    fn settle_unseen(&mut self, engine: &dyn crate::switch::Backend) {
+        if self.notes.is_empty() {
+            return;
+        }
+        let seen: std::collections::HashSet<i64> = engine
+            .queued_ids()
+            .into_iter()
+            .chain(engine.head_position().map(|(id, _)| id))
+            .collect();
+        let now = std::time::Instant::now();
+        let mut gone = Vec::new();
+        for (id, marks) in self.notes.iter_mut() {
+            if seen.contains(id) {
+                marks.unseen_since = None;
+            } else if now.duration_since(*marks.unseen_since.get_or_insert(now)) >= NOTE_GRACE {
+                gone.push(*id);
+            }
+        }
+        for id in gone {
+            while self.notes.contains_key(&id) {
+                self.resolve_mark(id, true);
+            }
+        }
     }
 
     /// Put the pool size where the browser can see it.
@@ -744,24 +827,10 @@ impl Session {
             }
         }
 
-        // A passage the engine could not open never played, so the Director
-        // must stop counting it as though it had -- otherwise one unreadable
-        // file suppresses its recording and its artist for a full rotation
-        // `[REQ-PD-112]`.
-        for id in engine.take_dropped() {
-            if let (Some(note), Some(d)) = (self.notes.remove(&id), self.director.as_mut()) {
-                d.forget_queued(note);
-            }
-        }
-        // A note is only useful while its passage can still fail to open, and
-        // once admitted it cannot. Pruning to what is still queued bounds the
-        // map by the queue depth rather than letting it grow one entry per
-        // passage for the life of the process.
-        if !self.notes.is_empty() {
-            let queued: std::collections::HashSet<i64> =
-                engine.queued_ids().into_iter().collect();
-            self.notes.retain(|id, _| queued.contains(id));
-        }
+        // What became of each passage the Director marked as coming: a play
+        // keeps its mark, anything else gives it back, and a rejection starts
+        // its window now `[REQ-PD-112]`, `[SPEC-PLAY-050]`.
+        self.hear_outcomes(engine, now);
 
         let short = engine.shortfall();
         if short == 0 {
@@ -786,7 +855,7 @@ impl Session {
                 };
                 let entry = decision.entry;
                 if let Some(note) = d.note_queued(entry.passage_id, now) {
-                    self.notes.insert(entry.passage_id, note);
+                    self.notes.entry(entry.passage_id).or_default().notes.push_back(note);
                 }
                 chosen.push(entry.passage_id);
 
@@ -1044,9 +1113,7 @@ impl Session {
         let stopped = sw.stop_and_flip(target, fade_ms)?;
 
         for id in &carried.lost {
-            if let (Some(note), Some(d)) = (self.notes.remove(id), self.director.as_mut()) {
-                d.forget_queued(note);
-            }
+            self.resolve_mark(*id, false);
         }
         Ok(Handoff { carried, stopped: Some(stopped), resumed: resume, took_ms })
     }
@@ -1343,6 +1410,148 @@ mod tests {
         session.apply_utc_offset();
 
         assert_eq!(session.director.as_ref().unwrap().programs().utc_offset_minutes, os);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A backend that says what it is told to: what became of passages, and
+    /// nothing queued or sounding.
+    #[derive(Default)]
+    struct Scripted {
+        dropped: Vec<i64>,
+        outcomes: Vec<Outcome>,
+    }
+
+    impl Playback for Scripted {
+        fn capabilities(&self) -> crate::playback::Capabilities {
+            crate::playback::Capabilities::FULL
+        }
+        fn enqueue(&mut self, _e: crate::queue::QueueEntry) {}
+        fn queued_ids(&self) -> Vec<i64> {
+            Vec::new()
+        }
+        fn queued_ms(&self) -> u64 {
+            0
+        }
+        fn shortfall(&self) -> usize {
+            0
+        }
+        fn take_dropped(&mut self) -> Vec<i64> {
+            std::mem::take(&mut self.dropped)
+        }
+        fn take_outcomes(&mut self) -> Vec<Outcome> {
+            std::mem::take(&mut self.outcomes)
+        }
+        fn resume_at(&mut self, _position_ms: u64) {}
+        fn tick(&mut self) -> usize {
+            0
+        }
+        fn is_shutdown(&self) -> bool {
+            false
+        }
+    }
+    impl crate::switch::FadeOut for Scripted {
+        fn fade_out(&mut self, _ms: u64) -> crate::switch::Stopped {
+            crate::switch::Stopped::Cut
+        }
+    }
+    impl crate::switch::Publish for Scripted {
+        fn publish(&mut self, _p: &crate::switch::Published<'_>) {}
+    }
+    impl crate::switch::Progress for Scripted {
+        fn head_position(&self) -> Option<(i64, u64)> {
+            None
+        }
+    }
+
+    /// The running Director hears what becomes of each passage as it happens
+    /// `[REQ-PD-112]`, `[SPEC-PLAY-050]`, and ends where a Director rebuilt
+    /// from what the backend wrote would be. Until 2026-10-08 a skip kept its
+    /// queueing marks and opened no window until the next rebuild, and a
+    /// person's pick marked nothing.
+    #[test]
+    fn the_running_director_hears_each_outcome_as_it_happens() {
+        let tmp = director_library_on_disk("outcomes");
+        // A second passage by art-1, to show the artist mark come and go.
+        let c = rusqlite::Connection::open(&tmp).unwrap();
+        c.execute_batch(
+            "INSERT INTO passages VALUES (5,1,'radio',0,180000,0,0,0.0,20,20,'exponential','exponential');
+             INSERT INTO passage_recordings VALUES (5,'rec-d',1.0);
+             INSERT INTO recording_artists VALUES ('rec-d','art-1');
+             CREATE TABLE listener_rejections (rejection_id INTEGER PRIMARY KEY,
+                 rejected_at INTEGER, kind TEXT, passage_id INTEGER, mbid TEXT,
+                 heard_ms INTEGER, span_ms INTEGER);",
+        )
+        .unwrap();
+        let mut session = Session::open(&tmp, &tmp, 5).unwrap();
+        let lib = crate::db::Library::open_split(&tmp, &tmp).unwrap();
+        session.director = Some(lib.director().unwrap());
+        let now = unix_now();
+        let eligible = |s: &Session, id: i64| {
+            s.director.as_ref().unwrap().weigh_all(now).iter()
+                .any(|(e, w)| e.passage_id == id && w.is_eligible())
+        };
+        let mut b = Scripted::default();
+
+        // The Director queues 1; art-1's other passage is held by rotation.
+        session.mark(1, now);
+        assert!(!eligible(&session, 5), "queued 1 holds its artist");
+        // It is skipped: the artist mark goes, and 1 is held by its window.
+        b.outcomes.push(Outcome::Rejected {
+            passage: 1, kind: crate::db::Rejection::Skip, mbid: Some("rec-a".into()), at: now,
+        });
+        session.hear_outcomes(&mut b, now);
+        assert!(eligible(&session, 5), "a skip earns no artist mark");
+        assert!(!eligible(&session, 1), "and its window starts at once");
+
+        // A person queues 2: marked like a Director's pick, then taken back out.
+        b.outcomes.push(Outcome::Queued { passage: 2 });
+        session.hear_outcomes(&mut b, now);
+        assert!(!eligible(&session, 2), "a person's pick is coming, and rotation knows");
+        b.dropped.push(2);
+        session.hear_outcomes(&mut b, now);
+        assert!(eligible(&session, 2), "their change of mind leaves nothing behind");
+
+        // The Director queues 3 and it plays: the mark stays as the play.
+        session.mark(3, now);
+        b.outcomes.push(Outcome::Played { passage: 3 });
+        session.hear_outcomes(&mut b, now);
+        assert!(!eligible(&session, 3));
+        assert_eq!(session.director.as_ref().unwrap().open_marks(), 0, "everything judged");
+        assert!(session.notes.is_empty());
+
+        // What a backend wrote for that session, read by a fresh Director.
+        c.execute("INSERT INTO listener_rejections (rejected_at, kind, passage_id, mbid)
+                   VALUES (?1, 'skip', 1, 'rec-a')", [now]).unwrap();
+        c.execute("INSERT INTO listener_play_history (played_at, passage_id, mbid)
+                   VALUES (?1, 3, 'rec-c')", [now]).unwrap();
+        let rebuilt = lib.director().unwrap();
+        let shape = |d: &Director| -> Vec<(i64, bool)> {
+            d.weigh_all(now).iter().map(|(e, w)| (e.passage_id, w.is_eligible())).collect()
+        };
+        assert_eq!(shape(session.director.as_ref().unwrap()), shape(&rebuilt),
+                   "the running Director agrees with one rebuilt from the history");
+        drop(c);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A mark whose passage has gone from sight with no word of it is settled
+    /// after `NOTE_GRACE`, so the map cannot grow for the life of the process.
+    #[test]
+    fn a_mark_with_no_word_is_settled_after_the_grace() {
+        let tmp = director_library_on_disk("grace");
+        let mut session = Session::open(&tmp, &tmp, 5).unwrap();
+        let lib = crate::db::Library::open_split(&tmp, &tmp).unwrap();
+        session.director = Some(lib.director().unwrap());
+        let now = unix_now();
+        session.mark(1, now);
+        let b = Scripted::default();
+        session.settle_unseen(&b);
+        assert_eq!(session.notes.len(), 1, "unseen, but not for long yet");
+        session.notes.get_mut(&1).unwrap().unseen_since =
+            Some(std::time::Instant::now() - NOTE_GRACE);
+        session.settle_unseen(&b);
+        assert!(session.notes.is_empty());
+        assert_eq!(session.director.as_ref().unwrap().open_marks(), 0);
         let _ = std::fs::remove_file(&tmp);
     }
 

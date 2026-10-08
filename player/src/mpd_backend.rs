@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use crate::db::{PlayerStore, Rejection};
 use crate::mpd::{quote, Mpd};
-use crate::playback::{Capabilities, Playback};
+use crate::playback::{Capabilities, Outcome, Playback};
 use crate::queue::QueueEntry;
 use crate::scrobble::{counts_as_play, FOUR_MINUTES_MS};
 
@@ -223,6 +223,15 @@ struct Offered {
     /// listener hearing it and a listener removing it, and MPD reports the
     /// departure identically either way.
     was_current: bool,
+    /// Queued by a person rather than the Director. Taking it back out is not
+    /// a rejection: they changed their mind about their choice, not about the
+    /// music (the maintainer, 2026-10-08).
+    by_person: bool,
+}
+
+/// Chosen by a person rather than the Director `[REQ-VIS-300]`.
+fn is_persons(e: &QueueEntry) -> bool {
+    e.selected_by.as_deref() == Some("user")
 }
 
 pub struct MpdBackend {
@@ -250,6 +259,8 @@ pub struct MpdBackend {
     queue_len: usize,
     playing: bool,
     dropped: Vec<i64>,
+    /// What became of passages, for the running Director, until asked for.
+    outcomes: Vec<Outcome>,
     store: Option<PlayerStore>,
     /// URI → passage, for adopting what the listener queued `[SPEC-MPD-115]`.
     names: HashMap<String, Nameable>,
@@ -322,6 +333,7 @@ impl MpdBackend {
             queue_len: 0,
             playing: false,
             dropped: Vec::new(),
+            outcomes: Vec::new(),
             store: None,
             names: HashMap::new(),
             cues: HashMap::new(),
@@ -529,12 +541,16 @@ impl MpdBackend {
     /// Judge a passage that has left MPD's queue, and record what it was.
     fn retire(&mut self, o: Offered) {
         if !o.was_current {
-            // Never reached the front, so a person took it out. It did not play
-            // and it is not forgotten: the removal earns the shorter window
-            // `[SPEC-PLAY-055]`, and the Director is told to un-count the
-            // queueing mark by way of `take_dropped` `[REQ-PD-112]`.
-            self.dropped.push(o.passage_id);
-            // Never sounded, so there is no percentage to report `[REQ-VIS-250]`.
+            // Never reached the front, so a person took it out. Their own pick
+            // leaves as a dropped passage does: un-marked, no window.
+            if o.by_person {
+                self.dropped.push(o.passage_id);
+                return;
+            }
+            // A Director's pick did not play and is not forgotten: the removal
+            // earns the shorter window `[SPEC-PLAY-055]`, and the Director
+            // takes back its queueing mark when told `[REQ-PD-112]`. Never
+            // sounded, so there is no percentage to report `[REQ-VIS-250]`.
             self.write(Rejection::Dequeue, o.passage_id, o.mbid.as_deref(), None, None);
             return;
         }
@@ -561,13 +577,16 @@ impl MpdBackend {
                     tracing::error!("record play: {e}");
                 }
             }
+            self.outcomes.push(Outcome::Played { passage: o.passage_id });
         } else {
             self.write(Rejection::Skip, o.passage_id, o.mbid.as_deref(), Some(o.heard_ms), Some(o.span_ms));
         }
     }
 
+    /// Write a rejection, and tell the running Director: written or not, the
+    /// window is the listener's wish.
     fn write(
-        &self,
+        &mut self,
         kind: Rejection,
         passage_id: i64,
         mbid: Option<&str>,
@@ -579,6 +598,15 @@ impl MpdBackend {
                 tracing::error!("record {}: {e}", kind.as_str());
             }
         }
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        self.outcomes.push(Outcome::Rejected {
+            passage: passage_id,
+            kind,
+            mbid: mbid.map(str::to_string),
+            at,
+        });
     }
 
     /// The rate `SPEC-MPD-105`'s setting configures, tightened near a
@@ -680,8 +708,12 @@ impl MpdBackend {
                                 seen_at_ms: None,
                                 span_honoured: true,
                                 was_current: true,
+                                by_person: true,
                             },
                         );
+                        // Sounding now, so marked as coming only now: rotation
+                        // learns of it the moment it is known `[REQ-PD-112]`.
+                        self.outcomes.push(Outcome::Queued { passage: *pid });
                     }
                     // Ambiguous, or not in the library at all. Reported once
                     // rather than guessed at `[SPEC-MPD-060]`, and once rather
@@ -851,6 +883,7 @@ impl Playback for MpdBackend {
                                 seen_at_ms: None,
                                 span_honoured: false,
                                 was_current: false,
+                                by_person: is_persons(&entry),
                             },
                         );
                         self.queue_len += 1;
@@ -891,6 +924,7 @@ impl Playback for MpdBackend {
             seen_at_ms: None,
                         span_honoured: added.span_honoured,
                         was_current: false,
+                        by_person: is_persons(&entry),
                     },
                 );
                 self.queue_len += 1;
@@ -927,6 +961,10 @@ impl Playback for MpdBackend {
 
     fn take_dropped(&mut self) -> Vec<i64> {
         std::mem::take(&mut self.dropped)
+    }
+
+    fn take_outcomes(&mut self) -> Vec<Outcome> {
+        std::mem::take(&mut self.outcomes)
     }
 
     /// Begin the **first** queued song at this offset.
@@ -1392,6 +1430,30 @@ mod tests {
         assert!(b.ours.is_empty(), "and nothing is still keyed by a stale song id");
     }
 
+    /// What the running Director is told of each departure `[REQ-PD-112]`:
+    /// a Director's pick taken out is a rejection `[SPEC-PLAY-055]`; a
+    /// person's own taken out is only dropped (the maintainer, 2026-10-08); a
+    /// play is a play, and a skip a rejection `[SPEC-PLAY-050]`.
+    #[test]
+    fn each_departure_tells_the_director_what_it_was() {
+        let mpd = FakeMpd::start();
+        let mut b = mpd.backend();
+        b.retire(offered(5));
+        b.retire(Offered { by_person: true, ..offered(6) });
+        b.retire(Offered { heard_ms: 1_000, ..offered_at(7, 1_000, 1_000) });
+        b.retire(Offered { heard_ms: 100, ..offered_at(8, 1_000, 100) });
+        assert_eq!(b.take_dropped(), vec![6], "only the person's own pick is merely dropped");
+        let said: Vec<(i64, Option<Rejection>)> = b
+            .take_outcomes()
+            .into_iter()
+            .map(|o| match o {
+                Outcome::Rejected { passage, kind, .. } => (passage, Some(kind)),
+                Outcome::Played { passage } | Outcome::Queued { passage } => (passage, None),
+            })
+            .collect();
+        assert_eq!(said, vec![(5, Some(Rejection::Dequeue)), (7, None), (8, Some(Rejection::Skip))]);
+    }
+
     fn offered(passage_id: i64) -> Offered {
         Offered {
             passage_id,
@@ -1403,6 +1465,7 @@ mod tests {
             seen_at_ms: None,
             span_honoured: true,
             was_current: false,
+            by_person: false,
         }
     }
 
@@ -1492,6 +1555,7 @@ mod tests {
             seen_at_ms: None,
             span_honoured: true,
             was_current: true,
+            by_person: false,
         }
     }
 

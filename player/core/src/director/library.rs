@@ -143,22 +143,38 @@ pub struct Decision {
     pub why: Explanation,
 }
 
-/// Enough to undo a `note_queued` exactly `[REQ-PD-112]`.
-///
-/// Held between choosing a passage and learning whether it could be opened. It
-/// carries the values that were there before, because `max` cannot be inverted
-/// from its result alone.
-#[derive(Debug, Clone)]
+/// A passage marked as coming, held until it is judged `[REQ-PD-112]`: played
+/// ([`Director::settle`]), or declined or never played
+/// ([`Director::forget_queued`]). Not `Clone`: each mark is resolved once.
+#[derive(Debug)]
 pub struct QueuedNote {
+    token: u64,
     passage_id: i64,
-    prev_passage: Option<i64>,
-    mbid: Option<String>,
-    prev_recording: Option<i64>,
-    artist: Option<String>,
-    prev_artist: Option<i64>,
-    /// One entry per work the recording performs `[GDE-WRK-070]`, each with
-    /// the stamp that was there before.
-    works: Vec<(String, Option<i64>)>,
+}
+
+impl QueuedNote {
+    pub fn passage_id(&self) -> i64 {
+        self.passage_id
+    }
+}
+
+/// One rotation key a mark touches, in whichever tier it lives.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum MarkKey {
+    Passage(i64),
+    Recording(String),
+    Work(String),
+    Artist(String),
+}
+
+/// The marks still open on one key, and what the key held before the first of
+/// them. `max` cannot be inverted from its result, so a forgotten mark is
+/// undone by recomputing from these rather than by restoring one saved value:
+/// exact whatever order the marks are resolved in (review O-05).
+#[derive(Debug)]
+struct OpenMarks {
+    before: Option<i64>,
+    marks: Vec<(u64, i64)>,
 }
 
 /// An artist tag as a rotation key `[REQ-AND-315]`: trimmed, lower case, inner
@@ -204,6 +220,11 @@ pub struct Director {
     /// so it must not be reachable from anything that computes a weight.
     last_skipped: HashMap<String, i64>,
     last_dequeued: HashMap<String, i64>,
+    /// Passages marked as coming and not yet judged: each mark's keys, and the
+    /// marks open on each key `[REQ-PD-112]`.
+    marked: HashMap<u64, (i64, Vec<MarkKey>)>,
+    open: HashMap<MarkKey, OpenMarks>,
+    next_token: u64,
     relations: HashMap<String, Vec<(String, f64)>>,
     occasions: Occasions,
     flavor: FlavorIndex,
@@ -485,6 +506,9 @@ impl Director {
             policy,
             last_skipped,
             last_dequeued,
+            marked: HashMap::new(),
+            open: HashMap::new(),
+            next_token: 0,
             recording_tuning,
             artist_tuning,
             artist_of,
@@ -669,100 +693,115 @@ impl Director {
         // `[GDE-WRK-055]`.
         let row = self.rows.iter().find(|r| r.entry.passage_id == passage_id)?;
         let mbid = row.mbid.clone();
-        let artist = self.artist_key(mbid.as_deref(), passage_id).cloned();
-        let works: Vec<String> = mbid
-            .as_ref()
-            .and_then(|m| self.works_of.get(m))
-            .cloned()
-            .unwrap_or_default();
-        // Every previous value is kept so the note can be taken back exactly.
-        // `max` is not invertible: without the old value, undoing a note would
-        // have to guess, and guessing at rotation history is how a recording
-        // that never played ends up suppressed.
-        let note = QueuedNote {
-            passage_id,
-            prev_passage: self.passage_last_played.get(&passage_id).copied(),
-            mbid: mbid.clone(),
-            prev_recording: mbid.as_ref().and_then(|m| self.last_played.get(m).copied()),
-            artist: artist.clone(),
-            prev_artist: artist
-                .as_ref()
-                .and_then(|a| self.artist_last_played.get(a).copied()),
-            works: works
-                .iter()
-                .map(|w| (w.clone(), self.work_last_played.get(w).copied()))
-                .collect(),
-        };
-        let e = self.passage_last_played.entry(passage_id).or_insert(at);
-        *e = (*e).max(at);
-        if let Some(a) = artist {
-            let e = self.artist_last_played.entry(a).or_insert(at);
-            *e = (*e).max(at);
+        let mut keys = vec![MarkKey::Passage(passage_id)];
+        if let Some(a) = self.artist_key(mbid.as_deref(), passage_id) {
+            keys.push(MarkKey::Artist(a.clone()));
         }
-        for w in works {
-            let e = self.work_last_played.entry(w).or_insert(at);
-            *e = (*e).max(at);
+        if let Some(m) = &mbid {
+            for w in self.works_of.get(m).into_iter().flatten() {
+                keys.push(MarkKey::Work(w.clone()));
+            }
+            keys.push(MarkKey::Recording(m.clone()));
         }
-        if let Some(m) = mbid {
-            let e = self.last_played.entry(m).or_insert(at);
-            *e = (*e).max(at);
+        let token = self.next_token;
+        self.next_token += 1;
+        for key in &keys {
+            // What the key held before any open mark is kept, so a mark can be
+            // taken back exactly: guessing at rotation history is how a
+            // recording that never played ends up suppressed.
+            let before = self.stamp(key);
+            self.open
+                .entry(key.clone())
+                .or_insert(OpenMarks { before, marks: Vec::new() })
+                .marks
+                .push((token, at));
+            self.set_stamp(key, Some(before.map_or(at, |b| b.max(at))));
         }
-        Some(note)
+        self.marked.insert(token, (at, keys));
+        Some(QueuedNote { token, passage_id })
     }
 
-    /// Undo a note for a passage that never played `[REQ-PD-112]`.
+    /// Take back a mark for a passage that never played `[REQ-PD-112]`.
     ///
-    /// A passage can be chosen, noted, and then fail to open -- an unreadable
-    /// file, a path that moved. The engine drops it, and without this the
-    /// Director would go on believing it was heard, suppressing that recording
-    /// and its artist for a full rotation on the strength of a play that never
-    /// happened.
+    /// A passage can be chosen, marked, and then fail to open -- an unreadable
+    /// file, a path that moved -- or be declined: skipped, or taken out of the
+    /// queue. Either way it was not heard, and leaving the mark would suppress
+    /// its recording, its works and its artist for a full rotation on the
+    /// strength of a play that never happened `[SPEC-PLAY-050]`.
     ///
-    /// **Exact only when notes are undone newest first.** Each key goes back
-    /// to the value it held when *this* note was taken, so a later note on the
-    /// same passage, work, recording or artist is overwritten by the undo.
-    /// Rotation keeps one artist out of a short queue, which makes that rare;
-    /// nothing here prevents it.
+    /// Exact in any order: each key is recomputed from what it held before the
+    /// first open mark and the marks still open on it.
     pub fn forget_queued(&mut self, note: QueuedNote) {
-        let restore_i = |m: &mut HashMap<i64, i64>, k: i64, prev: Option<i64>| match prev {
-            Some(p) => {
-                m.insert(k, p);
-            }
-            None => {
-                m.remove(&k);
-            }
+        self.resolve(note.token, false);
+    }
+
+    /// The passage played: its mark stays, as the play it now is
+    /// `[REQ-PD-112]`.
+    pub fn settle(&mut self, note: QueuedNote) {
+        self.resolve(note.token, true);
+    }
+
+    /// The listener declined a recording just now `[SPEC-PLAY-050]`,
+    /// `[SPEC-PLAY-055]`: its window starts at once, in this Director, not
+    /// when the next one is built. Nothing else changes, since a rejection
+    /// earns no play and no mark.
+    pub fn note_rejection(&mut self, kind: crate::db::Rejection, mbid: &str, at: i64) {
+        let map = match kind {
+            crate::db::Rejection::Skip => &mut self.last_skipped,
+            crate::db::Rejection::Dequeue => &mut self.last_dequeued,
         };
-        let restore_s = |m: &mut HashMap<String, i64>, k: String, prev: Option<i64>| match prev {
-            Some(p) => {
-                m.insert(k, p);
+        let e = map.entry(mbid.to_string()).or_insert(at);
+        *e = (*e).max(at);
+    }
+
+    /// How many marks are open: passages marked as coming and not yet judged.
+    pub fn open_marks(&self) -> usize {
+        self.marked.len()
+    }
+
+    fn resolve(&mut self, token: u64, keep: bool) {
+        let Some((at, keys)) = self.marked.remove(&token) else { return };
+        for key in keys {
+            let Some(open) = self.open.get_mut(&key) else { continue };
+            open.marks.retain(|(t, _)| *t != token);
+            if keep {
+                open.before = Some(open.before.map_or(at, |b| b.max(at)));
             }
-            None => {
-                m.remove(&k);
+            let value = open.marks.iter().map(|(_, a)| *a).chain(open.before).max();
+            if open.marks.is_empty() {
+                self.open.remove(&key);
             }
-        };
-        restore_i(&mut self.passage_last_played, note.passage_id, note.prev_passage);
-        for (w, prev) in note.works {
-            // Another passage of the same work may have been noted since, and
-            // restoring what was there forgets that one too -- the hazard the
-            // doc comment above names, the same for every tier.
-            restore_s(&mut self.work_last_played, w, prev);
+            self.set_stamp(&key, value);
         }
-        if let Some(mbid) = note.mbid {
-            restore_s(&mut self.last_played, mbid, note.prev_recording);
+    }
+
+    fn stamp(&self, key: &MarkKey) -> Option<i64> {
+        match key {
+            MarkKey::Passage(p) => self.passage_last_played.get(p).copied(),
+            MarkKey::Recording(m) => self.last_played.get(m).copied(),
+            MarkKey::Work(w) => self.work_last_played.get(w).copied(),
+            MarkKey::Artist(a) => self.artist_last_played.get(a).copied(),
         }
-        if let Some(a) = note.artist {
-            match note.prev_artist {
-                Some(prev) => {
-                    self.artist_last_played.insert(a, prev);
+    }
+
+    /// `None` removes the entry: "nothing was there" is a value like any
+    /// other, and a zero left behind would read as a play at the epoch.
+    fn set_stamp(&mut self, key: &MarkKey, value: Option<i64>) {
+        fn put<K: std::hash::Hash + Eq>(m: &mut HashMap<K, i64>, k: K, v: Option<i64>) {
+            match v {
+                Some(v) => {
+                    m.insert(k, v);
                 }
-                // Restoring what was there is the undo, and "nothing was there"
-                // is a value like any other. It is not safe against a later
-                // note by the same artist: removing the entry forgets that one
-                // too, as the doc comment above says.
                 None => {
-                    self.artist_last_played.remove(&a);
+                    m.remove(&k);
                 }
             }
+        }
+        match key {
+            MarkKey::Passage(p) => put(&mut self.passage_last_played, *p, value),
+            MarkKey::Recording(m) => put(&mut self.last_played, m.clone(), value),
+            MarkKey::Work(w) => put(&mut self.work_last_played, w.clone(), value),
+            MarkKey::Artist(a) => put(&mut self.artist_last_played, a.clone(), value),
         }
     }
 
@@ -1302,6 +1341,58 @@ mod tests {
         assert!(d.artist_last_played.is_empty());
     }
 
+    /// Two marks on one recording, and the OLDER one forgotten first: the
+    /// newer must survive. Undoing by restoring a saved value -- how this
+    /// worked until 2026-10-08 -- erased it (review O-05), and with skips and
+    /// a person's picks now forgotten as they happen, out of order is common.
+    #[test]
+    fn forgetting_in_any_order_is_exact() {
+        let mut d = Director::load(&fixture()).unwrap();
+        d.last_played.clear();
+        d.artist_last_played.clear();
+        let first = d.note_queued(1, 5_000).unwrap();
+        let second = d.note_queued(1, 6_000).unwrap();
+        assert_eq!(d.open_marks(), 2);
+        d.forget_queued(first);
+        assert_eq!(d.last_played.get("rec-a"), Some(&6_000), "the newer mark stands");
+        assert_eq!(d.artist_last_played.get("art-1"), Some(&6_000));
+        d.forget_queued(second);
+        assert!(d.last_played.is_empty() && d.artist_last_played.is_empty());
+        assert!(!d.passage_last_played.contains_key(&1));
+        assert_eq!(d.open_marks(), 0);
+    }
+
+    /// A settled mark is a play: forgetting a later one goes back to it, not
+    /// to before it.
+    #[test]
+    fn a_settled_mark_outlives_a_later_one_forgotten() {
+        let mut d = Director::load(&fixture()).unwrap();
+        d.last_played.clear();
+        let played = d.note_queued(1, 5_000).unwrap();
+        let skipped = d.note_queued(1, 6_000).unwrap();
+        d.settle(played);
+        d.forget_queued(skipped);
+        assert_eq!(d.last_played.get("rec-a"), Some(&5_000));
+        assert_eq!(d.open_marks(), 0);
+    }
+
+    /// A rejection holds the recording out of THIS Director at once
+    /// `[SPEC-PLAY-050]`, `[SPEC-PLAY-055]` -- before 2026-10-08 only a
+    /// rebuild read it -- and marks nothing else: rec-a's artist stays free.
+    #[test]
+    fn a_rejection_suppresses_at_once_and_marks_nothing() {
+        let mut d = Director::load(&fixture()).unwrap();
+        let excluded = |d: &Director, id: i64| {
+            d.weigh_all(NOW).into_iter().find(|(e, _)| e.passage_id == id).unwrap().1.excluded
+        };
+        assert_eq!(excluded(&d, 1), None);
+        d.note_rejection(crate::db::Rejection::Skip, "rec-a", NOW);
+        assert_eq!(excluded(&d, 1), Some(Exclusion::SkipSuppressed));
+        assert!(!d.artist_last_played.contains_key("art-1"), "a skip earns no artist mark");
+        d.note_rejection(crate::db::Rejection::Dequeue, "rec-b", NOW);
+        assert_eq!(excluded(&d, 2), Some(Exclusion::DequeueSuppressed));
+    }
+
     /// A passage marked `director_hold` -- a damaged rip, or a person's choice
     /// -- is never chosen, and is counted as held, not lost `[SPEC-HOLD-010]`.
     /// An empty mark holds nothing. The fixture without the column is every
@@ -1416,8 +1507,8 @@ mod tests {
         let c = fixture();
         with_tags(&c);
         let mut d = Director::load(&c).unwrap();
-        let note = d.note_queued(5, NOW).expect("a carried passage can be noted");
-        assert_eq!(note.artist.as_deref(), Some("tag:the beatles"));
+        d.note_queued(5, NOW).expect("a carried passage can be noted");
+        assert_eq!(d.artist_last_played.get("tag:the beatles"), Some(&NOW));
         let six = d.weigh_all(NOW).into_iter()
             .find(|(e, _)| e.passage_id == 6).map(|(_, w)| w).unwrap();
         assert!(six.artist_blocked, "6 is held the moment 5 is queued");

@@ -714,11 +714,15 @@ pub struct Engine {
     /// was actually heard `[REQ-VIS-250]`. At most one at a time, the same
     /// simplification `draining` makes for the display.
     pending_finish: Option<PendingFinish>,
-    /// Passages chosen but never opened, waiting to be reported `[REQ-PD-112]`.
+    /// Passages chosen but never played, waiting to be reported `[REQ-PD-112]`:
+    /// one that could not be opened, or a person's own pick they took out.
     ///
     /// The engine drops them; only the Director can undo having counted them,
     /// and it lives on the other side of `Session`. Kept here until asked for.
     dropped: Vec<i64>,
+    /// What became of passages, for the running Director, until asked for
+    /// (`crate::playback::Outcome`).
+    outcomes: Vec<crate::playback::Outcome>,
     /// The passage the LISTENER is on, which is not the one being mixed
     /// `[REQ-AUD-164]`. Held here because it outlives `live`: a passage stays
     /// audible for a ring's depth after the mixer has finished with it.
@@ -741,6 +745,11 @@ pub struct Engine {
 }
 
 /// Seconds since the epoch, for stamping when a count was restarted.
+/// Chosen by a person rather than the Director `[REQ-VIS-300]`.
+fn is_persons_pick(e: &QueueEntry) -> bool {
+    e.passage_id > 0 && !e.is_shutdown && e.selected_by.as_deref() == Some("user")
+}
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -875,6 +884,7 @@ impl Engine {
             pending_finish: None,
             shown: None,
             dropped: Vec::new(),
+            outcomes: Vec::new(),
             underruns_playing: 0,
             underrun_baseline: 0,
             // Seeded now, so a fresh player reads "since 09:14" rather than
@@ -1314,15 +1324,18 @@ impl Engine {
                     self.remember_settings();
                 }
                 Ok(Command::Enqueue(e)) => {
+                    self.note_people_picks([&e]);
                     self.queue.push(e);
                     self.queue_edited = true;
                 }
                 Ok(Command::EnqueueNext(e)) => {
+                    self.note_people_picks([&e]);
                     self.queue.push_front(e);
                     self.queue_edited = true;
                 }
                 Ok(Command::EnqueueMany(entries, place)) => {
                     self.queue_edited = true;
+                    self.note_people_picks(&entries);
                     if !entries.is_empty() {
                         match place {
                             Placement::Now => {
@@ -1348,6 +1361,7 @@ impl Engine {
                     // Front, then skip: skip takes the front of the queue, so
                     // anything less than the front would play the passage that
                     // was already next instead.
+                    self.note_people_picks([&e]);
                     self.queue.push_front(e);
                     self.skip();
                     self.queue_edited = true;
@@ -1361,21 +1375,29 @@ impl Engine {
                     // Deliberately NOT the same path as a passage the engine
                     // could not open: that is a failure, not a preference, and
                     // `[REQ-PD-112]` requires it leave no mark at all.
+                    //
+                    // A person's own pick taken back out is not a rejection
+                    // either: they changed their mind about their choice, not
+                    // about the music. It leaves the queue as a dropped passage
+                    // does, un-marked and with no window (the maintainer,
+                    // 2026-10-08).
                     let declined = self
                         .queue
                         .iter()
                         .find(|e| e.qid == id && !e.is_shutdown && e.passage_id > 0)
-                        .map(|e| (e.passage_id, e.mbid.clone()));
+                        .map(|e| (e.passage_id, e.mbid.clone(), is_persons_pick(e)));
                     self.queue_edited = true;
                     if self.queue.remove(id) {
-                        if let Some((passage_id, mbid)) = declined {
-                            self.note_rejection(
+                        match declined {
+                            Some((passage_id, _, true)) => self.dropped.push(passage_id),
+                            Some((passage_id, mbid, false)) => self.note_rejection(
                                 crate::db::Rejection::Dequeue,
                                 passage_id,
                                 mbid.as_deref(),
                                 None,
                                 None,
-                            );
+                            ),
+                            None => {}
                         }
                     }
                 }
@@ -1967,6 +1989,22 @@ impl Engine {
     /// once, and a second report would restore a rotation entry twice.
     pub fn take_dropped(&mut self) -> Vec<i64> {
         std::mem::take(&mut self.dropped)
+    }
+
+    /// What became of passages since last asked, oldest first, taken once
+    /// for the same reason as `take_dropped`.
+    pub fn take_outcomes(&mut self) -> Vec<crate::playback::Outcome> {
+        std::mem::take(&mut self.outcomes)
+    }
+
+    /// A person's own picks are marked as coming, as the Director's are
+    /// `[REQ-PD-112]`; nothing else needs saying when something is queued.
+    fn note_people_picks<'a>(&mut self, entries: impl IntoIterator<Item = &'a QueueEntry>) {
+        for e in entries {
+            if is_persons_pick(e) {
+                self.outcomes.push(crate::playback::Outcome::Queued { passage: e.passage_id });
+            }
+        }
     }
 
     /// Open the passage after this one before anyone asks for it
@@ -4508,6 +4546,8 @@ than one mix block");
 
         assert!(tick_until(&mut e, |_| plays(&st) > 0), "a play should have been written");
         assert_eq!(plays(&st), 1, "and exactly one, however many ticks it took");
+        assert_eq!(e.take_outcomes(), vec![crate::playback::Outcome::Played { passage: 41 }],
+                   "and the running Director is told it played, once");
         let _ = std::fs::remove_file(&wav);
         let _ = std::fs::remove_file(&path);
     }
@@ -4717,6 +4757,11 @@ than one mix block");
             "the abandoned passage should have been suppressed"
         );
         assert_eq!(plays(&st), 0, "and it must never have become a play");
+        assert!(
+            e.take_outcomes().iter().any(|o| matches!(o, crate::playback::Outcome::Rejected {
+                passage: 42, kind: crate::db::Rejection::Skip, .. })),
+            "and the running Director is told of the skip"
+        );
         let _ = std::fs::remove_file(&long);
         let _ = std::fs::remove_file(&short);
         let _ = std::fs::remove_file(&path);
@@ -5312,6 +5357,39 @@ than one mix block");
             st.last_rejected(crate::db::Rejection::Skip).unwrap().is_empty(),
             "a removal is not a skip: they earn different windows"
         );
+        // And the running Director is told, not left to the next rebuild.
+        assert!(matches!(
+            e.take_outcomes().as_slice(),
+            [crate::playback::Outcome::Rejected { passage: 7, kind: crate::db::Rejection::Dequeue, .. }]
+        ));
+        assert!(e.take_dropped().is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A person's own pick is marked as coming when they queue it
+    /// `[REQ-PD-112]`, and taking it back out is not a rejection: no window,
+    /// no row, only its mark given back (the maintainer, 2026-10-08).
+    #[test]
+    fn a_persons_own_pick_is_marked_and_taking_it_out_is_no_rejection() {
+        let (st, path) = store();
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+
+        let mut mine = entry(7, "a.mp3");
+        mine.mbid = Some(DQ_MBID.into());
+        mine.selected_by = Some("user".into());
+        h.send(Command::EnqueueMany(vec![mine, entry(8, "b.mp3")], Placement::Last));
+        e.drain_commands();
+        assert_eq!(e.take_outcomes(), vec![crate::playback::Outcome::Queued { passage: 7 }],
+                   "only the person's pick is announced: the Director marks its own");
+
+        let qid = e.queued().find(|q| q.passage_id == 7).expect("queued").qid;
+        h.send(Command::RemoveQueued(qid));
+        e.drain_commands();
+        assert!(st.last_rejected(crate::db::Rejection::Dequeue).unwrap().is_empty(),
+                "no dequeue written for a person's own pick");
+        assert!(e.take_outcomes().is_empty(), "and no rejection told");
+        assert_eq!(e.take_dropped(), vec![7], "only its mark to give back");
         let _ = std::fs::remove_file(&path);
     }
 

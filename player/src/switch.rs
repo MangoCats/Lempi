@@ -349,6 +349,16 @@ impl Playback for Switching {
     fn take_dropped(&mut self) -> Vec<i64> {
         self.live_mut().take_dropped()
     }
+    /// **Both sides'**, unlike `take_dropped`. A person's pick reaches the
+    /// local engine whichever side is live, and a side handed away from may
+    /// still be judging the passage it was sounding.
+    fn take_outcomes(&mut self) -> Vec<crate::playback::Outcome> {
+        let mut out = self.local.take_outcomes();
+        if let Some(g) = self.guest.as_deref_mut() {
+            out.extend(g.take_outcomes());
+        }
+        out
+    }
     fn resume_at(&mut self, position_ms: u64) {
         self.live_mut().resume_at(position_ms)
     }

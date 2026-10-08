@@ -113,6 +113,26 @@ impl Capabilities {
 /// `extract_library.py` uses when deciding whether to slice before extracting.
 pub const WHOLE_FILE_SLACK_MS: u64 = 5_000;
 
+/// What became of a queued passage, as only the backend can tell, so the
+/// running Director learns it as it happens rather than at its next rebuild
+/// `[REQ-PD-112]`, `[SPEC-PLAY-050]`.
+///
+/// Beside `take_dropped`, not instead of it: a dropped passage was never
+/// played at all -- it could not be opened, or a person took out their own
+/// pick -- and leaves no trace, which `switch::carry_queue` relies on.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Outcome {
+    /// A person queued it. Their pick is coming like the Director's own, and
+    /// rotation must know before choosing what follows it.
+    Queued { passage: i64 },
+    /// It played: the counting threshold was crossed `[SPEC-PLAY-010]`.
+    Played { passage: i64 },
+    /// The listener declined it -- a skip, or a Director's pick taken out of
+    /// the queue -- and the rejection was written `[SPEC-PLAY-050]`,
+    /// `[SPEC-PLAY-055]`. `at` is when, in unix seconds.
+    Rejected { passage: i64, kind: crate::db::Rejection, mbid: Option<String>, at: i64 },
+}
+
 /// The whole of what a session asks of a player.
 ///
 /// **Eleven methods, and the shape now comes from the callers.** *(Narrowed
@@ -152,6 +172,12 @@ pub trait Playback {
     /// `[REQ-PD-112]`. A remote backend reports the same thing for a song the
     /// server has forgotten.
     fn take_dropped(&mut self) -> Vec<i64>;
+
+    /// What became of passages since last asked, oldest first. Defaulted to
+    /// nothing for a backend that judges nothing.
+    fn take_outcomes(&mut self) -> Vec<Outcome> {
+        Vec::new()
+    }
 
     /// Begin the first queued passage at this offset, for a resumed session.
     fn resume_at(&mut self, position_ms: u64);
@@ -215,6 +241,9 @@ impl Playback for crate::engine::Engine {
     }
     fn take_dropped(&mut self) -> Vec<i64> {
         Engine::take_dropped(self)
+    }
+    fn take_outcomes(&mut self) -> Vec<Outcome> {
+        Engine::take_outcomes(self)
     }
     fn resume_at(&mut self, position_ms: u64) {
         Engine::resume_at(self, position_ms)

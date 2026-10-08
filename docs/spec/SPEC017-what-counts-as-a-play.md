@@ -120,6 +120,11 @@ ramp, **no** artist mark and **no** weight of any kind — a passage whose windo
 has passed weighs exactly as one never rejected, which is asserted rather than
 described.
 
+It takes effect **at once**, in the running Director, not at its next rebuild:
+the backend reports each rejection as it writes it. The mark the passage was
+given when it was queued, so that the next pick would see it coming
+`[REQ-PD-112]`, is taken back at the same moment, since a rejection earns none.
+
 Structurally rather than by convention: the rejection ages are separate fields
 from `recording_age_s`, the gate sits with the passage filters *above* the artist and
 recording passes, and nothing below it reads them. A rejection cannot leak into a ramp
@@ -140,7 +145,11 @@ declining to hear something *now* says less than stopping it once it had started
 
 **Not every departure from the queue is a rejection.** A passage the engine could
 not open leaves the queue too, and it must leave no mark at all `[REQ-PD-112]` —
-that is a failure, not a preference. Only a removal the listener asked for counts.
+that is a failure, not a preference. Only a removal the listener asked for counts,
+and only of a passage the Director chose: a person taking out a pick of their own
+has changed their mind about their choice, not about the music, so it earns no
+window and writes no row, and its queueing mark is simply given back (the
+maintainer, 2026-10-08). Both backends judge it the same way `[IMPL-MPD-045]`.
 
 **`[SPEC-PLAY-057]` Where windows overlap, the longer remaining one wins.** A
 second rejection can only extend suppression, never shorten it: a track skipped

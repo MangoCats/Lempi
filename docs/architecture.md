@@ -225,14 +225,6 @@ otherwise.
   end (`BUFFER_FRAMES`) the passage on air has already left the mixer, and play
   accounting still follows the mixer, so `seek_to` declines rather than moving
   the next passage `[REQ-VIS-225]`.
-* **The live Director never hears of in-session rejections, or of a person's
-  own picks.** Skip and dequeue windows are read when the Director is built, so
-  they take effect only after a restart or a library reload. Until then a
-  skipped or removed passage keeps the artist, work and recording marks set
-  when it was queued — which a rejection never earns `[SPEC-PLAY-050]`. The MPD
-  backend un-notes a removed passage as `[IMPL-MPD-045]` requires, but without
-  the dequeue window of `[SPEC-PLAY-055]` the recording is eligible again at
-  once. A passage a person queues marks nothing at all `[REQ-PD-112]`.
 * **The no-Director fallback is uniform random.** On a first start, with no
   remembered queue, or when every candidate is blocked, `random_radio` fills
   the queue, ignoring holds `[SPEC-HOLD-010]`, characteristic exclusions,

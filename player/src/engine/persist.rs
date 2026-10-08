@@ -263,6 +263,7 @@ impl Engine {
             return;
         }
         self.recorded = true;
+        self.outcomes.push(crate::playback::Outcome::Played { passage: id });
         if let Some(store) = &self.store {
             // `heard_ms` at this instant is only the threshold just crossed --
             // half the passage, or four minutes -- not what will finally have
@@ -352,7 +353,7 @@ impl Engine {
     /// sounded, so there is no percentage to report, not a percentage of
     /// zero `[REQ-VIS-250]`. A skip supplies both -- it always started.
     pub(super) fn note_rejection(
-        &self,
+        &mut self,
         kind: crate::db::Rejection,
         passage_id: i64,
         mbid: Option<&str>,
@@ -364,6 +365,14 @@ impl Engine {
                 tracing::error!("record {}: {e}", kind.as_str());
             }
         }
+        // And to the running Director, written or not: the window is the
+        // listener's wish, and a failed write is no reason to ignore it.
+        self.outcomes.push(crate::playback::Outcome::Rejected {
+            passage: passage_id,
+            kind,
+            mbid: mbid.map(str::to_string),
+            at: super::unix_now(),
+        });
     }
 
 }
