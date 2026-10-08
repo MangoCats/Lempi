@@ -216,22 +216,51 @@ moves over the network in that arrangement is control, not sound.
 
 ## 10. Known gaps
 
-* **The UI is blank while MPD is the live backend** — title, position and
-  duration come from the local engine's published state, so the seek bar is not
-  offered there.
-* ~~**MPD resident versus on-demand is undecided.**~~ *(Settled 2026-08-23,
-  missed in the 2026-09-01 pass over this section.)* `[SPEC-BK-060]` measured
-  both on the appliance itself (MPD 0.23.12) and decided resident: 100.8 MB for
-  MPD, 264 MB free with both running, versus a 242 s cold index rebuilt every
-  time on-demand would pay. The real remaining gap is narrower: every protocol
-  finding in [SPEC020](spec/SPEC020-the-handoff.md) was measured against MPD
-  0.24.0 on the development machine, not re-checked against the appliance's
-  0.23.12 beyond `seekid`.
-* ~~**No integration tests.**~~ *(Closed 2026-08-22, missed in the 2026-09-01
-  pass over this section.)* `player/tests/invariants.rs` now holds
-  cross-module agreements no single module's unit tests can reach — the cue
-  numbering against `cue_uris` named here as the example was the first one
-  written.
+Where what is built falls short of a specification, or of what a reader would
+assume. The specifications stay the statement of intent: each line here is a
+fault in the code, to be fixed there, and found 2026-10-08 unless it says
+otherwise.
+
+* **A seek in a passage's last ~15 s moves the next passage.** The browser
+  sends an offset against the passage it shows; `seek_to` applies it to the
+  first passage still being mixed, which for a ring's depth before the end
+  (`BUFFER_FRAMES`) is already the next one. A seek during a crossfade discards
+  the incoming passage, unplayed and unrecorded `[REQ-VIS-225]`.
+* **The live Director never hears of in-session rejections, or of a person's
+  own picks.** Skip and dequeue windows are read when the Director is built, so
+  they take effect only after a restart or a library reload. Until then a
+  skipped or removed passage keeps the artist, work and recording marks set
+  when it was queued — which a rejection never earns `[SPEC-PLAY-050]`. The MPD
+  backend un-notes a removed passage as `[IMPL-MPD-045]` requires, but without
+  the dequeue window of `[SPEC-PLAY-055]` the recording is eligible again at
+  once. A passage a person queues marks nothing at all `[REQ-PD-112]`.
+* **The draining clock runs while paused.** A passage's last ring-depth of audio
+  is timed by the wall clock, so pausing there runs the progress bar to the end
+  and records the tail as heard `[REQ-VIS-250]`.
+* **The no-Director fallback is uniform random.** On a first start, with no
+  remembered queue, or when every candidate is blocked, `random_radio` fills
+  the queue, ignoring holds `[SPEC-HOLD-010]`, characteristic exclusions,
+  rejections and rotation.
+* **Listener restore does not work on a split pair.** `backup::restore` looks
+  for `passage_recordings` in the listener file, so a rehearsal reports zeros
+  and `--commit` fails and rolls back. It is reachable only as the cargo example
+  `restore_listener`, whose default path predates the split `[REQ-LIB-160]`,
+  `[PI-DB-030]`.
+* **At a queue depth of 1, flow never applies.** Each pick is made with the
+  queue empty, so there is no tail to measure from `[SPEC-DIR-160]`.
+* **The UTC offset is read once per process.** An appliance that stays up
+  across a change of daylight saving time runs its programmes an hour off until
+  it restarts `[SPEC-DIR-180]`.
+* **`tools/test_mesh_sync.py` fails**, since `fb766de` made the hub take part in
+  every run `[SPEC-STAR-134]`: its plan has no backups directory, and it does
+  not stub the console check as `test_star_sync_flow.py` does.
+* **The now-playing panel is blank while MPD is the live backend** — title,
+  position and duration come from the local engine's published state, so the
+  seek bar has nothing to act on there, though MPD itself can seek.
+* **The MPD protocol findings are from the development machine.** Every one in
+  [SPEC020](spec/SPEC020-the-handoff.md) was measured against MPD 0.24.0 there;
+  only `seekid` has been re-checked against the appliance's 0.23.12
+  `[SPEC-BK-060]`.
 
 ---
 

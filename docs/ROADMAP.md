@@ -20,7 +20,7 @@ folded into one spec.
 
 | Area | Document | Section |
 | :--- | :--- | :--- |
-| System-wide gaps | [architecture.md](architecture.md) | [§10 Known gaps](architecture.md#10-known-gaps) |
+| System-wide gaps, including where the code falls short of a specification | [architecture.md](architecture.md) | [§10 Known gaps](architecture.md#10-known-gaps) |
 | Functional requirements | [REQ002](spec/REQ002-functional-requirements.md) | [§8 Coverage Gaps](spec/REQ002-functional-requirements.md#8-coverage-gaps) |
 | Flavor distance | [SPEC005](spec/SPEC005-flavor-distance.md) | [§5a Future Direction — entry/exit flavor](spec/SPEC005-flavor-distance.md#5a-future-direction--entry-and-exit-flavor) |
 | Vipunen pipeline | [SPEC007](spec/SPEC007-vipunen-architecture.md) | [§6 Segmentation & Amplitude — PROVISIONAL](spec/SPEC007-vipunen-architecture.md#6-segmentation--amplitude-s2-s6--provisional) |
