@@ -90,7 +90,7 @@ Three implementation decisions worth keeping:
 
 ## 5. Stages C & D — Flow and Roulette
 
-**`[SPEC-DIR-160]` Flow.** Re-sort the pool by flavor distance to the **last passage already queued**, so consecutive passages blend `[GDE-PD-050]`. This is also what makes a hard programme switch acceptable `[SPEC-DIR-180]`: continuity is supplied here, not by blending programmes.
+**`[SPEC-DIR-160]` Flow.** Re-sort the pool by flavor distance to the **last passage already queued** — or, with nothing queued, the passage on air — so consecutive passages blend `[GDE-PD-050]`. This is also what makes a hard programme switch acceptable `[SPEC-DIR-180]`: continuity is supplied here, not by blending programmes.
 
 > **Future direction `[SPEC-FD-170]`:** flow currently matches whole-passage flavor to whole-passage flavor, but a handover is heard as the *end* of one passage against the *start* of the next. Characterising the first and last three minutes separately, and matching `exit → entry`, models the transition rather than the pairing. Not the current target — it roughly triples extraction cost and needs a segment discriminator in `flavor`.
 

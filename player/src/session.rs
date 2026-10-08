@@ -16,6 +16,18 @@ use crate::engine::Engine;
 use crate::playback::Playback;
 use crate::switch::Progress;
 
+/// What the next pick follows, for flow `[SPEC-DIR-160]`: the last passage
+/// already queued, or, with nothing queued, the one on air.
+///
+/// The queue empties at every admission when the depth is 1 -- a setting the
+/// panel allows -- and after a person clears it by hand. Taking the tail from
+/// the queue alone left every such pick with nothing to follow, so at depth 1
+/// flow never applied at all. Only the very first pick of a session, with
+/// nothing on air either, has no flow order.
+fn flow_tail(chosen: &[i64], sounding: Option<i64>) -> Option<i64> {
+    chosen.last().copied().or(sounding)
+}
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -709,13 +721,15 @@ impl Session {
             return;
         }
         let mut chosen: Vec<i64> = engine.queued_ids();
+        // Read once, before the loop: the passage on air does not change while
+        // this refill picks, and `engine` is borrowed mutably below.
+        let sounding = engine.head_position().map(|(id, _)| id);
 
         if let Some(d) = &mut self.director {
             for _ in 0..short {
                 // The tail is what this passage will follow, so flow is
-                // measured from it [SPEC-DIR-160]. On the very first pick of a
-                // session there is nothing queued and no flow order.
-                let tail = chosen.last().copied();
+                // measured from it [SPEC-DIR-160] -- see `flow_tail`.
+                let tail = flow_tail(&chosen, sounding);
                 let Some(mut decision) = d.decide(now, &mut self.rng, &chosen, tail) else {
                     // Everything eligible is blocked. Falling back keeps the
                     // radio playing, which [REQ-PD-100] requires; silence would
@@ -1262,5 +1276,15 @@ mod tests {
         assert!(!queued.contains(&999));
         assert_eq!(queued.len(), 5, "and the refill makes the count up");
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// Flow follows the queue's tail, and with an empty queue the passage on
+    /// air `[SPEC-DIR-160]` -- the depth-1 case, where every pick used to be
+    /// made with nothing to follow.
+    #[test]
+    fn flow_follows_the_queue_and_then_what_is_on_air() {
+        assert_eq!(flow_tail(&[4, 7], Some(2)), Some(7), "the queue's tail first");
+        assert_eq!(flow_tail(&[], Some(2)), Some(2), "nothing queued: what is on air");
+        assert_eq!(flow_tail(&[], None), None, "the very first pick follows nothing");
     }
 }

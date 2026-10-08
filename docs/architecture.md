@@ -246,14 +246,9 @@ otherwise.
   and `--commit` fails and rolls back. It is reachable only as the cargo example
   `restore_listener`, whose default path predates the split `[REQ-LIB-160]`,
   `[PI-DB-030]`.
-* **At a queue depth of 1, flow never applies.** Each pick is made with the
-  queue empty, so there is no tail to measure from `[SPEC-DIR-160]`.
 * **The UTC offset is read once per process.** An appliance that stays up
   across a change of daylight saving time runs its programmes an hour off until
   it restarts `[SPEC-DIR-180]`.
-* **`tools/test_mesh_sync.py` fails**, since `fb766de` made the hub take part in
-  every run `[SPEC-STAR-134]`: its plan has no backups directory, and it does
-  not stub the console check as `test_star_sync_flow.py` does.
 * **The now-playing panel is blank while MPD is the live backend** — title,
   position and duration come from the local engine's published state, so the
   seek bar has nothing to act on there, though MPD itself can seek.
