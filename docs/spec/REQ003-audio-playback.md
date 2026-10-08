@@ -215,6 +215,8 @@ Only the second is copied, and that choice is what makes the scheme work: **2.4 
 >
 > The whole restore is one transaction: half-applied would leave the listening in a state that never existed, which is worse than either version.
 >
+> **An old snapshot restores into a newer schema.** A yearly snapshot is kept for ever, so it will predate migrations. Each table is copied by column name, and a column added since takes its default; a renamed column, which keeps its place, is copied by position. A snapshot holding a column this listener file lacks is refused, naming it, in the rehearsal as in the restore, since copying the rest would lose it quietly.
+>
 > **A safety copy is taken before committing, and is exempt from rotation.** The first version was not, and it very nearly destroyed what it was protecting: the safety copy and the snapshot being restored fell on the same day, the ladder keeps only the newest of a day, and the source was pruned out from under the restore. Safety copies now carry their own prefix and `prune` never looks at them.
 >
 > Verified end to end against a copy of the real library: 37,206 plays, damaged to 34,429, restored to 37,206, with 2 orphaned plays kept.

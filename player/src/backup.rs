@@ -399,10 +399,17 @@ pub fn restore(snapshot: &Path, listener: &Path, library: &Path, commit: bool)
             .map_err(q)?;
     }
 
-    if !commit {
-        for table in LISTENER_TABLES {
-            report.tables += table_in("snap", table)? as usize;
+    // Which tables come back, and how each is copied. Decided before anything
+    // is written, so a rehearsal refuses what a restore would fail on.
+    let mut plan: Vec<(&str, String)> = Vec::new();
+    for table in LISTENER_TABLES {
+        if table_in("snap", table)? && table_in("main", table)? {
+            plan.push((table, copy_for(&conn, table)?));
         }
+    }
+
+    if !commit {
+        report.tables = plan.len();
         let _ = conn.execute_batch("DETACH DATABASE snap");
         return Ok(report);
     }
@@ -412,18 +419,11 @@ pub fn restore(snapshot: &Path, listener: &Path, library: &Path, commit: bool)
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| DbError::Query(e.to_string()))?;
     let done = || -> Result<usize, DbError> {
-        let mut n = 0;
-        for table in LISTENER_TABLES {
-            if !table_in("snap", table)? || !table_in("main", table)? {
-                continue;
-            }
-            conn.execute_batch(&format!(
-                "DELETE FROM main.\"{table}\"; \
-                 INSERT INTO main.\"{table}\" SELECT * FROM snap.\"{table}\";"
-            ))
-            .map_err(|e| DbError::Query(format!("restore {table}: {e}")))?;
-            n += 1;
+        for (table, insert) in &plan {
+            conn.execute_batch(&format!("DELETE FROM main.\"{table}\"; {insert};"))
+                .map_err(|e| DbError::Query(format!("restore {table}: {e}")))?;
         }
+        let n = plan.len();
         // Re-point the history through recordings, which outlive renumbering:
         // to the passage that is most nearly the recording itself (a medley
         // holding it carries a smaller weight), then the lowest id, so the
@@ -453,6 +453,44 @@ pub fn restore(snapshot: &Path, listener: &Path, library: &Path, commit: bool)
     }
     let _ = conn.execute_batch("DETACH DATABASE snap");
     Ok(report)
+}
+
+/// How `table` is copied back from `snap`, as the `INSERT` that does it.
+///
+/// **By name** when the listener file has every column the snapshot holds: a
+/// snapshot taken before a column was added (`listener_occasions.label`, say)
+/// restores, and the new column takes its default. A yearly snapshot is kept
+/// for ever, so this is the ordinary case for an old one, not a corner.
+///
+/// **By position** when the names differ but the counts agree: a renamed
+/// column, which keeps its place (`track_time_scale`, now
+/// `recording_time_scale`). That is how every table was copied before.
+///
+/// Otherwise refused, naming the column: the snapshot holds something this
+/// file has nowhere to put, and copying the rest would lose it quietly.
+fn copy_for(conn: &Connection, table: &str) -> Result<String, DbError> {
+    let columns = |schema: &str| -> Result<Vec<String>, DbError> {
+        let q = |e: rusqlite::Error| DbError::Query(format!("columns of {schema}.{table}: {e}"));
+        let mut st = conn.prepare(&format!("PRAGMA {schema}.table_info(\"{table}\")")).map_err(q)?;
+        let names = st.query_map([], |r| r.get::<_, String>(1)).map_err(q)?;
+        names.collect::<Result<Vec<_>, _>>().map_err(q)
+    };
+    let here = columns("main")?;
+    let theirs = columns("snap")?;
+    let known = |c: &String| here.iter().any(|h| h.eq_ignore_ascii_case(c));
+    if theirs.iter().all(known) {
+        let list = theirs.iter().map(|c| format!("\"{c}\"")).collect::<Vec<_>>().join(", ");
+        return Ok(format!("INSERT INTO main.\"{table}\" ({list}) SELECT {list} FROM snap.\"{table}\""));
+    }
+    if theirs.len() == here.len() {
+        return Ok(format!("INSERT INTO main.\"{table}\" SELECT * FROM snap.\"{table}\""));
+    }
+    let extra: Vec<&str> = theirs.iter().filter(|c| !known(c)).map(String::as_str).collect();
+    Err(DbError::Query(format!(
+        "the snapshot's {table} has {} this listener file does not; restoring it would lose {}",
+        extra.join(", "),
+        if extra.len() == 1 { "that column" } else { "those columns" }
+    )))
 }
 
 /// Thin the snapshots to the retention ladder.
@@ -749,6 +787,84 @@ mod tests {
         assert_eq!(at(1), 20, "the single still carries the recording: the play stays");
         assert_eq!(at(2), 10, "the whole recording before the medley, then the lowest id");
         drop((l, c));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// A listener file and a catalogue, and a snapshot written by hand in an
+    /// older or newer shape than the file's: what a yearly snapshot is after a
+    /// migration.
+    fn shapes(tag: &str, file: &str, snap: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+        let tmp = scratch(tag);
+        let (listener, library, snapshot) =
+            (tmp.join("listener.db"), tmp.join("library.db"), tmp.join("old.db"));
+        Connection::open(&listener).unwrap().execute_batch(file).unwrap();
+        Connection::open(&library).unwrap()
+            .execute_batch("CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL);")
+            .unwrap();
+        Connection::open(&snapshot).unwrap().execute_batch(snap).unwrap();
+        (tmp, listener, library, snapshot)
+    }
+
+    /// `listener_occasions.label` was added by a migration, so every snapshot
+    /// from before it lacks the column. It restores, by name, and the new
+    /// column takes its default.
+    #[test]
+    fn a_snapshot_from_before_a_column_was_added_restores() {
+        let (tmp, listener, library, snap) = shapes(
+            "rs-older",
+            "CREATE TABLE listener_occasions (occasion_id INTEGER PRIMARY KEY, name TEXT, label TEXT);
+             INSERT INTO listener_occasions VALUES (9, 'today', 'Today');",
+            "CREATE TABLE listener_occasions (occasion_id INTEGER PRIMARY KEY, name TEXT);
+             INSERT INTO listener_occasions VALUES (1, 'christmas');",
+        );
+        let dry = restore(&snap, &listener, &library, false).expect("rehearsal");
+        assert_eq!(dry.tables, 1);
+        let done = restore(&snap, &listener, &library, true).expect("an older snapshot restores");
+        assert_eq!(done.tables, dry.tables, "the rehearsal counts what the restore does");
+        let rows: Vec<(i64, String, Option<String>)> = Connection::open(&listener).unwrap()
+            .prepare("SELECT occasion_id, name, label FROM listener_occasions").unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap()
+            .collect::<Result<_, _>>().unwrap();
+        assert_eq!(rows, vec![(1, "christmas".to_string(), None)]);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// A renamed column keeps its place, so it is copied by position, as every
+    /// table was before: `track_time_scale` became `recording_time_scale`.
+    #[test]
+    fn a_snapshot_from_before_a_column_was_renamed_restores() {
+        let (tmp, listener, library, snap) = shapes(
+            "rs-renamed",
+            "CREATE TABLE listener_settings (id INTEGER PRIMARY KEY, recording_time_scale REAL);",
+            "CREATE TABLE listener_settings (id INTEGER PRIMARY KEY, track_time_scale REAL);
+             INSERT INTO listener_settings VALUES (1, 0.25);",
+        );
+        restore(&snap, &listener, &library, true).expect("a renamed column restores");
+        let v: f64 = Connection::open(&listener).unwrap()
+            .query_row("SELECT recording_time_scale FROM listener_settings", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 0.25);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// A snapshot holding a column the file has nowhere to put is refused, in
+    /// the rehearsal as in the restore, and the file is left as it was.
+    #[test]
+    fn a_snapshot_with_a_column_the_file_lacks_is_refused() {
+        let (tmp, listener, library, snap) = shapes(
+            "rs-newer",
+            "CREATE TABLE listener_likes (like_id INTEGER PRIMARY KEY, mbid TEXT);
+             INSERT INTO listener_likes VALUES (7, 'keep');",
+            "CREATE TABLE listener_likes (like_id INTEGER PRIMARY KEY, mbid TEXT, why TEXT);
+             INSERT INTO listener_likes VALUES (1, 'x', 'y');",
+        );
+        let said = restore(&snap, &listener, &library, false).expect_err("the rehearsal refuses");
+        assert!(said.to_string().contains("listener_likes has why"), "{said}");
+        restore(&snap, &listener, &library, true).expect_err("and so does the restore");
+        let kept: String = Connection::open(&listener).unwrap()
+            .query_row("SELECT mbid FROM listener_likes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(kept, "keep");
         std::fs::remove_dir_all(&tmp).ok();
     }
 
