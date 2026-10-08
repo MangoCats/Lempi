@@ -58,37 +58,58 @@ forgets a Bluetooth speaker. After connecting, a "can you hear it?" check
 gives you thirty seconds to confirm before automatically reverting if you
 don't — so a bad connection can't strand you silently.</p>
 
-<h3>Moving to a new Wi-Fi network, or the appliance's own (Lempi skin
+<h3>Travel, offline playback, and automatic Wi-Fi failover (Lempi skin
 only, Raspberry Pi appliance only)</h3>
-<p>The same settings panel's <strong>Wi-Fi</strong> section is for moving
-a Pi appliance into a new home. It shows every network it already knows
-(each with a toggle for whether it should connect automatically, and a
-button to forget it), a <strong>scan</strong> button to find nearby
-networks and connect to a new one by name and password, and a toggle to
-have the appliance broadcast its <em>own</em> network instead — useful the
-moment it arrives somewhere with no Wi-Fi of its own yet, since you can
-join its network directly from a phone and configure the real one from
-there. While that's on, reach this same page from anywhere joined to it at
-plain <code>http://lempi/</code> — no IP address, and no port number to
-remember either; <code>http://lempi:5720/</code> still works too, the
-same address the appliance answers to on any other network.</p>
-<p class="note">Both of these can disconnect the very page you're looking
-at — switching networks, or turning the appliance's own network on or
-off, are both real interruptions of whatever is currently connecting you
-to it. That's why every one of these actions shows a <strong>"Keep this
-network?"</strong> banner with a countdown afterward: if you don't
-confirm within five minutes (because, for instance, the new network
-didn't actually work, or you haven't reconnected your own device yet),
-the appliance automatically reverts to whatever was working before —
-never silently choosing to strand itself on a network nobody can reach it
-on.</p>
-<p class="note">The appliance's own network has no internet connection
-behind it — there's nothing to share one with. A phone joined to it may
-still quietly send web traffic over mobile data instead, since it looks
-like a Wi-Fi with no internet, and the page will simply fail to load with
-no obvious reason why. If that happens: turn off mobile data on the phone
-before joining, or look for a "connect without internet" option on the
-network in the phone's Wi-Fi settings — either one is enough.</p>
+<p>When you take a Pi appliance travelling or move it out of range of its
+home network, you don't need a screen, keyboard, or pre-configured router:
+it takes care of itself. If it boots where no known Wi-Fi is reachable (or
+loses connection for 30 continuous seconds), it automatically starts its
+own access point named <code>Lempi</code> (default password:
+<code>Lempi321</code>).</p>
+<p><strong>First-class offline playback:</strong> You can join that network
+from your phone, tablet, or laptop and reach the player directly at
+plain <code>http://lempi/</code> or <code>http://10.42.0.1/</code> — no port
+number needed (port 5720 works as well). An <strong>Offline Player</strong>
+banner confirms the appliance is operating standalone from internal storage.
+Every core feature — browsing the library, queueing tracks, transport, and
+volume control — works completely offline with zero internet access, zero app
+installation, and zero obligation to configure anything further.</p>
+<p class="note"><strong>Mobile data routing on phones:</strong> The appliance's
+network has no internet connection behind it. Modern phones (especially
+Android and iOS) may notice this and quietly send browser requests over
+cellular data instead, causing the page to fail to load. If that happens:
+temporarily turn off mobile/cellular data on your phone before connecting, or
+select the "Stay connected without internet" prompt in your phone's Wi-Fi
+settings.</p>
+
+<h3>Moving to a new Wi-Fi network, or pivoting to a phone hotspot</h3>
+<p>From the same settings panel's <strong>Wi-Fi</strong> section (or by clicking
+<strong>Pivot to Hotspot / Wi-Fi</strong> on the offline banner), you can move
+the appliance onto a venue Wi-Fi network or a phone's personal hotspot:</p>
+<ul>
+  <li><strong>Scanned networks:</strong> Click <strong>Scan for networks</strong>
+    to discover nearby SSIDs, select one, and enter its password.</li>
+  <li><strong>Single-phone hotspot (manual entry):</strong> A smartphone cannot
+    broadcast a Wi-Fi hotspot while joined to Lempi's network at the same time.
+    To connect Lempi to your phone's hotspot from that same phone, click
+    <strong>Enter manually</strong> and type your phone hotspot's exact SSID
+    and password <em>before</em> turning on your phone's hotspot. Click
+    <strong>Connect</strong>, then turn on Personal Hotspot on your phone.
+    Lempi will connect to your hotspot.</li>
+</ul>
+<p><strong>Finding Lempi on a hotspot:</strong> Once Lempi joins your phone's
+hotspot, you can reach it at <code>http://&lt;ip&gt;/</code> (on iOS hotspots,
+Lempi is usually <code>http://172.20.10.x</code>; on Android, check the IP listed
+under Hotspot Connected Devices) or by opening the Lempi mobile app, which
+finds the player automatically via local network broadcast.</p>
+<p class="note"><strong>Confirm-or-revert safety &amp; reload persistence:</strong>
+Switching networks temporarily severs your browser connection. Every switch
+schedules a safety timer (3&ndash;5 minutes). When you rejoin on the new
+network and reload the page, the <strong>"Keep this network?"</strong> banner
+is automatically restored with the live remaining countdown. Click <strong>Yes,
+keep it</strong> to disarm the timer. If unconfirmed or unreachable, the
+appliance automatically reverts to its previous working state (or back to
+<code>Lempi</code> AP mode), so it can never strand itself.</p>
 
 <h3>Play History (Lempi skin only)</h3>
 <p>The clock icon opens a page of everything that's actually played or

@@ -19,20 +19,17 @@ finding it once it's there.</p>
     gear icon) before writing, and fill in a hostname, SSH access if
     you'll ever need it, and the Wi-Fi network's name, password, and
     country — the appliance joins it automatically on first boot, no
-    screen or keyboard involved. Otherwise — moving an already-running
-    appliance into a new home, for instance, where you don't want to
-    re-flash the card just to change networks — join the appliance's
-    <em>own</em> network first: while it's still reachable on its current
-    one, open Settings → Wi-Fi and turn on the access-point toggle before
-    you move it. Once it's in its new home and your phone or laptop joins
-    that broadcast network, the same Settings panel lets you scan for and
-    connect to the real one from there. This has to be turned on
-    <em>before</em> the move — the appliance doesn't broadcast its own
-    network on its own if it simply can't find any it already knows, so
-    reaching Settings at all still means getting it onto some network
-    first, by whichever of these two ways actually applies to your
-    situation. See <strong>Advanced Features</strong> for exactly how
-    that panel works.</li>
+    screen or keyboard involved.
+    Otherwise — taking the appliance travelling or into a new home where
+    it hasn't seen the network yet — just power it on. When it can't find
+    any known network after 45 seconds, it automatically starts its own
+    broadcast network named <code>Lempi</code> (password:
+    <code>Lempi321</code>). Join that network from a phone or laptop, open
+    <code>http://lempi/</code> or <code>http://10.42.0.1/</code>, and either
+    enjoy full offline playback immediately, or open Settings &rarr; Wi-Fi
+    to scan for or manually enter your home network credentials. See
+    <strong>Advanced Features</strong> for full details on offline mode
+    and hotspot pivoting.</li>
   <li><strong>Give it music.</strong> Vipunen (the library-building side)
     only ever runs on an ordinary desktop, never on the appliance itself —
     so building or adding to a library still means following the rest of
