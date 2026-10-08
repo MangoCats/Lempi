@@ -50,13 +50,15 @@ fn parse_hhmm(s: &str) -> Option<i64> {
 /// the player guessing"). Nothing ever wrote it, so every library sat at the
 /// column's own default of 0 and every programme was chosen against raw UTC
 /// clock time instead of the listener's own. The OS already knows its
-/// offset; asking it once at load time is simpler and more honest than
-/// asking a person to type a number nobody enjoys getting right twice a year.
+/// offset; asking it -- at start, and hourly after that, so a change of
+/// daylight saving time lands without a restart -- is simpler and more honest
+/// than asking a person to type a number nobody enjoys getting right twice a
+/// year.
 ///
 /// `None` on a platform this cannot ask, or if the ask fails -- the caller's
 /// job is to fall back to whatever is already stored, not to invent one.
 #[cfg(unix)]
-pub(crate) fn os_utc_offset_minutes() -> Option<i64> {
+pub fn os_utc_offset_minutes() -> Option<i64> {
     // SAFETY: `tm` is zeroed before use and `localtime_r` only ever writes
     // into it; `now` is a valid `time_t` just read from the same call.
     unsafe {
@@ -69,31 +71,35 @@ pub(crate) fn os_utc_offset_minutes() -> Option<i64> {
     }
 }
 
-/// The Windows CRT's `tm` carries no `tm_gmtoff` `[SPEC-DIR-180]`; Windows is
-/// a development convenience here, never the appliance, so this asks
-/// `TimeZoneInfo` once at load time rather than pulling in a timezone crate
-/// for a platform nothing actually ships on. Best-effort like its Unix
-/// sibling: any failure to launch, parse, or a non-UTF-8 answer yields
+/// The Windows CRT's `tm` carries no `tm_gmtoff` `[SPEC-DIR-180]`, so this asks
+/// the system directly. `GetTimeZoneInformation` gives its biases in minutes
+/// west of UTC and says which of the zone's two is in force now; the offset
+/// east of UTC is the negated sum. It replaced a PowerShell child process that cost ~750 ms
+/// at every start and was far too slow to ask hourly (review F-09,
+/// 2026-10-08). Best-effort like its Unix sibling: an invalid answer is
 /// `None`, never a guess.
 #[cfg(windows)]
-pub(crate) fn os_utc_offset_minutes() -> Option<i64> {
-    let out = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "[int][System.TimeZoneInfo]::Local.GetUtcOffset([DateTime]::Now).TotalMinutes",
-        ])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8(out.stdout).ok()?.trim().parse().ok()
+pub fn os_utc_offset_minutes() -> Option<i64> {
+    use windows_sys::Win32::System::Time::{
+        GetTimeZoneInformation, TIME_ZONE_ID_INVALID, TIME_ZONE_INFORMATION,
+    };
+    let mut tz = TIME_ZONE_INFORMATION::default();
+    // SAFETY: `tz` is a valid, zeroed `TIME_ZONE_INFORMATION` the call only
+    // writes into, and it outlives the call.
+    let id = unsafe { GetTimeZoneInformation(&mut tz) };
+    // 0 is TIME_ZONE_ID_UNKNOWN (a zone with no daylight rules), 1 STANDARD,
+    // 2 DAYLIGHT; windows-sys names only the invalid one.
+    let extra = match id {
+        TIME_ZONE_ID_INVALID => return None,
+        1 => tz.StandardBias,
+        2 => tz.DaylightBias,
+        _ => 0,
+    };
+    Some(-(i64::from(tz.Bias) + i64::from(extra)))
 }
 
 #[cfg(not(any(unix, windows)))]
-pub(crate) fn os_utc_offset_minutes() -> Option<i64> {
+pub fn os_utc_offset_minutes() -> Option<i64> {
     None
 }
 
@@ -244,21 +250,26 @@ impl Programs {
 /// all -- relying on that reading as offset 0 to keep their time-of-day
 /// assertions independent of whichever timezone happens to run the suite.
 /// Folding a real OS call into `load` would have made every one of them
-/// depend on the machine running `cargo test`. This is called once, from the
-/// production startup path only, before `load` ever reads the column.
+/// depend on the machine running `cargo test`. It is called from the
+/// production path only: at start, before `load` ever reads the column, and
+/// hourly from `Session` so that a change of daylight saving time reaches the
+/// running Director too.
+///
+/// Returns what the OS said, written or already stored, so that caller can
+/// update the Director it holds; `None` when the OS could not be asked.
 ///
 /// Best-effort like everything else that touches this table off the audio
 /// path: a write that fails here costs a stale offset until the next
 /// restart, not a player that will not start.
-pub fn sync_os_utc_offset(conn: &Connection) {
-    let Some(os) = os_utc_offset_minutes() else { return };
+pub fn sync_os_utc_offset(conn: &Connection) -> Option<i64> {
+    let os = os_utc_offset_minutes()?;
     let stored: i64 = conn
         .query_row("SELECT utc_offset_minutes FROM listener_settings WHERE id = 1", [], |r| {
             r.get(0)
         })
         .unwrap_or(0);
     if os == stored {
-        return;
+        return Some(os);
     }
     // `updated_at` is carried even though nothing reads it back, because the
     // row may not exist yet on a library old enough to predate this column,
@@ -273,6 +284,7 @@ pub fn sync_os_utc_offset(conn: &Connection) {
              updated_at = excluded.updated_at",
         [os],
     );
+    Some(os)
 }
 
 #[cfg(test)]
@@ -323,7 +335,7 @@ mod tests {
         )
         .unwrap();
 
-        sync_os_utc_offset(&c);
+        assert_eq!(sync_os_utc_offset(&c), Some(os), "it reports what the OS said");
         let read = |c: &Connection| -> i64 {
             c.query_row("SELECT utc_offset_minutes FROM listener_settings WHERE id = 1", [], |r| {
                 r.get(0)

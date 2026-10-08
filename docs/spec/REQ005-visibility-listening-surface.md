@@ -70,8 +70,9 @@ the gap was left rather than opening a second writable connection to close it.
 > directly by a great many fixture-backed tests, every one of them relying on
 > an absent `listener_settings` row reading as offset 0 to keep their
 > time-of-day assertions independent of whichever timezone happens to run
-> the suite. The OS ask lives in `PlayerStore::sync_utc_offset`, called once
-> from `Session::open` -- deliberately not `Library::director()`, which was
+> the suite. The OS ask lives in `PlayerStore::sync_utc_offset`, called from
+> `Session::open` and hourly after it, so a change of daylight saving time
+> reaches the running Director -- deliberately not `Library::director()`, which was
 > the first version's mistake: `Library`'s connection is opened read-only
 > ("the player must not be able to corrupt the library"), so a write
 > attempted there fails silently every time. It looked finished, ran on

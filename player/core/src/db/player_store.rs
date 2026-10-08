@@ -1326,8 +1326,9 @@ impl PlayerStore {
     /// looked like it was working, called `sync_os_utc_offset` on schedule,
     /// and never once reached the disk. `PlayerStore` is the one connection
     /// this process holds that can actually write.
-    pub fn sync_utc_offset(&self) {
-        crate::director::program::sync_os_utc_offset(&self.conn);
+    /// Returns what the OS said, for a caller holding a Director to apply.
+    pub fn sync_utc_offset(&self) -> Option<i64> {
+        crate::director::program::sync_os_utc_offset(&self.conn)
     }
 
     /// Remember which speaker was chosen `[PI3-AIM-020]`, `[REQ-VIS-260]`.

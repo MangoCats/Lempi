@@ -246,9 +246,6 @@ otherwise.
   and `--commit` fails and rolls back. It is reachable only as the cargo example
   `restore_listener`, whose default path predates the split `[REQ-LIB-160]`,
   `[PI-DB-030]`.
-* **The UTC offset is read once per process.** An appliance that stays up
-  across a change of daylight saving time runs its programmes an hour off until
-  it restarts `[SPEC-DIR-180]`.
 * **The now-playing panel is blank while MPD is the live backend** — title,
   position and duration come from the local engine's published state, so the
   seek bar has nothing to act on there, though MPD itself can seek.

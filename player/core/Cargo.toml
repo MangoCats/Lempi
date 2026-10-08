@@ -64,7 +64,7 @@ base64 = "0.22"
 
 # The appliance's own local UTC offset `[SPEC-DIR-180]`, for
 # `director/program.rs`. Unix only -- Windows has no `tm_gmtoff` and is asked
-# through `TimeZoneInfo` instead.
+# through `GetTimeZoneInformation` instead, below.
 #
 # **Missed when this crate was split out, and Windows hid it.** `libc` was
 # declared in `player/Cargo.toml` and the code that needs it moved here; the
@@ -75,3 +75,11 @@ base64 = "0.22"
 # compiling is not testing, and compiling *here* is not compiling there.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# The Windows side of the same question `[SPEC-DIR-180]`. It replaced a
+# PowerShell child process that cost ~750 ms at every start (review F-09, 2026-
+# 10-08) and could not have been asked hourly. Already in the lock through
+# `cpal`, so this adds two features and no crate; never built for an
+# appliance or a phone.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Time"] }

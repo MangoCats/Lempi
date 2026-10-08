@@ -232,6 +232,11 @@ fn step_aside() {}
 /// process.
 const KEEP_EXPLANATIONS: usize = 32;
 
+/// How often the OS's UTC offset is asked again `[SPEC-DIR-180]`. A change of
+/// daylight saving time is then at most this late, which is well inside any
+/// programme's own length; asking costs a syscall and one small read.
+const UTC_RESYNC: std::time::Duration = std::time::Duration::from_secs(3600);
+
 #[derive(Default)]
 pub struct ExplanationLog {
     by_passage: HashMap<i64, Explanation>,
@@ -306,6 +311,9 @@ pub struct Session {
     /// **1,724 times in about twenty seconds**. Said once, again only if the
     /// message changes, and once more with the count when it clears.
     refill_failing: Option<(String, u64)>,
+    /// When the OS's UTC offset was last read `[SPEC-DIR-180]`; see
+    /// `resync_utc_offset`.
+    utc_synced: std::time::Instant,
 }
 
 impl Session {
@@ -404,7 +412,42 @@ impl Session {
             rebuild: None,
             saved_queue: Vec::new(),
             refill_failing: None,
+            // `open` has just synced it, above.
+            utc_synced: std::time::Instant::now(),
         })
+    }
+
+    /// Ask the OS for its UTC offset again, at most every `UTC_RESYNC`
+    /// `[SPEC-DIR-180]`.
+    ///
+    /// The offset used to be read once, at start, so an appliance that stayed
+    /// up across a change of daylight saving time chose every programme an hour
+    /// off until something restarted it (review O-06, 2026-10-08).
+    fn resync_utc_offset(&mut self) {
+        if self.utc_synced.elapsed() < UTC_RESYNC {
+            return;
+        }
+        self.utc_synced = std::time::Instant::now();
+        self.apply_utc_offset();
+    }
+
+    /// Store what the OS says, and give it to the Director in hand: a rebuild
+    /// would read it from the store, but the running Director read it once,
+    /// when it was built.
+    fn apply_utc_offset(&mut self) {
+        let Some(offset) = self.decisions.as_ref().and_then(|s| s.sync_utc_offset()) else {
+            return;
+        };
+        if let Some(d) = self.director.as_mut() {
+            let programs = d.programs_mut();
+            if programs.utc_offset_minutes != offset {
+                tracing::info!(
+                    "utc offset is now {offset:+} min (was {:+}); programmes follow it",
+                    programs.utc_offset_minutes
+                );
+                programs.utc_offset_minutes = offset;
+            }
+        }
     }
 
     /// Start a rebuild when asked, and adopt one that has finished
@@ -670,6 +713,7 @@ impl Session {
         // Before anything else, and deliberately before the shortfall check:
         // a rebuild must not start while the queue is short `[IMPL-SUI-075]`.
         self.tend_rebuild(&*engine);
+        self.resync_utc_offset();
 
         // Apply the browser's programme choice before selecting, and report
         // back what is actually in force -- "auto" resolves to a name only the
@@ -1275,6 +1319,26 @@ mod tests {
         assert_eq!(&queued[..2], &[4, 1], "the survivors keep their order");
         assert!(!queued.contains(&999));
         assert_eq!(queued.len(), 5, "and the refill makes the count up");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A running Director takes a changed UTC offset without a rebuild
+    /// `[SPEC-DIR-180]` -- the daylight-saving case, where it used to keep the
+    /// offset it was built with until the player restarted.
+    #[test]
+    fn a_changed_utc_offset_reaches_the_running_director() {
+        let Some(os) = crate::director::program::os_utc_offset_minutes() else {
+            return; // nothing to prove on a platform this cannot ask
+        };
+        let tmp = director_library_on_disk("utc");
+        let mut session = Session::open(&tmp, &tmp, 5).unwrap();
+        let lib = crate::db::Library::open_split(&tmp, &tmp).unwrap();
+        session.director = Some(lib.director().unwrap());
+        session.director.as_mut().unwrap().programs_mut().utc_offset_minutes = os + 60;
+
+        session.apply_utc_offset();
+
+        assert_eq!(session.director.as_ref().unwrap().programs().utc_offset_minutes, os);
         let _ = std::fs::remove_file(&tmp);
     }
 
