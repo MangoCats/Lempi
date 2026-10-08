@@ -95,7 +95,7 @@ it actually opens rather than calling both `--db`:
 
 | Option | What it is | Who takes it |
 |---|---|---|
-| `--listener PATH` | plays, preferences, programmes — the half nothing can rebuild `[REQ-LIB-160]` | `lempi`, `station`, `dircheck`, `mpd_fill`, `mpd_direct`, `mpd_session` |
+| `--listener PATH` | plays, preferences, programmes — the half nothing can rebuild `[REQ-LIB-160]` | `lempi`, `station`, `dircheck`, `restore_listener`, `mpd_fill`, `mpd_direct`, `mpd_session` |
 | `--library PATH` | files, passages, flavor, cover art | all of the above that take both, plus `tagscan`, `flavorcheck`, `relink`, `import_bundle`, `mpd_map`, `mpd_watch` |
 
 On an installation that has not split they are the same file, and a program

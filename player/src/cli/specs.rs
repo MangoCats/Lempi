@@ -63,6 +63,10 @@ pub mod common {
     pub const APPLY: Opt = Opt::flag("--apply", "make the changes; without it nothing is written")
         .short("a")
         .not_from_env();
+    /// Print what there is and stop: `station`'s programme, `restore_listener`'s
+    /// snapshots. Each binary words it with `.saying(..)` and picks its short.
+    pub const LIST: Opt = Opt::flag("--list", "list what there is, and do nothing else")
+        .not_from_env();
     pub const WRITE: Opt =
         Opt::flag("--write", "record the results; without it nothing is written")
             .short("w")
@@ -205,9 +209,7 @@ pub mod station {
     pub const COUNT: Opt =
         Opt::int("--count", "N", "how many passages to select").or("5").was(1)
         .short("c");
-    pub const LIST: Opt = Opt::flag("--list", "print the programme and play nothing")
-        .short("l")
-        .not_from_env();
+    pub const LIST: Opt = common::LIST.saying("print the programme and play nothing").short("l");
 
     pub const SPEC: Cli = Cli {
         program: "station",
@@ -388,6 +390,33 @@ pub mod import_bundle {
         summary: "import a Vipunen bundle, in one transaction or not at all",
         opts: &[LIBRARY, BUNDLE, AUDIO_ROOT, APPLY, INVENTORY],
         notes: &["--bundle is required unless --inventory is given."],
+    };
+}
+
+/// Put a listener snapshot back `[REQ-LIB-160]`: a report by default, the
+/// restore only with `--apply`.
+pub mod restore_listener {
+    use super::common;
+    use crate::cli::{Cli, Opt};
+
+    pub const LISTENER: Opt = common::LISTENER.needed().bootstrap();
+    pub const LIBRARY: Opt = common::LIBRARY.short("lib").bootstrap();
+    pub const SNAPSHOT: Opt =
+        Opt::text("--snapshot", "PATH", "the snapshot to put back").short("s").not_from_env();
+    pub const LIST: Opt = common::LIST
+        .saying("list the snapshots beside the listener file, with what each holds, and stop")
+        .short("ls");
+    pub const APPLY: Opt = common::APPLY;
+
+    pub const SPEC: Cli = Cli {
+        program: "restore_listener",
+        summary: "put a listener snapshot back, re-pointing plays through their recordings",
+        opts: &[LISTENER, LIBRARY, SNAPSHOT, LIST, APPLY],
+        notes: &[
+            "--snapshot and --library are required unless --list is given.",
+            "Without --apply nothing is written: the report is what --apply would do.",
+            "Stop the player first: a running one would write over the restore.",
+        ],
     };
 }
 
@@ -671,6 +700,7 @@ pub const ALL: &[&Cli] = &[
     &tagscan::SPEC,
     &relink::SPEC,
     &import_bundle::SPEC,
+    &restore_listener::SPEC,
     &hash_audio::SPEC,
     &echoprobe::SPEC,
     &delayprobe::SPEC,

@@ -94,7 +94,7 @@ genuinely established names only, and every use of it should read as
 deliberate.
 
 **`[GDE-CLI-105]` A flag that makes a program write is off layer 3
-entirely.** `--apply` in `relink` and `import_bundle`, `--write` in the MPD
+entirely.** `--apply` in `relink`, `import_bundle` and `restore_listener`, `--write` in the MPD
 tools. An exported `LEMPI_APPLY` left in a shell would turn reporting into
 writing, at a distance, with nothing on the command line to show for it.
 These carry `.not_from_env()` and a test holds it.

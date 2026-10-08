@@ -125,6 +125,22 @@ Every option is named — there are no bare arguments `[GDE-CLI-020]`. The old
 form, with the listener database as the first bare word, is still read and
 prints the corrected line on stderr `[GDE-CLI-040]`.
 
+**Putting the listening back.** The player snapshots the listener half at
+startup and hourly into `listener-backups/` beside it `[REQ-LIB-160]`. To
+put one back, stop the player, then:
+
+```
+player/target/release/restore_listener --listener listener.db --list
+player/target/release/restore_listener --listener listener.db --library library.db \
+    --snapshot listener-backups/listener-<stamp>.db
+```
+
+The second line rehearses: it reports how many plays would come back and how
+many would be re-pointed to renumbered passages, and writes nothing. Add
+`--apply` to do it; the current state is saved first as a `prerestore-`
+snapshot, which rotation never removes, so a wrong choice can be undone the
+same way.
+
 ---
 
 ## 5. Run Vipunen
