@@ -375,3 +375,93 @@ body:has(#panel-history:not([hidden])) main {
 #outvol-status { opacity: .85; }
 #bt-timeout-input { width: 5em; padding: .2rem .4rem; }
 
+/* Travel Wi-Fi Failover (Approach 1) & Hotspot Pivot (Approach 3D) [SPEC061] */
+.offline-banner:not([hidden]) {
+  display: block;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--dim) 8%, var(--bg));
+  border-radius: 6px;
+  padding: .8rem 1rem;
+  margin-bottom: 1.5rem;
+}
+.offline-header {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  flex-wrap: wrap;
+}
+.offline-badge {
+  font-size: .6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  padding: .1rem .45rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  color: #4c9a5a;
+}
+.offline-advisory {
+  font-size: .8125rem;
+  color: var(--dim);
+  margin: .4rem 0 .6rem;
+  line-height: 1.45;
+}
+.offline-actions {
+  display: flex;
+  gap: .5rem;
+}
+.offline-actions button {
+  padding: .3rem .7rem;
+  font-size: .8125rem;
+}
+
+.wifi-confirm-banner:not([hidden]) {
+  display: block;
+  border: 1px solid #e0a030;
+  background: color-mix(in srgb, #e0a030 12%, var(--bg));
+  border-radius: 6px;
+  padding: .8rem 1rem;
+  margin-bottom: 1.5rem;
+}
+.wifi-confirm-banner > label {
+  font-weight: 600;
+  margin-right: 1rem;
+}
+#wifi-confirm-countdown {
+  font-size: .8125rem;
+  margin: .4rem 0 0;
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.pivot-modal:not([hidden]) {
+  display: block;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .2);
+  border-radius: 8px;
+  padding: 1.2rem;
+  margin-bottom: 1.5rem;
+}
+.pivot-modal h3 {
+  margin: 0 0 .5rem;
+  font-size: 1rem;
+  color: var(--fg);
+}
+.pivot-countdown {
+  font-size: .875rem;
+  font-weight: 600;
+  color: #e0a030;
+  margin: .6rem 0;
+}
+
+#wifi-manual-ssid-row {
+  margin-bottom: .5rem;
+}
+#wifi-manual-ssid-input {
+  width: 14rem;
+}
+#wifi-connect-password {
+  width: 10rem;
+}
+

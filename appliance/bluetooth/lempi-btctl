@@ -23,6 +23,9 @@ export LC_ALL=C
 VERB="${1:-}"
 ADDR="${2:-}"
 
+. "${LEMPI_COMMON:-/usr/local/lib/lempi-common.sh}" 2>/dev/null ||
+    . "$(dirname "$0")/lempi-common.sh" 2>/dev/null || true
+
 die() { printf '{"ok":false,"error":"%s"}\n' "$1"; exit 1; }
 
 # Every verb but list and scan needs an address, and it is the only untrusted
@@ -62,6 +65,7 @@ NM_DIR="${LEMPI_NM_DIR:-/etc/NetworkManager/system-connections}"
 # Where the AP's shared-mode dnsmasq drop-in goes. A variable only so the tests
 # can redirect it off the real /etc; production is the fixed path.
 DNSMASQ_DIR="${LEMPI_DNSMASQ_DIR:-/etc/NetworkManager/dnsmasq-shared.d}"
+STATE_DIR="${LEMPI_RUN_DIR:-/run/lempi}"
 
 # A WPA-PSK is 8-63 printable ASCII characters, or exactly 64 hex
 # `[SecurityReview2 R1]`. Rejecting everything else -- before it is ever
@@ -712,7 +716,14 @@ case "$VERB" in
     # the caller tells the two apart by this process's own exit status,
     # not by guessing at the first byte of stdout.
     wifi-scan)
-        nmcli -m multiline -f SSID,SIGNAL,SECURITY device wifi list --rescan yes 2>/dev/null \
+        rescan="yes"
+        if type lempi_routed >/dev/null 2>&1; then
+            routed="$(lempi_routed)"
+            if [ -n "$routed" ] && [ "$routed" != "dac" ]; then
+                rescan="no"
+            fi
+        fi
+        nmcli -m multiline -f SSID,SIGNAL,SECURITY device wifi list --rescan "$rescan" 2>/dev/null \
             || die "could not scan -- is the Wi-Fi radio on?"
         ;;
     wifi-known)
@@ -749,12 +760,17 @@ case "$VERB" in
             nmcli connection add type wifi ifname wlan0 con-name "$conn" ssid "$ssid" \
                 autoconnect yes >/dev/null 2>&1 || die "could not create the connection profile"
         fi
+        mkdir -p "$STATE_DIR"
+        now=$(date +%s)
+        expires=$((now + REVERT_MIN * 60))
+        printf 'change_id=%s\nexpires_epoch=%s\nssid=%s\n' "$change_id" "$expires" "$ssid" > "$STATE_DIR/wifi_pending"
         systemd-run --unit="lempi-revert-$change_id" --on-active="${REVERT_MIN}min" \
             /usr/local/bin/lempi-wifi-revert "$prev" "$conn" >/dev/null 2>&1
         if nmcli connection up "$conn" >/dev/null 2>&1; then
             printf '{"ok":true,"change_id":"%s","minutes":%s}\n' "$change_id" "$REVERT_MIN"
         else
             systemctl stop "lempi-revert-$change_id.timer" >/dev/null 2>&1
+            rm -f "$STATE_DIR/wifi_pending"
             nmcli connection modify "$conn" autoconnect no >/dev/null 2>&1
             [ -n "$prev" ] && nmcli connection up "$prev" >/dev/null 2>&1
             die "could not connect -- reverted immediately, nothing was left waiting"
@@ -784,7 +800,22 @@ case "$VERB" in
         # or never existed, is a harmless no-op in systemd, not an error --
         # confirming twice, or confirming late, must never itself fail.
         systemctl stop "lempi-revert-$change_id.timer" >/dev/null 2>&1
+        rm -f "$STATE_DIR/wifi_pending"
         printf '{"ok":true}\n'
+        ;;
+    wifi-pending)
+        if [ -f "$STATE_DIR/wifi_pending" ]; then
+            cid=$(awk -F= '$1=="change_id"{print $2}' "$STATE_DIR/wifi_pending" 2>/dev/null)
+            exp=$(awk -F= '$1=="expires_epoch"{print $2}' "$STATE_DIR/wifi_pending" 2>/dev/null)
+            target=$(awk -F= '$1=="ssid"{print $2}' "$STATE_DIR/wifi_pending" 2>/dev/null)
+            now=$(date +%s)
+            if [ -n "$exp" ] && [ "$exp" -gt "$now" ] && [ -n "$cid" ]; then
+                rem=$((exp - now))
+                printf '{"ok":true,"pending":true,"change_id":"%s","remaining_seconds":%s,"ssid":"%s"}\n' "$cid" "$rem" "$target"
+                exit 0
+            fi
+        fi
+        printf '{"ok":true,"pending":false}\n'
         ;;
     mesh-pair)
         # Open the mesh pairing window `[SecurityReview3 R3]` -- the local
@@ -893,14 +924,40 @@ case "$VERB" in
         mkdir -p "$DNSMASQ_DIR"
         printf 'address=/lempi/10.42.0.1\naddress=/lempi.lan/10.42.0.1\n' \
             > "$DNSMASQ_DIR/lempi.conf"
+        mkdir -p "$STATE_DIR"
+        now=$(date +%s)
+        expires=$((now + REVERT_MIN * 60))
+        printf 'change_id=%s\nexpires_epoch=%s\nssid=%s\n' "$change_id" "$expires" "$ssid" > "$STATE_DIR/wifi_pending"
         systemd-run --unit="lempi-revert-$change_id" --on-active="${REVERT_MIN}min" \
             /usr/local/bin/lempi-wifi-revert "$prev" lempi-ap >/dev/null 2>&1
         if nmcli connection up lempi-ap >/dev/null 2>&1; then
             printf '{"ok":true,"change_id":"%s","minutes":%s}\n' "$change_id" "$REVERT_MIN"
         else
             systemctl stop "lempi-revert-$change_id.timer" >/dev/null 2>&1
+            rm -f "$STATE_DIR/wifi_pending"
             [ -n "$prev" ] && nmcli connection up "$prev" >/dev/null 2>&1
             die "could not start the access point -- reverted immediately"
+        fi
+        ;;
+    ap-failover)
+        # Autonomous standing bringup without revert timer [SPEC-WFO-010], [IMPL-WFO-012]
+        ssid="${2:-Lempi}"
+        password="Lempi321"
+        mkdir -p "$DNSMASQ_DIR"
+        printf 'address=/lempi/10.42.0.1\naddress=/lempi.lan/10.42.0.1\n' \
+            > "$DNSMASQ_DIR/lempi.conf"
+        if [ -z "$(nmcli -g connection.uuid connection show lempi-ap 2>/dev/null)" ]; then
+            nmcli connection add type wifi ifname wlan0 con-name lempi-ap autoconnect no ssid "$ssid" \
+                802-11-wireless.mode ap 802-11-wireless.band bg \
+                ipv4.method shared ipv4.addresses 10.42.0.1/24 \
+                wifi-sec.key-mgmt wpa-psk wifi-sec.psk 00000000 \
+                >/dev/null 2>&1 || die "could not create the access point profile"
+            set_psk lempi-ap "$password" || die "could not set the access point key"
+        fi
+        if nmcli connection up lempi-ap >/dev/null 2>&1; then
+            printf '{"ok":true,"ap":"active"}\n'
+        else
+            die "could not bring up the access point"
         fi
         ;;
     ap-stop)

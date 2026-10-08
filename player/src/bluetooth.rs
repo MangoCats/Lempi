@@ -408,6 +408,13 @@ pub fn wifi_confirm(change_id: &str) -> Result<serde_json::Value, String> {
     serde_json::from_str(text.trim()).map_err(|_| helper_error(&out))
 }
 
+/// Query whether a Wi-Fi/AP confirm-or-revert countdown is currently in flight `[SPEC061]`.
+pub fn wifi_pending() -> Result<serde_json::Value, String> {
+    let out = run_helper(&["wifi-pending"])?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str(text.trim()).map_err(|_| helper_error(&out))
+}
+
 /// Delete a known-network profile -- refused by the helper for whichever
 /// one is currently active `[SPEC034]`.
 pub fn wifi_forget(name: &str) -> Result<serde_json::Value, String> {

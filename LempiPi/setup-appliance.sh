@@ -317,7 +317,7 @@ fi
 echo "helpers"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 for f in lempi-underruns lempi-led-boot \
-         lempi-wifi-revert lempi-radio-test lempi-startup-sample \
+         lempi-wifi-revert lempi-wifi-failover lempi-radio-test lempi-startup-sample \
          lempi-hci-capture lempi-linkstate lempi-afh-seed lempi-vitals; do
     if [ -f "$HERE/$f" ]; then
         if ! cmp -s "$HERE/$f" "/usr/local/bin/$f"; then

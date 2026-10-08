@@ -1,0 +1,9 @@
+# A travel-safe appliance unit: fails over to AP when disconnected [SPEC061], [IMPL022].
+[Unit]
+Description=Failover to Lempi access point when disconnected
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lempi-wifi-failover
+TimeoutStartSec=60

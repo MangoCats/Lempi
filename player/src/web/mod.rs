@@ -555,6 +555,7 @@ fn appliance_routes(router: Router<Ui>) -> Router<Ui> {
         .route("/led/:state", post(set_led))
         .route("/wifi/scan", get(scan))
         .route("/wifi/known", get(known))
+        .route("/wifi/pending", get(pending))
         .route("/wifi/connect", post(connect))
         .route("/wifi/confirm/:change_id", post(confirm))
         .route("/wifi/forget/:name", post(forget))
@@ -1067,6 +1068,9 @@ mod tests {
         let skin = SKINS.iter().find(|s| s.name == "lempi").expect("skin exists");
         assert!(skin.html.contains(r#"id="wifi-known-list""#), "lempi has no known-networks list");
         assert!(skin.html.contains(r#"id="wifi-confirm""#), "lempi has no confirm-or-revert banner");
+        assert!(skin.html.contains(r#"id="offline-banner""#), "lempi has no offline banner");
+        assert!(skin.html.contains(r#"id="wifi-pivot-modal""#), "lempi has no wifi pivot modal");
+        assert!(skin.html.contains(r#"id="wifi-manual-entry-btn""#), "lempi has no manual wifi entry button");
         // Both password fields (an existing network's, and this appliance's
         // own AP's) get a visibility toggle -- typed once, from a router
         // label, with no server-side check to catch a mistake before the
@@ -1078,6 +1082,7 @@ mod tests {
         for route in [
             "/wifi/known",
             "/wifi/scan",
+            "/wifi/pending",
             "/wifi/connect",
             "/wifi/confirm/",
             "/wifi/forget/",

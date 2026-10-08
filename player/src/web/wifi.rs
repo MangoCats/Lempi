@@ -73,6 +73,11 @@ pub(super) async fn confirm(Path(change_id): Path<String>) -> Response {
     reply(tokio::task::spawn_blocking(move || bluetooth::wifi_confirm(&change_id)).await)
 }
 
+/// Query active Wi-Fi/AP confirm-or-revert countdown and change id `[SPEC061]`.
+pub(super) async fn pending() -> Response {
+    reply(tokio::task::spawn_blocking(bluetooth::wifi_pending).await)
+}
+
 /// Delete a known-network profile; refused for whichever one is active
 /// `[SPEC034]`.
 pub(super) async fn forget(Path(name): Path<String>) -> Response {

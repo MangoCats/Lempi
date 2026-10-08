@@ -1,0 +1,71 @@
+#!/bin/sh
+# Keep the appliance reachable by failing over to lempi-ap when disconnected [SPEC061], [IMPL022].
+#
+# Runs periodically via lempi-wifi-failover.timer.
+# Evaluates link state, boot grace period, rfkill status, and debounce thresholds
+# before executing lempi-btctl ap-failover without scheduling a revert timer.
+set -u
+
+STATE_DIR="${LEMPI_RUN_DIR:-/run/lempi}"
+RFKILL_DIR="${SYS_CLASS_RFKILL:-/sys/class/rfkill}"
+PROC_UPTIME="${PROC_UPTIME:-/proc/uptime}"
+BTCTL="${LEMPI_BTCTL:-/usr/local/bin/lempi-btctl}"
+
+# 1. Radio State Guard: if Wi-Fi is soft-blocked by operator intent, honor it.
+if [ -d "$RFKILL_DIR" ]; then
+    for r in "$RFKILL_DIR"/rfkill*; do
+        [ -f "$r/type" ] || continue
+        if [ "$(cat "$r/type" 2>/dev/null)" = "wlan" ]; then
+            if [ "$(cat "$r/soft" 2>/dev/null)" = "1" ]; then
+                exit 0
+            fi
+        fi
+    done
+fi
+
+# 2. In-Flight Revert Guard: if a user network switch is underway, defer to it.
+if systemctl list-timers 'lempi-revert-*' 2>/dev/null | grep -q 'lempi-revert-'; then
+    exit 0
+fi
+
+# 3. Boot Grace Period (45 seconds): allow time for home Wi-Fi association on boot.
+UPTIME=$(cut -d. -f1 "$PROC_UPTIME" 2>/dev/null || echo 0)
+if [ "$UPTIME" -lt 45 ]; then
+    exit 0
+fi
+
+# 4. Connection Check: if connected, connecting, or already in AP mode, do nothing.
+ACTIVE_CONNS=$(nmcli -t -f NAME,TYPE,ACTIVE connection show 2>/dev/null || true)
+if printf '%s\n' "$ACTIVE_CONNS" | grep -q '^lempi-ap:.*:yes$'; then
+    rm -f "$STATE_DIR/wifi_disconnected_since"
+    exit 0
+fi
+
+DEV_STATE=$(nmcli -t -f DEVICE,STATE dev 2>/dev/null | grep '^wlan0:' || true)
+case "$DEV_STATE" in
+    wlan0:connected|wlan0:connecting)
+        rm -f "$STATE_DIR/wifi_disconnected_since"
+        exit 0
+        ;;
+esac
+
+# 5. Debounce Tracker: wait 30 continuous seconds of disconnection before acting.
+mkdir -p "$STATE_DIR"
+NOW=$(date +%s)
+DEBOUNCE_FILE="$STATE_DIR/wifi_disconnected_since"
+
+if [ ! -f "$DEBOUNCE_FILE" ]; then
+    printf '%s\n' "$NOW" > "$DEBOUNCE_FILE"
+    exit 0
+fi
+
+SINCE=$(cat "$DEBOUNCE_FILE" 2>/dev/null || echo "$NOW")
+ELAPSED=$((NOW - SINCE))
+
+if [ "$ELAPSED" -ge 30 ]; then
+    # 6. Autonomous Bringup: standing AP bringup without revert timer.
+    "$BTCTL" ap-failover >/dev/null 2>&1 || exit 1
+    rm -f "$DEBOUNCE_FILE"
+fi
+
+exit 0

@@ -1,0 +1,9 @@
+# Periodic connectivity check and AP failover [SPEC061], [IMPL022].
+[Unit]
+Description=Check Wi-Fi connectivity and failover to AP when offline
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=20s
+AccuracySec=5s
+[Install]
+WantedBy=timers.target

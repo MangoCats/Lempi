@@ -218,3 +218,132 @@ assert_in "$OUT" "could not set the network key" "a set_psk failure is reported"
 if [ -e "$VT_STATE/nm/wifi-Orphan.nmconnection" ]; then bad "the placeholder profile is deleted" "it remains"; else ok "the placeholder profile is deleted"; fi
 unset NM_UUID_MISMATCH
 teardown
+
+# --- wifi-pending and ap-failover [SPEC061], [IMPL022] ------------------
+
+# wifi-pending returns false when no switch is pending.
+setup
+OUT=$(btctl wifi-pending)
+assert_in "$OUT" '"pending":false' "wifi-pending returns false when no switch is pending"
+teardown
+
+# wifi-pending returns true with remaining seconds when a switch is pending.
+setup
+now=$(date +%s)
+exp=$((now + 120))
+printf 'change_id=test123\nexpires_epoch=%s\nssid=Hotspot\n' "$exp" > "$LEMPI_RUN_DIR/wifi_pending"
+OUT=$(btctl wifi-pending)
+assert_in "$OUT" '"pending":true' "wifi-pending returns true when a switch is pending"
+assert_in "$OUT" '"change_id":"test123"' "wifi-pending returns change_id"
+assert_in "$OUT" '"ssid":"Hotspot"' "wifi-pending returns target ssid"
+teardown
+
+# wifi-pending returns false when pending switch is expired.
+setup
+now=$(date +%s)
+exp=$((now - 10))
+printf 'change_id=test123\nexpires_epoch=%s\nssid=Hotspot\n' "$exp" > "$LEMPI_RUN_DIR/wifi_pending"
+OUT=$(btctl wifi-pending)
+assert_in "$OUT" '"pending":false' "wifi-pending returns false when switch is expired"
+teardown
+
+# wifi-confirm removes wifi_pending file.
+setup
+touch "$LEMPI_RUN_DIR/wifi_pending"
+OUT=$(btctl wifi-confirm test123)
+assert_in "$OUT" '"ok":true' "wifi-confirm succeeds"
+if [ ! -f "$LEMPI_RUN_DIR/wifi_pending" ]; then
+    ok "wifi-confirm removes wifi_pending file"
+else
+    bad "wifi-confirm removes wifi_pending file" "file still exists"
+fi
+teardown
+
+# ap-failover performs standing bringup without scheduling a revert timer.
+setup
+export LEMPI_NM_DIR="$VT_STATE/nm" LEMPI_DNSMASQ_DIR="$VT_STATE/dnsmasq"
+OUT=$(btctl ap-failover)
+assert_in "$OUT" '"ok":true' "ap-failover succeeds"
+assert_not_called "systemd-run" "ap-failover does not schedule a revert timer"
+assert_called "nmcli connection up lempi-ap" "ap-failover brings up lempi-ap"
+if [ -f "$LEMPI_DNSMASQ_DIR/lempi.conf" ]; then
+    ok "ap-failover writes dnsmasq configuration"
+else
+    bad "ap-failover writes dnsmasq configuration" "missing"
+fi
+teardown
+
+# lempi-wifi-revert never sets autoconnect yes on lempi-ap and cleans up pending state.
+setup
+touch "$LEMPI_RUN_DIR/wifi_pending"
+OUT=$(sh "$PI/lempi-wifi-revert" lempi-ap TargetNet)
+assert_not_called "nmcli connection modify lempi-ap autoconnect yes" "lempi-wifi-revert never sets autoconnect yes on lempi-ap"
+assert_called "nmcli connection up lempi-ap" "lempi-wifi-revert restores lempi-ap"
+assert_called "nmcli connection modify TargetNet autoconnect no" "lempi-wifi-revert sets target autoconnect no"
+if [ ! -f "$LEMPI_RUN_DIR/wifi_pending" ]; then
+    ok "lempi-wifi-revert cleans up wifi_pending"
+else
+    bad "lempi-wifi-revert cleans up wifi_pending" "file remains"
+fi
+teardown
+
+# lempi-wifi-revert restores autoconnect yes on normal infrastructure profile.
+setup
+OUT=$(sh "$PI/lempi-wifi-revert" HomeNet TargetNet)
+assert_called "nmcli connection modify HomeNet autoconnect yes" "lempi-wifi-revert restores autoconnect yes on home connection"
+assert_called "nmcli connection up HomeNet" "lempi-wifi-revert restores home connection"
+teardown
+
+# lempi-wifi-failover honors rfkill soft-block.
+setup
+mkdir -p "$VT_STATE/rfkill/rfkill0"
+printf 'wlan\n' > "$VT_STATE/rfkill/rfkill0/type"
+printf '1\n' > "$VT_STATE/rfkill/rfkill0/soft"
+SYS_CLASS_RFKILL="$VT_STATE/rfkill" sh "$BT/lempi-wifi-failover"
+assert_not_called "ap-failover" "lempi-wifi-failover honors rfkill soft block"
+teardown
+
+# lempi-wifi-failover honors boot grace period.
+setup
+printf '20.5 10.2\n' > "$VT_STATE/uptime"
+PROC_UPTIME="$VT_STATE/uptime" sh "$BT/lempi-wifi-failover"
+assert_not_called "ap-failover" "lempi-wifi-failover waits out boot grace period"
+teardown
+
+# lempi-wifi-failover takes no action when connected.
+setup
+printf '60.0 50.0\n' > "$VT_STATE/uptime"
+printf 'wlan0:connected\n' > "$VT_STATE/nm_dev_state"
+PROC_UPTIME="$VT_STATE/uptime" sh "$BT/lempi-wifi-failover"
+assert_not_called "ap-failover" "lempi-wifi-failover takes no action when connected"
+teardown
+
+# lempi-wifi-failover records timestamp on first drop without failing over yet.
+setup
+printf '60.0 50.0\n' > "$VT_STATE/uptime"
+printf 'wlan0:disconnected\n' > "$VT_STATE/nm_dev_state"
+PROC_UPTIME="$VT_STATE/uptime" LEMPI_BTCTL="$BT/lempi-btctl" sh "$BT/lempi-wifi-failover"
+if [ -f "$LEMPI_RUN_DIR/wifi_disconnected_since" ]; then
+    ok "lempi-wifi-failover records first drop timestamp"
+else
+    bad "lempi-wifi-failover records first drop timestamp" "debounce file not written"
+fi
+assert_not_called "ap-failover" "and does not fail over on first drop"
+teardown
+
+# lempi-wifi-failover brings up lempi-ap once debounce threshold is met.
+setup
+export LEMPI_NM_DIR="$VT_STATE/nm" LEMPI_DNSMASQ_DIR="$VT_STATE/dnsmasq"
+printf '60.0 50.0\n' > "$VT_STATE/uptime"
+printf 'wlan0:disconnected\n' > "$VT_STATE/nm_dev_state"
+now=$(date +%s)
+past=$((now - 35))
+printf '%s\n' "$past" > "$LEMPI_RUN_DIR/wifi_disconnected_since"
+PROC_UPTIME="$VT_STATE/uptime" LEMPI_BTCTL="$BT/lempi-btctl" sh "$BT/lempi-wifi-failover"
+assert_called "nmcli connection up lempi-ap" "lempi-wifi-failover brings up lempi-ap after debounce threshold"
+if [ ! -f "$LEMPI_RUN_DIR/wifi_disconnected_since" ]; then
+    ok "lempi-wifi-failover removes debounce file on failover"
+else
+    bad "lempi-wifi-failover removes debounce file on failover" "debounce file remains"
+fi
+teardown

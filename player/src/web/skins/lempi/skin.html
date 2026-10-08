@@ -1,4 +1,35 @@
 <main>
+  <div id="offline-banner" class="offline-banner" hidden>
+    <div class="offline-header">
+      <strong>Offline Player</strong>
+      <span class="offline-badge">Direct Playback via Lempi AP</span>
+    </div>
+    <p class="offline-advisory">
+      Operating standalone from internal storage. If controls fail to open or pause on lock, temporarily disable mobile data or select &ldquo;Stay connected without internet&rdquo;. Access directly at <code>http://10.42.0.1</code> or <code>http://lempi</code> on port 80.
+    </p>
+    <div class="offline-actions">
+      <button type="button" id="wifi-pivot-btn">Pivot to Hotspot / Wi-Fi</button>
+      <button type="button" id="offline-dismiss-btn">Dismiss</button>
+    </div>
+  </div>
+
+  <div class="setting wifi-confirm-banner" id="wifi-confirm" hidden>
+    <label>Keep this network?</label>
+    <span>
+      <button type="button" id="wifi-confirm-yes">Yes, keep it</button>
+    </span>
+    <p id="wifi-confirm-countdown"></p>
+  </div>
+
+  <div id="wifi-pivot-modal" class="pivot-modal" hidden>
+    <h3>Connecting to <b id="pivot-target-ssid"></b></h3>
+    <p id="pivot-instructions">
+      If using a single phone, enable Personal Hotspot now. Then reconnect your phone to the hotspot and open <code>http://&lt;ip&gt;</code> (iOS: <code>http://172.20.10.x</code>, or check Android Hotspot Connected Devices) or use the Lempi mobile app.
+    </p>
+    <p id="pivot-countdown" class="pivot-countdown"></p>
+    <button type="button" id="pivot-dismiss-btn">Close instructions</button>
+  </div>
+
   <div id="panel-main">
   <!-- The playing track is a selectable row like the queued ones: the panel
        below explains whichever is picked, and "the one playing" has to be
@@ -289,10 +320,15 @@
       <ul id="wifi-known-list" aria-live="polite"></ul>
       <span>
         <button type="button" id="wifi-scan-btn">Scan for networks</button>
+        <button type="button" id="wifi-manual-entry-btn">Enter manually</button>
       </span>
       <ul id="wifi-scan-list" aria-live="polite"></ul>
       <div id="wifi-connect-form" hidden>
-        <label for="wifi-connect-password">Password for <b id="wifi-connect-ssid"></b></label>
+        <div id="wifi-manual-ssid-row" hidden>
+          <label for="wifi-manual-ssid-input">Network name (SSID)</label>
+          <input type="text" id="wifi-manual-ssid-input" placeholder="e.g. My Phone Hotspot">
+        </div>
+        <label for="wifi-connect-password" id="wifi-connect-password-label">Password for <b id="wifi-connect-ssid"></b></label>
         <span>
           <input type="password" id="wifi-connect-password" placeholder="leave blank if open">
           <button type="button" class="copy" id="wifi-connect-password-toggle"
@@ -313,13 +349,6 @@
       </span>
       <p id="ap-hint">Off by default. When on, reach this page from a phone
          joined to that network at <code>http://lempi:5720/</code>.</p>
-    </div>
-    <div class="setting" id="wifi-confirm" hidden>
-      <label>Keep this network?</label>
-      <span>
-        <button type="button" id="wifi-confirm-yes">Yes, keep it</button>
-      </span>
-      <p id="wifi-confirm-countdown"></p>
     </div>
     <div class="setting" id="led-row">
       <label for="led-mode">Status LED</label>

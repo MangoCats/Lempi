@@ -37,6 +37,7 @@ bluetooth_items() {
     file_item "lempi-speaker" $B/lempi-speaker.sh /usr/local/bin/lempi-speaker 755
     file_item "lempi-btwatch" $B/lempi-btwatch.sh /usr/local/bin/lempi-btwatch 755
     file_item "lempi-bt-agent" $B/lempi-bt-agent /usr/local/bin/lempi-bt-agent 755
+    file_item "lempi-wifi-failover" $B/lempi-wifi-failover /usr/local/bin/lempi-wifi-failover 755
 
     # The privileged helper's one rule [PI-SET-030]: the web process gets these
     # verbs and no more. lp3-wifi had none until 2026-10-02 -- pi's blanket
@@ -49,7 +50,8 @@ bluetooth_items() {
     # watchdog's routine ticks kept out of the journal [PI3-FOUND-760], which
     # lp3-wifi lacked.
     for u in lempi-speaker.service lempi-speaker.timer lempi-btwatch.service \
-             lempi-btwatch.timer lempi-bt-agent.service; do
+             lempi-btwatch.timer lempi-bt-agent.service \
+             lempi-wifi-failover.service lempi-wifi-failover.timer; do
         file_item "$u" $B/$u /etc/systemd/system/$u 644
     done
     file_item "/run/lempi for the agent" $B/lempi-tmpfiles.conf /etc/tmpfiles.d/lempi.conf 644
@@ -70,7 +72,7 @@ bluetooth_items() {
          "sudo systemctl enable upower.service && sudo systemctl add-wants multi-user.target upower.service"
     item "lempi-bt-agent enabled" "test -L $P/etc/systemd/system/multi-user.target.wants/lempi-bt-agent.service" \
          "sudo systemctl enable lempi-bt-agent.service"
-    for t in lempi-speaker lempi-btwatch; do
+    for t in lempi-speaker lempi-btwatch lempi-wifi-failover; do
         item "$t.timer enabled" "test -L $P/etc/systemd/system/timers.target.wants/$t.timer" \
              "sudo systemctl enable $t.timer"
     done

@@ -21,6 +21,12 @@ case "$*" in
   *"-t -f DEVICE,NAME connection show --active"*)
     [ -f "$VT_STATE/nm_active" ] && printf 'wlan0:%s\n' "$(cat "$VT_STATE/nm_active")"
     exit 0 ;;
+  *"-t -f NAME,TYPE,ACTIVE connection show"*)
+    [ -f "$VT_STATE/nm_active_conns" ] && cat "$VT_STATE/nm_active_conns"
+    exit 0 ;;
+  *"-t -f DEVICE,STATE dev"*)
+    [ -f "$VT_STATE/nm_dev_state" ] && cat "$VT_STATE/nm_dev_state"
+    exit 0 ;;
 esac
 
 # Everything else dispatches on the connection subcommand.

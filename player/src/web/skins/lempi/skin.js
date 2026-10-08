@@ -1022,13 +1022,53 @@
   const wifiKnownList = $('wifi-known-list');
   const wifiScanList = $('wifi-scan-list');
   const wifiScanBtn = $('wifi-scan-btn');
+  const wifiManualEntryBtn = $('wifi-manual-entry-btn');
   const wifiConnectForm = $('wifi-connect-form');
+  const wifiManualSsidRow = $('wifi-manual-ssid-row');
+  const wifiManualSsidInput = $('wifi-manual-ssid-input');
   const wifiConnectSsid = $('wifi-connect-ssid');
+  const wifiConnectPasswordLabel = $('wifi-connect-password-label');
   const wifiConnectPassword = $('wifi-connect-password');
   const apSsid = $('ap-ssid');
   const apPassword = $('ap-password');
   const apStartBtn = $('ap-start-btn');
   const apStopBtn = $('ap-stop-btn');
+
+  const offlineBanner = $('offline-banner');
+  const wifiPivotBtn = $('wifi-pivot-btn');
+  const offlineDismissBtn = $('offline-dismiss-btn');
+  const wifiPivotModal = $('wifi-pivot-modal');
+  const pivotTargetSsid = $('pivot-target-ssid');
+  const pivotCountdown = $('pivot-countdown');
+  const pivotDismissBtn = $('pivot-dismiss-btn');
+
+  if (offlineDismissBtn) {
+    offlineDismissBtn.onclick = () => { setHidden(offlineBanner, true); };
+  }
+  if (pivotDismissBtn) {
+    pivotDismissBtn.onclick = () => { setHidden(wifiPivotModal, true); };
+  }
+  if (wifiPivotBtn) {
+    wifiPivotBtn.onclick = () => {
+      if ($('panel-settings').hidden) {
+        gear.click();
+      }
+      $('wifi-row').scrollIntoView({ behavior: 'smooth' });
+      wifiScanBtn.click();
+    };
+  }
+  if (wifiManualEntryBtn) {
+    wifiManualEntryBtn.onclick = () => {
+      wifiConnectForm.dataset.manual = '1';
+      setHidden(wifiManualSsidRow, false);
+      setText(wifiConnectSsid, '');
+      if (wifiConnectPasswordLabel) setText(wifiConnectPasswordLabel, 'Password:');
+      setHidden(wifiConnectForm, false);
+      wifiManualSsidInput.value = '';
+      wifiConnectPassword.value = '';
+      wifiManualSsidInput.focus();
+    };
+  }
 
   // A password field with no way to check what you actually typed means the
   // only way to catch a mistake is to retype it and hope -- worse than usual
@@ -1052,10 +1092,30 @@
   const wifiConfirmCountdown = $('wifi-confirm-countdown');
 
   let confirmTimer = null;
+  let pivotTimer = null;
 
-  function showWifiConfirm(changeId, minutes) {
+  function showPivotModal(ssid, minutes) {
+    clearInterval(pivotTimer);
+    if (!wifiPivotModal) return;
+    setText(pivotTargetSsid, ssid);
+    setHidden(wifiPivotModal, false);
+    let remaining = (minutes || 3) * 60;
+    const tick = () => {
+      const m = Math.floor(remaining / 60), s = remaining % 60;
+      setText(pivotCountdown, `Safety timer: reverting automatically in ${m}:${String(s).padStart(2, '0')} unless confirmed.`);
+      if (remaining <= 0) {
+        clearInterval(pivotTimer);
+        setHidden(wifiPivotModal, true);
+      }
+      remaining--;
+    };
+    tick();
+    pivotTimer = setInterval(tick, 1000);
+  }
+
+  function showWifiConfirm(changeId, minutes, exactSeconds) {
     clearInterval(confirmTimer);
-    let remaining = minutes * 60;
+    let remaining = exactSeconds != null ? exactSeconds : minutes * 60;
     setHidden(wifiConfirmBox, false);
     const tick = () => {
       const m = Math.floor(remaining / 60), s = remaining % 60;
@@ -1072,10 +1132,34 @@
         await fetch(`/wifi/confirm/${changeId}`, { method: 'POST' });
       } finally {
         clearInterval(confirmTimer);
+        clearInterval(pivotTimer);
         setHidden(wifiConfirmBox, true);
+        if (wifiPivotModal) setHidden(wifiPivotModal, true);
         wifiConfirmYes.disabled = false;
+        checkWifiState();
       }
     };
+  }
+
+  async function checkWifiPending() {
+    try {
+      const r = await fetch('/wifi/pending');
+      if (!r.ok) return;
+      const data = await r.json();
+      if (data && data.pending && data.change_id) {
+        const secs = data.remaining_seconds != null ? data.remaining_seconds : 180;
+        showWifiConfirm(data.change_id, Math.max(1, Math.ceil(secs / 60)), secs);
+      }
+    } catch { /* unsupported or network down */ }
+  }
+
+  async function checkWifiState() {
+    try {
+      const rows = await (await fetch('/wifi/known')).json();
+      const activeRow = rows.find(r => r.active === 'yes');
+      const onOwnAp = activeRow && activeRow.name === 'lempi-ap';
+      setHidden(offlineBanner, !onOwnAp);
+    } catch { /* unsupported */ }
   }
 
   // One fetch feeds both the known-networks list and "what's active right
@@ -1171,6 +1255,7 @@
     const onOwnAp = activeRow && activeRow.name === 'lempi-ap';
     setHidden(apStartBtn, !!onOwnAp);
     setHidden(apStopBtn, !onOwnAp);
+    setHidden(offlineBanner, !onOwnAp);
   }
 
   async function wifiScan() {
@@ -1188,8 +1273,11 @@
       btn.type = 'button';
       setText(btn, `${r.ssid} (${r.security || 'open'}, ${r.signal}%)`);
       btn.onclick = () => {
-        setText(wifiConnectSsid, r.ssid);
+        wifiConnectForm.dataset.manual = '0';
         wifiConnectForm.dataset.ssid = r.ssid;
+        if (wifiManualSsidRow) setHidden(wifiManualSsidRow, true);
+        setText(wifiConnectSsid, r.ssid);
+        if (wifiConnectPasswordLabel) setText(wifiConnectPasswordLabel, `Password for ${r.ssid}:`);
         setHidden(wifiConnectForm, false);
         wifiConnectPassword.value = '';
         wifiConnectPassword.focus();
@@ -1207,9 +1295,17 @@
       setText(wifiScanBtn, 'Scan for networks');
     });
   };
-  $('wifi-connect-cancel').onclick = () => { wifiConnectForm.hidden = true; };
+  $('wifi-connect-cancel').onclick = () => {
+    wifiConnectForm.hidden = true;
+    if (wifiManualSsidRow) wifiManualSsidRow.hidden = true;
+  };
   $('wifi-connect-go').onclick = async () => {
-    const ssid = wifiConnectForm.dataset.ssid;
+    const isManual = wifiConnectForm.dataset.manual === '1';
+    const ssid = isManual ? (wifiManualSsidInput ? wifiManualSsidInput.value.trim() : '') : wifiConnectForm.dataset.ssid;
+    if (!ssid) {
+      alert('Please enter a network name (SSID)');
+      return;
+    }
     const btn = $('wifi-connect-go');
     btn.disabled = true;
     try {
@@ -1221,6 +1317,7 @@
       if (body.error) throw new Error(body.error);
       setHidden(wifiConnectForm, true);
       showWifiConfirm(body.change_id, body.minutes);
+      showPivotModal(ssid, body.minutes);
     } catch (e) {
       alert(`Could not connect: ${e.message}`);
     } finally {
@@ -1259,6 +1356,9 @@
       apStopBtn.disabled = false;
     }
   };
+
+  checkWifiPending();
+  checkWifiState();
 
   // Populated when the panel is opened rather than at load: it costs a
   // subprocess on the appliance, and most sessions never open the settings.

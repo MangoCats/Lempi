@@ -21,7 +21,8 @@ NEW="${2:-}"
 [ -n "$NEW" ] && nmcli connection modify "$NEW" autoconnect no >/dev/null 2>&1
 
 if [ -n "$PREV" ]; then
-    nmcli connection modify "$PREV" autoconnect yes >/dev/null 2>&1
+    # Do not poison lempi-ap with autoconnect yes [SPEC-WFO-080], [IMPL-WFO-015].
+    [ "$PREV" != "lempi-ap" ] && nmcli connection modify "$PREV" autoconnect yes >/dev/null 2>&1
     nmcli connection up "$PREV" >/dev/null 2>&1
 else
     # Nothing was active before this change at all -- the safest place to
@@ -30,3 +31,5 @@ else
     # depend on.
     nmcli connection up lempi-ap >/dev/null 2>&1
 fi
+
+rm -f "${LEMPI_RUN_DIR:-/run/lempi}/wifi_pending"
