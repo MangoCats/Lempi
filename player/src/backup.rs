@@ -354,6 +354,17 @@ pub fn restore(snapshot: &Path, listener: &Path, library: &Path, commit: bool)
             .map_err(q)
     };
     let recordings = format!("{lib}.passage_recordings");
+    // A play to re-point: its recording is in the library, and its passage no
+    // longer carries it. A play whose passage still does stays where it is --
+    // a recording on several passages (an album cut and a single, say) would
+    // otherwise have its plays moved between them. One clause, used for the
+    // count and the write, so the rehearsal's number is the restore's.
+    let moved = format!(
+        "h.mbid IS NOT NULL \
+         AND EXISTS (SELECT 1 FROM {recordings} pr WHERE pr.mbid = h.mbid) \
+         AND NOT EXISTS (SELECT 1 FROM {recordings} pr \
+                          WHERE pr.mbid = h.mbid AND pr.passage_id = h.passage_id)"
+    );
 
     let mut report = Report { committed: commit, ..Default::default() };
 
@@ -373,11 +384,7 @@ pub fn restore(snapshot: &Path, listener: &Path, library: &Path, commit: bool)
             .map_err(q)?;
         report.remapped = conn
             .query_row(
-                &format!(
-                    "SELECT COUNT(*) FROM snap.listener_play_history h \
-                       JOIN {recordings} pr ON pr.mbid = h.mbid \
-                      WHERE h.mbid IS NOT NULL AND pr.passage_id <> h.passage_id"
-                ),
+                &format!("SELECT COUNT(*) FROM snap.listener_play_history h WHERE {moved}"),
                 [], |r| r.get(0))
             .map_err(q)?;
         report.orphaned = conn
@@ -417,14 +424,17 @@ pub fn restore(snapshot: &Path, listener: &Path, library: &Path, commit: bool)
             .map_err(|e| DbError::Query(format!("restore {table}: {e}")))?;
             n += 1;
         }
-        // Re-point the history through recordings, which outlive renumbering.
+        // Re-point the history through recordings, which outlive renumbering:
+        // to the passage that is most nearly the recording itself (a medley
+        // holding it carries a smaller weight), then the lowest id, so the
+        // choice is the same every time.
         if has_hist {
             conn.execute_batch(&format!(
                 "UPDATE main.listener_play_history AS h \
                     SET passage_id = (SELECT pr.passage_id FROM {recordings} pr \
-                                       WHERE pr.mbid = h.mbid LIMIT 1) \
-                  WHERE h.mbid IS NOT NULL \
-                    AND EXISTS (SELECT 1 FROM {recordings} pr WHERE pr.mbid = h.mbid);"
+                                       WHERE pr.mbid = h.mbid \
+                                       ORDER BY pr.weight DESC, pr.passage_id LIMIT 1) \
+                  WHERE {moved};"
             ))
             .map_err(|e| DbError::Query(format!("remap history: {e}")))?;
         }
@@ -691,6 +701,53 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM passage_recordings", [], |r| r.get(0))
             .unwrap();
         assert_eq!(recs, 2, "the catalogue is untouched");
+        drop((l, c));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// A play whose passage still carries its recording is not moved, and each
+    /// play counts once however many passages hold its recording. Measured on
+    /// a real snapshot: 42,583 "re-pointed" of 39,408 plays, because the count
+    /// was a join and the write moved every play to an arbitrary passage of
+    /// its recording.
+    #[test]
+    fn a_restore_moves_only_the_plays_whose_passage_lost_their_recording() {
+        let tmp = scratch("rs-keep");
+        let listener = tmp.join("listener.db");
+        let library = tmp.join("library.db");
+        let l = Connection::open(&listener).unwrap();
+        l.execute_batch(
+            "CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
+                 played_at INTEGER, passage_id INTEGER, mbid TEXT);
+             INSERT INTO listener_play_history VALUES (1, 100, 20, 'rec-a');
+             INSERT INTO listener_play_history VALUES (2, 200, 15, 'rec-a');",
+        )
+        .unwrap();
+        // rec-a is an album cut (10), a single (20) and part of a medley (5);
+        // passage 15 is gone.
+        let c = Connection::open(&library).unwrap();
+        c.execute_batch(
+            "CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL);
+             INSERT INTO passage_recordings VALUES (5, 'rec-a', 0.3);
+             INSERT INTO passage_recordings VALUES (10, 'rec-a', 1.0);
+             INSERT INTO passage_recordings VALUES (20, 'rec-a', 1.0);",
+        )
+        .unwrap();
+        let snap = snapshot(&listener).expect("snapshot");
+
+        let dry = restore(&snap, &listener, &library, false).expect("rehearsal");
+        assert_eq!(dry.plays, 2);
+        assert_eq!(dry.remapped, 1, "only the play on the vanished passage moves, once");
+
+        let done = restore(&snap, &listener, &library, true).expect("restore");
+        assert_eq!(done.remapped, dry.remapped);
+        let at = |id: i64| -> i64 {
+            l.query_row("SELECT passage_id FROM listener_play_history WHERE play_id=?1",
+                        [id], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(at(1), 20, "the single still carries the recording: the play stays");
+        assert_eq!(at(2), 10, "the whole recording before the medley, then the lowest id");
         drop((l, c));
         std::fs::remove_dir_all(&tmp).ok();
     }
