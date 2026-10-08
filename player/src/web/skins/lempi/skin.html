@@ -430,6 +430,19 @@
       <span id="mesh-buttons"></span>
       <p id="mesh-note"></p>
     </div>
+    <!-- [REQ-LIB-160]: the listening's snapshots, and a restore staged for
+         the next start -- never run beneath the player serving this page. -->
+    <div class="setting" id="backups-row">
+      <label>Listening backups</label>
+      <span><small id="bk-count">&mdash;</small></span>
+      <p>Your plays, preferences, likes and programmes are copied aside every
+         hour: one a day is kept for a week, one a month for a year, and one a
+         year for good. Choose one to see what putting it back would do.
+         Nothing changes until Lempi restarts, and the listening as it is then
+         is kept first, so putting one back can itself be undone.</p>
+      <p id="bk-status" aria-live="polite" hidden></p>
+      <ul id="bk-list" aria-live="polite"></ul>
+    </div>
     <div class="setting" id="restart">
       <label>Restart the player</label>
       <span><button type="button" id="rs-ask">Restart Lempi</button></span>

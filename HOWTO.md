@@ -139,7 +139,11 @@ The second line rehearses: it reports how many plays would come back and how
 many would be re-pointed to renumbered passages, and writes nothing. Add
 `--apply` to do it; the current state is saved first as a `prerestore-`
 snapshot, which rotation never removes, so a wrong choice can be undone the
-same way.
+same way. `--snapshot` takes a name as `--list` prints it, or a path.
+
+Without a shell, the Lempi skin's Settings has a **Listening backups** row
+that does the same: it stages the restore, and the player puts it back the
+next time it starts.
 
 ---
 

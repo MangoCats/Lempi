@@ -402,7 +402,7 @@ pub mod restore_listener {
     pub const LISTENER: Opt = common::LISTENER.needed().bootstrap();
     pub const LIBRARY: Opt = common::LIBRARY.short("lib").bootstrap();
     pub const SNAPSHOT: Opt =
-        Opt::text("--snapshot", "PATH", "the snapshot to put back").short("s").not_from_env();
+        Opt::text("--snapshot", "PATH", "the snapshot to put back: a path, or a name --list shows").short("s").not_from_env();
     pub const LIST: Opt = common::LIST
         .saying("list the snapshots beside the listener file, with what each holds, and stop")
         .short("ls");
@@ -416,6 +416,7 @@ pub mod restore_listener {
             "--snapshot and --library are required unless --list is given.",
             "Without --apply nothing is written: the report is what --apply would do.",
             "Stop the player first: a running one would write over the restore.",
+            "Without a shell, the Lempi skin's Settings stages a restore for the player's next start.",
         ],
     };
 }

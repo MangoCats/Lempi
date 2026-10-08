@@ -884,6 +884,107 @@
     setHidden($('pw-confirm'), true);
   };
 
+  // --------------------------------------------------------------- backups
+  // `[REQ-LIB-160]`. A restore is staged, never run beneath this player: it
+  // writes the same file as it plays and keeps its queue and its Director in
+  // memory. The player puts a staged one back as it next starts, after
+  // keeping the listening as it was.
+  const bkWhen = secs => new Date(secs * 1000).toLocaleString(undefined, {
+    weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+  const bkNum = x => Number(x).toLocaleString();
+
+  function bkButton(label, onclick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.onclick = onclick;
+    return b;
+  }
+
+  // What is staged, or else what the last restore did.
+  function bkStatus(body) {
+    const p = $('bk-status');
+    p.textContent = '';
+    if (body.staged) {
+      const copy = body.snapshots.find(x => x.name === body.staged);
+      const b = document.createElement('b');
+      b.textContent = 'Staged: ';
+      p.append(b, `the copy from ${copy ? bkWhen(copy.taken_at) : body.staged} is put back when Lempi next starts. `);
+      if (caps.restart !== false) {
+        // The restart row's own two steps, not a second way to restart.
+        p.append(bkButton('Restart now', () => {
+          $('rs-ask').onclick();
+          $('rs-confirm').scrollIntoView({ block: 'nearest' });
+        }), ' ');
+      } else {
+        p.append('Restart Lempi to put it back. ');
+      }
+      const cancel = bkButton('Cancel', async () => {
+        cancel.disabled = true;
+        await fetch('/backups/stage', { method: 'DELETE' });
+        backups();
+      });
+      p.append(cancel);
+    } else if (body.last) {
+      p.append(`Last restore, ${bkWhen(body.last.at)}: ${body.last.said}`);
+    }
+    setHidden(p, !body.staged && !body.last);
+  }
+
+  function bkRow(copy, staged) {
+    const li = document.createElement('li');
+    const b = document.createElement('b');
+    b.textContent = bkWhen(copy.taken_at);
+    li.append(b, copy.error
+      ? ` — cannot be read: ${copy.error}`
+      : ` — ${bkNum(copy.plays)} plays, ${bkNum(copy.preferences)} preferences` +
+        `${copy.before_restore ? ' (kept from before a restore)' : ''} `);
+    if (copy.error || copy.name === staged) return li;
+    const said = document.createElement('small');
+    const put = bkButton('Put this back at restart', async () => {
+      put.disabled = true;
+      const r = await fetch(`/backups/${encodeURIComponent(copy.name)}/stage`, { method: 'POST' });
+      if (r.ok) { backups(); return; }
+      setText(said, `Not staged: ${await r.text()}`);
+      put.disabled = false;
+    });
+    setHidden(put, true);
+    const ask = bkButton('What would this do?', async () => {
+      ask.disabled = true;
+      const r = await fetch(`/backups/${encodeURIComponent(copy.name)}/rehearse`, { method: 'POST' });
+      if (r.ok) {
+        const x = await r.json();
+        setText(said, `Puts back ${bkNum(x.plays)} plays` +
+          (x.remapped ? `, ${bkNum(x.remapped)} of them moved to tracks renumbered since` : '') +
+          (x.orphaned ? `, and keeps ${bkNum(x.orphaned)} whose recording has left the library` : '') +
+          '. Anything played after this copy is set aside with the listening as it is now.');
+        setHidden(put, false);
+      } else {
+        setText(said, `Cannot be put back: ${await r.text()}`);
+      }
+      ask.disabled = false;
+    });
+    li.append(ask, ' ', said, ' ', put);
+    return li;
+  }
+
+  async function backups() {
+    let body;
+    try {
+      const r = await fetch('/backups');
+      if (!r.ok) return;
+      body = await r.json();
+    } catch { /* leave whatever it last showed */ return; }
+    const n = body.snapshots.length;
+    setText($('bk-count'), n ? `${n} kept` : 'none yet');
+    bkStatus(body);
+    const list = $('bk-list');
+    list.textContent = '';
+    for (const copy of body.snapshots) list.appendChild(bkRow(copy, body.staged));
+  }
+
   // ---------------------------------------------------------------- radios
   // A blocked radio looks exactly like a broken button `[PI3-FOUND-050]`: the
   // speaker was paired, bonded, trusted and flashing, and Connect did nothing
@@ -1370,6 +1471,7 @@
       if (caps.bluetooth !== false) refresh();
       if (caps.led !== false) led();
       if (caps.wifi !== false) wifiKnown();
+      backups();
     }
   });
 

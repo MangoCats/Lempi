@@ -16,6 +16,8 @@
 //! and holds its queue and its Director in memory, so a restore beneath it would
 //! be partly undone and partly ignored. On Linux this refuses while a `lempi`
 //! process is running; elsewhere it cannot tell, and says so `[GDE-DEP-060]`.
+//! Without a shell, the Lempi skin's Settings stages a restore instead, and
+//! the player puts it back as it next starts (`backup::apply_staged`).
 //!
 //! Until 2026-10-08 this was the cargo example `restore_listener`.
 
@@ -50,27 +52,27 @@ fn player_running() -> Option<bool> {
     None
 }
 
+/// Newest first, as the Backups page lists them: the same `backup::held`.
 fn list(listener: &Path) {
     let dir = backup::dir_for(listener);
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    let snaps = backup::held(listener);
+    if snaps.is_empty() {
         eprintln!("no snapshots in {}", dir.display());
         std::process::exit(1);
-    };
-    let mut snaps: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|x| x == "db"))
-        .collect();
-    snaps.sort();
+    }
     println!("{} snapshot(s) in {}", snaps.len(), dir.display());
-    for s in snaps.iter().rev() {
-        let name = s.file_name().unwrap_or_default().to_string_lossy();
-        match backup::inspect(s) {
+    for s in &snaps {
+        let name = &s.name;
+        match backup::inspect(&s.path) {
             Ok(i) => println!(
                 "  {name}  {} plays, {} preferences, last play {}",
                 i.plays, i.preferences, when(i.last_play)
             ),
             Err(e) => println!("  {name}  UNREADABLE: {e}"),
         }
+    }
+    if let Some(name) = backup::staged(listener) {
+        println!("staged to be put back at the player's next start: {name}");
     }
 }
 
@@ -85,8 +87,13 @@ fn main() {
 
     // The two conditions the grammar cannot state: required unless `--list`
     // already returned above.
-    let Some(snap) = args.text(&opt::SNAPSHOT).map(PathBuf::from) else {
+    let Some(snap) = args.text(&opt::SNAPSHOT) else {
         opt::SPEC.fail("`--snapshot` is required unless `--list` is given")
+    };
+    // A path, or a name as `--list` prints it.
+    let snap = match PathBuf::from(snap) {
+        p if p.exists() => p,
+        p => backup::find(&listener, snap).unwrap_or(p),
     };
     let Some(library) = args.text(&opt::LIBRARY).map(PathBuf::from) else {
         opt::SPEC.fail("`--library` is required unless `--list` is given")
@@ -111,7 +118,8 @@ fn main() {
                 eprintln!(
                     "refusing: a `lempi` process is running, and it would write over the \
                      restore and keep its own state. Stop it first (on an appliance, \
-                     `sudo systemctl stop lempi`)."
+                     `sudo systemctl stop lempi`), or stage the restore from the Lempi \
+                     skin's Settings, which the player puts back as it next starts."
                 );
                 std::process::exit(1);
             }

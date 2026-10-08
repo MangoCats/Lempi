@@ -199,6 +199,17 @@ impl Player {
             .build()
             .map_err(StartError::Spawn)?;
 
+        // A restore staged from the Backups page goes back now, before the
+        // backup thread or the session opens the listener file, and at most
+        // once `[REQ-LIB-160]`.
+        if let Some(o) = crate::backup::apply_staged(&cfg.listener, &cfg.library) {
+            if o.restored {
+                tracing::info!("restore: {}", o.said);
+            } else {
+                tracing::warn!("restore: {}", o.said);
+            }
+        }
+
         let (stop_background, stopped) = channel::<()>();
         if cfg.backup {
             spawn_backup(cfg.listener.clone(), stopped);

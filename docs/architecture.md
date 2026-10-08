@@ -265,7 +265,7 @@ Each is specified in its own document; this table is where to start reading.
 | Queued shutdown | `player/src/engine/` | [SPEC059](spec/SPEC059-queued-shutdown.md) |
 | Holding a passage back | `player/core/src/director/library.rs`, `tools/passage_hold.py` | [SPEC057](spec/SPEC057-holding-a-passage-back.md) |
 | CD import | `tools/cd_import.py`, and the console's import page | [SPEC056](spec/SPEC056-cd-import.md), [GUIDE037](GUIDE037-ripping-a-cd.md) |
-| Listener backups | `player/src/backup.rs` | `[REQ-LIB-160]` |
+| Listener backups, and restoring one | `player/src/backup.rs`, `player/src/bin/restore_listener.rs`, `player/src/web/backups.rs` | `[REQ-LIB-160]` |
 
 ---
 

@@ -33,6 +33,7 @@ use crate::session::{Explanations, SharedControls};
 
 #[cfg(feature = "appliance")]
 mod bluetooth;
+mod backups;
 mod browse;
 pub mod access;
 pub mod capabilities;
@@ -532,6 +533,12 @@ pub fn router(ui: Ui) -> Router {
         .route("/covers/:on", post(set_covers))
         .route("/lyricscache/:on", post(set_lyrics_cache))
         .route("/lyricssidecar/:on", post(set_lyrics_sidecar))
+        // The Backups row `[REQ-LIB-160]`: a restore is staged for the next
+        // start, never run beneath this player.
+        .route("/backups", get(backups::backups))
+        .route("/backups/stage", axum::routing::delete(backups::unstage))
+        .route("/backups/:name/rehearse", post(backups::rehearse))
+        .route("/backups/:name/stage", post(backups::stage))
         .with_state(ui)
 }
 

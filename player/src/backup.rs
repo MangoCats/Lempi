@@ -493,6 +493,157 @@ fn copy_for(conn: &Connection, table: &str) -> Result<String, DbError> {
     )))
 }
 
+// --- Choosing a snapshot, and a restore staged for the next start ----------
+//
+// A page can show the snapshots and what putting one back would do, but it
+// cannot restore beneath the player serving it: the player writes the
+// listener file as it plays and holds its queue and its Director in memory,
+// so a restore under it would be partly overwritten and partly ignored. The
+// page stages one instead, and the player applies it as it next starts,
+// before anything opens the file to write `[REQ-LIB-160]`.
+
+/// The stage: the name of the snapshot to put back at the next start.
+const STAGED: &str = "restore-staged";
+/// What the last staged restore did, for the page to say.
+const OUTCOME: &str = "restore-outcome";
+
+/// One snapshot, by the name a person picks it by.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Held {
+    pub name: String,
+    pub path: PathBuf,
+    /// When it was taken, in seconds since the epoch.
+    pub taken_at: i64,
+    /// A copy taken before a restore, which rotation never prunes.
+    pub before_restore: bool,
+}
+
+/// The snapshots beside `listener`, newest first: the hourly rotation and the
+/// copies taken before a restore. Nothing else there -- a `.part`, the stage
+/// -- is offered.
+pub fn held(listener: &Path) -> Vec<Held> {
+    let Ok(entries) = std::fs::read_dir(dir_for(listener)) else { return Vec::new() };
+    let mut out: Vec<Held> = entries
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            let name = path.file_name()?.to_str()?.to_string();
+            let (before_restore, rest) = match name.strip_prefix("listener-") {
+                Some(rest) => (false, rest),
+                None => (true, name.strip_prefix("prerestore-")?),
+            };
+            let taken_at = rest.strip_suffix(".db")?.parse().ok()?;
+            Some(Held { name, path, taken_at, before_restore })
+        })
+        .collect();
+    out.sort_by(|a, b| b.taken_at.cmp(&a.taken_at).then_with(|| a.name.cmp(&b.name)));
+    out
+}
+
+/// A snapshot by the name [`held`] gives it, and by no other. A page sends
+/// this name, so a path, or anything not in the directory, finds nothing.
+pub fn find(listener: &Path, name: &str) -> Option<PathBuf> {
+    held(listener).into_iter().find(|h| h.name == name).map(|h| h.path)
+}
+
+/// Stage `name` to be put back at the next start, and say what that will do.
+/// Rehearsed first: a snapshot that cannot be restored is refused now, while
+/// someone is looking, not at a start nobody is watching.
+pub fn stage(listener: &Path, library: &Path, name: &str) -> Result<Report, DbError> {
+    let path = find(listener, name)
+        .ok_or_else(|| DbError::Query(format!("no snapshot called {name}")))?;
+    let report = restore(&path, listener, library, false)?;
+    let dir = dir_for(listener);
+    let part = dir.join(format!("{STAGED}.part"));
+    std::fs::write(&part, name)
+        .and_then(|_| std::fs::rename(&part, dir.join(STAGED)))
+        .map_err(|e| DbError::Open(format!("stage {name}: {e}")))?;
+    Ok(report)
+}
+
+/// Take the stage down. `Ok(false)` when nothing was staged.
+pub fn unstage(listener: &Path) -> Result<bool, DbError> {
+    match std::fs::remove_file(dir_for(listener).join(STAGED)) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(DbError::Open(format!("unstage: {e}"))),
+    }
+}
+
+/// The snapshot staged, if any.
+pub fn staged(listener: &Path) -> Option<String> {
+    let name = std::fs::read_to_string(dir_for(listener).join(STAGED)).ok()?;
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// What a staged restore did.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Outcome {
+    /// When, in seconds since the epoch.
+    pub at: i64,
+    pub restored: bool,
+    /// One line, for the log and the page alike.
+    pub said: String,
+}
+
+/// What the last staged restore did, if one has run here.
+pub fn last_outcome(listener: &Path) -> Option<Outcome> {
+    let s = std::fs::read_to_string(dir_for(listener).join(OUTCOME)).ok()?;
+    let mut parts = s.trim_end().splitn(3, '\t');
+    let at = parts.next()?.parse().ok()?;
+    let restored = parts.next()? == "restored";
+    Some(Outcome { at, restored, said: parts.next()?.to_string() })
+}
+
+/// Put back a staged restore, if there is one. Called as the player starts,
+/// before the backup thread or the session opens the listener file.
+///
+/// **At most once.** The stage comes down before anything else, and if it
+/// cannot, nothing is restored: a stage that outlived its restore would put
+/// the same snapshot back at every start, over everything played since.
+pub fn apply_staged(listener: &Path, library: &Path) -> Option<Outcome> {
+    let name = staged(listener)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let (restored, said) = match unstage(listener) {
+        Err(e) => (false, format!(
+            "the restore of {name} was not attempted: its stage could not be removed ({e}), \
+             and left in place it would restore again at every start")),
+        Ok(_) => put_back(listener, library, &name),
+    };
+    let outcome = Outcome { at: now, restored, said };
+    let line = format!("{}\t{}\t{}\n", outcome.at,
+                       if outcome.restored { "restored" } else { "not restored" }, outcome.said);
+    if let Err(e) = std::fs::write(dir_for(listener).join(OUTCOME), line) {
+        tracing::warn!("could not record the restore's outcome for the page: {e}");
+    }
+    Some(outcome)
+}
+
+fn put_back(listener: &Path, library: &Path, name: &str) -> (bool, String) {
+    let Some(path) = find(listener, name) else {
+        return (false, format!("{name} was staged to be put back, but it is no longer there"));
+    };
+    let before = match snapshot_before_restore(listener) {
+        Ok(p) => p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+        Err(e) => {
+            return (false, format!(
+                "{name} was not put back: the listening as it was could not be saved first ({e})"));
+        }
+    };
+    match restore(&path, listener, library, true) {
+        Ok(r) => (true, format!(
+            "put back {name}: {} plays, {} re-pointed to new passage ids, {} orphaned; \
+             the listening as it was is kept as {before}",
+            r.plays, r.remapped, r.orphaned)),
+        Err(e) => (false, format!(
+            "{name} was not put back, and nothing changed ({e}); the listening is also kept \
+             as {before}")),
+    }
+}
+
 /// Thin the snapshots to the retention ladder.
 ///
 /// One per day for the last week, one per month for the last year, one per
@@ -865,6 +1016,86 @@ mod tests {
             .query_row("SELECT mbid FROM listener_likes", [], |r| r.get(0))
             .unwrap();
         assert_eq!(kept, "keep");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// A split pair with one play, snapshotted.
+    fn one_play(tag: &str) -> (PathBuf, PathBuf, PathBuf, String) {
+        let tmp = scratch(tag);
+        let (listener, library) = (tmp.join("listener.db"), tmp.join("library.db"));
+        Connection::open(&listener).unwrap().execute_batch(
+            "CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
+                 played_at INTEGER, passage_id INTEGER, mbid TEXT);
+             INSERT INTO listener_play_history VALUES (1, 100, 10, 'rec-a');",
+        ).unwrap();
+        Connection::open(&library).unwrap().execute_batch(
+            "CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL);
+             INSERT INTO passage_recordings VALUES (10, 'rec-a', 1.0);",
+        ).unwrap();
+        let snap = snapshot(&listener).unwrap();
+        let name = snap.file_name().unwrap().to_string_lossy().into_owned();
+        (tmp, listener, library, name)
+    }
+
+    fn plays(listener: &Path) -> i64 {
+        Connection::open(listener).unwrap()
+            .query_row("SELECT COUNT(*) FROM listener_play_history", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// The page's restore: staged, then put back as the player starts, with
+    /// the listening as it was kept first -- and only once, since a stage left
+    /// behind would put the same snapshot back at every start.
+    #[test]
+    fn a_staged_restore_is_put_back_once_at_the_next_start() {
+        let (tmp, listener, library, name) = one_play("stage");
+        Connection::open(&listener).unwrap()
+            .execute_batch("DELETE FROM listener_play_history;").unwrap();
+        assert!(apply_staged(&listener, &library).is_none(), "nothing staged, nothing done");
+
+        let report = stage(&listener, &library, &name).expect("stage");
+        assert_eq!(report.plays, 1, "staging says what the restore will do");
+        assert_eq!(staged(&listener).as_deref(), Some(name.as_str()));
+        assert_eq!(plays(&listener), 0, "staging writes nothing to the listening");
+
+        let o = apply_staged(&listener, &library).expect("applied");
+        assert!(o.restored, "{}", o.said);
+        assert_eq!(plays(&listener), 1);
+        assert!(staged(&listener).is_none(), "the stage is gone");
+        assert!(held(&listener).iter().any(|h| h.before_restore), "the state before was kept");
+        assert_eq!(last_outcome(&listener).as_ref(), Some(&o), "and the page can say what happened");
+
+        Connection::open(&listener).unwrap()
+            .execute_batch("INSERT INTO listener_play_history VALUES (2, 200, 10, 'rec-a');").unwrap();
+        assert!(apply_staged(&listener, &library).is_none(), "a second start restores nothing");
+        assert_eq!(plays(&listener), 2, "and the play since is still there");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// A staged snapshot that has gone by the next start is said, not retried.
+    #[test]
+    fn a_staged_snapshot_that_has_gone_is_reported_once() {
+        let (tmp, listener, library, name) = one_play("stage-gone");
+        stage(&listener, &library, &name).expect("stage");
+        std::fs::remove_file(dir_for(&listener).join(&name)).unwrap();
+        let o = apply_staged(&listener, &library).expect("reported");
+        assert!(!o.restored && o.said.contains("no longer there"), "{}", o.said);
+        assert!(staged(&listener).is_none());
+        assert!(!held(&listener).iter().any(|h| h.before_restore), "nothing to keep a copy for");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Only a name the directory lists can be staged, and a snapshot whose
+    /// rehearsal fails is refused while someone is looking.
+    #[test]
+    fn only_a_listed_restorable_snapshot_can_be_staged() {
+        let (tmp, listener, library, _) = one_play("stage-refuse");
+        for name in ["listener-9.db", "../listener.db", "restore-staged", ""] {
+            assert!(stage(&listener, &library, name).is_err(), "{name:?} was staged");
+        }
+        std::fs::write(dir_for(&listener).join("listener-5.db"), b"not a database").unwrap();
+        assert!(stage(&listener, &library, "listener-5.db").is_err(), "an unreadable snapshot");
+        assert!(staged(&listener).is_none());
         std::fs::remove_dir_all(&tmp).ok();
     }
 
