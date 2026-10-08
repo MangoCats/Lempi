@@ -96,6 +96,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `PRE` — What an appliance's startup path depends on, verified and reported at every boot rather than assumed, see [PI026](../LempiPi/PI026-startup-preflight.md)
 - `OPS` — An appliance measured **in service** rather than at build time: the health baseline, the false alarms, the standing findings. Prefixed per machine (`BOS` for `bose`), because the numbers are only meaningful against one box — see [BOSE004](../BosePi/BOSE004-operating-health.md)
 - `POV` — Per-Output Volume: independent volume state, memory, and persistence across DAC and Bluetooth outputs, see [SPEC060](spec/SPEC060-per-output-volume.md)
+- `WFO` — Travel Wi-Fi Failover: autonomous access point failover, standalone offline operation, and hotspot pivot, see [SPEC061](spec/SPEC061-travel-wifi-failover.md)
 
 ### Development Guidance Domains (`GDE`)
 - `BMK` — MuLibPlay benchmark measurements
@@ -220,6 +221,7 @@ grep -rn "SPEC-PD" docs/
 | `[FLT-*]` | The fleet: each node's role, databases, build and standing issues; mirrored via git to the source hosts | [FLEET001-the-fleet.md](../fleet/FLEET001-the-fleet.md) |
 | `[SPEC-FREQ-*]` | How often a subject has played, by window and by who chose each play — built | [SPEC031-play-frequency.md](spec/SPEC031-play-frequency.md) |
 | `[SPEC-WIFI-010..050]` | Wi-Fi network switching and access-point mode on the Pi appliance, confirm-or-revert safety, on NetworkManager, plain `http://lempi/` on :80 — built | [SPEC034-wifi-configuration.md](spec/SPEC034-wifi-configuration.md) |
+| `[SPEC-WFO-010..080]` | Autonomous travel Wi-Fi failover, standalone offline operation, and hotspot pivot — design | [SPEC061-travel-wifi-failover.md](spec/SPEC061-travel-wifi-failover.md) |
 | `[SPEC-DF-030]` | Identity keys: audio_md5 / recording_mbid / file_path | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
 | `[SPEC-DF-035]` | Local sequence numbers: when a `passage_id` may be used | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#2-identity--three-keys-three-scopes) |
 | `[SPEC-DF-060]` | Metadata transports: embedded tags, sidecar, db migration | [SPEC006-data-flow-and-portability.md](spec/SPEC006-data-flow-and-portability.md#4-three-transports) |
