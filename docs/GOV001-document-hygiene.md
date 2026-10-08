@@ -149,7 +149,7 @@ grep -rn "SPEC-PD" docs/
 | `[GDE-FEX-*]` | Feature extraction strategy (P0 critical path) — current strategy only; reverse-engineering and validation history split out per `[GOV-DOC-050]` | [GUIDE003-feature-extraction-strategy.md](GUIDE003-feature-extraction-strategy.md) |
 | `[GDE-AND-*]` | Phone ports (Android, iOS): fork vs ground-up, and the licence that decides it | [GUIDE004-phone-port-strategy.md](GUIDE004-phone-port-strategy.md) |
 | `[GDE-APP-*]` | The Android app: the decisions its requirements wait on, each with a recommendation | [GUIDE034-android-decisions-before-requirements.md](GUIDE034-android-decisions-before-requirements.md) |
-| `[GDE-NDS-*]` | Node discovery on a LAN — the sketch [SPEC050](spec/SPEC050-node-discovery.md) (`[SPEC-DSC-*]`) was built from, 2026-09-27; its open questions are settled there | [GUIDE035-node-discovery.md](GUIDE035-node-discovery.md) |
+| `[GDE-NDS-*]` | Node discovery on a LAN — the sketch [SPEC050](spec/SPEC050-node-discovery.md) (`[SPEC-DSC-*]`) was built from; its open questions are settled there | [GUIDE035-node-discovery.md](GUIDE035-node-discovery.md) |
 | `[GDE-OCP-*]` | Node occasion policies — a profanity ceiling and ramp, curve overrides; designed, not scheduled | [GUIDE036-node-occasion-policies.md](GUIDE036-node-occasion-policies.md) |
 | `[GDE-HST-*]` | What the player assumes about its host; groundwork for a phone target; logging with `tracing` | [GUIDE033-the-player-without-an-appliance.md](GUIDE033-the-player-without-an-appliance.md) |
 | `[GDE-CLD-*]` | Hosted flavor lookup instead of Vipunen on the device | [GUIDE005-flavor-service.md](GUIDE005-flavor-service.md) |

@@ -271,15 +271,10 @@ a log line to stand in for at a point of no easy return.
 
 ## 19. What remains
 
-- **The three tools' query-level ATTACH support** (§16) — real, scoped,
-  understood, not yet built. Does not block the migration — mesh-sync
-  catalog diffing already works against a split peer per `[§4.1]`; only
-  `remote_flags.py`/`sync_preferences.py`'s own cross-table fetch is
-  affected, and neither runs unattended.
-- **Hearing it play** — the last step, and the only one that has never
-  been substitutable by a green test or an active service.
-
-Scope for the first real implementation and migration pass stays lempi02w
-only; `bose` and local stay single-file and untouched until lempi02w has
-proven the split in practice.
+Nothing from this build. The three tools' query-level ATTACH support (§16)
+is built: `remote_flags.py` attaches the peer's listener half,
+`sync_preferences.py` takes `--remote-listener`, and `export_flags.py` opens
+both halves through `lempi_db`. Every node plays from the split pair,
+`lempi02w` first, and the single-file mode was removed on 2026-10-02
+`[IMPL-DBSPLIT-025]` — FLEET001 `[FLT-DAT-010]` has where each half lives.
 

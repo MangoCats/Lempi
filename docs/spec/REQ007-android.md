@@ -2,7 +2,7 @@
 
 **Requirements Specification — Tier 1, draft**
 
-What Lempi on an Android phone must do, written 2026-09-25 from the decisions in [GUIDE034](../GUIDE034-android-decisions-before-requirements.md), all answered by the maintainer that day. **Draft until the device spike `[GDE-APP-020]` has run**: several requirements below state a behaviour whose feasibility that spike measures, and `[REQ-AND-530]` makes it the gate on this document leaving draft.
+What Lempi on an Android phone must do, written 2026-09-25 from the decisions in [GUIDE034](../GUIDE034-android-decisions-before-requirements.md), all answered by the maintainer that day. **Draft.** The device spike `[GDE-APP-020]`, which `[REQ-AND-530]` made the first gate on leaving draft, ran and passed on 2026-09-26 ([LOG013](../LOG013-the-android-spike.md)); what is left before this leaves draft is §7.
 
 The README ranks mobile *Future / Post-V1*. Nothing here schedules the work; it makes the work specifiable.
 

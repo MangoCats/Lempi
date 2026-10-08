@@ -1,6 +1,6 @@
 # GUIDE035: Node Discovery
 
-**Development Guidance — a future feature, recorded so it is not lost: how Lempi and Vipunen nodes could find each other on a LAN**
+**Development Guidance — the sketch node discovery was built from: how Lempi and Vipunen nodes find each other on a LAN. Built as [SPEC050](spec/SPEC050-node-discovery.md), which settles the three questions in §3**
 
 *Taken up 2026-09-27:* discovery is now specified on top of mesh membership, in [SPEC049](spec/SPEC049-mesh-membership-and-trust.md) §5, which also settles `[GDE-NDS-900]`. This guide stays as the idea's record.
 
@@ -44,4 +44,4 @@ Recorded 2026-09-25 from the maintainer's description, **as an idea for later an
 
 ---
 
-**Traceability:** `[GDE-NDS-010..920]` · a future idea, not a requirement · touches `[SPEC-ECHO-100]`, `[SPEC-WIFI-030]`, `[REQ-AND-286]`, `[REQ-AND-287]`
+**Traceability:** `[GDE-NDS-010..920]` · built as [SPEC050](spec/SPEC050-node-discovery.md) · touches `[SPEC-ECHO-100]`, `[SPEC-WIFI-030]`, `[REQ-AND-286]`, `[REQ-AND-287]`

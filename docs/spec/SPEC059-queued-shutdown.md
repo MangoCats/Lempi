@@ -1,6 +1,6 @@
 # SPEC059: Queued Shutdown Event
 
-**Design Specification — Tier 2 · written 2026-10-06 · for `[REQ-QSD-010]`**
+**Design Specification — Tier 2 · written 2026-10-06 · for `[REQ-QSD-010]` · built 2026-10-07 (`3e094ed`)**
 
 A mechanism allowing a listener using the MuLibPlay skin to enqueue an appliance shutdown event directly into the playback queue. The system continues playing the audio preceding the shutdown event to its natural completion, suppresses crossfading or decoding of any subsequent tracks, persists all tracks enqueued after the shutdown event for the next power cycle, and initiates a clean system power-off.
 

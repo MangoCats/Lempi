@@ -1,6 +1,6 @@
 # IMPL017: Closing the Mesh Arc
 
-**Implementation Plan — written 2026-09-28 · accepted 2026-09-28, being executed**
+**Implementation Plan — written 2026-09-28 · accepted 2026-09-28 · phases 0–2 and 4 built 2026-09-28; phase 3 reframed 2026-10-04, its items 3 and 4 not scheduled; phase 5 built but `[SPEC-FCP-010]`, which awaits the private repository**
 
 Builds [SPEC054](spec/SPEC054-mesh-without-ssh.md) (ssh leaves the mesh's data
 plane; the pairing window hardened; trusted networks) and

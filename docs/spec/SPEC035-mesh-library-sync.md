@@ -1,6 +1,6 @@
 # SPEC035: Mesh Synchronization of Library Content
 
-**Design Specification — Tier 2 · Not yet built**
+**Design Specification — Tier 2 · partly built: the diff, its review and conflict resolution, the peer registry and the console's `/mesh` page. Since 2026-09-26 the household syncs as a star ([SPEC046](SPEC046-star-sync.md)); whether that supersedes the rest of this design is open ([ROADMAP](../ROADMAP.md) §3)**
 
 The fifth deployment topology [SPEC006 §6](SPEC006-data-flow-and-portability.md#6-deployment-topologies)
 doesn't name: two or more **Vipunen-capable** installations, each independently

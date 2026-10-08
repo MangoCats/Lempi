@@ -237,7 +237,7 @@ Keyed the way `flavor` already is — a recording when the play had one, a passa
 
 **`[SPEC-SUI-080]` One job at a time, and it says so.** `fingerprint_ids.py` documents Vipunen holding the library's write lock for a minute at a time; a console that starts a second job creates lock contention that surfaces as an unexplained stall. Requests to start while one runs are queued and shown as queued.
 
-**`[SPEC-SUI-082]` The player is a second writer, and it never stops** `[SPEC-SUI-012]`. The library runs in WAL mode — the appliance's `lempi.db-wal` and `-shm` are there to see — so a job holding the write lock does **not** block the player's reads: playback and browsing continue throughout. What it blocks is the player's *writes*, the resume row `[SPEC-SC-098]` and play history.
+**`[SPEC-SUI-082]` The player is a second writer, and it never stops** `[SPEC-SUI-012]`. The library runs in WAL mode — the appliance's `listener.db-wal` and `-shm` are there to see — so a job holding the write lock does **not** block the player's reads: playback and browsing continue throughout. What it blocks is the player's *writes*, the resume row `[SPEC-SC-098]` and play history.
 
 The pattern for a long pass is therefore already in the tree and is not the console's to invent: `fingerprint_ids.py` opens the library **read-only**, writes its findings to a sidecar, and folds them in with `--merge` once the library is quiet — on the stated grounds that a pass which cannot write to the library also cannot damage it.
 

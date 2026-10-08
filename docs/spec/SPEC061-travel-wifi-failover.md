@@ -1,6 +1,6 @@
 # SPEC061: Travel Wi-Fi Failover and Hotspot Pivot
 
-**Design Specification — Tier 2 · written 2026-10-07, updated 2026-10-07 · autonomous off-infrastructure access point failover, standalone offline operation, and in-browser hotspot pivot**
+**Design Specification — Tier 2 · written 2026-10-07, updated 2026-10-07 · built 2026-10-07 (`88e249a`) · autonomous off-infrastructure access point failover, standalone offline operation, and in-browser hotspot pivot**
 
 When a Lempi appliance travels outside its home network, it loses infrastructure Wi-Fi association. This specification defines autonomous failover to the local access point (`lempi-ap`), establishes first-class standalone offline operation (Approach 1), and provides an in-browser pivot mechanism (Approach 3D) to transfer the appliance onto a mobile hotspot or venue network with confirm-or-revert safety.
 

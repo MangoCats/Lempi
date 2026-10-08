@@ -12,12 +12,11 @@ Split from [PI001](PI001-image-and-partitions.md) on 2026-09-10, which had reach
 
 ## 5. The database split
 
-**Designed in detail, reviewed, still not built, as of 2026-09-06.** Building
-`bose`'s image was the first real attempt to apply this section, and it found
-no `ATTACH`, no second file, no schema split — `lempi.db` is still one file,
-exactly as `[SPEC-SC-010]` describes it today. `bose`'s image was built
-around that reality rather than this one: the whole file lives on C, not
-split across B and C — see [BOSE002 `[IMPL-BOS-078]`](../BosePi/BOSE002-image-build.md)
+**Built: every node runs the split pair since 2026-10-02** `[IMPL-DBSPLIT-025]`,
+as recorded in [IMPL011](IMPL011-database-split-built.md), and FLEET001
+`[FLT-DAT-010]` lists where each half lives on each node. `bose`'s image was
+built on 2026-09-06, before the split existed, around a single file on C rather
+than one split across B and C — see [BOSE002 `[IMPL-BOS-078]`](../BosePi/BOSE002-image-build.md)
 for why that specific substitution is safe for `bose` (its B genuinely
 becomes read-only) in a way it happens not to be for `lempi02w` (whose data
 partition never actually does).
@@ -31,9 +30,8 @@ enumerated in full there), a genuine ownership gap found in review
 "the only writable handle," which a split removes), the migration tool's
 design, and a review against synchronization (`[SPEC035]`'s mesh tooling
 needs no changes — it already addresses each side by an independent path),
-RAM, backup, and MPD. Still not built: the player refactor and the migration
-tool are both specified, not implemented, and neither has run against real
-data.
+RAM, backup, and MPD. The player refactor and the migration tool have both
+since been built and run on every node (IMPL011).
 
 **`[PI-DB-010]` One file becomes two, along a line the schema already draws.**
 `[SPEC-SC-020]` segregates listener state by the `listener_` prefix precisely
@@ -90,8 +88,8 @@ what is lost is the listener's accumulated opinion. That is a real loss
 `[PI-C-020]` and precisely why C is backed up off-device, but it is a
 different kind of loss from a system that will not run.
 
-Like/dislike `[REQ-PD-150]` is unbuilt, and belongs on this side of the line
-when it is written — it is the listener's judgement, and nothing re-derives it.
+Like/dislike `[REQ-PD-150]` (`listener_likes`) belongs on this side of the
+line — it is the listener's judgement, and nothing re-derives it.
 
 **`[PI-DB-040]` Vipunen writes `library.db` on a desktop and never on the Pi.**
 Which is already true, and the split makes it enforceable rather than merely

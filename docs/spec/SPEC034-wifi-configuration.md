@@ -172,10 +172,8 @@ doesn't re-announce it) re-apply `setcap` immediately after every single
 
 ## 8. What isn't built
 
-A returning/reloaded browser has no way to see a *pending* confirmation
-it didn't itself just trigger — the countdown is client-side state, not
-persisted or queryable. This does not weaken the safety property (the
-server-side revert always fires regardless), only the convenience of
-confirming from a second page load. A `wifi-pending` verb surfacing
-`systemctl list-timers 'lempi-revert-*'` would close this; deferred as a
-real but non-blocking gap.
+Nothing outstanding. The gap this section recorded — a reloaded browser
+could not see a *pending* confirmation it had not itself triggered — closed
+on 2026-10-07 with [SPEC061](SPEC061-travel-wifi-failover.md): the
+`lempi-btctl wifi-pending` verb reads the revert timer, and `GET /wifi/pending`
+restores the countdown in the page.

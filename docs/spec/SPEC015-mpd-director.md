@@ -1,6 +1,6 @@
 # SPEC015: The Director as an MPD Client
 
-**Design Specification — Tier 2 · PROVISIONAL, on `investigate/external-players`**
+**Design Specification — Tier 2 · built, on `main` behind the `mpd` feature; the decisions taken and the measurements behind them are [SPEC038](SPEC038-mpd-director-settled.md)**
 
 How Lempi's Program Director `[SPEC009]` reaches the MPD ecosystem: what MPD already does better than reimplementing it, and what it cannot do that Lempi must supply.
 

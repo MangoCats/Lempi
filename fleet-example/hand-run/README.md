@@ -49,19 +49,18 @@ rather than `-a -b` — nothing bundles `[GDE-CLI-070]`.
 
 ---
 
-## One database or two
+## Two databases
 
-An installation that has never split names one path:
+Every installation is split `[IMPL-DBSPLIT-025]`, and the player refuses to
+start unless both halves are named:
 
 ```sh
-lempi --listener ~/music/lempi.db --port 13491
+lempi --listener ~/music/listener.db --library ~/music/library.db --port 13491
 ```
 
-`--library` defaults to whatever `--listener` is, so a single-file library
-needs nothing else. Once split `[IMPL-DBSPLIT-025]`, name both — the listener
-half is written continuously and the catalogue is read mostly read-only, and
-passing them the wrong way round bootstraps listener tables into the
-catalogue, which is a mess to undo.
+The listener half is written continuously and the catalogue is attached
+read-only; passing them the wrong way round bootstraps listener tables into
+the catalogue, which is a mess to undo.
 
 ---
 

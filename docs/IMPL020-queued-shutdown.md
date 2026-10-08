@@ -1,6 +1,6 @@
 # IMPL020: Queued Shutdown Event
 
-**Implementation Plan — Tier 3 · written 2026-10-06**
+**Implementation Plan — Tier 3 · written 2026-10-06 · built 2026-10-07 (`3e094ed`)**
 
 How a queued appliance shutdown event is integrated into the Lempi player engine and MuLibPlay skin, allowing a listener to schedule a clean power-off while playing through pending audio, preserving future queue selections across the restart, and maintaining seamless cross-skin queue compatibility.
 

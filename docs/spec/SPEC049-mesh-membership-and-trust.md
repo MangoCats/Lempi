@@ -1,6 +1,6 @@
 # SPEC049: Mesh Membership and Trust
 
-**Design Specification — Tier 2 · written 2026-09-27, from the maintainer's decisions that day · membership built 2026-09-27; discovery and the shared data not yet**
+**Design Specification — Tier 2 · written 2026-09-27, from the maintainer's decisions that day · membership and the shared data built 2026-09-27, discovery 2026-09-28 ([SPEC050](SPEC050-node-discovery.md)); §6 has what remains**
 
 Until now a node trusted another by one of two means, and neither was Lempi's own.
 Star sync reaches the appliances over ssh, whose keys the operating system
@@ -172,9 +172,10 @@ membership:
 - receiving listener state;
 - sending updates.
 
-**`[SPEC-MTR-220]` ssh stays for the appliances until the channel replaces it.**
-Star sync keeps its ssh transport `[SPEC-STAR-075]`. Moving it onto node
-identities is desired, and to be built later (decided 2026-09-28).
+**`[SPEC-MTR-220]` ssh stays only where the channel cannot reach.** Since
+2026-10-04 star sync reaches every node by signed requests between mesh
+identities `[SPEC-STAR-100]`; ssh remains for starting `teacherslounge`'s
+on-demand player and for the hub's backup mirror (IMPL017 §4).
 
 ---
 
@@ -262,7 +263,7 @@ The order agreed 2026-09-27:
    channel, only what changed `[SPEC-PL-107]`;
 4. discovery, and the players' joining by invitation. *Built 2026-09-28*:
    [SPEC050](SPEC050-node-discovery.md) `[SPEC-DSC-070]`;
-5. desired, to be built later: star sync onto node identities `[SPEC-MTR-220]`.
+5. star sync onto node identities `[SPEC-MTR-220]`: built 2026-10-04, `[SPEC-STAR-100]`.
    Moving the hub `[SPEC-MTR-070]` stays later and optional.
 
 1. **`[SPEC-MTR-900]` Whether occasions follow programmes.** SPEC046 carries

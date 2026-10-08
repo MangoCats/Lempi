@@ -1,6 +1,6 @@
 # SPEC060: Per-Output Volume Association
 
-**Design Specification — Tier 2 · written 2026-10-07 · for `[REQ-POV-010]`**
+**Design Specification — Tier 2 · written 2026-10-07 · for `[REQ-POV-010]` · built 2026-10-07 (`357cb3d`)**
 
 Associates output volume levels with each specific physical and wireless audio output device (the hardware DAC and each known Bluetooth speaker). When switching outputs, the playback engine automatically restores the volume associated with the newly active output. Supports both explicit preset pinning ("remember this volume") and automatic last-used tracking, user-directed switching to DAC, and configurable automatic fallback.
 

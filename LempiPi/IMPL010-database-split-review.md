@@ -1,6 +1,6 @@
 # IMPL010: The Database Split — Scope, Correction and Review
 
-**Implementation Guide — what the plan got wrong before it was run**
+**Implementation Guide — what the plan got wrong before it was run · since built, as [IMPL011](IMPL011-database-split-built.md) records**
 
 Split from [IMPL002](IMPL002-database-split.md) on 2026-09-10, which had reached 948 lines against `[GOV-DOC-010]`'s 300-line limit.
 

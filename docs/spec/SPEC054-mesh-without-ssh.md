@@ -1,6 +1,6 @@
 # SPEC054: Mesh Without ssh
 
-**Design Specification — Tier 2 · written 2026-09-28 · accepted 2026-09-28, being built · build plan in [IMPL017](../IMPL017-closing-the-mesh-arc.md)**
+**Design Specification — Tier 2 · written 2026-09-28 · accepted 2026-09-28 · built through [IMPL017](../IMPL017-closing-the-mesh-arc.md): star sync has used the signed transport for every node since 2026-10-04 `[SPEC-STAR-100]`; retiring the console's ssh peer chain is not scheduled**
 
 Star sync still reaches the appliances over ssh `[SPEC-MTR-220]`, and a chain of
 console tools reads and writes other nodes the same way. That is the last place

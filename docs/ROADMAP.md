@@ -54,7 +54,6 @@ folded into one spec.
 | Operating health on `bose`, in service | [BOSE004](../BosePi/BOSE004-operating-health.md) | [§5. Standing findings — open, none urgent](../BosePi/BOSE004-operating-health.md#5-standing-findings--open-none-urgent) |
 | The `bose` image update — plan | [BOSE008](../BosePi/BOSE008-image-update-plan.md) | [§8. Open](../BosePi/BOSE008-image-update-plan.md#8-open) |
 | The `bose` image update — runbook | [BOSE009](../BosePi/BOSE009-image-update-runbook.md) | [§6. Open](../BosePi/BOSE009-image-update-runbook.md#6-open) |
-| Database split — what the build left | [IMPL011](../LempiPi/IMPL011-database-split-built.md) | [§19. What remains](../LempiPi/IMPL011-database-split-built.md#19-what-remains) |
 | Appliance startup preflight | [PI026](../LempiPi/PI026-startup-preflight.md) | [§7. Open](../LempiPi/PI026-startup-preflight.md#7-open) |
 | The controller wedge | [PI027](../LempiPi/PI027-the-controller-wedge.md) | [§7. What is still open](../LempiPi/PI027-the-controller-wedge.md#7-what-is-still-open) |
 | `smartboardpc`, the build host | [SMART001](../SmartPC/SMART001-survey.md) | [§7. Open](../SmartPC/SMART001-survey.md#7-open) |

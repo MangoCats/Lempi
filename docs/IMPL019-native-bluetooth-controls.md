@@ -1,6 +1,6 @@
 # IMPL019: Native Bluetooth Controls
 
-**Implementation Plan — Tier 3 · written 2026-10-06**
+**Implementation Plan — Tier 3 · written 2026-10-06 · built 2026-10-06 (`2644650`)**
 
 How speaker-side transport controls are integrated directly into the Lempi player binary, replacing the legacy standalone `lempi-rocker.sh` characterisation script and providing universal AVRCP Play/Pause and Skip support across all Bluetooth playback appliances.
 
@@ -82,7 +82,7 @@ Lempi playback has no "previous track" or "stopped" state (`[REQ-AUD-142]`). Map
 ## 6. Appliance Service & Deployment Changes
 
 * **Group Permissions**: Add `SupplementaryGroups=input` to `LempiPlay3/lempi.service`, `fleet-example/speaker-plain/lempi.service`, and `LempiPi/setup-appliance.sh`'s template, granting `User=pi` access to `/dev/input/event*`.
-* **Script Retirement**: Remove the copy block for `lempi-rocker.sh` from `setup-appliance.sh` and retire `/usr/local/bin/lempi-rocker`. Archive or remove `LempiPi/lempi-rocker.sh`.
+* **Script Retirement**: Remove the copy block for `lempi-rocker.sh` from `setup-appliance.sh` and retire `/usr/local/bin/lempi-rocker`. The prototype `lempi-rocker.sh` itself is gone from the tree (2026-10-06).
 * **Overlay Nodes**: Changes to `lempi.service` are deployed via `setup-fleet.sh --go` or `setup-lp3.sh --go` to persist across both tmpfs and lower durable layers (`[APP-SET-030]`).
 
 ---

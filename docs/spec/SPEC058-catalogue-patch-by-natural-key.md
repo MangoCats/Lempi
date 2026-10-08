@@ -1,6 +1,6 @@
 # SPEC058: The Catalogue Patch by Natural Key
 
-**Design Specification — Tier 2 · written 2026-10-05 · built 2026-10-05, parts included, tested on fixtures and the real catalogues, not yet applied to a node**
+**Design Specification — Tier 2 · written 2026-10-05 · built 2026-10-05, parts included, tested on fixtures and the real catalogues, and committed live from 2026-10-05, to `lp3-wifi` and `lempi02w` first ([FLEET001](../../fleet/FLEET001-the-fleet.md) `[FLT-ISS-060]`)**
 
 The star sync's catalogue patch names a row by its numeric key, and a numeric key is local to one database `[SPEC-DF-035]`. Music the Export page sends a node is imported under the *node's* numbering, so from then on the hub and that node hold the same music under different ids, and the strict patch cannot be applied to it `[SPEC-STAR-940]`. This specifies a patch that names rows by what identifies them on every installation, so that a node's numbering stops mattering.
 

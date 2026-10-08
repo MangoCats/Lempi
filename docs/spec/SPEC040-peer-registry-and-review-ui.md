@@ -1,6 +1,6 @@
 # SPEC040: The Peer Registry and the Conflict Review UI
 
-**Specification — the concrete design behind mesh sync**
+**Specification — the concrete design behind mesh sync · partly built, as [SPEC035](SPEC035-mesh-library-sync.md) records**
 
 Split from [SPEC035](SPEC035-mesh-library-sync.md) on 2026-09-10, which had
 reached 356 lines against `[GOV-DOC-010]`'s 300-line limit.

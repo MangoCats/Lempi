@@ -99,9 +99,9 @@ Done. Full behaviour in [SPEC050](SPEC050-node-discovery.md) `[SPEC-DSC-090]`.
 
 **`[SPEC-SEC-110]` R4 — UDP discovery disclosure and roaming.**
 `SecurityReview2 R4` / review 3: **deferred** to the trusted-networks feature,
-designed in [SPEC051](SPEC051-trusted-networks.md) and not yet built. Resolved
-already: the phone pins the hub's key at enrolment and sends to no discovered
-hub.
+[SPEC051](SPEC051-trusted-networks.md), built for the appliances 2026-09-28; the
+phone's half waits. Resolved already: the phone pins the hub's key at enrolment
+and sends to no discovered hub.
 
 ## 6. ssh and sudo across the fleet
 

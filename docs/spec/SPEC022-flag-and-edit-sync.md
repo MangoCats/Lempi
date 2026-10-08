@@ -62,8 +62,9 @@ ssh pi@lempi02w 'systemctl stop lempi && { echo "ATTACH DATABASE '''/srv/library
 > `CREATE` lands in `main`, now the right half, and an unqualified
 > `passage_recordings` resolves down the chain to the catalogue. Confirmed by
 > hand on `lempi02w` 2026-09-12: through one such connection,
-> `passage_recordings` answered 16,409 rows and `listener_flags` 20. Unsplit
-> peers keep the single-file command, with nothing attached.
+> `passage_recordings` answered 16,409 rows and `listener_flags` 20. Every
+> peer is split since 2026-10-02, and one recorded without its listener half
+> is refused rather than sent the single-file command.
 >
 > **`bose` still refuses this, by design.** Its catalogue half is mounted `ro`
 > `[BOSE003]` step 10, so the catalogue statements fail there every time

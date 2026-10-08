@@ -1,6 +1,6 @@
 # IMPL022: Travel Wi-Fi Failover and Hotspot Pivot Implementation Plan
 
-**Implementation Specification — Tier 3 · written 2026-10-07, updated 2026-10-07 · step-by-step implementation for autonomous access point failover and in-browser hotspot pivot**
+**Implementation Specification — Tier 3 · written 2026-10-07, updated 2026-10-07 · built 2026-10-07 (`88e249a`) · step-by-step implementation for autonomous access point failover and in-browser hotspot pivot**
 
 This document details the concrete implementation plan for [SPEC061](spec/SPEC061-travel-wifi-failover.md), providing autonomous failover to `lempi-ap`, first-class offline operation (Approach 1), and a safe in-browser pivot to mobile hotspots or venue networks (Approach 3D).
 

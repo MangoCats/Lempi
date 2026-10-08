@@ -1,6 +1,6 @@
 # IMPL021: Per-Output Volume Implementation Plan
 
-**Implementation Plan — Tier 3 · written 2026-10-07 · for `[SPEC-POV-010]`**
+**Implementation Plan — Tier 3 · written 2026-10-07 · for `[SPEC-POV-010]` · built 2026-10-07 (`357cb3d`)**
 
 Technical implementation plan for associating independent output volume settings with physical DAC and Bluetooth speaker outputs, providing preset pinning ("remember this volume"), automatic last-used tracking, user-directed DAC selection, and configurable Bluetooth connection timeout with automatic DAC fallback.
 
