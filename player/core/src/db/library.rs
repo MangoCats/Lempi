@@ -126,11 +126,10 @@ impl Library {
     }
 
     /// Opens `db_path` (the listener side) read-only and attaches
-    /// `library_path` read-only alongside it `[PI-DB-020]`. `open` above is
-    /// the common case -- every installation that hasn't split calls it
-    /// with one path, which becomes `open_split(path, path)`, attaching
-    /// nothing (`[IMPL-DBSPLIT-025]`). An installation with a genuinely
-    /// separate `library.db` calls this directly once it has two paths.
+    /// `library_path` read-only alongside it `[PI-DB-020]`. Every
+    /// installation is split `[IMPL-DBSPLIT-025]`, so this is what the
+    /// binaries call. `open` above is the single-file form test fixtures use:
+    /// one path, which becomes `open_split(path, path)` and attaches nothing.
     pub fn open_split(
         db_path: &std::path::Path,
         library_path: &std::path::Path,
@@ -196,8 +195,11 @@ impl Library {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
-    /// Radio passages in random order — a stand-in until the Program Director
-    /// is wired in `[SPEC009]`. Radio only, per `[REQ-PD-120]`.
+    /// Radio passages in uniform random order: what `Session::refill` falls
+    /// back to when there is no Director yet, or when the Director finds every
+    /// candidate blocked. Radio only, per `[REQ-PD-120]`, and nothing more --
+    /// no rotation, no rejections, no holds `[SPEC-HOLD-010]`; that gap is
+    /// listed in docs/architecture.md section 10.
     pub fn random_radio(&self, limit: usize) -> Result<Vec<QueueEntry>, DbError> {
         let sql = format!("SELECT {COLS} {FROM} WHERE p.kind = 'radio' ORDER BY RANDOM() LIMIT ?1");
         let mut stmt = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
@@ -207,14 +209,6 @@ impl Library {
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| DbError::Query(e.to_string()))
     }
 
-    /// Load the Program Director from this same library `[SPEC009]`.
-    /// Keeps the connection private -- selection reads the library, it does
-    /// not get its own handle on the file.
-    /// Names and play count for one passage, from MusicBrainz.
-    ///
-    /// Silent failure on purpose: a passage whose names cannot be read still
-    /// plays, and still shows its filename. Nothing here is worth interrupting
-    /// the music for.
     /// The file's own tags, if they have been scanned.
     pub fn stored_tags(&self, passage_id: i64) -> Option<crate::tags::Tags> {
         self.conn
@@ -260,6 +254,11 @@ impl Library {
             .unwrap_or((None, None, None))
     }
 
+    /// Names and play count for one passage, from MusicBrainz.
+    ///
+    /// Silent failure on purpose: a passage whose names cannot be read still
+    /// plays, and still shows its filename. Nothing here is worth interrupting
+    /// the music for.
     pub fn describe(&self, e: &mut QueueEntry) {
         let Some(mbid) = e.mbid.clone() else { return };
         let got = self.conn.query_row(&describe_sql(self.has_file_releases()), rusqlite::params![mbid, e.passage_id], |r| {
@@ -404,6 +403,9 @@ impl Library {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
+    /// Load the Program Director from this same library `[SPEC009]`.
+    /// Keeps the connection private -- selection reads the library, it does
+    /// not get its own handle on the file.
     pub fn director(&self) -> Result<crate::director::library::Director, DbError> {
         crate::director::library::Director::load(&self.conn)
     }

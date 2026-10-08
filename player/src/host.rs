@@ -61,8 +61,8 @@ const HANDOFF_LEAD_MS: u64 = 250;
 pub struct Config {
     /// The listener-side database: plays, preferences, programmes.
     pub listener: PathBuf,
-    /// The catalogue-side database. Equal to `listener` on every installation
-    /// that has not split `[IMPL-DBSPLIT-025]`.
+    /// The catalogue-side database: a separate file on every installation,
+    /// all of which are split `[IMPL-DBSPLIT-025]`.
     pub library: PathBuf,
     /// Passages kept queued ahead.
     pub depth: usize,

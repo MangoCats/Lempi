@@ -307,6 +307,11 @@ pub struct Report {
 /// Nothing is written unless `commit`. The default is a rehearsal that reports
 /// exactly what would happen, because the first restore anyone performs is
 /// usually the one they are least sure about.
+///
+/// **Known gap: this does not work on a split pair.** It opens only the
+/// listener file and reads `main.passage_recordings`, which lives in
+/// `library.db` `[PI-DB-030]`: a rehearsal's counts read zero, and a commit
+/// fails and rolls back. Listed in docs/architecture.md section 10.
 pub fn restore(snapshot: &Path, db: &Path, commit: bool) -> Result<Report, DbError> {
     let conn = Connection::open(db).map_err(|e| DbError::Open(e.to_string()))?;
     conn.busy_timeout(std::time::Duration::from_secs(10))

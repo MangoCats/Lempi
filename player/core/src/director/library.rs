@@ -717,6 +717,12 @@ impl Director {
     /// Director would go on believing it was heard, suppressing that recording
     /// and its artist for a full rotation on the strength of a play that never
     /// happened.
+    ///
+    /// **Exact only when notes are undone newest first.** Each key goes back
+    /// to the value it held when *this* note was taken, so a later note on the
+    /// same passage, work, recording or artist is overwritten by the undo.
+    /// Rotation keeps one artist out of a short queue, which makes that rare;
+    /// nothing here prevents it.
     pub fn forget_queued(&mut self, note: QueuedNote) {
         let restore_i = |m: &mut HashMap<i64, i64>, k: i64, prev: Option<i64>| match prev {
             Some(p) => {
@@ -737,8 +743,8 @@ impl Director {
         restore_i(&mut self.passage_last_played, note.passage_id, note.prev_passage);
         for (w, prev) in note.works {
             // Another passage of the same work may have been noted since, and
-            // restoring "nothing was there" would forget that one too -- the
-            // same hazard the artist tier documents below.
+            // restoring what was there forgets that one too -- the hazard the
+            // doc comment above names, the same for every tier.
             restore_s(&mut self.work_last_played, w, prev);
         }
         if let Some(mbid) = note.mbid {
@@ -749,10 +755,10 @@ impl Director {
                 Some(prev) => {
                     self.artist_last_played.insert(a, prev);
                 }
-                // Another passage by the same artist may have been noted since,
-                // in which case removing the entry would forget that one too.
-                // Restoring what was there is the only safe undo, and "nothing
-                // was there" is a value like any other.
+                // Restoring what was there is the undo, and "nothing was there"
+                // is a value like any other. It is not safe against a later
+                // note by the same artist: removing the entry forgets that one
+                // too, as the doc comment above says.
                 None => {
                     self.artist_last_played.remove(&a);
                 }

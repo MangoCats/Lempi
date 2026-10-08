@@ -810,19 +810,19 @@ impl Output {
         Ok(device_name)
     }
 
-    /// Start or stop the device callback.
+    /// Silence the device callback, or let it play again.
     ///
     /// Pausing playback by merely not submitting is not enough: the ring holds
-    /// roughly fourteen seconds, and the callback keeps draining it, so the
-    /// music would play on for that long after the button was pressed. Stopping
-    /// the stream leaves the ring full, which is what makes resuming instant
-    /// `[REQ-AUD-142]`.
+    /// roughly fourteen seconds, and the callback would keep draining it, so
+    /// the music would play on for that long after the button was pressed.
+    /// Paused, the callback feeds zeros and leaves the ring full, which is what
+    /// makes resuming instant `[REQ-AUD-142]`; the stream itself keeps running.
     ///
-    /// Returns false if the backend refuses -- not all of them can pause -- so
-    /// the caller can fall back rather than assume silence.
+    /// Returns false when there is no stream, or when `play()` fails on resume,
+    /// so the caller can fall back rather than assume sound.
     pub fn set_playing(&self, on: bool) -> bool {
-        // play() and pause() return different error types, so normalise early
-        // rather than let that detail leak into the caller.
+        // play()'s error type is normalised here rather than let that detail
+        // leak into the caller.
         let Some(stream) = self.stream.as_ref() else { return false };
         // Silence rather than a stopped device `[PI3-OPEN-020]`. The stream is
         // still started on resume in case a backend stopped it for its own

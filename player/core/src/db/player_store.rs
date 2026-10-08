@@ -1,4 +1,5 @@
-//! The one writable connection to `lempi.db` `[REQ-VIS-155]`.
+//! The one writable connection: `listener.db`, with `library.db` attached
+//! read-only `[REQ-VIS-155]`.
 //!
 //! Everything that writes -- the resume row, settings, play history,
 //! rejections, flags, and (behind `vipunen-support`) the listener's own pending
@@ -787,11 +788,10 @@ impl PlayerStore {
     }
 
     /// Opens `db_path` (listener-side, writable) and attaches `library_path`
-    /// read-only `[PI-DB-020]`. `open` above is the common case -- every
-    /// installation that hasn't split calls it with one path, which becomes
-    /// `open_split(path, path)`, attaching nothing
-    /// (`[IMPL-DBSPLIT-025]`). An installation with a genuinely separate
-    /// `library.db` calls this directly once it has two paths.
+    /// read-only `[PI-DB-020]`. Every installation is split
+    /// `[IMPL-DBSPLIT-025]`, so this is what the binaries call. `open` above is
+    /// the single-file form test fixtures use: one path, which becomes
+    /// `open_split(path, path)` and attaches nothing.
     pub fn open_split(
         db_path: &std::path::Path,
         library_path: &std::path::Path,

@@ -216,11 +216,11 @@ impl QualifyingConn {
         Self { conn, lib: "main" }
     }
 
-    /// `"main"` on every installation that hasn't split; `"lib"` only once
-    /// it has. Exposed so callers that build SQL as ad hoc `format!` text
-    /// rather than through [`Self::qualify`] -- `bundle.rs`'s import path
-    /// does this for a few statements -- can still get it right by asking
-    /// rather than assuming.
+    /// `"lib"` on every installation, all of them split `[IMPL-DBSPLIT-025]`;
+    /// `"main"` only for a single-file test fixture. Exposed so callers that
+    /// build SQL as ad hoc `format!` text rather than through
+    /// [`Self::qualify`] -- `bundle.rs`'s import path does this for a few
+    /// statements -- can still get it right by asking rather than assuming.
     pub fn lib_alias(&self) -> &'static str {
         self.lib
     }
@@ -410,10 +410,9 @@ mod attach_library_tests {
         .unwrap()
     }
 
-    /// The common case today: every installation that hasn't split passes
-    /// the same path twice. Nothing should be attached, and `main` must
-    /// still resolve -- the whole point is that this costs nothing when
-    /// there is no split.
+    /// The single-file case a test fixture uses: the same path twice.
+    /// Nothing should be attached, and `main` must still resolve -- the
+    /// whole point is that this costs nothing when there is no split.
     #[test]
     fn same_path_attaches_nothing_and_returns_main() {
         let path = scratch_path("same");

@@ -683,10 +683,11 @@ pub struct Engine {
     /// `[REQ-AUD-164]`. Held here because it outlives `live`: a passage stays
     /// audible for a ring's depth after the mixer has finished with it.
     shown: Option<(QueueEntry, u64)>,
-    /// Underruns that happened while PLAYING. Under the two-state model the
-    /// device callback drains continuously, so a paused player underruns
-    /// forever -- counting those would bury the fault this number exists to
-    /// expose [REQ-AUD-142].
+    /// Underruns that happened while PLAYING. A paused stream is fed silence
+    /// and its shortfall is not counted at all (`output::fill`
+    /// `[PI3-OPEN-020]`), so this gate is now a second guard rather than the
+    /// only one; either way a pause must not add to the fault this number
+    /// exists to expose [REQ-AUD-142].
     underruns_playing: u64,
     /// What `underruns_playing` read when the count was last restarted, and
     /// when that was `[REQ-VIS-230]`.
@@ -908,9 +909,12 @@ impl Engine {
         let submitted = if self.playing && audible { self.mix_and_submit() } else { 0 };
         self.retire_finished();
         self.record_play();
-        // Independent of `self.playing`, the same as `advance_shown` below:
-        // the ring drains at the device's own pace regardless of pause
-        // `[REQ-VIS-250]`.
+        // Independent of `self.playing`, the same as `advance_shown` below.
+        // That is a known gap, not a design: while paused the device is fed
+        // silence and the ring does NOT drain (`output::fill`
+        // `[PI3-OPEN-020]`), but the clock these read keeps running, so a
+        // pause in a passage's last ring-depth finishes it early
+        // `[REQ-VIS-250]` -- docs/architecture.md section 10.
         self.finalize_draining_plays();
         self.advance_shown();
         self.check_queued_shutdown();
@@ -1352,9 +1356,11 @@ impl Engine {
         }
     }
 
-    /// Stopping the consumer means stopping the DEVICE, not just declining to
-    /// submit: the output ring would otherwise play on for its full depth.
-    /// Producers are untouched, so the buffers stay primed [REQ-AUD-142].
+    /// Pausing silences the DEVICE, not just the submissions: the output ring
+    /// would otherwise play on for its full depth. Paused, the callback feeds
+    /// zeros and leaves the ring untouched, and the stream keeps running
+    /// `[PI3-OPEN-020]`. Producers are untouched too, so the buffers stay
+    /// primed [REQ-AUD-142].
     fn set_playing(&mut self, on: bool) {
         if on {
             self.shutdown_saved = false;

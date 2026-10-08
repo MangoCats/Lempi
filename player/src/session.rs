@@ -271,8 +271,9 @@ pub struct Session {
     /// `[IMPL-SUI-075]`. A path rather than a shared handle, for the reason
     /// `Ui` keeps one: `rusqlite`'s `Connection` is not `Sync`.
     db: std::path::PathBuf,
-    /// The catalog-side file. Equal to `db` on every installation that
-    /// hasn't split `[IMPL-DBSPLIT-025]`; carried separately here for the
+    /// The catalog-side file. Every installation is split
+    /// `[IMPL-DBSPLIT-025]`, so this differs from `db` except in a test fixture
+    /// that holds both halves in one file; carried separately here for the
     /// same reason `db` is -- the rebuild thread needs both to reopen
     /// `Library::open_split`, not just one.
     library: std::path::PathBuf,
@@ -297,8 +298,8 @@ pub struct Session {
 
 impl Session {
     /// `depth` is how many passages to keep queued ahead. `library` is the
-    /// catalog-side file -- equal to `db` on every installation that hasn't
-    /// split `[IMPL-DBSPLIT-025]`.
+    /// catalog-side file -- equal to `db` only in a single-file test fixture;
+    /// every installation is split `[IMPL-DBSPLIT-025]`.
     pub fn open(db: &Path, library: &Path, depth: usize) -> Result<Self, DbError> {
         // **`[PI3-FOUND-210]` The phases are timed because guessing at them
         // cost a whole evening.** Measured on lempi02w: nineteen seconds pass
@@ -355,10 +356,12 @@ impl Session {
         // through the *same* queue-depth gate `[IMPL-SUI-075]` already
         // reasons about for exactly this SD-card-contention concern --
         // cold start has no queued audio yet either, so it is the right
-        // gate to reuse, not a new one to invent. Selection runs on
-        // frequency alone (no character shaping) until it adopts, which is
-        // the existing no-Director fallback arriving slightly later rather
-        // than a new code path.
+        // gate to reuse, not a new one to invent. Until it adopts, a refill
+        // that finds the queue short is served by the no-Director fallback,
+        // `Library::random_radio` -- uniform random, with no frequency, no
+        // character shaping and no holds (docs/architecture.md section 10).
+        // `prime` restores the remembered queue first so that an ordinary
+        // start never reaches it.
         let controls = SharedControls::default();
         if let Ok(mut c) = controls.lock() {
             c.reload_requested = true;
@@ -870,19 +873,15 @@ impl Session {
         self.saved_queue = ids;
     }
 
-    /// Move the session to the other backend, carrying the queue `[SPEC-BK-030]`.
+    /// Hand over **without restarting the passage that is playing**
+    /// `[SPEC-BK-065]`.
     ///
     /// The session is the only thing here holding a library, which is why the
     /// transfer lives on it: `[SPEC-BK-030]` carries **passage ids**, and only
     /// the library can turn one back into something playable. Spans are read
     /// again on arrival rather than carried, because a span belongs to the
-    /// passage and not to whichever backend last played it.
-    ///
-    /// Returns what did not make it, by name. A passage the library has
-    /// renumbered away since the queue was built is skipped rather than allowed
-    /// to refuse the switch, for the same reason an unnameable guest entry is
-     /// Hand over **without restarting the passage that is playing**
-    /// `[SPEC-BK-065]`.
+    /// passage and not to whichever backend last played it. What did not make
+    /// it comes back in `carried.lost` -- see `switch::carry_queue`.
     ///
     /// **The only handoff there is.** There was a queue-only one beside it until
     /// this shipped, and it was the wrong answer kept alive: a queue is what is

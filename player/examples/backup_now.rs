@@ -4,7 +4,7 @@
 //! the player running: before a migration, before letting a tool loose on the
 //! library, or to check the thing works before trusting it to.
 //!
-//!     cargo run --release --example backup_now -- data/lempi_new.db
+//!     cargo run --release --example backup_now -- data/listener.db
 
 fn main() {
     let Some(db) = std::env::args().nth(1) else {

@@ -127,8 +127,8 @@ pub(super) async fn vipunen_ensure(State(ui): State<Ui>) -> Response {
     // `listener.console.db` instead of `library.console.db`, so a console
     // launched from this page came up with no job history and, worse, an
     // empty `remote_config` -- the configured peer simply absent, with no
-    // error to say so. Equal to `ui.db` on every unsplit installation, so
-    // this changes nothing there.
+    // error to say so. (No installation is unsplit any more
+    // `[IMPL-DBSPLIT-025]`.)
     let db = ui.library.clone();
     let started = tokio::task::spawn_blocking(move || -> Result<(), String> {
         let script = console_script()

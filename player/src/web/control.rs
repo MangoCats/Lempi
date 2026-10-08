@@ -74,17 +74,6 @@ pub(super) async fn seek_to(
     StatusCode::ACCEPTED
 }
 
-/// Act on a passage's place in the queue `[REQ-VIS-185]`.
-///
-/// Six verbs on one route, because they are one idea -- where does this go --
-/// and splitting them across six routes would spread that idea thin:
-///
-/// * `now` — to the front, then skip into it. The only one that interrupts.
-/// * `next` — after the current passage.
-/// * `last` — to the back, behind everything already waiting.
-/// * `remove` — out of the queue.
-/// * `sooner` / `later` — one place each way, clamped at the ends.
-///
 /// Enqueue a shutdown event at the tail of the queue `[IMPL-QSD-020]`.
 ///
 /// The queue enforces cardinality 0 <= n <= 1; returns 204 No Content on success
@@ -97,6 +86,17 @@ pub(super) async fn queue_shutdown(State(ui): State<Ui>) -> StatusCode {
     StatusCode::NO_CONTENT
 }
 
+/// Act on a passage's place in the queue `[REQ-VIS-185]`.
+///
+/// Six verbs on one route, because they are one idea -- where does this go --
+/// and splitting them across six routes would spread that idea thin:
+///
+/// * `now` — to the front, then skip into it. The only one that interrupts.
+/// * `next` — after the current passage.
+/// * `last` — to the back, behind everything already waiting.
+/// * `remove` — out of the queue.
+/// * `sooner` / `later` — one place each way, clamped at the ends.
+///
 /// The first three take a passage from the library; the last three act on one
 /// already queued, and need no library read at all.
 pub(super) async fn queue_passage(

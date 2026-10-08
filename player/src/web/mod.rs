@@ -83,11 +83,9 @@ pub struct Ui {
     /// `rusqlite`'s is not `Sync`, and a request opens its own.
     pub db: std::path::PathBuf,
     /// The catalog-side file, for serving cover art and everything else a
-    /// handler reads through `Library`. Equal to `db` on every installation
-    /// that hasn't split `[IMPL-DBSPLIT-025]` -- every handler in this
-    /// module still opens `db` alone as of this field's addition; wiring
-    /// each one to `Library::open_split(&db, &library)` instead is tracked,
-    /// separately scoped work, not yet done.
+    /// handler reads through `Library`. Every installation is split
+    /// `[IMPL-DBSPLIT-025]`, and the handlers open the pair with
+    /// `Library::open_split(&db, &library)` / `PlayerStore::open_split`.
     pub library: std::path::PathBuf,
     pub why: Explanations,
     pub controls: SharedControls,

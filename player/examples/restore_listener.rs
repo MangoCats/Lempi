@@ -11,6 +11,10 @@
 //! Rehearsal is the default. The numbers it prints are the ones a real restore
 //! would produce, because both are measured from the same query before anything
 //! is written.
+//!
+//! **Known gap:** on a split pair -- every installation now -- `backup::restore`
+//! cannot work, and the default `LEMPI_DB` below predates the split. See
+//! `backup::restore`, and docs/architecture.md section 10.
 
 use std::path::{Path, PathBuf};
 
