@@ -8,7 +8,7 @@
 
 fn main() {
     let Some(db) = std::env::args().nth(1) else {
-        eprintln!("usage: backup_now <library.db>");
+        eprintln!("usage: backup_now <listener.db>");
         std::process::exit(2);
     };
     match lempi_player::backup::snapshot(std::path::Path::new(&db)) {
