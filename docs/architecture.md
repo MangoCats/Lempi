@@ -237,11 +237,9 @@ otherwise.
   remembered queue, or when every candidate is blocked, `random_radio` fills
   the queue, ignoring holds `[SPEC-HOLD-010]`, characteristic exclusions,
   rejections and rotation.
-* **Listener restore does not work on a split pair.** `backup::restore` looks
-  for `passage_recordings` in the listener file, so a rehearsal reports zeros
-  and `--commit` fails and rolls back. It is reachable only as the cargo example
-  `restore_listener`, whose default path predates the split `[REQ-LIB-160]`,
-  `[PI-DB-030]`.
+* **Listener restore is a developer's tool.** It is reachable only as the
+  cargo example `restore_listener`, not as a binary shipped to a node
+  `[REQ-LIB-160]`.
 * **The now-playing panel is blank while MPD is the live backend** — title,
   position and duration come from the local engine's published state, so the
   seek bar has nothing to act on there, though MPD itself can seek.

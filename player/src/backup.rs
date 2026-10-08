@@ -117,6 +117,15 @@ pub fn snapshot_before_restore(db: &Path) -> Result<PathBuf, DbError> {
     snapshot_named(db, "prerestore-", false)
 }
 
+/// A path as a read-only SQLite URI. `%`, `?` and `#` would otherwise be read
+/// as an escape, a query or a fragment; percent-encoded they are part of the
+/// name. Shared, so the snapshot and the restore cannot escape differently --
+/// they did, until 2026-10-08.
+fn ro_uri(path: &Path) -> String {
+    let p = path.to_string_lossy().replace('%', "%25").replace('?', "%3f").replace('#', "%23");
+    format!("file:{p}?mode=ro")
+}
+
 fn snapshot_named(db: &Path, prefix: &str, rotate: bool) -> Result<PathBuf, DbError> {
     let dir = dir_for(db);
     std::fs::create_dir_all(&dir)
@@ -142,11 +151,7 @@ fn snapshot_named(db: &Path, prefix: &str, rotate: bool) -> Result<PathBuf, DbEr
         .map_err(|e| DbError::Open(format!("create {}: {e}", part.display())))?;
     conn.busy_timeout(std::time::Duration::from_secs(10))
         .map_err(|e| DbError::Open(e.to_string()))?;
-    let src = format!(
-        "file:{}?mode=ro",
-        db.to_string_lossy().replace('?', "%3f").replace('#', "%23")
-    );
-    conn.execute("ATTACH DATABASE ?1 AS src", [src.as_str()])
+    conn.execute("ATTACH DATABASE ?1 AS src", [ro_uri(db).as_str()])
         .map_err(|e| DbError::Query(format!("attach {}: {e}", db.display())))?;
 
     let mut copied = 0usize;
@@ -265,20 +270,36 @@ pub struct Summary {
 pub fn inspect(snapshot: &Path) -> Result<Summary, DbError> {
     let c = Connection::open_with_flags(snapshot, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| DbError::Open(e.to_string()))?;
-    let count = |t: &str| -> i64 {
-        c.query_row(&format!("SELECT COUNT(*) FROM \"{t}\""), [], |r| r.get(0)).unwrap_or(0)
+    let q = |e: rusqlite::Error| DbError::Query(e.to_string());
+    // A table the snapshot does not hold is a snapshot taken before it existed,
+    // and reads as none. A query that FAILS is not "none": it is reported, so a
+    // damaged snapshot never passes for an empty one (review O-04).
+    let has = |t: &str| -> Result<bool, DbError> {
+        c.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1", [t],
+                    |r| r.get::<_, i64>(0))
+            .map(|n| n > 0)
+            .map_err(q)
+    };
+    let count = |t: &str| -> Result<i64, DbError> {
+        if !has(t)? {
+            return Ok(0);
+        }
+        c.query_row(&format!("SELECT COUNT(*) FROM \"{t}\""), [], |r| r.get(0)).map_err(q)
+    };
+    let (first_play, last_play) = if has("listener_play_history")? {
+        c.query_row("SELECT MIN(played_at), MAX(played_at) FROM listener_play_history", [],
+                    |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(q)?
+    } else {
+        (None, None)
     };
     Ok(Summary {
-        plays: count("listener_play_history"),
-        first_play: c
-            .query_row("SELECT MIN(played_at) FROM listener_play_history", [], |r| r.get(0))
-            .unwrap_or(None),
-        last_play: c
-            .query_row("SELECT MAX(played_at) FROM listener_play_history", [], |r| r.get(0))
-            .unwrap_or(None),
-        preferences: count("listener_preferences"),
-        likes: count("listener_likes"),
-        programs: count("listener_programs"),
+        plays: count("listener_play_history")?,
+        first_play,
+        last_play,
+        preferences: count("listener_preferences")?,
+        likes: count("listener_likes")?,
+        programs: count("listener_programs")?,
     })
 }
 
@@ -304,61 +325,76 @@ pub struct Report {
 /// hold those numbers now. Every play carries the recording it was, and that
 /// is what the history is re-pointed through.
 ///
+/// **The recordings live in the catalogue** `[PI-DB-030]`. `listener` is
+/// written; `library` is attached read-only and is only ever read, through
+/// `attach_library`, the same way the player reads it. Before 2026-10-08 this
+/// opened the listener file alone and looked for `passage_recordings` there:
+/// on every split installation a rehearsal reported zeros and a commit failed
+/// (review F-01).
+///
 /// Nothing is written unless `commit`. The default is a rehearsal that reports
 /// exactly what would happen, because the first restore anyone performs is
-/// usually the one they are least sure about.
-///
-/// **Known gap: this does not work on a split pair.** It opens only the
-/// listener file and reads `main.passage_recordings`, which lives in
-/// `library.db` `[PI-DB-030]`: a rehearsal's counts read zero, and a commit
-/// fails and rolls back. Listed in docs/architecture.md section 10.
-pub fn restore(snapshot: &Path, db: &Path, commit: bool) -> Result<Report, DbError> {
-    let conn = Connection::open(db).map_err(|e| DbError::Open(e.to_string()))?;
+/// usually the one they are least sure about. Every count it reports is either
+/// measured or an error -- never a failed query read as zero (review O-04).
+pub fn restore(snapshot: &Path, listener: &Path, library: &Path, commit: bool)
+    -> Result<Report, DbError> {
+    let conn = Connection::open(listener).map_err(|e| DbError::Open(e.to_string()))?;
     conn.busy_timeout(std::time::Duration::from_secs(10))
         .map_err(|e| DbError::Open(e.to_string()))?;
-    let src = format!("file:{}?mode=ro", snapshot.to_string_lossy());
-    conn.execute("ATTACH DATABASE ?1 AS snap", [src.as_str()])
+    let lib = crate::db::attach_library(&conn, listener, library)?;
+    conn.execute("ATTACH DATABASE ?1 AS snap", [ro_uri(snapshot).as_str()])
         .map_err(|e| DbError::Query(format!("attach {}: {e}", snapshot.display())))?;
+
+    let q = |e: rusqlite::Error| DbError::Query(e.to_string());
+    let table_in = |schema: &str, table: &str| -> Result<bool, DbError> {
+        conn.query_row(
+            &format!("SELECT COUNT(*) FROM {schema}.sqlite_master WHERE type='table' AND name=?1"),
+            [table], |r| r.get::<_, i64>(0))
+            .map(|n| n > 0)
+            .map_err(q)
+    };
+    let recordings = format!("{lib}.passage_recordings");
 
     let mut report = Report { committed: commit, ..Default::default() };
 
     // How much of the history still points at something that exists, and how
     // much has moved. Measured before anything is written, so a rehearsal and
     // a real restore report the same numbers.
-    let has_hist: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM snap.sqlite_master WHERE name='listener_play_history'",
-            [], |r| r.get(0))
-        .unwrap_or(0);
-    if has_hist > 0 {
+    let has_hist = table_in("snap", "listener_play_history")?;
+    if has_hist {
+        if !table_in(lib, "passage_recordings")? {
+            return Err(DbError::Query(format!(
+                "{} has no passage_recordings to re-point the history through",
+                library.display()
+            )));
+        }
         report.plays = conn
             .query_row("SELECT COUNT(*) FROM snap.listener_play_history", [], |r| r.get(0))
-            .unwrap_or(0);
+            .map_err(q)?;
         report.remapped = conn
             .query_row(
-                "SELECT COUNT(*) FROM snap.listener_play_history h \
-                   JOIN main.passage_recordings pr ON pr.mbid = h.mbid \
-                  WHERE h.mbid IS NOT NULL AND pr.passage_id <> h.passage_id",
+                &format!(
+                    "SELECT COUNT(*) FROM snap.listener_play_history h \
+                       JOIN {recordings} pr ON pr.mbid = h.mbid \
+                      WHERE h.mbid IS NOT NULL AND pr.passage_id <> h.passage_id"
+                ),
                 [], |r| r.get(0))
-            .unwrap_or(0);
+            .map_err(q)?;
         report.orphaned = conn
             .query_row(
-                "SELECT COUNT(*) FROM snap.listener_play_history h \
-                  WHERE h.mbid IS NULL \
-                     OR NOT EXISTS (SELECT 1 FROM main.passage_recordings pr \
-                                     WHERE pr.mbid = h.mbid)",
+                &format!(
+                    "SELECT COUNT(*) FROM snap.listener_play_history h \
+                      WHERE h.mbid IS NULL \
+                         OR NOT EXISTS (SELECT 1 FROM {recordings} pr \
+                                         WHERE pr.mbid = h.mbid)"
+                ),
                 [], |r| r.get(0))
-            .unwrap_or(0);
+            .map_err(q)?;
     }
 
     if !commit {
         for table in LISTENER_TABLES {
-            let exists: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM snap.sqlite_master WHERE type='table' AND name=?1",
-                    [table], |r| r.get(0))
-                .unwrap_or(0);
-            report.tables += exists as usize;
+            report.tables += table_in("snap", table)? as usize;
         }
         let _ = conn.execute_batch("DETACH DATABASE snap");
         return Ok(report);
@@ -371,17 +407,7 @@ pub fn restore(snapshot: &Path, db: &Path, commit: bool) -> Result<Report, DbErr
     let done = || -> Result<usize, DbError> {
         let mut n = 0;
         for table in LISTENER_TABLES {
-            let in_snap: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM snap.sqlite_master WHERE type='table' AND name=?1",
-                    [table], |r| r.get(0))
-                .unwrap_or(0);
-            let in_main: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM main.sqlite_master WHERE type='table' AND name=?1",
-                    [table], |r| r.get(0))
-                .unwrap_or(0);
-            if in_snap == 0 || in_main == 0 {
+            if !table_in("snap", table)? || !table_in("main", table)? {
                 continue;
             }
             conn.execute_batch(&format!(
@@ -392,14 +418,16 @@ pub fn restore(snapshot: &Path, db: &Path, commit: bool) -> Result<Report, DbErr
             n += 1;
         }
         // Re-point the history through recordings, which outlive renumbering.
-        conn.execute_batch(
-            "UPDATE main.listener_play_history AS h \
-                SET passage_id = (SELECT pr.passage_id FROM main.passage_recordings pr \
-                                   WHERE pr.mbid = h.mbid LIMIT 1) \
-              WHERE h.mbid IS NOT NULL \
-                AND EXISTS (SELECT 1 FROM main.passage_recordings pr WHERE pr.mbid = h.mbid);",
-        )
-        .map_err(|e| DbError::Query(format!("remap history: {e}")))?;
+        if has_hist {
+            conn.execute_batch(&format!(
+                "UPDATE main.listener_play_history AS h \
+                    SET passage_id = (SELECT pr.passage_id FROM {recordings} pr \
+                                       WHERE pr.mbid = h.mbid LIMIT 1) \
+                  WHERE h.mbid IS NOT NULL \
+                    AND EXISTS (SELECT 1 FROM {recordings} pr WHERE pr.mbid = h.mbid);"
+            ))
+            .map_err(|e| DbError::Query(format!("remap history: {e}")))?;
+        }
         Ok(n)
     };
     match done() {
@@ -580,14 +608,10 @@ mod tests {
     }
 
 
-    /// The point of the whole exercise: a Vipunen rebuild renumbers passages, and
-    /// the history has to follow the RECORDING rather than the number, or years
-    /// of listening are silently reattributed to whatever songs hold those ids
-    /// now `[REQ-LIB-160]`.
-    #[test]
-    fn a_restore_follows_recordings_through_renumbering() {
+    /// A fresh directory for one test's files.
+    fn scratch(tag: &str) -> PathBuf {
         let tmp = std::env::temp_dir().join(format!(
-            "lempi-rs-{}_{}",
+            "lempi-{tag}-{}_{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -595,54 +619,103 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&tmp).unwrap();
-        let db = tmp.join("lib.db");
-        let c = Connection::open(&db).unwrap();
-        c.execute_batch(
+        tmp
+    }
+
+    /// The point of the whole exercise: a Vipunen rebuild renumbers passages, and
+    /// the history has to follow the RECORDING rather than the number, or years
+    /// of listening are silently reattributed to whatever songs hold those ids
+    /// now `[REQ-LIB-160]`.
+    ///
+    /// **On a split pair, as every installation is** `[PI-DB-030]`: the plays in
+    /// the listener file, the recordings in the catalogue. The single-file
+    /// fixture this test used to build is how F-01 went unseen.
+    #[test]
+    fn a_restore_follows_recordings_through_renumbering() {
+        let tmp = scratch("rs");
+        let listener = tmp.join("listener.db");
+        let library = tmp.join("library.db");
+        let l = Connection::open(&listener).unwrap();
+        l.execute_batch(
             "CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
                  played_at INTEGER, passage_id INTEGER, mbid TEXT);
-             CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL);
-             INSERT INTO passage_recordings VALUES (10, 'rec-a', 1.0);
-             INSERT INTO passage_recordings VALUES (11, 'rec-b', 1.0);
              INSERT INTO listener_play_history VALUES (1, 100, 10, 'rec-a');
              INSERT INTO listener_play_history VALUES (2, 200, 11, 'rec-b');
              INSERT INTO listener_play_history VALUES (3, 300, 12, 'rec-gone');",
         )
         .unwrap();
-        let snap = snapshot(&db).expect("snapshot");
+        let c = Connection::open(&library).unwrap();
+        c.execute_batch(
+            "CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL);
+             INSERT INTO passage_recordings VALUES (10, 'rec-a', 1.0);
+             INSERT INTO passage_recordings VALUES (11, 'rec-b', 1.0);",
+        )
+        .unwrap();
+        let snap = snapshot(&listener).expect("snapshot");
 
         // Vipunen rebuilds: same recordings, entirely different passage numbers.
         c.execute_batch(
             "DELETE FROM passage_recordings;
              INSERT INTO passage_recordings VALUES (77, 'rec-a', 1.0);
-             INSERT INTO passage_recordings VALUES (88, 'rec-b', 1.0);
-             DELETE FROM listener_play_history;",
+             INSERT INTO passage_recordings VALUES (88, 'rec-b', 1.0);",
         )
         .unwrap();
+        l.execute_batch("DELETE FROM listener_play_history;").unwrap();
 
-        let dry = restore(&snap, &db, false).expect("rehearsal");
+        let dry = restore(&snap, &listener, &library, false).expect("rehearsal");
         assert_eq!(dry.plays, 3);
         assert_eq!(dry.remapped, 2, "two plays moved to new passage ids");
         assert_eq!(dry.orphaned, 1, "one recording is no longer in the library");
         assert!(!dry.committed);
-        let still: i64 = c
+        let still: i64 = l
             .query_row("SELECT COUNT(*) FROM listener_play_history", [], |r| r.get(0))
             .unwrap();
         assert_eq!(still, 0, "a rehearsal must not write");
 
-        let done = restore(&snap, &db, true).expect("restore");
+        let done = restore(&snap, &listener, &library, true).expect("restore");
         assert!(done.committed);
-        let at: i64 = c
+        let at: i64 = l
             .query_row("SELECT passage_id FROM listener_play_history WHERE mbid='rec-a'",
                        [], |r| r.get(0))
             .unwrap();
         assert_eq!(at, 77, "the play followed its recording, not its old number");
         // A play whose recording has left the library still happened, and is
         // kept rather than tidied away for the sake of a foreign key.
-        let orphan: i64 = c
+        let orphan: i64 = l
             .query_row("SELECT COUNT(*) FROM listener_play_history WHERE mbid='rec-gone'",
                        [], |r| r.get(0))
             .unwrap();
         assert_eq!(orphan, 1);
+        // And the catalogue was only read.
+        let recs: i64 = c
+            .query_row("SELECT COUNT(*) FROM passage_recordings", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(recs, 2, "the catalogue is untouched");
+        drop((l, c));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// A catalogue the history cannot be re-pointed through is an error, in a
+    /// rehearsal as much as a commit -- never a report of zero moved and zero
+    /// orphaned that looks like a clean answer (review O-04).
+    #[test]
+    fn a_restore_without_recordings_to_follow_is_an_error_not_a_zero() {
+        let tmp = scratch("rs-norec");
+        let listener = tmp.join("listener.db");
+        let library = tmp.join("library.db");
+        Connection::open(&listener).unwrap().execute_batch(
+            "CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
+                 played_at INTEGER, passage_id INTEGER, mbid TEXT);
+             INSERT INTO listener_play_history VALUES (1, 100, 10, 'rec-a');",
+        )
+        .unwrap();
+        Connection::open(&library).unwrap()
+            .execute_batch("CREATE TABLE files (file_id INTEGER PRIMARY KEY);")
+            .unwrap();
+        let snap = snapshot(&listener).expect("snapshot");
+        let err = restore(&snap, &listener, &library, false).expect_err("rehearsal");
+        assert!(err.message().contains("passage_recordings"), "says what is missing: {err}");
+        assert!(restore(&snap, &listener, &library, true).is_err(), "and a commit refuses too");
         std::fs::remove_dir_all(&tmp).ok();
     }
 

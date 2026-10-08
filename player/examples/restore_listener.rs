@@ -12,9 +12,8 @@
 //! would produce, because both are measured from the same query before anything
 //! is written.
 //!
-//! **Known gap:** on a split pair -- every installation now -- `backup::restore`
-//! cannot work, and the default `LEMPI_DB` below predates the split. See
-//! `backup::restore`, and docs/architecture.md section 10.
+//! The pair is named by `LEMPI_LISTENER` and `LEMPI_LIBRARY`, as for `lempi`
+//! itself; unset, `data/listener.db` and `data/library.db`.
 
 use std::path::{Path, PathBuf};
 
@@ -34,7 +33,10 @@ fn when(t: Option<i64>) -> String {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let db = PathBuf::from(
-        std::env::var("LEMPI_DB").unwrap_or_else(|_| "data/lempi_new.db".into()),
+        std::env::var("LEMPI_LISTENER").unwrap_or_else(|_| "data/listener.db".into()),
+    );
+    let library = PathBuf::from(
+        std::env::var("LEMPI_LIBRARY").unwrap_or_else(|_| "data/library.db".into()),
     );
 
     if args.is_empty() || args[0] == "--list" {
@@ -90,7 +92,7 @@ fn main() {
         }
     }
 
-    match backup::restore(snap, &db, commit) {
+    match backup::restore(snap, &db, &library, commit) {
         Ok(r) => {
             println!(
                 "{} {} table(s): {} plays, {} re-pointed to new passage ids, {} orphaned",
