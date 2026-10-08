@@ -54,7 +54,7 @@ fi
 # writes whatever happens to be connected over the listener's choice.
 #
 # Measured 2026-09-10 19:35:14, from the appliance's own log: *"adopted
-# 08:EB:ED:26:14:12 as the speaker (none was chosen)"* -- while one very much
+# <speaker-mac> as the speaker (none was chosen)"* -- while one very much
 # was. That is the `[PI3-FOUND-310]` failure happening through the guard built
 # to prevent it, and it silently changed which speaker the appliance prefers at
 # every future boot.
