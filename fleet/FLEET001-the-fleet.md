@@ -82,6 +82,7 @@ Beside each backup, `pre-star-2026-09-26-tools/` holds the tool and the two patc
 | `lp3-wifi` | `1a72c72`, `import_bundle` the same | overlay root; holds durable copies, and its fbui is the same build |
 | `teacherslounge` | `ca8313f`, built there 2026-10-02 by `build/update-source-host.sh`, which now also links `import_bundle` onto the PATH; no player service, **on purpose**: started by hand only `[TL-OPN-020]` | mirrors this file |
 | `smartboardpc` | `0a161fd`, built there the same way, its `systemd --user` player restarted onto it `[SMT-SVC-010]` | migrated 2026-09-26 `[FLT-ISS-020]` |
+| the Moto G | `5fadc11`, built by `android/build.sh` and installed over wireless adb 2026-10-09, read back as `0.1+5fadc11` and from the player's own `/build`, not dirty | 181 commits behind until then, on `4165cd1` since 2026-09-27: nothing compiled its crate between APK builds, which the gate does now `[REQ-AND-410]`. Cold-started and playing, position advancing, no underruns. Not in `setup-fleet.sh`: its build is read with adb |
 
 **`[FLT-RUN-020]` How each plays, and what MPD is where.** The appliances' audio paths differ on purpose only where the difference buys something.
 
