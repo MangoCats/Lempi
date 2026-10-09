@@ -2765,7 +2765,7 @@ placing at the ring's own depth, which sounds early",
         if self.announced.is_none() {
             if let Some(h) = heard {
                 if let Some(entry) = self.entry_of(h.admitted, h.passage) {
-                    // Capped at the passage's own end: the clock must not run
+                    // Capped at the passage's own end: the position must not run
                     // past the music, however long it sits there.
                     let at = h.position_ms.min(entry.duration_ms());
                     self.shown = Some((entry, at));

@@ -115,7 +115,7 @@ mixer applies), `gain_db`, `mbid`, naming.
 `kind='radio'` trim points, and why one capture holds forty passages with one set
 of tags.
 
-Three things worth knowing before changing anything here:
+Four things worth knowing before changing anything here:
 
 * **`path.rs` is a supervisor on its own thread** and owns the device. A sink
   that vanishes — a Bluetooth speaker walking out of range — is reopened rather
@@ -126,6 +126,12 @@ Three things worth knowing before changing anything here:
 * **Gain is applied per passage, before the mix**, so each side of a crossfade
   carries its own level. Applying it after would level the blend rather than the
   passages.
+* **What is heard is read off the device, not the mixer.** The mixer runs the
+  ring's depth ahead, so `engine/timeline.rs` records which passage each output
+  sample belongs to, and the device's read position says what is playing. The
+  display `[REQ-AUD-164]`, play accounting `[SPEC-PLAY-010]` and seeks all use
+  it, so a pause, which reads nothing, moves none of them. The mixer's head is
+  still what a handoff carries.
 
 ---
 
