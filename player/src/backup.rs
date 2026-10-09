@@ -117,15 +117,6 @@ pub fn snapshot_before_restore(db: &Path) -> Result<PathBuf, DbError> {
     snapshot_named(db, "prerestore-", false)
 }
 
-/// A path as a read-only SQLite URI. `%`, `?` and `#` would otherwise be read
-/// as an escape, a query or a fragment; percent-encoded they are part of the
-/// name. Shared, so the snapshot and the restore cannot escape differently --
-/// they did, until 2026-10-08.
-fn ro_uri(path: &Path) -> String {
-    let p = path.to_string_lossy().replace('%', "%25").replace('?', "%3f").replace('#', "%23");
-    format!("file:{p}?mode=ro")
-}
-
 fn snapshot_named(db: &Path, prefix: &str, rotate: bool) -> Result<PathBuf, DbError> {
     let dir = dir_for(db);
     std::fs::create_dir_all(&dir)
@@ -151,7 +142,7 @@ fn snapshot_named(db: &Path, prefix: &str, rotate: bool) -> Result<PathBuf, DbEr
         .map_err(|e| DbError::Open(format!("create {}: {e}", part.display())))?;
     conn.busy_timeout(std::time::Duration::from_secs(10))
         .map_err(|e| DbError::Open(e.to_string()))?;
-    conn.execute("ATTACH DATABASE ?1 AS src", [ro_uri(db).as_str()])
+    conn.execute("ATTACH DATABASE ?1 AS src", [crate::db::read_only_uri(db).as_str()])
         .map_err(|e| DbError::Query(format!("attach {}: {e}", db.display())))?;
 
     let mut copied = 0usize;
@@ -342,7 +333,7 @@ pub fn restore(snapshot: &Path, listener: &Path, library: &Path, commit: bool)
     conn.busy_timeout(std::time::Duration::from_secs(10))
         .map_err(|e| DbError::Open(e.to_string()))?;
     let lib = crate::db::attach_library(&conn, listener, library)?;
-    conn.execute("ATTACH DATABASE ?1 AS snap", [ro_uri(snapshot).as_str()])
+    conn.execute("ATTACH DATABASE ?1 AS snap", [crate::db::read_only_uri(snapshot).as_str()])
         .map_err(|e| DbError::Query(format!("attach {}: {e}", snapshot.display())))?;
 
     let q = |e: rusqlite::Error| DbError::Query(e.to_string());

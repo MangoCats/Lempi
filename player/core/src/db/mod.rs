@@ -126,6 +126,19 @@ pub(crate) const BUSY_WAIT: std::time::Duration = std::time::Duration::from_secs
 /// enabled. Every one of `Library::open`, `PlayerStore::open`, and
 /// `bin/mpd_direct.rs`'s bare `Connection::open` must include that flag
 /// once they call this.
+/// A path as a read-only SQLite URI, `file:<path>?mode=ro`.
+///
+/// `%`, `?` and `#` in the path would otherwise be read as an escape, a query
+/// or a fragment -- a catalogue in a folder named `Music #2` failed to attach,
+/// and `%41` named another file -- so they are percent-encoded and stay part
+/// of the name; `%` first, so the others' escapes are not escaped again. One
+/// helper for every read-only attach: until 2026-10-09 three places built this
+/// URI and only the backups escaped it.
+pub fn read_only_uri(path: &std::path::Path) -> String {
+    let p = path.to_string_lossy().replace('%', "%25").replace('?', "%3f").replace('#', "%23");
+    format!("file:{p}?mode=ro")
+}
+
 pub fn attach_library(
     conn: &rusqlite::Connection,
     db_path: &std::path::Path,
@@ -134,8 +147,7 @@ pub fn attach_library(
     if db_path == library_path {
         return Ok("main");
     }
-    let uri = format!("file:{}?mode=ro", library_path.display());
-    conn.execute("ATTACH DATABASE ?1 AS lib", [uri])
+    conn.execute("ATTACH DATABASE ?1 AS lib", [read_only_uri(library_path)])
         .map_err(|e| DbError::Open(format!("attach library {}: {e}", library_path.display())))?;
     Ok("lib")
 }
@@ -397,6 +409,30 @@ mod attach_library_tests {
     /// dependency for one new test module.
     fn scratch_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("lempi-attach-{name}-{}.db", std::process::id()))
+    }
+
+    /// A catalogue in a folder whose name holds `#` and `%` attaches, and is
+    /// the one read: unescaped, `#` ended the path and `%20` named another
+    /// file. (`?` cannot be in a Windows file name; the escaping covers it
+    /// the same way.)
+    #[test]
+    fn a_catalogue_under_a_name_with_uri_characters_attaches() {
+        let dir = std::env::temp_dir()
+            .join(format!("lempi-attach-Music #2 100%20 {}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (listener, library) = (dir.join("listener.db"), dir.join("library.db"));
+        let lib = rusqlite::Connection::open(&library).unwrap();
+        lib.execute_batch("CREATE TABLE recordings (mbid TEXT); INSERT INTO recordings VALUES ('x');")
+            .unwrap();
+        drop(lib);
+        let conn = open_uri(&listener);
+        let schema = attach_library(&conn, &listener, &library).expect("it attaches");
+        let n: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {schema}.recordings"), [], |r| r.get(0))
+            .expect("and it is the catalogue that was named");
+        assert_eq!(n, 1);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn open_uri(path: &Path) -> Connection {

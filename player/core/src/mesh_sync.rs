@@ -45,7 +45,7 @@ pub struct Snapshot {
 pub fn snapshot(listener: &Path, out: &Path) -> Result<Snapshot, String> {
     let _ = std::fs::remove_file(out);
     let c = Connection::open(out).map_err(|e| e.to_string())?;
-    let uri = format!("file:{}?mode=ro", listener.to_string_lossy().replace('\\', "/"));
+    let uri = crate::db::read_only_uri(listener);
     c.execute("ATTACH DATABASE ?1 AS src", [&uri]).map_err(|e| format!("open {}: {e}", listener.display()))?;
     let mut rep = Snapshot::default();
     for t in SHARED {
