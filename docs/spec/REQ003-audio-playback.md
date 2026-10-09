@@ -109,6 +109,8 @@ The test is the device's read position against a record of which passage each ou
 
 A lead longer than the fade is legal and leaves silence between the two; the UI reports which of the three it is rather than letting a gap come as a surprise. The engine clamps, and the browser is sent the limits rather than keeping its own copy.
 
+**In a track's last ~15 s, a skip passes over the next track too, and that is intended** *(the maintainer, 2026-10-09, after trying it on lempi02w)*. For the ring's depth before a track ends, the mixer has finished with it and is already mixing the next one, so a skip there fades out the track heard and lands on the one after next. The track passed over was never heard: it earns no rejection and its queueing mark is given back `[REQ-PD-112]`, and whatever of its opening survives the cut plays as part of the fade, attributed to nothing.
+
 > **The fade is applied on the mixer thread, not in the callback** — the opposite of volume `[REQ-AUD-152]`, and for a reason worth stating: the incoming passage is summed into those same samples, so a fade-out evaluated in the callback would drag the newcomer down with the passage it is replacing. Cut, fade and overlay happen under one lock, so no callback can observe a ring that is cut but not yet faded.
 >
 > **The overlap is affordable only because the passage is already decoded** `[REQ-AUD-160]`. The 1.5 s laid over the outgoing tail is lifted straight from its prepared buffer, with its fade-in already applied on the way in `[XFD-ORTH-020]`, and through `mix` rather than by reading the ring directly so the accounting is identical to an ordinary tick.

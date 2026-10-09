@@ -106,6 +106,12 @@ impl Timeline {
         self.segments.iter().any(|s| s.admitted == admitted)
     }
 
+    /// Forget an admission: a skip passed over it unheard, and whatever of it
+    /// survives the cut is part of the fade, not a hearing of it.
+    pub fn forget(&mut self, admitted: u64) {
+        self.segments.retain(|s| s.admitted != admitted);
+    }
+
     /// Forget everything: the ring was replaced, and its sample count with it.
     pub fn reset(&mut self) {
         self.segments.clear();

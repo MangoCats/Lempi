@@ -1324,6 +1324,26 @@ impl Engine {
         // there, together. Nothing upstream is worth keeping -- including a
         // passage part-way through an ordinary crossfade, which the listener
         // has barely heard, its decode having run a ring's depth ahead.
+        //
+        // **In a passage's last ring-depth, that includes the next one.** The
+        // passage heard has left the mixer and the next is being mixed, so a
+        // skip passes over both and lands on the one after: intended, and so
+        // documented `[REQ-AUD-162]` (the maintainer, 2026-10-09). The next
+        // was never heard, so it is no rejection; it is dropped, and its
+        // queueing mark given back `[REQ-PD-112]`. Whatever of its opening
+        // survives the cut plays as part of the fade, attributed to nothing.
+        if let Some(read) = self.read_position() {
+            let unheard: Vec<(u64, i64)> = self
+                .live
+                .iter()
+                .filter(|l| self.timeline.heard_to(l.admitted, read).is_none())
+                .map(|l| (l.admitted, l.entry.passage_id))
+                .collect();
+            for (admitted, passage) in unheard {
+                self.timeline.forget(admitted);
+                self.dropped.push(passage);
+            }
+        }
         self.depart_all();
         self.live.clear();
         // Promote the prepared passage. Without one this degrades to a plain
@@ -5082,6 +5102,53 @@ than one mix block");
         assert!(!e.seek_to(Some(66), 5_000), "not the passage on air");
         assert!(e.seek_to(Some(65), 5_000), "the passage on air");
         let _ = std::fs::remove_file(&wav);
+    }
+
+    /// A skip in a passage's last ring-depth passes over the next passage too,
+    /// as intended `[REQ-AUD-162]`: the one heard has left the mixer and the
+    /// next is being mixed, so the skip lands on the one after. The one heard
+    /// is judged as usual; the next, never heard, is dropped -- no rejection,
+    /// and its mark given back.
+    #[test]
+    fn a_skip_in_the_last_ring_depth_passes_over_the_next_passage() {
+        let (st, path) = store();
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+        let ws: Vec<_> = (0..3).map(|_| wav_of(2_000)).collect();
+        for (i, w) in ws.iter().enumerate() {
+            let mut ent = entry(95 + i as i64, w.to_str().unwrap());
+            ent.end_ms = 2_000;
+            ent.mbid = Some(format!("aaaaaaaa-0000-0000-0000-{:012}", 95 + i));
+            e.enqueue(ent);
+        }
+        h.send(Command::Play);
+        e.drain_commands();
+        const KEEP: usize = 44_100;
+        let mut window = false;
+        for _ in 0..200_000 {
+            e.tick();
+            drain_keeping(&ring, KEEP);
+            if e.head == Some(95) && e.live.first().map(|l| l.entry.passage_id) == Some(96) {
+                window = true;
+                break;
+            }
+        }
+        assert!(window, "never reached the window where 95 sounds and 96 is mixed");
+        e.take_dropped();
+
+        h.send(Command::Skip);
+        e.drain_commands();
+        assert_eq!(e.shown.as_ref().map(|(s, _)| s.passage_id), Some(97), "it lands on the one after");
+        assert_eq!(e.take_dropped(), vec![96], "the next, never heard, is dropped");
+        for _ in 0..400 {
+            drain_keeping(&ring, KEEP);
+            e.tick();
+        }
+        let skipped = st.last_rejected(crate::db::Rejection::Skip).unwrap();
+        assert!(!skipped.contains_key("aaaaaaaa-0000-0000-0000-000000000096"), "and not rejected");
+        let _ = ws.iter().map(std::fs::remove_file).count();
+        let _ = std::fs::remove_file(&path);
     }
 
     /// A seek's jump is not listening `[SPEC-PLAY-012]`, though for the lead
