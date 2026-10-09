@@ -411,7 +411,7 @@ pub fn import(
     import_bound(db, doc, body, audio_root, apply, md5_hasher, &HashMap::new(), &Default::default())
 }
 
-/// [`import_with`], with some encodings bound where they already are rather
+/// [`import`], with some encodings bound where they already are rather
 /// than under `audio_root`: `bind` maps an `audio_md5` to its file. A phone
 /// uses it for a file it found in its own storage, which a bundle then names
 /// `[REQ-AND-260]`.
@@ -1930,9 +1930,9 @@ mod tests {
     /// improved recording-scope data (flavor, here) land -- today's `held`
     /// check `continue`s past the whole encoding, including its credits'
     /// flavor, the moment the file itself is no longer new. A resend of the
-    /// *identical* bundle must change nothing (the `flavor_value_updates`
-    /// test below covers that side); this is the other direction: a
-    /// *different*, newer bundle for audio already on disk.
+    /// *identical* bundle must change nothing (this test's last step covers
+    /// that side); this is mainly the other direction: a *different*, newer
+    /// bundle for audio already on disk.
     #[test]
     fn a_later_bundle_still_updates_flavor_for_an_already_held_file() {
         let mut c = empty_library();

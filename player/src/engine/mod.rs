@@ -304,8 +304,8 @@ pub struct Engine {
     /// (`prefs.rs`): saved, published and handed to whoever reads them.
     pub(crate) prefs: Prefs,
     /// Which passage contributed to which output samples, and where in it:
-    /// what the listener hears, read off the device's position. In shadow for
-    /// now -- compared with `shown`, never acted on (`shadow_timeline`).
+    /// what the listener hears, read off the device's position. The display,
+    /// play accounting and seeks all follow it `[REQ-AUD-164]`.
     timeline: Timeline,
     /// How many passages have joined `live`, for `Live::admitted`.
     admissions: u64,

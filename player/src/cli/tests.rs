@@ -594,7 +594,7 @@ fn an_option_shaped_value_is_never_swallowed_as_a_path() {
 /// behind the `mpd` feature and the default run does not compile them.
 ///
 /// So this reads the source of `src/bin/` rather than the binaries — the
-/// same technique as `every_binary_has_a_table` above, and it works whether
+/// same technique as `every_binary_has_exactly_one_spec` above, and it works whether
 /// or not the feature is enabled. A `must_*` call names its option constant,
 /// so the name is recoverable from the text.
 ///
