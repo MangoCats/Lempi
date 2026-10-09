@@ -150,8 +150,8 @@ offers: accept as the new version, keep it under a new name, or decline.
 ## 6. Moving to it
 
 **`[SPEC-PGM-500]` The eight time slots every node has become one programme.**
-The hub's set is stored as the library's first programme, version 1, under a
-name the maintainer chooses. Each node whose slots have that fingerprint is
+The hub's set is stored as the library's first programme, version 1, named
+**WKMP** — the maintainer's name for it, 2026-10-09. Each node whose slots have that fingerprint is
 recorded as running it; a node whose slots differ is recorded as running its
 own, unnamed until someone names or replaces it. Nothing on any node changes in
 the move.
