@@ -12,7 +12,7 @@
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::db::PlayerStore;
 use crate::decoder::PassageDecoder;
@@ -25,7 +25,6 @@ use crate::BUFFER_FRAMES;
 use echo_state::EchoState;
 use prefs::Prefs;
 use timeline::{Segment, Timeline};
-#[cfg(test)]
 use timeline::Audible;
 
 struct Live {
@@ -47,69 +46,6 @@ struct Live {
     /// Its place in the order passages joined `live`: in an overlap, the later
     /// one is the one shown `[REQ-AUD-164]`. Set by `admit_live`.
     admitted: u64,
-}
-
-/// A play already written to history, whose passage finished decoding but may
-/// still be sounding out of the output ring `[REQ-VIS-250]`.
-///
-/// **Why this waits rather than reading `heard_ms` on the spot.** A passage
-/// leaves `live` the instant its decoder is exhausted, which is up to a
-/// ring's depth -- `BUFFER_FRAMES`, ~15 s here -- before its last sample
-/// actually reaches the speaker `[REQ-VIS-240]`. Finalising there froze the
-/// figure at "decoded", not "heard": a passage played all the way through and
-/// left with 15 s of itself still queued behind it read as ~94%, never 100%,
-/// however completely it was listened to. `at_ms`/`since` are the same pair
-/// `draining` carries, so the estimate advances exactly as the position
-/// display already does -- one clock, trusted by both.
-struct PendingFinish {
-    play_id: i64,
-    span_ms: u64,
-    at_ms: u64,
-    /// The `SoundingClock` reading when it left `live`.
-    since: Duration,
-}
-
-impl PendingFinish {
-    /// How much would have been heard by `now` (a `SoundingClock` reading),
-    /// capped at the passage's own length -- the clock must not run past the
-    /// music.
-    fn estimate(&self, now: Duration) -> u64 {
-        (self.at_ms + now.saturating_sub(self.since).as_millis() as u64).min(self.span_ms)
-    }
-}
-
-/// Time that counts as sounding: it runs only while the engine is playing into
-/// an output that is audible, and stands still otherwise `[REQ-VIS-250]`.
-///
-/// What a drain is timed by. A passage that has left `live` sounds out of the
-/// ring for up to a ring's depth, and that was timed by the wall clock -- but a
-/// pause feeds the device silence and leaves the ring untouched
-/// `[PI3-OPEN-020]`, so pausing in a passage's last ring-depth ran its position
-/// to the end and recorded the tail as heard (review F-02, 2026-10-08). A
-/// stopgap: the audible timeline replaces it by reading the frames the device
-/// actually took.
-#[derive(Debug, Default)]
-struct SoundingClock {
-    banked: Duration,
-    since: Option<Instant>,
-}
-
-impl SoundingClock {
-    fn now(&self) -> Duration {
-        self.banked + self.since.map_or(Duration::ZERO, |s| s.elapsed())
-    }
-
-    /// Start or stop it; idempotent, so it can be told every tick.
-    fn run(&mut self, on: bool) {
-        match (on, self.since) {
-            (true, None) => self.since = Some(Instant::now()),
-            (false, Some(s)) => {
-                self.banked += s.elapsed();
-                self.since = None;
-            }
-            _ => {}
-        }
-    }
 }
 
 /// Whether a host names this very node `[SPEC-ECHO-050]`.
@@ -535,6 +471,10 @@ pub struct Engine {
     /// display can name what it hears. Each goes once the timeline holds
     /// nothing of it.
     departed: Vec<(u64, QueueEntry)>,
+    /// Which admission of `head` is being heard. A seek opens the same passage
+    /// again, so the passage does not depart, but its position jumps, and a
+    /// jump is not listening `[SPEC-PLAY-012]`.
+    head_admitted: Option<u64>,
     /// Set when a command rearranged the queue, so that too can bypass the
     /// clock. A listener who removes a passage is waiting on the answer; the
     /// throttle exists for the position counter ticking along, and making an
@@ -572,24 +512,6 @@ pub struct Engine {
     /// Set only while a handoff's fade is running, so the departing head is
     /// not written down as a rejection `[SPEC-BK-065]`.
     handing_over: bool,
-    /// The passage that has finished mixing but is still being heard: which
-    /// one, where it had got to, and when that was `[REQ-VIS-240]`.
-    ///
-    /// A passage leaves `live` when its decoder is exhausted, which is up to a
-    /// ring's depth before its last sample reaches the speaker. Without this
-    /// the displayed position simply stopped there — fifteen seconds short of
-    /// the end, every passage.
-    ///
-    /// **Advanced by the clock, not by the ring.** The obvious measure — what
-    /// it had mixed, less what is still buffered — is wrong here: during a
-    /// crossfade the incoming passage is filling that same ring, so its depth
-    /// says nothing about how much of the outgoing one is left. What is left
-    /// is simply time, and audio is played at one second per second.
-    /// The `SoundingClock` reading is the third field, not an `Instant`: a
-    /// pause must stop it (review F-02).
-    draining: Option<(i64, u64, Duration)>,
-    /// What a drain is timed by; see `SoundingClock`.
-    sounding: SoundingClock,
 
     /// A passage arriving mid-play whose play another backend has already
     /// recorded. Judged as recorded the moment it becomes the head, so it
@@ -629,11 +551,6 @@ pub struct Engine {
     /// `[REQ-VIS-250]`. `None` once there is nothing left to finish: cleared
     /// after use and whenever the head changes.
     pending_play_id: Option<i64>,
-    /// A play whose passage exhausted naturally and is still draining
-    /// through the ring, waiting for the clock to say how much of the tail
-    /// was actually heard `[REQ-VIS-250]`. At most one at a time, the same
-    /// simplification `draining` makes for the display.
-    pending_finish: Option<PendingFinish>,
     /// Passages chosen but never played, waiting to be reported `[REQ-PD-112]`:
     /// one that could not be opened, or a person's own pick they took out.
     ///
@@ -755,6 +672,7 @@ impl Engine {
             timeline_read: 0,
             announced: None,
             departed: Vec::new(),
+            head_admitted: None,
             last_lock_failures: 0,
             out_rate,
             out_channels,
@@ -775,8 +693,6 @@ impl Engine {
             last_save: Instant::now(),
             handing_over: false,
             counted_elsewhere: None,
-            draining: None,
-            sounding: SoundingClock::default(),
             heard_ms: 0,
             heard_from: None,
             saved: None,
@@ -785,7 +701,6 @@ impl Engine {
             head_mbid: None,
             head_span_ms: 0,
             pending_play_id: None,
-            pending_finish: None,
             shown: None,
             dropped: Vec::new(),
             outcomes: Vec::new(),
@@ -861,17 +776,9 @@ impl Engine {
         // that lies about what it is doing, which is the fault this whole
         // effort exists to remove `[PI3-API-030]`.
         let audible = self.path.audible();
-        self.sounding.run(self.playing && audible);
         let submitted = if self.playing && audible { self.mix_and_submit() } else { 0 };
         self.retire_finished();
         self.record_play();
-        // Independent of `self.playing`, the same as `advance_shown` below.
-        // That is a known gap, not a design: while paused the device is fed
-        // silence and the ring does NOT drain (`output::fill`
-        // `[PI3-OPEN-020]`), but the clock these read keeps running, so a
-        // pause in a passage's last ring-depth finishes it early
-        // `[REQ-VIS-250]` -- docs/architecture.md section 10.
-        self.finalize_draining_plays();
         self.advance_shown();
         self.check_queued_shutdown();
         // Throttled by time, but never at the cost of a late answer to the
@@ -1478,12 +1385,6 @@ impl Engine {
         // commanded start makes them differ `[GDE-ARC-058]`.
         let ch = self.out_channels.max(1);
         let lead_samples = (lead_ms * self.out_rate as u64 / 1000) as usize * ch;
-        // Whatever a previously-departed passage still had draining through
-        // this ring is about to be wiped along with everything else in it --
-        // take its estimate as final now, rather than let a skip or a seek
-        // strand it waiting for a tail that will never finish arriving
-        // `[REQ-VIS-250]`.
-        self.resolve_pending_finish_now();
         // How much of the outgoing survives the cut sets how much of the
         // incoming overlaps it. Asked before the cut, since afterwards the
         // answer is by definition the fade length.
@@ -1663,7 +1564,9 @@ impl Engine {
     /// Whether the sounding passage's play is already in the history
     /// `[SPEC-BK-065]`.
     pub fn head_counted(&self) -> bool {
-        self.recorded && !self.live.is_empty()
+        // The play judged is the one heard, and for the last ring's depth of a
+        // passage the one mixed -- what a handoff carries -- is the next.
+        self.recorded && self.head.is_some() && self.head == self.live.first().map(|l| l.entry.passage_id)
     }
 
     /// Adopt a passage another backend already counted, so this one will not
@@ -2789,15 +2692,9 @@ placing at the ring's own depth, which sounds early",
     }
 
     fn retire_finished(&mut self) {
-        // **What it had mixed as it left** `[REQ-VIS-240]`. The listener has
-        // not heard the last of it -- a ring's depth of it is still queued for
-        // the device -- and `advance_shown` needs this to keep the clock
-        // moving over that window.
+        // Still to be heard for up to a ring's depth: the timeline keeps
+        // playing it, and `departed` keeps its entry so it can be named.
         for l in self.live.iter().filter(|l| l.stream.is_exhausted()) {
-            // The audible position at the moment it stopped being mixed, and
-            // the moment itself. Everything after this is arithmetic on the
-            // clock.
-            self.draining = Some((l.entry.passage_id, self.audible_ms(l), self.sounding.now()));
             self.departed.push((l.admitted, l.entry.clone()));
         }
         self.live.retain(|l| !l.stream.is_exhausted());
@@ -2932,8 +2829,28 @@ placing at the ring's own depth, which sounds early",
     fn read_position(&self) -> Option<u64> {
         match &self.path.ring {
             Some(r) => r.position().map(|(consumed, _)| consumed),
+            None if self.live.is_empty() => Some(self.discarded),
             None => Some(self.discarded.saturating_sub(1)),
         }
+    }
+
+    /// The passage the device is playing, and where in it, for play
+    /// accounting. Where nothing covers the read position, the passage that
+    /// ended last is still the one playing if the mixer still has it: the ring
+    /// ran dry under it (an underrun is a stall, not a departure), or a seek
+    /// opened it again and the silence before the new point is still playing.
+    fn heard_now(&self) -> Option<(Audible, QueueEntry)> {
+        let a = self.timeline.audible_at(self.read_position()?)?;
+        if a.ended
+            && !self
+                .live
+                .iter()
+                .any(|l| l.admitted == a.admitted || l.entry.passage_id == a.passage)
+        {
+            return None;
+        }
+        let e = self.entry_of(a.admitted, a.passage)?;
+        Some((a, e))
     }
 
     /// What the timeline says is audible now.
@@ -2953,12 +2870,10 @@ placing at the ring's own depth, which sounds early",
     }
 
     fn execute_queued_shutdown(&mut self) {
-        self.resolve_pending_finish_now();
         self.queue.advance();
         self.queue_edited = true;
         self.shown = None;
         self.announced = Some(self.admissions + 1);
-        self.draining = None;
         let remaining: Vec<i64> = self
             .queue
             .iter()
@@ -4559,101 +4474,62 @@ than one mix block");
         let _ = std::fs::remove_file(&path);
     }
 
-    /// The primitive the deferred correction runs on `[REQ-VIS-250]`: grows
-    /// with the sounding clock from wherever the ring left off, and never
-    /// claims more than the passage actually is -- the same cap
-    /// `advance_shown` applies to the position display for the identical
-    /// reason `[REQ-VIS-240]`.
-    #[test]
-    fn pending_finish_estimate_advances_with_the_clock_and_caps_at_span() {
-        let at = Duration::from_secs(5);
-        let p = PendingFinish { play_id: 1, span_ms: 100, at_ms: 80, since: at };
-        assert_eq!(p.estimate(at), 80, "nothing has elapsed yet");
-        assert_eq!(p.estimate(at + Duration::from_millis(10)), 90, "it advances with the clock");
-        assert_eq!(p.estimate(at + Duration::from_secs(1)), 100,
-                   "the clock must not run past the passage's own length");
-    }
 
-    /// The sounding clock stands still while it is stopped, and resumes from
-    /// where it stood (review F-02).
-    #[test]
-    fn the_sounding_clock_stops_for_a_pause() {
-        let mut c = SoundingClock::default();
-        assert_eq!(c.now(), Duration::ZERO, "it starts stopped");
-        c.run(true);
-        std::thread::sleep(Duration::from_millis(20));
-        c.run(false);
-        let stopped = c.now();
-        assert!(stopped >= Duration::from_millis(20), "it ran while on: {stopped:?}");
-        std::thread::sleep(Duration::from_millis(30));
-        assert_eq!(c.now(), stopped, "and not at all while off");
-        c.run(true);
-        c.run(true);
-        assert!(c.now() >= stopped, "told twice, it still only runs once");
-    }
 
-    /// A skip or a seek wipes the ring outright `[REQ-VIS-250]`: whatever a
-    /// still-draining play had reached by then is all it is ever going to
-    /// reach, so it must be written now rather than left waiting for a tail
-    /// that no longer exists.
+    /// A skip in a passage's last ring-depth does not lose its correction
+    /// `[REQ-VIS-250]`: the passage played and left the mixer, the skip cut
+    /// the ring under its tail, and what was heard of it up to the cut is
+    /// written as final.
     #[test]
-    fn a_skip_resolves_a_still_draining_correction_rather_than_losing_it() {
+    fn a_skip_in_the_drain_window_writes_what_was_heard() {
         let (_st, path) = store();
-        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
         e.attach_store(PlayerStore::open(&path).unwrap());
-
-        // As if an earlier passage had just departed and was still draining
-        // when this test picks the story up.
-        let play_id = e
-            .store
-            .as_ref()
-            .unwrap()
-            .record_play(90, Some("aaaaaaaa-0000-0000-0000-000000000090"), 400, 500, None)
-            .unwrap();
-        e.pending_finish =
-            Some(PendingFinish { play_id, span_ms: 500, at_ms: 400, since: e.sounding.now() });
-
-        // Something else has to be live for `skip` to act on at all.
-        let wav = wav_of(2_000);
-        let mut ent = entry(91, wav.to_str().unwrap());
-        ent.end_ms = 2_000;
-        e.enqueue(ent);
+        // Long enough to cross its threshold before it leaves the mixer.
+        let (a, b) = (wav_of(2_000), wav_of(5_000));
+        for (id, w, ms) in [(90, &a, 2_000), (91, &b, 5_000)] {
+            let mut ent = entry(id, w.to_str().unwrap());
+            ent.end_ms = ms;
+            ent.mbid = Some(format!("aaaaaaaa-0000-0000-0000-{id:012}"));
+            e.enqueue(ent);
+        }
         h.send(Command::Play);
         e.drain_commands();
-        assert!(tick_until(&mut e, |eng| eng.snapshot_live() > 0), "the second passage should have started");
+        assert!(tick_until(&mut e, |eng| eng.snapshot_live() > 0));
+        // 90 plays out of the mixer, its tail still in the ring.
+        while e.live.iter().any(|l| l.entry.passage_id == 90) {
+            e.tick();
+            drain_keeping(&ring, 30_000);
+        }
+        assert_eq!(e.head, Some(90), "still heard, so still the head");
 
         h.send(Command::Skip);
         e.drain_commands();
-
-        assert!(e.pending_finish.is_none(), "the interrupted correction must be resolved, not left pending");
+        for _ in 0..400 {
+            drain_keeping(&ring, 10_000);
+            e.tick();
+        }
+        assert_ne!(e.head, Some(90), "it departed once the cut was heard");
         let conn = rusqlite::Connection::open(&path).unwrap();
         let heard: i64 = conn
-            .query_row("SELECT heard_ms FROM listener_play_history WHERE play_id = ?1", [play_id], |r| {
+            .query_row("SELECT heard_ms FROM listener_play_history WHERE passage_id = 90", [], |r| {
                 r.get(0)
             })
             .unwrap();
-        assert!(
-            (400..=500).contains(&heard),
-            "the resolved figure should be at least what had already drained: got {heard}"
-        );
-        let _ = std::fs::remove_file(&wav);
-        let _ = std::fs::remove_file(&path);
+        assert!((1_000..=2_000).contains(&heard), "past the threshold and no more than it is: {heard}");
+        let _ = (std::fs::remove_file(&a), std::fs::remove_file(&b), std::fs::remove_file(&path));
     }
 
     /// The figure `record_play` writes the instant the threshold is crossed
     /// is not the last word `[REQ-VIS-250]`. A passage played all the way
-    /// through must read as EXACTLY whole once its drain tail has actually
-    /// finished, not frozen at whatever the ring still had queued behind it
-    /// the moment the decoder ran out.
+    /// through must read as EXACTLY whole once its last sample has been heard,
+    /// not frozen at whatever the ring still held behind it the moment the
+    /// decoder ran out.
     ///
-    /// **Needs a real ring, not `silent()`.** A ring of `None` reports zero
-    /// frames buffered, always -- `audible_ms` never lags `played_ms` there,
-    /// so the bug this guards against cannot occur in that fixture no matter
-    /// what the code does. Draining it fully after every tick stands in for
-    /// a device consuming what was just mixed, except on the very tick the
-    /// passage exhausts: that tick's freshly-submitted tail is still sitting
-    /// in the ring when `retire_finished` reads it, which is exactly the gap
-    /// a real device leaves too.
+    /// **Needs a real ring, not `silent()`**: with no ring there is no tail
+    /// to wait for. The ring is drained to a steady backlog after every tick,
+    /// as a device keeps a roughly constant latency, then emptied.
     #[test]
     fn a_completed_play_is_corrected_with_what_was_actually_heard() {
         let (st, path) = store();
@@ -4668,45 +4544,14 @@ than one mix block");
         e.enqueue(ent);
         h.send(Command::Play);
         e.drain_commands();
-
-        // Left holding a steady backlog rather than drained to empty: a real
-        // device keeps a roughly constant amount of latency, not zero, and
-        // draining fully every tick let the exhaustion tick's own tiny
-        // remainder round down to nothing in milliseconds -- proving
-        // nothing about the bug this exists to catch. ~90 ms of stereo
-        // audio at 44.1 kHz.
+        // ~90 ms of stereo audio at 44.1 kHz.
         const KEEP: usize = 8_000;
-        let drain = |ring: &crate::output::OutputRing| {
-            let mut st = ring.state.lock().unwrap();
-            let len = st.ring.len();
-            if len > KEEP {
-                let mut scratch = vec![0.0f32; len - KEEP];
-                st.ring.read(&mut scratch);
-            }
-        };
-        // Let it actually start sounding before watching for it to finish --
-        // `live` is empty both before the first admission and after the last
-        // retirement, and only the second one is the departure this test
-        // wants.
         assert!(tick_until(&mut e, |eng| eng.snapshot_live() > 0), "the passage should have started");
         while e.snapshot_live() > 0 {
             e.tick();
-            drain(&ring);
+            drain_keeping(&ring, KEEP);
         }
-
         assert_eq!(plays(&st), 1, "a play should have been written");
-        let pending = e.pending_finish.as_ref().expect(
-            "a naturally-exhausted play must be deferred, not finalised on the spot",
-        );
-        assert!(
-            pending.at_ms < pending.span_ms,
-            "the ring should still have been holding some of the tail: at {} of {}",
-            pending.at_ms, pending.span_ms
-        );
-
-        // Still sitting at whatever `record_play` wrote when the threshold
-        // was first crossed -- the old, buggy answer -- until the clock
-        // says the tail is done.
         let row = |c: &rusqlite::Connection| -> (i64, i64) {
             c.query_row("SELECT heard_ms, span_ms FROM listener_play_history", [], |r| {
                 Ok((r.get(0)?, r.get(1)?))
@@ -4714,18 +4559,16 @@ than one mix block");
             .unwrap()
         };
         let conn = rusqlite::Connection::open(&path).unwrap();
-        let (before, span_check) = row(&conn);
-        assert_eq!(span_check, 600);
-        assert!(before < 600, "not corrected yet: read {before} of 600 before the clock catches up");
-
-        // The clock closes the rest of the gap, not the ring -- which by now
-        // holds nothing at all for this passage.
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        e.tick();
-        assert!(e.pending_finish.is_none(), "the drain estimate should have resolved by now");
-
-        let (heard, span) = row(&conn);
+        let (before, span) = row(&conn);
         assert_eq!(span, 600);
+        assert!(before < 600, "not final while the tail is still to be heard: {before}");
+        assert_eq!(e.head, Some(46), "the passage is still the one heard");
+
+        // The device plays the rest.
+        drain_keeping(&ring, 0);
+        e.tick();
+        assert_eq!(e.head, None, "its last sample heard, it has departed");
+        let (heard, span) = row(&conn);
         assert_eq!(heard, span, "played to the end must read as exactly whole");
         let _ = std::fs::remove_file(&wav);
         let _ = std::fs::remove_file(&path);
@@ -4865,10 +4708,9 @@ than one mix block");
             e.tick();
         }
 
-        // Mixed to the end and retired, but the listener is still hearing it.
+        // Mixed to the end and retired, and still the passage shown.
         assert_eq!(e.snapshot_live(), 0, "the mixer has finished with it");
-        let (id, _, _) = e.draining.expect("it is remembered as still sounding");
-        assert_eq!(id, 91);
+        assert_eq!(e.shown.as_ref().map(|(s, _)| s.passage_id), Some(91));
 
         let first = e.shown.as_ref().map(|(_, p)| *p).unwrap_or(0);
         std::thread::sleep(std::time::Duration::from_millis(120));
@@ -5235,9 +5077,88 @@ than one mix block");
         let _ = std::fs::remove_file(&wav);
     }
 
-    /// **A pause in the drain window stops the clock that times it** (review
-    /// F-02): the position does not run on, and the play's heard figure is
-    /// not finalised, while the music waits.
+    /// A seek's jump is not listening `[SPEC-PLAY-012]`, though for the lead
+    /// after it the device still plays the fade of where it was: the passage is
+    /// opened again, the same passage, and its new position is not credited.
+    #[test]
+    fn a_seek_through_a_ring_credits_none_of_the_jump() {
+        let (st, path) = store();
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+        let w = wav_of(30_000);
+        let mut ent = entry(88, w.to_str().unwrap());
+        ent.end_ms = 30_000;
+        ent.mbid = Some("aaaaaaaa-0000-0000-0000-000000000088".into());
+        e.enqueue(ent);
+        h.send(Command::Play);
+        e.drain_commands();
+        while e.heard_ms < 500 {
+            drain_keeping(&ring, 30_000);
+            e.tick();
+        }
+        let before = e.heard_ms;
+        assert!(e.seek_to(Some(88), 20_000));
+        for _ in 0..300 {
+            drain_keeping(&ring, 30_000);
+            e.tick();
+        }
+        let at = e.shown.as_ref().map(|(_, p)| *p).unwrap();
+        assert!(at > 20_000, "the seek happened: {at}");
+        assert_eq!(e.head, Some(88), "the same passage, not a departure");
+        // What played since the seek, and the fade of where it was: never the
+        // nineteen seconds between.
+        let played_since = at - 20_000;
+        let gained = e.heard_ms - before;
+        assert!(gained <= played_since + 1_500, "{gained} ms heard for {played_since} ms played");
+        // A ring holding less than the lead leaves silence between the old
+        // point and the new; the passage did not depart in it.
+        assert!(st.last_rejected(crate::db::Rejection::Skip).unwrap().is_empty(), "a seek is not a skip");
+        assert!(gained >= played_since.saturating_sub(1_500), "and what played is still heard");
+        let _ = (std::fs::remove_file(&w), std::fs::remove_file(&path));
+    }
+
+    /// A ring run dry under a passage still being mixed is a stall, not a
+    /// departure: judged as one, an underrun would end the passage, then start
+    /// it over as new -- a skip, or a second play.
+    #[test]
+    fn a_ring_run_dry_is_a_stall_not_a_departure() {
+        let (st, path) = store();
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+        let w = wav_of(3_000);
+        let mut ent = entry(89, w.to_str().unwrap());
+        ent.end_ms = 3_000;
+        ent.mbid = Some("aaaaaaaa-0000-0000-0000-000000000089".into());
+        e.enqueue(ent);
+        h.send(Command::Play);
+        e.drain_commands();
+        while e.heard_ms < 300 {
+            drain_keeping(&ring, 30_000);
+            e.tick();
+        }
+        // The device takes everything; the mixer has not caught up.
+        drain_keeping(&ring, 0);
+        e.record_play();
+        assert_eq!(e.head, Some(89), "still the passage playing");
+        assert!(st.last_rejected(crate::db::Rejection::Skip).unwrap().is_empty(), "not a skip");
+        // And it plays on to one play, not two.
+        while e.snapshot_live() > 0 || ring.buffered() > 0 {
+            drain_keeping(&ring, 30_000.min(ring.buffered().saturating_sub(1_000)));
+            e.tick();
+            if e.snapshot_live() == 0 {
+                drain_keeping(&ring, 0);
+                e.tick();
+            }
+        }
+        assert_eq!(plays(&st), 1);
+        let _ = (std::fs::remove_file(&w), std::fs::remove_file(&path));
+    }
+
+    /// A pause in a passage's last ring-depth holds its position and what has
+    /// been heard of it (review F-02): the device reads nothing while paused
+    /// `[PI3-OPEN-020]`, so nothing moves, however long the pause.
     #[test]
     fn a_pause_in_the_drain_window_freezes_position_and_heard() {
         let (_st, path) = store();
@@ -5257,19 +5178,21 @@ than one mix block");
             e.tick();
             drain_keeping(&ring, KEEP);
         }
-        assert!(e.pending_finish.is_some(), "deferred, so a pause can land inside the drain");
+        assert_eq!(e.head, Some(67), "in the drain window: still heard");
 
         h.send(Command::Pause);
         e.drain_commands();
         e.tick();
         let at = e.shown.as_ref().map(|(_, p)| *p);
+        let heard = e.heard_ms;
         // Longer than the whole ~90 ms tail the ring was holding.
         std::thread::sleep(Duration::from_millis(250));
         for _ in 0..10 {
             e.tick();
         }
         assert_eq!(e.shown.as_ref().map(|(_, p)| *p), at, "the position stands still while paused");
-        assert!(e.pending_finish.is_some(), "and the tail is not finalised as heard");
+        assert_eq!(e.heard_ms, heard, "and nothing more is heard");
+        assert_eq!(e.head, Some(67), "and it has not departed");
         let _ = (std::fs::remove_file(&wav), std::fs::remove_file(&path));
     }
 

@@ -110,8 +110,8 @@ still writes the moment half the passage (or four minutes) is crossed
 `[SPEC-PLAY-030]`, so a crash right after still counts the play — but the
 figure written then is only the threshold just reached, not what was
 actually heard. The engine corrects that row once the passage is actually
-done sounding. A skip writes its final figure directly, since a skip never
-leaves anything draining behind it to wait for.
+done sounding: when the device has read its last sample, or a cut has been
+heard. A skip writes its figure as a rejection instead `[SPEC-PLAY-050]`.
 
 > **Corrected again, 2026-08-24: "departs" is not "is heard".** The first
 > version wrote the correction the instant the passage left `live`, which is
@@ -122,11 +122,13 @@ leaves anything draining behind it to wait for.
 > "decoded", the same mistake the ring's-depth fix already corrected for the
 > position display, made again in the one place that fix did not reach.
 >
-> The correction is now **held until the clock says the drain is done** — the
-> same `(position, instant)` pair `draining` already carries for the display,
-> read again for this. A skip or a seek that wipes the ring out from under a
-> still-draining correction takes whatever it had reached as final, rather
-> than leaving it waiting for a tail that will never arrive.
+> The correction is **written when the passage stops being heard**, read off
+> the device through the same timeline as the display `[REQ-AUD-164]`: the
+> passage is judged when its last sample is read, or when what follows a cut
+> is, with everything heard up to that point credited. A pause reads nothing,
+> so it cannot finish a passage early. Until 2026-10-09 the correction was
+> held until a clock said the drain was done, which a pause in the drain
+> window ran on (review F-02).
 
 > **Absent, not zero.** `heard_ms`/`span_ms` are new columns on both tables,
 > migrated onto an existing library the same way `id_reviews` gains its

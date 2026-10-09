@@ -89,6 +89,17 @@ impl Timeline {
         }
     }
 
+    /// How far into its passage an admission has been heard at `read`: where
+    /// a segment of it covers `read`, or, if all of it is behind `read`, the
+    /// end of the last of it. `None` if nothing of it has been heard.
+    pub fn heard_to(&self, admitted: u64, read: u64) -> Option<u64> {
+        let mine = || self.segments.iter().filter(move |s| s.admitted == admitted);
+        if let Some(s) = mine().find(|s| s.from <= read && read < s.to) {
+            return Some(s.ms_at(read));
+        }
+        mine().filter(|s| s.to <= read).max_by_key(|s| s.to).map(|s| s.ms_at(s.to))
+    }
+
     /// Whether this admission still has a segment: still to be heard, or the
     /// last heard.
     pub fn holds(&self, admitted: u64) -> bool {

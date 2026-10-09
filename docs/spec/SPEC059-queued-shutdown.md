@@ -77,12 +77,12 @@ The Shutdown event is held in `Queue` as an entry with a unique monotonic stampe
 In `player/src/engine/mod.rs`:
 1. `prepare_next()`: If the upcoming queue head is a Shutdown event, decoder pre-opening is bypassed.
 2. `admit_due()`: While the passage preceding the Shutdown event is sounding or draining, or when the upcoming queue head is Shutdown, admission is suppressed (returns early). The Shutdown marker is not popped and tracks behind Shutdown are not admitted into the mixer.
-3. The preceding passage plays to its full recorded duration, enters `draining`, and the output buffer drains completely until `out_buffered_frames() == 0` and `pending_finish` is resolved.
+3. The preceding passage plays to its full recorded duration and the output buffer drains completely until `out_buffered_frames() == 0`; the device has then read its last sample, so its play is finalized (`[REQ-VIS-250]`).
 4. **Skip Interaction**: If the listener presses "Skip" while the passage preceding Shutdown is sounding, the engine sets pending shutdown drain state, applies standard `skip_fade_ms` fade-out, bypasses admitting subsequent passages, lets the fade drain to 0 frames, and proceeds to shutdown.
 
 **`[SPEC-QSD-060]` Appliance shutdown lifecycle and queue persistence.**
-When `queue.peek()` is Shutdown, `self.live.is_empty()`, `out_buffered_frames() == 0`, and `pending_finish.is_none()` (or immediately if playback was idle):
-1. Play history for the finishing track is finalized (`write_finish`).
+When `queue.peek()` is Shutdown, `self.live.is_empty()` and `out_buffered_frames() == 0` (or immediately if playback was idle):
+1. Play history for the finishing track has been finalized (`write_finish`) by then: `record_play` runs earlier in the same tick and sees the passage's last sample read.
 2. The Shutdown event is popped from the head of `self.queue`.
 3. The remaining queue (passages enqueued after Shutdown) is committed to SQLite via `store.save_queue()`.
 4. Playback state (`player_state`) is persisted with `passage_id: None`, `position_ms: 0`, and `playing: true` (or prior intent) so next boot starts cleanly at the beginning of the upcoming queue.

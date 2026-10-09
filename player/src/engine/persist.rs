@@ -16,7 +16,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::{Engine, PendingFinish};
+use super::Engine;
 
 /// The head entry's own identity and provenance, snapshotted once at the
 /// top of `record_play` before any bookkeeping needs `&mut self` -- id,
@@ -146,28 +146,31 @@ impl Engine {
         if !self.playing {
             return;
         }
-        // Everything needed is read off the head first, so the borrow ends
-        // before any of the bookkeeping below wants `&mut self`.
+        // **The passage heard, not the one mixed** `[REQ-AUD-164]`: read off
+        // the device through the timeline. The mixer runs a ring's depth ahead,
+        // so a passage leaves it fifteen seconds before its last sample is
+        // played, and judging it there froze `heard_ms` at what was decoded --
+        // which a deferred correction then estimated by a clock.
         //
-        // **Read even when there is no head.** An empty `live` is not "nothing
-        // to do": it is the strongest evidence a passage has just departed. An
-        // earlier version returned here, so skipping the *last* queued passage
-        // judged nothing at all — the passage was abandoned and suppressed
-        // nothing, and the Director could offer it straight back
-        // `[SPEC-PLAY-050]`.
-        let head_now: Option<HeadNow> =
-            self.live.first().map(|live| {
-                (
-                    live.entry.passage_id,
-                    live.entry.mbid.clone(),
-                    self.audible_ms(live),
-                    live.entry.duration_ms(),
-                    // Rides along for the eventual `record_play` below
-                    // `[REQ-VIS-300]` -- the entry's own provenance, set
-                    // when it was queued, never computed here.
-                    live.entry.selected_by.clone(),
-                )
-            });
+        // **Read even when nothing is heard.** No head is not "nothing to do":
+        // it is the strongest evidence a passage has just departed. An earlier
+        // version returned here, so skipping the *last* queued passage judged
+        // nothing at all -- the passage was abandoned and suppressed nothing,
+        // and the Director could offer it straight back `[SPEC-PLAY-050]`.
+        let heard = self.heard_now();
+        let admitted_now = heard.as_ref().map(|(a, _)| a.admitted);
+        let head_now: Option<HeadNow> = heard.map(|(a, e)| {
+            (
+                e.passage_id,
+                e.mbid.clone(),
+                a.position_ms.min(e.duration_ms()),
+                e.duration_ms(),
+                // Rides along for the eventual `record_play` below
+                // `[REQ-VIS-300]` -- the entry's own provenance, set
+                // when it was queued, never computed here.
+                e.selected_by.clone(),
+            )
+        });
         let id_now = head_now.as_ref().map(|(id, ..)| *id);
 
         // The guard has to follow the head, not just remember the last write.
@@ -179,37 +182,25 @@ impl Engine {
             // not stop, it moved to the other backend `[SPEC-BK-065]`. Taken
             // rather than read, so it covers exactly one departure.
             let handoff = std::mem::take(&mut self.handing_over);
+            // What was heard of it after the last sample this saw: its tail,
+            // read by the device since, up to where it ended or was overtaken.
+            if let (Some(admitted), Some(from), Some(read)) =
+                (self.head_admitted, self.heard_from, self.read_position())
+            {
+                if let Some(to) = self.timeline.heard_to(admitted, read) {
+                    self.heard_ms += to.min(self.head_span_ms).saturating_sub(from);
+                }
+            }
             if let Some(prev) = self.head {
                 if !handoff {
                     if self.recorded {
-                        // Already earned a play, and there may be nothing
-                        // further to do: a passage adopted mid-play from
+                        // Already earned a play. Its last sample has been
+                        // heard, or it was cut, so what was heard is final
+                        // `[REQ-VIS-250]`. A passage adopted mid-play from
                         // another backend, or one whose write itself failed,
                         // leaves no local row to correct.
                         if let Some(play_id) = self.pending_play_id.take() {
-                            // If it left because it was CUT SHORT -- a skip,
-                            // a seek, anything that did not go through
-                            // `retire_finished` -- `heard_ms` is already
-                            // final: it was live and tracked right up to the
-                            // interruption, no ring left to drain. But if
-                            // `draining` names this same passage, it left the
-                            // ordinary way -- decoded to its end -- and up to
-                            // a ring's depth of it may still be sounding
-                            // `[REQ-VIS-250]`. Finalising on the spot there
-                            // is exactly the bug this exists to avoid:
-                            // freezing the figure at "decoded" rather than
-                            // waiting for "heard".
-                            match self.draining {
-                                Some((id, at, since)) if id == prev => {
-                                    self.queue_pending_finish(PendingFinish {
-                                        play_id,
-                                        span_ms: self.head_span_ms,
-                                        at_ms: at,
-                                        since,
-                                    });
-                                }
-                                _ => self.write_finish(play_id, self.heard_ms.min(self.head_span_ms)),
-                            }
+                            self.write_finish(play_id, self.heard_ms.min(self.head_span_ms));
                         }
                     } else {
                         // The outgoing passage left without reaching the
@@ -227,6 +218,7 @@ impl Engine {
                 }
             }
             self.head = id_now;
+            self.head_admitted = admitted_now;
             self.head_mbid = head_now.as_ref().and_then(|(_, m, ..)| m.clone());
             self.head_span_ms = head_now.as_ref().map(|(_, _, _, span, _)| *span).unwrap_or(0);
             self.pending_play_id = None;
@@ -242,6 +234,12 @@ impl Engine {
             // A new passage has been heard for none of itself, and there is
             // no earlier position of it to measure the first gap from.
             self.heard_ms = 0;
+            self.heard_from = None;
+        } else if self.head_admitted != admitted_now {
+            // The same passage opened again -- a seek -- now sounding. It has
+            // not departed, but its position has jumped, and the distance is
+            // not listening `[SPEC-PLAY-012]`.
+            self.head_admitted = admitted_now;
             self.heard_from = None;
         }
 
@@ -285,46 +283,6 @@ impl Engine {
         let Some(store) = &self.store else { return };
         if let Err(e) = store.finish_play(play_id, heard_ms) {
             tracing::error!("finish play: {e}");
-        }
-    }
-
-    /// Hold a play's correction until the clock says the drain is done
-    /// `[REQ-VIS-250]`, replacing whatever was already waiting.
-    ///
-    /// There is only one slot, the same simplification `draining` itself
-    /// makes -- two passages finishing within one ring's depth of each other
-    /// is the case neither tracks past. Losing the earlier one silently would
-    /// leave its row frozen at the threshold forever, so it is flushed with
-    /// its best estimate first rather than dropped.
-    pub(super) fn queue_pending_finish(&mut self, next: PendingFinish) {
-        if let Some(prev) = self.pending_finish.take() {
-            self.write_finish(prev.play_id, prev.estimate(self.sounding.now()));
-        }
-        self.pending_finish = Some(next);
-    }
-
-    /// Every tick: has a deferred play finished draining on its own?
-    /// `[REQ-VIS-250]`. Checked here rather than resolved once and forgotten,
-    /// because the answer depends on the clock, not on anything that happens
-    /// to run this tick -- the same reason `advance_shown` re-reads `draining`
-    /// every time rather than computing it once `[REQ-VIS-240]`.
-    pub(super) fn finalize_draining_plays(&mut self) {
-        let Some(pending) = &self.pending_finish else { return };
-        let estimate = pending.estimate(self.sounding.now());
-        if estimate >= pending.span_ms {
-            let play_id = pending.play_id;
-            self.pending_finish = None;
-            self.write_finish(play_id, estimate);
-        }
-    }
-
-    /// A skip or a seek is about to overwrite the ring outright `[REQ-VIS-250]`.
-    /// Whatever a still-draining play had reached is as much of it as anyone
-    /// will ever hear now, so take the estimate as final rather than let the
-    /// interrupted tail count toward it forever.
-    pub(super) fn resolve_pending_finish_now(&mut self) {
-        if let Some(pending) = self.pending_finish.take() {
-            self.write_finish(pending.play_id, pending.estimate(self.sounding.now()));
         }
     }
 
