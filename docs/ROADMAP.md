@@ -160,6 +160,48 @@ minutes with the underrun counter watched throughout — the signal that
 caught the fault both previous times it mattered — before the reopened-
 stream path can be called reliable rather than merely improved.
 
+## 5. After the 2026-10-08 remediation
+
+The review of 2026-10-08 and the remediation that followed it closed most of
+what they found. What they left, reviewed 2026-10-09, in the order suggested
+then. Items that belong to one document are linked, not copied.
+
+1. **Roll the remaining appliances forward.** `bose` and `lp3-wifi` run builds
+   from 2026-10-05, before the restore fixes, the live Director, the fallback
+   and the audible timeline; `lempi02w` runs the latest
+   ([FLEET001](../fleet/FLEET001-the-fleet.md) `[FLT-RUN-010]`). Both have
+   overlay roots. Do the two deferred device checks of `[FLT-ISS-070]` — a
+   restore from the Listening backups row, and the play-rate check — on the
+   way. `lp3-wifi` is one star-sync run behind on preference edits, and
+   `bose` and `smartboardpc` await the catalogue patch by natural key
+   `[FLT-ISS-060]`.
+2. **A restore does not re-point `player_state` or `player_queue`.** Only the
+   play history follows recordings through a renumbering `[REQ-LIB-160]`, so
+   after a rebuild the resume point and the remembered queue can name other
+   songs.
+3. **`switch::carry_queue` discards drops waiting before a handoff.** A
+   passage that failed to open just before a switch keeps its queueing mark
+   instead of giving it back `[REQ-PD-112]`.
+4. **The Program Director's open items**, [SPEC009 §9](spec/SPEC009-program-director.md#9-open):
+   first `[SPEC-DIR-240]`, a passage that crashed the player coming straight
+   back (a cheap guard, worth most on appliances powered by their speaker);
+   then `[SPEC-DIR-235]` and `[SPEC-DIR-245]` together, a restored queue
+   re-weighed and its provenance kept.
+5. **The now-playing panel while MPD is live**, [architecture.md §10](architecture.md#10-known-gaps):
+   the MPD backend knows its head and position, and could publish them
+   through the snapshot fields the panel already reads.
+6. **How a seek feels.** A seek cuts the ring with the skip's own fade (2 s)
+   and lead (0.5 s); a shorter fade of its own may feel crisper. The
+   maintainer found it "functional, could be smoother", 2026-10-09: a question
+   for the ear, not for a test.
+7. **Errors that read as zero, beyond the backups.** Review finding O-04 was
+   fixed in `backup.rs` only; the census, the pool count and other figures
+   shown to a person still read a failed query as 0.
+8. **The default skin and the settings layout** (review U-01, U-02), left as
+   they are by the maintainer's decision of 2026-10-08. Worth revisiting once
+   the rest settles: the settings list has grown since, with the Listening
+   backups row.
+
 ---
 
 **Traceability:** exists to satisfy `[GOV-DOC-050]` · nothing here is a
