@@ -383,7 +383,7 @@ pub enum Placement {
 /// retired by a measurement rather than by a change of taste:
 /// `cut_ring_to_incoming` is the real-time path every ordinary user skip
 /// also uses, and a measured constant was reckoned to reach most of the
-/// benefit. On this fleet it did not -- `echo_prep_ms` was assuming 400 ms
+/// benefit. On this fleet it did not -- `echo.prep_ms` was assuming 400 ms
 /// against a real 33-37, converging by quarters over joins that happen a few
 /// times a day, and resetting to the cold guess at every restart. The
 /// ordinary skip path is untouched: with no commanded start pending, the
@@ -1168,7 +1168,7 @@ pub fn join_mid_passage(
 /// is recorded, and the next join is aimed that much further on.
 ///
 /// **The middle, not the mean, and not the last one.** Three joins in three
-/// seconds once drove `echo_prep_ms` 295 -> 162 -> 195 -> 158 -> 124, the
+/// seconds once drove `echo.prep_ms` 295 -> 162 -> 195 -> 158 -> 124, the
 /// compensation thrashed by the storm it was meant to absorb
 /// `[GDE-ARC-044]`. A median over a window cannot be dragged that way by one
 /// bad landing; an exponential average is defined by its willingness to be.
@@ -1775,7 +1775,7 @@ mod tests {
 
         // **The storm test** `[GDE-ARC-044]`. One wild landing among steady
         // ones must move the figure a little, not become it -- the failure
-        // that made `echo_prep_ms` useless was a compensation defined by its
+        // that made `echo.prep_ms` useless was a compensation defined by its
         // most recent surprise.
         b.record(-400);
         assert_eq!(b.correction_ms(), 700, "a single outlier must not take over");
@@ -1795,7 +1795,7 @@ mod tests {
         assert_eq!(c.correction_ms(), 100, "and it followed the move");
     }
 
-    /// It has to survive a restart or it is `echo_prep_ms` again: that reset
+    /// It has to survive a restart or it is `echo.prep_ms` again: that reset
     /// to its cold guess on every boot and never converged `[GDE-ARC-058]`.
     #[test]
     fn a_join_bias_survives_being_written_down() {

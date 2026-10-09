@@ -46,47 +46,47 @@ impl Engine {
             volume: self.volume,
             skip_fade_ms: self.skip_fade_ms,
             skip_lead_ms: self.skip_lead_ms,
-            resume_save_ms: self.resume_save_ms,
-            skip_suppress_h: self.skip_suppress_h,
-            dequeue_suppress_h: self.dequeue_suppress_h,
+            resume_save_ms: self.prefs.resume_save_ms,
+            skip_suppress_h: self.prefs.skip_suppress_h,
+            dequeue_suppress_h: self.prefs.dequeue_suppress_h,
             queue_depth: self.queue.min_depth,
-            sample_interval_ms: self.sample_interval_ms,
-            cue_sheets: self.cue_sheets,
-            covers: self.covers,
-            lyrics_cache: self.lyrics_cache,
-            lyrics_sidecar: self.lyrics_sidecar,
-            echo_delay_trim_ms: self.echo_delay_trim_ms,
-            echo_follow_host: self.echo_follow_host.clone(),
-            echo_join_now: self.echo_join_now,
-            echo_join_bias: self.echo_join_bias.encode(),
+            sample_interval_ms: self.prefs.sample_interval_ms,
+            cue_sheets: self.prefs.cue_sheets,
+            covers: self.prefs.covers,
+            lyrics_cache: self.prefs.lyrics_cache,
+            lyrics_sidecar: self.prefs.lyrics_sidecar,
+            echo_delay_trim_ms: self.echo.delay_trim_ms,
+            echo_follow_host: self.echo.follow_host.clone(),
+            echo_join_now: self.echo.join_now,
+            echo_join_bias: self.echo.join_bias.encode(),
         }
     }
 
     /// Put back what was last chosen. Clamped on the way in, because a value
     /// from disk deserves no more trust than one from the network.
     pub fn apply_settings(&mut self, s: &crate::db::Settings) {
-        self.resume_save_ms =
+        self.prefs.resume_save_ms =
             s.resume_save_ms.clamp(crate::RESUME_SAVE_MIN_MS, crate::RESUME_SAVE_MAX_MS);
-        self.skip_suppress_h =
+        self.prefs.skip_suppress_h =
             s.skip_suppress_h.clamp(crate::SKIP_SUPPRESS_MIN_H, crate::SKIP_SUPPRESS_MAX_H);
-        self.dequeue_suppress_h = s
+        self.prefs.dequeue_suppress_h = s
             .dequeue_suppress_h
             .clamp(crate::DEQUEUE_SUPPRESS_MIN_H, crate::DEQUEUE_SUPPRESS_MAX_H);
         // The queue depth is a listener setting now, not a launch flag
         // `[SPEC-MPD-105]`, and it governs this engine as much as the MPD one.
         self.queue.min_depth =
             s.queue_depth.clamp(crate::QUEUE_DEPTH_MIN, crate::QUEUE_DEPTH_MAX);
-        self.sample_interval_ms = s
+        self.prefs.sample_interval_ms = s
             .sample_interval_ms
             .clamp(crate::SAMPLE_INTERVAL_MIN_MS, crate::SAMPLE_INTERVAL_MAX_MS);
-        self.cue_sheets = s.cue_sheets;
-        self.covers = s.covers;
-        self.lyrics_cache = s.lyrics_cache;
-        self.lyrics_sidecar = s.lyrics_sidecar;
-        self.echo_delay_trim_ms = s.echo_delay_trim_ms;
-        self.echo_follow_host = s.echo_follow_host.clone();
-        self.echo_join_now = s.echo_join_now;
-        self.echo_join_bias = crate::echo::JoinBias::decode(&s.echo_join_bias);
+        self.prefs.cue_sheets = s.cue_sheets;
+        self.prefs.covers = s.covers;
+        self.prefs.lyrics_cache = s.lyrics_cache;
+        self.prefs.lyrics_sidecar = s.lyrics_sidecar;
+        self.echo.delay_trim_ms = s.echo_delay_trim_ms;
+        self.echo.follow_host = s.echo_follow_host.clone();
+        self.echo.join_now = s.echo_join_now;
+        self.echo.join_bias = crate::echo::JoinBias::decode(&s.echo_join_bias);
         self.volume = s.volume.clamp(0.0, 1.0);
         if let Some(r) = &self.path.ring {
             r.volume.set(self.volume);
@@ -107,7 +107,7 @@ impl Engine {
         let Some(store) = &self.store else { return };
         let key = (self.live.first().map(|l| l.entry.passage_id).unwrap_or(-1), self.playing);
         let changed = self.saved != Some(key);
-        let every = Duration::from_millis(self.resume_save_ms);
+        let every = Duration::from_millis(self.prefs.resume_save_ms);
         if !force && !changed && self.last_save.elapsed() < every {
             return;
         }
@@ -337,7 +337,7 @@ impl Engine {
     /// The suppression windows as the listener has them set, in hours:
     /// `(skip, dequeue)` `[SPEC-PLAY-050]`, `[SPEC-PLAY-055]`.
     pub fn snapshot_suppress_h(&self) -> (u64, u64) {
-        (self.skip_suppress_h, self.dequeue_suppress_h)
+        (self.prefs.skip_suppress_h, self.prefs.dequeue_suppress_h)
     }
 
     /// A passage the listener declined `[SPEC-PLAY-050]`.

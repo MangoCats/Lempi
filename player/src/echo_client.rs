@@ -1404,7 +1404,7 @@ mod tests {
 
         assert!(fs.mid_joined.is_none(),
                 "400 ms is not a reason to cut the ring");
-        assert_eq!(e.echo_next_shift_ms, 0,
+        assert_eq!(e.echo.next_shift_ms, 0,
                    "the flow path corrected a boundary it cannot aim at; this \
 lands on the passage after the one it was measured for");
     }
@@ -1448,7 +1448,7 @@ lands on the passage after the one it was measured for");
         // while the fault it names was live on three appliances.
         h.send(Command::EchoShedOffset(30));
         e.tick();
-        let owed = e.echo_debt_frames;
+        let owed = e.echo.debt_frames;
         assert_ne!(owed, 0, "fixture: the trim should have something to pay");
         {
             let mut s = h.state.lock().unwrap();
@@ -1474,9 +1474,9 @@ lands on the passage after the one it was measured for");
         one_pass(&h, &st, &mut fs).await;
         e.tick();
 
-        assert_eq!(e.echo_next_shift_ms, 0,
+        assert_eq!(e.echo.next_shift_ms, 0,
                    "an endgame error must not be placed at the boundary as well");
-        assert_eq!(e.echo_debt_frames, owed,
+        assert_eq!(e.echo.debt_frames, owed,
                    "the placement cleared a debt the frame trim was paying off");
     }
 
@@ -1752,13 +1752,13 @@ join cuts the ring and re-imposes the join bias",
             correct_offset(&st, &handle, &mut fs, now_nanos());
             e.tick();
 
-            assert_eq!(e.echo_next_shift_ms, 600,
+            assert_eq!(e.echo.next_shift_ms, 600,
                        "straight_away={straight_away}: the boundary must be asked for all of it");
             // And nothing is trimmed mid-passage in either case. Under the old
             // cap this was the line that told the two settings apart; it is now
             // the same claim for both, because 0.1 ms/s was never going to
             // answer a step anyway `[GDE-ARC-043]`.
-            assert_eq!(e.echo_debt_frames, 0,
+            assert_eq!(e.echo.debt_frames, 0,
                        "straight_away={straight_away}: nothing is owed to the trim");
         }
     }
@@ -1815,7 +1815,7 @@ join cuts the ring and re-imposes the join bias",
     fn the_lead_a_node_publishes_is_the_lead_it_fires_early_by() {
         let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
         // One slow seek into a long capture `[PI-CHR-075]`.
-        e.echo_prep_ms = 1_500;
+        e.echo.prep_ms = 1_500;
         e.tick();
         let published = h.snapshot().echo_node.start_lead_ms;
         assert_eq!(published, e.echo_start_lead_ms());
@@ -1832,7 +1832,7 @@ join cuts the ring and re-imposes the join bias",
             at_nanos: now + published * 1_000_000,
         });
         e.tick();
-        assert_ne!(e.echo_prep_ms, 1_500,
+        assert_ne!(e.echo.prep_ms, 1_500,
                    "the join was declined rather than fired");
     }
 }

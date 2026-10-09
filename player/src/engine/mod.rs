@@ -9,6 +9,8 @@
 //! whole engine is testable without a thread, an audio device, or real time.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+use echo_state::EchoState;
+use prefs::Prefs;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 
@@ -497,102 +499,14 @@ pub struct Engine {
     /// because the two answer different questions at different rates: one
     /// serves a browser, the other serves a measurement `[GDE-ECHO-280]`.
     clock_log_at: Option<std::time::Instant>,
-    /// Whether the frame clock may still be compared against an echo anchor,
-    /// and the counters that decide it `[GDE-ECHO-360]`.
-    ///
-    /// Derived from counters rather than hooked into each event, deliberately:
-    /// a device reopen, an underrun and a pause are raised in three different
-    /// places and a fourth could be added without anyone remembering this.
-    /// Watching the numbers move catches every path, including ones not
-    /// anticipated here.
-    echo_basis: crate::echo::Basis,
-    /// The most recent forward schedule, republished until superseded. Every
-    /// message is absolute and idempotent `[GDE-ECHO-320]`, so repeating one
-    /// costs nothing and a node that missed the first simply uses this.
-    echo_schedule: Option<crate::echo::Schedule>,
-    /// Samples of the output ring this node must leave EMPTY `[LOG-ECHO-030]`.
-    ///
-    /// Zero means "fill to capacity", which is what a node with the fleet's
-    /// shortest device delay does. Every other node runs shallower by its own
-    /// excess over that minimum, so that `depth + device_delay` comes to the
-    /// same total everywhere and one sample sounds at one instant across the
-    /// fleet. `bose` at 46.3 ms behind `lempiplay3`'s 42.2 ms leaves 181
-    /// frames `[LOG-P4-140]`.
-    echo_depth_shortfall: usize,
-    /// This node's hand-set delay trim, ms `[SPEC-DLY-010]`.
-    pub(crate) echo_delay_trim_ms: i64,
-    /// The node this one follows, bare host; empty is independent
-    /// `[SPEC-ECHO-010]`.
-    pub(crate) echo_follow_host: String,
-    /// Join at once, or wait for the followed node's next passage
-    /// `[SPEC-ECHO-030]`.
-    pub(crate) echo_join_now: bool,
-    /// The fitted relative rate error, ppm `[GDE-ECHO-340]`.
-    pub(crate) echo_rate_ppm: f64,
-    /// How long a commanded start takes to become audible, ms
-    /// `[GDE-ECHO-342]`.
-    ///
-    /// Measured, not assumed. The lead a skip applies is a constant, but the
-    /// work before it -- opening the file, seeking, building the resampler,
-    /// and topping the decoder up so the overlay is not silence
-    /// `[PI-CHR-075]` -- takes as long as the card and the passage make it.
-    /// That time lands directly on the air, so a start fired early by a
-    /// constant is late by however long the work took: ~900 ms on this fleet,
-    /// which was the whole of the lag a listener could hear.
-    ///
-    /// Smoothed, because the next join's prep is better predicted by the last
-    /// few than by any constant, and the first one has to guess something.
-    pub(crate) echo_prep_ms: u64,
-    /// Position still to shed by trimming, in frames `[GDE-ECHO-349]`.
-    ///
-    /// Positive when this node is late and must advance. Counted in frames
-    /// rather than milliseconds because that is the resolution the actuator
-    /// actually has -- 23 us -- and rounding to a millisecond here would
-    /// throw away forty times the precision the endgame exists to reach.
-    pub(crate) echo_debt_frames: i64,
-    /// When a frame was last trimmed. Monotonic, because a wall clock can
-    /// step `[GDE-ECHO-365]` and this is an interval.
-    echo_last_trim: Option<std::time::Instant>,
-    /// Whether the last trim the mixer tried was refused, so a refusal is
-    /// reported once rather than twenty times a second `[GDE-ECHO-378]`.
-    echo_trim_refused: bool,
-    /// Frames of silence still owed before the next passage's audio
-    /// `[GDE-ARC-052]`.
-    ///
-    /// **The actuator a follower running ahead never had.** The ring is
-    /// contiguous, so declining to submit does not delay anything — it only
-    /// makes the buffer shallower, and the audio airs at the same instant
-    /// either way `[a_pause_in_writing_leaves_no_gap_in_the_audio]`. Moving
-    /// sound later means putting something in front of it, and silence is
-    /// the only thing that can go there without inventing content.
-    ///
-    /// Spent by the mixer a block at a time. While it is outstanding the
-    /// live streams are not mixed at all, so their decoded audio waits in
-    /// their own rings and the passage lands whole, only later.
-    /// The instant a commanded start's sample 0 must **sound**, held from
-    /// `fire_echo_start` until the ring is cut `[GDE-ARC-058]`.
-    ///
-    /// Carried rather than converted to a depth at the point it is learned,
-    /// because the depth is only correct if it is computed after the
-    /// preparation -- which is the entire difference between this and the
-    /// `echo_prep_ms` guess it replaces `[GDE-ECHO-342]`.
-    echo_join_at: Option<u64>,
-    /// What this node's past joins landed at `[GDE-ARC-061]`.
-    pub(crate) echo_join_bias: crate::echo::JoinBias,
-    /// Whether `shown` was promoted by `advance_shown`'s own audibility test
-    /// rather than set eagerly by a cut `[GDE-ARC-059]`.
-    shown_is_sounding: bool,
-    pub(crate) echo_gap_frames: u64,
-    /// An offset correction waiting for the next admission, ms earlier
-    /// `[GDE-ECHO-340]`. Zero is no correction, which is also the resting
-    /// state of a node that is already level.
-    pub(crate) echo_next_shift_ms: i64,
-    /// A start instant committed to but not yet reached `[GDE-ECHO-330]`.
-    echo_start: Option<(QueueEntry, u64, u64)>,
-    echo_seen_recoveries: u64,
-    echo_seen_underruns: u64,
     /// The audible passage as last published, so a change can bypass the clock.
     published: Option<i64>,
+    /// What keeping in step with another node needs `[SPEC-ECHO-010]`,
+    /// gathered apart from the mixer's own state (`echo_state.rs`).
+    pub(crate) echo: EchoState,
+    /// The listener's settings the engine holds but does not mix by
+    /// (`prefs.rs`): saved, published and handed to whoever reads them.
+    pub(crate) prefs: Prefs,
     /// Set when a command rearranged the queue, so that too can bypass the
     /// clock. A listener who removes a passage is waiting on the answer; the
     /// throttle exists for the position counter ticking along, and making an
@@ -627,28 +541,6 @@ pub struct Engine {
     /// starts where the library says it starts.
     pending_resume: Option<u64>,
     last_save: Instant,
-    /// How often the resume point is written `[REQ-VIS-155]`. Configurable
-    /// because every one of these writes lands on the appliance's most
-    /// volatile partition `[PI-C-010]`.
-    resume_save_ms: u64,
-    /// How long a skipped passage stays out of selection `[SPEC-PLAY-050]`.
-    skip_suppress_h: u64,
-    /// How long a passage removed from the queue unheard stays out
-    /// `[SPEC-PLAY-055]`.
-    dequeue_suppress_h: u64,
-    /// How often a guest backend should sample `status` `[SPEC-MPD-105]`. The
-    /// local engine does not poll; it holds the value so one row owns every
-    /// listener setting and the settings page has one place to read.
-    sample_interval_ms: u64,
-    /// Whether Lempi may write cue sheets into the music folder
-    /// `[REQ-VIS-205]`. Held here for the same reason: one row, one page.
-    cue_sheets: bool,
-    /// `[REQ-VIS-210]`
-    covers: bool,
-    /// `[REQ-VIS-215]`
-    lyrics_cache: bool,
-    /// `[REQ-VIS-220]`
-    lyrics_sidecar: bool,
     /// Set only while a handoff's fade is running, so the departing head is
     /// not written down as a rejection `[SPEC-BK-065]`.
     handing_over: bool,
@@ -759,6 +651,8 @@ fn unix_now() -> i64 {
 
 
 mod persist;
+mod echo_state;
+mod prefs;
 
 impl Engine {
     /// Least worth mixing in one pass, in **frames** `[GDE-FBD-090]`.
@@ -822,27 +716,10 @@ impl Engine {
             out_room: 0,
             publish_at: None,
             clock_log_at: None,
-            echo_basis: crate::echo::Basis::default(),
-            echo_schedule: None,
-            echo_depth_shortfall: 0,
-            echo_delay_trim_ms: 0,
-            echo_follow_host: String::new(),
-            echo_join_now: true,
-            echo_rate_ppm: 0.0,
-            echo_debt_frames: 0,
-            echo_prep_ms: Self::ECHO_PREP_GUESS_MS,
-            echo_last_trim: None,
-            echo_trim_refused: false,
-            echo_join_at: None,
-            echo_join_bias: crate::echo::JoinBias::default(),
-            shown_is_sounding: false,
-            echo_gap_frames: 0,
-            echo_next_shift_ms: 0,
-            echo_start: None,
-            echo_seen_recoveries: 0,
-            echo_seen_underruns: 0,
             published: None,
             queue_edited: false,
+            echo: EchoState::new(Self::ECHO_PREP_GUESS_MS),
+            prefs: Prefs::default(),
             last_lock_failures: 0,
             out_rate,
             out_channels,
@@ -861,14 +738,6 @@ impl Engine {
             store: None,
             pending_resume: None,
             last_save: Instant::now(),
-            resume_save_ms: crate::RESUME_SAVE_MS,
-            skip_suppress_h: crate::SKIP_SUPPRESS_H,
-            dequeue_suppress_h: crate::DEQUEUE_SUPPRESS_H,
-            sample_interval_ms: crate::SAMPLE_INTERVAL_MS,
-            cue_sheets: false,
-            covers: false,
-            lyrics_cache: false,
-            lyrics_sidecar: false,
             handing_over: false,
             counted_elsewhere: None,
             draining: None,
@@ -997,19 +866,19 @@ impl Engine {
     fn update_echo_basis(&mut self) {
         use crate::echo::Voided;
         let r = self.path.recoveries();
-        if r != self.echo_seen_recoveries {
-            self.echo_seen_recoveries = r;
-            self.echo_basis.void(Voided::DeviceReopen);
+        if r != self.echo.seen_recoveries {
+            self.echo.seen_recoveries = r;
+            self.echo.basis.void(Voided::DeviceReopen);
         }
         if let Some(ring) = self.path.ring.as_ref() {
             let u = ring.counts.underruns();
-            if u != self.echo_seen_underruns {
-                self.echo_seen_underruns = u;
-                self.echo_basis.void(Voided::Underrun);
+            if u != self.echo.seen_underruns {
+                self.echo.seen_underruns = u;
+                self.echo.basis.void(Voided::Underrun);
             }
         }
         if !self.playing {
-            self.echo_basis.void(Voided::Pause);
+            self.echo.basis.void(Voided::Pause);
         }
     }
 
@@ -1054,7 +923,7 @@ impl Engine {
         // filter a join has just cleared. There is no honest answer to give
         // until the passage is really sounding, and `None` is how this
         // function says so everywhere else `[GOV-SRC-040]`.
-        if !self.shown_is_sounding {
+        if !self.echo.shown_is_sounding {
             return None;
         }
         let (entry, audible_ms) = self.shown.as_ref()?;
@@ -1132,7 +1001,7 @@ impl Engine {
         // Phase 3 raises this to twice a second on the snapshot's own
         // WebSocket; logging it first makes the arithmetic observable on a
         // real node before anything depends on it being right.
-        match (self.echo_basis.is_valid(), self.air_position()) {
+        match (self.echo.basis.is_valid(), self.air_position()) {
             (true, Some(a)) => tracing::info!(
                 "echo-anchor: passage={} position_ms={} at_nanos={}",
                 a.passage_id, a.position_ms, a.at),
@@ -1140,7 +1009,7 @@ impl Engine {
             // reads the same as a node that is simply quiet `[GOV-SRC-040]`.
             (false, _) => tracing::info!(
                 "echo-anchor: withheld, basis voided by {:?} until the next passage",
-                self.echo_basis.voided_by()),
+                self.echo.basis.voided_by()),
             (true, None) => {}
         }
     }
@@ -1158,7 +1027,7 @@ impl Engine {
                 Ok(Command::ReopenOutput) => self.path.reopen(),
                 Ok(Command::Skip) => self.skip(),
                 Ok(Command::SetEchoDelayTrim(ms)) => {
-                    self.echo_delay_trim_ms =
+                    self.echo.delay_trim_ms =
                         ms.clamp(-crate::db::ECHO_TRIM_LIMIT_MS, crate::db::ECHO_TRIM_LIMIT_MS);
                     self.remember_settings();
                 }
@@ -1179,13 +1048,13 @@ impl Engine {
                         // carrying a number that is quietly about somebody
                         // else. Re-setting the SAME host is not a change and
                         // keeps the history -- a reconnect must not wipe it.
-                        if host != self.echo_follow_host && !self.echo_join_bias.is_empty() {
+                        if host != self.echo.follow_host && !self.echo.join_bias.is_empty() {
                             tracing::info!("echo-join: now following {host}; forgetting {} landing(s) learned against {}",
-                                      self.echo_join_bias.len(),
-                                      if self.echo_follow_host.is_empty() { "nobody" } else { &self.echo_follow_host });
-                            self.echo_join_bias = crate::echo::JoinBias::default();
+                                      self.echo.join_bias.len(),
+                                      if self.echo.follow_host.is_empty() { "nobody" } else { &self.echo.follow_host });
+                            self.echo.join_bias = crate::echo::JoinBias::default();
                         }
-                        self.echo_follow_host = host;
+                        self.echo.follow_host = host;
                         self.remember_settings();
                     }
                 }
@@ -1194,15 +1063,15 @@ impl Engine {
                     if want.abs() > Self::ECHO_RATE_CEILING_PPM {
                         tracing::warn!("echo-rate: {want:+.1} ppm is not a crystal; clamping to {:+.0} and carrying on", Self::ECHO_RATE_CEILING_PPM.copysign(want));
                     }
-                    self.echo_rate_ppm =
+                    self.echo.rate_ppm =
                         want.clamp(-Self::ECHO_RATE_CEILING_PPM, Self::ECHO_RATE_CEILING_PPM);
                     // Starting or stopping the clock, never resetting it
                     // mid-run: a rate that is merely refined should not push
                     // the next trim back by a whole interval each time.
-                    if self.echo_rate_ppm == 0.0 && self.echo_debt_frames == 0 {
-                        self.echo_last_trim = None;
-                    } else if self.echo_last_trim.is_none() {
-                        self.echo_last_trim = Some(std::time::Instant::now());
+                    if self.echo.rate_ppm == 0.0 && self.echo.debt_frames == 0 {
+                        self.echo.last_trim = None;
+                    } else if self.echo.last_trim.is_none() {
+                        self.echo.last_trim = Some(std::time::Instant::now());
                     }
                 }
                 Ok(Command::EchoSetQueue(entries)) => {
@@ -1211,16 +1080,16 @@ impl Engine {
                 }
                 Ok(Command::EchoShedOffset(ms)) => {
                     let rate = self.out_rate.max(1) as i64;
-                    self.echo_debt_frames = ms.saturating_mul(rate) / 1000;
+                    self.echo.debt_frames = ms.saturating_mul(rate) / 1000;
                     // The trim clock runs for a debt as well as for a rate.
-                    if self.echo_debt_frames != 0 && self.echo_last_trim.is_none() {
-                        self.echo_last_trim = Some(std::time::Instant::now());
+                    if self.echo.debt_frames != 0 && self.echo.last_trim.is_none() {
+                        self.echo.last_trim = Some(std::time::Instant::now());
                     }
                     tracing::info!("echo-offset: shedding {ms} ms by trimming ({} frames)",
-                              self.echo_debt_frames);
+                              self.echo.debt_frames);
                 }
                 Ok(Command::EchoCorrectNextStart(ms)) => {
-                    self.echo_next_shift_ms = ms;
+                    self.echo.next_shift_ms = ms;
                     // **A new correction is a new plan, and it supersedes the
                     // outstanding debt** `[GDE-ARC-041]`. The follower
                     // measures once per master passage and sends the pair --
@@ -1230,31 +1099,31 @@ impl Engine {
                     // would accumulate across passages into a debt nobody
                     // measured. The follower's own `EchoShedOffset` follows
                     // this command and sets the new base.
-                    self.echo_debt_frames = 0;
+                    self.echo.debt_frames = 0;
                 }
                 Ok(Command::RecordJoinLanding(ms)) => {
                     // **Persisted immediately, not at the next settings
                     // write** `[GDE-ARC-061]`. Joins are rare on a quiet
                     // follower -- three in seven hours was typical -- so a
                     // sample lost to a restart can be a day's learning, and
-                    // that is exactly how `echo_prep_ms` never converged
+                    // that is exactly how `echo.prep_ms` never converged
                     // `[GDE-ARC-058]`.
-                    let was = self.echo_join_bias.correction_ms();
-                    if self.echo_join_bias.record(ms) {
-                        let now = self.echo_join_bias.correction_ms();
+                    let was = self.echo.join_bias.correction_ms();
+                    if self.echo.join_bias.record(ms) {
+                        let now = self.echo.join_bias.correction_ms();
                         tracing::info!("echo-join: landed {ms:+} ms; {} sample(s), aiming {now:+} ms further on from now (was {was:+})",
-                                  self.echo_join_bias.len());
+                                  self.echo.join_bias.len());
                         self.remember_settings();
                     } else {
                         tracing::warn!("echo-join: landed {ms:+} ms, which is past the credible range; not learned from");
                     }
                 }
                 Ok(Command::SetEchoJoinNow(now)) => {
-                    self.echo_join_now = now;
+                    self.echo.join_now = now;
                     self.remember_settings();
                 }
                 Ok(Command::EchoStartAt { entry, start_sample, at_nanos }) => {
-                    self.echo_start = Some((entry, start_sample, at_nanos));
+                    self.echo.start = Some((entry, start_sample, at_nanos));
                 }
                 Ok(Command::SetEchoDepth { own_offset_frames, fleet_min_offset_frames }) => {
                     self.set_echo_depth(own_offset_frames, fleet_min_offset_frames);
@@ -1264,17 +1133,17 @@ impl Engine {
                     self.remember_settings();
                 }
                 Ok(Command::SetResumeSave(ms)) => {
-                    self.resume_save_ms =
+                    self.prefs.resume_save_ms =
                         ms.clamp(crate::RESUME_SAVE_MIN_MS, crate::RESUME_SAVE_MAX_MS);
                     self.remember_settings();
                 }
                 Ok(Command::SetSkipSuppress(h)) => {
-                    self.skip_suppress_h =
+                    self.prefs.skip_suppress_h =
                         h.clamp(crate::SKIP_SUPPRESS_MIN_H, crate::SKIP_SUPPRESS_MAX_H);
                     self.remember_settings();
                 }
                 Ok(Command::SetDequeueSuppress(h)) => {
-                    self.dequeue_suppress_h =
+                    self.prefs.dequeue_suppress_h =
                         h.clamp(crate::DEQUEUE_SUPPRESS_MIN_H, crate::DEQUEUE_SUPPRESS_MAX_H);
                     self.remember_settings();
                 }
@@ -1284,19 +1153,19 @@ impl Engine {
                     self.remember_settings();
                 }
                 Ok(Command::SetCueSheets(on)) => {
-                    self.cue_sheets = on;
+                    self.prefs.cue_sheets = on;
                     self.remember_settings();
                 }
                 Ok(Command::SetCovers(on)) => {
-                    self.covers = on;
+                    self.prefs.covers = on;
                     self.remember_settings();
                 }
                 Ok(Command::SetLyricsCache(on)) => {
-                    self.lyrics_cache = on;
+                    self.prefs.lyrics_cache = on;
                     self.remember_settings();
                 }
                 Ok(Command::SetLyricsSidecar(on)) => {
-                    self.lyrics_sidecar = on;
+                    self.prefs.lyrics_sidecar = on;
                     self.remember_settings();
                 }
                 Ok(Command::RestartUnderruns) => {
@@ -1305,7 +1174,7 @@ impl Engine {
                     self.underrun_since = unix_now();
                 }
                 Ok(Command::SetSampleInterval(ms)) => {
-                    self.sample_interval_ms =
+                    self.prefs.sample_interval_ms =
                         ms.clamp(crate::SAMPLE_INTERVAL_MIN_MS, crate::SAMPLE_INTERVAL_MAX_MS);
                     self.remember_settings();
                 }
@@ -1458,19 +1327,19 @@ impl Engine {
     fn skip(&mut self) {
         // The ring is cut `[REQ-AUD-158]`, so frames already counted were
         // never heard and no anchor may be compared across this.
-        self.echo_basis.void(crate::echo::Voided::Skip);
+        self.echo.basis.void(crate::echo::Voided::Skip);
         // **Taken before the early return, not after** `[GDE-ARC-058]`. A
         // target left sitting here would be picked up by whatever skipped
         // next -- an ordinary listener's skip, minutes later -- and placed
         // against an instant that had long passed. Consumed on every path
         // through this function, including the one that does nothing.
-        let join_at = self.echo_join_at.take();
+        let join_at = self.echo.join_at.take();
         // The eager `shown` below is a display promise, not an audibility
         // claim `[GDE-ARC-059]`.
-        self.shown_is_sounding = false;
+        self.echo.shown_is_sounding = false;
         // **The alignment plan does not survive a cut either** `[GDE-ARC-067]`.
         // `admit_due` below takes the `(Some(_), None)` arm and admits at
-        // once, which would spend `echo_next_shift_ms` against *this*
+        // once, which would spend `echo.next_shift_ms` against *this*
         // transition -- and the shift was measured for the master's next
         // boundary, minutes away, not for a listener pressing skip. In the
         // "later" direction it would become silence and be emitted into the
@@ -1487,8 +1356,8 @@ impl Engine {
         // obligation, while a gap is a delivery already in progress against
         // an admission that has happened. They have different lifetimes and
         // only one of them is superseded by a new plan.
-        self.echo_next_shift_ms = 0;
-        self.echo_gap_frames = 0;
+        self.echo.next_shift_ms = 0;
+        self.echo.gap_frames = 0;
         if self.live.is_empty() {
             return;
         }
@@ -1535,7 +1404,7 @@ impl Engine {
         // `[GDE-ECHO-342]`. `admit_due` above is where a commanded start
         // opens its file and seeks into it, so only from here is the distance
         // to the target instant a measurement rather than a guess. This is
-        // the whole of what `echo_prep_ms` was estimating, and the estimate
+        // the whole of what `echo.prep_ms` was estimating, and the estimate
         // no longer has to be right -- only generous enough that
         // `fire_echo_start` left time to get here.
         let lead_ms = match join_at {
@@ -1692,19 +1561,19 @@ impl Engine {
         // seek discards exactly the same audio by exactly the same call. It
         // was not voiding, so a listener's seek left this node comparing a
         // frame clock across a cut and publishing anchors from it.
-        self.echo_basis.void(crate::echo::Voided::Skip);
+        self.echo.basis.void(crate::echo::Voided::Skip);
         // An in-flight gap was aimed at the ring this is about to discard,
         // and a pending shift was measured against a content position this
         // seek is about to leave `[GDE-ARC-067]`. `skip` clears both; this
         // cleared only the gap, and a seek re-announces the SAME passage, so
         // `fs.corrected` blocks the follower from re-measuring and the stale
         // shift would survive to be spent at the next boundary.
-        self.echo_gap_frames = 0;
-        self.echo_next_shift_ms = 0;
+        self.echo.gap_frames = 0;
+        self.echo.next_shift_ms = 0;
         // And the `shown` set below is the same display promise `skip` makes:
         // the sought-to point does not sound until the lead has drained
         // `[GDE-ARC-059]`.
-        self.shown_is_sounding = false;
+        self.echo.shown_is_sounding = false;
         let behind: Vec<QueueEntry> = self.live.drain(1..).map(|l| l.entry).collect();
         if !behind.is_empty() {
             self.queue.insert_at(0, behind);
@@ -1834,15 +1703,15 @@ impl Engine {
         let Some(entry) = self.queue.advance() else { return };
         // Spent. A correction left in place would be applied again at every
         // boundary, turning a one-off nudge into a standing rate error.
-        // An earlier version consumed `echo_next_shift_ms` here and re-derived
+        // An earlier version consumed `echo.next_shift_ms` here and re-derived
         // the split further down, where it was already zero -- so the fine
         // half was silently dropped and every late correction did nothing at
         // all, while this very line logged the value it was about to discard.
         // A log computed at a different point from the action is not evidence
         // of the action `[GDE-ECHO-347]`.
         // Captured before the block below spends it `[GDE-ARC-071]`.
-        let asked_ms = self.echo_next_shift_ms;
-        if self.echo_next_shift_ms != 0 {
+        let asked_ms = self.echo.next_shift_ms;
+        if self.echo.next_shift_ms != 0 {
             // A commanded start brings its own position and outranks this, and
             // takes the fine knob with it.
             let superseded = self.pending_resume.is_some();
@@ -1854,7 +1723,7 @@ impl Engine {
             // and simply later. Frames, because that is what the mixer
             // counts in and a millisecond is not a whole number of them.
             if spent.gap_ms > 0 {
-                self.echo_gap_frames =
+                self.echo.gap_frames =
                     spent.gap_ms.saturating_mul(self.out_rate.max(1) as u64) / 1000;
             }
             // **What the transition could not absorb is not lost and not
@@ -1878,37 +1747,37 @@ impl Engine {
             // arrives with less of the outgoing passage left than it asked to
             // spend, which the engine previously could not see at all.
             let achieved = Self::achieved_shift_ms(spent, remaining, overlap);
-            let left = self.echo_next_shift_ms - achieved;
+            let left = self.echo.next_shift_ms - achieved;
             let owed = left.saturating_mul(self.out_rate.max(1) as i64) / 1000;
-            self.echo_debt_frames = self.echo_debt_frames.saturating_add(owed);
+            self.echo.debt_frames = self.echo.debt_frames.saturating_add(owed);
             // The trim clock runs for a debt as well as for a rate, exactly as
             // `EchoShedOffset` starts it: `due_trim` answers `None` while
-            // `echo_last_trim` is `None`, and a follower that has not yet
+            // `echo.last_trim` is `None`, and a follower that has not yet
             // produced a rate fit has sent only `SetEchoRate(0.0)`, which
             // clears it. A debt with no clock is a number nobody pays.
-            if self.echo_debt_frames != 0 && self.echo_last_trim.is_none() {
-                self.echo_last_trim = Some(std::time::Instant::now());
+            if self.echo.debt_frames != 0 && self.echo.last_trim.is_none() {
+                self.echo.last_trim = Some(std::time::Instant::now());
             }
             // Say which happened rather than claiming a shift that was dropped
             // `[GDE-ECHO-351]`.
             if superseded {
-                tracing::info!("echo-offset: passage {} had a {} ms shift pending, superseded by a commanded start", entry.passage_id, self.echo_next_shift_ms.abs());
+                tracing::info!("echo-offset: passage {} had a {} ms shift pending, superseded by a commanded start", entry.passage_id, self.echo.next_shift_ms.abs());
             } else {
                 tracing::info!("echo-offset: passage {} asked for {} ms {}; placed by {} ms of overlap + {} ms origin + {} ms silence; wanted {} ms, achieved {} ms ({} ms of the outgoing passage left, overlap {}), {} ms left to the frame trim",
-                          entry.passage_id, self.echo_next_shift_ms.abs(),
-                          if self.echo_next_shift_ms > 0 { "earlier" } else { "later" },
+                          entry.passage_id, self.echo.next_shift_ms.abs(),
+                          if self.echo.next_shift_ms > 0 { "earlier" } else { "later" },
                           spent.admit_ms, spent.origin_ms, spent.gap_ms,
                           delivered.abs(), achieved.abs(),
                           remaining, overlap, left.abs());
             }
-            self.echo_next_shift_ms = 0;
+            self.echo.next_shift_ms = 0;
         }
         // The forward schedule `[GDE-ECHO-310]`, emitted here because here is
         // where the ~15 s of lead exists: everything already in the ring plays
         // before this passage's first sample can sound, and that lead is what
         // makes an arbitrary presentation offset compensable.
         // A passage boundary reached cleanly is the only way back in.
-        self.echo_basis.establish();
+        self.echo.basis.establish();
         // Taken before the schedule is built, not after. A resume starts the
         // passage part-way in, and a schedule announcing sample 0 for a
         // passage that begins at 3 minutes tells every follower to play the
@@ -2191,11 +2060,11 @@ impl Engine {
     /// a budget smaller than this has every join declined and the declining is
     /// invisible from the other end.
     pub(crate) fn echo_start_lead_ms(&self) -> u64 {
-        self.skip_lead_ms + self.echo_prep_ms
+        self.skip_lead_ms + self.echo.prep_ms
     }
 
     fn fire_echo_start(&mut self) {
-        let Some((_, _, at)) = self.echo_start.as_ref() else { return };
+        let Some((_, _, at)) = self.echo.start.as_ref() else { return };
         let Ok(d) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         else { return };
         let now = d.as_nanos() as u64;
@@ -2218,36 +2087,36 @@ impl Engine {
                 // A clock that has not been disciplined yet `[GDE-ECHO-365]`.
                 // Waiting for this would be waiting for days.
                 tracing::warn!("echo-start: scheduled {} s out, which is not a schedule; dropping it and waiting for this node's clock", by.as_secs());
-                self.echo_start = None;
+                self.echo.start = None;
                 return;
             }
             crate::echo::StartVerdict::TooLate { by } => {
                 // **And the estimate backs off** `[GDE-ECHO-375]`. Firing
                 // early by more than a start's whole lead is itself the way a
-                // start becomes too late, and `echo_prep_ms` is revised only
+                // start becomes too late, and `echo.prep_ms` is revised only
                 // by a join that fires -- so an estimate large enough to
                 // prevent every join could never be corrected by one. Decayed
                 // towards the cold guess rather than reset to it, on the same
                 // reasoning as the measurement itself: one refusal should move
                 // the figure, not replace it.
-                let was = self.echo_prep_ms;
-                self.echo_prep_ms =
+                let was = self.echo.prep_ms;
+                self.echo.prep_ms =
                     ((was * 3 + Self::ECHO_PREP_GUESS_MS) / 4).max(Self::ECHO_PREP_GUESS_MS);
                 // Said out loud. A node that silently declines to join looks
                 // exactly like one that was never told to `[GOV-SRC-040]`.
                 tracing::warn!("echo-start: passage missed by {} ms; holding for the next schedule (assuming {was} ms of preparation, now {})",
-                          by.as_millis(), self.echo_prep_ms);
-                self.echo_start = None;
+                          by.as_millis(), self.echo.prep_ms);
+                self.echo.start = None;
                 return;
             }
             crate::echo::StartVerdict::Fire => {}
         }
-        let Some((entry, start_sample, submit_at)) = self.echo_start.take() else { return };
+        let Some((entry, start_sample, submit_at)) = self.echo.start.take() else { return };
         // **Hand the cut the target, not a lead** `[GDE-ARC-058]`. `submit_at`
         // is a device instant, one presentation offset before the sound
         // `[GDE-ECHO-410]`; `placement` wants the sound. Converting here and
         // deciding the depth there is what lets the depth absorb however long
-        // the preparation below actually takes, instead of `echo_prep_ms`
+        // the preparation below actually takes, instead of `echo.prep_ms`
         // having to predict it.
         let measured = self.path.ring.as_ref().and_then(|r| {
             (r.clock.timestamps() == crate::output::Timestamps::Hardware)
@@ -2255,7 +2124,7 @@ impl Engine {
         });
         let (offset_frames, _) = self.echo_offset_frames(measured);
         let offset_ns = offset_frames.saturating_mul(1_000_000_000) / self.out_rate.max(1) as u64;
-        self.echo_join_at = Some(submit_at.saturating_add(offset_ns));
+        self.echo.join_at = Some(submit_at.saturating_add(offset_ns));
         // Before `skip`, not after: `skip` admits the next passage itself, and
         // a resume offset arriving afterwards would apply to the one after it.
         let began = std::time::Instant::now();
@@ -2275,9 +2144,9 @@ impl Engine {
         // preparation against an assumed 400), cost the join that much of its
         // placement before; now it costs nothing but a little extra lead.
         let took = (began.elapsed().as_millis() as u64).min(Self::ECHO_PREP_MAX_MS);
-        let was = self.echo_prep_ms;
-        self.echo_prep_ms = (was * 3 + took) / 4;
-        tracing::info!("echo-start: preparing took {took} ms (was assuming {was}); firing {} ms early from now on", self.echo_prep_ms + self.skip_lead_ms);
+        let was = self.echo.prep_ms;
+        self.echo.prep_ms = (was * 3 + took) / 4;
+        tracing::info!("echo-start: preparing took {took} ms (was assuming {was}); firing {} ms early from now on", self.echo.prep_ms + self.skip_lead_ms);
     }
 
     /// This node's presentation offset: what the device reports plus what a
@@ -2290,7 +2159,7 @@ impl Engine {
     /// instead of showing a value nobody chose.
     pub(crate) fn echo_offset_frames(&self, measured: Option<u64>) -> (u64, bool) {
         let rate = self.out_rate.max(1) as i64;
-        let trim_frames = self.echo_delay_trim_ms.saturating_mul(rate) / 1000;
+        let trim_frames = self.echo.delay_trim_ms.saturating_mul(rate) / 1000;
         let want = measured.unwrap_or(0) as i64 + trim_frames;
         if want < 0 { (0, true) } else { (want as u64, false) }
     }
@@ -2300,7 +2169,7 @@ impl Engine {
     ///
     /// **The durable fix `[GDE-ECHO-342]` named and did not take.** The ring
     /// cut used to lay the incoming passage a constant `skip_lead_ms` in, and
-    /// `fire_echo_start` fired early by that plus `echo_prep_ms` to make up
+    /// `fire_echo_start` fired early by that plus `echo.prep_ms` to make up
     /// for it -- two predictions about a duration that had not happened yet,
     /// the second of which this fleet measured at 33-37 ms while assuming
     /// 400. Asking `placement()` at the moment of the cut replaces both with
@@ -2397,7 +2266,7 @@ placing at the ring's own depth, which sounds early",
         );
         tracing::info!("echo-schedule: passage={} start_sample={} sound_at={} rate={} depth={}",
                   s.passage_id, s.start_sample, s.sound_at, s.rate, depth_frames);
-        self.echo_schedule = Some(s);
+        self.echo.schedule = Some(s);
     }
 
     /// Re-announce after a cut, from where the incoming passage really sits.
@@ -2461,7 +2330,7 @@ placing at the ring's own depth, which sounds early",
     /// pulled forward again by the origin.
     fn echo_split(&self) -> Shift {
         let (overlap, ceiling) = self.next_transition_overlap();
-        self.split_shift(self.echo_next_shift_ms, overlap, ceiling)
+        self.split_shift(self.echo.next_shift_ms, overlap, ceiling)
     }
 
     /// The overlap the transition now in prospect has to spend, and the most
@@ -2628,19 +2497,19 @@ placing at the ring's own depth, which sounds early",
     /// interval rather than run as two timers that would double the splice
     /// rate and fight over direction `[GDE-ECHO-349]`.
     fn due_trim(&self) -> Option<bool> {
-        let debt_ppm = if self.echo_debt_frames > 0 {
+        let debt_ppm = if self.echo.debt_frames > 0 {
             Self::ECHO_DEBT_PPM
-        } else if self.echo_debt_frames < 0 {
+        } else if self.echo.debt_frames < 0 {
             -Self::ECHO_DEBT_PPM
         } else {
             0.0
         };
-        let effective = self.echo_rate_ppm + debt_ppm;
+        let effective = self.echo.rate_ppm + debt_ppm;
         let interval = crate::echo::trim_interval(
             effective, self.out_rate, Self::ECHO_RATE_FLOOR_PPM)?;
         // The clock starts when the rate does, so the first trim waits a full
         // interval rather than firing the instant an estimate arrives.
-        let due = self.echo_last_trim.is_some_and(|t| t.elapsed() >= interval);
+        let due = self.echo.last_trim.is_some_and(|t| t.elapsed() >= interval);
         due.then_some(effective > 0.0)
     }
 
@@ -2664,7 +2533,7 @@ placing at the ring's own depth, which sounds early",
         // because the alternative is an underflow that reads as a colossal
         // shortfall and silences the node.
         let excess = own_offset_frames.saturating_sub(fleet_min_offset_frames);
-        self.echo_depth_shortfall = (excess as usize).saturating_mul(self.out_channels.max(1));
+        self.echo.depth_shortfall = (excess as usize).saturating_mul(self.out_channels.max(1));
     }
 
     /// Frames this node may add, given a ring it must not fill completely.
@@ -2699,12 +2568,12 @@ placing at the ring's own depth, which sounds early",
                 // forever: `out_room` stays above the threshold, the effective
                 // room stays below it, the early return fires every pass and
                 // nothing ever submits to update the cache.
-                if Self::submit_room_frames(self.out_room, self.echo_depth_shortfall)
+                if Self::submit_room_frames(self.out_room, self.echo.depth_shortfall)
                     < self.min_submit()
                 {
                     self.out_room = o.free();
                 }
-                Self::submit_room_frames(self.out_room, self.echo_depth_shortfall)
+                Self::submit_room_frames(self.out_room, self.echo.depth_shortfall)
             }
             None => self.scratch.len(),
         };
@@ -2730,12 +2599,12 @@ placing at the ring's own depth, which sounds early",
         // no audio at all. It waits by putting silence in front of the
         // passage. Nothing is mixed on these passes, so the decoded audio
         // stays in each stream's own ring and the passage arrives whole.
-        if self.echo_gap_frames > 0 {
-            let frames = (want / ch).min(self.echo_gap_frames as usize);
+        if self.echo.gap_frames > 0 {
+            let frames = (want / ch).min(self.echo.gap_frames as usize);
             let n = frames * ch;
             self.scratch[..n].fill(0.0);
-            self.echo_gap_frames -= frames as u64;
-            if self.echo_gap_frames == 0 {
+            self.echo.gap_frames -= frames as u64;
+            if self.echo.gap_frames == 0 {
                 tracing::info!("echo-gap: silence spent; the passage starts now");
             }
             return match &self.path.ring {
@@ -2782,22 +2651,22 @@ placing at the ring's own depth, which sounds early",
                     // actuator that declines silently is the whole shape of
                     // `[GDE-ECHO-351]`, so this is said once per episode
                     // rather than at the mixer's own cadence.
-                    if !self.echo_trim_refused {
-                        self.echo_trim_refused = true;
+                    if !self.echo.trim_refused {
+                        self.echo.trim_refused = true;
                         tracing::info!("echo-trim: a {} was refused on a {filled}-sample block; nothing credited, retrying",
                                   if drop_frame { "drop" } else { "duplicate" });
                     }
                 } else {
-                    self.echo_trim_refused = false;
+                    self.echo.trim_refused = false;
                     // The clock restarts only when a frame actually moved: a
                     // trim skipped now must happen a few milliseconds later,
                     // not be counted as already done.
-                    self.echo_last_trim = Some(std::time::Instant::now());
+                    self.echo.last_trim = Some(std::time::Instant::now());
                     // One frame of the debt, whichever job the trim was doing
                     // -- credited by the frame that moved rather than by the
                     // intention to move one `[GDE-ECHO-373]`.
-                    if self.echo_debt_frames != 0 {
-                        self.echo_debt_frames -= self.echo_debt_frames.signum();
+                    if self.echo.debt_frames != 0 {
+                        self.echo.debt_frames -= self.echo.debt_frames.signum();
                     }
                 }
                 after
@@ -2900,8 +2769,8 @@ placing at the ring's own depth, which sounds early",
             // Only a cut is recovered from -- an underrun, a device reopen or
             // a pause are about the frame clock itself and are not mended by
             // a passage becoming audible `[GDE-ECHO-360]`.
-            if self.echo_basis.voided_by() == Some(crate::echo::Voided::Skip) {
-                self.echo_basis.establish();
+            if self.echo.basis.voided_by() == Some(crate::echo::Voided::Skip) {
+                self.echo.basis.establish();
             }
             // **The one place that knows `shown` is really sounding**
             // `[GDE-ARC-059]`. `skip` sets `shown` eagerly so the button stays
@@ -2909,7 +2778,7 @@ placing at the ring's own depth, which sounds early",
             // the audio. Recording which branch set it, rather than re-deriving
             // the same `frames_mixed > ring` test elsewhere, keeps one model of
             // one quantity `[GDE-ARC-033]`.
-            self.shown_is_sounding = true;
+            self.echo.shown_is_sounding = true;
         } else if let Some((entry, _)) = self.shown.clone() {
             // Still audible though no longer mixed: keep it, and keep its
             // position moving, rather than blanking the display mid-passage.
@@ -2988,15 +2857,15 @@ placing at the ring's own depth, which sounds early",
         // live list, and holding the snapshot mutex across that would put the
         // engine's own state behind the lock a browser thread waits on.
         let echo = crate::echo::EchoState {
-            anchor: if self.echo_basis.is_valid() {
+            anchor: if self.echo.basis.is_valid() {
                 // None, not 0.0: nothing here measures the master's own rate
                 // error yet, and saying zero would be a claim `[GOV-SRC-040]`.
                 self.air_position().map(|a| a.anchor(self.out_rate, None))
             } else {
                 None
             },
-            schedule: self.echo_schedule,
-            voided_by: self.echo_basis.voided_by(),
+            schedule: self.echo.schedule,
+            voided_by: self.echo.basis.voided_by(),
         };
         if let Ok(mut s) = self.state.lock() {
             s.echo = echo;
@@ -3009,15 +2878,15 @@ placing at the ring's own depth, which sounds early",
             });
             let (offset_frames, clamped) = self.echo_offset_frames(measured);
             s.echo_node = EchoNode {
-                trim_ms: self.echo_delay_trim_ms,
+                trim_ms: self.echo.delay_trim_ms,
                 trim_limit_ms: crate::db::ECHO_TRIM_LIMIT_MS,
                 measured_frames: measured,
                 offset_frames,
                 clamped,
                 rate: self.out_rate,
-                follow_host: self.echo_follow_host.clone(),
-                join_now: self.echo_join_now,
-                join_bias_ms: self.echo_join_bias.correction_ms(),
+                follow_host: self.echo.follow_host.clone(),
+                join_now: self.echo.join_now,
+                join_bias_ms: self.echo.join_bias.correction_ms(),
                 // Written by the follower task, which is the only thing that
                 // knows; left as it found it here.
                 follow_status: s.echo_node.follow_status.clone(),
@@ -3050,20 +2919,20 @@ placing at the ring's own depth, which sounds early",
             s.volume = self.volume;
             s.skip_fade_ms = self.skip_fade_ms;
             s.skip_lead_ms = self.skip_lead_ms;
-            s.resume_save_ms = self.resume_save_ms;
+            s.resume_save_ms = self.prefs.resume_save_ms;
             // Every listener setting, published. These were declared on
             // `PlayerState` and read by the settings page but never filled, so
             // the page would have offered a confident **0 hours** for both
             // suppression windows — a control showing a value the engine does
             // not hold is worse than one showing nothing.
-            s.skip_suppress_h = self.skip_suppress_h;
-            s.dequeue_suppress_h = self.dequeue_suppress_h;
+            s.skip_suppress_h = self.prefs.skip_suppress_h;
+            s.dequeue_suppress_h = self.prefs.dequeue_suppress_h;
             s.queue_depth = self.queue.min_depth;
-            s.sample_interval_ms = self.sample_interval_ms;
-            s.cue_sheets = self.cue_sheets;
-            s.covers = self.covers;
-            s.lyrics_cache = self.lyrics_cache;
-            s.lyrics_sidecar = self.lyrics_sidecar;
+            s.sample_interval_ms = self.prefs.sample_interval_ms;
+            s.cue_sheets = self.prefs.cue_sheets;
+            s.covers = self.prefs.covers;
+            s.lyrics_cache = self.prefs.lyrics_cache;
+            s.lyrics_sidecar = self.prefs.lyrics_sidecar;
             s.active_streams = self.live.len();
             s.underrun_samples = self.underruns_playing;
             s.underruns_since_reset =
@@ -3093,7 +2962,7 @@ impl Drop for Engine {
 /// that long, the earliest one this process can name.
 ///
 /// `Instant` counts from boot, and `Instant - Duration` **panics** on
-/// underflow rather than saturating. Six tests below set `echo_last_trim` in
+/// underflow rather than saturating. Six tests below set `echo.last_trim` in
 /// the past this way, and on 2026-09-21 the 3600 s one failed on a machine
 /// six minutes into its uptime: `overflow when subtracting duration from
 /// instant`, which reads as an engine fault rather than as a test that cannot
@@ -3102,7 +2971,7 @@ impl Drop for Engine {
 ///
 /// Saturating to *now* is the safe direction. Where the value is only
 /// decoration -- `due_trim` returns `None` at the rate floor before it ever
-/// reads `echo_last_trim` -- nothing changes. Where the elapsed time is what
+/// reads `echo.last_trim` -- nothing changes. Where the elapsed time is what
 /// the assertion turns on, a saturated clock reports "not due" and the test
 /// **fails**, loudly, instead of passing for a reason nobody chose
 /// `[GDE-ECHO-547]`.
@@ -3124,12 +2993,12 @@ mod depth_tests {
     fn a_trim_past_the_measured_delay_clamps_and_says_it_did() {
         let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 1);
         e.out_rate = 44_100;
-        e.echo_delay_trim_ms = -40;
+        e.echo.delay_trim_ms = -40;
         assert_eq!(e.echo_offset_frames(Some(2043)), (279, false), "46 ms less 40 leaves 6");
-        e.echo_delay_trim_ms = -100;
+        e.echo.delay_trim_ms = -100;
         assert_eq!(e.echo_offset_frames(Some(2043)), (0, true), "further back than zero");
         // With nothing measured the trim IS the offset `[GDE-ECHO-430]`.
-        e.echo_delay_trim_ms = 10;
+        e.echo.delay_trim_ms = 10;
         assert_eq!(e.echo_offset_frames(None), (441, false));
     }
 
@@ -3146,13 +3015,13 @@ mod depth_tests {
         // The clock starts with the rate: nothing is due in the first instant.
         assert_eq!(e.due_trim(), None, "an arriving rate is not a debt to pay at once");
         // ...but once an interval has passed, it is, and this node is behind.
-        e.echo_last_trim = Some(ago(2));
+        e.echo.last_trim = Some(ago(2));
         assert_eq!(e.due_trim(), Some(true), "behind: drop a frame to catch up");
 
         // The other way round.
         h.send(Command::SetEchoRate(-13.92));
         e.tick();
-        e.echo_last_trim = Some(ago(2));
+        e.echo.last_trim = Some(ago(2));
         assert_eq!(e.due_trim(), Some(false), "ahead: repeat a frame to wait");
     }
 
@@ -3195,7 +3064,7 @@ mod depth_tests {
 
         // With nothing sounding there is no transition and no overlap, so
         // the admission half has nothing to spend and says so.
-        e.echo_next_shift_ms = 100;
+        e.echo.next_shift_ms = 100;
         assert_eq!(e.echo_split().admit_ms, 0);
     }
 
@@ -3423,13 +3292,13 @@ mod depth_tests {
         e.out_rate = 44_100;
         h.send(Command::SetEchoRate(5_000.0));
         e.tick();
-        assert_eq!(e.echo_rate_ppm, Engine::ECHO_RATE_CEILING_PPM);
+        assert_eq!(e.echo.rate_ppm, Engine::ECHO_RATE_CEILING_PPM);
         h.send(Command::SetEchoRate(-5_000.0));
         e.tick();
-        assert_eq!(e.echo_rate_ppm, -Engine::ECHO_RATE_CEILING_PPM);
+        assert_eq!(e.echo.rate_ppm, -Engine::ECHO_RATE_CEILING_PPM);
         h.send(Command::SetEchoRate(f64::INFINITY));
         e.tick();
-        assert_eq!(e.echo_rate_ppm, 0.0, "not finite is not a rate at all");
+        assert_eq!(e.echo.rate_ppm, 0.0, "not finite is not a rate at all");
     }
 
     /// Stopping following stops trimming. A rate left behind would have the
@@ -3440,11 +3309,11 @@ mod depth_tests {
         e.out_rate = 44_100;
         h.send(Command::SetEchoRate(13.92));
         e.tick();
-        assert!(e.echo_last_trim.is_some());
+        assert!(e.echo.last_trim.is_some());
         h.send(Command::SetEchoRate(0.0));
         e.tick();
         assert_eq!(e.due_trim(), None);
-        assert!(e.echo_last_trim.is_none(), "the clock stops with the rate");
+        assert!(e.echo.last_trim.is_none(), "the clock stops with the rate");
     }
 
     /// Below the floor the interval runs to hours and the estimate is mostly
@@ -3455,7 +3324,7 @@ mod depth_tests {
         e.out_rate = 44_100;
         h.send(Command::SetEchoRate(0.2));
         e.tick();
-        e.echo_last_trim = Some(ago(3600));
+        e.echo.last_trim = Some(ago(3600));
         assert_eq!(e.due_trim(), None);
     }
 
@@ -3488,10 +3357,10 @@ mod depth_tests {
         let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 1);
         e.out_channels = 2;
         e.set_echo_depth(2043, 1863);
-        assert_eq!(e.echo_depth_shortfall, 360);
+        assert_eq!(e.echo.depth_shortfall, 360);
         // The node holding the minimum fills to capacity.
         e.set_echo_depth(1863, 1863);
-        assert_eq!(e.echo_depth_shortfall, 0);
+        assert_eq!(e.echo.depth_shortfall, 0);
     }
 
     /// A roster claiming a minimum above this node's own offset is wrong. The
@@ -3501,7 +3370,7 @@ mod depth_tests {
         let (mut e, _h) = Engine::new(crate::path::PathHandle::silent(), 1);
         e.out_channels = 2;
         e.set_echo_depth(1863, 2043);
-        assert_eq!(e.echo_depth_shortfall, 0);
+        assert_eq!(e.echo.depth_shortfall, 0);
     }
 }
 
@@ -3526,7 +3395,7 @@ mod tests {
             at_nanos: nanos_now() + 60 * 1_000_000_000,
         });
         e.tick();
-        assert!(e.echo_start.is_some(), "a future start must still be pending");
+        assert!(e.echo.start.is_some(), "a future start must still be pending");
         assert!(e.queue.iter().all(|q| q.passage_id != 4242), "and must not be queued yet");
     }
 
@@ -3542,13 +3411,13 @@ mod tests {
             at_nanos: nanos_now() - 10_000_000,   // 10 ms ago, one tick
         });
         e.tick();
-        assert!(e.echo_start.is_none(), "a fired start is taken, not left to fire twice");
+        assert!(e.echo.start.is_none(), "a fired start is taken, not left to fire twice");
     }
 
     /// `[GDE-ECHO-375]`'s second half: an estimate that prevents every join
     /// can never be corrected by one, so it has to back itself off.
     ///
-    /// `echo_prep_ms` is revised only inside the path a join takes when it
+    /// `echo.prep_ms` is revised only inside the path a join takes when it
     /// **fires**. A node that paid once for a slow seek into a long capture
     /// `[PI-CHR-075]` therefore fired earlier and earlier of its own accord,
     /// and once the figure carried it past the late limit every subsequent
@@ -3557,7 +3426,7 @@ mod tests {
     #[test]
     fn a_preparation_estimate_no_join_can_survive_backs_itself_off() {
         let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 1);
-        e.echo_prep_ms = Engine::ECHO_PREP_MAX_MS;
+        e.echo.prep_ms = Engine::ECHO_PREP_MAX_MS;
         h.send(Command::EchoStartAt {
             entry: entry(4242, "nonexistent.flac"),
             start_sample: 0,
@@ -3566,13 +3435,13 @@ mod tests {
             at_nanos: nanos_now() + 500_000_000,
         });
         e.tick();
-        assert!(e.echo_start.is_none(), "dropped");
-        assert!(e.echo_prep_ms < Engine::ECHO_PREP_MAX_MS,
+        assert!(e.echo.start.is_none(), "dropped");
+        assert!(e.echo.prep_ms < Engine::ECHO_PREP_MAX_MS,
                 "still {} ms, so the next join is declined exactly as this one was",
-                e.echo_prep_ms);
+                e.echo.prep_ms);
         // Never below the cold guess, which is the best figure available
         // without a measurement.
-        assert!(e.echo_prep_ms >= Engine::ECHO_PREP_GUESS_MS);
+        assert!(e.echo.prep_ms >= Engine::ECHO_PREP_GUESS_MS);
     }
 
     /// Too late is not "late": it is dropped, so the trim loop is never handed
@@ -3586,7 +3455,7 @@ mod tests {
             at_nanos: nanos_now() - 5_000_000_000,   // five seconds ago
         });
         e.tick();
-        assert!(e.echo_start.is_none(), "dropped");
+        assert!(e.echo.start.is_none(), "dropped");
         assert!(e.queue.iter().all(|q| q.passage_id != 4242),
                 "and emphatically not queued");
     }
@@ -3791,7 +3660,7 @@ mod tests {
                 "the second passage should be admitted");
         let opened = e.live.iter().find(|l| l.entry.passage_id == 2).unwrap().origin_ms;
         assert_eq!(opened, 28, "opened at {opened} ms, so the correction never reached it");
-        assert_eq!(e.echo_next_shift_ms, 0, "and it is spent, not applied every boundary");
+        assert_eq!(e.echo.next_shift_ms, 0, "and it is spent, not applied every boundary");
         // **Owed only what admission was actually late by** `[GDE-ARC-057]`.
         // This asserted zero while the engine computed delivery from the
         // request; measuring it instead shows a couple of milliseconds, which
@@ -3800,7 +3669,7 @@ mod tests {
         // block, because that is how far the played position can move between
         // two checks -- and the residue goes to the trim rather than being
         // rounded away, which is the whole point of measuring it.
-        let owed = e.echo_debt_frames;
+        let owed = e.echo.debt_frames;
         // **Strictly positive, and that is the point of the assertion**
         // `[GDE-ARC-057]`. Computing the shortfall from the request instead
         // of the measurement yields exactly zero, so the `>= 0` this used to
@@ -3860,20 +3729,20 @@ than one mix block");
         let opened = e.live.iter().find(|l| l.entry.passage_id == 2).unwrap().origin_ms;
         assert_eq!(opened, 0,
                    "opened {opened} ms in, which sounds EARLIER -- the opposite of what was asked");
-        assert_eq!(e.echo_next_shift_ms, 0, "and it is spent, not applied every boundary");
+        assert_eq!(e.echo.next_shift_ms, 0, "and it is spent, not applied every boundary");
         // The silence is armed in frames, because that is what the mixer
         // counts in `[GDE-ARC-052]`. Some of it may already have been emitted
         // by the time the admission is visible here, so the claim is that it
         // was armed at the right size and is being spent -- not that it is
         // untouched.
-        assert!(e.echo_gap_frames > 0 && e.echo_gap_frames <= owed,
-                "gap of {} frames, expected up to {owed}", e.echo_gap_frames);
+        assert!(e.echo.gap_frames > 0 && e.echo.gap_frames <= owed,
+                "gap of {} frames, expected up to {owed}", e.echo.gap_frames);
         // And because the boundary took all of it, the slow actuator is left
         // with nothing to crawl through. That is the whole point of
         // `[GDE-ARC-052]`: before it, this line read `-120 * rate / 1000` and
         // the node spent twenty minutes at `ECHO_DEBT_PPM` arriving where the
         // boundary could have put it at once `[GDE-ARC-046]`.
-        assert_eq!(e.echo_debt_frames, 0,
+        assert_eq!(e.echo.debt_frames, 0,
                    "the transition placed it exactly; nothing should be owed");
         let _ = std::fs::remove_file(&wav);
     }
@@ -3928,7 +3797,7 @@ than one mix block");
         // frame -- the half of the actuator that never fired.
         h.send(Command::SetEchoRate(-13.92));
         e.drain_commands();
-        e.echo_last_trim = Some(ago(10));
+        e.echo.last_trim = Some(ago(10));
         assert_eq!(e.due_trim(), Some(false), "ahead: repeat a frame to wait");
         drain(&ring);
         let trimmed = e.mix_and_submit();
@@ -3942,7 +3811,7 @@ than one mix block");
     ///
     /// `cut_ring_to_incoming` lays the incoming passage `skip_lead_ms` into
     /// the ring — 500 ms on this fleet, a fixed number — and `fire_echo_start`
-    /// fired early by that plus `echo_prep_ms` to compensate. Both halves are
+    /// fired early by that plus `echo.prep_ms` to compensate. Both halves are
     /// guesses about a duration that has not happened yet, and the second was
     /// measured on this fleet at 33–37 ms while being assumed to be 400.
     ///
@@ -3963,7 +3832,7 @@ than one mix block");
         e.out_channels = 2;
         e.skip_lead_ms = 500;
         // 46 ms of device delay, as `bose` reports `[LOG-CPAL-060]`.
-        e.echo_delay_trim_ms = 46;
+        e.echo.delay_trim_ms = 46;
 
         let now = 1_000_000_000_000u64;
         // Written the way `placement` computes it rather than in round
@@ -4014,14 +3883,14 @@ than one mix block");
 
         // Nothing sounding: the skip bails, and must still clear the target.
         assert!(e.live.is_empty(), "fixture: nothing live");
-        e.echo_join_at = Some(1_000_000_000_000);
+        e.echo.join_at = Some(1_000_000_000_000);
         e.skip();
-        assert_eq!(e.echo_join_at, None,
+        assert_eq!(e.echo.join_at, None,
                    "a target survived a skip that did nothing and will be used by the next one");
 
         // And with none pending the engine has nothing echo-specific to say.
         e.skip();
-        assert_eq!(e.echo_join_at, None);
+        assert_eq!(e.echo.join_at, None);
     }
 
     /// **A seek cuts the ring, so it voids the basis and drops the sounding
@@ -4056,16 +3925,16 @@ than one mix block");
             st.ring.read(&mut sink);
         };
         for _ in 0..400 { e.tick(); drain(&ring); }
-        assert!(e.shown_is_sounding, "fixture: it should be sounding by now");
-        e.echo_basis.establish();
-        assert!(e.echo_basis.is_valid(), "fixture: and comparable");
+        assert!(e.echo.shown_is_sounding, "fixture: it should be sounding by now");
+        e.echo.basis.establish();
+        assert!(e.echo.basis.is_valid(), "fixture: and comparable");
 
         e.seek_to(None, 5_000);
 
-        assert_eq!(e.echo_basis.voided_by(), Some(crate::echo::Voided::Skip),
+        assert_eq!(e.echo.basis.voided_by(), Some(crate::echo::Voided::Skip),
                    "a seek discards counted frames and must say so");
-        assert!(!e.echo_basis.is_valid());
-        assert!(!e.shown_is_sounding,
+        assert!(!e.echo.basis.is_valid());
+        assert!(!e.echo.shown_is_sounding,
                 "the sought-to point does not sound until the lead has drained");
 
         // **And it must come back on its own** `[GDE-ARC-066]`. `skip` is
@@ -4074,8 +3943,8 @@ than one mix block");
         // every follower until its next passage boundary -- caught live, by a
         // measurement that returned no samples at all.
         for _ in 0..400 { e.tick(); drain(&ring); }
-        assert!(e.shown_is_sounding, "the sought-to passage never became audible");
-        assert!(e.echo_basis.is_valid(),
+        assert!(e.echo.shown_is_sounding, "the sought-to passage never became audible");
+        assert!(e.echo.basis.is_valid(),
                 "the basis never recovered from a seek; this node is silent to its followers until the next passage boundary");
         let _ = std::fs::remove_file(&wav);
     }
@@ -4085,10 +3954,10 @@ than one mix block");
     ///
     /// `skip` clears `live` and calls `admit_due`, which takes the
     /// `(Some(_), None)` arm and admits at once — spending any pending
-    /// `echo_next_shift_ms` against it. That shift was computed for the
+    /// `echo.next_shift_ms` against it. That shift was computed for the
     /// *master's* next boundary, minutes away; a listener pressing skip is
     /// not that boundary. Worse in the "later" direction: the shift becomes
-    /// `echo_gap_frames`, the ring is then cut, and the silence is emitted
+    /// `echo.gap_frames`, the ring is then cut, and the silence is emitted
     /// into the opening moments of the track the listener just asked for.
     ///
     /// Measured by a reviewer: a pending −448 ms correction plus one skip
@@ -4120,13 +3989,13 @@ than one mix block");
         // later, which is the direction that becomes silence.
         h.send(Command::EchoCorrectNextStart(-448));
         e.drain_commands();
-        assert_eq!(e.echo_next_shift_ms, -448, "fixture: the plan is pending");
+        assert_eq!(e.echo.next_shift_ms, -448, "fixture: the plan is pending");
 
         e.skip();
 
-        assert_eq!(e.echo_gap_frames, 0,
+        assert_eq!(e.echo.gap_frames, 0,
                    "the skip turned an alignment correction into dead air at the front of the track the listener asked for");
-        assert_eq!(e.echo_next_shift_ms, 0,
+        assert_eq!(e.echo.next_shift_ms, 0,
                    "and the plan must be voided by the cut, not spent on it");
 
         // **A seek is the same cut and gets the same treatment.** This half
@@ -4137,11 +4006,11 @@ than one mix block");
         // at a boundary it was never measured against.
         h.send(Command::EchoCorrectNextStart(-448));
         e.drain_commands();
-        e.echo_gap_frames = 1_234;
-        assert_eq!(e.echo_next_shift_ms, -448, "fixture: a plan is pending again");
+        e.echo.gap_frames = 1_234;
+        assert_eq!(e.echo.next_shift_ms, -448, "fixture: a plan is pending again");
         e.seek_to(None, 5_000);
-        assert_eq!(e.echo_gap_frames, 0, "a seek must drop an in-flight gap");
-        assert_eq!(e.echo_next_shift_ms, 0,
+        assert_eq!(e.echo.gap_frames, 0, "a seek must drop an in-flight gap");
+        assert_eq!(e.echo.next_shift_ms, 0,
                    "and a plan measured against the position it just left");
         let _ = std::fs::remove_file(&wav);
     }
@@ -4190,14 +4059,14 @@ than one mix block");
         }
         assert_eq!(ring.clock.timestamps(), crate::output::Timestamps::Hardware,
                    "fixture: the clock must look like real hardware");
-        assert!(e.shown_is_sounding, "fixture: and the passage must be sounding");
+        assert!(e.echo.shown_is_sounding, "fixture: and the passage must be sounding");
 
         let untrimmed = e.air_position().expect("a sounding node reports where it is");
 
         // A listener calibrates 200 ms of delay the device does not report.
         // The node now sounds later than the device claims, so its air
         // position is EARLIER than it was -- and by exactly the trim.
-        e.echo_delay_trim_ms = 200;
+        e.echo.delay_trim_ms = 200;
         let trimmed = e.air_position().expect("still reports");
         assert_eq!(trimmed.passage_id, untrimmed.passage_id);
         let moved = untrimmed.position_ms as i64 - trimmed.position_ms as i64;
@@ -4266,20 +4135,20 @@ than one mix block");
                    "fixture: the guard is unreachable unless the clock is believable");
         assert!(e.air_position().is_some(),
                 "fixture: a settled node reports where it is");
-        assert!(e.shown_is_sounding, "fixture: a settled node should know it is sounding");
+        assert!(e.echo.shown_is_sounding, "fixture: a settled node should know it is sounding");
 
         e.skip();
         // The basis is *not* voided across this, which is the thing that had
         // to be checked rather than assumed.
-        assert!(e.echo_basis.is_valid(),
+        assert!(e.echo.basis.is_valid(),
                 "admit_due re-establishes inside skip; if that changes, this test is measuring something else");
-        assert!(!e.shown_is_sounding,
+        assert!(!e.echo.shown_is_sounding,
                 "the node believes it is sounding a passage that has not started yet, and will publish an anchor saying so");
         assert!(e.air_position().is_none(),
                 "it reported a position for a passage that has not started sounding; this is published as its anchor and fed to every follower");
 
         run(&mut e, 400);
-        assert!(e.shown_is_sounding, "the skipped-to passage never became audible");
+        assert!(e.echo.shown_is_sounding, "the skipped-to passage never became audible");
         assert!(e.air_position().is_some(),
                 "and it must answer again once the passage is really sounding");
         let _ = std::fs::remove_file(&wav);
@@ -4330,7 +4199,7 @@ than one mix block");
 
         h.send(Command::SetEchoRate(-13.92));
         e.drain_commands();
-        e.echo_last_trim = Some(ago(10));
+        e.echo.last_trim = Some(ago(10));
         assert_eq!(e.due_trim(), Some(false), "ahead: repeat a frame to wait");
 
         let before = ring.state.lock().unwrap().ring.len();
@@ -4384,14 +4253,14 @@ than one mix block");
 
         // Owe a gap of one block plus a little, so it spans two passes.
         let ch = e.out_channels.max(1);
-        e.echo_gap_frames = (block / ch) as u64 + 100;
+        e.echo.gap_frames = (block / ch) as u64 + 100;
         let buffered_before = e.live[0].stream.ring.len();
 
         let n = e.mix_and_submit();
         assert_eq!(n, block, "a gap pass still submits a full block");
         assert_eq!(e.live[0].stream.ring.len(), buffered_before,
                    "the passage must not be consumed while silence is playing");
-        assert_eq!(e.echo_gap_frames, 100, "and the gap is spent by what was emitted");
+        assert_eq!(e.echo.gap_frames, 100, "and the gap is spent by what was emitted");
 
         // What reached the ring is silence, not audio.
         {
@@ -4402,7 +4271,7 @@ than one mix block");
         }
         // And once it is spent, mixing resumes and the passage is consumed.
         drain(&ring);
-        e.echo_gap_frames = 0;
+        e.echo.gap_frames = 0;
         e.mix_and_submit();
         assert!(e.live[0].stream.ring.len() < buffered_before,
                 "the passage resumes after the gap");
@@ -4430,15 +4299,15 @@ than one mix block");
         // 10 ms early: a position debt to be repaid by repeating frames.
         h.send(Command::EchoShedOffset(-10));
         e.drain_commands();
-        let owed = e.echo_debt_frames;
+        let owed = e.echo.debt_frames;
         assert!(owed < 0, "a node ahead owes a negative debt");
-        e.echo_last_trim = Some(ago(10));
+        e.echo.last_trim = Some(ago(10));
         assert_eq!(e.due_trim(), Some(false));
 
         // Nothing is playing, so the mixer produces no frames at all and there
         // is nothing to duplicate.
         e.mix_and_submit();
-        assert_eq!(e.echo_debt_frames, owed,
+        assert_eq!(e.echo.debt_frames, owed,
                    "a frame that never moved cannot pay a frame of debt");
         assert!(e.due_trim().is_some(),
                 "a refused trim must still be due, not wait out another interval");
