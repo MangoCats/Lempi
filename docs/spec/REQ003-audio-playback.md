@@ -83,7 +83,7 @@ Zero slope at the top is what the curve is for: it spends most of the control's 
 
 **`[REQ-AUD-164]` What is reported as playing is what is being *heard*.** A passage becomes current when its first sample leaves the ring for the device, not when the mixer starts on it — those are a ring's depth apart, so the display announced each track some fourteen seconds before it could be heard, cover art and all.
 
-The test is `frames_mixed` against the ring depth, deliberately in **frames rather than position**: a resumed passage starts at a non-zero position and would otherwise announce itself the instant it was admitted. Skip is the exception and hands the display over at once, because it cuts the ring to the fade and the incoming passage really is audible within a second.
+The test is the device's read position against a record of which passage each output sample belongs to (`engine/timeline.rs`): a passage is current from the moment the device reads its first sample, whatever position that sample is at, so a resumed passage does not announce itself the instant it is admitted. Where two overlap, the later admission is current. A skip or a seek is the exception and hands the display over at once, because it cuts the ring to the fade and the incoming passage really is audible within a second; the fading tail of what it cut is not shown again.
 
 > **Measured:** resumed 40 s from the end of a passage, the title changed at **40.0 s** — exactly when the outgoing passage stopped reaching the device.
 >
@@ -145,7 +145,7 @@ A lead longer than the fade is legal and leaves silence between the two; the UI 
 >
 > **Audited 2026-08-15**, because a debt list that reports finished work as outstanding is worse than no list: it spends the reader's attention on nothing and teaches them to distrust the rest of it. Every entry was checked against the code rather than against memory. Two had been resolved and are struck through with what settles them; two carried line counts that had drifted; one — the display-name rule — was found to be exactly right as written and left alone.
 >
-> **Position freezes briefly at a handover** *(cosmetic, accepted)*. When the passage being displayed leaves `live` before the next becomes audible, its reported position holds its last value instead of advancing. Bounded by the ring depth and invisible unless watched closely `[REQ-AUD-164]`.
+> ~~**Position freezes briefly at a handover**~~ *(cosmetic, resolved 2026-10-09)*. When the passage being displayed left `live` before the next became audible, its reported position held its last value instead of advancing. The position is now read off the device through the timeline, which keeps the passage until its last sample is read `[REQ-AUD-164]`, `[REQ-VIS-240]`.
 >
 > ~~**A passage that fails to open is dropped by the engine but still counted as queued by the Director**~~ *(correctness, resolved)*. `prepare_next` advanced past it while `note_queued` had already recorded it, so rotation history counted a passage that never played. The engine now collects them — `Engine::dropped`, pushed at both drop sites — and `take_dropped()` is drained in `session.rs`, which tells the Director to forget them. **Verified 2026-08-15**, by following the value from where it is pushed to where it is consumed.
 >

@@ -526,9 +526,15 @@ pub struct Engine {
     /// The read position last looked at, so a ring that started again is
     /// noticed and the timeline with it.
     timeline_read: u64,
-    /// Whether the timeline last disagreed with `shown`, so a disagreement is
-    /// said once as it begins and once as it ends.
-    timeline_disagreed: bool,
+    /// The admission a cut announced, shown before it sounds `[GDE-ARC-059]`;
+    /// `advance_shown` follows the timeline again once it, or anything
+    /// admitted after it, is heard. One past every admission when the cut
+    /// left nothing to announce.
+    announced: Option<u64>,
+    /// Passages gone from `live` whose samples are still in the ring, so the
+    /// display can name what it hears. Each goes once the timeline holds
+    /// nothing of it.
+    departed: Vec<(u64, QueueEntry)>,
     /// Set when a command rearranged the queue, so that too can bypass the
     /// clock. A listener who removes a passage is waiting on the answer; the
     /// throttle exists for the position counter ticking along, and making an
@@ -664,10 +670,6 @@ fn is_persons_pick(e: &QueueEntry) -> bool {
     e.passage_id > 0 && !e.is_shutdown && e.selected_by.as_deref() == Some("user")
 }
 
-/// How far the timeline's position may differ from `shown`'s and still agree:
-/// the two read the ring at slightly different moments.
-const TIMELINE_TOLERANCE_MS: u64 = 50;
-
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -751,7 +753,8 @@ impl Engine {
             admissions: 0,
             discarded: 0,
             timeline_read: 0,
-            timeline_disagreed: false,
+            announced: None,
+            departed: Vec::new(),
             last_lock_failures: 0,
             out_rate,
             out_channels,
@@ -1399,8 +1402,10 @@ impl Engine {
         let fade_samples = (self.skip_fade_ms * rate / 1000) as usize * ch;
 
         if is_shutdown {
+            self.depart_all();
             self.live.clear();
             self.shown = None;
+            self.announced = Some(self.admissions + 1);
             self.cut_ring_to_incoming(fade_samples, self.skip_lead_ms);
             self.republish_after_cut(0);
             self.queue_edited = true;
@@ -1412,6 +1417,7 @@ impl Engine {
         // there, together. Nothing upstream is worth keeping -- including a
         // passage part-way through an ordinary crossfade, which the listener
         // has barely heard, its decode having run a ring's depth ahead.
+        self.depart_all();
         self.live.clear();
         // Promote the prepared passage. Without one this degrades to a plain
         // fade to silence, which is the right answer when the queue is empty.
@@ -1431,6 +1437,7 @@ impl Engine {
         // display and any resume point taken during that passage too, so this
         // was never only an echo fault.
         self.shown = self.live.first().map(|l| (l.entry.clone(), l.origin_ms));
+        self.announced = Some(self.live.first().map_or(self.admissions + 1, |l| l.admitted));
 
         // **After the preparation, not before** `[GDE-ARC-058]`,
         // `[GDE-ECHO-342]`. `admit_due` above is where a commanded start
@@ -1624,6 +1631,7 @@ impl Engine {
         // the sought-to point does not sound until the lead has drained
         // `[GDE-ARC-059]`.
         self.echo.shown_is_sounding = false;
+        self.depart_all();
         let behind: Vec<QueueEntry> = self.live.drain(1..).map(|l| l.entry).collect();
         if !behind.is_empty() {
             self.queue.insert_at(0, behind);
@@ -1634,6 +1642,7 @@ impl Engine {
         // The listener is at the new point the moment they ask, not a ring's
         // depth later `[REQ-AUD-164]`.
         self.shown = self.live.first().map(|l| (l.entry.clone(), at));
+        self.announced = self.live.first().map(|l| l.admitted);
         self.heard_from = None;
         self.cut_ring_to_incoming(fade_samples, self.skip_lead_ms);
         self.republish_after_cut(lead_samples);
@@ -2789,6 +2798,7 @@ placing at the ring's own depth, which sounds early",
             // the moment itself. Everything after this is arithmetic on the
             // clock.
             self.draining = Some((l.entry.passage_id, self.audible_ms(l), self.sounding.now()));
+            self.departed.push((l.admitted, l.entry.clone()));
         }
         self.live.retain(|l| !l.stream.is_exhausted());
     }
@@ -2836,70 +2846,93 @@ placing at the ring's own depth, which sounds early",
                       misses - self.last_lock_failures, misses);
             self.last_lock_failures = misses;
         }
-        // A passage becomes "playing" when its first sample leaves the ring for
-        // the device, not when the mixer starts on it -- those are ~14 s apart
-        // [REQ-AUD-164]. `frames_mixed` against the ring depth is the test, and
-        // it is deliberately in FRAMES rather than milliseconds of position: a
-        // resumed passage starts at a non-zero position and would otherwise
-        // announce itself the instant it was admitted.
-        let ring = self.out_buffered_frames() as u64;
-        if let Some(l) = self.live.iter().rev().find(|l| l.frames_mixed > ring) {
-            self.shown = Some((l.entry.clone(), self.audible_ms(l)));
-            // **And a basis voided by a cut comes back here** `[GDE-ARC-066]`.
-            // `skip` is re-established by the `admit_due` inside it, at the
-            // cut; `seek_to` admits nothing, so when `[GDE-ARC-064]` gave it
-            // the voiding it was missing it had no way back and the node went
-            // silent to every follower until its next passage boundary.
-            //
-            // This is the honest moment for either of them: the passage is
-            // genuinely sounding, its position is derived the ordinary way,
-            // and nothing about the discarded audio is being compared across.
-            // Only a cut is recovered from -- an underrun, a device reopen or
-            // a pause are about the frame clock itself and are not mended by
-            // a passage becoming audible `[GDE-ECHO-360]`.
-            if self.echo.basis.voided_by() == Some(crate::echo::Voided::Skip) {
-                self.echo.basis.establish();
-            }
-            // **The one place that knows `shown` is really sounding**
-            // `[GDE-ARC-059]`. `skip` sets `shown` eagerly so the button stays
-            // honest, and for the lead after a cut that claim runs ahead of
-            // the audio. Recording which branch set it, rather than re-deriving
-            // the same `frames_mixed > ring` test elsewhere, keeps one model of
-            // one quantity `[GDE-ARC-033]`.
-            self.echo.shown_is_sounding = true;
-        } else if let Some((entry, _)) = self.shown.clone() {
-            // Still audible though no longer mixed: keep it, and keep its
-            // position moving, rather than blanking the display mid-passage.
-            let pos = self
-                .live
-                .iter()
-                .find(|l| l.entry.passage_id == entry.passage_id)
-                .map(|l| self.audible_ms(l))
-                // Gone from `live` but still sounding: what it had mixed, less
-                // what is still queued behind it. As the ring drains this
-                // advances to the end of the passage on its own
-                // `[REQ-VIS-240]`.
-                .or_else(|| match self.draining {
-                    Some((id, at, since)) if id == entry.passage_id => {
-                        // Capped at the passage's own end: the clock must not
-                        // run past the music, however long it sits there.
-                        let moved = at + self.sounding.now().saturating_sub(since).as_millis() as u64;
-                        Some(moved.min(entry.duration_ms()))
-                    }
-                    _ => None,
-                });
-            if let Some(p) = pos {
-                self.shown = Some((entry, p));
+        // What the device is playing, read off the timeline `[REQ-AUD-164]`. A
+        // passage becomes "playing" when its first sample leaves the ring for
+        // the device, not when the mixer starts on it -- those are ~14 s
+        // apart -- and stays shown, its position moving with what the device
+        // reads, until something newer sounds. It keeps moving after it has
+        // left the mixer, through the ring's depth of it still to play
+        // `[REQ-VIS-240]`; a pause reads nothing, and so moves nothing.
+        let Some(read) = self.read_position() else { return };
+        if read < self.timeline_read {
+            self.timeline.reset();
+        }
+        self.timeline_read = read;
+        let heard = self.timeline.audible_at(read);
+        // **A cut announces the incoming passage before it sounds**
+        // `[GDE-ARC-059]`: `skip` and `seek_to` hand the display over at once,
+        // so the button stays honest and the fading tail of what was cut is
+        // not shown again. It stands until the newcomer, or anything admitted
+        // after it, is heard.
+        if let (Some(a), Some(h)) = (self.announced, &heard) {
+            if h.admitted >= a {
+                self.announced = None;
             }
         }
-        self.shadow_timeline();
+        if self.announced.is_none() {
+            if let Some(h) = heard {
+                if let Some(entry) = self.entry_of(h.admitted, h.passage) {
+                    // Capped at the passage's own end: the clock must not run
+                    // past the music, however long it sits there.
+                    let at = h.position_ms.min(entry.duration_ms());
+                    self.shown = Some((entry, at));
+                    if !h.ended {
+                        // **And a basis voided by a cut comes back here**
+                        // `[GDE-ARC-066]`. `skip` is re-established by the
+                        // `admit_due` inside it, at the cut; `seek_to` admits
+                        // nothing, so when `[GDE-ARC-064]` gave it the voiding
+                        // it was missing it had no way back and the node went
+                        // silent to every follower until its next passage
+                        // boundary.
+                        //
+                        // This is the honest moment for either of them: the
+                        // passage is genuinely sounding, its position is read
+                        // off the device, and nothing about the discarded audio
+                        // is being compared across. Only a cut is recovered
+                        // from -- an underrun, a device reopen or a pause are
+                        // about the frame clock itself and are not mended by a
+                        // passage becoming audible `[GDE-ECHO-360]`.
+                        if self.echo.basis.voided_by() == Some(crate::echo::Voided::Skip) {
+                            self.echo.basis.establish();
+                        }
+                        // **The one place that knows `shown` is really
+                        // sounding** `[GDE-ARC-059]`, against a cut's
+                        // announcement that runs ahead of the audio.
+                        self.echo.shown_is_sounding = true;
+                    }
+                }
+            }
+        }
+        self.timeline.prune(read);
+        let timeline = &self.timeline;
+        self.departed.retain(|(a, _)| timeline.holds(*a));
+    }
+
+    /// The entry for an admission the timeline names: still mixing, departed,
+    /// or the one already shown.
+    fn entry_of(&self, admitted: u64, passage: i64) -> Option<QueueEntry> {
+        self.live
+            .iter()
+            .find(|l| l.admitted == admitted)
+            .map(|l| l.entry.clone())
+            .or_else(|| self.departed.iter().find(|(a, _)| *a == admitted).map(|(_, e)| e.clone()))
+            .or_else(|| {
+                self.shown.as_ref().filter(|(e, _)| e.passage_id == passage).map(|(e, _)| e.clone())
+            })
+    }
+
+    /// Everything in `live` leaves it, its samples still in the ring.
+    fn depart_all(&mut self) {
+        for l in &self.live {
+            self.departed.push((l.admitted, l.entry.clone()));
+        }
     }
 
     /// The device's read position: the index of the next sample it takes.
     fn read_position(&self) -> Option<u64> {
         match &self.path.ring {
             Some(r) => r.position().map(|(consumed, _)| consumed),
-            None => Some(self.discarded),
+            None => Some(self.discarded.saturating_sub(1)),
         }
     }
 
@@ -2909,37 +2942,6 @@ placing at the ring's own depth, which sounds early",
         self.timeline.audible_at(self.read_position()?)
     }
 
-    /// The timeline beside `shown`, compared and never acted on: step 5c of
-    /// the 2026-10-08 remediation plan, before the display is driven by it.
-    /// Compared only while `shown` is really sounding -- a cut announces the
-    /// incoming passage before it is heard, on purpose `[GDE-ARC-059]`.
-    fn shadow_timeline(&mut self) {
-        let Some(read) = self.read_position() else { return };
-        if read < self.timeline_read {
-            self.timeline.reset();
-        }
-        self.timeline_read = read;
-        if self.echo.shown_is_sounding {
-            let heard = self.timeline.audible_at(read);
-            let shown = self.shown.as_ref().map(|(e, p)| (e.passage_id, *p));
-            let agree = match (&heard, shown) {
-                (Some(a), Some((id, pos))) => {
-                    a.passage == id && a.position_ms.abs_diff(pos) <= TIMELINE_TOLERANCE_MS
-                }
-                (None, None) => true,
-                _ => false,
-            };
-            if agree == self.timeline_disagreed {
-                self.timeline_disagreed = !agree;
-                if agree {
-                    tracing::debug!("timeline: agrees with what is shown again");
-                } else {
-                    tracing::debug!("timeline: hears {heard:?} where {shown:?} is shown");
-                }
-            }
-        }
-        self.timeline.prune(read);
-    }
 
     fn check_queued_shutdown(&mut self) {
         if self.queue.peek().is_some_and(|e| e.is_shutdown)
@@ -2955,6 +2957,7 @@ placing at the ring's own depth, which sounds early",
         self.queue.advance();
         self.queue_edited = true;
         self.shown = None;
+        self.announced = Some(self.admissions + 1);
         self.draining = None;
         let remaining: Vec<i64> = self
             .queue
@@ -5038,6 +5041,62 @@ than one mix block");
             }
         }
         assert_eq!(compared.len(), 2, "both passages were compared, or this proves little");
+        let _ = (std::fs::remove_file(&a), std::fs::remove_file(&b));
+    }
+
+    /// A cut hands the display over at once `[GDE-ARC-059]`: after a skip the
+    /// newcomer is shown at its origin while the device is still playing the
+    /// fade of what was cut, and is followed by the timeline once it sounds.
+    /// A fade to silence shows nothing, and the fade does not bring back what
+    /// it is fading.
+    #[test]
+    fn a_cut_shows_the_newcomer_before_it_sounds_and_never_the_fading_tail() {
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        // 82 long enough to be still mixing when it is faded at the end.
+        let (a, b) = (wav_of(3_000), wav_of(20_000));
+        for (id, w, ms) in [(81, &a, 3_000), (82, &b, 20_000)] {
+            let mut ent = entry(id, w.to_str().unwrap());
+            ent.end_ms = ms;
+            e.enqueue(ent);
+        }
+        h.send(Command::Play);
+        e.drain_commands();
+        assert!(tick_until(&mut e, |eng| eng.echo.shown_is_sounding));
+        for _ in 0..50 {
+            drain_keeping(&ring, 100_000);
+            e.tick();
+        }
+        assert_eq!(e.shown.as_ref().map(|(s, _)| s.passage_id), Some(81));
+
+        h.send(Command::Skip);
+        e.drain_commands();
+        let origin = e.shown.as_ref().map(|(s, p)| (s.passage_id, *p));
+        assert_eq!(origin, Some((82, 0)), "the newcomer, at once");
+        // The device reads into the fade of 81, short of the lead.
+        drain_keeping(&ring, ring.buffered().saturating_sub(200));
+        for _ in 0..5 {
+            e.tick();
+        }
+        assert_eq!(e.shown.as_ref().map(|(s, p)| (s.passage_id, *p)), origin,
+                   "not the fading tail of what was cut");
+        assert!(!e.echo.shown_is_sounding);
+        // Past the lead, the newcomer sounds and its position moves.
+        for _ in 0..200 {
+            drain_keeping(&ring, 20_000);
+            e.tick();
+        }
+        let (id, at) = e.shown.as_ref().map(|(s, p)| (s.passage_id, *p)).unwrap();
+        assert_eq!(id, 82);
+        assert!(at > 0 && e.echo.shown_is_sounding, "followed once it sounds: {at}");
+
+        assert!(e.fade_to_silence(500));
+        assert!(e.shown.is_none(), "a fade to silence shows nothing");
+        for _ in 0..20 {
+            drain_keeping(&ring, ring.buffered().saturating_sub(2_000));
+            e.tick();
+        }
+        assert!(e.shown.is_none(), "and the fade does not bring 82 back");
         let _ = (std::fs::remove_file(&a), std::fs::remove_file(&b));
     }
 

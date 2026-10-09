@@ -89,6 +89,12 @@ impl Timeline {
         }
     }
 
+    /// Whether this admission still has a segment: still to be heard, or the
+    /// last heard.
+    pub fn holds(&self, admitted: u64) -> bool {
+        self.segments.iter().any(|s| s.admitted == admitted)
+    }
+
     /// Forget everything: the ring was replaced, and its sample count with it.
     pub fn reset(&mut self) {
         self.segments.clear();

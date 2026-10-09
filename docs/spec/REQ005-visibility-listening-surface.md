@@ -146,12 +146,15 @@ display already knew it had to cover that window and kept the *title*; it looked
 the position up in the list of passages being mixed, which is the one place the
 passage had just been removed from, so the number stopped.
 
-**It is advanced by the clock, and that is the point.** The obvious measure —
-what was mixed, less what is still buffered — is wrong during a crossfade,
-because the incoming passage is filling that same ring and its depth says
-nothing about how much of the outgoing one is left. What is left is simply time,
-and audio plays at one second per second. Capped at the passage's own end, so
-the clock cannot run past the music however long it sits there.
+**It is read off the device.** The engine records, for every block it hands
+the output, which passage each sample belongs to and at what position in it
+(`engine/timeline.rs`); the position shown is the one at the sample the device
+reads next. That holds through a crossfade, where the incoming passage fills
+the same ring, and after a passage has left the mixer, where its tail is still
+playing. A pause reads nothing and so moves nothing. Capped at the passage's
+own end. Until 2026-10-09 the position past the mixer was advanced by a clock,
+which a pause in that window ran on, and which a device that was not
+consuming at one second per second left wrong.
 
 > Present since 2026-08-14 and reported by a listener, not by a test — the kind
 > of fault that is invisible from a terminal and obvious from a chair.
