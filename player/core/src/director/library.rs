@@ -74,6 +74,14 @@ impl Rng {
 /// "why not something else?".
 const RUNNERS_UP: usize = 5;
 
+/// How long a passage that has never played counts as unplayed, for the
+/// fallback's preference for the longest unplayed: ten years, which outranks
+/// anything that has.
+pub(crate) const NEVER_PLAYED_S: f64 = 10.0 * 365.0 * 86_400.0;
+/// The least a just-marked passage counts as unplayed, so the fallback can
+/// still draw it when nothing else is left.
+pub(crate) const IDLE_FLOOR_S: f64 = 60.0;
+
 /// Rank decay `[SPEC-DIR-165]`. Applied over the flow-ordered pool, so the
 /// passages that follow the queue tail best are favoured — without ever
 /// becoming certain. At rank 100 this is ×0.017.
@@ -613,6 +621,16 @@ impl Director {
     /// Weigh every radio passage. `now` is unix seconds, passed in so a
     /// selection can be replayed against a frozen history `[REQ-PD-110]`.
     pub fn weigh_all(&self, now: i64) -> Vec<(&QueueEntry, Weighing)> {
+        self.weigh_all_with(now, false)
+    }
+
+    /// As [`Director::weigh_all`], and with `relaxed`, as though nothing had
+    /// played: no passage, recording, work, artist or related age, so neither
+    /// rotation nor recovery applies. Everything else does -- holds, the
+    /// length filters, rejection windows, the listener's restraint and the
+    /// occasion -- which is the whole of what the fallback may set aside
+    /// (the maintainer, 2026-10-08).
+    fn weigh_all_with(&self, now: i64, relaxed: bool) -> Vec<(&QueueEntry, Weighing)> {
         let mut related_buf: Vec<Related> = Vec::new();
         // The day is resolved once per pass, not per passage: every candidate is
         // weighed against the same "today", which is also what keeps a selection
@@ -637,7 +655,7 @@ impl Director {
                     .unwrap_or_else(Tuning::artist_defaults);
 
                 related_buf.clear();
-                if let Some(m) = mbid {
+                if let (Some(m), false) = (mbid, relaxed) {
                     if let Some(rel) = self.relations.get(m) {
                         for (other, strength) in rel {
                             related_buf.push(Related {
@@ -674,9 +692,42 @@ impl Director {
                     related: &related_buf,
                     occasion: self.occasions.multiplier(mbid, today),
                 };
+                let c = if relaxed {
+                    Candidate {
+                        passage_age_s: None,
+                        recording_age_s: None,
+                        work_age_s: None,
+                        artist_age_s: None,
+                        ..c
+                    }
+                } else {
+                    c
+                };
                 (&row.entry, weigh(&c, &self.policy))
             })
             .collect()
+    }
+
+    /// Seconds since anything this passage would rotate by last played or was
+    /// marked as coming -- the passage, its recording, its works, its artist --
+    /// or `None` if none ever has.
+    fn idle_s(&self, entry: &QueueEntry, now: i64) -> Option<f64> {
+        let mbid = entry.mbid.as_deref();
+        let artist = self.artist_key(mbid, entry.passage_id);
+        [
+            self.passage_last_played.get(&entry.passage_id).map(|at| (now - at).max(0) as f64),
+            mbid.and_then(|m| self.age(&self.last_played, m, now)),
+            artist.and_then(|a| self.age(&self.artist_last_played, a, now)),
+        ]
+        .into_iter()
+        .chain(
+            mbid.and_then(|m| self.works_of.get(m))
+                .into_iter()
+                .flatten()
+                .map(|w| self.age(&self.work_last_played, w, now)),
+        )
+        .flatten()
+        .min_by(f64::total_cmp)
     }
 
     /// Mark a passage as just played, so the next pick sees it.
@@ -912,6 +963,84 @@ impl Director {
             })
             .collect();
 
+        let stages = if flowed {
+            "frequency, shaping, flow, rank decay"
+        } else {
+            "frequency, shaping; no flow -- nothing queued to follow"
+        };
+        self.draw(now, rng, &pool, &shaping, &seeds, stages)
+    }
+
+    /// Choose when [`Director::decide`] cannot: every candidate is blocked
+    /// `[REQ-PD-100]`, `[SPEC-DIR-230]`. A repeat is a better answer than
+    /// silence, so **rotation and recovery are set aside, and nothing else**
+    /// (the maintainer, 2026-10-08): a held passage, one under the weight floor
+    /// for its occasion today -- children's, or out of season -- one inside a
+    /// rejection window, or one the listener has turned all the way down is
+    /// still never chosen. Already-queued passages are skipped, and the
+    /// programme still shapes the pool.
+    ///
+    /// In rotation's place, the longest unplayed is the likeliest: each weight
+    /// is scaled by how long since anything it rotates by last played, and
+    /// drawn, so it is not the same passage every time.
+    pub fn decide_relaxed(&self, now: i64, rng: &mut Rng, skip: &[i64]) -> Option<Decision> {
+        let weighed = self.weigh_all_with(now, true);
+        let open: Vec<(&QueueEntry, &Weighing)> = weighed
+            .iter()
+            .filter(|(e, w)| w.is_eligible() && !skip.contains(&e.passage_id))
+            .map(|(e, w)| (*e, w))
+            .collect();
+        if open.is_empty() {
+            return None;
+        }
+        let seeds = self.seeds_now(now);
+        let mut shaping = Shaping::default();
+        let candidates: Vec<(i64, Option<&Flavor>)> =
+            open.iter().map(|(e, _)| (e.passage_id, self.flavor_of(e.passage_id))).collect();
+        let shaped: HashSet<i64> = shape(
+            &self.flavor.schema,
+            &candidates,
+            &seeds,
+            self.dislike.as_ref(),
+            &mut shaping,
+        )
+        .into_iter()
+        .collect();
+        // The weight the draw uses, carried on the weighing so the panel shows
+        // the number that was actually drawn on.
+        let idled: Vec<(&QueueEntry, Weighing)> = open
+            .iter()
+            .filter(|(e, _)| shaped.is_empty() || shaped.contains(&e.passage_id))
+            .map(|(e, w)| {
+                let idle = self.idle_s(e, now).unwrap_or(NEVER_PLAYED_S).max(IDLE_FLOOR_S);
+                (*e, Weighing { weight: w.weight * idle, ..(*w).clone() })
+            })
+            .collect();
+        let pool: Vec<(&QueueEntry, &Weighing, Option<f64>, f64)> =
+            idled.iter().map(|(e, w)| (*e, w, None, w.weight)).collect();
+        self.draw(
+            now,
+            rng,
+            &pool,
+            &shaping,
+            &seeds,
+            "fallback: every candidate was blocked by rotation; rotation and recovery \
+             set aside, the longest unplayed favoured",
+        )
+    }
+
+    /// The roulette over a ranked pool, and the record of why `[SPEC-DIR-165]`,
+    /// `[REQ-VIS-100]`. `pool` is (entry, weighing, flow distance, the weight
+    /// actually drawn on).
+    fn draw(
+        &self,
+        now: i64,
+        rng: &mut Rng,
+        pool: &[(&QueueEntry, &Weighing, Option<f64>, f64)],
+        shaping: &Shaping,
+        seeds: &[Seed<'_>],
+        stages: &'static str,
+    ) -> Option<Decision> {
         let total: f64 = pool.iter().map(|x| x.3).sum();
         // Negated `>` so a NaN total is refused rather than divided by; see
         // the same shape in `frequency::weigh`.
@@ -965,7 +1094,7 @@ impl Director {
                     .active(now)
                     .map(|p| p.name.clone()),
                 shaping: shaping.clone(),
-                seed_distances: self.seed_distances(entry.passage_id, &seeds),
+                seed_distances: self.seed_distances(entry.passage_id, seeds),
                 share_pct: if total > 0.0 { w.weight / total * 100.0 } else { 0.0 },
                 runners_up: rest
                     .iter()
@@ -979,11 +1108,7 @@ impl Director {
                         weight: x.3,
                     })
                     .collect(),
-                stages: if flowed {
-                    "frequency, shaping, flow, rank decay"
-                } else {
-                    "frequency, shaping; no flow -- nothing queued to follow"
-                },
+                stages,
             },
         })
     }
@@ -1095,7 +1220,7 @@ impl Census {
 ///
 /// Missing tables are not an error: a library with no occasions defined simply
 /// has no seasons, and every multiplier is 1.0.
-fn load_occasions(conn: &QualifyingConn) -> Result<Occasions, DbError> {
+pub(crate) fn load_occasions(conn: &QualifyingConn) -> Result<Occasions, DbError> {
     let mut modes: HashMap<(String, String), Interp> = HashMap::new();
     let mut pts: HashMap<(String, String), Vec<(u16, f64)>> = HashMap::new();
 

@@ -246,6 +246,9 @@ const UTC_RESYNC: std::time::Duration = std::time::Duration::from_secs(3600);
 /// says within a tick or two; this bounds a path that never does.
 const NOTE_GRACE: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// How long selection rests after finding nothing it may play.
+const FALLBACK_REST: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// The marks the Director holds for one passage, oldest first -- a person may
 /// queue one passage twice -- and since when it has been out of sight.
 #[derive(Default)]
@@ -326,6 +329,11 @@ pub struct Session {
     /// **1,724 times in about twenty seconds**. Said once, again only if the
     /// message changes, and once more with the count when it clears.
     refill_failing: Option<(String, u64)>,
+    /// Until when selection rests after finding nothing -- the Director's,
+    /// even with rotation set aside, or the no-Director fallback's -- or after
+    /// the fallback failed: each is a pass over the whole pool, and refill
+    /// runs on every tick.
+    fallback_rest: Option<std::time::Instant>,
     /// When the OS's UTC offset was last read `[SPEC-DIR-180]`; see
     /// `resync_utc_offset`.
     utc_synced: std::time::Instant,
@@ -393,10 +401,10 @@ impl Session {
         // cold start has no queued audio yet either, so it is the right
         // gate to reuse, not a new one to invent. Until it adopts, a refill
         // that finds the queue short is served by the no-Director fallback,
-        // `Library::random_radio` -- uniform random, with no frequency, no
-        // character shaping and no holds (docs/architecture.md section 10).
-        // `prime` restores the remembered queue first so that an ordinary
-        // start never reaches it.
+        // `Library::fallback_radio` -- every rule but rotation, without the
+        // listener's per-recording dials or character shaping. `prime`
+        // restores the remembered queue first so that an ordinary start never
+        // reaches it.
         let controls = SharedControls::default();
         if let Ok(mut c) = controls.lock() {
             c.reload_requested = true;
@@ -427,6 +435,7 @@ impl Session {
             rebuild: None,
             saved_queue: Vec::new(),
             refill_failing: None,
+            fallback_rest: None,
             // `open` has just synced it, above.
             utc_synced: std::time::Instant::now(),
         })
@@ -569,6 +578,8 @@ impl Session {
     fn adopt(&mut self, fresh: Director, engine: &dyn crate::switch::Backend) {
         self.director = Some(fresh);
         self.notes.clear();
+        // A new Director may have something to choose where the last had not.
+        self.fallback_rest = None;
         let now = unix_now();
         // **The sounding passage first, and it is not in `queued_ids`.**
         //
@@ -753,10 +764,11 @@ impl Session {
         // The queue as it stood `[SPEC-DIR-225]`, and **before** the refill
         // below. The Director is built on its own thread and is not here yet
         // `[IMPL-SUI-075]`, so the only selector this refill would have is the
-        // uniform-random fallback -- which is stated behaviour for a live
-        // rebuild, where the queue is full and it cannot fire, and quite
-        // another thing at startup, where the queue is empty and it fills
-        // every slot. Restoring first leaves it nothing to fill.
+        // library's fallback, which keeps every rule but rotation and has none
+        // of the listener's dials or the programme's character -- harmless
+        // for a live rebuild, where the queue is full and it cannot fire, and
+        // a poorer start, where the queue is empty and it fills every slot.
+        // Restoring first leaves it nothing to fill.
         //
         // Entries arrive with `selected_by` at its `Library::passage` default
         // of `None`, which already means "no selection event to report at all
@@ -841,16 +853,24 @@ impl Session {
         // Read once, before the loop: the passage on air does not change while
         // this refill picks, and `engine` is borrowed mutably below.
         let sounding = engine.head_position().map(|(id, _)| id);
+        let mut starved = false;
+        // A fill that found nothing rests before trying again: the answer is
+        // a pass over the whole pool, and refill runs on every tick.
+        let resting = self.fallback_rest.is_some_and(|until| std::time::Instant::now() < until);
 
-        if let Some(d) = &mut self.director {
+        if let (Some(d), false) = (&mut self.director, resting) {
             for _ in 0..short {
                 // The tail is what this passage will follow, so flow is
                 // measured from it [SPEC-DIR-160] -- see `flow_tail`.
                 let tail = flow_tail(&chosen, sounding);
-                let Some(mut decision) = d.decide(now, &mut self.rng, &chosen, tail) else {
-                    // Everything eligible is blocked. Falling back keeps the
-                    // radio playing, which [REQ-PD-100] requires; silence would
-                    // be a worse answer than a repeat.
+                // Everything eligible blocked by rotation: a repeat is a better
+                // answer than silence [REQ-PD-100], so rotation and recovery
+                // are set aside, and nothing else is (`decide_relaxed`).
+                let Some(mut decision) = d
+                    .decide(now, &mut self.rng, &chosen, tail)
+                    .or_else(|| d.decide_relaxed(now, &mut self.rng, &chosen))
+                else {
+                    starved = true;
                     break;
                 };
                 let entry = decision.entry;
@@ -941,13 +961,37 @@ impl Session {
             }
         }
 
+        if starved {
+            // Nothing may be played, even with rotation set aside: every radio
+            // passage is held, declined, out of its season, or turned down.
+            // Silence is then the honest answer, and the pool on the page
+            // reads zero `[REQ-PD-100]`.
+            self.fallback_rest = Some(std::time::Instant::now() + FALLBACK_REST);
+            self.refill_failed(
+                "nothing may be chosen: every radio passage is held, declined, out of its \
+                 season or turned down"
+                    .into(),
+            );
+        }
+
+        // No Director yet: the library's own fallback, with every rule but
+        // rotation `[SPEC-DIR-230]`. Rested after a fill that found nothing,
+        // so an empty answer is not recomputed on every tick.
         let still_short = engine.shortfall();
-        if still_short > 0 {
-            match self.lib.random_radio(still_short) {
+        if still_short > 0 && self.director.is_none() && !resting {
+            let queued = engine.queued_ids();
+            match self.lib.fallback_radio(still_short, now, suppress, &queued, &mut self.rng) {
+                Ok(entries) if entries.is_empty() => {
+                    self.fallback_rest = Some(std::time::Instant::now() + FALLBACK_REST);
+                    self.refill_failed(
+                        "no radio passage may be played until the Director is built: every \
+                         one is held, declined or out of its season"
+                            .into(),
+                    );
+                }
                 Ok(entries) => {
-                    if let Some((_, n)) = self.refill_failing.take() {
-                        tracing::info!("refill: recovered after {n} failed attempt(s)");
-                    }
+                    self.fallback_rest = None;
+                    self.refill_recovered();
                     entries.into_iter().for_each(|mut e| {
                         // Also an auto-selection, with no program steering it
                         // `[REQ-VIS-300]` -- the same "auto" the main loop
@@ -958,19 +1002,32 @@ impl Session {
                     })
                 }
                 Err(e) => {
-                    let msg = e.to_string();
-                    match &mut self.refill_failing {
-                        Some((last, n)) if *last == msg => *n += 1,
-                        _ => {
-                            tracing::error!(
-                                "refill: {msg} (repeats are counted, not logged, until it clears)");
-                            self.refill_failing = Some((msg, 1));
-                        }
-                    }
+                    self.fallback_rest = Some(std::time::Instant::now() + FALLBACK_REST);
+                    self.refill_failed(e.to_string());
                 }
             }
+        } else if !starved && still_short == 0 {
+            self.refill_recovered();
         }
         self.remember_queue(&*engine);
+    }
+
+    /// Say why the queue could not be filled -- once, and again only if the
+    /// reason changes; repeats are counted.
+    fn refill_failed(&mut self, msg: String) {
+        match &mut self.refill_failing {
+            Some((last, n)) if *last == msg => *n += 1,
+            _ => {
+                tracing::error!("refill: {msg} (repeats are counted, not logged, until it clears)");
+                self.refill_failing = Some((msg, 1));
+            }
+        }
+    }
+
+    fn refill_recovered(&mut self) {
+        if let Some((_, n)) = self.refill_failing.take() {
+            tracing::info!("refill: recovered after {n} failed attempt(s)");
+        }
     }
 
     /// Write the queue down when it has changed `[SPEC-DIR-225]`.
@@ -1197,10 +1254,11 @@ mod tests {
     ///
     /// The Director is built on its own thread and is not there yet when
     /// `prime` runs `[IMPL-SUI-075]`, so without a remembered queue the only
-    /// selector available is the uniform-random fallback -- which is how 149
-    /// children's passages, excluded from every weighted selection, reached
-    /// the appliance's speakers anyway. The remembered queue is what that
-    /// fallback must no longer be reached to supply.
+    /// selector available is the library's fallback. When it was uniform
+    /// random, that is how 149 children's passages, excluded from every
+    /// weighted selection, reached the appliance's speakers anyway; it keeps
+    /// the occasion floor now, but a remembered queue is still the better
+    /// start.
     #[test]
     fn a_remembered_queue_is_restored_rather_than_drawn_at_random() {
         let tmp = library_on_disk("restore");
@@ -1223,7 +1281,7 @@ mod tests {
     ///
     /// Separate from `library_on_disk`, deliberately: adding these to the
     /// shared fixture would give every other session test a real Director
-    /// where it currently exercises the uniform-random fallback, which is a
+    /// where it currently exercises the no-Director fallback, which is a
     /// different thing from what those tests are about.
     fn director_library_on_disk(name: &str) -> std::path::PathBuf {
         let tmp = std::env::temp_dir()
@@ -1552,6 +1610,82 @@ mod tests {
         session.settle_unseen(&b);
         assert!(session.notes.is_empty());
         assert_eq!(session.director.as_ref().unwrap().open_marks(), 0);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// The Director fixture, with every hard rule represented: 1 played just
+    /// now (rotation only), 2 held `[SPEC-HOLD-010]`, 3 skipped just now
+    /// `[SPEC-PLAY-050]`, 5 a children's recording under the occasion floor
+    /// `[SPEC-DIR-134]`, 6 never played. Opened as a session.
+    fn every_rule(name: &str) -> (std::path::PathBuf, Session, i64) {
+        let tmp = director_library_on_disk(name);
+        let now = unix_now();
+        let c = rusqlite::Connection::open(&tmp).unwrap();
+        c.execute_batch(
+            "ALTER TABLE passages ADD COLUMN director_hold TEXT;
+             UPDATE passages SET director_hold = 'damaged' WHERE passage_id = 2;
+             INSERT INTO passages (passage_id, file_id, kind, start_ms, end_ms, lead_in_ms,
+                 lead_out_ms, gain_db) VALUES (5,1,'radio',0,180000,0,0,0.0),
+                                              (6,1,'radio',0,180000,0,0,0.0);
+             INSERT INTO passage_recordings VALUES (5,'rec-e',1.0),(6,'rec-f',1.0);
+             INSERT INTO recording_artists VALUES ('rec-e','art-5'),('rec-f','art-6');
+             INSERT INTO listener_occasions VALUES ('user.childrens','childrens','step');
+             INSERT INTO listener_occasion_points VALUES ('user.childrens','childrens',1,1,0.000001);
+             INSERT INTO flavor VALUES ('recording','rec-e','user.childrens','childrens',
+                 1.0,'inherited:mulib',NULL);
+             CREATE TABLE listener_rejections (rejection_id INTEGER PRIMARY KEY,
+                 rejected_at INTEGER, kind TEXT, passage_id INTEGER, mbid TEXT,
+                 heard_ms INTEGER, span_ms INTEGER);",
+        )
+        .unwrap();
+        c.execute("INSERT INTO listener_rejections (rejected_at, kind, passage_id, mbid)
+                   VALUES (?1, 'skip', 3, 'rec-c')", [now]).unwrap();
+        let session = Session::open(&tmp, &tmp, 5).unwrap();
+        c.execute("INSERT INTO listener_play_history (played_at, passage_id, mbid)
+                   VALUES (?1, 1, 'rec-a')", [now]).unwrap();
+        (tmp, session, now)
+    }
+
+    /// With no Director yet, the library's fill keeps every rule but rotation
+    /// (the maintainer, 2026-10-08) -- where `random_radio`, until then,
+    /// drew from every radio passage -- and favours the longest unplayed.
+    #[test]
+    fn the_fallback_without_a_director_keeps_every_rule_but_rotation() {
+        let (tmp, mut session, now) = every_rule("fallback-lib");
+        let suppress = (crate::SKIP_SUPPRESS_H, crate::DEQUEUE_SUPPRESS_H);
+        let all = session.lib.fallback_radio(10, now, suppress, &[], &mut session.rng).unwrap();
+        let mut ids: Vec<i64> = all.iter().map(|e| e.passage_id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![1, 6], "not held, not declined, not children's, not the album");
+        for _ in 0..20 {
+            let one = session.lib.fallback_radio(1, now, suppress, &[], &mut session.rng).unwrap();
+            assert_eq!(one[0].passage_id, 6, "the never-played over the one played just now");
+        }
+        let rest = session.lib.fallback_radio(10, now, suppress, &[6], &mut session.rng).unwrap();
+        assert_eq!(rest.iter().map(|e| e.passage_id).collect::<Vec<_>>(), vec![1],
+                   "nothing already queued");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// With every eligible passage blocked by rotation, the Director sets
+    /// rotation aside and nothing else `[REQ-PD-100]`.
+    #[test]
+    fn the_director_sets_aside_rotation_and_nothing_else() {
+        let (tmp, mut session, now) = every_rule("fallback-dir");
+        let c = rusqlite::Connection::open(&tmp).unwrap();
+        c.execute("INSERT INTO listener_play_history (played_at, passage_id, mbid)
+                   VALUES (?1, 6, 'rec-f')", [now]).unwrap();
+        let d = crate::db::Library::open_split(&tmp, &tmp).unwrap().director().unwrap();
+        assert!(d.decide(now, &mut session.rng, &[], None).is_none(),
+                "everything eligible is blocked, or this proves nothing");
+        for _ in 0..30 {
+            let pick = d.decide_relaxed(now, &mut session.rng, &[]).expect("a repeat over silence");
+            assert!([1, 6].contains(&pick.entry.passage_id), "picked {}", pick.entry.passage_id);
+            assert!(pick.why.stages.starts_with("fallback"), "and the panel says so");
+        }
+        assert!(d.decide_relaxed(now, &mut session.rng, &[1, 6]).is_none(),
+                "nothing queued twice, and no hard rule relaxed to fill the gap");
+        drop(c);
         let _ = std::fs::remove_file(&tmp);
     }
 

@@ -30,6 +30,8 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 
 **`[REQ-PD-100]`** Select the next passage automatically, continuously, without user intervention. The queue never empties while eligible passages exist.
 
+> When every eligible passage is resting in rotation, a repeat is a better answer than silence, so rotation and recovery are set aside, and nothing else (the maintainer, 2026-10-08): a held passage, one declined within its window, one out of season or for children, or one the listener has turned all the way down stays out. With none left, the queue is left short `[SPEC-DIR-230]`.
+
 **`[REQ-PD-110]`** Implement MuLibPlay's weighting **as designed** `[GDE-PD-010..030]`: log-scale rotation, multiplicative artist-then-recording eligibility, hard rotation block, linear recovery ramp, seasonal occasion multipliers, length bonus, and a `minWeightLimit` floor.
 
 > **As designed, not as shipped.** This previously read "reproduce exactly". It changed when a variable shadowing was found in the shipped code: MuLibPlay's artist recovery ramp never reached the recording weight, so a partially recovered artist has never damped its recordings `[SPEC-DIR-117]`. Lempi implements the ramp. MuLibPlay is a proven baseline, not a ceiling — six years of satisfactory listening is evidence the design is sound, not evidence that every behaviour of the binary is worth preserving.

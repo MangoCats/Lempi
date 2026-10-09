@@ -195,11 +195,10 @@ impl Library {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
-    /// Radio passages in uniform random order: what `Session::refill` falls
-    /// back to when there is no Director yet, or when the Director finds every
-    /// candidate blocked. Radio only, per `[REQ-PD-120]`, and nothing more --
-    /// no rotation, no rejections, no holds `[SPEC-HOLD-010]`; that gap is
-    /// listed in docs/architecture.md section 10.
+    /// Radio passages in uniform random order, radio only per `[REQ-PD-120]`
+    /// and nothing more: no holds, rejections, occasions or rotation. Not the
+    /// session's fallback, which is [`Library::fallback_radio`]; a plain draw
+    /// for tests and tools that want one.
     pub fn random_radio(&self, limit: usize) -> Result<Vec<QueueEntry>, DbError> {
         let sql = format!("SELECT {COLS} {FROM} WHERE p.kind = 'radio' ORDER BY RANDOM() LIMIT ?1");
         let mut stmt = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
@@ -207,6 +206,135 @@ impl Library {
             .query_map([limit as i64], row_to_entry)
             .map_err(|e| DbError::Query(e.to_string()))?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// The fill when there is no Director yet `[REQ-PD-100]`, `[SPEC-DIR-230]`:
+    /// the first start of a fresh image, or a remembered queue that came back
+    /// short. Until 2026-10-08 the session used `random_radio` here, uniform
+    /// over every radio passage, which drew held, children's and out-of-season
+    /// music at its full share of the library.
+    ///
+    /// It keeps every rule that is not rotation (the maintainer, 2026-10-08),
+    /// judged by the Director's own `weigh` as though nothing had played: no
+    /// passage held back `[SPEC-HOLD-010]`, none under the weight floor for
+    /// its occasion today `[SPEC-DIR-134]`, none inside a rejection window
+    /// `[SPEC-PLAY-050]`, and the length and depth filters `[SPEC-DIR-125]`.
+    /// The listener's per-recording dials wait for the Director, which is
+    /// seconds behind. In rotation's place the longest unplayed are the
+    /// likeliest, drawn by that weight, so two starts do not queue one list.
+    pub fn fallback_radio(
+        &self,
+        limit: usize,
+        now: i64,
+        suppress_h: (u64, u64),
+        skip: &[i64],
+        rng: &mut crate::director::library::Rng,
+    ) -> Result<Vec<QueueEntry>, DbError> {
+        use crate::director::frequency::{weigh, Candidate, Policy, Tuning};
+        use crate::director::library::{IDLE_FLOOR_S, NEVER_PLAYED_S};
+        use crate::director::occasion::{civil_from_unix, ordinal};
+        use std::collections::HashMap;
+        let q = |e: rusqlite::Error| DbError::Query(e.to_string());
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        // Held passages out, where the catalogue has the column; one that
+        // predates it holds nothing `[SPEC-HOLD-055]`.
+        let unheld = format!(
+            "SELECT {COLS} {FROM} WHERE p.kind = 'radio' \
+               AND (p.director_hold IS NULL OR p.director_hold = '')"
+        );
+        let every = format!("SELECT {COLS} {FROM} WHERE p.kind = 'radio'");
+        let mut stmt = match self.conn.prepare(&unheld) {
+            Ok(s) => s,
+            Err(_) => self.conn.prepare(&every).map_err(q)?,
+        };
+        let rows: Vec<QueueEntry> = stmt
+            .query_map([], row_to_entry)
+            .map_err(q)?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(q)?;
+        drop(stmt);
+
+        // An absent table is a listener with no history yet, not a fault.
+        let latest = |sql: &str| -> HashMap<String, i64> {
+            self.conn
+                .prepare(sql)
+                .and_then(|mut s| {
+                    s.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                        .map(|rows| rows.flatten().collect())
+                })
+                .unwrap_or_default()
+        };
+        let by_recording = latest(
+            "SELECT mbid, MAX(played_at) FROM listener_play_history \
+              WHERE mbid IS NOT NULL GROUP BY mbid",
+        );
+        let by_passage = latest(
+            "SELECT CAST(passage_id AS TEXT), MAX(played_at) FROM listener_play_history \
+              WHERE passage_id IS NOT NULL GROUP BY passage_id",
+        );
+        let skipped = latest(
+            "SELECT mbid, MAX(rejected_at) FROM listener_rejections \
+              WHERE mbid IS NOT NULL AND kind = 'skip' GROUP BY mbid",
+        );
+        let dequeued = latest(
+            "SELECT mbid, MAX(rejected_at) FROM listener_rejections \
+              WHERE mbid IS NOT NULL AND kind = 'dequeue' GROUP BY mbid",
+        );
+        let occasions = crate::director::library::load_occasions(&self.conn)?;
+        let (_, month, day) = civil_from_unix(now);
+        let today = ordinal(month, day);
+        let policy = Policy {
+            skip_suppress_s: suppress_h.0 as f64 * 3600.0,
+            dequeue_suppress_s: suppress_h.1 as f64 * 3600.0,
+            ..Default::default()
+        };
+        let age = |at: Option<&i64>| at.map(|at| (now - at).max(0) as f64);
+
+        let mut drawn: Vec<(f64, QueueEntry)> = Vec::new();
+        for e in rows {
+            if skip.contains(&e.passage_id) {
+                continue;
+            }
+            let mbid = e.mbid.as_deref();
+            let w = weigh(
+                &Candidate {
+                    length_s: e.duration_ms() as f64 / 1000.0,
+                    depth_s: e.start_ms as f64 / 1000.0,
+                    recording: Tuning::recording_defaults(),
+                    artist: Tuning::artist_defaults(),
+                    passage_age_s: None,
+                    recording_age_s: None,
+                    work_age_s: None,
+                    artist_age_s: None,
+                    skip_age_s: mbid.and_then(|m| age(skipped.get(m))),
+                    dequeue_age_s: mbid.and_then(|m| age(dequeued.get(m))),
+                    related: &[],
+                    occasion: occasions.multiplier(mbid, today),
+                },
+                &policy,
+            );
+            if !w.is_eligible() {
+                continue;
+            }
+            let idle = [
+                age(by_passage.get(&e.passage_id.to_string())),
+                mbid.and_then(|m| age(by_recording.get(m))),
+            ]
+            .into_iter()
+            .flatten()
+            .min_by(f64::total_cmp)
+            .unwrap_or(NEVER_PLAYED_S)
+            .max(IDLE_FLOOR_S);
+            // A weighted draw without replacement: the largest `ln(u) / w`
+            // (Efraimidis and Spirakis).
+            let key = rng.unit().max(f64::MIN_POSITIVE).ln() / (w.weight * idle);
+            drawn.push((key, e));
+        }
+        drawn.sort_by(|a, b| b.0.total_cmp(&a.0));
+        Ok(drawn.into_iter().take(limit).map(|(_, e)| e).collect())
     }
 
     /// The file's own tags, if they have been scanned.
@@ -2837,15 +2965,22 @@ mod tests {
             c.execute_batch(include_str!("../../../../sql/schema.sql")).unwrap();
             c.execute_batch(
                 "INSERT INTO files (file_id,audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen)
-                   VALUES (1,'m','/x.mp3',1,1.0,'mp3',1000,'t','t');
+                   VALUES (1,'m','/x.mp3',1,1.0,'mp3',180000,'t','t');
                  INSERT INTO passages (passage_id,file_id,kind,start_ms,end_ms,boundary_src)
-                   VALUES (1,1,'radio',0,1000,'x');",
+                   VALUES (1,1,'radio',0,180000,'x');",
             )
             .unwrap();
         }
         let lib = Library::open(&path).unwrap();
-        let got = lib.random_radio(1).expect("the refill query must run against the canonical schema");
+        let got = lib.random_radio(1).expect("the plain draw must run against the canonical schema");
         assert_eq!(got.len(), 1);
+        // The session's fallback reads holds, rejections, history and
+        // occasions: every one of them must be where the schema puts it.
+        let mut rng = crate::director::library::Rng::from_clock();
+        let got = lib
+            .fallback_radio(1, 1_800_000_000, (156, 18), &[], &mut rng)
+            .expect("the refill query must run against the canonical schema");
+        assert_eq!(got.len(), 1, "and find the one passage nothing holds out");
         std::fs::remove_dir_all(&dir).ok();
     }
 

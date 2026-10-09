@@ -225,10 +225,6 @@ otherwise.
   end (`BUFFER_FRAMES`) the passage on air has already left the mixer, and play
   accounting still follows the mixer, so `seek_to` declines rather than moving
   the next passage `[REQ-VIS-225]`.
-* **The no-Director fallback is uniform random.** On a first start, with no
-  remembered queue, or when every candidate is blocked, `random_radio` fills
-  the queue, ignoring holds `[SPEC-HOLD-010]`, characteristic exclusions,
-  rejections and rotation.
 * **The now-playing panel is blank while MPD is the live backend** — title,
   position and duration come from the local engine's published state, so the
   seek bar has nothing to act on there, though MPD itself can seek.
