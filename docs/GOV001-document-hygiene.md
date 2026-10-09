@@ -97,6 +97,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `OPS` — An appliance measured **in service** rather than at build time: the health baseline, the false alarms, the standing findings. Prefixed per machine (`BOS` for `bose`), because the numbers are only meaningful against one box — see [BOSE004](../BosePi/BOSE004-operating-health.md)
 - `POV` — Per-Output Volume: independent volume state, memory, and persistence across DAC and Bluetooth outputs, see [SPEC060](spec/SPEC060-per-output-volume.md)
 - `WFO` — Travel Wi-Fi Failover: autonomous access point failover, standalone offline operation, and hotspot pivot, see [SPEC061](spec/SPEC061-travel-wifi-failover.md)
+- `PGM` — Named Programmes: the hub's library of programmes, assigned to nodes and confirmed there, see [SPEC062](spec/SPEC062-named-programmes.md)
 - `WIFI` · `MESH` · `FBUI` · `DLY` · `ECHO` · `STAR` · `COV` · `PID` · `MTR` · `DSC` · `TN` · `WAG` · `SEC` · `NSH` · `FCP` · `CDI` · `HOLD` · `NKP` · `QSD` — the specification domains of SPEC034 to SPEC059, in document order; §3's index names each one's document
 
 ### Development Guidance Domains (`GDE`)
@@ -223,6 +224,7 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-FREQ-*]` | How often a subject has played, by window and by who chose each play — built | [SPEC031-play-frequency.md](spec/SPEC031-play-frequency.md) |
 | `[SPEC-WIFI-010..050]` | Wi-Fi network switching and access-point mode on the Pi appliance, confirm-or-revert safety, on NetworkManager, plain `http://lempi/` on :80 — built | [SPEC034-wifi-configuration.md](spec/SPEC034-wifi-configuration.md) |
 | `[REQ-WFO-*]`, `[SPEC-WFO-010..080]`, `[IMPL-WFO-*]` | Autonomous travel Wi-Fi failover, standalone offline operation, and hotspot pivot — built 2026-10-07 | [SPEC061-travel-wifi-failover.md](spec/SPEC061-travel-wifi-failover.md), [IMPL022](IMPL022-travel-wifi-failover.md) |
+| `[SPEC-PGM-010..510]` | Named programmes: a programme is a whole day, kept by name in the hub's library, assigned to nodes and confirmed at each — decided 2026-10-09, not yet built | [SPEC062-named-programmes.md](spec/SPEC062-named-programmes.md) |
 | `[SPEC-HOLD-*]` | Holding a passage back from the Director: the mark, who sets it, how it travels — built | [SPEC057-holding-a-passage-back.md](spec/SPEC057-holding-a-passage-back.md) |
 | `[REQ-QSD-*]`, `[SPEC-QSD-*]`, `[IMPL-QSD-*]` | Queued shutdown: power off when the music reaches it — built | [SPEC059-queued-shutdown.md](spec/SPEC059-queued-shutdown.md), [IMPL020](IMPL020-queued-shutdown.md) |
 | `[REQ-POV-*]`, `[SPEC-POV-*]`, `[IMPL-POV-*]` | Per-output volume: a level remembered for each output — built | [SPEC060-per-output-volume.md](spec/SPEC060-per-output-volume.md), [IMPL021](IMPL021-per-output-volume.md) |
