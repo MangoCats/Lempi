@@ -244,7 +244,13 @@ echo "== C: host (Windows or Linux) =="
 # with MinGW while rustc links with MSVC, which fails on ___chkstk_ms. Unset,
 # the cc crate finds MSVC itself and it builds. Cleared here so the result
 # does not depend on the developer's environment.
-run_suite "C" sh -c "cd '$ROOT/player' && env -u CC cargo test --release" \
+#
+# **Its own target directory**, as the Docker stages have theirs. A release
+# `lempi.exe` running from `player/target/release` -- the player of anyone
+# developing here -- is locked by Windows, so `cargo test --release` failed
+# to replace it and this stage reported a failed suite that had not run
+# (2026-10-09). Building beside it costs disk, not correctness.
+run_suite "C" sh -c "cd '$ROOT/player' && env -u CC cargo test --release --target-dir target/gate-host" \
     || fail=$((fail+1))
 
 # The same boundary check the commit hook runs, defined once above.
