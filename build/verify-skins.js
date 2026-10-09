@@ -7,9 +7,12 @@
 // transport, and drives volume through the shared fader curve rather than a
 // private copy of it `[REQ-VIS-160]`.
 //
-// Optional by design: it needs node and jsdom, which the player itself does not.
-// `verify-targets.sh` skips it when they are absent rather than failing, because
-// a Pi has no business installing a JavaScript test runner to play music.
+// It needs node and jsdom, which the player itself does not -- a Pi has no
+// business installing a JavaScript test runner to play music. So
+// `verify-targets.sh` runs it in the Linux image built for its stage A, which
+// carries both (`build/Dockerfile.linux`), and fails if it cannot run. Until
+// 2026-10-09 it ran on the host and skipped without jsdom, which went unseen
+// while two of its fixtures drifted from the pages they check.
 //
 //   npm install jsdom && node build/verify-skins.js [snapshot.json]
 
@@ -67,8 +70,13 @@ const RICH = {
   plays: 12, last_played: 1735689600,
   title_source: 'musicbrainz', artist_source: 'musicbrainz', album_source: 'tags',
   queue_len: 3,
-  queue: [{ qid: 101, passage_id: 1, title: 'Next One', artist: 'Another', duration_ms: 180000 },
-          { qid: 102, passage_id: 2, title: 'The One After', artist: null, duration_ms: 205000 }],
+  // No shutdown queued [SPEC059]: the fields are carried, and every entry is
+  // music, so the queue checks below count both rows.
+  shutdown_queued: false,
+  queue: [{ qid: 101, passage_id: 1, title: 'Next One', artist: 'Another', duration_ms: 180000,
+            is_shutdown: false },
+          { qid: 102, passage_id: 2, title: 'The One After', artist: null, duration_ms: 205000,
+            is_shutdown: false }],
   volume_db: -12.5,
   program: 'Mellow', program_manual: true,
   programs: [{ id: 1, name: 'Mellow', start: '20:00' }, { id: 2, name: 'Prog', start: '09:00' }],
@@ -772,8 +780,10 @@ async function runBrowse() {
   await settle(); await settle();
 
   const $ = id => window.document.getElementById(id);
+  // Rows of the listing itself: not the letter headings, and not an album's
+  // sleeve, which sits above its first track [REQ-VIS-184].
   const rows = () => [...window.document.querySelectorAll('#rows li')]
-    .filter(li => !li.classList.contains('letter'));
+    .filter(li => !li.classList.contains('letter') && !li.classList.contains('sleeves'));
   const check = (cond, msg) => { if (!cond) errors.push(msg); };
 
   // Artists list, with the alphabet built from what is actually there.
@@ -792,6 +802,10 @@ async function runBrowse() {
   await settle();
   check(!$('verbs').hidden, 'the verbs appear on tracks');
   check(rows().length === 2, `album tracks: ${rows().length}, want 2`);
+  // The album's sleeve, front and back, through its first track's passage.
+  const sleeve = [...window.document.querySelectorAll('#rows li.sleeves img')].map(i => i.getAttribute('src'));
+  check(sleeve.join(' ') === '/art/11 /art/11/back',
+        `an opened album shows its sleeve through its first track, got ${sleeve.join(' ') || 'none'}`);
   // Album order, so the number leads and the alphabet is gone.
   check(rows()[0].textContent.includes('1. Black Cow'), 'track number should lead in album order');
   check(window.document.querySelectorAll('#az button').length === 0,

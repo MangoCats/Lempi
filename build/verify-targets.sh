@@ -317,18 +317,16 @@ fi
 # because the player needs neither node nor jsdom to run; a skip is reported as
 # a skip, never folded into the pass.
 echo
-echo "== Skins (optional: needs node + jsdom) =="
-skins_note=""
-if command -v node >/dev/null 2>&1; then
-    node "$ROOT/build/verify-skins.js"
-    case $? in
-        0) ;;
-        2) skins_note="skins NOT checked (jsdom missing)" ;;
-        *) fail=$((fail+1)) ;;
-    esac
-else
-    skins_note="skins NOT checked (node missing)"
-fi
+echo "== Skins (in the Linux image, which carries node and jsdom) =="
+# **Required, since 2026-10-09.** It ran on the host's node, and skipped where
+# jsdom was not installed -- which was everywhere this was run, so the skins
+# went unchecked while the browse page and the snapshot moved under the check:
+# both had drifted when it first ran again. The image built for stage A now
+# carries node and jsdom (`build/Dockerfile.linux`), so nothing is optional
+# here, and `verify-skins.js`'s own exit 2 -- "could not run" -- is a failure
+# like any other `[GDE-DEP-060]`.
+MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w lempi-linux node build/verify-skins.js \
+    || fail=$((fail+1))
 
 # The Python tools are outside cargo's reach too. `apply_reviews` rewrites what
 # a passage IS, and shipped once in a state where it could not write at all, so
@@ -350,9 +348,6 @@ if [ -n "$mem_note" ]; then
 fi
 if [ -n "$tools_note" ]; then
     echo "$tools_note"
-fi
-if [ -n "$skins_note" ]; then
-    echo "$skins_note"
 fi
 if [ "$fail" -eq 0 ]; then
     echo "ALL TARGETS PASS"

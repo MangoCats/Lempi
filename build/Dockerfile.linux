@@ -1,6 +1,13 @@
 # Native Linux build/test image. x86_64 by default; also runs under
 # --platform linux/arm64 emulation to exercise the aarch64 target for real
 # rather than only compiling it.
+#
+# Node, for the skin check `build/verify-skins.js` (2026-10-09): the skins are
+# HTML and JavaScript that `cargo test` cannot reach. Taken from the official
+# image because bookworm's own `nodejs` is 18 and jsdom 30 needs 22.22 or 24.15
+# and later. Only node and npm are copied; the rest of that image stays there.
+FROM node:24-bookworm-slim AS node
+
 FROM rust:1.90-bookworm
 # No `ffmpeg` since 2026-09-27. It was installed because `relink::hash_encoded`
 # shelled out to it and two bundle-import tests hashed a real file through it
@@ -15,4 +22,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # `#![deny(clippy::print_stdout, clippy::print_stderr)]` `[GDE-HST-160]` would be
 # a lock no gate ever turned; this image did not have clippy until 2026-09-24.
 RUN rustup component add clippy
+# jsdom from the repository's own lockfile, outside the mounted tree so a run
+# never writes `node_modules` into the checkout; `NODE_PATH` is how
+# `require('jsdom')` finds it from `/w/build/verify-skins.js`.
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
+COPY package.json package-lock.json /opt/lempi-skins/
+RUN cd /opt/lempi-skins && npm ci --no-audit --no-fund --loglevel=error
+ENV NODE_PATH=/opt/lempi-skins/node_modules
 WORKDIR /w
