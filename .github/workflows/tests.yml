@@ -144,6 +144,19 @@ jobs:
           --no-default-features --features echo-client
           --target aarch64-linux-android --locked
 
+      # The phone's own crate -- the UniFFI bindings the Kotlin app calls
+      # [REQ-AND-410] -- a gate since 2026-10-09. Until then nothing compiled
+      # it: the phone ran a 12-day-old build, and a refactor that broke the
+      # bindings would have surfaced only at the next APK build. The Kotlin
+      # side needs the image's `app` stage and Gradle, and stays a release
+      # step (android/build.sh).
+      - name: cargo check the Android bindings for aarch64-linux-android
+        run: >
+          docker run --rm -v "$PWD":/w -w /w -e RUSTFLAGS="-D warnings"
+          lempi-android
+          cargo check --manifest-path player/Cargo.toml -p lempi-android
+          --target aarch64-linux-android --locked
+
   vipunen:
     name: Vipunen's own test scripts
     runs-on: ubuntu-latest

@@ -285,6 +285,15 @@ run_step "E" env MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w \
     --target aarch64-linux-android --locked \
     --target-dir player/target/gate-android-player \
     || fail=$((fail+1))
+# And the phone's own crate, the bindings the Kotlin app calls
+# `[REQ-AND-410]`, since 2026-10-09: nothing compiled it until then, and the
+# phone was found 12 days behind. The Kotlin app itself is android/build.sh's.
+run_step "E" env MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w \
+    -e RUSTFLAGS="-D warnings" lempi-android \
+    cargo check --manifest-path player/Cargo.toml -p lempi-android \
+    --target aarch64-linux-android --locked \
+    --target-dir player/target/gate-android-bindings \
+    || fail=$((fail+1))
 
 echo
 core_boundary || fail=$((fail+1))
