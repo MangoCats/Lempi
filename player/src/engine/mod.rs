@@ -9,8 +9,6 @@
 //! whole engine is testable without a thread, an audio device, or real time.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
-use echo_state::EchoState;
-use prefs::Prefs;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 
@@ -23,6 +21,12 @@ use crate::mixer::{mix, Stream};
 use crate::queue::{should_admit_nudged, Queue, QueueEntry};
 use crate::resample::Resampler;
 use crate::BUFFER_FRAMES;
+
+use echo_state::EchoState;
+use prefs::Prefs;
+use timeline::{Segment, Timeline};
+#[cfg(test)]
+use timeline::Audible;
 
 struct Live {
     dec: PassageDecoder,
@@ -40,6 +44,9 @@ struct Live {
     /// its own level -- applying it after mixing would level the blend, not the
     /// passages, and the whole point is that they meet at a matched loudness.
     gain: f32,
+    /// Its place in the order passages joined `live`: in an overlap, the later
+    /// one is the one shown `[REQ-AUD-164]`. Set by `admit_live`.
+    admitted: u64,
 }
 
 /// A play already written to history, whose passage finished decoding but may
@@ -507,6 +514,21 @@ pub struct Engine {
     /// The listener's settings the engine holds but does not mix by
     /// (`prefs.rs`): saved, published and handed to whoever reads them.
     pub(crate) prefs: Prefs,
+    /// Which passage contributed to which output samples, and where in it:
+    /// what the listener hears, read off the device's position. In shadow for
+    /// now -- compared with `shown`, never acted on (`shadow_timeline`).
+    timeline: Timeline,
+    /// How many passages have joined `live`, for `Live::admitted`.
+    admissions: u64,
+    /// Samples handed to a missing output, which takes everything at once:
+    /// the read and write position of a ring that is not there.
+    discarded: u64,
+    /// The read position last looked at, so a ring that started again is
+    /// noticed and the timeline with it.
+    timeline_read: u64,
+    /// Whether the timeline last disagreed with `shown`, so a disagreement is
+    /// said once as it begins and once as it ends.
+    timeline_disagreed: bool,
     /// Set when a command rearranged the queue, so that too can bypass the
     /// clock. A listener who removes a passage is waiting on the answer; the
     /// throttle exists for the position counter ticking along, and making an
@@ -642,6 +664,10 @@ fn is_persons_pick(e: &QueueEntry) -> bool {
     e.passage_id > 0 && !e.is_shutdown && e.selected_by.as_deref() == Some("user")
 }
 
+/// How far the timeline's position may differ from `shown`'s and still agree:
+/// the two read the ring at slightly different moments.
+const TIMELINE_TOLERANCE_MS: u64 = 50;
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -653,6 +679,7 @@ fn unix_now() -> i64 {
 mod persist;
 mod echo_state;
 mod prefs;
+mod timeline;
 
 impl Engine {
     /// Least worth mixing in one pass, in **frames** `[GDE-FBD-090]`.
@@ -720,6 +747,11 @@ impl Engine {
             queue_edited: false,
             echo: EchoState::new(Self::ECHO_PREP_GUESS_MS),
             prefs: Prefs::default(),
+            timeline: Timeline::default(),
+            admissions: 0,
+            discarded: 0,
+            timeline_read: 0,
+            timeline_disagreed: false,
             last_lock_failures: 0,
             out_rate,
             out_channels,
@@ -1476,7 +1508,10 @@ impl Engine {
         }
 
         let mut overlay = vec![0.0f32; wanted];
+        let rate = self.out_rate.max(1) as u64;
+        let mut incoming: Option<(i64, u64, u64)> = None;
         if let Some(l) = self.live.first_mut() {
+            incoming = Some((l.entry.passage_id, l.admitted, l.origin_ms + l.frames_mixed * 1000 / rate));
             // Through `mix`, not by reading the ring directly: the fade-in has
             // been applied on the way in `[XFD-ORTH-020]`, and this keeps the
             // accounting identical to an ordinary tick.
@@ -1488,12 +1523,27 @@ impl Engine {
         }
 
         if let Some(o) = &self.path.ring {
-            o.begin_skip_transition(
+            let (kept, placed, front) = o.begin_skip_transition(
                 self.skip_fade_ms,
                 lead_ms,
                 Curve::Exponential,
                 &overlay,
             );
+            // What the cut discarded will never sound, and the overlay sounds
+            // from the lead on.
+            self.timeline.cut(front + kept as u64);
+            if let Some((passage, admitted, at_ms)) = incoming {
+                let from = front + lead_samples as u64;
+                self.timeline.record(Segment {
+                    passage,
+                    admitted,
+                    from,
+                    to: from + placed as u64,
+                    at_ms,
+                    channels: ch as u32,
+                    rate: self.out_rate,
+                });
+            }
         }
     }
 
@@ -1580,7 +1630,7 @@ impl Engine {
             self.queue_edited = true;
         }
         self.live.clear();
-        self.live.push(opened);
+        self.admit_live(opened);
         // The listener is at the new point the moment they ask, not a ring's
         // depth later `[REQ-AUD-164]`.
         self.shown = self.live.first().map(|l| (l.entry.clone(), at));
@@ -1839,12 +1889,12 @@ impl Engine {
         // so it serves unless a resume offset overrides where to begin.
         if origin.is_none() {
             if let Some(l) = self.ready.take().filter(|l| l.entry.passage_id == entry.passage_id) {
-                self.live.push(l);
+                self.admit_live(l);
                 return;
             }
         }
         match self.open(&entry, origin.unwrap_or(0)) {
-            Ok(l) => self.live.push(l),
+            Ok(l) => self.admit_live(l),
             Err(e) => {
                 tracing::warn!("skipping {}: {e}", entry.path.display());
                 self.dropped.push(entry.passage_id);
@@ -1956,7 +2006,15 @@ impl Engine {
             entry: e.clone(),
             frames_mixed: 0,
             origin_ms,
+            admitted: 0,
         })
+    }
+
+    /// A passage joins the mixer, numbered in the order it joined.
+    fn admit_live(&mut self, mut l: Live) {
+        self.admissions += 1;
+        l.admitted = self.admissions;
+        self.live.push(l);
     }
 
     /// Feeds what is sounding AND what is merely ready, so the prepared passage
@@ -2613,7 +2671,10 @@ placing at the ring's own depth, which sounds early",
                     self.out_room = free_after;
                     taken
                 }
-                None => n,
+                None => {
+                    self.discarded += n as u64;
+                    n
+                }
             };
         }
 
@@ -2673,22 +2734,49 @@ placing at the ring's own depth, which sounds early",
             }
             None => filled,
         };
+        // Each stream is summed from the block's first sample, so a passage
+        // that gave `frames` covers that many from wherever the block lands.
+        let rate = self.out_rate.max(1) as u64;
+        let mut gave: Vec<(i64, u64, u64, u64)> = Vec::with_capacity(self.live.len());
         for (l, was) in self.live.iter_mut().zip(before) {
             let consumed = was.saturating_sub(l.stream.ring.len());
-            l.frames_mixed += (consumed / l.stream.channels.max(1)) as u64;
+            let frames = (consumed / l.stream.channels.max(1)) as u64;
+            if frames > 0 {
+                gave.push((l.entry.passage_id, l.admitted, l.origin_ms + l.frames_mixed * 1000 / rate, frames));
+            }
+            l.frames_mixed += frames;
         }
         if filled == 0 {
             return 0;
         }
-        match &self.path.ring {
+        let (taken, at) = match &self.path.ring {
             Some(o) => {
-                let (taken, free_after, _) = o.submit(&self.scratch[..filled]);
+                let (taken, free_after, at) = o.submit(&self.scratch[..filled]);
                 debug_assert_eq!(taken, filled, "output accepted less than it reported free");
                 self.out_room = free_after;
-                taken
+                (taken, at)
             }
-            None => filled, // discard sink: report accepted so callers advance
+            // Discard sink: report accepted so callers advance.
+            None => {
+                let at = self.discarded;
+                self.discarded += filled as u64;
+                (filled, at)
+            }
+        };
+        // A trim moved the block by a frame; the next block's segment starts
+        // afresh from its own position, so that frame does not accumulate.
+        for (passage, admitted, at_ms, frames) in gave {
+            self.timeline.record(Segment {
+                passage,
+                admitted,
+                from: at,
+                to: at + (frames * ch as u64).min(taken as u64),
+                at_ms,
+                channels: ch as u32,
+                rate: self.out_rate,
+            });
         }
+        taken
     }
 
     fn retire_finished(&mut self) {
@@ -2804,6 +2892,53 @@ placing at the ring's own depth, which sounds early",
                 self.shown = Some((entry, p));
             }
         }
+        self.shadow_timeline();
+    }
+
+    /// The device's read position: the index of the next sample it takes.
+    fn read_position(&self) -> Option<u64> {
+        match &self.path.ring {
+            Some(r) => r.position().map(|(consumed, _)| consumed),
+            None => Some(self.discarded),
+        }
+    }
+
+    /// What the timeline says is audible now.
+    #[cfg(test)]
+    fn heard(&self) -> Option<Audible> {
+        self.timeline.audible_at(self.read_position()?)
+    }
+
+    /// The timeline beside `shown`, compared and never acted on: step 5c of
+    /// the 2026-10-08 remediation plan, before the display is driven by it.
+    /// Compared only while `shown` is really sounding -- a cut announces the
+    /// incoming passage before it is heard, on purpose `[GDE-ARC-059]`.
+    fn shadow_timeline(&mut self) {
+        let Some(read) = self.read_position() else { return };
+        if read < self.timeline_read {
+            self.timeline.reset();
+        }
+        self.timeline_read = read;
+        if self.echo.shown_is_sounding {
+            let heard = self.timeline.audible_at(read);
+            let shown = self.shown.as_ref().map(|(e, p)| (e.passage_id, *p));
+            let agree = match (&heard, shown) {
+                (Some(a), Some((id, pos))) => {
+                    a.passage == id && a.position_ms.abs_diff(pos) <= TIMELINE_TOLERANCE_MS
+                }
+                (None, None) => true,
+                _ => false,
+            };
+            if agree == self.timeline_disagreed {
+                self.timeline_disagreed = !agree;
+                if agree {
+                    tracing::debug!("timeline: agrees with what is shown again");
+                } else {
+                    tracing::debug!("timeline: hears {heard:?} where {shown:?} is shown");
+                }
+            }
+        }
+        self.timeline.prune(read);
     }
 
     fn check_queued_shutdown(&mut self) {
@@ -4865,6 +5000,79 @@ than one mix block");
             let mut scratch = vec![0.0f32; len - keep];
             st.ring.read(&mut scratch);
         }
+    }
+
+    /// Step 5c: while the passage shown is still being mixed, the timeline,
+    /// read off the device's position, names the same passage at the same
+    /// point -- through one passage and on into the next.
+    #[test]
+    fn the_timeline_agrees_with_what_is_shown_while_it_is_mixed() {
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        let (a, b) = (wav_of(1_500), wav_of(1_500));
+        for (id, w) in [(71, &a), (72, &b)] {
+            let mut ent = entry(id, w.to_str().unwrap());
+            ent.end_ms = 1_500;
+            e.enqueue(ent);
+        }
+        h.send(Command::Play);
+        e.drain_commands();
+        let mut compared = std::collections::HashSet::new();
+        for _ in 0..20_000 {
+            // Read before the tick, so `shown` and the timeline are taken at
+            // the same device position.
+            drain_keeping(&ring, 20_000);
+            e.tick();
+            let Some((shown, at)) = e.shown.as_ref().map(|(s, p)| (s.passage_id, *p)) else {
+                continue;
+            };
+            if !e.echo.shown_is_sounding || !e.live.iter().any(|l| l.entry.passage_id == shown) {
+                continue;
+            }
+            let heard = e.heard().expect("something is audible while something is shown");
+            assert_eq!(heard.passage, shown, "the same passage");
+            assert!(heard.position_ms.abs_diff(at) <= 2, "{} against {at}", heard.position_ms);
+            compared.insert(shown);
+            if compared.len() == 2 && e.live.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(compared.len(), 2, "both passages were compared, or this proves little");
+        let _ = (std::fs::remove_file(&a), std::fs::remove_file(&b));
+    }
+
+    /// Step 5c: after the passage has left the mixer, the timeline keeps it,
+    /// moving only as the device reads -- a pause, which reads nothing, holds
+    /// it whatever the clock says -- and stopping at the passage's end.
+    #[test]
+    fn the_timeline_follows_the_drain_by_what_the_device_reads() {
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        let w = wav_of(600);
+        let mut ent = entry(73, w.to_str().unwrap());
+        ent.end_ms = 600;
+        e.enqueue(ent);
+        h.send(Command::Play);
+        e.drain_commands();
+        assert!(tick_until(&mut e, |eng| eng.snapshot_live() > 0));
+        while e.snapshot_live() > 0 {
+            e.tick();
+            drain_keeping(&ring, 30_000);
+        }
+        let before = e.heard().expect("still sounding from the ring");
+        assert_eq!(before.passage, 73);
+        assert!(!before.ended && before.position_ms < 600, "{before:?}");
+        // No reads: however long it waits, nothing has been heard.
+        std::thread::sleep(Duration::from_millis(100));
+        e.tick();
+        assert_eq!(e.heard().unwrap().position_ms, before.position_ms, "a device that reads nothing hears nothing");
+        drain_keeping(&ring, 10_000);
+        let mid = e.heard().unwrap();
+        assert!(mid.position_ms > before.position_ms, "and it moves with what is read");
+        drain_keeping(&ring, 0);
+        let after = e.heard().unwrap();
+        assert!(after.ended && after.position_ms.abs_diff(600) <= 1, "{after:?}");
+        let _ = std::fs::remove_file(&w);
     }
 
     /// **A seek mid-crossfade keeps the passage that was fading in** (review
