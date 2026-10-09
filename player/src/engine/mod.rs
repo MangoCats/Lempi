@@ -1474,29 +1474,22 @@ impl Engine {
     /// browser's offset is against the duration it was shown; the mixer runs
     /// a ring's depth ahead, so for the last ~15 s of every passage
     /// `live.first()` is already the *next* one, and a seek there moved the
-    /// next passage instead (review O-01). Until play accounting follows the
-    /// audible passage, a seek in that window is refused rather than misapplied;
-    /// `passage`, when given, must also be the one shown, so a click that
-    /// races a track change is refused too. Returns whether it moved.
+    /// next passage instead (review O-01). In that window the shown passage
+    /// has left the mixer and is opened again, and whatever was mixed after
+    /// it goes back to the front of the queue, unheard: play accounting
+    /// follows what is heard, so nothing was judged of it. `passage`, when
+    /// given, must be the one shown, so a click that races a track change is
+    /// refused. Returns whether it moved.
     ///
     /// The jump itself is not listening `[SPEC-PLAY-012]`: `heard_from` is
     /// cleared so no part of the distance travelled is credited as heard.
     pub fn seek_to(&mut self, passage: Option<i64>, position_ms: u64) -> bool {
-        let Some(shown) = self.shown.as_ref().map(|(e, _)| e.passage_id) else { return false };
+        let Some(entry) = self.shown.as_ref().map(|(e, _)| e.clone()) else { return false };
+        let shown = entry.passage_id;
         if let Some(asked) = passage.filter(|p| *p != shown) {
             tracing::info!("seek: asked to move {asked}, but {shown} is on air; refused");
             return false;
         }
-        let Some(head) = self.live.first() else { return false };
-        if head.entry.passage_id != shown {
-            tracing::info!(
-                "seek: {shown} has finished decoding and is draining; refused rather than \
-                 moving {} instead",
-                head.entry.passage_id
-            );
-            return false;
-        }
-        let entry = head.entry.clone();
         // A seek to the very end would open a decoder with nothing to decode.
         let at = position_ms.min(entry.duration_ms().saturating_sub(1));
         let opened = match self.open(&entry, at) {
@@ -1533,7 +1526,10 @@ impl Engine {
         // `[GDE-ARC-059]`.
         self.echo.shown_is_sounding = false;
         self.depart_all();
-        let behind: Vec<QueueEntry> = self.live.drain(1..).map(|l| l.entry).collect();
+        // Still the mixer's head: what follows it goes back. Past the mixer --
+        // its last ring's depth -- everything in it goes back.
+        let keep = usize::from(self.live.first().is_some_and(|l| l.entry.passage_id == shown));
+        let behind: Vec<QueueEntry> = self.live.drain(keep..).map(|l| l.entry).collect();
         if !behind.is_empty() {
             self.queue.insert_at(0, behind);
             self.queue_edited = true;
@@ -5021,14 +5017,17 @@ than one mix block");
         let _ = (std::fs::remove_file(&wa), std::fs::remove_file(&wb), std::fs::remove_file(&path));
     }
 
-    /// **A seek in the drain window is refused, not misapplied** (review
-    /// O-01). The passage on air has left the mixer and the next one is being
-    /// mixed; until play accounting follows the audible passage, the engine
-    /// says no rather than moving the next passage.
+    /// **A seek in the drain window moves the passage heard** (review O-01,
+    /// F-06). The passage on air has left the mixer and the next one is being
+    /// mixed: the one on air is opened again at the new point, and the next
+    /// goes back to the front of the queue, unheard -- neither recorded nor
+    /// rejected.
     #[test]
-    fn a_seek_in_the_drain_window_is_refused_and_moves_nothing() {
+    fn a_seek_in_the_drain_window_moves_the_passage_heard() {
+        let (st, path) = store();
         let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
         let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
         let (wa, wb) = (wav_of(1_000), wav_of(3_000));
         let mut a = entry(63, wa.to_str().unwrap());
         a.end_ms = 1_000;
@@ -5051,11 +5050,19 @@ than one mix block");
         }
         assert!(window, "never reached the window where 63 sounds and 64 is mixed");
 
-        assert!(!e.seek_to(Some(63), 200), "refused with the passage named");
-        assert!(!e.seek_to(None, 200), "and without");
-        assert_eq!(e.live[0].entry.passage_id, 64, "the next passage is not moved");
-        assert_eq!(e.shown.as_ref().map(|(x, _)| x.passage_id), Some(63), "and 63 is still on air");
-        let _ = (std::fs::remove_file(&wa), std::fs::remove_file(&wb));
+        assert!(!e.seek_to(Some(64), 200), "the passage being mixed is not the one on air");
+        assert!(e.seek_to(Some(63), 200), "the one on air moves");
+        assert_eq!(e.live.iter().map(|l| l.entry.passage_id).collect::<Vec<_>>(), vec![63]);
+        assert_eq!(e.queued().next().map(|q| q.passage_id), Some(64), "64 is next again");
+        assert_eq!(e.shown.as_ref().map(|(x, p)| (x.passage_id, *p)), Some((63, 200)));
+        // Played on: 63 from the new point, then 64, each judged once.
+        for _ in 0..2_000 {
+            drain_keeping(&ring, KEEP);
+            e.tick();
+        }
+        assert!(st.last_rejected(crate::db::Rejection::Skip).unwrap().is_empty(),
+                "neither was skipped: 63 was moved, 64 was never heard before it went back");
+        let _ = (std::fs::remove_file(&wa), std::fs::remove_file(&wb), std::fs::remove_file(&path));
     }
 
     /// A seek naming a passage that is not on air is refused (review O-01):

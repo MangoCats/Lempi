@@ -221,10 +221,6 @@ assume. The specifications stay the statement of intent: each line here is a
 fault in the code, to be fixed there, and found 2026-10-08 unless it says
 otherwise.
 
-* **A seek in a passage's last ~15 s is refused.** For a ring's depth before the
-  end (`BUFFER_FRAMES`) the passage on air has already left the mixer, and play
-  accounting still follows the mixer, so `seek_to` declines rather than moving
-  the next passage `[REQ-VIS-225]`.
 * **The now-playing panel is blank while MPD is the live backend** — title,
   position and duration come from the local engine's published state, so the
   seek bar has nothing to act on there, though MPD itself can seek.
