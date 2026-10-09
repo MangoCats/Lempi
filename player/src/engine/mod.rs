@@ -2609,7 +2609,7 @@ placing at the ring's own depth, which sounds early",
             }
             return match &self.path.ring {
                 Some(o) => {
-                    let (taken, free_after) = o.submit(&self.scratch[..n]);
+                    let (taken, free_after, _) = o.submit(&self.scratch[..n]);
                     self.out_room = free_after;
                     taken
                 }
@@ -2682,7 +2682,7 @@ placing at the ring's own depth, which sounds early",
         }
         match &self.path.ring {
             Some(o) => {
-                let (taken, free_after) = o.submit(&self.scratch[..filled]);
+                let (taken, free_after, _) = o.submit(&self.scratch[..filled]);
                 debug_assert_eq!(taken, filled, "output accepted less than it reported free");
                 self.out_room = free_after;
                 taken

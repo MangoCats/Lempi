@@ -50,11 +50,27 @@ pub struct RingBuffer {
     buf: Box<[f32]>,
     head: usize,
     len: usize,
+    /// Samples taken from the front since the ring was made, counting those a
+    /// `clear` discarded. Never goes back, so a sample keeps one index for the
+    /// life of the ring: the one at the front is `consumed`, the next written
+    /// lands at `consumed + len` -- which a `truncate` moves back and
+    /// `mix_at` may move on.
+    consumed: u64,
 }
 
 impl RingBuffer {
     pub fn new(capacity_samples: usize) -> Self {
-        Self { buf: vec![0.0; capacity_samples].into_boxed_slice(), head: 0, len: 0 }
+        Self { buf: vec![0.0; capacity_samples].into_boxed_slice(), head: 0, len: 0, consumed: 0 }
+    }
+
+    /// The index of the sample at the front: how many have left the ring.
+    pub fn consumed(&self) -> u64 {
+        self.consumed
+    }
+
+    /// The index the next written sample will take.
+    pub fn written(&self) -> u64 {
+        self.consumed + self.len as u64
     }
 
     /// Discard everything buffered, keeping the allocation.
@@ -64,6 +80,9 @@ impl RingBuffer {
     /// reconnection would replay that moment `[IMPL-AUD-020]`. The samples are
     /// left in place because nothing reads past `len`.
     pub fn clear(&mut self) {
+        // Discarded samples count as passed: they will never be heard, and the
+        // next written takes the index after them.
+        self.consumed += self.len as u64;
         self.head = 0;
         self.len = 0;
     }
@@ -117,6 +136,7 @@ impl RingBuffer {
         }
         self.head = (self.head + n) % cap;
         self.len -= n;
+        self.consumed += n as u64;
         n
     }
 
@@ -180,6 +200,7 @@ impl RingBuffer {
         }
         self.head = (self.head + n) % cap;
         self.len -= n;
+        self.consumed += n as u64;
         n
     }
 }
@@ -258,6 +279,30 @@ pub fn retain_active(streams: &mut Vec<Stream>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A sample keeps one index for the ring's life: reading moves the front
+    /// on, a cut moves the write position back but never the front, and a
+    /// clear counts what it discarded as passed, so what comes next does not
+    /// reuse an index already handed out.
+    #[test]
+    fn the_counters_never_go_back_at_the_front() {
+        let mut r = RingBuffer::new(8);
+        assert_eq!((r.consumed(), r.written()), (0, 0));
+        r.write(&[1.0; 6]);
+        assert_eq!(r.written(), 6);
+        r.read(&mut [0.0; 2]);
+        assert_eq!((r.consumed(), r.written()), (2, 6));
+        r.truncate(1);
+        assert_eq!((r.consumed(), r.written()), (2, 3), "a cut moves only the write position");
+        r.mix_at(3, &[1.0; 2]);
+        assert_eq!(r.written(), 7, "an overlay past the end extends it");
+        r.mix_into(&mut [0.0; 3]);
+        assert_eq!(r.consumed(), 5, "a stream's mix consumes as a read does");
+        r.clear();
+        assert_eq!((r.consumed(), r.written()), (7, 7), "a clear passes what it discarded");
+        r.write(&[1.0; 2]);
+        assert_eq!(r.written(), 9);
+    }
 
     /// The overlay sums where audio is already queued and appends past the end
     /// -- one call spanning both, because the incoming passage straddles the

@@ -368,18 +368,29 @@ impl OutputRing {
 
     /// Hand mixed audio to the output.
     ///
-    /// Returns `(accepted, free_after)`. The second value exists so a caller
+    /// Returns `(accepted, free_after, at)`. `free_after` exists so a caller
     /// does not need a separate `free()` on the next pass: between now and
     /// then the callback only ever *drains*, so this is a lower bound on the
-    /// room that will be available, and writing that much always fits.
-    pub fn submit(&self, samples: &[f32]) -> (usize, usize) {
+    /// room that will be available, and writing that much always fits. `at`
+    /// is the index the first sample took (`RingBuffer::written`), so the
+    /// caller can say what it put where.
+    pub fn submit(&self, samples: &[f32]) -> (usize, usize, u64) {
         self.state
             .lock()
             .map(|mut s| {
+                let at = s.ring.written();
                 let took = s.ring.write(samples);
-                (took, s.ring.free())
+                (took, s.ring.free(), at)
             })
-            .unwrap_or((0, 0))
+            .unwrap_or((0, 0, 0))
+    }
+
+    /// `(consumed, written)`: the index of the sample at the front of the
+    /// ring, which the device takes next, and the index the next written
+    /// sample will take. Both count from the ring's making and never go back
+    /// but for a cut moving `written`. `None` if the lock is poisoned.
+    pub fn position(&self) -> Option<(u64, u64)> {
+        self.state.lock().ok().map(|s| (s.ring.consumed(), s.ring.written()))
     }
 
     /// Samples submitted but not yet consumed by the device.
@@ -402,22 +413,26 @@ impl OutputRing {
     /// callback would drag the newcomer down with the passage it is replacing.
     ///
     /// All of it happens under one lock, so no callback can observe a ring that
-    /// is cut but not yet faded. Returns `(faded, overlaid)` in samples.
+    /// is cut but not yet faded. Returns `(faded, overlaid, front)`: samples,
+    /// and the index of the sample at the front when it was cut, so the
+    /// caller knows that what survives is `front .. front + faded` and the
+    /// overlay begins at `front` plus the lead.
     pub fn begin_skip_transition(
         &self,
         fade_ms: u64,
         lead_ms: u64,
         curve: Curve,
         overlay: &[f32],
-    ) -> (usize, usize) {
+    ) -> (usize, usize, u64) {
         let ch = self.channels().max(1);
         let rate = self.sample_rate() as u64;
         let fade_samples = (fade_ms * rate / 1000) as usize * ch;
         let lead_samples = (lead_ms * rate / 1000) as usize * ch;
         // A blocking lock is safe here: this runs on the mixer thread, and the
         // callback only ever tries.
-        let Ok(mut s) = self.state.lock() else { return (0, 0) };
+        let Ok(mut s) = self.state.lock() else { return (0, 0, 0) };
 
+        let front = s.ring.consumed();
         let kept = s.ring.truncate(fade_samples);
         // Span the fade over what is actually there. Holding it to the
         // requested length when the ring is shallower -- at startup, say --
@@ -442,7 +457,7 @@ impl OutputRing {
             }
         }
         let placed = s.ring.mix_at(lead_samples, overlay);
-        (kept, placed)
+        (kept, placed, front)
     }
 
     /// The ring's total size in samples.
@@ -1240,6 +1255,28 @@ mod tests {
         fill(&ring.state, &ring.volume, &mut out, &ring.silent, &ring.counts);
         assert_eq!(out, [0.5; 8], "a full ring plays on the first callback");
         assert_eq!(ring.counts.underruns(), 0);
+    }
+
+    /// What the ring says about where things went: a block's first index on
+    /// submit, the front a cut was made at, and how far the device has read.
+    /// A pause or a priming wait reads nothing, so the front stays put.
+    #[test]
+    fn the_ring_says_where_each_sample_went() {
+        let ring = OutputRing::new(64, Volume::new(1.0));
+        assert_eq!(ring.submit(&[0.1; 10]).2, 0);
+        assert_eq!(ring.submit(&[0.1; 10]).2, 10, "the second block starts where the first ended");
+        let mut out = [0.0f32; 6];
+        fill(&ring.state, &ring.volume, &mut out, &audible(), &Counts::default());
+        assert_eq!(ring.position(), Some((6, 20)));
+        let paused = Arc::new(AtomicBool::new(true));
+        fill(&ring.state, &ring.volume, &mut out, &paused, &Counts::default());
+        assert_eq!(ring.position(), Some((6, 20)), "a paused device reads nothing");
+        // Skip: two channels at the ring's default 44.1 kHz, so a 0 ms fade
+        // keeps nothing and the overlay lands at the front.
+        let (kept, placed, front) =
+            ring.begin_skip_transition(0, 0, Curve::Exponential, &[0.2; 4]);
+        assert_eq!((kept, placed, front), (0, 4, 6));
+        assert_eq!(ring.position(), Some((6, 10)), "the cut came back to the front");
     }
 
     #[test]
