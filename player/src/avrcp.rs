@@ -12,8 +12,9 @@
 //!
 //! State is owned by the engine, not by a local shell variable: Play/Pause
 //! toggling dispatches an atomic [`Command::TogglePlayPause`], eliminating
-//! snapshot latency race conditions. Previous/back keys are an explicit no-op
-//! per `[PI3-ROCKER-010]` and `[REQ-AUD-142]`.
+//! snapshot latency race conditions. Previous/back keys are reserved per
+//! `[PI3-ROCKER-010]` and `[REQ-AUD-142]` -- except while the access point is
+//! up, when they mean "I'm home" `[SPEC-WFO-085]`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use std::sync::atomic::AtomicBool;
@@ -60,6 +61,8 @@ pub enum Action {
     Play,
     Pause,
     Skip,
+    /// "I'm home": try the known network, if the access point is up.
+    Home,
 }
 
 /// Parse standard Linux 24-byte `struct input_event` (`timeval` 16B + type 2B + code 2B + value 4B).
@@ -81,8 +84,11 @@ pub fn map_key(code: u16) -> Option<Action> {
         KEY_PLAY => Some(Action::Play),
         KEY_PAUSE => Some(Action::Pause),
         KEY_NEXTSONG | KEY_FORWARD => Some(Action::Skip),
-        // Previous/Back is deliberately unmapped / reserved per [PI3-ROCKER-010] and [REQ-AUD-142].
-        KEY_PREVIOUSSONG | KEY_BACK => None,
+        // Previous/Back stays reserved per [PI3-ROCKER-010] and [REQ-AUD-142]
+        // everywhere but on the access point, where it means "I'm home"
+        // [SPEC-WFO-085]. `lempi-btctl ap-return` is what refuses it
+        // elsewhere, so the key itself does nothing on the household network.
+        KEY_PREVIOUSSONG | KEY_BACK => Some(Action::Home),
         _ => None,
     }
 }
@@ -222,6 +228,7 @@ fn read_device_loop(
         revents: 0,
     };
     let mut debounce = Debounce::new(DEBOUNCE_MS);
+    let home_busy = Arc::new(AtomicBool::new(false));
     let mut buf = [0u8; 24];
 
     while !shutdown.load(Ordering::Relaxed) {
@@ -271,6 +278,7 @@ fn read_device_loop(
                                         tracing::info!("avrcp: key {} -> skip", ev.code);
                                         handle.send(Command::Skip);
                                     }
+                                    Action::Home => go_home(handle, &home_busy, ev.code),
                                 }
                             } else {
                                 tracing::trace!("avrcp: key {} suppressed by debounce", ev.code);
@@ -296,6 +304,97 @@ fn read_device_loop(
                 }
             }
         }
+    }
+}
+
+/// What `lempi-btctl ap-return` did, read from what it printed.
+#[derive(Debug, PartialEq, Eq)]
+pub enum HomeOutcome {
+    /// Refused before trying: not on the access point, or a client is on it.
+    /// The key did nothing, so no tone says otherwise.
+    Ignored(String),
+    /// Back on the known network.
+    Home,
+    /// Tried, and the known network did not answer; the access point is back.
+    NotHome(String),
+}
+
+fn is_trying(line: &str) -> bool {
+    line.contains("\"trying\":true")
+}
+
+/// `ap-return` prints `{"trying":true}` when it starts the switch and one JSON
+/// answer at the end. Whether it got as far as trying is what separates a
+/// press that did nothing from a try that failed.
+pub fn home_outcome(lines: &[String]) -> HomeOutcome {
+    let tried = lines.iter().any(|l| is_trying(l));
+    let last = lines.iter().rev().find(|l| !is_trying(l))
+        .and_then(|l| serde_json::from_str::<serde_json::Value>(l).ok());
+    let ok = last.as_ref().and_then(|v| v.get("ok")).and_then(|v| v.as_bool()) == Some(true);
+    let why = last.as_ref().and_then(|v| v.get("error")).and_then(|v| v.as_str())
+        .unwrap_or("no answer from lempi-btctl").to_string();
+    match (ok, tried) {
+        (true, _) => HomeOutcome::Home,
+        (false, true) => HomeOutcome::NotHome(why),
+        (false, false) => HomeOutcome::Ignored(why),
+    }
+}
+
+/// Left, "I'm home" `[SPEC-WFO-085]`: one try for the known network, on a
+/// thread of its own -- it takes up to `ap-return`'s 15 s, and the input
+/// reader must not wait on it. A click when the try starts, then two rising
+/// notes or one low one; nothing at all if it was refused, because then the
+/// key did nothing. A second press while one try runs is ignored.
+#[cfg(all(target_os = "linux", feature = "appliance"))]
+fn go_home(handle: &Arc<EngineHandle>, busy: &Arc<AtomicBool>, code: u16) {
+    use crate::output::Cue;
+    use std::io::BufRead;
+    if busy.swap(true, Ordering::SeqCst) {
+        tracing::info!("avrcp: key {code} -> home, but a try is already under way");
+        return;
+    }
+    tracing::info!("avrcp: key {code} -> home: trying the known network if the access point is up");
+    let handle = Arc::clone(handle);
+    let done = Arc::clone(busy);
+    let spawned = std::thread::Builder::new().name("lempi-home".into()).spawn(move || {
+        let mut lines = Vec::new();
+        match std::process::Command::new("sudo")
+            .args(["-n", crate::bluetooth::HELPER, "ap-return"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                if let Some(out) = child.stdout.take() {
+                    for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
+                        if is_trying(&line) {
+                            handle.send(Command::Cue(Cue::Ack));
+                        }
+                        lines.push(line);
+                    }
+                }
+                let _ = child.wait();
+            }
+            Err(e) => lines.push(
+                serde_json::json!({ "ok": false, "error": format!("could not run lempi-btctl: {e}") })
+                    .to_string()),
+        }
+        match home_outcome(&lines) {
+            HomeOutcome::Home => {
+                tracing::info!("avrcp: home -- back on the known network");
+                handle.send(Command::Cue(Cue::Home));
+            }
+            HomeOutcome::NotHome(why) => {
+                tracing::info!("avrcp: home -- not back ({why})");
+                handle.send(Command::Cue(Cue::NotHome));
+            }
+            HomeOutcome::Ignored(why) => tracing::info!("avrcp: home -- nothing to do ({why})"),
+        }
+        done.store(false, Ordering::SeqCst);
+    });
+    if let Err(e) = spawned {
+        tracing::warn!("avrcp: home -- could not start the try: {e}");
+        busy.store(false, Ordering::SeqCst);
     }
 }
 
@@ -330,10 +429,26 @@ mod tests {
         assert_eq!(map_key(KEY_NEXTSONG), Some(Action::Skip));
         assert_eq!(map_key(KEY_FORWARD), Some(Action::Skip));
 
-        // Previous and Back are unmapped per PI3-ROCKER-010 / REQ-AUD-142
-        assert_eq!(map_key(KEY_PREVIOUSSONG), None);
-        assert_eq!(map_key(KEY_BACK), None);
+        // Previous and Back mean "home", refused by ap-return off the access
+        // point, so still nothing there [PI3-ROCKER-010], [SPEC-WFO-085].
+        assert_eq!(map_key(KEY_PREVIOUSSONG), Some(Action::Home));
+        assert_eq!(map_key(KEY_BACK), Some(Action::Home));
         assert_eq!(map_key(999), None);
+    }
+
+    /// A press refused off the access point is silent; a try says how it went.
+    #[test]
+    fn the_home_key_reads_what_ap_return_did() {
+        let l = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(home_outcome(&l(&[r#"{"trying":true}"#, r#"{"ok":true}"#])), HomeOutcome::Home);
+        assert_eq!(
+            home_outcome(&l(&[r#"{"trying":true}"#,
+                              r#"{"ok":false,"error":"the known network did not answer"}"#])),
+            HomeOutcome::NotHome("the known network did not answer".into()));
+        assert_eq!(
+            home_outcome(&l(&[r#"{"ok":false,"error":"the access point is not currently active"}"#])),
+            HomeOutcome::Ignored("the access point is not currently active".into()));
+        assert!(matches!(home_outcome(&[]), HomeOutcome::Ignored(_)), "silence is not a try");
     }
 
     #[test]

@@ -154,6 +154,9 @@ pub enum Command {
     Persist,
     /// Enqueue a shutdown event at the tail of the queue `[IMPL-QSD-020]`.
     EnqueueShutdown,
+    /// Sound a short tone at the device now, over the music or the pause
+    /// `[SPEC-WFO-085]`. Nothing without a device; never in the history.
+    Cue(crate::output::Cue),
     /// Terminate the process. Deliberately NOT a playback state -- it ends the
     /// engine rather than putting playback into a third mode.
     Shutdown,
@@ -173,6 +176,11 @@ impl Engine {
                     self.publish();
                 }
                 Ok(Command::ReopenOutput) => self.path.reopen(),
+                Ok(Command::Cue(c)) => {
+                    if let Some(r) = &self.path.ring {
+                        r.play_cue(c);
+                    }
+                }
                 Ok(Command::Skip) => self.skip(),
                 Ok(Command::SetEchoDelayTrim(ms)) => {
                     self.echo.delay_trim_ms =

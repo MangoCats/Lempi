@@ -150,6 +150,13 @@ Left is deliberately left dead rather than given a placeholder. A control that
 does something surprising is worse than one that does nothing, and reserving it
 in writing is what stops it being spent on something lesser later.
 
+*Amended 2026-10-10, by the maintainer's decision:* the reservation stands
+everywhere but on the travel access point, where Left means "I'm home" and
+takes the appliance back to its known network `[SPEC-WFO-085]`. Off the access
+point it still does nothing -- `lempi-btctl ap-return` refuses it, and no cue
+sounds. Which buttons other speakers send is unmeasured; this table is the
+Middleton's.
+
 **`[PI3-ROCKER-030]` The uinput device appears with audio, not with the
 connection.** Anything reading it must wait for it, and must wait again when it
 goes: it is removed on every disconnect. Native handling in `avrcp.rs` rescans

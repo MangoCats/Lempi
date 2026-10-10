@@ -313,6 +313,84 @@ pub struct OutputRing {
     pub counts: Counts,
     /// Frames out and when, for keeping a second node in step `[GDE-ECHO-280]`.
     pub clock: FrameClock,
+    /// A short tone the callback lays over whatever it plays `[SPEC-WFO-085]`.
+    cue: Arc<Mutex<CueState>>,
+}
+
+/// The appliance's few words, for a listener with no screen `[SPEC-WFO-085]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cue {
+    /// A soft click: the press arrived, and something is being tried.
+    Ack,
+    /// Two rising notes: back on the known network.
+    Home,
+    /// One low note: the known network did not answer.
+    NotHome,
+}
+
+/// A cue in progress: mono samples at the device rate, and how far it got.
+#[derive(Default)]
+struct CueState {
+    samples: Vec<f32>,
+    at: usize,
+}
+
+/// Peak level of a cue, before the listener's volume. Under the music, which
+/// runs to full scale, so the cue is heard over it without startling.
+const CUE_LEVEL: f32 = 0.2;
+
+/// A cue's samples, mono, at `rate`.
+///
+/// Generated rather than shipped: a few hundred milliseconds of sine, each note
+/// eased in and out over 8 ms so neither edge clicks -- the declick rule this
+/// file already keeps for the music.
+pub fn cue_samples(cue: Cue, rate: u32) -> Vec<f32> {
+    // (frequency Hz, length ms); a frequency of 0 is a rest.
+    let notes: &[(f32, u32)] = match cue {
+        Cue::Ack => &[(1_500.0, 25)],
+        Cue::Home => &[(660.0, 120), (0.0, 40), (880.0, 170)],
+        Cue::NotHome => &[(330.0, 320)],
+    };
+    let r = rate.max(1) as f32;
+    let ease = (0.008 * r) as usize;
+    let mut out = Vec::new();
+    for &(hz, ms) in notes {
+        let n = (ms as f32 / 1000.0 * r) as usize;
+        for i in 0..n {
+            if hz == 0.0 {
+                out.push(0.0);
+                continue;
+            }
+            let edge = i.min(n - 1 - i);
+            let env = if edge < ease {
+                0.5 - 0.5 * (std::f32::consts::PI * edge as f32 / ease as f32).cos()
+            } else {
+                1.0
+            };
+            out.push(CUE_LEVEL * env * (2.0 * std::f32::consts::PI * hz * i as f32 / r).sin());
+        }
+    }
+    out
+}
+
+/// Lay the cue in progress over `out`, at the listener's volume.
+///
+/// In the callback, so it is heard now: through the ring it would wait behind
+/// ~14 s of music, and while paused it would not be heard at all. `try_lock`,
+/// never `lock` -- a cue that waits a callback is late by milliseconds; a
+/// callback that waits on a lock is an underrun.
+fn mix_cue(cue: &Mutex<CueState>, out: &mut [f32], channels: usize, volume: f32) {
+    let Ok(mut c) = cue.try_lock() else { return };
+    if c.at >= c.samples.len() {
+        return;
+    }
+    for frame in out.chunks_mut(channels.max(1)) {
+        let Some(&s) = c.samples.get(c.at) else { break };
+        c.at += 1;
+        for v in frame.iter_mut() {
+            *v += s * volume;
+        }
+    }
 }
 
 impl OutputRing {
@@ -333,6 +411,7 @@ impl OutputRing {
             chans: Arc::new(std::sync::atomic::AtomicU32::new(2)),
             counts,
             clock: FrameClock::default(),
+            cue: Arc::new(Mutex::new(CueState::default())),
         }
     }
 
@@ -340,6 +419,15 @@ impl OutputRing {
     /// cached: a reattach onto a different sink can change both.
     pub fn sample_rate(&self) -> u32 { self.rate.load(Ordering::Relaxed) }
     pub fn channels(&self) -> usize { self.chans.load(Ordering::Relaxed) as usize }
+
+    /// Sound `cue` at the device now, over the music or the pause's silence.
+    /// A cue still sounding is replaced: the newest says what is true.
+    pub fn play_cue(&self, cue: Cue) {
+        let samples = cue_samples(cue, self.sample_rate());
+        if let Ok(mut c) = self.cue.lock() {
+            *c = CueState { samples, at: 0 };
+        }
+    }
 
     /// Mark the output as needing recovery.
     pub fn mark_failed(&self) { self.failed.store(true, Ordering::Relaxed); }
@@ -670,10 +758,12 @@ impl Output {
                 let cb_silent = Arc::clone(&silent);
                 let cb_counts = ring.counts.clone();
                 let cb_clock = ring.clock.clone();
+                let cb_cue = Arc::clone(&ring.cue);
                 device.build_output_stream(
                 config,
                 move |out: &mut [f32], info: &cpal::OutputCallbackInfo| {
                     fill(&cb_state, &cb_vol, out, &cb_silent, &cb_counts);
+                    mix_cue(&cb_cue, out, channels, cb_vol.get());
                     tick_clock(&cb_clock, info, out.len(), channels, sample_rate);
                 },
                 err_fn,
@@ -685,11 +775,13 @@ impl Output {
                 let cb_silent = Arc::clone(&silent);
                 let cb_counts = ring.counts.clone();
                 let cb_clock = ring.clock.clone();
+                let cb_cue = Arc::clone(&ring.cue);
                 device.build_output_stream(
                     config,
                     move |out: &mut [i16], info: &cpal::OutputCallbackInfo| {
                         scratch.resize(out.len(), 0.0);
                         fill(&cb_state, &cb_vol, &mut scratch, &cb_silent, &cb_counts);
+                        mix_cue(&cb_cue, &mut scratch, channels, cb_vol.get());
                         tick_clock(&cb_clock, info, out.len(), channels, sample_rate);
                         for (o, s) in out.iter_mut().zip(scratch.iter()) {
                             *o = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
@@ -705,11 +797,13 @@ impl Output {
                 let cb_silent = Arc::clone(&silent);
                 let cb_counts = ring.counts.clone();
                 let cb_clock = ring.clock.clone();
+                let cb_cue = Arc::clone(&ring.cue);
                 device.build_output_stream(
                     config,
                     move |out: &mut [u16], info: &cpal::OutputCallbackInfo| {
                         scratch.resize(out.len(), 0.0);
                         fill(&cb_state, &cb_vol, &mut scratch, &cb_silent, &cb_counts);
+                        mix_cue(&cb_cue, &mut scratch, channels, cb_vol.get());
                         tick_clock(&cb_clock, info, out.len(), channels, sample_rate);
                         for (o, s) in out.iter_mut().zip(scratch.iter()) {
                             let v = (s.clamp(-1.0, 1.0) + 1.0) * 0.5;
@@ -730,11 +824,13 @@ impl Output {
                 let cb_silent = Arc::clone(&silent);
                 let cb_counts = ring.counts.clone();
                 let cb_clock = ring.clock.clone();
+                let cb_cue = Arc::clone(&ring.cue);
                 device.build_output_stream(
                     config,
                     move |out: &mut [i32], info: &cpal::OutputCallbackInfo| {
                         scratch.resize(out.len(), 0.0);
                         fill(&cb_state, &cb_vol, &mut scratch, &cb_silent, &cb_counts);
+                        mix_cue(&cb_cue, &mut scratch, channels, cb_vol.get());
                         tick_clock(&cb_clock, info, out.len(), channels, sample_rate);
                         for (o, s) in out.iter_mut().zip(scratch.iter()) {
                             *o = (s.clamp(-1.0, 1.0) * i32::MAX as f32) as i32;
@@ -1121,6 +1217,46 @@ mod tests {
     fn audible() -> Arc<AtomicBool> { Arc::new(AtomicBool::new(false)) }
 
     use super::*;
+
+    /// Each cue is the length it says, under the music's full scale, and
+    /// starts and ends at silence so neither edge clicks `[SPEC-WFO-085]`.
+    #[test]
+    fn a_cue_is_short_quiet_and_eased_at_both_ends() {
+        for (cue, ms) in [(Cue::Ack, 25), (Cue::Home, 330), (Cue::NotHome, 320)] {
+            let s = cue_samples(cue, 48_000);
+            assert_eq!(s.len(), 48 * ms, "{cue:?} is {ms} ms at 48 kHz");
+            let peak = s.iter().fold(0f32, |m, v| m.max(v.abs()));
+            assert!(peak > 0.1 && peak <= CUE_LEVEL, "{cue:?} peaks at {peak}");
+            assert!(s[0].abs() < 1e-3 && s[s.len() - 1].abs() < 0.02, "{cue:?} begins and ends at silence");
+        }
+    }
+
+    /// The cue is laid over what the callback already wrote -- the music, or a
+    /// pause's silence -- on every channel, at the listener's volume, and
+    /// played once across as many callbacks as it takes.
+    #[test]
+    fn a_cue_mixes_over_the_output_at_the_volume_and_plays_once() {
+        let cue = Mutex::new(CueState { samples: vec![0.5, 0.5, 0.5], at: 0 });
+        let mut out = [0.1f32; 4]; // two stereo frames of music
+        mix_cue(&cue, &mut out, 2, 0.5);
+        assert_eq!(out, [0.35, 0.35, 0.35, 0.35], "0.1 of music + 0.5 of cue at half volume");
+        let mut out = [0.0f32; 4]; // a pause
+        mix_cue(&cue, &mut out, 2, 1.0);
+        assert_eq!(out, [0.5, 0.5, 0.0, 0.0], "the last frame of it, then silence");
+        let mut out = [0.0f32; 4];
+        mix_cue(&cue, &mut out, 2, 1.0);
+        assert_eq!(out, [0.0; 4], "and it does not play twice");
+    }
+
+    /// A callback never waits on the cue's lock: it skips the cue that once.
+    #[test]
+    fn a_held_cue_lock_is_skipped_not_waited_on() {
+        let cue = Mutex::new(CueState { samples: vec![0.5; 8], at: 0 });
+        let _held = cue.lock().unwrap();
+        let mut out = [0.25f32; 4];
+        mix_cue(&cue, &mut out, 2, 1.0);
+        assert_eq!(out, [0.25; 4], "the music untouched, and no wait");
+    }
 
     /// A failure writes one line however many errors it reports; the rest are
     /// a count the supervisor takes when it recovers, and the next failure

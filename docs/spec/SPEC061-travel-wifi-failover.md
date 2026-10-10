@@ -100,7 +100,15 @@ Wi-Fi scanning aggressively hops all 2.4 GHz channels, creating heavy RF content
 When the appliance returns to its home network:
 1. **Reboot Path**: On power cycle, the 45-second boot grace period automatically prioritizes known autoconnect infrastructure profiles before AP failover can trigger.
 2. **Runtime Manual Path**: User can tap **"Stop AP, return to Wi-Fi"** (`POST /wifi/ap/stop`), which reconnects to preferred known networks. *Until 2026-10-10 it never could: it looked for type `wifi`, which terse nmcli never prints `[PI3-FOUND-800]`.*
-3. **Idle Return (built 2026-10-10)**: If `lempi-ap` has had zero associated client stations for 15 minutes, the failover keeper tries the known autoconnect profile once (`lempi-btctl ap-return`: no revert timer, `--wait 30`, the access point straight back on failure), and the idle clock restarts. Not conditioned on idle audio, as first written: an appliance that plays all day never is, and the return does not scan. Each change in the number of clients is logged — the record of when anyone joined or left [PI028](../../LempiPi/PI028-started-before-its-audio.md).
+3. **Idle Return (built 2026-10-10)**: while `lempi-ap` is up, the failover keeper counts its associated client stations (`iw dev wlan0 station dump`) and logs each change — the record of when anyone joined or left [PI028](../../LempiPi/PI028-started-before-its-audio.md). With no clients, the way home is `[SPEC-WFO-085]`'s. Not conditioned on idle audio, as first written: an appliance that plays all day never is.
+
+**`[SPEC-WFO-085]` The way home: the speaker's key, or the keeper's backoff.** Decided by the maintainer 2026-10-10, on the reasoning that a Bluetooth speaker usually means a battery, and a wired one mains power:
+
+- **A Bluetooth speaker connected — the listener's way.** The speaker's Left key (previous track), reserved for a "like" everywhere else `[PI3-ROCKER-010]`, means "I'm home" while the access point is up. The player runs `lempi-btctl ap-return`, off its input thread. The keeper tries nothing itself: a try is a switch on the one radio the speaker's audio shares `[SPEC-WFO-070]`.
+- **No speaker connected — the keeper's way.** After 90 s with no clients it tries; each failure doubles the wait (3, 6, 12 min) to 15 min at most, and a client resets it.
+- **`ap-return`** refuses while a client is on the access point, prints `{"trying":true}` the moment it starts the switch, waits 15 s at most (every try takes the access point off the air for that long), and puts the access point straight back if the known network does not answer. No confirm-or-revert timer: nobody is there to confirm.
+- **Cues**, because the speaker has no screen: a soft click when a try starts, two rising notes when it reaches home, one low note when it does not. Nothing for a press refused — then the key did nothing. Laid over the output in the device callback, at the listener's volume, so they are heard at once, over the music or a pause, and never pass through the ring or the history.
+- A speaker that powers the Pi has a third way already: off and on is a reboot, and the boot path goes home first (item 1).
 
 ---
 
@@ -119,3 +127,4 @@ When the appliance returns to its home network:
 - Reference `[SPEC-WFO-060]`: Pivot handshake, IP discovery, reload persistence, and 3-min revert (`lempi-wifi-revert`)
 - Reference `[SPEC-WFO-070]`: RF scan suppression during active playback via `lempi_routed` (`lempi-btctl`)
 - Reference `[SPEC-WFO-080]`: Return-to-infrastructure boot & idle hysteresis (`lempi-wifi-failover`)
+- Reference `[SPEC-WFO-085]`: The way home by speaker key or by backoff, and the cues (`avrcp.rs`, `output.rs`, `lempi-wifi-failover`, `lempi-btctl ap-return`)

@@ -10,28 +10,39 @@ STATE_DIR="${LEMPI_RUN_DIR:-/run/lempi}"
 RFKILL_DIR="${SYS_CLASS_RFKILL:-/sys/class/rfkill}"
 PROC_UPTIME="${PROC_UPTIME:-/proc/uptime}"
 BTCTL="${LEMPI_BTCTL:-/usr/local/bin/lempi-btctl}"
-# How long the access point sits with no clients before the keeper tries the
-# way home [SPEC-WFO-080]: the spec's fifteen minutes.
-RETURN_AFTER="${LEMPI_AP_RETURN_AFTER:-900}"
+# How long the access point sits with no clients before the keeper first tries
+# the way home, and the most it waits between tries as they keep failing
+# [SPEC-WFO-085]. Doubled after each failed try: 90 s, 3, 6, 12, then 15 min.
+RETURN_FIRST="${LEMPI_AP_RETURN_FIRST:-90}"
+RETURN_MAX="${LEMPI_AP_RETURN_MAX:-900}"
+. "${LEMPI_COMMON:-/usr/local/lib/lempi-common.sh}" 2>/dev/null ||
+    . "$(dirname "$0")/lempi-common.sh"
 
 # While the access point is up: who is on it, and the way home when nobody is
 # [SPEC-WFO-080], built 2026-10-10.
 #
 # The access point used to be a one-way door. Once up it stayed up until a
 # reboot -- a router restarted for thirty seconds left the appliance off the
-# household's network for good. Now an access point with no clients for
-# RETURN_AFTER tries the known network once (`lempi-btctl ap-return`, which
-# puts the access point straight back if that fails), and the idle clock
-# restarts, so a failed try is another full idle period from the next.
+# household's network for good. Now there are two ways home, and which one is
+# the keeper's depends on the speaker [SPEC-WFO-085]:
+#
+# - **A Bluetooth speaker connected: the listener's.** The speaker's Left key
+#   means "I'm home" while the access point is up, and the player runs
+#   `ap-return` for it. The keeper tries nothing here: a try is a scan and a
+#   switch on the one radio the speaker's audio shares [SPEC-WFO-070], and a
+#   Bluetooth speaker usually means a battery. (A speaker that powers the Pi
+#   has a third way already: off and on is a reboot, and the boot path goes
+#   home first [SPEC-WFO-080].)
+# - **No speaker connected -- wired output, so mains power: the keeper's.**
+#   After RETURN_FIRST with no clients it tries the known network
+#   (`lempi-btctl ap-return`, the access point straight back on failure), and
+#   doubles the wait after each failure up to RETURN_MAX, so a week away is
+#   not spent retrying every ninety seconds.
 #
 # Clients are the stations `iw` lists as associated -- a phone that joined is
 # one, whether or not it ever opened the page. A change in their number is
-# said in the journal, which is the record of when anyone joined or left.
-#
-# Unlike the spec's optional probe, this does not wait for audio to be idle:
-# an appliance that plays all day never is, and a way home that never runs is
-# no way home. It does not scan either [SPEC-WFO-070] -- `nmcli connection up`
-# of a known profile -- and it runs at most once per idle period.
+# said in the journal, which is the record of when anyone joined or left; a
+# client also resets the wait, and `ap-return` refuses while one is there.
 ap_watch() {
     mkdir -p "$STATE_DIR"
     if ! DUMP=$(iw dev wlan0 station dump 2>&1); then
@@ -52,7 +63,7 @@ ap_watch() {
     fi
     NOW=$(date +%s)
     if [ "$N" -gt 0 ]; then
-        rm -f "$STATE_DIR/ap_idle_since"
+        rm -f "$STATE_DIR/ap_idle_since" "$STATE_DIR/ap_return_wait"
         return 0
     fi
     if [ ! -f "$STATE_DIR/ap_idle_since" ]; then
@@ -60,14 +71,27 @@ ap_watch() {
         return 0
     fi
     SINCE=$(cat "$STATE_DIR/ap_idle_since" 2>/dev/null || echo "$NOW")
+    WAIT=$(cat "$STATE_DIR/ap_return_wait" 2>/dev/null || echo "$RETURN_FIRST")
     IDLE=$((NOW - SINCE))
-    [ "$IDLE" -ge "$RETURN_AFTER" ] || return 0
-    rm -f "$STATE_DIR/ap_idle_since" "$STATE_DIR/ap_clients"
+    [ "$IDLE" -ge "$WAIT" ] || return 0
+    # The listener's way home while a speaker is connected; said once.
+    if [ -n "$(lempi_connected_speakers)" ]; then
+        if [ ! -f "$STATE_DIR/ap_bt_said" ]; then
+            echo "access point idle, but a Bluetooth speaker is connected: its Left key goes home"
+            : > "$STATE_DIR/ap_bt_said"
+        fi
+        return 0
+    fi
+    rm -f "$STATE_DIR/ap_bt_said"
     echo "access point idle for ${IDLE}s with no clients: trying the known network"
     if OUT=$("$BTCTL" ap-return 2>&1); then
+        rm -f "$STATE_DIR/ap_idle_since" "$STATE_DIR/ap_clients" "$STATE_DIR/ap_return_wait"
         echo "back on the known network; the access point is down"
     else
-        echo "did not get back ($OUT)"
+        NEXT=$((WAIT * 2)); [ "$NEXT" -le "$RETURN_MAX" ] || NEXT=$RETURN_MAX
+        printf '%s\n' "$NOW" > "$STATE_DIR/ap_idle_since"
+        printf '%s\n' "$NEXT" > "$STATE_DIR/ap_return_wait"
+        echo "did not get back ($(printf '%s' "$OUT" | tail -n 1)); next try in ${NEXT}s"
     fi
 }
 
@@ -103,7 +127,8 @@ if printf '%s\n' "$ACTIVE_CONNS" | grep -q '^lempi-ap:.*:yes$'; then
     exit 0
 fi
 # Not on the access point: its client count and idle clock start fresh next time.
-rm -f "$STATE_DIR/ap_idle_since" "$STATE_DIR/ap_clients" "$STATE_DIR/ap_iw_failed"
+rm -f "$STATE_DIR/ap_idle_since" "$STATE_DIR/ap_clients" "$STATE_DIR/ap_iw_failed" \
+      "$STATE_DIR/ap_return_wait" "$STATE_DIR/ap_bt_said"
 
 DEV_STATE=$(nmcli -t -f DEVICE,STATE dev 2>/dev/null | grep '^wlan0:' || true)
 case "$DEV_STATE" in

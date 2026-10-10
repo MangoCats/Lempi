@@ -379,7 +379,8 @@ setup
 nm_known; on_ap
 OUT=$(btctl ap-return)
 assert_in "$OUT" '"ok":true' "ap-return goes home"
-assert_called "nmcli --wait 30 connection up Home" "with its wait bounded"
+assert_called "nmcli --wait 15 connection up Home" "with its wait bounded at fifteen seconds"
+assert_in "$OUT" '{"trying":true}' "and says when the switch starts, for the speaker's click"
 assert_not_called "systemd-run" "and schedules no revert timer to undo it"
 teardown
 
@@ -406,12 +407,12 @@ teardown
 # No clients, but not yet for long enough: stay.
 setup
 nm_known; on_ap
-printf '%s\n' "$(( $(date +%s) - 100 ))" > "$LEMPI_RUN_DIR/ap_idle_since"
+printf '%s\n' "$(( $(date +%s) - 30 ))" > "$LEMPI_RUN_DIR/ap_idle_since"
 OUT=$(keeper)
-assert_not_called "connection up Home" "an access point idle under fifteen minutes stays up"
+assert_not_called "connection up Home" "an access point idle under ninety seconds stays up"
 teardown
 
-# No clients for fifteen minutes: try home, once, and restart the clock.
+# No clients past the wait, no speaker connected: try home, and clear the clock.
 setup
 nm_known; on_ap
 printf '1\n' > "$LEMPI_RUN_DIR/ap_clients"
@@ -419,9 +420,63 @@ printf '%s\n' "$(( $(date +%s) - 1000 ))" > "$LEMPI_RUN_DIR/ap_idle_since"
 OUT=$(keeper)
 assert_in "$OUT" "access point clients: 1 -> 0" "the last client leaving is said"
 assert_in "$OUT" "trying the known network" "an idle access point tries the way home"
-assert_called "nmcli --wait 30 connection up Home" "through ap-return"
-[ ! -f "$LEMPI_RUN_DIR/ap_idle_since" ] && ok "and the idle clock restarts for the next try" \
-    || bad "and the idle clock restarts for the next try" "ap_idle_since remains"
+assert_called "nmcli --wait 15 connection up Home" "through ap-return"
+[ ! -f "$LEMPI_RUN_DIR/ap_idle_since" ] && ok "and home, the idle clock is cleared" \
+    || bad "and home, the idle clock is cleared" "ap_idle_since remains"
+teardown
+
+# --- the speaker's Left key, and the keeper's backoff [SPEC-WFO-085] ---------
+
+# ap-return refuses while a client is on the access point, and says no "trying":
+# the speaker's key then stays silent.
+setup
+nm_known; on_ap
+printf 'Station aa:bb:cc:dd:ee:02 (on wlan0)\n' > "$VT_STATE/iw_stations"
+OUT=$(btctl ap-return)
+assert_in "$OUT" "a client is on the access point" "ap-return refuses while a client is on the access point"
+assert_not_in "$OUT" '"trying":true' "without saying it is trying"
+assert_not_called "connection up Home" "and does not switch"
+teardown
+
+# A Bluetooth speaker connected: the keeper leaves the way home to its Left key.
+setup
+nm_known; on_ap
+speaker aa:bb:cc:dd:ee:10 Boom yes yes
+printf '%s\n' "$(( $(date +%s) - 1000 ))" > "$LEMPI_RUN_DIR/ap_idle_since"
+OUT=$(keeper)
+assert_in "$OUT" "its Left key goes home" "with a speaker connected, the keeper says the key is the way home"
+assert_not_called "connection up Home" "and tries nothing on the shared radio"
+OUT=$(keeper)
+assert_not_in "$OUT" "Left key" "said once, not every twenty seconds"
+teardown
+
+# A failed try doubles the wait.
+setup
+nm_known; on_ap
+printf '%s\n' "$(( $(date +%s) - 100 ))" > "$LEMPI_RUN_DIR/ap_idle_since"
+OUT=$(NM_UP_FAIL=Home keeper)
+assert_in "$OUT" "next try in 180s" "a failed try doubles the wait, ninety to one hundred and eighty"
+assert_eq "$(cat "$LEMPI_RUN_DIR/ap_return_wait" 2>/dev/null)" 180 "and keeps it for the next"
+assert_called "nmcli connection up lempi-ap" "with the access point back up"
+teardown
+
+# ...up to fifteen minutes, and no further.
+setup
+nm_known; on_ap
+printf '600\n' > "$LEMPI_RUN_DIR/ap_return_wait"
+printf '%s\n' "$(( $(date +%s) - 700 ))" > "$LEMPI_RUN_DIR/ap_idle_since"
+OUT=$(NM_UP_FAIL=Home keeper)
+assert_in "$OUT" "next try in 900s" "the wait stops doubling at fifteen minutes"
+teardown
+
+# A client joining resets the backoff as well as the clock.
+setup
+nm_known; on_ap
+printf '720\n' > "$LEMPI_RUN_DIR/ap_return_wait"
+printf 'Station aa:bb:cc:dd:ee:03 (on wlan0)\n' > "$VT_STATE/iw_stations"
+keeper >/dev/null
+[ ! -f "$LEMPI_RUN_DIR/ap_return_wait" ] && ok "a client resets the backoff" \
+    || bad "a client resets the backoff" "ap_return_wait remains"
 teardown
 
 # Clients that cannot be listed are not "no clients": stay, and say so once.

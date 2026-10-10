@@ -100,10 +100,19 @@ an appliance off the household's network until someone rebooted it.
 
 **Built `[SPEC-WFO-080]`:** one lookup, `home_network`, for both ways home;
 `ap-return`, which is `ap-stop` without the confirm-or-revert timer (nobody is
-there to confirm, so it would always revert) and bounded by `--wait 30`; and
-in the keeper, while the access point is up, its clients counted from
-`iw dev wlan0 station dump`, each change said in the journal, and after
-fifteen minutes with none, one try for home. A client resets the clock; a
-failed try restarts it; clients that cannot be listed are not taken for none.
-The stub now answers as the real tool does, and the suite gained nineteen
-checks, the first of which fails against the old filter.
+there to confirm, so it would always revert); and in the keeper, while the
+access point is up, its clients counted from `iw dev wlan0 station dump`, each
+change said in the journal. Clients that cannot be listed are not taken for
+none. The stub now answers as the real tool does, and the first check added
+fails against the old filter.
+
+**Then, the same day, `[SPEC-WFO-085]`.** The first build tried home after
+fifteen idle minutes whatever the speaker. The maintainer's refinement: a
+Bluetooth speaker usually means a battery, and its audio shares the radio, so
+with one connected the way home is the listener's -- the speaker's Left key,
+the one `[PI3-ROCKER-010]` left unspent -- answered with a click, then two
+rising notes or one low one. With none connected, the keeper tries after 90
+s, doubling to 15 minutes. `ap-return` waits 15 s, not 30, and refuses while
+a client is on. The cues are the player's first sound of its own: mixed in
+the device callback, since through the ring they would wait ~14 s behind the
+music and in a pause not sound at all.

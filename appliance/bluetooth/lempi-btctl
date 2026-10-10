@@ -1000,11 +1000,22 @@ case "$VERB" in
         # own, so a revert timer would always fire, and put the access point
         # back three minutes after a successful return. Bounded by --wait:
         # the keeper runs under a 60 s TimeoutStartSec, and being killed
-        # mid-switch would leave neither network up.
+        # mid-switch would leave neither network up. Fifteen seconds, not
+        # thirty: every try takes the access point off the air for that long
+        # [SPEC-WFO-085].
+        #
+        # Refused while a client is on the access point -- whoever asked, the
+        # keeper or the speaker's Left key: someone is using it. `{"trying":
+        # true}` is printed the moment the switch starts, so the player can
+        # click then rather than fifteen seconds later; a refusal never prints
+        # it, and the key stays silent.
         [ "$(active_wifi_conn)" = "lempi-ap" ] || die "the access point is not currently active"
+        clients="$(iw dev wlan0 station dump 2>/dev/null | grep -c '^Station')"
+        [ "${clients:-0}" -eq 0 ] || die "a client is on the access point"
         fallback="$(home_network)"
         [ -n "$fallback" ] || die "no known network is set to connect automatically"
-        if nmcli --wait 30 connection up "$fallback" >/dev/null 2>&1; then
+        printf '{"trying":true}\n'
+        if nmcli --wait 15 connection up "$fallback" >/dev/null 2>&1; then
             printf '{"ok":true}\n'
         else
             nmcli connection up lempi-ap >/dev/null 2>&1
