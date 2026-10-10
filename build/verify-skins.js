@@ -116,8 +116,34 @@ const HISTORY = {
 const skins = fs.readdirSync(path.join(ROOT, 'skins'));
 let failures = 0;
 
+// Start core in a page and wait for its skin. Core runs skin.js itself -- it
+// fetches markup, stylesheet and script together and runs the script once the
+// markup is in `[REQ-VIS-162]` -- and opens the socket alongside rather than
+// after, so a socket existing no longer means the skin has loaded. Wait on
+// start()'s own promise instead, and catch what the skin throws as it runs.
+// Returns why it failed, or null.
+async function startCore(window, runScript) {
+  let threw = null;
+  const onError = e => { threw = threw || (e.error ? e.error.message : e.message); };
+  window.addEventListener('error', onError);
+  runScript(fs.readFileSync(path.join(ROOT, 'core.js'), 'utf8'));
+  // Through a <script>: core's top-level `const` is in the shared script scope,
+  // not on `window`. The page starts it exactly as shell.html does.
+  runScript('window.__started = Lempi.start();');
+  let failed = null;
+  try {
+    await Promise.race([window.__started,
+      new Promise((_, no) => setTimeout(() => no(new Error('still waiting after 2 s')), 2000))]);
+  } catch (e) {
+    failed = e.message;
+  }
+  window.removeEventListener('error', onError);
+  if (failed) return `core never finished loading the skin: ${failed}`;
+  if (threw) return `skin.js threw on load: ${threw}`;
+  return null;
+}
+
 async function run(skin) {
-  const dir = path.join(ROOT, 'skins', skin);
   // The shell starts core with an inline script. Here core is injected by hand
   // (jsdom fetches no subresources), so that call would fire before core exists
   // and print a ReferenceError that means nothing. Drop it; we call start below.
@@ -150,7 +176,7 @@ async function run(skin) {
       return Promise.resolve({ json: () => Promise.resolve(skins.map(n => ({ name: n, label: n }))) });
     }
     const m = /^\/skin\/([^/]+)\/(.+)$/.exec(url);
-    if (m) return Promise.resolve({ text: () => Promise.resolve(fs.readFileSync(path.join(ROOT, 'skins', m[1], m[2]), 'utf8')) });
+    if (m) return Promise.resolve({ ok: true, text: () => Promise.resolve(fs.readFileSync(path.join(ROOT, 'skins', m[1], m[2]), 'utf8')) });
     if (/^\/art\//.test(url)) return Promise.reject(new Error('no art in a test DOM'));
     // An explanation for a queued passage, so the panel's fetch path is
     // exercised rather than only its failure path.
@@ -174,19 +200,9 @@ async function run(skin) {
     el.textContent = src;
     window.document.body.appendChild(el);
   };
-  runScript(fs.readFileSync(path.join(ROOT, 'core.js'), 'utf8'));
-  // core.js is a library now; the page starts it, exactly as shell.html does.
-  runScript('Lempi.start();');
-
-  // Wait for core to have loaded the skin and opened its socket.
-  for (let i = 0; i < 200 && !sock; i++) await new Promise(r => setTimeout(r, 5));
-  if (!sock) { console.log(`${skin.padEnd(11)} FAIL  core never finished loading the skin`); failures++; return; }
-
-  // core appended a <script> jsdom will not execute; run it in the same window.
-  try {
-    runScript(fs.readFileSync(path.join(dir, 'skin.js'), 'utf8'));
-  } catch (e) {
-    console.log(`${skin.padEnd(11)} FAIL  skin.js threw on load: ${e.message}`);
+  const why = await startCore(window, runScript);
+  if (why || !sock) {
+    console.log(`${skin.padEnd(11)} FAIL  ${why || 'core never opened its socket'}`);
     failures++;
     return;
   }
@@ -618,12 +634,13 @@ async function run(skin) {
             `the picker must say why it is empty, got ${JSON.stringify(prog.textContent)}`);
     }
 
-    // A Director that IS there and still reports none means none are
-    // configured. Saying "starting" for ever would be a lie on such a system.
+    // A Director that IS there and still reports none means the programme has
+    // no time slots `[ENT-SLOT-010]`. Saying "starting" for ever would be a lie
+    // on such a system.
     sock.onmessage({ data: JSON.stringify({ ...starting, pool: [0, 0] }) });
     await new Promise(r => setTimeout(r, 20));
     const shown = stations ? stations.textContent : (prog ? prog.textContent : '');
-    check(/no programmes/i.test(shown) && !/starting/i.test(shown),
+    check(/no time slots/i.test(shown) && !/starting/i.test(shown),
           `a Director reporting none must not read as starting up, got ${JSON.stringify(shown)}`);
 
     // And it all comes back when the programmes do.
@@ -1637,7 +1654,6 @@ const PREFERENCE = {
 };
 
 async function runPreference(skin) {
-  const dir = path.join(ROOT, 'skins', skin);
   const shell = fs.readFileSync(path.join(ROOT, 'shell.html'), 'utf8')
     .replace('<script>Lempi.start();</script>', '');
   const dom = new JSDOM(shell,
@@ -1661,7 +1677,7 @@ async function runPreference(skin) {
       return Promise.resolve({ json: () => Promise.resolve(skins.map(n => ({ name: n, label: n }))) });
     }
     const m = /^\/skin\/([^/]+)\/(.+)$/.exec(url);
-    if (m) return Promise.resolve({ text: () => Promise.resolve(fs.readFileSync(path.join(ROOT, 'skins', m[1], m[2]), 'utf8')) });
+    if (m) return Promise.resolve({ ok: true, text: () => Promise.resolve(fs.readFileSync(path.join(ROOT, 'skins', m[1], m[2]), 'utf8')) });
     if (/^\/preference\//.test(url)) {
       return Promise.resolve({ ok: true, json: () => Promise.resolve(PREFERENCE) });
     }
@@ -1682,14 +1698,9 @@ async function runPreference(skin) {
     el.textContent = src;
     window.document.body.appendChild(el);
   };
-  runScript(fs.readFileSync(path.join(ROOT, 'core.js'), 'utf8'));
-  runScript('Lempi.start();');
-  for (let i = 0; i < 200 && !sock; i++) await new Promise(r => setTimeout(r, 5));
-  if (!sock) { console.log(`${('pref/' + skin).padEnd(11)} FAIL  core never loaded the skin`); failures++; return; }
-  try {
-    runScript(fs.readFileSync(path.join(dir, 'skin.js'), 'utf8'));
-  } catch (e) {
-    console.log(`${('pref/' + skin).padEnd(11)} FAIL  skin.js threw: ${e.message}`);
+  const why = await startCore(window, runScript);
+  if (why || !sock) {
+    console.log(`${('pref/' + skin).padEnd(11)} FAIL  ${why || 'core never opened its socket'}`);
     failures++;
     return;
   }

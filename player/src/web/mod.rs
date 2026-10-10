@@ -434,7 +434,7 @@ impl From<&PlayerState> for Snapshot {
 
 pub fn router(ui: Ui) -> Router {
     let router = Router::new()
-        .route("/", get(|| async { Html(SHELL) }))
+        .route("/", get(|| async { ([REVALIDATE], Html(shell_page())) }))
         .route("/build", get(build_identity))
         .route("/core.js", get(|| async { js(CORE) }))
         .route("/skins", get(skin_list))
@@ -724,6 +724,31 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
 /// copy rather than an install. Adding a skin means adding a row here and three
 /// files; nothing else in the server changes.
 const SHELL: &str = include_str!("shell.html");
+
+/// The tag in `shell.html` that `shell_page` replaces. The file keeps it so it
+/// still works opened on its own and in `build/verify-skins.js`.
+const SHELL_CORE_TAG: &str = "<script src=\"/core.js\"></script>";
+
+/// The player page as served: `shell.html` with `core.js` and the skin
+/// catalogue written into it `[REQ-VIS-162]`. Without them the page waited on
+/// three round trips -- itself, then core, then the catalogue -- before it
+/// could ask for its skin. Built once: all three are compiled in.
+fn shell_page() -> &'static str {
+    static PAGE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PAGE.get_or_init(|| {
+        // Neither may close the <script> it is poured into. The catalogue is
+        // compiled-in names; a `<` in one is escaped regardless.
+        let skins = catalogue().to_string().replace('<', "\\u003c");
+        SHELL.replacen(
+            SHELL_CORE_TAG,
+            &format!(
+                "<script type=\"application/json\" id=\"lempi-skins\">{skins}</script>\n\
+                 <script>\n{CORE}\n//# sourceURL=/core.js\n</script>"
+            ),
+            1,
+        )
+    })
+}
 const BROWSE_HTML: &str = include_str!("browse.html");
 const BROWSE_JS: &str = include_str!("browse.js");
 const PROGRAMME_HTML: &str = include_str!("programme.html");
@@ -874,6 +899,26 @@ mod tests {
         assert!(CORE.contains("/programme/seed?slot="), "the panel sends a seed change");
         assert!(BROWSE_JS.contains("editPreference('recording', r.mbid"), "Browse opens the panel for a seed");
         assert!(BROWSE_HTML.contains("id=\"pref-panel\""), "and carries the panel to open");
+    }
+
+    /// The player page carries core and the catalogue in itself `[REQ-VIS-162]`,
+    /// and neither can break out of the `<script>` it is written into.
+    #[test]
+    fn the_player_page_carries_core_and_the_catalogue() {
+        assert_eq!(SHELL.matches(SHELL_CORE_TAG).count(), 1, "the tag shell_page replaces");
+        assert!(!CORE.to_ascii_lowercase().contains("</script"), "core.js would close its own tag");
+        let page = shell_page();
+        assert!(!page.contains(SHELL_CORE_TAG), "the page still fetches core");
+        let core_at = page.find(CORE).expect("core is in the page");
+        let start_at = page.find("Lempi.start()").expect("the page starts core");
+        assert!(core_at < start_at, "core is defined before it is started");
+        let open = "<script type=\"application/json\" id=\"lempi-skins\">";
+        let a = page.find(open).expect("the catalogue is in the page") + open.len();
+        let b = a + page[a..].find("</script>").unwrap();
+        let skins: serde_json::Value = serde_json::from_str(&page[a..b]).unwrap();
+        assert_eq!(skins, catalogue(), "the page's catalogue is /skins'");
+        assert!(a < core_at, "and is there before core reads it");
+        assert!(CORE.contains("getElementById('lempi-skins')"), "core reads it by that id");
     }
 
     /// The shell and browse page must load core, or nothing on them works.

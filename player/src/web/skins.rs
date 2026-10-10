@@ -36,11 +36,16 @@ pub(super) const SKINS: &[Skin] = &[
 /// written into each skin, so adding one does not mean editing the others to
 /// list it.
 pub(super) async fn skin_list() -> impl IntoResponse {
-    let names: Vec<_> = SKINS
+    axum::Json(catalogue())
+}
+
+/// The catalogue itself: served at `/skins`, and written into the player page
+/// so a load need not ask for it before it can ask for a skin.
+pub(super) fn catalogue() -> serde_json::Value {
+    SKINS
         .iter()
         .map(|s| serde_json::json!({ "name": s.name, "label": s.label }))
-        .collect();
-    axum::Json(names)
+        .collect()
 }
 
 /// A skin is exactly three files. The set is fixed, so an unknown name is a

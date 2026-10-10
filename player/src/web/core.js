@@ -1097,6 +1097,17 @@ const Lempi = (() => {
   const KEY = 'lempi.skin';
   let catalogue = [];
 
+  // The player page carries the catalogue in itself (`#lempi-skins`, written in
+  // by the server), which saves the page a round trip before it can ask for
+  // its skin. Any other page that loads core fetches it.
+  async function skinCatalogue() {
+    const own = document.getElementById('lempi-skins');
+    if (own) {
+      try { return JSON.parse(own.textContent); } catch { /* fetch it instead */ }
+    }
+    return fetch('/skins').then(r => r.json()).catch(() => []);
+  }
+
   // MuLibPlay is what a browser that has never chosen gets `[REQ-VIS-124]`:
   // the face six years of listening happened in front of. A browser that HAS
   // chosen keeps its choice, which is the whole reason this is stored.
@@ -1131,9 +1142,21 @@ const Lempi = (() => {
   }
 
   // A skin is markup, a stylesheet and a script, in that order: the script may
-  // assume its own DOM is present, which is the whole reason it loads last.
+  // assume its own DOM is present, which is the whole reason it RUNS last.
+  //
+  // It is not FETCHED last. All three are asked for at once and the script is
+  // held as text until the markup is in, so the skin costs one round trip
+  // rather than two. Measured 2026-10-09 on lempi02w, a Pi Zero 2W on weak
+  // Wi-Fi, where a single request now and then takes 200-370 ms: the page went
+  // through five round trips one after another before it could draw, and a
+  // reload sat on "Loading..." for up to a second.
   async function loadSkin(name) {
     const base = `/skin/${name}`;
+    const script = fetch(`${base}/skin.js`).then(r => {
+      if (!r.ok) throw new Error(`${base}/skin.js: the server answered ${r.status}`);
+      return r.text();
+    });
+    script.catch(() => {}); // awaited below; not unhandled if the markup fails first
     const [html] = await Promise.all([
       fetch(`${base}/skin.html`).then(r => r.text()),
       new Promise((ok, no) => {
@@ -1187,13 +1210,11 @@ const Lempi = (() => {
       sel.value = chosen();
       sel.onchange = () => setSkin(sel.value);
     }
-    await new Promise((ok, no) => {
-      const s = document.createElement('script');
-      s.src = `${base}/skin.js`;
-      s.onload = ok;
-      s.onerror = no;
-      document.body.appendChild(s);
-    });
+    // A classic script, as `src=` made it: its top-level declarations land in
+    // the shared script scope, and the sourceURL keeps its name in a stack trace.
+    const s = document.createElement('script');
+    s.textContent = `${await script}\n//# sourceURL=${base}/skin.js`;
+    document.body.appendChild(s);
     // A skin that loads after the first snapshot must not sit blank waiting for
     // the next one, which may be half a second away.
     if (last) dispatch(last);
@@ -1294,21 +1315,24 @@ const Lempi = (() => {
     covers: on => post(`/covers/${on ? 'on' : 'off'}`),
     lyricsCache: on => post(`/lyricscache/${on ? 'on' : 'off'}`),
     lyricsSidecar: on => post(`/lyricssidecar/${on ? 'on' : 'off'}`),
-    // The player page: load the chosen skin, then follow the socket.
+    // The player page: load the chosen skin and open the socket together. A
+    // snapshot that lands first waits in `last`, and the skin is handed it the
+    // moment it subscribes -- so neither has to wait for the other.
     async start() {
-      catalogue = await fetch('/skins').then(r => r.json()).catch(() => []);
-      await loadSkin(chosen());
+      catalogue = await skinCatalogue();
       connect();
+      await loadSkin(chosen());
     },
     // The browse page: it wants the skin's LOOK and the command helpers, but
     // not the player's markup and not a socket -- a library listing does not
-    // change twice a second.
+    // change twice a second. The stylesheet does not need the catalogue, so
+    // it does not wait for it.
     async startBare() {
-      catalogue = await fetch('/skins').then(r => r.json()).catch(() => []);
       const l = document.createElement('link');
       l.rel = 'stylesheet';
       l.href = `/skin/${chosen()}/skin.css`;
       document.head.appendChild(l);
+      catalogue = await skinCatalogue();
     },
     // Throws rather than resolving to nothing when the query fails, so a
     // broken listing cannot be mistaken for an empty library.

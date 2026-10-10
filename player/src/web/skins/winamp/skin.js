@@ -10,7 +10,7 @@
   // Short forms: this panel is fixed-width at 10px monospace, and the long
   // labels core defaults to would simply not fit beside the "Prog" caption.
   const showProgram = Lempi.bindProgram($('prog'), 'auto (by clock)',
-    { starting: 'director starting…', none: 'no programmes' });
+    { starting: 'director starting…', none: 'no time slots' });
   const showQueue = Lempi.bindQueue(
     $('queue'), q => (q.artist ? `${q.artist} - ${q.title}` : q.title));
   // Scroll only when it will not fit. A title that fits and scrolls anyway is
