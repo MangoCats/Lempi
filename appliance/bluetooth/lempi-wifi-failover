@@ -64,7 +64,10 @@ ELAPSED=$((NOW - SINCE))
 
 if [ "$ELAPSED" -ge 30 ]; then
     # 6. Autonomous Bringup: standing AP bringup without revert timer.
-    "$BTCTL" ap-failover >/dev/null 2>&1 || exit 1
+    # Said out loud: the unit's routine runs are kept out of the journal
+    # [PI3-FOUND-760], so this line is the only trace a failover leaves.
+    echo "wlan0 down for ${ELAPSED}s ($DEV_STATE): bringing up the access point"
+    "$BTCTL" ap-failover >/dev/null 2>&1 || { echo "the access point did not come up"; exit 1; }
     rm -f "$DEBOUNCE_FILE"
 fi
 

@@ -55,7 +55,7 @@ bluetooth_items() {
         file_item "$u" $B/$u /etc/systemd/system/$u 644
     done
     file_item "/run/lempi for the agent" $B/lempi-tmpfiles.conf /etc/tmpfiles.d/lempi.conf 644
-    for s in lempi-speaker lempi-btwatch; do
+    for s in lempi-speaker lempi-btwatch lempi-wifi-failover; do
         file_item "$s: routine ticks kept quiet" $B/lempi-quiet-tick.conf \
             /etc/systemd/system/$s.service.d/10-lempi-quiet.conf 644
     done
@@ -72,9 +72,14 @@ bluetooth_items() {
          "sudo systemctl enable upower.service && sudo systemctl add-wants multi-user.target upower.service"
     item "lempi-bt-agent enabled" "test -L $P/etc/systemd/system/multi-user.target.wants/lempi-bt-agent.service" \
          "sudo systemctl enable lempi-bt-agent.service"
+    # Enabled AND started: enabling alone left lempi-wifi-failover.timer
+    # waiting for the next boot on lp3-wifi, 2026-10-10 -- "enabled", and never
+    # run. Two commands, not `enable --now`: in the overlay chroot `--now` is
+    # refused outright (exit 1, so no link either), while a separate `start`
+    # is skipped there with exit 0 -- both measured on lp3-wifi.
     for t in lempi-speaker lempi-btwatch lempi-wifi-failover; do
         item "$t.timer enabled" "test -L $P/etc/systemd/system/timers.target.wants/$t.timer" \
-             "sudo systemctl enable $t.timer"
+             "sudo systemctl enable $t.timer && sudo systemctl start $t.timer"
     done
 
     # pi's PipeWire session, kept without a login: the player and the keeper
