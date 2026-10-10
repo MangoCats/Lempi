@@ -70,9 +70,16 @@
       if (waiting) {
         const note = document.createElement('p');
         note.className = 'stationnote';
-        note.textContent = Lempi.directorReady(s)
-          ? 'No programmes configured.'
-          : 'Program Director starting…';
+        if (Lempi.directorReady(s)) {
+          // No time slots in the programme this node runs: say where to make
+          // them, rather than only that there are none [SPEC-PGM-430].
+          const a = document.createElement('a');
+          a.href = '/programme';
+          a.textContent = 'No time slots: edit the programme';
+          note.appendChild(a);
+        } else {
+          note.textContent = 'Program Director starting…';
+        }
         host.appendChild(note);
       }
       for (const p of sorted) {
@@ -88,6 +95,13 @@
         b.onclick = () => Lempi.program(p.id);
         row.append(time, b);
         host.appendChild(row);
+      }
+      if (!waiting) {
+        const edit = document.createElement('a');
+        edit.className = 'stationnote programme-edit';
+        edit.href = '/programme';
+        edit.textContent = 'Edit programme';
+        host.appendChild(edit);
       }
     }
     for (const b of host.querySelectorAll('.button, .buttonOn')) lit(b, b.textContent === s.program);

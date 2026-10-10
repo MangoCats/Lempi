@@ -451,9 +451,20 @@ const Lempi = (() => {
   // more control that takes a press and does nothing `[REQ-VIS-185]`.
   function bindProgram(select, autoLabel = 'Automatic (by time of day)', labels = {}) {
     const starting = labels.starting ?? 'Program Director starting…';
-    const none = labels.none ?? 'no programmes configured';
+    // The picker lists the time slots of the programme this node runs
+    // [ENT-SLOT-010]. With none, it says where to make them, and the link
+    // beside it goes there [SPEC-PGM-430].
+    const none = labels.none ?? 'no time slots: edit the programme';
     let signature = '';
     select.onchange = e => post(`/program/${e.target.value}`);
+    if (!select.parentNode?.querySelector('a.programme-edit')) {
+      const edit = document.createElement('a');
+      edit.className = 'programme-edit';
+      edit.href = '/programme';
+      edit.textContent = 'Edit programme';
+      edit.title = 'The time slots of the programme this node runs, and their seeds';
+      select.insertAdjacentElement('afterend', edit);
+    }
     return s => {
       const programs = s.programs || [];
       const waiting = programs.length === 0;

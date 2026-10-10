@@ -456,6 +456,17 @@ CREATE TABLE IF NOT EXISTS listener_program_seeds (
     position    INTEGER NOT NULL,
     PRIMARY KEY (program_id, mbid)
 ) WITHOUT ROWID;
+-- The programme those time slots make, as a whole [SPEC-PGM-200]: what it is
+-- called, its content fingerprint [SPEC-PGM-110], and whether it is the
+-- hub's version or this node's own. One row; the player makes it.
+CREATE TABLE IF NOT EXISTS listener_programme (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    name        TEXT,
+    fingerprint TEXT NOT NULL,
+    source      TEXT NOT NULL CHECK (source IN ('node', 'hub')),
+    hub_version INTEGER,
+    updated_at  TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS listener_likes (
     like_id     INTEGER PRIMARY KEY,

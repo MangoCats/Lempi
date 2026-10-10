@@ -1,0 +1,81 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lempi — Programme</title>
+<style>
+  /* The programme this node runs [SPEC-PGM-400]: its name, its time slots,
+     their seeds. Words per SPEC023: the programme is the whole day, a time
+     slot one timed part of it, a seed a recording that sets a slot's sound.
+     Built as passage.html is: a bare, class-based baseline the chosen skin's
+     own stylesheet then dresses, one thing per line for a phone's width. */
+  html, body { margin: 0; padding: 0; background: #141416; color: #eee;
+               font: 16px/1.5 system-ui, sans-serif; }
+  /* Everything shrinks to a phone's width: an input or a button keeps an
+     intrinsic width of its own, and without these the page ran past the
+     screen's right edge at 430 px, measured 2026-10-09. */
+  .programme, .programme * { box-sizing: border-box; min-width: 0; }
+  .programme { max-width: 44rem; margin: 0 auto; padding: .75rem; }
+  .programme header { display: flex; align-items: center; gap: .5rem;
+                      flex-wrap: wrap; margin-bottom: .5rem; }
+  .programme h1 { font-size: .7rem; letter-spacing: .14em; text-transform: uppercase;
+                  font-weight: 600; margin: 0; opacity: .6; flex: 1; }
+  .programme a.back { font-size: .8125rem; }
+  input { font: inherit; background: transparent; color: inherit;
+          border: 1px solid rgba(128,128,128,.4); border-radius: 4px; padding: .15rem .35rem; }
+  button { font: inherit; font-size: .8125rem; cursor: pointer; }
+  .name input { font-size: 1.25rem; width: 100%; box-sizing: border-box; }
+  .status { margin: .2rem 0 .9rem; opacity: .7; font-size: .875rem; }
+  .card { border: 1px solid rgba(128,128,128,.28); border-radius: 6px;
+          padding: .55rem .65rem; margin-bottom: .6rem; }
+  .slot-head { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+  .slot-head .slot-name { flex: 1 1 8rem; width: 8rem; }
+  .slot-head .slot-start { flex: 0 0 4.5rem; width: 4.5rem; text-align: center; }
+  .range { opacity: .6; font-size: .8125rem; margin: .2rem 0 .3rem; }
+  ol.seeds { margin: .2rem 0 .3rem; padding-left: 1.4rem; font-size: .875rem; }
+  ol.seeds li { margin: .15rem 0; overflow-wrap: anywhere; }
+  ol.seeds .who { opacity: .75; }
+  ol.seeds button { margin-left: .25rem; padding: 0 .35rem; }
+  .empty { opacity: .6; font-size: .875rem; }
+  .actions { display: flex; gap: .5rem; flex-wrap: wrap; margin: .8rem 0; }
+  .newname { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin: .3rem 0 .8rem; }
+  .note { font-size: .875rem; }
+  .note.bad { color: #f88; }
+  .note.good { color: #8c8; }
+</style>
+
+<div class="programme">
+  <header>
+    <h1>Lempi — Programme</h1>
+    <a class="back" href="/">player</a>
+    <a class="back" href="/browse">browse</a>
+    <a class="back" href="/guide" target="_blank">help</a>
+  </header>
+
+  <div class="name">
+    <label for="pname" class="empty">The programme this node runs</label>
+    <input id="pname" placeholder="not named yet" spellcheck="false" autocomplete="off">
+  </div>
+  <p class="status" id="status">…</p>
+
+  <div id="slots"></div>
+  <button type="button" id="addslot">Add a time slot</button>
+
+  <div class="actions">
+    <button type="button" id="save" disabled>Save</button>
+    <button type="button" id="saveas">Save as a new programme…</button>
+    <button type="button" id="discard" disabled>Discard changes</button>
+  </div>
+  <div class="newname" id="newname" hidden>
+    <label for="newnameinput">New programme's name</label>
+    <input id="newnameinput" spellcheck="false" autocomplete="off">
+    <button type="button" id="newnamesave">Save under this name</button>
+    <button type="button" id="newnamecancel">Cancel</button>
+  </div>
+  <p class="note" id="note" aria-live="polite"></p>
+  <p class="empty">A time slot is on air from its start until the next one
+     starts. Its seeds are recordings that set its sound: the player chooses
+     music near them, not only them. Saving changes this node only.</p>
+</div>
+
+<script src="/core.js"></script>
+<script src="/programme.js"></script>

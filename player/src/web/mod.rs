@@ -44,6 +44,7 @@ mod guide;
 mod media;
 mod musicbrainz;
 mod preference;
+mod programme;
 mod review;
 #[cfg(feature = "vipunen-support")]
 mod vipunen;
@@ -451,6 +452,10 @@ pub fn router(ui: Ui) -> Router {
         .route("/history", get(history))
         .route("/history/flag/:kind/:id", post(set_flag))
         .route("/preference/:kind/:id", get(get_preference).post(set_preference))
+        // The programme this node runs, and editing it [SPEC-PGM-400].
+        .route("/programme", get(|| async { ([REVALIDATE], Html(PROGRAMME_HTML)) }))
+        .route("/programme.js", get(|| async { js(PROGRAMME_JS) }))
+        .route("/programme/current", get(programme::get_programme).post(programme::save_programme))
         .route("/play-frequency/:kind/:id", get(play_frequency))
         .route("/guide", get(guide_page))
         .route("/guide.js", get(guide_js_route))
@@ -719,6 +724,8 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
 const SHELL: &str = include_str!("shell.html");
 const BROWSE_HTML: &str = include_str!("browse.html");
 const BROWSE_JS: &str = include_str!("browse.js");
+const PROGRAMME_HTML: &str = include_str!("programme.html");
+const PROGRAMME_JS: &str = include_str!("programme.js");
 const PASSAGE_HTML: &str = include_str!("passage.html");
 const PASSAGE_JS: &str = include_str!("passage.js");
 #[cfg(feature = "vipunen-support")]
@@ -843,6 +850,20 @@ mod tests {
             }
             assert!(s.html.contains("data-skins"), "{} has no skin picker", s.name);
         }
+    }
+
+    /// The Programme page loads core and its own script, and asks the route
+    /// that serves it; the pickers lead to it, the empty one above all
+    /// `[SPEC-PGM-400]`, `[SPEC-PGM-430]`.
+    #[test]
+    fn the_programme_page_is_served_and_reached() {
+        assert!(PROGRAMME_HTML.contains("/core.js") && PROGRAMME_HTML.contains("/programme.js"));
+        assert!(PROGRAMME_JS.contains("startBare"), "the page takes the skin, not the player");
+        assert!(PROGRAMME_JS.contains("'/programme/current'"));
+        assert!(PROGRAMME_JS.contains("Save as a new") || PROGRAMME_HTML.contains("Save as a new programme"));
+        assert!(CORE.contains("href = '/programme'"), "the shared picker links to the page");
+        let mulibplay = include_str!("skins/mulibplay/skin.js");
+        assert!(mulibplay.contains("'/programme'"), "MuLibPlay's own list links to the page");
     }
 
     /// The shell and browse page must load core, or nothing on them works.

@@ -1,6 +1,6 @@
 # SPEC062: Named Programmes
 
-**Design Specification — Tier 2 · written 2026-10-09, from the maintainer's decisions that day · not yet built**
+**Design Specification — Tier 2 · written 2026-10-09, from the maintainer's decisions that day · step 1 built 2026-10-09; steps 2–4 not yet**
 
 A node's listening day is shaped by its programme: the time slots that come on
 air through the day, and the seed recordings that give each its sound. Until
@@ -115,10 +115,22 @@ client for the channel yet; this is the first thing it fetches there.
 **`[SPEC-PGM-400]` On a node: a Programme page in the player, `/programme`.**
 Every node has it, in every skin and in the phone's app, since the app shows
 the player's pages. It shows the programme the node runs — its name, and
-whether it is the hub's version *n* or edited here — with its time slots and
-their seeds. A person edits it there: slots named, timed, added and removed;
-seeds removed and reordered. "Offer to the household" sends it to the hub,
+whether it is the hub's version *n* or edited here — with its time slots, the
+range each is on air for (from its start to the next slot's), and their
+seeds, each shown as the recording, its artist and its album. A person edits
+it there: the programme renamed; slots named, timed, added and removed; seeds
+removed and reordered. "Offer to the household" (step 3) sends it to the hub,
 under its own name or a new one.
+
+**`[SPEC-PGM-405]` An edit can be saved as a new programme.** *The maintainer's
+note, 2026-10-09.* **Save** keeps the programme's name: it is an edit of that
+programme, and offered to the hub it would wait there as a replacement for the
+hub's version of that name `[SPEC-PGM-030]`. **Save as a new programme…** asks
+for another name, so the programme the edit started from stays unchanged
+wherever else it is kept — above all in the hub's library — and the node runs
+the new one, which an offer would add to the library under its own name
+`[SPEC-PGM-020]`. On the node either is a complete replacement of what it runs,
+and makes it the node's own (`source = 'node'`).
 
 **`[SPEC-PGM-410]` The question is asked where the node is used.** An arrival
 that differs shows a banner in the player, as a new Wi-Fi network's "Keep this
@@ -164,6 +176,22 @@ the move.
 3. offers from a node, and the hub's inbox;
 4. seeds from the preference panel and Browse.
 
+**`[SPEC-PGM-520]` Step 1, as built 2026-10-09.**
+- The node's record is `listener_programme`, made at the first read:
+  unnamed and the node's own, with the fingerprint of the slots it already
+  had. Slots changed behind it, by a tool or by hand, read as the node's own.
+  The player now creates the slot tables too, on a listener file that never
+  went through the split.
+- The fingerprint is checked against Python's standard JSON form
+  `[SPEC-PGM-110]`: computed both ways over the hub's eight slots, it was the
+  same value.
+- A save is one transaction. A kept slot keeps its id, so history still
+  names it. A new slot takes an id above any a slot or `selection_decisions`
+  has had, never the deleted one SQLite would reuse. The running Director
+  takes the new slots at its next refill, keeping its clock offset and a
+  slot held by hand unless the edit removed it.
+- The page is `/programme`, linked beside every skin's picker and from its
+  empty state. Its start times are 24-hour text, not a locale's time picker.
 ---
 
-**Traceability:** `[SPEC-PGM-010..510]` · from the maintainer's decisions of 2026-10-09 · words in [SPEC023](SPEC023-domain-vocabulary.md) `[ENT-PROGRAMME-010]`, `[ENT-SLOT-010]`, `[ENT-SEED-010]`, `[SPEC-VOC-020]` · refines `[SPEC-MTR-040]`
+**Traceability:** `[SPEC-PGM-010..520]` · from the maintainer's decisions of 2026-10-09 · words in [SPEC023](SPEC023-domain-vocabulary.md) `[ENT-PROGRAMME-010]`, `[ENT-SLOT-010]`, `[ENT-SEED-010]`, `[SPEC-VOC-020]` · refines `[SPEC-MTR-040]`

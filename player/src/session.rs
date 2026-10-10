@@ -58,6 +58,10 @@ pub struct Controls {
     pub programs: Vec<(i64, String, String)>,
     /// The programme actually in force, as the engine last resolved it.
     pub active: Option<String>,
+    /// Set when the page saved an edited programme `[SPEC-PGM-400]`: the
+    /// engine takes its time slots on its next refill, the same intent-cell
+    /// pattern as `reload_requested`.
+    pub programme_changed: bool,
     /// Asks for a live Director rebuild, so music imported into the library
     /// becomes selectable without restarting the player `[IMPL-SUI-075]`.
     ///
@@ -819,6 +823,24 @@ impl Session {
         // Director can supply.
         let now = unix_now();
         if let (Some(d), Ok(mut c)) = (&mut self.director, self.controls.lock()) {
+            // An edited programme, saved from its page `[SPEC-PGM-400]`. Read
+            // through the store, which is the connection that wrote it; the
+            // picker's list is rebuilt from what the Director now holds.
+            if c.programme_changed {
+                c.programme_changed = false;
+                match self.decisions.as_ref().map(|s| s.load_programs()) {
+                    Some(Ok(fresh)) => {
+                        d.programs_mut().replace_slots(fresh);
+                        c.programs.clear();
+                        if c.manual_program.is_some() && d.programs().manual().is_none() {
+                            c.manual_program = None;
+                        }
+                        tracing::info!("programme: {} time slot(s) taken from the edit", d.programs().len());
+                    }
+                    Some(Err(e)) => tracing::error!("programme: the edit could not be read: {e}"),
+                    None => tracing::error!("programme: no store to read the edit from"),
+                }
+            }
             if c.programs.is_empty() {
                 c.programs = d
                     .programs()

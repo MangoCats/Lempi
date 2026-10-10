@@ -139,6 +139,16 @@ impl Programs {
         self.manual
     }
 
+    /// Take the time slots of an edited programme `[SPEC-PGM-400]`, keeping
+    /// what this Director knows that the tables do not: the clock's offset,
+    /// and a slot held by hand -- unless that slot is gone, when the hold goes
+    /// with it and time of day decides again.
+    pub fn replace_slots(&mut self, fresh: Programs) {
+        let manual = self.manual.filter(|id| fresh.get(*id).is_some());
+        let offset = self.utc_offset_minutes;
+        *self = Programs { utc_offset_minutes: offset, manual, ..fresh };
+    }
+
     /// The programme in force at `now` (unix seconds).
     ///
     /// Whichever started most recently, wrapping through midnight — before the
@@ -291,6 +301,31 @@ pub fn sync_os_utc_offset(conn: &Connection) -> Option<i64> {
 mod tests {
     use super::*;
     use crate::db::QualifyingConn;
+
+    /// An edit's time slots replace the Director's; its clock offset stays,
+    /// and so does a slot held by hand -- unless the edit removed it
+    /// `[SPEC-PGM-400]`.
+    #[test]
+    fn an_edit_s_slots_replace_these_keeping_the_offset_and_a_live_hold() {
+        let mut running = Programs::load(&fixture()).unwrap();
+        running.utc_offset_minutes = -240;
+        running.set_manual(Some(4));
+        let edited = QualifyingConn::wrap_unsplit(Connection::open_in_memory().unwrap());
+        edited
+            .execute_batch(
+                "CREATE TABLE listener_programs (program_id INTEGER, name TEXT, start_time TEXT);
+                 CREATE TABLE listener_program_seeds (program_id INTEGER, mbid TEXT, position INTEGER);
+                 INSERT INTO listener_programs VALUES (4,'Late','23:00'),(9,'Dawn','05:00');",
+            )
+            .unwrap();
+        running.replace_slots(Programs::load(&edited).unwrap());
+        assert_eq!(running.len(), 2);
+        assert_eq!(running.utc_offset_minutes, -240, "the offset is the clock's, not the edit's");
+        assert_eq!(running.manual(), Some(4), "the held slot is still there");
+        edited.execute_batch("DELETE FROM listener_programs WHERE program_id = 4").unwrap();
+        running.replace_slots(Programs::load(&edited).unwrap());
+        assert_eq!(running.manual(), None, "the held slot is gone, and so is the hold");
+    }
 
     fn fixture() -> QualifyingConn {
         let c = QualifyingConn::wrap_unsplit(Connection::open_in_memory().unwrap());

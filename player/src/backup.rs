@@ -44,6 +44,9 @@ pub const LISTENER_TABLES: &[&str] = &[
     "listener_likes",
     "listener_programs",
     "listener_program_seeds",
+    // What the programme those time slots make is called, and where it came
+    // from [SPEC-PGM-200]: nothing recreates a name a person gave it.
+    "listener_programme",
     "listener_occasions",
     "listener_occasion_points",
     // The listener's own "special" tagging `[SPEC-PREF-085]` -- which songs

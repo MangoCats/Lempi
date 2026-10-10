@@ -143,7 +143,7 @@ row — no need to open the track's own profile page first — which clears
 it there and, if a remote is configured, on the remote too, in one
 click.</p>
 
-<h3>"Why this passage?" and program schedules</h3>
+<h3>"Why this passage?" and the programme</h3>
 <p>Every skin shows at least a one-line summary of why the current track
 was picked. The <strong>Lempi</strong> skin alone shows the full
 breakdown: a table of every factor that adjusted the odds (how the exact
@@ -153,17 +153,27 @@ its own preference panel. In the Lempi skin you can also click any queued
 (not-yet-playing) track to see its own explanation instead of the current
 track's.</p>
 
-<p>A <strong>program</strong> is a named block that steers what kind of
-music plays at a given time of day — the Lempi and WinAmp skins show a
-dropdown of the available programs plus "Automatic (by time of day)";
-MuLibPlay instead shows a row of program buttons and an "Autoselect by
-clock time" checkbox that does the same thing. Picking a program by hand
-overrides the schedule until you switch back to automatic; it takes effect
-on the <em>next</em> track chosen, not instantly. <strong>There is
-currently no way to create a new program or change what one sounds like
-from the web interface</strong> — you can only choose among whatever
-programs already exist. See the Appendix for what a program actually
+<p>A <strong>programme</strong> is this player's whole day of listening,
+under a name, such as "WKMP". It is made of <strong>time slots</strong>
+— "Mellow" from 22:00, "Fun" from 16:30 — each of which steers what kind
+of music plays from its start until the next one starts. The Lempi and
+WinAmp skins show the time slots in a dropdown, with "Automatic (by time of
+day)"; MuLibPlay shows a row of buttons and an "Autoselect by clock time"
+checkbox that does the same thing. Picking a time slot by hand holds it
+until you switch back to automatic; it takes effect on the <em>next</em>
+track chosen, not instantly. See the Appendix for what a time slot
 consists of.</p>
+
+<p><strong>Edit programme</strong>, beside that list, opens the programme
+this player runs: its name, and each time slot with its start, the range
+it is on air for, and its seeds — the recordings, shown by title, artist
+and album, that set its sound. You can rename the programme and its time
+slots, change when each starts, add or remove a time slot, and reorder or
+remove seeds. <strong>Save</strong> keeps the programme's name;
+<strong>Save as a new programme…</strong> asks for another, so the
+programme you started from stays as it was wherever else it is kept, and
+this player now runs the new one. Either way the change is this player's
+alone, and it takes effect on the next track chosen.</p>
 
 <h3>Restarting or shutting down</h3>
 <p>The settings panel's restart and shutdown buttons both ask for
@@ -252,7 +262,7 @@ you expect it, this is almost always why:</p>
 <tr><td>Output volume per output</td><td>✓</td><td>—</td><td>—</td></tr>
 <tr><td>Lyrics</td><td>—</td><td>✓</td><td>—</td></tr>
 <tr><td>Back cover art</td><td>—</td><td>✓</td><td>—</td></tr>
-<tr><td>Program override</td><td>dropdown</td><td>buttons + checkbox</td><td>dropdown</td></tr>
+<tr><td>Time slot override, and Edit programme</td><td>dropdown</td><td>buttons + checkbox</td><td>dropdown</td></tr>
 <tr><td>Browse the library</td><td>✓</td><td>✓ (dedicated buttons too)</td><td>✓</td></tr>
 </table>
 <p class="note">MuLibPlay is the default for a browser that has never

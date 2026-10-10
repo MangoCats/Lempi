@@ -13,6 +13,10 @@ use rusqlite::Connection;
 
 use super::{BUSY_WAIT, DbError, QualifyingConn};
 
+/// The programme a node runs `[SPEC062]`.
+mod programme;
+pub use programme::{ProgrammeView, Slot, canonical as programme_canonical, fingerprint as programme_fingerprint};
+
 /// The tag index, defined once `[REQ-VIS-180]`.
 ///
 /// Created by whoever holds a writable handle: `tagscan` when it fills it, and
@@ -855,6 +859,10 @@ impl PlayerStore {
             [],
         );
         Self::adopt_old_settings_columns(&conn);
+        // The time slots, their seeds, and what the whole is called
+        // `[SPEC-PGM-200]` -- on a listener file the player made for itself as
+        // much as on one that came through the split.
+        programme::ensure_programme_tables(&conn)?;
         ensure_library_tables_if_owned(&conn)?;
         Ok(Self { conn })
     }

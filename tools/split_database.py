@@ -76,6 +76,9 @@ LISTENER_TABLES = [
     # The saved queue `player_store.rs` writes; found unlisted by the same
     # check, against lempi02w's two halves, 2026-09-25.
     "player_queue",
+    # What the programme a node runs is called, and where it came from
+    # [SPEC-PGM-200]; the player makes it, 2026-10-09.
+    "listener_programme",
 ]
 BOTH = ["schema_meta"]
 
