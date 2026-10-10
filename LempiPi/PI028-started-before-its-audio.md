@@ -70,6 +70,16 @@ its PipeWire was up each time.
    `user@1000.service`. `lempi-wait-sink` still bounds the wait for a
    *speaker* at five seconds `[PI3-FOUND-550]`; this waits for PipeWire.
 
+**Measured on lp3-wifi, `148b6e2`, the same morning.** With pi's PipeWire
+stopped and the player restarted, it met the same "Host is down" and held: 45
+seconds, the same process, not one row of history. PipeWire started again; 12
+seconds later the player said it was restarting to use the device, did so
+through sudo, and came back on the OontZ at passage 16056, 92.1 s -- where it
+had held -- its position then advancing at the wall clock's rate. A reboot
+after that: `user@1000` active at 34.0 s, the player started at 34.0 s, its
+first open succeeded, and no row of history was written before it played.
+Its setup `--check` read 95 items as recorded.
+
 ## 2. The way home from the access point
 
 **`[PI3-FOUND-800]` "Stop AP, return to Wi-Fi" could never find the way.**
