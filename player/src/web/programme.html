@@ -36,6 +36,11 @@
   ol.seeds .who { opacity: .75; }
   ol.seeds button { margin-left: .25rem; padding: 0 .35rem; }
   .empty { opacity: .6; font-size: .875rem; }
+  .seed-add { margin: .2rem 0 0; font-size: .875rem; }
+  .seed-add input { width: 100%; margin: .3rem 0; }
+  ul.seed-results { list-style: none; margin: .2rem 0; padding: 0; }
+  ul.seed-results li { margin: .2rem 0; overflow-wrap: anywhere; }
+  ul.seed-results button { margin-left: .4rem; }
   .actions { display: flex; gap: .5rem; flex-wrap: wrap; margin: .8rem 0; }
   .newname { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin: .3rem 0 .8rem; }
   .note { font-size: .875rem; }
@@ -74,7 +79,10 @@
   <p class="note" id="note" aria-live="polite"></p>
   <p class="empty">A time slot is on air from its start until the next one
      starts. Its seeds are recordings that set its sound: the player chooses
-     music near them, not only them. Saving changes this node only.</p>
+     music near them, not only them. For each choice it takes one seed per
+     artist, those played least recently, at most five, so a slot with more
+     lets them take turns; the order they are listed in does not matter.
+     Saving changes this node only.</p>
 </div>
 
 <script src="/core.js"></script>

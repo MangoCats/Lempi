@@ -456,6 +456,8 @@ pub fn router(ui: Ui) -> Router {
         .route("/programme", get(|| async { ([REVALIDATE], Html(PROGRAMME_HTML)) }))
         .route("/programme.js", get(|| async { js(PROGRAMME_JS) }))
         .route("/programme/current", get(programme::get_programme).post(programme::save_programme))
+        .route("/programme/search", get(programme::search_seeds))
+        .route("/programme/seed", post(programme::set_seed))
         .route("/play-frequency/:kind/:id", get(play_frequency))
         .route("/guide", get(guide_page))
         .route("/guide.js", get(guide_js_route))
@@ -864,6 +866,14 @@ mod tests {
         assert!(CORE.contains("href = '/programme'"), "the shared picker links to the page");
         let mulibplay = include_str!("skins/mulibplay/skin.js");
         assert!(mulibplay.contains("'/programme'"), "MuLibPlay's own list links to the page");
+        // Seeds: added by search on the page, from the shared panel, and
+        // from Browse; never moved, since their order is never read
+        // `[SPEC-PGM-115]`, `[SPEC-PGM-420]`.
+        assert!(PROGRAMME_JS.contains("/programme/search"), "the page searches for seeds");
+        assert!(!PROGRAMME_JS.contains("'↑'") && !PROGRAMME_JS.contains("'↓'"), "seeds are a set: no arrows");
+        assert!(CORE.contains("/programme/seed?slot="), "the panel sends a seed change");
+        assert!(BROWSE_JS.contains("editPreference('recording', r.mbid"), "Browse opens the panel for a seed");
+        assert!(BROWSE_HTML.contains("id=\"pref-panel\""), "and carries the panel to open");
     }
 
     /// The shell and browse page must load core, or nothing on them works.

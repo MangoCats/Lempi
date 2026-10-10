@@ -95,21 +95,89 @@
         li.className = 'empty'; li.textContent = 'no seeds';
         ol.appendChild(li);
       }
+      // A slot's seeds are a set: the player never reads their order
+      // [SPEC-PGM-115], so there is nothing to move, only to add or remove.
       s.seeds.forEach((seed, j) => {
         const li = document.createElement('li');
         const t = document.createElement('span');
         t.textContent = seedText(seed);
         if (seed.title) t.title = seed.mbid;
-        li.append(t,
-          button('↑', 'Earlier', () => { if (j > 0) { [s.seeds[j - 1], s.seeds[j]] = [s.seeds[j], s.seeds[j - 1]]; touched(true); } }),
-          button('↓', 'Later', () => { if (j < s.seeds.length - 1) { [s.seeds[j + 1], s.seeds[j]] = [s.seeds[j], s.seeds[j + 1]]; touched(true); } }),
-          button('✕', 'Remove this seed', () => { s.seeds.splice(j, 1); touched(true); }));
+        li.append(t, button('✕', 'Remove this seed', () => { s.seeds.splice(j, 1); touched(true); }));
         ol.appendChild(li);
       });
-      card.append(head, r, ol);
+      card.append(head, r, ol, seedSearch(s));
       box.appendChild(card);
     });
     buttons();
+  }
+
+  // "Add a seed…" under a time slot [SPEC-PGM-420]: search the library by
+  // title or artist and pick a recording. It joins the slot's seeds in the
+  // working copy, saved with everything else.
+  function seedSearch(slot) {
+    const wrap = document.createElement('div');
+    wrap.className = 'seed-add';
+    const open = button('Add a seed…', 'Find a recording by title or artist', () => {
+      open.hidden = true; form.hidden = false; input.focus();
+    });
+    const form = document.createElement('div');
+    form.hidden = true;
+    const input = document.createElement('input');
+    input.type = 'search'; input.placeholder = 'title or artist'; input.autocomplete = 'off';
+    const close = button('Done', null, () => { form.hidden = true; open.hidden = false; input.value = ''; list.replaceChildren(); });
+    const list = document.createElement('ul');
+    list.className = 'seed-results';
+    let timer = 0, asked = 0;
+    input.oninput = () => {
+      clearTimeout(timer);
+      timer = setTimeout(async () => {
+        const q = input.value.trim();
+        const mine = ++asked;
+        if (q.length < 2) { list.replaceChildren(); return; }
+        const r = await fetch(`/programme/search?q=${encodeURIComponent(q)}`).catch(() => null);
+        if (mine !== asked) return; // a later keystroke has asked since
+        list.replaceChildren();
+        if (!r || !r.ok) { list.append(Object.assign(document.createElement('li'), { textContent: 'The search did not answer.' })); return; }
+        const rows = await r.json();
+        if (!rows.length) { list.append(Object.assign(document.createElement('li'), { textContent: 'Nothing found.', className: 'empty' })); return; }
+        for (const c of rows) {
+          const li = document.createElement('li');
+          const t = document.createElement('span');
+          t.textContent = seedText(c);
+          const already = slot.seeds.some(x => x.mbid === c.mbid);
+          const add = button(already ? 'added' : 'Add', null, () => {
+            if (!slot.seeds.some(x => x.mbid === c.mbid)) {
+              slot.seeds.push({ mbid: c.mbid, title: c.title, artist: c.artist, album: c.album });
+            }
+            add.disabled = true; add.textContent = 'added';
+            refreshSeeds();
+          });
+          add.disabled = already;
+          li.append(t, add);
+          list.appendChild(li);
+        }
+      }, 250);
+    };
+    form.append(input, close, list);
+    wrap.append(open, form);
+    return wrap;
+  }
+
+  // Redraw after a seed is added from a search, keeping that search open:
+  // a full render would close it under the person's finger.
+  function refreshSeeds() {
+    const open = [...document.querySelectorAll('.seed-add')].map(w => {
+      const f = w.querySelector('div');
+      return f && !f.hidden ? w.querySelector('input').value : null;
+    });
+    render();
+    document.querySelectorAll('.seed-add').forEach((w, i) => {
+      if (open[i] == null) return;
+      w.querySelector('button').click();
+      const input = w.querySelector('input');
+      input.value = open[i];
+      input.dispatchEvent(new Event('input'));
+    });
   }
 
   // `redraw`: a change that moves ranges or rows; typing in a name does not.

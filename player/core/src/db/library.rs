@@ -729,9 +729,22 @@ pub struct BrowseGroup {
     pub passage: Option<i64>,
 }
 
+/// A recording that could become a seed, as the Programme page's search
+/// shows it `[SPEC-PGM-420]`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SeedCandidate {
+    pub mbid: String,
+    pub title: String,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BrowseTrack {
     pub passage_id: i64,
+    /// The recording it is, for Browse's "seed" action `[SPEC-PGM-420]`;
+    /// `None` for an unidentified passage, which cannot be a seed.
+    pub mbid: Option<String>,
     pub title: String,
     pub artist: Option<String>,
     pub album: Option<String>,
@@ -1730,6 +1743,35 @@ impl Library {
         })
     }
 
+    /// Recordings that could become a seed `[SPEC-PGM-420]`: identified,
+    /// playable as radio, and matching `q` in their title or artist. One row
+    /// per recording, however many passages carry it, named the way Browse
+    /// names them. `q` shorter than two characters finds nothing rather than
+    /// the whole library.
+    pub fn seed_candidates(&self, q: &str, limit: usize) -> Result<Vec<SeedCandidate>, DbError> {
+        let q = q.trim();
+        if q.chars().count() < 2 {
+            return Ok(Vec::new());
+        }
+        let like = format!("%{}%", q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
+        let album = self.album_expr("m.file_id");
+        let sql = format!(
+            "SELECT mbid, title, artist, album FROM ( \
+               SELECT m.mbid AS mbid, {TITLE_EXPR} AS title, {ARTIST_EXPR} AS artist, {album} AS album \
+                 FROM ({NAMED}) m LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id) \
+             WHERE mbid IS NOT NULL AND title IS NOT NULL AND title <> '' \
+               AND (title LIKE ?1 ESCAPE '\\' OR artist LIKE ?1 ESCAPE '\\') \
+             GROUP BY mbid ORDER BY title COLLATE NOCASE, artist COLLATE NOCASE LIMIT {limit}"
+        );
+        let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let rows = st
+            .query_map([like], |r| {
+                Ok(SeedCandidate { mbid: r.get(0)?, title: r.get(1)?, artist: r.get(2)?, album: r.get(3)? })
+            })
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| DbError::Query(e.to_string()))
+    }
+
     pub fn browse_tracks(&self, f: &BrowseFilter) -> Result<Vec<BrowseTrack>, DbError> {
         // An album is a running order, not an index: opened as one, its tracks
         // belong in the order they were put on the record `[REQ-VIS-190]`.
@@ -1753,8 +1795,8 @@ impl Library {
         let disc = release_place("disc", self.has_file_releases());
         let sql = format!(
             "SELECT passage_id, title, artist, album, plays, \
-                    COALESCE(mb_track, track_no), COALESCE(mb_disc, disc_no) FROM ( \
-               SELECT m.passage_id, {TITLE_EXPR} AS title, {ARTIST_EXPR} AS artist, \
+                    COALESCE(mb_track, track_no), COALESCE(mb_disc, disc_no), mbid FROM ( \
+               SELECT m.passage_id, m.mbid AS mbid, {TITLE_EXPR} AS title, {ARTIST_EXPR} AS artist, \
                       {album} AS album, {PLAYS_EXPR} AS plays, \
                       ft.track_no AS track_no, ft.disc_no AS disc_no, \
                       {track} AS mb_track, {disc} AS mb_disc \
@@ -1783,6 +1825,7 @@ impl Library {
                         plays: r.get(4)?,
                         track_no: r.get(5)?,
                         disc_no: r.get(6)?,
+                        mbid: r.get(7)?,
                     })
                 },
             )
@@ -3027,6 +3070,16 @@ mod tests {
             .unwrap();
         assert_eq!((twelve.len(), twelve[0].passage_id, twelve[0].track_no), (1, 2, Some(1)),
                    "its own file, at its own place on that disc");
+        // A Browse row names its recording, for the seed action; a search
+        // finds the recording once, however many passages carry it, by title
+        // or by artist, and finds nothing for one letter or for a wildcard
+        // typed as text `[SPEC-PGM-420]`.
+        assert_eq!(twelve[0].mbid.as_deref(), Some("girls"));
+        let found = lib.seed_candidates("just want", 10).unwrap();
+        assert_eq!(found.iter().map(|c| c.mbid.as_str()).collect::<Vec<_>>(), ["girls"]);
+        assert_eq!(found[0].title, "Girls Just Want to Have Fun");
+        assert!(lib.seed_candidates("g", 10).unwrap().is_empty(), "one character finds nothing");
+        assert!(lib.seed_candidates("%%", 10).unwrap().is_empty(), "% is text, not a wildcard");
         assert_eq!(lib.stored_art(2, false).unwrap().data, front(2), "that disc's own cover");
         let mut e = lib.passage(2).unwrap();
         lib.describe(&mut e);

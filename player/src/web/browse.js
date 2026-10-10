@@ -262,6 +262,24 @@
         info.title = 'passage details';
         info.onclick = e => e.stopPropagation();
         li.appendChild(info);
+        // Make this recording a seed of a time slot [SPEC-PGM-420]: the
+        // shared preference panel, opened beneath this row. An unidentified
+        // passage names no recording, and cannot be one.
+        if (r.mbid) {
+          const seed = document.createElement('a');
+          seed.className = 'info seed';
+          seed.href = '#';
+          seed.textContent = '☆';
+          seed.title = 'seed of a time slot, and preferences';
+          seed.onclick = e => {
+            e.preventDefault();
+            e.stopPropagation();
+            const panel = document.getElementById('pref-panel');
+            if (panel) li.after(panel);
+            Lempi.editPreference('recording', r.mbid, r.title);
+          };
+          li.appendChild(seed);
+        }
         // Tapping anywhere on the row ticks it: a 16-pixel checkbox is not a
         // phone target, and the whole row is.
         li.onclick = () => { box.checked = !box.checked; armed(); };

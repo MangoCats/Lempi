@@ -193,6 +193,11 @@
    special closes the panel as cleanly as Preference used to. */
 .pref-specials { border-top: 1px solid var(--line); margin-top: .5rem;
     padding-top: .5rem; }
+/* "Seed of …" [SPEC-PGM-420]: divided from the specials the same way, one
+   time slot to a line. */
+.pref-seeds { border-top: 1px solid var(--line); margin-top: .5rem; padding-top: .5rem; }
+.pref-seeds-note { color: var(--dim); font-size: .8125rem; margin: 0 0 .3rem; padding: 0 1rem; }
+.pref-seed { display: block; padding: .1rem 1rem; }
 .pref-section { font-size: .8125rem; letter-spacing: .06em; text-transform: uppercase;
     color: var(--dim); font-weight: 600; margin: 0 0 .2rem; padding: 0 1rem; }
 .pref-actions { margin-top: .8rem; padding: 0 1rem; text-align: right; }

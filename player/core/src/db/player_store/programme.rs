@@ -105,16 +105,28 @@ fn ordered(slots: &[Slot]) -> Vec<&Slot> {
 /// fingerprint without sharing this code. The programme's own name and the
 /// slots' row ids are not content: a copy under another name, or on another
 /// node, is the same programme by this measure.
+///
+/// **A slot's seeds are a set, so they are sorted here** `[SPEC-PGM-115]`.
+/// The Director never reads a seed's position: it takes one per artist, the
+/// least recently played, at most `MAX_SEEDS` `[SPEC-DIR-140]`. The first
+/// form kept their stored order, so moving a seed up a list -- which the page
+/// briefly offered -- made a programme "differ" with nothing about what plays
+/// changed. Found by the maintainer's question, 2026-10-09.
 pub fn canonical(slots: &[Slot]) -> String {
     #[derive(Serialize)]
     struct C<'a> {
         name: &'a str,
-        seeds: &'a [String],
+        seeds: Vec<&'a str>,
         start: Option<&'a str>,
     }
     let v: Vec<C<'_>> = ordered(slots)
         .into_iter()
-        .map(|s| C { name: &s.name, seeds: &s.seeds, start: s.start.as_deref() })
+        .map(|s| {
+            let mut seeds: Vec<&str> = s.seeds.iter().map(String::as_str).collect();
+            seeds.sort_unstable();
+            seeds.dedup();
+            C { name: &s.name, seeds, start: s.start.as_deref() }
+        })
         .collect();
     serde_json::to_string(&v).unwrap_or_default()
 }
@@ -248,7 +260,20 @@ impl PlayerStore {
                 (None, "node".to_string(), None)
             }
             Some((name, recorded, source, v)) if recorded == fp => (name, source, v),
-            Some((name, _, _, _)) => (name, "node".to_string(), None),
+            // Different content from what the record says it was given: the
+            // node's own now, and the record says so, with the fingerprint it
+            // has -- which also brings a fingerprint taken in the first,
+            // seed-order form up to date `[SPEC-PGM-115]`.
+            Some((name, _, _, _)) => {
+                self.conn
+                    .execute(
+                        "UPDATE listener_programme SET fingerprint = ?1, source = 'node',
+                             hub_version = NULL, updated_at = datetime('now') WHERE id = 1",
+                        [&fp],
+                    )
+                    .map_err(q)?;
+                (name, "node".to_string(), None)
+            }
         };
         Ok(ProgrammeView { name, source, hub_version, fingerprint: fp, slots })
     }
@@ -340,6 +365,32 @@ impl PlayerStore {
         self.programme()
     }
 
+    /// Make a recording a seed of one time slot, or stop it being one
+    /// `[SPEC-PGM-420]` -- the preference panel's and Browse's way in, which
+    /// change one seed and should not have to send the whole programme back.
+    /// The same rules as a whole save: the slot must be on this node, a slot
+    /// holds at most `SEEDS_MAX`, and the programme becomes the node's own.
+    pub fn set_seed(&self, slot_id: i64, mbid: &str, on: bool) -> Result<ProgrammeView, DbError> {
+        let mbid = mbid.trim();
+        if mbid.is_empty() {
+            return Err(DbError::Query("Which recording? None was named.".into()));
+        }
+        let mut slots = read_slots(&self.conn)?;
+        let Some(slot) = slots.iter_mut().find(|s| s.id == Some(slot_id)) else {
+            return Err(DbError::Query(format!(
+                "Time slot {slot_id} is no longer on this node; reload and try again."
+            )));
+        };
+        let had = slot.seeds.iter().any(|m| m == mbid);
+        match (on, had) {
+            (true, false) => slot.seeds.push(mbid.to_string()),
+            (false, true) => slot.seeds.retain(|m| m != mbid),
+            _ => return self.programme(),
+        }
+        let name = self.programme()?.name;
+        self.save_programme(name.as_deref(), &slots)
+    }
+
     /// The time slots as the Director reads them, for a running Director to
     /// take after an edit `[SPEC-PGM-400]`.
     pub fn load_programs(&self) -> Result<crate::director::program::Programs, DbError> {
@@ -376,13 +427,14 @@ mod tests {
         let slots = vec![slot("Mellow", Some("22:00"), &["b", "a"]), slot("Soft", Some("04:00"), &["c"])];
         assert_eq!(
             canonical(&slots),
-            r#"[{"name":"Soft","seeds":["c"],"start":"04:00"},{"name":"Mellow","seeds":["b","a"],"start":"22:00"}]"#
+            r#"[{"name":"Soft","seeds":["c"],"start":"04:00"},{"name":"Mellow","seeds":["a","b"],"start":"22:00"}]"#
         );
         assert_eq!(canonical(&[slot("Ä", None, &[])]), r#"[{"name":"Ä","seeds":[],"start":null}]"#);
     }
 
-    /// Content decides, not how it arrived: slot order, row ids and the
-    /// programme's name change nothing; a seed's order does.
+    /// Content decides, not how it arrived: slot order, row ids, the
+    /// programme's name and the order of a slot's seeds change nothing
+    /// `[SPEC-PGM-115]`; a seed added, removed or moved to another slot does.
     #[test]
     fn the_fingerprint_follows_content_alone() {
         let a = vec![slot("Soft", Some("04:00"), &["x", "y"]), slot("Mellow", Some("22:00"), &[])];
@@ -391,8 +443,57 @@ mod tests {
         assert_eq!(fingerprint(&a), fingerprint(&b));
         let mut c = a.clone();
         c[0].seeds.reverse();
-        assert_ne!(fingerprint(&a), fingerprint(&c));
+        assert_eq!(fingerprint(&a), fingerprint(&c), "a slot's seeds are a set");
+        let mut d = a.clone();
+        let moved = d[0].seeds.pop().unwrap();
+        d[1].seeds.push(moved);
+        assert_ne!(fingerprint(&a), fingerprint(&d));
         assert_eq!(fingerprint(&a).len(), 64);
+    }
+
+    /// One seed in or out, as the panel and Browse send it: the slot must be
+    /// here, a repeat changes nothing, and the programme becomes the node's
+    /// own under the name it had.
+    #[test]
+    fn one_seed_is_added_or_removed_and_nothing_else_moves() {
+        let st = store();
+        st.conn
+            .execute_batch(
+                "INSERT INTO listener_programs VALUES (1, 'Soft', '04:00'), (2, 'Mellow', '22:00');
+                 INSERT INTO listener_program_seeds VALUES (1, 'x', 1);
+                 INSERT INTO listener_programme VALUES (1, 'WKMP', 'old', 'hub', 1, 't');",
+            )
+            .unwrap();
+        let v = st.set_seed(2, "y", true).unwrap();
+        assert_eq!(v.name.as_deref(), Some("WKMP"));
+        assert_eq!(v.source, "node");
+        let seeds = |v: &ProgrammeView, id: i64| v.slots.iter().find(|s| s.id == Some(id)).unwrap().seeds.clone();
+        assert_eq!(seeds(&v, 2), vec!["y".to_string()]);
+        assert_eq!(seeds(&v, 1), vec!["x".to_string()]);
+        let again = st.set_seed(2, "y", true).unwrap();
+        assert_eq!(again.fingerprint, v.fingerprint, "adding a seed it has changes nothing");
+        assert!(seeds(&st.set_seed(1, "x", false).unwrap(), 1).is_empty());
+        assert!(st.set_seed(99, "y", true).unwrap_err().message().contains("no longer on this node"));
+        assert!(st.set_seed(1, " ", true).is_err());
+    }
+
+    /// A record whose fingerprint was taken in another form -- the first,
+    /// which kept seed order -- is brought up to date on the next read, and
+    /// the name stays.
+    #[test]
+    fn a_stale_fingerprint_is_refreshed_on_read() {
+        let st = store();
+        st.conn
+            .execute_batch(
+                "INSERT INTO listener_programs VALUES (1, 'Soft', '04:00');
+                 INSERT INTO listener_programme VALUES (1, 'WKMP', 'first-form', 'node', NULL, 't');",
+            )
+            .unwrap();
+        let v = st.programme().unwrap();
+        let recorded: String =
+            st.conn.query_row("SELECT fingerprint FROM listener_programme", [], |r| r.get(0)).unwrap();
+        assert_eq!(recorded, v.fingerprint);
+        assert_eq!(v.name.as_deref(), Some("WKMP"));
     }
 
     #[test]

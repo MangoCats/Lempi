@@ -85,6 +85,63 @@ pub(super) async fn get_programme(State(ui): State<Ui>) -> axum::response::Respo
     }
 }
 
+/// Recordings that could become a seed, for the page's "Add a seed…" search
+/// `[SPEC-PGM-420]`: by title or artist, at most 40, named as Browse names
+/// them.
+pub(super) async fn search_seeds(
+    State(ui): State<Ui>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Response {
+    let query = q.get("q").cloned().unwrap_or_default();
+    let (db, library) = (ui.db.clone(), ui.library.clone());
+    let found = tokio::task::spawn_blocking(move || {
+        let lib = crate::db::Library::open_split(&db, &library).map_err(|e| e.message().to_string())?;
+        lib.seed_candidates(&query, 40).map_err(|e| e.message().to_string())
+    })
+    .await;
+    match found {
+        Ok(Ok(rows)) => axum::Json(rows).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// One seed in or out of one time slot `[SPEC-PGM-420]`:
+/// `?slot=<id>&mbid=<recording>&on=1|0`. What the preference panel and
+/// Browse send, so that ticking one box does not send the programme back.
+pub(super) async fn set_seed(
+    State(ui): State<Ui>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Response {
+    let Some(slot) = q.get("slot").and_then(|s| s.parse::<i64>().ok()) else {
+        return (StatusCode::BAD_REQUEST, "Which time slot? slot=<id> is needed.").into_response();
+    };
+    let on = match q.get("on").map(String::as_str) {
+        Some("1") => true,
+        Some("0") => false,
+        _ => return (StatusCode::BAD_REQUEST, "on=1 adds the seed, on=0 removes it.").into_response(),
+    };
+    let mbid = q.get("mbid").cloned().unwrap_or_default();
+    let (db, library) = (ui.db.clone(), ui.library.clone());
+    let saved = tokio::task::spawn_blocking(move || {
+        let store = crate::db::PlayerStore::open_split(&db, &library).map_err(|e| (true, e.message().to_string()))?;
+        let v = store.set_seed(slot, &mbid, on).map_err(|e| (false, e.message().to_string()))?;
+        Ok::<_, (bool, String)>(page_view(&store, v))
+    })
+    .await;
+    match saved {
+        Ok(Ok(v)) => {
+            if let Ok(mut c) = ui.controls.lock() {
+                c.programme_changed = true;
+            }
+            axum::Json(v).into_response()
+        }
+        Ok(Err((false, why))) => (StatusCode::BAD_REQUEST, why).into_response(),
+        Ok(Err((true, why))) => (StatusCode::INTERNAL_SERVER_ERROR, why).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 /// What the page sends: the whole programme as edited. A new name is how a
 /// person keeps the programme they started from unchanged and saves this as
 /// another `[SPEC-PGM-405]`; on the node the two are the same act, since a

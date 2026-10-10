@@ -67,6 +67,11 @@ body { background-color: black; color: #ccc; }
    sliders, and the heading naming them. */
 .pref-specials { border-top: 1px solid #402080; margin-top: .5rem;
     padding-top: .4rem; }
+/* "Seed of …" [SPEC-PGM-420]: divided from the specials the same way, one
+   time slot to a line. */
+.pref-seeds { border-top: 1px solid #402080; margin-top: .5rem; padding-top: .4rem; }
+.pref-seeds-note { opacity: .7; font-size: .875rem; margin: 0 0 .3rem; padding: 0 1rem; text-align: center; }
+.pref-seed { display: block; padding: .15rem 1rem; }
 .pref-section { font-weight: bold; margin: 0 0 .2rem; text-align: center;
     padding: 0 1rem; }
 .pref-actions { margin-top: .5rem; padding: 0 1rem; text-align: right; }

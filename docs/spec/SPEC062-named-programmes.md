@@ -1,6 +1,6 @@
 # SPEC062: Named Programmes
 
-**Design Specification — Tier 2 · written 2026-10-09, from the maintainer's decisions that day · step 1 built 2026-10-09; steps 2–4 not yet**
+**Design Specification — Tier 2 · written 2026-10-09, from the maintainer's decisions that day · steps 1 and 4 built 2026-10-09; steps 2 and 3 not yet**
 
 A node's listening day is shaped by its programme: the time slots that come on
 air through the day, and the seed recordings that give each its sound. Until
@@ -58,10 +58,21 @@ one programme; the name is shown as it was first written.
 
 **`[SPEC-PGM-110]` "Differs" means different content, never a different
 date.** A programme's content is its slots, in start-time order — name and
-start of each — and each slot's seeds in their order. Its fingerprint is
+start of each — and each slot's seeds, as a set. Its fingerprint is
 SHA-256 over that content in one canonical form. Two copies with the same
 fingerprint are the same programme, wherever they came from and whenever they
 were saved; a re-send of an unchanged version asks nothing.
+
+**`[SPEC-PGM-115]` A slot's seeds are a set: their order is not content.**
+The Director never reads a seed's position: for each choice it takes one seed
+per artist, the least recently played, at most five, each weighted alike
+`[SPEC-DIR-140]`, so a slot with more lets them take turns. The canonical form
+sorts them. The first form kept their stored order, and the page offered
+arrows to move them — so moving one made a programme "differ" with nothing
+about what plays changed, which at step 2 would have asked a node a question
+about nothing. Found by the maintainer's question, 2026-10-09; the arrows went
+with it, and a fingerprint taken in the first form is refreshed when it is
+next read.
 
 **`[SPEC-PGM-120]` A version is a fingerprint the hub has kept**, numbered in
 the order the hub first held it. A node records which programme it runs, the
@@ -119,7 +130,7 @@ whether it is the hub's version *n* or edited here — with its time slots, the
 range each is on air for (from its start to the next slot's), and their
 seeds, each shown as the recording, its artist and its album. A person edits
 it there: the programme renamed; slots named, timed, added and removed; seeds
-removed and reordered. "Offer to the household" (step 3) sends it to the hub,
+added by a search of the library and removed. "Offer to the household" (step 3) sends it to the hub,
 under its own name or a new one.
 
 **`[SPEC-PGM-405]` An edit can be saved as a new programme.** *The maintainer's
@@ -144,7 +155,16 @@ web page until someone answers.
 shared preference panel, which opens from any linked title in now playing, the
 queue and history `[SPEC-PREF-045]`, gains a row of the programme's time slots
 to tick ("Seed of: ☐ Cool ☑ Mellow"), and Browse's track rows gain the same.
-One panel in `core.js`, so every skin has it at once.
+One panel in `core.js`, so every skin has it at once. The Programme page adds
+the third way: "Add a seed…" under each slot, a search of the library by title
+or artist.
+
+*Built 2026-10-09, all three.* A seed is a recording, so only an identified
+passage offers one; the search finds each recording once, however many
+passages carry it, named as Browse names it, and treats `%` and `_` as text.
+The panel and Browse change one seed at a time (`POST /programme/seed`), so a
+tick does not send the programme back; the page sends its whole edit with Save.
+The panel's boxes go with its own Save, like its other fields.
 
 **`[SPEC-PGM-430]` The picker leads to the page.** Each skin's picker lists the
 time slots of the programme the node runs, under its name. Its empty state,
@@ -194,4 +214,4 @@ the move.
   empty state. Its start times are 24-hour text, not a locale's time picker.
 ---
 
-**Traceability:** `[SPEC-PGM-010..520]` · from the maintainer's decisions of 2026-10-09 · words in [SPEC023](SPEC023-domain-vocabulary.md) `[ENT-PROGRAMME-010]`, `[ENT-SLOT-010]`, `[ENT-SEED-010]`, `[SPEC-VOC-020]` · refines `[SPEC-MTR-040]`
+**Traceability:** `[SPEC-PGM-010..520]`, `[SPEC-PGM-115]` · from the maintainer's decisions of 2026-10-09 · words in [SPEC023](SPEC023-domain-vocabulary.md) `[ENT-PROGRAMME-010]`, `[ENT-SLOT-010]`, `[ENT-SEED-010]`, `[SPEC-VOC-020]` · refines `[SPEC-MTR-040]`
