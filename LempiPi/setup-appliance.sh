@@ -239,7 +239,10 @@ read -r -d '' WANT_UNIT <<'EOF' || true
 Description=Lempi
 # Deliberately NOT network-online.target: audio depends on the library and the
 # sound device, never on the network [REQ-HW-010B].
-After=local-fs.target sound.target
+# After the user's own session, where PipeWire runs [PI3-FOUND-790]: started
+# ahead of it, the player finds no audio service at all, not merely no sink.
+Wants=user@RUNUID.service
+After=local-fs.target sound.target user@RUNUID.service
 
 [Service]
 # Wait for a real sink before starting. PipeWire always offers a "Dummy

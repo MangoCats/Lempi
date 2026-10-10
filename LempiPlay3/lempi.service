@@ -1,6 +1,11 @@
 [Unit]
 Description=Lempi
-After=local-fs.target sound.target
+# After pi's own session, where PipeWire runs [PI3-FOUND-790]. Measured
+# 2026-10-10: this unit started at boot four seconds before user@1000, the
+# player found no audio service at all ("Host is down"), and lempi-wait-sink's
+# five seconds cannot help with that -- it waits for a sink, not for PipeWire.
+Wants=user@1000.service
+After=local-fs.target sound.target user@1000.service
 
 [Service]
 # Rewritten 2026-09-21 when the project's names changed. Only names and paths

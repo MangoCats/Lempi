@@ -1,0 +1,13 @@
+#!/bin/sh
+# Fake iw for the access point's client watch [SPEC-WFO-080]. `station dump`
+# prints $VT_STATE/iw_stations (the real shape: a "Station <mac> (on wlan0)"
+# line per client, fields indented under it); IW_FAIL=1 makes it fail, as a
+# missing or refused iw does.
+printf '%s\n' "iw $*" >> "$VT_STATE/calls"
+[ "${IW_FAIL:-0}" = 1 ] && { echo "command failed: Operation not permitted (-1)" >&2; exit 1; }
+case "$*" in
+  *"station dump"*)
+    [ -f "$VT_STATE/iw_stations" ] && cat "$VT_STATE/iw_stations"
+    exit 0 ;;
+esac
+exit 0

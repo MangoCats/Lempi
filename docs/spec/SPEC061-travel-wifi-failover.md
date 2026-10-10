@@ -99,8 +99,8 @@ Wi-Fi scanning aggressively hops all 2.4 GHz channels, creating heavy RF content
 **`[SPEC-WFO-080]` Return-to-home infrastructure hysteresis.**
 When the appliance returns to its home network:
 1. **Reboot Path**: On power cycle, the 45-second boot grace period automatically prioritizes known autoconnect infrastructure profiles before AP failover can trigger.
-2. **Runtime Manual Path**: User can tap **"Stop AP, return to Wi-Fi"** (`POST /wifi/ap/stop`), which reconnects to preferred known networks.
-3. **Idle Probe (Optional)**: If `lempi-ap` has had zero associated client stations for >15 minutes and audio is idle, the failover keeper may attempt a single survey to reconnect to known autoconnect profiles.
+2. **Runtime Manual Path**: User can tap **"Stop AP, return to Wi-Fi"** (`POST /wifi/ap/stop`), which reconnects to preferred known networks. *Until 2026-10-10 it never could: it looked for type `wifi`, which terse nmcli never prints `[PI3-FOUND-800]`.*
+3. **Idle Return (built 2026-10-10)**: If `lempi-ap` has had zero associated client stations for 15 minutes, the failover keeper tries the known autoconnect profile once (`lempi-btctl ap-return`: no revert timer, `--wait 30`, the access point straight back on failure), and the idle clock restarts. Not conditioned on idle audio, as first written: an appliance that plays all day never is, and the return does not scan. Each change in the number of clients is logged — the record of when anyone joined or left [PI028](../../LempiPi/PI028-started-before-its-audio.md).
 
 ---
 

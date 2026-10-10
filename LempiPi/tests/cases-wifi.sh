@@ -347,3 +347,102 @@ else
     bad "lempi-wifi-failover removes debounce file on failover" "debounce file remains"
 fi
 teardown
+
+# --- the way home from the access point [SPEC-WFO-080], [PI3-FOUND-800] -----
+
+# Known profiles as terse nmcli really lists them: `802-11-wireless`, not `wifi`.
+nm_known() {
+    printf 'lempi-ap:802-11-wireless:no\nHome:802-11-wireless:yes\nWired connection 1:802-3-ethernet:yes\n' \
+        > "$VT_STATE/nm_conns"
+}
+# On the access point, as the keeper and lempi-btctl each ask it.
+on_ap() {
+    printf 'lempi-ap\n' > "$VT_STATE/nm_active"
+    printf 'lempi-ap:802-11-wireless:yes\n' > "$VT_STATE/nm_active_conns"
+    printf '60.0 50.0\n' > "$VT_STATE/uptime"
+}
+keeper() {
+    PROC_UPTIME="$VT_STATE/uptime" LEMPI_BTCTL="$BT/lempi-btctl" sh "$BT/lempi-wifi-failover" 2>&1
+}
+
+# ap-stop finds the known network. It looked for type `wifi`, which terse
+# nmcli never prints, so on a real machine it always said there was none.
+setup
+nm_known; on_ap
+OUT=$(btctl ap-stop)
+assert_in "$OUT" '"ok":true' "ap-stop finds the known network by the type nmcli really prints"
+assert_called "nmcli connection up Home" "and brings it up"
+teardown
+
+# ap-return goes home without a revert timer, bounded by --wait.
+setup
+nm_known; on_ap
+OUT=$(btctl ap-return)
+assert_in "$OUT" '"ok":true' "ap-return goes home"
+assert_called "nmcli --wait 30 connection up Home" "with its wait bounded"
+assert_not_called "systemd-run" "and schedules no revert timer to undo it"
+teardown
+
+# ap-return that cannot reach home puts the access point straight back.
+setup
+nm_known; on_ap
+OUT=$(NM_UP_FAIL=Home btctl ap-return)
+assert_in "$OUT" '"ok":false' "ap-return reports a home network that did not answer"
+assert_called "nmcli connection up lempi-ap" "and puts the access point back up"
+teardown
+
+# A client on the access point: said, and no going home.
+setup
+nm_known; on_ap
+printf 'Station aa:bb:cc:dd:ee:01 (on wlan0)\n\tinactive time:\t120 ms\n' > "$VT_STATE/iw_stations"
+printf '%s\n' "$(( $(date +%s) - 5000 ))" > "$LEMPI_RUN_DIR/ap_idle_since"
+OUT=$(keeper)
+assert_in "$OUT" "access point clients: 0 -> 1" "a client joining the access point is said"
+assert_not_called "connection up Home" "and the keeper stays while it is there"
+[ ! -f "$LEMPI_RUN_DIR/ap_idle_since" ] && ok "a client resets the idle clock" \
+    || bad "a client resets the idle clock" "ap_idle_since remains"
+teardown
+
+# No clients, but not yet for long enough: stay.
+setup
+nm_known; on_ap
+printf '%s\n' "$(( $(date +%s) - 100 ))" > "$LEMPI_RUN_DIR/ap_idle_since"
+OUT=$(keeper)
+assert_not_called "connection up Home" "an access point idle under fifteen minutes stays up"
+teardown
+
+# No clients for fifteen minutes: try home, once, and restart the clock.
+setup
+nm_known; on_ap
+printf '1\n' > "$LEMPI_RUN_DIR/ap_clients"
+printf '%s\n' "$(( $(date +%s) - 1000 ))" > "$LEMPI_RUN_DIR/ap_idle_since"
+OUT=$(keeper)
+assert_in "$OUT" "access point clients: 1 -> 0" "the last client leaving is said"
+assert_in "$OUT" "trying the known network" "an idle access point tries the way home"
+assert_called "nmcli --wait 30 connection up Home" "through ap-return"
+[ ! -f "$LEMPI_RUN_DIR/ap_idle_since" ] && ok "and the idle clock restarts for the next try" \
+    || bad "and the idle clock restarts for the next try" "ap_idle_since remains"
+teardown
+
+# Clients that cannot be listed are not "no clients": stay, and say so once.
+setup
+nm_known; on_ap
+printf '%s\n' "$(( $(date +%s) - 1000 ))" > "$LEMPI_RUN_DIR/ap_idle_since"
+OUT=$(IW_FAIL=1 keeper)
+assert_in "$OUT" "cannot list the access point's clients" "an iw that fails is said"
+assert_not_called "connection up Home" "and the keeper does not leave clients it cannot see"
+OUT=$(IW_FAIL=1 keeper)
+assert_not_in "$OUT" "cannot list" "said once, not every twenty seconds"
+teardown
+
+# Off the access point, its count and clock start fresh next time.
+setup
+printf '60.0 50.0\n' > "$VT_STATE/uptime"
+printf 'wlan0:connected\n' > "$VT_STATE/nm_dev_state"
+printf '2\n' > "$LEMPI_RUN_DIR/ap_clients"
+printf '1\n' > "$LEMPI_RUN_DIR/ap_idle_since"
+keeper >/dev/null
+[ ! -f "$LEMPI_RUN_DIR/ap_clients" ] && [ ! -f "$LEMPI_RUN_DIR/ap_idle_since" ] \
+    && ok "leaving the access point clears its client count and idle clock" \
+    || bad "leaving the access point clears its client count and idle clock" "state remains"
+teardown

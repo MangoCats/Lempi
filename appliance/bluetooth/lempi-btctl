@@ -154,6 +154,18 @@ conn_type() {
     nmcli -t -f connection.type connection show "$1" 2>/dev/null \
         | sed -n 's/^connection\.type://p'
 }
+
+# The network to go home to from the access point: whichever known Wi-Fi
+# profile is marked to autoconnect -- what a reboot would choose
+# `[SPEC-WFO-080]`. `802-11-wireless`, the type terse nmcli prints: this was
+# written `wifi`, the name nmcli *accepts*, which a terse listing never
+# prints -- so on the machine it matched nothing and "Stop AP, return to
+# Wi-Fi" always answered "no known network". Measured on lp3-wifi
+# 2026-10-10 [PI3-FOUND-800].
+home_network() {
+    nmcli -t -f NAME,TYPE,AUTOCONNECT connection show 2>/dev/null \
+        | awk -F: '$2=="802-11-wireless" && $1!="lempi-ap" && $3=="yes"{print $1; exit}'
+}
 is_wifi_conn() {
     [ "$(conn_type "$1")" = "802-11-wireless" ]
 }
@@ -962,12 +974,10 @@ case "$VERB" in
         ;;
     ap-stop)
         [ "$(active_wifi_conn)" = "lempi-ap" ] || die "the access point is not currently active"
-        # What to return to: whichever known Wi-Fi profile is marked to
-        # autoconnect -- the same thing a reboot would choose, and the
-        # only sensible default when "what was active before AP mode
-        # started" was never recorded for this specific call.
-        fallback="$(nmcli -t -f NAME,TYPE,AUTOCONNECT connection show 2>/dev/null \
-            | awk -F: '$2=="wifi" && $1!="lempi-ap" && $3=="yes"{print $1; exit}')"
+        # What to return to: `home_network` -- the only sensible default
+        # when "what was active before AP mode started" was never recorded
+        # for this specific call.
+        fallback="$(home_network)"
         [ -n "$fallback" ] || die "no known network is set to connect automatically"
         change_id="as$(date +%s)$$"
         # Reverting from a failed ap-stop means going BACK to the access
@@ -981,6 +991,24 @@ case "$VERB" in
             systemctl stop "lempi-revert-$change_id.timer" >/dev/null 2>&1
             nmcli connection up lempi-ap >/dev/null 2>&1
             die "could not reach that network -- the access point is still running"
+        fi
+        ;;
+    ap-return)
+        # The failover keeper's way home [SPEC-WFO-080]: ap-stop without the
+        # confirm-or-revert timer, as ap-failover is ap-start without it.
+        # Nobody is at a page to confirm a return the appliance made on its
+        # own, so a revert timer would always fire, and put the access point
+        # back three minutes after a successful return. Bounded by --wait:
+        # the keeper runs under a 60 s TimeoutStartSec, and being killed
+        # mid-switch would leave neither network up.
+        [ "$(active_wifi_conn)" = "lempi-ap" ] || die "the access point is not currently active"
+        fallback="$(home_network)"
+        [ -n "$fallback" ] || die "no known network is set to connect automatically"
+        if nmcli --wait 30 connection up "$fallback" >/dev/null 2>&1; then
+            printf '{"ok":true}\n'
+        else
+            nmcli connection up lempi-ap >/dev/null 2>&1
+            die "the known network did not answer -- the access point is back up"
         fi
         ;;
 

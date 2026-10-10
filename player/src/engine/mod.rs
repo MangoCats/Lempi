@@ -3143,6 +3143,30 @@ mod tests {
         assert!(!e.is_shutdown(), "pause must not shut the engine down");
     }
 
+    /// A device that would not open holds playback rather than racing it
+    /// `[PI3-FOUND-790]`. The same passage, run into the discard sink, is mixed
+    /// to its end in the same ticks -- so this proves the difference, not
+    /// merely that a short loop did nothing.
+    #[test]
+    fn a_device_that_would_not_open_holds_rather_than_races() {
+        let wav = wav_of(2_000);
+        let run = |path: crate::path::PathHandle| {
+            let (mut e, h) = Engine::new(path, 3);
+            let mut a = entry(1, wav.to_str().unwrap());
+            a.end_ms = 2_000;
+            e.enqueue(a);
+            h.send(Command::Play);
+            for _ in 0..400 {
+                e.tick();
+            }
+            (e.departed.len(), e.live.iter().map(|l| l.frames_mixed).sum::<u64>())
+        };
+        let (gone, mixed) = run(crate::path::PathHandle::silent());
+        assert!(gone == 1 || mixed > 0, "fixture: the discard sink must mix the passage");
+        let (gone, mixed) = run(crate::path::PathHandle::failed_open());
+        assert_eq!((gone, mixed), (0, 0), "nothing may be mixed, finished or recorded without a device");
+    }
+
     #[test]
     fn shutdown_ends_the_loop() {
         let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);

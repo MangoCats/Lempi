@@ -10,6 +10,66 @@ STATE_DIR="${LEMPI_RUN_DIR:-/run/lempi}"
 RFKILL_DIR="${SYS_CLASS_RFKILL:-/sys/class/rfkill}"
 PROC_UPTIME="${PROC_UPTIME:-/proc/uptime}"
 BTCTL="${LEMPI_BTCTL:-/usr/local/bin/lempi-btctl}"
+# How long the access point sits with no clients before the keeper tries the
+# way home [SPEC-WFO-080]: the spec's fifteen minutes.
+RETURN_AFTER="${LEMPI_AP_RETURN_AFTER:-900}"
+
+# While the access point is up: who is on it, and the way home when nobody is
+# [SPEC-WFO-080], built 2026-10-10.
+#
+# The access point used to be a one-way door. Once up it stayed up until a
+# reboot -- a router restarted for thirty seconds left the appliance off the
+# household's network for good. Now an access point with no clients for
+# RETURN_AFTER tries the known network once (`lempi-btctl ap-return`, which
+# puts the access point straight back if that fails), and the idle clock
+# restarts, so a failed try is another full idle period from the next.
+#
+# Clients are the stations `iw` lists as associated -- a phone that joined is
+# one, whether or not it ever opened the page. A change in their number is
+# said in the journal, which is the record of when anyone joined or left.
+#
+# Unlike the spec's optional probe, this does not wait for audio to be idle:
+# an appliance that plays all day never is, and a way home that never runs is
+# no way home. It does not scan either [SPEC-WFO-070] -- `nmcli connection up`
+# of a known profile -- and it runs at most once per idle period.
+ap_watch() {
+    mkdir -p "$STATE_DIR"
+    if ! DUMP=$(iw dev wlan0 station dump 2>&1); then
+        # Cannot see the clients, so cannot know nobody is using it: stay.
+        # Said once per access-point session, not every twenty seconds.
+        if [ ! -f "$STATE_DIR/ap_iw_failed" ]; then
+            echo "cannot list the access point's clients ($DUMP); staying on it"
+            : > "$STATE_DIR/ap_iw_failed"
+        fi
+        return 0
+    fi
+    rm -f "$STATE_DIR/ap_iw_failed"
+    N=$(printf '%s\n' "$DUMP" | grep -c '^Station')
+    WAS=$(cat "$STATE_DIR/ap_clients" 2>/dev/null || echo 0)
+    if [ "$N" != "$WAS" ]; then
+        echo "access point clients: $WAS -> $N"
+        printf '%s\n' "$N" > "$STATE_DIR/ap_clients"
+    fi
+    NOW=$(date +%s)
+    if [ "$N" -gt 0 ]; then
+        rm -f "$STATE_DIR/ap_idle_since"
+        return 0
+    fi
+    if [ ! -f "$STATE_DIR/ap_idle_since" ]; then
+        printf '%s\n' "$NOW" > "$STATE_DIR/ap_idle_since"
+        return 0
+    fi
+    SINCE=$(cat "$STATE_DIR/ap_idle_since" 2>/dev/null || echo "$NOW")
+    IDLE=$((NOW - SINCE))
+    [ "$IDLE" -ge "$RETURN_AFTER" ] || return 0
+    rm -f "$STATE_DIR/ap_idle_since" "$STATE_DIR/ap_clients"
+    echo "access point idle for ${IDLE}s with no clients: trying the known network"
+    if OUT=$("$BTCTL" ap-return 2>&1); then
+        echo "back on the known network; the access point is down"
+    else
+        echo "did not get back ($OUT)"
+    fi
+}
 
 # 1. Radio State Guard: if Wi-Fi is soft-blocked by operator intent, honor it.
 if [ -d "$RFKILL_DIR" ]; then
@@ -34,12 +94,16 @@ if [ "$UPTIME" -lt 45 ]; then
     exit 0
 fi
 
-# 4. Connection Check: if connected, connecting, or already in AP mode, do nothing.
+# 4. Connection Check: if connected or connecting, do nothing; if already in
+#    AP mode, watch its clients and the way home.
 ACTIVE_CONNS=$(nmcli -t -f NAME,TYPE,ACTIVE connection show 2>/dev/null || true)
 if printf '%s\n' "$ACTIVE_CONNS" | grep -q '^lempi-ap:.*:yes$'; then
     rm -f "$STATE_DIR/wifi_disconnected_since"
+    ap_watch
     exit 0
 fi
+# Not on the access point: its client count and idle clock start fresh next time.
+rm -f "$STATE_DIR/ap_idle_since" "$STATE_DIR/ap_clients" "$STATE_DIR/ap_iw_failed"
 
 DEV_STATE=$(nmcli -t -f DEVICE,STATE dev 2>/dev/null | grep '^wlan0:' || true)
 case "$DEV_STATE" in

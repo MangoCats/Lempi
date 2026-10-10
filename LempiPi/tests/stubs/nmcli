@@ -24,12 +24,18 @@ case "$*" in
   *"-t -f NAME,TYPE,ACTIVE connection show"*)
     [ -f "$VT_STATE/nm_active_conns" ] && cat "$VT_STATE/nm_active_conns"
     exit 0 ;;
+  # Known profiles, as the real terse listing prints them: the TYPE column
+  # says `802-11-wireless`, never `wifi` [PI3-FOUND-800].
+  *"-t -f NAME,TYPE,AUTOCONNECT connection show"*)
+    [ -f "$VT_STATE/nm_conns" ] && cat "$VT_STATE/nm_conns"
+    exit 0 ;;
   *"-t -f DEVICE,STATE dev"*)
     [ -f "$VT_STATE/nm_dev_state" ] && cat "$VT_STATE/nm_dev_state"
     exit 0 ;;
 esac
 
-# Everything else dispatches on the connection subcommand.
+# Everything else dispatches on the connection subcommand, after any --wait.
+[ "$1" = --wait ] && shift 2
 [ "$1" = connection ] || exit 0
 sub="$2"; shift 2
 case "$sub" in
@@ -75,7 +81,12 @@ case "$sub" in
       fi
     fi
     exit 0 ;;
-  up|down|reload)
+  # NM_UP_FAIL=<name>: bringing that connection up fails, as an out-of-range
+  # network does.
+  up)
+    [ "$1" = "${NM_UP_FAIL:-}" ] && exit 4
+    exit 0 ;;
+  down|reload)
     exit 0 ;;
 esac
 exit 0

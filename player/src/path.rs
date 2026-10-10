@@ -61,18 +61,21 @@ pub enum PathRequest {
 ///
 /// Deliberately without any method that can block. `ring` is `None` for the
 /// discard sink -- the full pipeline running into nothing, which is what the
-/// tests and a headless host use.
+/// tests use -- and for a device that could not be opened, which `open_failed`
+/// tells apart `[PI3-FOUND-790]`.
 #[derive(Clone)]
 pub struct PathHandle {
     pub ring: Option<OutputRing>,
     tx: Option<Sender<PathRequest>>,
     recoveries: Arc<AtomicU64>,
+    /// No ring because the first open FAILED, not because none was wanted.
+    open_failed: bool,
 }
 
 impl PathHandle {
     /// A handle with no device at all.
     pub fn silent() -> Self {
-        Self { ring: None, tx: None, recoveries: Arc::new(AtomicU64::new(0)) }
+        Self { ring: None, tx: None, recoveries: Arc::new(AtomicU64::new(0)), open_failed: false }
     }
 
     /// A handle over a real ring with no supervisor behind it `[REQ-VIS-250]`.
@@ -85,7 +88,7 @@ impl PathHandle {
     /// than the mixer is producing it.
     #[cfg(test)]
     pub(crate) fn with_ring(ring: crate::output::OutputRing) -> Self {
-        Self { ring: Some(ring), tx: None, recoveries: Arc::new(AtomicU64::new(0)) }
+        Self { ring: Some(ring), tx: None, recoveries: Arc::new(AtomicU64::new(0)), open_failed: false }
     }
 
     fn ask(&self, r: PathRequest) {
@@ -104,12 +107,27 @@ impl PathHandle {
         self.ask(PathRequest::Shutdown);
     }
 
+    /// A handle as `start` leaves it when the device would not open: no ring,
+    /// and not audible. For the engine's tests of exactly that.
+    #[cfg(test)]
+    pub(crate) fn failed_open() -> Self {
+        Self { open_failed: true, ..Self::silent() }
+    }
+
     /// Could anyone hear us? Observed, never assumed `[GDE-FBD-100]`.
     ///
     /// A discard sink answers `true`: it is not a fault, and treating it as one
-    /// would stop the queue advancing on a host with no audio at all.
+    /// would stop the queue advancing in a test. A device that would not open
+    /// answers `false` `[PI3-FOUND-790]`. It used to answer `true` as well,
+    /// and the engine, with no device to pace it, mixed into nothing as fast
+    /// as it could decode: on lp3-wifi, 2026-10-10, after a boot that started
+    /// the player before PipeWire, 35 "plays" and skips in seven minutes,
+    /// written to the listener's history as heard.
     pub fn audible(&self) -> bool {
-        self.ring.as_ref().is_none_or(|r| !r.failed())
+        match &self.ring {
+            Some(r) => !r.failed(),
+            None => !self.open_failed,
+        }
     }
 
     pub fn recoveries(&self) -> u64 {
@@ -143,7 +161,8 @@ pub fn start(device: Option<String>, ring_capacity: usize) -> (PathHandle, Strin
     // Wait for the first open attempt, so the caller can print an honest line
     // about it. Only this one moment blocks, and it is before any audio flows.
     let (ring, why) = ready_rx.recv().unwrap_or((None, "path supervisor failed to start".into()));
-    (PathHandle { ring, tx: Some(tx), recoveries }, why)
+    let open_failed = ring.is_none();
+    (PathHandle { ring, tx: Some(tx), recoveries, open_failed }, why)
 }
 
 fn supervise(
@@ -163,11 +182,15 @@ fn supervise(
         Err(e) => {
             // A missing device must not stop the process: the UI still needs to
             // come up and say so, which is more use than exiting silently.
-            let _ = ready.send((None, format!("no audio device ({e}); running without output")));
+            let _ = ready.send((None, format!(
+                "no audio device ({e}); holding playback, and trying again until one opens")));
             None
         }
     };
-    let Some(out) = out.as_mut() else { return };
+    let Some(out) = out.as_mut() else {
+        await_device(device.as_deref(), ring_capacity, &rx);
+        return;
+    };
 
     // Said once, at start: whether this host can tell a silent output from a
     // heard one at all `[GDE-HST-350]`. Where it cannot, the dummy watch below
@@ -213,6 +236,64 @@ fn supervise(
 
         watch(out, playing, &mut watch_at);
         recover(out, playing, &mut retry_at, &mut backoff, &recoveries);
+    }
+}
+
+/// The first open failed: keep trying, and restart once a device opens
+/// `[PI3-FOUND-790]`.
+///
+/// This thread used to return here, so every later reopen -- the speaker
+/// keeper asks for one every thirty seconds -- went nowhere, and the player
+/// stayed without output until someone restarted it. The engine cannot adopt a
+/// ring that appears later: its rate and channel count are read once, when it
+/// is built. So a device that opens means a restart, which is how the player
+/// comes up with it. Under systemd (`INVOCATION_ID` is set) the player asks
+/// for that itself, by the same `sudo -n systemctl restart lempi` as the
+/// settings page's Restart; anywhere else it says so and leaves it to whoever
+/// started it.
+///
+/// Spaced as `recover` spaces its retries, and at once on a reopen request,
+/// which is what arrives when a speaker connects.
+fn await_device(device: Option<&str>, ring_capacity: usize, rx: &Receiver<PathRequest>) {
+    let mut backoff = RETRY;
+    let mut next = Instant::now() + backoff;
+    loop {
+        match rx.recv_timeout(next.saturating_duration_since(Instant::now()).min(IDLE)) {
+            Ok(PathRequest::Reopen) => next = Instant::now(),
+            Ok(PathRequest::SetPlaying(_)) | Err(RecvTimeoutError::Timeout) => {}
+            Ok(PathRequest::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
+        }
+        if Instant::now() < next {
+            continue;
+        }
+        match Output::open_device(device, ring_capacity) {
+            Ok(o) => {
+                drop(o);
+                restart_for_device();
+                return;
+            }
+            Err(e) => {
+                backoff = (backoff * 2).min(RETRY_MAX);
+                next = Instant::now() + backoff;
+                tracing::debug!("still no audio device ({e}); next try in {}s", backoff.as_secs());
+            }
+        }
+    }
+}
+
+/// A device opens now that did not at start: restart to use it.
+fn restart_for_device() {
+    if std::env::var_os("INVOCATION_ID").is_none() {
+        tracing::warn!("an audio device opens now, but this player started without one \
+                        and cannot take it up: restart the player to play");
+        return;
+    }
+    tracing::warn!("an audio device opens now; this player started without one, \
+                    so it is restarting to use it [PI3-FOUND-790]");
+    match std::process::Command::new("sudo").args(["-n", "systemctl", "restart", "lempi"]).status() {
+        Ok(s) if s.success() => {}
+        Ok(s) => tracing::error!("could not restart to take up the audio device: systemctl {s}"),
+        Err(e) => tracing::error!("could not restart to take up the audio device: {e}"),
     }
 }
 
