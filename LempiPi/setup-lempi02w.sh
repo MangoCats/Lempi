@@ -59,6 +59,13 @@ bluetooth_items
 item "WirePlumber 0.4: bluez monitor not tied to seats" \
      "test -f $P/etc/wireplumber/bluetooth.lua.d/51-lempi-no-logind.lua" "" \
      "setup-appliance.sh writes it"
+# Wi-Fi power save stays ON [PI3-FOUND-780]: this node runs on the speaker's
+# battery. Nothing sets it -- it is the driver's default -- so this only
+# checks that nothing has turned it off. The page's latency is paid for in
+# the player instead [REQ-VIS-162], [REQ-VIS-164].
+item "Wi-Fi power save on (battery) [PI3-FOUND-780]" \
+     "/usr/sbin/iw dev wlan0 get power_save | grep -q 'Power save: on'" "" \
+     "it is meant to be on, for the battery -- see PI021"
 
 # ------------------------------------------------------------- its own part
 say ""

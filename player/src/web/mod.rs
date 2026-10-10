@@ -547,6 +547,26 @@ pub fn router(ui: Ui) -> Router {
         .route("/backups/:name/rehearse", post(backups::rehearse))
         .route("/backups/:name/stage", post(backups::stage))
         .with_state(ui)
+        .layer(compression())
+}
+
+/// Gzip for a client that asks for it `[REQ-VIS-164]`. A browser and the
+/// phone's WebView always ask; the fleet's own clients -- reqwest without its
+/// `gzip` feature, Python's urllib -- never do, and get what they always got.
+///
+/// Not under a kilobyte: one packet carries it either way, so compressing
+/// would cost the Pi's CPU and save no time. Not images, which are compressed
+/// already, nor audio (the edit page's WAV preview), whose bytes gzip barely
+/// touches. A Range answer is never compressed; tower-http skips those itself.
+/// The WebSocket's 101 has no body, so it is under the kilobyte.
+fn compression() -> tower_http::compression::CompressionLayer<impl tower_http::compression::Predicate> {
+    use tower_http::compression::predicate::{NotForContentType, Predicate, SizeAbove};
+    tower_http::compression::CompressionLayer::new().gzip(true).compress_when(
+        SizeAbove::new(1024)
+            .and(NotForContentType::IMAGES)
+            .and(NotForContentType::const_new("audio/"))
+            .and(NotForContentType::SSE),
+    )
 }
 
 /// The routes that reach past the player -- `sudo systemctl` and `sudo
@@ -1493,6 +1513,61 @@ mod tests {
         // And the server is up, so the 404s above are not a dead socket.
         let line = status("GET", "/audio/sink").await;
         assert!(line.contains(" 200 "), "GET /audio/sink answered {line:?}");
+    }
+
+    /// `[REQ-VIS-164]`: the page is gzipped for a client that asks and only
+    /// for one; a small answer is not; and the socket still upgrades with the
+    /// layer in front of it.
+    #[tokio::test]
+    async fn responses_are_gzipped_only_when_asked_and_worth_it() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (_e, h) = crate::engine::Engine::new(crate::path::PathHandle::silent(), 1);
+        let ui = Ui {
+            handle: Arc::new(h),
+            db: ":memory:".into(),
+            library: ":memory:".into(),
+            why: Default::default(),
+            controls: Default::default(),
+            capabilities: Default::default(),
+            web_loopback_only: false,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router(ui)).await });
+        // (head, body) of one request; `extra` is more header lines.
+        let ask = |path: &'static str, extra: &'static str| async move {
+            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let req = format!("GET {path} HTTP/1.1\r\nHost: x\r\n{extra}Connection: close\r\n\r\n");
+            s.write_all(req.as_bytes()).await.unwrap();
+            let mut buf = Vec::new();
+            if extra.contains("Upgrade") {
+                // A 101 does not close; read only its head.
+                let mut b = [0u8; 1024];
+                let n = s.read(&mut b).await.unwrap();
+                buf.extend_from_slice(&b[..n]);
+            } else {
+                s.read_to_end(&mut buf).await.unwrap();
+            }
+            let split = buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+            (String::from_utf8_lossy(&buf[..split]).to_ascii_lowercase(), buf[split + 4..].to_vec())
+        };
+        const GZ: &str = "Accept-Encoding: gzip, deflate, br\r\n";
+
+        let (head, body) = ask("/", GZ).await;
+        assert!(head.contains("content-encoding: gzip"), "the page was not gzipped: {head}");
+        assert!(body.windows(2).any(|w| w == [0x1f, 0x8b]), "no gzip stream in the body");
+        assert!(body.len() * 2 < shell_page().len(), "{} bytes for a {}-byte page", body.len(), shell_page().len());
+
+        let (head, body) = ask("/", "").await;
+        assert!(!head.contains("content-encoding"), "gzipped for a client that did not ask: {head}");
+        assert_eq!(body, shell_page().as_bytes(), "the page, as it always was");
+
+        let (head, _) = ask("/skins", GZ).await;
+        assert!(!head.contains("content-encoding"), "a 110-byte answer was compressed: {head}");
+
+        let (head, _) = ask("/ws", "Accept-Encoding: gzip\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+            Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n").await;
+        assert!(head.starts_with("http/1.1 101"), "the socket did not upgrade: {head}");
     }
 
     /// `[SPEC-CDI-058]`: the lossless-copy switch, stored where `ingest_cd.py`

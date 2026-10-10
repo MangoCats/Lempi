@@ -201,6 +201,24 @@ on, card access is not -- but it is a real loss when diagnosing a card.
 radio is unblocked, so LED on means Wi-Fi up. Confirming it needs only the next
 dark-arm run: watch the LED at the moment the radio drops.
 
+**`[PI3-FOUND-780]` Wi-Fi power save stays on. Decided 2026-10-10.** The
+maintainer's ruling: turning it off is not desirable on `lempi02w`, because
+the node runs on battery -- the speaker supplies the Pi `[PI3-FOUND-090]`, so
+whatever the radio draws comes out of the same charge the music does.
+
+It came up as the cheap fix for a slow page. Measured 2026-10-09: −76 dBm,
+pings from the desktop 2-70 ms (averaging 19-33 ms), the player page's
+requests now and then 200-370 ms, and a reload sitting on "Loading…" for up
+to a second. Power save was on, as the driver leaves it; nothing in this
+repository had ever set it either way. Its share of that latency was not
+measured, and with the ruling it need not be: the latency is paid for in the
+player instead, by a page that draws after two round trips `[REQ-VIS-162]`
+and is gzipped on the way `[REQ-VIS-164]`.
+
+`setup-lempi02w.sh` checks it is still on, so turning it off by hand shows as
+a `DIFFERS` rather than passing silently. It applies nothing: the driver's
+default is the setting.
+
 
 ---
 

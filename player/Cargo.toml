@@ -127,6 +127,12 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # first-class targets"; the 150 MB budget is REQ-HW-100. GUIDE033 copied the
 # wrong one from here before review caught it.)
 axum = { version = "0.7", features = ["ws"] }
+# Responses gzipped for a browser that asks `[REQ-VIS-164]`. Gzip only: every
+# browser and WebView offers it, and brotli's tables are a memory decision
+# that buys a few kilobytes more. Measured 2026-10-10 on lempi02w, whose
+# Wi-Fi moved 0.2-0.4 MB/s: the player page is 66 KB and arrived in
+# 150-390 ms; gzipped it is 22 KB.
+tower-http = { version = "0.6", default-features = false, features = ["compression-gzip"] }
 
 # Diagnostics through `tracing` `[GDE-HST-070]`, `[GDE-HST-100]`. `tracing`
 # itself is already in the graph via axum and tower, so naming it here compiles

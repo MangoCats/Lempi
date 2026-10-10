@@ -143,5 +143,9 @@ What makes this possible was already true and merely tangled: **the server's con
 
 > Found 2026-10-09 on lempi02w, a Pi Zero 2W on weak Wi-Fi (−76 dBm, power save on, its one radio shared with the Bluetooth speaker), where a single request now and then took 200–370 ms. The page went page → core → catalogue → skin → skin script → socket, each waiting on the last, and a reload sat on "Loading…" for up to a second. The server was never the slow part — by address every request answered in tens of milliseconds, and bose, wired, drew in 50–90 ms — so the fix is fewer trips across the air, not faster answers.
 
+**`[REQ-VIS-164]` Responses are gzipped for a client that asks.** Every response a kilobyte or more, except images (compressed already), audio, and a Range answer. A browser and the phone's WebView always ask; the fleet's own clients — reqwest without its `gzip` feature, Python's urllib — never do, and get exactly what they got before. The WebSocket upgrades through it unchanged.
+
+> REQ-VIS-162 removed trips and left bytes: carrying `core.js` made the page 66 KB, and on lempi02w's Wi-Fi, moving 0.2–0.4 MB/s, it took 150–390 ms to arrive — so "Loading…" lasted about as long as before (median ~290 ms from the desktop, 13 loads each side), while the socket opened sooner (~410 → ~280 ms). Gzipped, the page is 22 KB. Gzip only: every client that asks offers it, and brotli's tables are a memory decision on a 512 MB Pi `[REQ-HW-100]`. The cheaper fix, turning the node's Wi-Fi power save off, is ruled out there: it runs on the speaker's battery `[PI3-FOUND-780]`.
+
 **`[REQ-VIS-140]`** Long-running operations report real progress and are interruptible without loss `[REQ-LIB-130]`.
 
