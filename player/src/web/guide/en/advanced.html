@@ -72,7 +72,11 @@ forgets a Bluetooth speaker. After connecting, a "can you hear it?" check
 gives you thirty seconds to confirm before automatically reverting if you
 don't — so a bad connection can't strand you silently. On a Raspberry Pi
 appliance the speaker's own buttons work too: play/pause and skip on the
-speaker control Lempi directly.</p>
+speaker control Lempi directly. The previous-track button does nothing,
+except while the appliance is running its own <code>Lempi</code> network,
+when it means “I'm home” — see <em>Coming home</em> below. Which buttons
+a speaker actually sends differs from model to model; volume is always the
+speaker's own.</p>
 
 <h3>Travel, offline playback, and automatic Wi-Fi failover (Lempi skin
 only, Raspberry Pi appliance only)</h3>
@@ -97,6 +101,44 @@ cellular data instead, causing the page to fail to load. If that happens:
 temporarily turn off mobile/cellular data on your phone before connecting, or
 select the "Stay connected without internet" prompt in your phone's Wi-Fi
 settings.</p>
+
+<h3>Coming home: leaving the <code>Lempi</code> network</h3>
+<p>Once the appliance is running its own <code>Lempi</code> network, it
+gets back onto your home Wi-Fi in one of these ways. The speaker button and
+the automatic return both wait until no phone or laptop is connected to the
+<code>Lempi</code> network — while one is, someone is using it.</p>
+<ul>
+  <li><strong>From the page:</strong> in the settings panel's
+    <strong>Wi-Fi</strong> section, <strong>Stop, return to Wi-Fi</strong>
+    joins the home network the appliance knows. Your browser loses the page
+    as it switches; rejoin your home Wi-Fi, reload, and answer
+    <strong>Yes, keep it</strong> on the <strong>“Keep this network?”</strong>
+    banner. Unconfirmed after five minutes, the appliance goes back to its
+    <code>Lempi</code> network, as any network switch does. If home can't be
+    reached at all, the <code>Lempi</code> network comes straight back.</li>
+  <li><strong>With a Bluetooth speaker connected — press previous-track on
+    the speaker.</strong> Usually that speaker is also the battery, so the
+    appliance doesn't try on its own: each try briefly disturbs the radio the
+    music travels over. Press it once you're home, with no phone on the
+    <code>Lempi</code> network. You'll hear a soft click as it starts, then
+    within about fifteen seconds either <strong>two rising notes</strong> —
+    it's back on your home Wi-Fi — or <strong>one low note</strong>: home
+    didn't answer, and the <code>Lempi</code> network is back up. No click at
+    all means the press was ignored: the appliance wasn't on its own network,
+    a phone was still connected to it, or your speaker doesn't send that
+    button. The music carries on throughout.</li>
+  <li><strong>With no Bluetooth speaker connected</strong> (a wired speaker,
+    so mains power): the appliance tries on its own, ninety seconds after the
+    last device leaves the <code>Lempi</code> network, then less often after
+    each failed try — three minutes, six, twelve, and every fifteen after
+    that — so a week away isn't spent retrying.</li>
+  <li><strong>Off and on again.</strong> Switching the appliance off and on
+    — on a speaker that powers it, the speaker's own power switch — tries home
+    first: it waits for known Wi-Fi before starting the <code>Lempi</code>
+    network.</li>
+</ul>
+<p class="note">While the <code>Lempi</code> network is up, the appliance's
+log records each time a device joins or leaves it.</p>
 
 <h3>Moving to a new Wi-Fi network, or pivoting to a phone hotspot</h3>
 <p>From the same settings panel's <strong>Wi-Fi</strong> section (or by clicking

@@ -99,7 +99,7 @@ Wi-Fi scanning aggressively hops all 2.4 GHz channels, creating heavy RF content
 **`[SPEC-WFO-080]` Return-to-home infrastructure hysteresis.**
 When the appliance returns to its home network:
 1. **Reboot Path**: On power cycle, the 45-second boot grace period automatically prioritizes known autoconnect infrastructure profiles before AP failover can trigger.
-2. **Runtime Manual Path**: User can tap **"Stop AP, return to Wi-Fi"** (`POST /wifi/ap/stop`), which reconnects to preferred known networks. *Until 2026-10-10 it never could: it looked for type `wifi`, which terse nmcli never prints `[PI3-FOUND-800]`.*
+2. **Runtime Manual Path**: User can tap **"Stop AP, return to Wi-Fi"** (`POST /wifi/ap/stop`), which reconnects to preferred known networks. *Until 2026-10-10 it never could: it looked for type `wifi`, which terse nmcli never prints `[PI3-FOUND-800]`. Nor did it record its change where the page reloaded at home looks for one, so a good return would have reverted to the access point five minutes later, with no banner to confirm it; it does now.*
 3. **Idle Return (built 2026-10-10)**: while `lempi-ap` is up, the failover keeper counts its associated client stations (`iw dev wlan0 station dump`) and logs each change — the record of when anyone joined or left [PI028](../../LempiPi/PI028-started-before-its-audio.md). With no clients, the way home is `[SPEC-WFO-085]`'s. Not conditioned on idle audio, as first written: an appliance that plays all day never is.
 
 **`[SPEC-WFO-085]` The way home: the speaker's key, or the keeper's backoff.** Decided by the maintainer 2026-10-10, on the reasoning that a Bluetooth speaker usually means a battery, and a wired one mains power:

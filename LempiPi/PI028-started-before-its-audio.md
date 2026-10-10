@@ -104,7 +104,12 @@ there to confirm, so it would always revert); and in the keeper, while the
 access point is up, its clients counted from `iw dev wlan0 station dump`, each
 change said in the journal. Clients that cannot be listed are not taken for
 none. The stub now answers as the real tool does, and the first check added
-fails against the old filter.
+fails against the old filter. Behind that fault was a second, met while
+writing the guide: `ap-stop` scheduled its five-minute revert but recorded no
+pending change, and the page's own copy of the change id is in a reply the
+switch makes undeliverable -- so a good return would have reverted to the
+access point five minutes later, with no banner to confirm it. It records
+the change now, as `wifi-connect` does.
 
 **Then, the same day, `[SPEC-WFO-085]`.** The first build tried home after
 fifteen idle minutes whatever the speaker. The maintainer's refinement: a

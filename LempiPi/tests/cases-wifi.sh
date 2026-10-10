@@ -372,6 +372,19 @@ nm_known; on_ap
 OUT=$(btctl ap-stop)
 assert_in "$OUT" '"ok":true' "ap-stop finds the known network by the type nmcli really prints"
 assert_called "nmcli connection up Home" "and brings it up"
+# The page's copy of the change id is lost with the network it was on, so the
+# change must be findable from home, or the revert undoes a good return.
+OUT=$(btctl wifi-pending)
+assert_in "$OUT" '"pending":true' "ap-stop leaves the change for the page at home to confirm"
+assert_in "$OUT" '"ssid":"Home"' "naming the network it went home to"
+teardown
+
+# A failed ap-stop leaves nothing waiting.
+setup
+nm_known; on_ap
+OUT=$(NM_UP_FAIL=Home btctl ap-stop)
+assert_in "$OUT" '"ok":false' "ap-stop reports a home network that did not answer"
+assert_in "$(btctl wifi-pending)" '"pending":false' "and leaves no change waiting"
 teardown
 
 # ap-return goes home without a revert timer, bounded by --wait.

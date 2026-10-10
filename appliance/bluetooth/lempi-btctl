@@ -980,6 +980,17 @@ case "$VERB" in
         fallback="$(home_network)"
         [ -n "$fallback" ] || die "no known network is set to connect automatically"
         change_id="as$(date +%s)$$"
+        # Recorded where `wifi-pending` reads it, as wifi-connect does. The
+        # page's own copy of the change id is in the reply to this request,
+        # which never reaches it: the switch takes down the network the
+        # browser was on. Without this, the page reloaded at home found
+        # nothing to confirm, and the revert below put the access point back
+        # five minutes after a good return -- unseen until 2026-10-10,
+        # because until then this verb never found a network to return to
+        # [PI3-FOUND-800].
+        mkdir -p "$STATE_DIR"
+        printf 'change_id=%s\nexpires_epoch=%s\nssid=%s\n' \
+            "$change_id" "$(( $(date +%s) + REVERT_MIN * 60 ))" "$fallback" > "$STATE_DIR/wifi_pending"
         # Reverting from a failed ap-stop means going BACK to the access
         # point, not to some third state -- passing no previous connection
         # is exactly what tells `lempi-wifi-revert` to do that.
@@ -989,6 +1000,7 @@ case "$VERB" in
             printf '{"ok":true,"change_id":"%s","minutes":%s}\n' "$change_id" "$REVERT_MIN"
         else
             systemctl stop "lempi-revert-$change_id.timer" >/dev/null 2>&1
+            rm -f "$STATE_DIR/wifi_pending"
             nmcli connection up lempi-ap >/dev/null 2>&1
             die "could not reach that network -- the access point is still running"
         fi
