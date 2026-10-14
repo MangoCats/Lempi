@@ -1226,7 +1226,10 @@ impl Session {
         }
         let stopped = sw.stop_and_flip(target, fade_ms)?;
 
-        for id in &carried.lost {
+        // Both what did not make it across and what the incoming side had
+        // dropped before it -- the same un-counting the loop gives a drop
+        // `[REQ-PD-112]`.
+        for id in carried.lost.iter().chain(&carried.earlier) {
             self.resolve_mark(*id, false);
         }
         Ok(Handoff { carried, stopped: Some(stopped), resumed: resume, took_ms })
@@ -1697,6 +1700,28 @@ mod tests {
         assert_eq!(shape(session.director.as_ref().unwrap()), shape(&rebuilt),
                    "the running Director agrees with one rebuilt from the history");
         drop(c);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// `[REQ-PD-112]` A passage the incoming side dropped before a handoff --
+    /// while it was not live, so the loop, which reads only the live side, never
+    /// heard -- gives its queueing mark back at the handoff. Until 2026-10-14
+    /// `carry_queue` took that drop and threw it away, and the mark stood.
+    #[test]
+    fn a_drop_waiting_on_the_incoming_side_is_uncounted_at_the_handoff() {
+        let tmp = director_library_on_disk("handoff-drop");
+        let mut session = Session::open(&tmp, &tmp, 5).unwrap();
+        let lib = crate::db::Library::open_split(&tmp, &tmp).unwrap();
+        session.director = Some(lib.director().unwrap());
+        let now = unix_now();
+        session.mark(1, now);
+        assert_eq!(session.director.as_ref().unwrap().open_marks(), 1, "1 is queued, and marked");
+
+        let mut sw = crate::switch::Switching::new(Box::new(Scripted::default()));
+        sw.attach_guest(Box::new(Scripted { dropped: vec![1], ..Default::default() }));
+        let h = session.hand_over_seamless(&mut sw, crate::switch::Side::Guest, 0, 0).unwrap();
+        assert_eq!(h.carried.earlier, vec![1], "the earlier drop is handed back");
+        assert_eq!(session.director.as_ref().unwrap().open_marks(), 0, "and its mark is given back");
         let _ = std::fs::remove_file(&tmp);
     }
 

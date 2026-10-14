@@ -137,6 +137,12 @@ pub struct Carried {
     pub moved: Vec<i64>,
     /// Passages the library could no longer build. Named, not counted.
     pub lost: Vec<i64>,
+    /// Passages the incoming side had already dropped before this transfer --
+    /// a failure while it was not the live one, which the session loop never
+    /// asks, since it reads only the live side's. Not this report's to count,
+    /// and still the Director's to un-count `[REQ-PD-112]`: until 2026-10-14
+    /// they were taken here and thrown away, and their queueing marks stood.
+    pub earlier: Vec<i64>,
 }
 
 /// Re-offer a carried queue to whichever backend is now live.
@@ -164,10 +170,9 @@ pub fn carry_queue<F>(ids: &[i64], into: &mut dyn Playback, build: F) -> Carried
 where
     F: Fn(i64) -> Option<QueueEntry>,
 {
-    // Anything already waiting is from before this transfer and belongs to
-    // whoever asks next, not to this report.
-    let _ = into.take_dropped();
-    let mut out = Carried::default();
+    // Anything already waiting is from before this transfer: not this report's
+    // `lost`, but handed back, not thrown away -- taking it consumes it.
+    let mut out = Carried { earlier: into.take_dropped(), ..Carried::default() };
     for &id in ids {
         match build(id) {
             Some(e) => {
@@ -566,6 +571,9 @@ mod tests {
         let got = carry_queue(&[7, 8], &mut dest, |id| Some(entry(id)));
         assert_eq!(got.moved, vec![7, 8], "both were taken this time");
         assert!(got.lost.is_empty());
+        // `[REQ-PD-112]`: and handed back, not thrown away -- taking a drop
+        // consumes it, and its queueing mark stood until 2026-10-14.
+        assert_eq!(got.earlier, vec![7], "the earlier drop is the caller's to un-count");
     }
 
     impl Publish for Cutter {

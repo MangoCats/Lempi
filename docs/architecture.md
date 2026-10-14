@@ -233,9 +233,6 @@ otherwise. **This is the one register of them** -- the
   Only the history follows recordings through a renumbering, so after a
   rebuild `player_state` and `player_queue` can name other songs
   `[REQ-LIB-160]`.
-* **`switch::carry_queue` discards the drops waiting before a handoff.** A
-  passage that failed to open just before a switch keeps its queueing mark
-  instead of giving it back `[REQ-PD-112]`.
 * **A boundary moved on Vipunen does not reach a file a phone already holds.**
   The bundle importer matches a held file's passages by exact span
   `[SPEC-PL-108]`, so a re-cut passage matches none: its credits are not
