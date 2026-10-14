@@ -155,9 +155,16 @@ if [ -z "$REF" ]; then
     fi
     EXPECTED="$(git -C "$REPO_ROOT" rev-parse --short=12 HEAD)"
     git -C "$REPO_ROOT" diff --quiet --ignore-cr-at-eol HEAD 2>/dev/null || EXPECTED="${EXPECTED}+dirty"
+    # [GDE-DEP-100]: the commit and the dirty count as the host sees them, for
+    # player/build.rs to use where git inside the container cannot answer --
+    # a worktree checkout, whose .git names a host path the container cannot
+    # resolve, built `unknown` until 2026-10-14. Counted as build.rs counts.
+    BUILD_GIT="${EXPECTED%+dirty}"
+    BUILD_DIRTY="$(git -C "$REPO_ROOT" -c core.autocrlf=true diff --name-only HEAD | grep -c .)"
+    STAMP_ENV="-e LEMPI_BUILD_GIT=$BUILD_GIT -e LEMPI_BUILD_DIRTY_FILES=$BUILD_DIRTY"
 
     echo "deploy: cross-compiling the currently checked-out tree ($EXPECTED)..."
-    docker run --rm -v "$DOCKER_PATH:/w" lempi-aarch64 \
+    docker run --rm $STAMP_ENV -v "$DOCKER_PATH:/w" lempi-aarch64 \
         cargo build --release --target aarch64-unknown-linux-gnu --manifest-path player/Cargo.toml $FEATURES \
         || die "cross-compile failed"
     # A second compile, not one with both: the `fbui` feature would otherwise
@@ -165,7 +172,7 @@ if [ -z "$REF" ]; then
     # the same bytes on every appliance, screen or not `[BOS-RUN-010]`.
     if [ -n "$HAS_FBUI" ]; then
         echo "deploy: cross-compiling fbui from the same tree ($EXPECTED)..."
-        docker run --rm -v "$DOCKER_PATH:/w" lempi-aarch64 \
+        docker run --rm $STAMP_ENV -v "$DOCKER_PATH:/w" lempi-aarch64 \
             cargo build --release --target aarch64-unknown-linux-gnu --manifest-path player/Cargo.toml \
                 --features fbui --bin fbui \
             || die "cross-compile of fbui failed"
@@ -261,10 +268,22 @@ if [ "$(ssh "$HOST" "findmnt -no FSTYPE /" 2>/dev/null)" = "overlay" ]; then
 else
     echo "deploy: $HOST has a plain root -- $VBIN is itself the durable copy"
 fi
-REPORTED="$(ssh "$HOST" "sudo $VBIN --version" 2>/dev/null \
-            | grep -o '[0-9a-f]\{12\}\(+dirty\)\?')"
-if [ "$REPORTED" = "$EXPECTED" ]; then
+# [GDE-DEP-110]: what it said, and whether it could be asked at all, kept apart.
+# Until 2026-10-14 every answer without a hash read as "predates --version" --
+# a binary that ran and said `unknown`, and one that could not be run, alike:
+# the conflation install-player.sh had already been caught by, never carried here.
+VOUT="$(ssh "$HOST" "sudo $VBIN --version" 2>&1)"
+VRC=$?
+REPORTED="$(printf '%s\n' "$VOUT" | grep -o '[0-9a-f]\{12\}\(+dirty\)\?' | head -1)"
+if [ "$VRC" -ne 0 ]; then
+    die "could not ask $HOST's $VBIN its version (exit $VRC): ${VOUT:-no output}"
+elif [ "$REPORTED" = "$EXPECTED" ]; then
     echo "deploy: confirmed -- $HOST is running $EXPECTED"
+elif [ -z "$REPORTED" ] && [ -n "$VOUT" ]; then
+    # It answered, and could not name its commit: built where git could not
+    # say, and nothing told it [GDE-DEP-100]. The upload was checksum-verified,
+    # so the build is the right one; what is missing is its word for it.
+    echo "deploy: WARNING -- $HOST is running the new build (checksum-verified), but it answers '$(printf '%s' "$VOUT" | head -1)': it cannot say which commit it is [GDE-DEP-100]" >&2
 elif [ -z "$REPORTED" ]; then
     # `--version` itself was added in 421f7c1 [REQ-VIS-200]; a ref older than
     # that has nothing to ask. deploy-player.sh already confirmed the upload

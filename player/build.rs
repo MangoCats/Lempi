@@ -60,7 +60,22 @@ fn main() {
         }
     }
 
-    let hash = git(&["rev-parse", "--short=12", "HEAD"]).unwrap_or_else(|| "unknown".into());
+    // **Where git cannot answer, the builder may say** `[GDE-DEP-100]`. A git
+    // worktree's `.git` is a file naming the main repository's
+    // `.git/worktrees/<name>` by a host path, which a container that mounts only
+    // the worktree cannot resolve; the commit was then `unknown`, confirmed
+    // again 2026-10-14. `build/deploy-appliance.sh` knows the commit on the host
+    // and passes it, and the dirty count with it. Only where git fails: a
+    // stale variable can never override what git can see for itself.
+    println!("cargo:rerun-if-env-changed=LEMPI_BUILD_GIT");
+    println!("cargo:rerun-if-env-changed=LEMPI_BUILD_DIRTY_FILES");
+    let from_git = git(&["rev-parse", "--short=12", "HEAD"]);
+    let told = std::env::var("LEMPI_BUILD_GIT").ok().filter(|h| {
+        h.len() == 12 && h.bytes().all(|b| b.is_ascii_hexdigit())
+    });
+    let told_dirty = || std::env::var("LEMPI_BUILD_DIRTY_FILES").ok().and_then(|n| n.parse::<usize>().ok());
+    let git_answers = from_git.is_some();
+    let hash = from_git.or(told).unwrap_or_else(|| "unknown".into());
 
     // **A diff, not a status, and line endings do not count as a difference.**
     // The appliance binary is cross-compiled in a Linux container against a
@@ -100,9 +115,13 @@ fn main() {
     // *how many* files, the same figure Vipunen's own `/system` page already
     // shows `[SPEC-SUI-211]`, one `git diff` rather than the two a count-then-
     // ask-again pair would cost.
-    let dirty_files = git(&["-c", "core.autocrlf=true", "diff", "--name-only", "HEAD"])
-        .map(|out| out.lines().filter(|l| !l.trim().is_empty()).count())
-        .unwrap_or(0);
+    let dirty_files = if git_answers {
+        git(&["-c", "core.autocrlf=true", "diff", "--name-only", "HEAD"])
+            .map(|out| out.lines().filter(|l| !l.trim().is_empty()).count())
+            .unwrap_or(0)
+    } else {
+        told_dirty().unwrap_or(0)
+    };
     let dirty = dirty_files > 0;
 
     let stamp = if dirty { format!("{hash}+dirty") } else { hash };

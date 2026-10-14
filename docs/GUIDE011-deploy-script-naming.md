@@ -251,8 +251,8 @@ argument of this document is that the weaker one is what let five days pass. It
 now resolves the `lowerdir` and asks the copy that survives a reboot, saying so
 in the log `[GDE-DEP-060]`.
 
-**`[GDE-DEP-100]` Open, found 2026-09-12: a cross-compile from a git *worktree*
-cannot stamp its commit.** The deployed binary answers `lempi 0.1.0 (unknown)`.
+**`[GDE-DEP-100]` Resolved 2026-10-14; found 2026-09-12: a cross-compile from a git
+*worktree* could not stamp its commit.** The deployed binary answers `lempi 0.1.0 (unknown)`.
 A worktree's `.git` is a file pointing at the parent repository's
 `.git/worktrees/<name>`, which lies outside the `-v "$REPO_ROOT":/w` bind
 mount, so git inside the container resolves nothing and
@@ -270,13 +270,15 @@ binary is otherwise correct — the checksum cross-check is what actually proves
 a deploy, and it passed — but `[REQ-VIS-200]`'s whole purpose is that a running
 player can say which source it is, and here it cannot.
 
-Two candidate fixes, not chosen here. `build.rs` could accept the hash from the
-environment, which also helps container and source-tarball builds; or the
-deploy script could mount the git common directory, which needs no source
-change but must survive a path with spaces in it.
+Fixed by the first of two candidates: where git cannot answer, `build.rs` takes
+the commit from `LEMPI_BUILD_GIT` and the dirty count from
+`LEMPI_BUILD_DIRTY_FILES`, which `deploy-appliance.sh` passes from the host; where
+git can, git wins. Re-confirmed broken first, a host worktree mounted in
+`lempi-aarch64` (`fatal: not a git repository`), then proven with git made to
+fail: told, `(abcdef123456+dirty)`; untold, `(unknown)`; git able, git's own.
 
-**`[GDE-DEP-110]` Open, found 2026-09-12: the final cross-check blames the
-wrong cause, and it is the same conflation this repository has already been
+**`[GDE-DEP-110]` Resolved 2026-10-14; found 2026-09-12: the final cross-check
+blamed the wrong cause, and it is the same conflation this repository has already been
 caught by once.** `deploy-appliance.sh` greps `--version` for a 12-hex hash and,
 finding none, reports the binary *"predates --version [421f7c1]"*. Under
 `[GDE-DEP-100]` that is false: `--version` ran and answered `unknown`. The
@@ -288,6 +290,6 @@ by this exact conflation — an unexecutable staged binary returned "Permission
 denied", *"the empty result was read as 'predates --version', and the guard
 reported itself skipped for a reason it had never checked"*. That lesson was
 fixed in one file and never carried to the other, so the stricter of the two
-guards is now the one excusing its own failure `[GDE-DEP-060]`. Distinguishing
-the two cases is a few lines and wants doing before a real version mismatch is
-read as an old build.
+guards was the one excusing its own failure `[GDE-DEP-060]`. It now keeps them
+apart: a binary it could not ask fails the deploy, one that answered without a
+commit is a warning naming `[GDE-DEP-100]`, and only silence reads as old.
