@@ -33,6 +33,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import lempi_control  # noqa: E402  -- pause/resume/reload the co-resident player
+import bundle_ledger  # noqa: E402  -- what a send touched, for the next star sync [SPEC-STAR-945]
 import sync_console  # noqa: E402  -- the Sync page's lock, and the plan [SPEC-STAR-126]
 import threading
 import time
@@ -1553,8 +1554,20 @@ class Runner:
         stage = "send" if payload.get("apply") else "check"
         self._emit(job_id, "stage", stage, stage=stage)
         code, _ = self._spawn(job_id, stage, argv)
+        recorded = None
+        if code == 0 and payload.get("apply"):
+            # [SPEC-STAR-945]: what this send touched on the speaker, for the next star
+            # sync to ask the speaker about -- it patches against what it last sent,
+            # which never saw this. Said in the log; a failure to record is said too.
+            try:
+                recorded = bundle_ledger.record(self.library, payload["peer"], payload["bundle"])
+                self._emit(job_id, "log", f"recorded {recorded} file(s) for the next star sync to ask "
+                                          f"{payload['peer']} about [SPEC-STAR-945]", stage=stage)
+            except (OSError, ValueError, KeyError) as err:
+                self._emit(job_id, "log", f"NOT RECORDED for star sync: {err} -- the next sync of "
+                                          f"{payload['peer']} may refuse a row this send wrote", stage=stage)
         self._save_result(job_id, {"peer": payload["peer"], "applied": bool(payload.get("apply")),
-                                   "bundle": payload["bundle"], "ok": code == 0})
+                                   "bundle": payload["bundle"], "ok": code == 0, "ledger_files": recorded})
         self._finish(job_id, "done" if code == 0 else "stopped" if code < 0 else "failed")
 
     def _files_of_recordings(self, mbids: set) -> set:

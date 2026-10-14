@@ -625,7 +625,7 @@ def outbox_applied(mdir: str, fp: str, run: str, counts: dict) -> bool:
 # answer signed by the player's own key and checked against its certificate
 # in the roster. The player's half is `player/src/star_node.rs`.
 
-SYNC_STEPS = ("snapshot", "rehearse", "commit", "stage", "staged")   # [SPEC-NKP-925]
+SYNC_STEPS = ("snapshot", "rows", "rehearse", "commit", "stage", "staged")   # [SPEC-NKP-925], rows [SPEC-STAR-945]
 
 
 def sync_players(mdir: str) -> dict:

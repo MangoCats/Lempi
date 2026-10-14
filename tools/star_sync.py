@@ -62,6 +62,7 @@ import star_distribute as sd  # noqa: E402  -- ssh, for a player's start and sto
 import star_merge as sm  # noqa: E402
 import star_patch as sp  # noqa: E402
 import mesh as meshmod  # noqa: E402  -- the signed transport, and phones by upload [REQ-AND-330]
+import bundle_ledger  # noqa: E402  -- what a bundle send touched on a node [SPEC-STAR-945]
 
 
 SSH = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=5",
@@ -248,6 +249,237 @@ def catalogue_state(sent_lib, summary_db, hub_lib):
     detail = {"files": len(added["files"]), "passages": len(added["passages"])}
     return {"state": "changed", **detail, "gone_files": len(gone["files"]), "gone_passages": len(gone["passages"]),
             "not_the_hubs": sum(len(added[t] - hub_nat[t]) for t in added)}
+
+
+# -------------------------------------------- the node's own rows [SPEC-STAR-945] --
+#
+# A bundle send writes a node's catalogue outside the sync, so the last-sent copy
+# the patch is made against does not hold what it wrote. A row the hub then changes
+# reaches the node as an insert it refuses; a row the hub removes does not reach it
+# at all -- found 2026-10-14, when two re-linked discs would have kept their wrong
+# credits beside the right ones [SPEC-STAR-940]. So the snapshot asks the node for
+# its own rows about the files a send touched, and the baseline holds those instead
+# of what the hub predicted. The node's own strict rehearsal is still the proof.
+
+# Each catalogue table in the scope, and how its rows are chosen: by file, by
+# passage, by recording, by release or by artist. Parents before children.
+ROW_SCOPE = [("files", "file", "audio_md5"), ("passages", "file_id", "file_id"), ("file_tags", "file_id", "file_id"),
+             ("passage_recordings", "passage", "passage_id"), ("id_checks", "passage", "passage_id"),
+             ("file_releases", "file", "audio_md5"), ("file_art", "file", "audio_md5"),
+             ("recordings", "recording", "mbid"), ("recording_artists", "recording", "mbid"),
+             ("release_recordings", "recording", "mbid"), ("flavor", "recording", "subject_id"),
+             ("releases", "release", "mbid"), ("cover_art", "release", "release_mbid"), ("artists", "artist", "mbid")]
+
+
+def _has(c, t):
+    return c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (t,)).fetchone() is not None
+
+
+def _in(c, sql, values):
+    """`sql` with one `({})` filled by `values`, in chunks; every first column."""
+    values, out = list(values), []
+    for i in range(0, len(values), 500):
+        chunk = values[i:i + 500]
+        out += [r[0] for r in c.execute(sql.format(",".join("?" * len(chunk))), chunk)]
+    return out
+
+
+def files_to_ask(summary_db, sent_lib, touched):
+    """The files whose rows the node is asked for: the ones it holds that the copy last
+    sent to it does not -- a bundle brought them -- and the ones a send has touched
+    since (`bundle_ledger`), held or not."""
+    s = sqlite3.connect(f"file:{summary_db}?mode=ro", uri=True)
+    b = sqlite3.connect(f"file:{sent_lib}?mode=ro", uri=True)
+    try:
+        held = {r[0] for r in s.execute("SELECT audio_md5 FROM files")}
+        sent = {r[0] for r in b.execute("SELECT audio_md5 FROM files")}
+    finally:
+        s.close()
+        b.close()
+    return sorted((held - sent) | set(touched))
+
+
+def rows_wanted(files, *libs):
+    """What to ask about `files`: them, and the recordings, releases and artists any of
+    `libs` -- the copy last sent, and the hub -- links to them. The node widens it by
+    what it links itself, so the scope covers a row on either side."""
+    rec, rel, art = set(), set(), set()
+    conns = [sqlite3.connect(f"file:{p}?mode=ro", uri=True) for p in libs]
+    try:
+        for c in conns:
+            fids = _in(c, "SELECT file_id FROM files WHERE audio_md5 IN ({})", files)
+            pids = _in(c, "SELECT passage_id FROM passages WHERE file_id IN ({})", fids)
+            rec |= set(_in(c, "SELECT DISTINCT mbid FROM passage_recordings WHERE passage_id IN ({})", pids))
+        for c in conns:
+            if _has(c, "file_releases"):
+                rel |= set(_in(c, "SELECT release_mbid FROM file_releases WHERE audio_md5 IN ({})", files))
+            if _has(c, "release_recordings"):
+                rel |= set(_in(c, "SELECT DISTINCT release_mbid FROM release_recordings WHERE chosen = 1 "
+                                  "AND mbid IN ({})", rec))
+            if _has(c, "recording_artists"):
+                art |= set(_in(c, "SELECT DISTINCT artist_mbid FROM recording_artists WHERE mbid IN ({})", rec))
+    finally:
+        for c in conns:
+            c.close()
+    return {"files": sorted(files), "recordings": sorted(rec), "releases": sorted(rel), "artists": sorted(art)}
+
+
+def baseline_from_rows(sent_lib, hub_lib, answer, out):
+    """The baseline a node is patched against: the copy last sent to it, with every row
+    in `answer`'s scope replaced by the node's own (`mesh_sync::catalogue_rows`), each id
+    named as the hub names it -- a file by its `audio_md5`, a passage by its span
+    [SPEC-DF-035] -- so the patch pairs it with the hub's row. A blob comes as its
+    SHA-256 and is matched to the hub's or the copy's value; one that matches neither is
+    left as the copy had it, and counted. Returns what it did."""
+    shutil.copyfile(sent_lib, out)
+    os.chmod(out, 0o644)
+    scope = {k: set(v) for k, v in answer["scope"].items()}
+    node = {t["name"]: t for t in answer["tables"]}
+    b = sqlite3.connect(out)
+    h = sqlite3.connect(f"file:{hub_lib}?mode=ro", uri=True)
+    report = {"files": len(scope["files"]), "rows": {}, "blobs_unmatched": 0, "tables_absent": []}
+    try:
+        def rows_of(t):
+            if t not in node:
+                return []
+            return [dict(zip(node[t]["columns"], r)) for r in node[t]["rows"]]
+        nfile = {d["file_id"]: d["audio_md5"] for d in rows_of("files")}
+        npass = {d["passage_id"]: (nfile[d["file_id"]], d["kind"], d["start_ms"], d["end_ms"]) for d in rows_of("passages")}
+
+        def ids(c):
+            f = {m: i for i, m in c.execute("SELECT file_id, audio_md5 FROM files")}
+            p = {(m, k, s, e): i for i, m, k, s, e in c.execute(
+                "SELECT p.passage_id, f.audio_md5, p.kind, p.start_ms, p.end_ms FROM passages p JOIN files f USING (file_id)")}
+            return f, p
+        hf, hp = ids(h)
+        bf, bp = ids(b)
+        nxt = {"file": max(list(hf.values()) + list(bf.values()) + [0]) + 1,
+               "passage": max(list(hp.values()) + list(bp.values()) + [0]) + 1}
+
+        def name(kind, key, hub, base):
+            if key in hub:
+                return hub[key]
+            if key in base:
+                return base[key]
+            hub[key] = nxt[kind]                 # a row neither holds: a new id, the same each time it is named
+            nxt[kind] += 1
+            return hub[key]
+
+        # The copy's own rows in scope, kept for a blob that matches nothing the node sent.
+        bfids = [bf[m] for m in scope["files"] if m in bf]
+        bpids = _in(b, "SELECT passage_id FROM passages WHERE file_id IN ({})", bfids)
+        by = {"file": scope["files"], "file_id": bfids, "passage": bpids, "recording": scope["recordings"],
+              "release": scope["releases"], "artist": scope["artists"]}
+        kept = {}
+        for t, kind, col in ROW_SCOPE:
+            if not _has(b, t):
+                continue
+            extra = " AND subject_kind = 'recording'" if t == "flavor" else ""
+            cols = sp.columns(b, t)
+            if t in ("cover_art", "file_art"):
+                for chunk in [list(by[kind])[i:i + 500] for i in range(0, len(by[kind]), 500)]:
+                    for r in b.execute(f"SELECT {', '.join(cols)} FROM {t} WHERE {col} IN ({','.join('?' * len(chunk))})",
+                                       chunk):
+                        kept[(t, r[cols.index(col)])] = dict(zip(cols, r))
+            vals = list(by[kind])
+            for i in range(0, len(vals), 500):
+                chunk = vals[i:i + 500]
+                b.execute(f"DELETE FROM {t} WHERE {col} IN ({','.join('?' * len(chunk))}){extra}", chunk)
+
+        def blob(t, col, d, v):
+            if t not in ROW_KEY:
+                return None                      # no candidates known for this table: left as the copy had it
+            want = v["sha256"]
+            cands = []
+            hrow = h.execute(f"SELECT {col} FROM {t} WHERE {ROW_KEY[t]} = ?", (d[ROW_KEY[t]],)).fetchone() if _has(h, t) else None
+            if hrow and hrow[0] is not None:
+                cands.append(hrow[0])
+            krow = kept.get((t, d[ROW_KEY[t]]))
+            if krow and krow.get(col) is not None:
+                cands.append(krow[col])
+            return next((c for c in cands if hashlib.sha256(c).hexdigest() == want), None)
+
+        for t, _kind, _col in ROW_SCOPE:
+            rows = rows_of(t)
+            if t not in node:
+                continue
+            if not _has(b, t):
+                report["tables_absent"].append(t)
+                continue
+            have = set(sp.columns(b, t))
+            n = 0
+            for d in rows:
+                if t == "files":
+                    d["file_id"] = name("file", d["audio_md5"], hf, bf)
+                elif t in ("passages",):
+                    d["passage_id"] = name("passage", npass[d["passage_id"]], hp, bp)
+                    d["file_id"] = name("file", nfile[d["file_id"]], hf, bf)
+                elif t == "file_tags":
+                    d["file_id"] = name("file", nfile[d["file_id"]], hf, bf)
+                elif t in ("passage_recordings", "id_checks"):
+                    d["passage_id"] = name("passage", npass[d["passage_id"]], hp, bp)
+                unmatched = False
+                for c, v in list(d.items()):
+                    if isinstance(v, dict) and "sha256" in v:
+                        d[c] = blob(t, c, d, v)
+                        unmatched = unmatched or d[c] is None
+                if unmatched:
+                    report["blobs_unmatched"] += 1
+                    d = kept.get((t, d.get(ROW_KEY.get(t))))   # as the copy had it: the rehearsal decides
+                    if d is None:
+                        continue
+                cols = [c for c in d if c in have]
+                b.execute(f"INSERT OR REPLACE INTO {t} ({', '.join(cols)}) VALUES ({','.join('?' * len(cols))})",
+                          [sp.dec(d[c]) for c in cols])
+                n += 1
+            report["rows"][t] = n
+        b.commit()
+        ok = b.execute("PRAGMA integrity_check").fetchone()[0]
+        if ok != "ok":
+            raise SystemExit(f"the baseline built from the node's rows fails integrity_check: {ok}")
+    finally:
+        b.close()
+        h.close()
+    return report
+
+
+ROW_KEY = {"cover_art": "release_mbid", "file_art": "audio_md5"}
+CATALOGUE_ROWS_NEEDED = 1    # [SPEC-STAR-945]: a player that answers `rows`
+
+
+def node_rows(mdir, player, run, name, snap, sent_lib, nd, hub_copy, hub_library, last_sent_at):
+    """[SPEC-STAR-945]: the baseline `name` is patched against -- the copy last sent to
+    it, corrected by its own rows for the files a bundle send touched -- and a line to
+    say what was done. `(None, line)` keeps the copy as it is; the line says why, and a
+    case that could make the rehearsal refuse is said as a warning [GDE-DEP-060]."""
+    if not sent_lib:
+        return None, None
+    touched = bundle_ledger.touched_since(hub_library, name, last_sent_at)
+    files = files_to_ask(os.path.join(nd, "summary.db"), sent_lib, touched)
+    if not files:
+        return None, None
+    if (snap.get("catalogue_rows", 0) or 0) < CATALOGUE_ROWS_NEEDED:
+        return None, (f"WARNING: {len(files)} file(s) here came or changed by bundle since the last sync, and this "
+                      "build cannot report its own rows for them: patched against what was last sent, so a row "
+                      "the hub has changed since may refuse, and one it removed is not removed -- deploy a current "
+                      "build [SPEC-STAR-945]")
+    want = rows_wanted(files, sent_lib, hub_copy)
+    try:
+        answer = meshmod.sync_step(mdir, player, "rows", stamp_of(run), extra={"want": want}, timeout=600.0)
+        out = os.path.join(nd, "library.baseline.db")
+        rep = baseline_from_rows(sent_lib, hub_copy, answer, out)
+    except (ValueError, OSError, KeyError) as err:
+        return None, (f"WARNING: asked for its own rows for {len(files)} file(s) and could not use them ({err}): "
+                      "patched against what was last sent [SPEC-STAR-945]")
+    seal(out)
+    rows = sum(rep["rows"].values())
+    line = (f"its own rows for {len(files)} file(s) a bundle brought or touched -- {rows} row(s), "
+            f"{len(want['recordings'])}+ recording(s) -- are the baseline for them [SPEC-STAR-945]")
+    if rep["blobs_unmatched"]:
+        line += f"; {rep['blobs_unmatched']} cover(s) matched neither the hub's nor the last sent, and are left as sent"
+    if rep["tables_absent"]:
+        line += f"; not in the last-sent copy, so not corrected: {', '.join(rep['tables_absent'])}"
+    return out, line
 
 
 def catalogue_words(st):
@@ -531,13 +763,18 @@ def snapshot(plan, only=None):
             cat = catalogue_state(sent_lib, os.path.join(nd, "summary.db"), os.path.join(hd, "library.db"))
             say(f"  {name}: {sum(len(t['rows']) for t in snap['listener']['tables'])} shared row(s), "
                 f"catalogue {catalogue_words(cat)}")
+            baseline, rows_note = node_rows(mdir, player, run, name, snap, sent_lib, nd,
+                                            os.path.join(hd, "library.db"), at_root(hub["library"]), ns.get("at"))
+            if rows_note:
+                say(f"  {name}: {rows_note}")
             manifest["nodes"].append(dict(
                 name=name, listener=os.path.join(nd, "listener.db"), taken_at=now().isoformat(),
                 sent=sent_path(ns, "listener_sent"),
                 backups=history_of(ns.get("listener_sent"), ns.get("at", ""), os.path.join(nd, "history")),
                 catalogue=os.path.join(nd, "summary.db"), files=os.path.join(nd, "summary.db")))
             baselines[name] = {"listener": os.path.join(nd, "listener.db"), "signed": n["member"],
-                               "library": sent_lib, "catalogue": cat, "natural_keys": cap,
+                               "library": baseline or sent_lib, "library_sent": sent_lib,
+                               "catalogue": cat, "natural_keys": cap,
                                "catalogue_blocked": blocked,
                                "catalogue_in_step": not blocked and (cat["state"] in ("as-sent", "holds-hub-rows")
                                or (cat["state"] == "other-ids" and cap >= NATURAL_KEYS_NEEDED))}

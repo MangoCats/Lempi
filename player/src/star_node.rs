@@ -10,6 +10,8 @@
 //! `{"request": "<json>", "signature": "<mesh key, base64 DER>"}`:
 //! - `snapshot` -- this node's shared tables and its catalogue summary
 //!   `[SPEC-NSH-050]`, `[SPEC-NSH-060]`;
+//! - `rows` -- its own catalogue rows about the files the hub names, read
+//!   only, so a patch is made against what is here `[SPEC-STAR-945]`;
 //! - `rehearse` -- both patches checked against the live files, nothing kept;
 //! - `commit` -- rehearsed again, then applied: the catalogue first under the
 //!   strict rule, then the listener under the member rule, and the catalogue
@@ -50,7 +52,7 @@ pub struct Handled {
 }
 
 pub fn handle(listener: &Path, library: &Path, op: &str, body: &Value) -> Result<Handled, String> {
-    if !matches!(op, "snapshot" | "rehearse" | "commit" | "stage" | "staged") {
+    if !matches!(op, "snapshot" | "rows" | "rehearse" | "commit" | "stage" | "staged") {
         return Err(format!("no such step: {op}"));
     }
     // Dormant on a network this node does not trust `[SPEC-NSH-180]`.
@@ -63,6 +65,8 @@ pub fn handle(listener: &Path, library: &Path, op: &str, body: &Value) -> Result
     let run = req["run"].as_str().unwrap_or_default().to_string();
     let (result, reload) = match op {
         "snapshot" => (snapshot(listener, library)?, false),
+        // `[SPEC-STAR-945]`: read only, like the snapshot it completes.
+        "rows" => (mesh_sync::catalogue_rows(library, &req["want"])?, false),
         "rehearse" => (rehearse(listener, library, &req)?, false),
         "stage" => (stage(listener, &req, &run)?, false),
         "staged" => (staged(listener, &run), false),
@@ -127,6 +131,10 @@ const NATURAL_KEYS: i64 = 1;
 /// rehearsal as well as the commit, and says whether the catalogue is on one. A node that
 /// does not report it is sent no catalogue patch to a read-only partition: it would refuse it.
 const CATALOGUE_WINDOW: i64 = 1;
+/// `[SPEC-STAR-945]`: this build answers `rows`, its own catalogue rows about some files.
+/// A node that does not report it is patched against what the hub last sent, and the hub
+/// says so.
+const CATALOGUE_ROWS: i64 = 1;
 
 fn snapshot(listener: &Path, library: &Path) -> Result<Value, String> {
     Ok(json!({
@@ -135,6 +143,7 @@ fn snapshot(listener: &Path, library: &Path) -> Result<Value, String> {
         "last_run": last_run(listener),
         "natural_keys": NATURAL_KEYS,
         "catalogue_window": CATALOGUE_WINDOW,
+        "catalogue_rows": CATALOGUE_ROWS,
         "library_readonly": library.exists() && !writable(library),
     }))
 }
@@ -736,6 +745,55 @@ mod tests {
         assert!(replay.contains("not newer"), "a replayed commit is refused: {replay}");
         let older = request(&n, "commit", "20260927T0000Z", cat_patch(), lis_patch());
         assert!(handle(&n.l, &n.lib, "commit", &signed(&n.mesh, &older)).err().unwrap().contains("not newer"));
+        let _ = std::fs::remove_dir_all(&n.dir);
+    }
+
+    /// `[SPEC-STAR-945]`: a node's own rows about the files the hub names -- the file,
+    /// its passages and credits, and what those credits reach -- and nothing about any
+    /// other file; the scope widened by what this catalogue links; a cover as its hash.
+    #[test]
+    fn the_rows_step_answers_with_this_catalogue_about_those_files() {
+        let n = node("rows");
+        rusqlite::Connection::open(&n.lib).unwrap().execute_batch(
+            "CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL, source TEXT,
+                 PRIMARY KEY (passage_id, mbid));
+             CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);
+             CREATE TABLE recording_artists (mbid TEXT, artist_mbid TEXT, PRIMARY KEY (mbid, artist_mbid));
+             CREATE TABLE artists (mbid TEXT PRIMARY KEY, name TEXT);
+             CREATE TABLE release_recordings (release_mbid TEXT, mbid TEXT, chosen INTEGER, PRIMARY KEY (release_mbid, mbid));
+             CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT);
+             CREATE TABLE cover_art (release_mbid TEXT PRIMARY KEY, front BLOB);
+             CREATE TABLE file_releases (audio_md5 TEXT PRIMARY KEY, release_mbid TEXT, decided_at TEXT);
+             INSERT INTO files VALUES (2,'m2','mp3','/music/b.mp3');
+             INSERT INTO passages VALUES (20,2,'radio',0,500);
+             INSERT INTO passage_recordings VALUES (10,'rec-wrong',1.0,'musicbrainz'), (20,'rec-other',1.0,'musicbrainz');
+             INSERT INTO recordings VALUES ('rec-wrong','I Had a Dream'), ('rec-other','Elsewhere');
+             INSERT INTO recording_artists VALUES ('rec-wrong','art-1');
+             INSERT INTO artists VALUES ('art-1','John Sebastian'), ('art-2','Nobody here');
+             INSERT INTO release_recordings VALUES ('rel-w','rec-wrong',1), ('rel-x','rec-wrong',0);
+             INSERT INTO releases VALUES ('rel-w','Woodstock'), ('rel-x','Another');
+             INSERT INTO cover_art VALUES ('rel-w', x'0102');
+             INSERT INTO file_releases VALUES ('m1','rel-w','2026-10-06T22:07:39');").unwrap();
+        let mut r = request(&n, "rows", "20261014T1434Z", json!(null), json!(null));
+        r["want"] = json!({"files": ["m1"], "recordings": ["rec-right"]});
+        let got = handle(&n.l, &n.lib, "rows", &signed(&n.mesh, &r)).unwrap();
+        assert!(!got.reload, "reading is not a change");
+        let a: Value = serde_json::from_str(got.answer["answer"].as_str().unwrap()).unwrap();
+        let res = &a["result"];
+        assert_eq!(res["scope"]["recordings"], json!(["rec-right", "rec-wrong"]),
+                   "the hub's recording, and the one this catalogue credits -- the one the hub must remove");
+        assert_eq!(res["scope"]["releases"], json!(["rel-w"]), "the file's release, and where its credit is chosen");
+        assert_eq!(res["scope"]["artists"], json!(["art-1"]));
+        let table = |t: &str| res["tables"].as_array().unwrap().iter().find(|x| x["name"] == t).cloned();
+        assert_eq!(table("files").unwrap()["rows"], json!([[1, "m1", "flac", "/music/a.flac"]]), "only the file asked about");
+        assert_eq!(table("passage_recordings").unwrap()["rows"], json!([[10, "rec-wrong", 1.0, "musicbrainz"]]));
+        assert_eq!(table("release_recordings").unwrap()["rows"].as_array().unwrap().len(), 2,
+                   "every release of a credit in scope, chosen or not: an import moves `chosen`");
+        let front = &table("cover_art").unwrap()["rows"][0][1];
+        assert_eq!(front["sha256"], "a12871fee210fb8619291eaea194581cbd2531e4b23759d225f6806923f63222", "a blob is its hash");
+        assert!(table("id_checks").is_none() && table("file_art").is_none(), "a table this catalogue lacks is left out");
+        let stranger = p256::ecdsa::SigningKey::random(&mut rand_core::OsRng);
+        assert!(handle(&n.l, &n.lib, "rows", &signed(&stranger, &r)).is_err(), "and only the mesh may ask");
         let _ = std::fs::remove_dir_all(&n.dir);
     }
 

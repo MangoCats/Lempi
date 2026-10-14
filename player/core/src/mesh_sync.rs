@@ -936,6 +936,123 @@ pub fn catalogue_summary(library: &Path) -> Result<Json, String> {
     Ok(serde_json::json!({ "tables": [files, passages] }))
 }
 
+/// `[SPEC-STAR-945]` This node's own catalogue rows about some files, so the hub can
+/// patch against what is here rather than against what it last sent. A bundle send
+/// writes a file's rows -- passages, credits, recordings, releases, covers -- outside
+/// the sync, and a row the hub later changed or removed could not be reached from a
+/// baseline that never had it: found 2026-10-14, when two re-linked discs would have
+/// kept their wrong credits beside the right ones `[SPEC-STAR-940]`.
+///
+/// `want` names `files` (by `audio_md5`) and, optionally, `recordings`, `releases` and
+/// `artists` the hub links to them. The scope is widened by what *this* catalogue links
+/// to those files: their passages' recordings, those recordings' artists, and the
+/// releases the files were taken from or their recordings are chosen on. Every row in
+/// that scope is returned, in this node's own ids, with its files and passages so the
+/// hub can name each id by what identifies it everywhere `[SPEC-DF-035]`; the answer's
+/// `scope` is the scope used, keys this node lacks included -- they are what it lacks.
+/// A blob travels as its SHA-256: the hub holds the candidates and only needs to know
+/// which one is here, and a cover is a megabyte a Pi need not send.
+pub fn catalogue_rows(library: &Path, want: &Json) -> Result<Json, String> {
+    use std::collections::BTreeSet;
+    let c = Connection::open_with_flags(library, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("open {}: {e}", library.display()))?;
+    let tx = c.unchecked_transaction().map_err(|e| e.to_string())?;
+    let list = |k: &str| -> BTreeSet<String> {
+        want[k].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()
+    };
+    let has = |t: &str| -> bool {
+        tx.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1", [t], |_| Ok(())).is_ok()
+    };
+    // `IN (...)` over a list, and the values to bind; an empty list matches nothing.
+    let inl = |n: usize| if n == 0 { "NULL".to_string() } else { vec!["?"; n].join(",") };
+    let texts = |s: &BTreeSet<String>| s.iter().map(|v| Value::Text(v.clone())).collect::<Vec<_>>();
+    let column = |sql: &str, vals: Vec<Value>| -> Result<Vec<Value>, String> {
+        let mut q = tx.prepare(sql).map_err(|e| format!("{sql}: {e}"))?;
+        let v = q.query_map(params_from_iter(vals), |r| r.get::<_, Value>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(v)
+    };
+    let as_text = |v: Vec<Value>| -> BTreeSet<String> {
+        v.into_iter().filter_map(|x| if let Value::Text(s) = x { Some(s) } else { None }).collect()
+    };
+
+    let files = list("files");
+    let (mut recordings, mut releases, mut artists) = (list("recordings"), list("releases"), list("artists"));
+    let fids = column(&format!("SELECT file_id FROM files WHERE audio_md5 IN ({})", inl(files.len())), texts(&files))?;
+    let pids = column(&format!("SELECT passage_id FROM passages WHERE file_id IN ({})", inl(fids.len())), fids.clone())?;
+    recordings.extend(as_text(column(
+        &format!("SELECT DISTINCT mbid FROM passage_recordings WHERE passage_id IN ({})", inl(pids.len())), pids.clone())?));
+    if has("file_releases") {
+        releases.extend(as_text(column(
+            &format!("SELECT release_mbid FROM file_releases WHERE audio_md5 IN ({})", inl(files.len())), texts(&files))?));
+    }
+    if has("release_recordings") {
+        releases.extend(as_text(column(
+            &format!("SELECT DISTINCT release_mbid FROM release_recordings WHERE chosen = 1 AND mbid IN ({})",
+                     inl(recordings.len())), texts(&recordings))?));
+    }
+    if has("recording_artists") {
+        artists.extend(as_text(column(
+            &format!("SELECT DISTINCT artist_mbid FROM recording_artists WHERE mbid IN ({})", inl(recordings.len())),
+            texts(&recordings))?));
+    }
+
+    let dump = |t: &str, filter: String, vals: Vec<Value>| -> Result<Option<Json>, String> {
+        if !has(t) {
+            return Ok(None);
+        }
+        let cols = columns(&tx, t)?;
+        let sql = format!("SELECT {} FROM {t} WHERE {filter}", cols.join(", "));
+        let mut q = tx.prepare(&sql).map_err(|e| format!("{sql}: {e}"))?;
+        let rows = q
+            .query_map(params_from_iter(vals), |r| {
+                Ok(Json::Array((0..cols.len()).map(|i| r.get::<_, Value>(i).map(|v| match v {
+                    Value::Blob(b) => {
+                        use sha2::Digest;
+                        let hex: String = sha2::Sha256::digest(&b).iter().map(|x| format!("{x:02x}")).collect();
+                        serde_json::json!({"sha256": hex})
+                    }
+                    v => to_json(&v),
+                })).collect::<Result<_, _>>()?))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(Some(serde_json::json!({"name": t, "columns": cols, "key": key_of(&tx, t)?, "rows": rows})))
+    };
+    let f = || texts(&files);
+    let p = || pids.clone();
+    let rec = || texts(&recordings);
+    let mut tables = Vec::new();
+    for got in [
+        dump("files", format!("audio_md5 IN ({})", inl(files.len())), f())?,
+        dump("passages", format!("file_id IN ({})", inl(fids.len())), fids.clone())?,
+        dump("file_tags", format!("file_id IN ({})", inl(fids.len())), fids.clone())?,
+        dump("passage_recordings", format!("passage_id IN ({})", inl(pids.len())), p())?,
+        dump("id_checks", format!("passage_id IN ({})", inl(pids.len())), p())?,
+        dump("file_releases", format!("audio_md5 IN ({})", inl(files.len())), f())?,
+        dump("file_art", format!("audio_md5 IN ({})", inl(files.len())), f())?,
+        dump("recordings", format!("mbid IN ({})", inl(recordings.len())), rec())?,
+        dump("recording_artists", format!("mbid IN ({})", inl(recordings.len())), rec())?,
+        dump("release_recordings", format!("mbid IN ({})", inl(recordings.len())), rec())?,
+        dump("flavor", format!("subject_kind = 'recording' AND subject_id IN ({})", inl(recordings.len())), rec())?,
+        dump("releases", format!("mbid IN ({})", inl(releases.len())), texts(&releases))?,
+        dump("cover_art", format!("release_mbid IN ({})", inl(releases.len())), texts(&releases))?,
+        dump("artists", format!("mbid IN ({})", inl(artists.len())), texts(&artists))?,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        tables.push(got);
+    }
+    Ok(serde_json::json!({
+        "scope": {"files": files, "recordings": recordings, "releases": releases, "artists": artists},
+        "tables": tables,
+    }))
+}
+
 fn rows(c: &Connection, t: &str, cols: &[String]) -> Result<Vec<Json>, String> {
     let mut q = c.prepare(&format!("SELECT {} FROM {t}", cols.join(", "))).map_err(|e| e.to_string())?;
     let v = q
