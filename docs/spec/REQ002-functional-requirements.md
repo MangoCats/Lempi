@@ -267,7 +267,7 @@ Areas where [MCR-REQ001](../inherited/mcrhythm/MCR-REQ001-requirements.md) has s
 
 | McRhythm area | Status |
 | :--- | :--- |
-| User identity / authentication (`AUTH`, 13 reqs) | Undecided. MuLibPlay is single-user with no auth. |
+| User identity / authentication (`AUTH`, 13 reqs) | Per-person identity is undecided: MuLibPlay is single-user, and so is Lempi. What exists is access control for machines -- the web guard and a phone's launch key ([SPEC052](SPEC052-web-access-guard.md), [SPEC053](SPEC053-security-hardening.md)), and signed mesh membership ([SPEC049](SPEC049-mesh-membership-and-trust.md), [SPEC054](SPEC054-mesh-without-ssh.md)) -- not accounts. |
 | Multi-user coordination (`PERS`, `UQ`) | Undecided; likely out of scope for v1. |
 | Network status & offline operation (`NET`, `OFF`, 66 reqs) | Partially implied by `[REQ-LIB-120]`; not enumerated. |
 | Three build tiers Full/Lite/Minimal (`VER`, 19 reqs) | Superseded by the Lempi/Vipunen split `[GDE-ARC-010]`. |

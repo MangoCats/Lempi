@@ -74,6 +74,7 @@ folded into one spec.
 | Mesh without ssh — the signed transport | [SPEC054](spec/SPEC054-mesh-without-ssh.md) | [§7. Open, to settle when built](spec/SPEC054-mesh-without-ssh.md#7-open-to-settle-when-built) |
 | Fleet configuration kept private (`[SPEC-FCP-010]` awaits the private repository) | [SPEC055](spec/SPEC055-fleet-configuration-kept-private.md) | [§4. Open](spec/SPEC055-fleet-configuration-kept-private.md#4-open) |
 | CD import | [SPEC056](spec/SPEC056-cd-import.md) | [§11. Open](spec/SPEC056-cd-import.md#11-open) |
+| Album names held short in folder and file names | [SPEC063](spec/SPEC063-album-names-held-short.md) | [§4. Open](spec/SPEC063-album-names-held-short.md#4-open) |
 | Holding a passage back (whole-album play, `[REQ-PD-127]`, not built) | [SPEC057](spec/SPEC057-holding-a-passage-back.md) | [§6. Open](spec/SPEC057-holding-a-passage-back.md#6-open) |
 | Catalogue patch by natural key | [SPEC058](spec/SPEC058-catalogue-patch-by-natural-key.md) | [§9. Open](spec/SPEC058-catalogue-patch-by-natural-key.md#9-open) |
 | A node's own occasion policy, a profanity ceiling first (designed, not scheduled) | [GUIDE036](GUIDE036-node-occasion-policies.md) | [§2. The design](GUIDE036-node-occasion-policies.md#2-the-design-a-nodes-own-policy) |
@@ -160,47 +161,44 @@ minutes with the underrun counter watched throughout — the signal that
 caught the fault both previous times it mattered — before the reopened-
 stream path can be called reliable rather than merely improved.
 
-## 5. After the 2026-10-08 remediation
+## 5. What the reviews left
 
-The review of 2026-10-08 and the remediation that followed it closed most of
-what they found. What they left, reviewed 2026-10-09, in the order suggested
-then. Items that belong to one document are linked, not copied.
+The reviews of 2026-10-08 and 2026-10-14
+([reports/review-2026-10-14.md](../reports/review-2026-10-14.md)) and the work
+after each closed most of what they found. Where the code falls short of a
+specification, the one register is [architecture.md §10](architecture.md#10-known-gaps);
+what remains here is the work that crosses documents.
 
-1. **Roll the remaining appliances forward.** `bose` and `lp3-wifi` run builds
-   from 2026-10-05, before the restore fixes, the live Director, the fallback
-   and the audible timeline; `lempi02w` runs the latest
-   ([FLEET001](../fleet/FLEET001-the-fleet.md) `[FLT-RUN-010]`). Both have
-   overlay roots. Do the two deferred device checks of `[FLT-ISS-070]` — a
-   restore from the Listening backups row, and the play-rate check — on the
-   way. `lp3-wifi` is one star-sync run behind on preference edits, and
-   `bose` and `smartboardpc` await the catalogue patch by natural key
-   `[FLT-ISS-060]`.
-2. **A restore does not re-point `player_state` or `player_queue`.** Only the
-   play history follows recordings through a renumbering `[REQ-LIB-160]`, so
-   after a rebuild the resume point and the remembered queue can name other
-   songs.
-3. **`switch::carry_queue` discards drops waiting before a handoff.** A
-   passage that failed to open just before a switch keeps its queueing mark
-   instead of giving it back `[REQ-PD-112]`.
-4. **The Program Director's open items**, [SPEC009 §9](spec/SPEC009-program-director.md#9-open):
+1. **Roll `lempi02w` and `teacherslounge` forward.** `bose`, `lp3-wifi` and
+   `smartboardpc` run `399d860` since 2026-10-14; `lempi02w` runs `340be21`
+   (2026-10-10) and `teacherslounge` `ca8313f`, both powered off that day
+   ([FLEET001](../fleet/FLEET001-the-fleet.md) `[FLT-RUN-010]`). `lempi02w`
+   still credits Woodstock's and *An American Treasure*'s second discs as
+   their first discs' songs, as its 2026-10-06 bundle left them; on the
+   current build its next star sync asks it for its own rows and corrects them
+   `[SPEC-STAR-945]`. The Moto G (`64987ee`) needs a build from `e526926` on
+   for a re-identified track to reach it `[SPEC-PL-108]`. The two deferred
+   device checks of `[FLT-ISS-070]` -- a restore from the Listening backups
+   row, and the play-rate check -- remain.
+2. **The Program Director's open items**, [SPEC009 §9](spec/SPEC009-program-director.md#9-open):
    first `[SPEC-DIR-240]`, a passage that crashed the player coming straight
    back (a cheap guard, worth most on appliances powered by their speaker);
    then `[SPEC-DIR-235]` and `[SPEC-DIR-245]` together, a restored queue
    re-weighed and its provenance kept.
-5. **The now-playing panel while MPD is live**, [architecture.md §10](architecture.md#10-known-gaps):
-   the MPD backend knows its head and position, and could publish them
-   through the snapshot fields the panel already reads.
-6. **How a seek feels.** A seek cuts the ring with the skip's own fade (2 s)
+3. **How a seek feels.** A seek cuts the ring with the skip's own fade (2 s)
    and lead (0.5 s); a shorter fade of its own may feel crisper. The
    maintainer found it "functional, could be smoother", 2026-10-09: a question
    for the ear, not for a test.
-7. **Errors that read as zero, beyond the backups.** Review finding O-04 was
-   fixed in `backup.rs` only; the census, the pool count and other figures
-   shown to a person still read a failed query as 0.
-8. **The default skin and the settings layout** (review U-01, U-02), left as
+4. **The default skin and the settings layout** (review U-01, U-02), left as
    they are by the maintainer's decision of 2026-10-08. Worth revisiting once
    the rest settles: the settings list has grown since, with the Listening
-   backups row.
+   backups row and *Album names*.
+5. **Multi-disc sets as one album** ([SPEC026](spec/SPEC026-cd-ripping-passages.md)):
+   38 confirmed sets in the library and four of the month's CD imports
+   (2026-10-14); since `[SPEC-CDI-099]` the importer knows which disc it holds,
+   but a set still files and browses as separate albums.
+6. **CI cannot be read from the hub desktop** -- `gh` is not authenticated
+   there -- so a red run is seen only on GitHub. The gates pass locally.
 
 ---
 

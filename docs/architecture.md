@@ -225,8 +225,23 @@ moves over the network in that arrangement is control, not sound.
 Where what is built falls short of a specification, or of what a reader would
 assume. The specifications stay the statement of intent: each line here is a
 fault in the code, to be fixed there, and found 2026-10-08 unless it says
-otherwise.
+otherwise. **This is the one register of them** -- the
+[ROADMAP](ROADMAP.md) links here rather than keeping a second list, merged
+2026-10-14 when the two had drifted apart.
 
+* **A restore re-points the play history, not the resume point or the queue.**
+  Only the history follows recordings through a renumbering, so after a
+  rebuild `player_state` and `player_queue` can name other songs
+  `[REQ-LIB-160]`.
+* **`switch::carry_queue` discards the drops waiting before a handoff.** A
+  passage that failed to open just before a switch keeps its queueing mark
+  instead of giving it back `[REQ-PD-112]`.
+* **A boundary moved on Vipunen does not reach a file a phone already holds.**
+  The bundle importer matches a held file's passages by exact span
+  `[SPEC-PL-108]`, so a re-cut passage matches none: its credits are not
+  corrected, and the phone names the file back, so the hub offers it again
+  rather than taking it as delivered `[SPEC-PL-109]`. Star sync does carry a
+  boundary edit to a signed node `[SPEC-NKP-045]`. Found 2026-10-14.
 * **The now-playing panel is blank while MPD is the live backend** — title,
   position and duration come from the local engine's published state, so the
   seek bar has nothing to act on there, though MPD itself can seek.

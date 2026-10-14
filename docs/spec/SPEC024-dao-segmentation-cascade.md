@@ -32,15 +32,15 @@ requirement independently derived, not a port of McRhythm's implementation.
 
 ## 1. What this replaces
 
-Today, `tools/segment_dao.py` is a threshold-*sweep* silence detector only:
-given an expected track count, it tries a small grid of silence thresholds
-and keeps whichever produces that count, with no fallback when none does.
+Before this pass (2026-09-03), `tools/segment_dao.py` was a threshold-*sweep* silence detector only:
+given an expected track count, it tried a small grid of silence thresholds
+and kept whichever produced that count, with no fallback when none did.
 Measured against the library's own 188 already-segmented files: 80% exact
 track-count match, 94% of boundary starts within 2s. No dynamic-programming
 assembly, no RMS-based fallback when silence detection itself fails
 (vinyl, cassette, live recordings), no merging of over-detected tracks, and
 no MusicBrainz edition search at all — the expected count is always given
-by hand.
+by hand. (The MusicBrainz edition search is still not built, §8.)
 
 **`[SPEC-SA-115]` The target is McRhythm's cascade, not McRhythm's
 implementation.** [MCR-SPEC033](../inherited/mcrhythm/MCR-SPEC033-album_matching.md)

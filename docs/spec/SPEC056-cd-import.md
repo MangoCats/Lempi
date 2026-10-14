@@ -122,8 +122,8 @@ disc up -- MusicBrainz Disc ID, then the CUE's CD-TEXT -- and shows the album
 as it will be added: artist, title, year, cover, and the track list with titles
 and times. Where MusicBrainz knows several editions, the person picks one here,
 once, rather than later in the review queue. Nothing is encoded or written to
-preview. **Today's dry run does both**: `ingest_cd.py` encodes the whole MP3 and
-leaves it on disk before its dry run reports (found 2026-09-29).
+preview. Until 2026-09-29 the dry run did both: `ingest_cd.py` encoded the whole
+MP3 and left it on disk before reporting (fixed that day, `997e35d`).
 
 **`[SPEC-CDI-045]` Already in the library is said before anything is done.** A
 disc whose Disc ID or chosen release the catalogue already holds is flagged on
@@ -148,8 +148,8 @@ the music folder (the name shown, and editable, on the card; a long album name
 held short, and the files renamed to match, [SPEC063](SPEC063-album-names-held-short.md)), encode the MP3
 `[SPEC-RIP-045]`, write the passages from the CUE with the edition chosen,
 record the rip's verdict `[SPEC-RIP-054]`, and remove the WAV
-`[SPEC-RIP-040]` -- a FLAC copy kept first when the Settings switch says so `[SPEC-CDI-058]`. **Today the WAV is never removed** -- about 630 MB left beside
-each album (found 2026-09-29). Anything still uncertain goes to the existing
+`[SPEC-RIP-040]` -- a FLAC copy kept first when the Settings switch says so `[SPEC-CDI-058]`. Until 2026-09-29 the WAV was never removed -- about 630 MB left beside
+each album (fixed that day, `997e35d`). Anything still uncertain goes to the existing
 review queue, linked from the finished card.
 
 **`[SPEC-CDI-055]` Afterwards, the next steps are buttons too.** *Make it
@@ -229,8 +229,8 @@ written is recorded and held as an image rip's is `[SPEC-HOLD-030]`.
 finds, by search, a file that holds a whole album and no track list -- a DAO
 capture `[SPEC024]` -- and splits it with the same preview-then-add
 shape: find its release, show where the cascade would cut, open the existing
-boundary editor to adjust, then commit. Today that is the `segment-dao` job with
-a hand-typed track count or durations, and no page at all.
+boundary editor to adjust, then commit. Until 2026-09-29 that was the `segment-dao`
+job with a hand-typed track count or durations, and no page at all (`393b186`).
 
 ## 7. The guide beside the controls
 
