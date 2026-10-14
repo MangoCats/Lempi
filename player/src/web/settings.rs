@@ -333,6 +333,51 @@ pub(super) async fn set_keep_lossless_rips(
     }
 }
 
+/// *Album names, at most N characters* `[SPEC-NAM-010]`: how long an album name
+/// Vipunen gives a CD rip's folder and files. Offered, like the lossless
+/// switch, only where Vipunen rips.
+pub(super) async fn cd_album_name_max(State(ui): State<Ui>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if !ui.capabilities.rips_cds {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let (db, library) = (ui.db.clone(), ui.library.clone());
+    let max = tokio::task::spawn_blocking(move || {
+        crate::db::PlayerStore::open_split(&db, &library)
+            .map(|s| s.load_cd_album_name_max())
+            .unwrap_or(crate::db::CD_ALBUM_NAME_MAX_DEFAULT)
+    })
+    .await
+    .unwrap_or(crate::db::CD_ALBUM_NAME_MAX_DEFAULT);
+    let range = crate::db::CD_ALBUM_NAME_MAX_RANGE;
+    axum::Json(serde_json::json!({
+        "max": max, "default": crate::db::CD_ALBUM_NAME_MAX_DEFAULT,
+        "least": range.start(), "most": range.end(),
+    }))
+    .into_response()
+}
+
+/// 400 for a length outside the range or not a number: nothing is stored.
+pub(super) async fn set_cd_album_name_max(
+    State(ui): State<Ui>,
+    axum::extract::Path(n): axum::extract::Path<String>,
+) -> StatusCode {
+    if !ui.capabilities.rips_cds {
+        return StatusCode::NOT_FOUND;
+    }
+    let Ok(n) = n.parse::<u32>() else { return StatusCode::BAD_REQUEST };
+    let (db, library) = (ui.db.clone(), ui.library.clone());
+    let saved = tokio::task::spawn_blocking(move || {
+        crate::db::PlayerStore::open_split(&db, &library).map(|s| s.save_cd_album_name_max(n))
+    })
+    .await;
+    match saved {
+        Ok(Ok(Ok(true))) => StatusCode::NO_CONTENT,
+        Ok(Ok(Ok(false))) => StatusCode::BAD_REQUEST,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
 /// Answer discovery queries, or not `[SPEC-MTR-020]`.
 pub(super) async fn set_discovery_announce(
     State(ui): State<Ui>,

@@ -171,6 +171,11 @@ pub const SPEAKER_CONNECT_TIMEOUT_MIN: u32 = 5;
 pub const SPEAKER_CONNECT_TIMEOUT_MAX: u32 = 300;
 pub const SPEAKER_CONNECT_TIMEOUT_DEFAULT: u32 = 45;
 
+/// The longest album name a CD rip's folder and files are given `[SPEC-NAM-010]`;
+/// `tools/ingest_cd.py` holds the same numbers as `ALBUM_NAME_MAX`/`_RANGE`.
+pub const CD_ALBUM_NAME_MAX_DEFAULT: u32 = 60;
+pub const CD_ALBUM_NAME_MAX_RANGE: std::ops::RangeInclusive<u32> = 20..=200;
+
 pub(crate) const PREFERENCES_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS listener_preferences (
         subject_kind TEXT NOT NULL CHECK (subject_kind IN ('recording','artist')),
@@ -1414,6 +1419,37 @@ impl PlayerStore {
                 rusqlite::params![if on { "1" } else { "0" }],
             )
             .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// The longest album name Vipunen gives a CD rip's folder and files
+    /// `[SPEC-NAM-010]`: the default unless a person chose another within the
+    /// range. Read by `tools/ingest_cd.py`, which holds the same numbers.
+    pub fn load_cd_album_name_max(&self) -> u32 {
+        self.conn
+            .query_row("SELECT value FROM player_settings WHERE key = 'cd_album_name_max'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|n| CD_ALBUM_NAME_MAX_RANGE.contains(n))
+            .unwrap_or(CD_ALBUM_NAME_MAX_DEFAULT)
+    }
+
+    /// `false`, and nothing stored, for a length outside the range.
+    pub fn save_cd_album_name_max(&self, n: u32) -> Result<bool, DbError> {
+        if !CD_ALBUM_NAME_MAX_RANGE.contains(&n) {
+            return Ok(false);
+        }
+        self.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES ('cd_album_name_max', ?1, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![n.to_string()],
+            )
+            .map(|_| true)
             .map_err(|e| DbError::Query(e.to_string()))
     }
 

@@ -31,7 +31,10 @@ Until 2026-09-29 the "dry run" encoded the whole MP3 and left it on disk first.
 so no track of it waits in the review queue for a down-select. `--into` is the
 album's permanent folder; the rip is moved there before anything is recorded,
 so the catalogue names where the album lives, not the inbox it was ripped into
-`[SPEC-CDI-020]`. After the catalogue is written the WAV is removed
+`[SPEC-CDI-020]`. The move renames the files the ripper named after the disc
+to match that folder, the album held to the Settings page's length
+(`--album-name-max`), and refuses a destination Windows could not open before
+anything is encoded `[SPEC063]`. After the catalogue is written the WAV is removed
 `[SPEC-RIP-040]` -- it was left beside every album until 2026-09-29 -- with a
 FLAC copy made first if `--keep-flac`, or if the desktop player's Settings
 switch says so when neither flag is given `[SPEC-CDI-058]`. The CUE's `FILE`
@@ -141,7 +144,36 @@ def keep_lossless_setting(db_path: str) -> bool:
     return row is not None and row[0] == "1"
 
 
+# The longest album name a folder or file is given `[SPEC-NAM-010]`, unless
+# the Lempi skin's Settings page says otherwise. The same numbers as the
+# player's `CD_ALBUM_NAME_MAX_*` in `player_store.rs`, which stores the choice.
+ALBUM_NAME_MAX = 60
+ALBUM_NAME_RANGE = (20, 200)
+# Windows' MAX_PATH less its terminating NUL: what an ordinary program on the
+# hub can open with `LongPathsEnabled` off, as it was when *The Idler Wheel*
+# failed to file at 278 characters, 2026-10-13 `[SPEC-NAM-030]`.
+WINDOWS_PATH_MAX = 259
+
+
+def album_name_max_setting(db_path: str) -> int:
+    """The Lempi skin's *album names, at most N characters* `[SPEC-NAM-010]`,
+    from the desktop player's own settings. The default when unset, unreadable,
+    or outside the range the Settings page offers."""
+    try:
+        conn = lempi_db.connect(db_path, lempi_db.ROLE_LISTENER)
+        try:
+            row = conn.execute(
+                "SELECT value FROM player_settings WHERE key = 'cd_album_name_max'").fetchone()
+        finally:
+            conn.close()
+        n = int(row[0]) if row else ALBUM_NAME_MAX
+    except Exception:                                          # noqa: BLE001
+        return ALBUM_NAME_MAX
+    return n if ALBUM_NAME_RANGE[0] <= n <= ALBUM_NAME_RANGE[1] else ALBUM_NAME_MAX
+
+
 _BAD_NAME = str.maketrans({c: "_" for c in '<>:"/\\|?*'})
+_TRAILING = " .,;:-_&+"
 
 
 def safe_name(text: str) -> str:
@@ -150,25 +182,175 @@ def safe_name(text: str) -> str:
     return (text or "").translate(_BAD_NAME).strip().rstrip(". ") or "Unknown"
 
 
-def proposed_folder(artist: str | None, album: str | None, year: str | None) -> str:
-    """`Artist\\Album (Year)`, relative to the music folder `[SPEC-CDI-050]`."""
-    title = safe_name(album or "Unknown album")
+def shorten(text: str, limit: int) -> str:
+    """`text` held to `limit` characters `[SPEC-NAM-020]`: cut at the last word
+    that fits, unless that loses more than half; a parenthesis the cut left open
+    dropped; no trailing punctuation, dot or space -- Windows refuses a folder
+    name ending in either of the last two."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    space = cut.rfind(" ")
+    if space >= limit // 2:
+        cut = cut[:space]
+    cut = cut.rstrip(_TRAILING)
+    if cut.count("(") > cut.count(")") and cut.rfind("(") > 0:
+        cut = cut[:cut.rfind("(")].rstrip(_TRAILING)
+    while True:
+        head, _, last = cut.rpartition(" ")
+        if last.lower() not in _DANGLING or len(head) < limit // 2:
+            break
+        cut = head.rstrip(_TRAILING)
+    return cut or text[:limit].rstrip(". ")
+
+
+# Words a cut should not end on: "...of the Screw and" reads as a mistake,
+# "...of the Screw" as a title.
+_DANGLING = {"a", "an", "and", "as", "at", "by", "for", "from", "in", "into", "of", "on",
+             "or", "the", "to", "with", "&", "+", "-"}
+
+
+def proposed_folder(artist: str | None, album: str | None, year: str | None,
+                    limit: int = ALBUM_NAME_MAX) -> str:
+    """`Artist\\Album (Year)`, relative to the music folder `[SPEC-CDI-050]`,
+    the album held to `limit` characters before the year `[SPEC-NAM-020]`."""
+    title = shorten(safe_name(album or "Unknown album"), limit)
     if year:
         title = f"{title} ({year})"
     return os.path.join(safe_name(artist or "Unknown artist"), title)
 
 
-def move_rip(folder: str, into: str) -> str:
-    """Move everything the rip left in `folder` to `into`, the album's
-    permanent home; returns `into`. Refuses to write over a file already there
-    -- an album folder that exists may hold another edition."""
-    os.makedirs(into, exist_ok=True)
+_YEAR = re.compile(r"\s\(\d{4}\)$")
+
+
+def renamed_files(folder: str, into: str, artist: str | None, limit: int,
+                  extra: tuple = ()) -> dict[str, str]:
+    """The new name of each file the move renames `[SPEC-NAM-040]`, old to
+    new; a file not in it keeps its name.
+
+    A ripper names its files after the disc -- CUERipper `Artist - Album` and
+    then `(Disc 1).cue`, EAC the same without the suffix -- and names the rip's
+    folder in the inbox the same way. So a file whose name starts with the rip
+    folder's name, where the CUE's does too, has that part replaced by
+    `Artist - Album`, the album as its new folder names it (less the year) and
+    held to `limit`: the names follow the folder a person saw and could edit.
+    A name the ripper cut short to fit its own path -- `...Mor(Dis.accurip`
+    beside `...Mor(Disc 1).cue` -- is given the CUE's whole new name. A rip
+    whose names do not start with its folder's (track files, `01. Title.wav`)
+    keeps them. `extra` names files not made yet: the MP3, the FLAC copy."""
     names = [n for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n))]
-    clash = [n for n in names if os.path.exists(os.path.join(into, n))]
+    names += [n for n in extra if n not in names]
+    anchor = os.path.basename(os.path.normpath(folder))
+    cues = [n for n in names if n.lower().endswith(".cue")]
+    if not cues or not cues[0].startswith(anchor):
+        return {}
+    album = shorten(safe_name(_YEAR.sub("", os.path.basename(os.path.normpath(into)))), limit)
+    prefix = f"{safe_name(artist)} - {album}" if artist else album
+    cue_stem = os.path.splitext(cues[0])[0]
+    out = {}
+    for n in names:
+        stem, ext = os.path.splitext(n)
+        if not n.startswith(anchor):
+            continue
+        if cue_stem.startswith(stem) and stem != cue_stem:
+            new = prefix + cue_stem[len(anchor):] + ext          # cut short by the ripper
+        else:
+            new = prefix + n[len(anchor):]
+        if new != n:
+            out[n] = new
+    return out
+
+
+class PathTooLong(ValueError):
+    """A file the move would make is longer than Windows opens `[SPEC-NAM-030]`."""
+
+
+def check_paths(folder: str, into: str, renames: dict[str, str], extra: tuple = ()) -> None:
+    """Refuse, before anything is encoded or moved, a destination this
+    computer cannot hold `[SPEC-NAM-030]`: two files given one name, or -- on
+    Windows -- a path longer than `WINDOWS_PATH_MAX`. The message names the
+    longest and what to do about it."""
+    names = [n for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n))]
+    names += [n for n in extra if n not in names]
+    final = [renames.get(n, n) for n in names]
+    twice = sorted({n for n in final if final.count(n) > 1})
+    if twice:
+        raise ValueError(f"the move would give two files one name: {twice[:3]}")
+    if os.name != "nt":
+        return
+    longest = max((os.path.join(os.path.abspath(into), n) for n in final), key=len, default="")
+    if len(longest) > WINDOWS_PATH_MAX:
+        raise PathTooLong(
+            f"{longest!r} would be {len(longest)} characters, and Windows opens at most {WINDOWS_PATH_MAX}: "
+            "give the album a shorter folder name, or lower 'album names, at most' on the Lempi "
+            "Settings page -- nothing was moved")
+
+
+def rename_in_cue(cue_path: str, renames: dict[str, str]) -> None:
+    """Each `FILE` line naming a renamed file names its new name `[SPEC-NAM-040]`,
+    so the sheet still opens what lies beside it. Written back as UTF-8, as
+    `point_cue_at` keeps it; untouched when nothing it names was renamed."""
+    text = cd_toc.read_cue_text(cue_path)
+    out = [_CUE_NAME.sub(lambda m: m.group(1) + renames.get(m.group(2), m.group(2)) + m.group(3), line, count=1)
+           for line in text.splitlines(keepends=True)]
+    if out == text.splitlines(keepends=True):
+        return
+    with open(cue_path, "wb") as fh:
+        fh.write("".join(out).encode("utf-8"))
+
+
+_CUE_NAME = re.compile(r'^(\s*FILE\s+")([^"]*)(")', re.I)
+
+
+def move_rip(folder: str, into: str, renames: dict[str, str] | None = None) -> str:
+    """Move everything the rip left in `folder` to `into`, the album's
+    permanent home, each file under its name in `renames` if it has one;
+    returns `into`. Refuses to write over a file already there -- an album
+    folder that exists may hold another edition.
+
+    All or nothing `[SPEC-NAM-050]`: a move that fails part-way puts back what
+    it moved and removes the folders it made, so the rip is in the inbox as it
+    was and no empty album folder is left behind -- *The Idler Wheel* left one,
+    2026-10-13."""
+    renames = renames or {}
+    names = [n for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n))]
+    check_paths(folder, into, renames)
+    clash = [renames.get(n, n) for n in names if os.path.exists(os.path.join(into, renames.get(n, n)))]
     if clash:
         raise FileExistsError(f"{into!r} already holds {clash[:3]}: not moved over")
-    for n in names:
-        shutil.move(os.path.join(folder, n), os.path.join(into, n))
+    made, d = [], os.path.abspath(into)
+    while not os.path.isdir(d):
+        made.append(d)
+        d = os.path.dirname(d)
+    moved, sheets = [], []
+    try:
+        os.makedirs(into, exist_ok=True)
+        for n in names:
+            dst = os.path.join(into, renames.get(n, n))
+            shutil.move(os.path.join(folder, n), dst)
+            moved.append((n, dst))
+        for n in names:
+            if renames and n.lower().endswith(".cue"):
+                sheets.append(os.path.join(into, renames.get(n, n)))
+                rename_in_cue(sheets[-1], renames)
+    except Exception:
+        back = {new: old for old, new in renames.items()}
+        for sheet in sheets:
+            try:
+                rename_in_cue(sheet, back)
+            except OSError:
+                pass
+        for n, dst in reversed(moved):
+            try:
+                shutil.move(dst, os.path.join(folder, n))
+            except OSError:
+                pass
+        for d in made:                          # deepest first
+            try:
+                os.rmdir(d)
+            except OSError:
+                break
+        raise
     try:
         os.rmdir(folder)                        # only if the rip left it empty
     except OSError:
@@ -506,13 +688,20 @@ def refuse_duplicate(conn, releases: list[dict], positions, allow: bool) -> None
             "is added only when asked -- tick \"Add it again\" on the import page, or pass --allow-duplicate")
 
 
-def release_summary(release: dict, track_count: int, conn=None, positions=None) -> dict:
+def release_credit(release: dict) -> str:
+    """An edition's artist credit as MusicBrainz writes it, joins and all."""
+    return "".join((a.get("name") or "") + (a.get("joinphrase") or "")
+                   for a in release.get("artist-credit") or []).strip()
+
+
+def release_summary(release: dict, track_count: int, conn=None, positions=None,
+                    limit: int = ALBUM_NAME_MAX) -> dict:
     """One candidate edition as the preview shows it `[SPEC-CDI-040]`: who,
     what, when, its track list for this disc, the folder it would be filed
-    under, and how many of its recordings the library already plays -- the
-    "already in the library" signal `[SPEC-CDI-045]`."""
-    credit = "".join((a.get("name") or "") + (a.get("joinphrase") or "")
-                     for a in release.get("artist-credit") or []).strip()
+    under -- its album name held to `limit` `[SPEC-NAM-020]` -- and how many of
+    its recordings the library already plays -- the "already in the library"
+    signal `[SPEC-CDI-045]`."""
+    credit = release_credit(release)
     media = release.get("media") or []
     medium = next((m for m in media if len(m.get("tracks") or []) == track_count), media[0] if media else {})
     tracks = [{"position": t.get("position"), "title": t.get("title"), "length_ms": t.get("length")}
@@ -533,7 +722,7 @@ def release_summary(release: dict, track_count: int, conn=None, positions=None) 
     return {"id": release.get("id"), "title": release.get("title"), "artist": credit or None,
             "year": year, "country": release.get("country"), "tracks": tracks,
             "in_library": held, "duplicate": bool(dup and dup[0] == dup[1]),
-            "folder": proposed_folder(credit, release.get("title"), year)}
+            "folder": proposed_folder(credit, release.get("title"), year, limit)}
 
 
 # -------------------------------------------------------------------- commit
@@ -848,14 +1037,15 @@ def preview_tracks(db_path: str, folder: str) -> dict:
     rip = open_tracks(folder)
     toc = rip["toc"]
     disc_outcome, releases, disc_id = identify_disc(toc, rip["log_toc"])
+    limit = album_name_max_setting(db_path)
     conn = lempi_db.connect(db_path, lempi_db.ROLE_LIBRARY)
     try:
-        rels = [release_summary(r, toc.track_count, conn, [t.number for t, _p in rip["present"]])
+        rels = [release_summary(r, toc.track_count, conn, [t.number for t, _p in rip["present"]], limit)
                 for r in releases[:8]]
     finally:
         conn.close()
-    cd_folder = proposed_folder(toc.performer, toc.title, None) if toc.title else None
-    return {"dry_run": True, "format": "eac", "mode": "tracks",
+    cd_folder = proposed_folder(toc.performer, toc.title, None, limit) if toc.title else None
+    return {"dry_run": True, "format": "eac", "mode": "tracks", "album_name_max": limit,
             "audio": f"{len(rip['present'])} of {toc.track_count} track files",
             "audio_bytes": sum(os.path.getsize(p) for _t, p in rip["present"]),
             "tracks": toc.track_count, "missing": _missing_titles(toc, rip["missing"]),
@@ -963,8 +1153,35 @@ def _drop(paths) -> None:
             pass
 
 
+def _plan_move(folder: str, into: str | None, releases: list[dict], toc: cd_toc.DiscToc,
+               limit: int, made: list[str]) -> dict[str, str]:
+    """The names the move gives each file, `made` included (the MP3s and FLACs
+    not encoded yet), and the destination refused now if it cannot be held --
+    before twenty seconds of encoding, not after `[SPEC-NAM-030]`. The artist
+    is the one the proposed folder was named after: the edition's credit when
+    there is one, else the disc's CD-TEXT."""
+    if not into:
+        return {}
+    artist = release_credit(releases[0]) if len(releases) == 1 else toc.performer
+    renames = renamed_files(folder, into, artist, limit, tuple(made))
+    check_paths(folder, into, renames, tuple(made))
+    return renames
+
+
+def _move_or_drop(folder: str, into: str, renames: dict[str, str], made: list[str]) -> str:
+    """`move_rip`, and on failure the encoded files removed as well: the rip
+    is left in the inbox exactly as the ripper wrote it `[SPEC-NAM-050]` -- a
+    failed move left the MP3 beside *The Idler Wheel*'s WAV, 2026-10-13."""
+    try:
+        return move_rip(folder, into, renames)
+    except Exception:
+        _drop(os.path.join(folder, n) for n in made)
+        raise
+
+
 def ingest_tracks(db_path: str, folder: str, release: str | None, into: str | None,
-                  keep_flac: bool, occasions: tuple = (), allow_duplicate: bool = False) -> dict:
+                  keep_flac: bool, occasions: tuple = (), allow_duplicate: bool = False,
+                  album_name_max: int = ALBUM_NAME_MAX) -> dict:
     """`do_ingest` for a tracks-mode rip: each WAV encoded as the image's is,
     then the same order -- the catalogue written before any WAV is touched,
     and a FLAC copy made first when asked `[SPEC-RIP-040]`."""
@@ -984,6 +1201,9 @@ def ingest_tracks(db_path: str, folder: str, release: str | None, into: str | No
             if not releases:
                 raise ValueError(f"release {release} is not among this disc's matches")
         refuse_duplicate(conn, releases, [t.number for t, _w in rip["present"]], allow_duplicate)
+        exts = (".mp3", ".flac") if keep_flac else (".mp3",)
+        made = [os.path.splitext(os.path.basename(w))[0] + e for _t, w in rip["present"] for e in exts]
+        renames = _plan_move(folder, into, releases, toc, album_name_max, made)
 
         for i, (t, wav) in enumerate(rip["present"], 1):
             say(f"encoding track {t.number} ({i} of {len(rip['present'])}) ...")
@@ -1005,9 +1225,10 @@ def ingest_tracks(db_path: str, folder: str, release: str | None, into: str | No
     try:
         if into:
             say(f"filing it in {into} ...")
-            folder = move_rip(folder, into)
-            encoded = [(t, os.path.join(folder, os.path.basename(w)), os.path.join(folder, os.path.basename(m)), md5)
-                       for t, w, m, md5 in encoded]
+            folder = _move_or_drop(folder, into, renames, made)
+            moved = lambda p: os.path.join(folder, renames.get(os.path.basename(p), os.path.basename(p)))  # noqa: E731
+            encoded = [(t, moved(w), moved(m), md5) for t, w, m, md5 in encoded]
+            rip["cue"] = moved(rip["cue"])
         say("writing the album ...")
         conn.execute("BEGIN IMMEDIATE")
         result = commit_tracks(conn, toc, [(t, m, md5) for t, _w, m, md5 in encoded], rip["missing"],
@@ -1047,13 +1268,14 @@ def preview(db_path: str, folder: str) -> dict:
         return preview_tracks(db_path, folder)
     fmt, _cue, toc, wav_path, rip_report = open_rip(folder)
     disc_outcome, releases = lookup_disc_id(toc)
+    limit = album_name_max_setting(db_path)
     conn = lempi_db.connect(db_path, lempi_db.ROLE_LIBRARY)
     try:
-        rels = [release_summary(r, toc.track_count, conn) for r in releases[:8]]
+        rels = [release_summary(r, toc.track_count, conn, limit=limit) for r in releases[:8]]
     finally:
         conn.close()
-    cd_folder = proposed_folder(toc.performer, toc.title, None) if toc.title else None
-    return {"dry_run": True, "format": fmt, "audio": os.path.basename(wav_path),
+    cd_folder = proposed_folder(toc.performer, toc.title, None, limit) if toc.title else None
+    return {"dry_run": True, "format": fmt, "album_name_max": limit, "audio": os.path.basename(wav_path),
             "audio_bytes": os.path.getsize(wav_path), "tracks": toc.track_count,
             "track_list": [{"number": t.number, "start_ms": t.start_ms, "end_ms": t.end_ms,
                             "title": t.title, "performer": t.performer} for t in toc.tracks],
@@ -1066,7 +1288,7 @@ def preview(db_path: str, folder: str) -> dict:
 
 def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = None,
               into: str | None = None, keep_flac: bool | None = None, occasions: tuple = (),
-              allow_duplicate: bool = False) -> dict:
+              allow_duplicate: bool = False, album_name_max: int | None = None) -> dict:
     import sqlite3  # noqa: F401  -- the connection below is lempi_db's
 
     if not commit:
@@ -1074,8 +1296,11 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
 
     if keep_flac is None:
         keep_flac = keep_lossless_setting(db_path)
+    if album_name_max is None:
+        album_name_max = album_name_max_setting(db_path)
     if is_tracks_rip(folder):
-        return ingest_tracks(db_path, folder, release, into, keep_flac, occasions, allow_duplicate)
+        return ingest_tracks(db_path, folder, release, into, keep_flac, occasions, allow_duplicate,
+                             album_name_max)
     fmt, _cue, toc, wav_path, rip_report = open_rip(folder)
 
     # Catalogue-only, and it writes -- library half as `main`.
@@ -1093,6 +1318,9 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
             if not releases:
                 raise ValueError(f"release {release} is not among this disc's matches")
         refuse_duplicate(conn, releases, [t.number for t in toc.tracks], allow_duplicate)
+        stem = os.path.splitext(os.path.basename(wav_path))[0]
+        made = [stem + ".mp3"] + ([stem + ".flac"] if keep_flac else [])
+        renames = _plan_move(folder, into, releases, toc, album_name_max, made)
 
         say("encoding the MP3 ...")
         if not encode_to_mp3(wav_path, mp3_path):
@@ -1112,9 +1340,9 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
     try:
         if into:
             say(f"filing it in {into} ...")
-            folder = move_rip(folder, into)
-            wav_path = os.path.join(folder, os.path.basename(wav_path))
-            mp3_path = os.path.join(folder, os.path.basename(mp3_path))
+            folder = _move_or_drop(folder, into, renames, made)
+            wav_path = os.path.join(folder, renames.get(os.path.basename(wav_path), os.path.basename(wav_path)))
+            mp3_path = os.path.join(folder, renames.get(os.path.basename(mp3_path), os.path.basename(mp3_path)))
 
         say("writing the album ...")
         conn.execute("BEGIN IMMEDIATE")
@@ -1161,6 +1389,9 @@ def main() -> int:
     flac.add_argument("--keep-flac", dest="keep_flac", action="store_true", default=None,
                       help="keep a lossless FLAC copy (default: the Lempi Settings switch)")
     flac.add_argument("--no-keep-flac", dest="keep_flac", action="store_false")
+    ap.add_argument("--album-name-max", type=int, default=None, metavar="N",
+                    help="hold album names in folder and file names to N characters "
+                         "(default: the Lempi Settings value, else %d) [SPEC-NAM-010]" % ALBUM_NAME_MAX)
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--allow-duplicate", action="store_true",
                     help="add a second copy of an edition the library already holds whole [SPEC-CDI-047]")
@@ -1172,7 +1403,8 @@ def main() -> int:
     try:
         result = do_ingest(args.db, args.folder, args.commit, release=args.release,
                            into=args.into, keep_flac=args.keep_flac,
-                           occasions=tuple(args.occasions or ()), allow_duplicate=args.allow_duplicate)
+                           occasions=tuple(args.occasions or ()), allow_duplicate=args.allow_duplicate,
+                           album_name_max=args.album_name_max)
     except Exception as e:                                    # noqa: BLE001
         if args.json:
             print(json.dumps({"ok": False, "error": str(e)}))

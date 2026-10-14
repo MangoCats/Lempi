@@ -529,6 +529,9 @@ pub fn router(ui: Ui) -> Router {
         // A lossless copy of each CD rip, or not `[SPEC-CDI-058]`.
         .route("/rips/keep-lossless", get(keep_lossless_rips))
         .route("/rips/keep-lossless/:on", post(set_keep_lossless_rips))
+        // How long an album name a rip's folder and files get `[SPEC-NAM-010]`.
+        .route("/rips/album-name-max", get(cd_album_name_max))
+        .route("/rips/album-name-max/:n", post(set_cd_album_name_max))
         .route("/skip/suppress/:hours", post(set_skip_suppress))
         .route("/dequeue/suppress/:hours", post(set_dequeue_suppress))
         .route("/queue/depth/:n", post(set_queue_depth))
@@ -1571,7 +1574,8 @@ mod tests {
     }
 
     /// `[SPEC-CDI-058]`: the lossless-copy switch, stored where `ingest_cd.py`
-    /// reads it (`keep_lossless_rips` = "1"), and only on a player that rips.
+    /// reads it (`keep_lossless_rips` = "1"), and only on a player that rips;
+    /// the album-name length `[SPEC-NAM-010]` beside it, the same way.
     #[tokio::test]
     async fn the_lossless_switch_is_kept_and_offered_only_beside_vipunen() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1612,9 +1616,20 @@ mod tests {
         let v: String = rusqlite::Connection::open(d.join("listener.db")).unwrap()
             .query_row("SELECT value FROM player_settings WHERE key='keep_lossless_rips'", [], |r| r.get(0)).unwrap();
         assert_eq!(v, "1", "stored as ingest_cd.py reads it");
+        // `[SPEC-NAM-010]`: the album-name length, 60 until chosen, kept only
+        // within its range, and stored as the number `ingest_cd.py` reads.
+        assert!(call(a, "GET", "/rips/album-name-max").await.contains(r#""max":60"#), "60 unless chosen");
+        assert!(call(a, "POST", "/rips/album-name-max/80").await.contains(" 204 "));
+        assert!(call(a, "POST", "/rips/album-name-max/5").await.contains(" 400 "), "below the range");
+        assert!(call(a, "POST", "/rips/album-name-max/many").await.contains(" 400 "), "not a number");
+        assert!(call(a, "GET", "/rips/album-name-max").await.contains(r#""max":80"#), "kept once chosen");
+        let v: String = rusqlite::Connection::open(d.join("listener.db")).unwrap()
+            .query_row("SELECT value FROM player_settings WHERE key='cd_album_name_max'", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, "80", "stored as ingest_cd.py reads it");
         let b = serve(false).await;
         assert!(call(b, "GET", "/rips/keep-lossless").await.contains(" 404 "), "not offered where nothing rips");
         assert!(call(b, "POST", "/rips/keep-lossless/on").await.contains(" 404 "));
+        assert!(call(b, "GET", "/rips/album-name-max").await.contains(" 404 "));
         let _ = std::fs::remove_dir_all(&d);
     }
 

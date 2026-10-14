@@ -277,6 +277,17 @@
          your music folder.</strong> It applies to every rip added after you tick
          it, never to one already added.</p>
     </div>
+    <div class="setting" id="albumname-row" hidden>
+      <label for="albumnamemax">Album names</label>
+      <span>at most <input type="number" id="albumnamemax" min="20" max="200" step="1" style="width:5em">
+        characters <small id="albumnamestatus"></small></span>
+      <p>When Vipunen adds a CD, it names the album&rsquo;s folder and files after
+         the album. A very long title is cut at a word to this length, so the
+         files stay within what Windows can open and what a speaker can copy.
+         The full title is still the album&rsquo;s name everywhere Lempi shows
+         it. You can still edit the folder name on the import page before adding.
+         60 unless you choose another; it applies to rips added after you change it.</p>
+    </div>
     <div class="setting">
       <label>Server build</label>
       <span><small id="buildtext" title="The version and the commit it was built from.">&mdash;</small><button type="button" class="copy" id="buildcopy" title="Copy the server build to the clipboard">&#x29C9;</button></span>

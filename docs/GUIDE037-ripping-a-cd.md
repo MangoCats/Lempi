@@ -89,7 +89,9 @@ Open Vipunen's **import** page. The rip appears as a card on its own, and says:
 
 Open the card: Vipunen shows the album -- artist, title, year and track list.
 If MusicBrainz knows several editions, pick yours. Check the folder name it
-proposes, then press **Add to library**. It files the album, makes the MP3,
+proposes -- a very long title is cut at a word, to 60 characters unless the
+Lempi Settings page's **Album names** says otherwise, and the rip's files are
+renamed to match as they move -- then press **Add to library**. It files the album, makes the MP3,
 removes the large WAV, and splits the album into its tracks from the disc's own
 track list. Then it analyses the tracks -- how each one sounds, and how it fades
 in and out -- so the radio can choose them. That takes about half a minute of

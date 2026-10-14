@@ -286,7 +286,13 @@ function showPreview(p, folder, area) {
       ? 'MusicBrainz knows several editions of this disc -- choose yours:' : 'This is the disc:' }), help('add')),
     gap, pick, warn, occ,
     S.el('div', { class: 'controls' }, S.el('span', { style: 'align-self:center;font-size:.88rem',
-      text: 'Album folder, in your music folder:' }), into, add));
+      text: 'Album folder, in your music folder:' }), into, add),
+    // [SPEC-NAM-010..040]: why a long title's folder is shorter than the
+    // title, and that the files take its name when they move.
+    p.album_name_max ? S.el('p', { class: 'steps', text:
+      `Album names in folder and file names are held to ${p.album_name_max} characters, cut at a word `
+      + '(Lempi Settings, Album names). The rip\'s files are renamed after this folder as they move; '
+      + 'the album keeps its full title in the library.' }) : null);
 }
 
 function done(job, into, rel, area) {

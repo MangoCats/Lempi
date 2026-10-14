@@ -289,6 +289,158 @@ def test_keep_lossless_setting():
           "unreadable: off")
 
 
+IDLER = ("The Idler Wheel Is Wiser Than the Driver of the Screw and Whipping Cords Will Serve You "
+         "More Than Ropes Will Ever Do")
+
+
+def test_album_names_held_short():
+    """[SPEC-NAM-010..020]: the setting, read as the player stores it, and an
+    album name held to it at a word, never ending mid-thought."""
+    print("album names: the setting, and the shortening")
+    p = os.path.join(tempfile.mkdtemp(), "lempi.db")
+    c = sqlite3.connect(p)
+    c.executescript(SCHEMA + "CREATE TABLE player_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);")
+    c.commit()
+    check(ingest_cd.album_name_max_setting(p) == 60, "unset: 60")
+    for value, want in (("80", 80), ("5", 60), ("999", 60), ("many", 60)):
+        c.execute("INSERT OR REPLACE INTO player_settings VALUES ('cd_album_name_max', ?1, 'now')", (value,))
+        c.commit()
+        got = ingest_cd.album_name_max_setting(p)
+        check(got == want, f"stored {value!r}: {want}, got {got}")
+    c.close()
+    check(ingest_cd.album_name_max_setting(os.path.join(tempfile.mkdtemp(), "none.db")) == 60, "unreadable: 60")
+
+    s = ingest_cd.shorten(IDLER, 60)
+    check(s == "The Idler Wheel Is Wiser Than the Driver of the Screw", f"at a word, not on 'and': {s!r}")
+    check(ingest_cd.shorten("Fetch the Bolt Cutters", 60) == "Fetch the Bolt Cutters", "a short name is left alone")
+    check(ingest_cd.shorten("Hits (The Very Best of Everything Anyone Ever Recorded)", 30) == "Hits",
+          "a parenthesis the cut left open is dropped")
+    check(ingest_cd.shorten("A" * 80, 60) == "A" * 60, "one word too long is cut at the limit")
+    check(ingest_cd.proposed_folder("Fiona Apple", IDLER, "2012", 60)
+          == os.path.join("Fiona Apple", "The Idler Wheel Is Wiser Than the Driver of the Screw (2012)"),
+          "the folder holds the album to the limit, then adds the year")
+
+
+def _cueripper_rip(parent: str, album: str, wav_secs: int | None = None) -> str:
+    """A rip shaped as CUERipper leaves one: a folder `Artist - Album` cut
+    short, files named after it with `(Disc 1)`, and an `.accurip` cut
+    shorter still -- the names *The Idler Wheel* arrived with, 2026-10-13."""
+    import subprocess
+    stem = f"Fiona Apple - {album}"
+    folder = os.path.join(parent, stem)
+    os.makedirs(folder)
+    with open(os.path.join(folder, stem + "(Disc 1).cue"), "w", encoding="cp1252", newline="\r\n") as f:
+        f.write(f'PERFORMER "Fiona Apple"\nTITLE "{IDLER}"\nFILE "{stem}(Disc 1).wav" WAVE\n'
+                '  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    INDEX 01 00:02:00\n')
+    for name in (stem + "(Disc 1).log", stem + "(Dis.accurip", "folder.jpg"):
+        with open(os.path.join(folder, name), "w") as f:
+            f.write(name)
+    wav = os.path.join(folder, stem + "(Disc 1).wav")
+    if wav_secs:
+        subprocess.run([ingest_cd.FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i",
+                        f"sine=frequency=330:duration={wav_secs}", "-ar", "44100", "-ac", "2", wav], check=True)
+    else:
+        open(wav, "wb").close()
+    return folder
+
+
+def test_files_renamed_with_the_folder():
+    """[SPEC-NAM-040..050]: the ripper's names follow the album folder, the CUE
+    names what lies beside it, and a move that fails puts everything back."""
+    print("move_rip: names follow the folder; a failed move is undone")
+    rip = _cueripper_rip(tempfile.mkdtemp(), IDLER[:60])
+    home = os.path.join(tempfile.mkdtemp(), "Fiona Apple", "The Idler Wheel (2012)")
+    renames = ingest_cd.renamed_files(rip, home, "Fiona Apple", 60, ("x.mp3",))
+    want = {f"Fiona Apple - {IDLER[:60]}(Disc 1).{e}": f"Fiona Apple - The Idler Wheel(Disc 1).{e}"
+            for e in ("cue", "wav", "log")}
+    want[f"Fiona Apple - {IDLER[:60]}(Dis.accurip"] = "Fiona Apple - The Idler Wheel(Disc 1).accurip"
+    check(renames == want, f"renamed after the folder, the cut-short one made whole: {renames}")
+    check(ingest_cd.renamed_files(rip, home, None, 60) .get(f"Fiona Apple - {IDLER[:60]}(Disc 1).cue")
+          == "The Idler Wheel(Disc 1).cue", "with no artist known, the album alone")
+
+    # Fail on the third file: what moved comes back, the folders made go.
+    real, calls = ingest_cd.shutil.move, []
+
+    def flaky(src, dst):
+        calls.append(src)
+        if len(calls) == 3:
+            raise OSError("[WinError 3] The system cannot find the path specified")
+        return real(src, dst)
+    before = sorted(os.listdir(rip))
+    ingest_cd.shutil.move = flaky
+    try:
+        ingest_cd.move_rip(rip, home, renames)
+        check(False, "the failing move raises")
+    except OSError:
+        pass
+    finally:
+        ingest_cd.shutil.move = real
+    check(sorted(os.listdir(rip)) == before, f"every file back in the inbox: {sorted(os.listdir(rip))}")
+    check(not os.path.exists(os.path.dirname(home)), "and no empty album or artist folder left")
+
+    ingest_cd.move_rip(rip, home, renames)
+    names = sorted(os.listdir(home))
+    check(names == sorted(list(want.values()) + ["folder.jpg"]), f"moved under the new names: {names}")
+    check(not os.path.exists(rip), "the inbox folder is gone")
+    cue = open(os.path.join(home, "Fiona Apple - The Idler Wheel(Disc 1).cue"), encoding="utf-8").read()
+    check('FILE "Fiona Apple - The Idler Wheel(Disc 1).wav" WAVE' in cue, f"the CUE names the renamed WAV: {cue!r}")
+
+    print("check_paths: a destination Windows cannot open is refused before anything moves")
+    rip2 = _cueripper_rip(tempfile.mkdtemp(), IDLER[:60])
+    deep = os.path.join(tempfile.mkdtemp(), "x" * 120, "y" * 60)
+    if os.name == "nt":
+        try:
+            ingest_cd.check_paths(rip2, deep, {})
+            check(False, "a 260-character path is refused")
+        except ingest_cd.PathTooLong as e:
+            check("Settings" in str(e) and "nothing was moved" in str(e), f"and says what to do: {e}")
+    try:
+        ingest_cd.check_paths(rip2, home, {"folder.jpg": "a", "Fiona Apple - " + IDLER[:60] + "(Disc 1).log": "a"})
+        check(False, "two files given one name are refused")
+    except ValueError as e:
+        check("two files one name" in str(e), str(e))
+
+
+def test_long_title_end_to_end():
+    """[SPEC-NAM-010..050], with a real WAV and ffmpeg: *The Idler Wheel* as
+    CUERipper left it, added into the folder the preview proposed. Its files
+    follow the folder's name, the MP3 and its CUE share a stem -- how the
+    player finds a sheet (`player/src/cue.rs`) -- and the catalogue names it."""
+    if not ingest_cd.FFMPEG:
+        check(False, "long title end to end needs ffmpeg")
+        return
+    print("long title end to end: preview proposes a short folder; the add files under it")
+    rip = _cueripper_rip(tempfile.mkdtemp(), IDLER[:60], wav_secs=4)
+    rel = {"id": "rel-I", "title": IDLER, "date": "2012-06-19", "artist-credit": [{"name": "Fiona Apple"}],
+           "media": [{"tracks": [{"position": n, "title": f"Song {n}", "length": 2000,
+                                  "recording": {"id": f"rec-i{n}", "title": f"Song {n}"}} for n in (1, 2)]}]}
+    db = os.path.join(tempfile.mkdtemp(), "lempi.db")
+    c = sqlite3.connect(db)
+    c.executescript(SCHEMA + "CREATE TABLE player_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);")
+    c.commit()
+    c.close()
+    old = ingest_cd.lookup_disc_id
+    ingest_cd.lookup_disc_id = lambda toc: ("exact", [rel])
+    try:
+        p = ingest_cd.do_ingest(db, rip, commit=False)
+        want = os.path.join("Fiona Apple", "The Idler Wheel Is Wiser Than the Driver of the Screw (2012)")
+        check(p["folder"] == want and p["album_name_max"] == 60, f"the proposed folder: {p['folder']!r}")
+        home = os.path.join(tempfile.mkdtemp(), p["folder"])
+        r = ingest_cd.do_ingest(db, rip, commit=True, release="rel-I", into=home, keep_flac=False)
+        stem = "Fiona Apple - The Idler Wheel Is Wiser Than the Driver of the Screw(Disc 1)"
+        names = sorted(os.listdir(home))
+        check(names == sorted([stem + e for e in (".accurip", ".cue", ".log", ".mp3")] + ["folder.jpg"]),
+              f"every file named after the folder, the WAV gone: {names}")
+        cue = open(os.path.join(home, stem + ".cue"), encoding="utf-8").read()
+        check(f'FILE "{stem}.mp3" MP3' in cue, f"the CUE names the MP3 beside it: {cue!r}")
+        c = sqlite3.connect(db)
+        path = c.execute("SELECT path FROM files").fetchone()[0]
+        c.close()
+        check(path == os.path.join(home, stem + ".mp3") and r["identified"] == 2, f"catalogued as filed: {path!r}")
+    finally:
+        ingest_cd.lookup_disc_id = old
+
+
 def test_end_to_end():
     """[SPEC-CDI-040], [SPEC-CDI-050], with a real WAV and ffmpeg: the preview
     leaves the rip byte-for-byte as it was; the commit files it in its album
@@ -582,6 +734,9 @@ def main() -> int:
     test_preview_pieces()
     test_files_on_disk()
     test_keep_lossless_setting()
+    test_album_names_held_short()
+    test_files_renamed_with_the_folder()
+    test_long_title_end_to_end()
     # `commit_rip` stats the encoded file for the `files` row -- a real,
     # empty file is enough; identification never actually reads it because
     # `segment_dao.identify_recording` is monkeypatched below.

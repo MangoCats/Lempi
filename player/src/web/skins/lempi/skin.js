@@ -1628,6 +1628,27 @@
     if (!r.ok) keepLosslessLoad();
   };
 
+  // [SPEC-NAM-010]: how long an album name a rip's folder and files get.
+  // Shown, like the switch above, only where the player answers for it.
+  const albumNameMax = $('albumnamemax');
+  function albumNameMaxLoad() {
+    fetch('/rips/album-name-max').then(r => (r.ok ? r.json() : null)).then(d => {
+      if (!d) return;
+      setHidden($('albumname-row'), false);
+      albumNameMax.min = d.least;
+      albumNameMax.max = d.most;
+      albumNameMax.value = d.max;
+    }).catch(() => {});
+  }
+  albumNameMaxLoad();
+  albumNameMax.onchange = async () => {
+    const n = Math.round(Number(albumNameMax.value));
+    const r = await fetch(`/rips/album-name-max/${n}`, { method: 'POST' });
+    setText($('albumnamestatus'), r.ok ? 'saved'
+      : r.status === 400 ? `between ${albumNameMax.min} and ${albumNameMax.max}` : 'could not save');
+    if (!r.ok) albumNameMaxLoad();
+  };
+
   // --------------------------------------------------------------- history
   // Its own fetch rather than the socket's snapshot `[REQ-VIS-250]`: a page
   // of what has already happened is not "what is true right now", and

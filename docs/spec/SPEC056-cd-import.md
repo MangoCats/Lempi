@@ -144,7 +144,8 @@ encoded track whose audio hash the library already holds is still refused.
 
 **`[SPEC-CDI-050]` One button, a progress bar, and a finished album.** *Add to
 library* runs one job: move the rip from the inbox to `Artist\Album (Year)` in
-the music folder (the name shown, and editable, on the card), encode the MP3
+the music folder (the name shown, and editable, on the card; a long album name
+held short, and the files renamed to match, [SPEC063](SPEC063-album-names-held-short.md)), encode the MP3
 `[SPEC-RIP-045]`, write the passages from the CUE with the edition chosen,
 record the rip's verdict `[SPEC-RIP-054]`, and remove the WAV
 `[SPEC-RIP-040]` -- a FLAC copy kept first when the Settings switch says so `[SPEC-CDI-058]`. **Today the WAV is never removed** -- about 630 MB left beside
