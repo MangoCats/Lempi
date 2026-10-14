@@ -318,6 +318,13 @@ pub struct ImportSummary {
     pub covers: u32,
     /// Cover files absent or not matching their byte hash: not stored.
     pub bad_covers: Vec<String>,
+    /// Passages already here given the recordings Vipunen now credits
+    /// `[SPEC-PL-108]`.
+    pub passage_credits_set: u32,
+    /// Files, by `audio_md5`, whose credits could not be corrected -- a credited
+    /// passage of no span here. The app names them back to the hub, which then
+    /// does not take them as delivered `[SPEC-PL-109]`.
+    pub passage_credits_unmatched: Vec<String>,
 }
 
 /// Import a bundle the app has unpacked into `staging` -- `payload.json` and
@@ -344,9 +351,10 @@ pub fn import_bundle(library: String, staging: String, music_root: String) -> Re
     match &r {
         Ok(s) => tracing::info!(
             "import: {} imported, {} already, {} replaced, {} upgraded, {} re-keyed, {} reused, {} corrupt, \
-             {} missing, {} conflicts, {} refused, {} releases, {} covers, {} bad covers",
+             {} missing, {} conflicts, {} refused, {} releases, {} covers, {} bad covers, \n             {} passage recordings set, {} file(s) with a credited passage of no span here",
             s.imported, s.already, s.replaced, s.upgraded, s.rekeyed, s.reused, s.corrupt.len(), s.missing.len(),
-            s.conflicts.len(), s.refused.len(), s.releases, s.covers, s.bad_covers.len()
+            s.conflicts.len(), s.refused.len(), s.releases, s.covers, s.bad_covers.len(),
+            s.passage_credits_set, s.passage_credits_unmatched.len()
         ),
         Err(e) => tracing::error!("import failed: {e}"),
     }
@@ -375,6 +383,8 @@ pub fn import_bundle(library: String, staging: String, music_root: String) -> Re
         releases: n(s.releases),
         covers: n(s.covers),
         bad_covers: s.bad_covers,
+        passage_credits_set: n(s.passage_credits_set),
+        passage_credits_unmatched: s.passage_credits_unmatched,
     })
 }
 

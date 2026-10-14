@@ -77,6 +77,20 @@ def main() -> int:
     check(s4["files"] == 2, "all of it, when the phone asks for all")
     check(not mu.delivered(mdir, fp, s3["stamp"], {}), "an update replaced by a newer one cannot be acknowledged")
 
+    # [SPEC-PL-109]: a file whose re-identified tracks the phone could not match
+    # is not taken as delivered, and is offered again.
+    check(mu.delivered(mdir, fp, s4["stamp"], {"passage_credits_set": 0, "passage_credits_unmatched": ["md5-b"]})
+          and mu.status(mdir, fp).get("not_delivered") == ["md5-b"],
+          f"the phone names a file it could not correct, and it is held back: {mu.status(mdir, fp)}")
+    s5 = mu.prepare(db, mdir, fp, manifest)
+    doc = json.loads(zipfile.ZipFile(mu.bundle_path(mdir, fp, s5["stamp"])).read("payload.json"))
+    check(s5["files"] == 1 and [e["audio_md5"] for e in doc["encodings"]] == ["md5-b"],
+          f"asked again, that file is offered again, and only it: {s5}")
+    check(mu.delivered(mdir, fp, s5["stamp"], {"imported": 0})
+          and "credits_unreported" in mu.status(mdir, fp) and "not_delivered" not in mu.status(mdir, fp),
+          "an app that does not say is taken as before, and the status says it did not say")
+    check(mu.prepare(db, mdir, fp, manifest)["state"] == "up-to-date", "and then nothing is waiting")
+
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")

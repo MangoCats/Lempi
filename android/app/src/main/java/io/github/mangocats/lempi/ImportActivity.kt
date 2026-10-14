@@ -104,7 +104,8 @@ class ImportActivity : Activity() {
                 say("Checking every file against Vipunen's record, then placing it in Music/Lempi…")
                 val r = importBundle(File(filesDir, "library.db").path, staging.path, music.path)
                 report(r)
-                if (r.imported > 0u || r.reused > 0u || r.replaced > 0u || r.upgraded > 0u || r.rekeyed > 0u || r.covers > 0u) reload()
+                if (r.imported > 0u || r.reused > 0u || r.replaced > 0u || r.upgraded > 0u || r.rekeyed > 0u || r.covers > 0u ||
+                    r.passageCreditsSet > 0u) reload()
                 keep = askToReplace(staging, r.refusedReplacements)
             } catch (e: NoRoom) {
                 say("\nNot imported, and nothing changed: ${e.message}")
@@ -198,6 +199,10 @@ class ImportActivity : Activity() {
         if (r.upgraded > 0u) say("Found on the phone already, and now given Vipunen's data where they lie: ${r.upgraded}.")
         if (r.rekeyed > 0u) say("Renamed to Vipunen's new signature for the same audio: ${r.rekeyed}.")
         if (r.reused > 0u) say("Already on the phone, and bound rather than copied again: ${r.reused}.")
+        // [SPEC-PL-108]: a track Vipunen has re-identified since, corrected here.
+        if (r.passageCreditsSet > 0u) say("Tracks re-identified on Vipunen, and corrected here: ${r.passageCreditsSet}.")
+        if (r.passageCreditsUnmatched.isNotEmpty()) say("Files whose tracks were re-cut on Vipunen, so their " +
+            "re-identified tracks could not be matched here: ${r.passageCreditsUnmatched.size}.")
         if (r.releases > 0u) say("Albums described: ${r.releases}, with ${r.covers} cover picture(s).")
         listOf(
             "Damaged in transit, not placed" to r.corrupt,

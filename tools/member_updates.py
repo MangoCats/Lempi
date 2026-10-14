@@ -190,11 +190,19 @@ def delivered(mdir: str, fp: str, stamp: str, counts: dict) -> bool:
         return False
     last_p = os.path.join(_dir(mdir, fp), "delivered.json")
     last = {} if s.get("full") or not os.path.isfile(last_p) else json.load(open(last_p, encoding="utf-8"))
-    last.update(s["digests"])
+    # [SPEC-PL-109]: a file whose credited passages the phone had no span for did
+    # not take the correction, so it is not taken as delivered: the next ask
+    # offers it again. An app from before 2026-10-14 does not say, and everything
+    # is taken as delivered, as before -- recorded, so the status shows it.
+    unmatched = counts.get("passage_credits_unmatched")
+    held_back = sorted(m for m in (unmatched or []) if m in s["digests"]) if isinstance(unmatched, list) else []
+    last.update({m: d for m, d in s["digests"].items() if m not in held_back})
     mesh.atomic_write(last_p, json.dumps(last))
     zp = os.path.join(_dir(mdir, fp), stamp + ".zip")
     if os.path.isfile(zp):
         os.remove(zp)
+    note = ({"not_delivered": held_back} if held_back else {}) | (
+        {} if isinstance(unmatched, list) else {"credits_unreported": "this app does not say whether credits landed"})
     _write_status(mdir, fp, {k: v for k, v in s.items() if k != "digests"} | {
-        "state": "delivered", "delivered_at": mesh.now(), "counts": counts})
+        "state": "delivered", "delivered_at": mesh.now(), "counts": counts} | note)
     return True

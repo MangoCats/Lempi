@@ -439,14 +439,21 @@ class MeshActivity : Activity() {
                     android.os.Environment.DIRECTORY_MUSIC), "Lempi")
                 val r = io.github.mangocats.lempi.ffi.importBundle(library.path, staging.path, music.path)
                 if (r.refused.isNotEmpty()) return say("The import refused it, and nothing changed: ${r.refused.joinToString("; ")}")
+                // [SPEC-PL-109]: the files whose credits could not be corrected are
+                // named back, so the hub does not take them as delivered.
                 val counts = JSONObject().put("imported", r.imported.toLong()).put("already", r.already.toLong())
                     .put("upgraded", r.upgraded.toLong()).put("rekeyed", r.rekeyed.toLong())
                     .put("releases", r.releases.toLong()).put("covers", r.covers.toLong()).put("bad_covers", r.badCovers.size)
+                    .put("passage_credits_set", r.passageCreditsSet.toLong())
+                    .put("passage_credits_unmatched", org.json.JSONArray(r.passageCreditsUnmatched))
                 client.call("POST", "/member/catalogue/$stamp/imported", counts)
                 say("Imported: ${r.upgraded} file(s) given Vipunen's newer data, ${r.already} unchanged, " +
                     "${r.releases} album(s) with ${r.covers} cover picture(s)" +
+                    (if (r.passageCreditsSet > 0u) "; ${r.passageCreditsSet} track(s) re-identified" else "") +
+                    (if (r.passageCreditsUnmatched.isNotEmpty()) "; ${r.passageCreditsUnmatched.size} file(s) whose " +
+                        "tracks were re-cut on Vipunen could not be corrected here" else "") +
                     (if (r.badCovers.isNotEmpty()) "; ${r.badCovers.size} cover(s) damaged in transit, not stored" else "") + ".")
-                if (r.upgraded > 0u || r.rekeyed > 0u || r.covers > 0u) {
+                if (r.upgraded > 0u || r.rekeyed > 0u || r.covers > 0u || r.passageCreditsSet > 0u) {
                     say(when (Lempi.reload()) {
                         null -> "The player is not running; it takes this up when it starts."
                         in 200..299 -> "The player is rebuilding its choices with it."

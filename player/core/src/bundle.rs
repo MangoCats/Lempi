@@ -149,6 +149,14 @@ pub struct Report {
     /// Files whose release -- the disc or album they were taken from -- was
     /// recorded or changed `[SPEC-SC-125]`.
     pub file_releases: usize,
+    /// Passages already here whose recordings the payload changed `[SPEC-PL-108]`
+    /// -- on a dry run, the ones it would.
+    pub passage_credits_set: usize,
+    /// Held files, by `audio_md5`, with a passage the payload credits and this
+    /// library has no passage of that exact span for: a boundary moved where
+    /// the bundle was made. Left alone, not guessed at, and named so that what
+    /// sent the bundle need not take the file as delivered `[SPEC-PL-109]`.
+    pub passage_credits_unmatched: Vec<String>,
 }
 
 impl Report {
@@ -512,6 +520,15 @@ fn import_bound(
                 let Some(hold) = p.get("hold").and_then(|v| v.as_str()) else { continue };
                 set_hold(&tx, held.unwrap_or_default(), p, hold, hold_col, apply, &mut rep)?;
             }
+            // So is which recording a passage is `[SPEC-PL-108]`: a re-identified
+            // track -- a second disc catalogued as its first disc's songs, found
+            // 2026-10-14 -- reaches a passage already here by the same span.
+            // Until then the importer wrote a held file's recordings and left its
+            // passages naming the old ones, and an update that sent the
+            // correction was recorded as delivered without it.
+            for p in e.get("passages").and_then(|v| v.as_array()).unwrap_or(&empty) {
+                set_credits(&tx, held.unwrap_or_default(), &md5, p, apply, &mut rep)?;
+            }
             if apply {
                 set_file_release(&tx, &md5, e, &mut rep)?;
             }
@@ -764,6 +781,53 @@ fn set_hold(tx: &rusqlite::Transaction, file_id: i64, p: &Value, hold: &str, hol
     Ok(())
 }
 
+/// One payload passage's recordings on a passage this library already has
+/// `[SPEC-PL-108]`, matched by its exact span as a hold is. The payload's replace
+/// this library's: which recording a passage is was decided on Vipunen, which
+/// sends it, as a hold and a file's release are. A passage the payload gives no
+/// `recordings` for says nothing and changes nothing; one with no span matching
+/// is counted against its file, never guessed at; a dry run only counts. The
+/// recordings themselves are already written, by the caller, before this runs.
+fn set_credits(tx: &rusqlite::Transaction, file_id: i64, md5: &str, p: &Value, apply: bool,
+               rep: &mut Report) -> Result<(), String> {
+    let Some(credits) = p.get("recordings").and_then(|v| v.as_array()) else { return Ok(()) };
+    let pid: Option<i64> = tx
+        .query_row("SELECT passage_id FROM passages WHERE file_id=?1 AND kind=?2 AND start_ms=?3 AND end_ms=?4",
+                   params![file_id, str_of(p, "kind"), num(p, "start_ms"), num(p, "end_ms")], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some(pid) = pid else {
+        if !rep.passage_credits_unmatched.iter().any(|m| m == md5) {
+            rep.passage_credits_unmatched.push(md5.to_string());
+        }
+        return Ok(());
+    };
+    let mut want: Vec<(String, f64, String)> = credits
+        .iter()
+        .map(|c| (str_of(c, "mbid"), c.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0), str_of(c, "source")))
+        .collect();
+    let mut have: Vec<(String, f64, String)> = tx
+        .prepare("SELECT mbid, COALESCE(weight, 1.0), COALESCE(source, '') FROM passage_recordings WHERE passage_id=?1")
+        .and_then(|mut q| q.query_map(params![pid], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect())
+        .map_err(|e| e.to_string())?;
+    want.sort_by(|a, b| a.0.cmp(&b.0));
+    have.sort_by(|a, b| a.0.cmp(&b.0));
+    if want == have {
+        return Ok(());
+    }
+    rep.passage_credits_set += 1;
+    if apply {
+        tx.execute("DELETE FROM passage_recordings WHERE passage_id=?1", params![pid]).map_err(|e| e.to_string())?;
+        for (mbid, weight, source) in &want {
+            tx.execute("INSERT INTO passage_recordings (passage_id,mbid,weight,source) VALUES (?1,?2,?3,?4)",
+                       params![pid, mbid, weight, source])
+                .map_err(|e| e.to_string())?;
+            rep.rows_written += 1;
+        }
+    }
+    Ok(())
+}
+
 fn upsert_recording(tx: &rusqlite::Transaction, r: &Value, rep: &mut Report) -> Result<(), String> {
     let mbid = str_of(r, "mbid");
     let exists: bool = tx
@@ -982,6 +1046,12 @@ pub struct StagedReport {
     /// recordings fall in several parts is carried by each of them.
     pub distinct_releases: std::collections::HashSet<String>,
     pub distinct_covers: std::collections::HashSet<String>,
+    /// Passages already here given the recordings Vipunen now credits
+    /// `[SPEC-PL-108]`.
+    pub passage_credits_set: usize,
+    /// Held files with a credited passage whose span is not here, by
+    /// `audio_md5`: not corrected, and not to be taken as delivered `[SPEC-PL-109]`.
+    pub passage_credits_unmatched: Vec<String>,
 }
 
 /// A replacement the system refused: the phone's copy, the staged file that
@@ -1443,6 +1513,12 @@ pub fn import_staged(
         total.conflicts.extend(r.conflicts);
         total.unsafe_paths.extend(r.unsafe_paths);
         total.changed_since_scan.extend(r.changed_since_scan);
+        total.passage_credits_set += r.passage_credits_set;
+        for m in r.passage_credits_unmatched {
+            if !total.passage_credits_unmatched.contains(&m) {
+                total.passage_credits_unmatched.push(m);
+            }
+        }
     }
     // Counted once each: measured on the Moto G, a 19-part bundle reported
     // 7,813 albums and 9,125 pictures for 1,381 releases and 857 covers.
@@ -1604,7 +1680,7 @@ fn import_one_payload(
         }
         tx.commit().map_err(|e| e.to_string())?;
     }
-    let r = import_bound(db, doc, body, music_root, true, md5_hasher, &bind, &trusted)?;
+    let mut r = import_bound(db, doc, body, music_root, true, md5_hasher, &bind, &trusted)?;
     // After the encodings, so each track finds the recording it links to.
     let rel = import_releases(db, doc, staging)?;
     rep.releases = rel.releases;
@@ -1614,6 +1690,8 @@ fn import_one_payload(
     rep.distinct_covers = rel.stored_covers;
     rep.upgraded = upgrades.len().min(r.count(|o| *o == Landed::Imported));
     rep.rows_written = r.rows_written;
+    rep.passage_credits_set = r.passage_credits_set;
+    rep.passage_credits_unmatched = std::mem::take(&mut r.passage_credits_unmatched);
     rep.imported = r.count(|o| *o == Landed::Imported);
     rep.reused = rep.reused.min(rep.imported);
     rep.imported = rep.imported.saturating_sub(rep.reused + rep.upgraded);
@@ -2027,6 +2105,60 @@ mod tests {
         let rep = import(&mut c, &with_hold("held", 999), "b5", &audio_dir, true, Some(TEST_HASHER)).unwrap();
         assert_eq!((rep.holds_set, rep.holds_unmatched), (0, 1));
         assert_eq!(hold_now(&c).as_deref(), Some(""));
+
+        std::fs::remove_dir_all(&audio_dir).ok();
+    }
+
+    /// `[SPEC-PL-108]` A re-identified passage reaches a file already here: its
+    /// recordings follow the sender's, matched by exact span, as a hold does.
+    /// The case of 2026-10-14 -- a second disc catalogued as its first disc's
+    /// songs, re-linked on Vipunen -- whose correction a resend could not carry.
+    #[test]
+    fn a_held_files_credits_follow_the_sender() {
+        let mut c = empty_library();
+        let audio_dir = std::env::temp_dir().join(format!("lempi-bundle-reid-{}", std::process::id()));
+        std::fs::create_dir_all(&audio_dir).unwrap();
+        let audio_path = audio_dir.join("a.wav");
+        write_tiny_wav(&audio_path);
+        let md5 = (TEST_HASHER.hash)(&audio_path).unwrap();
+        let credited = |c: &Connection| -> Vec<String> {
+            let mut s = c.prepare("SELECT mbid FROM passage_recordings ORDER BY mbid").unwrap();
+            s.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+        };
+        let as_m2 = |end_ms: i64| {
+            let mut d = one_encoding_bundle(&md5, "m2", 0.5, "computed:x@1");
+            d["encodings"][0]["passages"][0]["end_ms"] = Value::from(end_ms);
+            d
+        };
+
+        let rep = import(&mut c, &one_encoding_bundle(&md5, "m1", 0.5, "computed:x@1"), "b1", &audio_dir, true,
+                         Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep.outcomes, vec![(md5.clone(), Landed::Imported)]);
+        assert_eq!(credited(&c), vec!["m1"]);
+
+        // A dry run counts, and writes nothing.
+        let rep = import(&mut c, &as_m2(1000), "b2", &audio_dir, false, Some(TEST_HASHER)).unwrap();
+        assert_eq!((rep.passage_credits_set, credited(&c)), (1, vec!["m1".to_string()]));
+
+        // The correction lands on the passage already here, and only once.
+        let rep = import(&mut c, &as_m2(1000), "b3", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep.outcomes, vec![(md5.clone(), Landed::Already)]);
+        assert_eq!((rep.passage_credits_set, credited(&c)), (1, vec!["m2".to_string()]), "the wrong credit is gone");
+        let title: String = c.query_row("SELECT title FROM recordings WHERE mbid='m2'", [], |r| r.get(0)).unwrap();
+        assert_eq!(title, "t", "and the recording it names is here");
+        let rep = import(&mut c, &as_m2(1000), "b4", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep.passage_credits_set, 0, "the same again changes nothing");
+
+        // A boundary moved where the bundle was made: left alone, and the file named.
+        let rep = import(&mut c, &as_m2(999), "b5", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!((rep.passage_credits_set, rep.passage_credits_unmatched.clone()), (0, vec![md5.clone()]));
+        assert_eq!(credited(&c), vec!["m2"]);
+
+        // A passage the payload gives no recordings for says nothing.
+        let mut silent = as_m2(1000);
+        silent["encodings"][0]["passages"][0].as_object_mut().unwrap().remove("recordings");
+        let rep = import(&mut c, &silent, "b6", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!((rep.passage_credits_set, credited(&c)), (0, vec!["m2".to_string()]));
 
         std::fs::remove_dir_all(&audio_dir).ok();
     }

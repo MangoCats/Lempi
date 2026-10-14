@@ -533,7 +533,9 @@ class MemberHandler(BaseHTTPRequestHandler):
             return self.reply(202, {"state": "preparing"})
         mi = re.fullmatch(r"/member/catalogue/([0-9TZ]+-[0-9a-f]{6})/imported", self.path)
         if mi:
-            b = json.loads(self.rfile.read(n) or b"{}") if 0 < n <= 64_000 else {}
+            # Room for the files it names back [SPEC-PL-109]: an acknowledgement read
+            # as empty would take every one of them as delivered.
+            b = json.loads(self.rfile.read(n) or b"{}") if 0 < n <= 4_000_000 else {}
             if member_updates.delivered(mdir, m["fingerprint"], mi.group(1), b):
                 say(f"intake: {m['name'] or meshmod.show_fp(m['fingerprint'], True)} imported update {mi.group(1)}: {b}")
                 return self.reply(200, {"ok": True})

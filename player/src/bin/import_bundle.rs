@@ -115,6 +115,16 @@ fn main() {
     if rep.holds_unmatched > 0 {
         println!("  holds unmatched {} (no passage of that span here; left alone)", rep.holds_unmatched);
     }
+    // [SPEC-PL-108]: always said, zero included, as holds are -- the answer to
+    // whether a re-identified track reached a passage already here.
+    println!("  passage recordings {}", rep.passage_credits_set);
+    if !rep.passage_credits_unmatched.is_empty() {
+        println!("  passage recordings unmatched in {} file(s) (a credited passage of no span here; left alone):",
+                 rep.passage_credits_unmatched.len());
+        for m in &rep.passage_credits_unmatched {
+            println!("    {m}");
+        }
+    }
 
     for (md5, o) in &rep.outcomes {
         match o {
