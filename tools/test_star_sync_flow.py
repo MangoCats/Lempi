@@ -651,7 +651,29 @@ def test_old_players(tmp):
         check("OLD PLAYER" not in out.getvalue(), "a fleet of current players says nothing")
 
 
+def test_hub_writers():
+    """[SPEC-STAR-127]: a shell that launched the console is not a second
+    console -- the process table found on the desktop, 2026-10-14."""
+    print("hub_writers: what can write the hub's pair, and what only names it")
+    shell = (16752, 6136, "bash.exe", 'bash.exe -c "... python tools/console.py data/library.db > log 2>&1 & ..."')
+    console = (5652, 16752, "python.exe", r"C:\Python314\python.exe tools/console.py data/library.db")
+    player = (27100, 19772, "lempi.exe", r'"C:\Lempi\lempi.exe" --listener l.db --library library.db')
+    nohup = (19772, 1, "nohup.exe", '"nohup.exe" "/c/Lempi/lempi.exe" --listener l.db')
+    me = (900, 5652, "python.exe", r"C:\Python314\python.exe tools/star_sync.py commit --console-pid 5652")
+    procs = [shell, console, player, nohup, me]
+    check(ss.hub_writers(procs, 900, excuse=5652) == [],
+          f"from the console: its launching shell, itself and its player excused -- {ss.hub_writers(procs, 900, 5652)}")
+    check(ss.hub_writers(procs, 900) == ["5652", "27100"],
+          f"from a terminal: the console and the player count, the shells do not -- {ss.hub_writers(procs, 900)}")
+    other = (7000, 1, "pythonw.exe", r"pythonw C:\Lempi\tools\console.py other.db")
+    check(ss.hub_writers(procs + [other], 900, excuse=5652) == ["7000"],
+          "a second console still refuses, excuse or not")
+    check(ss.hub_writers([(8000, 1, "python.exe", "python tools/test_console_import.py")], 900) == [],
+          "a test of the console is not the console")
+
+
 def main() -> int:
+    test_hub_writers()
     test_split_catalogue()
     for test in (test_quiet, test_conflict, test_approve_all, test_on_demand, test_catalogue_moved,
                  test_catalogue_states, test_catalogue_old_player, test_catalogue_in_parts, test_a_patch_that_cannot_be_cut, test_selection, test_read_only_catalogue,

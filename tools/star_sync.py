@@ -47,6 +47,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -999,29 +1000,62 @@ def player_step(plan, run, name, player, commit):
 
 
 # ---------------------------------------------------------- the hub, here --
+_INTERPRETERS = ("python", "pythonw", "py")
+
+
+def hub_writers(procs, me, excuse=None):
+    """Which of `procs` -- `(pid, parent_pid, name, command_line)` -- can write
+    the hub's pair: a Python running `console.py`, or a `lempi` player
+    [SPEC-STAR-127]. A shell or launcher whose command line merely *names*
+    `console.py` cannot, and is not counted. `excuse` is the pid of a console
+    that has paused its player and will reload it [SPEC-STAR-126]: it, the
+    chain of processes that launched it, and the co-resident `lempi` are not
+    counted; any other still is.
+
+    Until 2026-10-14 every process whose command line matched counted. The
+    console the Sync page runs from had been started by an agent's Git Bash
+    shell, `bash -c "... python tools/console.py ..."`, which waits on it for
+    as long as it runs -- so from 2026-10-07 every hub commit refused with
+    "process(es) ['16752'] may be using the hub's pair", naming that shell."""
+    parent = {pid: ppid for pid, ppid, _n, _c in procs}
+    excused = set()
+    if excuse:
+        p = int(excuse)
+        while p and p not in excused:
+            excused.add(p)
+            p = parent.get(p)
+    found = []
+    for pid, _ppid, name, cmd in procs:
+        if pid == me or pid in excused:
+            continue
+        stem = os.path.splitext((name or "").lower())[0]
+        if stem.startswith("lempi"):
+            if excuse:
+                continue
+        elif not (stem in _INTERPRETERS and re.search(r"console\.py\b", cmd or "")):
+            continue
+        found.append(str(pid))
+    return found
+
+
 def console_running(excuse=None):
     """The Vipunen console writes to the hub's pair, and so does a player beside
-    it; neither must be running while the hub is patched. `excuse` is the pid
-    of a console that has paused its player and will reload it
-    [SPEC-STAR-126]: that process, and the co-resident `lempi` it paused, are
-    not counted; any other still is. None when this cannot be told -- said so."""
+    it; neither must be running while the hub is patched (`hub_writers`).
+    None when this cannot be told -- said so."""
     try:
         r = subprocess.run(["powershell", "-NoProfile", "-Command",
-                            "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match "
-                            "'console\\.py|\\\\lempi\\.exe' } | ForEach-Object "
-                            "{ \"$($_.ProcessId) $($_.Name)\" }"],
-                           capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError):
+                            "Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, "
+                            "CommandLine | ConvertTo-Json -Compress"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        rows = json.loads(r.stdout or "null")
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
-    found = []
-    for line in r.stdout.splitlines():
-        pid, _, name = line.strip().partition(" ")
-        if not pid.isdigit() or int(pid) == os.getpid():
-            continue
-        if excuse and (int(pid) == int(excuse) or name.lower().startswith("lempi")):
-            continue
-        found.append(pid)
-    return found
+    if not rows:
+        return None
+    rows = rows if isinstance(rows, list) else [rows]
+    procs = [(int(p["ProcessId"]), int(p.get("ParentProcessId") or 0), p.get("Name") or "", p.get("CommandLine") or "")
+             for p in rows if p.get("ProcessId") is not None]
+    return hub_writers(procs, os.getpid(), excuse)
 
 
 def hub_apply(plan, run, commit, excuse=None):
