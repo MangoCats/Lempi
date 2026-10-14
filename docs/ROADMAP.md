@@ -169,15 +169,14 @@ after each closed most of what they found. Where the code falls short of a
 specification, the one register is [architecture.md §10](architecture.md#10-known-gaps);
 what remains here is the work that crosses documents.
 
-1. **Roll `lempi02w` and `teacherslounge` forward.** `bose`, `lp3-wifi` and
-   `smartboardpc` run `399d860` since 2026-10-14; `lempi02w` runs `340be21`
+1. **Roll `lempi02w` and `teacherslounge` forward.** `bose`, `lp3-wifi`,
+   `smartboardpc`, the hub's own player and the Moto G run `c684831` since 2026-10-14; `lempi02w` runs `340be21`
    (2026-10-10) and `teacherslounge` `ca8313f`, both powered off that day
    ([FLEET001](../fleet/FLEET001-the-fleet.md) `[FLT-RUN-010]`). `lempi02w`
    still credits Woodstock's and *An American Treasure*'s second discs as
    their first discs' songs, as its 2026-10-06 bundle left them; on the
    current build its next star sync asks it for its own rows and corrects them
-   `[SPEC-STAR-945]`. The Moto G (`64987ee`) needs a build from `e526926` on
-   for a re-identified track to reach it `[SPEC-PL-108]`. The two deferred
+   `[SPEC-STAR-945]`. The two deferred
    device checks of `[FLT-ISS-070]` -- a restore from the Listening backups
    row, and the play-rate check -- remain.
 2. **The Program Director's open items**, [SPEC009 §9](spec/SPEC009-program-director.md#9-open):
