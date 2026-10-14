@@ -1527,16 +1527,28 @@ impl Library {
     /// Returned even when `id_checks` has never been created -- the pass may
     /// simply not have been run -- because "no findings" and "never looked"
     /// are different states and the page says which one it is in.
+    ///
+    /// A table that does not exist yet is a count of nothing; a count that
+    /// fails is an error, never a zero -- "0 contradicted" from a query that
+    /// could not run reads exactly like a clean library (review O-04, CLAUDE.md
+    /// §6). The page already says when it cannot read the queue.
     #[cfg(feature = "vipunen-support")]
-    pub fn review_progress(&self) -> ReviewProgress {
-        let n = |sql: &str| -> i64 { self.conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
-        ReviewProgress {
-            ran: self.has_table("id_checks"),
-            checked: n("SELECT COUNT(*) FROM __LIB__.id_checks"),
-            contradicted: n("SELECT COUNT(*) FROM __LIB__.id_checks WHERE verdict = 'contradicted'"),
-            confirmed: n("SELECT COUNT(*) FROM __LIB__.id_checks WHERE verdict = 'confirmed'"),
-            decided: n("SELECT COUNT(*) FROM id_reviews"),
-        }
+    pub fn review_progress(&self) -> Result<ReviewProgress, DbError> {
+        let ran = self.has_table("id_checks");
+        let n = |sql: &str| -> Result<i64, DbError> { self.count(sql) };
+        Ok(ReviewProgress {
+            ran,
+            checked: if ran { n("SELECT COUNT(*) FROM __LIB__.id_checks")? } else { 0 },
+            contradicted: if ran { n("SELECT COUNT(*) FROM __LIB__.id_checks WHERE verdict = 'contradicted'")? } else { 0 },
+            confirmed: if ran { n("SELECT COUNT(*) FROM __LIB__.id_checks WHERE verdict = 'confirmed'")? } else { 0 },
+            decided: if self.has_table("id_reviews") { n("SELECT COUNT(*) FROM id_reviews")? } else { 0 },
+        })
+    }
+
+    /// One `COUNT(*)`, its failure an error naming the query.
+    #[cfg(feature = "vipunen-support")]
+    fn count(&self, sql: &str) -> Result<i64, DbError> {
+        self.conn.query_row(sql, [], |r| r.get(0)).map_err(|e| DbError::Query(format!("{sql}: {e}")))
     }
 
     /// A recorded-but-not-yet-applied boundary edit, if there is one
@@ -1681,20 +1693,22 @@ impl Library {
     /// column recording a passage's origin once `boundary_src` has moved on
     /// from it `[SPEC-SC-045]`.
     #[cfg(feature = "vipunen-support")]
-    pub fn segment_progress(&self) -> SegmentProgress {
-        let n = |sql: &str| -> i64 { self.conn.query_row(sql, [], |r| r.get(0)).unwrap_or(0) };
+    pub fn segment_progress(&self) -> Result<SegmentProgress, DbError> {
         let segmented =
-            n("SELECT COUNT(*) FROM __LIB__.passages WHERE boundary_src LIKE 'computed:segment-cascade%'");
-        SegmentProgress {
-            ran: segmented > 0,
-            segmented,
-            confirmed: n(
+            self.count("SELECT COUNT(*) FROM __LIB__.passages WHERE boundary_src LIKE 'computed:segment-cascade%'")?;
+        // No `boundary_reviews` yet is nothing confirmed; a count that fails is an
+        // error, as for `review_progress`.
+        let confirmed = if self.has_table("boundary_reviews") {
+            self.count(
                 "SELECT COUNT(*) FROM __LIB__.passages p \
                    JOIN boundary_reviews br ON br.passage_id = p.passage_id \
                   WHERE p.boundary_src LIKE 'computed:segment-cascade%' \
                     AND br.applied_at IS NOT NULL",
-            ),
-        }
+            )?
+        } else {
+            0
+        };
+        Ok(SegmentProgress { ran: segmented > 0, segmented, confirmed })
     }
 
     /// Whether `name` is reachable on this connection, in **any** attached
@@ -2476,9 +2490,23 @@ mod tests {
     fn a_library_without_findings_reviews_empty_rather_than_failing() {
         let lib = Library { conn: QualifyingConn::wrap_unsplit(fixture()) };
         assert!(lib.review_queue(50).unwrap().is_empty());
-        let p = lib.review_progress();
+        let p = lib.review_progress().unwrap();
         assert!(!p.ran, "the page must be able to say the pass never ran");
         assert_eq!(p.contradicted, 0);
+    }
+
+    /// Review O-04: a count that cannot be taken is an error, not a zero. An
+    /// `id_checks` without its `verdict` column -- a table the pass made, that a
+    /// count over it cannot read -- used to report "0 contradicted", which reads
+    /// exactly like a clean library.
+    #[cfg(feature = "vipunen-support")]
+    #[test]
+    fn a_count_that_fails_is_an_error_not_a_zero() {
+        let c = fixture();
+        c.execute_batch("CREATE TABLE id_checks (passage_id INTEGER PRIMARY KEY);").unwrap();
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
+        let err = lib.review_progress().expect_err("the count over id_checks cannot run");
+        assert!(err.to_string().contains("verdict"), "and the error names why: {err}");
     }
 
     /// A library nothing has ever segmented has no `boundary_reviews` table
@@ -2490,7 +2518,7 @@ mod tests {
     fn a_library_never_segmented_has_an_empty_segment_queue() {
         let lib = Library { conn: QualifyingConn::wrap_unsplit(fixture()) };
         assert!(lib.segment_queue(50).unwrap().is_empty());
-        let p = lib.segment_progress();
+        let p = lib.segment_progress().unwrap();
         assert!(!p.ran, "the page must be able to say the cascade never ran");
         assert_eq!(p.segmented, 0);
         assert_eq!(p.confirmed, 0);
@@ -2533,7 +2561,7 @@ mod tests {
         assert_eq!(item.outcome.as_deref(), Some("grid:82%"));
         assert!(!item.decided, "no boundary_reviews row at all for this one yet");
 
-        let p = lib.segment_progress();
+        let p = lib.segment_progress().unwrap();
         assert!(p.ran);
         assert_eq!(p.segmented, 2, "both cascade passages, confirmed or not");
         assert_eq!(p.confirmed, 1, "only the one with an applied boundary_reviews row");

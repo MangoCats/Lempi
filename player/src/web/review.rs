@@ -25,7 +25,7 @@ pub(super) async fn review_queue(State(ui): State<Ui>) -> axum::response::Respon
         let lib = crate::db::Library::open_split(&db, &library).ok()?;
         let items = lib.review_queue(crate::BROWSE_LIMIT).ok()?;
         serde_json::to_value(serde_json::json!({
-            "progress": lib.review_progress(),
+            "progress": lib.review_progress().map_err(|e| tracing::warn!("review progress could not be counted: {e}")).ok()?,
             "items": items,
         }))
         .ok()

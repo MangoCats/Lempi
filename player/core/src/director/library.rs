@@ -243,7 +243,21 @@ pub struct Director {
     dislike: Option<Flavor>,
 }
 
+/// An optional read in `Director::load` that failed: quiet when what it reads is
+/// absent -- a library from before the feature -- and a warning otherwise, naming
+/// what selection goes without.
+fn optional_read(what: &str, e: &rusqlite::Error) {
+    let msg = e.to_string();
+    if !(msg.contains("no such table") || msg.contains("no such column")) {
+        tracing::warn!("director: could not read {what}, so selection goes without them: {msg}");
+    }
+}
+
 impl Director {
+    /// `load`'s optional reads -- rejections, the time scales -- fall back to
+    /// nothing, so a library from before a feature still plays. A table or
+    /// column that is absent is that case, and quiet; any other failure is a
+    /// read that did not happen, and is said `[CLAUDE.md §6]`.
     pub fn load(conn: &QualifyingConn) -> Result<Self, DbError> {
         let q = |e: rusqlite::Error| DbError::Query(e.to_string());
 
@@ -484,18 +498,22 @@ impl Director {
                 [],
                 |r| Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?)),
             )
+            .map_err(|e| optional_read("the time scales", &e))
             .ok();
         // Rejections, for suppression only `[SPEC-PLAY-050]`. An absent table is
         // a library that predates the feature, not a fault: nothing recorded
-        // means nothing suppressed.
+        // means nothing suppressed. Any other failure is said (review O-04): the
+        // music goes on, but "nothing suppressed" because the read failed is not
+        // "nothing suppressed" because nothing was rejected.
         let rejected = |kind: &str| -> HashMap<String, i64> {
             conn.prepare(
                 "SELECT mbid, MAX(rejected_at) FROM listener_rejections                  WHERE mbid IS NOT NULL AND kind = ?1 GROUP BY mbid",
             )
             .and_then(|mut q| {
                 q.query_map([kind], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
-                    .map(|rows| rows.flatten().collect())
+                    .and_then(|rows| rows.collect::<rusqlite::Result<HashMap<_, _>>>())
             })
+            .map_err(|e| optional_read(&format!("the {kind} rejections"), &e))
             .unwrap_or_default()
         };
         let last_skipped = rejected("skip");

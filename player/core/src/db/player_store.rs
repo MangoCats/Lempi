@@ -2376,19 +2376,19 @@ mod tests {
         assert_eq!(q[0].decision.as_deref(), Some("kept"),
                    "a decided card must still be findable");
         assert!(!q[0].applied, "recorded is not applied");
-        assert_eq!(lib.review_progress().decided, 1);
+        assert_eq!(lib.review_progress().unwrap().decided, 1);
 
         // Undo: the judgement is withdrawn and the passage is a question again.
         store.clear_review(2).unwrap();
         assert!(lib.review_queue(50).unwrap()[0].decision.is_none());
-        assert_eq!(lib.review_progress().decided, 0);
+        assert_eq!(lib.review_progress().unwrap().decided, 0);
         assert!(store.clear_review(2).is_err(), "nothing to withdraw twice");
 
         store.record_review(2, "kept", None, None).unwrap();
 
         // Changing one's mind overwrites rather than duplicating.
         store.record_review(2, "reassigned", Some("aaaaaaaa-0000-0000-0000-000000000002"), None).unwrap();
-        assert_eq!(lib.review_progress().decided, 1);
+        assert_eq!(lib.review_progress().unwrap().decided, 1);
         let (d, m): (String, Option<String>) = store
             .conn
             .query_row("SELECT decision, chosen_mbid FROM id_reviews WHERE passage_id = 2",

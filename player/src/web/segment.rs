@@ -28,7 +28,7 @@ pub(super) async fn segment_queue(State(ui): State<Ui>) -> axum::response::Respo
         let lib = crate::db::Library::open_split(&db, &library).ok()?;
         let items = lib.segment_queue(crate::BROWSE_LIMIT).ok()?;
         serde_json::to_value(serde_json::json!({
-            "progress": lib.segment_progress(),
+            "progress": lib.segment_progress().map_err(|e| tracing::warn!("segment progress could not be counted: {e}")).ok()?,
             "items": items,
         }))
         .ok()
