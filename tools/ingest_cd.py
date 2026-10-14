@@ -457,14 +457,79 @@ def identify_disc(toc: cd_toc.DiscToc, log_toc: cd_toc.DiscToc | None) -> tuple[
         outcome, releases = lookup_disc_id(positions)
     if outcome == "none" and toc.barcode:
         outcome, releases = lookup_barcode(toc.barcode)
-    return outcome, releases, disc_id
+    return outcome, for_this_disc(releases, disc_id, positions or toc), disc_id
 
 
-def _track_at_position(release: dict, position: int) -> dict | None:
+def _medium_tracks(medium: dict) -> int:
+    return medium.get("track-count") or len(medium.get("tracks") or [])
+
+
+def disc_medium(release: dict, disc_id: str | None, toc: cd_toc.DiscToc | None,
+                track_count: int | None = None) -> dict | None:
+    """Which of `release`'s discs this rip is `[SPEC-CDI-099]`. MusicBrainz
+    answers a Disc ID with whole releases -- every disc of a set, each listing
+    the Disc IDs it is known by -- so the disc is the medium naming this one's
+    own id. Without an id to go on (a fuzzy match, a barcode), the medium with
+    the disc's track count (`track_count`, else the TOC's), and among several,
+    the one whose track lengths fit its own best: *An American Treasure*'s two
+    discs have 13 tracks each."""
+    media = release.get("media") or []
+    if len(media) <= 1:
+        return media[0] if media else None
+    if disc_id:
+        for m in media:
+            if any(d.get("id") == disc_id for d in m.get("discs") or []):
+                return m
+    if toc is None or not toc.tracks:
+        return None
+    count = track_count or toc.track_count
+    same = [m for m in media if _medium_tracks(m) == count] or media
+    if len(same) == 1:
+        return same[0]
+    mine = {t.number: t.end_ms - t.start_ms for t in toc.tracks
+            if t.end_ms is not None and t.start_ms is not None}
+
+    def misfit(m):
+        theirs = {t.get("position"): t.get("length") for t in m.get("tracks") or []}
+        pairs = [(a, theirs[n]) for n, a in mine.items() if theirs.get(n) is not None]
+        return sum(abs(a - b) for a, b in pairs) / len(pairs) if pairs else float("inf")
+    best = min(same, key=misfit)
+    return best if misfit(best) != float("inf") else None
+
+
+def for_this_disc(releases: list[dict], disc_id: str | None, toc: cd_toc.DiscToc | None) -> list[dict]:
+    """Each release cut down to the disc this rip is, its other discs dropped,
+    so a track's number means its place on *this* disc `[SPEC-CDI-099]`. Until
+    2026-10-14 every lookup took the first disc's track at that number, and
+    Woodstock's second disc was catalogued as the first disc's seven songs.
+    A release whose disc cannot be told is left out: a wrong answer is worse
+    than none, and the review queue takes a track nobody can name. The whole
+    set's track count is kept, as `_track_total`, for `record_release`."""
+    out = []
+    for r in releases:
+        media = r.get("media") or []
+        if len(media) <= 1:
+            out.append(r)
+            continue
+        m = disc_medium(r, disc_id, toc)
+        if m is None:
+            say(f"  {r.get('title')!r} ({r.get('id')}) has {len(media)} discs and which this is cannot "
+                "be told: left out")
+            continue
+        out.append(dict(r, media=[m], _track_total=sum(_medium_tracks(x) for x in media)))
+    return out
+
+
+def _track_at_position(release: dict, position: int, mbid: str | None = None) -> dict | None:
+    """The track at `position` -- on a release cut to one disc
+    (`for_this_disc`), that disc's. With `mbid`, only the track at that place
+    holding that recording, on whichever disc of a whole release it is: how a
+    backfill, which has the recording and not the disc, finds it."""
     for medium in release.get("media") or []:
         for t in medium.get("tracks") or []:
             if t.get("position") == position or t.get("number") == str(position):
-                return t
+                if mbid is None or (t.get("recording") or {}).get("id") == mbid:
+                    return t
     return None
 
 
@@ -523,16 +588,16 @@ def record_release(conn, release: dict, tracks, files=()) -> int:
            "primary_type": group.get("primary-type"),
            "secondary_types": ",".join(group.get("secondary-types") or []) or None,
            "country": release.get("country"),
-           "track_count": sum(m.get("track-count") or len(m.get("tracks") or []) for m in release.get("media") or [])
-           or None}
+           "track_count": release.get("_track_total")
+           or sum(_medium_tracks(m) for m in release.get("media") or []) or None}
     cols = [c for c in row if c in have]
     # A release already known keeps its row: fetch_releases.py's is the fuller.
     conn.execute(f"INSERT OR IGNORE INTO releases ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
                  [row[c] for c in cols])
     linked = 0
     for position, mbid in tracks:
-        t = _track_at_position(release, position)
-        if t is None or (t.get("recording") or {}).get("id") != mbid:
+        t = _track_at_position(release, position, mbid)
+        if t is None:
             continue    # not this release's recording at this place: not linked
         disc = next((m.get("position") for m in release.get("media") or [] if t in (m.get("tracks") or [])), None)
         # A recording on two discs held here -- a hit on its album and on a
@@ -547,7 +612,13 @@ def record_release(conn, release: dict, tracks, files=()) -> int:
         conn.execute(
             "INSERT INTO release_recordings (release_mbid, mbid, position, source, track_length_ms, chosen, disc) "
             "VALUES (?1, ?2, ?3, 'cd:import', ?4, ?5, ?6) "
-            "ON CONFLICT(release_mbid, mbid) DO UPDATE SET chosen = excluded.chosen, source = 'cd:import'",
+            # A row already here -- one a release fetch wrote, without its
+            # place -- takes the place from the disc in hand: until
+            # 2026-10-14 it kept none, and Browse could not order the track.
+            "ON CONFLICT(release_mbid, mbid) DO UPDATE SET chosen = excluded.chosen, source = 'cd:import', "
+            "position = COALESCE(excluded.position, release_recordings.position), "
+            "disc = COALESCE(excluded.disc, release_recordings.disc), "
+            "track_length_ms = COALESCE(excluded.track_length_ms, release_recordings.track_length_ms)",
             (rid, mbid, t.get("position") or position, t.get("length"), 0 if other_disc else 1, disc))
         linked += 1
     if files:
@@ -1268,6 +1339,7 @@ def preview(db_path: str, folder: str) -> dict:
         return preview_tracks(db_path, folder)
     fmt, _cue, toc, wav_path, rip_report = open_rip(folder)
     disc_outcome, releases = lookup_disc_id(toc)
+    releases = for_this_disc(releases, cd_toc.musicbrainz_disc_id(toc), toc)   # [SPEC-CDI-099]
     limit = album_name_max_setting(db_path)
     conn = lempi_db.connect(db_path, lempi_db.ROLE_LIBRARY)
     try:
@@ -1313,6 +1385,7 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
         # `[SPEC-CDI-047]` -- before anything is encoded or moved.
         say("looking the disc up ...")
         disc_outcome, releases = lookup_disc_id(toc)
+        releases = for_this_disc(releases, cd_toc.musicbrainz_disc_id(toc), toc)   # [SPEC-CDI-099]
         if release:
             releases = [r for r in releases if r.get("id") == release]
             if not releases:

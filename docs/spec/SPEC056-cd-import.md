@@ -183,6 +183,14 @@ added radio passages had no album on the desktop or any speaker.
 chosen release per recording as it imports one. `backfill_cd_releases.py`
 links the rips added before.
 
+**`[SPEC-CDI-099]` A track's number is its place on the disc in hand.** A
+release is cut to that disc before any track is looked up: the medium listing
+the rip's own Disc ID, else the one whose track count and lengths fit; a set
+whose disc cannot be told is left out, not guessed. Until 2026-10-14 the first
+disc was always taken, and Woodstock's and *An American Treasure*'s second
+discs went in as their first discs' songs -- 20 tracks, re-linked by
+`relink_cd_disc.py`, which checks every rip against MusicBrainz.
+
 ## 5a. A rip with a file per track
 
 **`[SPEC-CDI-090]` A tracks-mode rip is added as one MP3 per track, each with
@@ -287,4 +295,4 @@ result, the album stays added, and the Jobs page's *Not analyzed* list finishes 
 
 ---
 
-**Traceability:** `[SPEC-CDI-010..096]` (with `[SPEC-CDI-012]`, `[SPEC-CDI-047]`, `[SPEC-CDI-058]`), `[SPEC-CDI-900]` · builds on `[SPEC-RIP-020]`, `[SPEC-RIP-088]`, `[SPEC024]`, `[SPEC028]` · corrects, when built, the dry run and WAV retention of `tools/ingest_cd.py`
+**Traceability:** `[SPEC-CDI-010..099]` (with `[SPEC-CDI-012]`, `[SPEC-CDI-047]`, `[SPEC-CDI-058]`), `[SPEC-CDI-900]` · builds on `[SPEC-RIP-020]`, `[SPEC-RIP-088]`, `[SPEC024]`, `[SPEC028]` · corrects, when built, the dry run and WAV retention of `tools/ingest_cd.py`

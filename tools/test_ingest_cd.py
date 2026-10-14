@@ -441,6 +441,106 @@ def test_long_title_end_to_end():
         ingest_cd.lookup_disc_id = old
 
 
+def _two_disc_release(rid="rel-W", lengths2=(4000, 4000)):
+    """A two-disc set shaped as MusicBrainz answers a Disc ID: every disc,
+    each naming the Disc IDs it is known by -- Woodstock's, 2026-10-14."""
+    def medium(pos, disc_id, lengths):
+        return {"position": pos, "format": "CD", "track-count": len(lengths), "discs": [{"id": disc_id}],
+                "tracks": [{"position": n, "number": str(n), "title": f"D{pos} Song {n}", "length": ms,
+                            "recording": {"id": f"rec-d{pos}-{n}", "title": f"D{pos} Song {n}",
+                                          "artist-credit": [{"artist": {"id": "art-w", "name": "Artist W"}}]}}
+                           for n, ms in enumerate(lengths, 1)]}
+    return {"id": rid, "title": "Two Discs", "date": "1999", "artist-credit": [{"name": "Artist W"}],
+            "media": [medium(1, "disc-one-id", (2000, 2000)), medium(2, "disc-two-id", lengths2)]}
+
+
+def test_which_disc():
+    """[SPEC-CDI-099]: a track's number means its place on the disc ripped,
+    not on the set's first disc."""
+    print("which disc of a set: by Disc ID, by track count, by track lengths")
+    toc2 = cd_toc.DiscToc(tracks=[cd_toc.TocTrack(number=1, start_ms=0, end_ms=4000, start_sector=0, end_sector=0),
+                                  cd_toc.TocTrack(number=2, start_ms=4000, end_ms=8000, start_sector=0, end_sector=0)],
+                          leadout_sector=0, source="eac-cue")
+    rel = _two_disc_release()
+    check(ingest_cd.disc_medium(rel, "disc-two-id", toc2)["position"] == 2, "the Disc ID names the second disc")
+    check(ingest_cd.disc_medium(rel, None, toc2)["position"] == 2,
+          "two discs of two tracks each: the one whose lengths fit")
+    three = cd_toc.DiscToc(tracks=TRACKS[:3], leadout_sector=0, source="eac-cue")
+    lopsided = dict(rel, media=[rel["media"][0], dict(rel["media"][1], **{"track-count": 3})])
+    check(ingest_cd.disc_medium(lopsided, None, three)["position"] == 2, "the only disc with three tracks")
+    narrowed = ingest_cd.for_this_disc([rel], "disc-two-id", toc2)
+    check(len(narrowed[0]["media"]) == 1 and narrowed[0]["_track_total"] == 4,
+          f"cut to that disc, the set's size kept: {narrowed[0].get('_track_total')}")
+    check(ingest_cd._track_at_position(narrowed[0], 1)["recording"]["id"] == "rec-d2-1",
+          "and track 1 is the second disc's first song")
+    check(ingest_cd._track_at_position(rel, 1, "rec-d2-1")["recording"]["id"] == "rec-d2-1",
+          "a whole release, asked with the recording, finds it on its own disc")
+    check(ingest_cd.for_this_disc([rel], None, cd_toc.DiscToc(tracks=[], leadout_sector=0, source="eac-cue")) == [],
+          "a set whose disc cannot be told is left out, not guessed")
+
+    c = fixture()
+    c.execute("CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT NOT NULL, release_date TEXT, "
+              "source TEXT NOT NULL, track_count INTEGER)")
+    n = ingest_cd.record_release(c, narrowed[0], [(1, "rec-d2-1"), (2, "rec-d2-2")])
+    rows = c.execute("SELECT mbid, position, disc FROM release_recordings ORDER BY position").fetchall()
+    check(n == 2 and [tuple(r) for r in rows] == [("rec-d2-1", 1, 2), ("rec-d2-2", 2, 2)],
+          f"linked as disc 2's tracks: {[tuple(r) for r in rows]}")
+    check(c.execute("SELECT track_count FROM releases").fetchone()[0] == 4, "the release keeps the set's track count")
+    # A row a release fetch wrote first, with no place, takes the disc's.
+    c.execute("DELETE FROM release_recordings")
+    c.execute("INSERT INTO release_recordings (release_mbid, mbid, source) VALUES ('rel-W', 'rec-d2-1', 'musicbrainz')")
+    ingest_cd.record_release(c, narrowed[0], [(1, "rec-d2-1")])
+    row = tuple(c.execute("SELECT position, disc, chosen, source FROM release_recordings").fetchone())
+    check(row == (1, 2, 1, "cd:import"), f"a placeless row already there takes this disc's place: {row}")
+    # The backfill's path: a whole release and the recordings, no disc.
+    c.execute("DELETE FROM release_recordings")
+    n = ingest_cd.record_release(c, rel, [(1, "rec-d2-1")])
+    check(n == 1 and c.execute("SELECT disc FROM release_recordings").fetchone()[0] == 2,
+          "a whole release links a second-disc recording to its own disc")
+
+
+def test_second_disc_end_to_end():
+    """[SPEC-CDI-099], with a real WAV and ffmpeg: the second disc of a set,
+    ripped and added, is catalogued as the second disc's songs -- Woodstock's
+    was not, 2026-10-06."""
+    import subprocess
+    if not ingest_cd.FFMPEG:
+        check(False, "second disc end to end needs ffmpeg")
+        return
+    print("second disc end to end: the songs of the disc in hand")
+    inbox = tempfile.mkdtemp()
+    subprocess.run([ingest_cd.FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=8",
+                    "-ar", "44100", "-ac", "2", os.path.join(inbox, "W - Two Discs(Disc 2).wav")], check=True)
+    with open(os.path.join(inbox, "W - Two Discs(Disc 2).cue"), "w", encoding="utf-8", newline="\r\n") as f:
+        f.write('PERFORMER "W"\nTITLE "Two Discs"\nFILE "W - Two Discs(Disc 2).wav" WAVE\n'
+                '  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    INDEX 01 00:04:00\n')
+    rel = _two_disc_release()
+    db = os.path.join(tempfile.mkdtemp(), "lempi.db")
+    c = sqlite3.connect(db)
+    c.executescript(SCHEMA + "CREATE TABLE player_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);")
+    c.commit()
+    c.close()
+    old = (ingest_cd.lookup_disc_id, cd_toc.musicbrainz_disc_id)
+    ingest_cd.lookup_disc_id = lambda toc: ("exact", [rel])
+    cd_toc.musicbrainz_disc_id = lambda toc: "disc-two-id"
+    try:
+        p = ingest_cd.do_ingest(db, inbox, commit=False)
+        titles = [t["title"] for t in p["releases"][0]["tracks"]]
+        check(titles == ["D2 Song 1", "D2 Song 2"], f"the preview lists the second disc: {titles}")
+        home = os.path.join(tempfile.mkdtemp(), "W", "Two Discs (1999)")
+        r = ingest_cd.do_ingest(db, inbox, commit=True, release="rel-W", into=home, keep_flac=False)
+        c = sqlite3.connect(db)
+        got = c.execute("SELECT r.title FROM passages p JOIN passage_recordings pr ON pr.passage_id = p.passage_id "
+                        "JOIN recordings r ON r.mbid = pr.mbid WHERE p.kind = 'radio' ORDER BY p.start_ms").fetchall()
+        discs = c.execute("SELECT DISTINCT disc FROM release_recordings").fetchall()
+        c.close()
+        check([g[0] for g in got] == ["D2 Song 1", "D2 Song 2"] and r["identified"] == 2,
+              f"catalogued as the second disc's songs: {got}")
+        check(discs == [(2,)], f"and linked as disc 2: {discs}")
+    finally:
+        ingest_cd.lookup_disc_id, cd_toc.musicbrainz_disc_id = old
+
+
 def test_end_to_end():
     """[SPEC-CDI-040], [SPEC-CDI-050], with a real WAV and ffmpeg: the preview
     leaves the rip byte-for-byte as it was; the commit files it in its album
@@ -737,6 +837,8 @@ def main() -> int:
     test_album_names_held_short()
     test_files_renamed_with_the_folder()
     test_long_title_end_to_end()
+    test_which_disc()
+    test_second_disc_end_to_end()
     # `commit_rip` stats the encoded file for the `files` row -- a real,
     # empty file is enough; identification never actually reads it because
     # `segment_dao.identify_recording` is monkeypatched below.
