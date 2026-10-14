@@ -171,6 +171,13 @@ pub const SPEAKER_CONNECT_TIMEOUT_MIN: u32 = 5;
 pub const SPEAKER_CONNECT_TIMEOUT_MAX: u32 = 300;
 pub const SPEAKER_CONNECT_TIMEOUT_DEFAULT: u32 = 45;
 
+/// How far past the last attempt a resume point must be to count as progress
+/// `[SPEC-DIR-240]`: six times the default save interval. A person who restarts
+/// a playing appliance twice within this of the same song loses that song once,
+/// and the log says why; a passage that kills the player is not replayed a third
+/// time.
+pub const RESUME_PROGRESS_MS: u64 = 30_000;
+
 /// The longest album name a CD rip's folder and files are given `[SPEC-NAM-010]`;
 /// `tools/ingest_cd.py` holds the same numbers as `ALBUM_NAME_MAX`/`_RANGE`.
 pub const CD_ALBUM_NAME_MAX_DEFAULT: u32 = 60;
@@ -2166,6 +2173,50 @@ impl PlayerStore {
         let end = if done.is_ok() { "COMMIT" } else { "ROLLBACK" };
         let _ = self.conn.execute_batch(end);
         done
+    }
+
+    /// How many starts in a row have tried to resume playing this passage
+    /// without the one before getting past where it began, this one included
+    /// `[SPEC-DIR-240]`. Written before the passage is opened, so a start the
+    /// player does not survive is still counted. "Got past" is a saved position
+    /// more than [`RESUME_PROGRESS_MS`] beyond the last attempt's: not an exact
+    /// match, because the point saved when a player dies mid-passage moves by up
+    /// to the save interval each time, and on an unwinding panic the engine's
+    /// own drop saves wherever it reached. So two means the player stopped in
+    /// the same place twice, playing.
+    ///
+    /// 1 when the count cannot be read or written: a guard that cannot keep its
+    /// count must not drop anything, and says why.
+    pub fn note_resume_attempt(&self, passage_id: i64, position_ms: u64) -> u32 {
+        let last: Option<String> = self
+            .conn
+            .query_row("SELECT value FROM player_settings WHERE key = 'resume_attempt'", [], |r| r.get(0))
+            .ok();
+        // `<passage>:<position>|<count>`
+        let parsed = last.as_deref().and_then(|v| {
+            let (point, count) = v.rsplit_once('|')?;
+            let (id, pos) = point.split_once(':')?;
+            Some((id.parse::<i64>().ok()?, pos.parse::<u64>().ok()?, count.parse::<u32>().ok()?))
+        });
+        let n = match parsed {
+            Some((id, pos, count)) if id == passage_id && position_ms <= pos.saturating_add(RESUME_PROGRESS_MS) => {
+                count + 1
+            }
+            _ => 1,
+        };
+        let wrote = self.conn.execute(
+            "INSERT INTO player_settings (key, value, updated_at)
+             VALUES ('resume_attempt', ?1, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            rusqlite::params![format!("{passage_id}:{position_ms}|{n}")],
+        );
+        match wrote {
+            Ok(_) => n,
+            Err(e) => {
+                tracing::warn!("resume guard: could not count this attempt ({e}); nothing will be dropped");
+                1
+            }
+        }
     }
 
     /// The queue as it was last written, in play order `[SPEC-DIR-225]`.

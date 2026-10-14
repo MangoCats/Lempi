@@ -180,10 +180,9 @@ what remains here is the work that crosses documents.
    device checks of `[FLT-ISS-070]` -- a restore from the Listening backups
    row, and the play-rate check -- remain.
 2. **The Program Director's open items**, [SPEC009 §9](spec/SPEC009-program-director.md#9-open):
-   first `[SPEC-DIR-240]`, a passage that crashed the player coming straight
-   back (a cheap guard, worth most on appliances powered by their speaker);
-   then `[SPEC-DIR-235]` and `[SPEC-DIR-245]` together, a restored queue
-   re-weighed and its provenance kept.
+   `[SPEC-DIR-235]` and `[SPEC-DIR-245]` together, a restored queue
+   re-weighed and its provenance kept. (`[SPEC-DIR-240]`, a passage that
+   crashed the player coming straight back, was built 2026-10-14.)
 3. **How a seek feels.** A seek cuts the ring with the skip's own fade (2 s)
    and lead (0.5 s); a shorter fade of its own may feel crisper. The
    maintainer found it "functional, could be smoother", 2026-10-09: a question

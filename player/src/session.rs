@@ -292,6 +292,11 @@ pub struct Session {
     resume_id: Option<i64>,
     /// Was it playing when it last stopped? `[PI5-PWR-030]`
     resume_playing: bool,
+    /// The same, whether or not a passage was saved with it: a start that died
+    /// before saving one still stopped playing, and that is what the crash-loop
+    /// guard asks `[SPEC-DIR-240]`. `resume_playing` alone decides whether to
+    /// play on.
+    stopped_playing: bool,
     depth: usize,
     director: Option<Director>,
     rng: Rng,
@@ -374,6 +379,7 @@ impl Session {
         // thrown away here for as long as the row has existed, which is why an
         // appliance that lost power came back silent even though it had been
         // playing `[PI5-PWR-030]`.
+        let stopped_playing = saved.as_ref().is_some_and(|s| s.2);
         let (resume_id, resume_ms, resume_playing) = match saved {
             Some((Some(id), pos, playing)) => (Some(id), pos, playing),
             _ => (None, 0, false),
@@ -426,6 +432,7 @@ impl Session {
             store,
             resume_ms,
             resume_id,
+            stopped_playing,
             resume_playing,
             depth,
             director: None,
@@ -748,11 +755,40 @@ impl Session {
                 engine.apply_settings(&saved);
             }
         }
+        // The queue as it stood, read here because the guard below may need its head.
+        let remembered: Vec<i64> =
+            self.decisions.as_ref().map(|s| s.load_queue()).unwrap_or_default();
+        let mut dropped_on_start = None;
+        // `[SPEC-DIR-240]`: a passage the player died on comes straight back
+        // with the queue that holds it, where the old random fill broke the loop
+        // by accident. The first passage this start will play -- the resume
+        // point, or the remembered queue's head when a start died before one was
+        // saved -- tried twice, playing, without the player getting past it, is
+        // dropped rather than replayed. Once only would drop a song for a crash
+        // that had nothing to do with it. Counted before the passage opens, so
+        // the start that dies is counted too.
+        let first = self.resume_id.map(|id| (id, self.resume_ms)).or(remembered.first().map(|&id| (id, 0)));
+        if let (Some((id, at)), true, Some(store)) = (first, self.stopped_playing, self.store.as_ref()) {
+            let tries = store.note_resume_attempt(id, at);
+            if tries >= 2 {
+                tracing::warn!(
+                    "passage {id} at {:.1}s: the player has stopped there {tries} times in a row without getting                      past it -- dropped rather than replayed [SPEC-DIR-240]",
+                    at as f64 / 1000.0
+                );
+                if self.resume_id == Some(id) {
+                    self.resume_id = None;
+                    self.resume_ms = 0;
+                }
+                dropped_on_start = Some(id);
+            }
+        }
         if let Some(s) = self.store.take() {
             engine.attach_store(s);
         }
         // Read before the `take` below, for the duplicate check after it.
-        let resumed = self.resume_id;
+        // A dropped passage is skipped in the remembered queue as well, where it
+        // is usually also the head.
+        let resumed = self.resume_id.or(dropped_on_start);
         if let Some(id) = self.resume_id.take() {
             match self.lib.passage(id) {
                 Ok(mut e) => {
@@ -777,8 +813,7 @@ impl Session {
         // Entries arrive with `selected_by` at its `Library::passage` default
         // of `None`, which already means "no selection event to report at all
         // -- a resumed or reconstructed entry". Nothing new to say.
-        let remembered: Vec<i64> =
-            self.decisions.as_ref().map(|s| s.load_queue()).unwrap_or_default();
+        // `remembered` was read above, for the guard.
         for id in remembered {
             // The head can be named here as well as in `player_state`, if the
             // process stopped between a passage being admitted and the next
@@ -1296,6 +1331,57 @@ mod tests {
             &[5, 2, 6],
             "the remembered queue comes back in play order, ahead of any refill"
         );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// `[SPEC-DIR-240]` A passage the player died on twice, playing, at the same
+    /// point, is dropped rather than replayed -- from the resume point and from
+    /// the remembered queue, where it is the head. Once only is replayed: one
+    /// crash may have had nothing to do with it. Progress, or a pause, never
+    /// counts against it.
+    #[test]
+    fn a_passage_the_player_died_on_twice_is_not_replayed() {
+        let tmp = library_on_disk("crashloop");
+        let store = PlayerStore::open(&tmp).unwrap();
+        store.save(Some(5), 1234, true).unwrap();
+        store.save_queue(&[5, 2, 6]).unwrap();
+        drop(store);
+        // A start the player does not survive: the engine is never dropped, so
+        // nothing saves on the way out, as after a crash.
+        let start = || -> Vec<i64> {
+            let mut session = Session::open(&tmp, &tmp, 5).unwrap();
+            let (mut engine, _h) = Engine::new(PathHandle::silent(), 5);
+            session.prime(&mut engine);
+            let ids = engine.queued().map(|e| e.passage_id).collect();
+            std::mem::forget(engine);
+            ids
+        };
+        assert_eq!(start()[0], 5, "the first start after a stop replays it");
+        let second = start();
+        // Dropped from the resume point and the remembered queue; the refill may
+        // still draw it later, as any eligible passage -- "no other effect".
+        assert_eq!(&second[..2], &[2, 6], "the second start at the same point drops it: {second:?}");
+
+        // Progress moves the resume point past the margin: counted from one again.
+        PlayerStore::open(&tmp).unwrap().save(Some(5), 1234 + 60_000, true).unwrap();
+        assert_eq!(start()[0], 5, "a point well past the last is a new count");
+        // A few seconds further on is the same place, as a mid-passage crash saves it.
+        PlayerStore::open(&tmp).unwrap().save(Some(5), 1234 + 64_000, true).unwrap();
+        assert_ne!(start()[0], 5, "a few seconds on is no progress: dropped");
+
+        // Paused, it was not playing when it stopped: never counted.
+        PlayerStore::open(&tmp).unwrap().save(Some(5), 9000, false).unwrap();
+        assert_eq!((start()[0], start()[0], start()[0]), (5, 5, 5), "a paused resume point is never dropped");
+
+        // A start that died before saving any passage: the queue's head is what
+        // it was opening, and is what is counted.
+        let store = PlayerStore::open(&tmp).unwrap();
+        store.save(None, 0, true).unwrap();
+        store.save_queue(&[2, 6, 5]).unwrap();
+        drop(store);
+        assert_eq!(start()[0], 2, "the head is played the first time");
+        let again = start();
+        assert_eq!(&again[..2], &[6, 5], "and dropped the second: {again:?}");
         let _ = std::fs::remove_file(&tmp);
     }
 
