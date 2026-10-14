@@ -1,6 +1,6 @@
 # SPEC026: CD Ripping — Passage Representation for Hidden Audio and Multi-Disc Sets
 
-**Design Specification — Tier 2 · Designed, not yet built**
+**Design Specification — Tier 2 · §2's filing built; §1 and wider passages designed**
 
 Two cases where a rip is not simply one passage per TOC track: real audio
 hidden in a pregap or at `INDEX 00`, and a box set ripped disc-by-disc.
@@ -13,10 +13,16 @@ below cover what happens to the audio once those have already run for a
 given disc — §2 also covers the multi-disc session itself, since that is
 squarely part of what a box set is, not a separate topic.
 
-> **Status.** Requirements and specification only, per `[REQ-LIB-255..275]`.
-> No code exists yet — same posture as [SPEC025](SPEC025-cd-ripping.md),
-> which this depends on entirely; neither can be built independently of
-> the other.
+> **Status, 2026-10-14.** §2's filing is built in `tools/ingest_cd.py`: a set
+> ripped a disc at a time is one release, each disc known by its own Disc ID
+> (`[SPEC-RIP-094]`, `[SPEC-RIP-096]`, `[SPEC-RIP-106]`, by way of the
+> importer's `[SPEC-CDI-099]`), filed in one folder under names that keep the
+> discs apart, and previewed as *disc N of M* beside what the library holds of
+> the rest (`[SPEC-RIP-108]`, `[SPEC-RIP-110]`). Browse lists the set as one
+> album in disc order. Not built: §1's hidden audio, the wider passages of
+> both `[SPEC-RIP-098]` and `[SPEC-RIP-100]`, and the session prompt of
+> §2's `[SPEC-RIP-104]` — the import page names the missing discs, but
+> nothing asks for the next one.
 
 > **Related:** [SPEC025](SPEC025-cd-ripping.md) for the ripping mechanics
 > this extends · [SPEC028](SPEC028-cd-ripping-identification.md) for the
@@ -128,6 +134,23 @@ next. Identification, not sequencing, is what a disc's medium number and
 set membership rest on; this is the same per-disc Disc ID lookup §2
 already performs, not a second mechanism built for the session case.
 
+**`[SPEC-RIP-108]` A set's discs share one album folder, and every file a
+disc brings is named with its disc.** Once the edition is settled — one
+release, its disc known — a track file becomes `2-01. Title`, anything else
+`… (Disc 2)`, in place of whatever disc the ripper wrote; a cover keeps its
+name unless the folder already has one by it, which is never replaced. The
+ripper's names cannot be trusted for this: CUERipper writes `(Disc 1)` on a
+single disc, and *An American Treasure*'s second disc arrived with no disc
+in its names at all, so its first would have collided name for name. The
+move still refuses to write over any file `[SPEC-NAM-050]`; this is what
+keeps the refusal for a real clash.
+
+**`[SPEC-RIP-110]` The import page says which disc of how many a rip is,
+and what of the rest of the set the library holds** — *disc 1 is not in the
+library yet* — before anything is added. A set added a disc at a time is
+otherwise one album that never says it is short a disc, and a wrong disc of
+the set is caught as the page opens rather than after the add `[SPEC-RIP-106]`.
+
 ---
 
 ## 3. Open
@@ -148,7 +171,7 @@ drive/hardware failure modes, the last item there, is now decided too.
 
 ---
 
-**Traceability:** `[SPEC-RIP-090..106]` · derives `[REQ-LIB-255..275]` ·
+**Traceability:** `[SPEC-RIP-090..110]` · derives `[REQ-LIB-255..275]` ·
 extends [SPEC025](SPEC025-cd-ripping.md), `[SPEC008]` §3's
 `release_recordings.disc` and `passages` schema, and
 [SPEC023](SPEC023-domain-vocabulary.md)'s Passage/File definitions.

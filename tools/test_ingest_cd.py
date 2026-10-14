@@ -477,6 +477,19 @@ def test_which_disc():
           "a whole release, asked with the recording, finds it on its own disc")
     check(ingest_cd.for_this_disc([rel], None, cd_toc.DiscToc(tracks=[], leadout_sector=0, source="eac-cue")) == [],
           "a set whose disc cannot be told is left out, not guessed")
+    check(ingest_cd.disc_of_set(narrowed) == (2, 2), f"disc 2 of 2: {ingest_cd.disc_of_set(narrowed)}")
+    check(ingest_cd.disc_of_set(narrowed * 2) is None, "not while the edition is still a choice")
+    single = ingest_cd.for_this_disc([dict(rel, media=rel["media"][:1])], None, toc2)
+    check(ingest_cd.disc_of_set(single) is None, "and not for a single disc")
+
+    print("set_summary: which disc, and what of the rest the library holds [SPEC-RIP-110]")
+    c = fixture()
+    c.execute("INSERT INTO passage_recordings (passage_id, mbid) VALUES (1, 'rec-d1-1')")
+    s = ingest_cd.set_summary(narrowed[0], c)
+    check(s["disc"] == 2 and s["discs"] == 2, f"disc 2 of 2: {s}")
+    check([(d["number"], d["recordings"], d["held"]) for d in s["set"]] == [(1, 2, 1), (2, 2, 0)],
+          f"disc 1 half held, disc 2 none: {s['set']}")
+    check(ingest_cd.set_summary(single[0], c) == {}, "a single disc says nothing of a set")
 
     c = fixture()
     c.execute("CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT NOT NULL, release_date TEXT, "
@@ -497,6 +510,35 @@ def test_which_disc():
     n = ingest_cd.record_release(c, rel, [(1, "rec-d2-1")])
     check(n == 1 and c.execute("SELECT disc FROM release_recordings").fetchone()[0] == 2,
           "a whole release links a second-disc recording to its own disc")
+
+
+def test_disc_in_the_names():
+    """[SPEC-RIP-108]: one disc of a set names every file with its disc, in
+    place of whatever disc the ripper wrote, and keeps a cover already there."""
+    print("renamed_files: a disc of a set carries its disc in every name")
+    rip = _cueripper_rip(tempfile.mkdtemp(), "Two Discs")
+    home = os.path.join(tempfile.mkdtemp(), "Fiona Apple", "Two Discs (1999)")
+    got = ingest_cd.renamed_files(rip, home, "Fiona Apple", 60, ("x.mp3",), disc=2)
+    stem = "Fiona Apple - Two Discs"
+    want = {f"{stem}(Disc 1).{e}": f"{stem} (Disc 2).{e}" for e in ("cue", "wav", "log")}
+    want[f"{stem}(Dis.accurip"] = f"{stem} (Disc 2).accurip"
+    want["x.mp3"] = "x (Disc 2).mp3"
+    check(got == want, f"the ripper's (Disc 1) replaced by the set's disc, the cover kept: {got}")
+    os.makedirs(home)
+    open(os.path.join(home, "folder.jpg"), "w").close()
+    got = ingest_cd.renamed_files(rip, home, "Fiona Apple", 60, disc=2)
+    check(got.get("folder.jpg") == "folder (Disc 2).jpg", f"a cover the folder has already is not replaced: {got}")
+    check(f"{stem}(Disc 1).cue" not in ingest_cd.renamed_files(rip, home, "Fiona Apple", 60),
+          "a single disc is named as before")
+
+    tracks = tempfile.mkdtemp()
+    for n in ("01. One.wav", "02. Two.wav", "Artist - Album.cue", "Artist - Album.log", "2-03. Three.wav"):
+        open(os.path.join(tracks, n), "w").close()
+    got = ingest_cd.renamed_files(tracks, home, "Artist", 60, ("01. One.mp3",), disc=2)
+    check(got == {"01. One.wav": "2-01. One.wav", "02. Two.wav": "2-02. Two.wav", "01. One.mp3": "2-01. One.mp3",
+                  "Artist - Album.cue": "Artist - Album (Disc 2).cue",
+                  "Artist - Album.log": "Artist - Album (Disc 2).log"},
+          f"tracks mode: 2-01, the sheet and log (Disc 2), a name with its disc left alone: {got}")
 
 
 def test_second_disc_end_to_end():
@@ -527,8 +569,23 @@ def test_second_disc_end_to_end():
         p = ingest_cd.do_ingest(db, inbox, commit=False)
         titles = [t["title"] for t in p["releases"][0]["tracks"]]
         check(titles == ["D2 Song 1", "D2 Song 2"], f"the preview lists the second disc: {titles}")
+        s = p["releases"][0]
+        check((s.get("disc"), s.get("discs"), [d["held"] for d in s.get("set", [])]) == (2, 2, [0, 0]),
+              f"and says disc 2 of 2, neither held [SPEC-RIP-110]: {s.get('set')}")
+        # The first disc is filed already, as CUERipper named it, with its cover.
         home = os.path.join(tempfile.mkdtemp(), "W", "Two Discs (1999)")
+        os.makedirs(home)
+        first = ["W - Two Discs(Disc 1).cue", "W - Two Discs(Disc 1).mp3", "folder.jpg"]
+        for n in first:
+            open(os.path.join(home, n), "w").close()
+        open(os.path.join(inbox, "folder.jpg"), "w").close()
         r = ingest_cd.do_ingest(db, inbox, commit=True, release="rel-W", into=home, keep_flac=False)
+        names = sorted(os.listdir(home))
+        check(names == sorted(first + ["W - Two Discs (Disc 2).cue", "W - Two Discs (Disc 2).mp3",
+                                       "folder (Disc 2).jpg"]),
+              f"filed beside the first disc, every name its own [SPEC-RIP-108]: {names}")
+        cue = open(os.path.join(home, "W - Two Discs (Disc 2).cue"), encoding="utf-8").read()
+        check('FILE "W - Two Discs (Disc 2).mp3" MP3' in cue, f"the sheet names its own MP3: {cue!r}")
         c = sqlite3.connect(db)
         got = c.execute("SELECT r.title FROM passages p JOIN passage_recordings pr ON pr.passage_id = p.passage_id "
                         "JOIN recordings r ON r.mbid = pr.mbid WHERE p.kind = 'radio' ORDER BY p.start_ms").fetchall()
@@ -838,6 +895,7 @@ def main() -> int:
     test_files_renamed_with_the_folder()
     test_long_title_end_to_end()
     test_which_disc()
+    test_disc_in_the_names()
     test_second_disc_end_to_end()
     # `commit_rip` stats the encoded file for the `files` row -- a real,
     # empty file is enough; identification never actually reads it because

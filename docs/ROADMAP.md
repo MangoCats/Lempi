@@ -27,7 +27,7 @@ folded into one spec.
 | DAO segmentation cascade | [SPEC024](spec/SPEC024-dao-segmentation-cascade.md) | [§8 Open](spec/SPEC024-dao-segmentation-cascade.md#8-open) |
 | CD ripping (built 2026-09-04, single-disc, person-assisted — verified against a real disc) | [SPEC025](spec/SPEC025-cd-ripping.md) | [§8 Open](spec/SPEC025-cd-ripping.md#8-open) |
 | CD ripping: how Vipunen drives a GUI-only Windows tool (decided — person-assisted, built) | [SPEC027](spec/SPEC027-cd-ripping-windows-automation.md) | whole document |
-| CD ripping — hidden-audio & multi-disc passage representation (designed, not yet built) | [SPEC026](spec/SPEC026-cd-ripping-passages.md) | [§3 Open](spec/SPEC026-cd-ripping-passages.md#3-open) |
+| CD ripping — multi-disc filing (built); hidden audio and wider passages (designed) | [SPEC026](spec/SPEC026-cd-ripping-passages.md) | [§3 Open](spec/SPEC026-cd-ripping-passages.md#3-open) |
 | Database schema | [SPEC008](spec/SPEC008-database-schema.md) | [§8 Open](spec/SPEC008-database-schema.md#8-open) |
 | Program Director | [SPEC009](spec/SPEC009-program-director.md) | [§9 Open](spec/SPEC009-program-director.md#9-open) |
 | Audio path supervisor | [SPEC011](spec/SPEC011-audio-path-supervisor.md) | [§5 Risks and open questions](spec/SPEC011-audio-path-supervisor.md#5-risks-and-open-questions) |
@@ -191,10 +191,13 @@ what remains here is the work that crosses documents.
    they are by the maintainer's decision of 2026-10-08. Worth revisiting once
    the rest settles: the settings list has grown since, with the Listening
    backups row and *Album names*.
-5. **Multi-disc sets as one album** ([SPEC026](spec/SPEC026-cd-ripping-passages.md)):
-   38 confirmed sets in the library and four of the month's CD imports
-   (2026-10-14); since `[SPEC-CDI-099]` the importer knows which disc it holds,
-   but a set still files and browses as separate albums.
+5. **What a multi-disc set still lacks** ([SPEC026](spec/SPEC026-cd-ripping-passages.md)).
+   A set already files and browses as one album, in disc order, and its discs
+   are named apart and previewed as *disc N of M* (`[SPEC-RIP-108]`,
+   `[SPEC-RIP-110]`, 2026-10-14). Left: a compilation is credited in Browse to
+   its first track's artist, because `releases` holds no artist credit; nothing
+   asks for a set's next disc `[SPEC-RIP-104]`; whole-disc passages
+   `[SPEC-RIP-100]`; hidden audio (SPEC026 §1).
 6. **CI cannot be read from the hub desktop** -- `gh` is not authenticated
    there -- so a red run is seen only on GitHub. The gates pass locally.
 

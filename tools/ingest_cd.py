@@ -221,10 +221,44 @@ def proposed_folder(artist: str | None, album: str | None, year: str | None,
 
 
 _YEAR = re.compile(r"\s\(\d{4}\)$")
+# The ripper's own word on the disc -- CUERipper's `(Disc 1)`, on a single disc
+# as readily as on a set -- replaced by the set's when there is one.
+_RIPPER_DISC = re.compile(r"\s*\((?:Disc|CD)\s*\d+\)$", re.I)
+_TRACK_FILE = re.compile(r"^\d{1,3}[ .\-_]")
+_HAS_DISC = re.compile(r"^\d{1,2}-\d{1,3}[ .\-_]")
+_IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
+
+
+def disc_of_set(releases: list[dict]) -> tuple[int, int] | None:
+    """`(disc, of)` when the rip is one disc of a set and which is settled:
+    one edition, cut to this disc by `for_this_disc` `[SPEC-RIP-106]`. `None`
+    for a single disc, or while the edition is still a choice."""
+    if len(releases) != 1:
+        return None
+    r = releases[0]
+    media, of = r.get("media") or [], r.get("_disc_count") or 0
+    if of < 2 or len(media) != 1:
+        return None
+    return media[0].get("position") or 1, of
+
+
+def _with_disc(name: str, disc: int, into: str) -> str:
+    """`name` as one disc of a set files it beside the others `[SPEC-RIP-108]`:
+    a track file `2-01. Title`, anything else `... (Disc 2)` in place of
+    whatever disc the ripper wrote; a cover keeps its name unless the album
+    folder already has one by it."""
+    stem, ext = os.path.splitext(name)
+    if ext.lower() in _IMAGE_EXT:
+        return name if not os.path.exists(os.path.join(into, name)) else f"{stem} (Disc {disc}){ext}"
+    if _HAS_DISC.match(name):
+        return name
+    if _TRACK_FILE.match(name):
+        return f"{disc}-{name}"
+    return f"{_RIPPER_DISC.sub('', stem)} (Disc {disc}){ext}"
 
 
 def renamed_files(folder: str, into: str, artist: str | None, limit: int,
-                  extra: tuple = ()) -> dict[str, str]:
+                  extra: tuple = (), disc: int | None = None) -> dict[str, str]:
     """The new name of each file the move renames `[SPEC-NAM-040]`, old to
     new; a file not in it keeps its name.
 
@@ -237,27 +271,36 @@ def renamed_files(folder: str, into: str, artist: str | None, limit: int,
     A name the ripper cut short to fit its own path -- `...Mor(Dis.accurip`
     beside `...Mor(Disc 1).cue` -- is given the CUE's whole new name. A rip
     whose names do not start with its folder's (track files, `01. Title.wav`)
-    keeps them. `extra` names files not made yet: the MP3, the FLAC copy."""
+    keeps them. `extra` names files not made yet: the MP3, the FLAC copy.
+
+    `disc`, when the rip is that disc of a set, is then written into every
+    name (`_with_disc`) `[SPEC-RIP-108]`: the set's discs share one folder, and
+    the ripper's names cannot be trusted to keep them apart -- *An American
+    Treasure*'s second disc arrived with no disc in its names at all."""
     names = [n for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n))]
     names += [n for n in extra if n not in names]
     anchor = os.path.basename(os.path.normpath(folder))
     cues = [n for n in names if n.lower().endswith(".cue")]
-    if not cues or not cues[0].startswith(anchor):
-        return {}
-    album = shorten(safe_name(_YEAR.sub("", os.path.basename(os.path.normpath(into)))), limit)
-    prefix = f"{safe_name(artist)} - {album}" if artist else album
-    cue_stem = os.path.splitext(cues[0])[0]
     out = {}
-    for n in names:
-        stem, ext = os.path.splitext(n)
-        if not n.startswith(anchor):
-            continue
-        if cue_stem.startswith(stem) and stem != cue_stem:
-            new = prefix + cue_stem[len(anchor):] + ext          # cut short by the ripper
-        else:
-            new = prefix + n[len(anchor):]
-        if new != n:
-            out[n] = new
+    if cues and cues[0].startswith(anchor):
+        album = shorten(safe_name(_YEAR.sub("", os.path.basename(os.path.normpath(into)))), limit)
+        prefix = f"{safe_name(artist)} - {album}" if artist else album
+        cue_stem = os.path.splitext(cues[0])[0]
+        for n in names:
+            stem, ext = os.path.splitext(n)
+            if not n.startswith(anchor):
+                continue
+            if cue_stem.startswith(stem) and stem != cue_stem:
+                new = prefix + cue_stem[len(anchor):] + ext          # cut short by the ripper
+            else:
+                new = prefix + n[len(anchor):]
+            if new != n:
+                out[n] = new
+    if disc:
+        for n in names:
+            new = _with_disc(out.get(n, n), disc, into)
+            if new != n:
+                out[n] = new
     return out
 
 
@@ -504,7 +547,9 @@ def for_this_disc(releases: list[dict], disc_id: str | None, toc: cd_toc.DiscToc
     Woodstock's second disc was catalogued as the first disc's seven songs.
     A release whose disc cannot be told is left out: a wrong answer is worse
     than none, and the review queue takes a track nobody can name. The whole
-    set's track count is kept, as `_track_total`, for `record_release`."""
+    set's track count is kept, as `_track_total`, for `record_release`; its
+    discs, as `_disc_count` and `_set`, for the names the move gives the files
+    and the preview's word on the rest of the set `[SPEC-RIP-108]`, `[SPEC-RIP-110]`."""
     out = []
     for r in releases:
         media = r.get("media") or []
@@ -516,7 +561,8 @@ def for_this_disc(releases: list[dict], disc_id: str | None, toc: cd_toc.DiscToc
             say(f"  {r.get('title')!r} ({r.get('id')}) has {len(media)} discs and which this is cannot "
                 "be told: left out")
             continue
-        out.append(dict(r, media=[m], _track_total=sum(_medium_tracks(x) for x in media)))
+        out.append(dict(r, media=[m], _track_total=sum(_medium_tracks(x) for x in media),
+                        _disc_count=len(media), _set=media))
     return out
 
 
@@ -793,7 +839,30 @@ def release_summary(release: dict, track_count: int, conn=None, positions=None,
     return {"id": release.get("id"), "title": release.get("title"), "artist": credit or None,
             "year": year, "country": release.get("country"), "tracks": tracks,
             "in_library": held, "duplicate": bool(dup and dup[0] == dup[1]),
-            "folder": proposed_folder(credit, release.get("title"), year, limit)}
+            "folder": proposed_folder(credit, release.get("title"), year, limit),
+            **set_summary(release, conn)}
+
+
+def set_summary(release: dict, conn=None) -> dict:
+    """For one disc of a set, which disc of how many, and each of the set's
+    discs with how much of it the library already plays `[SPEC-RIP-110]` -- so
+    the page says *disc 2 of 2*, and that disc 1 is not here yet, before
+    anything is added. Empty for a single disc."""
+    whole = release.get("_set") or []
+    if len(whole) < 2 or len(release.get("media") or []) != 1:
+        return {}
+    this = release["media"][0].get("position")
+    discs = []
+    for i, m in enumerate(whole, 1):
+        mbids = list(dict.fromkeys(((t.get("recording") or {}).get("id")) for t in m.get("tracks") or []))
+        mbids = [x for x in mbids if x]
+        held = 0
+        if conn is not None and mbids:
+            held = conn.execute("SELECT COUNT(DISTINCT mbid) FROM passage_recordings WHERE mbid IN "
+                                f"({','.join('?' * len(mbids))})", mbids).fetchone()[0]
+        discs.append({"number": m.get("position") or i, "format": m.get("format"), "title": m.get("title") or None,
+                      "tracks": _medium_tracks(m), "recordings": len(mbids), "held": held})
+    return {"disc": this, "discs": len(whole), "set": discs}
 
 
 # -------------------------------------------------------------------- commit
@@ -1234,7 +1303,8 @@ def _plan_move(folder: str, into: str | None, releases: list[dict], toc: cd_toc.
     if not into:
         return {}
     artist = release_credit(releases[0]) if len(releases) == 1 else toc.performer
-    renames = renamed_files(folder, into, artist, limit, tuple(made))
+    disc = disc_of_set(releases)
+    renames = renamed_files(folder, into, artist, limit, tuple(made), disc[0] if disc else None)
     check_paths(folder, into, renames, tuple(made))
     return renames
 

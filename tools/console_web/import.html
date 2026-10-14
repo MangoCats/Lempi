@@ -237,7 +237,8 @@ function showPreview(p, folder, area) {
       text: `${t.title || '?'}  ${t.length_ms ? S.clock(t.length_ms) : ''}` })));
     pick.append(S.el('label', { class: 'edition' }, radio,
       S.el('b', { text: ` ${rel.artist || '?'} — ${rel.title || '?'}` }),
-      S.el('span', { class: 'meta', text: `  ${rel.year || ''} ${rel.country || ''}` }), tl));
+      S.el('span', { class: 'meta', text: `  ${rel.year || ''} ${rel.country || ''}`
+        + (rel.discs ? ` · disc ${rel.disc} of ${rel.discs}` : '') }), tl, setLine(rel)));
   });
   // [SPEC-CDI-096]: the whole disc marked as an occasion, ticked in advance
   // when its title suggests one -- "Christmas" in it -- and the person's to
@@ -292,7 +293,26 @@ function showPreview(p, folder, area) {
     p.album_name_max ? S.el('p', { class: 'steps', text:
       `Album names in folder and file names are held to ${p.album_name_max} characters, cut at a word `
       + '(Lempi Settings, Album names). The rip\'s files are renamed after this folder as they move; '
-      + 'the album keeps its full title in the library.' }) : null);
+      + 'the album keeps its full title in the library.'
+      + (rels.length === 1 && rels[0].discs ? ` Each file is named with its disc, "(Disc ${rels[0].disc})", `
+        + 'so the set\'s discs share the one folder.' : '') }) : null);
+}
+
+// [SPEC-RIP-110]: one disc of a set says what of the rest the library holds --
+// a set added a disc at a time is otherwise one album that never says it is
+// short a disc, as An American Treasure was for its first, 2026-10-14.
+function setLine(rel) {
+  if (!rel.set) return null;
+  const other = rel.set.filter(d => d.number !== rel.disc);
+  const say = d => {
+    const what = `disc ${d.number}${d.format && !/CD/.test(d.format) ? ` (${d.format})` : ''}`;
+    if (!d.recordings) return `${what}: ${d.tracks} tracks`;
+    if (d.held >= d.recordings) return `${what} is in the library`;
+    return d.held ? `${what}: ${d.held} of its ${d.recordings} recordings are in the library`
+      : `${what} is not in the library yet`;
+  };
+  return S.el('p', { class: 'meta', style: 'margin:.2rem 0 .4rem', text:
+    `The rest of the set: ${other.map(say).join('; ')}.` });
 }
 
 function done(job, into, rel, area) {
