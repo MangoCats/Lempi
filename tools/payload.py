@@ -113,13 +113,18 @@ def releases_for(conn: sqlite3.Connection, mbids, file_releases=None) -> list[di
                 tracks[rel].append({"recording": m, "position": r[1], "disc": r[2], "chosen": r[3] or 0,
                                     "track_length_ms": r[4], "source": r[5]})
     out = []
+    # The release's own credit travels where the library has it `[REQ-VIS-183]`,
+    # and only when set: an absent key leaves a phone's own value standing.
+    credit = any(c[1] == "artist_credit" for c in conn.execute("PRAGMA table_info(releases)"))
+    names = ("mbid", "title", "release_date", "source", "release_group", "status",
+             "primary_type", "secondary_types", "country", "track_count") + (("artist_credit",) if credit else ())
     for mbid in sorted(tracks):
-        r = conn.execute("SELECT mbid, title, release_date, source, release_group, status, primary_type, "
-                         "secondary_types, country, track_count FROM releases WHERE mbid = ?", (mbid,)).fetchone()
+        r = conn.execute(f"SELECT {', '.join(names)} FROM releases WHERE mbid = ?", (mbid,)).fetchone()
         if r is None:
             continue
-        rel = dict(zip(("mbid", "title", "release_date", "source", "release_group", "status",
-                        "primary_type", "secondary_types", "country", "track_count"), tuple(r)))
+        rel = dict(zip(names, tuple(r)))
+        if rel.get("artist_credit") is None:
+            rel.pop("artist_credit", None)
         rel["tracks"] = tracks[mbid]
         a = conn.execute("SELECT front, back, source, fetched_at FROM cover_art WHERE release_mbid = ?",
                          (mbid,)).fetchone() if art else None

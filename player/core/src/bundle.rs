@@ -1102,7 +1102,7 @@ fn ensure_release_columns(db: &Connection) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     for (table, cols) in [
         ("releases", &["release_group TEXT", "status TEXT", "primary_type TEXT", "secondary_types TEXT",
-                       "country TEXT", "track_count INTEGER"][..]),
+                       "country TEXT", "track_count INTEGER", "artist_credit TEXT"][..]),
         ("release_recordings", &["track_length_ms INTEGER", "chosen INTEGER DEFAULT 0", "disc INTEGER"][..]),
     ] {
         let have: std::collections::HashSet<String> = db
@@ -1270,13 +1270,15 @@ pub fn import_releases(db: &mut Connection, doc: &Value, bundle_root: &Path) -> 
         let mbid = str_of(r, "mbid");
         tx.execute(
             "INSERT INTO releases (mbid,title,release_date,source,release_group,status,primary_type,secondary_types,\
-             country,track_count) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(mbid) DO UPDATE SET \
+             country,track_count,artist_credit) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) \
+             ON CONFLICT(mbid) DO UPDATE SET \
              title=excluded.title, release_date=excluded.release_date, source=excluded.source, \
              release_group=excluded.release_group, status=excluded.status, primary_type=excluded.primary_type, \
-             secondary_types=excluded.secondary_types, country=excluded.country, track_count=excluded.track_count",
+             secondary_types=excluded.secondary_types, country=excluded.country, track_count=excluded.track_count, \
+             artist_credit=COALESCE(excluded.artist_credit, releases.artist_credit)",
             params![mbid, str_of(r, "title"), opt(r, "release_date"), str_of(r, "source"), opt(r, "release_group"),
                     opt(r, "status"), opt(r, "primary_type"), opt(r, "secondary_types"), opt(r, "country"),
-                    int(r, "track_count")],
+                    int(r, "track_count"), opt(r, "artist_credit")],
         )
         .map_err(|e| format!("release {mbid}: {e}"))?;
         rep.releases += 1;
@@ -2949,12 +2951,17 @@ mod tests {
         std::fs::remove_file(s.staging.join("payload.json")).unwrap();
         for n in 0..2 {
             let rec = format!("m{n}");
-            let doc = serde_json::json!({"payload_version": 1,
+            let mut doc = serde_json::json!({"payload_version": 1,
                 "encodings": [whole["encodings"][n].clone()], "recordings": [whole["recordings"][n].clone()],
                 "releases": [{"mbid": "r1", "title": "One", "source": "mb",
                     "tracks": [{"recording": rec, "position": n + 1, "chosen": 1, "source": "mb"}],
                     "cover": {"source": "caa", "fetched_at": "t",
                               "front": {"file": "covers/r1-front.jpg", "sha256": sha_of(&front)}}}]});
+            // [REQ-VIS-183]: the first part names the release's credit; the
+            // second, as an older Vipunen's would, does not.
+            if n == 0 {
+                doc["releases"][0]["artist_credit"] = "Various Artists".into();
+            }
             std::fs::write(s.staging.join(format!("payload-00{}.json", n + 1)), doc.to_string()).unwrap();
         }
         let mut c = empty_library();
@@ -2962,6 +2969,8 @@ mod tests {
         assert_eq!((r.imported, r.releases, r.covers), (2, 1, 1), "{r:?}");
         let tracks: i64 = c.query_row("SELECT count(*) FROM release_recordings", [], |r| r.get(0)).unwrap();
         assert_eq!(tracks, 2, "both parts' tracks, on the one release");
+        let credit: Option<String> = c.query_row("SELECT artist_credit FROM releases", [], |r| r.get(0)).unwrap();
+        assert_eq!(credit.as_deref(), Some("Various Artists"), "a part without the credit does not erase it");
         std::fs::remove_dir_all(&s.root).ok();
     }
 

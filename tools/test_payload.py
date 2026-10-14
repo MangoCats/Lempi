@@ -244,6 +244,14 @@ def test_a_files_release_travels_with_it():
           and thin["encodings"][0]["release"]["mbid"] == "comp"
           and [t["position"] for r in thin["releases"] if r["mbid"] == "comp" for t in r["tracks"]] == [9],
           f"slim: {thin['recordings']} {thin['encodings'][0]}")
+    check("artist_credit" not in rels["comp"], "a library without the column sends no credit")
+    # [REQ-VIS-183]: the release's own credit travels where it is set, and
+    # an unset one is left out, so a phone's own value stands.
+    conn.execute("ALTER TABLE releases ADD COLUMN artist_credit TEXT")
+    conn.execute("UPDATE releases SET artist_credit = 'Various Artists' WHERE mbid = 'comp'")
+    rels = {r["mbid"]: r for r in pl.build(conn, ["md5"]).get("releases", [])}
+    check(rels["comp"].get("artist_credit") == "Various Artists" and "artist_credit" not in rels["album"],
+          f"the credit where set, nothing where not: {[(k, v.get('artist_credit')) for k, v in rels.items()]}")
 
 
 def test_covers_travel_as_files_named_by_the_payload():

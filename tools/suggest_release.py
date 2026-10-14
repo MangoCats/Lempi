@@ -98,7 +98,8 @@ DURATION_WINDOW_MS = 60_000  # a duration delta beyond this earns no tiebreak cr
 BASE_DDL = """
 CREATE TABLE IF NOT EXISTS releases (mbid TEXT PRIMARY KEY, title TEXT NOT NULL,
     release_date TEXT, source TEXT NOT NULL, release_group TEXT, status TEXT,
-    primary_type TEXT, secondary_types TEXT, country TEXT, track_count INTEGER);
+    primary_type TEXT, secondary_types TEXT, country TEXT, track_count INTEGER,
+    artist_credit TEXT);
 CREATE TABLE IF NOT EXISTS release_recordings (
     release_mbid TEXT NOT NULL REFERENCES releases(mbid) ON DELETE CASCADE,
     mbid TEXT NOT NULL REFERENCES recordings(mbid) ON DELETE CASCADE,
@@ -119,6 +120,10 @@ def say(text: str) -> None:
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(BASE_DDL)
     conn.executescript(CACHE_DDL)
+    try:
+        conn.execute("ALTER TABLE releases ADD COLUMN artist_credit TEXT")   # [REQ-VIS-183]
+    except sqlite3.OperationalError:
+        pass    # there already
 
 
 # ------------------------------------------------------------- folder scope --
@@ -254,14 +259,22 @@ def store_release_detail(conn: sqlite3.Connection, detail: dict) -> None:
         return
     group = detail.get("release-group") or {}
     media = detail.get("media") or []
+    # An upsert, not INSERT OR REPLACE: a replace would drop any column this
+    # does not name, as the credit a CD add wrote `[REQ-VIS-183]`.
     conn.execute(
-        "INSERT OR REPLACE INTO releases "
+        "INSERT INTO releases "
         "(mbid, title, release_date, source, release_group, status, primary_type, "
-        " secondary_types, country, track_count) "
-        "VALUES (?1,?2,?3,'musicbrainz',?4,?5,?6,?7,?8,?9)",
+        " secondary_types, country, track_count, artist_credit) "
+        "VALUES (?1,?2,?3,'musicbrainz',?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(mbid) DO UPDATE SET "
+        "title = excluded.title, release_date = excluded.release_date, source = excluded.source, "
+        "release_group = excluded.release_group, status = excluded.status, "
+        "primary_type = excluded.primary_type, secondary_types = excluded.secondary_types, "
+        "country = excluded.country, track_count = excluded.track_count, "
+        "artist_credit = COALESCE(excluded.artist_credit, releases.artist_credit)",
         (mbid, detail.get("title"), detail.get("date"), group.get("id"), detail.get("status"),
          group.get("primary-type"), ",".join(group.get("secondary-types") or []) or None,
-         detail.get("country"), sum(m.get("track-count") or 0 for m in media) or None))
+         detail.get("country"), sum(m.get("track-count") or 0 for m in media) or None,
+         artist_credit_name(detail.get("artist-credit"))))
     for t in tracks_from_detail(detail):
         conn.execute(
             "INSERT OR REPLACE INTO release_recordings (release_mbid, mbid, position, source, track_length_ms) "

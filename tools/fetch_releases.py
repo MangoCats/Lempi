@@ -65,6 +65,9 @@ EXTRA_DDL = [
     "ALTER TABLE releases ADD COLUMN secondary_types TEXT",
     "ALTER TABLE releases ADD COLUMN country TEXT",
     "ALTER TABLE releases ADD COLUMN track_count INTEGER",
+    # The release's own credit, what Browse shows an album under
+    # `[REQ-VIS-183]`: Woodstock is Various Artists, not John Sebastian.
+    "ALTER TABLE releases ADD COLUMN artist_credit TEXT",
     "ALTER TABLE release_recordings ADD COLUMN track_length_ms INTEGER",
 ]
 
@@ -122,7 +125,7 @@ def fetch(mbid: str) -> dict | None:
     out: list[dict] = []
     offset = 0
     while True:
-        url = (f"{BASE}?recording={mbid}&inc=release-groups+media"
+        url = (f"{BASE}?recording={mbid}&inc=release-groups+media+artist-credits"
                f"&fmt=json&limit={PAGE}&offset={offset}")
         doc = get(url)
         if doc is None:
@@ -137,6 +140,13 @@ def fetch(mbid: str) -> dict | None:
     return {"releases": out}
 
 
+def credit_of(release: dict) -> str | None:
+    """A release's artist credit as MusicBrainz writes it, joins and all
+    `[REQ-VIS-183]`; `None` when the response carried none."""
+    return "".join((a.get("name") or "") + (a.get("joinphrase") or "")
+                   for a in release.get("artist-credit") or []).strip() or None
+
+
 def store(conn, mbid: str, doc: dict) -> int:
     """Write the releases a recording appears on. Returns how many."""
     n = 0
@@ -146,11 +156,20 @@ def store(conn, mbid: str, doc: dict) -> int:
             continue
         group = rel.get("release-group") or {}
         media = rel.get("media") or []
+        # An upsert, not INSERT OR REPLACE: a replace drops every column it
+        # does not name, and a response cached before 2026-10-14 has no
+        # credit -- the one a CD add or `fetch_release_credits.py` wrote stays.
         conn.execute(
-            "INSERT OR REPLACE INTO releases "
+            "INSERT INTO releases "
             "  (mbid, title, release_date, source, release_group, status, "
-            "   primary_type, secondary_types, country, track_count) "
-            "VALUES (?1, ?2, ?3, 'musicbrainz', ?4, ?5, ?6, ?7, ?8, ?9)",
+            "   primary_type, secondary_types, country, track_count, artist_credit) "
+            "VALUES (?1, ?2, ?3, 'musicbrainz', ?4, ?5, ?6, ?7, ?8, ?9, ?10) "
+            "ON CONFLICT(mbid) DO UPDATE SET title = excluded.title, "
+            "release_date = excluded.release_date, source = excluded.source, "
+            "release_group = excluded.release_group, status = excluded.status, "
+            "primary_type = excluded.primary_type, secondary_types = excluded.secondary_types, "
+            "country = excluded.country, track_count = excluded.track_count, "
+            "artist_credit = COALESCE(excluded.artist_credit, releases.artist_credit)",
             (rid, rel.get("title"), rel.get("date"), group.get("id"), rel.get("status"),
              group.get("primary-type"),
              # A comma-separated list because it is read for scoring, never
@@ -158,7 +177,8 @@ def store(conn, mbid: str, doc: dict) -> int:
              # release from being the record a song belongs to.
              ",".join(group.get("secondary-types") or []) or None,
              rel.get("country"),
-             sum(m.get("track-count") or 0 for m in media) or None),
+             sum(m.get("track-count") or 0 for m in media) or None,
+             credit_of(rel)),
         )
         # Position lives under media/tracks; a recording can legitimately appear
         # twice on one release (a reprise), so the first is taken rather than

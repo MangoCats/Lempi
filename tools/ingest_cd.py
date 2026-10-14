@@ -622,7 +622,8 @@ def record_release(conn, release: dict, tracks, files=()) -> int:
                  "PRIMARY KEY (release_mbid, mbid)) WITHOUT ROWID")
     for ddl in ("ALTER TABLE release_recordings ADD COLUMN chosen INTEGER DEFAULT 0",
                 "ALTER TABLE release_recordings ADD COLUMN track_length_ms INTEGER",
-                "ALTER TABLE release_recordings ADD COLUMN disc INTEGER"):
+                "ALTER TABLE release_recordings ADD COLUMN disc INTEGER",
+                "ALTER TABLE releases ADD COLUMN artist_credit TEXT"):
         try:
             conn.execute(ddl)
         except sqlite3.OperationalError:
@@ -635,11 +636,17 @@ def record_release(conn, release: dict, tracks, files=()) -> int:
            "secondary_types": ",".join(group.get("secondary-types") or []) or None,
            "country": release.get("country"),
            "track_count": release.get("_track_total")
-           or sum(_medium_tracks(m) for m in release.get("media") or []) or None}
+           or sum(_medium_tracks(m) for m in release.get("media") or []) or None,
+           "artist_credit": release_credit(release) or None}
     cols = [c for c in row if c in have]
     # A release already known keeps its row: fetch_releases.py's is the fuller.
     conn.execute(f"INSERT OR IGNORE INTO releases ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
                  [row[c] for c in cols])
+    # ... but takes the disc's credit if it has none: what Browse shows the
+    # album under `[REQ-VIS-183]`, which a release fetch did not ask for.
+    if "artist_credit" in have and row["artist_credit"]:
+        conn.execute("UPDATE releases SET artist_credit = ?1 WHERE mbid = ?2 AND artist_credit IS NULL",
+                     (row["artist_credit"], rid))
     linked = 0
     for position, mbid in tracks:
         t = _track_at_position(release, position, mbid)

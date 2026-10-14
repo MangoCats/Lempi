@@ -696,6 +696,34 @@ impl Library {
         }
     }
 
+    /// The displayed album's own artist credit `[REQ-VIS-183]`: the credit of
+    /// the release `album_expr` named it after -- the file's release, else the
+    /// recording's chosen one, by the same order -- or NULL where that release
+    /// has none, or the album came from a tag. Taken from the one release
+    /// rather than a fallback to another, so a title and a credit never come
+    /// from two different records. `None` for a catalogue whose `releases`
+    /// predates the column: a speaker not yet synced, a phone not yet sent it.
+    fn album_artist_expr(&self, file: &str) -> Option<String> {
+        if !self.has_column("releases", "artist_credit") {
+            return None;
+        }
+        let chosen = "(SELECT rr.release_mbid FROM __LIB__.release_recordings rr \
+            JOIN __LIB__.releases rel ON rel.mbid = rr.release_mbid \
+              WHERE rr.mbid = m.mbid ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1)";
+        let release = if self.has_file_releases() {
+            format!(
+                "COALESCE((SELECT fr.release_mbid FROM __LIB__.files ff \
+                   JOIN __LIB__.file_releases fr ON fr.audio_md5 = ff.audio_md5 \
+                   JOIN __LIB__.releases rel ON rel.mbid = fr.release_mbid WHERE ff.file_id = {file}), {chosen})"
+            )
+        } else {
+            chosen.to_string()
+        };
+        Some(format!(
+            "(SELECT NULLIF(rel.artist_credit, '') FROM __LIB__.releases rel WHERE rel.mbid = {release})"
+        ))
+    }
+
     /// History's album: the played passage's file's release where the
     /// passage still exists, else the recording's chosen release.
     fn hist_album_expr(&self) -> String {
@@ -1157,11 +1185,16 @@ impl Library {
         self.groups(&sql, rusqlite::params![f.like()], false)
     }
 
+    /// Each album by its displayed name, under its release's own credit where
+    /// the catalogue has one `[REQ-VIS-183]`, else its first passage's artist.
+    /// The artist filter still matches the *track's* artist: John Sebastian's
+    /// albums include Woodstock, which is shown as Various Artists.
     pub fn browse_albums(&self, f: &BrowseFilter) -> Result<Vec<BrowseGroup>, DbError> {
         let album = self.album_expr("m.file_id");
+        let credit = self.album_artist_expr("m.file_id").unwrap_or_else(|| "NULL".into());
         let sql = format!(
-            "SELECT album, COUNT(*), SUM(plays), artist, NULL, MIN(pid) FROM ( \
-               SELECT {album} AS album, {ARTIST_EXPR} AS artist, {PLAYS_EXPR} AS plays, \
+            "SELECT album, COUNT(*), SUM(plays), COALESCE(credit, artist), NULL, MIN(pid) FROM ( \
+               SELECT {album} AS album, {ARTIST_EXPR} AS artist, {credit} AS credit, {PLAYS_EXPR} AS plays, \
                       m.passage_id AS pid \
                  FROM ({NAMED}) m LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id) \
              WHERE album IS NOT NULL AND album <> '' \
@@ -1752,6 +1785,28 @@ impl Library {
             );
             self.conn
                 .query_row(&sql, [name], |r| r.get::<_, i64>(0))
+                .unwrap_or(0)
+                > 0
+        })
+    }
+
+    /// Whether `table` has `column` in any attached schema -- `has_table`'s
+    /// reasoning, one level down.
+    fn has_column(&self, table: &str, column: &str) -> bool {
+        let schemas: Vec<String> = match self.conn.prepare("PRAGMA database_list") {
+            Ok(mut stmt) => match stmt.query_map([], |r| r.get::<_, String>(1)) {
+                Ok(rows) => rows.filter_map(Result::ok).collect(),
+                Err(_) => return false,
+            },
+            Err(_) => return false,
+        };
+        schemas.iter().any(|schema| {
+            self.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info(?1, ?2) WHERE name = ?3",
+                    [table, schema.as_str(), column],
+                    |r| r.get::<_, i64>(0),
+                )
                 .unwrap_or(0)
                 > 0
         })
@@ -3112,6 +3167,60 @@ mod tests {
         let mut e = lib.passage(2).unwrap();
         lib.describe(&mut e);
         assert_eq!(e.naming.mb_album.as_deref(), Some("Twelve Deadly Cyns"), "and now playing says so");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `[REQ-VIS-183]` An album is shown under its release's own credit --
+    /// Woodstock as Various Artists, not as whoever sings its first track --
+    /// is still found under each of its tracks' artists, and falls back to its
+    /// first track's artist where the release has no credit, or the catalogue
+    /// no column for one.
+    #[test]
+    fn an_album_is_shown_under_its_release_credit() {
+        let dir = std::env::temp_dir().join(format!("lempi-albumcredit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lib.db");
+        let _ = std::fs::remove_file(&path);
+        {
+            let c = rusqlite::Connection::open(&path).unwrap();
+            c.execute_batch(include_str!("../../../../sql/schema.sql")).unwrap();
+            c.execute_batch(
+                "INSERT INTO artists (mbid,name,source) VALUES ('js','John Sebastian','mb'), ('ch','Country Joe','mb');
+                 INSERT INTO releases (mbid,title,source,artist_credit) VALUES ('w','Woodstock','mb','Various Artists'),
+                                                                               ('s','Solo','mb',NULL);",
+            )
+            .unwrap();
+            for (n, rec, artist, rel) in [(1, "r1", "js", "w"), (2, "r2", "ch", "w"), (3, "r3", "ch", "s")] {
+                c.execute("INSERT INTO recordings (mbid,title,source) VALUES (?1,?1,'mb')", [rec]).unwrap();
+                c.execute("INSERT INTO recording_artists (mbid,artist_mbid,weight,source) VALUES (?1,?2,1.0,'mb')",
+                          [rec, artist]).unwrap();
+                c.execute("INSERT INTO release_recordings (release_mbid,mbid,position,source,chosen) VALUES (?1,?2,?3,'mb',1)",
+                          rusqlite::params![rel, rec, n]).unwrap();
+                c.execute("INSERT INTO files (file_id,audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen) \
+                           VALUES (?1,?2,'/x.mp3',1,1.0,'mp3',1000,'t','t')", rusqlite::params![n, format!("m{n}")]).unwrap();
+                c.execute("INSERT INTO passages (passage_id,file_id,kind,start_ms,end_ms,boundary_src) \
+                           VALUES (?1,?1,'radio',0,1000,'x')", [n]).unwrap();
+                c.execute("INSERT INTO passage_recordings (passage_id,mbid,weight,source) VALUES (?1,?2,1.0,'mb')",
+                          rusqlite::params![n, rec]).unwrap();
+            }
+        }
+        let albums = |lib: &Library, artist: Option<&str>| -> Vec<(String, Option<String>)> {
+            lib.browse_albums(&BrowseFilter { artist: artist.map(Into::into), ..Default::default() })
+                .unwrap()
+                .into_iter()
+                .map(|g| (g.name, g.artist))
+                .collect()
+        };
+        let lib = Library::open(&path).unwrap();
+        assert_eq!(albums(&lib, None), vec![("Solo".into(), Some("Country Joe".into())),
+                                            ("Woodstock".into(), Some("Various Artists".into()))]);
+        assert_eq!(albums(&lib, Some("John Sebastian")), vec![("Woodstock".into(), Some("Various Artists".into()))],
+                   "found under a track's artist, shown under the release's");
+        drop(lib);
+        rusqlite::Connection::open(&path).unwrap().execute_batch("ALTER TABLE releases DROP COLUMN artist_credit").unwrap();
+        let lib = Library::open(&path).unwrap();
+        assert_eq!(albums(&lib, None)[1], ("Woodstock".into(), Some("John Sebastian".into())),
+                   "a catalogue without the column browses as before");
         std::fs::remove_dir_all(&dir).ok();
     }
 

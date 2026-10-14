@@ -194,10 +194,10 @@ what remains here is the work that crosses documents.
 5. **What a multi-disc set still lacks** ([SPEC026](spec/SPEC026-cd-ripping-passages.md)).
    A set already files and browses as one album, in disc order, and its discs
    are named apart and previewed as *disc N of M* (`[SPEC-RIP-108]`,
-   `[SPEC-RIP-110]`, 2026-10-14). Left: a compilation is credited in Browse to
-   its first track's artist, because `releases` holds no artist credit; nothing
-   asks for a set's next disc `[SPEC-RIP-104]`; whole-disc passages
-   `[SPEC-RIP-100]`; hidden audio (SPEC026 §1).
+   `[SPEC-RIP-110]`), and a compilation is shown under its release's own credit
+   `[REQ-VIS-183]`, 2026-10-14. Left: nothing asks for a set's next disc
+   `[SPEC-RIP-104]`; whole-disc passages `[SPEC-RIP-100]`; hidden audio
+   (SPEC026 §1).
 6. **CI cannot be read from the hub desktop** -- `gh` is not authenticated
    there -- so a red run is seen only on GitHub. The gates pass locally.
 

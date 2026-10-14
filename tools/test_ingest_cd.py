@@ -499,6 +499,16 @@ def test_which_disc():
     check(n == 2 and [tuple(r) for r in rows] == [("rec-d2-1", 1, 2), ("rec-d2-2", 2, 2)],
           f"linked as disc 2's tracks: {[tuple(r) for r in rows]}")
     check(c.execute("SELECT track_count FROM releases").fetchone()[0] == 4, "the release keeps the set's track count")
+    check(c.execute("SELECT artist_credit FROM releases").fetchone()[0] == "Artist W",
+          "and its own credit, what Browse shows the album under [REQ-VIS-183]")
+    # A release a fetch wrote first, without a credit, takes the disc's;
+    # one that has a credit keeps it.
+    c.execute("UPDATE releases SET artist_credit = NULL")
+    ingest_cd.record_release(c, narrowed[0], [(1, "rec-d2-1")])
+    check(c.execute("SELECT artist_credit FROM releases").fetchone()[0] == "Artist W", "a missing credit is filled")
+    c.execute("UPDATE releases SET artist_credit = 'Someone Else'")
+    ingest_cd.record_release(c, narrowed[0], [(1, "rec-d2-1")])
+    check(c.execute("SELECT artist_credit FROM releases").fetchone()[0] == "Someone Else", "a credit there is kept")
     # A row a release fetch wrote first, with no place, takes the disc's.
     c.execute("DELETE FROM release_recordings")
     c.execute("INSERT INTO release_recordings (release_mbid, mbid, source) VALUES ('rel-W', 'rec-d2-1', 'musicbrainz')")

@@ -94,6 +94,11 @@ CREATE TABLE IF NOT EXISTS artists (
 -- The six after `source` are what `fetch_releases.py` and `choose_release.py`
 -- read a release by -- an album or a compilation, official or not. They were
 -- added to every library by those tools and missing here until 2026-10-02.
+-- `artist_credit` is the release's own credit, as MusicBrainz writes it,
+-- joins and all: what Browse shows an album under [REQ-VIS-183] -- "Various
+-- Artists" for Woodstock, not whoever sings its first track. Said here, not
+-- inside the table: SQLite keeps a comment there in the table's own SQL, and
+-- one after the last column made `DROP COLUMN` fail with "incomplete input".
 CREATE TABLE IF NOT EXISTS releases (
     mbid             TEXT PRIMARY KEY,
     title            TEXT NOT NULL,
@@ -104,7 +109,8 @@ CREATE TABLE IF NOT EXISTS releases (
     primary_type     TEXT,
     secondary_types  TEXT,
     country          TEXT,
-    track_count      INTEGER
+    track_count      INTEGER,
+    artist_credit    TEXT
 );
 
 -- ================================================================= passages
