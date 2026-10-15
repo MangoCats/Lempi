@@ -85,9 +85,12 @@ def main() -> int:
             else:
                 conn.execute("UPDATE releases SET artist_credit = ?1 WHERE mbid = ?2 AND artist_credit IS NULL",
                              (credit, mbid))
+                # At once: committing every 25 held the catalogue's write lock
+                # across 25 requests, and two CD adds' flavor analysis gave up
+                # on it, 2026-10-14.
+                conn.commit()
                 filled += 1
             if i % 25 == 0 or i == len(todo):
-                conn.commit()
                 print(f"  {i}/{len(todo)}: {filled} filled, {empty} with no credit, {gone} gone", flush=True)
             time.sleep(fetch_releases.RATE_S)
     except KeyboardInterrupt:

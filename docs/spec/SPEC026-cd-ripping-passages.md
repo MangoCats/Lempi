@@ -1,6 +1,6 @@
 # SPEC026: CD Ripping — Passage Representation for Hidden Audio and Multi-Disc Sets
 
-**Design Specification — Tier 2 · §2's filing built; §1 and wider passages designed**
+**Design Specification — Tier 2 · built for image rips, but for §1's folded-in passage**
 
 Two cases where a rip is not simply one passage per TOC track: real audio
 hidden in a pregap or at `INDEX 00`, and a box set ripped disc-by-disc.
@@ -13,16 +13,18 @@ below cover what happens to the audio once those have already run for a
 given disc — §2 also covers the multi-disc session itself, since that is
 squarely part of what a box set is, not a separate topic.
 
-> **Status, 2026-10-14.** §2's filing is built in `tools/ingest_cd.py`: a set
-> ripped a disc at a time is one release, each disc known by its own Disc ID
-> (`[SPEC-RIP-094]`, `[SPEC-RIP-096]`, `[SPEC-RIP-106]`, by way of the
+> **Status, 2026-10-14.** Built in `tools/ingest_cd.py` and the import page.
+> A set ripped a disc at a time is one release, each disc known by its own
+> Disc ID (`[SPEC-RIP-094]`, `[SPEC-RIP-096]`, `[SPEC-RIP-106]`, by way of the
 > importer's `[SPEC-CDI-099]`), filed in one folder under names that keep the
-> discs apart, and previewed as *disc N of M* beside what the library holds of
-> the rest (`[SPEC-RIP-108]`, `[SPEC-RIP-110]`). Browse lists the set as one
-> album in disc order. Not built: §1's hidden audio, the wider passages of
-> both `[SPEC-RIP-098]` and `[SPEC-RIP-100]`, and the session prompt of
-> §2's `[SPEC-RIP-104]` — the import page names the missing discs, but
-> nothing asks for the next one.
+> discs apart, previewed as *disc N of M*, and a set short of a disc said
+> loudly, before the add and after (`[SPEC-RIP-108]`, `[SPEC-RIP-110]`, and
+> the banner of `[SPEC-RIP-112]`). A disc that is one piece is one passage pair, on a
+> person's tick (`[SPEC-RIP-114]`). Hidden audio is found and made its own
+> passages (`[SPEC-RIP-090]`, as `[SPEC-RIP-116]` measures it), for an image
+> rip. Not built: the folded-in passage of `[SPEC-RIP-092]`; hidden audio in
+> a tracks-mode rip, where a gap stays inside a track's own file and is
+> played with it, not lost.
 
 > **Related:** [SPEC025](SPEC025-cd-ripping.md) for the ripping mechanics
 > this extends · [SPEC028](SPEC028-cd-ripping-identification.md) for the
@@ -153,6 +155,49 @@ the set is caught as the page opens rather than after the add `[SPEC-RIP-106]`.
 
 ---
 
+**`[SPEC-RIP-112]` A set short of a disc is said loudly, and what is here is
+added anyway.** Asked for 2026-10-14. Before the add, the chosen edition's
+banner names each of the set's discs the library does not hold -- *disc 2 of 3:
+disc 1 and disc 3 are not in the library* -- in red, larger than the page
+around it; after it, the add's result says the same from what the library
+then holds, or that the set is complete. Nothing waits on the missing disc:
+it is added whenever it turns up, into the same folder under its own names
+`[SPEC-RIP-108]`, and the album is whole once the last is in. This is
+`[SPEC-RIP-104]`'s prompt, in the form the import page can give it: the page
+cannot know a disc is in the drive, so it says what is missing instead.
+
+**`[SPEC-RIP-114]` A disc that is one piece is one radio and one album passage
+for the whole disc, in place of a pair per track.** Asked for 2026-10-14, for
+a disc like *Thick as a Brick*. A tick on the import page, *One piece*,
+offered and never inferred `[SPEC-RIP-100]`. The radio passage runs from
+track 1's start to the end, the album passage over the whole file. Every
+track is still identified and linked to its release, so the album is named
+and its tracks counted as for any disc; the two passages carry every track's
+recording, weighted by its share of the disc. This narrows
+`[SPEC-RIP-098]`, which had wider passages *alongside* the per-track ones:
+for a disc that is one work, the maintainer wants the one passage, not
+both. An image rip only -- a passage is a span of one file, and a tracks-mode
+rip is a file a track -- and refused before anything is touched otherwise.
+
+**`[SPEC-RIP-116]` Hidden audio is measured, never guessed.** For an image
+rip, three places no track holds are measured on the WAV with ffmpeg: before
+track 1's `INDEX 01` (a pregap, where MusicBrainz may name it as the medium's
+track 0), each gap between one track's `INDEX 00` and its `INDEX 01`, and
+after a silence of at least 8 s below -50 dB inside the last track, past its
+first half minute (each stretch of music after it, a piece). A span is hidden
+audio when it is at least 4 s long and averages above -45 dB: a pressed gap is
+digital silence, about -91 dB, and a hidden track is music. Each becomes a
+radio and an album passage of its own, named by MusicBrainz's pregap track,
+else AcoustID's answer, else by where it lies -- *Hidden track, after track
+12 ('...')* -- and the last track ends where its silence begins. The preview
+lists them; with *One piece* ticked nothing is hidden. Calibrated 2026-10-14
+on the 45 image rips then filed: none found, *50 First Dates*' 18.8 s pregap
+measured -91.0 dB and rightly left out. None of those discs has a known
+hidden track, so the finding side is proven on a made disc
+(`tools/test_ingest_cd.py`), not yet on a real one.
+
+---
+
 ## 3. Open
 
 **`[SPEC-RIP-102]`** Both wider-passage triggers (§1, §2) are now decided
@@ -171,7 +216,7 @@ drive/hardware failure modes, the last item there, is now decided too.
 
 ---
 
-**Traceability:** `[SPEC-RIP-090..110]` · derives `[REQ-LIB-255..275]` ·
+**Traceability:** `[SPEC-RIP-090..116]` · derives `[REQ-LIB-255..275]` ·
 extends [SPEC025](SPEC025-cd-ripping.md), `[SPEC008]` §3's
 `release_recordings.disc` and `passages` schema, and
 [SPEC023](SPEC023-domain-vocabulary.md)'s Passage/File definitions.

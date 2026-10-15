@@ -191,13 +191,13 @@ what remains here is the work that crosses documents.
    they are by the maintainer's decision of 2026-10-08. Worth revisiting once
    the rest settles: the settings list has grown since, with the Listening
    backups row and *Album names*.
-5. **What a multi-disc set still lacks** ([SPEC026](spec/SPEC026-cd-ripping-passages.md)).
-   A set already files and browses as one album, in disc order, and its discs
-   are named apart and previewed as *disc N of M* (`[SPEC-RIP-108]`,
-   `[SPEC-RIP-110]`), and a compilation is shown under its release's own credit
-   `[REQ-VIS-183]`, 2026-10-14. Left: nothing asks for a set's next disc
-   `[SPEC-RIP-104]`; whole-disc passages `[SPEC-RIP-100]`; hidden audio
-   (SPEC026 §1).
+5. **What CD import still lacks** ([SPEC026](spec/SPEC026-cd-ripping-passages.md)).
+   Built 2026-10-14: a set files and browses as one album, its discs named
+   apart, a missing disc said loudly; a disc that is one piece is one passage;
+   hidden audio is found and made its own passages. Left: the folded-in
+   passage of a hidden intro and the track it leads into `[SPEC-RIP-092]`;
+   hidden audio in a tracks-mode rip; hidden audio on a real disc, which no
+   disc filed so far has had to prove the finding side.
 6. **CI cannot be read from the hub desktop** -- `gh` is not authenticated
    there -- so a red run is seen only on GitHub. The gates pass locally.
 

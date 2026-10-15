@@ -157,6 +157,17 @@ def test_job():
         check([s for s, _ in seen2] == ["flavor", "amplitude"] and j2["state"] == "failed",
               f"a failed first stage does not stop the second, and the job says failed: {j2['state']}")
 
+        # [REQ-LIB-307]: one album's folder -- the import page's *Finish
+        # analyzing* -- narrows both stages to it.
+        r3, _, seen3 = runner_with(tmp, "one", {
+            "flavor": (0, "10 files, 0 cached, 10 to extract, 7 jobs\n\n10 extracted, 0 failed in 1.0 min"),
+            "amplitude": (0, '{"ok": true, "analyzed": 0, "failed": 0}')})
+        album = os.path.join(tmp, "Jackson Browne", "For Everyman (1990)")
+        j3 = wait_for(r3, r3.submit("analyze-missing", album))
+        check(j3["state"] == "done" and all(a[a.index("--folder") + 1] == album for _, a in seen3 if "--folder" in a)
+              and all("--folder" in a for _, a in seen3), f"both stages on the one folder: {seen3}")
+        check(j3["result"].get("folder") == album and j3["result"]["flavor"]["extracted"] == 10, f"{j3['result']}")
+
 
 def test_routes():
     print("the console: GET the list, POST starts the job")
@@ -187,6 +198,19 @@ def test_routes():
             resp = h.getresponse()
             resp.read()
             check(resp.status == 403 and len(submitted) == 1, f"a foreign page cannot start it: {resp.status}")
+            # [REQ-LIB-307]: with an album's folder, that folder; one that is
+            # not a folder is refused.
+            body = json.dumps({"folder": tmp})
+            h.request("POST", "/api/analysis/run", body=body, headers={
+                "Host": f"127.0.0.1:{port}", "Content-Type": "application/json", "Content-Length": str(len(body))})
+            r = json.loads(h.getresponse().read())
+            check(submitted[-1] == ("analyze-missing", tmp), f"one album's folder: {submitted}")
+            body = json.dumps({"folder": os.path.join(tmp, "nowhere")})
+            h.request("POST", "/api/analysis/run", body=body, headers={
+                "Host": f"127.0.0.1:{port}", "Content-Type": "application/json", "Content-Length": str(len(body))})
+            resp = h.getresponse()
+            resp.read()
+            check(resp.status == 400 and len(submitted) == 2, f"not a folder: refused, {resp.status}")
         finally:
             srv.shutdown()
             srv.server_close()

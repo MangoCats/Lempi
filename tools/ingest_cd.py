@@ -872,6 +872,107 @@ def set_summary(release: dict, conn=None) -> dict:
     return {"disc": this, "discs": len(whole), "set": discs}
 
 
+# -------------------------------------------------------------- hidden audio
+
+# What counts as hidden audio rather than the silence a gap ordinarily is
+# `[SPEC-RIP-090]`: at least this long, and this loud on average. A pressed
+# gap is digital silence (about -91 dB) or a tape's hiss (about -60 dB); a
+# hidden track is music, -30 dB and up. A live album's applause carried into
+# a two-second gap stays shorter than the floor, and with its track.
+HIDDEN_MIN_MS = 4000
+HIDDEN_MEAN_DB = -45.0
+# A silence inside the last track this long, music after it, is a hidden
+# track after the album -- the common case, minutes of nothing and then a
+# song. Not looked for within the track's first half minute.
+POSTGAP_SILENCE_S = 8
+POSTGAP_SILENCE_DB = -50
+POSTGAP_AFTER_MS = 30000
+
+_MEAN = re.compile(r"mean_volume:\s*(-?[\d.]+|-inf) dB")
+_SILENCE = re.compile(r"silence_(start|end):\s*(-?[\d.]+)")
+
+
+def _mean_db(wav_path: str, start_ms: int, end_ms: int) -> float | None:
+    """The span's mean volume, by ffmpeg's `volumedetect`; `None` if it could
+    not be measured."""
+    r = subprocess.run([FFMPEG, "-v", "info", "-nostats", "-ss", f"{start_ms / 1000:.3f}",
+                        "-t", f"{(end_ms - start_ms) / 1000:.3f}", "-i", wav_path,
+                        "-af", "volumedetect", "-f", "null", "-"], capture_output=True, text=True, timeout=600)
+    m = _MEAN.search(r.stderr or "")
+    if r.returncode != 0 or not m:
+        return None
+    return float("-inf") if m.group(1) == "-inf" else float(m.group(1))
+
+
+def _silences(wav_path: str, start_ms: int, end_ms: int) -> list[tuple[int, int]]:
+    """The long silences in a span, as `(start_ms, end_ms)` on the disc."""
+    r = subprocess.run([FFMPEG, "-v", "info", "-nostats", "-ss", f"{start_ms / 1000:.3f}",
+                        "-t", f"{(end_ms - start_ms) / 1000:.3f}", "-i", wav_path, "-af",
+                        f"silencedetect=noise={POSTGAP_SILENCE_DB}dB:d={POSTGAP_SILENCE_S}", "-f", "null", "-"],
+                       capture_output=True, text=True, timeout=600)
+    out, begun = [], None
+    for kind, at in _SILENCE.findall(r.stderr or ""):
+        ms = start_ms + int(float(at) * 1000)
+        if kind == "start":
+            begun = ms
+        elif begun is not None:
+            out.append((begun, ms))
+            begun = None
+    return out
+
+
+def _pregap_track(release: dict | None) -> dict | None:
+    """MusicBrainz's hidden track before track 1 -- a medium's `pregap`,
+    position 0 -- when the edition is settled and has one."""
+    media = (release or {}).get("media") or []
+    return (media[0].get("pregap") or None) if len(media) == 1 else None
+
+
+def find_hidden(wav_path: str, toc: cd_toc.DiscToc, release: dict | None = None) -> list[dict]:
+    """Audio on an image rip that no track holds `[SPEC-RIP-090]`, each
+    `{"where", "start_ms", "end_ms", "title", "mbid"?, "trims"?}`: before track
+    1 (a pregap, where MusicBrainz may name it), in a gap between two tracks,
+    or after a long silence at the end of the last track (`trims`: that track's
+    end moves to where the silence begins). Measured, never guessed: a span is
+    hidden audio only if it is long enough and loud enough. Until 2026-10-14
+    each of these was in the file and in no passage at all.
+
+    `release` is the settled edition, cut to this disc, for a pregap's name."""
+    if not FFMPEG or not toc.tracks:
+        return []
+    out = []
+    first, last = toc.tracks[0], toc.tracks[-1]
+    title = lambda t: f" ('{t.title}')" if t.title else ""  # noqa: E731
+
+    def loud(a, b):
+        db = _mean_db(wav_path, a, b) if b - a >= HIDDEN_MIN_MS else None
+        return db is not None and db > HIDDEN_MEAN_DB
+
+    if first.start_ms and loud(0, first.start_ms):
+        mb = _pregap_track(release)
+        rec = (mb or {}).get("recording") or {}
+        out.append({"where": "pregap", "start_ms": 0, "end_ms": first.start_ms,
+                    "title": (mb or {}).get("title") or rec.get("title")
+                    or f"Hidden audio, before track 1{title(first)}",
+                    **({"mbid": rec["id"]} if rec.get("id") else {})})
+    for prev, t in zip(toc.tracks, toc.tracks[1:]):
+        if prev.end_ms is not None and t.start_ms - prev.end_ms >= HIDDEN_MIN_MS and loud(prev.end_ms, t.start_ms):
+            out.append({"where": "gap", "start_ms": prev.end_ms, "end_ms": t.start_ms,
+                        "title": f"Hidden audio, between tracks {prev.number} and {t.number}{title(t)}"})
+    if last.end_ms and last.end_ms - last.start_ms > POSTGAP_AFTER_MS + HIDDEN_MIN_MS:
+        # Each stretch of music after the first long silence is its own piece:
+        # a disc may hide two, a silence apart. The last track then ends where
+        # that first silence begins.
+        quiet = _silences(wav_path, last.start_ms + POSTGAP_AFTER_MS, last.end_ms)
+        pieces = [(a[1], b[0]) for a, b in zip(quiet, quiet[1:])] + ([(quiet[-1][1], last.end_ms)] if quiet else [])
+        pieces = [p for p in pieces if loud(*p)]
+        for n, (a, b) in enumerate(pieces, 1):
+            out.append({"where": "postgap", "start_ms": a, "end_ms": b, "trims": quiet[0][0],
+                        "title": f"Hidden track{f' {n}' if len(pieces) > 1 else ''}, "
+                                 f"after track {last.number}{title(last)}"})
+    return out
+
+
 # -------------------------------------------------------------------- commit
 
 def _now() -> str:
@@ -980,7 +1081,8 @@ def _resolve_track(conn, number: int, cd_text_title: str | None, radio_pid: int,
 def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
                audio_md5: str, disc_outcome: str, releases: list[dict],
                rip_report: "cd_toc.RipReport | None", acoustid_key: str | None,
-               chosen: bool = False, occasions: tuple = ()) -> dict:
+               chosen: bool = False, occasions: tuple = (), whole_disc: bool = False,
+               hidden: list | tuple = ()) -> dict:
     """Register the file, write TOC-exact passages, resolve each track's
     identity, and record every decision -- the CD-ripping analogue of
     `segment_dao.commit_segments()`, same shape, ground-truth boundaries
@@ -990,6 +1092,17 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
     `[SPEC-CDI-040]`. It is then the answer for every track it names -- CD-TEXT
     no longer sends those to the review queue `[SPEC-RIP-066]`, since a person
     has already looked.
+
+    `whole_disc` `[SPEC-RIP-114]`: one radio passage from track 1's start to
+    the end, and one album passage of the whole file, in place of a pair per
+    track. Each track is still identified and linked to its release; the
+    passages carry every track's recording, weighted by its share of the disc.
+    The review queue's check is per passage, so of several unidentified tracks
+    it holds the last.
+
+    `hidden` `[SPEC-RIP-090]`: `find_hidden`'s spans, each a radio and an album
+    passage of its own; a span after the last track's long silence ends that
+    track where the silence begins.
     """
     st = os.stat(mp3_path)
     total_ms = toc.tracks[-1].end_ms if toc.tracks else 0
@@ -1014,19 +1127,32 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
     mbids: list[str] = []
     placed: list[tuple[int, str]] = []
 
-    for track in toc.tracks:
-        start_ms, end_ms = track.start_ms, track.end_ms
-
+    def pair(start_ms, end_ms, album_start_ms=None):
         # Both kinds, one identification `[SPEC-SA-110]`, `[GDE-BMK-030]`.
-        radio_pid = conn.execute(
+        radio = conn.execute(
             "INSERT INTO passages (file_id,kind,start_ms,end_ms,boundary_src) "
             "VALUES (?1,'radio',?2,?3,?4)",
             (file_id, start_ms, end_ms, boundary_src)).lastrowid
-        album_pid = conn.execute(
+        album = conn.execute(
             "INSERT INTO passages (file_id,kind,start_ms,end_ms,"
             "lead_in_ms,lead_out_ms,gain_db,boundary_src) "
             "VALUES (?1,'album',?2,?3,0,0,0.0,?4)",
-            (file_id, start_ms, end_ms, boundary_src)).lastrowid
+            (file_id, start_ms if album_start_ms is None else album_start_ms, end_ms, boundary_src)).lastrowid
+        return radio, album
+
+    hidden = [] if whole_disc else list(hidden)
+    # A hidden track after the last one's silence ends that track there.
+    trim = min((h["trims"] for h in hidden if h.get("trims") is not None), default=None)
+    # One pair for the whole disc: radio from track 1's own start, album from
+    # the file's, so a whole-disc play keeps whatever came before it.
+    whole = pair(toc.tracks[0].start_ms, total_ms, 0) if whole_disc and toc.tracks else None
+    shares: dict[str, list] = {}
+
+    for track in toc.tracks:
+        start_ms, end_ms = track.start_ms, track.end_ms
+        if trim is not None and track is toc.tracks[-1]:
+            end_ms = trim
+        radio_pid, album_pid = whole or pair(start_ms, end_ms)
 
         outcome, mbid, source = _resolve_track(
             conn, track.number, track.title or toc.title, radio_pid, mp3_path, start_ms, end_ms,
@@ -1037,10 +1163,14 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
         ambiguous += outcome == "ambiguous"
         unidentified += outcome == "unidentified"
 
-        for pid in (radio_pid, album_pid):
-            conn.execute(
-                "INSERT INTO passage_recordings (passage_id,mbid,weight,source) "
-                "VALUES (?1,?2,1.0,?3)", (pid, mbid, source))
+        if whole:
+            share = shares.setdefault(mbid, [0, source])
+            share[0] += max(end_ms - start_ms, 1)
+        else:
+            for pid in (radio_pid, album_pid):
+                conn.execute(
+                    "INSERT INTO passage_recordings (passage_id,mbid,weight,source) "
+                    "VALUES (?1,?2,1.0,?3)", (pid, mbid, source))
 
         # ----------------------------------------------- rip-failure record
         if rip_report is not None:
@@ -1059,6 +1189,16 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
                 conn.execute(f"UPDATE passages SET {passage_hold.COLUMN} = ?1 WHERE passage_id IN (?2, ?3)",
                              (passage_hold.damage_reason(tr.detail), radio_pid, album_pid))
                 failed += 1
+
+    if whole:
+        span = sum(n for n, _ in shares.values()) or 1
+        for pid in whole:
+            for mbid, (n, source) in shares.items():
+                conn.execute("INSERT INTO passage_recordings (passage_id,mbid,weight,source) "
+                             "VALUES (?1,?2,?3,?4)", (pid, mbid, round(n / span, 4), source))
+
+    found = [_commit_hidden(conn, h, pair, mp3_path, audio_md5, acoustid_key, now) for h in hidden]
+    mbids += [m for m in found if not m.startswith("local:")]
 
     marked = mark_occasions(conn, mbids, occasions, now) if occasions else {}
 
@@ -1082,7 +1222,45 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
     return {"tracks": toc.track_count, "identified": identified,
             "ambiguous": ambiguous, "unidentified": unidentified,
             "verification_failed": failed, "file_id": file_id, "album_linked": albums,
-            "disc_outcome": disc_outcome, "candidates": len(releases), "occasions": marked}
+            "disc_outcome": disc_outcome, "candidates": len(releases), "occasions": marked,
+            "whole_disc": bool(whole), "hidden": [dict(h, mbid=m) for h, m in zip(hidden, found)]}
+
+
+def _commit_hidden(conn, h: dict, pair, mp3_path: str, audio_md5: str, acoustid_key: str | None,
+                   now: str) -> str:
+    """One hidden span's passages and identity `[SPEC-RIP-090]`; returns its
+    recording. MusicBrainz's pregap track where it names one, else AcoustID's
+    answer for the span, else a recording of its own titled by where it lies
+    -- *Hidden track, after track 12 ('...')* -- and said, never dropped."""
+    radio, album = pair(h["start_ms"], h["end_ms"])
+    length = h["end_ms"] - h["start_ms"]
+    mbid, source = h.get("mbid"), "musicbrainz"
+    if mbid:
+        conn.execute("INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) VALUES (?1,?2,?3,?4)",
+                     (mbid, h["title"], length, source))
+    else:
+        rec = (segment_dao.identify_recording(mp3_path, h["start_ms"] / 1000.0, h["end_ms"] / 1000.0, acoustid_key)
+               if acoustid_key else None)
+        if rec is not None:
+            mbid, source = rec["mbid"], "cd:acoustid"
+            conn.execute("INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) VALUES (?1,?2,?3,?4)",
+                         (mbid, rec["title"], length, source))
+            for artist_mbid, name in rec["artists"]:
+                conn.execute("INSERT OR IGNORE INTO artists (mbid,name,source) VALUES (?1,?2,?3)",
+                             (artist_mbid, name, source))
+                conn.execute("INSERT OR IGNORE INTO recording_artists (mbid,artist_mbid,weight,source) "
+                             "VALUES (?1,?2,1.0,?3)", (mbid, artist_mbid, source))
+        else:
+            mbid, source = f"local:audio:{audio_md5}:{h['start_ms']}", "cd:hidden"
+            conn.execute("INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) VALUES (?1,?2,?3,?4)",
+                         (mbid, h["title"], length, source))
+    for pid in (radio, album):
+        conn.execute("INSERT INTO passage_recordings (passage_id,mbid,weight,source) VALUES (?1,?2,1.0,?3)",
+                     (pid, mbid, source))
+    conn.execute("INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
+                 "VALUES (?1,'rip','hidden_audio',NULL,?2,?3)",
+                 (audio_md5, json.dumps({k: h[k] for k in ("where", "start_ms", "end_ms", "title")}), now))
+    return mbid
 
 
 def _write_id_check(conn, passage_id: int, stored_mbid: str,
@@ -1385,6 +1563,7 @@ def ingest_tracks(db_path: str, folder: str, release: str | None, into: str | No
         conn.commit()
         if result.get("album_linked"):
             result["cover"] = fetch_disc_cover(conn, releases[0].get("id"))
+            result["set"] = set_summary(releases[0], conn)   # [SPEC-RIP-112]
     finally:
         conn.close()
 
@@ -1424,7 +1603,11 @@ def preview(db_path: str, folder: str) -> dict:
     finally:
         conn.close()
     cd_folder = proposed_folder(toc.performer, toc.title, None, limit) if toc.title else None
+    # [SPEC-RIP-090]: audio no track holds, measured on the WAV, so the page
+    # can say what the add will make of it.
+    hidden = find_hidden(wav_path, toc, releases[0] if len(releases) == 1 else None)
     return {"dry_run": True, "format": fmt, "album_name_max": limit, "audio": os.path.basename(wav_path),
+            "hidden": hidden,
             "audio_bytes": os.path.getsize(wav_path), "tracks": toc.track_count,
             "track_list": [{"number": t.number, "start_ms": t.start_ms, "end_ms": t.end_ms,
                             "title": t.title, "performer": t.performer} for t in toc.tracks],
@@ -1437,7 +1620,8 @@ def preview(db_path: str, folder: str) -> dict:
 
 def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = None,
               into: str | None = None, keep_flac: bool | None = None, occasions: tuple = (),
-              allow_duplicate: bool = False, album_name_max: int | None = None) -> dict:
+              allow_duplicate: bool = False, album_name_max: int | None = None,
+              whole_disc: bool = False) -> dict:
     import sqlite3  # noqa: F401  -- the connection below is lempi_db's
 
     if not commit:
@@ -1448,6 +1632,11 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
     if album_name_max is None:
         album_name_max = album_name_max_setting(db_path)
     if is_tracks_rip(folder):
+        if whole_disc:
+            # [SPEC-RIP-114]: a passage is a span of one file, and this rip is
+            # a file a track. Refused before anything is touched.
+            raise ValueError("one passage for the whole disc needs an image rip -- one file for the disc; "
+                             "this rip is a file per track")
         return ingest_tracks(db_path, folder, release, into, keep_flac, occasions, allow_duplicate,
                              album_name_max)
     fmt, _cue, toc, wav_path, rip_report = open_rip(folder)
@@ -1468,6 +1657,11 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
             if not releases:
                 raise ValueError(f"release {release} is not among this disc's matches")
         refuse_duplicate(conn, releases, [t.number for t in toc.tracks], allow_duplicate)
+        # [SPEC-RIP-090]: measured on the WAV before it is encoded and gone;
+        # inside the one passage of a whole disc, nothing is hidden.
+        hidden = [] if whole_disc else find_hidden(wav_path, toc, releases[0] if len(releases) == 1 else None)
+        if hidden:
+            say(f"hidden audio: {'; '.join(h['title'] for h in hidden)}")
         stem = os.path.splitext(os.path.basename(wav_path))[0]
         made = [stem + ".mp3"] + ([stem + ".flac"] if keep_flac else [])
         renames = _plan_move(folder, into, releases, toc, album_name_max, made)
@@ -1498,10 +1692,11 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
         conn.execute("BEGIN IMMEDIATE")
         result = commit_rip(conn, folder, toc, mp3_path, audio_md5, disc_outcome, releases,
                             rip_report, secret.acoustid_key(required=False), chosen=bool(release),
-                            occasions=occasions)
+                            occasions=occasions, whole_disc=whole_disc, hidden=hidden)
         conn.commit()
         if result.get("album_linked"):
             result["cover"] = fetch_disc_cover(conn, releases[0].get("id"))
+            result["set"] = set_summary(releases[0], conn)   # [SPEC-RIP-112]
     finally:
         conn.close()
 
@@ -1545,6 +1740,9 @@ def main() -> int:
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--allow-duplicate", action="store_true",
                     help="add a second copy of an edition the library already holds whole [SPEC-CDI-047]")
+    ap.add_argument("--whole-disc", action="store_true",
+                    help="one radio and one album passage for the whole disc, not one per track "
+                         "(an image rip only) [SPEC-RIP-114]")
     for occ, label in (("christmas", "Christmas"), ("childrens", "children's")):
         ap.add_argument(f"--{occ}", dest="occasions", action="append_const", const=occ,
                         help=f"mark every recording on the disc fully {label} [SPEC-CDI-096]")
@@ -1554,7 +1752,7 @@ def main() -> int:
         result = do_ingest(args.db, args.folder, args.commit, release=args.release,
                            into=args.into, keep_flac=args.keep_flac,
                            occasions=tuple(args.occasions or ()), allow_duplicate=args.allow_duplicate,
-                           album_name_max=args.album_name_max)
+                           album_name_max=args.album_name_max, whole_disc=args.whole_disc)
     except Exception as e:                                    # noqa: BLE001
         if args.json:
             print(json.dumps({"ok": False, "error": str(e)}))

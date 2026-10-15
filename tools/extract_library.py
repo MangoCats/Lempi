@@ -178,8 +178,12 @@ def main() -> int:
     # already has, so the two stages of one analysis cover the same passages.
     folder = os.path.normpath(args[args.index("--folder") + 1]) if "--folder" in args else None
 
-    # Catalogue-only, and it writes -- library half as `main`.
-    con = lempi_db.connect(db, lempi_db.ROLE_LIBRARY, writable=True)
+    # Catalogue-only, and it writes -- library half as `main`. It waits a
+    # minute for another writer, as `analyze_amplitude.py` does: at sqlite's
+    # five-second default, two CD adds' flavor died "database is locked",
+    # 2026-10-14, each passage's half minute of Essentia work thrown away,
+    # while a credit backfill held the catalogue between its commits.
+    con = lempi_db.connect(db, lempi_db.ROLE_LIBRARY, writable=True, timeout=60)
     con.execute(
         """CREATE TABLE IF NOT EXISTS lowlevel_cache (
              audio_md5 TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,

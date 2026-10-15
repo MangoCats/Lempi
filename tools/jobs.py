@@ -537,7 +537,7 @@ class Runner:
             return self._analyze_flavor(job_id, target)
 
         if kind == "analyze-missing":
-            return self._analyze_missing(job_id)
+            return self._analyze_missing(job_id, target)
 
         if kind == "passage-hold":
             return self._passage_hold(job_id, target)
@@ -1242,6 +1242,9 @@ class Runner:
         # when the person ticked "Add it again" [SPEC-CDI-047].
         if payload.get("duplicate_ok") is True:
             argv.append("--allow-duplicate")
+        # The whole disc as one passage, when ticked [SPEC-RIP-114].
+        if payload.get("whole_disc") is True:
+            argv.append("--whole-disc")
         self._emit(job_id, "stage", "ingest", stage="ingest")
         code, out = self._spawn(job_id, "ingest", argv)
         result = parse_json_tail(out) or {}
@@ -1326,7 +1329,7 @@ class Runner:
                 "--passage", target]
         self._run_single_stage(job_id, "extract", argv, require_ok=False)
 
-    def _analyze_missing(self, job_id: int):
+    def _analyze_missing(self, job_id: int, target: str = ""):
         """The Jobs page's *Analyse what's missing*: flavor, then amplitude,
         over the whole library -- each tool taking only what it has not done
         (`analysis_gaps.py` counts by the same rules), so a press after a
@@ -1336,8 +1339,14 @@ class Runner:
         Both stages run even when the first fails -- they are independent, and
         a person pressing this wants whatever can be done -- and the job fails
         if either did. A passage that fails stays in the list.
+
+        `target`, when set, is one album's folder: the import page's *Finish
+        analyzing*, for an add whose own analysis did not finish
+        `[REQ-LIB-307]`.
         """
-        result, failed, stopped = self._analysis(job_id, None)
+        result, failed, stopped = self._analysis(job_id, target or None)
+        if target:
+            result["folder"] = target
         self._save_result(job_id, result)
         self._finish(job_id, "stopped" if stopped else "failed" if failed else "done")
 

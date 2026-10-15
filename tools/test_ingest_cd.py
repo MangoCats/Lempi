@@ -146,6 +146,127 @@ def test_chosen_edition():
         c.close()
 
 
+def _three_track_release(rid="rel-T3"):
+    return {"id": rid, "title": "Three", "media": [{"position": 1, "tracks": [
+        {"position": n, "recording": {"id": f"rec-t{n}", "title": f"Part {n}",
+         "artist-credit": [{"artist": {"id": "art-t", "name": "Artist T"}}]}} for n in (1, 2, 3)]}]}
+
+
+def test_whole_disc():
+    """[SPEC-RIP-114]: one piece -- one radio and one album passage for the
+    whole disc, every track still identified and linked, each recording
+    weighted by its share."""
+    print("commit_rip: the whole disc as one passage")
+    tmpdir = tempfile.mkdtemp()
+    mp3_path = os.path.join(tmpdir, "dao.mp3")
+    with open(mp3_path, "wb") as f:
+        f.write(b"\0" * 128)
+    tracks = [cd_toc.TocTrack(number=1, start_ms=2000, end_ms=60000, start_sector=0, end_sector=0),
+              cd_toc.TocTrack(number=2, start_ms=60000, end_ms=180000, start_sector=0, end_sector=0),
+              cd_toc.TocTrack(number=3, start_ms=180000, end_ms=240000, start_sector=0, end_sector=0)]
+    toc = cd_toc.DiscToc(tracks=tracks, leadout_sector=0, source="eac-cue")
+    c = fixture()
+    try:
+        r = ingest_cd.commit_rip(c, "/rip", toc, mp3_path, MD5, "exact", [_three_track_release()], None, None,
+                                 chosen=True, whole_disc=True,
+                                 hidden=[{"where": "pregap", "start_ms": 0, "end_ms": 2000, "title": "x"}])
+        rows = [tuple(x) for x in c.execute("SELECT kind, start_ms, end_ms FROM passages ORDER BY kind")]
+        check(rows == [("album", 0, 240000), ("radio", 2000, 240000)],
+              f"one album passage of the whole file, one radio from track 1, nothing hidden inside it: {rows}")
+        w = {m: wt for m, wt in c.execute("SELECT mbid, weight FROM passage_recordings pr JOIN passages p "
+                                           "ON p.passage_id = pr.passage_id WHERE p.kind = 'radio'")}
+        check(w == {"rec-t1": round(58 / 238, 4), "rec-t2": round(120 / 238, 4), "rec-t3": round(60 / 238, 4)},
+              f"each track's recording by its share of the disc: {w}")
+        check(r["identified"] == 3 and r["album_linked"] == 3 and r["whole_disc"] and r["hidden"] == [],
+              f"every track identified and linked to the release: {r}")
+    finally:
+        c.close()
+
+
+def test_hidden_passages():
+    """[SPEC-RIP-090]: each hidden span is its own pair of passages -- a
+    pregap MusicBrainz names under its recording, a hidden track after the
+    last one's silence under a title saying where it is -- and the last
+    track ends where its silence begins."""
+    print("commit_rip: hidden audio, each its own passage")
+    tmpdir = tempfile.mkdtemp()
+    mp3_path = os.path.join(tmpdir, "dao.mp3")
+    with open(mp3_path, "wb") as f:
+        f.write(b"\0" * 128)
+    tracks = [cd_toc.TocTrack(number=1, start_ms=5000, end_ms=60000, start_sector=0, end_sector=0),
+              cd_toc.TocTrack(number=2, start_ms=60000, end_ms=300000, start_sector=0, end_sector=0)]
+    toc = cd_toc.DiscToc(tracks=tracks, leadout_sector=0, source="eac-cue")
+    hidden = [{"where": "pregap", "start_ms": 0, "end_ms": 5000, "title": "Intro", "mbid": "rec-pregap"},
+              {"where": "postgap", "start_ms": 280000, "end_ms": 300000, "trims": 200000,
+               "title": "Hidden track, after track 2 ('Part 2')"}]
+    c = fixture()
+    try:
+        r = ingest_cd.commit_rip(c, "/rip", toc, mp3_path, MD5, "exact", [_three_track_release()], None, None,
+                                 chosen=True, hidden=hidden)
+        rows = [tuple(x) for x in c.execute(
+            "SELECT p.kind, p.start_ms, p.end_ms, pr.mbid, r.title FROM passages p "
+            "JOIN passage_recordings pr ON pr.passage_id = p.passage_id JOIN recordings r ON r.mbid = pr.mbid "
+            "WHERE p.kind = 'radio' ORDER BY p.start_ms")]
+        local = f"local:audio:{MD5}:280000"
+        check(rows == [("radio", 0, 5000, "rec-pregap", "Intro"), ("radio", 5000, 60000, "rec-t1", "Part 1"),
+                       ("radio", 60000, 200000, "rec-t2", "Part 2"),
+                       ("radio", 280000, 300000, local, "Hidden track, after track 2 ('Part 2')")],
+              f"the pregap by MusicBrainz's name, track 2 ending at its silence, the hidden track after: {rows}")
+        check(c.execute("SELECT COUNT(*) FROM passages WHERE kind = 'album'").fetchone()[0] == 4,
+              "and an album passage for each, so a whole-album play keeps them")
+        check(c.execute("SELECT COUNT(*) FROM ingest_decisions WHERE outcome = 'hidden_audio'").fetchone()[0] == 2
+              and len(r["hidden"]) == 2, "each said in the decisions and the result")
+    finally:
+        c.close()
+
+
+def test_find_hidden():
+    """[SPEC-RIP-090], with a real WAV and ffmpeg: audio before track 1, in a
+    gap, and after a long silence at the end is found, measured; silence and
+    a short gap are not."""
+    import subprocess
+    if not ingest_cd.FFMPEG:
+        check(False, "find_hidden needs ffmpeg")
+        return
+    print("find_hidden: pregap, gap and postgap audio, measured")
+    wav = os.path.join(tempfile.mkdtemp(), "disc.wav")
+    # 80 s of tone, 10 s of silence, 6 s of tone: track 1 from 5 s, track 2's
+    # gap from 41 s (loud) and its INDEX 01 at 45 s; the last 6 s hidden.
+    subprocess.run([ingest_cd.FFMPEG, "-v", "error", "-y",
+                    "-f", "lavfi", "-i", "sine=frequency=330:duration=80",
+                    "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo:d=10",
+                    "-f", "lavfi", "-i", "sine=frequency=440:duration=6", "-filter_complex",
+                    "[0]aformat=channel_layouts=stereo:sample_rates=44100[a];"
+                    "[2]aformat=channel_layouts=stereo:sample_rates=44100[c];[a][1][c]concat=n=3:v=0:a=1",
+                    "-ar", "44100", "-ac", "2", wav], check=True)
+    tracks = [cd_toc.TocTrack(number=1, start_ms=5000, end_ms=41000, start_sector=0, end_sector=0, title="One"),
+              cd_toc.TocTrack(number=2, start_ms=45000, end_ms=96000, start_sector=0, end_sector=0, title="Two")]
+    toc = cd_toc.DiscToc(tracks=tracks, leadout_sector=0, source="eac-cue")
+    rel = {"media": [{"position": 1, "pregap": {"position": 0, "title": "Secret Intro",
+                                                "recording": {"id": "rec-secret", "title": "Secret Intro"}}}]}
+    got = ingest_cd.find_hidden(wav, toc, rel)
+    near = lambda a, b: abs(a - b) <= 400  # noqa: E731
+    check([h["where"] for h in got] == ["pregap", "gap", "postgap"], f"three spans found: {got}")
+    if len(got) == 3:
+        p, g, t = got
+        check(p["title"] == "Secret Intro" and p.get("mbid") == "rec-secret" and p["end_ms"] == 5000,
+              f"the pregap, by MusicBrainz's name: {p}")
+        check((g["start_ms"], g["end_ms"]) == (41000, 45000) and "between tracks 1 and 2" in g["title"],
+              f"the gap, by where it is: {g}")
+        check(near(t["start_ms"], 90000) and t["end_ms"] == 96000 and near(t["trims"], 80000)
+              and t["title"] == "Hidden track, after track 2 ('Two')", f"the hidden track after the silence: {t}")
+    # Silence where a pregap is, and a gap too short to count, are nothing.
+    quiet = os.path.join(os.path.dirname(wav), "quiet.wav")
+    subprocess.run([ingest_cd.FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo:d=6",
+                    "-f", "lavfi", "-i", "sine=frequency=330:duration=30", "-filter_complex",
+                    "[1]aformat=channel_layouts=stereo:sample_rates=44100[b];[0][b]concat=n=2:v=0:a=1",
+                    "-ar", "44100", "-ac", "2", quiet], check=True)
+    t2 = [cd_toc.TocTrack(number=1, start_ms=6000, end_ms=20000, start_sector=0, end_sector=0),
+          cd_toc.TocTrack(number=2, start_ms=22000, end_ms=36000, start_sector=0, end_sector=0)]
+    check(ingest_cd.find_hidden(quiet, cd_toc.DiscToc(tracks=t2, leadout_sector=0, source="eac-cue")) == [],
+          "a silent pregap and a two-second gap are not hidden audio")
+
+
 def test_record_release():
     """`record_release` links only the release's own recording at each place,
     and moves `chosen` off any other release that recording was on."""
@@ -906,6 +1027,9 @@ def main() -> int:
     test_long_title_end_to_end()
     test_which_disc()
     test_disc_in_the_names()
+    test_whole_disc()
+    test_hidden_passages()
+    test_find_hidden()
     test_second_disc_end_to_end()
     # `commit_rip` stats the encoded file for the `files` row -- a real,
     # empty file is enough; identification never actually reads it because

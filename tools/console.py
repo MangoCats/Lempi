@@ -1448,7 +1448,9 @@ class Handler(BaseHTTPRequestHandler):
                     {"folder": folder, "release": b.get("release") or None, "into": into,
                      "occasions": occasions,
                      # [SPEC-CDI-047]: a second copy only when asked, in so many words.
-                     "duplicate_ok": b.get("duplicate_ok") is True}))
+                     "duplicate_ok": b.get("duplicate_ok") is True,
+                     # [SPEC-RIP-114]: the whole disc as one passage, when ticked.
+                     "whole_disc": b.get("whole_disc") is True}))
                 return self.send_json({"job_id": job, "into": into})
             if p in ("/api/import/split/find", "/api/import/split/preview", "/api/import/split/commit"):
                 # [SPEC-CDI-060]: find the album's release; show the cuts; split.
@@ -1561,7 +1563,13 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/analysis/run":
                 # The whole library's missing flavor and amplitude, one job; never
                 # `reanalyze`, which would re-fingerprint every passage as well.
-                return self.send_json({"job_id": STATE["jobs"].submit("analyze-missing", "")})
+                # With `folder`, one album's: the import page's *Finish analyzing*
+                # for an add whose analysis did not finish [REQ-LIB-307].
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                folder = (json.loads(body or b"{}") or {}).get("folder", "") or ""
+                if folder and not os.path.isdir(folder):
+                    return self.send_json({"error": f"not a folder: {folder}"}, code=400)
+                return self.send_json({"job_id": STATE["jobs"].submit("analyze-missing", folder)})
             if p == "/api/analyze-amplitude":
                 # `[SPEC-SA-075]`, deliberately opt-in -- see `jobs.py`'s own
                 # `SKIPPED` entry for why this is never part of `/api/reanalyze`

@@ -214,7 +214,9 @@ function showPreview(p, folder, area) {
   const againRow = S.el('label', { style: 'display:block;margin:.3rem 0' }, again,
     ' Add it again anyway, as a second copy');
   let duplicate = false;
+  const setBox = S.el('div');
   const setWarn = rel => {
+    setBox.replaceChildren(setBanner(rel, false) || '');
     duplicate = !!(rel && rel.duplicate);
     again.checked = false;
     warn.replaceChildren(duplicate
@@ -252,6 +254,21 @@ function showPreview(p, folder, area) {
   const occ = S.el('div', { class: 'controls' },
     S.el('span', { style: 'align-self:center;font-size:.88rem', text: 'Every track on this disc is:' }),
     box('christmas', 'Christmas music'), box('childrens', "children's music"));
+  // [SPEC-RIP-114]: a disc that is one piece -- Thick as a Brick -- added as
+  // one radio and one album passage for the whole disc, not one per track.
+  // Offered, never inferred [SPEC-RIP-100]; an image rip's alone, since a
+  // passage is a span of one file and a tracks-mode rip is a file a track.
+  const whole = S.el('input', { type: 'checkbox' });
+  const wholeRow = p.mode === 'tracks' ? null : S.el('div', { class: 'controls' }, S.el('label', {}, whole,
+    ' One piece: add the whole disc as one passage, not a passage per track'),
+    S.el('span', { class: 'meta', text: ' -- for a disc that plays as one work, like Thick as a Brick' }));
+  // [SPEC-RIP-090]: audio found where no track is -- before track 1, in a
+  // gap, or after a long silence at the end -- each its own passage.
+  const hidden = (p.hidden || []).length ? S.el('div', { class: 'verdict note' },
+    S.el('b', { text: `Hidden audio found on this disc -- each is added as its own passage:` }),
+    S.el('ul', {}, ...p.hidden.map(h => S.el('li', { text:
+      `${h.title}  (${S.clock(h.start_ms)}–${S.clock(h.end_ms)} in the disc, ${S.clock(h.end_ms - h.start_ms)})` }))),
+    S.el('div', { class: 'meta', text: 'With "One piece" ticked, it is simply part of the whole disc.' })) : null;
   const add = S.el('button', { class: 'chip on', text: 'Add to library' });
   if (rels.length === 1) setWarn(rels[0]);
   add.onclick = async () => {
@@ -261,7 +278,7 @@ function showPreview(p, folder, area) {
     const r = await (await fetch('/api/import/add', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ folder, release: chosen, into: into.value.trim(), occasions,
-        duplicate_ok: duplicate && again.checked }) })).json();
+        duplicate_ok: duplicate && again.checked, whole_disc: whole.checked }) })).json();
     if (r.error) { add.disabled = false; return alert(r.error); }
     // The rip leaves the inbox while it is added, and its card with it: the
     // work and its result move to "Just added", where they stay.
@@ -285,7 +302,7 @@ function showPreview(p, folder, area) {
   area.replaceChildren(
     S.el('div', { class: 'steps' }, S.el('span', { text: rels.length > 1
       ? 'MusicBrainz knows several editions of this disc -- choose yours:' : 'This is the disc:' }), help('add')),
-    gap, pick, warn, occ,
+    setBox, gap, pick, warn, hidden, occ, wholeRow,
     S.el('div', { class: 'controls' }, S.el('span', { style: 'align-self:center;font-size:.88rem',
       text: 'Album folder, in your music folder:' }), into, add),
     // [SPEC-NAM-010..040]: why a long title's folder is shorter than the
@@ -315,7 +332,85 @@ function setLine(rel) {
     `The rest of the set: ${other.map(say).join('; ')}.` });
 }
 
-function done(job, into, rel, area) {
+// [REQ-LIB-307]: an add whose analysis did not finish offers to finish it,
+// beside the note that says so -- one album's folder, each stage taking only
+// what it has not done. Two adds' flavor died "database is locked",
+// 2026-10-14, and the note pointed at another page.
+function finishAnalysis(folder) {
+  const box = S.el('div');
+  const btn = S.el('button', { class: 'chip on', text: 'Finish analyzing this album' });
+  btn.onclick = async () => {
+    btn.disabled = true;
+    let r;
+    try {
+      r = await (await fetch('/api/analysis/run', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder }) })).json();
+    } catch (e) { btn.disabled = false; return alert(e.message); }
+    if (r.error) { btn.disabled = false; return alert(r.error); }
+    const log = S.el('div');
+    box.replaceChildren(log);
+    S.watchJob(r.job_id, log, job => {
+      const a = job.result || {}, fl = a.flavor || {}, am = a.amplitude || {};
+      const bad = job.state !== 'done' || fl.failed;
+      box.append(S.el('p', { class: 'verdict ' + (bad ? 'bad' : 'ok'), text:
+        `Analyzed now: ${fl.extracted || 0} for flavor, ${am.analyzed || 0} for amplitude`
+        + (fl.failed ? `; ${fl.failed} could not be analyzed for flavor` : '')
+        + (job.state !== 'done' ? ' -- it did not finish; the log above says why.' : '.') }),
+        bad ? finishAnalysis(folder) : null);
+    });
+  };
+  box.append(S.el('div', { class: 'controls' }, btn));
+  return box;
+}
+
+// The analysis line of an add, and what can still be done about it. `gaps`,
+// given when the card is rebuilt from an earlier add, is what the library
+// still lacks now -- which may be nothing, if it has been finished since.
+function analysisNote(res, gaps) {
+  if (!res.analysis) return null;
+  const fl = res.analysis.flavor || {};
+  const unfinished = (res.analysis_failed || []).length || fl.failed
+    || (fl.todo != null && (fl.extracted || 0) < fl.todo);
+  const said = S.el('p', {
+    class: 'verdict ' + (unfinished ? 'bad' : 'ok'),
+    text: `Analyzed: ${fl.extracted || 0} for flavor, `
+      + `${(res.analysis.amplitude || {}).analyzed || 0} for amplitude`
+      + (fl.failed ? `; ${fl.failed} could not be analyzed for flavor` : '')
+      + ((res.analysis_failed || []).length ? `; ${res.analysis_failed.join(' and ')} did not finish` : '') + '.' });
+  if (!unfinished || !res.folder) return said;
+  if (gaps) {
+    const g = gaps[res.folder];
+    if (!g) return S.el('div', {}, said, S.el('p', { class: 'verdict ok', text: 'It has been finished since.' }));
+    return S.el('div', {}, said, S.el('p', { class: 'steps', text:
+      `Still not analyzed: ${g.flavor} for flavor, ${g.amplitude} for amplitude.` }), finishAnalysis(res.folder));
+  }
+  return S.el('div', {}, said, finishAnalysis(res.folder));
+}
+
+// [SPEC-RIP-112]: a set short of a disc says so loudly -- before the add, for
+// the edition chosen, and after it, from what the library then holds -- and
+// adds what is here anyway. The missing disc is added whenever it turns up,
+// into the same folder under its own names [SPEC-RIP-108].
+function setBanner(s, added) {
+  if (!s || !s.set) return null;
+  const missing = s.set.filter(d => (added || d.number !== s.disc) && !(d.recordings && d.held >= d.recordings));
+  const name = d => `disc ${d.number}` + (d.format && !/CD/.test(d.format) ? ` (${d.format})` : '')
+    + (d.held ? ` -- ${d.held} of its ${d.recordings} recordings held` : '');
+  if (!missing.length) {
+    return S.el('p', { class: 'verdict ok', text: added
+      ? `The set is complete: all ${s.discs} discs are in the library.`
+      : `This is disc ${s.disc} of ${s.discs}, and the set's other discs are in the library: with it, the set is complete.` });
+  }
+  return S.el('div', { class: 'verdict bad', style: 'font-size:1.05rem;border-width:2px;padding:.7rem .9rem' },
+    S.el('b', { text: added ? `This set is still missing ${missing.length === 1 ? 'a disc' : missing.length + ' discs'}: `
+                            : `Disc ${s.disc} of ${s.discs} -- ${missing.length === 1 ? 'a disc' : missing.length + ' discs'} of this set ${missing.length === 1 ? 'is' : 'are'} not in the library: ` }),
+    missing.map(name).join('; ') + '.',
+    S.el('div', { style: 'font-size:.9rem;margin-top:.3rem', text: added
+      ? 'Rip and add the missing disc whenever you have it: it files into the same album folder, under its own names.'
+      : 'This disc is added now, as it is. Add the others whenever you have them -- each files beside it, and the album is whole once the last is in.' }));
+}
+
+function done(job, into, rel, area, gaps) {
   const res = job.result || {};
   if (job.state !== 'done' || !res.ok) {
     return area.append(S.el('p', { class: 'err', text: res.error || 'Adding it failed; the rip is still in the inbox.' }));
@@ -335,16 +430,15 @@ function done(job, into, rel, area) {
       (res.flac ? '; a lossless FLAC copy kept' : '') +
       (res.missing && res.missing.length ? `; track ${res.missing.join(', ')} not ripped, so not added` : '') +
       Object.entries(res.occasions || {}).map(([k, n]) =>
-        `; ${n} marked as ${k === 'christmas' ? 'Christmas' : "children's"} music`).join('') + '.' }),
+        `; ${n} marked as ${k === 'christmas' ? 'Christmas' : "children's"} music`).join('') + '.'
+      + (res.whole_disc ? ' Added as one piece: one passage for the whole disc.' : '') }),
+    (res.hidden || []).length ? S.el('p', { class: 'verdict note', text:
+      `Hidden audio, each its own passage: ${res.hidden.map(h => `${h.title} (${S.clock(h.end_ms - h.start_ms)})`).join('; ')}.` })
+      : null,
+    setBanner(res.set, true),
     // Analysed as part of adding it [REQ-LIB-305]; a stage that failed is
-    // said, and the Jobs page's Not analyzed list can finish it.
-    res.analysis ? S.el('p', {
-      class: 'verdict ' + ((res.analysis_failed || []).length || (res.analysis.flavor || {}).failed ? 'bad' : 'ok'),
-      text: `Analyzed: ${(res.analysis.flavor || {}).extracted || 0} for flavor, `
-        + `${(res.analysis.amplitude || {}).analyzed || 0} for amplitude`
-        + ((res.analysis.flavor || {}).failed ? `; ${res.analysis.flavor.failed} could not be analyzed for flavor` : '')
-        + ((res.analysis_failed || []).length ? `; ${res.analysis_failed.join(' and ')} did not finish`
-          + ' -- the Jobs page lists what is still not analyzed' : '') + '.' }) : null,
+    // said, with the button that finishes it [REQ-LIB-307].
+    analysisNote(res, gaps),
     (res.ambiguous || res.unidentified)
       ? S.el('p', {}, S.el('a', { href: `${PLAYER}/review`, target: '_blank', text: 'Open the review queue' })) : null,
     S.el('div', { class: 'controls' }, reload, send, said, help('after')),
@@ -467,6 +561,36 @@ function render(s) {
 async function refresh() {
   try { render(await S.get('/api/import/state')); } catch (e) { S.fail('#rips', e); }
 }
+
+// "Just added" outlives a reload: the day's adds are rebuilt from the jobs
+// that made them, each with what its analysis still lacks now [REQ-LIB-307].
+// It was this page's memory alone, so a reload lost the one card that said
+// an album's flavor had not finished.
+async function restoreAdded() {
+  let jobs, gaps;
+  try {
+    // Only adds that succeeded: a failed one left its rip in the inbox, where
+    // the page already shows it, and may since have been added again.
+    jobs = (await S.get('/api/jobs')).filter(j => j.kind === 'cd-rip' && j.state === 'done'
+      && Date.now() - Date.parse(j.created_at) < 24 * 3600e3);
+    if (!jobs.length) return;
+    const missing = await S.get('/api/analysis/missing');
+    gaps = Object.fromEntries(missing.folders.map(f => [f.folder, f]));
+  } catch (e) { return; }
+  const box = document.getElementById('added');
+  for (const j of jobs) {
+    let job, into = '';
+    try { job = await S.get(`/api/jobs/${j.job_id}`); into = JSON.parse(j.target).into || ''; }
+    catch (e) { continue; }
+    const area = S.el('div');
+    box.append(S.el('div', { class: 'rip' }, S.el('h3', { text: into || (job.result || {}).folder || `job ${j.job_id}` }),
+      S.el('p', { class: 'meta', text: `added ${j.ended_at ? j.ended_at.replace('T', ' ') : ''}` }), area));
+    done(job, into, null, area, gaps);
+  }
+  document.getElementById('addedwrap').hidden = false;
+}
+
 refresh();
+restoreAdded();
 setInterval(() => { if (!document.hidden) refresh(); }, 4000);
 </script>
