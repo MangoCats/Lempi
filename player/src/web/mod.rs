@@ -489,7 +489,11 @@ pub fn router(ui: Ui) -> Router {
         .route(SEGMENT_QUEUE_ROUTE, get(segment_queue))
         .route("/segment/:passage_id/accept", post(accept_segment))
         .route("/vipunen/available", get(vipunen_available))
-        .route("/vipunen/ensure", post(vipunen_ensure));
+        .route("/vipunen/ensure", post(vipunen_ensure))
+        // The review page's own apply `[REQ-LIB-177]`, Vipunen's two steps relayed.
+        .route("/vipunen/pending", get(vipunen_pending))
+        .route("/vipunen/apply", post(vipunen_apply))
+        .route("/vipunen/job/:id", get(vipunen_job));
 
     appliance_routes(router)
         .route("/queue/shutdown", post(queue_shutdown))
@@ -993,6 +997,10 @@ mod tests {
         // The on-demand handoff card `[SPEC-SUI-199]` -- reached by a route
         // the deep-link case asks for directly, not through the queue batch.
         assert!(REVIEW_JS.contains("/review/passage/"), "page cannot ask for a single card");
+        // Its apply step `[REQ-LIB-177]`: the three relays the router serves.
+        for route in ["/vipunen/pending", "/vipunen/apply", "/vipunen/job/"] {
+            assert!(REVIEW_JS.contains(route), "the review page never asks {route}");
+        }
         // The three decisions the page can send, and the only three
         // `PlayerStore::record_review` accepts. One added on either side alone
         // is the bug this is here to catch.

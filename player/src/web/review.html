@@ -135,6 +135,24 @@
                       border: 1px solid currentColor; border-radius: 4px; }
   .artistfix .sub { font-size: .8125rem; opacity: .7; margin: .2rem 0; }
 
+  /* What is decided and not yet in the library [REQ-LIB-177]: plain while it
+     waits, the warning loud once a person asks to apply, since applying
+     pauses this very player. */
+  #apply { border: 1px solid #d9a441; border-radius: 6px; padding: .55rem .7rem;
+           margin: 0 0 .8rem; font-size: .875rem; }
+  #apply .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+  #apply .row span { flex: 1; min-width: 12rem; }
+  #apply button { font: inherit; min-height: 2.4rem; padding: 0 .8rem; cursor: pointer;
+                  background: transparent; color: inherit; border-radius: 4px;
+                  border: 1px solid currentColor; }
+  #apply button.go { color: #ffb36b; font-weight: 600; }
+  #apply button[disabled] { opacity: .4; cursor: default; }
+  #apply ul { margin: .4rem 0; padding-left: 1.2rem; max-height: 14rem; overflow: auto;
+              font-size: .8125rem; opacity: .85; }
+  #apply .warn { color: #ffb36b; margin: .4rem 0; }
+  #apply .ok { color: #8fd18f; }
+  #apply .bad { color: #ff8a75; }
+
   .note { font-size: .875rem; opacity: .75; margin: 1rem .2rem; }
   .note.bad { opacity: 1; }
 </style>
@@ -145,6 +163,9 @@
     <a class="back" href="/">← player</a>
   </header>
   <p class="tally" id="tally"></p>
+  <!-- Decisions made here, waiting to reach the library, and the button that
+       applies them -- Vipunen's two steps, relayed [REQ-LIB-177]. -->
+  <div id="apply" hidden></div>
   <!-- One chip per grade, each with its own count: the size of each kind of
        problem is visible before choosing which to work through. -->
   <div class="filters" id="filters"></div>

@@ -445,6 +445,7 @@
         tally.decided++;
         showTally();
         showFilters();
+        showPending();
       } else {
         // Re-arm rather than leaving a dead card: a failed write must not look
         // like a recorded decision. The server sends the reason as text, and
@@ -471,6 +472,7 @@
         showTally();
         showFilters();
         showCards();
+        showPending();
       } else {
         said.textContent = (await r.text().catch(() => '')) ||
                            `could not undo that (${r.status})`;
@@ -627,6 +629,111 @@
               'is not evidence either way.';
   }
 
+  // ---- Applying what was decided here `[REQ-LIB-177]` ---------------------
+  // A decision above is recorded, not applied: the library changes only when
+  // Vipunen's apply step folds it in `[REQ-LIB-165]`. Until 2026-10-14 that
+  // step was only on Vipunen's Flags page, so 42 decisions made here looked
+  // lost when the Export page found nothing to send. It is offered here now,
+  // as the same two steps `[REQ-LIB-175]`: what would be written, then a
+  // confirm that says it pauses this player. Vipunen's own calls, relayed.
+  const KIND = { id: 'recording id', boundary: 'boundary', artist: 'artist credit' };
+  async function showPending() {
+    const box = $('apply');
+    let d;
+    try {
+      d = await (await fetch('/vipunen/pending')).json();
+    } catch (e) {
+      box.hidden = false;
+      box.className = 'bad';
+      box.textContent = `Could not ask Vipunen what is waiting to be applied: ${e.message}`;
+      return;
+    }
+    if (d.available === false) {
+      box.hidden = false;
+      box.className = '';
+      box.textContent = 'Decisions here reach the library when Vipunen applies them, and Vipunen ' +
+        `is not running (${d.error || 'no answer'}) -- start it to apply them from here.`;
+      return;
+    }
+    if (!d.total) {
+      box.hidden = true;
+      return;
+    }
+    const kinds = Object.entries(d.counts || {}).filter(e => e[1] > 0).map(e => e[0]);
+    const what = kinds.map(k => `${d.counts[k]} ${KIND[k] || k}`).join(', ');
+    const btn = el('button', null, 'Review and apply…');
+    const row = el('div', 'row');
+    row.append(el('span', null,
+      `${d.total} decision(s) recorded and not yet in the library: ${what}. ` +
+      'Until they are applied, Export and sync have nothing of them to send.'), btn);
+    box.className = '';
+    box.replaceChildren(row);
+    box.hidden = false;
+    btn.onclick = () => confirmApply(d, kinds);
+  }
+
+  function confirmApply(d, kinds) {
+    const box = $('apply');
+    const list = el('ul');
+    for (const r of d.id || []) {
+      list.append(el('li', null, `passage ${r.passage_id} — recording id to ` +
+        (r.chosen_title ? `“${r.chosen_title}” (${r.chosen_mbid})` : r.chosen_mbid)));
+    }
+    for (const b of d.boundary || []) list.append(el('li', null, `passage ${b.passage_id} — boundaries`));
+    for (const a of d.artist || []) {
+      list.append(el('li', null, `recording ${a.recording_mbid} — artist credit to “${a.artist_name}”`));
+    }
+    const go = el('button', 'go', `Write these ${d.total} and pause the player`);
+    const cancel = el('button', null, 'Cancel');
+    const row = el('div', 'row');
+    row.append(go, cancel);
+    box.replaceChildren(
+      el('div', null, `${d.total} edit(s) would be written:`), list,
+      el('p', 'warn', 'This pauses the player, rewrites the library, has the player rebuild ' +
+        'against it, and resumes playback if it was playing.'), row);
+    cancel.onclick = () => showPending();
+    go.onclick = () => applyNow(kinds, go, cancel);
+  }
+
+  async function applyNow(kinds, go, cancel) {
+    go.disabled = cancel.disabled = true;
+    go.textContent = 'writing…';
+    const box = $('apply');
+    let r;
+    try {
+      r = await (await fetch('/vipunen/apply', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmed: true, kinds }) })).json();
+    } catch (e) { r = { error: e.message }; }
+    if (!r.job_id) {
+      box.append(el('p', 'bad', `Not applied: ${r.error || 'Vipunen gave no job'}`));
+      go.disabled = cancel.disabled = false;
+      go.textContent = 'Try again';
+      return;
+    }
+    const status = el('p', null, `Applying (Vipunen job ${r.job_id})…`);
+    box.replaceChildren(status);
+    // Watched by asking, not streamed: the player this page is served by is
+    // paused and rebuilt part-way through, so a failed poll is waited out.
+    for (;;) {
+      await new Promise(res => setTimeout(res, 2000));
+      let job;
+      try { job = await (await fetch(`/vipunen/job/${r.job_id}`)).json(); } catch { continue; }
+      if (!job || job.available === false || ['queued', 'running'].includes(job.state)) continue;
+      const res = job.result || {}, b = res.boundary || {}, i = res.id || {};
+      const wrote = (b.applied || 0) + (i.applied || 0) + (i.artist_applied || 0);
+      status.className = job.state === 'done' ? 'ok' : 'bad';
+      status.textContent = job.state === 'done'
+        ? `Applied: ${wrote} edit(s) are now in the library -- Export and the next sync carry them.`
+        : `The apply job ended "${job.state}"; nothing is certain to have landed. Its log is on ` +
+          `Vipunen's Jobs page (job ${r.job_id}).`;
+      break;
+    }
+    load();
+    setTimeout(showPending, 1500);
+  }
+
   let items = [];
   load();
+  showPending();
 })();

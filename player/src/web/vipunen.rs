@@ -57,6 +57,57 @@ async fn vipunen_reachable() -> bool {
         .unwrap_or(false)
 }
 
+/// One of Vipunen's own calls, made for the review page `[REQ-LIB-177]`, its
+/// answer passed back as it came. Relayed rather than re-implemented: what is
+/// pending, and applying it, stay Vipunen's -- the same preview, the same
+/// two-step guard `[REQ-LIB-175]`, the same job -- and this page only asks.
+/// A console that is not running answers `{"available": false}`, so the page
+/// can say so rather than show nothing.
+async fn relay(method: reqwest::Method, path: &str, body: Option<serde_json::Value>) -> Response {
+    let unavailable = |why: String| {
+        axum::Json(serde_json::json!({ "available": false, "error": why })).into_response()
+    };
+    if !vipunen_reachable().await {
+        return unavailable("Vipunen is not running".into());
+    }
+    let Ok(client) = reqwest::Client::builder().timeout(Duration::from_secs(60)).build() else {
+        return unavailable("no HTTP client".into());
+    };
+    let mut req = client.request(method, format!("http://127.0.0.1:{VIPUNEN_PORT}{path}"));
+    if let Some(b) = body {
+        req = req.json(&b);
+    }
+    match req.send().await {
+        Ok(r) => {
+            let status = axum::http::StatusCode::from_u16(r.status().as_u16())
+                .unwrap_or(axum::http::StatusCode::BAD_GATEWAY);
+            match r.json::<serde_json::Value>().await {
+                Ok(v) => (status, axum::Json(v)).into_response(),
+                Err(e) => unavailable(format!("Vipunen's answer was not JSON: {e}")),
+            }
+        }
+        Err(e) => unavailable(format!("Vipunen did not answer: {e}")),
+    }
+}
+
+/// What applying would write -- Vipunen's step one, `/api/pending/detail`.
+pub(super) async fn vipunen_pending() -> Response {
+    relay(reqwest::Method::GET, "/api/pending/detail", None).await
+}
+
+/// Step two: the kinds the page just showed, and `confirmed`, passed through
+/// unchanged. Vipunen refuses a request without both.
+pub(super) async fn vipunen_apply(axum::Json(body): axum::Json<serde_json::Value>) -> Response {
+    let pass = serde_json::json!({ "confirmed": body.get("confirmed").cloned().unwrap_or_default(),
+                                    "kinds": body.get("kinds").cloned().unwrap_or_default() });
+    relay(reqwest::Method::POST, "/api/apply-reviews", Some(pass)).await
+}
+
+/// The apply job's progress and result, for the page to watch.
+pub(super) async fn vipunen_job(axum::extract::Path(id): axum::extract::Path<u64>) -> Response {
+    relay(reqwest::Method::GET, &format!("/api/jobs/{id}"), None).await
+}
+
 /// Where `tools/console.py` is, if it can be found at all `[REQ-VIS-320]`.
 ///
 /// Checked against this repository's own build layout, relative to
