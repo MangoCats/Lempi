@@ -78,6 +78,7 @@ folded into one spec.
 | Holding a passage back (whole-album play, `[REQ-PD-127]`, not built) | [SPEC057](spec/SPEC057-holding-a-passage-back.md) | [§6. Open](spec/SPEC057-holding-a-passage-back.md#6-open) |
 | Catalogue patch by natural key | [SPEC058](spec/SPEC058-catalogue-patch-by-natural-key.md) | [§9. Open](spec/SPEC058-catalogue-patch-by-natural-key.md#9-open) |
 | A node's own occasion policy, a profanity ceiling first (designed, not scheduled) | [GUIDE036](GUIDE036-node-occasion-policies.md) | [§2. The design](GUIDE036-node-occasion-policies.md#2-the-design-a-nodes-own-policy) |
+| Integrity -- every stored hash read again where the file lies, damage withheld and repaired (planned 2026-10-14; the review page's apply built) | [GUIDE038](GUIDE038-integrity-gap-closures.md) | [§7 Order and size](GUIDE038-integrity-gap-closures.md#7-order-and-size) |
 | Android requirements (draft) | [REQ007](spec/REQ007-android.md) | [§7. Open](spec/REQ007-android.md#7-open--to-be-settled-before-this-leaves-draft) |
 
 ## 2. Sendspin — a whole directory of "watch, don't build yet"
