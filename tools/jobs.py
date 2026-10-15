@@ -622,6 +622,13 @@ class Runner:
         if kind == "analyze-missing":
             return self._analyze_missing(job_id, target)
 
+        if kind == "verify-library":
+            # [GDE-INT-115]: every file re-hashed against its record. Read-only;
+            # its result is kept beside the library, where status reads it.
+            return self._run_single_stage(job_id, "verify", [
+                sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "verify_library.py"),
+                self.library, "--json"])
+
         if kind == "passage-hold":
             return self._passage_hold(job_id, target)
 

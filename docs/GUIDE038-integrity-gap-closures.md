@@ -1,6 +1,6 @@
 # GUIDE038: Closing the Integrity Gaps
 
-**Guide — Tier 2 · plan, written 2026-10-14 · half of one step built, the rest not**
+**Guide — Tier 2 · plan, written 2026-10-14 · phases 0 and 1 done 2026-10-15; 2 to 4 not built**
 
 The plan that follows from the
 [integrity audit of 2026-10-14](../reports/integrity-audit-2026-10-14.md): every
@@ -65,14 +65,16 @@ both the drift check and the patch (`SUMMARY_COLS`, `SIGNED_EXCLUDE`).
 ## 3. Phase 1 -- small, and closes the most visible gaps
 
 **`[GDE-INT-110]` Review decisions say where they go next, and can get
-there.** *The review page's half built 2026-10-14 as `[REQ-LIB-177]`*: it says
-how many decisions wait to reach the library and applies them, Vipunen's two
-steps relayed. Left: the console's Export page saying "N review decisions not
-yet applied" when there are any, since an empty Export with 42 waiting reads
-as decisions lost. Small; `tools/console_web/export.html`.
+there.** *Built: the review page's half 2026-10-14 as `[REQ-LIB-177]`, the
+Export page's 2026-10-15.* The review page says how many decisions wait to
+reach the library and applies them, Vipunen's two steps relayed. The Export
+page says "N review decisions are recorded and not yet in this library",
+linking to both ways to apply them, since an empty Export with 42 waiting read
+as decisions lost.
 
-**`[GDE-INT-115]` The hub verifies its library every night.**
-A new verify tool in `tools/`: every catalogued file re-hashed against
+**`[GDE-INT-115]` The hub verifies its library every night.** *Built
+2026-10-15: `tools/verify_library.py`; first run 5,870 of 5,870 match, 49.3 GB
+in 120 s.* Every catalogued file re-hashed against
 `files.sha256`; a mismatch re-checked by `audio_md5`, so a re-tag (bytes
 changed, audio intact) is told from damage; a missing file named. A console
 job, `verify-library`, with a button on the Jobs page, and run by the
@@ -80,11 +82,22 @@ job, `verify-library`, with a button on the Jobs page, and run by the
 (`data/verify/<date>.json`) and `star_sync.py status` reports its age and any
 finding, STALE past 30 h, as it already does the backup.
 
-**`[GDE-INT-120]` Backups are re-read, here and on the mirror.** Each night
-`backup` re-hashes the objects checked longest ago, enough that every kept
-object is read within a week, and asks the mirror for the same with one
-`sha256sum` over ssh. An object whose hash is not its name is reported, and
-the next backup stores a fresh one. `status` says when each was last proven.
+**`[GDE-INT-120]` Backups are re-read, here and on the mirror.** *Built
+2026-10-15; first run here: all 24 kept objects whole, 9.9 GB in 13 s.* Each
+night `backup` re-hashes every kept object not proven for six days, so each is
+read within a week, and asks the mirror for the same with one `sha256sum` over
+ssh. What was proven, when, and anything not whole is kept in
+`<backups>/proven.json`; an object whose hash is not its name is said, makes
+`status` STALE, and is re-read every night until it is whole. `status` says the
+oldest proof here and on the mirror.
+
+*Found building it: the mirror has not been written since 2026-09-26.* Every
+nightly run since at least 2026-10-01 logged `MIRROR FAILED: reach the mirror:
+exit 255`, and `status` STALE with it; the mirror is `teacherslounge`, which is
+usually off at 03:30 -- it went offline again the afternoon of 2026-10-15 after
+being brought up to date. The hub's pair has had no copy off this machine for
+nearly three weeks. Where the mirror should live is the maintainer's choice
+(ROADMAP §5).
 
 ## 4. Phase 2 -- each speaker checks its own audio
 

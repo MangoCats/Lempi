@@ -25,7 +25,60 @@ def check(cond, msg):
         print(f"  FAIL  {msg}")
 
 
+def test_backup_proofs():
+    """[GDE-INT-120], [GDE-INT-115]: each kept backup object re-read and proven
+    against its own name, one that is not said and re-read until it is; and
+    status saying both that and the library's last verification."""
+    import hashlib
+    import io
+    import json
+    import contextlib
+    print("backup objects re-read against their names; status says it, and the library's verification")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as root:
+        objs = os.path.join(root, "objects")
+        os.makedirs(objs)
+        names = []
+        for body in (b"one", b"two", b"three"):
+            sha = hashlib.sha256(body).hexdigest()
+            with open(os.path.join(objs, f"{sha}.db"), "wb") as fh:
+                fh.write(body)
+            names.append(sha)
+        with open(os.path.join(objs, f"{names[2]}.db"), "wb") as fh:
+            fh.write(b"thr3e")                                   # rotted since it was stored
+        st = ss.proofs(root)
+        with contextlib.redirect_stdout(io.StringIO()):
+            ss.prove_local(root, set(names), st)
+        ss.save_proofs(root, st)
+        check(sorted(st["local"]) == sorted(names[:2]) and st["local_bad"] == [names[2]],
+              f"two proven, the rotted one named: {st}")
+        check(ss.due(st, "local", set(names)) == [names[2]], "only the bad one is due again tomorrow")
+        old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=ss.PROVE_DAYS + 1)).isoformat()
+        st["local"][names[0]] = old
+        check(names[0] in ss.due(st, "local", set(names)), "a proof older than PROVE_DAYS is due again")
+
+        lib = os.path.join(root, "lib", "library.db")
+        os.makedirs(os.path.join(root, "lib", "verify"))
+        os.makedirs(os.path.join(root, "days"))
+        with open(os.path.join(root, "days", "2026-10-15.json"), "w") as fh:
+            json.dump({"taken_at": dt.datetime.now(dt.timezone.utc).isoformat()}, fh)
+        with open(os.path.join(root, "lib", "verify", "2026-10-15.json"), "w") as fh:
+            json.dump({"checked_at": dt.datetime.now().isoformat(timespec="seconds"), "files": 3, "ok": 2,
+                       "bytes": 9, "seconds": 1, "unrecorded": 0, "retagged": [], "damaged": [{"path": "x"}],
+                       "missing": [], "unreadable": [], "ok_whole": False}, fh)
+        plan = {"backups": {"dir": root, "max_age_hours": 30}, "hub": {"library": lib},
+                "runs": os.path.join(root, "runs")}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = ss.status(plan)
+        said = out.getvalue()
+        check(rc == 1 and "1 backup object(s) here are not what they were stored as" in said,
+              f"status names the bad object: {said}")
+        check("library verified" in said and "found damaged, missing or unreadable" in said,
+              f"and the library's verification, read with no offset on its time: {said}")
+
+
 def main() -> int:
+    test_backup_proofs()
     days = [f"2026-{m:02d}-{d:02d}" for m in (7, 8, 9) for d in (1, 10, 20, 28)]
     keep = ss.retained(days, 3, 2)
     check({"2026-09-10", "2026-09-20", "2026-09-28"} <= keep, f"the newest 3 days are kept: {sorted(keep)}")

@@ -1457,6 +1457,59 @@ def mesh_archive(mdir: str, dest: str) -> None:
     c.close()
 
 
+# [GDE-INT-120]: each kept object re-read at least this often, here and on the
+# mirror. Named by its own SHA-256, so the proof is a re-hash; until 2026-10-15
+# none was ever made after the object was stored.
+PROVE_DAYS = 6
+
+
+def proofs(root):
+    """When each object was last proven whole, here and on the mirror, and any
+    that were not: `<backups>/proven.json`."""
+    path = os.path.join(root, "proven.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            st = json.load(fh)
+    except (OSError, ValueError):
+        st = {}
+    for k in ("local", "mirror"):
+        st.setdefault(k, {})
+        st.setdefault(f"{k}_bad", [])
+    return st
+
+
+def save_proofs(root, st):
+    path = os.path.join(root, "proven.json")
+    with open(path + ".part", "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(st, fh, indent=1, sort_keys=True)
+    os.replace(path + ".part", path)
+
+
+def due(st, where, wanted):
+    limit = now() - dt.timedelta(days=PROVE_DAYS)
+    return sorted(o for o in wanted
+                  if not st[where].get(o) or dt.datetime.fromisoformat(st[where][o]) < limit)
+
+
+def prove_local(root, wanted, st):
+    """Re-hash the kept objects whose proof is older than PROVE_DAYS."""
+    st["local"] = {o: t for o, t in st["local"].items() if o in wanted}
+    st["local_bad"] = [o for o in st["local_bad"] if o in wanted]
+    todo = due(st, "local", wanted)
+    for o in todo:
+        f = os.path.join(root, "objects", f"{o}.db")
+        got = sha256(f) if os.path.isfile(f) else None
+        if got == o:
+            st["local"][o] = now().isoformat()
+            if o in st["local_bad"]:
+                st["local_bad"].remove(o)
+        elif o not in st["local_bad"]:
+            st["local_bad"].append(o)
+    bad = st["local_bad"]
+    say(f"  proven here: {len(todo)} object(s) re-read" + (f"; {len(bad)} NOT WHOLE: "
+        + ", ".join(b[:12] for b in bad) if bad else ", all whole"))
+
+
 def backup(plan):
     b = plan["backups"]
     root = at_root(b["dir"])
@@ -1517,6 +1570,9 @@ def backup(plan):
         if f.endswith(".db") and f[:-3] not in wanted:
             os.chmod(os.path.join(objs, f), 0o644)
             os.remove(os.path.join(objs, f))
+    st = proofs(root)
+    prove_local(root, wanted, st)
+    save_proofs(root, st)
     rc = mirror(plan, keep, wanted)
     return max(rc, status(plan))
 
@@ -1553,7 +1609,32 @@ def mirror(plan, keep, wanted):
                       f"case \" {want_names} \" in *\" $f \"*) ;; *) rm -f \"$f\" ;; esac; done; true",
                 "prune the mirror", quiet=True)
         say(f"  mirror {host}:{rd} holds the same {len(keep)} day(s)")
-        return 0
+        # [GDE-INT-120]: its objects re-hashed there, the ones not proven for
+        # PROVE_DAYS, in one command; an object whose hash is not its name is
+        # said, and stays said until a later run finds it whole.
+        st = proofs(root)
+        st["mirror"] = {o: t for o, t in st["mirror"].items() if o in wanted}
+        st["mirror_bad"] = [o for o in st["mirror_bad"] if o in wanted]
+        todo = due(st, "mirror", wanted)
+        if todo:
+            out = sd.must(host, f"cd {rd}/objects && sha256sum -- " + " ".join(f"{o}.db" for o in todo),
+                          "re-read the mirror's objects", quiet=True)
+            seen = {}
+            for line in out.splitlines():
+                sha, _, name = line.partition("  ")
+                seen[name.strip()] = sha
+            for o in todo:
+                if seen.get(f"{o}.db") == o:
+                    st["mirror"][o] = now().isoformat()
+                    if o in st["mirror_bad"]:
+                        st["mirror_bad"].remove(o)
+                elif o not in st["mirror_bad"]:
+                    st["mirror_bad"].append(o)
+        save_proofs(root, st)
+        bad = st["mirror_bad"]
+        say(f"  proven on the mirror: {len(todo)} object(s) re-read" + (f"; {len(bad)} NOT WHOLE: "
+            + ", ".join(b[:12] for b in bad) if bad else ", all whole"))
+        return 1 if bad else 0
     except (sd.Failed, subprocess.SubprocessError, OSError) as err:
         say(f"  MIRROR FAILED: {err}")
         return 1
@@ -1581,6 +1662,31 @@ def status(plan):
         say(f"  mirror: newest {there[-1] if there else 'NONE'}" + ("" if rc == 0 else " (unreachable)"))
         if not there or (newest and there[-1] != newest[-1]):
             bad.append("the mirror is behind the hub's backups, or unreachable")
+    # [GDE-INT-120]: how recently every kept object was proven whole.
+    root = at_root(b["dir"])
+    pr = proofs(root)
+    for where in ("local", "mirror") if m else ("local",):
+        if pr[f"{where}_bad"]:
+            bad.append(f"{len(pr[where + '_bad'])} backup object(s) {'here' if where == 'local' else 'on the mirror'} "
+                       "are not what they were stored as")
+        if pr[where]:
+            oldest = min(dt.datetime.fromisoformat(t) for t in pr[where].values())
+            say(f"  backups proven {'here' if where == 'local' else 'on the mirror'}: {len(pr[where])} object(s), "
+                f"the oldest proof {(now() - oldest).days} day(s) old")
+    # [GDE-INT-115]: the library's own files against their records.
+    import verify_library
+    v = verify_library.newest(at_root(plan["hub"]["library"]))
+    if v is None:
+        bad.append("the library has never been verified")
+    else:
+        vt = dt.datetime.fromisoformat(v["checked_at"])
+        vage = now() - (vt if vt.tzinfo else vt.astimezone())    # a time with no offset is this PC's
+        say(f"  library verified: {v['checked_at'][:16].replace('T', ' ')}, {vage.total_seconds() / 3600:.0f} h ago: "
+            + verify_library.summary(v))
+        if vage > limit:
+            bad.append(f"the library was last verified {vage.days} day(s) ago")
+        if not v.get("ok_whole", True):
+            bad.append("the library's last verification found damaged, missing or unreadable files")
     runs = at_root(plan["runs"])
     if os.path.exists(os.path.join(runs, "state.json")):
         st = load_state(plan)

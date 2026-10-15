@@ -198,7 +198,14 @@ what remains here is the work that crosses documents.
    passage of a hidden intro and the track it leads into `[SPEC-RIP-092]`;
    hidden audio in a tracks-mode rip; hidden audio on a real disc, which no
    disc filed so far has had to prove the finding side.
-6. ~~**CI cannot be read from the hub desktop**~~ *Resolved 2026-10-14: `gh` is authenticated there, and the first read found the docs workflow red since 2026-10-01 -- `check_forbidden_names.py` could not read the committed Essentia binaries, fixed the same night.* Was: `gh` was not authenticated
+6. **The hub backup's mirror has not been written since 2026-09-26**
+   ([GUIDE038](GUIDE038-integrity-gap-closures.md) `[GDE-INT-120]`,
+   `[SPEC-STAR-086]`). It is `teacherslounge`, usually off when the backup runs
+   at 03:30, so every night since at least 2026-10-01 has failed to reach it.
+   A choice for the maintainer: a mirror that is on at 03:30 (`smartboardpc`,
+   the fleet's always-on time server, or a speaker with room), or a mirror that
+   catches up whenever it is next reachable rather than only at 03:30.
+7. ~~**CI cannot be read from the hub desktop**~~ *Resolved 2026-10-14: `gh` is authenticated there, and the first read found the docs workflow red since 2026-10-01 -- `check_forbidden_names.py` could not read the committed Essentia binaries, fixed the same night.* Was: `gh` was not authenticated
    there, so a red run was seen only on GitHub; the commit hook does not run this gate.
 
 ---

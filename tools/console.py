@@ -1292,6 +1292,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"remote": STATE["jobs"].get_remote()})
             if p == "/api/jobs":
                 return self.send_json(STATE["jobs"].recent())
+            if p == "/api/verify/last":
+                # [GDE-INT-115]: the newest verification of the library, as kept.
+                import verify_library
+                return self.send_json({"last": verify_library.newest(STATE["library"])})
             if p == "/api/analysis/missing":
                 # What flavor and amplitude analysis have not reached, by album
                 # folder -- counted by each tool's own rule, so the list names
@@ -1560,6 +1564,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not folder or not os.path.isdir(folder):
                     return self.send_json({"error": f"not a folder: {folder}"}, code=400)
                 return self.send_json({"job_id": STATE["jobs"].submit("reanalyze", folder)})
+            if p == "/api/verify/run":
+                # [GDE-INT-115]: the library's files against their records, now.
+                return self.send_json({"job_id": STATE["jobs"].submit("verify-library", "")})
             if p == "/api/analysis/run":
                 # The whole library's missing flavor and amplitude, one job; never
                 # `reanalyze`, which would re-fingerprint every passage as well.

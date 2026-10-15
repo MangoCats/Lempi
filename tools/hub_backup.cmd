@@ -11,4 +11,12 @@ echo ==== %DATE% %TIME% >> data\backups\backup.log
 python tools\star_sync.py fleet\star-plan.json backup >> data\backups\backup.log 2>&1
 set rc=%ERRORLEVEL%
 if not "%rc%"=="0" msg %USERNAME% "Lempi: the hub's backup or its mirror FAILED or is stale (exit %rc%). See data\backups\backup.log"
-exit /b %rc%
+REM Then every file of the library against its record [GDE-INT-115], read-only,
+REM about two minutes. A damaged, missing or unreadable file is said the same way.
+if not exist data\verify mkdir data\verify
+echo ==== %DATE% %TIME% >> data\verify\verify.log
+python tools\verify_library.py data\library.db >> data\verify\verify.log 2>&1
+set vrc=%ERRORLEVEL%
+if not "%vrc%"=="0" msg %USERNAME% "Lempi: the library's verification found damaged, missing or unreadable files, or could not run (exit %vrc%). See data\verify\verify.log"
+if not "%rc%"=="0" exit /b %rc%
+exit /b %vrc%

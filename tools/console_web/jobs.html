@@ -34,6 +34,18 @@
   </div>
   <div id="gaps"></div>
 
+  <h2>Integrity <small>— the library's files against their records</small></h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    Every catalogued file re-hashed and compared with the hash recorded when it
+    arrived: a file whose bytes have changed is found here, not by a send that
+    refuses it. Run each night after the backup; read-only.
+  </p>
+  <div id="verifysum"></div>
+  <div class="controls">
+    <button class="chip" id="verify">Verify the library now</button>
+  </div>
+  <div id="verifylive"></div>
+
   <h2>Jobs</h2>
   <div id="list"></div>
   <div id="live"></div>
@@ -275,6 +287,35 @@ document.getElementById('analyze').onclick = async () => {
   list(); watch(r.job_id);
 };
 
+// ------------------------------------------------------------ integrity
+// [GDE-INT-115]: the newest verification, as kept beside the library.
+async function verifyLast() {
+  let d;
+  try { d = await S.get('/api/verify/last'); } catch (e) { return S.fail('#verifysum', e); }
+  const r = d.last, box = document.getElementById('verifysum');
+  if (!r) return box.replaceChildren(S.el('p', { class: 'verdict bad', text: 'The library has never been verified.' }));
+  const age = Math.round((Date.now() - Date.parse(r.checked_at)) / 3600e3);
+  const bad = ['damaged', 'missing', 'unreadable'].filter(k => (r[k] || []).length);
+  const lines = [...bad, 'retagged'].flatMap(k => (r[k] || []).slice(0, 10).map(x =>
+    S.el('li', { text: `${k}: ${x.path}` })));
+  box.replaceChildren(
+    S.el('p', { class: 'verdict ' + (bad.length ? 'bad' : age > 30 ? 'note' : 'ok'), text:
+      `Last verified ${r.checked_at.replace('T', ' ')} (${age} h ago): ${r.ok} of ${r.files} files match their record`
+      + bad.map(k => `; ${r[k].length} ${k}`).join('')
+      + ((r.retagged || []).length ? `; ${r.retagged.length} re-tagged (audio intact)` : '')
+      + (r.unrecorded ? `; ${r.unrecorded} with no hash recorded` : '') + '.' }),
+    lines.length ? S.el('ul', { class: 'tracks' }, ...lines) : '');
+}
+
+document.getElementById('verify').onclick = async () => {
+  let r;
+  try { r = await (await fetch('/api/verify/run', { method: 'POST' })).json(); }
+  catch (e) { return S.fail('#verifylive', e); }
+  if (r.error) return S.fail('#verifylive', new Error(r.error));
+  S.watchJob(r.job_id, document.getElementById('verifylive'), () => { verifyLast(); list(); });
+};
+
 list();
 gaps();
+verifyLast();
 </script>

@@ -18,6 +18,7 @@
     there; the same two steps are shown as commands, for a terminal. Nothing
     on a speaker changes until you press Send now or run the second command.
   </p>
+  <div id="unapplied"></div>
   <div class="controls" id="miss-peers"><span class="empty">Loading the speakers…</span></div>
   <div class="controls">
     <button class="chip on" id="find-missing">find what's missing and build bundles</button>
@@ -275,6 +276,23 @@ function showMissing(panel, info, job) {
   };
   panel.append(S.el('div', { class: 'controls' }, term, said));
 }
+
+// [GDE-INT-110]: review decisions that have not reached the library have
+// nothing here to send, and an empty result with 42 of them waiting read as
+// decisions lost, 2026-10-14. Said before anything is looked for.
+(async () => {
+  let d;
+  try { d = await S.get('/api/pending/detail'); } catch (e) { return; }
+  if (!d || !d.total) return;
+  const what = Object.entries(d.counts || {}).filter(e => e[1] > 0)
+    .map(([k, n]) => `${n} ${{ id: 'recording id', boundary: 'boundary', artist: 'artist credit' }[k] || k}`).join(', ');
+  document.getElementById('unapplied').replaceChildren(S.el('p', { class: 'verdict note' },
+    `${d.total} review decision(s) are recorded and not yet in this library (${what}), so there is nothing `
+      + 'of them to send. Apply them first: ',
+    S.el('a', { href: '/flags#apply', text: 'Flags, Apply pending edits' }), ', or the player\'s ',
+    S.el('a', { href: `${location.protocol}//${location.hostname}:5720/review`, target: '_blank', text: 'review page' }),
+    '.'));
+})();
 
 document.getElementById('build').onclick = build;
 document.getElementById('openterm').onclick = async () => {
