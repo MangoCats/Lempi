@@ -66,7 +66,7 @@ The Moto G is not a speaker here: a send is pushed over ssh, and the phone has n
 Beside each backup, `pre-star-2026-09-26-tools/` holds the tool and the two patches that were applied, so what changed can be read on the node itself. Rolling a node back is `star_patch.py restore`, with the player stopped.
 
 **`[FLT-DAT-030]` From 2026-09-26, the hub is backed up every night, and syncs are one tool** `[SPEC-STAR-085..087]`.
-- `data/backups/` on the desktop holds 14 days and 12 month-starts, mirrored to `teacherslounge:~/lempi-hub-backups/`. It is run by the Windows task "Lempi hub backup", which puts a message on screen if it fails.
+- `data/backups/` on the desktop holds 14 days and 12 month-starts, mirrored to `teacherslounge:~/lempi-hub-backups/`. It is run by the Windows task "Lempi hub backup" at 03:30, which puts a message on screen if it fails; the mirror is brought up to date by "Lempi hub mirror" every quarter hour, whenever `teacherslounge` is on `[SPEC-STAR-088]`. Both tasks are created by `tools/install_hub_tasks.ps1`.
 - A sync is `tools/star_sync.py fleet/star-plan.json`, stage by stage, started by a person.
 - Each node keeps the backups of its three most recent syncs as `pre-sync-<run>/`, beside its listener and its catalogue. The recovery's `pre-star-2026-09-26/` is never pruned.
 - The first routine sync, `20260926T1952Z`, carried the file hashes and that afternoon's edits to every node.

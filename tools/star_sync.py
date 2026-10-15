@@ -26,6 +26,7 @@ its mirror.
                                                       named or not [SPEC-STAR-134]
                                                       [--approve-all] [--console-pid N]
     python tools/star_sync.py PLAN backup             the hub's daily backup, and its mirror
+    python tools/star_sync.py PLAN mirror             the mirror brought up to date, if it is reachable
     python tools/star_sync.py PLAN status             exits 1 when a backup has gone stale
 
 `merge`, `items`, `verdict`, `approve-all`, `patch`, `rehearse` and `commit` act
@@ -1510,6 +1511,32 @@ def prove_local(root, wanted, st):
         + ", ".join(b[:12] for b in bad) if bad else ", all whole"))
 
 
+def kept_objects(plan):
+    """The days kept, and every object one of them names."""
+    b = plan["backups"]
+    days = os.path.join(at_root(b["dir"]), "days")
+    have = sorted(f[:-5] for f in os.listdir(days) if f.endswith(".json")) if os.path.isdir(days) else []
+    keep = retained(have, b["keep_daily"], b["keep_monthly"])
+    wanted = set()
+    for d in keep:
+        with open(os.path.join(days, f"{d}.json"), encoding="utf-8") as fh:
+            rec = json.load(fh)
+        wanted |= {rec["listener"], rec["library"]} | ({rec["mesh"]} if rec.get("mesh") else set())
+    return keep, wanted
+
+
+def mirror_now(plan):
+    """The `mirror` command: bring the mirror up to date if it can be reached,
+    and say nothing alarming if it cannot [SPEC-STAR-088]. Run every quarter
+    hour by the task *Lempi hub mirror*, so a mirror that is off at 03:30 -- as
+    `teacherslounge` usually is -- is written when it is next on, not never."""
+    keep, wanted = kept_objects(plan)
+    if not keep:
+        say("  no backup to mirror yet")
+        return 0
+    return mirror(plan, keep, wanted)
+
+
 def backup(plan):
     b = plan["backups"]
     root = at_root(b["dir"])
@@ -1561,11 +1588,7 @@ def backup(plan):
         if d not in keep:
             os.remove(os.path.join(days, f"{d}.json"))
             say(f"  retired the backup of {d}")
-    wanted = set()
-    for d in keep:
-        with open(os.path.join(days, f"{d}.json"), encoding="utf-8") as fh:
-            rec = json.load(fh)
-        wanted |= {rec["listener"], rec["library"]} | ({rec["mesh"]} if rec.get("mesh") else set())
+    keep, wanted = kept_objects(plan)
     for f in os.listdir(objs):
         if f.endswith(".db") and f[:-3] not in wanted:
             os.chmod(os.path.join(objs, f), 0o644)
@@ -1586,6 +1609,16 @@ def mirror(plan, keep, wanted):
         return 0
     host, rd = m["host"], m["dir"]
     root = at_root(plan["backups"]["dir"])
+    # [SPEC-STAR-088]: a mirror that is off is not a failure, only not yet; it
+    # is written when next reachable, and status says when a day is missed.
+    # Until 2026-10-15 it was tried at 03:30 alone, when teacherslounge is
+    # usually off, and was not written for nearly three weeks.
+    rc, _ = sd.ssh(host, "true", quiet=True)
+    if rc != 0:
+        st = proofs(root)
+        say(f"  mirror: {host} is not reachable now; it is brought up to date when it next is"
+            + (f" (it holds the backup of {st['mirror_newest']})" if st.get("mirror_newest") else ""))
+        return 0
     try:
         sd.must(host, f"mkdir -p {rd}/objects {rd}/days", "reach the mirror", quiet=True)
         there = set(sd.must(host, f"ls -1 {rd}/objects {rd}/days", "list the mirror", quiet=True).split())
@@ -1630,6 +1663,7 @@ def mirror(plan, keep, wanted):
                         st["mirror_bad"].remove(o)
                 elif o not in st["mirror_bad"]:
                     st["mirror_bad"].append(o)
+        st["mirror_newest"], st["mirror_at"] = max(keep), now().isoformat()
         save_proofs(root, st)
         bad = st["mirror_bad"]
         say(f"  proven on the mirror: {len(todo)} object(s) re-read" + (f"; {len(bad)} NOT WHOLE: "
@@ -1657,11 +1691,28 @@ def status(plan):
             bad.append(f"the newest hub backup is {age.days} day(s) old")
     m = b.get("mirror")
     if m:
-        rc, out = sd.ssh(m["host"], f"ls -1 {m['dir']}/days", quiet=True)
-        there = sorted(f[:-5] for f in out.split() if f.endswith(".json")) if rc == 0 else []
-        say(f"  mirror: newest {there[-1] if there else 'NONE'}" + ("" if rc == 0 else " (unreachable)"))
-        if not there or (newest and there[-1] != newest[-1]):
-            bad.append("the mirror is behind the hub's backups, or unreachable")
+        # [SPEC-STAR-088]: from what the last successful mirror run recorded,
+        # not by asking a host that may be off. Behind is normal for hours --
+        # the mirror is written when it is next reachable -- and STALE once the
+        # backup it holds is more than `max_age_hours` (48) old: a day missed.
+        st = proofs(at_root(b["dir"]))
+        held = st.get("mirror_newest")
+        mlimit = dt.timedelta(hours=m.get("max_age_hours", 48))
+        if not held:
+            say("  mirror: never brought up to date since its run was recorded (2026-10-15)")
+            bad.append("the mirror has not been brought up to date")
+        else:
+            try:
+                with open(os.path.join(days, f"{held}.json"), encoding="utf-8") as fh:
+                    taken = dt.datetime.fromisoformat(json.load(fh)["taken_at"])
+            except (OSError, ValueError, KeyError):
+                taken = dt.datetime.fromisoformat(held + "T00:00:00+00:00")
+            mage = now() - taken
+            say(f"  mirror: holds the backup of {held} ({mage.total_seconds() / 3600:.0f} h old), last written "
+                f"{st['mirror_at'][:16].replace('T', ' ')} UTC")
+            if mage > mlimit:
+                bad.append(f"the mirror's newest backup is {mage.days} day(s) old -- {m['host']} has not been "
+                           "reachable to take a newer one")
     # [GDE-INT-120]: how recently every kept object was proven whole.
     root = at_root(b["dir"])
     pr = proofs(root)
@@ -1730,6 +1781,8 @@ def main(argv):
         return snapshot(plan, only)
     if cmd == "backup":
         return backup(plan)
+    if cmd == "mirror":
+        return mirror_now(plan)
     if cmd == "status":
         return status(plan)
     if cmd not in ("merge", "items", "verdict", "approve-all", "patch", "rehearse", "commit"):

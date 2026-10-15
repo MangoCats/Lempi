@@ -96,8 +96,8 @@ nightly run since at least 2026-10-01 logged `MIRROR FAILED: reach the mirror:
 exit 255`, and `status` STALE with it; the mirror is `teacherslounge`, which is
 usually off at 03:30 -- it went offline again the afternoon of 2026-10-15 after
 being brought up to date. The hub's pair has had no copy off this machine for
-nearly three weeks. Where the mirror should live is the maintainer's choice
-(ROADMAP §5).
+nearly three weeks. The maintainer's decision the same day: keep the mirror on
+`teacherslounge`, daily, written whenever it is reachable -- `[SPEC-STAR-088]`.
 
 ## 4. Phase 2 -- each speaker checks its own audio
 

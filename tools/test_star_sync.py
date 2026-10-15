@@ -77,8 +77,62 @@ def test_backup_proofs():
               f"and the library's verification, read with no offset on its time: {said}")
 
 
+def test_mirror_when_reachable():
+    """[SPEC-STAR-088]: a mirror that cannot be reached is not a failure, and
+    status judges it by the backup it last took -- current within 48 h, STALE
+    once a day is missed -- without asking a host that may be off."""
+    import io
+    import json
+    import contextlib
+    print("the mirror: off is not a failure; status reads what it last took")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as root:
+        os.makedirs(os.path.join(root, "days"))
+        os.makedirs(os.path.join(root, "objects"))
+        lib = os.path.join(root, "lib", "library.db")
+        os.makedirs(os.path.join(root, "lib", "verify"))
+        with open(os.path.join(root, "lib", "verify", "v.json"), "w") as fh:
+            json.dump({"checked_at": dt.datetime.now().astimezone().isoformat(), "files": 0, "ok": 0, "bytes": 0,
+                       "seconds": 0, "unrecorded": 0, "retagged": [], "damaged": [], "missing": [],
+                       "unreadable": [], "ok_whole": True}, fh)
+        utc = dt.datetime.now(dt.timezone.utc)
+        for days_ago in (0, 3):
+            d = (utc - dt.timedelta(days=days_ago)).strftime("%Y-%m-%d")
+            with open(os.path.join(root, "days", f"{d}.json"), "w") as fh:
+                json.dump({"taken_at": (utc - dt.timedelta(days=days_ago)).isoformat(),
+                           "listener": "l" * 64, "library": "b" * 64}, fh)
+        plan = {"backups": {"dir": root, "max_age_hours": 30, "keep_daily": 14, "keep_monthly": 12,
+                            "mirror": {"host": "x@off", "dir": "/m"}},
+                "hub": {"library": lib}, "runs": os.path.join(root, "runs")}
+        real = ss.sd.ssh
+        ss.sd.ssh = lambda host, cmd, quiet=False: (255, "ssh: connect to host off: timed out")
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                rc = ss.mirror_now(plan)
+            check(rc == 0 and "not reachable now" in out.getvalue(), f"off is said, not failed: {rc}")
+
+            def said():
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    rc = ss.status(plan)
+                return rc, buf.getvalue()
+            rc, text = said()
+            check(rc == 1 and "has not been brought up to date" in text, f"never written: STALE: {text}")
+            st = ss.proofs(root)
+            st["mirror_newest"], st["mirror_at"] = (utc - dt.timedelta(days=0)).strftime("%Y-%m-%d"), utc.isoformat()
+            ss.save_proofs(root, st)
+            rc, text = said()
+            check(rc == 0 and "holds the backup of" in text, f"today's backup held: current: {text}")
+            st["mirror_newest"] = (utc - dt.timedelta(days=3)).strftime("%Y-%m-%d")
+            ss.save_proofs(root, st)
+            rc, text = said()
+            check(rc == 1 and "has not been reachable to take a newer one" in text, f"a day missed: STALE: {text}")
+        finally:
+            ss.sd.ssh = real
+
+
 def main() -> int:
     test_backup_proofs()
+    test_mirror_when_reachable()
     days = [f"2026-{m:02d}-{d:02d}" for m in (7, 8, 9) for d in (1, 10, 20, 28)]
     keep = ss.retained(days, 3, 2)
     check({"2026-09-10", "2026-09-20", "2026-09-28"} <= keep, f"the newest 3 days are kept: {sorted(keep)}")
