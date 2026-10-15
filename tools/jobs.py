@@ -28,6 +28,7 @@ import os
 import queue
 import re
 import sqlite3
+import tempfile
 import subprocess
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -185,6 +186,44 @@ def counts(db: str) -> dict:
         c.close()
 
 
+# How a running job is stopped, by kind and stage [REQ-LIB-132]. A stage not
+# named is killed at once, with its whole process tree.
+#   cooperative: asked through LEMPI_STOP_FILE, killed only after the grace (s)
+#   atomic: let finish; the job stops after it
+STOP_COOPERATIVE = {("send-bundle", "send"): 600}
+STOP_ATOMIC = {("cd-rip", "ingest"), ("star-sync", None), ("remote-push", None), ("remote-push-all", None),
+               ("apply-reviews", None), ("accept-remote", None), ("accept-release", None)}
+
+
+def stop_policy(kind, stage) -> tuple[str, int]:
+    if (kind, stage) in STOP_COOPERATIVE:
+        return "cooperative", STOP_COOPERATIVE[(kind, stage)]
+    if (kind, stage) in STOP_ATOMIC or (kind, None) in STOP_ATOMIC:
+        return "atomic", 0
+    return "kill", 0
+
+
+def stop_file(job_id: int) -> str:
+    """The file a stage looks for to know it has been asked to stop."""
+    return os.path.join(tempfile.gettempdir(), "lempi-console-stop", f"job-{job_id}")
+
+
+def kill_tree(proc) -> None:
+    """A process and everything it started. On Windows `taskkill /T`: a
+    terminate reaches only the top process there, and its children -- ssh,
+    bash, Essentia's workers -- would run on."""
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+    else:
+        import signal
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except OSError:
+            proc.terminate()
+
+
 class Runner:
     """One job at a time, and it says so `[SPEC-SUI-080]`.
 
@@ -201,6 +240,9 @@ class Runner:
         self.lock = threading.Lock()
         self.current = None          # job_id, while one runs
         self.proc = None             # the live subprocess, so it can be stopped
+        self.current_kind = None     # what it is and which stage it is in, for how to stop it
+        self.current_stage = None
+        self.stop_asked: set = set()  # [REQ-LIB-132]: stopped at the next safe point
         db = self._db()
         db.executescript(DDL)
         for migration in _MIGRATIONS:
@@ -272,16 +314,50 @@ class Runner:
         return job_id
 
     def stop(self, job_id: int) -> bool:
-        """Interrupt without loss `[REQ-LIB-130]`.
+        """Interrupt without loss `[REQ-LIB-130]`, in the way the step
+        running allows `[REQ-LIB-132]` (`stop_policy`):
 
-        The stage is killed between items, so the transaction it was inside is
-        rolled back by SQLite and the rows it had already committed stand. At
-        most the in-flight item is lost `[SPEC-SA-028]`.
+        - `kill`: the stage and **everything it started** are killed now. A
+          database writer's open transaction is rolled back by SQLite and what
+          it committed stands, so at most the item in flight is lost
+          `[SPEC-SA-028]`. The whole tree, because on Windows a terminate
+          reaches only the top process: until 2026-10-15 a stopped flavor run
+          left its Essentia workers running, and a stopped send its ssh.
+        - `cooperative`: the stage is asked, by the file `LEMPI_STOP_FILE`
+          names, and stops itself at its next safe point -- a send between
+          chunks of its copy, closing a speaker's write window on the way out.
+          Killed, with a loud line, only if it has not stopped in its grace.
+        - `atomic`: a step that would be left half-done -- a CD add's move, a
+          sync's commit -- is let finish, and the job stops after it.
+
+        A queued job is simply not started.
         """
         with self.lock:
-            if self.current == job_id and self.proc and self.proc.poll() is None:
-                self.proc.terminate()
-                return True
+            here = self.current == job_id
+            proc, kind, stage = self.proc, self.current_kind, self.current_stage
+        if here:
+            self.stop_asked.add(job_id)
+            try:
+                os.makedirs(os.path.dirname(stop_file(job_id)), exist_ok=True)
+                open(stop_file(job_id), "w").close()
+            except OSError:
+                pass
+            live = proc is not None and proc.poll() is None
+            how, grace = stop_policy(kind, stage)
+            if not live:
+                self._emit(job_id, "log", "stop asked: it stops before its next step", stage=stage)
+            elif how == "kill":
+                self._emit(job_id, "log", "stop asked: stopping it now, with everything it started", stage=stage)
+                kill_tree(proc)
+            elif how == "atomic":
+                self._emit(job_id, "log", f"stop asked: this step ({stage}) is let finish -- stopped part-way it "
+                                          "would be left half-done -- and the job stops after it", stage=stage)
+            else:
+                self._emit(job_id, "log", f"stop asked: it stops at its next safe point (allowed {grace} s)",
+                           stage=stage)
+                threading.Thread(target=self._stop_or_kill, args=(job_id, proc, stage, grace),
+                                 daemon=True).start()
+            return True
         db = self._db()
         n = db.execute("UPDATE jobs SET state='stopped', ended_at=?1 "
                        "WHERE job_id=?2 AND state='queued'", (now(), job_id)).rowcount
@@ -433,6 +509,7 @@ class Runner:
                 continue          # stopped before it ever started
             with self.lock:
                 self.current = job_id
+                self.current_kind, self.current_stage = row["kind"], None
             try:
                 self._run(job_id, row["kind"], row["target"])
             except Exception as e:
@@ -442,6 +519,12 @@ class Runner:
                 with self.lock:
                     self.current = None
                     self.proc = None
+                    self.current_kind = self.current_stage = None
+                    self.stop_asked.discard(job_id)
+                try:
+                    os.remove(stop_file(job_id))
+                except OSError:
+                    pass
 
     def _run(self, job_id: int, kind: str, target: str):
         db = self._db()
@@ -1143,7 +1226,7 @@ class Runner:
         db.commit()
         db.close()
         ok = code == 0 and (result.get("ok") if require_ok else True)
-        self._finish(job_id, "done" if ok else "failed")
+        self._finish(job_id, "done" if ok else "stopped" if code < 0 else "failed")
 
     def _accept_remote(self, job_id: int, target: str):
         """`[SPEC-DF-116..117]`'s one deliberate exception to "the console
@@ -1680,13 +1763,20 @@ class Runner:
         # encoding and renders a smart-quoted title as `?Duala?`; that is a
         # rendering artefact of a terminal, and a job is not one
         # `[IMPL-SUI-025]`.
-        env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
+        # `LEMPI_STOP_FILE`: where a stage that can stop itself looks to see
+        # whether it has been asked to [REQ-LIB-132]. Its own process group, so
+        # a stop can reach everything it starts.
+        env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1",
+                   LEMPI_STOP_FILE=stop_file(job_id))
+        group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+                 else {"start_new_session": True})
         p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              text=True, encoding="utf-8", errors="replace",
                              env=env, cwd=os.path.dirname(os.path.dirname(
-                                 os.path.abspath(__file__))))
+                                 os.path.abspath(__file__))), **group)
         with self.lock:
             self.proc = p
+            self.current_stage = stage
         lines = []
         for line in p.stdout:
             line = line.rstrip("\n")
@@ -1694,15 +1784,40 @@ class Runner:
             if line.strip():
                 self._emit(job_id, "log", line, stage=stage)
         p.wait()
-        return p.returncode, "\n".join(lines)
+        code = p.returncode
+        # A stage that ended badly after a stop was asked was stopped, however
+        # it ended: a tree killed on Windows exits 1, not a signal, and a send
+        # that stopped itself exits 3.
+        if code != 0 and job_id in self.stop_asked:
+            code = -1
+        return code, "\n".join(lines)
+
+    def _stop_or_kill(self, job_id, proc, stage, grace):
+        """A cooperative stage's grace: it stopped itself, or it is killed and
+        that is said loudly, with what a kill may have left [REQ-LIB-132]."""
+        try:
+            proc.wait(timeout=grace)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        self._emit(job_id, "error", f"it did not stop itself within {grace} s, so it was killed, with everything "
+                                    "it started. It may not have cleaned up after itself: a speaker's library "
+                                    "window may be open -- check that its library is mounted read-only", stage=stage)
+        kill_tree(proc)
 
     def _stopped(self, job_id) -> bool:
+        if job_id in self.stop_asked:
+            return True
         db = self._db()
         r = db.execute("SELECT state FROM jobs WHERE job_id=?1", (job_id,)).fetchone()
         db.close()
         return r is not None and r["state"] == "stopped"
 
     def _finish(self, job_id, state):
+        # A job that ended badly after a stop was asked was stopped, whichever
+        # of the many paths here noticed the stage's exit [REQ-LIB-132].
+        if state == "failed" and job_id in self.stop_asked:
+            state = "stopped"
         db = self._db()
         db.execute("UPDATE jobs SET state=?1, ended_at=?2 WHERE job_id=?3",
                    (state, now(), job_id))

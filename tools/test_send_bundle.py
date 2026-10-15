@@ -125,8 +125,79 @@ def test_git_bash():
           f"Git Bash, found where it is installed: {got}")
 
 
+def test_stop():
+    """[REQ-LIB-132]: a send asked to stop stops between steps, and part-way
+    through a copy; one run by hand, with no stop file, never does."""
+    print("a stop is honoured between steps and part-way through the copy")
+    flag = os.path.join(tempfile.mkdtemp(), "stop")
+    old = sb.STOP_FILE
+    try:
+        sb.STOP_FILE = flag
+        sb.check_stop("anything")              # no file yet: nothing happens
+        p = sb.Progress(io.BytesIO(), 100)
+        p.write(b"x" * 10)
+        open(flag, "w").close()
+        p.looked = 0
+        try:
+            p.write(b"x" * 10)
+            check(False, "a copy is stopped part-way when asked")
+        except sb.Stopped:
+            pass
+        try:
+            sb.check_stop("the import")
+            check(False, "a step is not begun once a stop is asked")
+        except sb.Stopped as e:
+            check("before the import" in str(e) and isinstance(e, sb.Failed), f"and says where: {e}")
+        sb.STOP_FILE = None
+        sb.check_stop("anything")              # by hand: never stopped this way
+    finally:
+        sb.STOP_FILE = old
+
+
+def test_resume():
+    """[REQ-LIB-134]: what the speaker already holds whole is not sent again --
+    by size and then by its bytes, hashed there; a file cut short is; and the
+    answer is read even when the speaker's loop exits 1, as it does when the
+    last file is absent (lempi02w, 2026-10-15)."""
+    import hashlib
+    print("a resumed send skips what the speaker holds whole, and resends what it cut short")
+    b = tempfile.mkdtemp()
+    os.makedirs(os.path.join(b, "audio", "A"))
+    body = {"A/whole.mp3": b"w" * 50, "A/cut.mp3": b"c" * 60, "A/absent.mp3": b"x" * 70}
+    for rel, data in body.items():
+        with open(os.path.join(b, "audio", *rel.split("/")), "wb") as f:
+            f.write(data)
+    with open(os.path.join(b, "payload.json"), "w", encoding="utf-8") as f:
+        json.dump({"encodings": [{"bundle_path": r, "sha256": hashlib.sha256(d).hexdigest()}
+                                 for r, d in body.items()]}, f)
+    asked = []
+
+    def fake_ssh(host, cmd, stdin=None):
+        asked.append(cmd)
+        if "stat -c" in cmd:      # whole at full size, cut short at less; absent last: exit 1
+            return 1, "50\tA/whole.mp3\n12\tA/cut.mp3"
+        if "sha256sum" in cmd:
+            return 0, f"{hashlib.sha256(body['A/whole.mp3']).hexdigest()}  A/whole.mp3"
+        return 0, ""
+    old = sb.ssh
+    sb.ssh = fake_ssh
+    try:
+        have = sb.already_there("pi@speaker", b, "/srv/library/audio")
+    finally:
+        sb.ssh = old
+    check(have == {"A/whole.mp3"}, f"only the whole one is skipped: {sorted(have)}")
+    check(sb.audio_size(os.path.join(b, "audio"), have) == (2, 130), "and the rest is what is sent")
+    out = io.BytesIO()
+    sb.audio_tar(os.path.join(b, "audio"), out, have)
+    out.seek(0)
+    names = sorted(m.name for m in tarfile.open(fileobj=out).getmembers() if m.isfile())
+    check(names == ["A/absent.mp3", "A/cut.mp3"], f"the tar carries the rest: {names}")
+
+
 def main() -> int:
     test_git_bash()
+    test_stop()
+    test_resume()
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         b = bundle(tmp)
 

@@ -78,10 +78,28 @@ const S = {
   // at a time, and a queued job emits nothing -- and the panel showed an
   // empty box. Now a queued job names what it waits behind, and a quiet
   // running one says how long it has been quiet.
+  //
+  // And a Stop beside it, on every page that watches a job [REQ-LIB-132]: a
+  // send to a speaker ran for minutes with no way to end it but the Jobs
+  // page. The runner decides how -- at once, at the step's next safe point,
+  // or after a step that must not be left half-done -- and says which in the
+  // log below.
   watchJob(id, box, onDone) {
     const status = S.el('p', { class: 'empty', style: 'font-size:.85rem;padding:.2rem 0', text: 'connecting…' });
+    const stop = S.el('button', { class: 'chip', text: 'Stop', title: 'stop this job at its next safe point' });
+    stop.onclick = async () => {
+      if (!confirm('Stop this job? It stops at its next safe point: what it has finished stays done, '
+        + 'and a step that must not be left half-done is let finish first. The log says what happens.')) return;
+      stop.disabled = true;
+      stop.textContent = 'stopping…';
+      try {
+        const r = await (await fetch(`/api/jobs/${id}/stop`, { method: 'POST' })).json();
+        if (!r.stopped) { stop.textContent = 'it had already finished'; }
+      } catch (e) { stop.disabled = false; stop.textContent = 'Stop'; alert(`Could not ask it to stop: ${e.message}`); }
+    };
+    const head = S.el('div', { style: 'display:flex;gap:.6rem;align-items:center;flex-wrap:wrap' }, status, stop);
     const log = S.el('div', { class: 'list' });
-    box.replaceChildren(status, log);
+    box.replaceChildren(head, log);
     let last = Date.now(), stage = null, heard = false, ahead = null, polled = 0;
     const tick = async () => {
       if (!heard && Date.now() - polled > 3000) {
@@ -109,6 +127,7 @@ const S = {
       if (e.kind === 'done') {
         clearInterval(beat);
         status.textContent = `finished: ${e.text}`;
+        stop.hidden = true;
       }
       if (e.kind === 'counts') return;
       const line = e.kind === 'stage' ? `── ${e.text} ──`

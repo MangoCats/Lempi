@@ -104,14 +104,38 @@ class _Closed(Exception):
     """The far end stopped reading; its exit status and output say why."""
 
 
+class Stopped(Failed):
+    """A person asked the console to stop the send [REQ-LIB-132]."""
+
+
+# The console's job runner names a file that appears when a person presses
+# Stop; a send run by hand has none, and is stopped with Ctrl-C as before.
+STOP_FILE = os.environ.get("LEMPI_STOP_FILE")
+_IN_FLIGHT = {"path": None}       # the audio file the copy is part-way through
+
+
+def stop_asked() -> bool:
+    return bool(STOP_FILE) and os.path.exists(STOP_FILE)
+
+
+def check_stop(before: str) -> None:
+    """Stop here if asked to: between steps, never inside one that would be
+    left half-done."""
+    if stop_asked():
+        raise Stopped(f"stopped at your request, before {before}")
+
+
 def ssh_stream(host: str, cmd: str, feed) -> tuple[int, str]:
     """`ssh`, with its input written by `feed(pipe)` as it is produced rather
     than held whole in memory first -- 712 MB was, on 2026-10-01, before a
     byte of it moved. Output goes to a file, so a chatty far end cannot fill
     a pipe and stall the send."""
     with tempfile.TemporaryFile() as out:
+        # Two minutes of silence before giving up, not ssh's thirty seconds:
+        # lempi02w's wifi, at -76 dBm, went quiet that long 67 minutes into a
+        # 1.8 GB copy, 2026-10-15, and the whole copy was lost with it.
         p = subprocess.Popen(["ssh", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=10",
-                              "-o", "BatchMode=yes", host, cmd],
+                              "-o", "ServerAliveCountMax=12", "-o", "BatchMode=yes", host, cmd],
                              stdin=subprocess.PIPE, stdout=out, stderr=subprocess.STDOUT)
         try:
             feed(p.stdin)
@@ -136,8 +160,15 @@ class Progress:
         self.pipe, self.total, self.every = pipe, max(total, 1), every
         self.sent, self.start = 0, time.monotonic()
         self.said_at, self.said_tenth = self.start, 0
+        self.looked = self.start
 
     def write(self, b) -> int:
+        # A stop is looked for twice a second while the bytes go [REQ-LIB-132]:
+        # the copy is the long part, 16 minutes to a Pi Zero on wifi.
+        if time.monotonic() - self.looked >= 0.5:
+            self.looked = time.monotonic()
+            if stop_asked():
+                raise Stopped("stopped at your request, part-way through the copy")
         try:
             self.pipe.write(b)
         except OSError as e:          # BrokenPipeError, or EINVAL on Windows
@@ -156,20 +187,67 @@ class Progress:
         return len(b)
 
 
-def audio_size(audio: str) -> tuple[int, int]:
-    """Files and bytes under `audio`, to say before the copy how big it is."""
+def audio_size(audio: str, skip: frozenset = frozenset()) -> tuple[int, int]:
+    """Files and bytes under `audio`, to say before the copy how big it is --
+    less those in `skip`, by their path under `audio`."""
     files = size = 0
     for root, _, names in os.walk(audio):
         for n in names:
+            if os.path.relpath(os.path.join(root, n), audio).replace(os.sep, "/") in skip:
+                continue
             files += 1
             size += os.path.getsize(os.path.join(root, n))
     return files, size
 
 
-def audio_tar(audio: str, out) -> None:
+def already_there(host: str, bundle: str, audio_root: str) -> frozenset:
+    """The bundle's audio files the speaker already holds whole: at their
+    place under `audio_root`, the size the bundle's copy is, and -- hashed on
+    the speaker -- the bytes the payload records [REQ-LIB-134]. They are not
+    sent again. A copy cut short is a file of the wrong size or hash, and is.
+    Until 2026-10-15 a send started over from nothing: lempi02w's second try
+    re-sent all 1,842 MB after the first had landed 88% of it."""
+    payload = json.load(open(os.path.join(bundle, "payload.json"), encoding="utf-8"))
+    audio = os.path.join(bundle, "audio")
+    want = {}
+    for e in payload.get("encodings") or []:
+        rel, sha = e.get("bundle_path"), e.get("sha256")
+        local = os.path.join(audio, *rel.split("/")) if rel else ""
+        if rel and sha and os.path.isfile(local):
+            want[rel] = (sha, os.path.getsize(local))
+    if not want:
+        return frozenset()
+    listing = "\n".join(want).encode("utf-8") + b"\n"
+    rc, out = ssh(host, f"cd {shlex.quote(audio_root)} 2>/dev/null || exit 0; "
+                        "while IFS= read -r f; do [ -f \"$f\" ] && printf '%s\\t%s\\n' \"$(stat -c %s -- \"$f\")\" \"$f\"; "
+                        "done; true", stdin=listing)
+    # Each line names its own file, so the answer is read whatever the exit
+    # status: a loop whose last file is absent exits 1, and until this was
+    # seen, on lempi02w, that threw the whole answer away.
+    same_size = []
+    for line in out.splitlines():
+        size, _, rel = line.partition("\t")
+        if rel in want and size.isdigit() and int(size) == want[rel][1]:
+            same_size.append(rel)
+    if not same_size:
+        return frozenset()
+    say(f"  {len(same_size)} of the bundle's {len(want)} audio file(s) are on {host} already at full size; "
+        "checking their bytes there ...")
+    rc, out = ssh(host, f"cd {shlex.quote(audio_root)} && tr '\\n' '\\0' | xargs -0 sha256sum --",
+                  stdin="\n".join(same_size).encode("utf-8"))
+    whole = set()
+    for line in out.splitlines():
+        sha, _, rel = line.partition("  ")
+        if rel in want and sha == want[rel][0]:
+            whole.add(rel)
+    return frozenset(whole)
+
+
+def audio_tar(audio: str, out, skip: frozenset = frozenset()) -> None:
     """The bundle's audio as a tar stream into `out`, with sane modes -- 0644
     files, 0755 folders, whatever Windows reports -- so nothing lands
-    world-writable, the fault that once made the whole library so."""
+    world-writable, the fault that once made the whole library so. A file in
+    `skip`, already on the speaker whole, is left out."""
     with tarfile.open(fileobj=out, mode="w|", format=tarfile.PAX_FORMAT) as tar:
         for root, dirs, names in os.walk(audio):
             dirs.sort()
@@ -179,10 +257,14 @@ def audio_tar(audio: str, out) -> None:
                 tar.addfile(ti)
             for n in sorted(names):
                 p = os.path.join(root, n)
+                if os.path.relpath(p, audio).replace(os.sep, "/") in skip:
+                    continue
                 ti = tar.gettarinfo(p, os.path.relpath(p, audio).replace(os.sep, "/"))
                 ti.mode, ti.uid, ti.gid, ti.uname, ti.gname = 0o644, 0, 0, "", ""
+                _IN_FLIGHT["path"] = ti.name
                 with open(p, "rb") as fh:
                     tar.addfile(ti, fh)
+                _IN_FLIGHT["path"] = None
 
 
 def stage(host: str, bundle: str, where: str) -> None:
@@ -261,21 +343,43 @@ def inside(host: str, bundle: str, library: str, audio_root: str, where: str) ->
     directly on a read-write library, or by attended-import.sh inside its
     window on a read-only one."""
     audio = os.path.join(bundle, "audio")
-    files, size = audio_size(audio)
+    check_stop("the copy")
+    have = already_there(host, bundle, audio_root) if os.path.isdir(audio) else frozenset()
+    if have:
+        say(f"  {len(have)} audio file(s) already there whole, from an earlier send: not sent again")
+    files, size = audio_size(audio, have)
+    check_stop("the copy")
     if not files:
         # A bundle of what changed about music the speaker already has -- its
         # holds `[SPEC-HOLD-080]` -- carries no audio at all.
         say("  no audio to copy: the speaker has these files already")
     else:
         say(f"  copying {files} audio file(s), {size / 1e6:.1f} MB, into {audio_root} ...")
-        rc, out = ssh_stream(host, f"mkdir -p {shlex.quote(audio_root)} && "
-                                   f"tar -xf - -C {shlex.quote(audio_root)} --no-same-owner",
-                             lambda pipe: audio_tar(audio, Progress(pipe, size)))
+        try:
+            rc, out = ssh_stream(host, f"mkdir -p {shlex.quote(audio_root)} && "
+                                       f"tar -xf - -C {shlex.quote(audio_root)} --no-same-owner",
+                                 lambda pipe: audio_tar(audio, Progress(pipe, size), have))
+        except Stopped:
+            # The file cut short goes, so nothing on the speaker is half a
+            # song under a whole one's name; the ones that arrived whole stay,
+            # and the next send finds them there [REQ-AND-240].
+            cut = _IN_FLIGHT["path"]
+            if cut:
+                rc, _ = ssh(host, f"rm -f {shlex.quote(posixpath.join(audio_root, cut))}")
+                say(f"  removed the file the copy was part-way through: {cut}" if rc == 0
+                    else f"  WARNING: could not remove the file cut short: {cut}")
+            raise
         if rc != 0:
             raise Failed(f"copy the audio on {host} failed (exit {rc}): {out[-300:]}")
+    check_stop("staging the payload")
     stage(host, bundle, where)
+    # The import is never stopped part-way: it is one transaction on the
+    # speaker, short beside the copy, and finished is better than half-done.
+    check_stop("the import")
     say("  importing ...")
     c = import_run(host, library, where, audio_root, apply=True)
+    if stop_asked():
+        say("  (a stop was asked during the import, which was let finish)")
     if c["rc"] != 0 or c.get("corrupt") or c.get("awaiting"):
         raise Failed(f"the import did not land whole: {c}")
     say(f"  imported {c.get('imported', 0)}, already there {c.get('already', 0)}"
@@ -336,6 +440,7 @@ def main() -> int:
         if not args.apply:
             say("\nNothing done. Re-run with --apply to send and import it.")
             return 0
+        check_stop("anything was sent")
 
         try:
             if ro:
@@ -349,6 +454,9 @@ def main() -> int:
                 r = subprocess.run([bash, os.path.join(os.path.dirname(HERE), "BosePi", "attended-import.sh"),
                                     "--host", host, "--go", "--", *me], env=env)
                 if r.returncode != 0:
+                    if stop_asked():
+                        raise Stopped("stopped at your request inside the library's window; "
+                                      "attended-import.sh says above whether B was closed")
                     raise Failed(f"attended-import.sh exited {r.returncode} -- see above; it says whether B was closed")
             else:
                 inside(host, bundle, library, audio_root, where)
@@ -366,6 +474,10 @@ def main() -> int:
                 f"run: curl -X POST http://{name}:{PORT}/library/reload")
         say(f"\nDone: {n} encoding(s) on {host}.")
         return 0
+    except Stopped as e:
+        # Its own exit status, so the console reads a stop and not a failure.
+        say(f"STOPPED: {e}. What was copied whole stays; the next send takes up the rest.")
+        return 3
     except Failed as e:
         say(f"ERROR: {e}")
         return 1
