@@ -455,6 +455,15 @@
       <p id="bk-status" aria-live="polite" hidden></p>
       <ul id="bk-list" aria-live="polite"></ul>
     </div>
+    <!-- [GDE-INT-135]: what reading the music files back has found. -->
+    <div class="setting" id="integrity-row">
+      <label>Your music files</label>
+      <span><small id="ic-count">&mdash;</small></span>
+      <p>Lempi slowly reads every music file back and compares it with what it
+         was when it arrived. A file that has changed or gone is not played,
+         and is named here until a good copy is sent to this player again.</p>
+      <ul id="ic-list" aria-live="polite"></ul>
+    </div>
     <div class="setting" id="restart">
       <label>Restart the player</label>
       <span><button type="button" id="rs-ask">Restart Lempi</button></span>

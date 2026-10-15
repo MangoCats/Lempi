@@ -1533,6 +1533,14 @@ class Runner:
             tables = json.load(fh)["tables"]
         files = tables["files"]
         md5s = [k[0] for k in files["local_only"]]
+        # [GDE-INT-150]: a file the speaker holds and found not whole -- its
+        # bytes changed, gone from its place, unreadable -- is sent again,
+        # audio and all, as if it lacked it. Asked of the speaker's player.
+        repair = [m for m in self._not_whole_on(job_id, payload["remote"]) if m not in md5s]
+        if repair:
+            md5s += repair
+            self._emit(job_id, "log", f"{len(repair)} file(s) {payload['peer']} holds but found not whole go "
+                       "again, with their audio [GDE-INT-150]", stage="diff")
         # Holds decided here that the speaker does not have, on files it
         # does: those go too, without their audio `[SPEC-HOLD-080]`. A hold
         # decided only there is the speaker's, and is left alone.
@@ -1668,6 +1676,32 @@ class Runner:
         self._save_result(job_id, {"peer": payload["peer"], "applied": bool(payload.get("apply")),
                                    "bundle": payload["bundle"], "ok": code == 0, "ledger_files": recorded})
         self._finish(job_id, "done" if code == 0 else "stopped" if code < 0 else "failed")
+
+    def _not_whole_on(self, job_id: int, remote: str) -> list:
+        """The files a speaker's own check found damaged, missing or
+        unreadable, that this library holds [GDE-INT-150]: asked of its
+        player's `/integrity`. A player that does not answer -- off, or a
+        build from before the check -- is said, and nothing is added."""
+        import urllib.request
+        host = remote.partition(":")[0].rpartition("@")[2]
+        try:
+            with urllib.request.urlopen(f"http://{host}:5720/integrity", timeout=15) as r:
+                body = json.load(r)
+        except (OSError, ValueError) as err:
+            self._emit(job_id, "log", f"could not ask {host}'s player which files it found not whole ({err}); "
+                       "none is sent again for that reason this time", stage="diff")
+            return []
+        bad = [x["audio_md5"] for x in body.get("not_ok", [])
+               if x.get("outcome") in ("damaged", "missing", "unreadable") and x.get("audio_md5")]
+        if not bad:
+            return []
+        db = sqlite3.connect(f"file:{self.library}?mode=ro", uri=True)
+        try:
+            held = {r[0] for r in db.execute(
+                f"SELECT audio_md5 FROM files WHERE audio_md5 IN ({','.join('?' * len(bad))})", bad)}
+        finally:
+            db.close()
+        return [m for m in bad if m in held]
 
     def _files_of_recordings(self, mbids: set) -> set:
         """The `audio_md5` of every file here with a passage crediting one of

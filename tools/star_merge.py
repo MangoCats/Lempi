@@ -100,6 +100,9 @@ TABLES = {
     "artist_reviews": dict(rule=UNION, key=("recording_mbid", "decided_at"), latest=("applied_at",)),
     "listener_play_history": dict(rule=LOCAL),
     "listener_rejections": dict(rule=LOCAL),
+    # What a node found reading its own files back [GDE-INT-130]: about its
+    # own disk, so its own; reported to the hub in the snapshot instead.
+    "file_checks": dict(rule=LOCAL),
     "player_queue": dict(rule=HUB),
     "player_settings": dict(rule=HUB),
     "player_state": dict(rule=HUB),

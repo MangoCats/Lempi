@@ -126,6 +126,7 @@ fn main() {
         writes_beside_audio: true,
         backup: true,
         tag_scan: true,
+        integrity_check: true,
         paused: args.has(&opt::PAUSED),
     };
 

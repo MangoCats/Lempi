@@ -390,6 +390,30 @@ impl Director {
                  back [SPEC-HOLD-010]"
             ),
         }
+        // And the passages of a file this player last found damaged, missing
+        // or unreadable `[GDE-INT-135]`: what cannot play as the catalogue
+        // says is not chosen. A listener without `file_checks` withholds
+        // nothing; any other failure is said.
+        match conn.prepare(&format!(
+            "SELECT p.passage_id FROM __LIB__.passages p JOIN __LIB__.files f ON f.file_id = p.file_id \
+               JOIN file_checks c ON c.audio_md5 = f.audio_md5 \
+              WHERE p.kind = 'radio' AND c.outcome IN {}",
+            crate::db::UNPLAYABLE_SQL
+        )) {
+            Ok(mut stmt) => {
+                let bad = stmt
+                    .query_map([], |r| r.get::<_, i64>(0))
+                    .map_err(q)?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(q)?;
+                if !bad.is_empty() {
+                    tracing::warn!("director: {} passage(s) withheld: their files failed this player's check \
+                                    [GDE-INT-135]", bad.len());
+                }
+                held.extend(bad);
+            }
+            Err(e) => optional_read("the file checks", &e),
+        }
 
         let mut last_played = HashMap::new();
         let mut artist_last_played: HashMap<String, i64> = HashMap::new();
@@ -1556,6 +1580,34 @@ mod tests {
         let mut rng = Rng::seeded(7);
         for _ in 0..200 {
             assert_ne!(d.choose(NOW, &mut rng).unwrap().passage_id, 2, "a held passage is never chosen");
+        }
+    }
+
+    /// `[GDE-INT-135]` A passage whose file this player found damaged,
+    /// missing or unreadable is held like a marked one; one re-tagged plays.
+    #[test]
+    fn a_passage_whose_file_failed_its_check_is_never_chosen() {
+        let c = fixture();
+        c.execute_batch(&format!(
+            "ALTER TABLE files ADD COLUMN audio_md5 TEXT;
+             UPDATE files SET audio_md5 = 'whole' WHERE file_id = 1;
+             INSERT INTO files (file_id, path, duration_ms, audio_md5) VALUES (2, '/m/b.mp3', 600000, 'rot'),
+                                                                          (3, '/m/c.mp3', 600000, 'tags');
+             UPDATE passages SET file_id = 2 WHERE passage_id = 2;
+             UPDATE passages SET file_id = 3 WHERE passage_id = 3;
+             {}
+             INSERT INTO file_checks (audio_md5, checked_at, outcome) VALUES ('rot', 't', 'damaged'),
+                                                                            ('tags', 't', 'retagged'),
+                                                                            ('whole', 't', 'ok');",
+            crate::db::FILE_CHECKS_TABLE
+        ))
+        .unwrap();
+        let d = Director::load(&c).unwrap();
+        let cen = d.census(NOW);
+        assert_eq!((cen.eligible, cen.held), (2, 1), "the damaged file's passage held; the re-tagged one plays");
+        let mut rng = Rng::seeded(7);
+        for _ in 0..200 {
+            assert_ne!(d.choose(NOW, &mut rng).unwrap().passage_id, 2, "never chosen");
         }
     }
 

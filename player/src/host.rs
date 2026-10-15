@@ -105,6 +105,9 @@ pub struct Config {
     pub backup: bool,
     /// Read the files' own tags in the background, for browsing by album.
     pub tag_scan: bool,
+    /// Read every file back against its recorded hash, slowly, and withhold
+    /// one that is not what it was `[GDE-INT-130]`.
+    pub integrity_check: bool,
     /// Come up paused, whatever the listener's state says it was doing when it
     /// last stopped: a player started to take part in a sync, not to play
     /// `[SPEC-STAR-101]`. False resumes as it always has.
@@ -161,6 +164,7 @@ pub struct Player {
     ended: Receiver<Ended>,
     /// Dropped to end the backup thread's hourly wait.
     _stop_background: Sender<()>,
+    _stop_scrub: Sender<()>,
     _stop_avrcp: AvrcpStopper,
 }
 
@@ -252,6 +256,11 @@ impl Player {
             Ok(Err(e)) => return Err(StartError::Engine(e)),
             Err(_) => return Err(StartError::EngineGone),
         };
+        // Its own stop: the sender lives as long as the backup's does.
+        let (stop_scrub, scrub_stopped) = channel::<()>();
+        if cfg.integrity_check {
+            crate::scrub::spawn(cfg.listener.clone(), cfg.library.clone(), controls.clone(), scrub_stopped);
+        }
 
         // Absent is not zero `[GOV-SRC-040]`: with no roster figures this node
         // fills its ring to capacity, which is right for a node playing alone
@@ -414,6 +423,7 @@ impl Player {
             runtime: Some(runtime),
             ended,
             _stop_background: stop_background,
+            _stop_scrub: stop_scrub,
             _stop_avrcp: AvrcpStopper(stop_avrcp),
         })
     }
@@ -911,6 +921,7 @@ mod tests {
             writes_beside_audio: false,
             backup: false,
             tag_scan: false,
+            integrity_check: false,
             paused: false,
         };
         match Player::start(cfg) {

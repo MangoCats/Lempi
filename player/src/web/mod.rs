@@ -436,6 +436,8 @@ pub fn router(ui: Ui) -> Router {
     let router = Router::new()
         .route("/", get(|| async { ([REVALIDATE], Html(shell_page())) }))
         .route("/build", get(build_identity))
+        // What this player found reading its own files back [GDE-INT-135, 145].
+        .route("/integrity", get(integrity))
         .route("/core.js", get(|| async { js(CORE) }))
         .route("/skins", get(skin_list))
         .route("/skin/:name/:file", get(skin_asset))
@@ -642,6 +644,19 @@ fn build_identity_json() -> serde_json::Value {
 
 async fn build_identity() -> axum::response::Response {
     axum::Json(build_identity_json()).into_response()
+}
+
+/// This player's file checks `[GDE-INT-135]`: how much of its catalogue it
+/// has read back, the oldest read, and every file not `ok` -- what the
+/// Settings page shows and the Export page's diff asks a speaker for, so a
+/// damaged file is sent again `[GDE-INT-150]`. Read-only.
+async fn integrity(State(ui): State<Ui>) -> axum::response::Response {
+    let (l, b) = (ui.db.clone(), ui.library.clone());
+    match tokio::task::spawn_blocking(move || crate::scrub::summary(&l, &b)).await {
+        Ok(Ok(v)) => axum::Json(v).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 /// Why any one passage was chosen `[REQ-VIS-100]`.

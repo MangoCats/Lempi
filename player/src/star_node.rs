@@ -145,6 +145,9 @@ fn snapshot(listener: &Path, library: &Path) -> Result<Value, String> {
         "catalogue_window": CATALOGUE_WINDOW,
         "catalogue_rows": CATALOGUE_ROWS,
         "library_readonly": library.exists() && !writable(library),
+        // [GDE-INT-145]: what this player found reading its own files back,
+        // for the hub to name. Null, not an error, if it cannot be read.
+        "file_checks": crate::scrub::summary(listener, library).ok(),
     }))
 }
 

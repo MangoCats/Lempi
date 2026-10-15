@@ -34,6 +34,30 @@ pub(crate) const TAG_TABLE: &str = "
     CREATE INDEX IF NOT EXISTS idx_file_tags_album ON file_tags(album);
     CREATE INDEX IF NOT EXISTS idx_file_tags_artist ON file_tags(artist);";
 
+/// What this player found when it last read each of its own files back
+/// `[GDE-INT-130]`: the file's bytes against the SHA-256 its catalogue
+/// records. In the **listener**, not the catalogue, because a speaker's
+/// catalogue may be read-only (bose's is) and because what one machine's
+/// disk holds is that machine's own: never merged or shared by a sync
+/// (`star_merge.py`'s `LOCAL`). `outcome` is one of [`CHECK_OUTCOMES`].
+pub const FILE_CHECKS_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS file_checks (
+        audio_md5  TEXT PRIMARY KEY,
+        checked_at TEXT NOT NULL,
+        outcome    TEXT NOT NULL,
+        size       INTEGER,
+        path       TEXT,
+        detail     TEXT);";
+
+/// Every outcome a file check records: its bytes as recorded; its bytes
+/// changed but its audio not (a tag rewritten); its audio changed; no file
+/// at its path; a file there that could not be read.
+pub const CHECK_OUTCOMES: [&str; 5] = ["ok", "retagged", "damaged", "missing", "unreadable"];
+
+/// The outcomes that withhold a file from the Director `[GDE-INT-135]`, as an
+/// SQL list: what cannot be played as the catalogue says it is.
+pub const UNPLAYABLE_SQL: &str = "('damaged', 'missing', 'unreadable')";
+
 /// Where plays are written `[SPEC-PLAY-010]`.
 ///
 /// Created by the player for exactly the reason `REJECTION_TABLE` is: the
@@ -845,6 +869,7 @@ impl PlayerStore {
         )
         .map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(PLAY_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+        conn.execute_batch(FILE_CHECKS_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(REJECTION_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(FLAGS_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(PREFERENCES_TABLE).map_err(|e| DbError::Open(e.to_string()))?;

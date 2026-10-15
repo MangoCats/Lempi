@@ -245,10 +245,20 @@ impl Library {
             "SELECT {COLS} {FROM} WHERE p.kind = 'radio' \
                AND (p.director_hold IS NULL OR p.director_hold = '')"
         );
+        // And a file this player found it cannot play as recorded out too
+        // `[GDE-INT-135]`, where the listener has the checks.
+        let sound = format!(
+            "{unheld} AND NOT EXISTS (SELECT 1 FROM file_checks c WHERE c.audio_md5 = f.audio_md5 \
+               AND c.outcome IN {})",
+            crate::db::UNPLAYABLE_SQL
+        );
         let every = format!("SELECT {COLS} {FROM} WHERE p.kind = 'radio'");
-        let mut stmt = match self.conn.prepare(&unheld) {
+        let mut stmt = match self.conn.prepare(&sound) {
             Ok(s) => s,
-            Err(_) => self.conn.prepare(&every).map_err(q)?,
+            Err(_) => match self.conn.prepare(&unheld) {
+                Ok(s) => s,
+                Err(_) => self.conn.prepare(&every).map_err(q)?,
+            },
         };
         let rows: Vec<QueueEntry> = stmt
             .query_map([], row_to_entry)

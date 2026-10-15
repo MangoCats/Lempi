@@ -199,6 +199,20 @@ def db_of(export, path):
 SUMMARY_COLS = {"files": ["file_id", "audio_md5"], "passages": ["passage_id", "file_id", "kind", "start_ms", "end_ms"]}
 
 
+def integrity_words(ic):
+    """A node's file checks in one line [GDE-INT-145]: how much of its
+    catalogue it has read back, since when, and how many are not whole --
+    withheld from playing there, and sent again by the Export page."""
+    bad = [x for x in ic.get("not_ok", []) if x.get("outcome") != "retagged"]
+    if ic.get("rate_kib_per_s") == 0:
+        head = "it does not read its files back (switched off)"
+    else:
+        head = f"{ic.get('checked', 0)} of {ic.get('files', 0)} files read back" + (
+            f" since {str(ic['oldest'])[:10]}" if ic.get("oldest") else "")
+    return head + (f"; {len(bad)} NOT WHOLE, withheld there -- send them again from the Export page" if bad
+                   else "; all whole")
+
+
 def summary_rows(db):
     """(rows by id, natural keys) of the files and passages a summary or a catalogue holds."""
     c = sp.open_ro(db)
@@ -774,6 +788,10 @@ def snapshot(plan, only=None):
             cat = catalogue_state(sent_lib, os.path.join(nd, "summary.db"), os.path.join(hd, "library.db"))
             say(f"  {name}: {sum(len(t['rows']) for t in snap['listener']['tables'])} shared row(s), "
                 f"catalogue {catalogue_words(cat)}")
+            # [GDE-INT-145]: what the node found reading its own files back.
+            ic = snap.get("file_checks")
+            if ic is not None:
+                say(f"  {name}: {integrity_words(ic)} [GDE-INT-145]")
             baseline, rows_note = node_rows(mdir, player, run, name, snap, sent_lib, nd,
                                             os.path.join(hd, "library.db"), at_root(hub["library"]), ns.get("at"))
             if rows_note:
@@ -786,7 +804,7 @@ def snapshot(plan, only=None):
             baselines[name] = {"listener": os.path.join(nd, "listener.db"), "signed": n["member"],
                                "library": baseline or sent_lib, "library_sent": sent_lib,
                                "catalogue": cat, "natural_keys": cap,
-                               "catalogue_blocked": blocked,
+                               "catalogue_blocked": blocked, "integrity": snap.get("file_checks"),
                                "catalogue_in_step": not blocked and (cat["state"] in ("as-sent", "holds-hub-rows")
                                or (cat["state"] == "other-ids" and cap >= NATURAL_KEYS_NEEDED))}
     finally:
@@ -1067,6 +1085,12 @@ def patch(plan, run):
         os.makedirs(pd, exist_ok=True)
         t = targets(plan, run, name)
         summary += [f"## {name}", ""]
+        if b.get("integrity") is not None:
+            # [GDE-INT-145]: every file the node found not whole, named.
+            ic = b["integrity"]
+            summary.append(f"- its own files: {integrity_words(ic)}")
+            summary += [f"  - **{x['outcome']}**: `{x.get('path') or x['audio_md5']}`"
+                        for x in ic.get("not_ok", []) if x.get("outcome") != "retagged"][:25]
         if "member" in b:
             good, line = member_patch(b["listener"], t["listener"], os.path.join(pd, "member.patch.json"))
             ok = ok and good

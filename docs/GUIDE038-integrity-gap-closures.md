@@ -1,6 +1,6 @@
 # GUIDE038: Closing the Integrity Gaps
 
-**Guide — Tier 2 · plan, written 2026-10-14 · phases 0 and 1 done 2026-10-15; 2 to 4 not built**
+**Guide — Tier 2 · plan, written 2026-10-14 · phases 0 and 1 done 2026-10-15, phase 2 built but for the phone; 3 and 4 not built**
 
 The plan that follows from the
 [integrity audit of 2026-10-14](../reports/integrity-audit-2026-10-14.md): every
@@ -101,39 +101,56 @@ nearly three weeks. The maintainer's decision the same day: keep the mirror on
 
 ## 4. Phase 2 -- each speaker checks its own audio
 
-**`[GDE-INT-130]` A scrub in the player.** A background task walks the
-catalogue's files, longest-unchecked first, hashing each against
-`files.sha256` at a paced rate (bytes per minute, set from `[GDE-INT-100]`)
-and only while the audio path is not starved. Results go to a new
-listener table, `file_checks (audio_md5 PRIMARY KEY, checked_at, outcome,
-size, detail)` -- in the **listener**, since `bose` mounts its catalogue
-read-only. Outcomes: `ok`, `retagged` (bytes differ, audio intact),
-`damaged`, `missing`, `unreadable`. It records the size it measured, which
-corrects the stale `size_bytes` the audio found on `bose` without writing the
-catalogue. `star_merge.py`'s table list needs `file_checks` as `LOCAL`, or the
-merge refuses the next run for a table with no rule.
+**`[GDE-INT-130]` A scrub in the player.** *Built 2026-10-15,
+`player/src/scrub.rs`.* A background thread reads the catalogue's files back,
+one at a time, against `files.sha256`: a file playback just failed on first,
+then any never read, then any not `ok` an hour after its last read, then any
+`ok` file last read over a week ago; with nothing due it looks again in an
+hour. Paced at `integrity_check_kib_per_s` (1024 unless the listener's
+settings say otherwise; 0 is off) and at the lowest CPU priority Linux gives a
+thread, it begins five minutes after the player starts: from
+`[GDE-INT-100]`'s measures a pass of 49.3 GB takes about fourteen hours and a
+twentieth of a Pi Zero's core. It does not watch the audio path for
+starvation, as this plan first said; the pace and the priority are what keep
+it out of the way, and a starved ring would be the place to look if they did
+not. Results go to the listener's `file_checks` (`audio_md5`, `checked_at`,
+`outcome`, `size`, `path`, `detail`) -- the listener, since `bose` mounts its
+catalogue read-only -- as `ok`, `retagged` (bytes changed, audio intact by
+`audio_md5`), `damaged`, `missing` or `unreadable`. `star_merge.py` keeps the
+table `LOCAL`. The size it measures is recorded, not yet used to correct a
+stale `size_bytes`.
 
-**`[GDE-INT-135]` A damaged file is withheld.** The Director leaves out the
-passages of a file whose last check is `damaged`, `missing` or `unreadable`,
-read the way holds already are (`optional_read`, so an older listener without
-the table plays as before). The player's Settings page says how many, and
-which; a whole-album play skips them as it skips a held passage
-`[REQ-PD-127]`.
+**`[GDE-INT-135]` A damaged file is withheld.** *Built.* The Director adds the
+radio passages of a file whose last check is `damaged`, `missing` or
+`unreadable` to the passages it holds back, and the fallback fill leaves them
+out too; a listener without the table plays as before. A file moving into or
+out of those asks for the reload `/library/reload` asks for, so the Director
+reads the change. The Lempi skin's Settings has a row, *Your music files*: how
+many have been read back, since when, and each one not whole. (A whole-album
+play is not built `[REQ-PD-127]`; when it is, it reads the same table.)
 
-**`[GDE-INT-140]` A decode failure is checked at once.** When playback logs
-`decode:` or the bit-reservoir warning that suggests damage, that file goes to
-the front of the scrub, so the failure becomes a finding within minutes and
-is withheld if it is real -- not a line in a journal that a reboot clears.
+**`[GDE-INT-140]` A decode failure is checked at once.** *Built.* A `decode:`
+error, or more bit-reservoir underflows than a start mid-file explains, puts
+that file at the front of the scrub's queue, so the failure becomes a finding
+within the next file's read -- and is withheld if it is real -- not a line in
+a journal a reboot clears.
 
-**`[GDE-INT-145]` The hub hears of it.** The sync snapshot carries each
-node's `file_checks` summary: how much of the library was checked, when the
-last full pass ended, and every file not `ok`. `SUMMARY.md` lists them per
-node; `status` names a node whose pass has not completed in 30 days.
+**`[GDE-INT-145]` The hub hears of it.** *Built, but for `status`.* The
+player's `/integrity` answers how much of its catalogue it has read, the
+oldest read, and every file not `ok`; the sync snapshot carries the same, and
+the snapshot's log and `SUMMARY.md` say it per node, naming each file not
+whole. Not built: `status` naming a node whose pass is overdue -- it reads no
+node's snapshot today.
 
-**`[GDE-INT-150]` Repair is a send.** Export's diff treats a file the node
-reports damaged as one it lacks, so *Send what's missing* bundles its audio.
-The import already replaces a held file whose bytes differ when the staged
-copy matches (`replace_if_rewritten`), and the next check finds it `ok`.
+**`[GDE-INT-150]` Repair is a send.** *Built.* The Export page's *find what's
+missing* asks each speaker's player for `/integrity`, and sends a file it
+holds but found damaged, missing or unreadable again, audio and all, as if it
+lacked it; a player that does not answer is said, and nothing is added. The
+send's own resume (`[REQ-LIB-134]`) re-sends it because its bytes no longer
+match; the import finds it already there, whole; the scrub reads it again
+within the hour, finds it `ok`, and lets it play. A `missing` file whose
+catalogue path differs from the hub's is the one case this does not mend: it
+lands at the hub's path, and the row still names the old one.
 
 **`[GDE-INT-155]` The phone, later.** The same scrub in the Android host, run
 only while charging. Its files are trusted on size and mtime today

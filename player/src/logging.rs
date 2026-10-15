@@ -116,6 +116,9 @@ pub fn unshown(seen: u32) -> u32 {
 pub fn reservoir_closed(path: &std::path::Path, seen: u32) {
     let hidden = unshown(seen);
     if hidden > 0 {
+        // More underflows than a mid-file start explains: read it back
+        // [GDE-INT-140].
+        crate::scrub::suspect(path);
         tracing::warn!(
             "decode: {}: {seen} bit-reservoir underflows in all, {hidden} of them not shown one by \
              one; a start mid-file explains up to {RESERVOIR_BUDGET}, so this many suggests damage",

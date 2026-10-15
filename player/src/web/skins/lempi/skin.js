@@ -985,6 +985,31 @@
     for (const copy of body.snapshots) list.appendChild(bkRow(copy, body.staged));
   }
 
+  // ------------------------------------------------------------- integrity
+  // [GDE-INT-135]: how much of the music has been read back, and every file
+  // not whole -- withheld from playing until a good copy is sent again.
+  const IC_SAID = { damaged: 'changed since it arrived', missing: 'not found',
+                    unreadable: 'could not be read', retagged: 'its tags changed (still plays)' };
+  async function integrity() {
+    let body;
+    try {
+      const r = await fetch('/integrity');
+      if (!r.ok) return;
+      body = await r.json();
+    } catch { return; }
+    const bad = body.not_ok.filter(x => x.outcome !== 'retagged').length;
+    const since = body.oldest ? ` since ${body.oldest.slice(0, 10)}` : '';
+    setText($('ic-count'), body.rate_kib_per_s === 0 ? 'checking is off'
+      : `${body.checked} of ${body.files} read back${since}` + (bad ? ` · ${bad} not whole` : ''));
+    const list = $('ic-list');
+    list.textContent = '';
+    for (const x of body.not_ok) {
+      const li = document.createElement('li');
+      li.textContent = `${(x.path || x.audio_md5).split(/[\/]/).slice(-2).join(' / ')}: ${IC_SAID[x.outcome] || x.outcome}`;
+      list.appendChild(li);
+    }
+  }
+
   // ---------------------------------------------------------------- radios
   // A blocked radio looks exactly like a broken button `[PI3-FOUND-050]`: the
   // speaker was paired, bonded, trusted and flashing, and Connect did nothing
@@ -1472,6 +1497,7 @@
       if (caps.led !== false) led();
       if (caps.wifi !== false) wifiKnown();
       backups();
+      integrity();
     }
   });
 

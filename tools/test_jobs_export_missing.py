@@ -52,7 +52,7 @@ def library(path):
     c.close()
 
 
-def runner_with(tmp, name, local_only, diff_code=0, holds=None):
+def runner_with(tmp, name, local_only, diff_code=0, holds=None, not_whole=()):
     db = os.path.join(tmp, f"{name}.db")
     library(db)
     r = jobmod.Runner(db, os.path.join(tmp, f"{name}.console.db"), roots=["C:\\Music"])
@@ -71,6 +71,9 @@ def runner_with(tmp, name, local_only, diff_code=0, holds=None):
             return diff_code, ""
         return 0, ""
     r._spawn = fake_spawn.__get__(r, jobmod.Runner)
+    # What the speaker's player says it found not whole [GDE-INT-150]:
+    # nothing unless a test says, and never asked over the network here.
+    r._not_whole_on = lambda job_id, remote: list(not_whole)
     return r, db, seen
 
 
@@ -307,9 +310,25 @@ def test_send_route(tmp):
             shutil.rmtree(os.path.dirname(b), ignore_errors=True)
 
 
+def test_repair(tmp):
+    """[GDE-INT-150]: a file the speaker holds but found not whole goes
+    again with its audio, beside what it lacks."""
+    print("a file the speaker found not whole is sent again, with its audio")
+    r, _, seen = runner_with(tmp, "repair", ["md5-1"], not_whole=["md5-3"])
+    j = wait_for(r, r.submit("export-missing", json.dumps({"peer": "speaker-a",
+                                                           "remote": "pi@speaker-a:/srv/library/library.db"})))
+    bundle = next(a for s, a in seen if s == "bundle")
+    sent = open(bundle[bundle.index("--md5-file") + 1], encoding="utf-8").read().split()
+    texts = [e["text"] or "" for e in j["events"]]
+    check(j["state"] == "done" and sent == ["md5-1", "md5-3"] and j["result"]["missing"] == 2,
+          f"the lacking one and the damaged one, both with audio: {sent} {j['result']}")
+    check(any("found not whole go again" in t for t in texts), f"and the log says why: {texts}")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         test_job(tmp)
+        test_repair(tmp)
         test_holds(tmp)
         test_credits(tmp)
         test_route(tmp)

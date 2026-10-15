@@ -1562,6 +1562,9 @@ impl Engine {
                 Ok(None) => l.stream.finished = true,
                 Err(e) => {
                     tracing::error!("decode: {e}");
+                    // Read the file back next [GDE-INT-140]: a failure here is
+                    // a finding within minutes, not a line a reboot clears.
+                    crate::scrub::suspect(std::path::Path::new(&l.entry.path));
                     l.stream.finished = true;
                 }
             }

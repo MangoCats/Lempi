@@ -128,6 +128,9 @@ pub mod bluetooth;
 pub mod sink;
 pub mod session;
 
+/// Each player reads its own audio back [GDE-INT-130].
+pub mod scrub;
+
 /// Holding two backends and exchanging which one sounds [SPEC-BK-030].
 pub mod switch;
 pub mod tags;
