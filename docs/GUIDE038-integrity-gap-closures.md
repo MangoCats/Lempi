@@ -42,6 +42,22 @@ hash: how long it takes on `bose` (Pi 4), `lp3-wifi` (Pi 3) and `lempi02w`
 117 s for 48.8 GB; a Pi reading an SD card will be far slower, and that number
 sets the scrub's pace in §4. Nothing is written.
 
+*Run 2026-10-15, players idle, `nice -n 19 ionice -c3`, over the 5,870 files
+each catalogue then named (49.3 GB):*
+
+| node | time | rate | result |
+| :--- | ---: | ---: | :--- |
+| `smartboardpc` | 141 s | 349 MB/s | 5,870 match |
+| `bose` (Pi 4, SD) | 19 min | 43 MB/s | 5,870 match |
+| `lp3-wifi` (Pi 3, SD) | 43 min | 19 MB/s | 5,869 match; one row names a path that does not exist |
+
+No file's bytes differ anywhere. `lp3-wifi`'s one is a stale path, not damage:
+its row for Robyn's *BodyTalk* has said `Bjork/BodyTalk.mp3` since 2026-08-09,
+while the file, its bytes matching the record, is at `Robyn/BodyTalk.mp3`, as
+`bose` and the hub record it. A player cannot open that passage there, and
+nothing said so -- the scrub's `missing` outcome, found by its first pass.
+`lempi02w` (Pi Zero 2 W) was receiving a send, and is not yet measured.
+
 ## 3. Phase 1 -- small, and closes the most visible gaps
 
 **`[GDE-INT-110]` Review decisions say where they go next, and can get
