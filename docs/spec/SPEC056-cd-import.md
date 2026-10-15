@@ -291,7 +291,7 @@ CUETools also ships a command-line ripper, `CUETools.Ripper.Console.exe`; whethe
 it reopens SPEC027's automation question `[SPEC-RIP-088]` is not examined.
 Adding a rip analyses it, flavor and amplitude, for the album's own folder, in
 the same job `[REQ-LIB-305]`; a stage that fails is said in red and in the
-result, the album stays added, and the Jobs page's *Not analyzed* list finishes it.
+result, the album stays added, and *Finish analyzing* beside it finishes it `[REQ-LIB-307]`.
 
 ---
 

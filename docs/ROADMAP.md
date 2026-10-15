@@ -25,9 +25,9 @@ folded into one spec.
 | Flavor distance | [SPEC005](spec/SPEC005-flavor-distance.md) | [§5a Future Direction — entry/exit flavor](spec/SPEC005-flavor-distance.md#5a-future-direction--entry-and-exit-flavor) |
 | Vipunen pipeline | [SPEC007](spec/SPEC007-vipunen-architecture.md) | [§6 Segmentation & Amplitude — PROVISIONAL](spec/SPEC007-vipunen-architecture.md#6-segmentation--amplitude-s2-s6--provisional) |
 | DAO segmentation cascade | [SPEC024](spec/SPEC024-dao-segmentation-cascade.md) | [§8 Open](spec/SPEC024-dao-segmentation-cascade.md#8-open) |
-| CD ripping (built 2026-09-04, single-disc, person-assisted — verified against a real disc) | [SPEC025](spec/SPEC025-cd-ripping.md) | [§8 Open](spec/SPEC025-cd-ripping.md#8-open) |
+| CD ripping (built 2026-09-04, person-assisted — verified against a real disc; sets a disc at a time since 2026-10-14) | [SPEC025](spec/SPEC025-cd-ripping.md) | [§8 Open](spec/SPEC025-cd-ripping.md#8-open) |
 | CD ripping: how Vipunen drives a GUI-only Windows tool (decided — person-assisted, built) | [SPEC027](spec/SPEC027-cd-ripping-windows-automation.md) | whole document |
-| CD ripping — multi-disc filing (built); hidden audio and wider passages (designed) | [SPEC026](spec/SPEC026-cd-ripping-passages.md) | [§3 Open](spec/SPEC026-cd-ripping-passages.md#3-open) |
+| CD ripping — multi-disc sets, one-piece discs and hidden audio (built 2026-10-14, image rips); the folded-in passage (designed) | [SPEC026](spec/SPEC026-cd-ripping-passages.md) | [§3 Open](spec/SPEC026-cd-ripping-passages.md#3-open) |
 | Database schema | [SPEC008](spec/SPEC008-database-schema.md) | [§8 Open](spec/SPEC008-database-schema.md#8-open) |
 | Program Director | [SPEC009](spec/SPEC009-program-director.md) | [§9 Open](spec/SPEC009-program-director.md#9-open) |
 | Audio path supervisor | [SPEC011](spec/SPEC011-audio-path-supervisor.md) | [§5 Risks and open questions](spec/SPEC011-audio-path-supervisor.md#5-risks-and-open-questions) |
@@ -170,7 +170,7 @@ specification, the one register is [architecture.md §10](architecture.md#10-kno
 what remains here is the work that crosses documents.
 
 1. **Roll `lempi02w` and `teacherslounge` forward.** `bose`, `lp3-wifi`,
-   `smartboardpc`, the hub's own player and the Moto G run `c684831` since 2026-10-14; `lempi02w` runs `340be21`
+   `smartboardpc`, the hub's own player and the Moto G run `16e4a47` since 2026-10-14; `lempi02w` runs `340be21`
    (2026-10-10) and `teacherslounge` `ca8313f`, both powered off that day
    ([FLEET001](../fleet/FLEET001-the-fleet.md) `[FLT-RUN-010]`). `lempi02w`
    still credits Woodstock's and *An American Treasure*'s second discs as
