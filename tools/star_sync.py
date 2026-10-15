@@ -1698,6 +1698,43 @@ def mirror(plan, keep, wanted):
         return 1
 
 
+PASS_DAYS = 30     # [GDE-INT-145]: a node whose oldest read is older has not finished a pass
+
+
+def node_integrity(plan, depth=30):
+    """[GDE-INT-145]: each node's file checks as its newest snapshot carried them,
+    from the newest `depth` runs: {name: (run, the summary or None)}. A node
+    missed by the newest run -- off, or skipped -- is read from the one before."""
+    runs = at_root(plan["runs"])
+    found = sorted((d for d in os.listdir(runs) if os.path.isdir(os.path.join(runs, d))),
+                   reverse=True)[:depth] if os.path.isdir(runs) else []
+    out = {}
+    for d in found:
+        p = os.path.join(runs, d, "baselines.json")
+        if not os.path.exists(p):
+            continue
+        with open(p, encoding="utf-8") as fh:
+            for name, b in json.load(fh).items():
+                out.setdefault(name, (d, b.get("integrity")))
+    return out
+
+
+def integrity_stale(name, ic, at):
+    """What about a node's file checks makes `status` STALE: a file not whole, or
+    a pass not finished in PASS_DAYS. A node switched off is said, not stale."""
+    bad = [x for x in ic.get("not_ok", []) if x.get("outcome") != "retagged"]
+    out = []
+    if bad:
+        out.append(f"{name} holds {len(bad)} file(s) not whole -- send them again from the Export page")
+    if ic.get("rate_kib_per_s") != 0 and ic.get("oldest"):
+        t = dt.datetime.fromisoformat(str(ic["oldest"]).replace("Z", "+00:00"))
+        age = at - (t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc))   # the player writes UTC
+        if age > dt.timedelta(days=PASS_DAYS):
+            out.append(f"{name} has not read all its files back in {PASS_DAYS} days "
+                       f"(the oldest read {str(ic['oldest'])[:10]})")
+    return out
+
+
 def status(plan):
     """[SPEC-STAR-086]: loud when the backup or its mirror has stopped."""
     b = plan["backups"]
@@ -1765,6 +1802,16 @@ def status(plan):
         if not v.get("sidecars_whole", True):     # [GDE-INT-175]
             bad.append("the library's last verification found a rip log, AccurateRip report or CUE "
                        "changed or missing")
+    # [GDE-INT-145]: each speaker's reading of its own files, as its last sync
+    # brought it. A build that does not report it is said and not counted
+    # stale: during a rollout most nodes are on one, and backup's exit is this.
+    for name, (run, ic) in sorted(node_integrity(plan).items()):
+        when = f"{run[:4]}-{run[4:6]}-{run[6:8]} {run[9:11]}:{run[11:13]}Z" if len(run) >= 13 else run
+        if ic is None:
+            say(f"  {name}: does not report reading its files back (sync of {when})")
+            continue
+        say(f"  {name}: {integrity_words(ic)} (sync of {when})")
+        bad += integrity_stale(name, ic, now())
     runs = at_root(plan["runs"])
     if os.path.exists(os.path.join(runs, "state.json")):
         st = load_state(plan)

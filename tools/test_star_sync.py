@@ -130,9 +130,67 @@ def test_mirror_when_reachable():
             ss.sd.ssh = real
 
 
+def test_node_integrity():
+    """[GDE-INT-145]: status says each node's file checks from its newest sync,
+    a node the newest run missed from the run before; STALE on a file not whole
+    or a pass unfinished in PASS_DAYS; a build that does not report is said,
+    not stale, and neither is a node with the check switched off."""
+    import io
+    import json
+    import contextlib
+    print("status: each node's reading of its own files, from its newest sync")
+    utc = dt.datetime.now(dt.timezone.utc)
+    recent = (utc - dt.timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    old = (utc - dt.timedelta(days=ss.PASS_DAYS + 5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as root:
+        runs = os.path.join(root, "runs")
+        older = {"gone": {"integrity": {"files": 9, "checked": 9, "oldest": recent, "not_ok": []}},
+                 "fine": {"integrity": {"files": 9, "checked": 1, "oldest": old, "not_ok": []}}}
+        newer = {"fine": {"integrity": {"files": 9, "checked": 9, "oldest": recent, "rate_kib_per_s": 1024,
+                                        "not_ok": [{"outcome": "retagged", "path": "t.mp3"}]}},
+                 "oldbuild": {"integrity": None},
+                 "rotten": {"integrity": {"files": 9, "checked": 9, "oldest": recent,
+                                          "not_ok": [{"outcome": "damaged", "path": "x.mp3"}]}},
+                 "slow": {"integrity": {"files": 9, "checked": 4, "oldest": old, "not_ok": []}},
+                 "off": {"integrity": {"files": 9, "checked": 4, "oldest": old, "rate_kib_per_s": 0,
+                                       "not_ok": []}}}
+        for stamp, b in (("20261001T0100Z", older), ("20261015T2005Z", newer)):
+            os.makedirs(os.path.join(runs, stamp))
+            with open(os.path.join(runs, stamp, "baselines.json"), "w") as fh:
+                json.dump(b, fh)
+        os.makedirs(os.path.join(runs, "20261016T0000Z"))           # a run that stopped before baselines
+        plan = {"runs": runs}
+        got = ss.node_integrity(plan)
+        check(got["gone"][0] == "20261001T0100Z" and got["fine"][0] == "20261015T2005Z",
+              f"the newest run naming each node: {[(n, r) for n, (r, _i) in sorted(got.items())]}")
+        stale = {n: ss.integrity_stale(n, ic, utc) for n, (_r, ic) in got.items() if ic is not None}
+        check(stale["fine"] == [] and stale["gone"] == [] and stale["off"] == [],
+              f"whole, a re-tag, or switched off: not stale: {stale}")
+        check(len(stale["rotten"]) == 1 and "1 file(s) not whole" in stale["rotten"][0], f"{stale['rotten']}")
+        check(len(stale["slow"]) == 1 and f"in {ss.PASS_DAYS} days" in stale["slow"][0], f"{stale['slow']}")
+
+        os.makedirs(os.path.join(root, "days"))
+        with open(os.path.join(root, "days", "d.json"), "w") as fh:
+            json.dump({"taken_at": utc.isoformat()}, fh)
+        lib = os.path.join(root, "lib", "library.db")
+        os.makedirs(os.path.join(root, "lib", "verify"))
+        with open(os.path.join(root, "lib", "verify", "v.json"), "w") as fh:
+            json.dump({"checked_at": dt.datetime.now().astimezone().isoformat(), "files": 0, "ok": 0, "bytes": 0,
+                       "seconds": 0, "unrecorded": 0, "retagged": [], "damaged": [], "missing": [],
+                       "unreadable": [], "ok_whole": True}, fh)
+        plan = {"backups": {"dir": root, "max_age_hours": 30}, "hub": {"library": lib}, "runs": runs}
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            rc = ss.status(plan)
+        said = out.getvalue()
+        check(rc == 1 and "oldbuild: does not report reading its files back (sync of 2026-10-15 20:05Z)" in said
+              and "STALE: rotten holds 1 file(s) not whole" in said and "STALE: slow has not read" in said
+              and "STALE: oldbuild" not in said, f"status: {said}")
+
+
 def main() -> int:
     test_backup_proofs()
     test_mirror_when_reachable()
+    test_node_integrity()
     days = [f"2026-{m:02d}-{d:02d}" for m in (7, 8, 9) for d in (1, 10, 20, 28)]
     keep = ss.retained(days, 3, 2)
     check({"2026-09-10", "2026-09-20", "2026-09-28"} <= keep, f"the newest 3 days are kept: {sorted(keep)}")

@@ -1,6 +1,6 @@
 # GUIDE038: Closing the Integrity Gaps
 
-**Guide — Tier 2 · plan, written 2026-10-14 · phases 0 and 1 done 2026-10-15, phase 2 built but for the phone; 3 measured; 4's 175 built**
+**Guide — Tier 2 · plan, written 2026-10-14 · phases 0 and 1 done 2026-10-15, phase 2 built but for the phone; 165 measured; 175 built**
 
 The plan that follows from the
 [integrity audit of 2026-10-14](../reports/integrity-audit-2026-10-14.md): every
@@ -135,12 +135,15 @@ that file at the front of the scrub's queue, so the failure becomes a finding
 within the next file's read -- and is withheld if it is real -- not a line in
 a journal a reboot clears.
 
-**`[GDE-INT-145]` The hub hears of it.** *Built, but for `status`.* The
+**`[GDE-INT-145]` The hub hears of it.** *Built.* The
 player's `/integrity` answers how much of its catalogue it has read, the
 oldest read, and every file not `ok`; the sync snapshot carries the same, and
 the snapshot's log and `SUMMARY.md` say it per node, naming each file not
-whole. Not built: `status` naming a node whose pass is overdue -- it reads no
-node's snapshot today.
+whole. `status` (and so the nightly backup's message) says each node's from its
+newest sync, and is STALE when one holds a file not whole or has not finished
+a pass in 30 days. A build that does not report is said, not stale: through a
+rollout most nodes run one, and a nightly alarm for that would teach the
+alarm to be ignored.
 
 **`[GDE-INT-150]` Repair is a send.** *Built.* The Export page's *find what's
 missing* asks each speaker's player for `/integrity`, and sends a file it
