@@ -1,6 +1,6 @@
 # GUIDE038: Closing the Integrity Gaps
 
-**Guide — Tier 2 · plan, written 2026-10-14 · phases 0 and 1 done 2026-10-15, phase 2 built but for the phone; 3 and 4 not built**
+**Guide — Tier 2 · plan, written 2026-10-14 · phases 0 and 1 done 2026-10-15, phase 2 built but for the phone; 3 measured; 4's 175 built**
 
 The plan that follows from the
 [integrity audit of 2026-10-14](../reports/integrity-audit-2026-10-14.md): every
@@ -190,11 +190,18 @@ proven them, a damaged hub file is fetched from a speaker whose last check of
 it is `ok`, its hash confirmed, and put back -- the speakers become the
 verified backup they already are in fact.
 
-**`[GDE-INT-175]` Sidecars and strays.** A CD import records the hash of its
-rip log, `.accurip` and CUE in `ingest_decisions`, and `[GDE-INT-115]` checks
-them with the audio. The verify job lists audio in the music folder that no
-row claims -- 13 MP3s, 21 WAV and 14 AIFF files tonight -- for a person to
-induct or remove.
+**`[GDE-INT-175]` Sidecars and strays.** *Built 2026-10-15, `tools/sidecars.py`.*
+A CD import records the hash of its rip log, `.accurip` and CUE in
+`ingest_decisions` (stage `sidecars`) -- last, after the sheet is pointed at
+the MP3, and only the files that rip brought -- and `[GDE-INT-115]` checks
+them with the audio. A record names files, not paths: the folder is wherever
+its audio is now, so a relink carries it. The 377 already on the hub were
+recorded as `adopted` (hashed as they are, not as ripped); a `.log` counts only
+if a ripper wrote it -- seven were FTP logs from 2002. The verify job lists
+audio in the music folder that no row claims -- 13 MP3s, 21 WAV and 14 AIFF
+files -- for a person to induct or remove, and counts the CD inbox apart.
+Building it found two second discs whose sheets still named their deleted WAV:
+the add had re-pointed the first disc's sheet instead; fixed, and both mended.
 
 ## 7. Order and size
 

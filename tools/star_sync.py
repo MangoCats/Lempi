@@ -1762,6 +1762,9 @@ def status(plan):
             bad.append(f"the library was last verified {vage.days} day(s) ago")
         if not v.get("ok_whole", True):
             bad.append("the library's last verification found damaged, missing or unreadable files")
+        if not v.get("sidecars_whole", True):     # [GDE-INT-175]
+            bad.append("the library's last verification found a rip log, AccurateRip report or CUE "
+                       "changed or missing")
     runs = at_root(plan["runs"])
     if os.path.exists(os.path.join(runs, "state.json")):
         st = load_state(plan)

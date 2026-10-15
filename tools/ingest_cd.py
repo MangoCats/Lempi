@@ -69,7 +69,8 @@ import ingest_folder          # noqa: E402  -- audio_md5(), LOCAL_PREFIX
 import passage_hold           # noqa: E402  -- a damaged track held back [SPEC-HOLD-010]
 from byte_hash import ensure_sha256_column, sha256_file  # noqa: E402  -- [REQ-AND-960]
 import secret                 # noqa: E402
-import segment_dao            # noqa: E402  -- identify_recording() (AcoustID)
+import sidecars               # noqa: E402  -- the rip log, AccurateRip and CUE hashed [GDE-INT-175]
+import segment_dao           # noqa: E402  -- identify_recording() (AcoustID)
 
 FFMPEG = shutil.which("ffmpeg")
 # `LEMPI_MUSICBRAINZ_URL` points the lookup elsewhere -- a test's own server,
@@ -1474,6 +1475,32 @@ def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[
             "disc_outcome": disc_outcome, "candidates": len(releases), "mode": "tracks"}
 
 
+def _record_sidecars(db_path: str, audio_md5: str, folder: str, brought) -> int | None:
+    """`[GDE-INT-175]`: the hashes of the rip log, AccurateRip report and CUE
+    this rip brought -- not another disc's beside them in a shared album
+    folder -- taken last, after the CUE is pointed at the MP3, so they are of
+    the files as they stay. In a short transaction of their own after the
+    album's: a failure here is said, the add stands, and `sidecars.py --adopt`
+    can record them later. The count; None if it failed."""
+    names = sidecars.of_rip(folder, brought)
+    if not names:
+        return 0
+    try:
+        conn = lempi_db.connect(db_path, lempi_db.ROLE_LIBRARY, writable=True, timeout=60)
+        try:
+            conn.execute("PRAGMA busy_timeout = 60000")
+            conn.execute("BEGIN IMMEDIATE")
+            n = sidecars.record(conn, audio_md5, folder, names)
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:                                   # noqa: BLE001
+        say(f"WARNING: the rip's log, AccurateRip and CUE files were not recorded ({e}); "
+            "tools/sidecars.py --adopt records them")
+        return None
+    return n
+
+
 def _drop(paths) -> None:
     """MP3s made for an add that was then refused: the rip goes back to the
     inbox as it was."""
@@ -1554,6 +1581,8 @@ def ingest_tracks(db_path: str, folder: str, release: str | None, into: str | No
         _drop(m for _t, _w, m, _h in encoded)
         conn.close()
         raise
+    # The rip's own files, by the names the move gives them [GDE-INT-175].
+    brought = [renames.get(n, n) for n in os.listdir(folder)]
     try:
         if into:
             say(f"filing it in {into} ...")
@@ -1591,6 +1620,7 @@ def ingest_tracks(db_path: str, folder: str, release: str | None, into: str | No
     cue = os.path.join(folder, os.path.basename(rip["cue"]))
     if os.path.isfile(cue):
         point_cue_at(cue)
+    result["sidecars"] = _record_sidecars(db_path, encoded[0][3], folder, brought) if encoded else 0
     return result
 
 
@@ -1687,6 +1717,8 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
         _drop([mp3_path])
         conn.close()
         raise
+    # The rip's own files, by the names the move gives them [GDE-INT-175].
+    brought = [renames.get(n, n) for n in os.listdir(folder)]
     try:
         if into:
             say(f"filing it in {into} ...")
@@ -1716,13 +1748,18 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
         if not encode_to_flac(wav_path, flac_path):
             result["wav_kept"] = wav_path
             say(f"the FLAC copy failed; the WAV is kept at {wav_path}")
+            result["sidecars"] = _record_sidecars(db_path, audio_md5, folder, brought)
             return result
         result["flac"] = flac_path
     os.remove(wav_path)
     result["wav_removed"] = True
-    cue = next((os.path.join(folder, n) for n in os.listdir(folder) if n.lower().endswith(".cue")), None)
-    if cue:
+    # This rip's sheet, not the first in the folder: a second disc filed beside
+    # the first re-pointed disc 1's, already pointed, and left its own naming
+    # the WAV just removed -- two such sheets found on the hub, 2026-10-15.
+    cue = next((os.path.join(folder, n) for n in brought if n.lower().endswith(".cue")), None)
+    if cue and os.path.isfile(cue):
         point_cue_at(cue)
+    result["sidecars"] = _record_sidecars(db_path, audio_md5, folder, brought)
     return result
 
 

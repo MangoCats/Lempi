@@ -20,6 +20,7 @@ Covers the four branches `[SPEC028] §3` describes:
     python tools/test_ingest_cd.py
 """
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -703,20 +704,36 @@ def test_second_disc_end_to_end():
         s = p["releases"][0]
         check((s.get("disc"), s.get("discs"), [d["held"] for d in s.get("set", [])]) == (2, 2, [0, 0]),
               f"and says disc 2 of 2, neither held [SPEC-RIP-110]: {s.get('set')}")
-        # The first disc is filed already, as CUERipper named it, with its cover.
+        # The first disc is filed already, as CUERipper named it, with its cover
+        # -- and a sheet named as this add names them, which sorts before the
+        # second disc's: the one the old first-in-the-folder choice re-pointed.
         home = os.path.join(tempfile.mkdtemp(), "W", "Two Discs (1999)")
         os.makedirs(home)
-        first = ["W - Two Discs(Disc 1).cue", "W - Two Discs(Disc 1).mp3", "folder.jpg"]
+        first = ["W - Two Discs(Disc 1).cue", "W - Two Discs(Disc 1).mp3", "folder.jpg",
+                 "W - Two Discs (Disc 1).cue", "W - Two Discs (Disc 1).log"]
         for n in first:
-            open(os.path.join(home, n), "w").close()
+            with open(os.path.join(home, n), "w") as fh:
+                fh.write("CUERipper v2.2.6, disc 1\n" if n.endswith(".log") else "")
         open(os.path.join(inbox, "folder.jpg"), "w").close()
+        with open(os.path.join(inbox, "W - Two Discs(Disc 2).log"), "w") as fh:
+            fh.write("CUERipper v2.2.6 Copyright (C) 2008-2024\nAccurately ripped\n")
         r = ingest_cd.do_ingest(db, inbox, commit=True, release="rel-W", into=home, keep_flac=False)
         names = sorted(os.listdir(home))
         check(names == sorted(first + ["W - Two Discs (Disc 2).cue", "W - Two Discs (Disc 2).mp3",
-                                       "folder (Disc 2).jpg"]),
+                                       "W - Two Discs (Disc 2).log", "folder (Disc 2).jpg"]),
               f"filed beside the first disc, every name its own [SPEC-RIP-108]: {names}")
         cue = open(os.path.join(home, "W - Two Discs (Disc 2).cue"), encoding="utf-8").read()
         check('FILE "W - Two Discs (Disc 2).mp3" MP3' in cue, f"the sheet names its own MP3: {cue!r}")
+        # [GDE-INT-175]: this disc's sheet and log hashed as they stay -- the sheet
+        # after it was pointed at the MP3 -- and not the first disc's beside them.
+        c = sqlite3.connect(db)
+        rows = c.execute("SELECT outcome, detail FROM ingest_decisions WHERE stage = 'sidecars'").fetchall()
+        c.close()
+        want = {n: hashlib.sha256(open(os.path.join(home, n), "rb").read()).hexdigest()
+                for n in ("W - Two Discs (Disc 2).cue", "W - Two Discs (Disc 2).log")}
+        check(r.get("sidecars") == 2 and len(rows) == 1 and rows[0][0] == "recorded"
+              and json.loads(rows[0][1])["files"] == want,
+              f"the second disc's sheet and log recorded, as they are now: {r.get('sidecars')} {rows}")
         c = sqlite3.connect(db)
         got = c.execute("SELECT r.title FROM passages p JOIN passage_recordings pr ON pr.passage_id = p.passage_id "
                         "JOIN recordings r ON r.mbid = pr.mbid WHERE p.kind = 'radio' ORDER BY p.start_ms").fetchall()
@@ -901,6 +918,7 @@ def test_tracks_end_to_end():
         cue = open(os.path.join(home, "Artist - Album.cue"), encoding="utf-8").read()
         check('FILE "01. One.mp3" MP3' in cue and 'FILE "02. Two.mp3" MP3' in cue and ".wav" not in cue,
               f"every FILE line names its MP3: {cue!r}")
+        check(r.get("sidecars") == 2, f"the sheet and the log recorded [GDE-INT-175]: {r.get('sidecars')}")
 
         c = sqlite3.connect(db)
         c.row_factory = sqlite3.Row

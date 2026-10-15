@@ -298,13 +298,28 @@ async function verifyLast() {
   const bad = ['damaged', 'missing', 'unreadable'].filter(k => (r[k] || []).length);
   const lines = [...bad, 'retagged'].flatMap(k => (r[k] || []).slice(0, 10).map(x =>
     S.el('li', { text: `${k}: ${x.path}` })));
+  // [GDE-INT-175]: a rip's log, AccurateRip report and CUE, and audio no row claims.
+  const side = r.sidecars, stray = r.strays;
+  const sideBad = side ? side.changed.length + side.missing.length : 0;
+  const sideLines = side ? ['changed', 'missing'].flatMap(k => side[k].slice(0, 10).map(x =>
+    S.el('li', { text: `rip sidecar ${k}: ${x.path}` }))) : [];
+  const strayLines = stray ? stray.audio.slice(0, 10).map(p => S.el('li', { text: p })) : [];
   box.replaceChildren(
-    S.el('p', { class: 'verdict ' + (bad.length ? 'bad' : age > 30 ? 'note' : 'ok'), text:
+    S.el('p', { class: 'verdict ' + (bad.length || sideBad ? 'bad' : age > 30 ? 'note' : 'ok'), text:
       `Last verified ${r.checked_at.replace('T', ' ')} (${age} h ago): ${r.ok} of ${r.files} files match their record`
       + bad.map(k => `; ${r[k].length} ${k}`).join('')
       + ((r.retagged || []).length ? `; ${r.retagged.length} re-tagged (audio intact)` : '')
       + (r.unrecorded ? `; ${r.unrecorded} with no hash recorded` : '') + '.' }),
-    lines.length ? S.el('ul', { class: 'tracks' }, ...lines) : '');
+    lines.length ? S.el('ul', { class: 'tracks' }, ...lines) : '',
+    side ? S.el('p', { class: 'verdict ' + (sideBad ? 'bad' : 'ok'), text:
+      `Rip logs, AccurateRip reports and CUE sheets: ${side.ok} of ${side.ok + sideBad} match their record`
+      + (sideBad ? `; ${side.changed.length} changed, ${side.missing.length} missing` : '')
+      + (side.unrecorded ? `; ${side.unrecorded} never recorded (tools/sidecars.py --adopt)` : '') + '.' }) : '',
+    sideLines.length ? S.el('ul', { class: 'tracks' }, ...sideLines) : '',
+    stray && stray.audio.length ? S.el('p', { class: 'verdict note', text:
+      `${stray.audio.length} audio file(s) in the music folder no row claims -- to add or remove`
+      + (stray.audio.length > 10 ? ' (the first ten):' : ':') }) : '',
+    strayLines.length ? S.el('ul', { class: 'tracks' }, ...strayLines) : '');
 }
 
 document.getElementById('verify').onclick = async () => {

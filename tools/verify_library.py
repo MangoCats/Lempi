@@ -20,14 +20,22 @@ Each file is one of:
   unreadable  there, and could not be read
   unrecorded  no SHA-256 on its row to check against
 
+With the audio, the files a CD rip left beside it `[GDE-INT-175]`: each rip
+log, AccurateRip report and CUE sheet `sidecars.py` recorded is read again --
+ok, changed or missing -- and the sidecars no record names are counted. And
+the music folder is walked for audio no row claims, for a person to induct or
+remove: the strays. The CD inbox, `_Rips`, is skipped and said to be: what
+waits there is not lost, it is not added yet.
+
 Read-only: the library is opened `mode=ro` and nothing in it is written. The
 result goes to `<library's folder>/verify/<date>.json`, the newest kept 14
 deep, where `star_sync.py ... status` reads its age and its findings.
 
     python tools/verify_library.py data/library.db [--json]
 
-Exit 0 when nothing is damaged, missing or unreadable; 1 otherwise; 2 when it
-could not run at all.
+Exit 0 when nothing is damaged, missing or unreadable and no recorded sidecar
+has changed or gone; 1 otherwise; 2 when it could not run at all. A stray is
+said, not failed: it is something to tidy, not something lost.
 """
 
 import argparse
@@ -39,10 +47,13 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db                   # noqa: E402
+import sidecars                   # noqa: E402  -- [GDE-INT-175]
 from byte_hash import sha256_file  # noqa: E402
 
 KEEP = 14
 BAD = ("damaged", "missing", "unreadable")
+AUDIO = (".mp3", ".flac", ".wav", ".aif", ".aiff", ".m4a", ".ogg", ".opus", ".wma", ".ape", ".wv")
+INBOX = "_Rips"
 
 
 def say(text: str) -> None:
@@ -59,10 +70,70 @@ def audio_md5(path: str) -> str | None:
     return ingest_folder.audio_md5(path)
 
 
+def check_sidecars(records: list[dict], unrecorded: int) -> dict:
+    """Each recorded sidecar read again: ok, changed, or missing; `orphaned` when
+    no catalogued file has its audio any more, so there is no folder to look in."""
+    out = {"ok": 0, "changed": [], "missing": [], "orphaned": 0, "unrecorded": unrecorded}
+    for r in records:
+        if not r["folder"]:
+            out["orphaned"] += 1
+            continue
+        path = os.path.join(r["folder"], r["name"])
+        if not os.path.isfile(path):
+            out["missing"].append({"path": path, "recorded_at": r["decided_at"]})
+            continue
+        try:
+            got = sha256_file(path)
+        except OSError as e:
+            out["missing"].append({"path": path, "recorded_at": r["decided_at"], "error": str(e)})
+            continue
+        if got == r["sha256"]:
+            out["ok"] += 1
+        else:
+            out["changed"].append({"path": path, "recorded": r["sha256"], "found": got,
+                                   "recorded_at": r["decided_at"], "outcome": r["outcome"]})
+    return out
+
+
+def strays(paths: list[str]) -> dict:
+    """Audio under the music root that no row claims. The root is the folder
+    every catalogued file lies under, as the console takes it; a FLAC beside a
+    catalogued MP3 of the same name is its lossless copy, counted, not a stray."""
+    try:
+        root = os.path.commonpath([p for p in paths if p]) if paths else ""
+    except ValueError:
+        root = ""
+    out = {"root": root, "audio": [], "lossless_copies": 0, "inbox": None, "inbox_audio": 0}
+    if not root or not os.path.isdir(root):
+        return out
+    claimed = {os.path.normcase(os.path.normpath(p)) for p in paths if p}
+    stems = {os.path.splitext(p)[0] for p in claimed}
+    for d, dirs, files in os.walk(root):
+        if d == root and INBOX in dirs:
+            out["inbox"] = os.path.join(root, INBOX)
+        for n in files:
+            if not n.lower().endswith(AUDIO):
+                continue
+            p = os.path.join(d, n)
+            key = os.path.normcase(os.path.normpath(p))
+            if key in claimed:
+                continue
+            if out["inbox"] and key.startswith(os.path.normcase(out["inbox"]) + os.sep):
+                out["inbox_audio"] += 1
+            elif n.lower().endswith(".flac") and os.path.splitext(key)[0] in stems:
+                out["lossless_copies"] += 1
+            else:
+                out["audio"].append(p)
+    out["audio"].sort()
+    return out
+
+
 def verify(library: str, progress=say) -> dict:
     conn = lempi_db.connect(library, lempi_db.ROLE_LIBRARY)
     try:
         rows = conn.execute("SELECT file_id, audio_md5, path, sha256 FROM files ORDER BY file_id").fetchall()
+        side_records = sidecars.recorded(conn)
+        side_unrecorded = sum(len(names) for _f, _m, names in sidecars.unrecorded(conn))
     finally:
         conn.close()
     out = {"checked_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "library": os.path.abspath(library),
@@ -91,8 +162,11 @@ def verify(library: str, progress=say) -> dict:
         if time.time() - last >= 30:
             last = time.time()
             progress(f"  {i} of {len(rows)} files, {out['bytes'] / 1e9:.1f} GB")
+    out["sidecars"] = check_sidecars(side_records, side_unrecorded)
+    out["strays"] = strays([r[2] for r in rows])
     out["seconds"] = round(time.time() - t0, 1)
     out["ok_whole"] = not any(out[k] for k in BAD)
+    out["sidecars_whole"] = not (out["sidecars"]["changed"] or out["sidecars"]["missing"])
     return out
 
 
@@ -127,6 +201,17 @@ def summary(r: dict) -> str:
             parts.append(f"{len(r[k])} {k}")
     if r["unrecorded"]:
         parts.append(f"{r['unrecorded']} with no hash recorded")
+    s = r.get("sidecars")                      # absent from a result kept before [GDE-INT-175]
+    if s:
+        n = s["ok"] + len(s["changed"]) + len(s["missing"])
+        side = f"rip sidecars: {s['ok']} of {n} match"
+        side += "".join(f", {len(s[k])} {k}" for k in ("changed", "missing") if s[k])
+        if s["unrecorded"]:
+            side += f", {s['unrecorded']} never recorded"
+        parts.append(side)
+    st = r.get("strays")
+    if st and st["audio"]:
+        parts.append(f"{len(st['audio'])} audio file(s) no row claims")
     return "; ".join(parts) + f" ({r['bytes'] / 1e9:.1f} GB in {r['seconds']:.0f} s)"
 
 
@@ -148,12 +233,23 @@ def main() -> int:
     for k in BAD + ("retagged",):
         for x in r[k][:20]:
             say(f"  {k.upper()}: {x['path']}" + (f" ({x['error']})" if x.get("error") else ""))
+    for k in ("changed", "missing"):
+        for x in r["sidecars"][k][:20]:
+            say(f"  SIDECAR {k.upper()}: {x['path']}")
+    st = r["strays"]
+    for p in st["audio"][:20]:
+        say(f"  STRAY: {p}")
+    if st["inbox"]:
+        say(f"  (the CD inbox {st['inbox']} was not counted: {st['inbox_audio']} audio file(s) wait there)")
     say(f"kept in {where}")
+    whole = r["ok_whole"] and r["sidecars_whole"]
     if args.json:
-        print(json.dumps({"ok": r["ok_whole"], "files": r["files"], "matched": r["ok"],
+        print(json.dumps({"ok": whole, "files": r["files"], "matched": r["ok"],
                           **{k: len(r[k]) for k in ("retagged",) + BAD}, "unrecorded": r["unrecorded"],
-                          "seconds": r["seconds"], "kept": where}))
-    return 0 if r["ok_whole"] else 1
+                          "sidecars_changed": len(r["sidecars"]["changed"]),
+                          "sidecars_missing": len(r["sidecars"]["missing"]),
+                          "strays": len(st["audio"]), "seconds": r["seconds"], "kept": where}))
+    return 0 if whole else 1
 
 
 if __name__ == "__main__":
