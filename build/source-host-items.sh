@@ -8,8 +8,11 @@
 #
 # Read off both on 2026-10-02 before it was written. The finding that made it
 # worth writing: each kept the fleet clock in a file named for the project's
-# earlier name, vaino-fleet.*, written by hand and recorded by no script, so a
-# rebuild of either would have lost it.
+# earlier name (docs/GUIDE015-the-earlier-names.md), written by hand and
+# recorded by no script, so a rebuild of either would have lost it. Both were
+# removed by --go on 2026-10-03, and the check of 2026-10-04 found them gone;
+# the two lines that removed them went 2026-10-14, since naming the files kept
+# a retired name in the tree [GOV-FBN-010].
 #
 # Needs build/setup-lib.sh sourced and `setup_target` run.
 
@@ -53,7 +56,6 @@ source_host_items() {
             /etc/chrony/sources.d/lempi-fleet.sources 644
         file_item "chrony: serving the fleet's /24, through a WAN outage too" "$conf" \
             /etc/chrony/conf.d/lempi-fleet.conf 644
-        retired_item "chrony: vaino-fleet.conf (the earlier name)" /etc/chrony/conf.d/vaino-fleet.conf
     else
         build/render-fleet-sources.sh "$sources" >/dev/null \
             || die "the fleet sources could not be rendered"
@@ -61,7 +63,6 @@ source_host_items() {
             /etc/chrony/sources.d/lempi-fleet.sources 644
     fi
     rm -f "$sources" "$conf"
-    retired_item "chrony: vaino-fleet.sources (the earlier name)" /etc/chrony/sources.d/vaino-fleet.sources
     # chrony reads these at start, so it must have started after they last
     # changed. The settings in the renamed files are the ones it already
     # runs, so the restart moves nothing; it makes the files the ones in use.
