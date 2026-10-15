@@ -106,7 +106,27 @@ def test_progress():
         pass
 
 
+def test_git_bash():
+    """The attended window runs under Git Bash, never Windows' WSL launcher,
+    whichever comes first on the PATH -- a console started from PowerShell had
+    System32's first, and the send failed in WSL, 2026-10-14."""
+    if os.name != "nt":
+        return
+    print("git_bash: Git's bash, not the WSL launcher first on the PATH")
+    system32 = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
+    old = os.environ["PATH"]
+    os.environ["PATH"] = os.pathsep.join([system32, os.path.dirname(sys.executable)])
+    try:
+        got = sb.git_bash()
+    finally:
+        os.environ["PATH"] = old
+    check("system32" not in got.lower() and "windowsapps" not in got.lower()
+          and os.path.normcase(got).endswith(os.path.normcase(os.path.join("Git", "bin", "bash.exe"))),
+          f"Git Bash, found where it is installed: {got}")
+
+
 def main() -> int:
+    test_git_bash()
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         b = bundle(tmp)
 

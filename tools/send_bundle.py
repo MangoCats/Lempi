@@ -61,6 +61,29 @@ class Failed(Exception):
     pass
 
 
+def git_bash() -> str:
+    """Git Bash, which `attended-import.sh` is written for -- never Windows'
+    own `bash.exe`, in System32 or WindowsApps, which launches WSL. Which of
+    them `bash` names depends on how the console was started: from Git Bash,
+    Git's; from PowerShell, WSL's, and the send to bose failed
+    "execvpe(/bin/bash) failed" on 2026-10-14 after the console was restarted
+    from PowerShell. A POSIX host's own `bash` is used as it is."""
+    if os.name != "nt":
+        return shutil.which("bash") or "/bin/bash"
+    windows = os.path.normcase(os.environ.get("SystemRoot", r"C:\Windows"))
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        p = os.path.join(d, "bash.exe")
+        low = os.path.normcase(os.path.abspath(p)) if d else ""
+        if d and os.path.isfile(p) and not low.startswith(windows) and "windowsapps" not in low:
+            return p
+    for root in (os.environ.get("ProgramFiles", r"C:\Program Files"), os.environ.get("ProgramW6432", "")):
+        p = os.path.join(root, "Git", "bin", "bash.exe")
+        if root and os.path.isfile(p):
+            return p
+    raise Failed("Git Bash was not found -- attended-import.sh needs it, and Windows' own bash.exe "
+                 "would start WSL instead")
+
+
 def ssh(host: str, cmd: str, stdin: bytes | None = None) -> tuple[int, str]:
     """Run `cmd` on `host`; its output read as UTF-8, as the remote writes it
     -- not in this PC's code page, which is how a curly apostrophe crashed the
@@ -316,7 +339,7 @@ def main() -> int:
 
         try:
             if ro:
-                bash = shutil.which("bash") or r"C:\Program Files\Git\bin\bash.exe"
+                bash = git_bash()
                 me = [sys.executable, os.path.abspath(__file__), bundle, host, "--library", library,
                       "--apply", "--inside-window"] + (["--audio-root", args.audio_root] if args.audio_root else [])
                 # Git Bash rewrites a POSIX-looking argument it hands to a
