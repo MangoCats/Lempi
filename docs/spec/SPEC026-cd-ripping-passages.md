@@ -196,6 +196,17 @@ measured -91.0 dB and rightly left out. None of those discs has a known
 hidden track, so the finding side is proven on a made disc
 (`tools/test_ingest_cd.py`), not yet on a real one.
 
+**`[SPEC-RIP-118]` Several discs ripped into one folder are added a disc at a
+time, each given a folder of its own when it is previewed.** CUERipper puts a
+set's discs in one folder when its folder template names no disc -- *The Very
+Best of Jackson Browne*, 2026-10-15, both discs' CUE, WAV, log and `.accurip`
+side by side. The inbox already showed a card per CUE, but staging handed the
+importer the shared folder, which took the first CUE's disc for every file and
+refused the add for naming both discs' files "(Disc 1)". Staging now moves the
+disc previewed -- its CUE, the audio it names, the files named after it -- into
+a folder of its own and copies the cover, so each disc keeps one; the importer
+refuses a folder that still holds more than one CUE.
+
 ---
 
 ## 3. Open
@@ -216,7 +227,7 @@ drive/hardware failure modes, the last item there, is now decided too.
 
 ---
 
-**Traceability:** `[SPEC-RIP-090..116]` · derives `[REQ-LIB-255..275]` ·
+**Traceability:** `[SPEC-RIP-090..118]` · derives `[REQ-LIB-255..275]` ·
 extends [SPEC025](SPEC025-cd-ripping.md), `[SPEC008]` §3's
 `release_recordings.disc` and `passages` schema, and
 [SPEC023](SPEC023-domain-vocabulary.md)'s Passage/File definitions.

@@ -220,6 +220,37 @@ def test_stage():
         pass
 
 
+def test_stage_splits_a_set():
+    """[SPEC-RIP-118]: two discs CUERipper ripped into one folder -- The Very
+    Best of Jackson Browne, 2026-10-15 -- each staged into a folder of its own,
+    with its own files and a copy of the cover; the importer refuses a folder
+    still holding two."""
+    import ingest_cd
+    root = tempfile.mkdtemp()
+    folder = os.path.join(root, "JB - Best")
+    os.makedirs(folder)
+    for d in (1, 2):
+        stem = f"JB - Best(Disc {d})"
+        with open(os.path.join(folder, stem + ".cue"), "w", encoding="utf-8", newline="\r\n") as f:
+            f.write(f'PERFORMER "JB"\nTITLE "Best"\nFILE "{stem}.wav" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n')
+        for ext in (".wav", ".log", ".accurip"):
+            open(os.path.join(folder, stem + ext), "w").close()
+    open(os.path.join(folder, "folder.jpg"), "w").close()
+    try:
+        ingest_cd.find_rip(folder)
+        check(False, "the importer refuses a folder of two discs")
+    except ValueError as e:
+        check("2 CUE sheets" in str(e), f"and says why: {e}")
+    two = ci.stage(root, os.path.join("JB - Best", "JB - Best(Disc 2).cue"))
+    check(sorted(os.listdir(two)) == sorted(["JB - Best(Disc 2)" + e for e in (".accurip", ".cue", ".log", ".wav")]
+                                            + ["folder.jpg"]), f"disc 2's own files, and the cover: {os.listdir(two)}")
+    check(sorted(os.listdir(folder)) == sorted(["JB - Best(Disc 1)" + e for e in (".accurip", ".cue", ".log", ".wav")]
+                                               + ["folder.jpg"]), f"disc 1 left as it was: {os.listdir(folder)}")
+    check(ci.stage(root, os.path.join("JB - Best", "JB - Best(Disc 1).cue")) == folder,
+          "the last disc in the folder is staged where it is")
+    check(ingest_cd.find_rip(two)[1].endswith("(Disc 2).cue"), "and each folder is one disc to the importer")
+
+
 def tracks_rip(folder, files, log=None, age=600):
     """A tracks-mode rip of three tracks; `files` names which were written."""
     os.makedirs(folder, exist_ok=True)
@@ -287,6 +318,7 @@ def main() -> int:
     test_cueripper_checks()
     test_scan()
     test_stage()
+    test_stage_splits_a_set()
     test_tracks_scan_and_stage()
     test_inbox_setting()
     print()

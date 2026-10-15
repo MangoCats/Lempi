@@ -91,6 +91,12 @@ def find_rip(folder: str) -> tuple[str, str]:
     """
     cues = [f for f in os.listdir(folder) if f.lower().endswith(".cue")]
     tocs = [f for f in os.listdir(folder) if f.lower().endswith(".toc")]
+    if len(cues) > 1:
+        # Several discs in one folder [SPEC-RIP-118]: taking the first CUE
+        # took disc 1's identity for every file, 2026-10-15. The import page
+        # gives each disc its own folder when it is previewed.
+        raise ValueError(f"{folder!r} holds {len(cues)} CUE sheets -- {len(cues)} discs; each needs a folder "
+                         "of its own (the import page's preview makes one)")
     if cues:
         return "eac", os.path.join(folder, cues[0])
     if tocs:

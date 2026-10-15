@@ -314,7 +314,8 @@ def stage(root: str, card_id: str) -> str:
         raise FileNotFoundError(f"no rip {card_id!r} in the inbox")
     folder = os.path.dirname(cue)
     if os.path.abspath(folder) != os.path.abspath(root):
-        return folder
+        others = [n for n in os.listdir(folder) if n.lower().endswith(".cue") and n != os.path.basename(cue)]
+        return _split_disc(root, folder, cue, others) if others else folder
     stem = os.path.splitext(os.path.basename(cue))[0]
     toc = cd_toc.parse_eac_cue(cue)
     target, n = os.path.join(root, stem), 2
@@ -326,6 +327,51 @@ def stage(root: str, card_id: str) -> str:
         p = os.path.join(root, name)
         if name and os.path.isfile(p):
             shutil.move(p, os.path.join(target, name))
+    return target
+
+
+_COVER_EXT = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
+
+
+def _split_disc(root: str, folder: str, cue: str, others: list[str]) -> str:
+    """One disc of several in one folder, given a folder of its own
+    `[SPEC-RIP-118]`: its CUE, the audio it names, and the files named after
+    it -- the log and `.accurip`, a name the ripper cut short when no other
+    disc's could be meant -- moved; a cover copied, so each disc keeps one.
+    CUERipper rips a set's discs into one folder when its template has no
+    disc in it: *The Very Best of Jackson Browne*, 2026-10-15, whose add then
+    named both discs' files "(Disc 1)" and was refused. The importer works a
+    disc at a time, so every downstream step is unchanged. Returns the new
+    folder; a move that fails puts back what it moved."""
+    stem = os.path.splitext(os.path.basename(cue))[0]
+    other_stems = [os.path.splitext(o)[0] for o in others]
+    toc = cd_toc.parse_eac_cue(cue)
+    mine = {os.path.basename(cue), *(f for f in toc.files if f)}
+    for n in os.listdir(folder):
+        s = os.path.splitext(n)[0]
+        if s == stem or (s and stem.startswith(s) and not any(o.startswith(s) for o in other_stems)):
+            mine.add(n)
+    target, k = os.path.join(root, stem), 2
+    while os.path.exists(target):
+        target, k = os.path.join(root, f"{stem} ({k})"), k + 1
+    os.makedirs(target)
+    moved = []
+    try:
+        for n in sorted(mine):
+            if os.path.isfile(os.path.join(folder, n)):
+                shutil.move(os.path.join(folder, n), os.path.join(target, n))
+                moved.append(n)
+        for n in os.listdir(folder):
+            if n.lower().endswith(_COVER_EXT) and os.path.isfile(os.path.join(folder, n)):
+                shutil.copy2(os.path.join(folder, n), os.path.join(target, n))
+    except Exception:
+        for n in moved:
+            try:
+                shutil.move(os.path.join(target, n), os.path.join(folder, n))
+            except OSError:
+                pass
+        shutil.rmtree(target, ignore_errors=True)
+        raise
     return target
 
 
