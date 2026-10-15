@@ -45,7 +45,13 @@ SKIP_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip",
             ".jar",  # android/gradle/wrapper/gradle-wrapper.jar, 2026-09-26
             # SQLite's sidecars: binary like the `.db` beside them, and found
             # 2026-09-26 in the recovery snapshots under data/.
-            ".db-shm", ".db-wal"}
+            ".db-shm", ".db-wal",
+            # vendor/essentia/, committed 2026-10-01 (c6df488): the extractor
+            # and its SVM models' training histories, both binary. Their
+            # `.param` siblings are text and are searched. CI failed on these
+            # every push for two weeks, unseen from the hub until `gh` could
+            # read it, 2026-10-14.
+            ".exe", ".history"}
 
 
 def tokens_from_source(path):
