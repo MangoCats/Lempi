@@ -56,6 +56,9 @@ its row for Robyn's *BodyTalk* has said `Bjork/BodyTalk.mp3` since 2026-08-09,
 while the file, its bytes matching the record, is at `Robyn/BodyTalk.mp3`, as
 `bose` and the hub record it. A player cannot open that passage there, and
 nothing said so -- the scrub's `missing` outcome, found by its first pass.
+Corrected the same day by hand, one row: the path and the file's own mtime.
+A sync neither notices nor undoes it: `path` is a node's own column, outside
+both the drift check and the patch (`SUMMARY_COLS`, `SIGNED_EXCLUDE`).
 `lempi02w` (Pi Zero 2 W) was receiving a send, and is not yet measured.
 
 ## 3. Phase 1 -- small, and closes the most visible gaps
