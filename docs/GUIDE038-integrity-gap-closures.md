@@ -50,6 +50,7 @@ each catalogue then named (49.3 GB):*
 | `smartboardpc` | 141 s | 349 MB/s | 5,870 match |
 | `bose` (Pi 4, SD) | 19 min | 43 MB/s | 5,870 match |
 | `lp3-wifi` (Pi 3, SD) | 43 min | 19 MB/s | 5,869 match; one row names a path that does not exist |
+| `lempi02w` (Pi Zero 2 W, SD) | 37 min | 22 MB/s | 5,870 match |
 
 No file's bytes differ anywhere. `lp3-wifi`'s one is a stale path, not damage:
 its row for Robyn's *BodyTalk* has said `Bjork/BodyTalk.mp3` since 2026-08-09,
@@ -59,7 +60,7 @@ nothing said so -- the scrub's `missing` outcome, found by its first pass.
 Corrected the same day by hand, one row: the path and the file's own mtime.
 A sync neither notices nor undoes it: `path` is a node's own column, outside
 both the drift check and the patch (`SUMMARY_COLS`, `SIGNED_EXCLUDE`).
-`lempi02w` (Pi Zero 2 W) was receiving a send, and is not yet measured.
+`lempi02w` was measured the same afternoon, after a send to it had ended.
 
 ## 3. Phase 1 -- small, and closes the most visible gaps
 
