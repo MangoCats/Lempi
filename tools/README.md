@@ -49,6 +49,8 @@ Resolving what a file actually is, against MusicBrainz.
 | `fetch_chosen_tracks.py` | The track listing of each chosen release. Vipunen S3, third pass. |
 | `suggest_release.py` | Suggest a MusicBrainz release for a folder of already-split files. |
 | `fetch_cover_art.py` | Fetch missing cover art from the Cover Art Archive `[REQ-VIS-170]`. |
+| `fetch_release_credits.py` | Fill `releases.artist_credit` for the releases Browse names albums after `[REQ-VIS-183]`. |
+| `relink_cd_disc.py` | Re-link a CD's tracks catalogued as another disc's recordings to the disc they are `[SPEC-CDI-099]`. |
 | `import_lyrics.py` | Bring MuLibPlay's lyrics into Lempi `[SPEC-LYR-030]`. |
 
 ## Review & sync
@@ -71,7 +73,11 @@ Folding reviewed decisions into the library, and syncing them — and flags — 
 | `star_distribute.py` | The ssh node path, a manual tool since 2026-10-04 `[SPEC-STAR-100]`: carry the patches to one node: rehearse read-only against its live files, then `--commit` with the node's current pair kept as a backup there. |
 | `star_sync.py` | The routine sync, one command per stage (`snapshot`, `merge`, `items`, `verdict`, `approve-all`, `patch`, `rehearse`, `commit`), every node reached by signed request `[SPEC-STAR-100]`; refuses a commit until every conflict has a verdict `[SPEC-STAR-116]`. Plus the hub's daily `backup` and a `status` that fails when it goes stale `[SPEC-STAR-085..087]`. Reads `fleet/star-plan.json`. |
 | `sync_console.py` | What the console's `/sync` page knows: where a run stands, its conflicts in words and in pages, verdicts, and what blocks a commit `[SPEC-STAR-120]`. |
-| `hub_backup.cmd` | What Task Scheduler runs each night: `star_sync.py … backup`, with a message on screen if it fails `[SPEC-STAR-086]`. |
+| `hub_backup.cmd` | What Task Scheduler runs each night at 03:30: `star_sync.py … backup` -- the backup and the re-read of its objects -- then `verify_library.py`, with a message on screen if either fails `[SPEC-STAR-086]`. |
+| `hub_mirror.cmd` | What Task Scheduler runs every quarter hour, without a window: `star_sync.py … mirror`, the backup's mirror brought up to date whenever it can be reached `[SPEC-STAR-088]`. |
+| `install_hub_tasks.ps1` | Creates or updates the hub's two scheduled tasks, *Lempi hub backup* and *Lempi hub mirror* -- run once on a new or rebuilt hub (HOWTO §7). |
+| `verify_library.py` | Every catalogued file re-hashed against its recorded SHA-256: ok, re-tagged, damaged, missing, unreadable; read-only, the result kept in `data/verify/` `[GDE-INT-115]`. |
+| `bundle_ledger.py` | What each applied send touched on each speaker (`sync/bundled.json`), for the next star sync to ask that speaker about `[SPEC-STAR-945]`. |
 
 ## Flavor extraction & classifier training
 

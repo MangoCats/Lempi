@@ -215,6 +215,17 @@ this is only how to drive it.
 4. Start the console on the hub's own databases:
    `python tools/console.py data/library.db`.
 
+**The hub's nightly work, set up once.** On a new or rebuilt hub, once the
+plan above exists (its `backups` section names the folder and the mirror), run
+`powershell -ExecutionPolicy Bypass -File tools\install_hub_tasks.ps1`. It
+creates two Windows scheduled tasks: *Lempi hub backup*, at 03:30 -- the
+backup of both databases, the re-read of every kept backup, and the
+verification of every file in the library against its recorded hash -- and
+*Lempi hub mirror*, every quarter hour, which copies the backups to the mirror
+whenever it is on `[SPEC-STAR-086, 088]`. Without them nothing is backed up or
+checked, and nothing says so. `python tools/star_sync.py fleet/star-plan.json
+status` answers at any time whether all of it is current.
+
 **In the console: `http://127.0.0.1:5730/sync`**
 
 1. **Tick the nodes this run takes part with.** The hub always takes part and
