@@ -125,9 +125,38 @@ def build(tmp: str, *, cached=True, release=None) -> str:
     return db
 
 
+# A stand-in for MusicBrainz, so no test reaches the network: it names NEW
+# only while `MB_NAMES` says so, and answers 404 otherwise.
+MB_NAMES: dict = {}
+
+
+def fake_musicbrainz() -> str:
+    import http.server
+    import json as _json
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            mbid = self.path.split("/recording/")[-1].split("?")[0]
+            doc = MB_NAMES.get(mbid)
+            self.send_response(200 if doc else 404)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(_json.dumps(doc or {}).encode())
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{srv.server_address[1]}"
+
+
+MB_URL = fake_musicbrainz()
+
+
 def run(db, *args):
-    return subprocess.run([sys.executable, TOOL, db, *args],
-                          capture_output=True, text=True)
+    return subprocess.run([sys.executable, TOOL, db, *args], capture_output=True, text=True,
+                          env=dict(os.environ, LEMPI_MUSICBRAINZ_URL=MB_URL))
 
 
 def linked(db):
@@ -208,7 +237,7 @@ def main() -> int:
                .fetchone()[0] == 0, "revert must clear the decision so it returns to the queue")
         c.close()
 
-        print("a recording with no cached name is REFUSED, not written nameless")
+        print("a recording with no name anywhere -- cache, catalogue, MusicBrainz -- is REFUSED")
         db2 = build(tmp + "/b", cached=False)
         r = run(db2, "--commit")
         check(r.returncode == 0, f"exited {r.returncode}: {r.stderr[:200]}")
@@ -218,6 +247,23 @@ def main() -> int:
         check(c.execute("SELECT COUNT(*) FROM recordings WHERE mbid=?",
                         (NEW,)).fetchone()[0] == 0,
               "no nameless recording row may be created")
+        c.close()
+
+        # [REQ-LIB-177]: one a person found by searching has no cached name;
+        # MusicBrainz names it, and it is applied with that name and artist.
+        print("a recording found by search is named by MusicBrainz, and applied")
+        MB_NAMES[NEW] = {"id": NEW, "title": "Found By Search", "artist-credit": [
+            {"name": "Searched Artist", "artist": {"id": "55555555-5555-5555-5555-555555555555",
+                                                    "name": "Searched Artist"}}]}
+        db4 = build(tmp + "/found", cached=False)
+        r = run(db4, "--commit")
+        MB_NAMES.clear()
+        check(r.returncode == 0 and linked(db4)[0] == NEW, f"applied by MusicBrainz's name: {r.stdout!r}")
+        c = sqlite3.connect(db4)
+        check(c.execute("SELECT title FROM recordings WHERE mbid=?", (NEW,)).fetchone() == ("Found By Search",)
+              and c.execute("SELECT a.name FROM recording_artists ra JOIN artists a ON a.mbid = ra.artist_mbid "
+                            "WHERE ra.mbid=?", (NEW,)).fetchall() == [("Searched Artist",)],
+              "with its title and its artist")
         c.close()
 
         print("a preferred album is marked chosen, and only that one")

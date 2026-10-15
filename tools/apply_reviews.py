@@ -32,6 +32,7 @@ correction was reached.
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 
@@ -82,6 +83,48 @@ def cached_names(conn: sqlite3.Connection, passage_id: int) -> dict:
                                 for a in rec.get("artists") or [] if a.get("id")],
                 }
     return out
+
+
+def catalogue_names(conn: sqlite3.Connection, mbid: str) -> dict:
+    """The title and artists the catalogue already holds for a recording."""
+    row = conn.execute("SELECT title FROM recordings WHERE mbid = ?1", (mbid,)).fetchone()
+    if not row or not row[0]:
+        return {}
+    artists = conn.execute(
+        "SELECT a.mbid, a.name FROM recording_artists ra JOIN artists a ON a.mbid = ra.artist_mbid "
+        "WHERE ra.mbid = ?1 ORDER BY ra.weight DESC", (mbid,)).fetchall()
+    return {"title": row[0], "artists": [(a, n) for a, n in artists]}
+
+
+_ASKED = [0.0]
+
+
+def musicbrainz_names(mbid: str) -> dict:
+    """A recording's title and credited artists from MusicBrainz, for a
+    chosen recording nothing here has a name for. The network is the last
+    resort, after the cache and the catalogue; one request a second, as every
+    tool here asks. `{}` when MusicBrainz does not answer, and the decision is
+    then refused as before, never written nameless."""
+    if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", mbid or ""):
+        return {}
+    import time
+    import fetch_releases
+    wait = fetch_releases.RATE_S - (time.time() - _ASKED[0])
+    if wait > 0:
+        time.sleep(wait)
+    try:
+        base = os.environ.get("LEMPI_MUSICBRAINZ_URL", "https://musicbrainz.org").rstrip("/")
+        doc = fetch_releases.get(f"{base}/ws/2/recording/{mbid}?inc=artists&fmt=json")
+    except Exception as e:          # noqa: BLE001 -- refused below, and said
+        say(f"    MusicBrainz could not be asked about {mbid}: {e}")
+        doc = None
+    finally:
+        _ASKED[0] = time.time()
+    if not doc or not doc.get("title"):
+        return {}
+    return {"title": doc["title"],
+            "artists": [((c.get("artist") or {}).get("id"), (c.get("artist") or {}).get("name"))
+                        for c in doc.get("artist-credit") or [] if (c.get("artist") or {}).get("id")]}
 
 
 def revert(conn: sqlite3.Connection, passage_id: int, commit: bool) -> int:
@@ -281,7 +324,13 @@ def main() -> int:
 
     for passage_id, new_mbid, old_mbid, release_mbid in pending:
         names = cached_names(conn, passage_id)
-        info = names.get(new_mbid)
+        # A recording a person found themselves -- the review page's own
+        # MusicBrainz search, not one of AcoustID's suggestions -- has no
+        # cached name. The catalogue may know it; else MusicBrainz is asked.
+        # Until 2026-10-14 these were refused, and with them 17 of one
+        # evening's 42 decisions: exactly the ones a person had to look up
+        # because the fingerprint had them wrong.
+        info = names.get(new_mbid) or catalogue_names(conn, new_mbid) or musicbrainz_names(new_mbid)
         title = (info or {}).get("title")
 
         # `recordings.title` and `recordings.source` are both NOT NULL, and
@@ -354,12 +403,12 @@ def main() -> int:
             say(f"  passage {passage_id}: {old_mbid} -> {new_mbid}  ({title})")
 
     if skipped:
-        say(f"\n{len(skipped)} refused: no cached name for the chosen recording, "
+        say(f"\n{len(skipped)} refused: no name to be found for the chosen recording, "
             f"and a nameless one cannot be written")
         for passage_id, mbid in skipped[:10]:
             say(f"  passage {passage_id} -> {mbid}")
-        say("  Re-run tools/fingerprint_ids.py for these passages, or pick a "
-            "different candidate on the review page.")
+        say("  Neither the cache, the catalogue nor MusicBrainz named them; re-run "
+            "when MusicBrainz answers, or pick another candidate on the review page.")
 
     if args.commit:
         conn.commit()
