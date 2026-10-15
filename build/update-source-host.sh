@@ -3,6 +3,12 @@
 # opposed to one that is handed a finished binary.
 #
 #     build/update-source-host.sh sw@teacherslounge /home/sw/Dev/Lempi
+#     build/update-source-host.sh <user@host> <path-to-checkout> 4e70172
+#
+# With a commit, the host is fast-forwarded to that commit and no further: a
+# build already watched on another node goes to this one as it was watched,
+# whatever has been pushed since. It must already be on origin's branch; the
+# host stays on the branch, so the next update without one carries on from it.
 #
 # Why this is not another host in deploy-appliance.sh's list: the appliances
 # are aarch64 and are sent a cross-compiled binary by build/install-player.sh,
@@ -36,10 +42,11 @@ set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 HOST="${1:-}"
 REPO="${2:-}"
+PIN="${3:-}"
 
 die() { echo "update-source-host: $*" >&2; exit 1; }
 
-[ -n "$HOST" ] && [ -n "$REPO" ] || die "usage: $0 <user@host> <path-to-checkout>"
+[ -n "$HOST" ] && [ -n "$REPO" ] || die "usage: $0 <user@host> <path-to-checkout> [commit]"
 
 branch=$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null) || die "not a git checkout"
 head_sha=$(git -C "$ROOT" rev-parse HEAD)
@@ -56,12 +63,20 @@ if [ "$remote_sha" != "$head_sha" ]; then
     Run: git push origin $branch"
 fi
 
-echo "update-source-host: updating $HOST:$REPO to $(echo "$head_sha" | cut -c1-7) ..."
+want_sha="$head_sha"
+if [ -n "$PIN" ]; then
+    want_sha=$(git -C "$ROOT" rev-parse --verify --quiet "$PIN^{commit}") || die "no commit $PIN here"
+    git -C "$ROOT" merge-base --is-ancestor "$want_sha" "$remote_sha" \
+        || die "$PIN is not on origin/$branch, so $HOST cannot reach it by fast-forward"
+    echo "update-source-host: pinned to $(echo "$want_sha" | cut -c1-7), not origin/$branch's head $(echo "$remote_sha" | cut -c1-7)"
+fi
+
+echo "update-source-host: updating $HOST:$REPO to $(echo "$want_sha" | cut -c1-7) ..."
 
 # One heredoc rather than a chain of ssh calls: the steps share state (the
 # checkout's own directory, the toolchain PATH) and a partial run is easier to
 # reason about when it is one script that stopped than five that half-ran.
-ssh -o ConnectTimeout=10 "$HOST" bash -s -- "$REPO" "$branch" "$head_sha" <<'REMOTE'
+ssh -o ConnectTimeout=10 "$HOST" bash -s -- "$REPO" "$branch" "$want_sha" <<'REMOTE'
 set -uo pipefail
 REPO="$1"; branch="$2"; want="$3"
 say() { echo "  $*"; }
@@ -85,8 +100,10 @@ $dirty"
 
 git fetch --quiet origin || fail "fetch failed"
 # Fast-forward only. A merge commit made unattended on someone else's machine
-# is not a thing this should ever create.
-git merge --ff-only "origin/$branch" --quiet || fail "cannot fast-forward to origin/$branch"
+# is not a thing this should ever create. To the commit asked for: origin's
+# head, or an earlier one pinned on purpose. A pinned commit already behind
+# this checkout is not a fast-forward, and is refused rather than walked back.
+git merge --ff-only "$want" --quiet || fail "cannot fast-forward to $(echo "$want" | cut -c1-7)"
 
 got=$(git rev-parse HEAD)
 [ "$got" = "$want" ] || fail "checkout is $(echo "$got" | cut -c1-7) after pulling, wanted $(echo "$want" | cut -c1-7)"
