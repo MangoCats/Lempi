@@ -172,6 +172,15 @@ not is listed as an item for a verdict, not patched. **Measure first**: count
 such rows across consecutive daily backups. If edits always move their
 `source` or a timestamp, the count is near zero and this is a sharp tripwire;
 if not, the tools that edit without a stamp are found and fixed first.
+*Measured 2026-10-15*
+([report](../reports/unstamped-changes-2026-10-15.md)): 7,358 of 13,410
+changed rows moved no stamp in twenty days, so the rule as written would hold
+half of every day. But 6,866 have their reason in another row -- a recording's
+flavor re-averaged after its passages changed, a CD add's chosen release, the
+rekey's aliases -- and 481 fill a value that was empty. Taught those, it holds
+11 rows, all from one day's MusicBrainz re-fetch, which a `releases` row could
+be matched against the cache to explain. Build it that way, on the hub, after
+the rollout.
 
 ## 6. Phase 4 -- the hub's own audio, and what nothing tracks
 
