@@ -171,6 +171,58 @@ def test_catalogue(tmp):
           "the catalogue too: the same bytes whatever the order")
 
 
+def test_held_out(tmp):
+    """[SPEC-STAR-082]: a node's copy leaves out the hub's music it does not
+    hold, and every row that names it, and says so -- where until 2026-10-14
+    one album added on the hub refused the whole sync."""
+    out = os.path.join(tmp, "ho-out")
+    os.makedirs(out)
+    hub = sqlite3.connect(os.path.join(out, "library.db"))
+    hub.executescript("""
+        CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT UNIQUE, path TEXT, size_bytes INTEGER,
+                            mtime REAL, last_seen TEXT, first_seen TEXT);
+        CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, end_ms INTEGER);
+        CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT);
+        CREATE TABLE file_tags (file_id INTEGER PRIMARY KEY, title TEXT);
+        CREATE TABLE file_releases (audio_md5 TEXT PRIMARY KEY, release_mbid TEXT);
+        CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);
+        INSERT INTO files VALUES (1, 'held', 'C:/Music/A/Old Album/1.mp3', 1, 1, 't', 't'),
+                                 (2, 'new', 'C:/Music/J/Time the Conqueror (2008)/1.mp3', 1, 1, 't', 't');
+        INSERT INTO passages VALUES (10, 1, 100), (20, 2, 200), (21, 2, 300);
+        INSERT INTO passage_recordings VALUES (10, 'r1'), (20, 'r2'), (21, 'r2');
+        INSERT INTO file_tags VALUES (1, 'a'), (2, 'b');
+        INSERT INTO file_releases VALUES ('held', 'rel1'), ('new', 'rel2');
+        INSERT INTO recordings VALUES ('r1', 'One'), ('r2', 'Two');
+    """)
+    hub.commit()
+    hub.close()
+    summary = os.path.join(tmp, "ho-node.db")
+    node = sqlite3.connect(summary)
+    node.executescript("CREATE TABLE files (audio_md5 TEXT, path TEXT, size_bytes INTEGER, mtime REAL, "
+                       "last_seen TEXT, first_seen TEXT);"
+                       "INSERT INTO files VALUES ('held', '/srv/a.mp3', 1, 1, 't', 't');")
+    node.commit()
+    node.close()
+    rep = sm.Report()
+    sm.catalogue_copies({"hub_state_from": "hub", "nodes": [dict(name="hub"), dict(name="pi", files=summary)]},
+                        out, rep)
+    P = os.path.join(out, "nodes", "pi", "library.db")
+    check(rows(P, "SELECT audio_md5, path FROM files") == [("held", "/srv/a.mp3")],
+          "the node's copy holds the music it has, by its own path")
+    check(rows(P, "SELECT passage_id FROM passages") == [(10,)]
+          and rows(P, "SELECT passage_id FROM passage_recordings") == [(10,)]
+          and rows(P, "SELECT file_id FROM file_tags") == [(1,)]
+          and rows(P, "SELECT audio_md5 FROM file_releases") == [("held",)],
+          "and nothing that names the file it lacks: passages, credits, tags, its release")
+    check(len(rows(P, "SELECT mbid FROM recordings")) == 2, "music's own names stay")
+    h = rep.data["copies"]["pi"].get("held_out") or {}
+    check(h.get("files") == 1 and h.get("albums") == ["Time the Conqueror (2008)"]
+          and h.get("rows", {}).get("passages") == 2, f"what was left out, by album: {h}")
+    said = "\n".join(sm.copies_section(rep.data["copies"]))
+    check("not on pi, so left out of its copy" in said and "Time the Conqueror (2008)" in said
+          and "Export page" in said, f"and the report says so, and what to do: {said}")
+
+
 def test_receivers(tmp):
     """[SPEC-STAR-048]: an appliance's catalogue is received, not authored."""
     base, desk, app = (os.path.join(tmp, f"r-{n}.cat") for n in ("base", "desk", "app"))
@@ -439,6 +491,7 @@ def main() -> int:
     test_items(tmp)
     test_rekeyed(tmp)
     test_catalogue(tmp)
+    test_held_out(tmp)
     test_receivers(tmp)
     test_translation(tmp)
     test_routine(tmp)

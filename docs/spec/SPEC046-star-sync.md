@@ -91,12 +91,14 @@ The recovery above was run by hand, once. From 2026-09-26 the same thing is one 
 - It exits non-zero when the newest backup is over 30 hours old or the mirror is behind, and the wrapper then puts a message on screen.
 - `status` prints the same answer at any time. The Vipunen launcher runs it first, so a stopped backup is seen by whoever opens the console.
 
+**`[SPEC-STAR-082]` Music a node does not hold is left out of its copy, and said -- never a reason to sync nothing.** Decided 2026-10-14. A node's catalogue copy is the hub's catalogue of the music the node has: a file it lacks goes, with every row naming that file, its passages or its audio hash -- tags, credits, checks, its release and art, the hub's caches. Recordings, releases, artists and their flavor stay: they name music, not a file. The merge's report lists what was left out, by album, and says to send it from the Export page; the bundle then writes those rows, and the next sync reconciles them through the node's own `rows` `[SPEC-STAR-945]`. Until then the merge refused the whole run, so every album ripped on the hub stopped the routine sync until it had reached every speaker: on 2026-10-14 one album, *Time the Conqueror*, blocked it, and by the time it was fixed, eight, 37 files. The first run after it rehearsed clean on all three speakers it reached, each copy 37 files short and saying so.
+
 **`[SPEC-STAR-087]` A sync runs when a person starts it.** `[SPEC-STAR-070]` stands: nothing is distributed until someone has read the run's summary and the merge's report. So the sync is not scheduled. `status` shows how long since each node was last synced. The backup, which changes nothing anywhere, is the part that runs by itself.
 
 **`[SPEC-STAR-090]` The audio a node lacks goes by bundle, found by asking it.**
-A star sync carries the catalogue, never audio, and refuses an entry for audio
-the node does not hold `[SPEC-STAR-080]`. So new music reaches a speaker as a
-bundle first. Built 2026-10-01 at the maintainer's request: the Export page's
+A star sync carries the catalogue, never audio, and leaves out an entry for
+audio the node does not hold `[SPEC-STAR-082]`. So new music reaches a speaker
+as a bundle first. Built 2026-10-01 at the maintainer's request: the Export page's
 *Send what's missing* asks each speaker ticked which audio it holds --
 `mesh_diff.py` on `files`, `holds` and `credits`, read-only over ssh -- and builds one
 bundle of exactly the files this library has and it lacks

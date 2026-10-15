@@ -666,9 +666,12 @@ def catalogue_copies(manifest: dict, out: str, rep: Report):
         md5s = [r[0] for r in dest.execute("SELECT audio_md5 FROM files ORDER BY file_id")]
         missing = [m for m in md5s if m not in theirs]
         if missing:
-            dest.close()
-            raise SystemExit(f"{name} has no file for {len(missing)} of the hub's, e.g. {missing[:3]}: "
-                             "its catalogue would name paths it does not have [SPEC-STAR-080]")
+            # [SPEC-STAR-082]: music the hub has and this node does not is left
+            # out of its copy, not a reason to sync nothing. Until 2026-10-14
+            # this refused the whole run: every album added on the hub stopped
+            # the routine sync until it had been sent to every speaker.
+            entry["held_out"] = hold_out(dest, missing)
+            md5s = [m for m in md5s if m in theirs]
         dest.executemany(f"UPDATE files SET {', '.join(c + ' = ?' for c in use)} WHERE audio_md5 = ?",
                          [(*theirs[m], m) for m in md5s])
         dest.commit()
@@ -676,6 +679,47 @@ def catalogue_copies(manifest: dict, out: str, rep: Report):
         dest.close()
         entry["catalogue"] = f"the hub's, with its own {', '.join(use)}; integrity {ok}"
         entry["only_theirs"] = len(set(theirs) - set(md5s))
+
+
+def _chunks(xs: list, n: int = 500):
+    for i in range(0, len(xs), n):
+        yield xs[i:i + n]
+
+
+def hold_out(dest: sqlite3.Connection, md5s: list[str]) -> dict:
+    """[SPEC-STAR-082]: every row of a node's catalogue copy about files the
+    node does not hold, removed -- the files, their passages, and whatever
+    names a file, a passage or an audio hash: tags, credits, checks, the
+    file's release and art, the hub's own caches. The node's copy is then the
+    hub's catalogue of the music the node has. Recordings, releases and
+    artists stay: they are music's names, not a file's, and harmless unplayed.
+    When the files are sent, the bundle writes their rows, and the next sync
+    reconciles them through the node's own `rows` [SPEC-STAR-945].
+
+    Returns what it removed and the album folders it came from, for the
+    report."""
+    fids, pids, folders = [], [], set()
+    for part in _chunks(md5s):
+        q = ",".join("?" * len(part))
+        for fid, path in dest.execute(f"SELECT file_id, path FROM files WHERE audio_md5 IN ({q})", part):
+            fids.append(fid)
+            folders.add(os.path.basename(os.path.dirname(path.replace("\\", "/"))) or path)
+    for part in _chunks(fids):
+        q = ",".join("?" * len(part))
+        pids += [r[0] for r in dest.execute(f"SELECT passage_id FROM passages WHERE file_id IN ({q})", part)]
+    removed = {}
+    for (t,) in dest.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall():
+        cols = {r[1] for r in dest.execute(f"PRAGMA table_info({t})")}
+        col, vals = next(((c, v) for c, v in (("passage_id", pids), ("file_id", fids), ("audio_md5", md5s))
+                          if c in cols), (None, None))
+        if col is None or not vals:
+            continue
+        n = 0
+        for part in _chunks(vals):
+            n += dest.execute(f"DELETE FROM {t} WHERE {col} IN ({','.join('?' * len(part))})", part).rowcount
+        if n:
+            removed[t] = n
+    return {"files": len(md5s), "albums": sorted(folders), "rows": removed}
 
 
 # ------------------------------------------------------------ catalogue half --
@@ -1012,6 +1056,15 @@ def copies_section(c: dict) -> list[str]:
         L.append(f"- **{n}**: listener {e.get('listener', 'none')}" + (f" ({own})" if own else "")
                  + f"; catalogue {e.get('catalogue', 'none')}"
                  + (f"; {e['only_theirs']} file(s) it holds that the hub does not" if e.get("only_theirs") else ""))
+        h = e.get("held_out")
+        if h:
+            # [SPEC-STAR-082]: said, never silent -- what the node is not
+            # given, and what would give it.
+            albums = h["albums"]
+            L.append(f"  - **not on {n}, so left out of its copy:** {h['files']} of the hub's file(s), from "
+                     + ", ".join(f"*{a}*" for a in albums[:8])
+                     + (f" and {len(albums) - 8} more" if len(albums) > 8 else "")
+                     + ". Send them from the Export page; the next sync takes them up.")
     return L
 
 
