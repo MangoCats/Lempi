@@ -651,6 +651,30 @@ def test_old_players(tmp):
         check("OLD PLAYER" not in out.getvalue(), "a fleet of current players says nothing")
 
 
+def test_lost_answer():
+    """A node whose answer to the members' query is lost once is asked again,
+    not marked MISSING for the run -- lp3-wifi, 2026-10-15."""
+    print("a lost discovery answer is asked again, not taken as a node away")
+    asked = []
+
+    def flaky(mdir):
+        asked.append(1)
+        nodes = ["a"] if len(asked) == 1 else ["a", "b"]
+        return {f"fp-{n}": {"fingerprint": f"fp-{n}", "address": n} for n in nodes}
+    plan = {"mesh": "m", "nodes": {"a": {"member": "fp-a"}, "b": {"member": "fp-b"}}}
+    real = (ss.meshmod.sync_players, ss.mesh_of)
+    ss.meshmod.sync_players, ss.mesh_of = flaky, (lambda p: "m")
+    try:
+        got = ss.players_up(plan, ["a", "b"], {})
+        check(got["b"] is not None and len(asked) == 2, f"b found on the second asking: {got} {len(asked)}")
+        asked.clear()
+        ss.meshmod.sync_players = lambda mdir: (asked.append(1) or {"fp-a": {"fingerprint": "fp-a", "address": "a"}})
+        got = ss.players_up(plan, ["a", "b"], {})
+        check(got["b"] is None and len(asked) == 3, f"one that never answers: asked three times, then away: {len(asked)}")
+    finally:
+        ss.meshmod.sync_players, ss.mesh_of = real
+
+
 def test_hub_writers():
     """[SPEC-STAR-127]: a shell that launched the console is not a second
     console -- the process table found on the desktop, 2026-10-14."""
@@ -674,6 +698,7 @@ def test_hub_writers():
 
 def main() -> int:
     test_hub_writers()
+    test_lost_answer()
     test_split_catalogue()
     for test in (test_quiet, test_conflict, test_approve_all, test_on_demand, test_catalogue_moved,
                  test_catalogue_states, test_catalogue_old_player, test_catalogue_in_parts, test_a_patch_that_cannot_be_cut, test_selection, test_read_only_catalogue,

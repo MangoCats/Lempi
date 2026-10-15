@@ -596,6 +596,16 @@ def players_up(plan, names, started):
     stopped afterwards."""
     mdir = mesh_of(plan)
     found = meshmod.sync_players(mdir)
+    # Asked again, up to twice, while a node this run wants has not answered:
+    # a Wi-Fi node's answer is lost now and then however often one query
+    # repeats itself [GDE-NDS-910]. lp3-wifi went MISSING from a snapshot on
+    # 2026-10-15 and answered three queries in a row a minute later; lempi02w
+    # missed the first of those three. Every answer heard is kept.
+    wanted = {plan["nodes"][n].get("member") for n in names} - {None}
+    for _ in range(2):
+        if wanted <= set(found):
+            break
+        found = {**meshmod.sync_players(mdir), **found}
     got, waiting = {}, []
     for name in names:
         n = plan["nodes"][name]
