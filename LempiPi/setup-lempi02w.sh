@@ -21,8 +21,11 @@
 # that half is the unit, which is the line that decides what the player
 # opens.
 #
-# Written 2026-10-02. **--go has not run**: until it does, its staging step
-# is the part to watch.
+# Written 2026-10-02. **--go first ran 2026-10-15**, on 5331809: the staging
+# step worked, setup-appliance.sh (--no-boot-tune) rewrote lempi.service and
+# installed lempi-wifi-revert, eight Bluetooth-output items changed -- the
+# Wi-Fi failover among them, new to this node -- and the --check after it
+# reported every item as recorded.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
