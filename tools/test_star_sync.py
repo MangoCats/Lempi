@@ -104,7 +104,7 @@ def test_mirror_when_reachable():
                             "mirror": {"host": "x@off", "dir": "/m"}},
                 "hub": {"library": lib}, "runs": os.path.join(root, "runs")}
         real = ss.sd.ssh
-        ss.sd.ssh = lambda host, cmd, quiet=False: (255, "ssh: connect to host off: timed out")
+        ss.sd.ssh = lambda host, cmd, quiet=False, timeout=None: (255, "ssh: connect to host off: timed out")
         try:
             with contextlib.redirect_stdout(io.StringIO()) as out:
                 rc = ss.mirror_now(plan)
@@ -128,6 +128,76 @@ def test_mirror_when_reachable():
             check(rc == 1 and "has not been reachable to take a newer one" in text, f"a day missed: STALE: {text}")
         finally:
             ss.sd.ssh = real
+
+
+def test_mirror_limits():
+    """Every mirror step has a limit, and ssh an empty standard input: on
+    2026-10-15 a `mv` on teacherslounge finished and the ssh that ran it never
+    returned, twice, and every quarter-hour's run after it was refused."""
+    import hashlib
+    import io
+    import json
+    import subprocess
+    import contextlib
+    print("the mirror: a step that never returns is ended, said, and the run gives way")
+    calls = []
+
+    def hangs(argv, **kw):
+        calls.append((argv, kw))
+        raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+    real_run = ss.sd.subprocess.run
+    ss.sd.subprocess.run = hangs
+    try:
+        rc, out = ss.sd.ssh("x@h", "mv a b", quiet=True, timeout=5)
+    finally:
+        ss.sd.subprocess.run = real_run
+    argv, kw = calls[0]
+    check(rc == 124 and "within 5 s" in out, f"a call past its limit answers 124, said: {rc} {out}")
+    check("-n" in argv and kw.get("stdin") is subprocess.DEVNULL and kw.get("timeout") == 5,
+          f"with an empty standard input and the limit: {argv} {kw}")
+    check(ss.mirror_limit(1_270_000_000, ss.MIRROR_COPY_BPS) == ss.MIRROR_SHORT_S + 1270,
+          "a copy's limit grows with its size")
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as root:
+        os.makedirs(os.path.join(root, "objects"))
+        os.makedirs(os.path.join(root, "days"))
+        names = []
+        for body in (b"listener" * 1000, b"library" * 3000):
+            sha = hashlib.sha256(body).hexdigest()
+            with open(os.path.join(root, "objects", f"{sha}.db"), "wb") as fh:
+                fh.write(body)
+            names.append(sha)
+        with open(os.path.join(root, "days", "2026-10-15.json"), "w") as fh:
+            json.dump({"listener": names[0], "library": names[1], "taken_at": "2026-10-15T07:30:00+00:00"}, fh)
+        plan = {"backups": {"dir": root, "keep_daily": 14, "keep_monthly": 12,
+                            "mirror": {"host": "x@h", "dir": "/m"}}}
+        seen, copies = [], []
+
+        def far_end(host, cmd, quiet=False, timeout=None):
+            seen.append((cmd.split()[0], timeout))
+            if cmd.startswith("sha256sum"):
+                return 0, cmd.split()[-1].rsplit("/", 1)[-1][:-len(".db.part")] + "  x"
+            if cmd.startswith("mv"):
+                return 124, f"no answer from {host} within {timeout:.0f} s"   # the hang, now ended
+            return 0, ""
+
+        def scp(argv, **kw):
+            copies.append((argv[-1], kw.get("timeout"), kw.get("stdin")))
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        real = (ss.sd.ssh, ss.subprocess.run)
+        ss.sd.ssh, ss.subprocess.run = far_end, scp
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                rc = ss.mirror_now(plan)
+        finally:
+            ss.sd.ssh, ss.subprocess.run = real
+        said = buf.getvalue()
+        check(rc == 1 and "MIRROR FAILED: place: no answer from x@h within 120 s" in said,
+              f"the run ends, failed and said, instead of waiting: {rc} {said}")
+        check(all(t is not None for _c, t in seen), f"every ssh step had a limit: {seen}")
+        size = os.path.getsize(os.path.join(root, "objects", f"{names[0]}.db"))
+        check(copies and copies[0][1] == ss.mirror_limit(size, ss.MIRROR_COPY_BPS)
+              and copies[0][2] is subprocess.DEVNULL, f"the copy's limit is its size's: {copies}")
 
 
 def test_node_integrity():
@@ -190,6 +260,7 @@ def test_node_integrity():
 def main() -> int:
     test_backup_proofs()
     test_mirror_when_reachable()
+    test_mirror_limits()
     test_node_integrity()
     days = [f"2026-{m:02d}-{d:02d}" for m in (7, 8, 9) for d in (1, 10, 20, 28)]
     keep = ss.retained(days, 3, 2)

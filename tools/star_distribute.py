@@ -57,10 +57,25 @@ def say(msg):
     print(msg, flush=True)
 
 
-def ssh(host, cmd, quiet=False):
-    r = subprocess.run(["ssh", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=10",
-                        "-o", "ServerAliveCountMax=6", host, cmd],
-                       capture_output=True, text=True)
+def ssh(host, cmd, quiet=False, timeout=None):
+    """`cmd` on `host`: (exit code, output). With `timeout`, a call that has
+    not returned in that many seconds is ended and answers 124.
+
+    Its standard input is empty (`-n`, and DEVNULL): run by Task Scheduler,
+    ssh inherited one that never ends, and Windows OpenSSH then sometimes
+    never returned after the remote command had -- the far end's session
+    held open with nothing to do. The mirror hung that way twice on
+    2026-10-15, at a `mv` that had finished in milliseconds, and its
+    keepalives did not end it: the far end was answering them."""
+    try:
+        r = subprocess.run(["ssh", "-n", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=10",
+                            "-o", "ServerAliveCountMax=6", host, cmd],
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        out = f"no answer from {host} within {timeout:.0f} s"
+        if not quiet:
+            say(f"    {out}")
+        return 124, out
     out = (r.stdout + r.stderr).rstrip()
     if not quiet and out:
         for line in out.splitlines():
@@ -68,8 +83,10 @@ def ssh(host, cmd, quiet=False):
     return r.returncode, out
 
 
-def must(host, cmd, what, quiet=False):
-    rc, out = ssh(host, cmd, quiet)
+def must(host, cmd, what, quiet=False, timeout=None):
+    rc, out = ssh(host, cmd, quiet, timeout)
+    if rc == 124 and timeout is not None:
+        raise Failed(f"{what}: {out}")
     if rc != 0:
         raise Failed(f"{what}: exit {rc}")
     return out

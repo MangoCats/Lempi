@@ -1624,6 +1624,37 @@ def backup(plan):
     return max(rc, status(plan))
 
 
+# Every mirror step has a limit, so a host that stops answering costs one
+# quarter-hour's run, not the night: the run is said FAILED and the next one
+# starts over -- an object is sent whole or not at all (`.part`, then `mv`).
+# A short step gets two minutes. A copy or a hash gets two minutes and its
+# size at a floor rate, well under what was measured: 1.27 GB went to
+# teacherslounge over Wi-Fi in under 3.6 minutes, 2026-10-15 -- 5.9 MB/s or
+# better -- so 1 MB/s for copies; and sha256sum reads far faster than that.
+MIRROR_SHORT_S = 120
+MIRROR_COPY_BPS = 1_000_000
+MIRROR_HASH_BPS = 20_000_000
+
+
+def mirror_limit(nbytes, bps):
+    """Seconds allowed for a step over `nbytes` at the floor rate `bps`."""
+    return MIRROR_SHORT_S + nbytes / bps
+
+
+def mirror_copy(src, dest, nbytes):
+    """`scp` one file, within a limit set by its size; empty standard input,
+    as `star_distribute.ssh` has, for the same reason. Raises sd.Failed."""
+    limit = mirror_limit(nbytes, MIRROR_COPY_BPS)
+    try:
+        r = subprocess.run(["scp", "-q", *SSH, src, dest], capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL, timeout=limit)
+    except subprocess.TimeoutExpired:
+        raise sd.Failed(f"copying {os.path.basename(src)} took longer than {limit:.0f} s")
+    if r.returncode != 0:
+        raise sd.Failed(f"copying {os.path.basename(src)}: exit {r.returncode} "
+                        f"{(r.stdout + r.stderr).strip()[-200:]}")
+
+
 def mirror(plan, keep, wanted):
     """The same days and objects on the mirror host; an object is sent once,
     so an unchanged catalogue costs nothing after its first night."""
@@ -1637,34 +1668,38 @@ def mirror(plan, keep, wanted):
     # is written when next reachable, and status says when a day is missed.
     # Until 2026-10-15 it was tried at 03:30 alone, when teacherslounge is
     # usually off, and was not written for nearly three weeks.
-    rc, _ = sd.ssh(host, "true", quiet=True)
+    rc, _ = sd.ssh(host, "true", quiet=True, timeout=MIRROR_SHORT_S)
     if rc != 0:
         st = proofs(root)
         say(f"  mirror: {host} is not reachable now; it is brought up to date when it next is"
             + (f" (it holds the backup of {st['mirror_newest']})" if st.get("mirror_newest") else ""))
         return 0
     try:
-        sd.must(host, f"mkdir -p {rd}/objects {rd}/days", "reach the mirror", quiet=True)
-        there = set(sd.must(host, f"ls -1 {rd}/objects {rd}/days", "list the mirror", quiet=True).split())
+        sd.must(host, f"mkdir -p {rd}/objects {rd}/days", "reach the mirror", quiet=True, timeout=MIRROR_SHORT_S)
+        there = set(sd.must(host, f"ls -1 {rd}/objects {rd}/days", "list the mirror", quiet=True,
+                            timeout=MIRROR_SHORT_S).split())
         for o in sorted(wanted):
             if f"{o}.db" in there:
                 continue
             src = os.path.join(root, "objects", f"{o}.db")
-            subprocess.run(["scp", "-q", *SSH, src, f"{host}:{rd}/objects/{o}.db.part"], timeout=7200)
-            got = sd.must(host, f"sha256sum {rd}/objects/{o}.db.part", "hash", quiet=True).split()[0]
+            size = os.path.getsize(src)
+            mirror_copy(src, f"{host}:{rd}/objects/{o}.db.part", size)
+            got = sd.must(host, f"sha256sum {rd}/objects/{o}.db.part", "hash", quiet=True,
+                          timeout=mirror_limit(size, MIRROR_HASH_BPS)).split()[0]
             if got != o:
                 raise sd.Failed(f"object {o[:12]} did not arrive intact")
-            sd.must(host, f"mv {rd}/objects/{o}.db.part {rd}/objects/{o}.db", "place", quiet=True)
+            sd.must(host, f"mv {rd}/objects/{o}.db.part {rd}/objects/{o}.db", "place", quiet=True,
+                    timeout=MIRROR_SHORT_S)
             say(f"  mirror: sent {o[:12]}")
         for d in sorted(keep):
             src = os.path.join(root, "days", f"{d}.json")
-            subprocess.run(["scp", "-q", *SSH, src, f"{host}:{rd}/days/{d}.json"], timeout=600)
+            mirror_copy(src, f"{host}:{rd}/days/{d}.json", os.path.getsize(src))
         keep_names = " ".join(f"{d}.json" for d in keep)
         want_names = " ".join(f"{o}.db" for o in wanted)
         sd.must(host, f"cd {rd}/days && for f in *.json; do case \" {keep_names} \" in *\" $f \"*) ;; "
                       f"*) rm -f \"$f\" ;; esac; done; cd {rd}/objects && for f in *.db; do "
                       f"case \" {want_names} \" in *\" $f \"*) ;; *) rm -f \"$f\" ;; esac; done; true",
-                "prune the mirror", quiet=True)
+                "prune the mirror", quiet=True, timeout=MIRROR_SHORT_S)
         say(f"  mirror {host}:{rd} holds the same {len(keep)} day(s)")
         # [GDE-INT-120]: its objects re-hashed there, the ones not proven for
         # PROVE_DAYS, in one command; an object whose hash is not its name is
@@ -1674,8 +1709,10 @@ def mirror(plan, keep, wanted):
         st["mirror_bad"] = [o for o in st["mirror_bad"] if o in wanted]
         todo = due(st, "mirror", wanted)
         if todo:
+            total = sum(os.path.getsize(os.path.join(root, "objects", f"{o}.db")) for o in todo)
             out = sd.must(host, f"cd {rd}/objects && sha256sum -- " + " ".join(f"{o}.db" for o in todo),
-                          "re-read the mirror's objects", quiet=True)
+                          "re-read the mirror's objects", quiet=True,
+                          timeout=mirror_limit(total, MIRROR_HASH_BPS))
             seen = {}
             for line in out.splitlines():
                 sha, _, name = line.partition("  ")
