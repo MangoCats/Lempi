@@ -36,6 +36,7 @@ bluetooth_items() {
     file_item "lempi-btctl" $B/lempi-btctl /usr/local/bin/lempi-btctl 755
     file_item "lempi-speaker" $B/lempi-speaker.sh /usr/local/bin/lempi-speaker 755
     file_item "lempi-btwatch" $B/lempi-btwatch.sh /usr/local/bin/lempi-btwatch 755
+    file_item "lempi-wifiwatch" $B/lempi-wifiwatch.sh /usr/local/bin/lempi-wifiwatch 755
     file_item "lempi-bt-agent" $B/lempi-bt-agent /usr/local/bin/lempi-bt-agent 755
     file_item "lempi-wifi-failover" $B/lempi-wifi-failover /usr/local/bin/lempi-wifi-failover 755
 
@@ -51,11 +52,12 @@ bluetooth_items() {
     # lp3-wifi lacked.
     for u in lempi-speaker.service lempi-speaker.timer lempi-btwatch.service \
              lempi-btwatch.timer lempi-bt-agent.service \
-             lempi-wifi-failover.service lempi-wifi-failover.timer; do
+             lempi-wifi-failover.service lempi-wifi-failover.timer \
+             lempi-wifiwatch.service lempi-wifiwatch.timer; do
         file_item "$u" $B/$u /etc/systemd/system/$u 644
     done
     file_item "/run/lempi for the agent" $B/lempi-tmpfiles.conf /etc/tmpfiles.d/lempi.conf 644
-    for s in lempi-speaker lempi-btwatch lempi-wifi-failover; do
+    for s in lempi-speaker lempi-btwatch lempi-wifi-failover lempi-wifiwatch; do
         file_item "$s: routine ticks kept quiet" $B/lempi-quiet-tick.conf \
             /etc/systemd/system/$s.service.d/10-lempi-quiet.conf 644
     done
@@ -77,7 +79,7 @@ bluetooth_items() {
     # run. Two commands, not `enable --now`: in the overlay chroot `--now` is
     # refused outright (exit 1, so no link either), while a separate `start`
     # is skipped there with exit 0 -- both measured on lp3-wifi.
-    for t in lempi-speaker lempi-btwatch lempi-wifi-failover; do
+    for t in lempi-speaker lempi-btwatch lempi-wifi-failover lempi-wifiwatch; do
         item "$t.timer enabled" "test -L $P/etc/systemd/system/timers.target.wants/$t.timer" \
              "sudo systemctl enable $t.timer && sudo systemctl start $t.timer"
     done

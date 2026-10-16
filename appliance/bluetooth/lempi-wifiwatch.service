@@ -1,0 +1,10 @@
+# A Bluetooth appliance's unit, lempi02w's and lp3-wifi's alike [APP-BT-010].
+# Runs as root: the kernel log and the reboot both need it [PI3-FOUND-830].
+[Unit]
+Description=Notice a frozen Wi-Fi chip, and reboot at the next pause
+After=network.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lempi-wifiwatch
+# [PI3-FOUND-670]: two 3 s pings, nmcli and one 5 s player query: ~15 s.
+TimeoutStartSec=45

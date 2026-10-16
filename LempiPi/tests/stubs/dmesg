@@ -1,0 +1,6 @@
+#!/bin/sh
+# Fake dmesg: prints $VT_STATE/dmesg, the kernel log a test needs the
+# watchdogs to read [PI3-FOUND-830], and nothing when there is none.
+printf '%s\n' "dmesg $*" >> "$VT_STATE/calls"
+cat "$VT_STATE/dmesg" 2>/dev/null
+exit 0

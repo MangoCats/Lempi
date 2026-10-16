@@ -1,0 +1,6 @@
+#!/bin/sh
+# Fake ping: the router answers unless $VT_STATE/ping_fails exists
+# [PI3-FOUND-830].
+printf '%s\n' "ping $*" >> "$VT_STATE/calls"
+[ -f "$VT_STATE/ping_fails" ] && exit 1
+exit 0
