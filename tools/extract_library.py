@@ -209,14 +209,25 @@ def main() -> int:
     todo = [r for r in rows if (r[0], r[3], r[4]) not in done]
     if limit:
         todo = todo[:limit]
-    print(f"{len(rows)} files, {len(done)} cached, {len(todo)} to extract, {jobs} jobs", flush=True)
-    if not todo:
+    # Flavor belongs to a recording, and is written only when a passage is
+    # extracted -- so a passage whose features were cached under one recording
+    # and that is then credited to another (a review applied, a release
+    # match) left its new recording with none, and nothing here noticed: 116
+    # radio passages so, 2026-10-16. Its cached features are classified again,
+    # in seconds, with no Essentia run; once per recording.
+    have = {r[0] for r in con.execute("SELECT DISTINCT subject_id FROM flavor WHERE subject_kind = 'recording'")}
+    reflavor = list({r[2]: r for r in rows if (r[0], r[3], r[4]) in done and r[2] not in have}.values())
+    print(f"{len(rows)} files, {len(done)} cached, {len(todo)} to extract, {jobs} jobs"
+          + (f"; {len(reflavor)} recording(s) with cached features and no flavor" if reflavor else ""),
+          flush=True)
+    if not todo and not reflavor:
         return 0
 
     # Both tools, checked before any work: without them every passage fails,
     # and on 2026-10-01 that read only as "0 extracted, 218 failed", after
-    # two silent minutes, under a job marked done.
-    if not EXTRACTOR.is_file():
+    # two silent minutes, under a job marked done. Re-classifying cached
+    # features needs only the models.
+    if todo and not EXTRACTOR.is_file():
         print(f"ERROR: the Essentia extractor is missing: {EXTRACTOR}\n"
               "  It is committed in vendor/essentia/ -- see vendor/essentia/README.md "
               "for where it comes from.", flush=True)
@@ -226,6 +237,24 @@ def main() -> int:
     except gc.ModelsMissing as e:
         print(f"ERROR: {e}", flush=True)
         return 2
+    if reflavor:
+        n = 0
+        for md5, _path, mbid, start_ms, end_ms, _dur in reflavor:
+            blob = con.execute("SELECT features FROM lowlevel_cache WHERE audio_md5 = ? AND start_ms = ? "
+                               "AND end_ms = ?", (md5, start_ms, end_ms)).fetchone()[0]
+            doc = json.loads(zlib.decompress(blob))
+            # Windowed exactly as extract_one decides it, from the same span.
+            windowed = end_ms > 0 and end_ms - start_ms > MAX_ANALYSIS_MS
+            source = SOURCE + (WINDOW_SUFFIX if windowed else "")
+            for ch, classes in clf.classify(doc).items():
+                for cls, val in classes.items():
+                    con.execute("INSERT OR REPLACE INTO flavor VALUES ('recording',?,?,?,?,?,NULL)",
+                                (mbid, ch, cls, val, source))
+            n += 1
+        con.commit()
+        print(f"{n} recording(s) given flavor from their cached features", flush=True)
+        if not todo:
+            return 0
     print(f"extracting {len(todo)} passage(s), {jobs} at a time -- about half a minute each, "
           "so the first results take a while", flush=True)
 

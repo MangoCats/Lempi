@@ -126,12 +126,60 @@ def test_folder_scope(tmp: str):
         check(want in r.stdout, f"--folder {folder}: {want}, got {r.stdout[-200:]}")
 
 
+def test_reflavor_from_cache(tmp: str):
+    print("a passage re-credited to a recording with no flavor: classified from its cached features")
+    import json
+    import zlib
+    import extract_library as el
+    db = os.path.join(tmp, "recredit.db")
+    library(db)
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE IF NOT EXISTS lowlevel_cache (audio_md5 TEXT NOT NULL, start_ms INTEGER NOT NULL, "
+              "end_ms INTEGER NOT NULL, features BLOB NOT NULL, extractor TEXT NOT NULL, extracted_at TEXT NOT NULL, "
+              "PRIMARY KEY (audio_md5, start_ms, end_ms))")
+    c.execute("INSERT INTO lowlevel_cache VALUES ('md5', 0, 200000, ?, 'essentia', 'x')",
+              (zlib.compress(json.dumps({"bpm": 120}).encode()),))
+    # Extracted once as r1, then a review moved the passage to r2.
+    c.execute("INSERT INTO flavor VALUES ('recording','r1','danceability','danceable',0.9,'old',NULL)")
+    c.execute("INSERT INTO recordings (mbid, title, source) VALUES ('r2', 'Song (live)', 'test')")
+    c.execute("UPDATE passage_recordings SET mbid = 'r2' WHERE passage_id = 1")
+    c.commit()
+    c.close()
+
+    seen = []
+
+    class Fixed:                       # stands in for the 18 real models
+        def classify(self, doc):
+            seen.append(doc)
+            return {"danceability": {"danceable": 0.25, "not_danceable": 0.75}}
+    saved = (el.EXTRACTOR, el.gc.Classifier, sys.argv)
+    el.EXTRACTOR = Path(os.path.join(tmp, "not-there.exe"))     # not needed for cached features
+    el.gc.Classifier = Fixed
+    sys.argv = ["extract_library.py", db, "--jobs", "1"]
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            code = el.main()
+            again = el.main()
+    finally:
+        el.EXTRACTOR, el.gc.Classifier, sys.argv = saved
+    out = buf.getvalue()
+    c = sqlite3.connect(db)
+    got = c.execute("SELECT class, value, source FROM flavor WHERE subject_id = 'r2' ORDER BY class").fetchall()
+    c.close()
+    check(code == 0 and seen == [{"bpm": 120}], f"classified once, from the cache, no extractor needed: {code} {out}")
+    check(got == [("danceable", 0.25, el.SOURCE), ("not_danceable", 0.75, el.SOURCE)], f"r2's flavor: {got}")
+    check("1 recording(s) given flavor from their cached features" in out and again == 0 and len(seen) == 1,
+          f"said, and not done twice: {out}")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         test_missing_tools(tmp)
         test_classifier_refuses_partial()
         test_every_passage_failing(tmp)
         test_folder_scope(tmp)
+        test_reflavor_from_cache(tmp)
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")
