@@ -593,6 +593,7 @@ fn appliance_routes(router: Router<Ui>) -> Router<Ui> {
         .route("/audio/output/volume/clear", post(clear_output_volume))
         .route("/audio/output/use/dac", post(use_dac))
         .route("/audio/output/timeout/:secs", post(set_output_timeout))
+        .route("/audio/output/preferred-wait/:secs", post(set_preferred_wait))
         .route("/led", get(led_state))
         .route("/led/:state", post(set_led))
         .route("/wifi/scan", get(scan))

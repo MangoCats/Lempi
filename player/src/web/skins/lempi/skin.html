@@ -414,6 +414,16 @@
       </span>
       <p id="bt-timeout-hint">How long to wait for a Bluetooth speaker to connect before falling back to DAC audio (5–300 seconds).</p>
     </div>
+    <!-- [PI3-AIM-110]: read by the appliance's speaker keeper at startup. -->
+    <div class="setting" id="preferred-wait-row">
+      <label for="preferred-wait-input">Preferred speaker wait</label>
+      <span>
+        <input type="number" id="preferred-wait-input" min="1" max="60" step="1" value="5"> s
+      </span>
+      <p id="preferred-wait-hint">At startup, how long to look for your usual speaker before
+         playing on whichever speaker has connected instead (1–60 seconds). A speaker
+         that plays for five minutes becomes the usual one.</p>
+    </div>
     <div class="setting">
       <label for="prog">Programme</label>
       <span><select id="prog"></select></span>

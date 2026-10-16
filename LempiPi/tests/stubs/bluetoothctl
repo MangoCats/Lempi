@@ -41,6 +41,15 @@ case "$1" in
             sed -i 's/^\(\s*\)Connected: no/\1Connected: yes/' "$VT_STATE/info.$2" 2>/dev/null
             echo "Connection successful"
         else
+            # A speaker that connects ITSELF while this page is failing -- the
+            # FM converter in the car, every boot [PI3-FOUND-810]. Named in
+            # `arrives_on_page`, it arrives once and stays.
+            if [ -s "$VT_STATE/arrives_on_page" ]; then
+                a=$(cat "$VT_STATE/arrives_on_page")
+                : > "$VT_STATE/arrives_on_page"
+                grep "^Device $a " "$VT_STATE/paired" >> "$VT_STATE/connected"
+                sed -i 's/^\(\s*\)Connected: no/\1Connected: yes/' "$VT_STATE/info.$a" 2>/dev/null
+            fi
             echo "Failed to connect: br-connection-page-timeout" >&2
             exit 1
         fi

@@ -247,7 +247,7 @@
   // only means something inside an echo fleet [REQ-AND-170].
   const CAP_SECTIONS = {
     restart: ['restart'], power_off: ['power'], wifi: ['wifi-row'],
-    bluetooth: ['speakers', 'output-volume-row', 'bt-timeout-row'], led: ['led-row'], radios: ['radios'],
+    bluetooth: ['speakers', 'output-volume-row', 'bt-timeout-row', 'preferred-wait-row'], led: ['led-row'], radios: ['radios'],
     follow: ['echo-trim-row', 'follow-row', 'join-row'],
     writes_beside_audio: ['sidecar-row'],
     rips_cds: ['rips-row'],
@@ -766,6 +766,10 @@
       if ($('bt-timeout-input')) {
         $('bt-timeout-input').value = v.connect_timeout_s;
       }
+      if ($('preferred-wait-input') && v.preferred_wait_s != null &&
+          document.activeElement !== $('preferred-wait-input')) {
+        $('preferred-wait-input').value = v.preferred_wait_s;
+      }
       return v;
     } catch (e) {
       return null;
@@ -1082,6 +1086,17 @@
     if (!isNaN(secs)) {
       try {
         await fetch(`/audio/output/timeout/${secs}`, { method: 'POST' });
+        await updateOutputVolume();
+      } catch {}
+    }
+  };
+  // [PI3-AIM-110]: the server clamps to 1-60 and answers with what it kept,
+  // which updateOutputVolume() then shows.
+  $('preferred-wait-input').onchange = async () => {
+    const secs = parseInt($('preferred-wait-input').value, 10);
+    if (!isNaN(secs)) {
+      try {
+        await fetch(`/audio/output/preferred-wait/${secs}`, { method: 'POST' });
         await updateOutputVolume();
       } catch {}
     }

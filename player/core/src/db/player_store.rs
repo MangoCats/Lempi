@@ -195,6 +195,15 @@ pub const SPEAKER_CONNECT_TIMEOUT_MIN: u32 = 5;
 pub const SPEAKER_CONNECT_TIMEOUT_MAX: u32 = 300;
 pub const SPEAKER_CONNECT_TIMEOUT_DEFAULT: u32 = 45;
 
+/// How long the appliance waits for the preferred speaker before staying with
+/// whichever one is connected `[PI3-AIM-110]`. Read by `lempi-speaker` and
+/// `lempi-wait-sink`, which clamp it the same way. The keeper unit's
+/// `TimeoutStartSec` is sized from the ceiling `[PI3-FOUND-670]`: this plus
+/// the fallback's ten seconds, with room for a page's overshoot on each.
+pub const PREFERRED_SPEAKER_WAIT_MIN: u32 = 1;
+pub const PREFERRED_SPEAKER_WAIT_MAX: u32 = 60;
+pub const PREFERRED_SPEAKER_WAIT_DEFAULT: u32 = 5;
+
 /// How far past the last attempt a resume point must be to count as progress
 /// `[SPEC-DIR-240]`: six times the default save interval. A person who restarts
 /// a playing appliance twice within this of the same song loses that song once,
@@ -1666,6 +1675,34 @@ impl PlayerStore {
             .execute(
                 "INSERT INTO player_settings (key, value, updated_at)
                  VALUES ('speaker_connect_timeout_s', ?1, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![clamped.to_string()],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Seconds to wait for the preferred speaker at startup `[PI3-AIM-110]`.
+    /// Kept out of `Settings` as the speaker address is: the shell keeper reads
+    /// it, not the engine.
+    pub fn get_preferred_speaker_wait(&self) -> u32 {
+        self.conn
+            .query_row("SELECT value FROM player_settings WHERE key = 'preferred_speaker_wait_s'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .map(|s: u32| s.clamp(PREFERRED_SPEAKER_WAIT_MIN, PREFERRED_SPEAKER_WAIT_MAX))
+            .unwrap_or(PREFERRED_SPEAKER_WAIT_DEFAULT)
+    }
+
+    pub fn set_preferred_speaker_wait(&self, secs: u32) -> Result<(), DbError> {
+        let clamped = secs.clamp(PREFERRED_SPEAKER_WAIT_MIN, PREFERRED_SPEAKER_WAIT_MAX);
+        self.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES ('preferred_speaker_wait_s', ?1, datetime('now'))
                  ON CONFLICT(key) DO UPDATE SET
                      value = excluded.value, updated_at = excluded.updated_at",
                 rusqlite::params![clamped.to_string()],
@@ -3817,6 +3854,20 @@ mod tests {
         // Above maximum clamps to 300
         store.set_speaker_connect_timeout(999).unwrap();
         assert_eq!(store.get_speaker_connect_timeout(), SPEAKER_CONNECT_TIMEOUT_MAX);
+    }
+
+    /// `[PI3-AIM-110]`: five seconds unless the listener changed it, and
+    /// never longer than the keeper unit's ceiling allows for.
+    #[test]
+    fn preferred_speaker_wait_defaults_and_clamps() {
+        let store = settings_store();
+        assert_eq!(store.get_preferred_speaker_wait(), PREFERRED_SPEAKER_WAIT_DEFAULT);
+        store.set_preferred_speaker_wait(9).unwrap();
+        assert_eq!(store.get_preferred_speaker_wait(), 9);
+        store.set_preferred_speaker_wait(0).unwrap();
+        assert_eq!(store.get_preferred_speaker_wait(), PREFERRED_SPEAKER_WAIT_MIN);
+        store.set_preferred_speaker_wait(120).unwrap();
+        assert_eq!(store.get_preferred_speaker_wait(), PREFERRED_SPEAKER_WAIT_MAX);
     }
 
     #[test]

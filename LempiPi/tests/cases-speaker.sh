@@ -6,7 +6,7 @@
 group speaker || return 0
 printf '\nspeaker\n'
 
-keeper() { LEMPI_TICK_SECONDS=4 LEMPI_CHASE_SECONDS=2 sh "$BT/lempi-speaker.sh" 2>&1; }
+keeper() { LEMPI_FALLBACK_SECONDS=2 LEMPI_CHASE_SECONDS=2 sh "$BT/lempi-speaker.sh" 2>&1; }
 
 # --- 1. nothing connected, the chosen speaker is reachable ----------------
 # The regression of 2026-09-10 made this path unreachable: an `exit 0` above
@@ -115,7 +115,7 @@ speaker "$MIDDL" "MIDDLETON" no no
 printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
 sinks "Dummy Output"
 START=$(date +%s)
-LEMPI_TICK_SECONDS=6 LEMPI_CHASE_SECONDS=3 sh "$BT/lempi-speaker.sh" >/dev/null 2>&1
+LEMPI_FALLBACK_SECONDS=3 LEMPI_CHASE_SECONDS=3 sh "$BT/lempi-speaker.sh" >/dev/null 2>&1
 ELAPSED=$(( $(date +%s) - START ))
 if [ "$ELAPSED" -le 14 ]; then
     ok "a tick with nothing reachable stays inside its budget (${ELAPSED}s)"
@@ -239,3 +239,155 @@ assert_not_called "bluetoothctl connect $OONTZ" "does not chase Bluetooth when a
 assert_not_called "bluetoothctl trust $OONTZ" "does not trust speakers when active output is dac"
 teardown
 
+
+# --- 16. the car boot: another speaker connected first [PI3-FOUND-810] ---
+# lempi02w in a car, 2026-10-12..14. The FM converter connects itself at
+# boot; the remembered speaker is at home. The preferred speaker gets its
+# window `[PI3-AIM-110]` -- the player is held by the gate, so paging costs
+# nothing audible -- and then the converter holds the audio and nothing else
+# is paged.
+CONV=AA:BB:CC:DD:EE:01
+setup
+speaker "$OONTZ" "OontZ_Angle 3 U412" no yes
+speaker "$MIDDL" "MIDDLETON" no no
+speaker "$CONV" "JR-CCB01" yes no
+printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
+sinks "JR-CCB01"
+OUT=$(keeper)
+assert_called "bluetoothctl connect $OONTZ" "the preferred speaker gets its window first"
+assert_not_called "bluetoothctl connect $MIDDL" "pages nothing else once the window is over"
+assert_in "$OUT" "staying with JR-CCB01" "says it is staying with the connected speaker"
+assert_eq "$(cat "$LEMPI_RUN_DIR/incumbent" 2>/dev/null)" "$CONV" \
+    "claims it at once, so the gate can release the player [PI3-AIM-120]"
+assert_not_called "bluetoothctl disconnect $CONV" "never disconnects the speaker it settled on"
+teardown
+
+# --- 17. the car boot: the converter arrives during the chase ------------
+# What the journal actually showed: nothing connected when the tick began,
+# the converter a second later, and the keeper paging two absent speakers
+# for twenty-five seconds more while it played.
+setup
+speaker "$OONTZ" "OontZ_Angle 3 U412" no yes
+speaker "$MIDDL" "MIDDLETON" no no
+speaker "$CONV" "JR-CCB01" no no
+printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
+printf '%s\n' "$CONV" > "$VT_STATE/arrives_on_page"
+sinks "Dummy Output"
+OUT=$(keeper)
+assert_not_called "bluetoothctl connect $MIDDL" "stops paging once a speaker has connected itself"
+assert_eq "$(cat "$LEMPI_RUN_DIR/incumbent" 2>/dev/null)" "$CONV" "the speaker that arrived holds the audio"
+assert_not_in "$OUT" "nothing has answered" "records no miss when something did answer"
+teardown
+
+# --- 18. already playing on another speaker: no window ------------------
+# The window is for a boot, where nothing is audible. Once the player is on a
+# real sink, paging the preferred speaker would be the skip `[PI3-AIM-060]`
+# exists to prevent.
+setup
+speaker "$OONTZ" "OontZ_Angle 3 U412" no yes
+speaker "$CONV" "JR-CCB01" yes yes
+printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
+printf 'JR-CCB01\n' > "$VT_STATE/routed"
+sinks "JR-CCB01"
+keeper >/dev/null
+assert_not_called "bluetoothctl connect $OONTZ" "never pages the preferred speaker over one that is playing"
+assert_eq "$(cat "$LEMPI_RUN_DIR/incumbent" 2>/dev/null)" "$CONV" "keeps the one that is playing"
+teardown
+
+# --- 19. the wait is the listener's setting, clamped ---------------------
+setup
+. "$LEMPI_COMMON"
+assert_eq "$(lempi_preferred_wait)" "5" "five seconds when nobody has set it [PI3-AIM-110]"
+printf '9\n' > "$VT_STATE/db_preferred_wait"
+assert_eq "$(lempi_preferred_wait)" "9" "the stored wait is used"
+printf '0\n' > "$VT_STATE/db_preferred_wait"
+assert_eq "$(lempi_preferred_wait)" "1" "never less than a second"
+printf '99\n' > "$VT_STATE/db_preferred_wait"
+assert_eq "$(lempi_preferred_wait)" "60" "never more than the keeper unit allows for [PI3-FOUND-670]"
+printf 'soon\n' > "$VT_STATE/db_preferred_wait"
+assert_eq "$(lempi_preferred_wait)" "5" "a value that is not a number is no value"
+teardown
+
+setup
+speaker "$OONTZ" "OontZ_Angle 3 U412" no yes
+printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
+printf '1\n' > "$VT_STATE/db_preferred_wait"
+sinks "Dummy Output"
+OUT=$(LEMPI_FALLBACK_SECONDS=2 sh "$BT/lempi-speaker.sh" 2>&1)
+assert_in "$OUT" "did not answer in 1s" "the keeper's window is the stored wait"
+teardown
+
+# --- 20. five minutes heard on a speaker makes it the preferred one -----
+# `[PI3-AIM-130]`. Seeded twenty seconds short of the threshold, with the
+# last tick playing too; this tick, playing, crosses it.
+dwelling() { # addr seconds was-playing
+    printf '%s %s %s %s\n' "$1" "$2" "$(( $(date +%s) - 20 ))" "$3" > "$LEMPI_RUN_DIR/dwell"
+}
+on_the_converter() {
+    speaker "$OONTZ" "OontZ_Angle 3 U412" no no
+    speaker "$CONV" "JR-CCB01" yes yes
+    printf '%s\n' "$CONV" > "$LEMPI_RUN_DIR/incumbent"
+    printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
+    printf 'JR-CCB01\n' > "$VT_STATE/routed"
+    sinks "JR-CCB01"
+}
+setup
+on_the_converter
+touch "$VT_STATE/playing"
+dwelling "$CONV" 290 1
+OUT=$(keeper)
+assert_in "$OUT" "now the preferred speaker" "adopts after five minutes of playing"
+assert_in "$(cat "$VT_STATE/db_writes")" "'speaker_address', '$CONV'" "records it as the speaker"
+assert_in "$(cat "$VT_STATE/db_writes")" "'bt:$CONV'" "and as the output, where the output was a speaker"
+assert_eq "$([ -e "$LEMPI_RUN_DIR/dwell" ] && echo present || echo gone)" "gone" "and starts counting afresh"
+teardown
+
+# --- 21. paused time is not listening -----------------------------------
+setup
+on_the_converter
+dwelling "$CONV" 290 1
+keeper >/dev/null
+assert_eq "$(wc -l < "$VT_STATE/db_writes")" "0" "does not adopt while paused"
+assert_eq "$(cut -d' ' -f2,4 "$LEMPI_RUN_DIR/dwell")" "290 0" "keeps the count, and notes it was not playing"
+teardown
+
+setup
+on_the_converter
+touch "$VT_STATE/playing"
+dwelling "$CONV" 290 0
+keeper >/dev/null
+assert_eq "$(wc -l < "$VT_STATE/db_writes")" "0" "does not count the stretch since a paused tick"
+teardown
+
+# --- 22. the count belongs to one speaker -------------------------------
+setup
+on_the_converter
+touch "$VT_STATE/playing"
+dwelling "$MIDDL" 290 1
+keeper >/dev/null
+assert_eq "$(wc -l < "$VT_STATE/db_writes")" "0" "another speaker's minutes do not carry over"
+assert_eq "$(cut -d' ' -f1,2 "$LEMPI_RUN_DIR/dwell")" "$CONV 0" "the count restarts for the new speaker"
+teardown
+
+# --- 23. never on a choice that could not be read [PI3-FOUND-700] -------
+setup
+on_the_converter
+touch "$VT_STATE/playing" "$VT_STATE/db_fails"
+dwelling "$CONV" 290 1
+keeper >/dev/null
+assert_eq "$(wc -l < "$VT_STATE/db_writes")" "0" "adopts nothing when the preference could not be read"
+teardown
+
+# --- 24. playing on the preferred speaker has nothing to earn ----------
+setup
+speaker "$OONTZ" "OontZ_Angle 3 U412" yes yes
+printf '%s\n' "$OONTZ" > "$LEMPI_RUN_DIR/incumbent"
+printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
+printf 'OontZ_Angle 3 U412\n' > "$VT_STATE/routed"
+sinks "OontZ_Angle 3 U412"
+touch "$VT_STATE/playing"
+dwelling "$CONV" 100 1
+keeper >/dev/null
+assert_eq "$([ -e "$LEMPI_RUN_DIR/dwell" ] && echo present || echo gone)" "gone" \
+    "a count for another speaker ends when the preferred one plays"
+teardown

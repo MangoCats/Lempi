@@ -278,8 +278,15 @@ pub(super) async fn set_program(
 ///
 /// On demand rather than in the state snapshot: it costs a subprocess, and the
 /// settings panel is the only thing that needs it.
-pub(super) async fn audio_sink() -> axum::Json<crate::sink::SinkStatus> {
-    axum::Json(crate::sink::current())
+///
+/// Also says whether the player is playing into it, which is what lets
+/// `lempi-speaker` count time *heard* on a speaker rather than time connected
+/// to one `[PI3-AIM-130]`. The live state rides the websocket, and a shell
+/// script has no business holding one open.
+pub(super) async fn audio_sink(State(ui): State<Ui>) -> axum::Json<serde_json::Value> {
+    let mut v = serde_json::to_value(crate::sink::current()).unwrap_or_default();
+    v["playing"] = serde_json::Value::Bool(ui.handle.snapshot().playing);
+    axum::Json(v)
 }
 
 /// Restart the player, without restarting the machine `[REQ-VIS-250]`.

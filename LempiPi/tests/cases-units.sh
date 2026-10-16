@@ -46,14 +46,15 @@ else
     bad "no unit disables its start timeout explicitly" "$INFINITE"
 fi
 
-# The keeper's ceiling must clear its own tick budget, or systemd kills work
-# that was going to finish. The budget is 25 s `[PI3-FOUND-670]`.
+# The keeper's ceiling must clear its longest tick, or systemd kills work
+# that was going to finish `[PI3-FOUND-670]`. Since 2026-10-15 that is the
+# longest preferred-speaker wait plus the fallback: 60 + 10 s `[PI3-AIM-110]`.
 KEEPER_TIMEOUT=$(awk '/^install_unit lempi-speaker.service/,/^EOF$/' "$UNITS" |
     sed -n 's/^TimeoutStartSec=//p')
-if [ -n "$KEEPER_TIMEOUT" ] && [ "$KEEPER_TIMEOUT" -gt 25 ]; then
-    ok "the keeper's timeout (${KEEPER_TIMEOUT}s) clears its tick budget"
+if [ -n "$KEEPER_TIMEOUT" ] && [ "$KEEPER_TIMEOUT" -gt 70 ]; then
+    ok "the keeper's timeout (${KEEPER_TIMEOUT}s) clears its longest tick"
 else
-    bad "the keeper's timeout clears its tick budget" "got '${KEEPER_TIMEOUT:-none}', budget is 25s"
+    bad "the keeper's timeout clears its longest tick" "got '${KEEPER_TIMEOUT:-none}', longest tick is 70s"
 fi
 
 # Every unit the setup installs must name a program that ships beside it --

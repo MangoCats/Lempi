@@ -17,6 +17,9 @@ case "$*" in
             *active_output*)
                 cat "$VT_STATE/db_active_output" 2>/dev/null
                 exit 0 ;;
+            *preferred_speaker_wait_s*)
+                cat "$VT_STATE/db_preferred_wait" 2>/dev/null
+                exit 0 ;;
         esac
         cat "$VT_STATE/db_speaker" 2>/dev/null
         exit 0 ;;

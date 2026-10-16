@@ -75,9 +75,24 @@
 # keeper connects the speaker and asks the player to reopen, and if the
 # remembered speaker never answers it falls back to another known one
 # `[PI3-FOUND-560]`.
+#
+# **`[PI3-AIM-120]` And it holds the player until the speaker is settled, not
+# merely until something is there.** The car boots of 2026-10-12..14
+# `[PI3-FOUND-810]`: the FM converter's sink appeared at 3 s, this gate
+# released the player onto it, and the keeper then spent twenty-five seconds
+# paging speakers that were not in the car while the converter played at half
+# rate. Taking
+# whatever is present first is right only once the keeper has finished
+# looking for the preferred speaker -- so a real sink that is *not* the
+# preferred one is now taken when `lempi-speaker` has claimed it as the
+# incumbent, which it does the moment its window `[PI3-AIM-110]` runs out.
+#
+# Still bounded twice over, because `[PI3-FOUND-550]` holds: no real sink at
+# all still gives up at `DEADLINE`, since there is nothing to settle; and a
+# real sink the keeper never claims -- a keeper not installed, or wedged -- is
+# taken after the preferred wait plus ten seconds, and said so.
 set -u
 DEADLINE=${LEMPI_SINK_WAIT:-5}
-SPEAKER_GRACE=${LEMPI_SPEAKER_WAIT:-3}
 # The listener-side file, not the pre-split one `[PI3-FOUND-280]`: the
 # speaker this gate waits for is whichever the listener last chose, and that
 # choice is recorded in `listener.db` since `[IMPL-DBSPLIT-025]`. Reading the
@@ -85,17 +100,18 @@ SPEAKER_GRACE=${LEMPI_SPEAKER_WAIT:-3}
 . "${LEMPI_COMMON:-/usr/local/lib/lempi-common.sh}" 2>/dev/null ||
     . "$(dirname "$0")/lempi-common.sh"
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-
-# Every sink PipeWire currently offers, one name per line, dummy excluded.
-# Parsed from the numbered rows only, so no header or box-drawing line can be
-# mistaken for a sink -- the whole of `[PI3-FOUND-110]`.
+PREFER_WAIT=${LEMPI_SPEAKER_WAIT:-$(lempi_preferred_wait)}
+SETTLE=${LEMPI_SETTLE_WAIT:-$(( PREFER_WAIT + 10 ))}
+INCUMBENT="${LEMPI_RUN_DIR:-/run/lempi}/incumbent"
 
 # The speaker the listener chose, by the name PipeWire will give its sink
 # [PI3-AIM-020]. Absent is fine and common: it just means anything real will
-# do.
+# do. So does a listener who chose the DAC, for whom the keeper never runs and
+# never claims anything `[SPEC-POV-020.3]`.
 WANT=""
 ADDR=$(lempi_speaker)
 [ -n "${ADDR:-}" ] && WANT=$(lempi_alias "$ADDR")
+[ "$(lempi_active_output)" = dac ] && WANT=""
 
 # **`[PI3-FOUND-540]` Counted in seconds, not in passes.** This loop used to
 # increment a counter once per iteration and call that a second, but each pass
@@ -109,22 +125,38 @@ ADDR=$(lempi_speaker)
 # did.
 started=$(date +%s)
 i=0
-while [ "$i" -lt "$DEADLINE" ]; do
+while :; do
     sinks=$(lempi_sinks)
     if [ -n "$sinks" ]; then
         if [ -n "$WANT" ] && echo "$sinks" | grep -qxF "$WANT"; then
             echo "lempi-wait-sink: $WANT present after ${i}s"
             exit 0
         fi
-        # Something real, but not the speaker. Worth having, but not worth
-        # binding to while the speaker may still be seconds away.
-        if [ -z "$WANT" ] || [ "$i" -ge "$SPEAKER_GRACE" ]; then
+        # The keeper's choice, once it has made one.
+        held=$(cat "$INCUMBENT" 2>/dev/null)
+        if [ -n "${held:-}" ]; then
+            name=$(lempi_alias "$held")
+            if [ -n "$name" ] && echo "$sinks" | grep -qxF "$name"; then
+                echo "lempi-wait-sink: $name present after ${i}s, chosen by lempi-speaker"
+                exit 0
+            fi
+        fi
+        if [ -z "$WANT" ]; then
             echo "lempi-wait-sink: real sink present after ${i}s ($(echo "$sinks" | tr '\n' ' '))"
             exit 0
         fi
+        # Something real, but neither the speaker nor the keeper's choice.
+        # Worth having, but not worth binding to while the keeper may still
+        # be seconds from deciding.
+        if [ "$i" -ge "$SETTLE" ]; then
+            echo "lempi-wait-sink: real sink present after ${i}s ($(echo "$sinks" | tr '\n' ' '));" \
+                 "lempi-speaker had not chosen a speaker by then"
+            exit 0
+        fi
+    elif [ "$i" -ge "$DEADLINE" ]; then
+        echo "lempi-wait-sink: no real sink after ${DEADLINE}s; starting anyway" >&2
+        exit 0
     fi
     sleep 1
     i=$(( $(date +%s) - started ))
 done
-echo "lempi-wait-sink: no real sink after ${DEADLINE}s; starting anyway" >&2
-exit 0

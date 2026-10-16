@@ -62,8 +62,10 @@ fi
 # So the read's exit status is kept. `sqlite3` returns 0 for a query that
 # matches no rows and non-zero when it could not ask, which is exactly the
 # distinction needed.
+SPEAKER_PINNED=""
 if [ -n "${SPEAKER:-}" ]; then
     SPEAKER_KNOWN=yes
+    SPEAKER_PINNED=yes
 elif SPEAKER=$(lempi_speaker); then
     SPEAKER_KNOWN=yes
 else
@@ -247,46 +249,117 @@ chase_delay() {
 SPEAKERS=$(lempi_connected_speakers)
 HELD=$(cat "$INCUMBENT" 2>/dev/null)
 
-# Who holds the audio. The recorded incumbent keeps it for as long as it is
-# connected -- that is the whole point. Only when it is gone does anything else
-# become eligible, and then the listener's choice is preferred.
-CONNECTED=""
-if [ -n "${HELD:-}" ] && printf '%s\n' "$SPEAKERS" | grep -qxF "$HELD"; then
-    CONNECTED="$HELD"
-elif [ -n "${SPEAKER:-}" ] && printf '%s\n' "$SPEAKERS" | grep -qxF "$SPEAKER"; then
-    CONNECTED="$SPEAKER"
-else
-    CONNECTED=$(printf '%s\n' "$SPEAKERS" | head -1)
-fi
+# Where the player says its stream is, read once per tick: it costs the player
+# a subprocess `[PI3-API-020]`.
+ROUTED=$(lempi_routed)
 
-if [ -n "$CONNECTED" ]; then
+# **`[PI3-AIM-110]` The preferred speaker gets a few seconds, not the tick.**
+# Read here because the window decision below spends it, and the chase further
+# down does too. The listener sets it on the Settings page; 5 s by default.
+CHASE_BUDGET="${LEMPI_CHASE_SECONDS:-$(lempi_preferred_wait)}"
+
+# Recorded the moment a choice is made, not a tick later: `lempi-wait-sink`
+# holds the player until it sees one `[PI3-AIM-120]`, and thirty seconds of
+# waiting for the bookkeeping would be thirty seconds of silence for nothing.
+claim() {
+    mkdir -p "$INCUMBENT_DIR" 2>/dev/null
+    printf '%s\n' "$1" > "$INCUMBENT" 2>/dev/null
+}
+
+# **Exactly one.** Anything else that has managed to connect is shown the
+# door, whatever the audio is currently doing -- a second speaker is not a
+# guest to be tolerated, it is the thing that breaks the first one
+# `[PI3-FOUND-600]`. The agent `[PI3-FOUND-630]` should have refused it
+# before it got this far; this is the tidy-up for the ones that slip past.
+only_one() {
+    printf '%s\n' "$SPEAKERS" | while read -r other; do
+        [ -n "$other" ] || continue
+        [ "$other" = "$1" ] && continue
+        echo "$(lempi_alias "$other") connected while $(lempi_alias "$1") holds the audio -- disconnecting it"
+        bluetoothctl disconnect "$other" >/dev/null 2>&1
+    done
+}
+
+# **`[PI3-AIM-130]` Five minutes of listening makes a speaker the preferred
+# one.** Asked for by the listener after three days of driving with lempi02w
+# `[PI3-FOUND-810]`: the remembered speaker was the one at home, so every
+# boot in the car spent its first seconds looking for a speaker that was not
+# in the car. A speaker that has actually been listened to for five
+# minutes is the better guess for the next boot.
+#
+# Counted in time *heard*, not time connected: a tick adds the seconds since
+# the last one only when the player was playing into this speaker at both
+# ends. A gap longer than three timer periods is a suspended or stepped clock
+# -- the Pi has none of its own -- and is not counted at all.
+#
+# This deliberately overrides a choice the listener made, which is what
+# `[PI3-FOUND-310]` forbade for a speaker that merely connected. The dwell is
+# the difference: five minutes of playing is the listener choosing with their
+# ears. It is still never done on a choice that could not be read
+# `[PI3-FOUND-700]`, nor over an address pinned in the environment.
+DWELL="$INCUMBENT_DIR/dwell"
+ADOPT_AFTER="${LEMPI_ADOPT_SECONDS:-300}"
+dwell() {
+    _who="$1"
+    if [ "$SPEAKER_KNOWN" != yes ] || [ -n "$SPEAKER_PINNED" ] ||
+       [ -z "${SPEAKER:-}" ] || [ "$_who" = "$SPEAKER" ]; then
+        rm -f "$DWELL" 2>/dev/null
+        return 0
+    fi
+    case "$_who" in ??:??:??:??:??:??) ;; *) return 0 ;; esac
+    _now=$(date +%s)
+    _addr="" _secs=0 _last=0 _was=0
+    [ -r "$DWELL" ] && read -r _addr _secs _last _was < "$DWELL" 2>/dev/null
+    case "${_secs:-}" in ''|*[!0-9]*) _secs=0 ;; esac
+    case "${_last:-}" in ''|*[!0-9]*) _last=0 ;; esac
+    [ "${_addr:-}" = "$_who" ] || { _secs=0; _last=0; _was=0; }
+    _is=0
+    if [ "$(printf '%s' "$ROUTED" | tr a-z A-Z)" = "$(printf '%s' "$ALIAS" | tr a-z A-Z)" ] &&
+       lempi_playing; then
+        _is=1
+    fi
+    if [ "$_is" = 1 ] && [ "${_was:-0}" = 1 ]; then
+        _gap=$(( _now - _last ))
+        [ "$_gap" -ge 0 ] && [ "$_gap" -le 90 ] && _secs=$(( _secs + _gap ))
+    fi
+    if [ "$_secs" -ge "$ADOPT_AFTER" ]; then
+        # The output follows the speaker only when it was a speaker already:
+        # a listener who chose the DAC never reaches here `[SPEC-POV-020.3]`.
+        if sqlite3 "$DB" "BEGIN; \
+               INSERT INTO player_settings (key, value, updated_at) \
+                 VALUES ('speaker_address', '$_who', datetime('now')) \
+                 ON CONFLICT(key) DO UPDATE SET \
+                   value = excluded.value, updated_at = excluded.updated_at; \
+               UPDATE player_settings SET value = 'bt:$_who', updated_at = datetime('now') \
+                 WHERE key = 'active_output' AND value LIKE 'bt:%'; \
+               COMMIT;" 2>/dev/null; then
+            echo "played ${_secs}s on $ALIAS; it is now the preferred speaker in place of $(lempi_alias "$SPEAKER") [PI3-AIM-130]"
+            rm -f "$DWELL" 2>/dev/null
+            return 0
+        fi
+        echo "played ${_secs}s on $ALIAS but could not record it as the preferred speaker; will try again next tick"
+    fi
+    printf '%s %s %s %s\n' "$_who" "$_secs" "$_now" "$_is" > "$DWELL" 2>/dev/null
+}
+
+# Hold the audio on one connected speaker, and stop. Everything the tick does
+# once it knows who that is.
+hold() {
+    CONNECTED="$1"
     # Something is connected, so whatever the chase was backing off from is
     # over `[PI3-FOUND-720]`.
     chase_clear
-    if [ "$CONNECTED" != "${HELD:-}" ]; then
-        mkdir -p "$INCUMBENT_DIR" 2>/dev/null
-        printf '%s\n' "$CONNECTED" > "$INCUMBENT" 2>/dev/null
-    fi
+    [ "$CONNECTED" != "${HELD:-}" ] && claim "$CONNECTED"
 
     # Trust follows the audio, so the agent is actually reachable for everyone
     # else `[PI3-FOUND-680]`.
     trust_only "$CONNECTED"
-
-    # **Exactly one.** Anything else that has managed to connect is shown the
-    # door, whatever the audio is currently doing -- a second speaker is not a
-    # guest to be tolerated, it is the thing that breaks the first one
-    # `[PI3-FOUND-600]`. The agent `[PI3-FOUND-630]` should have refused it
-    # before it got this far; this is the tidy-up for the ones that slip past.
-    printf '%s\n' "$SPEAKERS" | while read -r other; do
-        [ -n "$other" ] || continue
-        [ "$other" = "$CONNECTED" ] && continue
-        echo "$(lempi_alias "$other") connected while $(lempi_alias "$CONNECTED") holds the audio -- disconnecting it"
-        bluetoothctl disconnect "$other" >/dev/null 2>&1
-    done
+    only_one "$CONNECTED"
 
     # Bookkeeping, only where it cannot contradict anybody: adopt into the
     # database when no speaker was ever chosen. A recorded choice stands until
-    # the listener changes it `[PI3-FOUND-310]`.
+    # the listener changes it `[PI3-FOUND-310]` -- or listens somewhere else
+    # for five minutes `[PI3-AIM-130]`, below.
     if [ "$SPEAKER_KNOWN" = yes ] && [ -z "${SPEAKER:-}" ]; then
         case "$CONNECTED" in
             ??:??:??:??:??:??)
@@ -306,7 +379,6 @@ if [ -n "$CONNECTED" ]; then
     # `[PI3-FOUND-590]`, and a reopen aimed at a sink that does not exist is an
     # instruction to abandon working audio.
     ALIAS=$(lempi_alias "$CONNECTED")
-    ROUTED=$(lempi_routed)
     if [ -n "$ALIAS" ] && lempi_sink_present "$ALIAS" &&
        [ "$(printf '%s' "$ROUTED" | tr a-z A-Z)" != "$(printf '%s' "$ALIAS" | tr a-z A-Z)" ]; then
         lempi_reopen
@@ -314,19 +386,68 @@ if [ -n "$CONNECTED" ]; then
     elif [ -n "$ALIAS" ] && ! lempi_sink_present "$ALIAS"; then
         echo "'$ALIAS' holds the audio but has no sink in PipeWire yet -- waiting, not switching"
     fi
+    dwell "$CONNECTED"
     exit 0
+}
+
+# **`[PI3-FOUND-810]` Whatever connects while the keeper is paging is the
+# answer, not a distraction.** Asked at every point where the keeper would
+# otherwise page again, and after the preferred speaker's window has run out.
+# The car boots of 2026-10-12..14 are why: the FM converter connected itself
+# a second into the chase, the player started on it, and the keeper went on
+# paging an absent speaker and then a second absent one for twenty-five
+# seconds more -- audio reaching the radio at half rate the whole time.
+settle_on_connected() {
+    SPEAKERS=$(lempi_connected_speakers)
+    [ -n "$SPEAKERS" ] || return 0
+    if [ -n "${SPEAKER:-}" ] && printf '%s\n' "$SPEAKERS" | grep -qxF "$SPEAKER"; then
+        hold "$SPEAKER"
+    fi
+    _first=$(printf '%s\n' "$SPEAKERS" | head -1)
+    echo "$1; staying with $(lempi_alias "$_first"), which is connected [PI3-AIM-110]"
+    hold "$_first"
+}
+
+# Who holds the audio. The recorded incumbent keeps it for as long as it is
+# connected -- that is the whole point. Only when it is gone does anything else
+# become eligible, and then the listener's choice is preferred.
+#
+# **`[PI3-AIM-110]` A speaker that connected first does not win outright.**
+# When nobody holds the audio yet and the player is not on a real sink -- a
+# boot, where `lempi-wait-sink` is holding it `[PI3-AIM-120]` -- the
+# preferred speaker gets its window before anything else is accepted, because
+# paging it now interrupts nothing. Once the player is audible on a speaker,
+# that speaker is kept and nothing is paged `[PI3-AIM-060]`.
+WINDOW=no
+if [ -n "${HELD:-}" ] && printf '%s\n' "$SPEAKERS" | grep -qxF "$HELD"; then
+    hold "$HELD"
+elif [ -n "${SPEAKER:-}" ] && printf '%s\n' "$SPEAKERS" | grep -qxF "$SPEAKER"; then
+    hold "$SPEAKER"
+elif [ -n "$SPEAKERS" ]; then
+    case "${ROUTED:-none}" in
+        none|"Dummy Output")
+            if [ -n "${SPEAKER:-}" ] && [ "$SPEAKER_KNOWN" = yes ]; then
+                WINDOW=yes
+            fi
+            ;;
+    esac
+    [ "$WINDOW" = yes ] || hold "$(printf '%s\n' "$SPEAKERS" | head -1)"
 fi
 
-# Nothing connected, so the incumbency is over and the next tick may pick
-# freely. Cleared here rather than left to go stale, so a speaker that comes
-# back does not inherit a claim it no longer has.
-rm -f "$INCUMBENT" 2>/dev/null
+if [ "$WINDOW" = no ]; then
+    # Nothing connected, so the incumbency is over and the next tick may pick
+    # freely. Cleared here rather than left to go stale, so a speaker that
+    # comes back does not inherit a claim it no longer has.
+    rm -f "$INCUMBENT" 2>/dev/null
 
-# Nobody holds the audio, so the listener's choice gets the standing invitation
-# back: it is the one path that does not have to win the power-up race. Skipped
-# entirely when the choice could not be read `[PI3-FOUND-700]` -- handing the
-# invitation to a guess is the same mistake in a quieter form.
-[ "$SPEAKER_KNOWN" = yes ] && trust_only "${SPEAKER:-}"
+    # Nobody holds the audio, so the listener's choice gets the standing
+    # invitation back: it is the one path that does not have to win the
+    # power-up race. Skipped entirely when the choice could not be read
+    # `[PI3-FOUND-700]` -- handing the invitation to a guess is the same
+    # mistake in a quieter form. Not done inside the window: it would untrust
+    # the speaker that is connected and may be about to hold the audio.
+    [ "$SPEAKER_KNOWN" = yes ] && trust_only "${SPEAKER:-}"
+fi
 
 # **Absent is a real answer, not an error.** Paging a device the shared
 # Bluetooth radio cannot reach stalls whatever the appliance IS playing for
@@ -366,15 +487,20 @@ rm -f "$INCUMBENT" 2>/dev/null
 # same work run by hand recovered the appliance in 25 seconds. The appliance
 # was not slow to recover; it was not running.
 #
-# So there is one budget for the tick, shared. The chase gets the larger part
-# because it is the common case, and the fallback keeps a share of its own: a
-# single shared deadline would let a chosen speaker that is switched off eat
-# the whole tick, every tick, and the fallback would never run at all.
-TICK_BUDGET="${LEMPI_TICK_SECONDS:-25}"
-CHASE_BUDGET="${LEMPI_CHASE_SECONDS:-15}"
-FALLBACK_BUDGET="${LEMPI_FALLBACK_SECONDS:-$(( TICK_BUDGET - CHASE_BUDGET ))}"
+# So the chase and the fallback each have a deadline of their own: a single
+# shared one would let a chosen speaker that is switched off eat the whole
+# tick, every tick, and the fallback would never run at all.
+#
+# **Revised 2026-10-15: the tick no longer has to fit inside the period.** The
+# chase's share is now the preferred speaker's wait `[PI3-AIM-110]`, read
+# above -- 5 s by default, and up to 60 s if the listener asks for it. Sixty
+# seconds of chase cannot fit a thirty-second period, and carving the fallback
+# out of what was left would quietly switch the fallback off. So the fallback
+# keeps a fixed 10 s, a long wait simply means the next tick starts later, and
+# what keeps a tick from being killed half-way is the unit's own ceiling,
+# raised to 100 s to clear 60 + 10 with a page's overshoot on each.
+FALLBACK_BUDGET="${LEMPI_FALLBACK_SECONDS:-10}"
 
-ROUTED=$(lempi_routed)
 case "${ROUTED:-none}" in
     none|"Dummy Output") BUDGET="$CHASE_BUDGET" ;;
     *)                   BUDGET=0 ;;
@@ -425,6 +551,7 @@ if [ "$BUDGET" -gt 0 ]; then
         wedged)
             echo "the Bluetooth controller is not answering HCI commands -- not paging anything." \
                  "Check 'dmesg | grep hci0' for tx timeouts; this state needs a reboot [PI3-FOUND-730]"
+            settle_on_connected "the controller cannot page"
             MISSES=$(( MISSES + 1 ))
             printf '%s %s\n' "$MISSES" "$(( NOW + $(chase_delay "$MISSES") ))" \
                 > "$CHASE_STATE" 2>/dev/null
@@ -442,6 +569,7 @@ fi
 # us unasked `[PI3-FOUND-130]`; this only declines to spend the radio paging
 # it `[PI3-FOUND-720]`.
 if [ "$BUDGET" -gt 0 ] && [ "$NOW" -lt "$HOLD" ]; then
+    settle_on_connected "still easing off after $MISSES missed ticks, so not paging"
     exit 0
 fi
 
@@ -462,23 +590,39 @@ fi
 # whether a baseband link exists rather than asking BlueZ whether a profile
 # finished. A link present means a connection is up or coming up, and the
 # only useful thing to do is keep out of its way.
+#
+# The pause after each attempt stops at the budget rather than running past
+# it `[PI3-AIM-110]`: with a 5 s window and one ~5 s page timeout, a full 3 s
+# pause would be most of the window again. `bluetoothctl connect` has
+# returned by then, so the page it started is over.
+pause_within() {
+    _left=$(( BUDGET - ($(date +%s) - started) ))
+    [ "$_left" -gt 3 ] && _left=3
+    [ "$_left" -gt 0 ] && sleep "$_left"
+    return 0
+}
 started=$(date +%s)
 while :; do
     if hcitool con 2>/dev/null | grep -qi "$SPEAKER"; then
-        sleep 3
+        pause_within
     else
         bluetoothctl connect "$SPEAKER" >/dev/null 2>&1
         # Long enough that two pages cannot overlap: a page that goes
         # unanswered costs the controller its own timeout, and starting the
         # next one on top of it is what produced the collisions above.
-        sleep 3
+        pause_within
     fi
     if bluetoothctl info "$SPEAKER" 2>/dev/null | grep -qi 'Connected: yes'; then
         # Connected. The stream does not dependably follow a change of default
         # sink [PI3-WHY-020], so the player is told explicitly -- and only
         # after a connection actually succeeded, so a reopen is never spent on
-        # nothing.
+        # nothing. Claimed now, and anything that connected during the window
+        # sent away, so `lempi-wait-sink` releases the player onto this one
+        # alone `[PI3-AIM-120]`.
         chase_clear
+        claim "$SPEAKER"
+        SPEAKERS=$(lempi_connected_speakers)
+        only_one "$SPEAKER"
         lempi_reopen
         echo "connected $SPEAKER after $(( $(date +%s) - started ))s and asked the player to reopen"
         exit 0
@@ -490,6 +634,11 @@ done
 # log shows a speaker being waited for rather than an appliance repeating that
 # it has failed.
 [ "$BUDGET" -gt 0 ] && echo "$SPEAKER did not answer in ${BUDGET}s (held by another device, or asleep)"
+
+# The preferred speaker's window is over. Whatever connected in the meantime
+# -- on its own, as the FM converter in the car always did -- holds the audio
+# now, and nothing else is paged `[PI3-FOUND-810]`.
+settle_on_connected "$(lempi_alias "$SPEAKER") did not connect within ${BUDGET}s"
 
 # **`[PI3-FOUND-560]` A remembered speaker that is switched off should not
 # leave the appliance silent when another one is sitting there paired.**
@@ -517,7 +666,8 @@ done
 # It does not rewrite the listener's choice. `speaker_address` still names the
 # speaker they picked, so when that one comes back it is preferred again on
 # the next boot. This is a stand-in for a missing speaker, not a new decision
-# about which speaker this is.
+# about which speaker this is -- until it has been played on for five
+# minutes, when it becomes one `[PI3-AIM-130]`.
 if [ "$BUDGET" -gt 0 ]; then
     FALLBACK="$FALLBACK_BUDGET"
     fstart=$(date +%s)
@@ -525,6 +675,9 @@ if [ "$BUDGET" -gt 0 ]; then
                   sed -n 's/^Device \([0-9A-F:]*\) .*/\1/p'); do
         [ "$addr" = "$SPEAKER" ] && continue
         [ $(( $(date +%s) - fstart )) -lt "$FALLBACK" ] || break
+        # Before every page, not once: the speaker that answers is often one
+        # that connected itself while the last page was failing.
+        settle_on_connected "a speaker connected while the keeper was falling back"
         cand=$(bluetoothctl info "$addr" 2>/dev/null)
         echo "$cand" | grep -q 'Audio Sink' || continue
         echo "$cand" | grep -qE 'Paired: yes|Bonded: yes' || continue
@@ -532,6 +685,7 @@ if [ "$BUDGET" -gt 0 ]; then
         bluetoothctl connect "$addr" >/dev/null 2>&1
         sleep 3
         if bluetoothctl info "$addr" 2>/dev/null | grep -qi 'Connected: yes'; then
+            claim "$addr"
             curl -s -o /dev/null -X POST \
                 "http://localhost:${LEMPI_PORT:-5720}/command/reopen-output"
             chase_clear

@@ -378,7 +378,7 @@ body:has(#panel-history:not([hidden])) main {
 
 #output-volume-row span { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 #outvol-status { opacity: .85; }
-#bt-timeout-input { width: 5em; padding: .2rem .4rem; }
+#bt-timeout-input, #preferred-wait-input { width: 5em; padding: .2rem .4rem; }
 
 /* Travel Wi-Fi Failover (Approach 1) & Hotspot Pivot (Approach 3D) [SPEC061] */
 .offline-banner:not([hidden]) {

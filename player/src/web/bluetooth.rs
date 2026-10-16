@@ -279,6 +279,10 @@ pub struct OutputVolumeStatus {
     pub last_used_db: Option<f32>,
     pub has_pinned: bool,
     pub connect_timeout_s: u32,
+    /// Seconds the appliance waits for the preferred speaker at startup
+    /// `[PI3-AIM-110]`. Carried here because this is what the Bluetooth rows
+    /// of the settings panel already read.
+    pub preferred_wait_s: u32,
 }
 
 pub(super) fn get_output_volume_status(ui: &Ui) -> Result<OutputVolumeStatus, String> {
@@ -287,6 +291,7 @@ pub(super) fn get_output_volume_status(ui: &Ui) -> Result<OutputVolumeStatus, St
     let output_id = store.get_active_output();
     let vol = store.load_output_volume(&output_id).unwrap_or_default();
     let connect_timeout_s = store.get_speaker_connect_timeout();
+    let preferred_wait_s = store.get_preferred_speaker_wait();
     let current_amp = ui.handle.snapshot().volume;
     let current_db = ((Volume::db_for(current_amp) * 10.0).round()) / 10.0;
     let name = if output_id == "dac" {
@@ -304,6 +309,7 @@ pub(super) fn get_output_volume_status(ui: &Ui) -> Result<OutputVolumeStatus, St
         name,
         current_db,
         connect_timeout_s,
+        preferred_wait_s,
     })
 }
 
@@ -374,6 +380,34 @@ pub(super) async fn set_output_timeout(
     match res {
         Ok(Ok(val)) => {
             axum::Json(serde_json::json!({ "ok": true, "connect_timeout_s": val })).into_response()
+        }
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, e).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// How long to wait for the preferred speaker before staying with whichever
+/// is connected `[PI3-AIM-110]`. Stored for `lempi-speaker` and
+/// `lempi-wait-sink` to read on their next run; nothing in the player acts on
+/// it.
+pub(super) async fn set_preferred_wait(
+    State(ui): State<Ui>,
+    axum::extract::Path(secs): axum::extract::Path<u32>,
+) -> Response {
+    let db = ui.db.clone();
+    let library = ui.library.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        let store = crate::db::PlayerStore::open_split(&db, &library)
+            .map_err(|e| e.message().to_string())?;
+        store
+            .set_preferred_speaker_wait(secs)
+            .map_err(|e| e.message().to_string())?;
+        Ok::<u32, String>(store.get_preferred_speaker_wait())
+    })
+    .await;
+    match res {
+        Ok(Ok(val)) => {
+            axum::Json(serde_json::json!({ "ok": true, "preferred_wait_s": val })).into_response()
         }
         Ok(Err(e)) => (StatusCode::BAD_REQUEST, e).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -492,6 +526,7 @@ mod tests {
             last_used_db: Some(-12.0),
             has_pinned: true,
             connect_timeout_s: 45,
+            preferred_wait_s: 5,
         };
         let val = serde_json::to_value(&st).unwrap();
         assert_eq!(val["output_id"], "dac");
@@ -499,5 +534,6 @@ mod tests {
         assert_eq!(val["has_pinned"], true);
         assert_eq!(val["pinned_db"], -15.0);
         assert_eq!(val["connect_timeout_s"], 45);
+        assert_eq!(val["preferred_wait_s"], 5);
     }
 }

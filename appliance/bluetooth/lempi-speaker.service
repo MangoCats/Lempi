@@ -7,4 +7,6 @@ Type=oneshot
 User=pi
 ExecStart=/usr/local/bin/lempi-speaker
 # [PI3-FOUND-670]: a oneshot has no start timeout unless it is given one.
-TimeoutStartSec=45
+# 100 s clears the longest tick: a 60 s preferred-speaker wait [PI3-AIM-110],
+# the 10 s fallback, and one ~5 s page running past each deadline.
+TimeoutStartSec=100

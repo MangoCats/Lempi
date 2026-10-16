@@ -44,6 +44,20 @@ lempi_active_output() {
         "SELECT value FROM player_settings WHERE key = 'active_output'" 2>/dev/null
 }
 
+# Seconds to wait for the preferred speaker before staying with whichever one
+# is connected `[PI3-AIM-110]`. The listener sets it on the Settings page; the
+# player clamps it to 1-60 when it stores it, and so does this, because a row
+# written by hand is not clamped by anybody. Unset or unreadable is 5: a wait
+# is not a choice anyone can be overruled on, so a guess here costs seconds.
+lempi_preferred_wait() {
+    _w=$(sqlite3 "$(lempi_db)" \
+        "SELECT value FROM player_settings WHERE key = 'preferred_speaker_wait_s'" 2>/dev/null)
+    case "${_w:-}" in ''|*[!0-9]*) _w=5 ;; esac
+    [ "$_w" -lt 1 ] && _w=1
+    [ "$_w" -gt 60 ] && _w=60
+    printf '%s\n' "$_w"
+}
+
 # **Every sink PipeWire currently offers**, one name per line, dummy excluded.
 # Parsed from the numbered rows only, so no header or box-drawing line can be
 # mistaken for a sink -- the whole of `[PI3-FOUND-110]`, which is why this
@@ -89,6 +103,14 @@ lempi_connected_speakers() {
 lempi_routed() {
     curl -s "http://localhost:${LEMPI_PORT:-5720}/audio/sink" 2>/dev/null |
         sed -n 's/.*"sink":"\([^"]*\)".*/\1/p'
+}
+
+# Is the player playing right now? From the same answer as `lempi_routed`, so
+# "playing" and "where" come from one moment. A player that cannot be asked is
+# not playing, which only ever delays the adoption that reads it.
+lempi_playing() {
+    curl -s "http://localhost:${LEMPI_PORT:-5720}/audio/sink" 2>/dev/null |
+        grep -q '"playing":true'
 }
 
 # Ask the player to reopen its output. The stream does not dependably follow a
