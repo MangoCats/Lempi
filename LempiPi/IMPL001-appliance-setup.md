@@ -112,7 +112,9 @@ released early would still have made a noise.
 Two consequences for anyone building another one. **Verify with `aplay -l`
 rather than assuming**: a Pi with a jack, or a Zero 2 W with a display
 attached, is *not* this profile — it has a real sink at boot, `lempi-wait-sink`
-passes on it immediately, and the player can bind to it and play to nobody,
+passes on it (at once when no speaker has been chosen; when the chosen one is
+absent, after the preferred-speaker wait plus ten seconds `[PI3-AIM-120]`),
+and the player can bind to it and play to nobody,
 which makes `[PI3-FOUND-110]`'s fault *more* likely on better-equipped
 hardware. And **nothing here belongs in `cmdline.txt`**: these parameters are
 already correct, and on a board that does have a jack they would be the wrong

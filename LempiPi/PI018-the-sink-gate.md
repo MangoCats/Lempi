@@ -58,6 +58,12 @@ immediately, measured at 0 s. What changes is the failure case, which now
 costs five seconds instead of over two minutes. The audio is no longer the
 gate's problem; the keeper connects the speaker and asks the player to reopen.
 
+> **Amended 2026-10-15** `[PI3-AIM-120]`: with no real sink at all the gate
+> still gives up at five seconds. A real sink that is neither the listener's
+> speaker nor the one the keeper has claimed is now held for up to the
+> preferred-speaker wait plus ten seconds, so the player does not play while
+> the keeper is still paging. [PI029](PI029-the-car-and-the-speaker-at-home.md)
+
 **`[PI3-FOUND-560]` And a missing speaker no longer means silence.** Asked for
 directly after the same boot: the appliance sat waiting on a speaker that had
 been switched off while a second, known speaker was awake in the same room. It
@@ -68,13 +74,17 @@ does not answer. Deliberately narrow:
 
 - Only after the chase has already failed, and only when `BUDGET` is non-zero
   -- which means nothing is currently audible. It can never interrupt playback
-  to go hunting, which was the injury behind `[PI3-AIM-060]`.
+  to go hunting, which was the injury behind `[PI3-AIM-060]`. *(Since
+  2026-10-15 it also stops before any page once a speaker has connected
+  meanwhile `[PI3-FOUND-810]`.)*
 - Only devices that are **paired and advertise an Audio Sink**. Something
   deliberately introduced to this appliance, never something merely in range.
-- Bounded at 20 s total, three seconds per candidate.
+- Bounded at 20 s total, three seconds per candidate. *(10 s since the
+  tick budget of `[PI3-FOUND-670]`, below.)*
 - **It does not rewrite `speaker_address`.** The listener's choice still stands
   and is preferred again on the next boot. This is a stand-in for a missing
-  speaker, not a new decision about which speaker this is.
+  speaker, not a new decision about which speaker this is. *(Until it has
+  been played on for five minutes, since 2026-10-15 `[PI3-AIM-130]`.)*
 
 **Trust was the obvious test and it was the wrong one.** The first version
 required `Trusted: yes` and would have skipped exactly the speaker it existed
@@ -134,6 +144,13 @@ Two fixes, because the budgets and the timeout answer different failures:
   two shares stay separate rather than sharing one deadline, because a chosen
   speaker that is switched off would otherwise eat the whole tick every time
   and the fallback would never run.
+
+> **Revised 2026-10-15** `[PI3-AIM-110]`: the chase's share is now the
+> listener's preferred-speaker wait, 1-60 s and 5 s by default, and the
+> fallback a fixed 10 s -- so a long wait makes a tick outlast the 30 s
+> period, which only delays the next one. `TimeoutStartSec` went from 45 s
+> to 100 s to clear 60 + 10 s with a page's overshoot on each.
+> [PI029](PI029-the-car-and-the-speaker-at-home.md)
 
 A settled tick costs 0 s, measured; only the absent case spends anything.
 

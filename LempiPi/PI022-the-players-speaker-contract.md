@@ -35,6 +35,15 @@ ways round:
     speaker connected  {"sink":"MIDDLETON","dummy":false,"known":true}
     speaker removed    {"sink":"Dummy Output","dummy":true,"known":true}
 
+The answer has since grown. `audible`, `observer` and `note` say what those
+three fields add up to and who observed it, and since 2026-10-15 `playing`
+carries the engine's own play state, so `lempi-speaker` can count time heard
+on a speaker rather than time connected to it `[PI3-AIM-130]`. Read on
+lempi02w that evening:
+
+    {"audible":"yes","dummy":false,"known":true,"note":null,
+     "observer":"wpctl","playing":true,"sink":"soundcore Boom 2"}
+
 **`[PI3-API-030]` Never settle for a dummy, and notice when one arrives.
 Built.** Two paths, because the first one shipped covering only half the
 problem. The loud failure -- a stream that breaks -- is caught by the error

@@ -75,6 +75,7 @@ Output volume associations and timeouts persist in `player_settings` within `lis
 - Last-used volume: `key = "volume_last:<output_id>"`, `value = "<db_float>"`.
 - Active output tracker: `key = "active_output"`, `value = "<output_id>"`.
 - Bluetooth connection timeout: `key = "speaker_connect_timeout_s"`, `value = "<secs_int>"` (default `45`).
+- Preferred-speaker wait: `key = "preferred_speaker_wait_s"`, `value = "<secs_int>"` (default `5`, clamped `1..=60`). Not read by the player: `lempi-speaker` and `lempi-wait-sink` read it on the appliance `[PI3-AIM-110]`.
 
 ---
 
@@ -107,10 +108,12 @@ When output $O$ becomes active, target volume $V_O$ is resolved:
     "pinned_db": -12.0,
     "last_used_db": -9.0,
     "has_pinned": true,
-    "connect_timeout_s": 45
+    "connect_timeout_s": 45,
+    "preferred_wait_s": 5
   }
   ```
 - `POST /audio/output/volume/remember`: Pins current volume to active output (`204 No Content`).
 - `POST /audio/output/volume/clear`: Clears pinned volume for active output (`204 No Content`).
 - `POST /audio/output/use/dac`: Disconnects Bluetooth and switches default output to DAC (`200 OK` with sink status).
 - `POST /audio/output/timeout/:secs`: Updates Bluetooth connect timeout parameter (`204 No Content`).
+- `POST /audio/output/preferred-wait/:secs`: Stores the preferred-speaker wait, clamped to 1-60 s; answers `200 OK` with `{"ok": true, "preferred_wait_s": <secs>}` `[PI3-AIM-110]`.

@@ -60,6 +60,12 @@ interactions that produced the inversion:
 | disconnect-the-others sweep | kept, but as *enforce exactly one*, not as a reaction to what is playing |
 | interloper reporting | deleted: an interloper is disconnected, not narrated |
 
+> **Amended 2026-10-15.** The startup preference came back, narrowly, as the
+> wait of `[PI3-AIM-110]`: a speaker connected while nobody holds the audio
+> and nothing is audible waits while the listener's speaker is paged for the
+> preferred-speaker wait. It needs no marker -- it applies only until
+> something holds the audio. [PI029](PI029-the-car-and-the-speaker-at-home.md)
+
 `lempi-speaker.sh` went from 503 lines to 366 with no loss of behaviour.
 
 **`[PI3-FOUND-630]` The race is closed at the source.** A keeper running

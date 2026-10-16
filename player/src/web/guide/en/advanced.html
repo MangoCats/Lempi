@@ -34,7 +34,11 @@ playback behavior:</p>
     output, the DAC or a Bluetooth speaker: <em>Remember</em> pins the
     current level for the output in use, <em>Clear</em> forgets it.
     <strong>Bluetooth timeout</strong> is how long to wait for a Bluetooth
-    speaker before falling back to the DAC.</li>
+    speaker before falling back to the DAC.
+    <strong>Preferred speaker wait</strong> is how long, whenever nothing is
+    playing yet — at startup, or after a speaker drops out — Lempi looks for
+    your usual speaker before playing on another one it knows. A speaker you
+    play on for five minutes becomes the usual one.</li>
   <li><strong>Guest sampling interval</strong> — only relevant if another
     playback backend (like MPD) is attached alongside Lempi.</li>
   <li><strong>Playing through</strong> — which backend is actually driving

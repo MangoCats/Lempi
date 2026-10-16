@@ -110,7 +110,9 @@ What that costs, beyond what is already built:
   every thirty seconds — is now prevented at its source by `[PI3-AIM-060]`,
   which pages nothing while audio reaches a real sink, so adoption survives
   only for the case where no speaker has been chosen at all. A recorded
-  choice now stands until the listener changes it.
+  choice now stands until the listener changes it. *(Amended 2026-10-15:
+  or until another speaker has been played on for five minutes, which makes
+  it the choice `[PI3-AIM-130]`.)*
 - **`[PI3-AIM-050]` Done, 2026-09-08.** `[PI3-AIM-040]`'s "audio is already
   flowing correctly" was an assumption, not a check, and it was wrong twice
   over on a lempi02w boot that a listener experienced as "can't connect to

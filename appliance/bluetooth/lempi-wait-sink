@@ -89,8 +89,10 @@
 #
 # Still bounded twice over, because `[PI3-FOUND-550]` holds: no real sink at
 # all still gives up at `DEADLINE`, since there is nothing to settle; and a
-# real sink the keeper never claims -- a keeper not installed, or wedged -- is
-# taken after the preferred wait plus ten seconds, and said so.
+# real sink the keeper never claims is taken after the preferred wait plus ten
+# seconds, and said so. That is a keeper not installed or wedged -- or a wired
+# output such as HDMI or a jack, which the keeper never claims, so a node that
+# has one waits out that deadline whenever its chosen speaker is absent.
 set -u
 DEADLINE=${LEMPI_SINK_WAIT:-5}
 # The listener-side file, not the pre-split one `[PI3-FOUND-280]`: the

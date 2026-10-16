@@ -13,6 +13,13 @@ The policy is one sentence `[PI3-AIM-080]`:
 It reads as obvious. It replaced four rules that had grown separately and
 had begun to fight each other; what follows is what that cost.
 
+> **Amended 2026-10-15** [PI029](PI029-the-car-and-the-speaker-at-home.md):
+> a speaker that is connected while nobody holds the audio and nothing is
+> audible -- a boot -- is taken only after the listener's speaker has been
+> paged for the preferred-speaker wait `[PI3-AIM-110]`. And the listener's
+> speaker is whichever they chose, or have played on for five minutes,
+> as `[PI3-AIM-130]` has it.
+
 > **Related:** [PI011](PI011-two-speakers-and-placement.md) is the front door and lists the rest.
 
 ---
@@ -130,7 +137,10 @@ thirty seconds and stalling the speaker that was actually playing. But
 audio reaches a real sink — which left adoption doing only harm. It now
 happens **only when no speaker has been chosen at all**; a recorded choice
 stands until the listener changes it, and an uninvited device is reported
-rather than promoted.
+rather than promoted. *(Since then: an uninvited device is disconnected, not
+reported `[PI3-AIM-080]`; and since 2026-10-15 a speaker played on for five
+minutes becomes the choice `[PI3-AIM-130]` -- listening, not merely
+connecting.)*
 
 **The other half is trust.** Trust means "reconnect to this without being
 asked", and on an adapter that carries one A2DP transport only one speaker

@@ -120,13 +120,17 @@ listening is a choice made with the ears.
   preferred again.
 - **A slow preferred speaker can lose.** The power-up race `[PI3-FOUND-090]`
   is now run for 5 s rather than 15. If another known speaker answers first,
-  it holds the audio, and the preferred one has to wait for its next boot or
-  be chosen by hand.
+  it holds the audio, and after five minutes of playing it is the preferred
+  one -- so getting the first one back means choosing it by hand.
 
 ## 4. Not yet measured
 
 Written and tested against the stubs (`LempiPi/tests/run speaker`,
-`waitsink`) on 2026-10-15; not yet on lempi02w. The proof is the same
+`waitsink`) on 2026-10-15, and deployed to lempi02w that evening on
+`5331809`, where a keeper tick held the Boom 2 as before. Not yet measured in
+the car. The Wi-Fi failover reached lempi02w the same evening: with no known
+network in a car it raises `lempi-ap` about a minute after boot, on the radio
+the audio shares, which the same log will show too. The proof is the same
 `lempi-hci.log` that found it: a car boot whose bytes per second are healthy
 from the moment audio starts, and a journal reading *"did not connect within
 5s; staying with JR-CCB01, which is connected"*.
