@@ -35,9 +35,24 @@ export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 # **`[SPEC-POV-020.3]` Respect DAC output selection.**
 # If the listener directed audio to the physical DAC, the appliance must
 # not chase or page any Bluetooth speaker [IMPL-POV-048].
+#
+# **`[PI3-FOUND-820]` Unless there is no DAC.** On a node with none -- lempi02w
+# is one -- a stored "dac" is not a choice anybody could have meant: the
+# player wrote it as a fallback after a failed speaker choice, a forgotten
+# speaker, or a "Can you hear it?" with nothing to go back to. Obeyed, it
+# silenced the keeper until a later choice happened to succeed. So it is
+# ignored where PipeWire offers no local output, and said once per boot.
+# Where that cannot be told, the setting is obeyed, as it always was.
 ACTIVE_OUTPUT=$(lempi_active_output)
 if [ "$ACTIVE_OUTPUT" = "dac" ]; then
-    exit 0
+    if [ "$(lempi_local_sink)" != no ]; then
+        exit 0
+    fi
+    _said="${LEMPI_RUN_DIR:-/run/lempi}/dac-ignored"
+    if [ ! -e "$_said" ]; then
+        echo "the output is set to the DAC, but this node has none -- looking for a speaker anyway [PI3-FOUND-820]"
+        mkdir -p "${_said%/*}" 2>/dev/null && : > "$_said" 2>/dev/null
+    fi
 fi
 
 # The address is whatever the player last recorded through `use`/`pair`

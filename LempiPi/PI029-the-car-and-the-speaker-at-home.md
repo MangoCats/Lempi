@@ -134,3 +134,32 @@ the audio shares, which the same log will show too. The proof is the same
 `lempi-hci.log` that found it: a car boot whose bytes per second are healthy
 from the moment audio starts, and a journal reading *"did not connect within
 5s; staying with JR-CCB01, which is connected"*.
+
+## 5. A node with no DAC
+
+**`[PI3-FOUND-820]` The player could store "dac" on a node that has none, and
+the keeper then stood aside for it.** Found reviewing this change against its
+documentation, 2026-10-15; not seen to happen on lempi02w, which had no
+`active_output` stored. Four paths wrote it: a speaker chosen in Settings that
+failed to connect, forgetting the speaker in use, the DAC entry -- drawn on
+every node -- and a "Can you hear it?" that ran out with no earlier speaker to
+go back to. `lempi-speaker` exits at once whenever the output is "dac"
+`[SPEC-POV-020.3]`, so on lempi02w one failed choice in the car would have
+left nothing reconnecting any speaker until a later choice succeeded.
+
+*What a DAC is.* A sink PipeWire offers whose node name is `alsa_output.*`,
+read from `pw-cli ls Node` by the player (`sink::local_output`) and the
+scripts (`lempi_local_sink`) alike. Not the kernel's card list: lempi02w's
+kernel has an HDMI card, but with no display PipeWire offers no sink for it.
+Read on 2026-10-15, lempi02w offered only `bluez_output.*` and lp3-wifi an
+`alsa_output.*` for its headphone jack, so only lempi02w changes behaviour.
+
+*Fixed both ways.* The player never stores "dac" where there is none: a
+failed choice changes nothing, forgetting the speaker in use clears the
+choice, `POST /audio/output/use/dac` answers `409`, and every speaker reply
+carries `has_dac` so the skin leaves the entry out. And a "dac" already stored
+is ignored where there is none: the keeper goes on looking for a speaker, and
+says so once a boot; the gate does not take the first real sink on its
+strength. Where PipeWire cannot be asked, the answer is *unknown*, and both
+keep the behaviour they had before, so a host that cannot tell is never
+treated as one without a DAC.

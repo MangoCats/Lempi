@@ -50,12 +50,13 @@ When the active output changes (switching between Bluetooth speakers, connecting
 > changing `active_output`, and `lempi-speaker` moves the stream to the speaker
 > if it connects later.
 >
-> **Known gap.** The selection fallback stores `"dac"` on a node with no DAC
-> too -- lempi02w is one -- and `lempi-speaker` stands aside whenever the output
-> is `"dac"` `[SPEC-POV-020.3]`. So after one failed choice it reconnects no
-> speaker at all until a later choice succeeds. The DAC entry, shown on every
-> node, leads to the same state when chosen on one without a DAC, and so does
-> a "Can you hear it?" that runs out with no earlier speaker to go back to.
+> **A node with no DAC, fixed 2026-10-15** `[PI3-FOUND-820]`. Item 2 and the
+> DAC entry assume a DAC exists. Where PipeWire offers no local output -- lempi02w
+> is such a node -- the selection fallback changes nothing, forgetting the
+> speaker in use clears `active_output` rather than storing `"dac"`, the DAC
+> entry is left out of the list, and `POST /audio/output/use/dac` is refused.
+> A `"dac"` already stored there is ignored by `lempi-speaker` and
+> `lempi-wait-sink`. [PI029](../../LempiPi/PI029-the-car-and-the-speaker-at-home.md)
 
 ---
 
@@ -141,6 +142,7 @@ When output $O$ becomes active, target volume $V_O$ is resolved:
   ```
 - `POST /audio/output/volume/remember`: Pins current volume to active output (`200 OK` with the same body as `GET /audio/output/volume`).
 - `POST /audio/output/volume/clear`: Clears pinned volume for active output (`200 OK` with the same body as `GET /audio/output/volume`).
-- `POST /audio/output/use/dac`: Disconnects Bluetooth and switches default output to DAC (`200 OK` with sink status).
+- `POST /audio/output/use/dac`: Disconnects Bluetooth and switches default output to DAC (`200 OK` with sink status). On a node with no DAC, `409 Conflict` with `{"ok": false, "error": "..."}`, and nothing changed `[PI3-FOUND-820]`.
+- Every `/audio/speakers` reply carries `has_dac`: `true`, `false`, or `null` when PipeWire could not be asked; the skin omits the DAC entry only on `false`.
 - `POST /audio/output/timeout/:secs`: Updates Bluetooth connect timeout parameter, clamped to 5-300 s (`200 OK` with `{"ok": true, "connect_timeout_s": <secs>}`).
 - `POST /audio/output/preferred-wait/:secs`: Stores the preferred-speaker wait, clamped to 1-60 s; answers `200 OK` with `{"ok": true, "preferred_wait_s": <secs>}` `[PI3-AIM-110]`.

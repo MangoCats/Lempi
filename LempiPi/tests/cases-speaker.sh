@@ -391,3 +391,64 @@ keeper >/dev/null
 assert_eq "$([ -e "$LEMPI_RUN_DIR/dwell" ] && echo present || echo gone)" "gone" \
     "a count for another speaker ends when the preferred one plays"
 teardown
+
+# --- 25. a stored "dac" on a node with no DAC [PI3-FOUND-820] ------------
+# lempi02w has none. The player stored "dac" after a failed choice, and the
+# keeper, standing aside for the DAC, reconnected nothing until a later
+# choice succeeded. Where PipeWire offers no local output, it is ignored.
+nodes_bluetooth_only() {
+    cat > "$VT_STATE/pw_nodes" <<'EOF'
+	id 30, type PipeWire:Interface:Node/3
+ 		node.name = "Dummy-Driver"
+	id 49, type PipeWire:Interface:Node/3
+ 		node.name = "alsa_playback.lempi"
+ 		media.class = "Stream/Output/Audio"
+	id 55, type PipeWire:Interface:Node/3
+ 		node.name = "bluez_output.AA_BB_CC_DD_EE_01.1"
+ 		media.class = "Audio/Sink"
+EOF
+}
+nodes_with_jack() {
+    cat > "$VT_STATE/pw_nodes" <<'EOF'
+	id 30, type PipeWire:Interface:Node/3
+ 		node.name = "Dummy-Driver"
+	id 48, type PipeWire:Interface:Node/3
+ 		node.name = "alsa_output.platform-3f00b840.mailbox.stereo-fallback"
+ 		media.class = "Audio/Sink"
+EOF
+}
+setup
+. "$LEMPI_COMMON"
+assert_eq "$(lempi_local_sink)" "unknown" "no PipeWire to ask is not 'no DAC'"
+nodes_bluetooth_only
+assert_eq "$(lempi_local_sink)" "no" "a Bluetooth sink and the player's own stream are not a DAC"
+nodes_with_jack
+assert_eq "$(lempi_local_sink)" "yes" "an ALSA sink is a DAC"
+: > "$VT_STATE/pw_nodes"
+assert_eq "$(lempi_local_sink)" "unknown" "an empty listing is not an answer"
+teardown
+
+setup
+speaker "$OONTZ" "OontZ_Angle 3 U412" no yes
+printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
+printf '%s\n' "$OONTZ" > "$VT_STATE/reachable"
+printf 'dac\n' > "$VT_STATE/db_active_output"
+nodes_bluetooth_only
+sinks "Dummy Output"
+OUT=$(keeper)
+assert_called "bluetoothctl connect $OONTZ" "ignores a stored DAC on a node that has none"
+assert_in "$OUT" "this node has none" "and says so"
+OUT=$(keeper)
+assert_not_in "$OUT" "this node has none" "once per boot, not every tick"
+teardown
+
+setup
+speaker "$OONTZ" "OontZ_Angle 3 U412" no yes
+printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
+printf '%s\n' "$OONTZ" > "$VT_STATE/reachable"
+printf 'dac\n' > "$VT_STATE/db_active_output"
+nodes_with_jack
+sinks "Built-in Audio Stereo"
+keeper >/dev/null
+assert_not_called "bluetoothctl connect $OONTZ" "still obeys a stored DAC on a node that has one"
+teardown

@@ -1711,8 +1711,12 @@ impl PlayerStore {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
-    /// Clean up volume rows for an output and reset active output to `"dac"` if forgotten `[IMPL-POV-020]`.
-    pub fn forget_output(&self, output: &str) -> Result<(), DbError> {
+    /// Clean up volume rows for an output and, if it was the active one, fall
+    /// back to `"dac"` `[IMPL-POV-020]` -- or, on a host with no DAC to fall
+    /// back to, clear the choice instead `[PI3-FOUND-820]`. A stored `"dac"`
+    /// there would tell the appliance's speaker keeper to stand aside for an
+    /// output that does not exist.
+    pub fn forget_output(&self, output: &str, has_dac: bool) -> Result<(), DbError> {
         let pinned_key = format!("volume_pinned:{output}");
         let last_key = format!("volume_last:{output}");
         self.conn
@@ -1722,7 +1726,13 @@ impl PlayerStore {
             )
             .map_err(|e| DbError::Query(e.to_string()))?;
         if self.get_active_output() == output {
-            self.set_active_output("dac")?;
+            if has_dac {
+                self.set_active_output("dac")?;
+            } else {
+                self.conn
+                    .execute("DELETE FROM player_settings WHERE key = 'active_output'", [])
+                    .map_err(|e| DbError::Query(e.to_string()))?;
+            }
         }
         Ok(())
     }
@@ -3895,10 +3905,25 @@ mod tests {
         assert!(store.load_output_volume(output).unwrap().pinned_db.is_some());
 
         // Forgetting the output clears volume rows and resets active output to "dac"
-        store.forget_output(output).unwrap();
+        store.forget_output(output, true).unwrap();
         let loaded = store.load_output_volume(output).unwrap();
         assert_eq!(loaded.pinned_db, None);
         assert_eq!(loaded.last_used_db, None);
         assert_eq!(store.get_active_output(), "dac");
+    }
+
+    /// `[PI3-FOUND-820]`: with no DAC to fall back to, the choice is cleared,
+    /// never set to an output the host does not have.
+    #[test]
+    fn forgetting_the_active_speaker_without_a_dac_stores_no_dac() {
+        let store = settings_store();
+        let output = "bt:12:34:56:78:9A:BC";
+        store.set_active_output(output).unwrap();
+        store.forget_output(output, false).unwrap();
+        let rows: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM player_settings WHERE key = 'active_output'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "no active_output row at all, so nothing reads as \"dac\"");
     }
 }

@@ -733,6 +733,9 @@
           if (r.ok) {
             previous = before;
             askConfirm({ name: 'DAC / Onboard Audio' });
+          } else {
+            const why = await r.json().catch(() => ({}));
+            hint(why.error ? `Not switched: ${why.error}.` : 'Could not switch to DAC.');
           }
         } catch (e) {
           hint('Could not switch to DAC.');
@@ -797,7 +800,9 @@
                             { method: scan ? 'POST' : 'GET' });
       const body = await r.json();
       list.textContent = '';
-      list.appendChild(dacRow(volStatus, body.output));
+      // [PI3-FOUND-820]: no entry for a DAC this player does not have --
+      // only a definite `false` hides it; `null` means it could not tell.
+      if (body.has_dac !== false) list.appendChild(dacRow(volStatus, body.output));
       const devices = body.devices || [];
       for (const d of devices) list.appendChild(speakerRow(d, body.output));
       // **`[PI3-FOUND-740]` A scan that did not happen must not read as one

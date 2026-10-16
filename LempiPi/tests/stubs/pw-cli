@@ -1,0 +1,9 @@
+#!/bin/sh
+# Fake pw-cli for `lempi_local_sink` [PI3-FOUND-820]: `ls Node` prints
+# $VT_STATE/pw_nodes, in the real listing's shape. With no such file it fails,
+# as pw-cli does when no PipeWire can be reached -- which must read as
+# "could not tell", never as "no DAC".
+printf '%s\n' "pw-cli $*" >> "$VT_STATE/calls"
+[ -f "$VT_STATE/pw_nodes" ] || { echo "Error: \"failed to connect: Host is down\"" >&2; exit 1; }
+cat "$VT_STATE/pw_nodes"
+exit 0

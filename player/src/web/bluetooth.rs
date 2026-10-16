@@ -77,21 +77,24 @@ pub(super) async fn speaker_verb_on(
         let db = ui.db.clone();
         let library = ui.library.clone();
         let addr = address.clone();
-        let forgotten_was_active = tokio::task::spawn_blocking(move || {
-            if let Ok(store) = crate::db::PlayerStore::open_split(&db, &library) {
-                let active = store.get_active_output();
-                let was_active = active == format!("bt:{addr}");
-                let _ = store.forget_output(&format!("bt:{addr}"));
-                was_active
-            } else {
-                false
-            }
+        let (forgotten_was_active, has_dac) = tokio::task::spawn_blocking(move || {
+            let has_dac = has_dac();
+            let was_active = crate::db::PlayerStore::open_split(&db, &library)
+                .map(|store| {
+                    let was = store.get_active_output() == format!("bt:{addr}");
+                    let _ = store.forget_output(&format!("bt:{addr}"), has_dac);
+                    was
+                })
+                .unwrap_or(false);
+            (was_active, has_dac)
         })
         .await
-        .unwrap_or(false);
+        .unwrap_or((false, true));
 
         let result = bluetooth::run(v, Some(&address));
-        if forgotten_was_active {
+        // Nothing to fall back to on a host without a DAC `[PI3-FOUND-820]`:
+        // the speaker keeper reconnects another known speaker instead.
+        if forgotten_was_active && has_dac {
             let db = ui.db.clone();
             let library = ui.library.clone();
             let current_amp = ui.handle.snapshot().volume;
@@ -111,7 +114,7 @@ pub(super) async fn speaker_verb_on(
             ui.handle.send(Command::SetVolume(dac_amp));
             tokio::time::sleep(Duration::from_millis(1_300)).await;
         }
-        return bt_reply(result, forgotten_was_active);
+        return bt_reply(result, forgotten_was_active && has_dac);
     }
 
     if matches!(v, bluetooth::Verb::Use | bluetooth::Verb::Pair) {
@@ -166,6 +169,14 @@ pub(super) async fn speaker_verb_on(
             ui.handle.send(Command::SetVolume(target_amp));
             tokio::time::sleep(Duration::from_millis(1_300)).await;
             return bt_reply(result, true);
+        } else if !tokio::task::spawn_blocking(has_dac).await.unwrap_or(true) {
+            // Failed, on a host with no DAC to fall back to `[PI3-FOUND-820]`.
+            // Storing "dac" here is what silenced lempi02w's keeper: it stands
+            // aside for the DAC `[SPEC-POV-020.3]`, and there is none. So
+            // nothing is written and nothing is disconnected -- the speaker
+            // that was chosen before stays the choice, and the keeper goes on
+            // looking for a speaker that can play.
+            return bt_reply(result, false);
         } else {
             // Connection failed or timed out: automatic fallback to DAC [IMPL-POV-045]
             let db = ui.db.clone();
@@ -415,6 +426,19 @@ pub(super) async fn set_preferred_wait(
 }
 
 pub(super) async fn use_dac(State(ui): State<Ui>) -> Response {
+    // Refused, and nothing changed, on a host without one `[PI3-FOUND-820]`.
+    // The skin hides the entry there; this is for a stale page, a countdown
+    // with nothing to go back to, and anything else that asks.
+    if !tokio::task::spawn_blocking(has_dac).await.unwrap_or(true) {
+        return (
+            StatusCode::CONFLICT,
+            axum::Json(serde_json::json!({
+                "ok": false,
+                "error": "this player has no DAC or onboard audio output",
+            })),
+        )
+            .into_response();
+    }
     let db = ui.db.clone();
     let library = ui.library.clone();
     let current_amp = ui.handle.snapshot().volume;
@@ -480,12 +504,22 @@ fn audible_json(a: crate::sink::Tristate) -> serde_json::Value {
     }
 }
 
+/// Whether this host has a DAC to fall back to `[PI3-FOUND-820]`. A host that
+/// cannot tell is treated as having one, which is how it behaved before the
+/// question was asked -- only a definite *no* changes anything.
+fn has_dac() -> bool {
+    crate::sink::local_output() != crate::sink::Tristate::No
+}
+
 /// One shape for every speaker reply, so the panel has one thing to read.
 pub(super) fn bt_reply(result: Result<serde_json::Value, String>, reopened: bool) -> Response {
     match result {
         Ok(mut v) => {
             if let Some(obj) = v.as_object_mut() {
                 obj.insert("reopened".into(), reopened.into());
+                // `true`, `false`, or `null` for "could not tell": the panel
+                // leaves the DAC entry out only on a definite `false`.
+                obj.insert("has_dac".into(), audible_json(crate::sink::local_output()));
                 // The answer the listener actually cares about, and the one
                 // the helper cannot give: where the audio ended up
                 // `[PI3-API-020]`.

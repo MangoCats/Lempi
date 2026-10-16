@@ -200,6 +200,56 @@ pub fn current() -> SinkStatus {
     observer().observe()
 }
 
+/// Does this host have a local output -- the "DAC / Onboard Audio" the
+/// settings panel offers -- as opposed to Bluetooth alone `[PI3-FOUND-820]`?
+///
+/// Asked of PipeWire, not the kernel. lempi02w's kernel lists an HDMI card,
+/// yet with no display attached PipeWire offers no sink for it, and the gate
+/// has said *"no real sink"* on every boot without a speaker. What counts is a
+/// sink PipeWire would play to that is not a Bluetooth one.
+///
+/// `Unknown` when the question cannot be put -- no `pw-cli`, no session, not
+/// Linux -- and callers then keep the behaviour they had before this existed,
+/// so a host that cannot tell is never treated as one that has no DAC.
+pub fn local_output() -> Tristate {
+    #[cfg(target_os = "linux")]
+    {
+        match Command::new("pw-cli").args(["ls", "Node"]).output() {
+            Ok(o) if o.status.success() => local_sink_in(&String::from_utf8_lossy(&o.stdout)),
+            _ => Tristate::Unknown,
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Tristate::Unknown
+    }
+}
+
+/// Read `pw-cli ls Node` for an ALSA sink. A listing with no node in it at
+/// all is not an answer -- a running PipeWire always has its drivers -- so it
+/// is `Unknown`, never `No`.
+pub fn local_sink_in(text: &str) -> Tristate {
+    let (mut nodes, mut found) = (0, false);
+    let (mut sink, mut alsa) = (false, false);
+    for line in text.lines().chain(std::iter::once("id end,")) {
+        let t = line.trim();
+        if t.starts_with("id ") && t.contains(',') {
+            found |= sink && alsa;
+            (sink, alsa) = (false, false);
+            nodes += 1;
+        } else if t == r#"media.class = "Audio/Sink""# {
+            sink = true;
+        } else if t.starts_with(r#"node.name = "alsa_output."#) {
+            alsa = true;
+        }
+    }
+    match (nodes > 1, found) {
+        (_, true) => Tristate::Yes,
+        (true, false) => Tristate::No,
+        (false, false) => Tristate::Unknown,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,5 +358,42 @@ mod tests {
     fn no_stream_is_not_an_error() {
         assert_eq!(parse(" └─ Streams:\n"), None);
         assert_eq!(parse(""), None);
+    }
+
+    /// `pw-cli ls Node` on lempi02w, 2026-10-15, trimmed: its kernel has an
+    /// HDMI card, but PipeWire offers only the speaker -- and the player's own
+    /// stream, an `alsa_playback` node, is not an output `[PI3-FOUND-820]`.
+    const BLUETOOTH_ONLY: &str = "\
+\tid 30, type PipeWire:Interface:Node/3
+ \t\tnode.name = \"Dummy-Driver\"
+\tid 49, type PipeWire:Interface:Node/3
+ \t\tnode.name = \"alsa_playback.lempi\"
+ \t\tmedia.class = \"Stream/Output/Audio\"
+\tid 55, type PipeWire:Interface:Node/3
+ \t\tnode.description = \"soundcore Boom 2\"
+ \t\tnode.name = \"bluez_output.AA_BB_CC_DD_EE_01.1\"
+ \t\tmedia.class = \"Audio/Sink\"
+";
+
+    /// lp3-wifi the same evening: the headphone jack is a local output.
+    const WITH_JACK: &str = "\
+\tid 30, type PipeWire:Interface:Node/3
+ \t\tnode.name = \"Dummy-Driver\"
+\tid 48, type PipeWire:Interface:Node/3
+ \t\tnode.description = \"Built-in Audio Stereo\"
+ \t\tnode.name = \"alsa_output.platform-3f00b840.mailbox.stereo-fallback\"
+ \t\tmedia.class = \"Audio/Sink\"
+";
+
+    #[test]
+    fn a_local_output_is_an_alsa_sink_and_nothing_else() {
+        assert_eq!(local_sink_in(BLUETOOTH_ONLY), Tristate::No);
+        assert_eq!(local_sink_in(WITH_JACK), Tristate::Yes);
+        assert_eq!(local_sink_in(&format!("{BLUETOOTH_ONLY}{WITH_JACK}")), Tristate::Yes);
+    }
+
+    #[test]
+    fn an_empty_listing_is_not_an_answer() {
+        assert_eq!(local_sink_in(""), Tristate::Unknown);
     }
 }

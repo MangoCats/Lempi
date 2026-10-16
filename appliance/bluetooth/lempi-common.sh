@@ -58,6 +58,23 @@ lempi_preferred_wait() {
     printf '%s\n' "$_w"
 }
 
+# **Does this node have a DAC at all?** `yes`, `no`, or `unknown`
+# `[PI3-FOUND-820]`. The player's own test, the same way: an `Audio/Sink`
+# whose node name is `alsa_output.*` is a local output, and a Bluetooth sink is
+# not. Asked of PipeWire, not the kernel -- lempi02w's kernel lists an HDMI
+# card that PipeWire never offers. A listing with no node in it is not an
+# answer, since a running PipeWire always has its drivers: `unknown`, and the
+# caller keeps the behaviour it had before the question existed.
+lempi_local_sink() {
+    pw-cli ls Node 2>/dev/null | awk '
+        /^[[:space:]]*id [0-9]+,/ { if (sink && alsa) found = 1
+                                    sink = 0; alsa = 0; nodes++; next }
+        /media\.class = "Audio\/Sink"/   { sink = 1 }
+        /node\.name = "alsa_output\./    { alsa = 1 }
+        END { if (sink && alsa) found = 1
+              if (found) print "yes"; else if (nodes) print "no"; else print "unknown" }'
+}
+
 # **Every sink PipeWire currently offers**, one name per line, dummy excluded.
 # Parsed from the numbered rows only, so no header or box-drawing line can be
 # mistaken for a sink -- the whole of `[PI3-FOUND-110]`, which is why this

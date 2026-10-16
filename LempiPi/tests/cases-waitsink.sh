@@ -101,3 +101,20 @@ sinks "Built-in Audio Stereo"
 OUT=$(gate 5 5)
 assert_in "$OUT" "real sink present after 0s" "takes the DAC at once [SPEC-POV-020.3]"
 teardown
+
+# --- a stored DAC on a node with none is not a reason to take any sink ---
+# `[PI3-FOUND-820]`: the keeper ignores it there, so the gate must not
+# release onto the first real sink on its strength.
+setup
+printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
+printf 'dac\n' > "$VT_STATE/db_active_output"
+speaker "$OONTZ" "OontZ_Angle 3 U412" no yes
+cat > "$VT_STATE/pw_nodes" <<'EOF'
+	id 55, type PipeWire:Interface:Node/3
+ 		node.name = "bluez_output.AA_BB_CC_DD_EE_01.1"
+ 		media.class = "Audio/Sink"
+EOF
+sinks "JR-CCB01"
+OUT=$(gate 5 1 2)
+assert_in "$OUT" "had not chosen a speaker" "waits for the keeper rather than taking any sink"
+teardown

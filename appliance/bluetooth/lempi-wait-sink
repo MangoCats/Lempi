@@ -113,7 +113,9 @@ INCUMBENT="${LEMPI_RUN_DIR:-/run/lempi}/incumbent"
 WANT=""
 ADDR=$(lempi_speaker)
 [ -n "${ADDR:-}" ] && WANT=$(lempi_alias "$ADDR")
-[ "$(lempi_active_output)" = dac ] && WANT=""
+# Not on a node with no DAC, where a stored "dac" means nothing and the
+# keeper ignores it too `[PI3-FOUND-820]`.
+[ "$(lempi_active_output)" = dac ] && [ "$(lempi_local_sink)" != no ] && WANT=""
 
 # **`[PI3-FOUND-540]` Counted in seconds, not in passes.** This loop used to
 # increment a counter once per iteration and call that a second, but each pass
