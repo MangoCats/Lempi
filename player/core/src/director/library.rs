@@ -16,7 +16,7 @@ use serde::Serialize;
 use crate::db::QualifyingConn;
 
 use super::frequency::{
-    weigh, Candidate, Exclusion, Policy, Related, TimeScale, Tuning, Weighing,
+    weigh, ArtistCredit, Candidate, Exclusion, Policy, Related, TimeScale, Tuning, Weighing,
 };
 use super::flavor::{centroid, Flavor, FlavorIndex};
 use super::occasion::{civil_from_unix, ordinal, Curve, Interp, Occasions};
@@ -198,8 +198,11 @@ pub struct Director {
     policy: Policy,
     recording_tuning: HashMap<String, Tuning>,
     artist_tuning: HashMap<String, Tuning>,
-    /// recording → its artist. One artist per recording, as migrated.
-    artist_of: HashMap<String, String>,
+    /// recording → every artist it credits, sorted. Was one artist per
+    /// recording until 2026-10-16, collected into a map that kept whichever
+    /// credit the scan returned last -- the highest artist MBID -- so Prince
+    /// + The Time rotated as The Time alone `[SPEC-DIR-114]`.
+    artist_of: HashMap<String, Vec<String>>,
     /// passage → an artist key from its file's tag, for a passage `artist_of`
     /// cannot reach: no recording, or a recording with no credited artist
     /// `[REQ-AND-315]`. Found music on a phone is all like this, and so is
@@ -313,7 +316,23 @@ impl Director {
             );
         }
 
-        let artist_of: HashMap<String, String> = map_query(conn, "SELECT mbid, artist_mbid FROM __LIB__.recording_artists")?;
+        // Every credit, not one per recording: collecting these rows into a
+        // plain map kept only the last, and on lempi02w that took Prince off
+        // 23 of his 103 radio recordings (measured 2026-10-16).
+        let mut artist_of: HashMap<String, Vec<String>> = HashMap::new();
+        {
+            let mut stmt = conn
+                .prepare("SELECT mbid, artist_mbid FROM __LIB__.recording_artists ORDER BY mbid, artist_mbid")
+                .map_err(q)?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .map_err(q)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(q)?;
+            for (mbid, artist) in rows {
+                artist_of.entry(mbid).or_default().push(artist);
+            }
+        }
 
         // A library built before `[GDE-WRK-035]` has no `recording_works`. The
         // work tier is then inactive -- which is the behaviour that shipped for
@@ -466,7 +485,9 @@ impl Director {
         drop(stmt);
         // Artists and works still fold with `max`: many recordings share one.
         for (mbid, at) in by_recording {
-            if let Some(a) = artist_of.get(&mbid) {
+            // A play stamps every credited artist: We Can Funk is a Prince
+            // play and a George Clinton play, each then on its own rotation.
+            for a in artist_of.get(&mbid).into_iter().flatten() {
                 bump(&mut artist_last_played, a, at);
             }
             for w in works_of.get(&mbid).into_iter().flatten() {
@@ -646,11 +667,14 @@ impl Director {
         out
     }
 
-    /// The artist a passage rotates by: its recording's credited artist, or
-    /// failing that its file's artist tag `[REQ-AND-315]`.
-    fn artist_key(&self, mbid: Option<&str>, passage_id: i64) -> Option<&String> {
-        mbid.and_then(|m| self.artist_of.get(m))
-            .or_else(|| self.tag_artist.get(&passage_id))
+    /// The artists a passage rotates by: every artist its recording credits,
+    /// or failing any, its file's artist tag `[REQ-AND-315]`. Empty when it
+    /// has neither.
+    fn artist_keys(&self, mbid: Option<&str>, passage_id: i64) -> &[String] {
+        match mbid.and_then(|m| self.artist_of.get(m)) {
+            Some(credits) if !credits.is_empty() => credits,
+            _ => self.tag_artist.get(&passage_id).map(std::slice::from_ref).unwrap_or(&[]),
+        }
     }
 
     fn age(&self, map: &HashMap<String, i64>, key: &str, now: i64) -> Option<f64> {
@@ -674,6 +698,7 @@ impl Director {
     /// (the maintainer, 2026-10-08).
     fn weigh_all_with(&self, now: i64, relaxed: bool) -> Vec<(&QueueEntry, Weighing)> {
         let mut related_buf: Vec<Related> = Vec::new();
+        let mut artist_buf: Vec<ArtistCredit> = Vec::new();
         // The day is resolved once per pass, not per passage: every candidate is
         // weighed against the same "today", which is also what keeps a selection
         // replayable from a frozen `now`.
@@ -690,11 +715,16 @@ impl Director {
                     .and_then(|m| self.recording_tuning.get(m))
                     .copied()
                     .unwrap_or_else(Tuning::recording_defaults);
-                let artist_id = self.artist_key(mbid, row.entry.passage_id);
-                let artist = artist_id
-                    .and_then(|a| self.artist_tuning.get(a))
-                    .copied()
-                    .unwrap_or_else(Tuning::artist_defaults);
+                // Each credit on its own tuning and its own age. Relaxed, the
+                // ages go and the tunings stay: the fallback sets rotation
+                // aside, never the listener's restraint.
+                artist_buf.clear();
+                for a in self.artist_keys(mbid, row.entry.passage_id) {
+                    artist_buf.push(ArtistCredit {
+                        tuning: self.artist_tuning.get(a).copied().unwrap_or_else(Tuning::artist_defaults),
+                        age_s: if relaxed { None } else { self.age(&self.artist_last_played, a, now) },
+                    });
+                }
 
                 related_buf.clear();
                 if let (Some(m), false) = (mbid, relaxed) {
@@ -712,7 +742,7 @@ impl Director {
                     length_s: row.entry.duration_ms() as f64 / 1000.0,
                     depth_s: row.entry.start_ms as f64 / 1000.0,
                     recording,
-                    artist,
+                    artists: &artist_buf,
                     passage_age_s: self
                         .passage_last_played
                         .get(&row.entry.passage_id)
@@ -729,8 +759,6 @@ impl Director {
                         .min_by(f64::total_cmp),
                     skip_age_s: mbid.and_then(|m| self.age(&self.last_skipped, m, now)),
                     dequeue_age_s: mbid.and_then(|m| self.age(&self.last_dequeued, m, now)),
-                    artist_age_s: artist_id
-                        .and_then(|a| self.age(&self.artist_last_played, a, now)),
                     related: &related_buf,
                     occasion: self.occasions.multiplier(mbid, today),
                 };
@@ -739,7 +767,6 @@ impl Director {
                         passage_age_s: None,
                         recording_age_s: None,
                         work_age_s: None,
-                        artist_age_s: None,
                         ..c
                     }
                 } else {
@@ -755,13 +782,16 @@ impl Director {
     /// or `None` if none ever has.
     fn idle_s(&self, entry: &QueueEntry, now: i64) -> Option<f64> {
         let mbid = entry.mbid.as_deref();
-        let artist = self.artist_key(mbid, entry.passage_id);
         [
             self.passage_last_played.get(&entry.passage_id).map(|at| (now - at).max(0) as f64),
             mbid.and_then(|m| self.age(&self.last_played, m, now)),
-            artist.and_then(|a| self.age(&self.artist_last_played, a, now)),
         ]
         .into_iter()
+        .chain(
+            self.artist_keys(mbid, entry.passage_id)
+                .iter()
+                .map(|a| self.age(&self.artist_last_played, a, now)),
+        )
         .chain(
             mbid.and_then(|m| self.works_of.get(m))
                 .into_iter()
@@ -787,7 +817,7 @@ impl Director {
         let row = self.rows.iter().find(|r| r.entry.passage_id == passage_id)?;
         let mbid = row.mbid.clone();
         let mut keys = vec![MarkKey::Passage(passage_id)];
-        if let Some(a) = self.artist_key(mbid.as_deref(), passage_id) {
+        for a in self.artist_keys(mbid.as_deref(), passage_id) {
             keys.push(MarkKey::Artist(a.clone()));
         }
         if let Some(m) = &mbid {
@@ -1406,17 +1436,6 @@ fn load_taste(conn: &QualifyingConn, flavor: &FlavorIndex) -> (Option<Flavor>, O
     (centroid(&flavor.schema, &likes), centroid(&flavor.schema, &dislikes))
 }
 
-fn map_query(conn: &QualifyingConn, sql: &str) -> Result<HashMap<String, String>, DbError> {
-    let q = |e: rusqlite::Error| DbError::Query(e.to_string());
-    let mut stmt = conn.prepare(sql).map_err(q)?;
-    let rows = stmt
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-        .map_err(q)?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(q)?;
-    Ok(rows.into_iter().collect())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1636,6 +1655,62 @@ mod tests {
         let cen = d.census(NOW);
         assert_eq!(cen.eligible, 2, "the played recording drops out");
         assert_eq!(cen.artist_blocked + cen.recording_blocked, 1);
+    }
+
+    /// lempi02w, 2026-10-16, in miniature: art-1 is Prince on a 26.5-hour
+    /// rotation, art-2 a co-artist on the default 10. rec-a credits both;
+    /// rec-c is Prince alone, rec-b the co-artist alone. art-2 is the higher
+    /// MBID on purpose -- the one a map keeping a single credit per recording
+    /// would have kept.
+    fn with_prince(c: &QualifyingConn) {
+        c.execute_batch(
+            "INSERT INTO recording_artists VALUES ('rec-a','art-2');
+             UPDATE recording_artists SET artist_mbid = 'art-1' WHERE mbid = 'rec-c';
+             INSERT INTO listener_preferences VALUES ('artist','art-1',1.4232,NULL,NULL);",
+        )
+        .unwrap();
+    }
+
+    fn excluded(d: &Director, passage_id: i64) -> Option<Exclusion> {
+        d.weigh_all(NOW).into_iter().find(|(e, _)| e.passage_id == passage_id).unwrap().1.excluded
+    }
+
+    /// Prince alone 21 hours ago holds Prince + co-artist: any credit in
+    /// rotation blocks.
+    #[test]
+    fn a_play_by_one_credited_artist_holds_a_recording_crediting_several() {
+        let c = fixture();
+        with_prince(&c);
+        c.execute("INSERT INTO listener_play_history VALUES (1, ?1, 3, 'rec-c')", [NOW - 21 * 3600])
+            .unwrap();
+        let d = Director::load(&c).unwrap();
+        assert_eq!(excluded(&d, 1), Some(Exclusion::ArtistRotationBlock), "rec-a credits Prince");
+        assert_eq!(excluded(&d, 2), None, "rec-b does not");
+    }
+
+    /// Prince + co-artist 12 hours ago stamps both, each on its own clock: the
+    /// co-artist's own recording is free after his 10 hours, Prince's is not.
+    #[test]
+    fn a_play_crediting_several_artists_starts_each_ones_own_rotation() {
+        let c = fixture();
+        with_prince(&c);
+        c.execute("INSERT INTO listener_play_history VALUES (1, ?1, 1, 'rec-a')", [NOW - 12 * 3600])
+            .unwrap();
+        let d = Director::load(&c).unwrap();
+        assert_eq!(excluded(&d, 3), Some(Exclusion::ArtistRotationBlock), "Prince: 26.5 h");
+        assert_eq!(excluded(&d, 2), None, "the co-artist: past 10 h");
+    }
+
+    /// Queueing one marks every credit at once, so a top-up of several slots
+    /// cannot follow Prince + co-artist with Prince.
+    #[test]
+    fn queueing_a_recording_marks_every_credited_artist() {
+        let c = fixture();
+        with_prince(&c);
+        let mut d = Director::load(&c).unwrap();
+        d.note_queued(1, NOW).unwrap();
+        assert_eq!(excluded(&d, 3), Some(Exclusion::ArtistRotationBlock));
+        assert_eq!(excluded(&d, 2), Some(Exclusion::ArtistRotationBlock));
     }
 
     /// Three tags-only passages beside the fixture's credited ones: 5 and 6

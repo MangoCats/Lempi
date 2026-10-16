@@ -169,6 +169,13 @@ pub struct SubjectNaming {
     pub album: Option<String>,
 }
 
+/// One credited artist of a recording `[SPEC-DIR-113]`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Credit {
+    pub mbid: String,
+    pub name: String,
+}
+
 /// One row of the play-frequency table `[REQ-VIS-300]`: a label ("All",
 /// "User", or a Program Director program's own name) and a play count for
 /// each of the five windows [`PlayerStore::play_frequency`] reports,
@@ -2077,6 +2084,27 @@ impl PlayerStore {
             })
     }
 
+    /// Every artist a recording credits, in the order the display names them
+    /// (weight, then name) -- so the artist link can open a preference panel
+    /// for each, the way the Program Director rotates by each
+    /// `[SPEC-DIR-114]`, `[SPEC-DIR-113]`. Empty for an unknown recording.
+    pub fn recording_credits(&self, mbid: &str) -> Result<Vec<Credit>, DbError> {
+        let mut st = self
+            .conn
+            .prepare(
+                "SELECT ra.artist_mbid, a.name FROM __LIB__.recording_artists ra \
+                   JOIN __LIB__.artists a ON a.mbid = ra.artist_mbid \
+                  WHERE ra.mbid = ?1 ORDER BY ra.weight DESC, a.name",
+            )
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        let rows = st
+            .query_map(rusqlite::params![mbid], |r| Ok(Credit { mbid: r.get(0)?, name: r.get(1)? }))
+            .map_err(|e| DbError::Query(e.to_string()))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        Ok(rows)
+    }
+
     /// How often a subject has played, broken out by who selected it
     /// `[REQ-VIS-300]`.
     ///
@@ -3762,6 +3790,27 @@ mod tests {
         assert_eq!(row("All").counts[4], 2);
         assert_eq!(row("User").counts[4], 1);
         assert_eq!(row("Soft").counts[4], 1);
+    }
+
+    /// Every credit, in display order -- weight, then name -- so the artist
+    /// link opens a panel for each `[SPEC-DIR-113]`. An unknown recording
+    /// has none, which is an empty list rather than an error.
+    #[test]
+    fn recording_credits_lists_every_artist_in_display_order() {
+        let store = frequency_store();
+        let recording = "aaaaaaaa-0000-0000-0000-000000000001";
+        store
+            .conn
+            .execute_batch(
+                "INSERT INTO artists VALUES ('bbbbbbbb-0000-0000-0000-000000000002','Another Band',NULL,'s');
+                 INSERT INTO recording_artists VALUES
+                     ('aaaaaaaa-0000-0000-0000-000000000001','bbbbbbbb-0000-0000-0000-000000000002',1.0,'s');",
+            )
+            .unwrap();
+        let names: Vec<String> =
+            store.recording_credits(recording).unwrap().into_iter().map(|c| c.name).collect();
+        assert_eq!(names, vec!["A Band", "Another Band"]);
+        assert!(store.recording_credits("no-such-recording").unwrap().is_empty());
     }
 
     /// Program rows sort by their own all-time count, most-played first --

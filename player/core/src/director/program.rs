@@ -10,7 +10,7 @@
 //! transitions `[SPEC-DIR-160]` and blending would make "which programme am I
 //! in?" ambiguous for a tunable nobody asked for.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::Connection;
 
@@ -178,10 +178,17 @@ impl Programs {
     /// `MAX_SEEDS`. Preferring the least-recently-played keeps a programme from
     /// being defined by whatever it happened to play an hour ago, and makes the
     /// target drift slowly around the exemplars rather than sitting still.
+    ///
+    /// A seed crediting several artists takes all of them: once a Prince +
+    /// The Time seed is chosen, neither a Prince seed nor a The Time seed
+    /// follows it. Walking the seeds least-recently-played first and taking
+    /// each whose artists are all still free is what keeps that a choice of
+    /// the stalest, and for single-artist seeds it picks exactly what one
+    /// best-per-artist pass did.
     pub fn seeds_for(
         &self,
         program_id: i64,
-        artist_of: &HashMap<String, String>,
+        artist_of: &HashMap<String, Vec<String>>,
         last_played: &HashMap<String, i64>,
     ) -> Vec<String> {
         let Some(all) = self.seeds.get(&program_id) else { return Vec::new() };
@@ -190,25 +197,24 @@ impl Programs {
         // choice is stable: two never-played seeds must not swap between runs.
         let key = |m: &String| (last_played.get(m).copied().unwrap_or(i64::MIN), m.clone());
 
-        let mut best: HashMap<&str, &String> = HashMap::new();
-        let mut unattributed: Vec<&String> = Vec::new();
-        for m in all {
-            match artist_of.get(m) {
-                Some(a) => {
-                    let e = best.entry(a.as_str()).or_insert(m);
-                    if key(m) < key(e) {
-                        *e = m;
-                    }
-                }
-                // No known artist: it cannot collide with anyone, so it stands
-                // on its own rather than being grouped under a shared "unknown".
-                None => unattributed.push(m),
+        let mut ordered: Vec<&String> = all.iter().collect();
+        ordered.sort_by_key(|m| key(m));
+        let mut taken: HashSet<&str> = HashSet::new();
+        let mut chosen: Vec<String> = Vec::new();
+        for m in ordered {
+            if chosen.len() == MAX_SEEDS {
+                break;
             }
+            // No known artist: it cannot collide with anyone, so it stands
+            // on its own rather than being grouped under a shared "unknown".
+            let artists = artist_of.get(m).map(Vec::as_slice).unwrap_or(&[]);
+            if artists.iter().any(|a| taken.contains(a.as_str())) {
+                continue;
+            }
+            taken.extend(artists.iter().map(String::as_str));
+            chosen.push(m.clone());
         }
-        let mut chosen: Vec<&String> = best.into_values().chain(unattributed).collect();
-        chosen.sort_by_key(|m| key(m));
-        chosen.truncate(MAX_SEEDS);
-        chosen.into_iter().cloned().collect()
+        chosen
     }
 
     pub fn load(conn: &Connection) -> Result<Self, DbError> {
@@ -472,7 +478,7 @@ mod tests {
         let mut artist = HashMap::new();
         // a and b share an artist; the rest are distinct
         for (m, a) in [("a", "x"), ("b", "x"), ("c", "y"), ("d", "z"), ("e", "w"), ("f", "v"), ("g", "u")] {
-            artist.insert(m.to_string(), a.to_string());
+            artist.insert(m.to_string(), vec![a.to_string()]);
         }
         let mut played = HashMap::new();
         played.insert("a".to_string(), 100i64); // a played recently, b never
@@ -487,8 +493,8 @@ mod tests {
     #[test]
     fn the_cap_drops_the_most_recently_played() {
         let p = Programs::load(&fixture()).unwrap();
-        let artist: HashMap<String, String> =
-            ["a", "b", "c", "d", "e", "f", "g"].iter().map(|m| (m.to_string(), m.to_string())).collect();
+        let artist: HashMap<String, Vec<String>> =
+            ["a", "b", "c", "d", "e", "f", "g"].iter().map(|m| (m.to_string(), vec![m.to_string()])).collect();
         let played: HashMap<String, i64> =
             [("a", 900i64), ("b", 800), ("c", 700)].iter().map(|(m, t)| (m.to_string(), *t)).collect();
         let seeds = p.seeds_for(1, &artist, &played);
@@ -499,13 +505,29 @@ mod tests {
     #[test]
     fn seed_selection_is_stable_across_runs() {
         let p = Programs::load(&fixture()).unwrap();
-        let artist: HashMap<String, String> =
-            ["a", "b", "c", "d", "e", "f", "g"].iter().map(|m| (m.to_string(), m.to_string())).collect();
+        let artist: HashMap<String, Vec<String>> =
+            ["a", "b", "c", "d", "e", "f", "g"].iter().map(|m| (m.to_string(), vec![m.to_string()])).collect();
         let played = HashMap::new(); // none played: every key ties on time
         let first = p.seeds_for(1, &artist, &played);
         for _ in 0..5 {
             assert_eq!(p.seeds_for(1, &artist, &played), first, "ties must break deterministically");
         }
+    }
+
+    /// A two-artist seed takes both artists: Prince + The Time rules out a
+    /// later Prince seed and a later The Time seed alike.
+    #[test]
+    fn a_seed_with_several_artists_takes_each_of_them() {
+        let p = Programs::load(&fixture()).unwrap();
+        let mut artist: HashMap<String, Vec<String>> =
+            ["d", "e", "f", "g"].iter().map(|m| (m.to_string(), vec![m.to_string()])).collect();
+        artist.insert("a".into(), vec!["prince".into(), "the-time".into()]);
+        artist.insert("b".into(), vec!["prince".into()]);
+        artist.insert("c".into(), vec!["the-time".into()]);
+        let seeds = p.seeds_for(1, &artist, &HashMap::new()); // ties break by mbid: a first
+        assert!(seeds.contains(&"a".to_string()));
+        assert!(!seeds.contains(&"b".to_string()), "Prince is already taken");
+        assert!(!seeds.contains(&"c".to_string()), "The Time is already taken");
     }
 
     #[test]

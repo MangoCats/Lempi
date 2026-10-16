@@ -21,8 +21,17 @@ largest stage of the pipeline and the one with the most rules of its own.
 1. `w = 10^(-restraint)`
 2. **Hard block** if `now - last_played < seconds(rotation)` → excluded entirely.
 3. Otherwise **linear recovery ramp**: `w *= clamp((age - rot) / rec, 0, 1)`.
-4. Recording weight multiplies its artist's weight. Related recordings block and damp too, scaled by relation strength.
+4. Recording weight multiplies its artists' weight — every credited artist, `[SPEC-DIR-114]` below. Related recordings block and damp too, scaled by relation strength.
 5. Drop below `min_weight` → excluded.
+
+**`[SPEC-DIR-114]` The artist pass runs once per credited artist, each on its own tuning and its own clock.** Built 2026-10-16, on the maintainer's direction, after lempi02w played two Prince recordings within 21 hours of a third against Prince's 26.5-hour rotation. The Director had kept one artist per recording, whichever credit sorted last by MBID: 23 of Prince's 103 radio recordings rotated as The Revolution, The Time or George Clinton on the 10-hour default, and playing them stamped nothing on Prince. 81 artists lost at least one recording that way.
+
+1. **A play stamps every credited artist.** We Can Funk is a Prince play and a George Clinton play.
+2. **Any credited artist inside its own rotation blocks.** Prince's 26.5 hours hold every recording crediting Prince, whoever else it credits; George Clinton's own 10 hours hold only what credits him.
+3. **Past the blocks, the least-recovered artist sets the ramp**, as the freshest identity tier does in `[SPEC-DIR-119]`, and **every credit's restraint multiplies in**, so turning a co-artist down quiets the shared recording too.
+4. Queueing marks every credit at once `[REQ-PD-112]`, and a programme takes one seed per artist counting every credit of each seed `[SPEC-DIR-140]`.
+
+**`[SPEC-DIR-113]` The artist link opens a preference panel for every credited artist.** Prince + The Time are two subjects with two rotations, so clicking the artist on any surface opens Prince's panel and The Time's, each with its own play-frequency table `[REQ-VIS-300]` and its own Save. The clicked artist's panel opens at once; the others follow from `GET /credits/:mbid`, in display order.
 
 **`[SPEC-DIR-119]` `last_played` in step 2 is the freshest of three identity tiers, not the recording's alone.** Built 2026-09-12, superseding `[SPEC-DIR-116]`'s graded relation for the same-song case — see [GUIDE012](../GUIDE012-work-based-song-blocking.md) `[GDE-WRK-035]` for the measurements and the decision.
 

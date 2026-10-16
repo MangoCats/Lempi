@@ -230,6 +230,28 @@ pub(super) async fn set_preference(
     }
 }
 
+/// Every artist a recording credits `[SPEC-DIR-113]`, so the artist link
+/// opens a panel for each -- Prince + The Time are two artists with two
+/// rotations, and the Program Director holds the recording by both
+/// `[SPEC-DIR-114]`.
+pub(super) async fn credits(
+    State(ui): State<Ui>,
+    axum::extract::Path(mbid): axum::extract::Path<String>,
+) -> axum::response::Response {
+    let db = ui.db.clone();
+    let library = ui.library.clone();
+    let got = tokio::task::spawn_blocking(move || {
+        let store = crate::db::PlayerStore::open_split(&db, &library).map_err(|e| e.message().to_string())?;
+        store.recording_credits(&mbid).map_err(|e| e.message().to_string())
+    })
+    .await;
+    match got {
+        Ok(Ok(rows)) => axum::Json(rows).into_response(),
+        Ok(Err(why)) => (StatusCode::BAD_REQUEST, why).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
 /// How often a subject has played, by window and by who selected it
 /// `[REQ-VIS-300]` -- the play-frequency panel underneath the preference
 /// panel. Never delays that panel: this is its own independent route,

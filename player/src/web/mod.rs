@@ -454,6 +454,8 @@ pub fn router(ui: Ui) -> Router {
         .route("/history", get(history))
         .route("/history/flag/:kind/:id", post(set_flag))
         .route("/preference/:kind/:id", get(get_preference).post(set_preference))
+        // A recording's every credited artist, one panel each [SPEC-DIR-113].
+        .route("/credits/:mbid", get(credits))
         // The programme this node runs, and editing it [SPEC-PGM-400].
         .route("/programme", get(|| async { ([REVALIDATE], Html(PROGRAMME_HTML)) }))
         .route("/programme.js", get(|| async { js(PROGRAMME_JS) }))
@@ -1130,12 +1132,16 @@ mod tests {
     #[test]
     fn the_preference_panel_reaches_the_route_the_router_serves() {
         assert!(CORE.contains("/preference/"), "core.js never asks for /preference/");
+        // One panel per credited artist [SPEC-DIR-113]: core.js asks for the
+        // credits, and every skin's artist link hands it the recording.
+        assert!(CORE.contains("/credits/"), "core.js never asks for /credits/");
         for name in ["lempi", "mulibplay"] {
             let skin = SKINS.iter().find(|s| s.name == name).expect("skin exists");
             assert!(
                 skin.js.contains("Lempi.editPreference") || skin.js.contains("editPreference("),
                 "{name} never opens the preference panel"
             );
+            assert!(skin.js.contains("{ recording"), "{name}'s artist link never passes its recording");
         }
     }
 

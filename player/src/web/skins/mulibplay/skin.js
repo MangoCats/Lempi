@@ -131,10 +131,12 @@
   // Title/artist reach the preference panel when their own mbid is known
   // `[REQ-VIS-285]`, plain text otherwise -- unidentified audio, or an
   // uncredited artist, the same case that already leaves `artist` unset.
-  const prefLink = (el, kind, id, text) => {
+  // `recording` lets an artist link open a panel for each artist the
+  // recording credits [SPEC-DIR-113].
+  const prefLink = (el, kind, id, text, recording) => {
     if (!el) return;
     el.classList.toggle('pref-link', !!id);
-    el.onclick = id ? () => Lempi.editPreference(kind, id, text) : null;
+    el.onclick = id ? () => Lempi.editPreference(kind, id, text, { recording }) : null;
   };
 
   // Reads the same snapshot the display does, so a click can only act on
@@ -190,7 +192,7 @@
     plain($('title'), s.title ?? '—');
     prefLink($('title'), 'recording', s.mbid, s.title);
     pair('byword', 'artist', s.artist);
-    prefLink($('artist'), 'artist', s.artist_mbid, s.artist);
+    prefLink($('artist'), 'artist', s.artist_mbid, s.artist, s.mbid);
     pair('fromword', 'album', s.album);
     $('plays').textContent = Lempi.fmt.plays(s.plays, s.last_played);
     Lempi.showArt($('art'), s.passage_id);

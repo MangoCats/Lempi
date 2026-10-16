@@ -465,7 +465,7 @@
   // is only a file tag is the common case here, and averaging the two into one
   // marker would describe neither.
   function showByline(s) {
-    if (!changed('byline', s.artist, s.artist_source, s.artist_mbid, s.album, s.album_source)) return;
+    if (!changed('byline', s.artist, s.artist_source, s.artist_mbid, s.mbid, s.album, s.album_source)) return;
     const el = $('byline');
     el.textContent = '';
     // `link` is only set for the artist -- an album has no mbid to open a
@@ -479,7 +479,8 @@
         span.classList.add('pref-link');
         span.onclick = e => {
           e.stopPropagation();
-          Lempi.editPreference('artist', link, text);
+          // Every artist the recording credits, one panel each [SPEC-DIR-113].
+          Lempi.editPreference('artist', link, text, { recording: s.mbid });
         };
       }
       el.appendChild(span);
@@ -1720,12 +1721,12 @@
   // the same preference panel every other skin and view does
   // `[REQ-VIS-285]`, plain text otherwise (unidentified audio, an
   // uncredited artist, or nothing played at all).
-  function histCell(text, kind, id) {
+  function histCell(text, kind, id, recording) {
     if (!id) return document.createTextNode(text || (kind === 'recording' ? '(unknown)' : ''));
     const span = document.createElement('span');
     span.className = 'pref-link';
     setText(span, text);
-    span.onclick = () => Lempi.editPreference(kind, id, text);
+    span.onclick = () => Lempi.editPreference(kind, id, text, { recording });
     return span;
   }
 
@@ -1798,7 +1799,7 @@
       const tr = histRow([
         Lempi.since(row.at),
         histCell(row.title || '(unknown)', 'recording', row.mbid),
-        histCell(row.artist || '', 'artist', row.artist_mbid),
+        histCell(row.artist || '', 'artist', row.artist_mbid, row.mbid),
         row.album || '',
         pct,
         row.kind === 'play' ? 'Played' : 'Skipped',

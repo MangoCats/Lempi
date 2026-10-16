@@ -616,7 +616,7 @@ const Lempi = (() => {
     const open = (kind, id, label, e) => {
       e.stopPropagation();
       e.preventDefault();
-      Lempi.editPreference(kind, id, label);
+      Lempi.editPreference(kind, id, label, { recording: item.mbid });
     };
     const titleEl = document.createElement(item.mbid ? 'a' : 'span');
     titleEl.className = 'pref-link pref-link-title';
@@ -661,7 +661,15 @@ const Lempi = (() => {
   // still empty.
   function prefPanelSlot() {
     const panel = document.getElementById('pref-panel');
-    if (!panel || panel.dataset.built) return panel;
+    if (panel && !panel.dataset.built) buildPrefPanel(panel);
+    return panel;
+  }
+
+  // The markup of one preference panel, into the skin's own slot or into a
+  // copy of it beside the slot -- one per further credited artist
+  // `[SPEC-DIR-113]`. Same classes either way, so each skin's CSS dresses
+  // the copies exactly as it dresses the slot.
+  function buildPrefPanel(panel) {
     // Each field's own label/readout/reset share a row; the slider itself
     // gets a row of its own, full width -- the range of a control read at
     // a glance, not squeezed beside three other things fighting it for
@@ -702,12 +710,25 @@ const Lempi = (() => {
     // itself `[REQ-VIS-300]`: "close the history when the preference
     // closes" -- there is no reading of frequency data for a subject
     // whose preference panel is no longer open.
-    panel.querySelector('.pref-cancel').onclick = () => {
-      panel.hidden = true;
-      closeFreqPanel();
-    };
+    panel.querySelector('.pref-cancel').onclick = () => closePrefPanel(panel);
     panel.dataset.built = '1';
-    return panel;
+  }
+
+  // Closes one panel and the play-frequency table paired with it, and only
+  // those: with a panel per credited artist, saving Prince must leave The
+  // Time's open. A copy is removed outright rather than hidden -- the next
+  // subject builds its own.
+  function closePrefPanel(panel) {
+    panel.hidden = true;
+    const freq = panel.freqPanel;
+    if (freq) {
+      freq.hidden = true;
+      delete freq.dataset.token; // a fetch still in flight must not reopen it
+    }
+    if (panel.dataset.extra) {
+      panel.remove();
+      freq?.remove();
+    }
   }
 
   // The play-frequency panel is its own slot, `#freq-panel`, built once the
@@ -718,7 +739,11 @@ const Lempi = (() => {
   // directly than repeating five labelled numbers per row.
   function freqPanelSlot() {
     const panel = document.getElementById('freq-panel');
-    if (!panel || panel.dataset.built) return panel;
+    if (panel && !panel.dataset.built) buildFreqPanel(panel);
+    return panel;
+  }
+
+  function buildFreqPanel(panel) {
     panel.innerHTML = `
       <h3 class="freq-heading"></h3>
       <table class="freq-table">
@@ -726,30 +751,27 @@ const Lempi = (() => {
         <tbody></tbody>
       </table>`;
     panel.dataset.built = '1';
-    return panel;
-  }
-
-  function closeFreqPanel() {
-    const panel = document.getElementById('freq-panel');
-    if (panel) panel.hidden = true;
   }
 
   // Guards a slow `/play-frequency` response against landing after the
   // subject has changed, or the preference panel (and this one with it)
   // has already closed -- the same problem a fast double-click on two
-  // different links already risks. Each call to `loadFreqPanel` bumps this
-  // and captures its own value; the response is applied only if it is
-  // still current when it arrives.
+  // different links already risks. Each call to `loadFreqPanel` takes a
+  // fresh value and writes it on its own panel; the response is applied
+  // only if that panel still carries it when it arrives. Per panel, since
+  // one panel per credited artist means several loads at once.
   let freqToken = 0;
 
   // Fetched and shown independently of the preference panel's own fetch
   // above -- "do not delay opening of the preference panel while play
   // frequency is prepared, open play frequency panel when it is ready"
-  // `[REQ-VIS-300]`. Never awaited by its caller.
-  async function loadFreqPanel(kind, id) {
-    const panel = freqPanelSlot();
+  // `[REQ-VIS-300]`. Never awaited by its caller. `label` names the
+  // subject, which matters once two artists' tables stand one above the
+  // other.
+  async function loadFreqPanel(panel, kind, id, label) {
     if (!panel) return; // this skin carries no #freq-panel slot
-    const token = ++freqToken;
+    const token = String(++freqToken);
+    panel.dataset.token = token;
     panel.hidden = true; // clear whatever the last subject showed
     let rows;
     try {
@@ -759,9 +781,9 @@ const Lempi = (() => {
     } catch {
       return; // silent, like a failed preference fetch leaving Save inert
     }
-    if (token !== freqToken) return; // subject changed, or panel closed, meanwhile
+    if (panel.dataset.token !== token) return; // subject changed, or panel closed, meanwhile
     panel.querySelector('.freq-heading').textContent =
-      `Play frequency — ${kind === 'artist' ? 'artist' : 'recording'}`;
+      `Play frequency — ${kind === 'artist' ? 'artist' : 'recording'}${label ? ` ${label}` : ''}`;
     const body = panel.querySelector('tbody');
     body.innerHTML = '';
     for (const row of rows) {
@@ -950,9 +972,62 @@ const Lempi = (() => {
     };
   }
 
-  async function editPreference(kind, id, label) {
+  // Bumped whenever a new subject opens, so a credits fetch that lands
+  // after the listener has moved on adds nothing to the new subject.
+  let panelGen = 0;
+
+  // `opts.recording`: the recording the artist link was clicked on. Given,
+  // an artist link opens a panel for **every** artist that recording
+  // credits, the clicked one first, each saved on its own `[SPEC-DIR-113]`:
+  // Prince + George Clinton are two artists with two rotations, and the
+  // Program Director holds the recording by both `[SPEC-DIR-114]`. The
+  // clicked artist's panel opens at once; the others follow when the
+  // credits arrive, as the play-frequency table does `[REQ-VIS-300]`.
+  async function editPreference(kind, id, label, opts = {}) {
+    const gen = ++panelGen;
+    document.querySelectorAll('.pref-panel[data-extra], .freq-panel[data-extra]')
+      .forEach(n => n.remove());
     const panel = prefPanelSlot();
     if (!panel) return; // this skin carries no #pref-panel slot (WinAmp)
+    panel.freqPanel = freqPanelSlot();
+    const opened = openSubject(panel, kind, id, label);
+    if (kind === 'artist' && opts.recording) addCoArtistPanels(gen, panel, opts.recording, id);
+    return opened;
+  }
+
+  async function addCoArtistPanels(gen, first, recording, clicked) {
+    let credits;
+    try {
+      const r = await fetch(`/credits/${encodeURIComponent(recording)}`);
+      if (!r.ok) return;
+      credits = await r.json();
+    } catch {
+      return; // the clicked artist's own panel is already open; that is enough
+    }
+    if (gen !== panelGen) return;
+    let after = first.freqPanel ?? first;
+    for (const c of credits) {
+      if (c.mbid === clicked) continue;
+      const panel = document.createElement('div');
+      panel.className = 'pref-panel';
+      const freq = document.createElement('div');
+      freq.className = 'freq-panel';
+      for (const n of [panel, freq]) {
+        n.dataset.extra = '1';
+        n.hidden = true;
+      }
+      after.after(panel, freq);
+      after = freq;
+      buildPrefPanel(panel);
+      buildFreqPanel(freq);
+      panel.freqPanel = freq;
+      openSubject(panel, 'artist', c.mbid, c.name);
+    }
+  }
+
+  // Fills one panel for one subject, fetches its current tuning, and wires
+  // its own Save.
+  async function openSubject(panel, kind, id, label) {
     const err = panel.querySelector('.pref-error');
     const save = panel.querySelector('.pref-save');
     const subject = panel.querySelector('.pref-subject');
@@ -989,7 +1064,7 @@ const Lempi = (() => {
     // Its own independent fetch, deliberately not awaited -- the
     // preference panel above is already open and must not wait on this
     // `[REQ-VIS-300]`.
-    loadFreqPanel(kind, id);
+    loadFreqPanel(panel.freqPanel, kind, id, label);
 
     let current = {};
     let defaults = {};
@@ -1081,8 +1156,7 @@ const Lempi = (() => {
             { method: 'POST' });
           if (!s.ok) throw new Error(await s.text() || `the server answered ${s.status}`);
         }
-        panel.hidden = true;
-        closeFreqPanel();
+        closePrefPanel(panel);
       } catch (e) {
         err.textContent = `could not save: ${e.message}`;
         err.hidden = false;

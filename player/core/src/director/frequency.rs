@@ -104,6 +104,22 @@ impl Tuning {
     }
 }
 
+/// One credited artist of a candidate: its own tuning and its own age
+/// `[SPEC-DIR-114]`.
+///
+/// One per credit, not one per recording. A recording credited to Prince and
+/// The Time is held by Prince's 26-hour rotation *and* The Time's own, each
+/// on its own clock -- found live 2026-10-16 on lempi02w, where keeping one
+/// artist per recording let 23 of 103 Prince recordings rotate as their
+/// co-credit, on the 10-hour default, and stamp nothing on Prince when they
+/// played.
+#[derive(Debug, Clone, Copy)]
+pub struct ArtistCredit {
+    pub tuning: Tuning,
+    /// Seconds since anything crediting this artist last played; `None` if never.
+    pub age_s: Option<f64>,
+}
+
 /// How far the artist pass reaches into the recording weight.
 ///
 /// Named for what it does, not where it came from, because the choice is now
@@ -227,7 +243,10 @@ pub struct Candidate<'a> {
     /// and the deep ones are rarely what a listener means by "a song".
     pub depth_s: f64,
     pub recording: Tuning,
-    pub artist: Tuning,
+    /// Every artist the recording credits, each with its own tuning and age.
+    /// Empty for an uncredited passage, which then carries no artist history
+    /// at all. Borrowed for the same reason `related` is.
+    pub artists: &'a [ArtistCredit],
     /// Seconds since *this passage* last played; `None` if never.
     ///
     /// The narrowest of the three identity tiers `[GDE-WRK-035]`, and the only
@@ -244,8 +263,6 @@ pub struct Candidate<'a> {
     /// `[GDE-WRK-038]`. A recording performing several works takes the most
     /// recent across all of them.
     pub work_age_s: Option<f64>,
-    /// Seconds since anything by this artist last played; `None` if never.
-    pub artist_age_s: Option<f64>,
     /// Seconds since this recording was last **skipped**; `None` if never.
     /// Deliberately separate from `recording_age_s`: a skip suppresses and
     /// does not otherwise participate `[SPEC-PLAY-050]`.
@@ -311,16 +328,29 @@ pub fn weigh(c: &Candidate<'_>, policy: &Policy) -> Weighing {
     }
 
     // --- artist pass ---
+    // Every credited artist, each against its own rotation `[SPEC-DIR-114]`
+    // (the maintainer, 2026-10-16). **Any one in rotation blocks**: Prince's 26 hours hold
+    // every recording crediting Prince, whoever else it credits. Past the
+    // block the **least recovered** credit sets the ramp -- the same "the
+    // freshest decides" the identity tiers below follow -- while each
+    // credit's restraint multiplies in, so turning a co-artist down quiets
+    // the shared recording too. With no credit at all the weight is 1, as it
+    // was when an uncredited passage fell back to the default tuning.
     let a_scale = policy.artist_scale.get();
-    let art_rot = seconds(c.artist.rotation) * a_scale;
-    let art_rec = seconds(c.artist.recovery) * a_scale;
-    let mut artist_weight = 10f64.powf(-c.artist.restraint);
-    if let Some(age) = c.artist_age_s {
-        if age < art_rot {
-            return Weighing::excluded(Exclusion::ArtistRotationBlock);
+    let mut artist_restraint = 1.0;
+    let mut artist_ramp = 1.0f64;
+    for a in c.artists {
+        artist_restraint *= 10f64.powf(-a.tuning.restraint);
+        if let Some(age) = a.age_s {
+            let art_rot = seconds(a.tuning.rotation) * a_scale;
+            if age < art_rot {
+                return Weighing::excluded(Exclusion::ArtistRotationBlock);
+            }
+            let art_rec = seconds(a.tuning.recovery) * a_scale;
+            artist_ramp = artist_ramp.min(recovery_weight(age, art_rot, art_rec));
         }
-        artist_weight *= recovery_weight(age, art_rot, art_rec);
     }
+    let artist_weight = artist_restraint * artist_ramp;
 
     // --- recording pass ---
     let r_scale = policy.recording_scale.get();
@@ -524,16 +554,20 @@ mod tests {
             length_s: LENGTH_MIDPOINT_S,
             depth_s: 0.0,
             recording: Tuning::recording_defaults(),
-            artist: Tuning::artist_defaults(),
+            artists: &[],
             passage_age_s: None,
             recording_age_s: None,
             work_age_s: None,
-            artist_age_s: None,
             skip_age_s: None,
             dequeue_age_s: None,
             related: &[],
             occasion: 1.0,
         }
+    }
+
+    /// An artist on the default tuning, last heard `age_s` ago.
+    fn credit(age_s: Option<f64>) -> ArtistCredit {
+        ArtistCredit { tuning: Tuning::artist_defaults(), age_s }
     }
 
     /// Cold start: no history, no tuning. Everything must weigh the same, or
@@ -620,10 +654,67 @@ mod tests {
     #[test]
     fn a_recent_play_by_the_artist_blocks_the_recording() {
         let mut c = candidate();
-        c.artist_age_s = Some(seconds(DEF_ROTATION_ART) - 1.0);
+        let a = [credit(Some(seconds(DEF_ROTATION_ART) - 1.0))];
+        c.artists = &a;
         let w = weigh(&c, &Policy::default());
         assert_eq!(w.excluded, Some(Exclusion::ArtistRotationBlock));
         assert!(w.artist_blocked, "the panel must be able to say which block fired");
+    }
+
+    /// Prince + The Time, found live 2026-10-16: Prince heard 21 hours ago
+    /// against a 26.5-hour rotation must hold the shared recording, whatever
+    /// The Time's own clock says -- in either credit order.
+    #[test]
+    fn any_credited_artist_in_rotation_blocks_the_recording() {
+        let prince = ArtistCredit {
+            tuning: Tuning { rotation: 1.4237, recovery: 1.857, restraint: 0.0 },
+            age_s: Some(21.0 * 3600.0),
+        };
+        let the_time = credit(None);
+        for pair in [[prince, the_time], [the_time, prince]] {
+            let mut c = candidate();
+            c.artists = &pair;
+            assert_eq!(weigh(&c, &Policy::default()).excluded, Some(Exclusion::ArtistRotationBlock));
+        }
+    }
+
+    /// The other half: a co-artist's play holds only that co-artist's own
+    /// recordings, for that co-artist's own rotation. We Can Funk (Prince +
+    /// George Clinton) 12 hours ago leaves a George Clinton recording free on
+    /// his 10-hour default, while Prince's 26 hours still hold the next Prince.
+    #[test]
+    fn each_credit_serves_its_own_rotation() {
+        let twelve_h = Some(12.0 * 3600.0);
+        let clinton = [credit(twelve_h)];
+        let prince = [ArtistCredit {
+            tuning: Tuning { rotation: 1.4237, recovery: 1.857, restraint: 0.0 },
+            age_s: twelve_h,
+        }];
+        let mut c = candidate();
+        c.artists = &clinton;
+        assert!(weigh(&c, &Policy::default()).is_eligible(), "past his own 10 hours");
+        c.artists = &prince;
+        assert_eq!(weigh(&c, &Policy::default()).excluded, Some(Exclusion::ArtistRotationBlock));
+    }
+
+    #[test]
+    fn the_least_recovered_credit_sets_the_ramp() {
+        let (rot, rec) = (seconds(DEF_ROTATION_ART), seconds(DEF_RECOVERY_ART));
+        let a = [credit(Some(rot + rec * 0.8)), credit(Some(rot + rec * 0.25)), credit(None)];
+        let mut c = candidate();
+        c.artists = &a;
+        let w = weigh(&c, &Policy::default());
+        assert!((w.artist_weight - 0.25).abs() < 1e-9, "artist weight {}", w.artist_weight);
+    }
+
+    #[test]
+    fn every_credits_restraint_multiplies_in() {
+        let quiet = |r: f64| ArtistCredit { tuning: Tuning { restraint: r, ..Tuning::artist_defaults() }, age_s: None };
+        let a = [quiet(0.3), quiet(0.2)];
+        let mut c = candidate();
+        c.artists = &a;
+        let w = weigh(&c, &Policy::default());
+        assert!((w.artist_weight - 10f64.powf(-0.5)).abs() < 1e-9, "artist weight {}", w.artist_weight);
     }
 
     #[test]
@@ -641,7 +732,8 @@ mod tests {
     fn a_recovering_artist_damps_its_recordings() {
         let mut c = candidate();
         let (rot, rec) = (seconds(DEF_ROTATION_ART), seconds(DEF_RECOVERY_ART));
-        c.artist_age_s = Some(rot + rec / 2.0);
+        let a = [credit(Some(rot + rec / 2.0))];
+        c.artists = &a;
 
         let damped = weigh(&c, &Policy::default());
         assert!((damped.artist_weight - 0.5).abs() < 1e-9, "artist is half recovered");
@@ -656,7 +748,8 @@ mod tests {
     fn a_barely_recovered_artist_is_damped_not_excluded() {
         let mut c = candidate();
         let (rot, rec) = (seconds(DEF_ROTATION_ART), seconds(DEF_RECOVERY_ART));
-        c.artist_age_s = Some(rot + rec * 0.02);
+        let a = [credit(Some(rot + rec * 0.02))];
+        c.artists = &a;
         let w = weigh(&c, &Policy::default());
         assert!(w.is_eligible(), "still eligible: {:?}", w.excluded);
         assert!(w.weight > MIN_WEIGHT && w.weight < 0.05, "weight {}", w.weight);
@@ -784,7 +877,8 @@ mod tests {
     fn the_scales_do_not_leak_into_each_other() {
         let art_rot = seconds(DEF_ROTATION_ART);
         let mut c = candidate();
-        c.artist_age_s = Some(art_rot * 0.6);
+        let a = [credit(Some(art_rot * 0.6))];
+        c.artists = &a;
         let recording_only = Policy { recording_scale: TimeScale::new(0.5), ..Default::default() };
         assert_eq!(weigh(&c, &recording_only).excluded, Some(Exclusion::ArtistRotationBlock),
                    "the recording scale must not shorten an artist block");
@@ -812,7 +906,8 @@ mod tests {
         let mut c = candidate();
         c.related = &rel;
         c.recording_age_s = Some(rot + rec * 0.75);
-        c.artist_age_s = Some(seconds(DEF_ROTATION_ART) * 3.0);
+        let a = [credit(Some(seconds(DEF_ROTATION_ART) * 3.0))];
+        c.artists = &a;
         let explicit = Policy {
             coupling: ArtistCoupling::Damped,
             artist_scale: TimeScale::new(1.0),
