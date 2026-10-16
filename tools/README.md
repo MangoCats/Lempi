@@ -28,7 +28,7 @@ Bringing audio into the library and keeping its schema current.
 | `fingerprint_ids.py` | Check every recording MBID against the audio itself `[REQ-LIB-165]`. |
 | `verify_ids.py` | Are the recording MBIDs on these passages actually right? |
 | `segment_dao.py` | Segment a disc-at-once capture into its tracks — grid search, DP assembly, RMS fallback, extra-track merging `[SPEC-SA-070]`, `[SPEC024]`. |
-| `analyze_amplitude.py` | Automatic lead-in/lead-out detection `[SPEC-SA-075]`. |
+| `analyze_amplitude.py` | Automatic lead-in/lead-out detection `[SPEC-SA-075]`, with the parameters in `player/src/web/boundary-params.json` that the waveform editor tunes `[SPEC-SUI-229]`. |
 | `backfill_album_cuts.py` | Give an old radio-only passage the album twin it never got `[SPEC-SA-110]`. |
 | `backfill_file_tags.py` | Re-read tags for a file whose `file_tags` row came back entirely empty. |
 | `repair_durations.py` | Repair `files.duration_ms` from the decoded length `[REQ-LIB-145]`. |

@@ -22,6 +22,13 @@
 // gain ramp during ordinary playback, so the preview now applies
 // `fade_in_ms`/`fade_out_ms` (with their own selected curve), not
 // `lead_in_ms`/`lead_out_ms`, matching what real playback actually does.
+//
+// Automatic detection was added `[SPEC-SUI-230]`: the parameters the
+// algorithm runs with, for radio and album, editable here and run against
+// this passage's own decoded audio, with where every point would land drawn
+// as dashed markers. Built because the spans in the library are mostly not
+// Lempi's own -- passage 7439's end, MuLibPlay's, cut 15 s of audible fade --
+// and tuning an algorithm needs a place to watch it work on real audio.
 (() => {
   const $ = id => document.getElementById(id);
   const note = (text, cls = '') => {
@@ -74,8 +81,11 @@
   // flavor was last computed against": correct for the ordinary case of one
   // edit, one save, since nothing else moves `passages.end_ms` in between.
   let loadedBoundary = null;
+  let info = null;      // `/info` as loaded -- kind and neighbours, for detection
+  let mono = null;      // the decoded window, channels averaged, for detection
 
   const canvas = $('wave');
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
   const totalMs = () => (buffer ? buffer.duration * 1000 : 0);
   // The decoded window's own end, in whole ms `[SPEC-SUI-228]` -- wherever
@@ -193,7 +203,14 @@
     draft.fade_in_curve !== base.fade_in_curve ||
     draft.fade_out_curve !== base.fade_out_curve;
 
-  const refreshCommitState = () => { $('commit').disabled = !dirty(); };
+  // Every completed change to the draft passes through here, which makes it
+  // the one place the detection table's "now" column follows the draft --
+  // and, with "keep my start/end", the place detection re-runs from.
+  const refreshCommitState = () => {
+    $('commit').disabled = !dirty();
+    renderDetectTable();
+    if ($('detspan').checked) scheduleDetect();
+  };
 
   // Undo: one stack of prior drafts, pushed once per *completed* edit -- a
   // drag's own motion, or a field's own keystrokes, never touch it, matching
@@ -237,12 +254,17 @@
       'The main player was paused so only this preview plays. Its own Play ' +
       'button on the player page resumes it when you are done here.';
 
+    // Asked for alongside `/info`, not after it -- neither depends on the other.
+    const defaultsWanted = fetch('/boundary-params.json')
+      .then(r => (r && r.ok ? r.json() : null))
+      .catch(() => null);
+
     const infoResp = await fetch(`/edit/${passageId}/info`).catch(() => null);
     if (!infoResp || !infoResp.ok) {
       note(`Passage ${passageId} does not exist, or its info could not be read.`, 'bad');
       return;
     }
-    const info = await infoResp.json();
+    info = await infoResp.json();
     base = {
       start_ms: info.start_ms, end_ms: info.end_ms,
       lead_in_ms: info.lead_in_ms, lead_out_ms: info.lead_out_ms,
@@ -261,6 +283,7 @@
                        'fadeinms', 'fadeoutms', 'fadeincurve', 'fadeoutcurve']) {
       $(id).disabled = false;
     }
+    setUpDetection(await defaultsWanted);
 
     note('Loading audio…');
     // A bounded window around the passage, never the whole file
@@ -295,8 +318,17 @@
 
     $('play').disabled = false;
     for (const id of ['zoomout', 'zoomin', 'zoompassage', 'zoomfile']) $(id).disabled = false;
+    // One channel for detection, the average of all of them -- what
+    // `analyze_amplitude.py` asks ffmpeg for (`-ac 1`), so both measure the
+    // same overall level rather than one side of a stereo image.
+    mono = new Float32Array(buffer.length);
+    for (let c = 0; c < buffer.numberOfChannels; c++) {
+      const ch = buffer.getChannelData(c);
+      for (let i = 0; i < ch.length; i++) mono[i] += ch[i] / buffer.numberOfChannels;
+    }
     setView(windowFromMs, windowFromMs + totalMs());
     updateFacts(); // the partial-window note depends on `windowFromMs`/`totalMs()`, both just set
+    runDetect();
 
     // The server clamps to `EDIT_AUDIO_MAX_MS` regardless of what was asked,
     // and a library not yet repaired can still store an `end_ms` past what
@@ -330,6 +362,12 @@
       `fade-in <b>${draft.fade_in_ms} ms ${draft.fade_in_curve}</b> · ` +
       `fade-out <b>${draft.fade_out_ms} ms ${draft.fade_out_curve}</b> · ` +
       `gain <b>${draft.gain_db.toFixed(2)} dB</b> · file <b>${fmt(fileMs || null)}</b>` +
+      // Which cut this is and where its stored span came from -- most of the
+      // library's spans are MuLibPlay's (`inherited:mulib`), not anything
+      // Lempi computed, which is worth knowing before trusting one.
+      (info && info.kind
+        ? ` · <b>${esc(info.kind)}</b> cut, span from <b>${esc(info.boundary_src || 'unknown')}</b>`
+        : '') +
       // Only a bounded window around the passage is ever decoded for a
       // large DAO capture `[SPEC-SUI-224]` -- said plainly here, since
       // "Zoom out" quietly stopping short of the file's own edges would
@@ -458,6 +496,34 @@
     line(draft.end_ms - draft.lead_out_ms, '#fb6', 1.5);
     line(draft.start_ms + draft.fade_in_ms, '#a78bfa', 1.5);
     line(draft.end_ms - draft.fade_out_ms, '#a78bfa', 1.5);
+
+    if ($('dettrace').checked && mono && params) drawTrace(g, w, h, dpr, padPx, usable, span, px);
+
+    // Where detection would put each point `[SPEC-SUI-230]`: dashed, in the
+    // same colour as the marker it suggests a value for, with a small
+    // triangle on the bottom edge -- so a suggestion that coincides with the
+    // real marker is still visibly there, and the knob rail at the top stays
+    // reserved for things that can be dragged.
+    if (suggestion) {
+      const s = suggestion;
+      const marks = [
+        [s.start_ms, '#6cf'], [s.end_ms, '#6cf'],
+        [s.start_ms + s.lead_in_ms, '#fb6'], [s.end_ms - s.lead_out_ms, '#fb6'],
+        [s.start_ms + s.fade_in_ms, '#a78bfa'], [s.end_ms - s.fade_out_ms, '#a78bfa'],
+      ];
+      g.setLineDash([5 * dpr, 4 * dpr]);
+      for (const [ms, color] of marks) line(ms, color, 1.25);
+      g.setLineDash([]);
+      for (const [ms, color] of marks) {
+        const x = px(ms);
+        g.fillStyle = color;
+        g.beginPath();
+        g.moveTo(x, h - 9 * dpr);
+        g.lineTo(x - 5 * dpr, h);
+        g.lineTo(x + 5 * dpr, h);
+        g.fill();
+      }
+    }
 
     // A knob near the top of each line -- an actual grabbable shape, not
     // just a place on a line that happens to respond to a drag
@@ -868,6 +934,391 @@
          'library here, and not yet sent to any other library -- both are ' +
          'separate, deliberate steps.', 'good');
   });
+
+  // ---------------------------------------------------------------------
+  // Automatic detection `[SPEC-SUI-230]`. The algorithm is `boundary.js`
+  // (`[SPEC-SUI-229]`); this is the panel around it: the parameters for both
+  // kinds, editable, run against the decoded window on every change, and the
+  // result offered -- never applied without asking -- as a suggestion.
+  //
+  // The edited parameters are kept in this browser only, so tuning carries
+  // from one passage to the next. Making them the defaults everywhere is a
+  // deliberate step: copy the JSON into `boundary-params.json`, which the
+  // batch tool reads too.
+  let defaults = null;     // boundary-params.json as shipped
+  let params = null;       // { radio, album } as edited here
+  let detKind = 'radio';
+  let suggestion = null;   // the last detect() result, or null
+  let detSteps = [];
+  let detTimer = null;
+  let traceCache = null;   // { windowMs, env } over the whole decoded window
+  const KINDS = ['radio', 'album'];
+  const PARAM_STORE = 'lempi.edit.detectParams.v1';
+  // Column heads for the two-sided groups; a group not named here has one.
+  const SIDES = { 'Start / end': ['start', 'end'],
+                  'Lead-in / lead-out': ['in', 'out'],
+                  'Fade-in / fade-out': ['in', 'out'] };
+
+  // Only keys the shipped defaults know, and only of the same type -- a value
+  // saved by an older or newer page cannot smuggle in a parameter the
+  // algorithm does not read, or a string where a number belongs.
+  function mergeParams(base, saved) {
+    const out = { ...base };
+    if (saved && typeof saved === 'object') {
+      for (const k of Object.keys(base)) {
+        if (k in saved && typeof saved[k] === typeof base[k]) out[k] = saved[k];
+      }
+    }
+    return out;
+  }
+  function saveParams() {
+    try { localStorage.setItem(PARAM_STORE, JSON.stringify(params)); } catch (e) { /* a convenience only */ }
+  }
+
+  function setUpDetection(shipped) {
+    if (!window.LempiBoundary || !shipped || !shipped.radio || !shipped.album) {
+      // Said, not hidden: a panel that silently is not there reads as a
+      // page that never had one `[GDE-DEP-060]`.
+      $('detect').hidden = false;
+      $('detsteps').innerHTML =
+        '<li>Detection is unavailable: its default parameters could not be read from this player.</li>';
+      for (const id of ['detkind', 'detspan', 'dettrace', 'detreset', 'detjsonapply']) $(id).disabled = true;
+      return;
+    }
+    defaults = shipped;
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(PARAM_STORE) || 'null'); } catch (e) { saved = null; }
+    params = {};
+    for (const k of KINDS) params[k] = mergeParams(defaults[k], saved && saved[k]);
+    detKind = KINDS.includes(info.kind) ? info.kind : 'radio';
+    $('detkind').value = detKind;
+    $('detect').hidden = false;
+    renderKindNote();
+    renderParams();
+    renderDetectTable();
+    renderSteps(['Waiting for the audio to decode.']);
+  }
+
+  function renderKindNote() {
+    const own = KINDS.includes(info.kind) ? info.kind : null;
+    $('detkindnote').textContent = !own
+      ? 'this passage\'s kind could not be read'
+      : own === detKind ? `this is a ${own} cut`
+        : `this is a ${own} cut -- showing what the ${detKind} parameters would do to it`;
+  }
+
+  // Where a start may be searched for and an end searched back from: the
+  // file's own edges, a neighbouring passage of the same kind, or the edge
+  // of what was decoded -- whichever is nearest, and said which.
+  function searchContext() {
+    if ($('detspan').checked) {
+      return {
+        ctx: { loMs: draft.start_ms, hiMs: draft.end_ms, loIsFileEdge: true, hiIsFileEdge: true },
+        keep: true,
+        why: `start and end kept where they are now (${fmt(draft.start_ms)} – ${fmt(draft.end_ms)}); ` +
+             'lead and fade measured on that span',
+      };
+    }
+    const winEnd = windowEndMs();
+    const prev = info.prev_end_ms, next = info.next_start_ms;
+    const loMs = Math.max(windowFromMs, prev == null ? 0 : prev);
+    const hiMs = Math.min(winEnd, next == null ? Infinity : next);
+    const loIsFileEdge = prev == null && windowFromMs === 0;
+    // The decoded length and the stored file length differ by a sample's
+    // rounding even when the whole file was decoded; a window that stopped
+    // short of the file by design is short by far more than this.
+    const hiIsFileEdge = next == null && winEnd >= (fileMs || winEnd) - 1000;
+    const loWhy = loIsFileEdge ? 'the file\'s start'
+      : prev != null && loMs === prev ? 'where the previous passage ends' : 'the edge of the decoded window';
+    const hiWhy = hiIsFileEdge ? 'the file\'s end'
+      : next != null && hiMs === next ? 'where the next passage starts' : 'the edge of the decoded window';
+    return {
+      ctx: { loMs, hiMs, loIsFileEdge, hiIsFileEdge },
+      keep: false,
+      why: `searched ${fmt(loMs)} – ${fmt(hiMs)}: from ${loWhy} to ${hiWhy}`,
+    };
+  }
+
+  function scheduleDetect() {
+    if (detTimer) clearTimeout(detTimer);
+    detTimer = setTimeout(runDetect, 120);
+  }
+
+  function runDetect() {
+    detTimer = null;
+    if (!mono || !params || !draft) return;
+    const { ctx, keep, why } = searchContext();
+    if (!(ctx.hiMs > ctx.loMs)) {
+      suggestion = null;
+      renderSteps([`Nothing to search -- ${why}.`]);
+    } else {
+      const p = keep ? { ...params[detKind], trim_start: false, trim_end: false } : params[detKind];
+      const t0 = performance.now();
+      suggestion = LempiBoundary.detect(mono, buffer.sampleRate, windowFromMs, ctx, p);
+      const took = Math.round(performance.now() - t0);
+      renderSteps([why, ...suggestion.steps, `(computed in ${took} ms on ${fmt(totalMs())} of decoded audio)`]);
+    }
+    $('legendsuggest').hidden = !suggestion;
+    renderDetectTable();
+    draw();
+  }
+
+  // Suggested beside now, one row per point. A fade row carries its curve,
+  // and "use" on it takes the curve too.
+  const POINTS = [
+    { label: 'start', field: 'start_ms', color: '#6cf', pos: true },
+    { label: 'end', field: 'end_ms', color: '#6cf', pos: true },
+    { label: 'lead-in', field: 'lead_in_ms', color: '#fb6' },
+    { label: 'lead-out', field: 'lead_out_ms', color: '#fb6' },
+    { label: 'fade-in', field: 'fade_in_ms', color: '#a78bfa', curve: 'fade_in_curve' },
+    { label: 'fade-out', field: 'fade_out_ms', color: '#a78bfa', curve: 'fade_out_curve' },
+  ];
+  function renderDetectTable() {
+    const t = $('detresult');
+    if (!t || !params || !draft) return;
+    t.textContent = '';
+    const head = t.insertRow();
+    for (const h of ['', 'suggested', 'now', 'difference', '']) {
+      const th = document.createElement('th');
+      th.textContent = h;
+      head.append(th);
+    }
+    let differs = false;
+    for (const pt of POINTS) {
+      const r = t.insertRow();
+      r.className = 'point';
+      const c0 = r.insertCell();
+      const sw = document.createElement('span');
+      sw.className = 'sw';
+      sw.style.background = pt.color;
+      c0.append(sw, pt.label);
+      const show = (v, curve) => (v == null ? '—' : pt.pos ? fmt(v) : `${v} ms` + (curve ? ` ${curve}` : ''));
+      const sug = suggestion ? suggestion[pt.field] : null;
+      const now = draft[pt.field];
+      const sugCurve = suggestion && pt.curve ? suggestion[pt.curve] : null;
+      const nowCurve = pt.curve ? draft[pt.curve] : null;
+      const cell = (text, cls) => { const c = r.insertCell(); c.textContent = text; c.className = cls; };
+      cell(show(sug, sugCurve), 'num');
+      cell(show(now, nowCurve), 'num');
+      const d = sug == null ? null : sug - now;
+      const curveDiffers = Boolean(pt.curve && suggestion && sugCurve !== nowCurve);
+      const text = d == null ? '—'
+        : d === 0 ? (curveDiffers ? 'curve' : 'same')
+          : `${d > 0 ? '+' : '−'}${Math.abs(d).toLocaleString()} ms`;
+      cell(text, 'num' + (d || curveDiffers ? ' differs' : ''));
+      const use = document.createElement('button');
+      use.type = 'button';
+      use.textContent = 'use';
+      use.disabled = !suggestion || (d === 0 && !curveDiffers);
+      use.title = `Put the suggested ${pt.label} into the draft`;
+      use.addEventListener('click', () => applySuggestion([pt.field]));
+      r.insertCell().append(use);
+      if (d || curveDiffers) differs = true;
+    }
+    $('detuse').disabled = !suggestion || !differs;
+  }
+
+  function renderSteps(lines) {
+    detSteps = lines;
+    const ol = $('detsteps');
+    ol.textContent = '';
+    for (const s of lines) {
+      const li = document.createElement('li');
+      li.textContent = s;
+      ol.append(li);
+    }
+  }
+
+  // Into the draft, exactly as a drag would put it there -- one undo step,
+  // the same clamps, and nothing saved until Save edit.
+  function applySuggestion(fields) {
+    if (!suggestion) return;
+    pushUndo();
+    stopPreview();
+    const s = suggestion;
+    if (fields.includes('start_ms') && fields.includes('end_ms')) {
+      // Both at once: the pair is valid together even where either alone
+      // would cross the other's current value.
+      draft.start_ms = clamp(s.start_ms, windowFromMs, windowEndMs() - 1);
+      draft.end_ms = clamp(s.end_ms, draft.start_ms + 1, windowEndMs());
+    } else if (fields.includes('start_ms')) {
+      draft.start_ms = clamp(s.start_ms, windowFromMs, draft.end_ms - 1);
+    } else if (fields.includes('end_ms')) {
+      draft.end_ms = clamp(s.end_ms, draft.start_ms + 1, windowEndMs());
+    }
+    const len = draft.end_ms - draft.start_ms;
+    for (const f of ['lead_in_ms', 'lead_out_ms', 'fade_in_ms', 'fade_out_ms']) {
+      if (fields.includes(f)) draft[f] = clamp(s[f], 0, len);
+    }
+    if (fields.includes('fade_in_ms')) draft.fade_in_curve = s.fade_in_curve;
+    if (fields.includes('fade_out_ms')) draft.fade_out_curve = s.fade_out_curve;
+    updateFacts();
+    updatePreciseFields();
+    refreshCommitState();
+    draw();
+  }
+  $('detuse').addEventListener('click', () => applySuggestion(POINTS.map(p => p.field)));
+
+  function renderParams() {
+    const box = $('detparams');
+    box.textContent = '';
+    const rows = LempiBoundary.ROWS;
+    for (const group of [...new Set(rows.map(r => r.group))]) {
+      const mine = rows.filter(r => r.group === group);
+      const sides = SIDES[group];
+      const t = document.createElement('table');
+      const head = t.insertRow();
+      for (const h of [group, ...(sides || [])]) {
+        const th = document.createElement('th');
+        th.textContent = h;
+        head.append(th);
+      }
+      for (const row of mine) {
+        const tr = t.insertRow();
+        const lab = tr.insertCell();
+        lab.className = 'rowlabel';
+        lab.textContent = row.label + (row.unit ? ` (${row.unit})` : '');
+        lab.title = row.hint;
+        for (const key of row.keys) {
+          const td = tr.insertCell();
+          if (sides && row.keys.length === 1) td.colSpan = 2;
+          td.append(paramInput(row, key));
+        }
+      }
+      box.append(t);
+    }
+    refreshJson();
+  }
+
+  function paramInput(row, key) {
+    const p = params[detKind];
+    let el;
+    if (row.type === 'bool') {
+      el = document.createElement('input');
+      el.type = 'checkbox';
+      el.checked = Boolean(p[key]);
+    } else if (row.type === 'select') {
+      el = document.createElement('select');
+      for (const o of row.options) el.append(new Option(o, o));
+      el.value = p[key];
+    } else {
+      el = document.createElement('input');
+      el.type = 'number';
+      el.min = key === 'window_ms' ? '1' : '0';
+      el.step = row.unit === 'ms' ? '10' : '1';
+      el.value = p[key];
+    }
+    el.dataset.key = key;
+    el.title = row.hint;
+    const mark = () => el.classList.toggle('changed', params[detKind][key] !== defaults[detKind][key]);
+    mark();
+    el.addEventListener(row.type === 'number' ? 'input' : 'change', () => {
+      let v;
+      if (row.type === 'bool') v = el.checked;
+      else if (row.type === 'select') v = el.value;
+      else {
+        v = Number(el.value);
+        // Half-typed is not a value: keep the last good one until it is.
+        if (el.value === '' || !Number.isFinite(v) || v < Number(el.min)) return;
+      }
+      params[detKind][key] = v;
+      mark();
+      saveParams();
+      refreshJson();
+      scheduleDetect();
+    });
+    return el;
+  }
+
+  $('detkind').addEventListener('change', () => {
+    detKind = $('detkind').value;
+    renderKindNote();
+    renderParams();
+    runDetect();
+  });
+  $('detspan').addEventListener('change', runDetect);
+  $('dettrace').addEventListener('change', () => {
+    $('legendtrace').hidden = !$('dettrace').checked;
+    draw();
+  });
+  $('detreset').addEventListener('click', () => {
+    params[detKind] = { ...defaults[detKind] };
+    saveParams();
+    renderParams();
+    runDetect();
+  });
+
+  function refreshJson() {
+    if (!params || !$('detjsonbox').open) return;
+    $('detjson').value = JSON.stringify({ version: defaults.version, ...params }, null, 2);
+  }
+  $('detjsonbox').addEventListener('toggle', refreshJson);
+  $('detjsonapply').addEventListener('click', () => {
+    let parsed;
+    try { parsed = JSON.parse($('detjson').value); } catch (e) {
+      $('detjsonnote').textContent = `Not JSON: ${e.message}`;
+      return;
+    }
+    for (const k of KINDS) params[k] = mergeParams(defaults[k], parsed && parsed[k]);
+    saveParams();
+    renderParams();
+    runDetect();
+    $('detjsonnote').textContent = 'Applied. A key it did not name went back to its default.';
+  });
+
+  // Each window's level over the waveform, 0 dBFS at the top and -90 at the
+  // bottom, with every threshold the current parameters use drawn across it
+  // -- so "why did it put the end there" is answered by where the curve
+  // crosses a line, not by reading numbers.
+  const DB_FLOOR = -90;
+  function drawTrace(g, w, h, dpr, padPx, usable, span, px) {
+    const wms = params[detKind].window_ms;
+    if (!traceCache || traceCache.windowMs !== wms) {
+      traceCache = { windowMs: wms, env: LempiBoundary.envelope(mono, buffer.sampleRate, 0, mono.length, wms) };
+    }
+    const env = traceCache.env;
+    const yOf = db => (Math.max(DB_FLOOR, Math.min(0, db)) / DB_FLOOR) * h;
+    g.strokeStyle = '#5d8';
+    g.lineWidth = 1.5 * dpr;
+    g.beginPath();
+    let started = false;
+    for (let x = Math.floor(padPx); x < w - padPx; x++) {
+      const msLo = view.fromMs + ((x - padPx) / usable) * span - windowFromMs;
+      const msHi = view.fromMs + ((x + 1 - padPx) / usable) * span - windowFromMs;
+      const i0 = Math.floor(msLo / wms), i1 = Math.max(i0, Math.floor(msHi / wms));
+      let peak = -1;
+      for (let i = Math.max(0, i0); i <= Math.min(env.length - 1, i1); i++) if (env[i] > peak) peak = env[i];
+      if (peak < 0) continue;
+      const y = yOf(LempiBoundary.dbOf(peak));
+      if (started) g.lineTo(x, y); else { g.moveTo(x, y); started = true; }
+    }
+    g.stroke();
+    if (!suggestion) return;
+    // One line per distinct level, named for everything that uses it.
+    const byLevel = new Map();
+    for (const lv of suggestion.levels) {
+      if (!lv.on) continue;
+      const k = lv.dbfs.toFixed(1);
+      if (!byLevel.has(k)) byLevel.set(k, { dbfs: lv.dbfs, names: [], color: /silence/.test(lv.name) ? '#6cf' : '#fb6' });
+      byLevel.get(k).names.push(lv.name);
+    }
+    g.font = `${11 * dpr}px system-ui, sans-serif`;
+    g.textAlign = 'right';
+    for (const { dbfs, names, color } of byLevel.values()) {
+      const y = yOf(dbfs);
+      g.strokeStyle = color;
+      g.lineWidth = 1 * dpr;
+      g.setLineDash([2 * dpr, 3 * dpr]);
+      g.beginPath();
+      g.moveTo(padPx, y);
+      g.lineTo(w - padPx, y);
+      g.stroke();
+      g.setLineDash([]);
+      g.fillStyle = color;
+      g.fillText(`${dbfs.toFixed(0)} dBFS  ${names.join(', ')}`, w - padPx - 4 * dpr, y - 3 * dpr);
+    }
+    g.textAlign = 'start';
+  }
 
   load().catch(() => note('Something went wrong loading this passage.', 'bad'));
 })();

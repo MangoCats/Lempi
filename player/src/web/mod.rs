@@ -487,6 +487,10 @@ pub fn router(ui: Ui) -> Router {
         .route("/edit/:passage_id", get(|| async { ([REVALIDATE], Html(EDIT_HTML)) }))
         .route("/edit.js", get(|| async { js(EDIT_JS) }))
         .route("/fade.js", get(|| async { js(FADE_JS) }))
+        .route("/boundary.js", get(|| async { js(BOUNDARY_JS) }))
+        .route("/boundary-params.json", get(|| async {
+            ([(axum::http::header::CONTENT_TYPE, "application/json"), REVALIDATE], BOUNDARY_PARAMS)
+        }))
         .route("/edit/:passage_id/info", get(edit_info))
         .route("/edit/:passage_id/audio", get(edit_audio))
         .route("/edit/:passage_id/review", post(edit_review))
@@ -814,6 +818,13 @@ const EDIT_JS: &str = include_str!("edit.js");
 /// each other.
 #[cfg(feature = "vipunen-support")]
 const FADE_JS: &str = include_str!("fade.js");
+/// Automatic boundary detection, and the default parameters it runs with
+/// `[SPEC-SUI-229]`. The same JSON `tools/analyze_amplitude.py` reads, so a
+/// value tuned in the editor and copied into it is what the batch tool uses.
+#[cfg(feature = "vipunen-support")]
+const BOUNDARY_JS: &str = include_str!("boundary.js");
+#[cfg(feature = "vipunen-support")]
+const BOUNDARY_PARAMS: &str = include_str!("boundary-params.json");
 
 /// The route the review page fetches its work from, named once so the router
 /// and the test that checks the page agrees with it cannot drift apart.
@@ -1486,7 +1497,8 @@ mod tests {
             ("guide.js", include_str!("guide.js")),
         ];
         #[cfg(feature = "vipunen-support")]
-        sources.extend([("review.js", REVIEW_JS), ("edit.js", EDIT_JS), ("fade.js", FADE_JS)]);
+        sources.extend([("review.js", REVIEW_JS), ("edit.js", EDIT_JS), ("fade.js", FADE_JS),
+                        ("boundary.js", BOUNDARY_JS)]);
         for s in SKINS {
             sources.push((s.name, s.js));
         }
@@ -1947,6 +1959,14 @@ mod tests {
         assert!(EDIT_JS.contains("/edit/${passageId}/info"));
         assert!(EDIT_JS.contains("/edit/${passageId}/audio"));
         assert!(EDIT_JS.contains("/edit/${passageId}/review"));
+        // The detection panel's defaults `[SPEC-SUI-229]`, and the page
+        // loading the module that runs them.
+        assert!(EDIT_JS.contains("/boundary-params.json"));
+        assert!(EDIT_HTML.contains("/boundary.js"));
+        let defaults: serde_json::Value =
+            serde_json::from_str(BOUNDARY_PARAMS).expect("boundary-params.json must parse");
+        assert!(defaults["radio"].is_object() && defaults["album"].is_object(),
+                "both kinds' parameter sets must be present");
         // Silences the server's own transport on entry `[SPEC-SUI-217]` --
         // the same route the main skin's own pause button sends.
         assert!(EDIT_JS.contains("/command/pause"));

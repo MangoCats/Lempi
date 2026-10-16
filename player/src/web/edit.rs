@@ -31,13 +31,14 @@ pub(super) async fn edit_info(
         // that was made, not the automatic values it drafted over
         // `[SPEC021 §2]`.
         let draft = lib.boundary_review(passage_id);
-        Some((entry, draft))
+        let context = lib.passage_context(passage_id);
+        Some((entry, draft, context))
     })
     .await
     .ok()
     .flatten();
     match found {
-        Some((entry, draft)) => {
+        Some((entry, draft, context)) => {
             let edited = draft.is_some();
             let (start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
                  fade_in_ms, fade_out_ms, fade_in_curve, fade_out_curve) = match draft {
@@ -77,6 +78,15 @@ pub(super) async fn edit_info(
                 "fade_in_curve": fade_in_curve,
                 "fade_out_curve": fade_out_curve,
                 "edited": edited,
+                // What the detection panel needs `[SPEC-SUI-231]`: which
+                // parameter set applies, where the stored span came from, and
+                // how far a start or end may be searched before it reaches a
+                // neighbouring passage. `null` throughout when it could not be
+                // read -- the panel says so rather than guessing a kind.
+                "kind": context.as_ref().map(|c| c.kind.clone()),
+                "boundary_src": context.as_ref().map(|c| c.boundary_src.clone()),
+                "prev_end_ms": context.as_ref().and_then(|c| c.prev_end_ms),
+                "next_start_ms": context.as_ref().and_then(|c| c.next_start_ms),
             }))
             .into_response()
         }

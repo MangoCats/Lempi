@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "radio": {
+    "window_ms": 100,
+    "reference": "full_scale",
+    "reference_percentile": 95,
+
+    "trim_start": true,
+    "start_silence_db": 60,
+    "start_min_sound_ms": 200,
+    "start_pad_ms": 0,
+    "trim_end": true,
+    "end_silence_db": 60,
+    "end_min_sound_ms": 200,
+    "end_pad_ms": 200,
+
+    "lead_in": true,
+    "lead_in_content_db": 40,
+    "lead_in_db": 45,
+    "lead_in_quick_ramp_ms": 1000,
+    "lead_in_max_ms": 10000,
+    "lead_out": true,
+    "lead_out_content_db": 40,
+    "lead_out_db": 45,
+    "lead_out_quick_ramp_ms": 1000,
+    "lead_out_max_ms": 10000,
+
+    "fade_in_mode": "fixed",
+    "fade_in_ms": 20,
+    "fade_in_curve": "exponential",
+    "fade_out_mode": "fixed",
+    "fade_out_ms": 20,
+    "fade_out_curve": "exponential"
+  },
+  "album": {
+    "window_ms": 100,
+    "reference": "full_scale",
+    "reference_percentile": 95,
+
+    "trim_start": false,
+    "start_silence_db": 60,
+    "start_min_sound_ms": 200,
+    "start_pad_ms": 0,
+    "trim_end": false,
+    "end_silence_db": 60,
+    "end_min_sound_ms": 200,
+    "end_pad_ms": 0,
+
+    "lead_in": false,
+    "lead_in_content_db": 40,
+    "lead_in_db": 45,
+    "lead_in_quick_ramp_ms": 1000,
+    "lead_in_max_ms": 10000,
+    "lead_out": false,
+    "lead_out_content_db": 40,
+    "lead_out_db": 45,
+    "lead_out_quick_ramp_ms": 1000,
+    "lead_out_max_ms": 10000,
+
+    "fade_in_mode": "fixed",
+    "fade_in_ms": 20,
+    "fade_in_curve": "exponential",
+    "fade_out_mode": "fixed",
+    "fade_out_ms": 20,
+    "fade_out_curve": "exponential"
+  }
+}

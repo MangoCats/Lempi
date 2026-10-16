@@ -1,0 +1,78 @@
+{
+  "about": "Shared cases for boundary detection [SPEC-SUI-229]: player/src/web/boundary.js (checked by build/verify-skins.js) and tools/analyze_amplitude.py (checked by tools/test_analyze_amplitude.py) must both produce `expect` from the same input. Each signal is piecewise constant: `segments` is [length_ms, dBFS] in order, null meaning digital silence, synthesised at `sr` as a +a/-a square wave so a window's RMS is exactly a. `params` names a kind's defaults in boundary-params.json and `overrides` changes some of them. Levels sit at least 1 dB from every threshold they are tested against, so rounding cannot flip a case.",
+  "cases": [
+    {
+      "name": "radio: a long fade-out tail is kept to where it reaches silence",
+      "params": "radio", "overrides": {},
+      "sr": 1000, "t0_ms": 0,
+      "segments": [[500, null], [30000, -12], [2000, -20], [2000, -30], [2000, -42], [2000, -50], [1000, -58], [1000, -70], [1500, null]],
+      "ctx": {"lo_ms": 0, "hi_ms": 42000, "lo_is_file_edge": true, "hi_is_file_edge": true},
+      "expect": {"start_ms": 500, "end_ms": 39700, "lead_in_ms": 0, "lead_out_ms": 3300, "fade_in_ms": 20, "fade_out_ms": 20}
+    },
+    {
+      "name": "album: the same audio keeps both file edges and has no leads",
+      "params": "album", "overrides": {},
+      "sr": 1000, "t0_ms": 0,
+      "segments": [[500, null], [30000, -12], [2000, -20], [2000, -30], [2000, -42], [2000, -50], [1000, -58], [1000, -70], [1500, null]],
+      "ctx": {"lo_ms": 0, "hi_ms": 42000, "lo_is_file_edge": true, "hi_is_file_edge": true},
+      "expect": {"start_ms": 0, "end_ms": 42000, "lead_in_ms": 0, "lead_out_ms": 0, "fade_in_ms": 20, "fade_out_ms": 20}
+    },
+    {
+      "name": "radio, measured from the 95th percentile, fading across the lead-out",
+      "params": "radio",
+      "overrides": {"reference": "percentile", "lead_out_content_db": 10, "lead_out_db": 20, "fade_out_mode": "lead"},
+      "sr": 1000, "t0_ms": 0,
+      "segments": [[500, null], [30000, -12], [2000, -20], [2000, -30], [2000, -42], [2000, -50], [1000, -58], [1000, -70], [1500, null]],
+      "ctx": {"lo_ms": 0, "hi_ms": 42000, "lo_is_file_edge": true, "hi_is_file_edge": true},
+      "expect": {"start_ms": 500, "end_ms": 40700, "lead_in_ms": 0, "lead_out_ms": 6300, "fade_in_ms": 20, "fade_out_ms": 6300}
+    },
+    {
+      "name": "radio: a slow fade-in gets a lead-in, an abrupt end does not get a lead-out",
+      "params": "radio", "overrides": {},
+      "sr": 1000, "t0_ms": 0,
+      "segments": [[3000, -50], [2000, -43], [20000, -10], [1000, null]],
+      "ctx": {"lo_ms": 0, "hi_ms": 26000, "lo_is_file_edge": true, "hi_is_file_edge": true},
+      "expect": {"start_ms": 0, "end_ms": 25200, "lead_in_ms": 3000, "lead_out_ms": 0, "fade_in_ms": 20, "fade_out_ms": 20}
+    },
+    {
+      "name": "radio: the lead-in cap, and a fade across it",
+      "params": "radio", "overrides": {"lead_in_max_ms": 2500, "fade_in_mode": "lead"},
+      "sr": 1000, "t0_ms": 0,
+      "segments": [[3000, -50], [2000, -43], [20000, -10], [1000, null]],
+      "ctx": {"lo_ms": 0, "hi_ms": 26000, "lo_is_file_edge": true, "hi_is_file_edge": true},
+      "expect": {"start_ms": 0, "end_ms": 25200, "lead_in_ms": 2500, "lead_out_ms": 0, "fade_in_ms": 2500, "fade_out_ms": 20}
+    },
+    {
+      "name": "album between two neighbours in one file: both edges found at the silence",
+      "params": "album", "overrides": {},
+      "sr": 1000, "t0_ms": 10000,
+      "segments": [[1000, -15], [1500, null], [15000, -12], [2000, null], [1500, -15]],
+      "ctx": {"lo_ms": 11000, "hi_ms": 29500, "lo_is_file_edge": false, "hi_is_file_edge": false},
+      "expect": {"start_ms": 12500, "end_ms": 27500, "lead_in_ms": 0, "lead_out_ms": 0, "fade_in_ms": 20, "fade_out_ms": 20}
+    },
+    {
+      "name": "radio: a click before the music is not its start",
+      "params": "radio", "overrides": {},
+      "sr": 1000, "t0_ms": 0,
+      "segments": [[100, -20], [900, null], [10000, -15], [500, null]],
+      "ctx": {"lo_ms": 0, "hi_ms": 11500, "lo_is_file_edge": true, "hi_is_file_edge": true},
+      "expect": {"start_ms": 1000, "end_ms": 11200, "lead_in_ms": 0, "lead_out_ms": 0, "fade_in_ms": 20, "fade_out_ms": 20}
+    },
+    {
+      "name": "radio: the same click counts when one window of sound is enough",
+      "params": "radio", "overrides": {"start_min_sound_ms": 100},
+      "sr": 1000, "t0_ms": 0,
+      "segments": [[100, -20], [900, null], [10000, -15], [500, null]],
+      "ctx": {"lo_ms": 0, "hi_ms": 11500, "lo_is_file_edge": true, "hi_is_file_edge": true},
+      "expect": {"start_ms": 0, "end_ms": 11200, "lead_in_ms": 0, "lead_out_ms": 0, "fade_in_ms": 20, "fade_out_ms": 20}
+    },
+    {
+      "name": "radio: all silence leaves the search edges and no leads",
+      "params": "radio", "overrides": {},
+      "sr": 1000, "t0_ms": 0,
+      "segments": [[5000, null]],
+      "ctx": {"lo_ms": 0, "hi_ms": 5000, "lo_is_file_edge": true, "hi_is_file_edge": true},
+      "expect": {"start_ms": 0, "end_ms": 5000, "lead_in_ms": 0, "lead_out_ms": 0, "fade_in_ms": 20, "fade_out_ms": 20}
+    }
+  ]
+}

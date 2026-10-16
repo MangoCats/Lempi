@@ -92,6 +92,51 @@
   /* Same amber as the lead-in/lead-out markers -- a boundary-timing concern
      reads through the same color it is drawn in on the canvas above. */
   .note.warn { opacity: 1; color: #fb6; }
+
+  /* Automatic detection [SPEC-SUI-230]: where the algorithm would put every
+     point with the parameters shown, drawn on the canvas as dashed markers
+     beside the real ones. A suggestion, never a save -- "Use suggested"
+     changes the draft like any drag does, and Save is still the only write. */
+  .detect { margin: 1.2rem 0 0; padding: .8rem 0 0;
+            border-top: 1px solid rgba(128,128,128,.28); }
+  .detect h2 { font-size: .7rem; letter-spacing: .14em; text-transform: uppercase;
+               font-weight: 600; margin: 0; opacity: .6; }
+  .detecthead, .detfoot { display: flex; align-items: center; gap: .5rem 1rem;
+                          flex-wrap: wrap; }
+  .detecthead .spacer { flex: 1; }
+  .detect label { font-size: .8125rem; display: inline-flex; align-items: center; gap: .35rem; }
+  .detect small { font-size: .75rem; opacity: .7; }
+  .detect button { font: inherit; font-size: .875rem; min-height: 2rem; padding: 0 .7rem;
+                   cursor: pointer; background: transparent; color: inherit;
+                   border: 1px solid currentColor; border-radius: 4px; }
+  .detect button[disabled] { opacity: .35; cursor: default; }
+  .detect select, .detect input[type=number], .detect textarea {
+    font: inherit; font-size: .8125rem; padding: .2rem .35rem; background: #141416;
+    color: inherit; border-radius: 4px; border: 1px solid rgba(128,128,128,.45); }
+  .detect input[type=number] { width: 5.5rem; }
+  /* A value tuned away from the shipped default reads at a glance -- the
+     point of this panel is finding which numbers should change. */
+  .detect .changed { border-color: #fb6; box-shadow: 0 0 0 1px #fb6 inset; }
+  .detect input[type=checkbox].changed { outline: 2px solid #fb6; }
+
+  .dettables { display: flex; flex-wrap: wrap; gap: .6rem 1.6rem; margin: .7rem 0 0; }
+  .detect table { border-collapse: collapse; font-size: .8125rem;
+                  font-variant-numeric: tabular-nums; }
+  .detect th, .detect td { padding: .2rem .5rem .2rem 0; text-align: left; vertical-align: middle; }
+  .detect th { font-weight: 600; opacity: .65; font-size: .75rem; }
+  .detect td.num { text-align: right; padding-right: .9rem; }
+  .detect td.differs { color: #fb6; }
+  .detect td.rowlabel { opacity: .85; cursor: help; padding-right: .8rem; }
+  .detect tr.point td:first-child { padding-right: .8rem; }
+  .detect tr.point .sw { display: inline-block; width: .6rem; height: .6rem;
+                         border-radius: 2px; margin-right: .35rem; }
+  .detsteps { font-size: .8125rem; opacity: .8; margin: .6rem 0 0; padding-left: 1.3rem; }
+  .detsteps li { margin: .1rem 0; }
+  .detfoot { margin: .8rem 0 0; align-items: flex-start; }
+  .detfoot details { flex: 1; min-width: 16rem; }
+  .detfoot summary { cursor: pointer; font-size: .8125rem; opacity: .8; }
+  .detect textarea { width: 100%; box-sizing: border-box; margin: .4rem 0; resize: vertical;
+                     font-family: ui-monospace, monospace; font-size: .75rem; }
 </style>
 
 <div class="edit">
@@ -115,6 +160,8 @@
     <span><span class="swatch" style="background:#fb6"></span>lead-in / lead-out</span>
     <span><span class="swatch" style="background:#a78bfa"></span>fade-in / fade-out</span>
     <span><span class="swatch" style="background:#fff"></span>playhead</span>
+    <span id="legendsuggest" hidden>dashed: suggested by detection</span>
+    <span id="legendtrace" hidden><span class="swatch" style="background:#5d8"></span>level (dBFS, 0 at top, −90 at bottom)</span>
     <span>drag a knob to move it · drag empty space to pan · click empty space to jump · wheel to zoom</span>
   </p>
   <div class="transport">
@@ -147,8 +194,42 @@
   <p class="note" id="note"></p>
   <p class="note" id="flavornote"></p>
   <p class="note quiet" id="pausenote"></p>
+
+  <section class="detect" id="detect" hidden>
+    <div class="detecthead">
+      <h2>Automatic detection</h2>
+      <label>parameters for
+        <select id="detkind">
+          <option value="radio">radio</option>
+          <option value="album">album</option>
+        </select></label>
+      <small id="detkindnote"></small>
+      <span class="spacer"></span>
+      <label title="Measure lead and fade on the start/end you have now, instead of on the suggested ones">
+        <input type="checkbox" id="detspan"> keep my start/end</label>
+      <label title="Draw each window's level, and the thresholds, over the waveform">
+        <input type="checkbox" id="dettrace"> level trace</label>
+      <button type="button" id="detuse" disabled
+              title="Copy every suggested point into the draft. Undo puts it back; nothing is saved until Save edit.">Use suggested</button>
+    </div>
+    <div class="dettables">
+      <table id="detresult"></table>
+    </div>
+    <ol class="detsteps" id="detsteps"></ol>
+    <div class="dettables" id="detparams"></div>
+    <div class="detfoot">
+      <button type="button" id="detreset" title="Back to boundary-params.json, for the kind shown">Reset to defaults</button>
+      <details id="detjsonbox">
+        <summary>Parameters as JSON — paste into player/src/web/boundary-params.json to make them the defaults</summary>
+        <textarea id="detjson" rows="14" spellcheck="false"></textarea>
+        <button type="button" id="detjsonapply">Apply JSON</button>
+        <small id="detjsonnote"></small>
+      </details>
+    </div>
+  </section>
 </div>
 
 <script src="/core.js"></script>
 <script src="/fade.js"></script>
+<script src="/boundary.js"></script>
 <script src="/edit.js"></script>

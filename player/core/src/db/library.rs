@@ -1105,6 +1105,20 @@ pub struct BoundaryReview {
     pub fade_out_curve: Option<String>,
 }
 
+/// What the editor's detection needs to know about a passage beyond its own
+/// values `[SPEC-SUI-231]`: which parameter set applies (`kind`), where its
+/// span came from, and how far a start or end may move before it reaches a
+/// neighbouring passage of the same kind in the same file -- `None` on a
+/// side with no neighbour, where the file's own edge is the limit.
+#[cfg(feature = "vipunen-support")]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct PassageContext {
+    pub kind: String,
+    pub boundary_src: String,
+    pub prev_end_ms: Option<u64>,
+    pub next_start_ms: Option<u64>,
+}
+
 /// A passage the segmentation cascade drew boundaries for, still waiting on
 /// a look `[SPEC024 §7]`, `[SPEC-SA-124]`.
 #[cfg(feature = "vipunen-support")]
@@ -1624,6 +1638,35 @@ impl Library {
                         fade_out_ms: r.get::<_, Option<i64>>(6)?.map(|v| v as u64),
                         fade_in_curve: r.get(7)?,
                         fade_out_curve: r.get(8)?,
+                    })
+                },
+            )
+            .ok()
+    }
+
+    /// A passage's kind, provenance and same-kind neighbours in its own file
+    /// `[SPEC-SUI-231]`. A neighbour is judged by its stored span: the
+    /// nearest one starting before this passage bounds its start, the
+    /// nearest one starting after it bounds its end.
+    #[cfg(feature = "vipunen-support")]
+    pub fn passage_context(&self, passage_id: i64) -> Option<PassageContext> {
+        self.conn
+            .query_row(
+                "SELECT p.kind, p.boundary_src,
+                        (SELECT MAX(q.end_ms) FROM __LIB__.passages q
+                          WHERE q.file_id = p.file_id AND q.kind = p.kind
+                            AND q.passage_id != p.passage_id AND q.start_ms < p.start_ms),
+                        (SELECT MIN(q.start_ms) FROM __LIB__.passages q
+                          WHERE q.file_id = p.file_id AND q.kind = p.kind
+                            AND q.passage_id != p.passage_id AND q.start_ms > p.start_ms)
+                   FROM __LIB__.passages p WHERE p.passage_id = ?1",
+                [passage_id],
+                |r| {
+                    Ok(PassageContext {
+                        kind: r.get(0)?,
+                        boundary_src: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                        prev_end_ms: r.get::<_, Option<i64>>(2)?.map(|v| v.max(0) as u64),
+                        next_start_ms: r.get::<_, Option<i64>>(3)?.map(|v| v.max(0) as u64),
                     })
                 },
             )
@@ -2543,6 +2586,35 @@ mod tests {
     fn a_passage_never_edited_has_no_boundary_review() {
         let lib = Library { conn: QualifyingConn::wrap_unsplit(fixture()) };
         assert!(lib.boundary_review(2).is_none());
+    }
+
+    /// The editor's detection searches only as far as a neighbour of the
+    /// same kind `[SPEC-SUI-231]`: the other kind's span over the same audio
+    /// is not a neighbour, and a passage alone in its file has none.
+    #[cfg(feature = "vipunen-support")]
+    #[test]
+    fn a_passage_knows_its_kind_and_its_same_kind_neighbours() {
+        let c = fixture();
+        c.execute_batch(
+            "INSERT INTO files VALUES (2,'md5b','/m/dao.flac',1,1.0,'flac',900000,'t','t');
+             INSERT INTO passages (passage_id,file_id,kind,start_ms,end_ms,boundary_src) VALUES
+                 (10,2,'album',0,200000,'segment'),
+                 (11,2,'album',201500,400000,'segment'),
+                 (12,2,'album',402000,600000,'segment'),
+                 (13,2,'radio',201600,399000,'segment');",
+        )
+        .unwrap();
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
+        let mid = lib.passage_context(11).unwrap();
+        assert_eq!(mid.kind, "album");
+        assert_eq!(mid.boundary_src, "segment");
+        assert_eq!((mid.prev_end_ms, mid.next_start_ms), (Some(200000), Some(402000)));
+        let radio = lib.passage_context(13).unwrap();
+        assert_eq!((radio.prev_end_ms, radio.next_start_ms), (None, None),
+                   "the album cuts over the same audio are not the radio cut's neighbours");
+        let alone = lib.passage_context(2).unwrap();
+        assert_eq!((alone.kind.as_str(), alone.prev_end_ms, alone.next_start_ms), ("radio", None, None));
+        assert!(lib.passage_context(999).is_none());
     }
 
     /// A library the pass has never touched has no `id_checks` table at all,

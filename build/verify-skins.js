@@ -1312,6 +1312,42 @@ function runFadeFixture() {
   if (errors.length) failures++;
 }
 
+// `boundary.js`'s detection against the cases `analyze_amplitude.py`'s own
+// test checks Python against `[SPEC-SUI-229]` -- one algorithm in two
+// languages, the same arrangement as `fade.js` above. Each case's signal is
+// synthesised here from its segment list, exactly as the Python test does.
+function runBoundaryFixture() {
+  const errors = [];
+  delete require.cache[require.resolve(path.join(ROOT, 'boundary.js'))];
+  const { detect } = require(path.join(ROOT, 'boundary.js'));
+  const defaults = JSON.parse(fs.readFileSync(path.join(ROOT, 'boundary-params.json'), 'utf8'));
+  const { cases } = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', 'fixtures', 'boundary', 'vectors.json'), 'utf8'));
+  for (const c of cases) {
+    const total = c.segments.reduce((s, [ms]) => s + ms, 0);
+    const mono = new Float32Array(Math.round((total * c.sr) / 1000));
+    let k = 0;
+    for (const [ms, db] of c.segments) {
+      const a = db == null ? 0 : Math.pow(10, db / 20);
+      for (let i = 0; i < Math.round((ms * c.sr) / 1000); i++, k++) mono[k] = k % 2 ? -a : a;
+    }
+    if (!defaults[c.params]) { errors.push(`${c.name}: no "${c.params}" defaults`); continue; }
+    const got = detect(mono, c.sr, c.t0_ms, {
+      loMs: c.ctx.lo_ms, hiMs: c.ctx.hi_ms,
+      loIsFileEdge: c.ctx.lo_is_file_edge, hiIsFileEdge: c.ctx.hi_is_file_edge,
+    }, { ...defaults[c.params], ...c.overrides });
+    for (const [field, want] of Object.entries(c.expect)) {
+      if (got[field] !== want) errors.push(`${c.name}: ${field} got ${got[field]}, want ${want}`);
+    }
+  }
+  // A fixture that read no cases would otherwise pass by finding no fault.
+  if (cases.length < 5) errors.push(`only ${cases.length} cases read`);
+  console.log(`${'boundary'.padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+              `${cases.length} cases checked against the Python-side fixture`);
+  for (const e of errors) console.log('    ! ' + e);
+  if (errors.length) failures++;
+}
+
 // The skins' side of the snapshot contract `[GDE-HST-060]`. Every skin check
 // above renders SPARSE and RICH; if those two describe a field the server does
 // not send, every skin passes against a player that does not exist. So the
@@ -1372,7 +1408,10 @@ async function runEdit() {
   const INFO = { passage_id: 22, start_ms: 1000, end_ms: 181000, file_ms: 200000,
                  lead_in_ms: 5, lead_out_ms: 946, gain_db: -1.2,
                  fade_in_ms: 20, fade_out_ms: 20,
-                 fade_in_curve: 'exponential', fade_out_curve: 'exponential' };
+                 fade_in_curve: 'exponential', fade_out_curve: 'exponential',
+                 kind: 'album', boundary_src: 'inherited:mulib',
+                 prev_end_ms: null, next_start_ms: null };
+  const BOUNDARY_PARAMS = fs.readFileSync(path.join(ROOT, 'boundary-params.json'), 'utf8');
   const posted = [];
   let audioUrl = null;
   window.fetch = (url, opts) => {
@@ -1380,6 +1419,8 @@ async function runEdit() {
     if (url === '/skins') return Promise.resolve({ json: () => Promise.resolve([]) });
     if (url === '/edit/22/info')
       return Promise.resolve({ ok: true, json: () => Promise.resolve(INFO) });
+    if (url === '/boundary-params.json')
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(JSON.parse(BOUNDARY_PARAMS)) });
     // A windowed request now, not the bare route -- `from_ms`/`to_ms`
     // query params around the passage, never the whole file [SPEC-SUI-224].
     if (url.startsWith('/edit/22/audio?')) {
@@ -1394,6 +1435,7 @@ async function runEdit() {
     window.document.body.appendChild(el);
   };
   runScript(fs.readFileSync(path.join(ROOT, 'core.js'), 'utf8'));
+  runScript(fs.readFileSync(path.join(ROOT, 'boundary.js'), 'utf8'));
   runScript(fs.readFileSync(path.join(ROOT, 'edit.js'), 'utf8'));
   await new Promise(r => setTimeout(r, 30));
 
@@ -1476,6 +1518,37 @@ async function runEdit() {
   check($('flavornote').textContent === '',
         'undoing back to the loaded boundary must clear the suggestion');
 
+  // The detection panel `[SPEC-SUI-230]`: present once `/info` and the
+  // defaults have loaded, on the passage's own kind, before any audio -- the
+  // detection itself needs Web Audio, the parameters do not.
+  check(!$('detect').hidden, 'the detection panel must show once /info and the defaults load');
+  check($('detkind').value === 'album', `the panel must open on the passage's own kind, got ${$('detkind').value}`);
+  check(/album cut/.test($('detkindnote').textContent), `the kind note must name it, got "${$('detkindnote').textContent}"`);
+  check($('facts').textContent.includes('inherited:mulib'), 'the facts line must say where the span came from');
+  const trimEnd = window.document.querySelector('#detparams [data-key="trim_end"]');
+  check(trimEnd && trimEnd.checked === false, 'album trims nothing at the file edge by default');
+  const silence = window.document.querySelector('#detparams [data-key="end_silence_db"]');
+  check(silence && silence.value === '60', `the end silence level must read 60, got ${silence && silence.value}`);
+  silence.value = '50';
+  silence.dispatchEvent(new window.Event('input'));
+  check(silence.classList.contains('changed'), 'a parameter tuned off its default must say so');
+  check(/50/.test(window.localStorage.getItem('lempi.edit.detectParams.v1') || ''),
+        'a tuned parameter must be remembered in this browser');
+  $('detkind').value = 'radio';
+  $('detkind').dispatchEvent(new window.Event('change'));
+  const radioTrim = window.document.querySelector('#detparams [data-key="trim_end"]');
+  check(radioTrim && radioTrim.checked === true, 'switching to radio must show the radio set, which trims');
+  check(/showing what the radio parameters/.test($('detkindnote').textContent),
+        'looking at the other kind\'s parameters must be said');
+  $('detkind').value = 'album';
+  $('detkind').dispatchEvent(new window.Event('change'));
+  $('detreset').dispatchEvent(new window.Event('click'));
+  const silenceAgain = window.document.querySelector('#detparams [data-key="end_silence_db"]');
+  check(silenceAgain.value === '60' && !silenceAgain.classList.contains('changed'),
+        'reset must put the default back and clear the mark');
+  check($('detuse').disabled, 'with no audio decoded there is nothing to use');
+  check(/waiting/i.test($('detsteps').textContent), 'with no audio yet the panel must say what it waits for');
+
   // jsdom has no `AudioContext`; decoding fails there the same way it would
   // in a browser without Web Audio, and that must read as an explanation, not
   // a crash the page swallows silently.
@@ -1516,6 +1589,104 @@ async function runEdit() {
 
   console.log(`${'edit'.padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
               `facts line matches /info for passage 22, and 999 explains itself`);
+  for (const e of errors) console.log('    ! ' + e);
+  if (errors.length) failures++;
+}
+
+// ---------------------------------------------------------------------------
+// The editor's detection panel end to end `[SPEC-SUI-230]`. jsdom has no Web
+// Audio, so `AudioContext` is stood in for by one that hands back a buffer
+// of the first fixture case's signal -- a radio passage whose stored end
+// (30 s) cuts into a fade that runs to 39.5 s, the shape of passage 7439.
+// The canvas is out of reach here (no 2D context), the rest is not: the
+// table, "Use suggested" reaching the draft, undo, and "keep my start/end".
+async function runEditDetect() {
+  const errors = [];
+  const { cases } = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', 'fixtures', 'boundary', 'vectors.json'), 'utf8'));
+  const fadeCase = cases[0];
+  const sr = fadeCase.sr;
+  const total = fadeCase.segments.reduce((s, [ms]) => s + ms, 0);
+  const data = new Float32Array((total * sr) / 1000);
+  let k = 0;
+  for (const [ms, db] of fadeCase.segments) {
+    const a = db == null ? 0 : Math.pow(10, db / 20);
+    for (let i = 0; i < (ms * sr) / 1000; i++, k++) data[k] = k % 2 ? -a : a;
+  }
+
+  const dom = new JSDOM(fs.readFileSync(path.join(ROOT, 'edit.html'), 'utf8'),
+    { runScripts: 'dangerously', url: 'http://localhost/edit/40' });
+  const { window } = dom;
+  window.console.error = (...a) => errors.push(a.join(' '));
+  const create = window.document.createElement.bind(window.document);
+  window.document.createElement = tag => {
+    const el = create(tag);
+    if (tag === 'link' || tag === 'script') setTimeout(() => el.onload && el.onload(), 0);
+    return el;
+  };
+  // No 2D context in jsdom; `draw()` already treats null as "nowhere to draw".
+  window.HTMLCanvasElement.prototype.getContext = () => null;
+  window.AudioContext = class {
+    decodeAudioData() {
+      return Promise.resolve({ sampleRate: sr, length: data.length, duration: data.length / sr,
+                               numberOfChannels: 1, getChannelData: () => data });
+    }
+  };
+  const INFO = { passage_id: 40, start_ms: 0, end_ms: 30000, file_ms: total,
+                 lead_in_ms: 0, lead_out_ms: 0, gain_db: 0,
+                 fade_in_ms: 20, fade_out_ms: 20,
+                 fade_in_curve: 'exponential', fade_out_curve: 'exponential',
+                 kind: 'radio', boundary_src: 'inherited:mulib',
+                 prev_end_ms: null, next_start_ms: null };
+  const defaults = JSON.parse(fs.readFileSync(path.join(ROOT, 'boundary-params.json'), 'utf8'));
+  window.fetch = (url, opts) => {
+    if (opts && opts.method === 'POST') return Promise.resolve({ ok: true });
+    if (url === '/skins') return Promise.resolve({ json: () => Promise.resolve([]) });
+    if (url === '/edit/40/info') return Promise.resolve({ ok: true, json: () => Promise.resolve(INFO) });
+    if (url === '/boundary-params.json') return Promise.resolve({ ok: true, json: () => Promise.resolve(defaults) });
+    if (url.startsWith('/edit/40/audio?'))
+      return Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)) });
+    return Promise.resolve({ ok: false, status: 404 });
+  };
+  // A fresh browser: nothing tuned by an earlier instance on this origin.
+  try { window.localStorage.clear(); } catch (e) { /* none to clear */ }
+  for (const f of ['core.js', 'boundary.js', 'edit.js']) {
+    const el = create('script');
+    el.textContent = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    window.document.body.appendChild(el);
+  }
+  await new Promise(r => setTimeout(r, 60));
+
+  const $ = id => window.document.getElementById(id);
+  const check = (cond, msg) => { if (!cond) errors.push(msg); };
+  const row = label => [...$('detresult').rows].find(r => r.cells[0].textContent === label);
+  const cells = label => (row(label) ? [...row(label).cells].map(c => c.textContent) : []);
+
+  check(cells('end')[1] === '0:39.700', `suggested end should be 0:39.700, got ${cells('end')[1]}`);
+  check(cells('end')[2] === '0:30.000', `the end now should be 0:30.000, got ${cells('end')[2]}`);
+  check(/\+9,?700 ms/.test(cells('end')[3] || ''), `the end should differ by +9700 ms, got ${cells('end')[3]}`);
+  check(cells('lead-out')[1] === '3300 ms', `suggested lead-out should be 3300 ms, got ${cells('lead-out')[1]}`);
+  check(/end silence|-60 dBFS/.test($('detsteps').textContent) || /until 39\.5 s/.test($('detsteps').textContent),
+        `the steps must say where the end came from, got "${$('detsteps').textContent}"`);
+  check(!$('detuse').disabled, 'a suggestion that differs must be usable');
+
+  $('detuse').dispatchEvent(new window.Event('click'));
+  check($('endms').value === '39700', `Use suggested must reach the end field, got ${$('endms').value}`);
+  check($('startms').value === '500', `and the start field, got ${$('startms').value}`);
+  check($('leadoutms').value === '3300', `and the lead-out field, got ${$('leadoutms').value}`);
+  check(!$('commit').disabled, 'a used suggestion is an edit Save can record');
+  check(cells('end')[3] === 'same', `the table must follow the draft, got ${cells('end')[3]}`);
+  $('undo').dispatchEvent(new window.Event('click'));
+  check($('endms').value === '30000', `one undo must put every point back, got end ${$('endms').value}`);
+
+  $('detspan').checked = true;
+  $('detspan').dispatchEvent(new window.Event('change'));
+  check(cells('end')[1] === '0:30.000', `"keep my start/end" must not move the end, got ${cells('end')[1]}`);
+  check(cells('lead-out')[1] === '0 ms',
+        `measured on the cut span the lead-out is a quick ramp, got ${cells('lead-out')[1]}`);
+
+  console.log(`${'edit/detect'.padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+              'suggested end 0:39.700 over a stored 0:30.000, used, undone, and kept');
   for (const e of errors) console.log('    ! ' + e);
   if (errors.length) failures++;
 }
@@ -1799,8 +1970,10 @@ async function runPreference(skin) {
   await runReview();
   await runReviewHandoff();
   runFadeFixture();
+  runBoundaryFixture();
   runSnapshotFixture();
   await runEdit();
+  await runEditDetect();
   await runPassage();
   console.log(failures ? `\n${failures} skin(s) failed` : '\nall skins rendered without error');
   process.exit(failures ? 1 : 0);

@@ -52,9 +52,10 @@ Created by Lempi on first write, the same way `id_reviews` is `[SPEC-SC-020]`-ad
 | route | method | does |
 | :--- | :--- | :--- |
 | `/edit/:passage_id` | GET | the editor page |
-| `/edit/:passage_id/info` | GET | the passage's current boundaries as JSON |
+| `/edit/:passage_id/info` | GET | the passage's current boundaries as JSON, with its kind, provenance and neighbours `[SPEC-SUI-231]` |
 | `/edit/:passage_id/audio` | GET | a decoded WAV window, `?from_ms=&to_ms=`, around the passage — never the raw file, see `[SPEC-SUI-224]` |
 | `/edit/:passage_id/review` | POST | write a `boundary_reviews` row — body carries the nine values `[SPEC-SUI-226]` |
+| `/boundary.js`, `/boundary-params.json` | GET | the detection algorithm and its default parameters `[SPEC-SUI-229]` |
 
 **`[SPEC-SUI-201]` `/info` exists because Lempi has no server-side templating.** Every page here is a static shell compiled in with `include_str!` and fetches its own state over a small JSON route once loaded — `/why/:id` and `/review/queue` are the same shape already. There was never a way to bake a passage's boundaries into the `/edit/:passage_id` response itself, so a sibling route carries them instead.
 
@@ -91,7 +92,7 @@ Created by Lempi on first write, the same way `id_reviews` is `[SPEC-SC-020]`-ad
 ## 6. Not yet measured
 
 - ~~Whether `decodeAudioData` on a multi-minute DAO capture (a third of this library) is fast enough to feel immediate, or needs the `Range` fetch narrowed further before decode.~~ Measured, 2026-08-30, against a real 4h05m capture: not fast enough, not even close — see `[SPEC-SUI-224]`. `/edit/:passage_id/audio` now decodes a bounded window server-side rather than the whole file client-side, closing this rather than narrowing it.
-- Whether dragging start/end across a passage boundary that abuts another passage in the same file needs a visible marker for the *neighbour's* span, so an edit here cannot silently create or close a gap the neighbour did not ask for.
+- Whether dragging start/end across a passage boundary that abuts another passage in the same file needs a visible marker for the *neighbour's* span, so an edit here cannot silently create or close a gap the neighbour did not ask for. `/info` now reports where the neighbours are `[SPEC-SUI-231]`, and detection searches no further; a drag is still not stopped there.
 - Whether the fixed ±60s window `[SPEC-SUI-224]` needs an on-demand "load more" when an edit genuinely needs to reach further — not yet requested, and the honest facts-line note stands in for it until it is.
 
 Measurement questions for whoever builds this, not open design questions — the shape above does not change based on any answer.
@@ -121,3 +122,36 @@ Refinements to §4's interaction model, described here as they now stand. The in
 **`[SPEC-SUI-226]` Fade's remaining implementation detail**, beyond the schema and interaction-model facts already in §2, §4 and §5. `fade.rs`'s `Envelope` combines an independent fade-in `Fade` and fade-out `Fade` by multiplying their gains, so a short passage where the two regions overlap falls to the smaller of the two rather than one silently overriding the other — `Fade` itself is unchanged and stays exactly what it is for Skip/Handoff (`engine/mod.rs`'s `cut_ring_to_incoming`). `Stream::envelope: Envelope` replaces the mixer's old `Stream::fade: Fade`; `engine/mod.rs::open()` builds it from the four `QueueEntry` fade fields and a computed `total_frames`, and `Stream::frames_written` is seeded from `origin_frames` on a resume, so a fade-in cannot spuriously re-trigger and a fade-out cannot land early. `record_boundary_review` validates both curve names against `Curve::parse` and refuses an unknown one, the same posture `record_review` takes for its own verb. `BOUNDARY_REVIEW_FADE_COLUMNS` is its own `ALTER TABLE` batch, so an installation already past the first migration only ever gains columns, and `tools/add_fade_columns.py` backfills every existing row with the fixed default in one idempotent, dry-run-by-default statement. §5's `apply_boundary_reviews.py` falls back to the passage's own current fade values (`COALESCE`) only for a `boundary_reviews` row recorded before these columns existed — every row recorded from here on always carries all four, since fade is a required part of the post, not optional the way lead/gain are.
 
 **`[SPEC-SUI-228]` The decoded window's end is rounded to whole milliseconds wherever it acts as a boundary.** `buffer.duration` is a sample count over a sample rate and is essentially never an integer, so a drag or a typed value landing exactly on that ceiling would otherwise save as a float, which the server's `u64` `start_ms`/`end_ms` fields reject. `totalMs()` stays unrounded where it is only a view extent; the rounding applies at the points where it becomes a limit on a value that will be stored.
+
+---
+
+## 8. Automatic detection, beside the manual edit
+
+The editor is still for placing points by hand. It also shows where an algorithm would place them, with the parameters it used, so those parameters can be tuned against real audio. **What prompted it:** passage 7439, the album cut of "Cousin Dupree", ends at 310.8 s in a 328.3 s file. Measured on 2026-10-16, the audio at that point is still at −20 dB RMS (the peak is −9 dB) and fades out until about 326 s, so 15 s of audible fade is cut. That end was not computed by Lempi: its `boundary_src` is `inherited:mulib`, and no Lempi tool computed `start_ms`/`end_ms` from audio before this section.
+
+**`[SPEC-SUI-229]` One algorithm, two implementations, one set of defaults.** [`boundary.js`](../../player/src/web/boundary.js) runs in the editor on the decoded window. `detect()` in [`tools/analyze_amplitude.py`](../../tools/analyze_amplitude.py) is the same algorithm, line for line. Both are checked against [`fixtures/boundary/vectors.json`](../../fixtures/boundary/vectors.json): `build/verify-skins.js` checks the JS and `tools/test_analyze_amplitude.py` checks the Python, the arrangement `fade.js` already has with `fade.rs` (§4). The defaults live only in [`boundary-params.json`](../../player/src/web/boundary-params.json), one set per kind, read by both. A value tuned in the editor becomes the batch tool's value by being copied into that file, not by being written twice.
+
+The algorithm works on an RMS envelope of the mono mix, with a window of `window_ms`:
+
+- **Reference.** Every "dB below" parameter is measured from `full_scale` (0 dBFS), from the loudest window (`peak`), or from a `percentile` of the non-silent windows. That percentile is taken by index, not interpolated, so both implementations get the same number.
+- **Start/end.** The search runs from the nearest limit inward: the file's edge, a neighbouring passage of the same kind `[SPEC-SUI-231]`, or the edge of the decoded window. The start is the first run of `*_min_sound_ms` above `*_silence_db`, and the end is the last such run; `*_pad_ms` is kept outside each. With `trim_*` off, a file edge is kept as it is. A neighbour's edge is always found from the audio, because `segment_dao.py` leaves the silence between two passages outside both of them `[SPEC-SC-047]`.
+- **Lead-in/lead-out.** This is the inherited rule `[AMP-LEADIN-020]`, `[AMP-LEADOUT-020]`, measured on the detected span: content level reached within `*_quick_ramp_ms` of the edge gives no lead; otherwise the lead runs to the lead level, capped at `*_max_ms`. With the radio defaults it gives exactly what `analyze_amplitude.py` always wrote. The thresholds are 45 and 40 dB below full scale, as before.
+- **Fade.** `fixed` is the de-click ramp `[SPEC-SC-046]`. `lead` fades across the lead window, never shorter than the fixed ramp, which is the second half of an audible crossfade `[SPEC-SC-043]`.
+
+The defaults follow `[SPEC-SC-047]`. A **radio** cut trims to silence 60 dB below full scale and keeps 200 ms after the last sound. An **album** cut keeps the file's edges and has no leads `[GDE-BMK-030]`. On 7439 the radio defaults suggest an end of 325.5 s, and the album defaults suggest the file's own end.
+
+**The batch tool still writes only what it wrote before:** `lead_in_ms`/`lead_out_ms` on radio passages, now computed from the file's radio parameters. Letting it write `start_ms`/`end_ms` is a separate decision. It would have to rank its result against the MuLibPlay spans most of the library carries, and against an album twin with the same span `[SPEC-DF-102]`. Tune the parameters first.
+
+**`[SPEC-SUI-230]` The panel.** Below the editor's fields:
+
+- **Parameters for radio or album.** The panel opens on the passage's own kind. Choosing the other kind shows what its parameters would do to this audio, and says so.
+- **Live detection.** Detection re-runs on each change, in tens of milliseconds on a five-minute window.
+- **Suggestions on the canvas.** Every suggested point is drawn as a dashed line in its marker's colour, with a triangle on the bottom edge. The knob rail stays for things that can be dragged.
+- **The table.** It shows each point suggested and now, with the difference. "use" takes one point and "Use suggested" takes all of them, as one undo step; nothing is saved until Save edit.
+- **The steps.** One line per decision, saying which threshold placed each point.
+- **Level trace.** Optional: each window's level in dBFS, with every threshold in use drawn across it.
+- **Keep my start/end.** Measures lead and fade on the span as it is now, for a passage whose end was placed by hand.
+
+A parameter tuned away from its default is outlined. The edited set is kept in this browser's storage only, as a convenience: it carries from one passage to the next, and is lost with the browser's data. "Parameters as JSON" shows both sets, ready to paste into `boundary-params.json`, and takes pasted JSON back.
+
+**`[SPEC-SUI-231]` What `/info` adds.** `kind`, `boundary_src`, and `prev_end_ms`/`next_start_ms`: the nearest passage of the same kind in the same file on each side (`Library::passage_context`), or `null` where the file's edge is the limit. The other kind's cut over the same audio is not a neighbour. The facts line shows the kind and the provenance, since most spans here are not Lempi's.

@@ -129,6 +129,32 @@ def test_slow_ramp_synthetic() -> None:
     check(lead_in_ms > 1000, f"expected a lead-in past the 1.2s quiet stretch, got {lead_in_ms}")
 
 
+def test_shared_boundary_vectors() -> None:
+    print("detect(): every case in fixtures/boundary/vectors.json, the ones boundary.js is checked against [SPEC-SUI-229]")
+    with open(os.path.join(HERE, "..", "fixtures", "boundary", "vectors.json"), encoding="utf-8") as f:
+        cases = json.load(f)["cases"]
+    check(len(cases) >= 5, f"only {len(cases)} cases read")
+    for c in cases:
+        parts = []
+        k = 0
+        for ms, db in c["segments"]:
+            n = round(ms * c["sr"] / 1000)
+            a = 0.0 if db is None else 10 ** (db / 20)
+            parts.append(np.where((np.arange(k, k + n) % 2) == 1, -a, a))
+            k += n
+        mono = np.concatenate(parts).astype(np.float32).astype(np.float64)
+        p = {**aa.load_params(c["params"]), **c["overrides"]}
+        got = aa.detect(mono, c["sr"], c["t0_ms"], c["ctx"], p)
+        for field, want in c["expect"].items():
+            check(got[field] == want, f"{c['name']}: {field} got {got[field]}, want {want}")
+
+
+def test_params_file_has_both_kinds() -> None:
+    print("boundary-params.json: radio and album carry the same keys")
+    radio, album = aa.load_params("radio"), aa.load_params("album")
+    check(set(radio) == set(album), f"keys differ: {set(radio) ^ set(album)}")
+
+
 # -- one real end-to-end decode, no committed binary --------------------------
 
 def test_real_decode_hard_cut(tmp: str) -> None:
@@ -275,6 +301,8 @@ def main() -> int:
     test_constant_amplitude_edge_case()
     test_never_gets_loud()
     test_slow_ramp_synthetic()
+    test_shared_boundary_vectors()
+    test_params_file_has_both_kinds()
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         test_real_decode_hard_cut(tmp)
