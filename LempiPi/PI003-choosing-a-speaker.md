@@ -189,7 +189,8 @@ A selection that stops short of it appears to work and is silent.
 the switch worked. So the new speaker is adopted provisionally, the panel asks
 "can you hear this?" over a test tone, and an unanswered prompt returns to the
 previous sink after 30 seconds. The listener cannot strand themselves in
-silence by choosing wrongly.
+silence by choosing wrongly. *(As built: the countdown is the Bluetooth
+timeout of `[SPEC-POV-025]`, 45 s by default.)*
 
 **`[PI3-UI-040]` Pairing is a mode, not a button.** The panel offers "put my
 speaker in pairing mode, then press this", scans for the ~20 s a speaker takes

@@ -20,6 +20,16 @@ The player maintains volume levels independently for the physical DAC and each k
 **`[REQ-POV-020]` Output transitions automatically restore the target device's volume.**
 When the active output changes (switching between Bluetooth speakers, connecting to a Bluetooth speaker, or returning to the physical DAC), the engine adjusts playback volume to the level associated with the incoming output prior to or concurrently with stream reopening, preventing abrupt level disparities.
 
+> **As built, 2026-10-15: only the player's own switches carry the level.** A
+> switch made from Settings -- a speaker chosen, or the DAC entry -- saves the
+> outgoing level and applies the incoming one `[SPEC-POV-050]`. A switch the
+> appliance makes itself, `lempi-speaker` reconnecting at boot or falling back
+> to another known speaker, only reopens the stream: no level is applied, and
+> `active_output` still names the speaker the listener chose, so fader moves
+> meanwhile are saved as *that* speaker's last-used level. The level at startup
+> is resolved for `active_output` too. Five minutes of playing re-points
+> `active_output` at the speaker actually in use `[PI3-AIM-130]`.
+
 **`[REQ-POV-030]` Two-tiered volume memory: explicit pinning with last-used fallback.**
 1. **Explicit Pinning ("Remember this volume")**: When a listener explicitly associates the current volume with an output, that exact volume is locked as a fixed preset to be applied every time that output connects, regardless of intervening slider adjustments during a session.
 2. **Last-Used Fallback**: If an explicit pinned volume has never been set for an output (or has been cleared), connecting to that output restores the volume level that was active when that output was last in use.
@@ -30,6 +40,22 @@ When the active output changes (switching between Bluetooth speakers, connecting
 1. The physical DAC / Onboard Audio is represented as a first-class output alongside known Bluetooth speakers with an explicit selection control.
 2. When attempting to connect to a Bluetooth speaker (at boot or on selection), if no Bluetooth speaker successfully connects within a user-configurable timeout (default: 45 seconds), playback automatically falls back to DAC / Onboard Audio.
 3. The fallback timeout is user-adjustable from the Lempi skin settings page.
+
+> **As built, 2026-10-15: item 2 holds on selection only.** A speaker chosen in
+> Settings that does not connect within the timeout leaves `active_output` set
+> to `"dac"` and the DAC sink restored. At boot nothing waits for this timeout
+> and nothing falls back as such: `lempi-wait-sink` lets the player start on
+> whatever real sink is present after the preferred-speaker wait plus ten
+> seconds `[PI3-AIM-120]` -- the DAC, on a node that has one -- without
+> changing `active_output`, and `lempi-speaker` moves the stream to the speaker
+> if it connects later.
+>
+> **Known gap.** The selection fallback stores `"dac"` on a node with no DAC
+> too -- lempi02w is one -- and `lempi-speaker` stands aside whenever the output
+> is `"dac"` `[SPEC-POV-020.3]`. So after one failed choice it reconnects no
+> speaker at all until a later choice succeeds. The DAC entry, shown on every
+> node, leads to the same state when chosen on one without a DAC, and so does
+> a "Can you hear it?" that runs out with no earlier speaker to go back to.
 
 ---
 
@@ -44,21 +70,22 @@ In the Lempi skin settings panel (`#panel-settings`), the speaker list (`#bt-lis
 **`[SPEC-POV-020]` Volume memory controls.**
 A dedicated "Output volume" control block (`#output-volume-row`) is placed directly below the "Speaker" section (`#speakers`):
 1. **Output Indicator**: Displays the currently active output name (e.g., `"DAC / Onboard Audio"` or `"soundcore Boom 2"`).
-2. **"Remember this volume" Button (`#outvol-remember`)**:
+2. **"Remember" Button (`#outvol-remember`)**:
    - Associates the currently active master volume level with the active output as its explicit pinned preset.
-   - Updates status readout to reflect the pinned decibel level (e.g., `"Remembered preset: -12.0 dB"`).
-   - Reveals and enables the "Clear remembered volume" button.
-3. **"Clear remembered volume" Button (`#outvol-clear`)**:
+   - Updates status readout to reflect the pinned decibel level (e.g., `"Pinned (-12.0 dB)"`).
+   - Reveals the "Clear" button.
+3. **"Clear" Button (`#outvol-clear`)**:
    - Clears the pinned volume preset for the active output.
-   - Hidden or disabled when no pinned volume exists for the active output.
-   - Reverts status display to indicate last-used tracking (e.g., `"Using last used level (-9.0 dB)"`).
+   - Hidden when no pinned volume exists for the active output.
+   - Reverts status display to indicate last-used tracking (e.g., `"Last used (-9.0 dB)"`), or the bare level (`"-9.0 dB"`) when there is none.
 4. **Volume Slider Synchronization**: Adjusting the transport volume fader updates the active output's last-used level immediately, without overwriting an existing pinned preset.
 
 **`[SPEC-POV-025]` Bluetooth connect timeout control.**
 A settings row (`#bt-timeout-row`) is provided in the Lempi settings panel:
-- Label: `"Bluetooth connect timeout"`
-- Numeric input field (`#bt-timeout-input`): in seconds, step 1, default `45`.
-- Explanatory note: `"How long to attempt connecting to a Bluetooth speaker before falling back to DAC / Onboard Audio."`
+- Label: `"Bluetooth timeout"`
+- Numeric input field (`#bt-timeout-input`): in seconds, min `5`, max `300`, step `5`, default `45`.
+- Explanatory note: `"When you choose a speaker here, how long to wait for it to connect before falling back to DAC audio, and how long “Can you hear it?” waits for an answer (5–300 seconds)."`
+- The same value is the length of the "Can you hear it?" countdown after any switch made from Settings, the DAC entry included `[PI3-UI-030]`.
 
 ---
 
@@ -112,8 +139,8 @@ When output $O$ becomes active, target volume $V_O$ is resolved:
     "preferred_wait_s": 5
   }
   ```
-- `POST /audio/output/volume/remember`: Pins current volume to active output (`204 No Content`).
-- `POST /audio/output/volume/clear`: Clears pinned volume for active output (`204 No Content`).
+- `POST /audio/output/volume/remember`: Pins current volume to active output (`200 OK` with the same body as `GET /audio/output/volume`).
+- `POST /audio/output/volume/clear`: Clears pinned volume for active output (`200 OK` with the same body as `GET /audio/output/volume`).
 - `POST /audio/output/use/dac`: Disconnects Bluetooth and switches default output to DAC (`200 OK` with sink status).
-- `POST /audio/output/timeout/:secs`: Updates Bluetooth connect timeout parameter (`204 No Content`).
+- `POST /audio/output/timeout/:secs`: Updates Bluetooth connect timeout parameter, clamped to 5-300 s (`200 OK` with `{"ok": true, "connect_timeout_s": <secs>}`).
 - `POST /audio/output/preferred-wait/:secs`: Stores the preferred-speaker wait, clamped to 1-60 s; answers `200 OK` with `{"ok": true, "preferred_wait_s": <secs>}` `[PI3-AIM-110]`.

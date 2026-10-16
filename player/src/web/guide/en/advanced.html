@@ -33,8 +33,9 @@ playback behavior:</p>
   <li><strong>Output volume</strong> — a volume level remembered for each
     output, the DAC or a Bluetooth speaker: <em>Remember</em> pins the
     current level for the output in use, <em>Clear</em> forgets it.
-    <strong>Bluetooth timeout</strong> is how long to wait for a Bluetooth
-    speaker before falling back to the DAC.
+    <strong>Bluetooth timeout</strong> is how long to wait for a speaker you
+    choose here before falling back to the DAC, and how long the “can you hear
+    it?” check below waits for your answer.
     <strong>Preferred speaker wait</strong> is how long, whenever nothing is
     playing yet — at startup, or after a speaker drops out — Lempi looks for
     your usual speaker before playing on another one it knows. A speaker you
@@ -73,7 +74,8 @@ Wi-Fi, mobile) with on/off switches — a radio carrying your only route to
 this page can't be switched off from here, for the obvious reason. The
 speaker chooser scans for, pairs with, connects to ("use this one"), or
 forgets a Bluetooth speaker. After connecting, a "can you hear it?" check
-gives you thirty seconds to confirm before automatically reverting if you
+gives you as long as the <strong>Bluetooth timeout</strong> (45 seconds
+unless you change it) to confirm before automatically reverting if you
 don't — so a bad connection can't strand you silently. On a Raspberry Pi
 appliance the speaker's own buttons work too: play/pause and skip on the
 speaker control Lempi directly. The previous-track button does nothing,

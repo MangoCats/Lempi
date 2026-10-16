@@ -129,7 +129,7 @@ In `player/src/web/skins/lempi/skin.html` and `skin.css`:
   - `#outvol-clear`: `"Clear remembered volume"` button (hidden or disabled if no pinned preset exists).
   - Kept visible regardless of Bluetooth hardware availability.
 - **Bluetooth Timeout Row (`#bt-timeout-row`)**:
-  - `#bt-timeout-input`: numeric input (in seconds, min 5, max 300, step 1, default 45).
+  - `#bt-timeout-input`: numeric input (in seconds, min 5, max 300, step 5, default 45).
   - Descriptive caption for DAC fallback behavior; hidden when `capabilities.bluetooth` is false.
 
 **`[IMPL-POV-060]` Event handling and state synchronization.**

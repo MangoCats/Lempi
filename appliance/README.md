@@ -88,8 +88,10 @@ that play to a Bluetooth speaker: `lempi02w`, and `lp3-wifi` since 2026-10-02.
 - the stack: PipeWire with its ALSA and Bluetooth plugins, WirePlumber, BlueZ,
   upower (wanted by `multi-user.target`), and the agent's D-Bus bindings
 - the helpers: the shared shell library, the sink gate, `lempi-btctl` and its
-  one sudoers rule, the keeper, the watchdog and the agent
-- their five units, `/run/lempi`, and the keeper's and watchdog's routine ticks
+  one sudoers rule, the keeper, the watchdog, the agent, and the travel Wi-Fi
+  failover ([SPEC061](../docs/spec/SPEC061-travel-wifi-failover.md), since 2026-10-07)
+- their seven units, `/run/lempi`, and the keeper's, watchdog's and failover's
+  routine ticks
   kept out of the journal
 - linger for pi, and PipeWire's clock: 44.1 kHz and a 4096-frame quantum, in one file
 - native AVRCP transport control handling: the player reads the speaker's rocker or adapter buttons directly ([`IMPL019`](../docs/IMPL019-native-bluetooth-controls.md)), replacing the retired standalone `lempi-rocker` script
