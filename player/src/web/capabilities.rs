@@ -43,6 +43,10 @@ pub struct Capabilities {
     /// Settings page offers *keep a lossless FLAC copy of CD rips*. A build
     /// fact -- `vipunen-support`, the desktop's build -- so never an appliance.
     pub rips_cds: bool,
+    /// The Pi's voltage monitor (`rpi_volt`) is there to be watched, so the
+    /// Settings page can show the power's recent history `[APP-PWR-010]`. A
+    /// host fact, measured in `host.rs` beside `writes_beside_audio`.
+    pub power: bool,
 }
 
 impl Capabilities {
@@ -72,6 +76,8 @@ impl Capabilities {
             // Not measured here: the host's configuration says, after this.
             writes_beside_audio: false,
             rips_cds: cfg!(feature = "vipunen-support"),
+            // Measured in host.rs, beside writes_beside_audio [APP-PWR-010].
+            power: false,
         };
         let why = if !has_helper {
             format!(" (no {helper})")
@@ -105,6 +111,7 @@ impl Capabilities {
             ("radios", self.radios),
             ("follow", self.follow),
             ("files beside the audio", self.writes_beside_audio),
+            ("power watch", self.power),
         ];
         let on: Vec<&str> = all.iter().filter(|(_, v)| *v).map(|(n, _)| *n).collect();
         let off: Vec<&str> = all.iter().filter(|(_, v)| !*v).map(|(n, _)| *n).collect();
@@ -126,7 +133,7 @@ mod tests {
         assert_eq!(
             caps.describe(" (no /usr/local/bin/lempi-btctl)"),
             "host controls: restart, power-off; not offered: wifi, bluetooth, led, radios, follow, \
-             files beside the audio (no /usr/local/bin/lempi-btctl)"
+             files beside the audio, power watch (no /usr/local/bin/lempi-btctl)"
         );
         assert_eq!(
             Capabilities::default().describe(" (built without the appliance feature)"),
@@ -140,7 +147,7 @@ mod tests {
     fn every_capability_is_on_the_wire() {
         let v = serde_json::to_value(Capabilities::default()).unwrap();
         for k in ["restart", "power_off", "wifi", "bluetooth", "led", "radios", "follow",
-                  "writes_beside_audio", "rips_cds"] {
+                  "writes_beside_audio", "rips_cds", "power"] {
             assert_eq!(v[k], serde_json::json!(false), "{k}");
         }
     }

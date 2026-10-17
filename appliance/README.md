@@ -108,6 +108,19 @@ be set against what the node was doing then, found needed on lp3-wifi
 [LP3002](../LempiPlay3/LP3002-power-and-the-bluetooth-glitches.md). At 2 MB
 the log moves to `.1`: about two weeks in all.
 
+**`[APP-PWR-010]` The player watches the power itself, and the Settings page
+shows it.** On any Pi with the voltage monitor (`rpi_volt`), `player/src/power.rs`
+reads `in0_lcrit_alarm` every two seconds -- the rate the kernel driver
+refreshes it, a few microseconds a read -- and once a minute, and at each
+dip, the throttle bits (`vcgencmd get_throttled`), CPU clock and temperature.
+It keeps the dips since the player started, the last fifty, and a
+minute-by-minute day beside the player's own underruns, in memory; `GET
+/power` answers it, and the Lempi skin's **Power** row says it -- "Supply
+dipped 3 times in the last hour, the last 2 min ago · processor slowed in 2
+of this hour's checks · audio ran short in 1 of the last hour's minutes".
+The row is hidden where there is no monitor. Since the player started, not
+across restarts: that is the health log's.
+
 Until 2026-10-02 lempi02w's copy was heredocs in `setup-appliance.sh` and
 lp3-wifi's was files copied from them. Read off both first: the units matched
 but for one start timeout, which lempi02w carried in a drop-in; the clock's five

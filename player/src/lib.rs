@@ -131,6 +131,9 @@ pub mod session;
 /// Each player reads its own audio back [GDE-INT-130].
 pub mod scrub;
 
+/// The node's power, watched from inside the player [APP-PWR-010].
+pub mod power;
+
 /// Holding two backends and exchanging which one sounds [SPEC-BK-030].
 pub mod switch;
 pub mod tags;

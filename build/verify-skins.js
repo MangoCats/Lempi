@@ -39,6 +39,19 @@ const LIVE = process.argv[2]
   ? JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
   : null;
 
+// `GET /power` from a node whose supply dipped recently `[APP-PWR-010]`:
+// three dips this hour, the last two minutes before `now`, the processor
+// found throttled twice, and the audio short in one minute.
+const POWER = {
+  available: true, state: 'recent', now: 1792250000, started: 1792240000, low_now: false,
+  throttled: '0x50000', mhz: 1200, temp_c: 58.2,
+  since_start: { dips: 26, low_secs: 120 },
+  last_hour: { dips: 3, low_secs: 14, throttled_samples: 2, min_mhz: 800, underrun_samples: 512 },
+  events: [{ at: 1792249880, secs: 6 }, { at: 1792249700, secs: 4 }],
+  minutes: [{ at: 1792249820, dips: 1, low_secs: 6, throttled: 1, min_mhz: 800,
+              max_temp_c: 58.2, underrun_samples: 512 }],
+};
+
 // A second snapshot exercising branches a healthy player may not reach:
 // nothing playing, nothing queued, no programme, no explanation, fade of zero.
 const SPARSE = {
@@ -186,6 +199,10 @@ async function run(skin) {
     }
     if (/^\/history\?/.test(url)) {
       return Promise.resolve({ ok: true, json: () => Promise.resolve(HISTORY) });
+    }
+    // The node's power `[APP-PWR-010]`: a supply that dipped recently.
+    if (url === '/power') {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(POWER) });
     }
     return Promise.reject(new Error('unexpected fetch ' + url));
   };
@@ -363,7 +380,10 @@ async function run(skin) {
     const set = window.document.getElementById('panel-settings');
     check(main && set, 'a gear needs both panels to switch between');
     check(!main.hidden && set.hidden, 'settings must start closed');
-    gear.onclick();
+    // A real click, not `onclick()`: what the panel loads when it opens hangs
+    // off a second listener, which a direct call never reached -- so until
+    // 2026-10-17 no row filled on opening was ever exercised here.
+    gear.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
     check(main.hidden && !set.hidden, 'the gear must open the settings screen');
     check(gear.getAttribute('aria-expanded') === 'true', 'aria-expanded must follow');
     // The controls moved there must still be wired to the engine.
@@ -382,6 +402,23 @@ async function run(skin) {
     }
     check(posted.includes('/skip/fade/3000'),
           `a moved control must still reach the engine, posted ${JSON.stringify(posted)}`);
+    // A skin with a Power row shows the supply's recent dips once the panel
+    // opens `[APP-PWR-010]`.
+    const pw = window.document.getElementById('pw-state');
+    if (pw) {
+      for (let i = 0; i < 5; i++) await new Promise(r => setTimeout(r, 0));
+      const row = window.document.getElementById('power-row');
+      check(row && !row.hidden, 'the Power row must show where /power has a monitor');
+      check(pw.textContent.includes('Supply dipped 3 times in the last hour, the last 2 min ago'),
+            `the Power row must say the recent dips, got "${pw.textContent}"`);
+      check(pw.textContent.includes('processor slowed in 2 of this hour'),
+            `the Power row must say the throttling, got "${pw.textContent}"`);
+      check(pw.textContent.includes('audio ran short in 1 of'),
+            `the Power row must put the underruns beside it, got "${pw.textContent}"`);
+      const items = window.document.querySelectorAll('#pw-list li');
+      check(items.length === 2 && items[0].textContent.endsWith('6 s low'),
+            `the Power row must list the dips newest first, got ${items.length}`);
+    }
     gear.onclick();
     check(!main.hidden && set.hidden, 'the gear must close it again');
   }

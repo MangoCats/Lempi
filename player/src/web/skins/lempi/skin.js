@@ -1020,6 +1020,47 @@
     }
   }
 
+  // ----------------------------------------------------------------- power
+  // [APP-PWR-010]: whether this player's supply has dipped below what the Pi
+  // needs, and when -- beside the audio's own underruns, so a glitch heard at
+  // a given time can be read against both [LP3-PWR-030]. The row stays
+  // hidden where there is no voltage monitor to read.
+  const pwClock = (t, secs) => new Date(t * 1000).toTimeString().slice(0, secs ? 8 : 5);
+  const pwTimes = n => `${n} time${n === 1 ? '' : 's'}`;
+  async function power() {
+    let b;
+    try {
+      const r = await fetch('/power');
+      if (!r.ok) return;
+      b = await r.json();
+    } catch { return; }
+    if (!b.available) { setHidden($('power-row'), true); return; }
+    setHidden($('power-row'), false);
+    const hour = b.last_hour || {}, last = (b.events || [])[0];
+    const dips = hour.dips || 0, total = (b.since_start || {}).dips || 0;
+    let said;
+    if (b.state === 'low') said = 'Supply too low right now';
+    else if (b.state === 'recent')
+      said = `Supply dipped ${pwTimes(dips)} in the last hour, the last ${Math.max(0, Math.round((b.now - last.at) / 60))} min ago`;
+    else if (total) said = `OK now · ${total} dip${total === 1 ? '' : 's'} since ${pwClock(b.started)}, ${dips} in the last hour`;
+    else said = `OK · no dips since ${pwClock(b.started)}`;
+    const parts = [said];
+    if (hour.throttled_samples) parts.push(`processor slowed in ${hour.throttled_samples} of this hour's checks`);
+    const short = (b.minutes || []).filter(m => m.at > b.now - 3600 && m.underrun_samples > 0).length;
+    if (short) parts.push(`audio ran short in ${short} of the last hour's minutes`);
+    if (b.mhz) parts.push(`${b.mhz} MHz`);
+    if (b.temp_c != null) parts.push(`${Math.round(b.temp_c)} °C`);
+    setText($('pw-state'), parts.join(' · '));
+    const list = $('pw-list');
+    list.textContent = '';
+    for (const d of (b.events || []).slice(0, 10)) {
+      const li = document.createElement('li');
+      li.textContent = `${pwClock(d.at, true)} — ${d.secs == null ? 'still low' : `${d.secs} s low`}`;
+      list.appendChild(li);
+    }
+  }
+  setInterval(() => { if (!$('panel-settings').hidden && caps.power !== false) power(); }, 15000);
+
   // ---------------------------------------------------------------- radios
   // A blocked radio looks exactly like a broken button `[PI3-FOUND-050]`: the
   // speaker was paired, bonded, trusted and flashing, and Connect did nothing
@@ -1519,6 +1560,7 @@
       if (caps.wifi !== false) wifiKnown();
       backups();
       integrity();
+      if (caps.power !== false) power();
     }
   });
 

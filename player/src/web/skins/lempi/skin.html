@@ -475,6 +475,16 @@
          and is named here until a good copy is sent to this player again.</p>
       <ul id="ic-list" aria-live="polite"></ul>
     </div>
+    <!-- [APP-PWR-010]: only where the Pi's voltage monitor exists. -->
+    <div class="setting" id="power-row" hidden>
+      <label>Power</label>
+      <span><small id="pw-state">&mdash;</small></span>
+      <p>Whether this player's power supply has dipped below what the Pi needs,
+         and when -- a supply that cannot keep up slows the processor and can
+         disturb the radio that carries Bluetooth and Wi-Fi. Counted since the
+         player started; the days before are in /var/lempi/health.log.</p>
+      <ul id="pw-list" aria-live="polite"></ul>
+    </div>
     <div class="setting" id="restart">
       <label>Restart the player</label>
       <span><button type="button" id="rs-ask">Restart Lempi</button></span>

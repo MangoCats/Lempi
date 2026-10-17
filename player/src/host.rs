@@ -228,6 +228,7 @@ impl Player {
         // `[GDE-HST-360]`: which host controls the page will offer.
         let (mut capabilities, why_not) = crate::web::capabilities::Capabilities::detect();
         capabilities.writes_beside_audio = cfg.writes_beside_audio;
+        capabilities.power = crate::power::available();
         tracing::info!("{}", capabilities.describe(&why_not));
         let power_off_allowed = capabilities.power_off;
 
@@ -260,6 +261,12 @@ impl Player {
         let (stop_scrub, scrub_stopped) = channel::<()>();
         if cfg.integrity_check {
             crate::scrub::spawn(cfg.listener.clone(), cfg.library.clone(), controls.clone(), scrub_stopped);
+        }
+        // The supply, watched beside the audio it can disturb [APP-PWR-010].
+        // Does nothing where there is no voltage monitor to read.
+        {
+            let h = handle.clone();
+            crate::power::spawn(move || h.snapshot().underrun_samples);
         }
 
         // Absent is not zero `[GOV-SRC-040]`: with no roster figures this node

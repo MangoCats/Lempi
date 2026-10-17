@@ -438,6 +438,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/build", get(build_identity))
         // What this player found reading its own files back [GDE-INT-135, 145].
         .route("/integrity", get(integrity))
+        .route("/power", get(power_status))
         .route("/core.js", get(|| async { js(CORE) }))
         .route("/skins", get(skin_list))
         .route("/skin/:name/:file", get(skin_asset))
@@ -651,6 +652,14 @@ fn build_identity_json() -> serde_json::Value {
 
 async fn build_identity() -> axum::response::Response {
     axum::Json(build_identity_json()).into_response()
+}
+
+/// This node's power `[APP-PWR-010]`: whether the supply is low now, the
+/// dips since the player started and in the last hour, the throttle bits,
+/// and a minute-by-minute day beside the player's own underruns. Read-only,
+/// and `available: false` where there is no voltage monitor.
+async fn power_status() -> axum::response::Response {
+    axum::Json(crate::power::status()).into_response()
 }
 
 /// This player's file checks `[GDE-INT-135]`: how much of its catalogue it
