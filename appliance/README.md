@@ -88,13 +88,25 @@ that play to a Bluetooth speaker: `lempi02w`, and `lp3-wifi` since 2026-10-02.
 - the stack: PipeWire with its ALSA and Bluetooth plugins, WirePlumber, BlueZ,
   upower (wanted by `multi-user.target`), and the agent's D-Bus bindings
 - the helpers: the shared shell library, the sink gate, `lempi-btctl` and its
-  one sudoers rule, the keeper, the watchdog, the agent, and the travel Wi-Fi
-  failover ([SPEC061](../docs/spec/SPEC061-travel-wifi-failover.md), since 2026-10-07)
-- their seven units, `/run/lempi`, and the keeper's, watchdog's and failover's
-  routine ticks
+  one sudoers rule, the keeper, the watchdog, the agent, the travel Wi-Fi
+  failover ([SPEC061](../docs/spec/SPEC061-travel-wifi-failover.md), since 2026-10-07),
+  the Wi-Fi watchdog (`[PI3-FOUND-830]`, since 2026-10-16) and the health log
+  (`[APP-HLT-010]`, since 2026-10-17)
+- their eleven units, `/run/lempi`, and every timer's routine ticks
   kept out of the journal
 - linger for pi, and PipeWire's clock: 44.1 kHz and a 4096-frame quantum, in one file
 - native AVRCP transport control handling: the player reads the speaker's rocker or adapter buttons directly ([`IMPL019`](../docs/IMPL019-native-bluetooth-controls.md)), replacing the retired standalone `lempi-rocker` script
+
+**`[APP-HLT-010]` A health log, one line a minute.** `lempi-health` writes
+`/var/lempi/health.log` -- on the writable partition, so it outlives a reboot
+-- with the power state (`vcgencmd get_throttled`, CPU clock, temperature),
+what the player is playing and where, the Bluetooth and Wi-Fi links, and the
+events since the line before: undervoltage, a Bluetooth transport failing,
+the player's underruns and recoveries, the Wi-Fi chip's bus. A journal cursor
+counts each event once. It exists so a listener's "it glitched at 14:20" can
+be set against what the node was doing then, found needed on lp3-wifi
+[LP3002](../LempiPlay3/LP3002-power-and-the-bluetooth-glitches.md). At 2 MB
+the log moves to `.1`: about two weeks in all.
 
 Until 2026-10-02 lempi02w's copy was heredocs in `setup-appliance.sh` and
 lp3-wifi's was files copied from them. Read off both first: the units matched

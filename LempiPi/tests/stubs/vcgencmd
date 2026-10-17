@@ -1,0 +1,10 @@
+#!/bin/sh
+# Fake vcgencmd [APP-HLT-010]: get_throttled answers $VT_STATE/throttled
+# (default 0x0); the measurements answer fixed, plausible values.
+printf '%s\n' "vcgencmd $*" >> "$VT_STATE/calls"
+case "$1" in
+    get_throttled) printf 'throttled=%s\n' "$(cat "$VT_STATE/throttled" 2>/dev/null || echo 0x0)" ;;
+    measure_temp)  echo "temp=53.7'C" ;;
+    measure_volts) echo "volt=1.2938V" ;;
+esac
+exit 0

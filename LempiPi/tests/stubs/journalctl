@@ -1,0 +1,16 @@
+#!/bin/sh
+# Fake journalctl for lempi-health [APP-HLT-010]. Prints $VT_STATE/journal and
+# then the cursor line `--show-cursor` adds, as the real one does. A cursor
+# named in $VT_STATE/bad_cursor is refused, as a rotated-away one is.
+printf '%s\n' "journalctl $*" >> "$VT_STATE/calls"
+case "$*" in
+    *--after-cursor=*)
+        c=$(printf '%s' "$*" | sed -n 's/.*--after-cursor=\([^ ]*\).*/\1/p')
+        if [ -f "$VT_STATE/bad_cursor" ] && [ "$c" = "$(cat "$VT_STATE/bad_cursor")" ]; then
+            echo "Failed to seek to cursor: Invalid argument" >&2
+            exit 1
+        fi ;;
+esac
+cat "$VT_STATE/journal" 2>/dev/null
+echo "-- cursor: s=test;i=$(date +%s%N 2>/dev/null || date +%s)"
+exit 0

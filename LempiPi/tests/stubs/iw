@@ -6,6 +6,10 @@
 printf '%s\n' "iw $*" >> "$VT_STATE/calls"
 [ "${IW_FAIL:-0}" = 1 ] && { echo "command failed: Operation not permitted (-1)" >&2; exit 1; }
 case "$*" in
+  # `dev wlan0 link`: $VT_STATE/iw_link when present [APP-HLT-010].
+  *"wlan0 link"*)
+    [ -f "$VT_STATE/iw_link" ] && cat "$VT_STATE/iw_link"
+    exit 0 ;;
   *"station dump"*)
     [ -f "$VT_STATE/iw_stations" ] && cat "$VT_STATE/iw_stations"
     exit 0 ;;

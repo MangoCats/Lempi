@@ -116,6 +116,7 @@ MIDDL=20:64:DE:CF:F3:AD
 . "$HERE/cases-wifi.sh"
 . "$HERE/cases-btwatch.sh"
 . "$HERE/cases-wifiwatch.sh"
+. "$HERE/cases-health.sh"
 . "$HERE/cases-units.sh"
 . "$HERE/cases-hci.sh"
 

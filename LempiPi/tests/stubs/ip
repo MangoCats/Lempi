@@ -1,0 +1,7 @@
+#!/bin/sh
+# Fake ip [APP-HLT-010]: `-4 route show default` answers $VT_STATE/ip_route.
+printf '%s\n' "ip $*" >> "$VT_STATE/calls"
+case "$*" in
+    *"route show default"*) cat "$VT_STATE/ip_route" 2>/dev/null ;;
+esac
+exit 0

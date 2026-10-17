@@ -1,0 +1,9 @@
+# A Bluetooth appliance's unit, lempi02w's and lp3-wifi's alike [APP-BT-010].
+# Runs as root: the kernel's events in the journal and vcgencmd [APP-HLT-010].
+[Unit]
+Description=Log the node's power, radios and audio, one line a minute
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lempi-health
+# [PI3-FOUND-670]: a 5 s player query, a 2 s ping, and a journal read: ~10 s.
+TimeoutStartSec=45

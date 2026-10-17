@@ -1,0 +1,9 @@
+# A Bluetooth appliance's unit, lempi02w's and lp3-wifi's alike [APP-BT-010].
+[Unit]
+Description=Log the node's health every minute
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=60s
+AccuracySec=5s
+[Install]
+WantedBy=timers.target
