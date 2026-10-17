@@ -99,7 +99,7 @@
 
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{Circle, CornerRadii, Line, PrimitiveStyle, Rectangle, RoundedRectangle};
+use embedded_graphics::primitives::{Circle, CornerRadii, Line, PrimitiveStyle, Rectangle, RoundedRectangle, Triangle};
 use framebuffer::Framebuffer;
 use futures_util::StreamExt;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
@@ -153,6 +153,10 @@ struct ClientSnapshot {
     program: Option<String>,
     programs: Vec<ProgramItem>,
     queue: Vec<QueueItem>,
+    /// The supply in one word -- `ok`, `recent`, `low` -- or `None` where
+    /// the player watches nothing `[APP-PWR-010]`. Drawn as a glyph by the
+    /// gear; a change of it redraws, like any other field.
+    power: Option<String>,
 }
 
 /// Wraps the real Linux framebuffer device so `embedded-graphics` can draw
@@ -410,6 +414,32 @@ const GEAR_HIT_Y1: i32 = 44;
 /// Playing, `LCD_BG` on Settings) -- the gear's own outline stays WinAmp
 /// green on both, a fixed piece of chrome rather than page content, but
 /// its backdrop patch would otherwise stand out as a mismatched square.
+/// The supply's state, as a lightning bolt just left of the gear
+/// `[APP-PWR-010]`: amber after a dip in the last ten minutes, red while the
+/// supply is low now, and nothing at all while it is fine -- a screen that
+/// shows a glyph only when there is something to say. Its own backdrop
+/// patch, for the same reason the gear has one.
+const POWER_X0: i32 = 394;
+fn power_color(state: Option<&str>) -> Option<Rgb565> {
+    match state {
+        Some("low") => Some(Rgb565::new(31, 4, 2)),
+        Some("recent") => Some(Rgb565::new(31, 42, 0)),
+        _ => None,
+    }
+}
+fn draw_power(display: &mut FbDisplay, state: Option<&str>, backdrop: Rgb565) -> Result<(), std::convert::Infallible> {
+    let Some(color) = power_color(state) else { return Ok(()) };
+    Rectangle::new(Point::new(POWER_X0, 0), Size::new((GEAR_HIT_X0 - POWER_X0) as u32, GEAR_HIT_Y1 as u32))
+        .into_styled(PrimitiveStyle::with_fill(backdrop))
+        .draw(display)?;
+    let fill = PrimitiveStyle::with_fill(color);
+    // Two triangles make the bolt: a top half leaning right, a bottom half
+    // leaning left, meeting at the waist.
+    Triangle::new(Point::new(412, 6), Point::new(400, 24), Point::new(409, 24)).into_styled(fill).draw(display)?;
+    Triangle::new(Point::new(405, 20), Point::new(414, 20), Point::new(402, 38)).into_styled(fill).draw(display)?;
+    Ok(())
+}
+
 fn draw_gear(display: &mut FbDisplay, backdrop: Rgb565) -> Result<(), std::convert::Infallible> {
     // A solid backdrop first: this corner is drawn last so it always wins
     // regardless of how long the title text underneath it runs, rather
@@ -588,6 +618,7 @@ fn render_now_playing(display: &mut FbDisplay, snap: &ClientSnapshot, art: Optio
     }
 
     draw_gear(display, MULIB_BG)?;
+    draw_power(display, snap.power.as_deref(), MULIB_BG)?;
     Ok(())
 }
 
@@ -682,6 +713,7 @@ fn render_settings(display: &mut FbDisplay, snap: &ClientSnapshot, pair: Option<
     }
 
     draw_gear(display, LCD_BG)?;
+    draw_power(display, snap.power.as_deref(), LCD_BG)?;
     Ok(())
 }
 

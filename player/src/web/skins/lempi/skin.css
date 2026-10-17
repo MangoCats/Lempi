@@ -84,6 +84,16 @@
   #losers .w { font-variant-numeric: tabular-nums; opacity: .75; }
   #stages { font-size: .75rem; color: var(--dim); opacity: .7; margin: 1rem 0 0; }
   #link { opacity: .55; font-size: .8125rem; margin-top: 2rem; }
+  /* [APP-PWR-010]: the supply, beside the connection; and its day. */
+  #link.pw-recent { opacity: 1; color: #d08c00; }
+  #link.pw-low { opacity: 1; color: #e0402a; font-weight: 600; }
+  .pw-day { display: flex; gap: 1px; height: 1.1rem; margin: .4rem 0 .2rem; }
+  .pw-day span { flex: 1; background: var(--line); }
+  .pw-day span.pw-none { background: transparent; }
+  .pw-day span.pw-1 { background: #c9b45a; }
+  .pw-day span.pw-2 { background: #d08c00; }
+  .pw-day span.pw-3 { background: #e0402a; }
+  .pw-day span.pw-u { box-shadow: inset 0 3px 0 #3d8fe0; }
   #vol { display: flex; align-items: center; gap: .5rem; margin-left: auto; }
   /* The settings screen. A label, its control, and a line saying what the
      control does -- room the strip under the transport never had. */

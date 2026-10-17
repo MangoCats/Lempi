@@ -50,6 +50,13 @@ const POWER = {
   events: [{ at: 1792249880, secs: 6 }, { at: 1792249700, secs: 4 }],
   minutes: [{ at: 1792249820, dips: 1, low_secs: 6, throttled: 1, min_mhz: 800,
               max_temp_c: 58.2, underrun_samples: 512 }],
+  // The day from the health log: 14 dips in one ten-minute cell four hours
+  // back, with the audio short there too, and 2 in the last cell.
+  day: { source: 'health-log', minutes: [
+    { at: 1792250000 - 4 * 3600, dips: 9, throttled: true, mhz: 600, temp_c: 60, underruns: 1, playing: true },
+    { at: 1792250000 - 4 * 3600 + 60, dips: 5, throttled: false, mhz: 1200, temp_c: 60, underruns: 0, playing: true },
+    { at: 1792250000 - 120, dips: 2, throttled: false, mhz: 1200, temp_c: 58, underruns: 0, playing: true },
+  ] },
 };
 
 // A second snapshot exercising branches a healthy player may not reach:
@@ -70,12 +77,16 @@ const SPARSE = {
   // `[GDE-HST-360]`.
   capabilities: { restart: true, power_off: true, wifi: true, bluetooth: true,
                   led: true, radios: true, follow: true, writes_beside_audio: true },
+  // Where nothing is watched, `null` `[APP-PWR-010]`.
+  power: null,
 };
 
 // A snapshot carrying a full Program Director explanation -- the richest
 // branch, and the one a live capture may not happen to include.
 const RICH = {
   ...SPARSE,
+  // A dip in the last ten minutes `[APP-PWR-010]`.
+  power: 'recent',
   playing: true, title: 'A Passage With Reasons', position_ms: 61000, duration_ms: 244000,
   // MusicBrainz for the recording and the artist, the file's tag for the album
   // -- which is exactly the mixed provenance the live library produces today.
@@ -233,6 +244,12 @@ async function run(skin) {
     } catch (e) {
       errors.push(`${label} snapshot threw: ${e.message}`);
     }
+  }
+  // A skin with a connection line says a recent dip there `[APP-PWR-010]`.
+  const link = window.document.getElementById('link');
+  if (link && skin === 'lempi' && !LIVE) {
+    check(link.classList.contains('pw-recent') && link.textContent.includes('power dipped recently'),
+          `the connection line must say a recent dip, got "${link.textContent}"`);
   }
 
   // Cover art: jsdom never loads images, so the browser's load event has to be
@@ -418,6 +435,14 @@ async function run(skin) {
       const items = window.document.querySelectorAll('#pw-list li');
       check(items.length === 2 && items[0].textContent.endsWith('6 s low'),
             `the Power row must list the dips newest first, got ${items.length}`);
+      const cells = window.document.querySelectorAll('#pw-day span');
+      check(cells.length === 144, `the day must be 144 ten-minute cells, got ${cells.length}`);
+      check(window.document.querySelectorAll('#pw-day span.pw-3.pw-u').length === 1,
+            'the worst cell must read red, edged where the audio ran short');
+      const note = window.document.getElementById('pw-day-note').textContent;
+      check(note.includes('Last 24 h: 16 dips') && note.includes('most in ten minutes: 14') &&
+            note.includes('from the health log'),
+            `the day's note must total it and say its source, got "${note}"`);
     }
     gear.onclick();
     check(!main.hidden && set.hidden, 'the gear must close it again');

@@ -94,7 +94,12 @@ if [ -f "$OUT" ] && [ "$(wc -c < "$OUT")" -gt "$MAXBYTES" ]; then
     mv -f "$OUT" "$OUT.1"
 fi
 [ -f "$OUT" ] || printf '# lempi-health: one line a minute [APP-HLT-010]\n' > "$OUT"
-printf '%s up=%s thr=%s arm=%s temp=%s volt=%s load=%s play=%s sink=%s acl=%s wifi=%s sig=%s gw=%s from=%s ev_uv=%s ev_bt=%s ev_ring=%s ev_underrun=%s ev_recov=%s ev_sdio=%s ev_xrun=%s\n' \
-    "$(date '+%Y-%m-%dT%H:%M:%S')" "${UP:-?}" "${THR:-?}" "$ARM" "${TEMP:-?}" "${VOLT:-?}" \
+# `t=` is the same moment in Unix seconds, for a reader with no time-zone
+# arithmetic of its own: the player's Power row draws its day from these
+# lines `[APP-PWR-010]`. Lines from before 2026-10-17 lack it.
+NOW=$(date +%s)
+printf '%s t=%s up=%s thr=%s arm=%s temp=%s volt=%s load=%s play=%s sink=%s acl=%s wifi=%s sig=%s gw=%s from=%s ev_uv=%s ev_bt=%s ev_ring=%s ev_underrun=%s ev_recov=%s ev_sdio=%s ev_xrun=%s\n' \
+    "$(date -d "@$NOW" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S')" "$NOW" \
+    "${UP:-?}" "${THR:-?}" "$ARM" "${TEMP:-?}" "${VOLT:-?}" \
     "${LOAD:-?}" "$PLAY" "${SINK:--}" "$ACL" "${WIFI:--}" "${SIG:--}" "$GW" "$FROM" \
     "$UV" "$BTE" "$RING" "$UNDER" "$RECOV" "$SDIO" "$XRUN" >> "$OUT"

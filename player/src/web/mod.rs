@@ -302,6 +302,11 @@ pub struct Snapshot {
     /// What this host offers beyond playing `[GDE-HST-360]`. A skin hides a
     /// control whose capability is `false`.
     pub capabilities: capabilities::Capabilities,
+    /// The supply, in one word: `ok`, `recent` (a dip in the last ten
+    /// minutes) or `low` (now); `null` where nothing is watched
+    /// `[APP-PWR-010]`. Enough for a warning dot and the screen's glyph;
+    /// the detail is `GET /power`.
+    pub power: Option<&'static str>,
     pub underrun_samples: u64,
     /// What the interface shows: the count since the baseline, and when that
     /// baseline was taken `[REQ-VIS-230]`.
@@ -418,6 +423,8 @@ impl From<&PlayerState> for Snapshot {
             dev_mode: s.dev_mode,
             // Host, not engine: filled in from `Ui` where the snapshot is sent.
             capabilities: Default::default(),
+            // Host too: filled in where the snapshot is sent.
+            power: None,
             underrun_samples: s.underrun_samples,
             underruns_since_reset: s.underruns_since_reset,
             underruns_since: s.underruns_since,
@@ -659,7 +666,11 @@ async fn build_identity() -> axum::response::Response {
 /// and a minute-by-minute day beside the player's own underruns. Read-only,
 /// and `available: false` where there is no voltage monitor.
 async fn power_status() -> axum::response::Response {
-    axum::Json(crate::power::status()).into_response()
+    // Off the async thread: the day is read from the health log's tail.
+    match tokio::task::spawn_blocking(crate::power::status).await {
+        Ok(v) => axum::Json(v).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 /// This player's file checks `[GDE-INT-135]`: how much of its catalogue it
@@ -743,6 +754,7 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
         sent_queue = Some((queue, state.mixing_ahead));
         let mut snap = Snapshot::from(&state);
         snap.capabilities = ui.capabilities;
+        snap.power = crate::power::state_now();
         explain(&ui, &mut snap, &state);
         if let Ok(c) = ui.controls.lock() {
             snap.program = c.active.clone();

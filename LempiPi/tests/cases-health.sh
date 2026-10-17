@@ -33,6 +33,13 @@ for f in "thr=0x50005" "arm=1200" "play=1" "sink=soundcore_Boom_2" "acl=1" "wifi
     assert_in "$L" "$f" "records $f"
 done
 assert_in "$L" "from=minute" "the first run, with no cursor, says it read the last minute"
+T=$(printf '%s' "$L" | sed -n 's/.* t=\([0-9]*\) .*/\1/p')
+NOW=$(date +%s)
+if [ -n "$T" ] && [ $(( NOW - T )) -ge 0 ] && [ $(( NOW - T )) -le 60 ]; then
+    ok "carries t=, the same moment in Unix seconds [APP-PWR-010]"
+else
+    bad "carries t=, the same moment in Unix seconds" "got '${T:-none}' at $NOW"
+fi
 teardown
 
 # --- 2. the cursor: each event counted once ------------------------------

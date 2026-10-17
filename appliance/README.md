@@ -118,8 +118,15 @@ minute-by-minute day beside the player's own underruns, in memory; `GET
 /power` answers it, and the Lempi skin's **Power** row says it -- "Supply
 dipped 3 times in the last hour, the last 2 min ago · processor slowed in 2
 of this hour's checks · audio ran short in 1 of the last hour's minutes".
-The row is hidden where there is no monitor. Since the player started, not
-across restarts: that is the health log's.
+The row is hidden where there is no monitor. Its counts are since the player
+started; under them, **the day**: 144 ten-minute cells shaded by dips, edged
+blue where the audio ran short, drawn from the health log's lines -- which
+carry `t=`, Unix seconds, from 2026-10-17 -- so it reaches back past a
+restart, and from the watch's own minutes where there is no log; the note
+under it says which. The state in one word, `ok`/`recent`/`low`, rides the
+live snapshot as `power`: the page's connection line says "power dipped
+recently" or "power low now" in amber or red, and `fbui` draws a lightning
+bolt beside its gear in the same colours, nothing while the supply is fine.
 
 Until 2026-10-02 lempi02w's copy was heredocs in `setup-appliance.sh` and
 lp3-wifi's was files copied from them. Read off both first: the units matched

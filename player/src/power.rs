@@ -286,12 +286,123 @@ pub fn spawn(underruns: impl Fn() -> u64 + Send + 'static) {
     }
 }
 
-/// What `GET /power` answers.
+/// What `GET /power` answers: the watch's own summary, and the day the page
+/// draws -- from the health log where there is one, so it reaches back past
+/// the player's own start, else the watch's own minutes; `day.source` says
+/// which `[APP-PWR-010]`.
 pub fn status() -> serde_json::Value {
-    match cell().get().and_then(|m| m.lock().ok()) {
-        Some(p) => p.summary(now_unix()),
-        None => serde_json::json!({ "available": false }),
+    let now = now_unix();
+    let (mut v, watched) = match cell().get().and_then(|m| m.lock().ok()) {
+        Some(p) => (p.summary(now), p.minutes.iter().map(DayMinute::from).collect::<Vec<_>>()),
+        None => return serde_json::json!({ "available": false }),
+    };
+    let logged = day_from_health_log(Path::new(HEALTH_LOG), now);
+    let (source, minutes) = if logged.is_empty() { ("watch", watched) } else { ("health-log", logged) };
+    v["day"] = serde_json::json!({ "source": source, "minutes": minutes });
+    v
+}
+
+/// The state alone, for the live snapshot: `None` where nothing is watched.
+/// One lock, no I/O -- cheap enough for twice a second.
+pub fn state_now() -> Option<&'static str> {
+    let p = cell().get()?.lock().ok()?;
+    Some(p.state(now_unix()))
+}
+
+// ---- the day, across restarts -------------------------------------------
+
+/// `lempi-health`'s log `[APP-HLT-010]`.
+pub const HEALTH_LOG: &str = "/var/lempi/health.log";
+/// A day of its lines is about 400 KB; this much of each file's tail is read.
+const TAIL_BYTES: u64 = 600_000;
+
+/// One minute of the day as the page draws it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct DayMinute {
+    pub at: i64,
+    pub dips: u32,
+    /// The sample found the CPU throttled.
+    pub throttled: bool,
+    pub mhz: Option<u32>,
+    pub temp_c: Option<f32>,
+    /// Underrun events (the health log) or minutes with any (the watch).
+    pub underruns: u32,
+    pub playing: Option<bool>,
+}
+
+impl From<&Minute> for DayMinute {
+    fn from(m: &Minute) -> Self {
+        DayMinute {
+            at: m.at,
+            dips: m.dips,
+            throttled: m.throttled > 0,
+            mhz: m.min_mhz,
+            temp_c: m.max_temp_c,
+            underruns: u32::from(m.underrun_samples > 0),
+            playing: None,
+        }
     }
+}
+
+/// One health-log line, or `None` for a comment or a line without `t=`.
+pub fn parse_health_line(line: &str) -> Option<DayMinute> {
+    if line.starts_with('#') {
+        return None;
+    }
+    let mut f = std::collections::HashMap::new();
+    for kv in line.split_whitespace().skip(1) {
+        if let Some((k, v)) = kv.split_once('=') {
+            f.insert(k, v);
+        }
+    }
+    let t: i64 = f.get("t")?.parse().ok()?;
+    let num = |k: &str| f.get(k).and_then(|v| v.parse::<u32>().ok());
+    let thr = f.get("thr").and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok());
+    Some(DayMinute {
+        at: t - t.rem_euclid(60),
+        dips: num("ev_uv").unwrap_or(0),
+        throttled: thr.is_some_and(|t| t & 0x4 != 0),
+        mhz: num("arm"),
+        temp_c: f.get("temp").and_then(|v| v.parse().ok()),
+        underruns: num("ev_underrun").unwrap_or(0),
+        playing: match f.get("play") {
+            Some(&"1") => Some(true),
+            Some(&"0") => Some(false),
+            _ => None,
+        },
+    })
+}
+
+fn tail(path: &Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let from = len.saturating_sub(TAIL_BYTES);
+    file.seek(SeekFrom::Start(from)).ok()?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    // A tail read from mid-file begins mid-line.
+    Some(if from > 0 { text.split_once('\n').map(|x| x.1.to_string()).unwrap_or_default() } else { text })
+}
+
+/// The last day of the health log, oldest first, one entry a minute. Reads
+/// the rotated `.1` too when the current file does not reach a day back.
+pub fn day_from_health_log(path: &Path, now: i64) -> Vec<DayMinute> {
+    let since = now - 24 * 3600;
+    let parse = |p: &Path| -> Vec<DayMinute> {
+        tail(p).map(|t| t.lines().filter_map(parse_health_line).filter(|m| m.at > since && m.at <= now).collect())
+            .unwrap_or_default()
+    };
+    let mut day = parse(path);
+    if day.first().is_none_or(|m| m.at > since + 3600) {
+        let mut older = parse(&PathBuf::from(format!("{}.1", path.display())));
+        older.append(&mut day);
+        day = older;
+    }
+    day.sort_by_key(|m| m.at);
+    day.dedup_by_key(|m| m.at);
+    day
 }
 
 #[cfg(test)]
@@ -371,6 +482,36 @@ mod tests {
         assert_eq!(d["capped_now"], false);
         assert_eq!(d["undervoltage_since_boot"], true);
         assert_eq!(d["throttled_since_boot"], true);
+    }
+
+    #[test]
+    fn a_health_log_line_becomes_a_minute() {
+        let line = "2026-10-17T19:34:31 t=1792280071 up=1 thr=0x50005 arm=600 temp=63.4 volt=1.2 \
+                    load=0.5 play=1 sink=x acl=1 wifi=connected sig=-60 gw=1 from=cursor ev_uv=3 \
+                    ev_bt=0 ev_ring=0 ev_underrun=2 ev_recov=0 ev_sdio=0 ev_xrun=0";
+        let m = parse_health_line(line).unwrap();
+        assert_eq!(m.at, 1792280071 - 1792280071 % 60);
+        assert_eq!((m.dips, m.throttled, m.mhz, m.underruns, m.playing), (3, true, Some(600), 2, Some(true)));
+        assert_eq!(m.temp_c, Some(63.4));
+        assert!(parse_health_line("# lempi-health: one line a minute").is_none());
+        assert!(parse_health_line("2026-10-17T10:16:29 up=1626 ev_uv=4").is_none(),
+                "a line from before t= cannot be placed in time");
+    }
+
+    #[test]
+    fn the_day_reads_both_files_and_only_the_last_day() {
+        let dir = std::env::temp_dir().join(format!("lempi-power-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("health.log");
+        let now = T + 30 * 3600;
+        let line = |t: i64, uv: u32| format!("x t={t} thr=0x0 arm=1200 temp=50 play=1 ev_uv={uv} ev_underrun=0\n");
+        // .1: one line too old, one inside the day; the current file: the last hour.
+        std::fs::write(dir.join("health.log.1"), line(now - 25 * 3600, 9) + &line(now - 20 * 3600, 4)).unwrap();
+        std::fs::write(&log, line(now - 1800, 1) + &line(now - 60, 2) + &line(now - 60, 2)).unwrap();
+        let day = day_from_health_log(&log, now);
+        assert_eq!(day.iter().map(|m| m.dips).collect::<Vec<_>>(), vec![4, 1, 2],
+                   "the too-old line left out, the rotated file read, a repeated minute kept once");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

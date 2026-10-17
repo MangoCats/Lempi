@@ -543,8 +543,14 @@
     renderBuild(s);
     renderCapabilities(s.capabilities);
     renderPick(s);
+    // [APP-PWR-010]: the supply said where the eye already goes; the detail
+    // is the Power row in Settings.
+    const pwSaid = s.power === 'low' ? ' · power low now'
+      : s.power === 'recent' ? ' · power dipped recently' : '';
     setText($('link'),
-      Lempi.status === 'connected' ? 'Connected' : 'Reconnecting…');
+      (Lempi.status === 'connected' ? 'Connected' : 'Reconnecting…') + pwSaid);
+    $('link').classList.toggle('pw-low', s.power === 'low');
+    $('link').classList.toggle('pw-recent', s.power === 'recent');
   }
 
   // The explanation panel, and the one control set that goes with it.
@@ -1051,6 +1057,7 @@
     if (b.mhz) parts.push(`${b.mhz} MHz`);
     if (b.temp_c != null) parts.push(`${Math.round(b.temp_c)} °C`);
     setText($('pw-state'), parts.join(' · '));
+    pwDay(b);
     const list = $('pw-list');
     list.textContent = '';
     for (const d of (b.events || []).slice(0, 10)) {
@@ -1058,6 +1065,40 @@
       li.textContent = `${pwClock(d.at, true)} — ${d.secs == null ? 'still low' : `${d.secs} s low`}`;
       list.appendChild(li);
     }
+  }
+  // The day, in 144 ten-minute cells, shaded by how many dips fell in each,
+  // with a blue edge where the audio ran short -- so whether the two went
+  // together is one look. From the health log where there is one, so it
+  // reaches back past the player's own start; the note says which.
+  function pwDay(b) {
+    const box = $('pw-day');
+    const day = b.day || { source: 'watch', minutes: [] };
+    const start = b.now - 24 * 3600;
+    const cells = Array.from({ length: 144 }, () => ({ seen: false, dips: 0, under: 0 }));
+    for (const m of day.minutes || []) {
+      const i = Math.floor((m.at - start) / 600);
+      if (i < 0 || i >= 144) continue;
+      cells[i].seen = true;
+      cells[i].dips += m.dips || 0;
+      cells[i].under += m.underruns || 0;
+    }
+    box.textContent = '';
+    let total = 0, worst = -1;
+    cells.forEach((c, i) => {
+      const span = document.createElement('span');
+      const level = !c.seen ? 'pw-none' : c.dips === 0 ? '' : c.dips <= 3 ? 'pw-1' : c.dips <= 12 ? 'pw-2' : 'pw-3';
+      if (level) span.classList.add(level);
+      if (c.under) span.classList.add('pw-u');
+      const at = start + i * 600;
+      span.title = `${pwClock(at)}–${pwClock(at + 600)}: ` +
+        (c.seen ? `${c.dips} dip${c.dips === 1 ? '' : 's'}${c.under ? `, audio short ${c.under}×` : ''}` : 'no record');
+      box.appendChild(span);
+      total += c.dips;
+      if (c.dips && (worst < 0 || c.dips > cells[worst].dips)) worst = i;
+    });
+    const from = day.source === 'health-log' ? 'from the health log' : `since the player started at ${pwClock(b.started)}`;
+    setText($('pw-day-note'), `Last 24 h: ${total} dip${total === 1 ? '' : 's'}` +
+      (worst >= 0 ? ` · most in ten minutes: ${cells[worst].dips}, at ${pwClock(start + worst * 600)}` : '') + ` · ${from}`);
   }
   setInterval(() => { if (!$('panel-settings').hidden && caps.power !== false) power(); }, 15000);
 
