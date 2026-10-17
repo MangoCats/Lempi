@@ -1963,8 +1963,66 @@ async function runPreference(skin) {
   if (errors.length) failures++;
 }
 
+// **A snapshot that arrives before the skin has loaded `[GDE-HST-365]`.**
+// Everything above sends its snapshots once the skin is in, which is the order
+// a fast connection gives. lp3-wifi, 2026-10-16, gave the other: the player's
+// first snapshot beat the 77 KB skin.js, `subscribe` handed it to the Lempi
+// skin's renderer while the skin's own script was still running, and the
+// renderer reached a `let` forty lines further down that had not run yet --
+// "Cannot access 'qpickSig' before initialization". The script died there, so
+// the socket's status, the settings panel's speaker list and everything else
+// set up below that line never happened. It took three reloads to win the race.
+// Here the socket answers in a microtask, before core can run the skin.
+async function runEarlySnapshot(skin) {
+  const shell = fs.readFileSync(path.join(ROOT, 'shell.html'), 'utf8')
+    .replace('<script>Lempi.start();</script>', '');
+  const dom = new JSDOM(shell,
+                        { runScripts: 'dangerously', url: 'http://localhost/?skin=' + skin });
+  const { window } = dom;
+  const errors = [];
+  window.console.error = (...a) => errors.push(a.join(' '));
+  const create = window.document.createElement.bind(window.document);
+  window.document.createElement = tag => {
+    const el = create(tag);
+    if (tag === 'link' || tag === 'script') setTimeout(() => el.onload && el.onload(), 0);
+    return el;
+  };
+  window.fetch = url => {
+    if (url === '/skins') {
+      return Promise.resolve({ json: () => Promise.resolve(skins.map(n => ({ name: n, label: n }))) });
+    }
+    const m = /^\/skin\/([^/]+)\/(.+)$/.exec(url);
+    if (m) return Promise.resolve({ ok: true, text: () => Promise.resolve(fs.readFileSync(path.join(ROOT, 'skins', m[1], m[2]), 'utf8')) });
+    // Whatever a skin asks for as it starts is beside the point here.
+    return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}), text: () => Promise.resolve('') });
+  };
+  let delivered = false;
+  window.WebSocket = function () {
+    const ws = this;
+    ws.close = () => {};
+    Promise.resolve().then(() => {
+      ws.onopen && ws.onopen();
+      ws.onmessage && ws.onmessage({ data: JSON.stringify(RICH) });
+      delivered = true;
+    });
+  };
+  const runScript = src => {
+    const el = create('script');
+    el.textContent = src;
+    window.document.body.appendChild(el);
+  };
+  const why = await startCore(window, runScript);
+  if (!delivered) errors.push('the snapshot never went out before the skin loaded -- the race was not staged');
+  if (why) errors.push(why);
+  console.log(`${('early/' + skin).padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+              'a snapshot before the skin loaded');
+  for (const e of errors) console.log('    ! ' + e);
+  if (errors.length) failures++;
+}
+
 (async () => {
   for (const s of skins) await run(s);
+  for (const s of skins) await runEarlySnapshot(s);
   for (const s of skins) await runPreference(s);
   await runBrowse();
   await runReview();

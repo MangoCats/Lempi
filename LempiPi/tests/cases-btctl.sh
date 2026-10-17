@@ -201,3 +201,21 @@ OUT=$(btctl library-rw on)
 assert_in "$OUT" '"ok":true' "library-rw finds the catalogue from the player's own command line"
 assert_called "findmnt -no TARGET -T $VT_STATE/srv/library.db" "and asks for that file's mount"
 lib_teardown
+
+# --- one speaker, two rows `[PI3-FOUND-840]` ------------------------------
+# lp3-wifi, 2026-10-16: "soundcore Boom 2" listed twice, once at the address
+# that plays and once at a same-named address with no Audio Sink. The row
+# that cannot play is left out; a name heard only once is always listed.
+setup
+speaker AA:BB:CC:DD:EE:10 "soundcore Boom 2" no no
+printf 'Device AA:BB:CC:DD:EE:11 soundcore Boom 2\n' >> "$VT_STATE/paired"
+printf '\tAlias: soundcore Boom 2\n\tPaired: no\n\tConnected: no\n' > "$VT_STATE/info.AA:BB:CC:DD:EE:11"
+printf 'Device AA:BB:CC:DD:EE:12 Pixel 7a\n' >> "$VT_STATE/paired"
+printf '\tAlias: Pixel 7a\n\tPaired: no\n\tConnected: no\n' > "$VT_STATE/info.AA:BB:CC:DD:EE:12"
+OUT=$(btctl list)
+assert_in "$OUT" '"address":"AA:BB:CC:DD:EE:10"' "lists the speaker at the address that plays"
+assert_not_in "$OUT" 'AA:BB:CC:DD:EE:11' "and leaves out its same-named twin that cannot"
+assert_in "$OUT" '"address":"AA:BB:CC:DD:EE:12"' "a device whose name appears once is listed whatever it advertises"
+OUT=$(SCAN_SECONDS=0 LEMPI_DB="$VT_STATE/fake.db" bash "$BT/lempi-btctl" scan 2>&1)
+assert_not_in "$OUT" 'AA:BB:CC:DD:EE:11' "a scan lists the speaker once too"
+teardown

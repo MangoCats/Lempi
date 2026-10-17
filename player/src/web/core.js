@@ -1320,7 +1320,19 @@ const Lempi = (() => {
   }
 
   return {
-    subscribe(fn) { listeners.push(fn); if (last) fn(last); },
+    // A subscriber that arrives after the first snapshot is still handed it,
+    // but **not from inside its own subscribe call** `[GDE-HST-365]`. A skin
+    // subscribes while its script is still running; called back there, its
+    // renderer can reach a `let` further down that has not run yet, and the
+    // whole script dies -- lp3-wifi, 2026-10-16, whenever the snapshot beat
+    // skin.js over the network. A microtask runs once that script has finished,
+    // and through the same guard `dispatch` keeps.
+    subscribe(fn) {
+      listeners.push(fn);
+      if (last) queueMicrotask(() => {
+        try { fn(last); } catch (e) { console.error('skin render failed', e); }
+      });
+    },
     get snapshot() { return last; },
     get status() { return status; },
     get skins() { return catalogue; },

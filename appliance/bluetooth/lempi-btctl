@@ -344,7 +344,11 @@ json_devices() {
         err="$(printf '%s' "$err" | tr -d '"\\' | tr -c '[:print:]' ' ')"
         head=",\"error\":\"$err\""
     fi
-    printf '{"ok":%s%s,"devices":[' "$ok" "$head"
+    # Read once, then written: whether a row is a duplicate depends on the
+    # rows after it.
+    local line
+    local -a rows=()
+    local -A plays=() name_plays=()
     while read -r _ mac name; do
         [[ "$mac" =~ ^([0-9A-F]{2}:){5}[0-9A-F]{2}$ ]] || continue
         # **`[PI3-FOUND-100]` A nameless device is noise, and noise hides the
@@ -355,11 +359,30 @@ json_devices() {
         # identical-looking hex strings, which is how "the speaker isn't
         # there" gets concluded while it is sitting in the list.
         [ "$name" = "${mac//:/-}" ] && continue
+        rows+=("$mac $name")
+        if bluetoothctl info "$mac" 2>/dev/null | grep -q 'UUID: Audio Sink'; then
+            plays[$mac]=1
+            name_plays[$name]=1
+        fi
+    done < <(bluetoothctl devices 2>/dev/null)
+    printf '{"ok":%s%s,"devices":[' "$ok" "$head"
+    for line in "${rows[@]}"; do
+        mac="${line%% *}"
+        name="${line#* }"
+        # **`[PI3-FOUND-840]` One speaker, two rows.** lp3-wifi, 2026-10-16:
+        # a scan listed "soundcore Boom 2" twice -- the speaker's classic
+        # address, which plays, and a second address of the same name that
+        # advertises no Audio Sink, which cannot. Choosing that row could
+        # never work. So a row is left out when another row of the same name
+        # can play audio and it cannot; a name that appears once is always
+        # listed, since a speaker not yet paired may not have said yet what
+        # it can do.
+        [ -n "${name_plays[$name]:-}" ] && [ -z "${plays[$mac]:-}" ] && continue
         [ $first -eq 1 ] || printf ','
         first=0
         printf '{"address":"%s","name":"%s","state":"%s"}' \
                "$mac" "${name//\"/}" "$(state_of "$mac")"
-    done < <(bluetoothctl devices 2>/dev/null)
+    done
     printf ']}\n'
 }
 

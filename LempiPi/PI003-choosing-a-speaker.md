@@ -157,6 +157,14 @@ What that costs, beyond what is already built:
   this arrived with `[PI3-FOUND-070]`: reports now separate a speaker that
   never answered from one that answered and refused, and carry whether A2DP
   is actually streaming rather than merely linked.
+- **`[PI3-FOUND-840]` One speaker, two rows. Done, 2026-10-16.** On
+  lp3-wifi "Find a speaker" listed many speakers twice. Measured on one scan:
+  "soundcore Boom 2" at its classic address, which advertises an Audio Sink,
+  and again at a second address of the same name that advertises none --
+  most likely the speaker's Low Energy side, and a row that could never play.
+  The list now leaves a row out when another row of the same name can play
+  audio and it cannot. A name heard only once is always listed, since a
+  speaker not yet paired may not have said yet what it can do.
 
 ## 2. The shape of it
 
