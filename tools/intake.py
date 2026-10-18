@@ -57,6 +57,7 @@ import pending as pendingmod  # noqa: E402  -- the decisions a person made [SPEC
 import mesh as meshmod  # noqa: E402  -- membership, enrolment and the members' channel [SPEC049]
 import member_updates  # noqa: E402  -- catalogue updates to a member [REQ-AND-330]
 import programmes as programmesmod  # noqa: E402  -- the programme assigned to a member [SPEC062]
+import member_bundles  # noqa: E402  -- music from the Export page, for a phone [REQ-AND-235]
 
 # The application's own key [REQ-AND-287]: every copy of Lempi and Vipunen
 # carries it, so it keeps out a stray request, not a person. The phone's copy is
@@ -463,6 +464,21 @@ class MemberHandler(BaseHTTPRequestHandler):
             return self.reply(200, o or {"run": None})
         if self.path == "/member/catalogue":
             return self.reply(200, member_updates.status(mdir, m["fingerprint"]))
+        if self.path == "/member/bundle":
+            # [REQ-AND-235]: music the Export page left waiting for this member.
+            return self.reply(200, member_bundles.offered(mdir, m["fingerprint"]))
+        mb = re.fullmatch(r"/member/bundle/([0-9TZ]+-[0-9a-f]{6})\.zip", self.path)
+        if mb:
+            p = member_bundles.bundle_path(mdir, m["fingerprint"], mb.group(1))
+            if p is None:
+                return self.reply(404, {"error": "no such bundle waiting"})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", str(os.path.getsize(p)))
+            self.end_headers()
+            with open(p, "rb") as fh:
+                shutil.copyfileobj(fh, self.wfile, 1 << 16)
+            return None
         if self.path == "/member/programme":
             # [SPEC-PGM-300]: the current version of the programme assigned to
             # this member, or none. Handed over, never applied: the member's
@@ -556,6 +572,18 @@ class MemberHandler(BaseHTTPRequestHandler):
                 say(f"intake: {m['name'] or meshmod.show_fp(m['fingerprint'], True)} imported update {mi.group(1)}: {b}")
                 return self.reply(200, {"ok": True})
             return self.reply(409, {"error": "no such update waiting"})
+        if self.path == "/member/storage":
+            # What the member has free [REQ-AND-235], for the Export page's
+            # check before it builds anything for it.
+            b = json.loads(self.rfile.read(n) or b"{}") if 0 < n <= 64_000 else {}
+            return self.reply(200, member_bundles.report_storage(mdir, m["fingerprint"], b))
+        mbi = re.fullmatch(r"/member/bundle/([0-9TZ]+-[0-9a-f]{6})/imported", self.path)
+        if mbi:
+            b = json.loads(self.rfile.read(n) or b"{}") if 0 < n <= 4_000_000 else {}
+            if member_bundles.delivered(mdir, m["fingerprint"], mbi.group(1), b):
+                say(f"intake: {m['name'] or meshmod.show_fp(m['fingerprint'], True)} imported bundle {mbi.group(1)}: {b}")
+                return self.reply(200, {"ok": True})
+            return self.reply(409, {"error": "no such bundle waiting"})
         if self.path == "/member/programme/state":
             # What the member runs now, and what of the hub's waits there
             # [SPEC-PGM-300], for the console's view of it [SPEC-PGM-440].

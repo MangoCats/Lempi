@@ -75,6 +75,30 @@ class MeshClient(private val base: String, private val pinHub: String?, private 
         c.inputStream.use { input -> dest.outputStream().use { input.copyTo(it) } }
     }
 
+    /** A GET whose answer is read by `use` as it arrives -- a bundle unpacked
+     *  as it downloads, so its zip never lands on the phone [REQ-AND-235]. */
+    fun <T> stream(path: String, use: (java.io.InputStream) -> T): T {
+        val c = URL(base + path).openConnection() as HttpsURLConnection
+        c.sslSocketFactory = context.socketFactory
+        c.hostnameVerifier = HostnameVerifier { _, _ -> true }
+        c.connectTimeout = 8000
+        c.readTimeout = 120000
+        if (c.responseCode != 200) throw IllegalStateException("the hub answered ${c.responseCode}")
+        return try { c.inputStream.use(use) } finally { c.disconnect() }
+    }
+
+    companion object {
+        /** This phone's client to the hub it enrolled with, presenting its own
+         *  key; `null` when it is not a member of a mesh. */
+        fun forMember(ctx: android.content.Context): MeshClient? {
+            val prefs = ctx.getSharedPreferences("mesh", android.content.Context.MODE_PRIVATE)
+            if (prefs.getString("roster", null) == null) return null
+            val hub = prefs.getString("hub", null) ?: return null
+            return MeshClient("https://" + (if (hub.contains(':')) hub else "$hub:${MeshActivity.MEMBER_PORT}"),
+                pinHub = prefs.getString("hub_fp", null), present = true)
+        }
+    }
+
     /** One request: its status and its JSON answer. */
     fun call(method: String, path: String, body: JSONObject? = null): Pair<Int, JSONObject> =
         send(method, path, body?.toString()?.toByteArray(), "application/json")

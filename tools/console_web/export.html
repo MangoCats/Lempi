@@ -58,9 +58,121 @@
     </p>
     <pre id="commands" class="list" style="white-space:pre-wrap;user-select:all"></pre>
   </div>
+
+  <h2>Send to a phone</h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    A phone has no ssh, so nothing is pushed to it <code style="font:12px var(--mono)">[REQ-AND-235]</code>:
+    the bundle is built here and waits until someone on the phone fetches it, from Lempi's
+    <em>Mesh membership…</em> screen, which checks and imports every file as any bundle is.
+    Files the phone is known to hold are left out. Whether it fits is judged by what the import
+    needs at its <em>peak</em> — about twice the unpacked bundle, staged and then placed — against
+    what the phone last said is free: above <span id="ph-confirm">80</span>% this stops for your
+    yes, above <span id="ph-refuse">99</span>% it is refused. The phone checks again before it fetches.
+  </p>
+  <div class="controls">
+    <select id="ph-who"></select>
+    <input type="search" id="ph-q" placeholder="artist, album or title to match" style="min-width:20rem">
+    <button class="chip" id="ph-check">check</button>
+  </div>
+  <p id="ph-free" style="font-size:.85rem;color:var(--dim)"></p>
+  <div id="ph-plan" style="font-size:.9rem"></div>
+  <div id="ph-offer" style="font-size:.9rem;margin-top:.4rem"></div>
 </main>
 <script src="/console.js"></script>
 <script>
+// [REQ-AND-235]: a bundle for a phone, measured against what it can take.
+(() => {
+  const $ = id => document.getElementById(id);
+  const mb = b => (b == null ? '?' : (b / 1e6).toFixed(b < 1e8 ? 1 : 0)) + ' MB';
+  const pct = r => (r == null ? 'unknown' : (r * 100).toFixed(1) + '%');
+  let phones = [];
+  const who = () => phones.find(p => p.fingerprint === $('ph-who').value);
+  const post = async (path, body) => {
+    const r = await fetch(path, { method: 'POST', body: JSON.stringify(body) });
+    return [r.ok, await r.json()];
+  };
+  const button = (text, fn) => { const b = S.el('button', { class: 'chip', text }); b.onclick = fn; return b; };
+
+  async function load() {
+    const s = await S.get('/api/export/phones');
+    $('ph-confirm').textContent = Math.round(s.confirm_at * 100);
+    $('ph-refuse').textContent = Math.round(s.refuse_at * 100);
+    const was = $('ph-who').value;
+    phones = s.phones;
+    if (!phones.length) {
+      $('ph-who').replaceChildren(S.el('option', { text: 'no phone in the mesh' }));
+      return;
+    }
+    $('ph-who').replaceChildren(...phones.map(p => {
+      const o = S.el('option', { text: p.name || p.fingerprint.slice(0, 12) });
+      o.value = p.fingerprint;
+      return o;
+    }));
+    if (phones.some(p => p.fingerprint === was)) $('ph-who').value = was;
+    show();
+  }
+
+  function show() {
+    const p = who();
+    if (!p) return;
+    $('ph-free').textContent = p.storage
+      ? `${p.name} said ${mb(p.storage.available_bytes)} free, at ${p.storage.reported_at}.`
+      : `${p.name} has not said what it has free: it does when Lempi starts or its Mesh screen opens. ` +
+        'Until then a bundle needs your yes.';
+    const o = p.offer || {};
+    const box = $('ph-offer');
+    const sizes = o.peak_bytes != null
+      ? ` ${o.files} file(s), ${mb(o.bytes)} to fetch, ${mb(o.peak_bytes)} at its peak — ${pct(o.ratio)} of what is free.` : '';
+    const line = {
+      none: '', nothing: `Nothing to send: ${o.why}.`, building: 'Building the bundle…',
+      ready: `Waiting for ${p.name} to fetch it (Mesh membership…).${sizes}`,
+      'needs-confirmation': `Stopped for your yes${o.estimate ? ' (estimated before building)' : ''}:${sizes}`,
+      refused: `Refused: ${mb(o.peak_bytes)} at its peak is ${pct(o.ratio)} of the ${mb(o.available_bytes)} the phone has free.`,
+      delivered: `Imported on the phone at ${o.delivered_at}: ${JSON.stringify(o.counts || {})}`,
+      failed: `Failed: ${o.error}`,
+    }[o.state] ?? o.state;
+    box.replaceChildren(S.el('span', { text: line }));
+    if (o.state === 'needs-confirmation' && o.stamp) {
+      box.append(' ', button('yes, leave it for the phone', async () => {
+        await post('/api/export/phone/confirm', { member: p.fingerprint, stamp: o.stamp }); load();
+      }));
+    }
+    if (o.state === 'ready' || o.state === 'needs-confirmation') {
+      box.append(' ', button('cancel', async () => { await post('/api/export/phone/cancel', { member: p.fingerprint }); load(); }));
+    }
+  }
+
+  async function build(confirmed) {
+    await post('/api/export/phone/build', { member: $('ph-who').value, q: $('ph-q').value.trim(), confirmed });
+    $('ph-plan').replaceChildren();
+    load();
+  }
+
+  $('ph-check').onclick = async () => {
+    const [ok, r] = await post('/api/export/phone/plan', { member: $('ph-who').value, q: $('ph-q').value.trim() });
+    const box = $('ph-plan');
+    if (!ok) return box.replaceChildren(S.el('span', { text: r.error }));
+    box.replaceChildren(S.el('span', { text:
+      `${r.files} file(s) to send` + (r.held_already ? `, ${r.held_already} already on the phone and left out` : '') +
+      `; ${mb(r.audio_bytes)} of audio, about ${mb(r.peak_bytes)} at its peak, ` +
+      (r.available_bytes ? `${pct(r.ratio)} of the ${mb(r.available_bytes)} free.` : 'against a free space the phone has not reported.') }));
+    if (!r.files) return;
+    if (r.verdict === 'refuse') {
+      box.append(S.el('p', { text: `Refused: more than ${$('ph-refuse').textContent}% of what the phone has free. Choose less.` }));
+    } else if (r.verdict === 'ok') {
+      box.append(' ', button('build and leave it for the phone', () => build(false)));
+    } else {
+      box.append(S.el('p', { text: r.verdict === 'unknown'
+        ? 'The phone has not said what it has free.'
+        : `That is more than ${$('ph-confirm').textContent}% of what the phone has free.` }),
+        button('build it anyway', () => build(true)));
+    }
+  };
+  $('ph-who').onchange = () => { $('ph-plan').replaceChildren(); show(); };
+  load();
+  setInterval(load, 3000);
+})();
+
 let es = null;
 
 // Arriving from the import page's "Send to the speakers" [SPEC-CDI-055]: the

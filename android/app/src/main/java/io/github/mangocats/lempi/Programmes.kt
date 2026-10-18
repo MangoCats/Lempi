@@ -21,13 +21,8 @@ object Programmes {
      * phone is not a member of a mesh. Network: never on the main thread.
      */
     fun exchange(ctx: Context): String? {
-        val prefs = ctx.getSharedPreferences("mesh", Context.MODE_PRIVATE)
-        if (prefs.getString("roster", null) == null) return null
-        val hub = prefs.getString("hub", null) ?: return null
+        val client = MeshClient.forMember(ctx) ?: return null
         return try {
-            val client = MeshClient(
-                "https://" + (if (hub.contains(':')) hub else "$hub:${MeshActivity.MEMBER_PORT}"),
-                pinHub = prefs.getString("hub_fp", null), present = true)
             val (s, out) = client.call("GET", "/member/programme")
             if (s != 200) return "The hub answered $s when asked for its programme: ${out.optString("error")}"
             val p = out.optJSONObject("programme")

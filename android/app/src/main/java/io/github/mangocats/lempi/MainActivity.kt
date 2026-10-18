@@ -87,6 +87,8 @@ class MainActivity : Activity() {
         // minute, so the question shows while the person is here.
         val app = applicationContext
         Thread({
+            // And what it has free, for the hub's Export page [REQ-AND-235].
+            HubBundles.reportStorage(app)
             Programmes.exchange(app)?.let { said ->
                 android.util.Log.i("lempi", "programme: $said")
                 main.post { web?.evaluateJavascript("window.Lempi && Lempi.askProgramme && Lempi.askProgramme()", null) }

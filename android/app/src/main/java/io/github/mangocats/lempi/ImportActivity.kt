@@ -63,6 +63,14 @@ class ImportActivity : Activity() {
                 .addCategory(Intent.CATEGORY_OPENABLE).setType("application/zip"), REQ_ZIP)
             PICK_FOLDER -> startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_FOLDER)
             SCAN -> { title = "Music on the phone"; scan() }
+            FROM_HUB -> {
+                title = "Music from the hub"
+                val stamp = i.getStringExtra(EXTRA_STAMP) ?: run { say("Which bundle? None was named."); return }
+                importWith(fromHub(stamp, i.getLongExtra(EXTRA_UNPACKED, 0L), i.getStringExtra(EXTRA_SHA256) ?: "")) { r ->
+                    // [REQ-AND-235]: only a clean import is the hub's to forget.
+                    if (r.refused.isEmpty()) acknowledge(stamp, r)
+                }
+            }
             else -> say("Share a bundle's .zip with Lempi, or choose one from Lempi's menu.")
         }
     }
@@ -87,7 +95,7 @@ class ImportActivity : Activity() {
      * Stage on a worker thread, import, report. Staging is removed afterwards,
      * unless the user is being asked for leave to replace files with it.
      */
-    private fun importWith(stageInto: (File) -> Unit) {
+    private fun importWith(stageInto: (File) -> Unit, after: ((ImportSummary) -> Unit)? = null) {
         Thread({
             val staging = File(cacheDir, "import-${System.currentTimeMillis()}")
             var keep = false
@@ -104,6 +112,7 @@ class ImportActivity : Activity() {
                 say("Checking every file against Vipunen's record, then placing it in Music/Lempi…")
                 val r = importBundle(File(filesDir, "library.db").path, staging.path, music.path)
                 report(r)
+                after?.invoke(r)
                 if (r.imported > 0u || r.reused > 0u || r.replaced > 0u || r.upgraded > 0u || r.rekeyed > 0u || r.covers > 0u ||
                     r.passageCreditsSet > 0u) reload()
                 keep = askToReplace(staging, r.refusedReplacements)
@@ -289,6 +298,49 @@ class ImportActivity : Activity() {
         say("Unpacked $files file(s).")
     }
 
+    /**
+     * A bundle the hub's Export page left for this phone [REQ-AND-235],
+     * unpacked as it downloads, so the zip itself never takes room here. It
+     * is hashed on the way through, and nothing is imported unless that is
+     * the hash the hub offered: the unpacking may already have started, but
+     * staging is all it has touched.
+     */
+    private fun fromHub(stamp: String, unpacked: Long, sha256: String): (File) -> Unit = { staging ->
+        if (unpacked > 0) need("unpacking the bundle", unpacked, staging)
+        val client = MeshClient.forMember(this) ?: throw IllegalStateException("this phone is not a member of a mesh")
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        say("Fetching from the hub and unpacking as it arrives…")
+        val files = client.stream("/member/bundle/$stamp.zip") { input ->
+            val hashed = java.security.DigestInputStream(input, md)
+            // The unzip closes what it reads; the rest of the zip -- its
+            // directory -- must still be read to be hashed.
+            val kept = object : java.io.FilterInputStream(hashed) { override fun close() {} }
+            val n = unzipBundle(kept, staging) { name, bytes -> need("unpacking $name", bytes, staging) }
+            val rest = ByteArray(1 shl 16)
+            while (hashed.read(rest) >= 0) { /* to the end, for the hash */ }
+            n
+        }
+        val got = md.digest().joinToString("") { "%02x".format(it) }
+        if (sha256.isNotEmpty() && got != sha256) {
+            throw IllegalStateException("what arrived is not the bundle the hub built; nothing imported")
+        }
+        say("Unpacked $files file(s).")
+    }
+
+    /** Tell the hub the bundle is in, so it lets the zip go [REQ-AND-235]. */
+    private fun acknowledge(stamp: String, r: ImportSummary) {
+        try {
+            val client = MeshClient.forMember(this) ?: return
+            val counts = org.json.JSONObject().put("imported", r.imported.toLong()).put("already", r.already.toLong())
+                .put("replaced", r.replaced.toLong()).put("upgraded", r.upgraded.toLong()).put("reused", r.reused.toLong())
+                .put("covers", r.covers.toLong())
+            val (s, o) = client.call("POST", "/member/bundle/$stamp/imported", counts)
+            say(if (s == 200) "The hub has been told; it lets the bundle go." else "The hub did not take the word: $s ${o.optString("error")}")
+        } catch (e: Exception) {
+            say("Imported, but the hub could not be told (${e.message ?: e}); it offers the bundle again until it is.")
+        }
+    }
+
     /** An unpacked bundle folder, chosen in the folder picker. */
     private fun fromFolder(tree: Uri): (File) -> Unit = { staging ->
         need("copying the bundle", sizeOfTree(tree, DocumentsContract.getTreeDocumentId(tree), ""), staging)
@@ -347,6 +399,11 @@ class ImportActivity : Activity() {
         const val PICK_ZIP = "io.github.mangocats.lempi.PICK_ZIP"
         const val PICK_FOLDER = "io.github.mangocats.lempi.PICK_FOLDER"
         const val SCAN = "io.github.mangocats.lempi.SCAN"
+        /** A bundle the hub left for this phone [REQ-AND-235]. */
+        const val FROM_HUB = "io.github.mangocats.lempi.FROM_HUB"
+        const val EXTRA_STAMP = "stamp"
+        const val EXTRA_UNPACKED = "unpacked"
+        const val EXTRA_SHA256 = "sha256"
         private const val REQ_ZIP = 1
         private const val REQ_FOLDER = 2
         private const val REQ_WRITE = 3

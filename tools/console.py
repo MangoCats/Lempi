@@ -50,6 +50,7 @@ import lempi_control  # noqa: E402  -- process/network side of the handoff
 import pending as pendingmod  # noqa: E402  -- what waits for a person [SPEC048]
 import mesh as meshmod  # noqa: E402  -- membership [SPEC049]
 import programmes as programmesmod  # noqa: E402  -- the hub's programmes [SPEC062]
+import member_bundles  # noqa: E402  -- music for a phone, fetched by it [REQ-AND-235]
 import sync_console  # noqa: E402  -- the Sync page [SPEC-STAR-120]
 import cd_import  # noqa: E402  -- the CD import page [SPEC056]
 import analysis_gaps  # noqa: E402  -- the Jobs page's Not analysed list [REQ-LIB-305]
@@ -1172,6 +1173,19 @@ class Handler(BaseHTTPRequestHandler):
                            if os.path.isdir(os.path.join(pdir, w)) else 0 for w in pendingmod.DONE}
                 return self.send_json({"waiting": pendingmod.entries(pdir), "decided": decided,
                                        "root": (STATE["roots"] or [""])[0], "folder": pdir})
+            if p == "/api/export/phones":
+                # [REQ-AND-235]: the mesh's phones, what each last said it has
+                # free, and the bundle waiting for it, if any.
+                mdir = meshmod.mesh_dir(STATE["library"] or STATE["path"])
+                if not meshmod.initialised(mdir):
+                    return self.send_json({"phones": [], "confirm_at": member_bundles.CONFIRM_AT,
+                                           "refuse_at": member_bundles.REFUSE_AT})
+                phones = [{"fingerprint": m["fingerprint"], "name": m["name"],
+                           "storage": member_bundles.storage(mdir, m["fingerprint"]),
+                           "offer": member_bundles.status(mdir, m["fingerprint"])}
+                          for m in meshmod.roster(mdir)["members"] if m["role"] == "phone"]
+                return self.send_json({"phones": phones, "confirm_at": member_bundles.CONFIRM_AT,
+                                       "refuse_at": member_bundles.REFUSE_AT})
             if p == "/api/programmes":
                 # [SPEC-PGM-440]: the hub's library of programmes, which node
                 # runs which, and the programme the hub's own player runs now,
@@ -1857,6 +1871,35 @@ class Handler(BaseHTTPRequestHandler):
                      # The speaker's own music folder, as configured [SPEC-STAR-094].
                      "audio_root": peers[name].get("audio_root")}))
                 return self.send_json({"job_id": job})
+            if p.startswith("/api/export/phone/"):
+                # [REQ-AND-235]: a bundle for a phone, left for it to fetch.
+                # Checked against what the phone last said is free before
+                # anything is built: above CONFIRM_AT a person must say yes,
+                # above REFUSE_AT it is refused. Nothing reaches the phone.
+                b = self.json_body() or {}
+                mdir = meshmod.mesh_dir(STATE["library"] or STATE["path"])
+                fp = str(b.get("member") or "")
+                m = meshmod.member(mdir, fp) if meshmod.initialised(mdir) else None
+                if not m or m["role"] != "phone":
+                    return self.send_json({"error": "not a phone in this mesh"}, code=400)
+                q = str(b.get("q") or "").strip()
+                if p in ("/api/export/phone/plan", "/api/export/phone/build") and not q:
+                    return self.send_json({"error": "type something to select by first"}, code=400)
+                if p == "/api/export/phone/plan":
+                    out = member_bundles.plan(STATE["path"], mdir, fp, f"%{q}%")
+                    out.pop("md5s")
+                    return self.send_json(out)
+                if p == "/api/export/phone/build":
+                    member_bundles.start(STATE["path"], mdir, fp, f"%{q}%", b.get("confirmed") is True)
+                    return self.send_json({"state": "building"})
+                if p == "/api/export/phone/confirm":
+                    if member_bundles.confirm(mdir, fp, str(b.get("stamp") or "")):
+                        return self.send_json({"ok": True})
+                    return self.send_json({"error": "no such bundle waiting for a yes"}, code=409)
+                if p == "/api/export/phone/cancel":
+                    member_bundles.cancel(mdir, fp)
+                    return self.send_json({"ok": True})
+                return self.send_json({"error": "unknown"}, code=404)
             if p == "/api/export/missing":
                 # [SPEC-STAR-090]: for each speaker named, what it lacks, as a
                 # bundle. Names are resolved to their configured remote here,

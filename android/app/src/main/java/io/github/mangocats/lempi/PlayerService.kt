@@ -287,6 +287,14 @@ class PlayerService : MediaLibraryService() {
         Lempi.status = "running"
         registerReceiver(noisy, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
         main.post(refresh)
+        // The hub, once per start of the player and whatever the screen is
+        // doing: what this phone has free [REQ-AND-235], and the programme
+        // assigned to it [SPEC-PGM-310]. Measured 2026-10-17: asked only from
+        // the activity, a start with the screen off never asked at all.
+        Thread({
+            HubBundles.reportStorage(applicationContext)
+            Programmes.exchange(applicationContext)?.let { Log.i(TAG, "programme: $it") }
+        }, "lempi-hub").start()
         // The phone's own music [REQ-AND-260], once playing has begun: a first
         // scan hashes every file not yet catalogued, and playback should not
         // wait for it. The Director rebuilds only if it changed anything.

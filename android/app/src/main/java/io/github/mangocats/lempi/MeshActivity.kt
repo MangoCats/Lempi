@@ -42,6 +42,9 @@ class MeshActivity : Activity() {
     private lateinit var col: LinearLayout
     private lateinit var log: TextView
     private val prefs by lazy { getSharedPreferences("mesh", MODE_PRIVATE) }
+    /** What the hub left for this phone [REQ-AND-235], and the way to take it. */
+    private var bundleLine: TextView? = null
+    private var fetchBundle: Button? = null
 
     override fun onCreate(saved: Bundle?) {
         super.onCreate(saved)
@@ -50,8 +53,68 @@ class MeshActivity : Activity() {
         log = TextView(this).apply { textSize = 14f; setPadding(0, 24, 0, 0) }
         setContentView(fitBars(ScrollView(this).apply { addView(col) }))
         draw()
-        // A member asks for its programme when this screen opens [SPEC-PGM-310].
-        Thread({ Programmes.exchange(applicationContext)?.let { say(it) } }, "lempi-programme").start()
+        // A member asks for its programme when this screen opens [SPEC-PGM-310],
+        // and says what it has free, for the Export page [REQ-AND-235].
+        Thread({
+            Programmes.exchange(applicationContext)?.let { say(it) }
+            HubBundles.reportStorage(applicationContext)
+        }, "lempi-programme").start()
+    }
+
+    /** Back from an import: what waits may have changed. */
+    override fun onRestart() {
+        super.onRestart()
+        draw()
+    }
+
+    private fun showOffer() {
+        val o = try {
+            HubBundles.offer(applicationContext)
+        } catch (e: Exception) {
+            main.post { bundleLine?.text = "Could not ask the hub: ${e.message ?: e}" }
+            return
+        }
+        val free = HubBundles.free(applicationContext)
+        main.post {
+            if (o == null) {
+                bundleLine?.text = "Nothing waiting. The hub's Export page can leave music here for this phone."
+                fetchBundle?.visibility = View.GONE
+                return@post
+            }
+            val peak = o.getLong("peak_bytes")
+            bundleLine?.text = "${o.getInt("files")} file(s) waiting: ${HubBundles.mb(o.getLong("bytes"))} MB to fetch, " +
+                "about ${HubBundles.mb(peak)} MB needed while it is imported; ${HubBundles.mb(free)} MB is free here " +
+                "(${"%.0f".format(100.0 * peak / maxOf(free, 1L))}%)."
+            fetchBundle?.visibility = View.VISIBLE
+            fetchBundle?.setOnClickListener { fetchOffer(o) }
+        }
+    }
+
+    /**
+     * [REQ-AND-235]: judged again here, against what is free now -- the hub's
+     * check used what the phone said earlier. Above 99% it is not fetched;
+     * above 80% a person says yes first.
+     */
+    private fun fetchOffer(o: JSONObject) {
+        val peak = o.getLong("peak_bytes")
+        val free = HubBundles.free(applicationContext)
+        val go = {
+            startActivity(android.content.Intent(this, ImportActivity::class.java)
+                .setAction(ImportActivity.FROM_HUB)
+                .putExtra(ImportActivity.EXTRA_STAMP, o.getString("stamp"))
+                .putExtra(ImportActivity.EXTRA_UNPACKED, o.optLong("unpacked_bytes"))
+                .putExtra(ImportActivity.EXTRA_SHA256, o.optString("sha256")))
+        }
+        when (HubBundles.verdict(peak, free)) {
+            "refuse" -> say("Not fetched: importing it needs about ${HubBundles.mb(peak)} MB at its peak, more than " +
+                "${(HubBundles.REFUSE_AT * 100).toInt()}% of the ${HubBundles.mb(free)} MB free. Make room, or ask for less.")
+            "confirm" -> AlertDialog.Builder(this)
+                .setMessage("Importing this needs about ${HubBundles.mb(peak)} MB at its peak: " +
+                    "${"%.0f".format(100.0 * peak / maxOf(free, 1L))}% of the ${HubBundles.mb(free)} MB free on this phone. Fetch it?")
+                .setPositiveButton("Fetch") { _, _ -> go() }
+                .setNegativeButton("Not now", null).show()
+            else -> go()
+        }
     }
 
     private fun say(line: String) {
@@ -331,6 +394,10 @@ class MeshActivity : Activity() {
         col.addView(everything)
         col.addView(text("Vipunen's names, credits, albums and covers for the music on this phone: " +
             "only what changed since it last took them.", 13f))
+        col.addView(text("\nMusic from the hub", 16f))
+        bundleLine = text("Asking the hub…", 13f).also { col.addView(it) }
+        fetchBundle = Button(this).apply { text = "Fetch and import"; visibility = View.GONE }.also { col.addView(it) }
+        Thread({ showOffer() }, "lempi-offer").start()
         col.addView(Button(this).apply {
             text = "Check the channel"
             setOnClickListener { Thread({ check() }, "lempi-mesh-check").start() }
