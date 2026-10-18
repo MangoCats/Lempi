@@ -131,6 +131,21 @@ def main() -> int:
             print(f"  REFUSING: {b}", file=sys.stderr)
         return 1
 
+    # Windows refuses a path past 260 characters in the copy, not in the
+    # folder made for it -- so a deep library failed part-way through, as a
+    # traceback, on the first phone export (2026-10-17). Every destination is
+    # measured first, and a long one refused by name before anything is copied.
+    if os.name == "nt":
+        audio_root = os.path.join(os.path.abspath(args.out), "audio")
+        long = [p for p in (os.path.join(audio_root, *e["bundle_path"].split("/"))
+                            for e in doc["encodings"] if e["audio_md5"] not in present) if len(p) > 259]
+        if long:
+            for p in long[:5]:
+                print(f"  TOO LONG for Windows ({len(p)} characters): {p}", file=sys.stderr)
+            print(f"  {len(long)} file(s) would land past Windows' 260-character limit under {args.out}; "
+                  "write the bundle somewhere shorter. Nothing was copied.", file=sys.stderr)
+            return 1
+
     os.makedirs(args.out, exist_ok=True)
     audio_dir = os.path.join(args.out, "audio")
     copied = missing = 0

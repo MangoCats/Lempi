@@ -31,6 +31,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -162,8 +163,13 @@ def build(db: str, mdir: str, fp: str, like: str, confirmed: bool) -> dict:
         return s
     _drop(mdir, fp)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + secrets.token_hex(3)
-    out = os.path.join(_dir(mdir, fp), stamp)
-    md5_file = out + ".md5s"
+    # Built in a short folder, and only the zip moved under the member's:
+    # that one's name carries a 64-character fingerprint, and the first phone
+    # export, built there, failed on two files at Windows' 260-character
+    # limit (2026-10-17). The bundle's own folders are a music library's.
+    work = tempfile.mkdtemp(prefix="lb-")
+    out = os.path.join(work, "b")
+    md5_file = os.path.join(work, "md5s")
     os.makedirs(_dir(mdir, fp), exist_ok=True)
     with open(md5_file, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(p["md5s"]) + "\n")
@@ -175,15 +181,16 @@ def build(db: str, mdir: str, fp: str, like: str, confirmed: bool) -> dict:
     r = subprocess.run([sys.executable, os.path.join(HERE, "export_bundle.py"), db, "--md5-file", md5_file,
                         "--root", root, "-o", out, "--zip"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace")
-    os.remove(md5_file)
-    zp = out + ".zip"
-    if r.returncode != 0 or not os.path.isfile(zp):
-        shutil.rmtree(out, ignore_errors=True)
+    built = out + ".zip"
+    if r.returncode != 0 or not os.path.isfile(built):
+        shutil.rmtree(work, ignore_errors=True)
         s = dict(base, state="failed", error=(r.stdout + r.stderr).strip()[-600:])
         _write_status(mdir, fp, s)
         return s
     unpacked = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(out) for f in fs)
-    shutil.rmtree(out, ignore_errors=True)          # the zip is what travels
+    zp = os.path.join(_dir(mdir, fp), stamp + ".zip")
+    shutil.move(built, zp)                          # the zip is what travels
+    shutil.rmtree(work, ignore_errors=True)
     need = peak(unpacked)
     v = verdict(need, p["available_bytes"])
     # The phone hashes what arrives as it unpacks it, and imports nothing

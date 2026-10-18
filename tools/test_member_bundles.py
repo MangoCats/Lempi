@@ -99,6 +99,27 @@ def main() -> int:
           "imported: the zip goes, and nothing more is offered")
     check(not mb.delivered(mdir, fp, s2["stamp"], {}), "a second word for the same bundle is refused")
 
+    # A deep music folder: the first phone export failed in Windows' 260-character
+    # limit, building under the member's folder, whose name is a 64-character
+    # fingerprint (2026-10-17, "browne": 2 of 24 files at 262 and 265).
+    deep = os.path.join(music, "A" * 60, "B" * 60)
+    os.makedirs(deep)
+    long_src = os.path.join(deep, "C" * 50 + ".wav")
+    with open(long_src, "wb") as fh:
+        fh.write(os.urandom(3000))
+    c = sqlite3.connect(db)
+    c.execute("INSERT INTO files VALUES (3,?,?,3000,1.0,'wav',1000,'t','t')", ("e" * 32, long_src))
+    c.execute("INSERT INTO passages VALUES (3,3,'radio',0,1000,NULL,NULL,NULL,'x')")
+    c.commit()
+    c.close()
+    in_member_dir = os.path.join(mb._dir(mdir, fp), "20261018T000000Z-abcdef", "audio",
+                                 os.path.relpath(long_src, music))
+    s = mb.build(db, mdir, fp, "%CCCC%", confirmed=True)
+    check(s["state"] == "ready" and os.path.isfile(os.path.join(mb._dir(mdir, fp), s["stamp"] + ".zip")),
+          f"a file whose place under the member's folder would be {len(os.path.abspath(in_member_dir))} "
+          f"characters is bundled all the same: {s.get('state')} {s.get('error', '')[-120:]}")
+    mb.cancel(mdir, fp)
+
     # Over the members' channel, as the phone does it, with an enrolled key.
     import http.client
     import ssl
