@@ -590,6 +590,23 @@ pub enum OutputError {
     Build(String),
 }
 
+impl OutputError {
+    /// Did Windows refuse this process the device, rather than find it absent?
+    ///
+    /// `RPC_E_CHANGED_MODE`, 0x80010106, which cpal's text carries as its
+    /// signed decimal. Seen on the desktop, 2026-10-18, after an FBA-20 lost
+    /// power and reconnected: every reopen refused for about ten minutes, while
+    /// a separate process opened the same device at once `[GDE-HST-230]`. So
+    /// it says nothing about the speaker, and retrying it is waiting, not
+    /// searching. Matched on text because cpal hands over nothing else here.
+    pub fn is_com_refusal(&self) -> bool {
+        match self {
+            OutputError::Config(e) | OutputError::Build(e) => e.contains("os error -2147417850"),
+            OutputError::NoDevice => false,
+        }
+    }
+}
+
 impl std::fmt::Display for OutputError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

@@ -204,6 +204,7 @@ fn supervise(
     let mut backoff = RETRY;
     let mut retry_at: Option<Instant> = None;
     let mut watch_at = Instant::now() + WATCH;
+    let mut refused: Option<Refused> = None;
 
     loop {
         match rx.recv_timeout(IDLE) {
@@ -235,7 +236,7 @@ fn supervise(
         }
 
         watch(out, playing, &mut watch_at);
-        recover(out, playing, &mut retry_at, &mut backoff, &recoveries);
+        recover(out, playing, &mut retry_at, &mut backoff, &mut refused, &recoveries);
     }
 }
 
@@ -352,6 +353,7 @@ fn recover(
     playing: bool,
     retry_at: &mut Option<Instant>,
     backoff: &mut Duration,
+    refused: &mut Option<Refused>,
     recoveries: &Arc<AtomicU64>,
 ) {
     if !playing || !out.failed() {
@@ -383,9 +385,16 @@ fn recover(
             } else {
                 // The stream's own error callback writes only the first error
                 // of a failure and counts the rest; here is the count.
-                match out.take_stream_errors() {
-                    0 | 1 => tracing::info!("output recovered on {name}"),
-                    n => tracing::info!("output recovered on {name} ({n} stream errors while it was down)"),
+                let errors = match out.take_stream_errors() {
+                    0 | 1 => String::new(),
+                    n => format!(" ({n} stream errors while it was down)"),
+                };
+                // How long a refusal lasted is the one measurement of it
+                // there is, so the line that ends one carries it.
+                match refused.take() {
+                    Some(r) => tracing::info!("output recovered on {name}{errors}, after {} [GDE-HST-230]",
+                                              r.describe(Instant::now())),
+                    None => tracing::info!("output recovered on {name}{errors}"),
                 }
                 *retry_at = None;
                 *backoff = RETRY;
@@ -394,7 +403,38 @@ fn recover(
                 out.set_playing(playing);
             }
         }
+        // Said differently from an absent device, because it means something
+        // different: the speaker is there and this process may not have it
+        // `[GDE-HST-230]`. A line that read like "still searching" for ten
+        // minutes is what made it look like a stall rather than a refusal.
+        Err(e) if e.is_com_refusal() => match refused {
+            None => {
+                *refused = Some(Refused { since: now, attempts: 1 });
+                tracing::warn!("output refused by Windows, not missing: {e} -- the device is there \
+                                but this process cannot open it; retrying, and restarting the \
+                                player should clear it [GDE-HST-230]");
+            }
+            Some(r) => {
+                r.attempts += 1;
+                tracing::warn!("output still refused by Windows, {} -- restarting the player \
+                                should clear it [GDE-HST-230]", r.describe(now));
+            }
+        },
         Err(e) => tracing::warn!("output recovery failed, retrying: {e}"),
+    }
+}
+
+/// A run of reopens Windows has refused `[GDE-HST-230]`, kept until one opens.
+struct Refused {
+    since: Instant,
+    attempts: u32,
+}
+
+impl Refused {
+    fn describe(&self, now: Instant) -> String {
+        let s = now.saturating_duration_since(self.since).as_secs();
+        format!("{} refused attempt{} over {}m{:02}s",
+                self.attempts, if self.attempts == 1 { "" } else { "s" }, s / 60, s % 60)
     }
 }
 
@@ -429,5 +469,26 @@ mod tests {
         }
         assert!(before.elapsed() < Duration::from_millis(500),
                 "reading path state must be a load, not a query");
+    }
+
+    #[test]
+    fn a_windows_refusal_is_told_apart_from_an_absent_device() {
+        use crate::output::OutputError;
+        // Verbatim from lempi-local.log, 2026-10-18 `[GDE-HST-230]`.
+        let seen = OutputError::Config("Failed to get audio client: Cannot change thread mode \
+                                        after it is set. (os error -2147417850)".into());
+        assert!(seen.is_com_refusal());
+        assert!(!OutputError::NoDevice.is_com_refusal());
+        assert!(!OutputError::Config("Failed to get audio client: Element not found. \
+                                      (os error -2147023728)".into()).is_com_refusal());
+    }
+
+    #[test]
+    fn a_refusal_reports_its_count_and_its_length() {
+        let since = Instant::now();
+        let r = Refused { since, attempts: 15 };
+        assert_eq!(r.describe(since + Duration::from_secs(605)), "15 refused attempts over 10m05s");
+        let one = Refused { since, attempts: 1 };
+        assert_eq!(one.describe(since), "1 refused attempt over 0m00s");
     }
 }
