@@ -505,6 +505,7 @@ pub fn router(ui: Ui) -> Router {
         }))
         .route("/edit/:passage_id/info", get(edit_info))
         .route("/edit/:passage_id/audio", get(edit_audio))
+        .route("/edit/:passage_id/overview", get(edit_overview))
         .route("/edit/:passage_id/review", post(edit_review))
         .route(SEGMENT_QUEUE_ROUTE, get(segment_queue))
         .route("/segment/:passage_id/accept", post(accept_segment))
@@ -1988,6 +1989,7 @@ mod tests {
     fn the_edit_page_asks_for_routes_the_router_serves() {
         assert!(EDIT_JS.contains("/edit/${passageId}/info"));
         assert!(EDIT_JS.contains("/edit/${passageId}/audio"));
+        assert!(EDIT_JS.contains("/edit/${passageId}/overview"));
         assert!(EDIT_JS.contains("/edit/${passageId}/review"));
         // The detection panel's defaults `[SPEC-SUI-229]`, and the page
         // loading the module that runs them.
@@ -2083,6 +2085,32 @@ mod tests {
             (got_frames as i64 - want_frames as i64).abs() < 4096,
             "decoded {got_frames} frames for a 1000ms window, wanted ~{want_frames}"
         );
+        std::fs::remove_file(&f).ok();
+    }
+
+    /// The whole-file overview `[SPEC-SUI-232]`: one min/max pair per bucket,
+    /// covering the file from its first frame to its last, and following the
+    /// signal -- the fixture is a ramp, so each bucket's peak is higher than
+    /// the one before and the last reaches the ramp's own top.
+    #[cfg(feature = "vipunen-support")]
+    #[test]
+    fn overview_peaks_cover_the_whole_file_in_buckets() {
+        let f = crate::decoder::tests::tmp("edit_overview"); // 5s ramp, 44.1kHz stereo
+        let ov = overview_peaks(&f, OVERVIEW_BUCKET_MS).expect("a readable fixture");
+        assert_eq!(ov.bucket_ms, OVERVIEW_BUCKET_MS);
+        assert!((ov.decoded_ms as i64 - 5_000).abs() <= 1, "decoded {} ms of a 5 s file", ov.decoded_ms);
+        assert_eq!(ov.peaks.len(), 2 * 50, "5 s in 100 ms buckets is 50 min/max pairs");
+        let maxes: Vec<i8> = ov.peaks.chunks_exact(2).map(|p| p[1]).collect();
+        assert!(maxes.windows(2).all(|w| w[0] <= w[1]), "a ramp's peaks must not fall: {maxes:?}");
+        assert_eq!(ov.peaks[0], 0, "the ramp starts at silence");
+        // The ramp's last frame is (220_499 / 8) / 32768 of full scale.
+        let top = ((220_499u32 / 8) as f32 / 32768.0 * 127.0).round() as i8;
+        assert!((maxes[49] - top).abs() <= 1, "last peak {} should be the ramp's top {top}", maxes[49]);
+
+        // Kept, not decoded again, for the next passage of the same file.
+        let a = cached_overview(&f).expect("first read");
+        let b = cached_overview(&f).expect("second read");
+        assert!(std::sync::Arc::ptr_eq(&a, &b), "the same file must be served from the cache");
         std::fs::remove_file(&f).ok();
     }
 

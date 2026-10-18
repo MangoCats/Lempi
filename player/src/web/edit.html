@@ -54,6 +54,11 @@
           touch-action: none; cursor: grab; }
   #wave.panning { cursor: grabbing; }
   #wave.onhandle { cursor: ew-resize; }
+  /* The whole file, small, above the waveform [SPEC-SUI-232]: pressing or
+     dragging on it moves the view there. */
+  #overview { display: block; width: 100%; height: 44px; border-radius: 6px; margin-bottom: .35rem;
+              background: #0b0b0c; border: 1px solid rgba(128,128,128,.28);
+              touch-action: none; cursor: pointer; }
 
   .legend { display: flex; flex-wrap: wrap; gap: .3rem 1rem; font-size: .75rem;
             opacity: .7; margin: .5rem 0 0; }
@@ -150,10 +155,14 @@
     <button type="button" id="zoomin" title="See a narrower span" disabled>+ Zoom in</button>
     <button type="button" id="zoompassage" disabled>Whole passage</button>
     <button type="button" id="zoomfile" disabled
-            title="Reaches the edge of what was actually decoded -- the whole file for an ordinary passage, a bounded window around it for a large multi-track capture">Zoom out</button>
+            title="The whole file, drawn from its outline; zoom in to five minutes or less for the audio itself">Whole file</button>
+    <button type="button" id="zoomorig" disabled
+            title="Back to the view this page opened on: the passage with a minute either side">Original extents</button>
     <span class="spacer"></span>
     <small id="viewrange"></small>
   </div>
+  <canvas id="overview" width="1200" height="44"
+          title="The whole file. Press or drag to move the view there."></canvas>
   <canvas id="wave" width="1200" height="220"></canvas>
   <p class="legend">
     <span><span class="swatch" style="background:#6cf"></span>start / end</span>

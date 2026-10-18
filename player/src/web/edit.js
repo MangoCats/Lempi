@@ -84,6 +84,35 @@
   let info = null;      // `/info` as loaded -- kind and neighbours, for detection
   let mono = null;      // the decoded window, channels averaged, for detection
 
+  // Navigating the whole file `[SPEC-SUI-232]`. Asked for 2026-10-18 on
+  // passage 18069 -- a 5.5-minute track in a 68.5-minute single-file rip,
+  // where the ±60 s window above left no way to reach a boundary that really
+  // lay further out. Three pieces: `overview`, the whole file at 100 ms a
+  // min/max pair, drawn wherever the detail does not reach; a detail window
+  // that is fetched again around wherever the view goes; and the view the
+  // page opened on, kept so "Original extents" can always get back to it.
+  let overview = null;      // { bucketMs, decodedMs, peaks: Int8Array }, or null
+  let overviewState = 'reading'; // 'reading' | 'ready' | 'failed'
+  let origView = null;      // { fromMs, toMs } -- the view this page opened on
+  // The span the current `buffer` was asked for. "Covered" is judged against
+  // this, not the decoded length: a decode that came back short stopped at
+  // the file's real end, and asking again would only come back short again.
+  let detailAsked = { fromMs: 0, toMs: 0 };
+  // A view no wider than this gets audio of its own; a wider one is drawn
+  // from the overview -- "I never need to see more than 5 minutes of the
+  // file in high resolution at a time".
+  const DETAIL_VIEW_MS = 5 * 60_000;
+  // A window holding the view and the passage together, when they fit in
+  // this; otherwise the view alone. Decoded audio costs the browser about
+  // 30 MB a minute, so the passage is kept alongside only while that is small.
+  const DETAIL_MAX_MS = 12 * 60_000;
+  // The server's own cap `EDIT_AUDIO_MAX_MS`: a window asked for past it
+  // would come back short, so it is never asked for.
+  const SERVER_MAX_MS = 30 * 60_000;
+  let detailTimer = null;
+  let detailBusy = false;
+  let detailNext = null;    // a window wanted while another was loading
+
   const canvas = $('wave');
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
@@ -96,6 +125,11 @@
   // otherwise saves as a float, which the server's `u64` fields reject
   // outright rather than truncating.
   const windowEndMs = () => Math.round(windowFromMs + totalMs());
+  // How far a boundary may go, and the view: the file's own end, whole ms,
+  // as `/info` reports it -- the decoded window's end only if that is unknown.
+  const fileEndMs = () => Math.round(fileMs) || windowEndMs();
+  const covered = (fromMs, toMs) =>
+    Boolean(buffer) && fromMs >= detailAsked.fromMs && toMs <= detailAsked.toMs;
 
   // The viewport: what span of the file the canvas currently shows. Distinct
   // from the passage's own start/end -- "what you can see" and "what the
@@ -106,25 +140,35 @@
   const MIN_SPAN_MS = 200;
 
   function clampView(fromMs, toMs) {
-    const total = totalMs();
+    // Bounded by the file, not by what is decoded `[SPEC-SUI-232]` -- the
+    // view goes anywhere in it, and the detail follows (`scheduleDetail`).
+    const total = fileEndMs();
     const cap = total || MIN_SPAN_MS;
     let span = clamp(toMs - fromMs, Math.min(MIN_SPAN_MS, cap), cap);
-    // Bounded by the decoded window, not by ms 0 -- `windowFromMs` is 0 for
-    // the ordinary case (decoding starts at the file's own beginning) and
-    // only ever nonzero for a bounded window into a large DAO capture
-    // `[SPEC-SUI-224]`.
-    const from = clamp(fromMs, windowFromMs, Math.max(windowFromMs, windowFromMs + total - span));
+    const from = clamp(fromMs, 0, Math.max(0, total - span));
     return { fromMs: from, toMs: from + span };
   }
   function setView(fromMs, toMs) {
     view = clampView(fromMs, toMs);
-    // Against `fileMs` (the file's own true duration, from `/info`), not
-    // `totalMs()` -- the latter is only the *decoded window's* own
-    // duration, which reads as nonsense beside two absolute positions once
-    // that window does not start at ms 0 `[SPEC-SUI-224]`.
-    $('viewrange').textContent =
-      `showing ${fmt(view.fromMs)} – ${fmt(view.toMs)} of ${fmt(fileMs || null)}`;
+    showViewRange();
     draw();
+    drawOverview();
+    scheduleDetail('view');
+  }
+  // Against `fileMs` (the file's own duration, from `/info`), and saying
+  // which part of what is shown is the decoded detail and which the
+  // overview -- the two look alike enough to need naming.
+  function showViewRange(busy) {
+    let text = `showing ${fmt(view.fromMs)} – ${fmt(view.toMs)} of ${fmt(fileMs || null)}`;
+    if (busy) text += ' · decoding audio here…';
+    else if (buffer && !covered(view.fromMs, view.toMs)) {
+      text += ` · detail ${fmt(detailAsked.fromMs)} – ${fmt(detailAsked.toMs)}, ` +
+        (overviewState === 'ready' ? 'the rest from the whole-file outline'
+          : overviewState === 'reading' ? 'the whole-file outline still being read'
+            : 'the whole-file outline unavailable');
+      if (view.toMs - view.fromMs > DETAIL_VIEW_MS) text += ' (zoom in to 5 min or less for detail)';
+    }
+    $('viewrange').textContent = text;
   }
   function zoomStep(factor) {
     const mid = (view.fromMs + view.toMs) / 2;
@@ -191,6 +235,23 @@
   };
   const msOf = x => xToMs(x, canvas.getBoundingClientRect().width || canvas.width);
 
+  // Vertical strokes gathered for one colour and drawn as one path -- the
+  // waveform comes in two, detail and outline, interleaved column by column.
+  class Strokes {
+    constructor() { this.segs = []; }
+    add(x, y0, y1) { this.segs.push(x, y0, y1); }
+    stroke(g, color) {
+      if (!this.segs.length) return;
+      g.strokeStyle = color;
+      g.beginPath();
+      for (let i = 0; i < this.segs.length; i += 3) {
+        g.moveTo(this.segs[i], this.segs[i + 1]);
+        g.lineTo(this.segs[i], this.segs[i + 2]);
+      }
+      g.stroke();
+    }
+  }
+
   const dirty = () =>
     !base ||
     draft.start_ms !== base.start_ms ||
@@ -210,6 +271,10 @@
     $('commit').disabled = !dirty();
     renderDetectTable();
     if ($('detspan').checked) scheduleDetect();
+    // A start or end moved outside what is decoded brings that audio in, so
+    // detection and the preview can reach it `[SPEC-SUI-232]`.
+    drawOverview();
+    scheduleDetail('draft');
   };
 
   // Undo: one stack of prior drafts, pushed once per *completed* edit -- a
@@ -296,38 +361,22 @@
     // single-track files where `start_ms=0`/`end_ms=file_ms` already --
     // this window already equals the whole file, so nothing about the
     // ordinary case changes beyond "now decoded server-side."
-    windowFromMs = Math.max(0, base.start_ms - WINDOW_PAD_MS);
-    const windowToMs = Math.min(fileMs || Infinity, base.end_ms + WINDOW_PAD_MS);
-    const audioResp = await fetch(
-      `/edit/${passageId}/audio?from_ms=${windowFromMs}&to_ms=${windowToMs}`,
-    ).catch(() => null);
-    if (!audioResp || !audioResp.ok) {
-      note('Could not read the audio for this passage.', 'bad');
-      return;
-    }
-    const bytes = await audioResp.arrayBuffer();
-
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    audioCtx = new Ctx();
-    try {
-      buffer = await audioCtx.decodeAudioData(bytes);
-    } catch (e) {
-      note('The audio could not be decoded by this browser.', 'bad');
+    const [fromMs, windowToMs] = passageWindow(base);
+    // The whole file's outline, asked for now and drawn whenever it arrives
+    // -- several seconds for a long file, and nothing here waits on it.
+    loadOverview();
+    const got = await fetchDetail(fromMs, windowToMs);
+    if (got !== 'ok') {
+      note(got === 'fetch' ? 'Could not read the audio for this passage.'
+        : 'The audio could not be decoded by this browser.', 'bad');
       return;
     }
 
     $('play').disabled = false;
-    for (const id of ['zoomout', 'zoomin', 'zoompassage', 'zoomfile']) $(id).disabled = false;
-    // One channel for detection, the average of all of them -- what
-    // `analyze_amplitude.py` asks ffmpeg for (`-ac 1`), so both measure the
-    // same overall level rather than one side of a stereo image.
-    mono = new Float32Array(buffer.length);
-    for (let c = 0; c < buffer.numberOfChannels; c++) {
-      const ch = buffer.getChannelData(c);
-      for (let i = 0; i < ch.length; i++) mono[i] += ch[i] / buffer.numberOfChannels;
-    }
-    setView(windowFromMs, windowFromMs + totalMs());
-    updateFacts(); // the partial-window note depends on `windowFromMs`/`totalMs()`, both just set
+    for (const id of ['zoomout', 'zoomin', 'zoompassage', 'zoomfile', 'zoomorig']) $(id).disabled = false;
+    origView = { fromMs: windowFromMs, toMs: windowFromMs + totalMs() };
+    setView(origView.fromMs, origView.toMs);
+    updateFacts();
     runDetect();
 
     // The server clamps to `EDIT_AUDIO_MAX_MS` regardless of what was asked,
@@ -337,7 +386,7 @@
     // always goes through real seeking now, never trusting stored duration
     // at all `[SPEC-SUI-224]`.
     const decodedMs = totalMs();
-    const requestedMs = windowToMs - windowFromMs;
+    const requestedMs = detailAsked.toMs - detailAsked.fromMs;
     const overrunMs = requestedMs - decodedMs;
     if (overrunMs > 1000) {
       note(
@@ -355,6 +404,129 @@
     note(info.edited ? 'Showing a saved-but-not-yet-applied edit.' : '');
   }
 
+  // The passage with `WINDOW_PAD_MS` either side, within the file and the
+  // server's cap -- what the page opens on, and what preview and detection
+  // need decoded.
+  function passageWindow(d) {
+    const from = Math.max(0, d.start_ms - WINDOW_PAD_MS);
+    const to = Math.min(fileEndMs() || Infinity, d.end_ms + WINDOW_PAD_MS, from + SERVER_MAX_MS);
+    return [Math.round(from), Math.round(to)];
+  }
+
+  // Fetch and decode `[fromMs, toMs)`, and make it the detail everything
+  // else reads -- the waveform, the preview, detection. 'ok', or which step
+  // failed: 'fetch' or 'decode'.
+  async function fetchDetail(fromMs, toMs) {
+    fromMs = Math.max(0, Math.round(fromMs));
+    toMs = Math.round(Math.min(toMs, fromMs + SERVER_MAX_MS));
+    const resp = await fetch(`/edit/${passageId}/audio?from_ms=${fromMs}&to_ms=${toMs}`)
+      .catch(() => null);
+    if (!resp || !resp.ok) return 'fetch';
+    const bytes = await resp.arrayBuffer();
+    if (!audioCtx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return 'decode';
+      audioCtx = new Ctx();
+    }
+    let decoded;
+    try {
+      decoded = await audioCtx.decodeAudioData(bytes);
+    } catch (e) {
+      return 'decode';
+    }
+    buffer = decoded;
+    windowFromMs = fromMs;
+    detailAsked = { fromMs, toMs };
+    traceCache = null;
+    // One channel for detection, the average of all of them -- what
+    // `analyze_amplitude.py` asks ffmpeg for (`-ac 1`), so both measure the
+    // same overall level rather than one side of a stereo image.
+    mono = new Float32Array(buffer.length);
+    for (let c = 0; c < buffer.numberOfChannels; c++) {
+      const ch = buffer.getChannelData(c);
+      for (let i = 0; i < ch.length; i++) mono[i] += ch[i] / buffer.numberOfChannels;
+    }
+    return 'ok';
+  }
+
+  async function loadOverview() {
+    try {
+      const resp = await fetch(`/edit/${passageId}/overview`);
+      if (!resp || !resp.ok) throw new Error('not served');
+      const bucketMs = Number(resp.headers.get('x-bucket-ms'));
+      const decodedMs = Number(resp.headers.get('x-decoded-ms'));
+      const peaks = new Int8Array(await resp.arrayBuffer());
+      if (!(bucketMs > 0) || !peaks.length) throw new Error('empty');
+      overview = { bucketMs, decodedMs, peaks };
+      overviewState = 'ready';
+    } catch (e) {
+      overviewState = 'failed';
+    }
+    if (buffer) { showViewRange(); draw(); drawOverview(); }
+  }
+
+  // Which window to decode next, if any. Decided when the view moves
+  // ('view') or the passage's own span changes ('draft'), and kept from
+  // fetching back and forth between the two: a view far from the passage
+  // gets audio of its own, and the passage's comes back when it is played,
+  // or by "Whole passage" or "Original extents" (`ensurePassage`).
+  function wantDetail(reason) {
+    if (!buffer || !fileEndMs()) return null;
+    const fe = fileEndMs();
+    const span = view.toMs - view.fromMs;
+    const viewWin = [Math.max(0, view.fromMs - WINDOW_PAD_MS), Math.min(fe, view.toMs + WINDOW_PAD_MS)];
+    const [pFrom, pTo] = passageWindow(draft);
+    const viewNeeds = span <= DETAIL_VIEW_MS && !covered(view.fromMs, view.toMs);
+    const passageNeeds = !covered(draft.start_ms, draft.end_ms);
+    if (reason === 'view' && !viewNeeds) return null;
+    if (reason === 'draft' && !passageNeeds) return null;
+    // Both together, when that is small enough to hold.
+    const lo = Math.min(pFrom, span <= DETAIL_VIEW_MS ? viewWin[0] : Infinity);
+    const hi = Math.max(pTo, span <= DETAIL_VIEW_MS ? viewWin[1] : -Infinity);
+    if (hi - lo <= DETAIL_MAX_MS) return [lo, hi];
+    if (reason === 'view') return viewWin;
+    // The passage alone, but only while it is what is being looked at.
+    return pFrom < view.toMs && pTo > view.fromMs ? [pFrom, pTo] : null;
+  }
+
+  function scheduleDetail(reason) {
+    if (detailTimer) clearTimeout(detailTimer);
+    detailTimer = setTimeout(() => {
+      detailTimer = null;
+      const want = wantDetail(reason);
+      if (want) loadDetail(want[0], want[1]);
+    }, 250);
+  }
+
+  // One load at a time; a window wanted meanwhile is loaded after, unless
+  // the one just loaded already holds it.
+  async function loadDetail(fromMs, toMs) {
+    if (detailBusy) { detailNext = [fromMs, toMs]; return; }
+    detailBusy = true;
+    showViewRange(true);
+    const got = await fetchDetail(fromMs, toMs);
+    detailBusy = false;
+    if (got !== 'ok') note('Could not decode the audio around here.', 'bad');
+    const next = detailNext;
+    detailNext = null;
+    if (next && !covered(next[0], next[1])) return loadDetail(next[0], next[1]);
+    showViewRange();
+    draw();
+    drawOverview();
+    runDetect();
+  }
+
+  // The passage's own span decoded, for preview and detection -- whatever
+  // the view is doing. True once it is.
+  async function ensurePassage() {
+    if (covered(draft.start_ms, draft.end_ms)) return true;
+    const [from, to] = passageWindow(draft);
+    if (draft.end_ms > to) return false; // longer than the server will decode at once
+    await loadDetail(from, to);
+    while (detailBusy) await new Promise(r => setTimeout(r, 50));
+    return covered(draft.start_ms, draft.end_ms);
+  }
+
   function updateFacts() {
     $('facts').innerHTML =
       `start <b>${fmt(draft.start_ms)}</b> · end <b>${fmt(draft.end_ms)}</b> · ` +
@@ -367,18 +539,9 @@
       // Lempi computed, which is worth knowing before trusting one.
       (info && info.kind
         ? ` · <b>${esc(info.kind)}</b> cut, span from <b>${esc(info.boundary_src || 'unknown')}</b>`
-        : '') +
-      // Only a bounded window around the passage is ever decoded for a
-      // large DAO capture `[SPEC-SUI-224]` -- said plainly here, since
-      // "Zoom out" quietly stopping short of the file's own edges would
-      // otherwise look like a bug rather than the deliberate limit it is.
-      // Expanding the window on request is real future work, not solved
-      // here, the same honest-deferral shape `[SPEC021 §6]` already uses
-      // for the neighbour-passage question.
-      (buffer && totalMs() < (fileMs || 0) - 1000
-        ? ` · <b class="win">showing ±${Math.round(WINDOW_PAD_MS / 1000)}s around ` +
-          `this passage, not the whole file</b>`
         : '');
+    // Which part of the file is decoded in detail is said on the view line
+    // (`showViewRange`), where it changes as the view moves `[SPEC-SUI-232]`.
     updateFlavorNote();
   }
 
@@ -436,8 +599,11 @@
     const w = canvas.width, h = canvas.height;
     g.clearRect(0, 0, w, h);
 
-    const data = buffer.getChannelData(0);
+    // The channels averaged, as the overview is, so the two resolutions
+    // meet without a step where one ends and the other begins.
+    const data = mono || buffer.getChannelData(0);
     const sr = buffer.sampleRate;
+    const detailEnd = windowFromMs + totalMs();
     const span = Math.max(1, view.toMs - view.fromMs);
     const mid = h / 2;
     // The same padded coordinate space `msOf`/`handleAt` use, scaled from
@@ -449,25 +615,40 @@
     const usable = Math.max(1, w - 2 * padPx);
     const px = ms => padPx + ((ms - view.fromMs) / span) * usable;
 
-    g.strokeStyle = '#9ad';
-    g.lineWidth = Math.max(1, dpr);
-    g.beginPath();
+    // Each column from the decoded detail where it reaches, and from the
+    // whole-file overview where it does not `[SPEC-SUI-232]` -- the second
+    // in a dimmer colour, since 100 ms a pair is an outline, not the audio.
+    const detailPath = new Strokes();
+    const outlinePath = new Strokes();
     for (let x = Math.floor(padPx); x < w - padPx; x++) {
       const msLo = view.fromMs + ((x - padPx) / usable) * span;
       const msHi = view.fromMs + ((x + 1 - padPx) / usable) * span;
-      const lo = Math.max(0, Math.floor(((msLo - windowFromMs) / 1000) * sr));
-      const hi = Math.min(data.length, Math.max(lo + 1, Math.ceil(((msHi - windowFromMs) / 1000) * sr)));
-      let min = 1, max = -1;
-      for (let i = lo; i < hi; i++) {
-        const v = data[i];
-        if (v < min) min = v;
-        if (v > max) max = v;
+      let min = 1, max = -1, into = null;
+      if (msHi > windowFromMs && msLo < detailEnd) {
+        const lo = Math.max(0, Math.floor(((msLo - windowFromMs) / 1000) * sr));
+        const hi = Math.min(data.length, Math.max(lo + 1, Math.ceil(((msHi - windowFromMs) / 1000) * sr)));
+        for (let i = lo; i < hi; i++) {
+          const v = data[i];
+          if (v < min) min = v;
+          if (v > max) max = v;
+        }
+        into = detailPath;
+      } else if (overview) {
+        const p = overview.peaks, b = overview.bucketMs;
+        const lo = Math.max(0, Math.floor(msLo / b));
+        const hi = Math.min(p.length / 2, Math.max(lo + 1, Math.ceil(msHi / b)));
+        for (let i = lo; i < hi; i++) {
+          if (p[2 * i] / 127 < min) min = p[2 * i] / 127;
+          if (p[2 * i + 1] / 127 > max) max = p[2 * i + 1] / 127;
+        }
+        into = outlinePath;
       }
-      if (min > max) { min = 0; max = 0; }
-      g.moveTo(x, mid + min * mid);
-      g.lineTo(x, mid + max * mid);
+      if (!into || min > max) continue;
+      into.add(x, mid + min * mid, mid + max * mid);
     }
-    g.stroke();
+    g.lineWidth = Math.max(1, dpr);
+    outlinePath.stroke(g, '#678');
+    detailPath.stroke(g, '#9ad');
     // Two independent semi-transparent layers, not one hand-blended region --
     // lead and fade legitimately overlap either way `[XFD-ORTH-010]`, and the
     // canvas's own alpha compositing shows that honestly wherever they do.
@@ -576,13 +757,10 @@
   }
 
   function applyDrag(which, ms) {
-    // Bounded by the decoded window's own absolute span, not by ms 0 --
-    // `windowFromMs` is 0 for the ordinary whole-file case `[SPEC-SUI-224]`.
-    // Rounded, like the ceiling it bounds `[SPEC-SUI-228]`: `totalMs()` comes
-    // from the buffer's sample count over its sample rate and is essentially
-    // never a whole millisecond, so a drag that lands exactly on this edge
-    // would otherwise hand `start`/`end` that same fraction.
-    const windowToMs = windowEndMs();
+    // Bounded by the file, not by the decoded window `[SPEC-SUI-232]` -- a
+    // boundary that really lies outside the window is what navigating the
+    // file is for. `fileEndMs()` is whole ms already `[SPEC-SUI-228]`.
+    const fileToMs = fileEndMs();
     // `ms` itself is pixel-derived (`xToMs`), so it is fractional on every
     // ordinary drag, not just at a clamped edge -- rounded here for the same
     // reason `leadIn`/`leadOut`/`fadeIn`/`fadeOut` already round just below:
@@ -590,8 +768,8 @@
     // and a fractional value that was never caught here reached `/review`'s
     // JSON body unrounded, which the server rejects outright rather than
     // truncating -- found live, dragging the end marker.
-    if (which === 'start') draft.start_ms = Math.round(clamp(ms, windowFromMs, draft.end_ms - 1));
-    else if (which === 'end') draft.end_ms = Math.round(clamp(ms, draft.start_ms + 1, windowToMs));
+    if (which === 'start') draft.start_ms = Math.round(clamp(ms, 0, draft.end_ms - 1));
+    else if (which === 'end') draft.end_ms = Math.round(clamp(ms, draft.start_ms + 1, fileToMs));
     else if (which === 'leadIn')
       draft.lead_in_ms = Math.round(clamp(ms - draft.start_ms, 0, draft.end_ms - draft.start_ms));
     else if (which === 'leadOut')
@@ -697,14 +875,102 @@
 
   $('zoomin').addEventListener('click', () => zoomStep(0.5));
   $('zoomout').addEventListener('click', () => zoomStep(2));
-  $('zoompassage').addEventListener('click', () => setView(draft.start_ms, draft.end_ms));
-  // Labelled "Zoom out" in the page, not "Whole file" -- it reaches the
-  // edge of what was actually decoded, which is the whole file for the
-  // ordinary single-track case and a bounded window around the passage for
-  // a large DAO capture `[SPEC-SUI-224]`; the id stays `zoomfile` since
-  // nothing else needs to change for that. See the partial-window note
-  // `updateFacts` adds when the two differ.
-  $('zoomfile').addEventListener('click', () => setView(windowFromMs, windowFromMs + totalMs()));
+  // "Whole passage" and "Original extents" also bring the passage's own
+  // audio back, wherever the view has been -- the two places someone who has
+  // wandered off goes to get back `[SPEC-SUI-232]`.
+  $('zoompassage').addEventListener('click', () => {
+    setView(draft.start_ms, draft.end_ms);
+    ensurePassage();
+  });
+  // The whole file now, drawn from the overview `[SPEC-SUI-232]`; it was
+  // "Zoom out", the edge of what was decoded, while that was all there was.
+  $('zoomfile').addEventListener('click', () => setView(0, fileEndMs()));
+  // The view the page opened on -- the passage with a minute either side --
+  // and its audio, for when navigating has gone somewhere unhelpful.
+  $('zoomorig').addEventListener('click', () => {
+    if (!origView) return;
+    setView(origView.fromMs, origView.toMs);
+    const [from, to] = passageWindow(base);
+    if (!covered(from, to)) loadDetail(from, to);
+  });
+
+  // The whole file at a glance, above the waveform `[SPEC-SUI-232]`: its
+  // outline, the passage (blue), the neighbouring passages' edges (grey),
+  // what is decoded in detail (lighter), and the view (the white box).
+  // Pressing or dragging on it puts the view there, at the same zoom.
+  const ovCanvas = $('overview');
+  const OV_HEIGHT_CSS = 44;
+  function drawOverview() {
+    if (!buffer || !ovCanvas) return;
+    const rect = ovCanvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    ovCanvas.width = Math.max(1, Math.round((rect.width || 1200) * dpr));
+    ovCanvas.height = Math.max(1, Math.round(OV_HEIGHT_CSS * dpr));
+    const g = ovCanvas.getContext('2d');
+    if (!g) return;
+    const w = ovCanvas.width, h = ovCanvas.height, mid = h / 2;
+    const total = Math.max(1, fileEndMs());
+    const px = ms => (ms / total) * w;
+    g.clearRect(0, 0, w, h);
+    g.fillStyle = 'rgba(255,255,255,.07)';
+    g.fillRect(px(detailAsked.fromMs), 0, px(detailAsked.toMs) - px(detailAsked.fromMs), h);
+    g.fillStyle = 'rgba(102,204,255,.16)';
+    g.fillRect(px(draft.start_ms), 0, Math.max(1, px(draft.end_ms) - px(draft.start_ms)), h);
+    if (overview) {
+      const p = overview.peaks, n = p.length / 2, b = overview.bucketMs;
+      const strokes = new Strokes();
+      for (let x = 0; x < w; x++) {
+        const lo = Math.floor((x / w) * total / b), hi = Math.min(n, Math.max(lo + 1, Math.ceil(((x + 1) / w) * total / b)));
+        let min = 127, max = -127;
+        for (let i = lo; i < hi; i++) { if (p[2 * i] < min) min = p[2 * i]; if (p[2 * i + 1] > max) max = p[2 * i + 1]; }
+        if (min <= max) strokes.add(x, mid + (min / 127) * mid, mid + (max / 127) * mid);
+      }
+      g.lineWidth = 1;
+      strokes.stroke(g, '#789');
+    } else {
+      g.fillStyle = '#89a';
+      g.font = `${11 * dpr}px system-ui, sans-serif`;
+      g.fillText(overviewState === 'reading' ? 'Reading the whole file…'
+        : 'The whole-file outline could not be read.', 6 * dpr, mid + 4 * dpr);
+    }
+    const tick = (ms, color, width) => {
+      if (ms == null) return;
+      g.strokeStyle = color;
+      g.lineWidth = width * dpr;
+      g.beginPath();
+      g.moveTo(px(ms), 0);
+      g.lineTo(px(ms), h);
+      g.stroke();
+    };
+    tick(info && info.prev_end_ms, '#999', 1);
+    tick(info && info.next_start_ms, '#999', 1);
+    tick(draft.start_ms, '#6cf', 1.5);
+    tick(draft.end_ms, '#6cf', 1.5);
+    g.strokeStyle = '#fff';
+    g.lineWidth = 1.5 * dpr;
+    const vx = px(view.fromMs), vw = Math.max(3 * dpr, px(view.toMs) - vx);
+    g.strokeRect(vx, 1 * dpr, vw, h - 2 * dpr);
+  }
+  let ovDragging = false;
+  const ovMove = e => {
+    const rect = ovCanvas.getBoundingClientRect();
+    if (!rect.width) return;
+    const ms = (clamp(e.clientX - rect.left, 0, rect.width) / rect.width) * fileEndMs();
+    const span = view.toMs - view.fromMs;
+    setView(ms - span / 2, ms + span / 2);
+  };
+  if (ovCanvas) {
+    ovCanvas.addEventListener('pointerdown', e => {
+      if (!buffer) return;
+      ovDragging = true;
+      ovCanvas.setPointerCapture(e.pointerId);
+      ovMove(e);
+    });
+    ovCanvas.addEventListener('pointermove', e => { if (ovDragging) ovMove(e); });
+    const ovStop = () => { ovDragging = false; };
+    ovCanvas.addEventListener('pointerup', ovStop);
+    ovCanvas.addEventListener('pointercancel', ovStop);
+  }
 
   // The preview player: a fresh `AudioBuffer` sliced at the draft's
   // boundaries with the draft's fades and gain baked in sample-by-sample,
@@ -760,8 +1026,17 @@
     $('play').textContent = 'Play';
   }
 
-  function playFrom(offsetMs) {
+  async function playFrom(offsetMs) {
     stopPreview();
+    // The preview is the passage itself, so its audio has to be here, which
+    // after navigating elsewhere it may not be `[SPEC-SUI-232]`.
+    if (!covered(draft.start_ms, draft.end_ms)) {
+      if (!(await ensurePassage())) {
+        note('The preview needs this passage decoded, and it is longer than the ' +
+             `${SERVER_MAX_MS / 60_000} minutes the player decodes at once.`, 'bad');
+        return;
+      }
+    }
     const preview = renderPreview();
     const node = audioCtx.createBufferSource();
     node.buffer = preview;
@@ -819,7 +1094,7 @@
     if (!Number.isFinite(v)) return updatePreciseFields();
     pushUndo();
     const before = draft.start_ms;
-    draft.start_ms = clamp(Math.round(v), windowFromMs, draft.end_ms - 1);
+    draft.start_ms = clamp(Math.round(v), 0, draft.end_ms - 1);
     updateFacts(); updatePreciseFields();
     // Reveal scaled to how far this edit actually moved it, not just
     // whether the new position is technically in view -- a small nudge on
@@ -834,7 +1109,7 @@
     if (!Number.isFinite(v)) return updatePreciseFields();
     pushUndo();
     const before = draft.end_ms;
-    draft.end_ms = clamp(Math.round(v), draft.start_ms + 1, windowEndMs());
+    draft.end_ms = clamp(Math.round(v), draft.start_ms + 1, fileEndMs());
     updateFacts(); updatePreciseFields();
     ensureVisible(draft.end_ms, revealSpan(Math.abs(draft.end_ms - before)));
     draw(); refreshCommitState();
@@ -1048,7 +1323,14 @@
     detTimer = null;
     if (!mono || !params || !draft) return;
     const { ctx, keep, why } = searchContext();
-    if (!(ctx.hiMs > ctx.loMs)) {
+    if (!covered(draft.start_ms, draft.end_ms)) {
+      // The view has taken the detail elsewhere `[SPEC-SUI-232]`: searching
+      // a stretch that does not hold the passage would suggest nonsense.
+      suggestion = null;
+      renderSteps([`Not run: the decoded audio (${fmt(detailAsked.fromMs)} – ${fmt(detailAsked.toMs)}) ` +
+        `does not hold this passage (${fmt(draft.start_ms)} – ${fmt(draft.end_ms)}). ` +
+        'Play, Whole passage or Original extents decodes it again.']);
+    } else if (!(ctx.hiMs > ctx.loMs)) {
       suggestion = null;
       renderSteps([`Nothing to search -- ${why}.`]);
     } else {
@@ -1139,12 +1421,12 @@
     if (fields.includes('start_ms') && fields.includes('end_ms')) {
       // Both at once: the pair is valid together even where either alone
       // would cross the other's current value.
-      draft.start_ms = clamp(s.start_ms, windowFromMs, windowEndMs() - 1);
-      draft.end_ms = clamp(s.end_ms, draft.start_ms + 1, windowEndMs());
+      draft.start_ms = clamp(s.start_ms, 0, fileEndMs() - 1);
+      draft.end_ms = clamp(s.end_ms, draft.start_ms + 1, fileEndMs());
     } else if (fields.includes('start_ms')) {
-      draft.start_ms = clamp(s.start_ms, windowFromMs, draft.end_ms - 1);
+      draft.start_ms = clamp(s.start_ms, 0, draft.end_ms - 1);
     } else if (fields.includes('end_ms')) {
-      draft.end_ms = clamp(s.end_ms, draft.start_ms + 1, windowEndMs());
+      draft.end_ms = clamp(s.end_ms, draft.start_ms + 1, fileEndMs());
     }
     const len = draft.end_ms - draft.start_ms;
     for (const f of ['lead_in_ms', 'lead_out_ms', 'fade_in_ms', 'fade_out_ms']) {

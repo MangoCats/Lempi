@@ -1656,6 +1656,126 @@ async function runEdit() {
 }
 
 // ---------------------------------------------------------------------------
+// Navigating the whole file `[SPEC-SUI-232]`, on a passage shaped like 18069:
+// 23:48.200-29:16.560 inside a 68:32.627 file. The audio stand-in decodes
+// at 1000 samples a second, one per ms of the window asked for, so every
+// window the page asks for is a window it really gets; the overview is one
+// min/max pair per 100 ms. What is checked is which windows the page asks
+// for as the view moves, and that a boundary may go past the first one.
+async function runEditNavigate() {
+  const errors = [];
+  const dom = new JSDOM(fs.readFileSync(path.join(ROOT, 'edit.html'), 'utf8'),
+    { runScripts: 'dangerously', url: 'http://localhost/edit/77' });
+  const { window } = dom;
+  window.console.error = (...a) => errors.push(a.join(' '));
+  const create = window.document.createElement.bind(window.document);
+  window.document.createElement = tag => {
+    const el = create(tag);
+    if (tag === 'link' || tag === 'script') setTimeout(() => el.onload && el.onload(), 0);
+    return el;
+  };
+  window.HTMLCanvasElement.prototype.getContext = () => null;
+  window.AudioContext = class {
+    decodeAudioData(bytes) {
+      const n = bytes.byteLength;
+      const data = new Float32Array(n);
+      for (let i = 0; i < n; i++) data[i] = i % 2 ? -0.5 : 0.5;
+      return Promise.resolve({ sampleRate: 1000, length: n, duration: n / 1000,
+                               numberOfChannels: 1, getChannelData: () => data });
+    }
+  };
+  const FILE_MS = 4112627;
+  const INFO = { passage_id: 77, start_ms: 1428200, end_ms: 1756560, file_ms: FILE_MS,
+                 lead_in_ms: 0, lead_out_ms: 0, gain_db: 0, fade_in_ms: 20, fade_out_ms: 20,
+                 fade_in_curve: 'exponential', fade_out_curve: 'exponential',
+                 kind: 'radio', boundary_src: 'imported:eac-cue',
+                 prev_end_ms: 1428200, next_start_ms: 1756560 };
+  const defaults = JSON.parse(fs.readFileSync(path.join(ROOT, 'boundary-params.json'), 'utf8'));
+  const windows = [];
+  let overviewAsked = false;
+  window.fetch = (url, opts) => {
+    if (opts && opts.method === 'POST') return Promise.resolve({ ok: true });
+    if (url === '/skins') return Promise.resolve({ json: () => Promise.resolve([]) });
+    if (url === '/edit/77/info') return Promise.resolve({ ok: true, json: () => Promise.resolve(INFO) });
+    if (url === '/boundary-params.json') return Promise.resolve({ ok: true, json: () => Promise.resolve(defaults) });
+    if (url === '/edit/77/overview') {
+      overviewAsked = true;
+      const peaks = new Int8Array(2 * Math.ceil(FILE_MS / 100)).fill(40);
+      return Promise.resolve({ ok: true,
+        headers: { get: k => ({ 'x-bucket-ms': '100', 'x-decoded-ms': String(FILE_MS) })[k] || null },
+        arrayBuffer: () => Promise.resolve(peaks.buffer) });
+    }
+    const m = /^\/edit\/77\/audio\?from_ms=(\d+)&to_ms=(\d+)$/.exec(url);
+    if (m) {
+      const [from, to] = [Number(m[1]), Number(m[2])];
+      windows.push([from, to]);
+      return Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(new ArrayBuffer(to - from)) });
+    }
+    return Promise.resolve({ ok: false, status: 404 });
+  };
+  try { window.localStorage.clear(); } catch (e) { /* none to clear */ }
+  for (const f of ['core.js', 'boundary.js', 'edit.js']) {
+    const el = create('script');
+    el.textContent = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    window.document.body.appendChild(el);
+  }
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  await wait(100);
+
+  const $ = id => window.document.getElementById(id);
+  const check = (cond, msg) => { if (!cond) errors.push(msg); };
+  const click = id => $(id).dispatchEvent(new window.Event('click'));
+  const last = () => windows[windows.length - 1] || [];
+
+  check(windows.length === 1 && last()[0] === 1368200 && last()[1] === 1816560,
+        `the page must open on the passage with a minute either side, got ${JSON.stringify(windows)}`);
+  check(overviewAsked, 'the whole-file overview must be asked for');
+  check(!$('zoomorig').disabled && !$('zoomfile').disabled, 'Original extents and Whole file must be usable');
+  check($('zoomfile').textContent === 'Whole file', `the whole-file button must say so, got "${$('zoomfile').textContent}"`);
+
+  click('zoomfile');
+  await wait(350);
+  const vr = $('viewrange').textContent;
+  check(vr.includes('0:00.000') && vr.includes('68:32.627'), `Whole file must show all of it, got "${vr}"`);
+  check(/whole-file outline/.test(vr), `a view past the detail must say where the rest comes from, got "${vr}"`);
+  check(windows.length === 1, `a view wider than 5 minutes must not ask for audio, got ${JSON.stringify(windows)}`);
+
+  // Four halvings of 68.5 minutes: a 4.3-minute view around 34:16, far
+  // from the passage -- too far to hold both, so the view's own window.
+  for (let i = 0; i < 4; i++) click('zoomin');
+  await wait(350);
+  check(windows.length === 2 && last()[0] > 1816560 && last()[0] < 2056313 && last()[1] > 2056313,
+        `a narrow view elsewhere must bring its own audio, got ${JSON.stringify(windows)}`);
+  check(/Not run/.test($('detsteps').textContent),
+        `with the passage no longer decoded, detection must say it did not run, got "${$('detsteps').textContent}"`);
+
+  click('zoomorig');
+  await wait(350);
+  const back = $('viewrange').textContent;
+  check(back.includes('22:48.200') && back.includes('30:16.560'), `Original extents must put the opening view back, got "${back}"`);
+  check(last()[0] === 1368200 && last()[1] === 1816560,
+        `Original extents must bring the passage's audio back, got ${JSON.stringify(windows)}`);
+  check(!/Not run/.test($('detsteps').textContent), 'with the passage decoded again, detection must run');
+
+  // A start four minutes before anything first decoded: accepted, not held
+  // at the window's edge, and its audio fetched.
+  $('startms').value = '1200000';
+  $('startms').dispatchEvent(new window.Event('change'));
+  check($('startms').value === '1200000', `a start outside the first window must be kept, got ${$('startms').value}`);
+  await wait(350);
+  check(last()[0] <= 1140000 && last()[1] >= 1756560,
+        `a start moved outside the decoded audio must bring that audio in, got ${JSON.stringify(windows)}`);
+  $('endms').value = '4200000';
+  $('endms').dispatchEvent(new window.Event('change'));
+  check($('endms').value === String(FILE_MS), `an end past the file must stop at its end, got ${$('endms').value}`);
+
+  console.log(`${'edit/nav'.padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+              'a 68-minute file: whole view, a far window, back to the original, a start moved past it');
+  for (const e of errors) console.log('    ! ' + e);
+  if (errors.length) failures++;
+}
+
+// ---------------------------------------------------------------------------
 // The editor's detection panel end to end `[SPEC-SUI-230]`. jsdom has no Web
 // Audio, so `AudioContext` is stood in for by one that hands back a buffer
 // of the first fixture case's signal -- a radio passage whose stored end
@@ -2094,6 +2214,7 @@ async function runEarlySnapshot(skin) {
   runSnapshotFixture();
   await runEdit();
   await runEditDetect();
+  await runEditNavigate();
   await runPassage();
   console.log(failures ? `\n${failures} skin(s) failed` : '\nall skins rendered without error');
   process.exit(failures ? 1 : 0);

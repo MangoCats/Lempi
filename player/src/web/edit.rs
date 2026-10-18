@@ -235,6 +235,129 @@ pub(super) fn decode_window_wav(path: &std::path::Path, from_ms: u64, to_ms: u64
     Some(write_wav_pcm16(sr, ch, &samples))
 }
 
+/// The whole file at a glance `[SPEC-SUI-232]`: one min/max pair of the
+/// channel-averaged signal per `OVERVIEW_BUCKET_MS`, as signed bytes, so the
+/// editor can draw and navigate a file far longer than any window it decodes
+/// in full. Asked for 2026-10-18 against passage 18069 -- a 5.5-minute track
+/// inside a 68.5-minute single-file rip, whose ±60 s window left no way to
+/// reach a boundary that really lay further out.
+///
+/// The bytes are `min, max, min, max, ...`; `x-bucket-ms` says how much of the
+/// file each pair covers, and `x-decoded-ms` how much audio was really found
+/// -- not the stored duration, which `[SPEC-SUI-224]` already showed can be
+/// wrong. Measured on this desktop the same day: 10 minutes of that MP3
+/// decoded in 0.78 s, so the whole file costs about 5 s once, and a 4-hour
+/// capture about 20 s; the result is 82 KB and 290 KB, which is why it is
+/// kept (`OVERVIEW_CACHE`) rather than recomputed for the next passage of the
+/// same file.
+#[cfg(feature = "vipunen-support")]
+pub(super) async fn edit_overview(
+    State(ui): State<Ui>,
+    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+) -> axum::response::Response {
+    let db = ui.db.clone();
+    let library = ui.library.clone();
+    let found = tokio::task::spawn_blocking(move || {
+        let lib = crate::db::Library::open_split(&db, &library).ok()?;
+        let entry = lib.passage(passage_id).ok()?;
+        cached_overview(&entry.path)
+    })
+    .await
+    .ok()
+    .flatten();
+
+    match found {
+        Some(ov) => (
+            StatusCode::OK,
+            [
+                (axum::http::header::CONTENT_TYPE, "application/octet-stream".to_string()),
+                (axum::http::HeaderName::from_static("x-bucket-ms"), ov.bucket_ms.to_string()),
+                (axum::http::HeaderName::from_static("x-decoded-ms"), ov.decoded_ms.to_string()),
+            ],
+            ov.peaks.iter().map(|&v| v as u8).collect::<Vec<u8>>(),
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// Fine enough that a view just wider than the editor's own detail window
+/// (five minutes on a 2400-pixel canvas is 125 ms a pixel) still reads as a
+/// waveform rather than a block.
+#[cfg(feature = "vipunen-support")]
+pub(super) const OVERVIEW_BUCKET_MS: u64 = 100;
+
+#[cfg(feature = "vipunen-support")]
+pub(super) struct Overview {
+    pub bucket_ms: u64,
+    pub decoded_ms: u64,
+    pub peaks: Vec<i8>,
+}
+
+/// The last few files' overviews, keyed by path, modification time and size,
+/// so a changed file is read again rather than served stale. Several passages
+/// share one file -- the reason it is worth keeping at all.
+#[cfg(feature = "vipunen-support")]
+type OverviewKey = (std::path::PathBuf, Option<std::time::SystemTime>, u64);
+#[cfg(feature = "vipunen-support")]
+static OVERVIEW_CACHE: std::sync::Mutex<Vec<(OverviewKey, std::sync::Arc<Overview>)>> =
+    std::sync::Mutex::new(Vec::new());
+#[cfg(feature = "vipunen-support")]
+const OVERVIEW_CACHE_FILES: usize = 4;
+
+#[cfg(feature = "vipunen-support")]
+pub(super) fn cached_overview(path: &std::path::Path) -> Option<std::sync::Arc<Overview>> {
+    let meta = std::fs::metadata(path).ok()?;
+    let key: OverviewKey = (path.to_path_buf(), meta.modified().ok(), meta.len());
+    if let Ok(cache) = OVERVIEW_CACHE.lock() {
+        if let Some((_, ov)) = cache.iter().find(|(k, _)| *k == key) {
+            return Some(ov.clone());
+        }
+    }
+    // Decoded outside the lock: two first requests for one file both pay for
+    // it, which is cheaper than every other file's request waiting on it.
+    let ov = std::sync::Arc::new(overview_peaks(path, OVERVIEW_BUCKET_MS)?);
+    if let Ok(mut cache) = OVERVIEW_CACHE.lock() {
+        cache.retain(|(k, _)| *k != key);
+        cache.push((key, ov.clone()));
+        let excess = cache.len().saturating_sub(OVERVIEW_CACHE_FILES);
+        cache.drain(..excess);
+    }
+    Some(ov)
+}
+
+/// Decode all of `path` and reduce it to min/max pairs per `bucket_ms`, the
+/// channels averaged first -- the same mono `edit.js` draws its detail from,
+/// so the two resolutions agree about what the signal is.
+#[cfg(feature = "vipunen-support")]
+pub(super) fn overview_peaks(path: &std::path::Path, bucket_ms: u64) -> Option<Overview> {
+    let mut dec = crate::decoder::PassageDecoder::open(path, 0, None).ok()?;
+    let (sr, ch) = (dec.sample_rate as u64, dec.channels.max(1));
+    let per_bucket = (sr * bucket_ms / 1000).max(1);
+    let q = |v: f32| (v.clamp(-1.0, 1.0) * 127.0).round() as i8;
+    let mut peaks = Vec::new();
+    let (mut lo, mut hi, mut n, mut frames) = (f32::MAX, f32::MIN, 0u64, 0u64);
+    while let Ok(Some(chunk)) = dec.next() {
+        for frame in chunk.chunks_exact(ch) {
+            let v = frame.iter().sum::<f32>() / ch as f32;
+            lo = lo.min(v);
+            hi = hi.max(v);
+            n += 1;
+            if n == per_bucket {
+                peaks.push(q(lo));
+                peaks.push(q(hi));
+                (lo, hi, n) = (f32::MAX, f32::MIN, 0);
+            }
+        }
+        frames += (chunk.len() / ch) as u64;
+    }
+    if n > 0 {
+        peaks.push(q(lo));
+        peaks.push(q(hi));
+    }
+    Some(Overview { bucket_ms, decoded_ms: frames * 1000 / sr, peaks })
+}
+
 /// A minimal 16-bit PCM WAV -- the same header shape
 /// `decoder::tests::ramp_wav` already writes as a *test* fixture, written
 /// here as the real response body a browser's `decodeAudioData` reads back.
