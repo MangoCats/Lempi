@@ -4,6 +4,7 @@
 # Two checks, both about the same gap -- what works on the Windows machine the
 # code is written on and not on the Linux ones it runs on: (1) a staged script
 # with a shebang and no executable bit, on every commit; (2) a Linux compile,
+# and since 2026-10-17 an Android compile of the phone's crate beside it,
 # when `player/` or `sql/` is staged. (2) is what this hook was written for;
 # (1) was added after the hook itself shipped without its executable bit.
 #
@@ -23,7 +24,8 @@
 # It runs only when something under `player/` or `sql/` is staged. This
 # repository commits far more documentation than code, and a gate that taxes a
 # docs commit is a gate someone turns off. Measured 2026-09-22: 22 s on a warm
-# no-op, 14 s after a core edit, 46 s cold.
+# no-op, 14 s after a core edit, 46 s cold. With the phone's crate checked
+# beside it, 2026-10-17: 37 s.
 #
 # ------------------------------------------------------------- escaping ---
 #

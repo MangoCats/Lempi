@@ -15,10 +15,10 @@
 #   B  Linux aarch64           cross-compiled, executed under emulation
 #   C  Windows x86_64          run on the host
 #   D  real audio device       manual; a null sink cannot catch rate mismatches
-#   E  Android aarch64         lempi-core only, compiled not run `[GDE-HST-370]`
+#   E  Android aarch64         core, player, phone crate; compiled not run `[GDE-HST-370]`
 #
 # Usage:  sh build/verify-targets.sh            everything above
-#         sh build/verify-targets.sh --quick    the two checks a commit hook runs
+#         sh build/verify-targets.sh --quick    the three checks a commit hook runs
 #
 # `--quick` exists because of a specific failure. On 2026-09-22 `lempi-core`
 # was committed naming `libc` in `#[cfg(unix)]` code without depending on it.
@@ -32,7 +32,8 @@
 # So the two checks that would have caught it -- a Linux compile and the
 # `lempi-core` boundary -- are separable and fast enough to run before a
 # commit. `.githooks/pre-commit` calls exactly this, and the full run stays
-# what it was.
+# what it was. A third joined them on 2026-10-17, the phone's crate compiled
+# for Android, after the same shape of fault reached a phone (`phone_compiles`).
 set -u
 
 QUICK=0
@@ -99,7 +100,7 @@ run_step() {
     return "$status"
 }
 
-# ---- the two checks a commit is gated on --------------------------------
+# ---- the three checks a commit is gated on ------------------------------
 #
 # Both are compile-or-resolve questions, so both are cheap; neither runs a
 # test. That is deliberate. A pre-commit hook that runs a suite gets disabled
@@ -184,8 +185,57 @@ core_boundary() {
     return 0
 }
 
+# Does the phone's crate compile, against the player as it is now?
+# `[REQ-AND-500]`, in the commit gate since 2026-10-17 by the maintainer's
+# decision. Until then only the full run's stage E compiled it, and on
+# 2026-10-15 `4e70172` added a field to the host's `Config` that the phone's
+# `start` did not set: the crate did not build for two days, found only when
+# `android/build.sh` was run for a new phone. The fault was in `player/src`,
+# not in `player/android`, so the gate runs on any `player/` change.
+#
+# `cargo check`, not clippy: the Android image carries no clippy, and a
+# compile is the question. Measured 2026-10-17: 38 s first, 23 s with nothing
+# to do -- not nothing, since the player's build script reads `.git/index`
+# for its dirty marker and every commit changes that. Run beside
+# `linux_compiles` rather than after it, so the hook pays for the slower of
+# the two, not their sum.
+phone_compiles() {
+    echo "== Android aarch64 (the phone's crate, as the app links it) =="
+    if ! docker info >/dev/null 2>&1; then
+        echo "  Docker is not running, so this check DID NOT RUN."
+        echo "  That is a failure, not a pass: the phone's crate is unchecked."
+        return 1
+    fi
+    docker build -q --target check -t lempi-android -f "$ROOT/build/Dockerfile.android" "$ROOT" >/dev/null || {
+        echo "  the Android image would not build; the check did not run"
+        return 1
+    }
+    out=$(mktemp)
+    if MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w lempi-android \
+        cargo check --manifest-path player/Cargo.toml -p lempi-android \
+        --target aarch64-linux-android --locked \
+        --target-dir player/target/gate-android-bindings >"$out" 2>&1
+    then
+        echo "  compiles for aarch64-linux-android"
+        rm -f "$out"
+        return 0
+    fi
+    grep -E "^error" "$out" | head -10
+    echo "  ^ full output kept at $out"
+    return 1
+}
+
 if [ "$QUICK" -eq 1 ]; then
+    # The phone beside Linux; its report is printed once it is in, so the
+    # two do not interleave.
+    phone_out=$(mktemp)
+    phone_compiles >"$phone_out" 2>&1 &
+    phone_pid=$!
     linux_compiles || fail=$((fail+1))
+    if wait "$phone_pid"; then phone_status=0; else phone_status=1; fi
+    cat "$phone_out"
+    rm -f "$phone_out"
+    [ "$phone_status" -eq 0 ] || fail=$((fail+1))
     core_boundary  || fail=$((fail+1))
     echo
     if [ "$fail" -eq 0 ]; then
@@ -266,7 +316,9 @@ echo "== E: Android aarch64 (lempi-core only, compile check) =="
 #
 # Full run only, never `--quick`: the image is 5.48 GB (measured 2026-09-24,
 # 174 s to build the first time), which is a price for this script and CI, not
-# for every commit. Proven to fail: a `compile_error!` under
+# for every commit. (Its third check, the phone's crate, is in `--quick` too
+# since 2026-10-17; see `phone_compiles`. Once the image is built, it costs
+# that check seconds, not the 174.) Proven to fail: a `compile_error!` under
 # `cfg(target_os = "android")` in core passed the Windows check and failed
 # this one, which is the whole of its reason to exist.
 docker build -q --target check -t lempi-android -f "$ROOT/build/Dockerfile.android" "$ROOT" >/dev/null \

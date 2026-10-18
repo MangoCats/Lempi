@@ -41,7 +41,7 @@ Unplugged headphones pause it too; untested, because Android lets only the syste
 
 **`[REQ-AND-150]` The listening surface is the existing skins in a WebView**, served by the player's own web server `[GDE-AND-060]`. A native client is evaluated afterwards and is not required here.
 
-**`[REQ-AND-155]` Every screen is clear of the system bars, and Back follows the platform.** An app targeting API 35 or later is drawn edge to edge, and from API 36 on Android 16 Back is a callback; neither can be opted out of. *Found and built 2026-10-17 on a Pixel 7a, Android 17:* every screen's content began behind the 118 px status bar and the title bar, and ran under the 126 px navigation bar, so the start-up error showed only its last word. Each screen's root is now padded by the insets Android reports (`Bars.kt`), which are zero on Android 11–14. Back goes to the skin's previous page through a callback held only while there is one, and otherwise leaves the app with the system's own animation.
+**`[REQ-AND-155]` Every screen is clear of the system bars, and Back follows the platform.** An app targeting API 35 or later is drawn edge to edge, and from API 36 on Android 16 Back is a callback; neither can be opted out of. *Found and built 2026-10-17 on a Pixel 7a, Android 17:* every screen's content began behind the 118 px status bar and the title bar, and ran under the 126 px navigation bar, so the start-up error showed only its last word. Each screen's root is now padded by the insets Android reports (`Bars.kt`), which are zero on Android 11–14. Back goes to the skin's previous page through a callback held only while there is one, and otherwise leaves the app with the system's own animation. *Seen by the maintainer on the Pixel the same evening:* Back went back a page in the skin.
 
 **`[REQ-AND-160]` That server is reachable only from the app.** It binds to the loopback address alone, and every HTTP and WebSocket request must carry a secret made anew at each launch; a request without it is refused `[GDE-APP-090]`.
 
@@ -109,7 +109,7 @@ Unplugged headphones pause it too; untested, because Android lets only the syste
 
 ## 6. Verification
 
-**`[REQ-AND-500]` The player's Android compile check is a CI gate**, not a one-off `[GDE-APP-160]`. *Met 2026-09-25: the `android-core` CI job and `verify-targets.sh` stage E check the player library with warnings denied; proven to fail on a warning planted under `cfg(target_os = "android")`, which the host build does not compile.*
+**`[REQ-AND-500]` The player's Android compile check is a CI gate**, not a one-off `[GDE-APP-160]`. *Met 2026-09-25: the `android-core` CI job and `verify-targets.sh` stage E check the player library with warnings denied; proven to fail on a warning planted under `cfg(target_os = "android")`, which the host build does not compile.* *The phone's crate went red there on 2026-10-15 and stayed red for 29 pushes:* `4e70172` added a field to the host's `Config` that the phone did not set, CI's other jobs passed, and nothing reached anyone until a new phone's first build failed on 2026-10-17. A CI result is read after a push, if at all; so since that day the commit hook compiles the phone's crate too, beside the Linux check (`verify-targets.sh --quick`), and refuses the commit. Proven to fail: that same missing field, taken out again, was refused with `E0063`.
 
 **`[REQ-AND-510]` The player library's tests run on an emulator or a device**, as an optional stage of `build/verify-targets.sh` that says when it did not run `[GDE-APP-160]`.
 

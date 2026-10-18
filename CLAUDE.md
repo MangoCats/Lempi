@@ -227,11 +227,15 @@ for everything. Also on every commit,
 an added line that looks like private fleet detail — a LAN address, a MAC, a
 personal path, a `user@host:` — and with `fleet/private-tokens.txt` present,
 the real names too `[SPEC-FCP-050]`. On a commit touching `player/` or `sql/`, it also runs
-`build/verify-targets.sh --quick` — a Linux `cargo clippy` and the `lempi-core`
-boundary; a docs-only commit skips that. Clippy rather than `check` since
+`build/verify-targets.sh --quick` — a Linux `cargo clippy`, an Android
+`cargo check` of the phone's crate beside it, and the `lempi-core` boundary; a
+docs-only commit skips that. Clippy rather than `check` since
 2026-09-24: the same compile plus the lints, so a module's
 `#![deny(clippy::print_stdout)]` actually refuses a `println!`. Warm cost measured 2026-09-22:
-**22 s** on a no-op, 14 s after a core edit.
+**22 s** on a no-op, 14 s after a core edit; **37 s** since the phone's crate
+joined it on 2026-10-17. It joined because a field added to the player's
+`Config` on 2026-10-15 left that crate uncompilable for two days, and only a
+new phone's first build found it.
 
 **It exists because §6's rule has a sibling this file did not state: compiling
 *here* is not compiling *there*.** On 2026-09-22 `lempi-core` was committed
