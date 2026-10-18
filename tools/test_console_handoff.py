@@ -174,6 +174,51 @@ def main() -> int:
         srv.shutdown()
         srv.server_close()
 
+    # Which side is older, and what to do about it, named in the reason --
+    # 2026-10-18: "rebuild whichever one is behind" sent a reader to build
+    # Lempi when Vipunen was the side behind. The checkout's own HEAD is
+    # pinned here, so the answer does not depend on where this repo stands.
+    real_head = lempi_control._checkout_head
+    try:
+        for label, v_date, l_date, head, want, unwanted in (
+            ("Vipunen older", "2026-10-17T22:37:55-04:00", "2026-10-17T23:20:59-04:00", None,
+             ["Vipunen is the older", "System page", "Git Bash", "HOWTO.md §6"],
+             ["Lempi is the older", "moved on"]),
+            ("Lempi older", "2026-10-17T23:20:59-04:00", "2026-10-17T22:37:55-04:00", None,
+             ["Lempi is the older", "--features vipunen-support", "port", "HOWTO.md §6"],
+             ["Vipunen is the older", "moved on"]),
+            ("the checkout past both", "2026-10-17T22:37:55-04:00", "2026-10-17T23:20:59-04:00",
+             {"commit": "c" * 40, "commit_short": "ccccccc", "commit_date": "2026-10-18T01:00:00-04:00"},
+             ["Vipunen is the older", "moved on to ccccccc", "both"], []),
+            ("dates in two offsets, compared as times", "2026-10-18T03:00:00+00:00",
+             "2026-10-17T23:30:00-04:00", None, ["Vipunen is the older"], ["Lempi is the older"]),
+            ("undated builds", None, None, None,
+             ["could not be told", "HOWTO.md §6"], ["is the older"]),
+        ):
+            print()
+            print(f"stale, {label}: the reason says which side to move [SPEC-SUI-227]")
+            lempi_control._checkout_head = lambda head=head: head
+            vipunen_build = {"available": True, "commit": "a" * 40, "commit_short": "aaaaaaaaaaaa",
+                             "commit_date": v_date}
+            build_json = {"git": ("b" * 12) + "+dirty", "branch": "main"}
+            if l_date:
+                build_json["commit_date"] = l_date
+            srv = fake_lempi(build_json=build_json)
+            try:
+                result = lempi_control.ensure_lempi(port=srv.server_port, vipunen_build=vipunen_build)
+                err = result.get("error", "")
+                check(result["ok"] is False, f"expected a refusal, got {result}")
+                for w in want:
+                    check(w in err, f"{label}: the reason must say {w!r}, got {err!r}")
+                for u in unwanted:
+                    check(u not in err, f"{label}: the reason must not say {u!r}, got {err!r}")
+                check("uncommitted changes" in err, f"{label}: a +dirty build is said, got {err!r}")
+            finally:
+                srv.shutdown()
+                srv.server_close()
+    finally:
+        lempi_control._checkout_head = real_head
+
     print()
     print("a dirty build's hash still compares against the bare commit -- the "
           "+dirty suffix names the working tree, not a different commit "

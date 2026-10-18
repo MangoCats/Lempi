@@ -42,17 +42,21 @@ function handoffBox(passageId, route, label) {
     S.el('p', { class: 'empty', text: 'Starting the local player…' }));
 
   (async () => {
+    // Only a request that never got an answer is "could not reach". An answer
+    // carrying an error is the server's own reason, said as itself -- found
+    // 2026-10-18: a stale-build refusal was prefixed "Could not reach
+    // Vipunen's own server", which it had just reached [SPEC-SUI-227].
     let r;
     try {
       r = await (await fetch('/api/handoff/ensure', { method: 'POST' })).json();
-      if (r && r.error) throw new Error(r.error);
     } catch (e) {
       box.replaceChildren(S.el('p', { class: 'err' },
         `Could not reach Vipunen's own server to ask: ${e.message}`));
       return;
     }
-    if (!r.ok) {
-      box.replaceChildren(S.el('p', { class: 'err' }, r.error));
+    if (!r || !r.ok) {
+      box.replaceChildren(S.el('p', { class: 'err' },
+        (r && r.error) || 'Vipunen answered without a local Lempi, and gave no reason.'));
       return;
     }
     const url = `http://localhost:${r.port}${route}`;

@@ -39,6 +39,7 @@ import socket
 import subprocess
 import sys
 import time
+from datetime import datetime
 
 # Where the co-resident player listens. A different number from Vipunen's own
 # because they are different services on the same machine, and because
@@ -419,10 +420,71 @@ def _lempi_staleness(port: int, vipunen_build: dict | None) -> str | None:
     lempi_hash = lempi_git.removesuffix("+dirty")
     if vipunen_commit.startswith(lempi_hash):
         return None
-    return (f"Vipunen is running from commit {vipunen.get('commit_short') or vipunen_commit[:12]}, "
-            f"but the co-resident Lempi on this port was built from a different commit "
-            f"({lempi_git}, {lempi.get('commit_date', 'date unknown')}) -- "
-            "rebuild whichever one is behind (see HOWTO.md §2) and restart it")
+    vipunen_date = vipunen.get("commit_date")
+    lempi_date = lempi.get("commit_date")
+    said = (f"Vipunen is running from commit {vipunen.get('commit_short') or vipunen_commit[:12]} "
+            f"({vipunen_date or 'date unknown'}), but the co-resident Lempi on port {port} was "
+            f"built from a different commit ({lempi_git}, {lempi_date or 'date unknown'}"
+            f"{', with uncommitted changes' if lempi_git.endswith('+dirty') else ''}). ")
+    # Which side to move, named rather than left to a `git log` -- found
+    # 2026-10-18: the old wording said "rebuild whichever one is behind (see
+    # HOWTO.md §2)", that section only builds Lempi, and the side behind was
+    # Vipunen. Commit dates decide it; equal or unreadable ones say so.
+    older = _older_side(vipunen_date, lempi_date)
+    if older == "lempi":
+        said += ("Lempi is the older: rebuild it (in player/, env -u CC cargo build --release "
+                 f"--features vipunen-support), stop the Lempi on port {port}, and reopen this "
+                 "page -- Vipunen starts the new build.")
+    elif older == "vipunen":
+        said += ("Vipunen is the older: shut it down from its System page, start it again "
+                 "from Git Bash (python tools/console.py <library.db>), and reopen this page.")
+    else:
+        said += "Which is older could not be told from their commit dates."
+    # The checkout past both is the common case after a pull or another
+    # agent's commit, and moving only the older side then leaves a second
+    # mismatch for the next click.
+    head = _checkout_head()
+    head_date = _when(head and head["commit_date"])
+    newest = max((d for d in (_when(vipunen_date), _when(lempi_date)) if d), default=None)
+    if head_date and newest and head_date > newest:
+        said += (f" The checkout has since moved on to {head['commit_short']}, so both need "
+                 "bringing to it.")
+    return said + " Step by step: HOWTO.md §6, \"When Vipunen and Lempi disagree\"."
+
+
+def _when(iso: str | None) -> datetime | None:
+    """A git `%cI` date. One without an offset is refused rather than
+    assumed: compared against one with, it would raise or mislead."""
+    try:
+        d = datetime.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return None
+    return d if d.tzinfo else None
+
+
+def _older_side(vipunen_date: str | None, lempi_date: str | None) -> str | None:
+    """`"vipunen"`, `"lempi"`, or `None` when the two ISO commit dates are
+    equal or either cannot be read -- not guessed `[SPEC-DF-095]`."""
+    v, le = _when(vipunen_date), _when(lempi_date)
+    if v is None or le is None or v == le:
+        return None
+    return "vipunen" if v < le else "lempi"
+
+
+def _checkout_head() -> dict | None:
+    """Where the checkout this module runs from stands *now* -- unlike
+    `console.build_info()`, a live answer, asked only once a mismatch is
+    already found. `None` when git cannot say."""
+    repo = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    try:
+        r = subprocess.run(["git", "show", "-s", "--format=%H %h %cI", "HEAD"], cwd=repo,
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    parts = r.stdout.split()
+    if r.returncode != 0 or len(parts) != 3:
+        return None
+    return {"commit": parts[0], "commit_short": parts[1], "commit_date": parts[2]}
 
 
 def _lempi_ready(port: int, started: bool, vipunen_build: dict | None = None) -> dict:

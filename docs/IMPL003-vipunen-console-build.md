@@ -263,6 +263,13 @@ Two observations from the appliance that are **not** about this change, and are 
 
 > **Done, 2026-08-27.** `ensure_lempi()` (`console.py` at the time, split into `tools/lempi_control.py`) implements the three-step sequence exactly; the profile page's "Review in Lempi" box embeds `/review?passage=:id`, with an unconditional new-tab link beside it rather than embed-failure detection `[SPEC-SUI-155]`. Verified against a real co-resident pair: `/api/handoff/ensure` on a cold console started `lempi.exe` on Vipunen's own db path and it answered within seconds; called again with one already running, `started: false` and no second process. All of it — the review page, the handoff route, the deep link — sits behind `vipunen-support` `[SPEC-SUI-190]`, off by default; the appliance binary measured ≈200 KB smaller without it *(that figure was corrected to 3.05 MB on 2026-09-11 — see `[SPEC-SUI-190]`)*.
 
+**`[IMPL-SUI-092]` Open, to take up if it keeps happening: the staleness check compares commits, not code.** On 2026-10-18 the editor was refused because Vipunen ran from `4c87f58` and the Lempi on 5720 from `f216b48` — and no file under `player/` differs between those two commits, only `tools/member_bundles.py` and its test. Any docs-only commit, followed by a restart of one side, refuses the handoff the same way. The same day made the refusal say which side is older and how to move it (HOWTO §6), and stopped the profile page calling it "could not reach" Vipunen's server; neither narrows when it fires.
+
+Two questions, both left open until the refusal is seen often enough to cost more than reading it:
+
+- **Compare what the binary is built from.** With both commits in the local repository, `git diff --quiet A B -- player/ sql/` says whether the Lempi would differ at all; refuse only when it would. Unknowable (a commit not present, a `+dirty` Lempi whose uncommitted part cannot be read) stays a refusal, not a guess — the 2026-08-31 case `[SPEC-SUI-227]` was found on was a real `player/` change, and must still be caught.
+- **Refuse or warn.** `[SPEC-SUI-227]` says a mismatch is *named*; `_lempi_ready()` refuses the handoff outright. Whichever is meant, the specification should say it.
+
 ---
 
 ## Not on this path
@@ -275,4 +282,4 @@ Two observations from the appliance that are **not** about this change, and are 
 
 ---
 
-**Traceability:** `[IMPL-SUI-010..090]` · implements `[SPEC-SUI-010..180]` · sits under `[GDE-PHS-040]`
+**Traceability:** `[IMPL-SUI-010..092]` · implements `[SPEC-SUI-010..180]` · sits under `[GDE-PHS-040]`

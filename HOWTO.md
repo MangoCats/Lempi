@@ -186,6 +186,25 @@ This means: build the `vipunen-support` binary (§2) if you want those pages
 to work, and keep it at `player/target/release/lempi[.exe]` (or on `PATH`)
 — that's where Vipunen looks for it.
 
+**When Vipunen and Lempi disagree.** The handoff refuses a Lempi built from
+a different commit than the one Vipunen started from `[SPEC-SUI-227]`, and
+says which is older. Bring that one to the checkout — and if the message
+says the checkout has moved on past both, bring both:
+
+- **Lempi.** Rebuild it with the feature (§2). Stop the running one — on
+  Windows, `netstat -ano | grep ':5720 .*LISTENING'` gives its PID, and
+  `taskkill //PID <pid>` from Git Bash stops it. Reopen the page; Vipunen
+  starts the new build itself.
+- **Vipunen.** Check no job is running, then press **shut down this
+  instance** on its System page, and start it again **from Git Bash**, in
+  the repository root (§5). Not PowerShell's `Start-Process`: the console's
+  jobs find `ffmpeg`, `ssh` and `docker` through the `PATH` it inherits,
+  and from PowerShell `bash` once resolved to the WSL launcher — a send to
+  an appliance failed `execvpe(/bin/bash)` (2026-10-14).
+
+A Lempi on that port may be someone else's test build — the message says
+*with uncommitted changes* when it is. Ask before stopping one of those.
+
 ---
 
 ## 7. Syncing the fleet (star sync)
