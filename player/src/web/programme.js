@@ -243,5 +243,65 @@
     if (await save(n)) $('newname').hidden = true;
   };
 
+  // ---- the hub's programme, waiting [SPEC-PGM-410] -----------------------
+  // What a replacement would change, slot by slot, read against what this
+  // node runs now. Seeds are a set [SPEC-PGM-115], so a slot's change is
+  // counted in seeds gained and lost, never in their order.
+  async function arriving() {
+    let got;
+    try {
+      const r = await fetch('/programme/pending', { cache: 'no-store' });
+      if (!r.ok) return;
+      got = await r.json();
+    } catch (e) {
+      return;
+    }
+    const p = got.pending;
+    $('arriving').hidden = !p || p.kept;
+    if (!p || p.kept) return;
+    $('arriving-q').textContent =
+      `The household sent ${p.name} (version ${p.hub_version}). Replace this node's programme?`;
+    const key = s => s.name.trim().toLowerCase();
+    const now = new Map(got.current.slots.map(s => [key(s), s]));
+    const sent = new Map(p.slots.map(s => [key(s), s]));
+    const lines = [];
+    for (const s of p.slots) {
+      const o = now.get(key(s));
+      if (!o) {
+        lines.push(`${s.name}: new, from ${s.start || 'chosen by hand'}, ${s.seeds.length} seed(s)`);
+        continue;
+      }
+      const parts = [];
+      if ((o.start || null) !== (s.start || null)) parts.push(`starts ${s.start || 'by hand'} instead of ${o.start || 'by hand'}`);
+      const gained = s.seeds.filter(m => !o.seeds.includes(m)).length;
+      const lost = o.seeds.filter(m => !s.seeds.includes(m)).length;
+      if (gained) parts.push(`${gained} seed(s) added`);
+      if (lost) parts.push(`${lost} seed(s) removed`);
+      lines.push(`${s.name}: ${parts.length ? parts.join(', ') : 'unchanged'}`);
+    }
+    for (const o of got.current.slots) {
+      if (!sent.has(key(o))) lines.push(`${o.name}: removed`);
+    }
+    const ul = $('arriving-diff');
+    ul.textContent = '';
+    for (const t of lines) {
+      const li = document.createElement('li');
+      li.textContent = t;
+      ul.appendChild(li);
+    }
+    const answer = async replace => {
+      const r = await fetch('/programme/pending/answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fingerprint: p.fingerprint, replace }),
+      });
+      if (!r.ok) { note(await r.text(), 'bad'); return; }
+      location.reload();
+    };
+    $('arriving-replace').onclick = () => answer(true);
+    $('arriving-keep').onclick = () => answer(false);
+  }
+
   load();
+  arriving();
 })();

@@ -94,6 +94,9 @@ TABLES = {
     # The name and source of the programme a node runs [SPEC-PGM-220]: its
     # own, like the time slots it describes.
     "listener_programme": dict(rule=LOCAL),
+    # What the hub sent and the node has not answered, or kept its own over
+    # [SPEC-PGM-200]: the node's own question, never the merge's.
+    "listener_programme_pending": dict(rule=LOCAL),
     "listener_likes": dict(rule=UNION, key=("mbid", "recorded_at")),
     "id_reviews": dict(rule=UNION, key=("passage_id", "decided_at"), latest=("applied_at",)),
     "boundary_reviews": dict(rule=UNION, key=("passage_id", "decided_at"), latest=("applied_at",)),

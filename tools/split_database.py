@@ -86,6 +86,9 @@ LISTENER_TABLES = [
     # Each machine's own read-back of its audio [GDE-INT-130], 2026-10-15;
     # named 2026-10-17 with the two above.
     "file_checks",
+    # A programme the hub sent and the node has not answered [SPEC-PGM-200],
+    # 2026-10-17.
+    "listener_programme_pending",
 ]
 BOTH = ["schema_meta"]
 

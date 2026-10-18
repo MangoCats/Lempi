@@ -82,6 +82,16 @@ class MainActivity : Activity() {
         // every later request -- and the WebSocket -- carries [REQ-AND-160].
         w.loadUrl("http://127.0.0.1:${Lempi.PORT}/?key=${Lempi.key}")
         web = w
+        // The household's programme, if the hub assigned one [SPEC-PGM-310];
+        // then the page is asked to look at once rather than at its next
+        // minute, so the question shows while the person is here.
+        val app = applicationContext
+        Thread({
+            Programmes.exchange(app)?.let { said ->
+                android.util.Log.i("lempi", "programme: $said")
+                main.post { web?.evaluateJavascript("window.Lempi && Lempi.askProgramme && Lempi.askProgramme()", null) }
+            }
+        }, "lempi-programme").start()
     }
 
     /**

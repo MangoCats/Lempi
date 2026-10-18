@@ -1,6 +1,6 @@
 # SPEC062: Named Programmes
 
-**Design Specification — Tier 2 · written 2026-10-09, from the maintainer's decisions that day · steps 1 and 4 built 2026-10-09; steps 2 and 3 not yet**
+**Design Specification — Tier 2 · written 2026-10-09, from the maintainer's decisions that day · steps 1 and 4 built 2026-10-09; step 2 built 2026-10-17 for the phone, a player's own client not yet; step 3 not yet**
 
 A node's listening day is shaped by its programme: the time slots that come on
 air through the day, and the seed recordings that give each its sound. Until
@@ -211,6 +211,31 @@ the move.
   slot held by hand unless the edit removed it.
 - The page is `/programme`, linked beside every skin's picker and from its
   empty state. Its start times are 24-hour text, not a locale's time picker.
+
+**`[SPEC-PGM-530]` Step 2, as built 2026-10-17**, asked for by the maintainer
+for a daily phone that had no programme and no way to get one but a hand edit.
+- **The hub** (`tools/programmes.py`): the library, its versions and the
+  assignments in the sidecar, `hub_programme*` tables. Its fingerprint is
+  tested against the player's own example of the canonical form. A person
+  keeps the hub player's programme as a version and assigns one to a node on
+  the console's **programmes** page, or with the same tool's command line.
+- **The channel** (`intake.py`): `GET /member/programme` and
+  `POST /member/programme/state`; the offer is step 3's.
+- **The node** (`programme.rs`): an arrival is held in
+  `listener_programme_pending`, `LOCAL` to star sync and classified in the
+  split tool's list. Content the node already runs is only recorded as the
+  hub's version. **Replace** keeps the id of a slot whose name it already
+  has, so history still names it; **Keep this node's** is remembered for
+  that version alone. An answer names the fingerprint it saw, and is refused
+  if a newer version arrived meanwhile.
+- **Every skin asks**, from `core.js`; the Programme page shows the
+  difference slot by slot.
+- **The phone asks** when its player has started and when its Mesh screen
+  opens (`Programmes.kt`), then says what it runs, for the console's view.
+
+Open: a player's own client for the channel, which an appliance needs to
+ask at start and hourly `[SPEC-PGM-310]`. Until it is built, an appliance is
+assigned on the page and never hears of it.
 ---
 
 **Traceability:** `[SPEC-PGM-010..520]`, `[SPEC-PGM-115]` · from the maintainer's decisions of 2026-10-09 · words in [SPEC023](SPEC023-domain-vocabulary.md) `[ENT-PROGRAMME-010]`, `[ENT-SLOT-010]`, `[ENT-SEED-010]`, `[SPEC-VOC-020]` · refines `[SPEC-MTR-040]`

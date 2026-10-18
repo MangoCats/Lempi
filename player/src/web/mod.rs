@@ -470,6 +470,10 @@ pub fn router(ui: Ui) -> Router {
         .route("/programme/current", get(programme::get_programme).post(programme::save_programme))
         .route("/programme/search", get(programme::search_seeds))
         .route("/programme/seed", post(programme::set_seed))
+        // The hub's programme arriving, and a person's answer [SPEC-PGM-050].
+        .route("/programme/arrival", post(programme::arrived))
+        .route("/programme/pending", get(programme::pending))
+        .route("/programme/pending/answer", post(programme::answer))
         .route("/play-frequency/:kind/:id", get(play_frequency))
         .route("/guide", get(guide_page))
         .route("/guide.js", get(guide_js_route))
@@ -976,6 +980,11 @@ mod tests {
         assert!(CORE.contains("/programme/seed?slot="), "the panel sends a seed change");
         assert!(BROWSE_JS.contains("editPreference('recording', r.mbid"), "Browse opens the panel for a seed");
         assert!(BROWSE_HTML.contains("id=\"pref-panel\""), "and carries the panel to open");
+        // The hub's programme is asked about in every skin, from core, and
+        // the page shows what it would change `[SPEC-PGM-410]`.
+        assert!(CORE.contains("'/programme/pending'") && CORE.contains("'/programme/pending/answer'"));
+        assert!(CORE.contains("askAboutProgrammes();"), "the player page starts asking");
+        assert!(PROGRAMME_HTML.contains("id=\"arriving\"") && PROGRAMME_JS.contains("'/programme/pending'"));
     }
 
     /// The player page carries core and the catalogue in itself `[REQ-VIS-162]`,

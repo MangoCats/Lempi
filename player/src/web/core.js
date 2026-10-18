@@ -166,6 +166,82 @@ const Lempi = (() => {
     document.head.appendChild(st);
   }
 
+  // ---- the hub's programme, asked about [SPEC-PGM-410] --------------------
+  // Here and not in a skin, so every skin asks the same question: a programme
+  // the household sent waits on the node until a person answers, and the
+  // answer is a complete replacement or nothing [SPEC-PGM-050]. Asked again
+  // each minute and whenever the page comes back into view, since the phone's
+  // app may hand one in while the page is open.
+  const QUESTION_CSS =
+    '#lempi-programme-question { position: fixed; left: 0; right: 0; top: 0; z-index: 1000;' +
+    '  padding: 10px 14px; background: #2a2440; color: #fff; font: 15px/1.4 sans-serif;' +
+    '  box-shadow: 0 2px 8px rgba(0,0,0,.4); }' +
+    '#lempi-programme-question p { margin: 0 0 8px; }' +
+    '#lempi-programme-question button { margin: 0 8px 0 0; padding: 6px 12px; font: inherit; }' +
+    '#lempi-programme-question a { color: #cfc4ff; }';
+
+  async function programmeQuestion() {
+    let p;
+    try {
+      const r = await fetch('/programme/pending', { cache: 'no-store' });
+      if (!r.ok) return;
+      p = (await r.json()).pending;
+    } catch (e) {
+      return;
+    }
+    let box = document.getElementById('lempi-programme-question');
+    if (!p || p.kept) {
+      if (box) box.remove();
+      return;
+    }
+    if (box && box.dataset.fp === p.fingerprint) return;
+    if (!document.getElementById('lempi-question-css')) {
+      const st = document.createElement('style');
+      st.id = 'lempi-question-css';
+      st.textContent = QUESTION_CSS;
+      document.head.appendChild(st);
+    }
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'lempi-programme-question';
+      box.setAttribute('role', 'alertdialog');
+      document.body.prepend(box);
+    }
+    box.dataset.fp = p.fingerprint;
+    box.textContent = '';
+    const q = document.createElement('p');
+    q.textContent = `The household sent ${p.name} (version ${p.hub_version}). Replace this node's programme?`;
+    const answer = async replace => {
+      for (const b of box.querySelectorAll('button')) b.disabled = true;
+      const r = await fetch('/programme/pending/answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fingerprint: p.fingerprint, replace }),
+      });
+      if (!r.ok) q.textContent = await r.text();
+      box.dataset.fp = '';
+      setTimeout(programmeQuestion, r.ok ? 0 : 3000);
+    };
+    const yes = document.createElement('button');
+    yes.textContent = 'Replace';
+    yes.onclick = () => answer(true);
+    const no = document.createElement('button');
+    no.textContent = "Keep this node's";
+    no.onclick = () => answer(false);
+    const diff = document.createElement('a');
+    diff.href = '/programme#arriving';
+    diff.textContent = 'What changes';
+    box.append(q, yes, no, diff);
+  }
+
+  function askAboutProgrammes() {
+    programmeQuestion();
+    setInterval(programmeQuestion, 60000);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) programmeQuestion();
+    });
+  }
+
   // Build the two layers and the mark beneath them, once per box.
   function artBox(box) {
     if (box.dataset.art) return;
@@ -1408,6 +1484,7 @@ const Lempi = (() => {
       catalogue = await skinCatalogue();
       connect();
       await loadSkin(chosen());
+      askAboutProgrammes();
     },
     // The browse page: it wants the skin's LOOK and the command helpers, but
     // not the player's markup and not a socket -- a library listing does not
@@ -1467,6 +1544,9 @@ const Lempi = (() => {
     // draws stacked buttons rather than a picker -- needs the same reading of
     // an empty one that `bindProgram` makes.
     directorReady,
+    // Look for the hub's programme now: the phone's app calls it once it has
+    // handed one in [SPEC-PGM-310].
+    askProgramme: () => programmeQuestion(),
     named,
     badge,
     showBackArt,

@@ -1,0 +1,122 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Vipunen — programmes</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/console.css">
+<header>
+  <h1>Vipunen</h1>
+  <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/import">import</a><a href="/export">export</a><a href="/flags">flags</a><a href="/intake">intake</a><a href="/mesh">mesh</a><a href="/programmes" class="on">programmes</a><a href="/sync">sync</a><a href="/system">system</a></nav>
+  <span class="ro">library read-only</span>
+</header>
+<main>
+  <h2>Programmes</h2>
+  <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+    The hub's library of programmes <code style="font:12px var(--mono)">[SPEC062]</code>: each a
+    named, complete day of time slots and their seeds, kept with every version it has had.
+    A node is assigned one here. Nothing is sent to it: it asks when it next can — a phone when
+    Lempi starts and when its Mesh screen opens — and the person there is asked whether to
+    replace what the node runs. Keeping their own is an answer too.
+    The intake must be running for a node to ask.
+  </p>
+
+  <h3 style="font-size:.95rem">The library</h3>
+  <table class="peers">
+    <thead><tr><th>programme</th><th>versions</th><th>current</th><th>time slots</th></tr></thead>
+    <tbody id="lib-rows"></tbody>
+  </table>
+  <p id="hub-player" style="font-size:.85rem"></p>
+  <div class="controls">
+    <input type="search" id="keep-name" placeholder="its name, e.g. WKMP" style="max-width:14rem">
+    <button class="chip" id="keep">keep the hub player's programme as a version</button>
+  </div>
+
+  <h3 style="font-size:.95rem;margin-top:1rem">The nodes</h3>
+  <table class="peers">
+    <thead><tr><th>node</th><th>role</th><th>assigned</th><th>where it stands</th><th></th></tr></thead>
+    <tbody id="node-rows"></tbody>
+  </table>
+  <p id="note" class="empty" aria-live="polite"></p>
+</main>
+<script src="/console.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const td = (t) => { const c = document.createElement('td'); c.textContent = t; return c; };
+  const post = async (path, body) => {
+    const r = await fetch(path, { method: 'POST', body: JSON.stringify(body || {}) });
+    const out = await r.json();
+    $('note').textContent = r.ok ? '' : (out.error || `refused (${r.status})`);
+    load();
+    return r.ok ? out : null;
+  };
+
+  async function load() {
+    const s = await (await fetch('/api/programmes', { cache: 'no-store' })).json();
+    const lib = $('lib-rows');
+    lib.textContent = '';
+    for (const p of s.programmes) {
+      const cur = p.versions[p.versions.length - 1];
+      const tr = document.createElement('tr');
+      tr.append(td(p.name), td(String(p.versions.length)),
+                td(`${cur.version} · ${cur.fingerprint.slice(0, 12)} · ${cur.made_at}`), td(String(cur.slots)));
+      lib.appendChild(tr);
+    }
+    if (!s.programmes.length) {
+      const tr = document.createElement('tr');
+      const c = td('None yet: keep the hub player\'s programme below to start the library.');
+      c.colSpan = 4;
+      tr.appendChild(c);
+      lib.appendChild(tr);
+    }
+    const hp = s.hub_player || {};
+    $('hub-player').textContent = hp.error
+      ? `The hub's player could not be read: ${hp.error}`
+      : `The hub's player runs ${hp.name || 'an unnamed programme'}: ${hp.slots} time slot(s), ` +
+        `${(hp.fingerprint || '').slice(0, 12)}` +
+        (s.programmes.some(p => p.versions.some(v => v.fingerprint === hp.fingerprint))
+          ? ' — already in the library.' : ' — not in the library yet.');
+    if (hp.name && !$('keep-name').value) $('keep-name').value = hp.name;
+
+    const assigned = new Map(s.nodes.map(n => [n.member, n]));
+    const rows = $('node-rows');
+    rows.textContent = '';
+    for (const m of s.members) {
+      if (m.role === 'hub') continue;
+      const a = assigned.get(m.fingerprint);
+      const tr = document.createElement('tr');
+      const pick = document.createElement('select');
+      const none = document.createElement('option');
+      none.value = '';
+      none.textContent = '— none —';
+      pick.appendChild(none);
+      for (const p of s.programmes) {
+        const o = document.createElement('option');
+        o.value = p.name;
+        o.textContent = p.name;
+        if (a && a.programme === p.name) o.selected = true;
+        pick.appendChild(o);
+      }
+      pick.onchange = () => pick.value
+        ? post('/api/programmes/assign', { member: m.fingerprint, programme: pick.value })
+        : post('/api/programmes/unassign', { member: m.fingerprint });
+      const cell = document.createElement('td');
+      cell.appendChild(pick);
+      tr.append(td(m.name || m.fingerprint.slice(0, 12)), td(m.role), cell,
+                td(a ? `${a.state}${a.reported_at ? ' (said ' + a.reported_at + ')' : ''}` : '—'),
+                td(a && a.sent_version ? `version ${a.sent_version} handed over ${a.sent_at}` : ''));
+      rows.appendChild(tr);
+    }
+    if (!s.members.some(m => m.role !== 'hub')) {
+      const tr = document.createElement('tr');
+      const c = td('No nodes in the mesh yet: enrol one on the mesh page.');
+      c.colSpan = 5;
+      tr.appendChild(c);
+      rows.appendChild(tr);
+    }
+  }
+
+  $('keep').onclick = () => post('/api/programmes/from-listener', { name: $('keep-name').value.trim() });
+  load();
+  setInterval(load, 5000);   // a node says where it stands from its own side
+})();
+</script>

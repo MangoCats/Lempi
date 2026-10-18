@@ -194,3 +194,102 @@ pub(super) async fn save_programme(
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
+
+/// A programme the hub sent `[SPEC-PGM-300]`, handed in by whatever reached
+/// the members' channel -- the phone's app today. Held, never applied: the
+/// answer is a person's `[SPEC-PGM-050]`.
+pub(super) async fn arrived(
+    State(ui): State<Ui>,
+    axum::Json(a): axum::Json<crate::db::Arrival>,
+) -> axum::response::Response {
+    let (db, library) = (ui.db.clone(), ui.library.clone());
+    let (name, version) = (a.name.clone(), a.version);
+    let got = tokio::task::spawn_blocking(move || {
+        let store = crate::db::PlayerStore::open_split(&db, &library).map_err(|e| (true, e.message().to_string()))?;
+        store.programme_arrived(&a).map_err(|e| (false, e.message().to_string()))
+    })
+    .await;
+    match got {
+        Ok(Ok(outcome)) => {
+            tracing::info!("programme: {name} version {version} arrived from the hub: {outcome:?}");
+            axum::Json(serde_json::json!({ "outcome": outcome })).into_response()
+        }
+        Ok(Err((false, why))) => (StatusCode::BAD_REQUEST, why).into_response(),
+        Ok(Err((true, why))) => (StatusCode::INTERNAL_SERVER_ERROR, why).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// What waits for an answer, with the programme it would replace, for the
+/// question every skin asks and the page's slot-by-slot difference
+/// `[SPEC-PGM-410]`. `{"pending": null}` when nothing has arrived.
+pub(super) async fn pending(State(ui): State<Ui>) -> axum::response::Response {
+    let (db, library) = (ui.db.clone(), ui.library.clone());
+    let got = tokio::task::spawn_blocking(move || {
+        let store = crate::db::PlayerStore::open_split(&db, &library).map_err(|e| e.message().to_string())?;
+        let p = store.programme_pending().map_err(|e| e.message().to_string())?;
+        let current = store.programme().map_err(|e| e.message().to_string())?;
+        Ok::<_, String>(serde_json::json!({
+            "pending": p,
+            "current": { "name": current.name, "source": current.source,
+                         "hub_version": current.hub_version, "fingerprint": current.fingerprint,
+                         "slots": current.slots },
+        }))
+    })
+    .await;
+    match got {
+        Ok(Ok(v)) => axum::Json(v).into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct Answer {
+    fingerprint: String,
+    replace: bool,
+}
+
+/// **Replace** or **Keep this node's** `[SPEC-PGM-050]`. A replacement reaches
+/// the running Director as a save from the page does, and a slot held by hand
+/// that the arrival does not have is let go.
+pub(super) async fn answer(
+    State(ui): State<Ui>,
+    axum::Json(a): axum::Json<Answer>,
+) -> axum::response::Response {
+    let (db, library) = (ui.db.clone(), ui.library.clone());
+    let manual = ui.controls.lock().ok().and_then(|c| c.manual_program);
+    let replace = a.replace;
+    let got = tokio::task::spawn_blocking(move || {
+        let store = crate::db::PlayerStore::open_split(&db, &library).map_err(|e| (true, e.message().to_string()))?;
+        let v = store.answer_programme(&a.fingerprint, a.replace).map_err(|e| (false, e.message().to_string()))?;
+        let held_gone = a.replace && manual.is_some_and(|id| !v.slots.iter().any(|s| s.id == Some(id)));
+        if held_gone {
+            let _ = store.save_manual_program(None);
+        }
+        Ok::<_, (bool, String)>((page_view(&store, v), held_gone))
+    })
+    .await;
+    match got {
+        Ok(Ok((v, held_gone))) => {
+            if replace {
+                if let Ok(mut c) = ui.controls.lock() {
+                    c.programme_changed = true;
+                    if held_gone {
+                        c.manual_program = None;
+                    }
+                }
+            }
+            tracing::info!(
+                "programme: {} {} (version {:?})",
+                if replace { "replaced with" } else { "kept over" },
+                v.name.as_deref().unwrap_or("unnamed"),
+                v.hub_version
+            );
+            axum::Json(v).into_response()
+        }
+        Ok(Err((false, why))) => (StatusCode::CONFLICT, why).into_response(),
+        Ok(Err((true, why))) => (StatusCode::INTERNAL_SERVER_ERROR, why).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}

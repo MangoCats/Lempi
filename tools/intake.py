@@ -56,6 +56,7 @@ sys.path.insert(0, HERE)
 import pending as pendingmod  # noqa: E402  -- the decisions a person made [SPEC048]
 import mesh as meshmod  # noqa: E402  -- membership, enrolment and the members' channel [SPEC049]
 import member_updates  # noqa: E402  -- catalogue updates to a member [REQ-AND-330]
+import programmes as programmesmod  # noqa: E402  -- the programme assigned to a member [SPEC062]
 
 # The application's own key [REQ-AND-287]: every copy of Lempi and Vipunen
 # carries it, so it keeps out a stray request, not a person. The phone's copy is
@@ -462,6 +463,21 @@ class MemberHandler(BaseHTTPRequestHandler):
             return self.reply(200, o or {"run": None})
         if self.path == "/member/catalogue":
             return self.reply(200, member_updates.status(mdir, m["fingerprint"]))
+        if self.path == "/member/programme":
+            # [SPEC-PGM-300]: the current version of the programme assigned to
+            # this member, or none. Handed over, never applied: the member's
+            # person answers [SPEC-PGM-050].
+            if not self.server.db:
+                return self.reply(503, {"error": "no library, so no programmes"})
+            c = programmesmod.connect(self.server.db)
+            try:
+                p = programmesmod.for_member(c, m["fingerprint"])
+            finally:
+                c.close()
+            if p:
+                say(f"intake: {m['name'] or meshmod.show_fp(m['fingerprint'], True)} was handed "
+                    f"{p['name']} version {p['version']}")
+            return self.reply(200, {"programme": p})
         mt = re.fullmatch(r"/member/catalogue/([0-9TZ]+-[0-9a-f]{6})\.zip", self.path)
         if mt:
             # This member's own update, and only while it waits for it.
@@ -540,6 +556,18 @@ class MemberHandler(BaseHTTPRequestHandler):
                 say(f"intake: {m['name'] or meshmod.show_fp(m['fingerprint'], True)} imported update {mi.group(1)}: {b}")
                 return self.reply(200, {"ok": True})
             return self.reply(409, {"error": "no such update waiting"})
+        if self.path == "/member/programme/state":
+            # What the member runs now, and what of the hub's waits there
+            # [SPEC-PGM-300], for the console's view of it [SPEC-PGM-440].
+            b = json.loads(self.rfile.read(n) or b"{}") if 0 < n <= 64_000 else {}
+            if not self.server.db:
+                return self.reply(503, {"error": "no library, so no programmes"})
+            c = programmesmod.connect(self.server.db)
+            try:
+                known = programmesmod.record_state(c, m["fingerprint"], b)
+            finally:
+                c.close()
+            return self.reply(200, {"ok": True, "assigned": known})
         if self.path == "/member/updates/applied":
             b = json.loads(self.rfile.read(n) or b"{}") if 0 < n <= 64_000 else {}
             counts = {k: int(b.get(k, 0)) for k in ("applied", "already", "kept")}

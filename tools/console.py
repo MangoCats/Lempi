@@ -49,6 +49,7 @@ import jobs as jobmod  # noqa: E402
 import lempi_control  # noqa: E402  -- process/network side of the handoff
 import pending as pendingmod  # noqa: E402  -- what waits for a person [SPEC048]
 import mesh as meshmod  # noqa: E402  -- membership [SPEC049]
+import programmes as programmesmod  # noqa: E402  -- the hub's programmes [SPEC062]
 import sync_console  # noqa: E402  -- the Sync page [SPEC-STAR-120]
 import cd_import  # noqa: E402  -- the CD import page [SPEC056]
 import analysis_gaps  # noqa: E402  -- the Jobs page's Not analysed list [REQ-LIB-305]
@@ -1171,6 +1172,26 @@ class Handler(BaseHTTPRequestHandler):
                            if os.path.isdir(os.path.join(pdir, w)) else 0 for w in pendingmod.DONE}
                 return self.send_json({"waiting": pendingmod.entries(pdir), "decided": decided,
                                        "root": (STATE["roots"] or [""])[0], "folder": pdir})
+            if p == "/api/programmes":
+                # [SPEC-PGM-440]: the hub's library of programmes, which node
+                # runs which, and the programme the hub's own player runs now,
+                # the one a person may keep as a version.
+                c = programmesmod.connect(STATE["path"])
+                try:
+                    mdir = meshmod.mesh_dir(STATE["library"] or STATE["path"])
+                    mesh_ok = meshmod.initialised(mdir)
+                    out = programmesmod.standing(c, mdir if mesh_ok else None)
+                finally:
+                    c.close()
+                out["members"] = ([{k: m[k] for k in ("fingerprint", "name", "role")}
+                                   for m in meshmod.roster(mdir)["members"]] if mesh_ok else [])
+                try:
+                    name, slots = programmesmod.read_listener(STATE["listener"])
+                    out["hub_player"] = {"name": name, "slots": len(slots),
+                                         "fingerprint": programmesmod.fingerprint(slots), "file": STATE["listener"]}
+                except Exception as e:
+                    out["hub_player"] = {"error": f"{STATE['listener']}: {e}"}
+                return self.send_json(out)
             if p == "/api/mesh":
                 # [SPEC049]: the roster and the enrolments in progress, read
                 # from `mesh/` beside the library. Written only by jobs.
@@ -1250,6 +1271,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(flags(self._db()))
             if p == "/mesh":
                 return self.send_file("mesh.html", "text/html; charset=utf-8")
+            if p == "/programmes":
+                return self.send_file("programmes.html", "text/html; charset=utf-8")
             if p == "/sync":
                 return self.send_file("sync.html", "text/html; charset=utf-8")
             if p.startswith("/api/sync/"):
@@ -1477,6 +1500,33 @@ class Handler(BaseHTTPRequestHandler):
                 if not folder or not os.path.isdir(folder):
                     return self.send_json({"error": f"not a folder: {folder}"}, code=400)
                 return self.send_json({"job_id": STATE["jobs"].submit("propose", folder)})
+            if p.startswith("/api/programmes/"):
+                # [SPEC-PGM-440]: a person keeps the hub player's programme as
+                # a version, and assigns one to a node. The sidecar only;
+                # nothing reaches a node until it asks [SPEC-PGM-310].
+                b = self.json_body() or {}
+                c = programmesmod.connect(STATE["path"])
+                try:
+                    if p == "/api/programmes/from-listener":
+                        recorded, slots = programmesmod.read_listener(STATE["listener"])
+                        name = str(b.get("name") or recorded or "").strip()
+                        if not name:
+                            return self.send_json({"error": "the hub's player runs an unnamed programme; name it"},
+                                                  code=400)
+                        return self.send_json(programmesmod.store(c, name, slots, f"the hub's player, {STATE['listener']}"))
+                    if p in ("/api/programmes/assign", "/api/programmes/unassign"):
+                        mdir = meshmod.mesh_dir(STATE["library"] or STATE["path"])
+                        fp = str(b.get("member") or "")
+                        if not meshmod.initialised(mdir) or not meshmod.member(mdir, fp):
+                            return self.send_json({"error": "not a member of this mesh"}, code=400)
+                        if p.endswith("/unassign"):
+                            return self.send_json({"ok": programmesmod.unassign(c, fp)})
+                        return self.send_json(programmesmod.assign(c, fp, str(b.get("programme") or "")))
+                except ValueError as e:
+                    return self.send_json({"error": str(e)}, code=400)
+                finally:
+                    c.close()
+                return self.send_json({"error": "unknown"}, code=404)
             if p.startswith("/api/mesh/"):
                 # [SPEC049]. Creating the mesh is a job. Accept, reject and
                 # remove are done here and at once: they touch the mesh files,

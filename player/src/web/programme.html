@@ -56,6 +56,16 @@
     <a class="back" href="/guide" target="_blank">help</a>
   </header>
 
+  <!-- The hub's programme, waiting for an answer [SPEC-PGM-410]: what it
+       would change, slot by slot, and the same two answers the banner gives. -->
+  <section class="card arriving" id="arriving" hidden>
+    <p id="arriving-q"></p>
+    <ul id="arriving-diff"></ul>
+    <div class="actions">
+      <button type="button" id="arriving-replace">Replace</button>
+      <button type="button" id="arriving-keep">Keep this node's</button>
+    </div>
+  </section>
   <div class="name">
     <label for="pname" class="empty">The programme this node runs</label>
     <input id="pname" placeholder="not named yet" spellcheck="false" autocomplete="off">

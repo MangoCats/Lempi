@@ -38,6 +38,16 @@ pub(super) fn ensure_programme_tables(conn: &Connection) -> Result<(), DbError> 
              source      TEXT NOT NULL CHECK (source IN ('node', 'hub')),
              hub_version INTEGER,
              updated_at  TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS listener_programme_pending (
+             id          INTEGER PRIMARY KEY CHECK (id = 1),
+             name        TEXT NOT NULL,
+             hub_version INTEGER NOT NULL,
+             fingerprint TEXT NOT NULL,
+             slots       TEXT NOT NULL,
+             arrived_at  TEXT NOT NULL,
+             answer      TEXT CHECK (answer IN ('kept')),
+             answered_at TEXT
          );",
     )
     .map_err(|e| DbError::Open(e.to_string()))
@@ -74,6 +84,42 @@ pub struct ProgrammeView {
     pub fingerprint: String,
     /// In start-time order, slots chosen only by hand last.
     pub slots: Vec<Slot>,
+}
+
+/// A programme the hub sent this node `[SPEC-PGM-300]`: the version of the one
+/// assigned to it, by name, with its whole content.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Arrival {
+    pub name: String,
+    pub version: i64,
+    pub slots: Vec<Slot>,
+}
+
+/// An arrival waiting for this node's answer, or one it kept its own over
+/// `[SPEC-PGM-050]`, kept so the question survives a restart and is not
+/// asked again about the same version `[SPEC-PGM-200]`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Pending {
+    pub name: String,
+    pub hub_version: i64,
+    pub fingerprint: String,
+    pub slots: Vec<Slot>,
+    pub arrived_at: String,
+    /// Answered "Keep this node's"; no longer asked.
+    pub kept: bool,
+}
+
+/// What an arrival did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Arrived {
+    /// The node already runs exactly this content: now recorded as the hub's
+    /// version, and nothing asked `[SPEC-PGM-110]`.
+    AlreadyRuns,
+    /// Waiting for a person's answer.
+    Asking,
+    /// This version was declined before; not asked again.
+    KeptBefore,
 }
 
 /// `HH:MM` back from any of the forms a person types (`9:05`, `09:05`), or
@@ -391,6 +437,127 @@ impl PlayerStore {
         self.save_programme(name.as_deref(), &slots)
     }
 
+    /// A programme the hub sent `[SPEC-PGM-050]`, held until a person answers.
+    ///
+    /// Content decides, never a date `[SPEC-PGM-110]`: what the node already
+    /// runs is only recorded as the hub's version, and a version answered
+    /// "Keep this node's" is not asked about again. Anything else replaces
+    /// whatever was waiting -- a newer version asks again.
+    pub fn programme_arrived(&self, a: &Arrival) -> Result<Arrived, DbError> {
+        let (name, slots) = validate(Some(&a.name), &a.slots).map_err(DbError::Query)?;
+        let name = name.ok_or_else(|| DbError::Query("The hub sent a programme with no name.".into()))?;
+        let slots: Vec<Slot> = slots.into_iter().map(|s| Slot { id: None, ..s }).collect();
+        let fp = fingerprint(&slots);
+        if self.programme()?.fingerprint == fp {
+            self.conn
+                .execute(
+                    "UPDATE listener_programme SET name = ?1, source = 'hub', hub_version = ?2,
+                         updated_at = datetime('now') WHERE id = 1",
+                    rusqlite::params![name, a.version],
+                )
+                .map_err(q)?;
+            self.conn.execute("DELETE FROM listener_programme_pending", []).map_err(q)?;
+            return Ok(Arrived::AlreadyRuns);
+        }
+        let kept: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT answer FROM listener_programme_pending WHERE id = 1 AND fingerprint = ?1",
+                [&fp],
+                |r| r.get(0),
+            )
+            .ok()
+            .flatten();
+        if kept.as_deref() == Some("kept") {
+            return Ok(Arrived::KeptBefore);
+        }
+        let content = serde_json::to_string(&slots).map_err(|e| DbError::Query(e.to_string()))?;
+        self.conn
+            .execute(
+                "INSERT INTO listener_programme_pending
+                     (id, name, hub_version, fingerprint, slots, arrived_at, answer, answered_at)
+                 VALUES (1, ?1, ?2, ?3, ?4, datetime('now'), NULL, NULL)
+                 ON CONFLICT(id) DO UPDATE SET name = excluded.name, hub_version = excluded.hub_version,
+                     fingerprint = excluded.fingerprint, slots = excluded.slots,
+                     arrived_at = excluded.arrived_at, answer = NULL, answered_at = NULL",
+                rusqlite::params![name, a.version, fp, content],
+            )
+            .map_err(q)?;
+        Ok(Arrived::Asking)
+    }
+
+    /// What arrived and is waiting, or was kept over; `None` if nothing has.
+    pub fn programme_pending(&self) -> Result<Option<Pending>, DbError> {
+        let row = self.conn.query_row(
+            "SELECT name, hub_version, fingerprint, slots, arrived_at, answer
+               FROM listener_programme_pending WHERE id = 1",
+            [],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, Option<String>>(5)?,
+                ))
+            },
+        );
+        let (name, hub_version, fingerprint, slots, arrived_at, answer) = match row {
+            Ok(r) => r,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+            Err(e) => return Err(q(e)),
+        };
+        let slots = serde_json::from_str(&slots).map_err(|e| DbError::Query(e.to_string()))?;
+        Ok(Some(Pending { name, hub_version, fingerprint, slots, arrived_at, kept: answer.is_some() }))
+    }
+
+    /// A person's answer to the arrival with `fingerprint` `[SPEC-PGM-050]`.
+    ///
+    /// The fingerprint is the one the question showed: a newer version that
+    /// arrived while it was on screen is not what they agreed to, and is
+    /// refused rather than taken. **Replace** is complete -- every slot is the
+    /// arrival's -- but a slot whose name the node already has keeps its id,
+    /// so what history recorded under it still names it. **Keep this node's**
+    /// leaves the node as it was, and that version is not asked about again.
+    pub fn answer_programme(&self, fingerprint: &str, replace: bool) -> Result<ProgrammeView, DbError> {
+        let p = self
+            .programme_pending()?
+            .filter(|p| !p.kept && p.fingerprint == fingerprint)
+            .ok_or_else(|| {
+                DbError::Query("That programme is no longer waiting for an answer; reload the page.".into())
+            })?;
+        if !replace {
+            self.conn
+                .execute(
+                    "UPDATE listener_programme_pending SET answer = 'kept', answered_at = datetime('now')
+                      WHERE id = 1",
+                    [],
+                )
+                .map_err(q)?;
+            return self.programme();
+        }
+        let current = read_slots(&self.conn)?;
+        let slots: Vec<Slot> = p
+            .slots
+            .iter()
+            .map(|s| Slot {
+                id: current.iter().find(|c| c.name.to_lowercase() == s.name.to_lowercase()).and_then(|c| c.id),
+                ..s.clone()
+            })
+            .collect();
+        self.save_programme(Some(&p.name), &slots)?;
+        self.conn
+            .execute(
+                "UPDATE listener_programme SET source = 'hub', hub_version = ?1, updated_at = datetime('now')
+                  WHERE id = 1",
+                [p.hub_version],
+            )
+            .map_err(q)?;
+        self.conn.execute("DELETE FROM listener_programme_pending", []).map_err(q)?;
+        self.programme()
+    }
+
     /// The time slots as the Director reads them, for a running Director to
     /// take after an edit `[SPEC-PGM-400]`.
     pub fn load_programs(&self) -> Result<crate::director::program::Programs, DbError> {
@@ -582,5 +749,78 @@ mod tests {
             .unwrap();
         let v = st.programme().unwrap();
         assert_eq!((v.name.as_deref(), v.source.as_str(), v.hub_version), (Some("WKMP"), "node", None));
+    }
+
+    fn arrival(version: i64, slots: Vec<Slot>) -> Arrival {
+        Arrival { name: "WKMP".into(), version, slots }
+    }
+
+    /// The same content, from wherever it came, asks nothing: the node is
+    /// recorded as running the hub's version `[SPEC-PGM-110]`, `[SPEC-PGM-500]`.
+    #[test]
+    fn an_arrival_the_node_already_runs_is_recorded_not_asked() {
+        let st = store();
+        st.save_programme(None, &[slot("Soft", Some("04:00"), &["b", "a"])]).unwrap();
+        let got = st.programme_arrived(&arrival(1, vec![slot("Soft", Some("4:00"), &["a", "b"])])).unwrap();
+        assert_eq!(got, Arrived::AlreadyRuns);
+        let v = st.programme().unwrap();
+        assert_eq!((v.name.as_deref(), v.source.as_str(), v.hub_version), (Some("WKMP"), "hub", Some(1)));
+        assert_eq!(st.programme_pending().unwrap(), None);
+    }
+
+    /// Replace is complete, and a slot the node already has by name keeps its
+    /// id, so history still names it `[SPEC-PGM-050]`.
+    #[test]
+    fn replacing_takes_every_slot_and_keeps_ids_by_name() {
+        let st = store();
+        let before = st
+            .save_programme(Some("Mine"), &[slot("Soft", Some("04:00"), &["a"]), slot("Loud", Some("12:00"), &["x"])])
+            .unwrap();
+        let soft_id = before.slots.iter().find(|s| s.name == "Soft").unwrap().id;
+        let sent = vec![slot("soft", Some("05:00"), &["c"]), slot("Night", Some("22:00"), &["n"])];
+        assert_eq!(st.programme_arrived(&arrival(2, sent)).unwrap(), Arrived::Asking);
+        let p = st.programme_pending().unwrap().unwrap();
+        assert!(!p.kept);
+        // Nothing changes until a person answers.
+        assert_eq!(st.programme().unwrap().name.as_deref(), Some("Mine"));
+
+        let v = st.answer_programme(&p.fingerprint, true).unwrap();
+        assert_eq!((v.name.as_deref(), v.source.as_str(), v.hub_version), (Some("WKMP"), "hub", Some(2)));
+        let names: Vec<&str> = v.slots.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["soft", "Night"]);
+        assert_eq!(v.slots[0].id, soft_id, "a slot kept by name keeps its id");
+        assert_eq!(v.fingerprint, p.fingerprint);
+        assert_eq!(st.programme_pending().unwrap(), None);
+    }
+
+    /// Keeping its own leaves the node as it was and is not asked again about
+    /// that version; a newer one asks again `[SPEC-PGM-050]`.
+    #[test]
+    fn keeping_is_remembered_for_that_version_only() {
+        let st = store();
+        st.save_programme(Some("Mine"), &[slot("Soft", Some("04:00"), &["a"])]).unwrap();
+        let v1 = vec![slot("Soft", Some("06:00"), &["a"])];
+        assert_eq!(st.programme_arrived(&arrival(1, v1.clone())).unwrap(), Arrived::Asking);
+        let fp = st.programme_pending().unwrap().unwrap().fingerprint;
+        let v = st.answer_programme(&fp, false).unwrap();
+        assert_eq!((v.name.as_deref(), v.source.as_str()), (Some("Mine"), "node"));
+        assert!(st.programme_pending().unwrap().unwrap().kept);
+        assert_eq!(st.programme_arrived(&arrival(1, v1)).unwrap(), Arrived::KeptBefore);
+        let v2 = vec![slot("Soft", Some("07:00"), &["a"])];
+        assert_eq!(st.programme_arrived(&arrival(2, v2)).unwrap(), Arrived::Asking);
+        assert!(!st.programme_pending().unwrap().unwrap().kept);
+    }
+
+    /// An answer is to the version the question showed; one that arrived
+    /// while it was on screen is refused, not taken.
+    #[test]
+    fn an_answer_to_a_version_no_longer_waiting_is_refused() {
+        let st = store();
+        st.programme_arrived(&arrival(1, vec![slot("A", Some("01:00"), &[])])).unwrap();
+        let old = st.programme_pending().unwrap().unwrap().fingerprint;
+        st.programme_arrived(&arrival(2, vec![slot("B", Some("02:00"), &[])])).unwrap();
+        let e = st.answer_programme(&old, true).unwrap_err().to_string();
+        assert!(e.contains("no longer waiting"), "{e}");
+        assert!(st.programme().unwrap().slots.is_empty());
     }
 }

@@ -15,7 +15,10 @@ use super::{BUSY_WAIT, DbError, QualifyingConn};
 
 /// The programme a node runs `[SPEC062]`.
 mod programme;
-pub use programme::{ProgrammeView, Slot, canonical as programme_canonical, fingerprint as programme_fingerprint};
+pub use programme::{
+    Arrival, Arrived, Pending, ProgrammeView, Slot, canonical as programme_canonical,
+    fingerprint as programme_fingerprint,
+};
 
 /// The tag index, defined once `[REQ-VIS-180]`.
 ///

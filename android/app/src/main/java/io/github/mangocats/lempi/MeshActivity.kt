@@ -50,6 +50,8 @@ class MeshActivity : Activity() {
         log = TextView(this).apply { textSize = 14f; setPadding(0, 24, 0, 0) }
         setContentView(fitBars(ScrollView(this).apply { addView(col) }))
         draw()
+        // A member asks for its programme when this screen opens [SPEC-PGM-310].
+        Thread({ Programmes.exchange(applicationContext)?.let { say(it) } }, "lempi-programme").start()
     }
 
     private fun say(line: String) {
