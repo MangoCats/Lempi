@@ -370,6 +370,34 @@ def test_a_review_survives_two_rounds(tmp):
           "and the node's copy is unchanged")
 
 
+def test_one_file_many_passages(tmp):
+    """[SPEC-STAR-049] within one file. Found 2026-10-18 on bose: a file
+    holding a whole album has several passages, numbered differently on a
+    node, and "same number, same file" read the node's album cut at 0:00 as
+    the hub's radio cut at a later start -- 95 passages on bose. The same
+    music is the same file, kind and start."""
+    hub, node = os.path.join(tmp, "m-hub.cat"), os.path.join(tmp, "m-node.cat")
+    # One file F. The hub: 1 radio@0, 2 album@0, 3 radio@100.
+    # The node:            1 album@0, 2 radio@0, 3 radio@100, 7 album@100 (a number the hub does not use).
+    for path, cuts in ((hub, ((1, "radio", 0), (2, "album", 0), (3, "radio", 100), (4, "album", 100))),
+                       (node, ((1, "album", 0), (2, "radio", 0), (3, "radio", 100), (7, "album", 100)))):
+        cat(path, "INSERT INTO files VALUES (1,'F','/f.mp3',100)")
+        c = sqlite3.connect(path)
+        for s in ("ALTER TABLE passages ADD COLUMN file_id INTEGER", "ALTER TABLE passages ADD COLUMN kind TEXT",
+                  "ALTER TABLE passages ADD COLUMN start_ms INTEGER"):
+            c.execute(s)
+        c.executemany("INSERT INTO passages (passage_id, end_ms, boundary_src, file_id, kind, start_ms) "
+                      "VALUES (?, 1000, 'cue', 1, ?, ?)", cuts)
+        c.commit()
+        c.close()
+    remap, gone = sm.passage_remap(node, hub)
+    check(remap == {1: 2, 2: 1, 7: 4}, f"each node passage is the hub's of the same kind and start: {remap}")
+    check(gone == [], f"and none is taken for gone: {gone}")
+    unmap, clashes = sm.passage_unmap(node, hub, remap)
+    check(unmap == {1: 2, 2: 1, 3: 3, 4: 7} and clashes == 0,
+          f"and back, one to one: {unmap}, {clashes} clash(es)")
+
+
 def test_rekeyed(tmp):
     """[SPEC-RLK-155]: the hub has re-keyed a file and the node has not. The
     node's old `audio_md5` is the same file, so its path still lands, and its
@@ -545,6 +573,7 @@ def main() -> int:
     test_receivers(tmp)
     test_translation(tmp)
     test_a_review_survives_two_rounds(tmp)
+    test_one_file_many_passages(tmp)
     test_routine(tmp)
     manifest, inputs = fleet(tmp)
     before = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in inputs}

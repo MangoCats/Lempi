@@ -538,12 +538,30 @@ def passage_remap(node_cat: str, hub_cat: str):
             out.setdefault((md5, kind), []).append((start, pid))
         return {k: [p for _, p in sorted(v)] for k, v in out.items()}
     nf, hf = by_file(node), by_file(hub)
+    # [SPEC-STAR-052] The same music is the same file, kind and start -- not the same file
+    # alone. Found 2026-10-18: in a file holding a whole album, bose's
+    # passage 16899 is the album cut at 0:00 and the hub's 16899 the radio cut
+    # at 67:47, and "same number, same file" read one as the other -- 95
+    # passages on bose. So: the same number naming the same music is the
+    # same passage; then the same music under another number; and only then,
+    # for a cut the hub has re-made, the same position among that file's
+    # passages of that kind.
+    hub_by_key: dict = {}
+    for pid in sorted(hub):
+        hub_by_key.setdefault(hub[pid], pid)
     remap, gone = {}, []
-    for pid, (md5, kind, _) in node.items():
-        if pid in hub and hub[pid][0] == md5:
-            continue                          # same file: the same passage
+    for pid, key in node.items():
+        md5, kind, _ = key
+        if hub.get(pid) == key:
+            continue                          # the same passage, the same number
+        if key in hub_by_key:
+            remap[pid] = hub_by_key[key]      # the same passage, another number
+            continue
         siblings, theirs = nf.get((md5, kind), []), hf.get((md5, kind), [])
-        if pid not in hub and not theirs:
+        if not theirs:
+            # Nothing of this file and kind on the hub -- including where the
+            # hub's passage of this number is other music, which a row kept
+            # under the number would then have named.
             gone.append(pid)
             continue
         i = siblings.index(pid)
@@ -570,12 +588,13 @@ def passage_unmap(node_cat: str, hub_cat: str, remap: dict) -> tuple[dict, int]:
     passages after three syncs, and twelve songs were renamed by it.
     Returns the map and how many hub ids two node passages both claimed (the
     first, by node id, is kept)."""
-    q = "SELECT p.passage_id, f.audio_md5 FROM passages p JOIN files f USING (file_id)"
+    q = ("SELECT p.passage_id, f.audio_md5, p.kind, p.start_ms FROM passages p "
+         "JOIN files f USING (file_id)")
     alias = aliases(hub_cat)
     nc, hc = open_ro(node_cat), open_ro(hub_cat)
     try:
-        node = {pid: alias.get(md5, md5) for pid, md5 in nc.execute(q)}
-        hub = {pid: md5 for pid, md5 in hc.execute(q)}
+        node = {r[0]: (alias.get(r[1], r[1]),) + r[2:] for r in nc.execute(q)}
+        hub = {r[0]: r[1:] for r in hc.execute(q)}
     finally:
         nc.close()
         hc.close()
@@ -584,8 +603,8 @@ def passage_unmap(node_cat: str, hub_cat: str, remap: dict) -> tuple[dict, int]:
     for pid in sorted(node):
         if pid in remap:
             to = remap[pid]
-        elif pid in hub and hub[pid] == node[pid]:
-            to = pid                          # same file: the same passage
+        elif hub.get(pid) == node[pid]:
+            to = pid                          # the same passage, the same number
         else:
             continue                          # gone from the hub: nothing to write back to
         if to in inverse:
