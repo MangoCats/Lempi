@@ -388,6 +388,25 @@ def main() -> int:
         check(link(c6, 1) == OLD_REC, "a rehearsal must not change anything")
         c6.close()
 
+    # A gain read back through a node's `sqlite3 -json` has 15 significant
+    # digits; the hub's own copy of a 32-bit float has 17. The same value
+    # must read as the same -- found 2026-10-18, a landed edit on bose
+    # reported as a conflict over -2.9200000762939453 and -2.92000007629395.
+    print("a gain differing only in printed precision is the same value, not a conflict")
+    sys.path.insert(0, HERE)
+    import apply_changes  # noqa: E402
+    keys = ["start_ms", "end_ms", "gain_db"]
+    target = {"start_ms": 414, "end_ms": 205776, "gain_db": -2.9200000762939453}
+    baseline = {"start_ms": 414, "end_ms": 280555, "gain_db": -2.92}
+    here = {"start_ms": 414, "end_ms": 205776, "gain_db": -2.92000007629395}
+    check(apply_changes.classify(here, baseline, target, keys) == "noop",
+          f"expected noop, got {apply_changes.classify(here, baseline, target, keys)}")
+    moved = dict(here, gain_db=-3.0)
+    check(apply_changes.classify(moved, baseline, target, keys) == "conflict",
+          "a real gain difference must still be a conflict")
+    check(apply_changes.classify(dict(here, end_ms=205777), baseline, target, keys) == "conflict",
+          "integers still compare exactly")
+
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")

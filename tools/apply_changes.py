@@ -213,14 +213,31 @@ def current_artist(conn: sqlite3.Connection, recording_mbid: str):
     return {"artist_mbid": row[0], "artist_name": row[1]} if row else {"artist_mbid": None, "artist_name": None}
 
 
+def _same(a, b) -> bool:
+    """Equal, except that two decimals within 0.0001 are the same value.
+
+    A node's values reach this through `sqlite3 -json`, which prints 15
+    significant digits, while the hub's come straight from its own file --
+    and a gain the player saved as a 32-bit float carries 17. Found
+    2026-10-18: bose, holding exactly the -2.9200000762939453 dB it had just
+    been sent, read back as -2.92000007629395 and was reported as a
+    conflict. A ten-thousandth of a decibel is no audible difference, and
+    every other column compared here is an integer or text, compared exactly.
+    """
+    if isinstance(a, float) or isinstance(b, float):
+        if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+            return abs(a - b) < 1e-4
+    return a == b
+
+
 def classify(current, baseline: dict, target: dict, keys: list) -> str:
     """`[SPEC-DF-101]`'s three-way merge, generic over which fields matter."""
     if current is None:
         return "missing"
-    cur = tuple(current.get(k) for k in keys)
-    if cur == tuple(target.get(k) for k in keys):
+    matches = lambda other: all(_same(current.get(k), other.get(k)) for k in keys)  # noqa: E731
+    if matches(target):
         return "noop"
-    if cur == tuple(baseline.get(k) for k in keys):
+    if matches(baseline):
         return "fastforward"
     return "conflict"
 
