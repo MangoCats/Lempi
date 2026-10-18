@@ -67,6 +67,21 @@ class MeshActivity : Activity() {
         draw()
     }
 
+    /** On screen, so a bundle on its way is looked for again. */
+    private var shown = false
+    private val lookAgain = Runnable { Thread({ showOffer() }, "lempi-offer").start() }
+
+    override fun onStart() {
+        super.onStart()
+        shown = true
+    }
+
+    override fun onStop() {
+        super.onStop()
+        shown = false
+        main.removeCallbacks(lookAgain)
+    }
+
     private fun showOffer() {
         val o = try {
             HubBundles.offer(applicationContext)
@@ -76,11 +91,22 @@ class MeshActivity : Activity() {
         }
         val free = HubBundles.free(applicationContext)
         main.post {
-            if (o == null) {
-                bundleLine?.text = "Nothing waiting. The hub's Export page can leave music here for this phone."
+            val state = o?.optString("state") ?: "none"
+            if (state != "ready") {
+                bundleLine?.text = when (state) {
+                    // On its way: looked for again every few seconds while
+                    // this screen is open. Read as "nothing" at first, a
+                    // bundle being built showed "Nothing waiting" (2026-10-17).
+                    "building" -> "The hub is building a bundle for this phone…"
+                    "needs-confirmation" -> "A bundle for this phone waits for a yes on the hub's Export page."
+                    else -> "Nothing waiting. The hub's Export page can leave music here for this phone."
+                }
                 fetchBundle?.visibility = View.GONE
+                main.removeCallbacks(lookAgain)
+                if (shown && state != "none") main.postDelayed(lookAgain, 5_000)
                 return@post
             }
+            o!!
             val peak = o.getLong("peak_bytes")
             bundleLine?.text = "${o.getInt("files")} file(s) waiting: ${HubBundles.mb(o.getLong("bytes"))} MB to fetch, " +
                 "about ${HubBundles.mb(peak)} MB needed while it is imported; ${HubBundles.mb(free)} MB is free here " +
@@ -397,6 +423,13 @@ class MeshActivity : Activity() {
         col.addView(text("\nMusic from the hub", 16f))
         bundleLine = text("Asking the hub…", 13f).also { col.addView(it) }
         fetchBundle = Button(this).apply { text = "Fetch and import"; visibility = View.GONE }.also { col.addView(it) }
+        col.addView(Button(this).apply {
+            text = "Look again"
+            setOnClickListener {
+                bundleLine?.text = "Asking the hub…"
+                Thread({ showOffer() }, "lempi-offer").start()
+            }
+        })
         Thread({ showOffer() }, "lempi-offer").start()
         col.addView(Button(this).apply {
             text = "Check the channel"

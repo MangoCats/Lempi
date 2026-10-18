@@ -83,15 +83,23 @@ def storage(mdir: str, fp: str) -> dict | None:
         return json.load(fh)
 
 
+def _read_set(path: str) -> set:
+    if not os.path.isfile(path):
+        return set()
+    with open(path, encoding="utf-8") as fh:
+        return set(json.load(fh))
+
+
 def held(mdir: str, fp: str) -> set:
     """The files the phone is known to hold: those a catalogue update has
-    been delivered for [SPEC-PL-107]. Empty for a phone that never took one,
-    so nothing is left out on a guess."""
-    p = os.path.join(member_updates._dir(mdir, fp), "delivered.json")
-    if not os.path.isfile(p):
-        return set()
-    with open(p, encoding="utf-8") as fh:
-        return set(json.load(fh))
+    been delivered for [SPEC-PL-107], and those a bundle from here has.
+    Nothing else is assumed, so nothing is left out on a guess.
+
+    The second half was missing at first: the first phone export imported
+    its 17 files, and the same selection built again ten minutes later chose
+    the same 17 (2026-10-17)."""
+    return (_read_set(os.path.join(member_updates._dir(mdir, fp), "delivered.json"))
+            | _read_set(os.path.join(_dir(mdir, fp), "delivered.json")))
 
 
 def plan(db: str, mdir: str, fp: str, like: str) -> dict:
@@ -131,13 +139,17 @@ def _write_status(mdir: str, fp: str, s: dict) -> None:
     mesh.atomic_write(os.path.join(_dir(mdir, fp), "status.json"), json.dumps(s))
 
 
+def _md5s_path(mdir: str, fp: str, stamp: str) -> str:
+    return os.path.join(_dir(mdir, fp), stamp + ".md5s.json")
+
+
 def _drop(mdir: str, fp: str) -> None:
-    """The waiting offer's zip, if any: one offer per phone."""
+    """The waiting offer's zip and its list, if any: one offer per phone."""
     s = status(mdir, fp)
     if s.get("stamp"):
-        zp = os.path.join(_dir(mdir, fp), s["stamp"] + ".zip")
-        if os.path.isfile(zp):
-            os.remove(zp)
+        for p in (os.path.join(_dir(mdir, fp), s["stamp"] + ".zip"), _md5s_path(mdir, fp, s["stamp"])):
+            if os.path.isfile(p):
+                os.remove(p)
 
 
 def build(db: str, mdir: str, fp: str, like: str, confirmed: bool) -> dict:
@@ -199,6 +211,8 @@ def build(db: str, mdir: str, fp: str, like: str, confirmed: bool) -> dict:
     with open(zp, "rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
+    # Which files it carries, kept beside it, for `delivered`.
+    mesh.atomic_write(_md5s_path(mdir, fp, stamp), json.dumps(p["md5s"]))
     exact = dict(base, stamp=stamp, bytes=os.path.getsize(zp), sha256=h.hexdigest(),
                  unpacked_bytes=unpacked, peak_bytes=need,
                  ratio=v["ratio"], verdict=v["verdict"], estimate=False)
@@ -244,8 +258,13 @@ def cancel(mdir: str, fp: str) -> None:
 
 
 def offered(mdir: str, fp: str) -> dict:
-    """What the phone is shown: a ready offer, or that there is none."""
+    """What the phone is shown: a ready offer; that one is on its way --
+    being built, or waiting for a yes at the hub -- so the phone can say so
+    and ask again; or that there is none. "On its way" read as "none" at
+    first, and the phone showed "Nothing waiting" for a bundle being built."""
     s = status(mdir, fp)
+    if s.get("state") in ("building", "needs-confirmation"):
+        return {"state": s["state"]}
     if s.get("state") != "ready":
         return {"state": "none"}
     return {k: s[k] for k in ("state", "stamp", "files", "bytes", "sha256", "unpacked_bytes", "peak_bytes", "query")}
@@ -264,6 +283,11 @@ def delivered(mdir: str, fp: str, stamp: str, counts: dict) -> bool:
     s = status(mdir, fp)
     if s.get("state") != "ready" or s.get("stamp") != stamp:
         return False
+    # Its files are the phone's now, so the next build leaves them out.
+    sent = _read_set(_md5s_path(mdir, fp, stamp))
+    if sent:
+        mesh.atomic_write(os.path.join(_dir(mdir, fp), "delivered.json"),
+                          json.dumps(sorted(sent | _read_set(os.path.join(_dir(mdir, fp), "delivered.json")))))
     _drop(mdir, fp)
     _write_status(mdir, fp, dict(s, state="delivered", delivered_at=mesh.now(), counts=counts))
     return True

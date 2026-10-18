@@ -89,8 +89,9 @@ def main() -> int:
     mb.report_storage(mdir, fp, {"available_bytes": int(s["peak_bytes"] / 0.9)})
     s2 = mb.build(db, mdir, fp, "%.wav", confirmed=False)
     check(s2["state"] == "needs-confirmation" and not s2["estimate"] and not os.path.isfile(zp)
-          and mb.offered(mdir, fp)["state"] == "none",
-          "a new build replaces the old offer; built at 90% it waits for a yes, and the phone sees nothing")
+          and mb.offered(mdir, fp) == {"state": "needs-confirmation"},
+          "a new build replaces the old offer; built at 90% it waits for a yes, and the phone is told so, "
+          "with nothing it could fetch")
     check(not mb.confirm(mdir, fp, "20990101T000000Z-000000") and mb.confirm(mdir, fp, s2["stamp"])
           and mb.offered(mdir, fp)["state"] == "ready", "a yes names the bundle it is for, and then it is offered")
     check(mb.delivered(mdir, fp, s2["stamp"], {"imported": 1})
@@ -98,6 +99,22 @@ def main() -> int:
           and mb.status(mdir, fp)["state"] == "delivered" and mb.offered(mdir, fp)["state"] == "none",
           "imported: the zip goes, and nothing more is offered")
     check(not mb.delivered(mdir, fp, s2["stamp"], {}), "a second word for the same bundle is refused")
+    # The first phone export: imported, then the same selection built again
+    # chose the same files (2026-10-17).
+    again = mb.plan(db, mdir, fp, "%.wav")
+    check(again["files"] == 0 and again["held_already"] == 2,
+          f"what a bundle delivered counts as held: the same selection again finds nothing ({again['files']} file(s))")
+    s3 = mb.build(db, mdir, fp, "%.wav", confirmed=False)
+    check(s3["state"] == "nothing" and "holds every file" in s3["why"], "and building it says so, building nothing")
+    check(not any(f.endswith(".md5s.json") for f in os.listdir(mb._dir(mdir, fp))),
+          "no list of a delivered bundle's files is left beside it")
+    mb._write_status(mdir, fp, {"state": "needs-confirmation", "stamp": "x"})
+    check(mb.offered(mdir, fp) == {"state": "needs-confirmation"},
+          "one waiting for a yes at the hub is told to the phone as that, not as nothing")
+    mb._busy[fp] = type("T", (), {"is_alive": lambda self: True})()
+    check(mb.offered(mdir, fp) == {"state": "building"}, "and one being built, as being built")
+    del mb._busy[fp]
+    mb.cancel(mdir, fp)
 
     # A deep music folder: the first phone export failed in Windows' 260-character
     # limit, building under the member's folder, whose name is a 64-character

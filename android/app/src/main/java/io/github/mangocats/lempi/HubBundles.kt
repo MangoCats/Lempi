@@ -49,12 +49,14 @@ object HubBundles {
         }
     }
 
-    /** The bundle waiting for this phone, or `null` if none. Network: never on
-     *  the main thread. */
+    /** What the hub has for this phone: `state` is `ready` (with the bundle),
+     *  `building` or `needs-confirmation` (on its way), or `none`; `null` when
+     *  not a member. Network: never on the main thread. */
     fun offer(ctx: Context): JSONObject? {
         val client = MeshClient.forMember(ctx) ?: return null
         val (s, o) = client.call("GET", "/member/bundle")
-        return if (s == 200 && o.optString("state") == "ready") o else null
+        if (s != 200) throw IllegalStateException("the hub answered $s: ${o.optString("error")}")
+        return o
     }
 
     fun mb(b: Long) = (b + 999_999) / 1_000_000
