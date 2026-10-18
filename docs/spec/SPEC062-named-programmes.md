@@ -235,7 +235,15 @@ for a daily phone that had no programme and no way to get one but a hand edit.
 
 Open: a player's own client for the channel, which an appliance needs to
 ask at start and hourly `[SPEC-PGM-310]`. Until it is built, an appliance is
-assigned on the page and never hears of it.
+assigned on the page and never hears of it. *The maintainer, 2026-10-17:*
+the appliances catch up as they are updated for other reasons; no deploy
+is made for this. What such an update carries is the node's half -- the
+pending table and the question -- with nothing yet to ask the hub: an
+appliance has no HTTPS client (`membership.rs`), and `reqwest` is kept out
+of its build. So the client is a decision still to make: one in the
+appliance binary, or the hub handing a mesh-signed programme over the
+player's own port as it hands over the roster, which would refine
+`[SPEC-PGM-310]`.
 ---
 
 **Traceability:** `[SPEC-PGM-010..520]`, `[SPEC-PGM-115]` · from the maintainer's decisions of 2026-10-09 · words in [SPEC023](SPEC023-domain-vocabulary.md) `[ENT-PROGRAMME-010]`, `[ENT-SLOT-010]`, `[ENT-SEED-010]`, `[SPEC-VOC-020]` · refines `[SPEC-MTR-040]`
