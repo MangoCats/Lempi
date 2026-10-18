@@ -11,6 +11,9 @@ import android.os.StatFs
 import android.provider.OpenableColumns
 import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.view.View
+import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import io.github.mangocats.lempi.ffi.ImportSummary
@@ -37,6 +40,9 @@ import java.io.File
 class ImportActivity : Activity() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var log: TextView
+    /** Shown once the screen has nothing more to do: it reads as finished,
+     *  not as stuck -- which it did, with its last line a report (2026-10-17). */
+    private lateinit var close: Button
 
     /**
      * A bundle kept staged while the user is asked for leave to replace files
@@ -50,7 +56,14 @@ class ImportActivity : Activity() {
         super.onCreate(saved)
         title = "Import a bundle"
         log = TextView(this).apply { setPadding(32, 32, 32, 32); textSize = 15f }
-        setContentView(fitBars(ScrollView(this).apply { addView(log) }))
+        close = Button(this).apply { text = "Close"; visibility = View.GONE; setOnClickListener { finish() } }
+        setContentView(fitBars(ScrollView(this).apply {
+            addView(LinearLayout(this@ImportActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(log)
+                addView(close)
+            })
+        }))
         if (saved != null) return
         val i = intent
         when (i.action) {
@@ -113,15 +126,26 @@ class ImportActivity : Activity() {
                 val r = importBundle(File(filesDir, "library.db").path, staging.path, music.path)
                 report(r)
                 after?.invoke(r)
-                if (r.imported > 0u || r.reused > 0u || r.replaced > 0u || r.upgraded > 0u || r.rekeyed > 0u || r.covers > 0u ||
-                    r.passageCreditsSet > 0u) reload()
+                val changed = r.imported > 0u || r.reused > 0u || r.replaced > 0u || r.upgraded > 0u || r.rekeyed > 0u ||
+                    r.covers > 0u || r.passageCreditsSet > 0u
+                val reloaded = changed && reload()
                 keep = askToReplace(staging, r.refusedReplacements)
+                // Asking leave goes on in the system's dialog; [writeGranted] ends it.
+                if (!keep) finished(when {
+                    r.refused.isNotEmpty() -> "Done. Nothing was changed."
+                    reloaded -> "Done — the music is in Lempi, and the player can choose it within a few seconds."
+                    changed -> "Done — the music is in Lempi."
+                    else -> "Done. Nothing here needed changing."
+                })
             } catch (e: NoRoom) {
                 say("\nNot imported, and nothing changed: ${e.message}")
+                finished("Stopped. Nothing was changed.")
             } catch (e: LempiException) {
                 say("\nImport failed: ${e.message}")
+                finished("Stopped.")
             } catch (e: Exception) {
                 say("\nImport failed: $e")
+                finished("Stopped.")
             } finally {
                 if (!keep) staging.deleteRecursively()
             }
@@ -170,6 +194,7 @@ class ImportActivity : Activity() {
         if (!allowed) {
             say("Not allowed, so those files are left as they were.")
             staging.deleteRecursively()
+            finished("Done.")
             return
         }
         Thread({
@@ -187,9 +212,10 @@ class ImportActivity : Activity() {
                 val still = again.refusedReplacements.size
                 say(if (still == 0) "Every replaced file is Vipunen's, and Lempi's record of it agrees."
                     else "$still file(s) are still not Vipunen's bytes.")
-                reload()
+                finished(if (reload()) "Done — the player can choose them within a few seconds." else "Done.")
             } catch (e: Exception) {
                 say("\nReplacing failed: $e")
+                finished("Stopped.")
             } finally {
                 staging.deleteRecursively()
             }
@@ -230,12 +256,23 @@ class ImportActivity : Activity() {
         }
     }
 
-    private fun reload() {
-        say(when (val code = Lempi.reload()) {
+    /** Ask the player to rebuild its choices; whether it took the request. */
+    private fun reload(): Boolean {
+        val code = Lempi.reload()
+        say(when (code) {
             null -> "\nThe player is not running; the new music is picked up when it starts."
             in 200..299 -> "\nThe player is rebuilding its choices to include it."
             else -> "\nThe player did not accept the reload ($code); it will include it at its next start."
         })
+        return code in 200..299
+    }
+
+    /** The last line, and the way out. */
+    private fun finished(line: String) {
+        main.post {
+            log.append("\n$line\n")
+            close.visibility = View.VISIBLE
+        }
     }
 
     /** Look for music already on the phone [REQ-AND-260]. */
@@ -255,9 +292,11 @@ class ImportActivity : Activity() {
                     say("\nCould not be read as audio (${r.unreadable.size}):")
                     r.unreadable.forEach { say("  • $it") }
                 }
-                if (r.rebound > 0u || r.tagsOnly > 0u || r.retired > 0u || r.identified > 0u) reload()
+                val reloaded = (r.rebound > 0u || r.tagsOnly > 0u || r.retired > 0u || r.identified > 0u) && reload()
+                finished(if (reloaded) "Done — the player can choose what was found within a few seconds." else "Done.")
             } catch (e: LempiException) {
                 say("\nScan failed: ${e.message}")
+                finished("Stopped.")
             }
         }, "lempi-scan").start()
     }
