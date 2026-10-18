@@ -50,7 +50,7 @@ class ImportActivity : Activity() {
         super.onCreate(saved)
         title = "Import a bundle"
         log = TextView(this).apply { setPadding(32, 32, 32, 32); textSize = 15f }
-        setContentView(ScrollView(this).apply { addView(log) })
+        setContentView(fitBars(ScrollView(this).apply { addView(log) }))
         if (saved != null) return
         val i = intent
         when (i.action) {

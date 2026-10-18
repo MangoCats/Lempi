@@ -37,7 +37,7 @@ class BackupActivity : Activity() {
         super.onCreate(saved)
         title = "Export a backup"
         log = TextView(this).apply { setPadding(32, 32, 32, 32); textSize = 15f }
-        setContentView(ScrollView(this).apply { addView(log) })
+        setContentView(fitBars(ScrollView(this).apply { addView(log) }))
         if (saved != null) return
         val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.ROOT).format(Date())
         startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT)

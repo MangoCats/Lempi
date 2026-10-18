@@ -88,7 +88,7 @@ class SendActivity : Activity() {
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         log = TextView(this).apply { textSize = 14f; setPadding(0, 24, 0, 0) }
         listOf(node, key, ask, send, repairButton, folder, list, log).forEach { col.addView(it) }
-        setContentView(ScrollView(this).apply { addView(col) })
+        setContentView(fitBars(ScrollView(this).apply { addView(col) }))
         Thread({
             try {
                 files = foundToSend(File(filesDir, "library.db").path)

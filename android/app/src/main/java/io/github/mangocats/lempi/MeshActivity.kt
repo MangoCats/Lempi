@@ -48,7 +48,7 @@ class MeshActivity : Activity() {
         title = "Mesh membership"
         col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 32, 32, 32) }
         log = TextView(this).apply { textSize = 14f; setPadding(0, 24, 0, 0) }
-        setContentView(ScrollView(this).apply { addView(col) })
+        setContentView(fitBars(ScrollView(this).apply { addView(col) }))
         draw()
     }
 

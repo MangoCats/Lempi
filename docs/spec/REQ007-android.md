@@ -41,6 +41,8 @@ Unplugged headphones pause it too; untested, because Android lets only the syste
 
 **`[REQ-AND-150]` The listening surface is the existing skins in a WebView**, served by the player's own web server `[GDE-AND-060]`. A native client is evaluated afterwards and is not required here.
 
+**`[REQ-AND-155]` Every screen is clear of the system bars, and Back follows the platform.** An app targeting API 35 or later is drawn edge to edge, and from API 36 on Android 16 Back is a callback; neither can be opted out of. *Found and built 2026-10-17 on a Pixel 7a, Android 17:* every screen's content began behind the 118 px status bar and the title bar, and ran under the 126 px navigation bar, so the start-up error showed only its last word. Each screen's root is now padded by the insets Android reports (`Bars.kt`), which are zero on Android 11–14. Back goes to the skin's previous page through a callback held only while there is one, and otherwise leaves the app with the system's own animation.
+
 **`[REQ-AND-160]` That server is reachable only from the app.** It binds to the loopback address alone, and every HTTP and WebSocket request must carry a secret made anew at each launch; a request without it is refused `[GDE-APP-090]`.
 
 **`[REQ-AND-170]` Controls the phone cannot honour are not shown** — power, Wi-Fi, speakers, LED, radios and following — declared absent in the snapshot's capabilities, as on any host that lacks them `[GDE-HST-360]`.
@@ -54,6 +56,8 @@ Unplugged headphones pause it too; untested, because Android lets only the syste
 ## 3. The library and its storage
 
 **`[REQ-AND-200]` Lempi's own files are private**: its databases, caches, lyrics and backups live in app-private storage. Lyrics are never written beside the audio `[GDE-APP-080]`. *Built 2026-09-25:* the host's `writes_beside_audio` switch, false on a phone, refuses the sidecar's route, hides its setting through the snapshot's capabilities, and never runs the generation.
+
+**`[REQ-AND-201]` A fresh install starts on its own.** With neither database present, the app makes both from `sql/schema.sql`, split as `tools/split_database.py` splits them, and says so in its log; with one present and not the other, it refuses by name, since that is damage rather than a new install. *Found 2026-10-17:* the first truly fresh install, on a Pixel 7a, stopped at "unable to open database file" — every earlier phone had its pair copied in before the app first ran, by the spike's `push.sh`. *Built the same day* as `create_pair_if_absent` in `lempi-core` (`db/pair.rs`), whose test holds its table split to the split tool's lists. *Measured on the Pixel:* "first start: made an empty catalogue and listener from the schema", the session open in 54 ms, and the scan of the phone's own music `[REQ-AND-260]` under way at once.
 
 **`[REQ-AND-202]` Lyrics reach the phone**, and are kept in its private database like any other catalogue fact — clarified by the maintainer 2026-09-25: private is where they are stored, not whether they arrive. They travel in the bundle on the recording they belong to `[SPEC-LYR-025]`.
 

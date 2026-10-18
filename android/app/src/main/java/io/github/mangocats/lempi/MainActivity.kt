@@ -10,9 +10,13 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Menu
 import android.view.MenuItem
+import android.view.View
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import android.widget.TextView
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
 
 /**
  * The listening surface: the player's own lempi skin in a WebView
@@ -22,11 +26,15 @@ class MainActivity : Activity() {
     private val main = Handler(Looper.getMainLooper())
     private var web: WebView? = null
     private lateinit var status: TextView
+    /** Holds the status or the skin, clear of the system bars [REQ-AND-155]. */
+    private lateinit var frame: FrameLayout
 
     override fun onCreate(saved: Bundle?) {
         super.onCreate(saved)
         status = TextView(this).apply { setPadding(32, 32, 32, 32) }
-        setContentView(status)
+        frame = FrameLayout(this)
+        setContentView(fitBars(frame))
+        showing(status)
         val read = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO
         else Manifest.permission.READ_EXTERNAL_STORAGE
         if (checkSelfPermission(read) != PackageManager.PERMISSION_GRANTED) {
@@ -62,9 +70,14 @@ class MainActivity : Activity() {
         val w = WebView(this)
         w.settings.javaScriptEnabled = true
         w.settings.domStorageEnabled = true
-        // Links stay in the app; the skin is the whole interface.
-        w.webViewClient = WebViewClient()
-        setContentView(w)
+        // Links stay in the app; the skin is the whole interface. Back goes
+        // to the skin's previous page while it has one.
+        w.webViewClient = object : WebViewClient() {
+            override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                holdBack(view.canGoBack())
+            }
+        }
+        showing(w)
         // The key once, in the query; the player answers with a cookie that
         // every later request -- and the WebSocket -- carries [REQ-AND-160].
         w.loadUrl("http://127.0.0.1:${Lempi.PORT}/?key=${Lempi.key}")
@@ -82,7 +95,8 @@ class MainActivity : Activity() {
         super.onStop()
         main.removeCallbacksAndMessages(null)
         web?.let {
-            setContentView(status)
+            showing(status)
+            holdBack(false)
             it.destroy()
             web = null
         }
@@ -127,7 +141,31 @@ class MainActivity : Activity() {
         return true
     }
 
-    @Deprecated("Activity's own back handling; this app has no AndroidX")
+    private fun showing(v: View) {
+        frame.removeAllViews()
+        frame.addView(v)
+    }
+
+    /**
+     * Back, in two shapes [REQ-AND-155]. From Android 13 it is a callback held
+     * only while the skin can go back, so that otherwise the system's own
+     * gesture leaves the app, with its predictive animation; an app targeting
+     * API 36 on Android 16 or later is never sent [onBackPressed] at all. On
+     * Android 11 and 12 it is [onBackPressed], as before.
+     */
+    private var backHeld = false
+    private var backCallback: Any? = null
+
+    private fun holdBack(want: Boolean) {
+        if (Build.VERSION.SDK_INT < 33 || want == backHeld) return
+        val cb = (backCallback ?: OnBackInvokedCallback { web?.goBack() }.also { backCallback = it })
+            as OnBackInvokedCallback
+        if (want) onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, cb)
+        else onBackInvokedDispatcher.unregisterOnBackInvokedCallback(cb)
+        backHeld = want
+    }
+
+    @Deprecated("Android 11 and 12 only; see holdBack")
     override fun onBackPressed() {
         val w = web
         if (w != null && w.canGoBack()) w.goBack() else super.onBackPressed()

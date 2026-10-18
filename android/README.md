@@ -77,6 +77,35 @@ S=<work dir> PY=python sh android/spike/verify.sh <serial>
 Each script sets `MSYS_NO_PATHCONV=1`, since Git Bash would otherwise
 rewrite `/sdcard/...` into a Windows path before adb sees it.
 
+### A second phone: pairing needs only the code
+
+Measured 2026-10-17 on a Pixel 7a, Android 17, paired with Windows adb.
+`adb mdns services` lists both of the phone's ports, the pairing one
+(`_adb-tls-pairing._tcp`) while its dialog is open and the connect one
+(`_adb-tls-connect._tcp`), so the six-digit code is the only thing to read
+off the screen:
+
+```
+adb mdns services
+adb pair <address>:<pairing port> <code>
+adb connect <address>:<connect port>
+```
+
+**A phone on a wireless charger drops its USB link every few seconds.** That
+evening the Pixel connected for 2 to 5 seconds at a time, already
+authorised, and dropped, over and over; its own `dumpsys usb` found no
+contaminant in the port. Wireless debugging needed no cable at all.
+
+### A fresh install starts on its own
+
+The app makes its two databases empty from `sql/schema.sql` when it finds
+neither `[REQ-AND-201]`; its log, `files/lempi.log` (`adb shell run-as
+io.github.mangocats.lempi cat files/lempi.log`), says so on the first start.
+**Nothing is copied in beforehand.** The spike's `push.sh` did that for the
+Moto G, which is why the gap stayed hidden until the first phone that never
+had it. The phone's own music is then found by its scan `[REQ-AND-260]`, and
+Vipunen's knowledge of it arrives by bundle, below.
+
 ## Music onto the phone: a bundle
 
 Vipunen sends music with everything it knows about it as a **bundle**

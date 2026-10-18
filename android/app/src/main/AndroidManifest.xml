@@ -18,9 +18,13 @@
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
 
+    <!-- enableOnBackInvokedCallback: Back is a callback from Android 13 on,
+         as API 36 makes it from Android 16 regardless [REQ-AND-155]; one
+         shape on every version that has it, rather than two. -->
     <application
         android:label="Lempi"
         android:allowBackup="false"
+        android:enableOnBackInvokedCallback="true"
         android:networkSecurityConfig="@xml/network_security_config">
 
         <activity

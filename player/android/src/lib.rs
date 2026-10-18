@@ -183,9 +183,17 @@ pub fn start(listener: String, library: String, port: u16, key: String) -> Resul
         if slot.is_some() {
             return Err("already started".into());
         }
+        let (listener, library) = (PathBuf::from(listener), PathBuf::from(library));
+        // A fresh install has neither file [REQ-AND-201]; said in the log, so
+        // a phone that started empty is told from one that lost its files.
+        if lempi_player::db::create_pair_if_absent(&listener, &library).map_err(|e| e.to_string())?
+            == lempi_player::db::Pair::Created
+        {
+            tracing::info!("first start: made an empty catalogue and listener from the schema");
+        }
         let cfg = Config {
-            listener: PathBuf::from(listener),
-            library: PathBuf::from(library),
+            listener,
+            library,
             depth: lempi_player::QUEUE_DEPTH,
             device: None,
             echo_offset_frames: 0,
@@ -201,6 +209,8 @@ pub fn start(listener: String, library: String, port: u16, key: String) -> Resul
             writes_beside_audio: false,
             backup: true,
             tag_scan: false,
+            // The phone's scrub is later, and only while charging [GDE-INT-155].
+            integrity_check: false,
             paused: false,
         };
         let player = Player::start(cfg).map_err(|e| e.to_string())?;

@@ -64,6 +64,10 @@ LIBRARY_TABLES = [
     # `unclassified()` would have refused the hub: `audio_md5_aliases` by the
     # re-key [SPEC-RLK-155], `file_art` by the cover induction [SPEC-COV-040].
     "audio_md5_aliases", "file_art",
+    # Named 2026-10-17, when `pair.rs` began making fresh pairs from
+    # `schema.sql` and its test found both unlisted: `file_releases` by the
+    # album induction [SPEC-SC-125], `imported_payloads` by bundle import.
+    "file_releases", "imported_payloads",
 ]
 LISTENER_TABLES = [
     "listener_play_history", "listener_rejections", "listener_flags",
@@ -79,6 +83,9 @@ LISTENER_TABLES = [
     # What the programme a node runs is called, and where it came from
     # [SPEC-PGM-200]; the player makes it, 2026-10-09.
     "listener_programme",
+    # Each machine's own read-back of its audio [GDE-INT-130], 2026-10-15;
+    # named 2026-10-17 with the two above.
+    "file_checks",
 ]
 BOTH = ["schema_meta"]
 

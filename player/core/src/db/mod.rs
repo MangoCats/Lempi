@@ -15,9 +15,11 @@
 //! file level too.
 
 mod library;
+mod pair;
 mod player_store;
 
 pub use library::*;
+pub use pair::*;
 pub use player_store::*;
 
 /// Bring a `files` table predating `md5_generator` up to date

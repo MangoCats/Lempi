@@ -784,7 +784,7 @@ impl Rejection {
 /// `tagscan`/`fetch_cover_art.py` own them going forward, the same
 /// self-sufficient pattern `Library::open_writable` now uses for
 /// `file_tags` `[IMPL-DBSPLIT-050]`.
-fn ensure_library_tables_if_owned(conn: &QualifyingConn) -> Result<(), DbError> {
+pub(super) fn ensure_library_tables_if_owned(conn: &QualifyingConn) -> Result<(), DbError> {
     if conn.lib_alias() != "main" {
         return Ok(());
     }
