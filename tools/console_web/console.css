@@ -136,6 +136,15 @@ h2 small { font-weight: 400; color: var(--dim); }
 .flagsync .dot.unknown { background: var(--line); color: var(--dim); }
 .flagsync .label { color: var(--dim); }
 
+/* pending edits on the flags page [REQ-VIS-275]: every change, gain marked */
+table.pending td { vertical-align: top; }
+table.pending td.when { color: var(--dim); font: 12px var(--mono); white-space: nowrap; }
+table.pending .chg { font: 12px var(--mono); }
+table.pending .chg .k { color: var(--dim); }
+table.pending .chg.loud { color: var(--warn); font-weight: 600; }
+table.pending tr.reedit > td { background: var(--panel); }
+.warn-text { color: var(--warn); font-size: .82rem; align-self: center; }
+
 /* the handoff [SPEC-SUI-140]: Lempi's own review page, framed in place */
 .handoff-frame {
   display: block; width: 100%; height: 34rem; margin-top: .5rem;

@@ -427,7 +427,11 @@ def pending_detail(conn) -> dict:
     if "boundary_reviews" in have:
         for r in conn.execute(
                 "SELECT br.passage_id, br.orig_start_ms, br.orig_end_ms, br.start_ms, br.end_ms, "
-                "       br.orig_lead_out_ms, br.lead_out_ms, br.orig_fade_out_ms, br.fade_out_ms, "
+                "       br.orig_lead_in_ms, br.lead_in_ms, "
+                "       br.orig_lead_out_ms, br.lead_out_ms, br.orig_gain_db, br.gain_db, "
+                "       br.orig_fade_in_ms, br.fade_in_ms, br.orig_fade_out_ms, br.fade_out_ms, "
+                "       br.orig_fade_in_curve, br.fade_in_curve, "
+                "       br.orig_fade_out_curve, br.fade_out_curve, "
                 "       br.decided_at, "
                 "       (SELECT r.title FROM recordings r "
                 "         JOIN passage_recordings pr ON pr.mbid = r.mbid "
@@ -438,8 +442,19 @@ def pending_detail(conn) -> dict:
             out["boundary"].append({
                 "passage_id": r["passage_id"], "title": r["title"],
                 "span": [r["orig_start_ms"], r["orig_end_ms"], r["start_ms"], r["end_ms"]],
+                # Every value `apply_boundary_reviews.py` writes, as [before,
+                # after] -- found 2026-10-18: this listed only the span,
+                # lead-out and fade-out, so four edits that would each turn
+                # a passage down 20 dB showed no gain change at all, and the
+                # list that is meant to be "exactly what would be written"
+                # was not.
+                "lead_in": [r["orig_lead_in_ms"], r["lead_in_ms"]],
                 "lead_out": [r["orig_lead_out_ms"], r["lead_out_ms"]],
+                "gain_db": [r["orig_gain_db"], r["gain_db"]],
+                "fade_in": [r["orig_fade_in_ms"], r["fade_in_ms"]],
                 "fade_out": [r["orig_fade_out_ms"], r["fade_out_ms"]],
+                "fade_in_curve": [r["orig_fade_in_curve"], r["fade_in_curve"]],
+                "fade_out_curve": [r["orig_fade_out_curve"], r["fade_out_curve"]],
                 "decided_at": r["decided_at"],
             })
 

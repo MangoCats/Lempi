@@ -1656,6 +1656,108 @@ async function runEdit() {
 }
 
 // ---------------------------------------------------------------------------
+// Vipunen's flags page: the pending-edit review `[REQ-VIS-275]`. Every value
+// applying would write is listed, gain marked; each row re-opens Lempi's own
+// editor (or id review) through the handoff, under that row; and once one
+// is opened, writing waits until the list is read again, since what is
+// pending may have changed in a frame this page cannot see `[SPEC-SUI-145]`.
+// Found 2026-10-18: four edits that would each turn a passage down 20 dB
+// were listed as small trims. The console's pages are served by Python, but
+// they are browser code like the skins, so they are checked here.
+async function runConsoleFlagsPending() {
+  const errors = [];
+  const web = path.join(__dirname, '..', 'tools', 'console_web');
+  let html = fs.readFileSync(path.join(web, 'flags.html'), 'utf8')
+    .replace('<script src="/console.js"></script>', '');
+  const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'http://127.0.0.1:5730/flags' });
+  const { window } = dom;
+  const check = (c, m) => { if (!c) errors.push(m); };
+
+  let detail = {
+    boundary: [
+      { passage_id: 18069, title: 'We Can Funk', span: [1428200, 1756560, 1428200, 1756560],
+        lead_in: [0, 0], lead_out: [0, 0], gain_db: [null, -20.0], fade_in: [20, 20],
+        fade_out: [20, 7000], fade_in_curve: ['exponential', 'exponential'],
+        fade_out_curve: ['exponential', 'cosine'], decided_at: '2026-10-18 16:41:25' },
+      { passage_id: 16410, title: 'Spaced Out', span: [0, 242265, 525, 235500],
+        lead_in: [0, 265], lead_out: [7600, 900], gain_db: [null, 0.0], fade_in: [20, 20],
+        fade_out: [20, 20], fade_in_curve: ['exponential', 'exponential'],
+        fade_out_curve: ['exponential', 'exponential'], decided_at: '2026-10-18 16:57:36' },
+    ],
+    id: [{ passage_id: 17911, decision: 'reassigned', chosen_mbid: 'fa8b', chosen_title: 'Somewhere Here on Earth',
+           decided_at: '2026-10-18 10:00:00' }],
+    artist: [], id_recorded_only: {},
+    counts: { boundary: 2, id: 1, artist: 0 }, total: 3,
+  };
+  let detailAsks = 0;
+  const handoffs = [];
+  window.fetch = async (url, opts) => {
+    const json = d => ({ ok: true, json: async () => d });
+    if (url === '/api/pending/detail') { detailAsks++; return json(detail); }
+    if (url === '/api/handoff/ensure') { handoffs.push(opts && opts.method); return json({ ok: true, port: 5720, started: false }); }
+    return json([]);
+  };
+  window.eval(fs.readFileSync(path.join(web, 'console.js'), 'utf8').replace(/^const S =/m, 'window.S ='));
+  const inline = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]).join('\n');
+  try { window.eval(inline); } catch (e) { errors.push('page script threw: ' + e.message); }
+
+  const $ = id => window.document.getElementById(id);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+    await wait(50);
+    $('review-pending').disabled = false;
+    $('review-pending').onclick();
+    await wait(50);
+    const rows = [...window.document.querySelectorAll('table.pending tbody > tr')];
+    check(rows.length === 3, `three pending rows, got ${rows.length}`);
+    const text = rows.map(r => r.textContent);
+    check(/gain\s*none → -20\.0 dB/.test(text[0]), `the gain change must show, got "${text[0]}"`);
+    check(rows[0].querySelector('.chg.loud'), 'a gain change must be marked');
+    check(/fade-out\s*20 ms exponential → 7000 ms cosine/.test(text[0]), `fade-out and its curve, got "${text[0]}"`);
+    check(!/gain/.test(text[1]), `none to 0 dB is no change and must not be listed, got "${text[1]}"`);
+    check(/start\s*0:00\.000 → 0:00\.525/.test(text[1]) && /lead-in\s*0 ms → 265 ms/.test(text[1]),
+          `start and lead-in for 16410, got "${text[1]}"`);
+    check(/recording id/.test(text[2]) && /Somewhere Here on Earth/.test(text[2]), `the id row, got "${text[2]}"`);
+    check(rows[0].querySelector('a[href="/profile/18069"]'), 'the passage must link to its profile');
+    check(!$('do-apply').disabled, 'the write button starts usable');
+
+    // Re-edit: the editor opens under its row, and the write button waits.
+    const btn = rows[0].querySelector('button');
+    check(btn && btn.textContent === 're-edit', `a boundary row offers re-edit, got ${btn && btn.textContent}`);
+    btn.onclick();
+    await wait(50);
+    const frame = window.document.querySelector('tr.reedit iframe');
+    check(frame && frame.getAttribute('src') === 'http://localhost:5720/edit/18069',
+          `the editor must open on that passage, got ${frame && frame.getAttribute('src')}`);
+    check(handoffs[0] === 'POST', 'it must go through the handoff');
+    check($('do-apply').disabled, 'with an editor opened, writing must wait for a refresh');
+    check(!$('stale-note').hidden, 'and say why');
+    const idBtn = rows[2].querySelector('button');
+    check(idBtn && idBtn.textContent === 're-review', 'an id row offers re-review');
+    idBtn.onclick();
+    await wait(50);
+    const frames = [...window.document.querySelectorAll('tr.reedit iframe')].map(f => f.getAttribute('src'));
+    check(frames.includes('http://localhost:5720/review?passage=17911'), `id review opens, got ${frames}`);
+    btn.onclick();
+    check(window.document.querySelectorAll('tr.reedit').length === 1, 'close removes that editor only');
+
+    // Saved in the editor: the server now says something else, and refresh shows it.
+    detail = JSON.parse(JSON.stringify(detail));
+    detail.boundary[0].gain_db = [null, 0.0];
+    const before = detailAsks;
+    $('refresh-pending').onclick();
+    await wait(50);
+    check(detailAsks === before + 1, 'refresh must read the list again');
+    const row0 = window.document.querySelector('table.pending tbody > tr').textContent;
+    check(!/gain/.test(row0), `after refresh the changed gain is gone, got "${row0}"`);
+    check(!$('do-apply').disabled, 'after refresh, writing is allowed again');
+
+  console.log(`${'flags'.padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+              'pending edits: every change and gain listed, re-edit opens Lempi, writing waits for a refresh');
+  for (const e of errors) console.log('    ! ' + e);
+  if (errors.length) failures++;
+}
+
+// ---------------------------------------------------------------------------
 // Navigating the whole file `[SPEC-SUI-232]`, on a passage shaped like 18069:
 // 23:48.200-29:16.560 inside a 68:32.627 file. The audio stand-in decodes
 // at 1000 samples a second, one per ms of the window asked for, so every
@@ -2215,6 +2317,7 @@ async function runEarlySnapshot(skin) {
   await runEdit();
   await runEditDetect();
   await runEditNavigate();
+  await runConsoleFlagsPending();
   await runPassage();
   console.log(failures ? `\n${failures} skin(s) failed` : '\nall skins rendered without error');
   process.exit(failures ? 1 : 0);

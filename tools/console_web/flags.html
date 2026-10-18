@@ -405,23 +405,113 @@ async function runSync(path) {
 // point: a button that is easy to reach must not also be easy to press by
 // accident, and a confirmation that only says "apply 4 edits?" is asking for
 // consent to something the person has not actually seen.
-const ms = v => (v === null || v === undefined) ? '?' : String(v);
+const none = v => v === null || v === undefined;
+// A position in the file as the editor shows it, m:ss.sss.
+const pos = v => {
+  if (none(v)) return '?';
+  const m = Math.floor(v / 60000);
+  return m + ':' + ((v - m * 60000) / 1000).toFixed(3).padStart(6, '0');
+};
+const dur = v => none(v) ? '?' : v + ' ms';
+const db = v => none(v) ? 'none' : (v > 0 ? '+' : '') + Number(v).toFixed(1) + ' dB';
+const fade = (msv, curve) => dur(msv) + (curve ? ' ' + curve : '');
 
-function boundaryLine(b) {
-  const os0 = b.span[0], oe = b.span[1], ns = b.span[2], ne = b.span[3];
-  const head = b.title ? 'passage ' + b.passage_id + ' "' + b.title + '"'
-                       : 'passage ' + b.passage_id;
-  const parts = [];
-  if (os0 !== ns || oe !== ne) {
-    parts.push('span ' + ms(os0) + '-' + ms(oe) + ' to ' + ms(ns) + '-' + ms(ne));
+// Every value that applying would write and that differs from the library
+// now, as [label, before, after, loud] -- all of them, gain included. Found
+// 2026-10-18: this showed only the span, lead-out and fade-out, so four
+// edits that would each turn a passage down 20 dB looked like small trims.
+// A gain of none and one of 0 dB sound the same, so that is not a change.
+function boundaryChanges(b) {
+  const out = [];
+  if (b.span[0] !== b.span[2]) out.push(['start', pos(b.span[0]), pos(b.span[2])]);
+  if (b.span[1] !== b.span[3]) out.push(['end', pos(b.span[1]), pos(b.span[3])]);
+  const pair = (k, label, f) => {
+    const v = b[k];
+    if (v && v[0] !== v[1]) out.push([label, f(v[0]), f(v[1])]);
+  };
+  pair('lead_in', 'lead-in', dur);
+  pair('lead_out', 'lead-out', dur);
+  const g = b.gain_db || [null, null];
+  if ((g[0] || 0) !== (g[1] || 0)) out.push(['gain', db(g[0]), db(g[1]), true]);
+  for (const side of ['in', 'out']) {
+    const m = b['fade_' + side] || [null, null], c = b['fade_' + side + '_curve'] || [null, null];
+    if (m[0] !== m[1] || c[0] !== c[1]) {
+      out.push(['fade-' + side, fade(m[0], c[0]), fade(m[1], c[1])]);
+    }
   }
-  if (b.lead_out[0] !== b.lead_out[1]) {
-    parts.push('lead-out ' + ms(b.lead_out[0]) + ' to ' + ms(b.lead_out[1]) + 'ms');
+  return out;
+}
+
+// One row per pending edit, each with a way back into it `[REQ-VIS-275]`:
+// "re-edit" opens Lempi's own editor (or id review) for that passage right
+// under its row, through the same handoff the profile page uses. Saving
+// there replaces the pending edit -- it is still a draft until applied --
+// so nothing new is stored here. Vipunen cannot see inside that frame
+// `[SPEC-SUI-145]`, so once one has been opened this list may no longer be
+// what applying would write: the write button waits for "refresh the list".
+function pendingTable(d) {
+  const t = S.el('table', { class: 'pending' },
+    S.el('thead', {}, S.el('tr', {}, ...['passage', 'what applying would change', '', '']
+      .map(h => S.el('th', { text: h })))));
+  const body = S.el('tbody');
+  t.append(body);
+  const passageCell = (pid, title) => S.el('td', {},
+    S.el('a', { href: '/profile/' + pid, text: String(pid) }),
+    title ? S.el('span', { text: ' \u201c' + title + '\u201d' }) : null);
+  const row = (pid, title, changes, when, route, label, button) => {
+    const tr = S.el('tr', {}, passageCell(pid, title),
+      S.el('td', {}, ...(changes.length ? changes.map(([k, a, b, loud]) =>
+        S.el('div', { class: loud ? 'chg loud' : 'chg' },
+          S.el('span', { class: 'k', text: k + ' ' }), a + ' \u2192 ' + b))
+        : [S.el('span', { class: 'empty', text: 'no change from the library' })])),
+      S.el('td', { class: 'when', text: when || '' }));
+    const btn = S.el('button', { class: 'chip', text: button });
+    tr.append(S.el('td', {}, btn));
+    let open = null;
+    btn.onclick = () => {
+      if (open) { open.remove(); open = null; btn.textContent = button; return; }
+      open = S.el('tr', { class: 'reedit' }, S.el('td', { colspan: '4' },
+        S.el('p', { style: 'margin:.2rem 0;font-size:.85rem' },
+          'Save in Lempi\u2019s editor below to replace this pending edit, then ',
+          S.el('b', { text: 'refresh the list' }), ' to see it here.'),
+        S.handoffBox(pid, route, label)));
+      tr.after(open);
+      btn.textContent = 'close';
+      markStale();
+    };
+    body.append(tr);
+  };
+  for (const b of d.boundary) {
+    row(b.passage_id, b.title, boundaryChanges(b), b.decided_at,
+        '/edit/' + b.passage_id, 'edit boundaries', 're-edit');
   }
-  if (b.fade_out[0] !== b.fade_out[1]) {
-    parts.push('fade-out ' + ms(b.fade_out[0]) + ' to ' + ms(b.fade_out[1]) + 'ms');
+  for (const r of d.id) {
+    const to = r.chosen_title ? '\u201c' + r.chosen_title + '\u201d (' + r.chosen_mbid + ')' : r.chosen_mbid;
+    row(r.passage_id, null, [['recording id', 'current', to]], r.decided_at,
+        '/review?passage=' + r.passage_id, 'review', 're-review');
   }
-  return head + ' \u2014 ' + (parts.join(', ') || 'no measurable change');
+  return t;
+}
+
+// The write button is only ever consent to the list on screen. Opening an
+// editor may change what is pending without this page knowing, so the
+// button waits until the list has been read again.
+function markStale() {
+  const btn = document.getElementById('do-apply');
+  if (btn) {
+    btn.disabled = true;
+    btn.title = 'An edit may have changed -- refresh the list first';
+  }
+  const note = document.getElementById('stale-note');
+  if (note) note.hidden = false;
+}
+
+async function refreshPending() {
+  try {
+    const d = await S.get('/api/pending/detail');
+    renderPending(d);
+    refreshPendingSummary(d);
+  } catch (e) { S.fail('#apply-result', e); }
 }
 
 function renderPending(d) {
@@ -436,19 +526,18 @@ function renderPending(d) {
   }
 
   const list = S.el('div', { class: 'list' });
-  for (const b of d.boundary) list.append(S.el('div', { text: boundaryLine(b) }));
-  for (const r of d.id) {
-    const to = r.chosen_title ? '"' + r.chosen_title + '" (' + r.chosen_mbid + ')'
-                              : r.chosen_mbid;
-    list.append(S.el('div', { text: 'passage ' + r.passage_id + ' \u2014 recording id to ' + to }));
-  }
   for (const a of d.artist) {
     list.append(S.el('div', { text: 'recording ' + a.recording_mbid
       + ' \u2014 artist credit to "' + a.artist_name + '"' }));
   }
   box.append(S.el('p', { style: 'margin:.2rem 0;font-size:.85rem' },
     S.el('b', { text: d.total + ' edit(s) would be written: ' }),
-    kinds.map(k => d.counts[k] + ' ' + k).join(', ') + '.'), list);
+    kinds.map(k => d.counts[k] + ' ' + k).join(', ') + '.'),
+    pendingTable(d), list,
+    S.el('div', { class: 'controls', style: 'margin-top:.4rem' },
+      S.el('button', { class: 'chip', id: 'refresh-pending', text: 'refresh the list' }),
+      S.el('span', { id: 'stale-note', class: 'warn-text', hidden: 'hidden',
+        text: 'An editor was opened, so this list may be out of date -- refresh it before writing.' })));
 
   // Judgements that rewrite nothing, named rather than folded into the count
   // -- otherwise this page promises 99 changes and delivers 40.
@@ -478,6 +567,7 @@ function renderPending(d) {
   box.hidden = false;
 
   document.getElementById('cancel-apply').onclick = () => { box.hidden = true; };
+  document.getElementById('refresh-pending').onclick = refreshPending;
   document.getElementById('do-apply').onclick = () => applyNow(kinds, d.total);
 }
 
@@ -521,10 +611,10 @@ async function applyNow(kinds, total) {
   });
 }
 
-async function refreshPendingSummary() {
+async function refreshPendingSummary(known) {
   const sum = document.getElementById('pending-summary');
   try {
-    const d = await S.get('/api/pending/detail');
+    const d = known || await S.get('/api/pending/detail');
     sum.textContent = d.total
       ? d.total + ' edit(s) saved here but not yet in the library'
       : 'nothing pending';

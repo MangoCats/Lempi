@@ -167,6 +167,59 @@ const S = {
       ...Object.entries(job.result).map(([k, v]) =>
         S.el('div', { class: 'tile' }, S.el('b', { text: S.n(v) }), S.el('span', { text: k })))));
   },
+
+  // The handoff `[SPEC-SUI-140]`, `[SPEC-SUI-150]`, `[SPEC-SUI-170]`. Vipunen asks
+  // the operating system to ensure a co-resident player is there -- never Lempi
+  // itself `[SPEC-SUI-025]` -- then embeds its own page for this exact passage.
+  // `[SPEC-SUI-155]`: embed it where it embeds, link it where it does not.
+  // Detecting a blocked frame from script is unreliable across browsers, so the
+  // new-tab link is offered unconditionally alongside the frame rather than
+  // only after a failure is inferred -- cheap, and correct either way.
+  //
+  // One function, two callers: id review and the waveform editor are the same
+  // handoff shape aimed at a different Lempi route `[SPEC-SUI-135]` -- a
+  // second mechanism would just be this one, copied.
+  //
+  // Shared since 2026-10-18: the flags page re-opens a pending edit with it
+  // too, so it lives here rather than in one page `[REQ-VIS-275]`.
+  handoffBox(passageId, route, label) {
+    const box = S.el('div', { class: 'handoff' },
+      S.el('p', { class: 'empty', text: 'Starting the local player…' }));
+
+    (async () => {
+      // Only a request that never got an answer is "could not reach". An answer
+      // carrying an error is the server's own reason, said as itself -- found
+      // 2026-10-18: a stale-build refusal was prefixed "Could not reach
+      // Vipunen's own server", which it had just reached [SPEC-SUI-227].
+      let r;
+      try {
+        r = await (await fetch('/api/handoff/ensure', { method: 'POST' })).json();
+      } catch (e) {
+        box.replaceChildren(S.el('p', { class: 'err' },
+          `Could not reach Vipunen's own server to ask: ${e.message}`));
+        return;
+      }
+      if (!r || !r.ok) {
+        box.replaceChildren(S.el('p', { class: 'err' },
+          (r && r.error) || 'Vipunen answered without a local Lempi, and gave no reason.'));
+        return;
+      }
+      const url = `http://localhost:${r.port}${route}`;
+      box.replaceChildren(
+        S.el('p', {},
+          S.el('a', { href: url, target: '_blank', rel: 'noopener' }, 'Open in a new tab ↗'),
+          r.started ? S.el('span', { class: 'pill ok', style: 'margin-left:.6rem',
+                                      text: 'started a local Lempi' }) : null),
+        S.el('iframe', {
+          src: url, class: 'handoff-frame', title: `Lempi — ${label}`,
+          // Cross-origin, deliberately [SPEC-SUI-145]: Vipunen cannot see inside
+          // this frame, and does not ask to. The round trip closes through the
+          // shared database on the next scan, not through the browser.
+        }));
+    })();
+
+    return box;
+  },
 };
 
 // A saved-but-not-yet-applied edit `[REQ-VIS-275]` looked identical to a

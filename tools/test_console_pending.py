@@ -83,6 +83,45 @@ def main() -> int:
           f"got {console._pending_for_passage(c2, 5, [])}")
 
     print()
+    print("pending_detail: every value applying would write, gain included, as "
+          "[before, after] -- the list the write button is consent to")
+    c3 = sqlite3.connect(":memory:")
+    c3.row_factory = sqlite3.Row
+    c3.executescript("""
+        CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);
+        CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL);
+        CREATE TABLE boundary_reviews (passage_id INTEGER PRIMARY KEY,
+            start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
+            lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL,
+            decided_at TEXT NOT NULL, applied_at TEXT,
+            audio_md5 TEXT, orig_kind TEXT, orig_start_ms INTEGER, orig_end_ms INTEGER,
+            orig_lead_in_ms INTEGER, orig_lead_out_ms INTEGER, orig_gain_db REAL, origin TEXT,
+            fade_in_ms INTEGER, fade_out_ms INTEGER, fade_in_curve TEXT, fade_out_curve TEXT,
+            orig_fade_in_ms INTEGER, orig_fade_out_ms INTEGER,
+            orig_fade_in_curve TEXT, orig_fade_out_curve TEXT);
+        INSERT INTO recordings VALUES ('rec-f', 'We Can Funk');
+        INSERT INTO passage_recordings VALUES (18069, 'rec-f', 1.0);
+        INSERT INTO boundary_reviews
+            (passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db, decided_at,
+             orig_start_ms, orig_end_ms, orig_lead_in_ms, orig_lead_out_ms, orig_gain_db,
+             fade_in_ms, fade_out_ms, fade_in_curve, fade_out_curve,
+             orig_fade_in_ms, orig_fade_out_ms, orig_fade_in_curve, orig_fade_out_curve)
+        VALUES (18069, 1428200, 1756560, 750, 0, -20.0, 't6',
+                1428200, 1756560, 0, 0, NULL,
+                1500, 7000, 'exponential', 'cosine',
+                20, 20, 'exponential', 'exponential');
+    """)
+    d = console.pending_detail(c3)
+    b = d["boundary"][0] if d["boundary"] else {}
+    check(b.get("title") == "We Can Funk", f"the title must come with it, got {b}")
+    check(b.get("gain_db") == [None, -20.0], f"the gain change must be listed, got {b.get('gain_db')}")
+    check(b.get("lead_in") == [0, 750], f"lead-in must be listed, got {b.get('lead_in')}")
+    check(b.get("fade_in") == [20, 1500], f"fade-in must be listed, got {b.get('fade_in')}")
+    check(b.get("fade_out_curve") == ["exponential", "cosine"],
+          f"a curve change must be listed, got {b.get('fade_out_curve')}")
+    check(b.get("span") == [1428200, 1756560, 1428200, 1756560], f"got {b.get('span')}")
+
+    print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")
         return 1
