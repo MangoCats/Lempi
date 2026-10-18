@@ -17,8 +17,10 @@ specifically that `remote_snapshot.py` replaced the old `scp` full-copy
 
 import json
 import os
+import re
 import sqlite3
 import sys
+import subprocess
 import tempfile
 import time
 
@@ -243,11 +245,15 @@ def test_a_split_peer_is_patched_through_its_listener_half(tmp: str) -> None:
     # were created inside `library.db`, shadowing the real ones in the
     # listener half (40 vs 99 rows, and 4 vs 3).
     cmd = _apply_cmd_for(tmp, "split", "pi@lempi02w:/var/lempi/listener.db")
-    check("sqlite3 /var/lempi/listener.db" in cmd,
+    check("sqlite3 -bail /var/lempi/listener.db" in cmd,
           f"the patch must be applied to the listener half, got: {cmd!r}")
     check("ATTACH DATABASE '/srv/library/library.db' AS lib;" in cmd,
           f"with the catalogue attached so catalogue statements still resolve, got: {cmd!r}")
-    check("sqlite3 /srv/library/library.db" not in cmd,
+    # The patch never goes straight at the catalogue, which is what planted
+    # the shadows. The one direct use is the WAL-to-DELETE switch before a
+    # read-only catalogue closes [BOS-RUN-092], which writes no table.
+    direct = [m.start() for m in re.finditer(r"sqlite3 (-bail )?/srv/library/library\.db", cmd)]
+    check(all(cmd[i:].split(";")[0].endswith("'PRAGMA journal_mode=DELETE") for i in direct),
           f"and never straight at the catalogue, which is what planted the shadows: {cmd!r}")
 
 
@@ -411,8 +417,133 @@ def test_a_deleted_peer_is_skipped_not_fatal(tmp: str) -> None:
     check(any("no such peer" in t for t in logs), f"and say why, got {logs}")
 
 
+def _bash() -> str | None:
+    """A real bash to run the remote command in. On Windows, Git Bash by its
+    own path: `bash` on `PATH` there can be the WSL launcher, which runs in
+    another filesystem altogether."""
+    if os.name == "nt":
+        for p in (r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files (x86)\Git\bin\bash.exe"):
+            if os.path.isfile(p):
+                return p
+        return None
+    import shutil
+    return shutil.which("bash")
+
+
+FAKES = {
+    # Each logs its own call, one line, to $LOG.
+    "systemctl": 'echo "systemctl $*" >> "$LOG"; '
+                 '[ "$1" = list-unit-files ] && echo "lempi.service enabled"; exit 0',
+    "sudo": '"$@"',
+    "findmnt": 'echo "findmnt $*" >> "$LOG"; case "$2" in '
+               'FSTYPE) echo "$FAKE_FS";; TARGET) echo /srv/library;; OPTIONS) echo "$FAKE_OPTS";; esac',
+    # `on` fails when told to; `off` succeeds. The real verb answers JSON.
+    "lempi-btctl": 'echo "lempi-btctl $*" >> "$LOG"; '
+                   'if [ "$2" = on ] && [ "${FAKE_ON_RC:-0}" != 0 ]; then '
+                   'echo \'{"ok":false,"error":"could not remount"}\'; exit 1; fi; '
+                   'echo \'{"ok":true,"mount":"/srv/library","was":"ro"}\'',
+    # The catalogue's header, bytes 18-19: each call reads the next value of
+    # $FAKE_JOURNAL ("11", "22", "22 11" ...), so a switch can be followed.
+    "od": 'n=$(cat "$LOG.od" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$LOG.od"; '
+          'set -- $FAKE_JOURNAL; i=1; v=$1; for x in "$@"; do [ $i = $n ] && v=$x; i=$((i+1)); done; '
+          'printf "   %s   %s\\n" "${v%?}" "${v#?}"',
+    "sqlite3": 'echo "sqlite3 $*" >> "$LOG"; '
+               'case "$2" in PRAGMA*) exit 0;; esac; '
+               'head -1 >> "$LOG"; cat > /dev/null; exit "${FAKE_SQL_RC:-0}"',
+}
+
+
+def test_a_read_only_catalogue_is_opened_for_the_patch(tmp: str) -> None:
+    print()
+    print("the remote command, run for real in bash against stand-in tools: a read-only "
+          "catalogue is opened by the node's own verb, closed only over a rollback journal, "
+          "and a failed patch lands nothing")
+    # Found 2026-10-18: every push to bose failed "attempt to write a
+    # readonly database" -- /srv/library is `ext4 ro` there -- and, without
+    # `-bail`, the review rows committed while the catalogue refused its half.
+    bash = _bash()
+    if not bash:
+        check(False, "no bash to run the remote command in -- this check could not run")
+        return
+    to_sh = lambda p: p.replace("\\", "/")  # noqa: E731
+    # A PATH entry cannot hold a drive's colon -- `:` separates entries --
+    # so on Windows a folder goes in as Git Bash names it, /c/...
+    on_path = lambda p: re.sub(r"^([A-Za-z]):", lambda m: "/" + m.group(1).lower(), to_sh(p))  # noqa: E731
+
+    def make_bin(name, without=()):
+        d = os.path.join(tmp, name)
+        os.makedirs(d, exist_ok=True)
+        for tool, body in FAKES.items():
+            if tool in without:
+                continue
+            with open(os.path.join(d, tool), "w", newline="\n") as f:
+                f.write("#!/bin/sh\n" + body + "\n")
+            os.chmod(os.path.join(d, tool), 0o755)
+        return d
+    full_bin, bare_bin = make_bin("fakebin"), make_bin("fakebin-no-btctl", without=("lempi-btctl",))
+    patch = os.path.join(tmp, "patch.sql")
+    with open(patch, "w", newline="\n") as f:
+        f.write("BEGIN IMMEDIATE;\nCOMMIT;\n")
+    cmd = jobmod.remote_apply_command("/srv/library/library.db", "/var/lempi/listener.db",
+                                      patch=to_sh(patch))
+
+    def run(fs, opts, journal="11", on_rc=0, sql_rc=0, bin_dir=full_bin):
+        log = os.path.join(tmp, "calls.log")
+        for p in (log, log + ".od"):
+            if os.path.exists(p):
+                os.remove(p)
+        env = dict(os.environ, LOG=to_sh(log), FAKE_FS=fs, FAKE_OPTS=opts, FAKE_JOURNAL=journal,
+                   FAKE_ON_RC=str(on_rc), FAKE_SQL_RC=str(sql_rc))
+        script = f'export PATH="{on_path(bin_dir)}:$PATH"; {cmd}'
+        r = subprocess.run([bash, "-c", script], env=env, capture_output=True, text=True)
+        calls = open(log).read().splitlines() if os.path.exists(log) else []
+        # The order of what touched the node, without the read-only queries.
+        steps = [c for c in calls if not c.startswith(("findmnt", "systemctl list"))]
+        return r.returncode, steps, r.stdout
+
+    patched = ["sqlite3 -bail /var/lempi/listener.db", "ATTACH DATABASE '/srv/library/library.db' AS lib;"]
+    rc, steps, out = run("ext4", "ro,noatime")
+    want = ["systemctl stop lempi", "lempi-btctl library-rw on", *patched,
+            "lempi-btctl library-rw off", "systemctl start lempi"]
+    check(rc == 0 and steps == want, f"read-only: open, patch, close, start in that order; got rc={rc} {steps}")
+    check("library-rw on:" in out and "library-rw off:" in out and "(ro,noatime)" in out,
+          f"and it says what it found and did, got {out!r}")
+
+    rc, steps, _ = run("ext4", "ro,noatime", sql_rc=1)
+    check(rc == 1 and steps[-2:] == ["lempi-btctl library-rw off", "systemctl start lempi"],
+          f"a failed patch still closes the catalogue and starts the player, and fails; got rc={rc} {steps}")
+
+    rc, steps, out = run("ext4", "ro,noatime", journal="22 11")
+    check(rc == 0 and "sqlite3 /srv/library/library.db PRAGMA journal_mode=DELETE;" in steps
+          and steps[-2:] == ["lempi-btctl library-rw off", "systemctl start lempi"],
+          f"a WAL catalogue is switched to DELETE, then closed; got rc={rc} {steps}")
+
+    rc, steps, out = run("ext4", "ro,noatime", journal="22 22")
+    check(rc == 1 and "lempi-btctl library-rw off" not in steps and steps[-1] == "systemctl start lempi"
+          and "LEFT READ-WRITE" in out,
+          f"a catalogue still WAL is left read-write, loudly, and the push fails; got rc={rc} {steps} {out!r}")
+
+    rc, steps, _ = run("ext4", "rw,relatime,errors=remount-ro")
+    check(rc == 0 and not any(s.startswith("lempi-btctl") for s in steps),
+          f"a writable catalogue is not opened or closed (errors=remount-ro is not ro); got {steps}")
+
+    rc, steps, _ = run("overlay", "rw")
+    check(rc == 1 and not any(s.startswith("sqlite3") for s in steps) and steps[-1] == "systemctl start lempi",
+          f"an overlay is refused, the player started again; got rc={rc} {steps}")
+
+    rc, steps, _ = run("ext4", "ro", on_rc=1)
+    check(rc == 1 and not any(s.startswith("sqlite3") for s in steps)
+          and "lempi-btctl library-rw off" not in steps and steps[-1] == "systemctl start lempi",
+          f"a catalogue that will not open is not written or closed; got rc={rc} {steps}")
+
+    rc, steps, out = run("ext4", "ro", bin_dir=bare_bin)
+    check(rc == 1 and not any(s.startswith("sqlite3") for s in steps) and "no lempi-btctl" in out,
+          f"a read-only catalogue with no verb to open it is refused, not remounted by hand; got rc={rc} {steps}")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        test_a_read_only_catalogue_is_opened_for_the_patch(tmp)
         test_push_lands_a_change(tmp)
         test_push_nothing_pending(tmp)
         test_snapshot_unreachable_fails_before_compare(tmp)

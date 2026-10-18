@@ -27,6 +27,7 @@ import json
 import os
 import queue
 import re
+import shlex
 import sqlite3
 import tempfile
 import subprocess
@@ -206,6 +207,76 @@ def stop_policy(kind, stage) -> tuple[str, int]:
 def stop_file(job_id: int) -> str:
     """The file a stage looks for to know it has been asked to stop."""
     return os.path.join(tempfile.gettempdir(), "lempi-console-stop", f"job-{job_id}")
+
+
+def remote_apply_command(library: str, listener: str,
+                         patch: str = "/tmp/lempi-sync-patch.sql") -> str:
+    """The shell a push runs on a node to land its patch `[SPEC-DF-111]`.
+
+    Stop the player if the node has one, apply, start it again whatever
+    happened, and exit with the patch's own status. Two things it must also
+    do, both found 2026-10-18 when every push to `bose` failed:
+
+    - **Open a read-only catalogue for the write, and close it after.**
+      `bose` mounts `/srv/library` `ext4 ro` `[REQ-HW-150]`; the patch's
+      `UPDATE passages` failed there on every push, which is why `bose` was
+      excluded from pushes until this path "learns that remount window"
+      `[SPEC-DF-127]`. It opens it the way the star sync does, with the
+      node's own root verb, `lempi-btctl library-rw on|off`
+      `[SPEC-STAR-104]`, which finds the catalogue's partition itself and
+      refuses an overlay; a read-only catalogue on a node without that verb
+      is refused, not remounted by hand. It says what it finds before
+      acting `[GDE-DEP-060]`.
+    - **Never close it over a WAL file `[BOS-RUN-092]`.** On read-only media
+      a WAL catalogue opens only while its sidecars exist, and a clean close
+      deletes them -- bose was silent for 30 minutes that way. The journal
+      mode is read from the header (bytes 18-19), as `attended-import.sh`
+      reads it; WAL is switched to DELETE, and a catalogue still WAL, or
+      unreadable, is left read-write and the push fails loudly -- the
+      harmless failure, not the outage.
+    - **Land all of the patch or none of it.** Without `-bail`, `sqlite3`
+      reports a failed statement and runs on, so the closing `COMMIT` kept
+      the review rows while the catalogue refused its half: `bose`'s listener
+      said five edits were applied that its library never received.
+    """
+    lib = shlex.quote(library)
+    header = f"$(od -An -tu1 -j18 -N2 {lib} 2>/dev/null | tr -d ' \\n')"
+    return (
+        # Only a node that HAS the unit gets stopped and started.
+        # `teacherslounge` deliberately runs no service -- it is launched by
+        # hand -- and `systemctl stop lempi` there fails with "Unit
+        # lempi.service not found", which is noise on every push and, read
+        # quickly, looks like the push itself went wrong. A node with no
+        # service has nothing holding the database open, so nothing to stop.
+        'have=$(systemctl list-unit-files lempi.service 2>/dev/null | '
+        'grep -c "^lempi.service" || true); '
+        '[ "$have" != 0 ] && sudo systemctl stop lempi; rc=0; opened=; '
+        f'fs=$(findmnt -no FSTYPE -T {lib} 2>/dev/null); '
+        f'at=$(findmnt -no TARGET -T {lib} 2>/dev/null); '
+        f'opts=$(findmnt -no OPTIONS -T {lib} 2>/dev/null); '
+        f'echo "catalogue {library}: on ${{fs:-?}} at ${{at:-?}} (${{opts:-mount unknown}})"; '
+        'if [ "$fs" = overlay ]; then '
+        'echo "refused: a write to an overlay vanishes at reboot"; rc=1; '
+        'else case ",$opts," in *,ro,*) '
+        'if command -v lempi-btctl >/dev/null 2>&1; then '
+        'out=$(sudo lempi-btctl library-rw on 2>&1); echo "library-rw on: $out"; '
+        'case "$out" in *\'"ok":true\'*) opened=1;; *) rc=1;; esac; '
+        'else echo "read-only, and this node has no lempi-btctl library-rw: not opened"; rc=1; fi;; '
+        'esac; fi; '
+        'if [ "$rc" = 0 ]; then '
+        f"{{ echo \"ATTACH DATABASE '{library}' AS lib;\"; cat {shlex.quote(patch)}; }} "
+        f"| sqlite3 -bail {shlex.quote(listener)} || rc=$?; fi; "
+        'if [ -n "$opened" ]; then '
+        f'j={header}; '
+        'if [ "$j" = 22 ]; then echo "catalogue is WAL: switching to DELETE before closing [BOS-RUN-092]"; '
+        f"sqlite3 {lib} 'PRAGMA journal_mode=DELETE;'; j={header}; fi; "
+        'if [ "$j" = 11 ]; then out=$(sudo lempi-btctl library-rw off 2>&1); '
+        'echo "library-rw off: $out"; '
+        'case "$out" in *\'"ok":true\'*) ;; *) echo "COULD NOT close the catalogue"; '
+        '[ "$rc" = 0 ] && rc=1;; esac; '
+        'else echo "catalogue journal is not a rollback journal (header $j): '
+        'LEFT READ-WRITE rather than risk the outage [BOS-RUN-092]"; [ "$rc" = 0 ] && rc=1; fi; fi; '
+        '[ "$have" != 0 ] && sudo systemctl start lempi; exit $rc')
 
 
 def kill_tree(proc) -> None:
@@ -996,9 +1067,6 @@ class Runner:
                    "a peer's halves must live on one machine")
             self._emit(job_id, "error", msg)
             return False, {"error": msg}
-        apply_sql = ("{ echo \"ATTACH DATABASE '" + remote_path + "' AS lib;\"; "
-                     "cat /tmp/lempi-sync-patch.sql; } | sqlite3 " + lis_path)
-
         self._emit(job_id, "stage", "export", stage="export")
         code, _ = self._spawn(job_id, "export", [
             sys.executable, os.path.join(tools, "export_changes.py"), self.library, "-o", changes_json])
@@ -1074,27 +1142,16 @@ class Runner:
         # room is a fault.
         #
         # It is not hypothetical. `bose` mounts its catalogue half read-only
-        # (`/srv/library`, `ext4 ro`), so `sqlite3` against it fails every
-        # time -- measured 2026-09-11 -- and the old chain would have stopped
-        # bose's player and left it that way.
+        # (`/srv/library`, `ext4 ro`), and that once made this patch fail there
+        # every time -- measured 2026-09-11 -- which the old chain would have
+        # turned into a stopped player. The mount is now remounted for the
+        # write (`remote_apply_command`), as the star sync already did.
         #
         # So: stop, try, restart whatever happened, and exit with the patch's
         # own status so the job still reports the failure honestly.
         self._emit(job_id, "stage", "apply-remote", stage="apply-remote")
         code, _ = self._spawn(job_id, "apply-remote", [
-            "ssh", host,
-            # Only a node that HAS the unit gets stopped and started.
-            # `teacherslounge` deliberately runs no service -- it is launched
-            # by hand -- and `systemctl stop lempi` there fails with "Unit
-            # lempi.service not found", which is noise on every push and, read
-            # quickly, looks like the push itself went wrong. A node with no
-            # service has nothing holding the database open, so there is
-            # nothing to stop.
-            'have=$(systemctl list-unit-files lempi.service 2>/dev/null | '
-            'grep -c "^lempi.service" || true); '
-            '[ "$have" != 0 ] && sudo systemctl stop lempi; rc=0; '
-            f"{apply_sql} || rc=$?; "
-            '[ "$have" != 0 ] && sudo systemctl start lempi; exit $rc'])
+            "ssh", host, remote_apply_command(remote_path, lis_path)])
         if code == 0:
             self._emit(job_id, "log", f"{host} now has these changes.")
         else:
