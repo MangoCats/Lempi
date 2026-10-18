@@ -4,7 +4,7 @@
 
 lp3-wifi played to the soundcore Boom 2 with glitches and dropouts the
 listener could hear, before and after a reboot. This is what was measured,
-what is still open, and what now records it.
+what it turned out to be -- the supply -- and what now records it.
 
 > **Related:** [LP3001](LP3001-the-node-and-its-units.md) for the node ·
 > [appliance/README](../appliance/README.md) for the health log, `[APP-HLT-010]` ·
@@ -32,7 +32,8 @@ Bluetooth transport failure, `bluez_output … running -> error` at 23:51:26,
 fell among the dips. So the sags follow load, not the speaker: they came with
 playing and stopped with it.
 
-**Whether they made the glitches is open.** The listener heard the glitches
+**Whether they made the glitches was left open here**, and is settled by a
+change of supply `[LP3-PWR-040]`. The listener heard the glitches
 almost stop from about 09:36, while the dips went on (17 in the five minutes
 before, 11 in the five after). Then lp3-wifi was taken out of its case for a
 photograph and put back, and after its 09:49 start the dips all but stopped
@@ -80,22 +81,54 @@ clean.** Three measurements, 2026-10-17, each on the Boom 2 playing:
 So a larger buffer would not help: everything before the radio keeps up,
 and the only buffer that could bridge a gap in the air is the speaker's own,
 which A2DP cannot fill ahead of time. What the glitches of the night were
-is open. That night ran four times the rate -- 145 to 181 an hour -- and may
-have crossed a line today did not; or the cause was not power at all.
+was left open: that night ran four times the rate -- 145 to 181 an hour --
+and may have crossed a line this test did not. The evening answered it.
 
-## 4. What now records it, and what to look at next
+## 4. The verdict: the supply
+
+**`[LP3-PWR-040]` The skipping was the supply, and a USB-C charger on a
+shorter cable ended it.** By the evening of 2026-10-17 lp3-wifi was powered
+from the Boom 2's USB-A port, the Boom 2 itself on its charger -- battery
+reported full (BlueZ `0x64`), its volume unchanged all evening. Then three
+supplies, one after another, under the same load -- playing to the Boom 2,
+the screen on:
+
+| supply | measured | heard |
+| :--- | :--- | :--- |
+| the Boom 2's USB-A port | undervoltage climbing all evening: 79 an hour at 19:00, then 126, 149, 178 by 20:30, and 186-189; one A2DP transport failure at 22:04:03 (`error 24`), the speaker back at 22:04:17 | skipping, a lot of it |
+| another charger's USB-A port, boot 22:38:28 | 13 dips in about 16 minutes, but 894 s of them below the threshold; `get_throttled` `0x50005` -- undervoltage and throttling in force -- at every check | clean |
+| one wall charger's USB-C output, a shorter cable, boot 22:56:28 | no undervoltage at all; `0x0` at every minute, 22:57-23:12, playing throughout | clean |
+
+The Boom 2's port could not hold a Pi 3 B and its screen above the Pi's
+4.63 V threshold, and held it less well as the evening went on. The skipping
+came at the rates the night had, 145 to 189 an hour, and not at the forty an
+hour of `[LP3-PWR-030]`; where the line lies between those is not measured.
+The night of 10-16 is most likely the same cause, though what fed lp3-wifi
+then is not recorded here.
+
+The second supply is the warning in this table. It sat below the threshold
+rather than crossing it, so it counted few events while the CPU stayed
+throttled the whole time -- clean for a quarter of an hour, and no supply to
+keep. **Read the event count with `thr=` and the time spent below the
+threshold, never alone.**
+
+lempi02w had run from the Boom 2's port, and has been off the network since
+the evening of 10-16 -- most likely unpowered since lp3-wifi took the port.
+
+## 5. What now records it, and what to look at next
 
 `lempi-health` runs here from 2026-10-17 `[APP-HLT-010]`: one line a minute
 in `/var/lempi/health.log`, with the throttle bits, the CPU clock, what is
 playing and where, the links, and the events since the line before. A glitch
 heard at a given minute is read against that minute's line:
 
-- **Dips there, well above today's one every two minutes:** the supply. The
-  fix is a 5.1 V, 2.5 A supply and a short, thick cable. A dip or two alone
-  says little: 26 came in 38 glitch-free minutes `[LP3-PWR-030]`.
+- **Dips there, well above one every two minutes, or `thr=` showing
+  undervoltage now:** the supply. The fix is a 5.1 V, 2.5 A supply and a
+  short, thick cable, as it was `[LP3-PWR-040]`. A dip or two alone says
+  little: 26 came in 38 glitch-free minutes `[LP3-PWR-030]`.
 - **No dips, but `ev_bt` or `ev_underrun`:** the Bluetooth link or the player,
   not the supply.
-- **Nothing at all:** the speaker's side. lempi02w is the suspect -- it runs
-  from the Boom 2's USB port and still prefers the Boom 2, so its keeper keeps
-  paging a speaker that is streaming here; unplugging it for a while tests
-  that.
+- **Nothing at all:** the speaker's side. lempi02w is the suspect whenever
+  it is powered near the Boom 2 -- it still prefers the Boom 2, so its keeper
+  keeps paging a speaker that is streaming here; unplugging it for a while
+  tests that.
