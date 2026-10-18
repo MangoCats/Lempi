@@ -72,7 +72,7 @@ The vocabulary is fixed, in Rust and in `star_patch.py`, and a test holds the tw
 
 - It does not make ids equal, and nothing depends on their being so. A node's numbering is its own.
 - It does not reach a node that holds music the hub does not `[SPEC-STAR-048]`, nor repair a node whose rows differ in more than ids.
-- It does not touch the listener half, whose passage rows are already translated through the node's summary `[SPEC-STAR-049]`.
+- It does not touch the listener half. Its passage rows were taken to be translated through the node's summary `[SPEC-STAR-049]`, which was true one way only: a node's copy went back in the hub's numbers until 2026-10-18 `[SPEC-STAR-051]`.
 - It does not move the 590,101 `flavor` rows or any table keyed by an MBID.
 
 ## 7. Proof, and the order to build it in

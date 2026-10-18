@@ -123,6 +123,10 @@ class Node:
         self.mirror = bool(spec.get("mirror"))
         self.catalogue = spec.get("catalogue")
         self.remap: dict = {}          # [SPEC-STAR-049]: node passage id -> hub's
+        # [SPEC-STAR-051]: hub passage id -> this node's, for writing its own
+        # copy back in its own numbering. None: no catalogue to translate by,
+        # so its copy keeps the ids as merged.
+        self.unmap: dict | None = None
         self.aliases: dict = {}        # [SPEC-RLK-155]: a retired audio_md5 -> the hub's
         self.remapped: dict = {}       # table -> rows translated
         self.tables = {r[0] for r in self.db.execute(
@@ -154,9 +158,12 @@ class Node:
     def cols(self, table: str) -> list[str]:
         return [r[1] for r in self.db.execute(f"PRAGMA table_info({table})")]
 
-    def _read(self, conn: sqlite3.Connection, table: str, count: bool) -> list[dict]:
+    def _read(self, conn: sqlite3.Connection, table: str, count: bool,
+              translate: bool = True) -> list[dict]:
         cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
         rows = [dict(zip(cols, r)) for r in conn.execute(f"SELECT * FROM {table}")]
+        if not translate:
+            return rows
         if self.aliases and "audio_md5" in cols:
             for r in rows:
                 if r["audio_md5"] in self.aliases:
@@ -181,6 +188,14 @@ class Node:
         if table not in self.tables:
             return []
         return self._read(self.db, table, True)
+
+    def own_rows(self, table: str) -> list[dict]:
+        """This node's rows exactly as it holds them, in its own numbering --
+        for the tables that are its own and never merged, written back to it
+        unchanged rather than translated there and back."""
+        if table not in self.tables:
+            return []
+        return self._read(self.db, table, False, translate=False)
 
     def base_rows(self, table: str, key: tuple) -> dict | None:
         """What this node held of `table` when last sent its copy, by key; None
@@ -539,6 +554,71 @@ def passage_remap(node_cat: str, hub_cat: str):
     return remap, sorted(gone)
 
 
+def passage_unmap(node_cat: str, hub_cat: str, remap: dict) -> tuple[dict, int]:
+    """[SPEC-STAR-049], the other way: hub passage id -> this node's, the exact
+    inverse of how the node's rows were read (`passage_remap`), so a row
+    written into the node's copy is read back next time as the passage it
+    was. A hub passage the node does not hold has no entry.
+
+    Missing until 2026-10-18. A node's copy was written in the hub's numbers,
+    which was right while every node took the hub's catalogue whole; since
+    the natural-key patch a node keeps its own numbering `[SPEC-NKP-020]`, so
+    the next merge read those hub numbers as the node's and translated them a
+    second time. An id review on the hub's passage 18031 ("Somewhere Here on
+    Earth") came back as one on the hub's 17993, a Scarecrow track, since
+    18031 is that track on the nodes: a review made once was on eight
+    passages after three syncs, and twelve songs were renamed by it.
+    Returns the map and how many hub ids two node passages both claimed (the
+    first, by node id, is kept)."""
+    q = "SELECT p.passage_id, f.audio_md5 FROM passages p JOIN files f USING (file_id)"
+    alias = aliases(hub_cat)
+    nc, hc = open_ro(node_cat), open_ro(hub_cat)
+    try:
+        node = {pid: alias.get(md5, md5) for pid, md5 in nc.execute(q)}
+        hub = {pid: md5 for pid, md5 in hc.execute(q)}
+    finally:
+        nc.close()
+        hc.close()
+    inverse: dict = {}
+    clashes = 0
+    for pid in sorted(node):
+        if pid in remap:
+            to = remap[pid]
+        elif pid in hub and hub[pid] == node[pid]:
+            to = pid                          # same file: the same passage
+        else:
+            continue                          # gone from the hub: nothing to write back to
+        if to in inverse:
+            clashes += 1
+            continue
+        inverse[to] = pid
+    return inverse, clashes
+
+
+def to_node_numbering(rows: list[dict], unmap: dict) -> tuple[list[dict], int]:
+    """Rows from the merge, in the hub's passage numbers, in a node's own.
+    A row naming a passage the node does not hold is left out of its copy --
+    written under the hub's number it would name some other music there --
+    and counted. Rows naming no passage pass through unchanged."""
+    out, dropped = [], 0
+    for r in rows:
+        r = dict(r)
+        if r.get("passage_id") is not None:
+            pid = _int(r["passage_id"])
+            if pid not in unmap:
+                dropped += 1
+                continue
+            r["passage_id"] = unmap[pid]
+        elif r.get("subject_kind") == "passage" and r.get("subject_id") is not None:
+            pid = _int(r["subject_id"])
+            if pid not in unmap:
+                dropped += 1
+                continue
+            r["subject_id"] = type(r["subject_id"])(unmap[pid])
+        out.append(r)
+    return out, dropped
+
+
 def _int(v):
     try:
         return int(v)
@@ -562,8 +642,10 @@ def _build_listener(nodes: list, manifest: dict, out: str, rep: Report, hub_cat:
             n.aliases = aliases(hub_cat)
         if n.catalogue and hub_cat:
             n.remap, gone = passage_remap(n.catalogue, hub_cat)
+            n.unmap, clashes = passage_unmap(n.catalogue, hub_cat, n.remap)
             rep.data["translations"][n.name] = dict(
-                ids=sorted([a, b] for a, b in n.remap.items()), unmatched=gone)
+                ids=sorted([a, b] for a, b in n.remap.items()), unmatched=gone,
+                back_clashes=clashes)
     hub = manifest["hub_state_from"]
     if hub not in {n.name for n in nodes}:
         raise SystemExit(f"hub_state_from names {hub!r}, which is not a node in the manifest")
@@ -599,6 +681,10 @@ def _build_listener(nodes: list, manifest: dict, out: str, rep: Report, hub_cat:
         own = {t: s["merged"] for t, s in scratch.data["tables"].items()
                if s["rule"] in (LOCAL, HUB)}
         rep.data["copies"][n.name] = dict(listener=f"its own, integrity {ok}", own=own)
+        not_there = {t: s["not_on_node"] for t, s in scratch.data["tables"].items()
+                     if s.get("not_on_node")}
+        if not_there:
+            rep.data["copies"][n.name]["not_on_node"] = not_there
 
 
 def write_listener(nodes: list[Node], own: str, path: str, rep: Report,
@@ -624,6 +710,17 @@ def write_listener(nodes: list[Node], own: str, path: str, rep: Report,
             dest.execute(isql)
         cols = src.cols(table)
         rows = merge_table(table, TABLES[table], nodes, own, rep)
+        # A node's own copy in its own passage numbers `[SPEC-STAR-049]`: the
+        # merge read every row of every node in the hub's. Its own tables go
+        # back as it holds them; the shared ones, merged in the hub's numbers,
+        # are translated into its.
+        if schema_of is not None and schema_of.unmap is not None:
+            if TABLES[table]["rule"] in (LOCAL, HUB):
+                rows = schema_of.own_rows(table)
+            else:
+                rows, dropped = to_node_numbering(rows, schema_of.unmap)
+                if dropped:
+                    rep.data["tables"][table]["not_on_node"] = dropped
         dest.executemany(
             f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
             [tuple(r.get(c) for c in cols) for r in rows])

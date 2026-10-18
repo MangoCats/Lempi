@@ -312,12 +312,62 @@ def test_translation(tmp):
     check(hub == [], f"the appliance's plays stay its own, never the hub's [REQ-PD-113]: {hub}")
     mine = os.path.join(out, "nodes", "app")
     got = rows(os.path.join(mine, "listener.db"), "SELECT passage_id, mbid FROM listener_play_history")
-    check(got == [(2, "rec-B")], f"in its own copy, its play of its passage 1 (file B) is the hub's passage 2: {got}")
+    # Its own numbering, not the hub's (2026-10-18): the natural-key patch
+    # leaves a node's ids its own [SPEC-NKP-020], so its play of its passage 1
+    # (file B) stays on its passage 1. Under the hub's number it would be a
+    # play of file A there, and the next merge would read it so.
+    check(got == [(1, "rec-B")], f"in its own copy, its play of its passage 1 (file B) stays its passage 1: {got}")
     check(rep.data["translations"]["app"]["ids"] == [[1, 2], [2, 1]], "and the translation is reported")
     f = rows(os.path.join(mine, "library.db"), "SELECT file_id, audio_md5, path FROM files ORDER BY file_id")
     check(f == [(1, "A", "/a.mp3"), (2, "B", "/b.mp3")],
           f"its catalogue is the hub's, with its own paths matched by audio_md5, not file id: {f}")
     check(not os.path.exists(os.path.join(out, "nodes", "desktop")), "the hub's own pair is not repeated")
+
+
+def test_a_review_survives_two_rounds(tmp):
+    """[SPEC-STAR-049] both ways. Found 2026-10-18: an id review made once on
+    the hub was on eight passages after three syncs, because a node's copy
+    was written in the hub's numbers and read back as the node's. Two rounds
+    here, the node's copy of the first fed back as its listener in the
+    second: the review stays one row, on the same music, on both sides."""
+    desk, app = os.path.join(tmp, "rr-desk.cat"), os.path.join(tmp, "rr-app.cat")
+    # Opposite order: the hub's passage 1 is file A, the node's is file B.
+    for path, order in ((desk, ("A", "B")), (app, ("B", "A"))):
+        cat(path, f"INSERT INTO files VALUES (1,'{order[0]}','/{order[0]}.mp3',100)",
+            f"INSERT INTO files VALUES (2,'{order[1]}','/{order[1]}.mp3',100)",
+            "INSERT INTO passages VALUES (1,1000,'ingest')", "INSERT INTO passages VALUES (2,1000,'ingest')")
+        c = sqlite3.connect(path)
+        for s in ("ALTER TABLE passages ADD COLUMN file_id INTEGER", "ALTER TABLE passages ADD COLUMN kind TEXT",
+                  "ALTER TABLE passages ADD COLUMN start_ms INTEGER",
+                  "UPDATE passages SET file_id = passage_id, kind = 'radio', start_ms = 0"):
+            c.execute(s)
+        c.commit()
+        c.close()
+    review = ("CREATE TABLE id_reviews (passage_id INTEGER PRIMARY KEY, decision TEXT, chosen_mbid TEXT, "
+              "decided_at TEXT, applied_at TEXT, origin TEXT)")
+    dl, al = os.path.join(tmp, "rr-desk.lis"), os.path.join(tmp, "rr-app.lis")
+    # The hub's review of its passage 1 -- file A.
+    db(dl, review, "INSERT INTO id_reviews VALUES (1,'reassigned','rec-A','2026-10-15 00:20:04',NULL,NULL)")
+    # The node's own play of its passage 1 -- file B.
+    db(al, review, "INSERT INTO listener_play_history VALUES (1,5000,1,'rec-B',100,200,'auto')")
+
+    def merge(tag, node_listener):
+        out = os.path.join(tmp, f"rr-out-{tag}")
+        sm.build({"hub_state_from": "desktop", "hub_library": desk,
+                  "nodes": [dict(name="desktop", listener=dl),
+                            dict(name="app", listener=node_listener, catalogue=app, files=app)]}, out)
+        return os.path.join(out, "listener.db"), os.path.join(out, "nodes", "app", "listener.db")
+
+    hub1, node1 = merge("1", al)
+    got = rows(node1, "SELECT passage_id, chosen_mbid FROM id_reviews")
+    check(got == [(2, "rec-A")], f"the node's copy names its own passage of file A, its 2: {got}")
+    check(rows(node1, "SELECT passage_id FROM listener_play_history") == [(1,)],
+          "and its own play stays on its own passage 1")
+    hub2, node2 = merge("2", node1)          # the node now holds what it was sent
+    got = rows(hub2, "SELECT passage_id, chosen_mbid FROM id_reviews")
+    check(got == [(1, "rec-A")], f"a second round leaves one review, on the hub's passage of file A: {got}")
+    check(rows(node2, "SELECT passage_id, chosen_mbid FROM id_reviews") == [(2, "rec-A")],
+          "and the node's copy is unchanged")
 
 
 def test_rekeyed(tmp):
@@ -494,6 +544,7 @@ def main() -> int:
     test_held_out(tmp)
     test_receivers(tmp)
     test_translation(tmp)
+    test_a_review_survives_two_rounds(tmp)
     test_routine(tmp)
     manifest, inputs = fleet(tmp)
     before = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in inputs}
