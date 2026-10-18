@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS files (
     first_seen   TEXT    NOT NULL,
     last_seen    TEXT    NOT NULL,
     -- Which hasher produced `audio_md5`, as `name@version` -- `ffmpeg@8.0`,
-    -- one day `symphonia@0.5.4` [SPEC-RLK-086], [SPEC-RLK-150] precondition 3.
+    -- `symphonia@0.5.5` since the 2026-09-27 re-key [SPEC-RLK-152], [SPEC-SC-038].
     --
     -- `audio_md5` keys four tables and is treated as a stable identity, but it
     -- implements no standard: it is whatever the demuxer that computed it did.
@@ -541,6 +541,10 @@ CREATE TABLE IF NOT EXISTS player_state (
     volume       REAL    NOT NULL DEFAULT 1.0,
     updated_at   TEXT    NOT NULL
 );
+
+-- Operational settings and saved queue: `player_settings` and `player_queue`
+-- live in listener.db alongside player_state [SPEC-SC-099], but are created
+-- and managed dynamically at runtime by PlayerStore (player/core/src/db/player_store.rs).
 
 -- ================================================================== metadata
 

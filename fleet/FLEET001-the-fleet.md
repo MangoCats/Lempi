@@ -20,7 +20,7 @@ Every machine that holds a Lempi or Vipunen database, what it is for, and where 
 | `lempi02w` | `pi@lempi02w` | appliance; Bluetooth speaker; where most listener edits are made; kept on bookworm and plain ext4 on purpose `[FLT-ISS-040]` | Pi Zero 2 W · bookworm | ext4 | [LempiPi/](../LempiPi/IMPL001-appliance-setup.md) |
 | `bose` | `pi@bose` | appliance; HiFiBerry DAC+; echo leader | Pi 4 · trixie | **overlay** | [BosePi/](../BosePi/BOSE004-operating-health.md) |
 | `lp3-wifi` (`lempiplay3`) | `pi@lp3-wifi` | appliance; framebuffer UI; echo follower; the jack, or a Bluetooth speaker since 2026-10-02 `[LP3-BT-010]` | Pi 3 B · trixie | **overlay** | [LempiPlay3/](../LempiPlay3/LP3001-the-node-and-its-units.md) |
-| the Moto G | adb, see `android/README.md` | Android test phone — no database in the fleet yet | moto g power (2021) · Android 11 | — | [android/](../android/README.md) |
+| the Moto G | adb, see `android/README.md` | Android test phone — runs WKMP against its own listener.db; see §3 | moto g power (2021) · Android 11 | — | [android/](../android/README.md) |
 
 The overlay nodes need both layers written for anything on the root filesystem, and such a write must go through the scripts CLAUDE.md §4 names. A star sync writes none: its targets are the data partitions, `/var/lempi` (f2fs, read-write) and `/srv/library` (ext4; read-only on `bose`, remounted for the write and put back), read on all three appliances on 2026-10-04. `star_distribute.py` refuses a database that is on an overlay `[SPEC-STAR-080]`.
 
@@ -40,6 +40,7 @@ The overlay nodes need both layers written for anything on the root filesystem, 
 | `lempi02w` | `/var/lempi/listener.db` | `/srv/library/library.db` | `/var/lempi/listener-backups/` |
 | `bose` | `/var/lempi/listener.db` | `/srv/library/library.db` (read-only mount) | `/var/lempi/listener-backups/` |
 | `lp3-wifi` | `/var/lempi/listener.db` | `/srv/library/library.db` | `/var/lempi/listener-backups/` |
+| the Moto G | app private storage (`files/listener.db`) | app private storage (`files/library.db`) | — |
 
 The desktop's pair went missing when this repository was seeded, and was rebuilt by merging every node's `[SPEC046]`; `data/README.md` records both.
 
@@ -90,7 +91,7 @@ Beside each backup, `pre-star-2026-09-26-tools/` holds the tool and the two patc
 | :--- | :--- | :--- |
 | `lempi02w` | PipeWire → a Bluetooth speaker | guest backend, idle until switched to |
 | `bose` | ALSA → the HiFiBerry DAC, directly — the one difference kept for what it gives | guest backend |
-| `lp3-wifi` | PipeWire → the jack, or the paired Oontz | none, by decision |
+| `lp3-wifi` | PipeWire → the jack, or the paired soundcore Boom 2 | none, by decision |
 | `smartboardpc` | PulseAudio's default device | not installed |
 | `teacherslounge` | by hand | not installed |
 

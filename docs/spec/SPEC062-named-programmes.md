@@ -202,9 +202,8 @@ the move.
   had. Slots changed behind it, by a tool or by hand, read as the node's own.
   The player now creates the slot tables too, on a listener file that never
   went through the split.
-- The fingerprint is checked against Python's standard JSON form
-  `[SPEC-PGM-110]`: computed both ways over the hub's eight slots, it was the
-  same value.
+- The fingerprint is checked against Python's standard JSON form `[SPEC-PGM-110]`:
+  computed both ways over the hub's eight slots, it was the same value.
 - A save is one transaction. A kept slot keeps its id, so history still
   names it. A new slot takes an id above any a slot or `selection_decisions`
   has had, never the deleted one SQLite would reuse. The running Director

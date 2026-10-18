@@ -62,6 +62,15 @@ playback behavior:</p>
     lyrics files beside the audio itself, and keeping a lossless FLAC copy
     of each CD rip Vipunen adds. Some of these only take effect after a
     restart — the panel says which.</li>
+  <li><strong>Album names</strong> — caps the length of folder and file names
+    for new CD rips (default 60 characters), so paths stay within system
+    limits while the full title remains displayed everywhere in Lempi.</li>
+  <li><strong>Your music files</strong> — reports background integrity checks,
+    reading each audio file back against its induction hash to catch damaged or
+    missing music.</li>
+  <li><strong>Power</strong> — on Raspberry Pi appliances, monitors the supply
+    for undervoltage dips and CPU throttling across the last 24 hours, warning
+    when supply drops could threaten playback, Bluetooth, or Wi-Fi.</li>
 </ul>
 <p>The same panel also shows the exact build you're running (with a
 copy-to-clipboard button), which branch and commit it came from, and
@@ -314,6 +323,8 @@ you expect it, this is almost always why:</p>
 <tr><td>Listening backups &amp; restore</td><td>✓</td><td>—</td><td>—</td></tr>
 <tr><td>Enqueue a shutdown after the music</td><td>—</td><td>✓</td><td>—</td></tr>
 <tr><td>Output volume per output</td><td>✓</td><td>—</td><td>—</td></tr>
+<tr><td>Your music files (integrity)</td><td>✓</td><td>—</td><td>—</td></tr>
+<tr><td>Power (voltage / throttling monitor)</td><td>✓</td><td>—</td><td>—</td></tr>
 <tr><td>Lyrics</td><td>—</td><td>✓</td><td>—</td></tr>
 <tr><td>Back cover art</td><td>—</td><td>✓</td><td>—</td></tr>
 <tr><td>Time slot override, and Edit programme</td><td>dropdown</td><td>buttons + checkbox</td><td>dropdown</td></tr>
