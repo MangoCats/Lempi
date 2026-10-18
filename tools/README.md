@@ -75,7 +75,7 @@ Folding reviewed decisions into the library, and syncing them — and flags — 
 | `sync_console.py` | What the console's `/sync` page knows: where a run stands, its conflicts in words and in pages, verdicts, and what blocks a commit `[SPEC-STAR-120]`. |
 | `hub_backup.cmd` | What Task Scheduler runs each night at 03:30: `star_sync.py … backup` -- the backup and the re-read of its objects -- then `verify_library.py`, with a message on screen if either fails `[SPEC-STAR-086]`. |
 | `hub_mirror.cmd` | What Task Scheduler runs every quarter hour, without a window: `star_sync.py … mirror`, the backup's mirror brought up to date whenever it can be reached `[SPEC-STAR-088]`. |
-| `install_hub_tasks.ps1` | Creates or updates the hub's two scheduled tasks, *Lempi hub backup* and *Lempi hub mirror* -- run once on a new or rebuilt hub (HOWTO §7). |
+| `install_hub_tasks.ps1` | Creates or updates the hub's two scheduled tasks, *Lempi hub backup* and *Lempi hub mirror* -- run once on a new or rebuilt hub ([GUIDE039](../docs/GUIDE039-running-the-star-sync.md)). |
 | `verify_library.py` | Every catalogued file re-hashed against its recorded SHA-256: ok, re-tagged, damaged, missing, unreadable; each rip's recorded sidecars read again; audio no row claims listed as strays, the CD inbox apart; read-only, the result kept in `data/verify/` `[GDE-INT-115]`, `[GDE-INT-175]`. |
 | `sidecars.py` | A CD rip's log, AccurateRip report and CUE sheet, hashed into `ingest_decisions` when the rip is added; `--adopt` records those already in the library, as they are today `[GDE-INT-175]`. |
 | `bundle_ledger.py` | What each applied send touched on each speaker (`sync/bundled.json`), for the next star sync to ask that speaker about `[SPEC-STAR-945]`. |
