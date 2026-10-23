@@ -702,6 +702,11 @@ pub struct Engine {
     /// once however many ticks it sounds for.
     /// Whether the passage at `head` has been written to history yet.
     recorded: bool,
+    /// Whether the passage at `head` has been heard warped at any point.
+    /// Working with a passage is neither listening through it nor declining
+    /// it, so its departure is then neither a play nor a skip
+    /// `[SPEC-TPL-015]`.
+    head_warped: bool,
     /// The passage currently at the head of `live`, so `recorded` can reset.
     head: Option<i64>,
     /// Its MBID, kept because a skip is written *after* the passage has gone
@@ -871,6 +876,7 @@ impl Engine {
             heard_from: None,
             saved: None,
             recorded: false,
+            head_warped: false,
             head: None,
             head_mbid: None,
             head_span_ms: 0,
@@ -994,10 +1000,16 @@ impl Engine {
     /// re-anchor, on the controls alone would do either across up to ~14 s of
     /// audio that is not at 1:1 with the clock.
     pub(crate) fn sounding_warped(&self) -> bool {
+        self.warped_at(self.heard_admitted)
+    }
+
+    /// As `sounding_warped`, for a caller holding the admission it is judging.
+    /// `record_play` runs before `advance_shown` in a tick, so at the tick a
+    /// new passage is first heard `heard_admitted` still names the old one --
+    /// and judged by it, a neutral passage was marked as worked with.
+    pub(crate) fn warped_at(&self, admitted: Option<u64>) -> bool {
         self.is_warped()
-            || self
-                .warped_through
-                .is_some_and(|w| self.heard_admitted.is_none_or(|h| h <= w))
+            || self.warped_through.is_some_and(|w| admitted.is_none_or(|h| h <= w))
     }
 
     /// Return tempo, pitch and the loop to neutral on a track change
@@ -6594,5 +6606,98 @@ than one mix block");
             assert!(deep_ms >= 900, "after a {what} cut the ring holds {deep_ms} ms");
         }
         let _ = std::fs::remove_file(&w);
+    }
+
+    /// Heard through at 1.25x, to its natural end: working with a passage
+    /// is neither a play nor a skip `[SPEC-TPL-015]`. It used to leave a
+    /// `Skip` rejection, which suppressed the song from selection.
+    #[test]
+    fn a_passage_heard_warped_to_its_end_is_neither_a_play_nor_a_skip() {
+        let (st, path) = store();
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+        let ws: Vec<_> = (0..2).map(|_| wav_of(3_000)).collect();
+        for (i, w) in ws.iter().enumerate() {
+            let mut ent = entry(301 + i as i64, w.to_str().unwrap());
+            ent.end_ms = 3_000;
+            ent.mbid = Some(format!("bbbbbbbb-0000-0000-0000-{:012}", 301 + i));
+            e.enqueue(ent);
+        }
+        h.send(Command::Play);
+        h.send(Command::SetTempo(1_250));
+        e.drain_commands();
+        assert!(tick_until(&mut e, |eng| {
+            drain_keeping(&ring, 20_000);
+            eng.head == Some(302)
+        }), "never moved on to the second passage");
+        for _ in 0..200 {
+            drain_keeping(&ring, 20_000);
+            e.tick();
+        }
+        let skipped = st.last_rejected(crate::db::Rejection::Skip).unwrap();
+        assert!(!skipped.contains_key("bbbbbbbb-0000-0000-0000-000000000301"),
+                "a passage heard warped to its end was recorded as a skip");
+        assert!(!e.outcomes.iter().any(|o| matches!(o,
+                    crate::playback::Outcome::Rejected { passage: 301, .. }
+                    | crate::playback::Outcome::Played { passage: 301 })),
+                "and the Director was told neither");
+        let _ = ws.iter().map(std::fs::remove_file).count();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Skipped after being worked with is not a skip either; skipped without
+    /// ever being warped still is, which the skip tests above hold.
+    #[test]
+    fn a_passage_skipped_while_looped_is_not_recorded_as_a_skip() {
+        let (st, path) = store();
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        e.attach_store(PlayerStore::open(&path).unwrap());
+        let ws: Vec<_> = (0..2).map(|_| wav_of(6_000)).collect();
+        for (i, w) in ws.iter().enumerate() {
+            let mut ent = entry(311 + i as i64, w.to_str().unwrap());
+            ent.end_ms = 6_000;
+            ent.mbid = Some(format!("cccccccc-0000-0000-0000-{:012}", 311 + i));
+            e.enqueue(ent);
+        }
+        h.send(Command::Play);
+        e.drain_commands();
+        assert!(tick_until(&mut e, |eng| eng.echo.shown_is_sounding));
+        h.send(Command::SetLoopA(500));
+        h.send(Command::SetLoopB(1_500));
+        e.drain_commands();
+        for _ in 0..200 {
+            drain_keeping(&ring, 20_000);
+            e.tick();
+        }
+        assert!(e.head_warped, "a loop heard is a passage worked with");
+        h.send(Command::Skip);
+        e.drain_commands();
+        assert!(tick_until(&mut e, |eng| {
+            drain_keeping(&ring, 20_000);
+            eng.head == Some(312)
+        }));
+        let skipped = st.last_rejected(crate::db::Rejection::Skip).unwrap();
+        assert!(!skipped.contains_key("cccccccc-0000-0000-0000-000000000311"),
+                "a looped passage skipped was recorded as a skip");
+        assert!(!e.head_warped, "the next passage starts unwarped");
+        // And it is still turned down by an ordinary skip: the warped
+        // passage's tail must not carry over onto the one after it.
+        for _ in 0..20 {
+            drain_keeping(&ring, 20_000);
+            e.tick();
+        }
+        h.send(Command::Skip);
+        e.drain_commands();
+        for _ in 0..400 {
+            drain_keeping(&ring, 20_000);
+            e.tick();
+        }
+        let skipped = st.last_rejected(crate::db::Rejection::Skip).unwrap();
+        assert!(skipped.contains_key("cccccccc-0000-0000-0000-000000000312"),
+                "an unwarped passage skipped early is still a skip");
+        let _ = ws.iter().map(std::fs::remove_file).count();
+        let _ = std::fs::remove_file(&path);
     }
 }

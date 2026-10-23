@@ -202,6 +202,16 @@ impl Engine {
                         if let Some(play_id) = self.pending_play_id.take() {
                             self.write_finish(play_id, self.heard_ms.min(self.head_span_ms));
                         }
+                    } else if self.head_warped {
+                        // Short of the threshold because the warped part is
+                        // never credited, not because it was turned down: a
+                        // song practised in a loop, or heard through at
+                        // 1.25x, is not one the listener declined. Recorded
+                        // as a skip it was suppressed from selection for the
+                        // skip window `[SPEC-TPL-015]`.
+                        tracing::info!(
+                            "passage {prev} left after being played with tempo, pitch or a loop:                              neither a play nor a skip"
+                        );
                     } else {
                         // The outgoing passage left without reaching the
                         // threshold: it did not play, and it is not
@@ -235,6 +245,7 @@ impl Engine {
             // no earlier position of it to measure the first gap from.
             self.heard_ms = 0;
             self.heard_from = None;
+            self.head_warped = false;
         } else if self.head_admitted != admitted_now {
             // The same passage opened again -- a seek -- now sounding. It has
             // not departed, but its position has jumped, and the distance is
@@ -245,13 +256,14 @@ impl Engine {
 
         let Some((id, mbid, position_ms, span_ms, selected_by)) = head_now else { return };
 
-        if self.sounding_warped() {
+        if self.warped_at(admitted_now) {
             // Altering tempo, pitch, or looping an A-B span is playing with
             // the music rather than listening through a passage `[SPEC-TPL-015]`.
             // Clearing `heard_from` both halts accumulation now and ensures the
             // span crossed while warped is not credited when neutral playback
             // resumes.
             self.heard_from = None;
+            self.head_warped = true;
             return;
         }
 

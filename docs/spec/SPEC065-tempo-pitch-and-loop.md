@@ -25,7 +25,7 @@ A passage is considered **warped** whenever `tempo_milli != 1000 || pitch_cents 
 1. While `self.sounding_warped()` is `true`, playback is treated as playing with the music rather than listening to a passage.
 2. In `Engine::record_play` (`player/src/engine/persist.rs`), whenever it is `true`, `self.heard_from` is cleared and the function returns early without adding to `self.heard_ms` and without recording a play in `PlayerStore`.
 3. When it is `false` again, normal `heard_ms` accumulation resumes from the next position sampled; the span crossed while warped is never credited.
-4. **Not yet as intended — see §6.** A passage that leaves having been heard mostly warped falls short of the play threshold, and `record_play` then records it as a `Skip` rejection, which the Director honours `[SPEC-PLAY-050]`.
+4. **A passage heard warped at any point leaves as neither a play nor a skip.** It falls short of the play threshold because the warped part is never credited, not because it was turned down, so its departure writes no `Skip` rejection and tells the Director nothing `[SPEC-PLAY-050]`. A passage that had already crossed the threshold before it was warped stays a play. `head_warped` is judged against the admission `record_play` itself is reading (`Engine::warped_at`), since `advance_shown` runs after it in a tick: judged by the previous one, the passage after a warped one was itself marked as worked with. Until 2026-10-23 such a departure was recorded as a skip, which suppressed the song from selection for the skip window.
 
 ---
 
@@ -118,7 +118,7 @@ In `player/src/web/skins/lempi/skin.js` and `player/src/web/core.js`, the Tempo 
 
 Found reviewing the build against `lp3-wifi`, 2026-10-22.
 
-- **A warped play is recorded as a skip.** Shown by test the same evening: a passage played through to its natural end at `1.25x` left a `Skip` rejection in the store, which suppresses it from selection `[SPEC-PLAY-050]`. Practising a song with a loop and moving on does the same. Working with a passage should be neither a play nor a rejection: a departure from a passage that was ever `sounding_warped()` should skip `note_rejection`.
+- ~~**A warped play is recorded as a skip.**~~ *Resolved 2026-10-23* (`[SPEC-TPL-015]` item 4): shown by test the evening before, a passage played through to its natural end at `1.25x` left a `Skip` rejection. It is now neither a play nor a skip, and the passage after it is still skipped as an ordinary one would be.
 - **Nothing on the device's own screen.** `fbui` shows no tempo, pitch or loop, and a loop holds its passage until cleared (`[SPEC-TPL-030]`), so a loop set from a phone on `lp3-wifi` plays on with no sign there and can be cleared only from a browser.
 - **The stretcher is unheard at its extremes.** Listened to on `lp3-wifi` through MIDDLETON and judged as expected; `0.25x`, `4.0x` and ±12 st were measured but not listened to. `FLUX_ONSET` (`0.35`) is reasoned, not tuned on music, and each channel's phases advance separately except at an onset.
 - **A warp cut works on the engine thread.** The cushion's decode (up to 96 top-ups) runs before the cut, synchronously, and the 1 s overlay is mixed into the output ring under its lock — as a skip's 1.5 s overlay already is. One missed ring lock was logged during the burst replay on `lp3-wifi`.
