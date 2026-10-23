@@ -82,15 +82,18 @@ Equalizer profiles are associated with each output sink using `[SPEC-POV-030]`'s
 
 **`[SPEC-EQ-080]` HTTP routes.**
 Served by `player/src/web/mod.rs` and `player/src/web/settings.rs`:
-- `GET /audio/eq`: Returns `200 OK` with JSON `{ "output_id": "<active_output>", "eq": <EqConfig>, "effective_preamp_db": <float>, "curve_db": [<64 floats>] }`. The curve is drawn at 48 kHz whatever the device rate; the two differ visibly only in the top octave.
-- `POST /audio/eq`: Accepts JSON `EqConfig`, clamps parameters to `[SPEC-EQ-030]` bounds, saves to `PlayerStore` for the currently active `output_id`, sends `Command::SetEq(eq)` to the engine, and returns `200 OK` with the clamped `EqConfig` and updated 64-point `curve_db`.
+- `GET /audio/eq`: Returns `200 OK` with JSON `{ "output_id": "<active_output>", "eq": <EqConfig>, "effective_preamp_db": <float>, "curve_db": [<64 floats>], "rate_hz": <int> }`. The curve is computed at the rate the output device opened at (`PlayerState::out_rate`), so it is the filter actually running, and at 48 kHz only before any device has opened.
+- `POST /audio/eq`: Accepts JSON `EqConfig`, clamps parameters to `[SPEC-EQ-030]` bounds, sends `Command::SetEq(eq)` to the engine, saves to `PlayerStore` for the currently active `output_id`, and returns `200 OK` with the clamped `EqConfig`, the updated 64-point `curve_db`, and `saved`. **A save that fails is said:** the equalizer is still applied — the listener is listening — but the answer carries `saved: false` and `save_error`, the player logs an error, and the skin writes "Applied, but not saved" beside the curve. Until 2026-10-23 a failed save answered exactly as one that worked, and the profile was forgotten at the next restart.
+
+**`[SPEC-EQ-085]` Named curves, defined once.** `lempi_core::eq::PRESETS` holds them — `flat`, `bass`, `vocal`, `treble`, `loudness` — as gains for the default bands. `POST /audio/eq/preset/:name` applies one to the configuration in force (`EqConfig::with_preset`): the default bands at those gains and preamp zeroed, with `auto_preamp` kept. `off` switches the equalizer off and keeps the curve, `flat` leaves it on or off as it was, and the others switch it on. It answers as `POST /audio/eq` does, or `404` for an unknown name. `Snapshot.eq_preset` names what is in force — `off`, a preset, or `custom` (`EqConfig::preset_name`) — for a control that can show a name but not a curve. Both the skin's preset list and the framebuffer UI's buttons `[SPEC-FBUI-110]` use the route and the field; neither holds a curve of its own, so a preset is the same curve wherever it is chosen.
 
 **`[SPEC-EQ-090]` Interactive graphic equalizer in the Lempi skin.**
 In `player/src/web/skins/lempi/skin.html`, `player/src/web/skins/lempi/skin.js`, and `player/src/web/core.js`:
 1. Gated by `snapshot.can_eq` (hidden when `can_eq` is `false`).
 2. Displays an HTML5 `<canvas>` plotting log-frequency (`20 Hz` to `20 kHz`) on the horizontal axis and gain (`−15 dB` to `+15 dB`) on the vertical axis, rendering the composite response curve and 5 draggable band control nodes.
 3. Dragging a node horizontally adjusts `freq_hz`, dragging vertically adjusts `gain_db`, and mouse-wheel / numeric inputs adjust `q`, `freq_hz`, `gain_db`, `preamp_db`, `auto_preamp`, and `enabled`, plus a **Flat / Reset** button that restores the default bands of `[SPEC-EQ-030]`. A press grabs the node under the pointer and nothing else. Changes are sent while they are made, never more than one request in flight.
-4. All DOM updates in `renderAudioControls()` are guarded by `changed(...)`, `setText`, and `setHidden` so repeated WebSocket snapshots with unchanged `eq` state cause zero DOM churn in `build/verify-skins.js`.
+4. The preset list chooses by name through `[SPEC-EQ-085]`'s route, and shows `eq_preset` — including `Off`.
+5. All DOM updates in `renderAudioControls()` are guarded by `changed(...)`, `setText`, and `setHidden` so repeated WebSocket snapshots with unchanged `eq` state cause zero DOM churn in `build/verify-skins.js`.
 
 ---
 
@@ -99,8 +102,8 @@ In `player/src/web/skins/lempi/skin.html`, `player/src/web/skins/lempi/skin.js`,
 Found reviewing the build against `lp3-wifi`, 2026-10-22.
 
 - **The profile follows the stored active output, not the sink that is sounding.** On `lp3-wifi` the stored output was `bt:` MIDDLETON while the speaker was away and the keeper had the jack playing, so MIDDLETON's profile — and volume — applied to the jack. Per-output volume has the same gap `[SPEC-POV-030]`; closing it means the player learning which sink it actually opened.
-- **A failed save is reported as saved.** `POST /audio/eq` ignores the result of `save_output_eq` and answers `200`; the profile is then live but forgotten at the next restart.
-- **The curve is drawn at 48 kHz**, whatever the device runs at.
+- ~~**A failed save is reported as saved.**~~ *Resolved 2026-10-23* `[SPEC-EQ-080]`: answered `saved: false` with the reason, and shown in the skin.
+- ~~**The curve is drawn at 48 kHz.**~~ *Resolved 2026-10-23*: drawn at the device's own rate.
 - **`LowPass` and `HighPass` are reachable only through the API.** Tested, but no control offers them; keep them deliberately or remove them.
 
 ---

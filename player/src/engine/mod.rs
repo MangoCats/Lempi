@@ -506,6 +506,10 @@ pub struct PlayerState {
     /// while this is non-zero: the output ring holds ~14 s, so a short passage
     /// can be fully submitted before a single sample is audible.
     pub output_buffered: usize,
+    /// The rate the output device opened at, so a response curve can be drawn
+    /// for the filter that is actually running `[SPEC-EQ-080]`. `0` before
+    /// any device has opened.
+    pub out_rate: u32,
 }
 
 impl Default for PlayerState {
@@ -544,6 +548,7 @@ impl Default for PlayerState {
             lock_failures: 0,
             out_recoveries: 0,
             output_buffered: 0,
+            out_rate: 0,
         }
     }
 }
@@ -1042,6 +1047,14 @@ impl Engine {
     /// -- cost 373,304 samples, 4.2 s of silence, while the refill caught up.
     /// Steady warped playback on the same node cost none.
     const WARP_CUT_CUSHION_MS: u64 = 1_000;
+
+    /// The longest the cushion's decode may hold the engine before a warp
+    /// cut goes ahead with what it has `[SPEC-TPL-060]`.
+    const WARP_PREFILL_BUDGET: std::time::Duration = std::time::Duration::from_millis(250);
+
+    /// Samples per lock taken to append an overlay's tail past its fade:
+    /// about 93 ms of stereo at 44.1 kHz.
+    const CUT_TAIL_BLOCK: usize = 8_192;
 
     /// Equal-power crossfade at the `B -> A` loop seam `[SPEC-TPL-030]`.
     const LOOP_SEAM_MS: u64 = 10;
@@ -1602,10 +1615,20 @@ impl Engine {
             let ab_loop = self.ab_loop;
             let out_rate = self.out_rate;
             // A cushion is more than a fade's worth, so it is given more
-            // attempts; the old audio plays on while they run.
+            // attempts; the old audio plays on while they run. And a clock as
+            // well as a count: a stretch at its extremes on a slow card could
+            // otherwise hold the engine here for as long as the attempts take,
+            // and nothing else this thread does would run meanwhile. What is
+            // decoded by then is laid in; the ordinary ticks bring the rest.
             let tries = if cushion > 0 { crate::TOPUP_TRIES_BEFORE_CUT * 4 } else { crate::TOPUP_TRIES_BEFORE_CUT };
+            let started = std::time::Instant::now();
             for _ in 0..tries {
                 if l.stream.ring.len() >= wanted || l.stream.finished {
+                    break;
+                }
+                if cushion > 0 && started.elapsed() >= Self::WARP_PREFILL_BUDGET {
+                    tracing::info!("warp: cushion decode stopped at its {} ms budget with {} of {wanted} samples",
+                                   Self::WARP_PREFILL_BUDGET.as_millis(), l.stream.ring.len());
                     break;
                 }
                 Self::top_up(l, ab_loop, out_rate);
@@ -1628,12 +1651,28 @@ impl Engine {
         }
 
         if let Some(o) = &self.path.ring {
-            let (kept, placed, front) = o.begin_skip_transition(
+            // **Only the overlap is mixed under the output lock.** The part of
+            // the overlay that lands beside the fading audio has to be summed
+            // into it there; anything past the fade has nothing to be summed
+            // with, and is appended a block at a time like any submit -- the
+            // callback waits on one block's copy at most, not on a second's
+            // mix. A warp cut's 1 s cushion is nearly all tail; one missed ring
+            // lock was logged while three were made in a second on `lp3-wifi`.
+            // A skip's overlay ends inside its fade, so it has no tail.
+            let head = fade_samples.saturating_sub(lead_samples).min(overlay.len());
+            let (kept, mut placed, front) = o.begin_skip_transition(
                 self.skip_fade_ms,
                 lead_ms,
                 Curve::Exponential,
-                &overlay,
+                &overlay[..head],
             );
+            for block in overlay[head..].chunks(Self::CUT_TAIL_BLOCK) {
+                let (took, _, _) = o.submit(block);
+                placed += took;
+                if took < block.len() {
+                    break;
+                }
+            }
             // What the cut discarded will never sound, and the overlay sounds
             // from the lead on.
             self.timeline.cut(front + kept as u64);
@@ -3337,6 +3376,7 @@ placing at the ring's own depth, which sounds early",
                 .collect();
             s.mixing_ahead = self.live.len().saturating_sub(after);
             s.volume = self.volume;
+            s.out_rate = self.out_rate;
             s.eq = self.eq;
             s.tempo_milli = self.tempo_milli;
             s.pitch_cents = self.pitch_cents;
@@ -4813,9 +4853,18 @@ than one mix block");
         v.extend(data.to_le_bytes());
         v.resize(44 + data as usize, 0);
 
+        // A counter as well as the clock: tests run in parallel, and two that
+        // asked in the same clock tick were given one path -- the second
+        // write replaced the first's audio and either test's cleanup deleted
+        // the other's file. The likeliest account of
+        // `a_late_correction_is_taken_by_admission_before_the_passage_head`
+        // failing once under load, 2026-10-22, its second passage never
+        // opened; it opens that passage from this file.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let p = std::env::temp_dir().join(format!(
-            "lempi_fixture_{}_{}.wav",
+            "lempi_fixture_{}_{}_{}.wav",
             std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -6047,9 +6096,14 @@ than one mix block");
     }
 
     fn store() -> (PlayerStore, PathBuf) {
+        // A counter for the reason `wav_of` has one: two tests in one clock
+        // tick were given one database, and the `remove_file` below deleted
+        // the other's.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let p = std::env::temp_dir().join(format!(
-            "lempi_eng_{}_{}.db",
+            "lempi_eng_{}_{}_{}.db",
             std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

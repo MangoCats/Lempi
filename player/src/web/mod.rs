@@ -297,6 +297,9 @@ pub struct Snapshot {
     pub ab_loop: crate::engine::AbLoop,
     /// Active 5-band parametric EQ configuration `[SPEC-EQ-070]`.
     pub eq: crate::eq::EqConfig,
+    /// The same, by name -- `off`, a preset, or `custom` -- for a control
+    /// that can show a name but not a curve `[SPEC-EQ-085]`.
+    pub eq_preset: &'static str,
     pub covers_status: Option<String>,
     /// `[REQ-VIS-215]`
     pub lyrics_cache: bool,
@@ -439,6 +442,7 @@ impl From<&PlayerState> for Snapshot {
             pitch_cents: s.pitch_cents,
             ab_loop: s.ab_loop,
             eq: s.eq,
+            eq_preset: s.eq.preset_name(),
             lyrics_cache: s.lyrics_cache,
             lyrics_sidecar: s.lyrics_sidecar,
             dev_mode: s.dev_mode,
@@ -543,6 +547,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/ws", get(ws_upgrade))
         .route("/audio/sink", get(audio_sink))
         .route("/audio/eq", get(get_eq).post(set_eq))
+        .route("/audio/eq/preset/:name", post(set_eq_preset))
         .route("/command/:name", post(command))
         .route("/volume/:db", post(set_volume))
         .route("/tempo/:milli", post(set_tempo))
@@ -2421,12 +2426,63 @@ mod tests {
         let body = post_eq.split("\r\n\r\n").nth(1).unwrap_or("");
         let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
         assert_eq!(parsed["curve_db"].as_array().map(|a| a.len()), Some(64));
+        assert_eq!(parsed["saved"], serde_json::Value::Bool(true), "{body}");
 
         let store = crate::db::PlayerStore::open(&db_path).unwrap();
         let saved = store.load_output_eq("dac");
         assert!(saved.enabled);
         assert!((saved.bands[0].gain_db - 4.5).abs() < 1e-4);
 
+        // A named curve by a body-less route, applied to what is in force
+        // and saved like any other `[SPEC-EQ-085]`.
+        let preset = call("POST", "/audio/eq/preset/vocal", None).await;
+        assert!(preset.contains(" 200 ") && preset.contains(r#""curve_db""#), "{preset}");
+        settled(&|s| s.eq.preset_name() == "vocal");
+        assert_eq!(store.load_output_eq("dac").preset_name(), "vocal");
+        let off = call("POST", "/audio/eq/preset/off", None).await;
+        assert!(off.contains(" 200 "), "{off}");
+        settled(&|s| !s.eq.enabled);
+        assert!(call("POST", "/audio/eq/preset/disco", None).await.contains(" 404 "), "an unknown name");
+
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A save that fails says so `[SPEC-EQ-080]`: still applied, since the
+    /// listener is listening, but answered `saved: false` with the reason --
+    /// it used to answer exactly as a save that worked.
+    #[tokio::test]
+    async fn an_equalizer_that_cannot_be_saved_says_so() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let nowhere = std::env::temp_dir()
+            .join(format!("lempi-no-such-dir-{}", std::process::id()))
+            .join("deeper")
+            .join("listener.db");
+        let (_engine, h) = crate::engine::Engine::new(crate::path::PathHandle::silent(), 1);
+        let ui = Ui {
+            handle: Arc::new(h),
+            db: nowhere.clone(),
+            library: nowhere,
+            why: Default::default(),
+            controls: Default::default(),
+            capabilities: Default::default(),
+            web_loopback_only: false,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router(ui)).await });
+        let body = serde_json::to_string(&crate::eq::EqConfig { enabled: true, ..Default::default() }).unwrap();
+        let req = format!(
+            "POST /audio/eq HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut buf = Vec::new();
+        s.read_to_end(&mut buf).await.unwrap();
+        let text = String::from_utf8_lossy(&buf).to_string();
+        let json: serde_json::Value = serde_json::from_str(text.split("\r\n\r\n").nth(1).unwrap_or("")).unwrap();
+        assert_eq!(json["saved"], serde_json::Value::Bool(false), "{text}");
+        assert!(json["save_error"].as_str().is_some_and(|e| !e.is_empty()), "{text}");
+        assert_eq!(json["curve_db"].as_array().map(|a| a.len()), Some(64), "still answered with the curve");
     }
 }

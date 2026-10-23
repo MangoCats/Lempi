@@ -223,6 +223,34 @@ real, measured low contrast, and button labels moved to a bold ASCII
 font — both again confirmed by looking at the physical screen rather than
 trusting the numbers on paper. See §9 for the full account.
 
+**`[SPEC-FBUI-110]` A third page, Audio, in the Lempi skin's own palette
+(2026-10-23).** Tempo, pitch, the A-B loop and the equalizer
+([SPEC064](SPEC064-parametric-equalizer.md), [SPEC065](SPEC065-tempo-pitch-and-loop.md)),
+abbreviated to what a fingertip can press, on a page reached by a fader
+icon left of the power glyph. The icon is on all three pages, and each icon
+toggles its own page against Now Playing. Every control shows its state:
+- **Tempo** `-` / value / `+`, stepping through 0.25x–4.00x by the skin's own
+  presets. **Pitch** `-1 st` / value / `+1 st`. Pressing the value returns it
+  to neutral, and it shows inverted while it isn't.
+- **Loop**: `SET A` and `SET B` mark the position now, then show it (`A 0:12`)
+  inverted. `CLEAR` clears both.
+- **EQ**: `OFF` and the server's presets by name `[SPEC-EQ-085]`; the one in
+  force is inverted, and a curve made in the browser reads `custom curve`.
+
+The palette is the skin's dark theme: `#141416` ground, `#eee` ink, `#99a`
+labels, buttons filled `#2c2c30` with a 2px `#99a` edge rather than its 1px
+outline, for this section's own reason. What is on is the skin's own
+inversion. The fader icon turns gold on every page while tempo, pitch or a
+loop is in use, and Now Playing writes what is in use beside the position
+(`1.25x -2st A-B EQ`). A loop holds its passage until cleared, so this is
+the screen's only sign that the music will not move on. A control the player
+does not offer is said to be absent in its row and has nothing to press. A
+press sends and does not redraw; the snapshot that follows does, so the page
+shows what the player did. Its drawing is generic over any RGB565 target,
+so a test renders each page into memory and saves it where
+`FBUI_PREVIEW_DIR` points — the only way to look at a page without the
+panel. Not yet seen on the physical screen.
+
 ---
 
 > **Split on 2026-09-10.** The bandwidth budget, touch and deployment are now

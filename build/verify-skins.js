@@ -83,6 +83,7 @@ const SPARSE = {
   tempo_milli: 1000, pitch_cents: 0,
   // What the engine sends `[SPEC-TPL-110]`, `[SPEC-EQ-030]`.
   ab_loop: { a_ms: null, b_ms: null },
+  eq_preset: 'off',
   eq: {
     enabled: false, preamp_db: 0.0, auto_preamp: true,
     bands: [
@@ -2340,6 +2341,8 @@ async function runAudioControls() {
   window.HTMLCanvasElement.prototype.getContext = () => null;
 
   const posted = [];
+  // What the server says of the save; switched off below to see the page say so.
+  let eqSaved = true;
   const eqPayload = {
     output_id: 'dac',
     eq: RICH.eq,
@@ -2348,8 +2351,9 @@ async function runAudioControls() {
   window.fetch = (url, opts) => {
     if (opts && opts.method === 'POST') {
       posted.push({ url, body: opts.body || null });
-      if (url === '/audio/eq') {
-        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(eqPayload) });
+      if (url === '/audio/eq' || url.startsWith('/audio/eq/preset/')) {
+        const answer = eqSaved ? { ...eqPayload, saved: true } : { ...eqPayload, saved: false, save_error: 'disk full' };
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(answer) });
       }
       return Promise.resolve({ ok: true, status: 202 });
     }
@@ -2428,17 +2432,42 @@ async function runAudioControls() {
   $('eq-preset').value = 'bass';
   $('eq-preset').onchange();
   await new Promise(r => setTimeout(r, 20));
+  // The curves are the server's `[SPEC-EQ-085]`: a preset is chosen by name,
+  // not built here and sent as a curve.
+  check(posted.some(p => p.url === '/audio/eq/preset/bass' && !p.body),
+        `selecting the bass preset must POST /audio/eq/preset/bass, got ${JSON.stringify(posted.map(p => p.url))}`);
+
+  // A curve edited by hand is still sent whole, and every band complete:
+  // the server parses bands strictly, and one missing `enabled` was a
+  // request it could not read.
+  posted.length = 0;
+  $('eq-enabled').checked = true;
+  $('eq-enabled').onchange();
+  await new Promise(r => setTimeout(r, 20));
   const eqPost = posted.find(p => p.url === '/audio/eq');
-  check(!!eqPost, 'selecting an EQ preset must POST to /audio/eq');
+  check(!!eqPost, 'switching the EQ on must POST the curve to /audio/eq');
   if (eqPost) {
     const sent = JSON.parse(eqPost.body);
-    check(sent.enabled === true && sent.bands.length === 5 && sent.bands[0].gain_db === 5,
-          `bass preset must enable 5-band EQ with +5 dB low shelf, got ${eqPost.body}`);
-    // The server parses bands strictly; one missing `enabled` was a request
-    // it could not read.
-    check(sent.bands.every(b => b.enabled === true && b.freq_hz > 0 && b.q > 0),
+    check(sent.enabled === true && sent.bands.length === 5 &&
+          sent.bands.every(b => b.enabled === true && b.freq_hz > 0 && b.q > 0),
           `every band sent must be complete, got ${eqPost.body}`);
   }
+
+  check($('eq-save-note').hidden, 'a curve that was saved says nothing about saving');
+
+  // Applied but not kept: said, since it would vanish at the next restart
+  // `[SPEC-EQ-080]`.
+  eqSaved = false;
+  $('eq-enabled').checked = false;
+  $('eq-enabled').onchange();
+  await new Promise(r => setTimeout(r, 20));
+  check(!$('eq-save-note').hidden && $('eq-save-note').textContent.includes('disk full'),
+        `a save that failed must be said, got "${$('eq-save-note').textContent}"`);
+  eqSaved = true;
+
+  // Shown by the name the server gives it.
+  sock.onmessage({ data: JSON.stringify({ ...RICH, eq_preset: 'vocal', eq: { ...RICH.eq, enabled: true } }) });
+  check($('eq-preset').value === 'vocal', `the preset list must show the server's eq_preset, got ${$('eq-preset').value}`);
 
   console.log(`${'audio'.padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
               `tempo, pitch, A-B loop markers, and 5-band EQ verified`);

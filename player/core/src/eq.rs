@@ -19,6 +19,23 @@ pub const EQ_Q_MAX: f32 = 18.0;
 pub const EQ_PREAMP_MIN_DB: f32 = -12.0;
 pub const EQ_PREAMP_MAX_DB: f32 = 12.0;
 
+/// The equalizer's named curves `[SPEC-EQ-085]`: gains in dB for the five
+/// default bands of `[SPEC-EQ-030]`, in band order. Defined here, once, for
+/// every control that offers them -- the Lempi skin and the framebuffer UI --
+/// so a preset means the same curve wherever it is chosen.
+pub const PRESETS: [(&str, [f32; EQ_BANDS]); 5] = [
+    ("flat", [0.0, 0.0, 0.0, 0.0, 0.0]),
+    ("bass", [5.0, 2.5, 0.0, 0.0, 0.0]),
+    ("vocal", [-1.5, 0.0, 3.5, 2.5, 0.0]),
+    ("treble", [0.0, 0.0, 0.0, 2.5, 5.0]),
+    ("loudness", [4.5, 1.5, -1.0, 1.5, 4.0]),
+];
+
+/// Not a curve: the equalizer switched off `[SPEC-EQ-085]`.
+pub const PRESET_OFF: &str = "off";
+/// On, and not exactly any preset.
+pub const PRESET_CUSTOM: &str = "custom";
+
 /// Filter topology for one parametric equalizer band `[SPEC-EQ-030]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -167,6 +184,51 @@ impl EqConfig {
         }
     }
 
+    /// This configuration with a named curve `[SPEC-EQ-085]`: the default
+    /// bands at that preset's gains, preamp zeroed, `auto_preamp` kept. `off`
+    /// switches the equalizer off and keeps whatever curve it had; `flat`
+    /// resets the curve and leaves it on or off as it was; any other preset
+    /// switches it on. `None` names no preset.
+    pub fn with_preset(self, name: &str) -> Option<Self> {
+        if name == PRESET_OFF {
+            return Some(Self { enabled: false, ..self });
+        }
+        let (_, gains) = PRESETS.iter().find(|(n, _)| *n == name)?;
+        let mut bands = Self::default().bands;
+        for (band, gain) in bands.iter_mut().zip(gains) {
+            band.gain_db = *gain;
+        }
+        Some(Self {
+            enabled: if name == "flat" { self.enabled } else { true },
+            preamp_db: 0.0,
+            auto_preamp: self.auto_preamp,
+            bands,
+        })
+    }
+
+    /// Which preset this configuration is, for a control that can only show
+    /// a name: `off` when disabled, a preset's name when it is exactly that
+    /// curve, else `custom` `[SPEC-EQ-085]`.
+    pub fn preset_name(&self) -> &'static str {
+        if !self.enabled {
+            return PRESET_OFF;
+        }
+        if self.preamp_db.abs() > 1e-3 {
+            return PRESET_CUSTOM;
+        }
+        let defaults = Self::default().bands;
+        let is = |gains: &[f32; EQ_BANDS]| {
+            self.bands.iter().zip(&defaults).zip(gains).all(|((b, d), g)| {
+                b.enabled
+                    && b.kind == d.kind
+                    && (b.freq_hz - d.freq_hz).abs() < 0.5
+                    && (b.q - d.q).abs() < 1e-3
+                    && (b.gain_db - g).abs() < 0.05
+            })
+        };
+        PRESETS.iter().find(|(_, gains)| is(gains)).map_or(PRESET_CUSTOM, |(name, _)| name)
+    }
+
     /// True when the equalizer is disabled or every stage is unity `[SPEC-EQ-035]`.
     pub fn is_flat(&self) -> bool {
         if !self.enabled {
@@ -194,6 +256,30 @@ mod tests {
         assert_eq!(cfg.bands[3].freq_hz, 4000.0);
         assert_eq!(cfg.bands[4].kind, FilterKind::HighShelf);
         assert_eq!(cfg.bands[4].freq_hz, 12_000.0);
+    }
+
+    #[test]
+    fn every_preset_names_itself_and_off_keeps_the_curve() {
+        for (name, gains) in PRESETS {
+            let cfg = EqConfig::default().with_preset(name).unwrap();
+            let want = if name == "flat" { PRESET_OFF } else { name };
+            assert_eq!(cfg.preset_name(), want, "{name}");
+            assert!(cfg.bands.iter().zip(gains).all(|(b, g)| b.gain_db == g));
+        }
+        let on = EqConfig { enabled: true, ..EqConfig::default() }.with_preset("flat").unwrap();
+        assert_eq!(on.preset_name(), "flat", "flat leaves an enabled equalizer on");
+
+        let bass = EqConfig::default().with_preset("bass").unwrap();
+        let off = bass.with_preset(PRESET_OFF).unwrap();
+        assert_eq!(off.preset_name(), PRESET_OFF);
+        assert_eq!(off.bands, bass.bands, "off keeps the curve to come back to");
+
+        let mut nudged = bass;
+        nudged.bands[2].gain_db += 1.0;
+        assert_eq!(nudged.preset_name(), PRESET_CUSTOM);
+        let manual = EqConfig { auto_preamp: false, ..bass };
+        assert!(!manual.with_preset("vocal").unwrap().auto_preamp, "auto_preamp is the listener's");
+        assert!(EqConfig::default().with_preset("disco").is_none());
     }
 
     #[test]

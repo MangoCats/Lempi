@@ -527,6 +527,7 @@
   const eqFlatBtn = $('eq-flat-btn');
   const eqCanvas = $('eq-canvas');
   const eqBandsBox = $('eq-bands');
+  const eqSaveNote = $('eq-save-note');
 
   // The spec's bounds `[SPEC-EQ-030]`, `[SPEC-EQ-040]`. The server clamps
   // as well; these keep the controls from offering what it would not keep.
@@ -557,13 +558,6 @@
   let eqCurveDb = null;
   let currentEq = { enabled: false, preamp_db: 0, auto_preamp: true, bands: freshBands() };
 
-  const EQ_PRESETS = {
-    flat:     [0, 0, 0, 0, 0],
-    bass:     [5.0, 2.5, 0, 0, 0],
-    vocal:    [-1.5, 0, 3.5, 2.5, 0],
-    treble:   [0, 0, 0, 2.5, 5.0],
-    loudness: [4.5, 1.5, -1.0, 1.5, 4.0],
-  };
 
   const fmtTempo = m => `${(Number(m) / 1000).toFixed(2)}×`;
   const fmtPitch = c => {
@@ -696,10 +690,19 @@
   // events far faster than a round trip, and only the latest one matters.
   let eqSending = false;
   let eqQueued = false;
+  // Applied whether or not it could be kept; said when it was not
+  // `[SPEC-EQ-080]`, since it would otherwise vanish at the next restart.
+  const showEqSaved = res => {
+    const why = res && res.saved === false ? (res.save_error || 'not saved') : '';
+    setText(eqSaveNote, why ? `Applied, but not saved: ${why}` : '');
+    setHidden(eqSaveNote, !why);
+  };
+
   function pushEq() {
     if (eqSending) { eqQueued = true; return; }
     eqSending = true;
     Lempi.setEq(currentEq).then(res => {
+      showEqSaved(res);
       if (res && Array.isArray(res.curve_db)) {
         eqCurveDb = res.curve_db;
         drawEqCanvas();
@@ -815,16 +818,18 @@
       pushEq();
     };
   }
-  // A preset, and Flat, start from the default bands `[SPEC-EQ-030]`: they
-  // reset frequency, Q and kind as well as gain.
+  // The curves are the server's `[SPEC-EQ-085]`, defined once for this skin
+  // and the framebuffer UI alike; a preset resets frequency, Q and kind as
+  // well as gain. What comes back is the configuration now in force.
   const applyEqPreset = name => {
-    const gains = EQ_PRESETS[name];
-    if (!gains) return;
-    if (name !== 'flat') currentEq.enabled = true;
-    currentEq.preamp_db = 0;
-    currentEq.bands = freshBands().map((b, i) => ({ ...b, gain_db: gains[i] }));
-    syncEqDom();
-    pushEq();
+    if (!name || name === 'custom') return;
+    Lempi.setEqPreset(name).then(res => {
+      showEqSaved(res);
+      if (!res || !res.eq) return;
+      currentEq = res.eq;
+      if (Array.isArray(res.curve_db)) eqCurveDb = res.curve_db;
+      syncEqDom();
+    }).catch(() => {});
   };
   if (eqPreset) {
     eqPreset.onchange = () => applyEqPreset(eqPreset.value);
@@ -947,6 +952,10 @@
     if (s.eq && draggingBand < 0) {
       currentEq = JSON.parse(JSON.stringify(s.eq));
       syncEqDom();
+      // By name, from the server, which owns the presets `[SPEC-EQ-085]`.
+      if (eqPreset && document.activeElement !== eqPreset) {
+        eqPreset.value = s.eq_preset || 'custom';
+      }
       // A profile changed somewhere else -- another browser, or a switch of
       // output `[SPEC-EQ-060]` -- needs its curve, which only the server draws.
       if (changed('eq-curve', s.eq) && audioDrawerOpen && s.can_eq) fetchEqCurve();

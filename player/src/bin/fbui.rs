@@ -99,7 +99,7 @@
 
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{Circle, CornerRadii, Line, PrimitiveStyle, Rectangle, RoundedRectangle, Triangle};
+use embedded_graphics::primitives::{Circle, CornerRadii, Line, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, RoundedRectangle, Triangle};
 use framebuffer::Framebuffer;
 use futures_util::StreamExt;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
@@ -157,6 +157,70 @@ struct ClientSnapshot {
     /// the player watches nothing `[APP-PWR-010]`. Drawn as a glyph by the
     /// gear; a change of it redraws, like any other field.
     power: Option<String>,
+    /// What the Audio page may offer `[SPEC-TPL-110]`, `[SPEC-EQ-070]`:
+    /// false for a backend that cannot, whose rows then say so instead.
+    /// Defaulted, these and the rest below, so a player from before them
+    /// still parses: absent is "not offered", never a blank screen.
+    #[serde(default)]
+    can_tempo_pitch: bool,
+    #[serde(default)]
+    can_ab_loop: bool,
+    #[serde(default)]
+    can_eq: bool,
+    /// `1000` is `1.00x`; `0` only when absent, read as neutral
+    /// (`ClientSnapshot::tempo`).
+    #[serde(default)]
+    tempo_milli: u32,
+    #[serde(default)]
+    pitch_cents: i32,
+    #[serde(default)]
+    ab_loop: AbLoopView,
+    /// `off`, a preset's name, or `custom` `[SPEC-EQ-085]` -- the server owns
+    /// the curves, so this page never needs one.
+    #[serde(default)]
+    eq_preset: Option<String>,
+}
+
+/// Named in the real `Snapshot` as `AbLoop`; a loop is active when both are
+/// set `[SPEC-TPL-020]`.
+#[derive(serde::Deserialize, Default, Clone, Copy, PartialEq)]
+struct AbLoopView {
+    a_ms: Option<u64>,
+    b_ms: Option<u64>,
+}
+
+impl ClientSnapshot {
+    fn tempo(&self) -> u32 {
+        if self.tempo_milli == 0 { 1000 } else { self.tempo_milli }
+    }
+
+    /// Tempo, pitch or a loop is in use -- what makes playback something
+    /// other than the passage as it is `[SPEC-TPL-015]`. The equalizer is not:
+    /// it shapes the sound and changes no time.
+    fn warped(&self) -> bool {
+        self.tempo() != 1000 || self.pitch_cents != 0 || self.ab_loop.a_ms.is_some()
+    }
+
+    /// The short line Now Playing shows while anything on the Audio page is
+    /// in use: `1.25x -2st A-B EQ`. `None` when nothing is.
+    fn audio_summary(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if self.tempo() != 1000 {
+            parts.push(fmt_tempo(self.tempo()));
+        }
+        if self.pitch_cents != 0 {
+            parts.push(format!("{:+}st", self.pitch_cents / 100));
+        }
+        match (self.ab_loop.a_ms, self.ab_loop.b_ms) {
+            (Some(_), Some(_)) => parts.push("A-B".into()),
+            (Some(_), None) => parts.push("A..".into()),
+            _ => {}
+        }
+        if self.eq_preset.as_deref().is_some_and(|p| p != "off") {
+            parts.push("EQ".into());
+        }
+        (!parts.is_empty()).then(|| parts.join(" "))
+    }
 }
 
 /// Wraps the real Linux framebuffer device so `embedded-graphics` can draw
@@ -257,6 +321,12 @@ impl DrawTarget for FbDisplay {
     }
 }
 
+/// Anything these pages can be drawn on: the panel, or a buffer in memory
+/// that a test can save as an image and a person can look at -- the only way
+/// to see a page without the hardware.
+trait Panel: DrawTarget<Color = Rgb565, Error = std::convert::Infallible> {}
+impl<T: DrawTarget<Color = Rgb565, Error = std::convert::Infallible>> Panel for T {}
+
 /// The WinAmp-derived palette `[SPEC-FBUI-035]` -- same values as
 /// `web/skins/winamp/skin.css`'s `--lcd-bg`/`--lcd`, so the two UIs read as
 /// the same player rather than coincidentally similar ones. Still used for
@@ -294,6 +364,22 @@ const MULIB_FILL: Rgb565 = Rgb565::new(15, 45, 31); // #7ab7ff
 /// panel's much smaller ones, kept generous enough to still read as "big
 /// rounded" rather than barely-softened corners.
 const MULIB_RADIUS: u32 = 14;
+
+/// The Lempi skin's own palette, for the Audio page -- its dark theme, as
+/// `web/skins/lempi/skin.css` defines it: `--bg #141416`, `--fg #eee`,
+/// `--dim #99a`, `--line #2c2c30`, and the `#4c9a5a` its equalizer curve is
+/// drawn in while on. The skin's buttons are a 1px `--line` outline on the
+/// page; here they are filled `--line` with a 2px `--dim` edge, for the reason
+/// the other two palettes give: a thin stroke does not read at 480x320. What
+/// is on is the skin's own inversion -- ink and paper trading places -- not a
+/// colour.
+const LEMPI_BG: Rgb565 = Rgb565::new(2, 5, 2); // #141416
+const LEMPI_FG: Rgb565 = Rgb565::new(29, 59, 29); // #eeeeee
+const LEMPI_DIM: Rgb565 = Rgb565::new(19, 38, 21); // #9999aa
+const LEMPI_LINE: Rgb565 = Rgb565::new(5, 11, 6); // #2c2c30
+const LEMPI_GREEN: Rgb565 = Rgb565::new(9, 38, 11); // #4c9a5a
+/// The skin's `border-radius: 6px`.
+const LEMPI_RADIUS: u32 = 6;
 
 /// `[SPEC-FBUI-030]`, revised for Phase 6: `embedded-graphics`'s own
 /// bundled fonts are ASCII-only, which real library data (not a synthetic
@@ -354,26 +440,40 @@ fn truncate_display(s: &str, max_chars: usize) -> String {
 /// caught by `normalize_for_display` and the coverage test before it ever
 /// reaches here, so surfacing it loudly if it somehow doesn't is more
 /// useful than a silent `.unwrap_or(())`.
-fn draw_text(display: &mut FbDisplay, text: &str, x: i32, y: i32) {
+fn draw_text(display: &mut impl Panel, text: &str, x: i32, y: i32) {
     draw_text_color(display, text, x, y, LCD_GREEN);
 }
 
 /// As `draw_text`, in a caller-chosen color -- Now Playing's MuLibPlay
 /// theme and Settings/calibration's WinAmp green share this one renderer,
 /// not two near-identical copies of it.
-fn draw_text_color(display: &mut FbDisplay, text: &str, x: i32, y: i32, color: Rgb565) {
+fn draw_text_color(display: &mut impl Panel, text: &str, x: i32, y: i32, color: Rgb565) {
     if let Err(e) = TEXT_FONT.render(text, Point::new(x, y), VerticalPosition::Baseline, FontColor::Transparent(color), display) {
         tracing::warn!("fbui: could not render {text:?}: {e:?}");
     }
 }
 
-fn draw_text_centered(display: &mut FbDisplay, text: &str, center: Point, color: Rgb565) {
+/// Right-aligned at `right_x`, on a baseline.
+fn draw_text_right(display: &mut impl Panel, text: &str, right_x: i32, y: i32, color: Rgb565) {
+    if let Err(e) = TEXT_FONT.render_aligned(
+        text,
+        Point::new(right_x, y),
+        VerticalPosition::Baseline,
+        HorizontalAlignment::Right,
+        FontColor::Transparent(color),
+        display,
+    ) {
+        tracing::warn!("fbui: could not render {text:?}: {e:?}");
+    }
+}
+
+fn draw_text_centered(display: &mut impl Panel, text: &str, center: Point, color: Rgb565) {
     draw_text_centered_font(display, &TEXT_FONT, text, center, color);
 }
 
 /// As `draw_text_centered`, in a caller-chosen font -- `draw_button_mulib`
 /// uses this with `BUTTON_FONT` instead of `TEXT_FONT`.
-fn draw_text_centered_font(display: &mut FbDisplay, font: &FontRenderer, text: &str, center: Point, color: Rgb565) {
+fn draw_text_centered_font(display: &mut impl Panel, font: &FontRenderer, text: &str, center: Point, color: Rgb565) {
     if let Err(e) = font.render_aligned(
         text,
         center,
@@ -392,15 +492,16 @@ fn fmt_time(ms: u64) -> String {
 }
 
 // ---------------------------------------------------------------------
-// Pages. Reached by the gear icon, present (and at the same coordinates)
-// on both -- a settings/back toggle, not a stack, since there are only
-// ever these two.
+// Pages. Settings is reached by the gear and Audio by the fader icon, both
+// present at the same coordinates on every page; each icon toggles its own
+// page against Now Playing -- not a stack, since there are only these three.
 // ---------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Page {
     NowPlaying,
     Settings,
+    Audio,
 }
 
 /// Top-right, both pages. Hit region is deliberately larger than the drawn
@@ -427,7 +528,7 @@ fn power_color(state: Option<&str>) -> Option<Rgb565> {
         _ => None,
     }
 }
-fn draw_power(display: &mut FbDisplay, state: Option<&str>, backdrop: Rgb565) -> Result<(), std::convert::Infallible> {
+fn draw_power(display: &mut impl Panel, state: Option<&str>, backdrop: Rgb565) -> Result<(), std::convert::Infallible> {
     let Some(color) = power_color(state) else { return Ok(()) };
     Rectangle::new(Point::new(POWER_X0, 0), Size::new((GEAR_HIT_X0 - POWER_X0) as u32, GEAR_HIT_Y1 as u32))
         .into_styled(PrimitiveStyle::with_fill(backdrop))
@@ -440,7 +541,7 @@ fn draw_power(display: &mut FbDisplay, state: Option<&str>, backdrop: Rgb565) ->
     Ok(())
 }
 
-fn draw_gear(display: &mut FbDisplay, backdrop: Rgb565) -> Result<(), std::convert::Infallible> {
+fn draw_gear(display: &mut impl Panel, backdrop: Rgb565) -> Result<(), std::convert::Infallible> {
     // A solid backdrop first: this corner is drawn last so it always wins
     // regardless of how long the title text underneath it runs, rather
     // than hoping no title is ever wide enough to reach the corner.
@@ -506,7 +607,7 @@ const PROGRAM_SLOTS: [(i32, i32, i32, i32); 8] = [
 
 /// WinAmp-styled: an outline, sharp corners, green -- used by Settings,
 /// unaffected by Now Playing's MuLibPlay re-theme.
-fn draw_button_winamp(display: &mut FbDisplay, x0: i32, x1: i32, y0: i32, y1: i32, label: &str, highlighted: bool) -> Result<(), std::convert::Infallible> {
+fn draw_button_winamp(display: &mut impl Panel, x0: i32, x1: i32, y0: i32, y1: i32, label: &str, highlighted: bool) -> Result<(), std::convert::Infallible> {
     if highlighted {
         // Inverted: a filled background is unmistakable at a glance, which
         // matters more here than anywhere else in this UI -- "which
@@ -531,7 +632,7 @@ fn draw_button_winamp(display: &mut FbDisplay, x0: i32, x1: i32, y0: i32, y1: i3
 /// of this project's own reasons for it. `#2010a0` indigo normally,
 /// `#d0a000` gold (with `#111` text, matching `.buttonOn` exactly) for
 /// whichever programme is currently active `[SPEC-DIR-140]`.
-fn draw_button_mulib(display: &mut FbDisplay, x0: i32, x1: i32, y0: i32, y1: i32, label: &str, highlighted: bool) -> Result<(), std::convert::Infallible> {
+fn draw_button_mulib(display: &mut impl Panel, x0: i32, x1: i32, y0: i32, y1: i32, label: &str, highlighted: bool) -> Result<(), std::convert::Infallible> {
     let (fill, text) = if highlighted { (MULIB_GOLD, MULIB_GOLD_TEXT) } else { (MULIB_BUTTON, MULIB_TEXT) };
     let rect = Rectangle::new(Point::new(x0, y0), Size::new((x1 - x0) as u32, (y1 - y0) as u32));
     RoundedRectangle::new(rect, CornerRadii::new(Size::new(MULIB_RADIUS, MULIB_RADIUS)))
@@ -547,19 +648,20 @@ fn draw_button_mulib(display: &mut FbDisplay, x0: i32, x1: i32, y0: i32, y1: i32
 /// are already exactly what the panel needs (decoded and resized once in
 /// `decode_and_resize`, not on every redraw), so there is nothing left for
 /// a generic drawing primitive to add here.
-fn draw_art(display: &mut FbDisplay, pixels: &[Rgb565]) {
-    for (i, &color) in pixels.iter().enumerate() {
+fn draw_art(display: &mut impl Panel, pixels: &[Rgb565]) {
+    let at = pixels.iter().enumerate().map(|(i, &color)| {
         let i = i as u32;
-        display.put_pixel(ART_X0 + i % ART_SIZE, ART_Y0 + i / ART_SIZE, color);
-    }
+        Pixel(Point::new((ART_X0 + i % ART_SIZE) as i32, (ART_Y0 + i / ART_SIZE) as i32), color)
+    });
+    let _ = display.draw_iter(at);
 }
 
 /// Now Playing: title/artist, art, the seek bar, position, and the 2x5
 /// button grid. `[SPEC-FBUI-020]`'s whole-region redraw on any change is
 /// `main`'s job to gate, not this function's.
-fn render_now_playing(display: &mut FbDisplay, snap: &ClientSnapshot, art: Option<&[Rgb565]>) -> Result<(), std::convert::Infallible> {
-    let w = display.width as i32;
-    Rectangle::new(Point::zero(), Size::new(display.width, display.height))
+fn render_now_playing(display: &mut impl Panel, snap: &ClientSnapshot, art: Option<&[Rgb565]>) -> Result<(), std::convert::Infallible> {
+    let w = display.bounding_box().size.width as i32;
+    Rectangle::new(Point::zero(), display.bounding_box().size)
         .into_styled(PrimitiveStyle::with_fill(MULIB_BG))
         .draw(display)?;
 
@@ -605,6 +707,12 @@ fn render_now_playing(display: &mut FbDisplay, snap: &ClientSnapshot, art: Optio
         fmt_time(snap.duration_ms),
     );
     draw_text_color(display, &pos, 8, POS_TEXT_Y, MULIB_TEXT);
+    // What the Audio page has in use, right-aligned on the same line: gold
+    // while tempo, pitch or a loop changes what is heard, dim for the
+    // equalizer alone `[SPEC-FBUI-110]`.
+    if let Some(summary) = snap.audio_summary() {
+        draw_text_right(display, &summary, w - 8, POS_TEXT_Y, if snap.warped() { MULIB_GOLD } else { MULIB_DIM });
+    }
 
     draw_button_mulib(display, GRID_XS[0].0, GRID_XS[0].1, ROW1_Y0, ROW1_Y1, if snap.playing { "PAUSE" } else { "PLAY" }, false)?;
     draw_button_mulib(display, GRID_XS[1].0, GRID_XS[1].1, ROW1_Y0, ROW1_Y1, "SKIP", false)?;
@@ -617,6 +725,7 @@ fn render_now_playing(display: &mut FbDisplay, snap: &ClientSnapshot, art: Optio
         draw_button_mulib(display, x0, x1, y0, y1, label.as_deref().unwrap_or(""), active)?;
     }
 
+    draw_audio_icon(display, snap.warped(), MULIB_BG, GEAR_HIT_Y1)?;
     draw_gear(display, MULIB_BG)?;
     draw_power(display, snap.power.as_deref(), MULIB_BG)?;
     Ok(())
@@ -669,8 +778,8 @@ fn queue_row_y(row: usize) -> (i32, i32) {
 
 /// `pair`: the outcome of a recent press of the pairing button, if any --
 /// `Some(true)` opened the window, `Some(false)` could not.
-fn render_settings(display: &mut FbDisplay, snap: &ClientSnapshot, pair: Option<bool>) -> Result<(), std::convert::Infallible> {
-    Rectangle::new(Point::zero(), Size::new(display.width, display.height))
+fn render_settings(display: &mut impl Panel, snap: &ClientSnapshot, pair: Option<bool>) -> Result<(), std::convert::Infallible> {
+    Rectangle::new(Point::zero(), display.bounding_box().size)
         .into_styled(PrimitiveStyle::with_fill(LCD_BG))
         .draw(display)?;
 
@@ -712,8 +821,199 @@ fn render_settings(display: &mut FbDisplay, snap: &ClientSnapshot, pair: Option<
         draw_text(display, note, PAIR_NOTE_X, PAIR_ROW_Y.1 - 12);
     }
 
+    draw_audio_icon(display, snap.warped(), LCD_BG, AUDIO_HIT_Y1_SETTINGS)?;
     draw_gear(display, LCD_BG)?;
     draw_power(display, snap.power.as_deref(), LCD_BG)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// Audio: tempo, pitch, the A-B loop and the equalizer's presets
+// `[SPEC-FBUI-110]` -- the controls of `[SPEC-TPL-120]` and `[SPEC-EQ-085]`,
+// abbreviated to what a fingertip can press. Reached by the fader icon left
+// of the power glyph, on all three pages; the same icon, gold, is how every
+// page shows that tempo, pitch or a loop is in use.
+// ---------------------------------------------------------------------
+
+/// The fader icon's hit region: as tall as the gear's, from its left edge to
+/// the power glyph's.
+const AUDIO_HIT_X0: i32 = 348;
+const AUDIO_HIT_X1: i32 = POWER_X0 - 1;
+/// On Settings the volume row starts at y 30, under this corner, and keeps
+/// what lies below this.
+const AUDIO_HIT_Y1_SETTINGS: i32 = 28;
+
+/// Three faders. Green chrome like the gear; gold -- "whatever is currently
+/// on" -- while tempo, pitch or a loop is in use, which is the one thing a
+/// person must be able to see from Now Playing: a loop holds its passage
+/// until it is cleared `[SPEC-TPL-030]`.
+///
+/// `bottom` is where its corner ends: the gear's height, or on Settings the
+/// shorter `AUDIO_HIT_Y1_SETTINGS`, so its backdrop does not cut through the
+/// volume row's outline below it.
+fn draw_audio_icon(display: &mut impl Panel, warped: bool, backdrop: Rgb565, bottom: i32) -> Result<(), std::convert::Infallible> {
+    Rectangle::new(Point::new(AUDIO_HIT_X0, 0), Size::new((POWER_X0 - AUDIO_HIT_X0) as u32, bottom as u32))
+        .into_styled(PrimitiveStyle::with_fill(backdrop))
+        .draw(display)?;
+    let color = if warped { MULIB_GOLD } else { LCD_GREEN };
+    let (top, foot) = (bottom / 6, bottom - bottom / 6);
+    for (x, knob) in [(359, 0.7), (371, 0.25), (383, 0.5)] {
+        Line::new(Point::new(x, top), Point::new(x, foot))
+            .into_styled(PrimitiveStyle::with_stroke(color, 2))
+            .draw(display)?;
+        let at = top + ((foot - top) as f64 * knob) as i32;
+        Rectangle::new(Point::new(x - 4, at - 3), Size::new(10, 7))
+            .into_styled(PrimitiveStyle::with_fill(color))
+            .draw(display)?;
+    }
+    Ok(())
+}
+
+/// A label column, then four columns of buttons, five rows of them.
+const AUDIO_LABEL_X: i32 = 8;
+const AUDIO_COLS: [(i32, i32); 4] = [(80, 172), (178, 270), (276, 368), (374, 472)];
+const AUDIO_ROWS: [(i32, i32); 5] = [(50, 94), (100, 144), (150, 194), (200, 244), (250, 294)];
+const AUDIO_NOTE_Y: i32 = 312;
+
+/// Where `-` and `+` step to: the skin's presets, and the range's ends
+/// `[SPEC-TPL-040]`. A tempo set elsewhere between two steps moves to the
+/// next one in the direction pressed.
+const TEMPO_STEPS: [u32; 11] = [250, 500, 750, 900, 1000, 1100, 1250, 1500, 2000, 3000, 4000];
+const PITCH_STEP: i32 = 100;
+const PITCH_LIMIT: i32 = 1200;
+
+/// The equalizer's buttons, rows 4 and 5: `off`, then the server's presets
+/// by name `[SPEC-EQ-085]`. The curves are not here -- only names, and the
+/// label a 92-pixel button has room for. A test holds these to
+/// `lempi_core::eq::PRESETS`.
+const EQ_BUTTONS: [(&str, &str); 6] = [
+    ("off", "OFF"),
+    ("flat", "FLAT"),
+    ("bass", "BASS"),
+    ("vocal", "VOCAL"),
+    ("treble", "TREBLE"),
+    ("loudness", "LOUD"),
+];
+
+/// `EQ_BUTTONS[i]`'s place: four on row 4, the rest on row 5.
+fn eq_button_at(i: usize) -> ((i32, i32), (i32, i32)) {
+    (AUDIO_COLS[i % 4], AUDIO_ROWS[3 + i / 4])
+}
+
+fn tempo_step(current: u32, up: bool) -> u32 {
+    if up {
+        TEMPO_STEPS.iter().copied().find(|&s| s > current).unwrap_or(TEMPO_STEPS[TEMPO_STEPS.len() - 1])
+    } else {
+        TEMPO_STEPS.iter().rev().copied().find(|&s| s < current).unwrap_or(TEMPO_STEPS[0])
+    }
+}
+
+fn pitch_step(current: i32, up: bool) -> i32 {
+    (current + if up { PITCH_STEP } else { -PITCH_STEP }).clamp(-PITCH_LIMIT, PITCH_LIMIT)
+}
+
+fn fmt_tempo(milli: u32) -> String {
+    format!("{:.2}x", milli as f64 / 1000.0)
+}
+
+/// Semitones; tenths where the skin's slider left a fraction of one.
+fn fmt_pitch(cents: i32) -> String {
+    if cents == 0 {
+        "0 st".into()
+    } else if cents % 100 == 0 {
+        format!("{:+} st", cents / 100)
+    } else {
+        format!("{:+.1} st", cents as f64 / 100.0)
+    }
+}
+
+/// Lempi-styled `[SPEC-FBUI-110]`: filled `--line`, a 2px `--dim` edge, `--fg`
+/// text; inverted while `on`.
+fn draw_button_lempi(display: &mut impl Panel, (x0, x1): (i32, i32), (y0, y1): (i32, i32), label: &str, on: bool) -> Result<(), std::convert::Infallible> {
+    let rect = Rectangle::new(Point::new(x0, y0), Size::new((x1 - x0) as u32, (y1 - y0) as u32));
+    let shape = RoundedRectangle::new(rect, CornerRadii::new(Size::new(LEMPI_RADIUS, LEMPI_RADIUS)));
+    let (style, text) = if on {
+        (PrimitiveStyle::with_fill(LEMPI_FG), LEMPI_BG)
+    } else {
+        (
+            PrimitiveStyleBuilder::new().fill_color(LEMPI_LINE).stroke_color(LEMPI_DIM).stroke_width(2).build(),
+            LEMPI_FG,
+        )
+    };
+    shape.into_styled(style).draw(display)?;
+    draw_text_centered_font(display, &BUTTON_FONT, label, Point::new((x0 + x1) / 2, (y0 + y1) / 2), text);
+    Ok(())
+}
+
+fn draw_row_label(display: &mut impl Panel, text: &str, row: usize) {
+    let (y0, y1) = AUDIO_ROWS[row];
+    draw_text_color(display, text, AUDIO_LABEL_X, (y0 + y1) / 2 + 5, LEMPI_DIM);
+}
+
+/// Said in the row, where the buttons would be, so an absent control is not
+/// mistaken for a broken one.
+fn draw_not_offered(display: &mut impl Panel, row: usize) {
+    let (y0, y1) = AUDIO_ROWS[row];
+    draw_text_color(display, "not offered by this player", AUDIO_COLS[0].0, (y0 + y1) / 2 + 5, LEMPI_DIM);
+}
+
+/// The Audio page. Every control shows its state: the tempo and pitch it is
+/// at, inverted when not neutral; where A and B are; which preset is in force,
+/// or that the curve is a custom one made in the browser.
+fn render_audio(display: &mut impl Panel, snap: &ClientSnapshot) -> Result<(), std::convert::Infallible> {
+    Rectangle::new(Point::zero(), display.bounding_box().size)
+        .into_styled(PrimitiveStyle::with_fill(LEMPI_BG))
+        .draw(display)?;
+    draw_text_color(display, "AUDIO", 8, 28, LEMPI_FG);
+
+    draw_row_label(display, "TEMPO", 0);
+    draw_row_label(display, "PITCH", 1);
+    if snap.can_tempo_pitch {
+        let t = snap.tempo();
+        draw_button_lempi(display, AUDIO_COLS[0], AUDIO_ROWS[0], "-", false)?;
+        draw_button_lempi(display, AUDIO_COLS[1], AUDIO_ROWS[0], &fmt_tempo(t), t != 1000)?;
+        draw_button_lempi(display, AUDIO_COLS[2], AUDIO_ROWS[0], "+", false)?;
+        let p = snap.pitch_cents;
+        draw_button_lempi(display, AUDIO_COLS[0], AUDIO_ROWS[1], "-1 st", false)?;
+        draw_button_lempi(display, AUDIO_COLS[1], AUDIO_ROWS[1], &fmt_pitch(p), p != 0)?;
+        draw_button_lempi(display, AUDIO_COLS[2], AUDIO_ROWS[1], "+1 st", false)?;
+    } else {
+        draw_not_offered(display, 0);
+        draw_not_offered(display, 1);
+    }
+
+    draw_row_label(display, "LOOP", 2);
+    if snap.can_ab_loop {
+        let AbLoopView { a_ms, b_ms } = snap.ab_loop;
+        let a = a_ms.map_or("SET A".to_string(), |ms| format!("A {}", fmt_time(ms)));
+        let b = b_ms.map_or("SET B".to_string(), |ms| format!("B {}", fmt_time(ms)));
+        draw_button_lempi(display, AUDIO_COLS[0], AUDIO_ROWS[2], &a, a_ms.is_some())?;
+        draw_button_lempi(display, AUDIO_COLS[1], AUDIO_ROWS[2], &b, b_ms.is_some())?;
+        draw_button_lempi(display, AUDIO_COLS[2], AUDIO_ROWS[2], "CLEAR", false)?;
+    } else {
+        draw_not_offered(display, 2);
+    }
+
+    draw_row_label(display, "EQ", 3);
+    if snap.can_eq {
+        let current = snap.eq_preset.as_deref().unwrap_or("off");
+        for (i, (name, label)) in EQ_BUTTONS.iter().enumerate() {
+            let (cols, rows) = eq_button_at(i);
+            draw_button_lempi(display, cols, rows, label, current == *name)?;
+        }
+        if current == "custom" {
+            let (y0, y1) = AUDIO_ROWS[4];
+            draw_text_color(display, "custom curve", AUDIO_COLS[2].0 + 6, (y0 + y1) / 2 + 5, LEMPI_GREEN);
+        }
+    } else {
+        draw_not_offered(display, 3);
+    }
+
+    draw_text_color(display, "tempo, pitch and loop reset at the next track", 8, AUDIO_NOTE_Y, LEMPI_DIM);
+
+    draw_audio_icon(display, snap.warped(), LEMPI_BG, GEAR_HIT_Y1)?;
+    draw_gear(display, LEMPI_BG)?;
+    draw_power(display, snap.power.as_deref(), LEMPI_BG)?;
     Ok(())
 }
 
@@ -726,9 +1026,10 @@ fn render_settings(display: &mut FbDisplay, snap: &ClientSnapshot, pair: Option<
 /// different state a person could otherwise not tell apart from this one.
 /// Page-agnostic on purpose -- there is nothing to page between when there
 /// is nothing to show.
-fn render_disconnected(display: &mut FbDisplay) -> Result<(), std::convert::Infallible> {
-    let (w, h) = (display.width as i32, display.height as i32);
-    Rectangle::new(Point::zero(), Size::new(display.width, display.height))
+fn render_disconnected(display: &mut impl Panel) -> Result<(), std::convert::Infallible> {
+    let size = display.bounding_box().size;
+    let (w, h) = (size.width as i32, size.height as i32);
+    Rectangle::new(Point::zero(), size)
         .into_styled(PrimitiveStyle::with_fill(LCD_BG))
         .draw(display)?;
     let center_x = w / 2;
@@ -889,6 +1190,17 @@ enum Zone {
     QueueRemove(u64),
     QueueLater(u64),
     Pair,
+    Audio,
+    TempoDown,
+    TempoNeutral,
+    TempoUp,
+    PitchDown,
+    PitchNeutral,
+    PitchUp,
+    LoopA,
+    LoopB,
+    LoopClear,
+    EqPreset(&'static str),
 }
 
 fn in_rect(x: i32, y: i32, x0: i32, x1: i32, y0: i32, y1: i32) -> bool {
@@ -902,6 +1214,10 @@ fn hit_test(page: Page, sx: f64, sy: f64, snap: &ClientSnapshot) -> Option<Zone>
     let (x, y) = (sx as i32, sy as i32);
     if x >= GEAR_HIT_X0 && y <= GEAR_HIT_Y1 {
         return Some(Zone::Gear);
+    }
+    let audio_y1 = if page == Page::Settings { AUDIO_HIT_Y1_SETTINGS } else { GEAR_HIT_Y1 };
+    if (AUDIO_HIT_X0..=AUDIO_HIT_X1).contains(&x) && y <= audio_y1 {
+        return Some(Zone::Audio);
     }
     match page {
         Page::NowPlaying => {
@@ -945,6 +1261,51 @@ fn hit_test(page: Page, sx: f64, sy: f64, snap: &ClientSnapshot) -> Option<Zone>
             }
             None
         }
+        // Only what the page drew: a row the backend does not offer has no
+        // buttons, so it has nothing to press either.
+        Page::Audio => {
+            let at = |col: usize, row: usize| {
+                in_rect(x, y, AUDIO_COLS[col].0, AUDIO_COLS[col].1, AUDIO_ROWS[row].0, AUDIO_ROWS[row].1)
+            };
+            if snap.can_tempo_pitch {
+                let rows = [
+                    (0, [Zone::TempoDown, Zone::TempoNeutral, Zone::TempoUp]),
+                    (1, [Zone::PitchDown, Zone::PitchNeutral, Zone::PitchUp]),
+                ];
+                for (row, zones) in rows {
+                    for (col, zone) in zones.into_iter().enumerate() {
+                        if at(col, row) {
+                            return Some(zone);
+                        }
+                    }
+                }
+            }
+            if snap.can_ab_loop {
+                for (col, zone) in [Zone::LoopA, Zone::LoopB, Zone::LoopClear].into_iter().enumerate() {
+                    if at(col, 2) {
+                        return Some(zone);
+                    }
+                }
+            }
+            if snap.can_eq {
+                for (i, (name, _)) in EQ_BUTTONS.iter().enumerate() {
+                    let ((x0, x1), (y0, y1)) = eq_button_at(i);
+                    if in_rect(x, y, x0, x1, y0, y1) {
+                        return Some(Zone::EqPreset(name));
+                    }
+                }
+            }
+            None
+        }
+    }
+}
+
+/// Whichever page is showing, drawn whole.
+fn render_page(display: &mut impl Panel, page: Page, snap: &ClientSnapshot, art: Option<&[Rgb565]>, pair: Option<bool>) -> Result<(), std::convert::Infallible> {
+    match page {
+        Page::NowPlaying => render_now_playing(display, snap, art),
+        Page::Settings => render_settings(display, snap, pair),
+        Page::Audio => render_audio(display, snap),
     }
 }
 
@@ -1200,6 +1561,7 @@ mod tests {
             &[
                 ("queue[]", contract::fields_of::<super::QueueItem>()),
                 ("programs[]", contract::fields_of::<super::ProgramItem>()),
+                ("ab_loop", contract::fields_of::<super::AbLoopView>()),
             ],
         );
         assert_eq!(mine, contract::required("fbui"));
@@ -1298,6 +1660,10 @@ mod tests {
         let labels = [
             "PLAY", "PAUSE", "SKIP", "VOL -", "VOL +", "-", "+", "X", "PAIR",
             "Cool", "Fun", "Mellow", "Soft", "Prog", "Light", "Loud", "Groove",
+            // The Audio page's, every shape a value takes.
+            "-1 st", "+1 st", "0 st", "+12 st", "-12 st", "-0.5 st", "0.25x", "1.25x", "4.00x",
+            "SET A", "SET B", "A 12:34", "B 1:02:03", "CLEAR",
+            "OFF", "FLAT", "BASS", "VOCAL", "TREBLE", "LOUD",
         ];
         for label in labels {
             assert!(text_renders(&super::BUTTON_FONT, label), "BUTTON_FONT could not render {label:?}");
@@ -1325,6 +1691,213 @@ mod tests {
         let out = super::truncate_display("a very long title indeed", 10);
         assert_eq!(out.chars().count(), 10);
         assert!(out.ends_with("..."));
+    }
+
+    /// The Audio page's EQ buttons are the server's presets by name, every
+    /// one of them and nothing else, plus `off` `[SPEC-EQ-085]`.
+    #[test]
+    fn the_eq_buttons_are_the_servers_presets() {
+        let mine: Vec<&str> = super::EQ_BUTTONS.iter().map(|(n, _)| *n).filter(|n| *n != "off").collect();
+        let theirs: Vec<&str> = lempi_core::eq::PRESETS.iter().map(|(n, _)| *n).collect();
+        assert_eq!(mine, theirs);
+        assert_eq!(super::EQ_BUTTONS[0].0, lempi_core::eq::PRESET_OFF);
+    }
+
+    #[test]
+    fn tempo_and_pitch_step_within_their_ranges() {
+        use super::{pitch_step, tempo_step};
+        assert_eq!(tempo_step(1000, true), 1100);
+        assert_eq!(tempo_step(1000, false), 900);
+        assert_eq!(tempo_step(1180, true), 1250, "set elsewhere, between steps: the next one up");
+        assert_eq!(tempo_step(1180, false), 1100);
+        assert_eq!(tempo_step(4000, true), 4000);
+        assert_eq!(tempo_step(250, false), 250);
+        assert_eq!(pitch_step(0, true), 100);
+        assert_eq!(pitch_step(1200, true), 1200);
+        assert_eq!(pitch_step(-1150, false), -1200);
+    }
+
+    fn audio_snap() -> super::ClientSnapshot {
+        super::ClientSnapshot {
+            can_tempo_pitch: true,
+            can_ab_loop: true,
+            can_eq: true,
+            tempo_milli: 1250,
+            pitch_cents: -200,
+            ab_loop: super::AbLoopView { a_ms: Some(12_000), b_ms: Some(45_000) },
+            eq_preset: Some("bass".into()),
+            title: Some("Africa".into()),
+            artist: Some("Toto".into()),
+            album: Some("Toto IV".into()),
+            playing: true,
+            position_ms: 61_000,
+            duration_ms: 295_000,
+            ..Default::default()
+        }
+    }
+
+    /// Every button the Audio page draws is pressed where it is drawn, and a
+    /// row the player does not offer has nothing to press.
+    #[test]
+    fn the_audio_page_is_hit_where_it_is_drawn() {
+        use super::{hit_test, Page, Zone, AUDIO_COLS, AUDIO_ROWS};
+        let s = audio_snap();
+        let mid = |col: usize, row: usize| {
+            (((AUDIO_COLS[col].0 + AUDIO_COLS[col].1) / 2) as f64, ((AUDIO_ROWS[row].0 + AUDIO_ROWS[row].1) / 2) as f64)
+        };
+        let want = [
+            ((0, 0), Zone::TempoDown), ((1, 0), Zone::TempoNeutral), ((2, 0), Zone::TempoUp),
+            ((0, 1), Zone::PitchDown), ((1, 1), Zone::PitchNeutral), ((2, 1), Zone::PitchUp),
+            ((0, 2), Zone::LoopA), ((1, 2), Zone::LoopB), ((2, 2), Zone::LoopClear),
+            ((0, 3), Zone::EqPreset("off")), ((1, 3), Zone::EqPreset("flat")),
+            ((2, 3), Zone::EqPreset("bass")), ((3, 3), Zone::EqPreset("vocal")),
+            ((0, 4), Zone::EqPreset("treble")), ((1, 4), Zone::EqPreset("loudness")),
+        ];
+        for ((col, row), zone) in want {
+            let (x, y) = mid(col, row);
+            assert_eq!(hit_test(Page::Audio, x, y, &s), Some(zone), "col {col} row {row}");
+        }
+        assert_eq!(hit_test(Page::Audio, mid(3, 0).0, mid(3, 0).1, &s), None, "nothing drawn there");
+
+        let none = super::ClientSnapshot::default();
+        for row in 0..5 {
+            for col in 0..4 {
+                let (x, y) = mid(col, row);
+                assert_eq!(hit_test(Page::Audio, x, y, &none), None, "not offered, col {col} row {row}");
+            }
+        }
+
+        // The fader icon from every page; on Settings it yields the volume
+        // row beneath it.
+        for page in [Page::NowPlaying, Page::Audio, Page::Settings] {
+            assert_eq!(hit_test(page, 370.0, 14.0, &s), Some(Zone::Audio), "{page:?}");
+        }
+        assert_eq!(hit_test(Page::Settings, 370.0, 40.0, &s), Some(Zone::VolUp));
+        assert_eq!(hit_test(Page::NowPlaying, 370.0, 40.0, &s), Some(Zone::Audio));
+        assert_eq!(hit_test(Page::Audio, 450.0, 20.0, &s), Some(Zone::Gear));
+    }
+
+    /// A panel in memory, for drawing a page where there is no hardware.
+    struct MemPanel {
+        px: Vec<super::Rgb565>,
+    }
+    const W: u32 = 480;
+    const H: u32 = 320;
+    impl MemPanel {
+        fn new() -> Self {
+            Self { px: vec![super::Rgb565::new(31, 0, 31); (W * H) as usize] }
+        }
+        fn at(&self, x: i32, y: i32) -> super::Rgb565 {
+            self.px[(y as u32 * W + x as u32) as usize]
+        }
+        /// Saved as a PNG where `FBUI_PREVIEW_DIR` names a folder -- for a
+        /// person to look at, since no assertion can say a page reads well.
+        fn save(&self, name: &str) {
+            use embedded_graphics::pixelcolor::RgbColor;
+            let Ok(dir) = std::env::var("FBUI_PREVIEW_DIR") else { return };
+            let img = image::RgbImage::from_fn(W, H, |x, y| {
+                let c = self.px[(y * W + x) as usize];
+                image::Rgb([(c.r() << 3) | (c.r() >> 2), (c.g() << 2) | (c.g() >> 4), (c.b() << 3) | (c.b() >> 2)])
+            });
+            img.save(std::path::Path::new(&dir).join(format!("{name}.png"))).expect("save preview");
+        }
+    }
+    impl embedded_graphics::prelude::OriginDimensions for MemPanel {
+        fn size(&self) -> embedded_graphics::prelude::Size {
+            embedded_graphics::prelude::Size::new(W, H)
+        }
+    }
+    impl embedded_graphics::prelude::DrawTarget for MemPanel {
+        type Color = super::Rgb565;
+        type Error = std::convert::Infallible;
+        fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+        where
+            I: IntoIterator<Item = embedded_graphics::Pixel<Self::Color>>,
+        {
+            for embedded_graphics::Pixel(p, c) in pixels {
+                if (0..W as i32).contains(&p.x) && (0..H as i32).contains(&p.y) {
+                    self.px[(p.y as u32 * W + p.x as u32) as usize] = c;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    /// Every page draws on the whole panel, and the Audio page shows its
+    /// state where a person reads it: what is on is inverted, the fader icon
+    /// is gold while tempo, pitch or a loop is in use `[SPEC-FBUI-110]`.
+    #[test]
+    fn the_pages_draw_and_show_what_is_in_use() {
+        use super::*;
+        let warped = audio_snap();
+        let mut neutral = audio_snap();
+        neutral.tempo_milli = 1000;
+        neutral.pitch_cents = 0;
+        neutral.ab_loop = AbLoopView::default();
+        neutral.eq_preset = Some("off".into());
+
+        let mut audio = MemPanel::new();
+        render_audio(&mut audio, &warped).unwrap();
+        audio.save("audio-warped");
+        assert!(!audio.px.contains(&Rgb565::new(31, 0, 31)), "the Audio page leaves part of the panel undrawn");
+        // A corner inside each button: filled, clear of its label.
+        let inside = |p: &MemPanel, col: usize, row: usize| p.at(AUDIO_COLS[col].0 + 8, AUDIO_ROWS[row].0 + 8);
+        assert_eq!(inside(&audio, 1, 0), LEMPI_FG, "a tempo off 1.00x is shown inverted");
+        assert_eq!(inside(&audio, 0, 0), LEMPI_LINE);
+        assert_eq!(inside(&audio, 0, 2), LEMPI_FG, "A, set");
+        assert_eq!(inside(&audio, 2, 3), LEMPI_FG, "bass, in force");
+        assert_eq!(inside(&audio, 0, 3), LEMPI_LINE, "off, not");
+        assert_eq!(audio.at(371, 20), MULIB_GOLD, "the fader icon, gold while warped");
+
+        let mut calm = MemPanel::new();
+        render_audio(&mut calm, &neutral).unwrap();
+        calm.save("audio-neutral");
+        assert_eq!(inside(&calm, 1, 0), LEMPI_LINE, "1.00x is not on");
+        assert_eq!(inside(&calm, 0, 3), LEMPI_FG, "off, in force");
+        assert_eq!(calm.at(371, 20), LCD_GREEN);
+
+        let mut custom = neutral.clone();
+        custom.eq_preset = Some("custom".into());
+        let mut panel = MemPanel::new();
+        render_audio(&mut panel, &custom).unwrap();
+        panel.save("audio-custom");
+        assert!(EQ_BUTTONS.iter().enumerate().all(|(i, _)| {
+            let ((x0, _), (y0, _)) = eq_button_at(i);
+            panel.at(x0 + 8, y0 + 8) == LEMPI_LINE
+        }), "a custom curve lights no preset");
+
+        let absent = ClientSnapshot { title: Some("Played by MPD".into()), ..Default::default() };
+        let mut panel = MemPanel::new();
+        render_audio(&mut panel, &absent).unwrap();
+        panel.save("audio-not-offered");
+
+        let mut now = MemPanel::new();
+        render_now_playing(&mut now, &warped, None).unwrap();
+        now.save("now-playing-warped");
+        assert_eq!(now.at(371, 20), MULIB_GOLD, "Now Playing shows a warp by the icon");
+        assert!(now.px.contains(&MULIB_GOLD), "and by its summary");
+        let mut now = MemPanel::new();
+        render_now_playing(&mut now, &neutral, None).unwrap();
+        now.save("now-playing-neutral");
+        assert_eq!(now.at(371, 20), LCD_GREEN);
+
+        let mut settings = MemPanel::new();
+        render_settings(&mut settings, &warped, None).unwrap();
+        settings.save("settings");
+        assert_eq!(settings.at(371, 20), MULIB_GOLD);
+    }
+
+    #[test]
+    fn the_summary_says_what_is_in_use() {
+        let s = audio_snap();
+        assert_eq!(s.audio_summary().as_deref(), Some("1.25x -2st A-B EQ"));
+        assert!(super::ClientSnapshot::default().audio_summary().is_none(), "nothing in use, nothing said");
+        let a = super::ClientSnapshot {
+            ab_loop: super::AbLoopView { a_ms: Some(1), b_ms: None },
+            ..Default::default()
+        };
+        assert_eq!(a.audio_summary().as_deref(), Some("A.."));
+        assert!(a.warped(), "a loop half-set is already working with the passage");
     }
 
     fn snap(position_ms: u64, title: &str) -> super::ClientSnapshot {
@@ -1544,10 +2117,7 @@ async fn main() {
                         // against real hardware, not estimated from the SPI
                         // clock rate on paper.
                         let started = std::time::Instant::now();
-                        let result = match page {
-                            Page::NowPlaying => render_now_playing(&mut display, &snap, art),
-                            Page::Settings => render_settings(&mut display, &snap, pair_shown(pair_note)),
-                        };
+                        let result = render_page(&mut display, page, &snap, art, pair_shown(pair_note));
                         let elapsed = started.elapsed();
                         if elapsed > std::time::Duration::from_millis(20) {
                             tracing::info!("fbui: render took {elapsed:?}");
@@ -1569,16 +2139,49 @@ async fn main() {
                     let (sx, sy) = cal.apply(rx, ry);
                     let snap = last.clone().unwrap_or_default();
                     match hit_test(page, sx, sy, &snap) {
-                        Some(Zone::Gear) => {
-                            page = match page { Page::NowPlaying => Page::Settings, Page::Settings => Page::NowPlaying };
+                        Some(zone @ (Zone::Gear | Zone::Audio)) => {
+                            // Each icon toggles its own page against Now
+                            // Playing, from wherever it is pressed.
+                            let own = if zone == Zone::Gear { Page::Settings } else { Page::Audio };
+                            page = if page == own { Page::NowPlaying } else { own };
                             let art = art_cache.as_ref().and_then(|(_, px)| px.as_deref());
-                            let result = match page {
-                                Page::NowPlaying => render_now_playing(&mut display, &snap, art),
-                                Page::Settings => render_settings(&mut display, &snap, pair_shown(pair_note)),
-                            };
-                            if let Err(e) = result {
+                            if let Err(e) = render_page(&mut display, page, &snap, art, pair_shown(pair_note)) {
                                 tracing::warn!("fbui: render failed: {e:?}");
                             }
+                        }
+                        // The Audio page's controls `[SPEC-FBUI-110]`. Each
+                        // sends and does not redraw: the snapshot that follows
+                        // is what the page shows, so it shows what the player
+                        // did rather than what was asked.
+                        Some(zone @ (Zone::TempoDown | Zone::TempoNeutral | Zone::TempoUp)) => {
+                            let t = match zone {
+                                Zone::TempoDown => tempo_step(snap.tempo(), false),
+                                Zone::TempoUp => tempo_step(snap.tempo(), true),
+                                _ => 1000,
+                            };
+                            tokio::spawn(http_post(http_addr.clone(), format!("/tempo/{t}")));
+                        }
+                        Some(zone @ (Zone::PitchDown | Zone::PitchNeutral | Zone::PitchUp)) => {
+                            let c = match zone {
+                                Zone::PitchDown => pitch_step(snap.pitch_cents, false),
+                                Zone::PitchUp => pitch_step(snap.pitch_cents, true),
+                                _ => 0,
+                            };
+                            tokio::spawn(http_post(http_addr.clone(), format!("/pitch/{c}")));
+                        }
+                        // Where the listener is now, from the latest snapshot:
+                        // at most a push old, as the browser's own marks are.
+                        Some(Zone::LoopA) => {
+                            tokio::spawn(http_post(http_addr.clone(), format!("/loop/a/{}", snap.position_ms)));
+                        }
+                        Some(Zone::LoopB) => {
+                            tokio::spawn(http_post(http_addr.clone(), format!("/loop/b/{}", snap.position_ms)));
+                        }
+                        Some(Zone::LoopClear) => {
+                            tokio::spawn(http_post(http_addr.clone(), "/loop/clear".to_string()));
+                        }
+                        Some(Zone::EqPreset(name)) => {
+                            tokio::spawn(http_post(http_addr.clone(), format!("/audio/eq/preset/{name}")));
                         }
                         Some(Zone::PlayPause) => {
                             let playing = snap.playing;

@@ -101,6 +101,7 @@
         <label title="Lower the preamp by the curve's highest boost, so no setting can clip"><input type="checkbox" id="eq-auto" checked> Auto headroom</label>
         <select id="eq-preset">
           <option value="custom">Custom</option>
+          <option value="off">Off</option>
           <option value="flat">Flat</option>
           <option value="bass">Bass Boost</option>
           <option value="vocal">Vocal Presence</option>
@@ -109,6 +110,7 @@
         </select>
         <button type="button" id="eq-flat-btn" class="audio-mini">Flat</button>
       </div>
+      <p id="eq-save-note" class="audio-readout" hidden></p>
       <canvas id="eq-canvas" width="520" height="150"></canvas>
       <div id="eq-bands" class="eq-bands"></div>
     </div>

@@ -460,13 +460,17 @@ pub(super) async fn set_skip_lead(
     StatusCode::NO_CONTENT
 }
 
-fn eq_response_json(eq: &crate::eq::EqConfig, output_id: &str) -> serde_json::Value {
-    let (effective_preamp_db, curve_db) = crate::eq::compute_response(eq, 48_000);
+/// The curve is computed at the rate the device opened at -- the filter that
+/// is really running -- and at 48 kHz only before any device has opened.
+fn eq_response_json(eq: &crate::eq::EqConfig, output_id: &str, out_rate: u32) -> serde_json::Value {
+    let rate = if out_rate == 0 { 48_000 } else { out_rate };
+    let (effective_preamp_db, curve_db) = crate::eq::compute_response(eq, rate);
     serde_json::json!({
         "output_id": output_id,
         "eq": eq,
         "effective_preamp_db": effective_preamp_db,
         "curve_db": curve_db.as_slice(),
+        "rate_hz": rate,
     })
 }
 
@@ -474,7 +478,8 @@ fn eq_response_json(eq: &crate::eq::EqConfig, output_id: &str) -> serde_json::Va
 /// composite frequency response curve `[SPEC-EQ-080]`.
 pub(super) async fn get_eq(State(ui): State<Ui>) -> axum::response::Response {
     use axum::response::IntoResponse;
-    let eq = ui.handle.snapshot().eq;
+    let state = ui.handle.snapshot();
+    let (eq, out_rate) = (state.eq, state.out_rate);
     let (db, library) = (ui.db.clone(), ui.library.clone());
     let output_id = tokio::task::spawn_blocking(move || {
         crate::db::PlayerStore::open_split(&db, &library)
@@ -483,7 +488,7 @@ pub(super) async fn get_eq(State(ui): State<Ui>) -> axum::response::Response {
     })
     .await
     .unwrap_or_else(|_| "dac".into());
-    axum::Json(eq_response_json(&eq, &output_id)).into_response()
+    axum::Json(eq_response_json(&eq, &output_id, out_rate)).into_response()
 }
 
 /// Apply and persist the 5-band parametric EQ configuration for the active
@@ -492,23 +497,58 @@ pub(super) async fn set_eq(
     State(ui): State<Ui>,
     axum::Json(cfg): axum::Json<crate::eq::EqConfig>,
 ) -> axum::response::Response {
+    apply_eq(ui, cfg).await
+}
+
+/// Choose one of the named curves, or `off` `[SPEC-EQ-085]`: applied to the
+/// configuration in force, so `auto_preamp` stays the listener's. A body-less
+/// route, for a control with buttons rather than a curve to edit -- the
+/// framebuffer UI's -- and the skin's preset list alike. An unknown name is
+/// `404`.
+pub(super) async fn set_eq_preset(
+    State(ui): State<Ui>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match ui.handle.snapshot().eq.with_preset(&name) {
+        Some(cfg) => apply_eq(ui, cfg).await,
+        None => (StatusCode::NOT_FOUND, format!("no equalizer preset named {name:?}")).into_response(),
+    }
+}
+
+/// Apply, persist for the active output, and answer with the curve
+/// `[SPEC-EQ-080]`.
+async fn apply_eq(ui: Ui, cfg: crate::eq::EqConfig) -> axum::response::Response {
     use axum::response::IntoResponse;
     let cfg = cfg.clamped();
+    // Live first: the listener hears the change whether or not it can be kept.
     ui.handle.send(Command::SetEq(cfg));
     let (db, library) = (ui.db.clone(), ui.library.clone());
     let saved_cfg = cfg;
-    let output_id = tokio::task::spawn_blocking(move || {
-        if let Ok(store) = crate::db::PlayerStore::open_split(&db, &library) {
-            let active = store.get_active_output();
-            let _ = store.save_output_eq(&active, &saved_cfg);
-            active
-        } else {
-            "dac".into()
+    // **Whether it was kept, said** `[SPEC-EQ-080]`. A save that failed used
+    // to answer exactly as one that worked, and the profile was then live but
+    // forgotten at the next restart, with nothing anywhere to say so.
+    let (output_id, saved) = tokio::task::spawn_blocking(move || {
+        match crate::db::PlayerStore::open_split(&db, &library) {
+            Ok(store) => {
+                let active = store.get_active_output();
+                let saved = store.save_output_eq(&active, &saved_cfg).map_err(|e| e.message().to_string());
+                (active, saved)
+            }
+            Err(e) => ("dac".to_string(), Err(format!("could not open the store: {}", e.message()))),
         }
     })
     .await
-    .unwrap_or_else(|_| "dac".into());
-    axum::Json(eq_response_json(&cfg, &output_id)).into_response()
+    .unwrap_or_else(|e| ("dac".into(), Err(format!("the save did not run: {e}"))));
+    if let Err(why) = &saved {
+        tracing::error!("equalizer: applied for {output_id} but not saved: {why}");
+    }
+    let mut body = eq_response_json(&cfg, &output_id, ui.handle.snapshot().out_rate);
+    body["saved"] = saved.is_ok().into();
+    if let Err(why) = saved {
+        body["save_error"] = why.into();
+    }
+    axum::Json(body).into_response()
 }
 
 /// Allow or forbid Lempi writing cue sheets into the music folder

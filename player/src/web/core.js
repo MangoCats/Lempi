@@ -1433,6 +1433,9 @@ const Lempi = (() => {
     setLoopB: ms => fetch(`/loop/b/${Math.round(ms)}`, { method: 'POST' }),
     clearLoop: () => fetch('/loop/clear', { method: 'POST' }),
     getEq: () => fetch('/audio/eq').then(r => (r.ok ? r.json() : null)),
+    // A named curve, or `off` `[SPEC-EQ-085]`.
+    setEqPreset: name => fetch(`/audio/eq/preset/${encodeURIComponent(name)}`, { method: 'POST' })
+      .then(r => (r.ok ? r.json() : null)),
     setEq: cfg => fetch('/audio/eq', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
