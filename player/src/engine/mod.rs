@@ -1022,6 +1022,15 @@ impl Engine {
     /// The replacement starts at once beneath it.
     const WARP_CUT_FADE_MS: u64 = 40;
 
+    /// How much of the re-primed passage a warp cut lays in behind its fade.
+    ///
+    /// Measured on `lp3-wifi` (Pi 3 B), 2026-10-22, before this existed: a
+    /// cut left the ring ~80 ms deep, and every one cost a 568-sample dropout;
+    /// three in about a second -- reset to neutral, then a new tempo and pitch
+    /// -- cost 373,304 samples, 4.2 s of silence, while the refill caught up.
+    /// Steady warped playback on the same node cost none.
+    const WARP_CUT_CUSHION_MS: u64 = 1_000;
+
     /// Equal-power crossfade at the `B -> A` loop seam `[SPEC-TPL-030]`.
     const LOOP_SEAM_MS: u64 = 10;
 
@@ -1108,7 +1117,7 @@ impl Engine {
         let saved_fade = self.skip_fade_ms;
         self.skip_fade_ms = Self::WARP_CUT_FADE_MS;
         let fade_samples = (self.skip_fade_ms * rate / 1000) as usize * ch;
-        self.cut_ring_to_incoming(fade_samples, 0);
+        self.cut_ring_to_incoming(fade_samples, 0, Self::WARP_CUT_CUSHION_MS);
         self.skip_fade_ms = saved_fade;
     }
 
@@ -1457,7 +1466,7 @@ impl Engine {
             self.live.clear();
             self.shown = None;
             self.announced = Some(self.admissions + 1);
-            self.cut_ring_to_incoming(fade_samples, self.skip_lead_ms);
+            self.cut_ring_to_incoming(fade_samples, self.skip_lead_ms, 0);
             self.republish_after_cut(0);
             self.queue_edited = true;
             self.publish();
@@ -1531,7 +1540,7 @@ impl Engine {
             None => self.skip_lead_ms,
         };
         let lead_samples = (lead_ms * rate / 1000) as usize * ch;
-        self.cut_ring_to_incoming(fade_samples, lead_ms);
+        self.cut_ring_to_incoming(fade_samples, lead_ms, 0);
         self.republish_after_cut(lead_samples);
     }
 
@@ -1542,7 +1551,12 @@ impl Engine {
     /// listener and the change they asked for. Lifted out of `skip` when `seek`
     /// turned out to need exactly it: both replace what is in the ring with a
     /// different point in the music, and differ only in which point.
-    fn cut_ring_to_incoming(&mut self, fade_samples: usize, lead_ms: u64) {
+    ///
+    /// `cushion_ms` is the least of the incoming passage to lay in, whatever
+    /// the fade: zero for a skip or a seek, whose fade already leaves a second
+    /// or more; a warp change's 40 ms crossfade would otherwise leave the ring
+    /// some 80 ms deep `[SPEC-TPL-060]`.
+    fn cut_ring_to_incoming(&mut self, fade_samples: usize, lead_ms: u64, cushion_ms: u64) {
         // One lead, converted once `[GDE-ARC-033]`. This used to take samples
         // for sizing the overlay and then hand `self.skip_lead_ms` to
         // `begin_skip_transition` for the placement -- two models of one
@@ -1554,7 +1568,8 @@ impl Engine {
         // incoming overlaps it. Asked before the cut, since afterwards the
         // answer is by definition the fade length.
         let have = self.path.ring.as_ref().map_or(0, |r| r.buffered()).min(fade_samples);
-        let wanted = have.saturating_sub(lead_samples);
+        let cushion = (cushion_ms * self.out_rate as u64 / 1000) as usize * ch;
+        let wanted = have.saturating_sub(lead_samples).max(cushion);
 
         // **Fill the incoming stream before cutting the ring** `[PI-CHR-075]`.
         //
@@ -1574,7 +1589,10 @@ impl Engine {
         if let Some(l) = self.live.first_mut() {
             let ab_loop = self.ab_loop;
             let out_rate = self.out_rate;
-            for _ in 0..crate::TOPUP_TRIES_BEFORE_CUT {
+            // A cushion is more than a fade's worth, so it is given more
+            // attempts; the old audio plays on while they run.
+            let tries = if cushion > 0 { crate::TOPUP_TRIES_BEFORE_CUT * 4 } else { crate::TOPUP_TRIES_BEFORE_CUT };
+            for _ in 0..tries {
                 if l.stream.ring.len() >= wanted || l.stream.finished {
                     break;
                 }
@@ -1719,7 +1737,7 @@ impl Engine {
         self.shown = self.live.first().map(|l| (l.entry.clone(), at));
         self.announced = self.live.first().map(|l| l.admitted);
         self.heard_from = None;
-        self.cut_ring_to_incoming(fade_samples, self.skip_lead_ms);
+        self.cut_ring_to_incoming(fade_samples, self.skip_lead_ms, 0);
         self.republish_after_cut(lead_samples);
         true
     }
@@ -6337,9 +6355,11 @@ than one mix block");
     fn scrobble_accounting_suspends_while_warped_and_resumes_at_neutral() {
         let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
         let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
-        let w = wav_of(4_000);
+        // Long enough that the warped phase, which a warp cut's cushion
+        // carries through quickly here, leaves audio for the neutral one.
+        let w = wav_of(20_000);
         let mut ent = entry(221, w.to_str().unwrap());
-        ent.end_ms = 4_000;
+        ent.end_ms = 20_000;
         e.enqueue(ent);
         h.send(Command::Play);
         e.drain_commands();
@@ -6545,6 +6565,34 @@ than one mix block");
             }
         }
         assert!(back, "the basis must return once the re-primed audio sounds");
+        let _ = std::fs::remove_file(&w);
+    }
+
+    /// A warp change cuts the ring with a 40 ms fade but leaves a second of
+    /// the re-primed passage behind it, not the ~80 ms that starved a Pi 3
+    /// into dropouts `[SPEC-TPL-060]`.
+    #[test]
+    fn a_warp_cut_leaves_a_cushion_in_the_ring() {
+        let ring = crate::output::OutputRing::new(800_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        let w = wav_of(20_000);
+        let mut ent = entry(271, w.to_str().unwrap());
+        ent.end_ms = 20_000;
+        e.enqueue(ent);
+        h.send(Command::Play);
+        e.drain_commands();
+        assert!(tick_until(&mut e, |eng| eng.echo.shown_is_sounding));
+        for _ in 0..50 {
+            drain_keeping(&ring, 200_000);
+            e.tick();
+        }
+        for (cmd, what) in [(Command::SetTempo(1_250), "tempo"), (Command::SetPitch(-500), "pitch"),
+                            (Command::SetLoopB(15_000), "loop")] {
+            h.send(cmd);
+            e.drain_commands();
+            let deep_ms = ring.buffered() as u64 * 1000 / (44_100 * 2);
+            assert!(deep_ms >= 900, "after a {what} cut the ring holds {deep_ms} ms");
+        }
         let _ = std::fs::remove_file(&w);
     }
 }
