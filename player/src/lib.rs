@@ -87,6 +87,7 @@ pub mod echo;
 #[cfg(feature = "echo-client")]
 pub mod echo_client;
 pub mod engine;
+pub mod eq;
 /// Music a phone finds in shared storage `[REQ-AND-260]`.
 pub mod found;
 /// The identity hash, `audio_md5`, computed in-process `[SPEC-RLK-150]`.
@@ -140,6 +141,7 @@ pub mod tags;
 pub mod web;
 pub mod resample;
 pub mod scrobble;
+pub mod stretch;
 
 /// Frames of audio buffered per passage. 15 s at 44.1 kHz.
 ///

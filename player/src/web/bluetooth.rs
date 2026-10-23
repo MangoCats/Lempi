@@ -99,19 +99,21 @@ pub(super) async fn speaker_verb_on(
             let library = ui.library.clone();
             let current_amp = ui.handle.snapshot().volume;
             let current_db = Volume::db_for(current_amp);
-            let dac_amp = tokio::task::spawn_blocking(move || {
+            let (dac_amp, dac_eq) = tokio::task::spawn_blocking(move || {
                 crate::bluetooth::restore_dac_sink();
                 let store = crate::db::PlayerStore::open_split(&db, &library).ok()?;
                 let dac_db = store.resolve_output_volume("dac", current_db);
-                Some(Volume::amplitude_at_db(dac_db))
+                let dac_eq = store.load_output_eq("dac");
+                Some((Volume::amplitude_at_db(dac_db), dac_eq))
             })
             .await
             .unwrap_or(None)
-            .unwrap_or(current_amp);
+            .unwrap_or((current_amp, crate::eq::EqConfig::default()));
 
             ui.handle.send(Command::ReopenOutput);
             tokio::time::sleep(Duration::from_millis(200)).await;
             ui.handle.send(Command::SetVolume(dac_amp));
+            ui.handle.send(Command::SetEq(dac_eq));
             tokio::time::sleep(Duration::from_millis(1_300)).await;
         }
         return bt_reply(result, forgotten_was_active && has_dac);
@@ -124,7 +126,7 @@ pub(super) async fn speaker_verb_on(
         let current_db = Volume::db_for(current_amp);
         let target_output = format!("bt:{address}");
 
-        let (timeout_s, target_amp, dac_amp) = tokio::task::spawn_blocking({
+        let (timeout_s, target_amp, dac_amp, target_eq, dac_eq) = tokio::task::spawn_blocking({
             let db = db.clone();
             let library = library.clone();
             let target_output = target_output.clone();
@@ -139,12 +141,20 @@ pub(super) async fn speaker_verb_on(
                 let target_amp = Volume::amplitude_at_db(target_db);
                 let dac_db = store.resolve_output_volume("dac", current_db);
                 let dac_amp = Volume::amplitude_at_db(dac_db);
-                Some((timeout, target_amp, dac_amp))
+                let target_eq = store.load_output_eq(&target_output);
+                let dac_eq = store.load_output_eq("dac");
+                Some((timeout, target_amp, dac_amp, target_eq, dac_eq))
             }
         })
         .await
         .unwrap_or(None)
-        .unwrap_or((45, current_amp, current_amp));
+        .unwrap_or((
+            45,
+            current_amp,
+            current_amp,
+            crate::eq::EqConfig::default(),
+            crate::eq::EqConfig::default(),
+        ));
 
         let result = bluetooth::run_with_timeout(v, Some(&address), Some(timeout_s));
         let is_connected = result
@@ -167,6 +177,7 @@ pub(super) async fn speaker_verb_on(
             ui.handle.send(Command::ReopenOutput);
             tokio::time::sleep(Duration::from_millis(200)).await;
             ui.handle.send(Command::SetVolume(target_amp));
+            ui.handle.send(Command::SetEq(target_eq));
             tokio::time::sleep(Duration::from_millis(1_300)).await;
             return bt_reply(result, true);
         } else if !tokio::task::spawn_blocking(has_dac).await.unwrap_or(true) {
@@ -191,6 +202,7 @@ pub(super) async fn speaker_verb_on(
             ui.handle.send(Command::ReopenOutput);
             tokio::time::sleep(Duration::from_millis(200)).await;
             ui.handle.send(Command::SetVolume(dac_amp));
+            ui.handle.send(Command::SetEq(dac_eq));
             tokio::time::sleep(Duration::from_millis(1_300)).await;
             return bt_reply(result, false);
         }
@@ -444,7 +456,7 @@ pub(super) async fn use_dac(State(ui): State<Ui>) -> Response {
     let current_amp = ui.handle.snapshot().volume;
     let current_db = Volume::db_for(current_amp);
 
-    let target_amp = match tokio::task::spawn_blocking(move || {
+    let (target_amp, dac_eq) = match tokio::task::spawn_blocking(move || {
         let store = crate::db::PlayerStore::open_split(&db, &library)
             .map_err(|e| e.message().to_string())?;
         let outgoing = store.get_active_output();
@@ -455,11 +467,12 @@ pub(super) async fn use_dac(State(ui): State<Ui>) -> Response {
             .set_active_output("dac")
             .map_err(|e| e.message().to_string())?;
         let target_db = store.resolve_output_volume("dac", current_db);
+        let dac_eq = store.load_output_eq("dac");
         crate::bluetooth::restore_dac_sink();
-        Ok::<f32, String>(Volume::amplitude_at_db(target_db))
+        Ok::<(f32, crate::eq::EqConfig), String>((Volume::amplitude_at_db(target_db), dac_eq))
     })
     .await {
-        Ok(Ok(amp)) => amp,
+        Ok(Ok(pair)) => pair,
         Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
@@ -467,6 +480,7 @@ pub(super) async fn use_dac(State(ui): State<Ui>) -> Response {
     ui.handle.send(Command::ReopenOutput);
     tokio::time::sleep(Duration::from_millis(200)).await;
     ui.handle.send(Command::SetVolume(target_amp));
+    ui.handle.send(Command::SetEq(dac_eq));
     tokio::time::sleep(Duration::from_millis(1_300)).await;
 
     let ui_clone = ui.clone();

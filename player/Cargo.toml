@@ -116,6 +116,7 @@ lempi-core = { path = "core" }
 # a `cargo update` `[SPEC-RLK-086]`.
 symphonia = { version = "=0.5.5", features = ["mp3", "flac", "isomp4", "aac", "vorbis"] }
 rubato = "0.15"
+rustfft = "6"
 cpal = "0.18"
 # bundled: compiles SQLite from source rather than needing libsqlite3-dev for
 # every target. Costs build time, buys a working cross-compile [REQ-HW-145].

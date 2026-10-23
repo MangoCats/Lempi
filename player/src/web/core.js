@@ -1425,6 +1425,19 @@ const Lempi = (() => {
     artUrl: id => `/art/${id}`,
     command: name => post(`/command/${name}`),
     volume: db => post(`/volume/${db}`),
+    // Real-time tempo, pitch, A-B loop, and 5-band parametric EQ `[SPEC-EQ-080]`,
+    // `[SPEC-TPL-120]`.
+    setTempo: milli => fetch(`/tempo/${Math.round(milli)}`, { method: 'POST' }),
+    setPitch: cents => fetch(`/pitch/${Math.round(cents)}`, { method: 'POST' }),
+    setLoopA: ms => fetch(`/loop/a/${Math.round(ms)}`, { method: 'POST' }),
+    setLoopB: ms => fetch(`/loop/b/${Math.round(ms)}`, { method: 'POST' }),
+    clearLoop: () => fetch('/loop/clear', { method: 'POST' }),
+    getEq: () => fetch('/audio/eq').then(r => (r.ok ? r.json() : null)),
+    setEq: cfg => fetch('/audio/eq', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cfg),
+    }).then(r => (r.ok ? r.json() : null)),
     // The passage the offset was measured against travels with it, so a
     // click that races a track change is refused rather than moving the next
     // passage (review O-01).

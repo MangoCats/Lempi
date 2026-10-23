@@ -460,6 +460,57 @@ pub(super) async fn set_skip_lead(
     StatusCode::NO_CONTENT
 }
 
+fn eq_response_json(eq: &crate::eq::EqConfig, output_id: &str) -> serde_json::Value {
+    let (effective_preamp_db, curve_db) = crate::eq::compute_response(eq, 48_000);
+    serde_json::json!({
+        "output_id": output_id,
+        "eq": eq,
+        "effective_preamp_db": effective_preamp_db,
+        "curve_db": curve_db.as_slice(),
+    })
+}
+
+/// Read the active 5-band parametric EQ configuration and its 64-point
+/// composite frequency response curve `[SPEC-EQ-080]`.
+pub(super) async fn get_eq(State(ui): State<Ui>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let eq = ui.handle.snapshot().eq;
+    let (db, library) = (ui.db.clone(), ui.library.clone());
+    let output_id = tokio::task::spawn_blocking(move || {
+        crate::db::PlayerStore::open_split(&db, &library)
+            .map(|s| s.get_active_output())
+            .unwrap_or_else(|_| "dac".into())
+    })
+    .await
+    .unwrap_or_else(|_| "dac".into());
+    axum::Json(eq_response_json(&eq, &output_id)).into_response()
+}
+
+/// Apply and persist the 5-band parametric EQ configuration for the active
+/// output `[SPEC-EQ-055]`, `[SPEC-EQ-080]`.
+pub(super) async fn set_eq(
+    State(ui): State<Ui>,
+    axum::Json(cfg): axum::Json<crate::eq::EqConfig>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let cfg = cfg.clamped();
+    ui.handle.send(Command::SetEq(cfg));
+    let (db, library) = (ui.db.clone(), ui.library.clone());
+    let saved_cfg = cfg;
+    let output_id = tokio::task::spawn_blocking(move || {
+        if let Ok(store) = crate::db::PlayerStore::open_split(&db, &library) {
+            let active = store.get_active_output();
+            let _ = store.save_output_eq(&active, &saved_cfg);
+            active
+        } else {
+            "dac".into()
+        }
+    })
+    .await
+    .unwrap_or_else(|_| "dac".into());
+    axum::Json(eq_response_json(&cfg, &output_id)).into_response()
+}
+
 /// Allow or forbid Lempi writing cue sheets into the music folder
 /// `[REQ-VIS-205]`.
 ///

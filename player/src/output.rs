@@ -297,6 +297,9 @@ pub struct OutputRing {
     /// Applied in the callback `[REQ-AUD-152]`, so a change is heard at the
     /// device rather than after the ring drains.
     pub volume: Volume,
+    /// Five-band parametric equalizer applied in the callback outside the ring
+    /// lock `[SPEC-EQ-010]`.
+    pub eq: Arc<crate::eq::EqProcessor>,
     /// Set by the stream's error callback, cleared by a successful attach.
     failed: Arc<AtomicBool>,
     /// Errors the stream's callback has reported since the supervisor last
@@ -404,6 +407,7 @@ impl OutputRing {
         Self {
             state: Arc::new(Mutex::new(OutputState::new(capacity))),
             volume,
+            eq: Arc::new(crate::eq::EqProcessor::new()),
             failed: Arc::new(AtomicBool::new(false)),
             stream_errors: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             silent: Arc::new(AtomicBool::new(false)),
@@ -769,9 +773,11 @@ impl Output {
             crate::logging::this_thread_must_not_block();
             record_stream_error(&cb_errors, &cb_failed, &e);
         };
+        ring.eq.set_stream_format(sample_rate, channels);
         let stream = match sample_format {
             SampleFormat::F32 => {
                 let cb_vol = volume.clone();
+                let cb_eq = Arc::clone(&ring.eq);
                 let cb_silent = Arc::clone(&silent);
                 let cb_counts = ring.counts.clone();
                 let cb_clock = ring.clock.clone();
@@ -779,7 +785,7 @@ impl Output {
                 device.build_output_stream(
                 config,
                 move |out: &mut [f32], info: &cpal::OutputCallbackInfo| {
-                    fill(&cb_state, &cb_vol, out, &cb_silent, &cb_counts);
+                    fill(&cb_state, &cb_vol, &cb_eq, out, &cb_silent, &cb_counts);
                     mix_cue(&cb_cue, out, channels, cb_vol.get());
                     tick_clock(&cb_clock, info, out.len(), channels, sample_rate);
                 },
@@ -789,6 +795,7 @@ impl Output {
             SampleFormat::I16 => {
                 let mut scratch: Vec<f32> = Vec::new();
                 let cb_vol = volume.clone();
+                let cb_eq = Arc::clone(&ring.eq);
                 let cb_silent = Arc::clone(&silent);
                 let cb_counts = ring.counts.clone();
                 let cb_clock = ring.clock.clone();
@@ -797,7 +804,7 @@ impl Output {
                     config,
                     move |out: &mut [i16], info: &cpal::OutputCallbackInfo| {
                         scratch.resize(out.len(), 0.0);
-                        fill(&cb_state, &cb_vol, &mut scratch, &cb_silent, &cb_counts);
+                        fill(&cb_state, &cb_vol, &cb_eq, &mut scratch, &cb_silent, &cb_counts);
                         mix_cue(&cb_cue, &mut scratch, channels, cb_vol.get());
                         tick_clock(&cb_clock, info, out.len(), channels, sample_rate);
                         for (o, s) in out.iter_mut().zip(scratch.iter()) {
@@ -811,6 +818,7 @@ impl Output {
             SampleFormat::U16 => {
                 let mut scratch: Vec<f32> = Vec::new();
                 let cb_vol = volume.clone();
+                let cb_eq = Arc::clone(&ring.eq);
                 let cb_silent = Arc::clone(&silent);
                 let cb_counts = ring.counts.clone();
                 let cb_clock = ring.clock.clone();
@@ -819,7 +827,7 @@ impl Output {
                     config,
                     move |out: &mut [u16], info: &cpal::OutputCallbackInfo| {
                         scratch.resize(out.len(), 0.0);
-                        fill(&cb_state, &cb_vol, &mut scratch, &cb_silent, &cb_counts);
+                        fill(&cb_state, &cb_vol, &cb_eq, &mut scratch, &cb_silent, &cb_counts);
                         mix_cue(&cb_cue, &mut scratch, channels, cb_vol.get());
                         tick_clock(&cb_clock, info, out.len(), channels, sample_rate);
                         for (o, s) in out.iter_mut().zip(scratch.iter()) {
@@ -838,6 +846,7 @@ impl Output {
                 // costs resolution, it just stops asking the driver to convert.
                 let mut scratch: Vec<f32> = Vec::new();
                 let cb_vol = volume.clone();
+                let cb_eq = Arc::clone(&ring.eq);
                 let cb_silent = Arc::clone(&silent);
                 let cb_counts = ring.counts.clone();
                 let cb_clock = ring.clock.clone();
@@ -846,7 +855,7 @@ impl Output {
                     config,
                     move |out: &mut [i32], info: &cpal::OutputCallbackInfo| {
                         scratch.resize(out.len(), 0.0);
-                        fill(&cb_state, &cb_vol, &mut scratch, &cb_silent, &cb_counts);
+                        fill(&cb_state, &cb_vol, &cb_eq, &mut scratch, &cb_silent, &cb_counts);
                         mix_cue(&cb_cue, &mut scratch, channels, cb_vol.get());
                         tick_clock(&cb_clock, info, out.len(), channels, sample_rate);
                         for (o, s) in out.iter_mut().zip(scratch.iter()) {
@@ -1104,7 +1113,8 @@ fn tick_clock(clock: &FrameClock, info: &cpal::OutputCallbackInfo,
     clock.tick((samples / channels.max(1)) as u64, delay);
 }
 
-fn fill(state: &Arc<Mutex<OutputState>>, volume: &Volume, out: &mut [f32],
+fn fill(state: &Arc<Mutex<OutputState>>, volume: &Volume,
+        eq: &crate::eq::EqProcessor, out: &mut [f32],
         silent: &Arc<AtomicBool>, counts: &Counts) {
     // Paused means silence, NOT a stopped stream `[PI3-OPEN-020]`. A2DP tears
     // down when nothing feeds it, so stopping the device on pause loses the
@@ -1139,12 +1149,18 @@ fn fill(state: &Arc<Mutex<OutputState>>, volume: &Volume, out: &mut [f32],
     match acquire(state) {
         Some(mut s) => {
             let got = s.ring.read(out);
-            // Volume is applied HERE, at the device, not before submission.
-            // The ring holds ~14 s, so scaling on the way in means a change is
-            // inaudible until that much already-scaled audio has drained --
+            // Release the ring lock before running the equalizer and volume
+            // stages so DSP never lengthens producer lock contention
+            // `[SPEC-EQ-015]`.
+            drop(s);
+            // Equalizer and volume are applied HERE, at the device, not before
+            // submission `[SPEC-EQ-010]`, `[REQ-AUD-152]`. The ring holds
+            // ~14 s, so shaping or scaling on the way in means a change is
+            // inaudible until that much already-processed audio has drained --
             // measured as a volume knob that appeared to lag by ten seconds or
             // more [REQ-AUD-152]. The same buffer-depth trap as pausing by
             // declining to submit [REQ-AUD-142].
+            eq.apply(&mut out[..got]);
             let v = volume.get();
             if v != 1.0 {
                 out[..got].iter_mut().for_each(|x| *x *= v);
@@ -1232,6 +1248,7 @@ fn declick(out: &mut [f32], fade_in: bool, from: f32) {
 mod tests {
     /// Not silenced -- the ordinary case for every fill test here.
     fn audible() -> Arc<AtomicBool> { Arc::new(AtomicBool::new(false)) }
+    fn flat_eq() -> crate::eq::EqProcessor { crate::eq::EqProcessor::new() }
 
     use super::*;
 
@@ -1352,7 +1369,7 @@ mod tests {
         st.lock().unwrap().ring.write(&[0.5; 8]);
         let mut out = [9.9f32; 8];
         let c = Counts::default();
-        fill(&st, &Volume::new(1.0), &mut out, &Arc::new(AtomicBool::new(true)), &c);
+        fill(&st, &Volume::new(1.0), &flat_eq(), &mut out, &Arc::new(AtomicBool::new(true)), &c);
         assert_eq!(out, [0.0; 8], "a paused stream feeds zeros");
         let s = st.lock().unwrap();
         // Both matter: the ring is what makes resuming instant, and counting
@@ -1367,14 +1384,15 @@ mod tests {
     fn a_primed_start_waits_for_the_ring_and_counts_nothing() {
         let st = Arc::new(Mutex::new(OutputState::new(64)));
         let c = Counts::default();
+        let eq = flat_eq();
         c.arm_priming();
         st.lock().unwrap().ring.write(&[0.5; 8]);
         let mut out = [9.9f32; 8];
-        fill(&st, &Volume::new(1.0), &mut out, &audible(), &c);
+        fill(&st, &Volume::new(1.0), &eq, &mut out, &audible(), &c);
         assert_eq!(out, [0.0; 8], "one callback's worth is not yet enough to start");
         assert_eq!(st.lock().unwrap().ring.len(), 8, "waiting consumes nothing");
         st.lock().unwrap().ring.write(&[0.5; 8]);
-        fill(&st, &Volume::new(1.0), &mut out, &audible(), &c);
+        fill(&st, &Volume::new(1.0), &eq, &mut out, &audible(), &c);
         assert_eq!(out, [0.5; 8], "two callbacks' worth starts it");
         assert_eq!(c.underruns(), 0, "a primed start is not a shortfall");
     }
@@ -1385,13 +1403,14 @@ mod tests {
     fn priming_gives_up_and_a_starved_output_is_still_reported() {
         let st = Arc::new(Mutex::new(OutputState::new(64)));
         let c = Counts::default();
+        let eq = flat_eq();
         c.arm_priming();
         let mut out = vec![9.9f32; 48_000];
         for _ in 0..4 {
-            fill(&st, &Volume::new(1.0), &mut out, &audible(), &c);
+            fill(&st, &Volume::new(1.0), &eq, &mut out, &audible(), &c);
         }
         assert_eq!(c.underruns(), 0, "within the limit, the wait is intended");
-        fill(&st, &Volume::new(1.0), &mut out, &audible(), &c);
+        fill(&st, &Volume::new(1.0), &eq, &mut out, &audible(), &c);
         assert_eq!(c.underruns(), 48_000, "past it, an empty ring is an underrun again");
     }
 
@@ -1405,7 +1424,7 @@ mod tests {
         ring.set_silent(false);
         assert!(ring.counts.priming.load(Ordering::Relaxed), "leaving silence arms priming");
         let mut out = [9.9f32; 8];
-        fill(&ring.state, &ring.volume, &mut out, &ring.silent, &ring.counts);
+        fill(&ring.state, &ring.volume, &ring.eq, &mut out, &ring.silent, &ring.counts);
         assert_eq!(out, [0.5; 8], "a full ring plays on the first callback");
         assert_eq!(ring.counts.underruns(), 0);
     }
@@ -1419,10 +1438,10 @@ mod tests {
         assert_eq!(ring.submit(&[0.1; 10]).2, 0);
         assert_eq!(ring.submit(&[0.1; 10]).2, 10, "the second block starts where the first ended");
         let mut out = [0.0f32; 6];
-        fill(&ring.state, &ring.volume, &mut out, &audible(), &Counts::default());
+        fill(&ring.state, &ring.volume, &ring.eq, &mut out, &audible(), &Counts::default());
         assert_eq!(ring.position(), Some((6, 20)));
         let paused = Arc::new(AtomicBool::new(true));
-        fill(&ring.state, &ring.volume, &mut out, &paused, &Counts::default());
+        fill(&ring.state, &ring.volume, &ring.eq, &mut out, &paused, &Counts::default());
         assert_eq!(ring.position(), Some((6, 20)), "a paused device reads nothing");
         // Skip: two channels at the ring's default 44.1 kHz, so a 0 ms fade
         // keeps nothing and the overlay lands at the front.
@@ -1438,7 +1457,7 @@ mod tests {
         st.lock().unwrap().ring.write(&[0.5; 4]);
         let mut out = [9.9f32; 8];
         let c = Counts::default();
-        fill(&st, &Volume::new(1.0), &mut out, &audible(), &c);
+        fill(&st, &Volume::new(1.0), &flat_eq(), &mut out, &audible(), &c);
         assert_eq!(&out[..4], &[0.5; 4]);
         assert!(out[4..].iter().all(|v| *v == 0.0), "shortfall must be silence");
         assert_eq!(c.underruns(), 4);
@@ -1452,7 +1471,7 @@ mod tests {
         let st = Arc::new(Mutex::new(OutputState::new(16)));
         st.lock().unwrap().ring.write(&[1.0; 4]);
         let mut out = [0.0f32; 4];
-        fill(&st, &Volume::new(0.25), &mut out, &audible(), &Counts::default());
+        fill(&st, &Volume::new(0.25), &flat_eq(), &mut out, &audible(), &Counts::default());
         assert!(out.iter().all(|v| (*v - 0.25).abs() < 1e-6), "got {out:?}");
     }
 
@@ -1463,13 +1482,38 @@ mod tests {
         let st = Arc::new(Mutex::new(OutputState::new(16)));
         st.lock().unwrap().ring.write(&[1.0; 8]);
         let vol = Volume::new(1.0);
+        let eq = flat_eq();
         let mut a = [0.0f32; 4];
-        fill(&st, &vol, &mut a, &audible(), &Counts::default());
+        fill(&st, &vol, &eq, &mut a, &audible(), &Counts::default());
         assert!((a[0] - 1.0).abs() < 1e-6);
         vol.set(0.5); // turned down while the rest is still queued
         let mut b = [0.0f32; 4];
-        fill(&st, &vol, &mut b, &audible(), &Counts::default());
+        fill(&st, &vol, &eq, &mut b, &audible(), &Counts::default());
         assert!((b[0] - 0.5).abs() < 1e-6, "the change must reach buffered audio");
+    }
+
+    /// Equalizer changes also reach audio already sitting in the ring
+    /// `[SPEC-EQ-010]`.
+    #[test]
+    fn eq_affects_audio_already_buffered_at_the_callback() {
+        // 2 x 44.1 kHz frames: room for well over the 20 ms switch ramp.
+        let st = Arc::new(Mutex::new(OutputState::new(8_192)));
+        st.lock().unwrap().ring.write(&[1.0; 8_192]);
+        let vol = Volume::new(1.0);
+        let eq = flat_eq();
+        let mut a = [0.0f32; 4];
+        fill(&st, &vol, &eq, &mut a, &audible(), &Counts::default());
+        assert!((a[0] - 1.0).abs() < 1e-6);
+
+        let cfg = crate::eq::EqConfig { enabled: true, auto_preamp: false, preamp_db: -6.0206, ..crate::eq::EqConfig::default() };
+        eq.set_config(cfg);
+
+        // Ramped in rather than stepped, but within the callback that follows,
+        // not after the ring drains.
+        let mut b = vec![0.0f32; 4_096];
+        fill(&st, &vol, &eq, &mut b, &audible(), &Counts::default());
+        let last = b[b.len() - 1];
+        assert!((last - 0.5).abs() < 1e-3, "EQ preamp must scale buffered audio at the callback, got {last}");
     }
 
     /// The ends must be exact: full scale must not be 0.999.
@@ -1551,7 +1595,7 @@ mod tests {
         st.lock().unwrap().ring.write(&[0.25; 8]);
         let mut out = [0.0f32; 8];
         let c = Counts::default();
-        fill(&st, &Volume::new(1.0), &mut out, &audible(), &c);
+        fill(&st, &Volume::new(1.0), &flat_eq(), &mut out, &audible(), &c);
         assert_eq!(c.underruns(), 0);
     }
 
@@ -1608,7 +1652,7 @@ property and this is running under emulation");
             std::hint::spin_loop();
         }
         let mut out = [9.9f32; 16];
-        fill(&st, &Volume::new(1.0), &mut out, &audible(), &c);
+        fill(&st, &Volume::new(1.0), &flat_eq(), &mut out, &audible(), &c);
         t.join().unwrap();
         assert_eq!(c.lock_failures(), 0, "a 100us hold must be waited out, not counted");
         assert!(out.iter().any(|v| *v != 0.0), "the audio must actually arrive");
@@ -1621,15 +1665,16 @@ property and this is running under emulation");
         let st = Arc::new(Mutex::new(OutputState::new(1024)));
         st.lock().unwrap().ring.write(&[1.0; 512]);
         let c = Counts::default();
+        let eq = flat_eq();
         // A first, successful fill leaves the waveform at 1.0.
         let mut out = [0.0f32; 128];
-        fill(&st, &Volume::new(1.0), &mut out, &audible(), &c);
+        fill(&st, &Volume::new(1.0), &eq, &mut out, &audible(), &c);
         assert_eq!(c.last_sample(), 1.0, "the last sample must be remembered");
 
         // Now miss, with the lock genuinely held throughout.
         let held = st.lock().unwrap();
         let mut gap = [9.9f32; 256];
-        fill(&st, &Volume::new(1.0), &mut gap, &audible(), &c);
+        fill(&st, &Volume::new(1.0), &eq, &mut gap, &audible(), &c);
         drop(held);
         assert_eq!(c.lock_failures(), 1);
         assert!(gap[0] > 0.9, "the gap must leave from the waveform, not from zero");
@@ -1640,7 +1685,7 @@ property and this is running under emulation");
 
         // The fill after a miss eases back in rather than stepping up.
         let mut back = [0.0f32; 256];
-        fill(&st, &Volume::new(1.0), &mut back, &audible(), &c);
+        fill(&st, &Volume::new(1.0), &eq, &mut back, &audible(), &c);
         assert!(back[0].abs() < 0.05, "the return must start from silence");
         assert!(back[DECLICK_SAMPLES - 1] > 0.9, "and reach the signal");
         assert!(back[..DECLICK_SAMPLES].windows(2).all(|w| w[0] <= w[1]));
@@ -1652,7 +1697,7 @@ property and this is running under emulation");
         let _held = st.lock().unwrap();
         let mut out = [9.9f32; 4];
         let c = Counts::default();
-        fill(&st, &Volume::new(1.0), &mut out, &audible(), &c); // must return, not deadlock
+        fill(&st, &Volume::new(1.0), &flat_eq(), &mut out, &audible(), &c); // must return, not deadlock
         assert!(out.iter().all(|v| *v == 0.0));
         // The event is recorded even though the lock is STILL held -- which is
         // the whole reason the counters left the mutex. The previous version

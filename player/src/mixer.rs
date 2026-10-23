@@ -211,6 +211,8 @@ pub struct Stream {
     /// Frames written so far, which is the envelope's position. Tracked
     /// here because it is applied on the way *in*.
     pub frames_written: u64,
+    /// Fractional 1/1000th frame remainder when `tempo_milli != 1000`.
+    pub milli_rem: u64,
     /// The passage's own fade-in/fade-out, independent of `Fade` above --
     /// that one stays reserved for Skip/Handoff's own retroactive cut
     /// `[SPEC-SUI-226]`.
@@ -218,6 +220,12 @@ pub struct Stream {
     pub channels: usize,
     /// No more audio will be produced; the stream ends when the ring drains.
     pub finished: bool,
+    /// Suppress the passage's fade-out while an A-B loop is active
+    /// `[SPEC-TPL-030]`.
+    pub suppress_fade_out: bool,
+    /// Playback tempo in milli-x (`1000` = `1.00x`), used to scale
+    /// envelope progression to passage content time `[SPEC-TPL-070]`.
+    pub tempo_milli: u32,
 }
 
 impl Stream {
@@ -225,9 +233,12 @@ impl Stream {
         Self {
             ring: RingBuffer::new(capacity_samples),
             frames_written: 0,
+            milli_rem: 0,
             envelope,
             channels,
             finished: false,
+            suppress_fade_out: false,
+            tempo_milli: 1000,
         }
     }
 
@@ -236,9 +247,31 @@ impl Stream {
     /// The only path by which audio enters a stream, so audio in the ring is
     /// always already faded -- the invariant the mixer relies on.
     pub fn push(&mut self, samples: &mut [f32]) -> usize {
-        self.envelope.apply(samples, self.channels, self.frames_written);
+        let ch = self.channels.max(1);
+        let env = if self.suppress_fade_out {
+            Envelope {
+                fade_in: self.envelope.fade_in,
+                fade_out: crate::fade::Fade::none(),
+                total_frames: self.envelope.total_frames,
+            }
+        } else {
+            self.envelope
+        };
+        let tempo = self.tempo_milli.max(1) as u64;
+        if tempo == 1000 && self.milli_rem == 0 {
+            env.apply(samples, ch, self.frames_written);
+        } else {
+            for (i, frame) in samples.chunks_mut(ch).enumerate() {
+                let pos = self.frames_written + (self.milli_rem + i as u64 * tempo) / 1000;
+                let g = env.gain_at(pos);
+                frame.iter_mut().for_each(|s| *s *= g);
+            }
+        }
         let written = self.ring.write(samples);
-        self.frames_written += (written / self.channels.max(1)) as u64;
+        let written_frames = (written / ch) as u64;
+        let total_milli = self.milli_rem + written_frames * tempo;
+        self.frames_written += total_milli / 1000;
+        self.milli_rem = total_milli % 1000;
         written
     }
 
@@ -572,5 +605,44 @@ straight against it -- the pause bought no delay at all");
         let mut out = [9.9; 4];
         assert_eq!(mix(std::iter::empty(), &mut out), 0);
         assert!(out.iter().all(|s| *s == 0.0), "must clear, not leave stale audio");
+    }
+
+    #[test]
+    fn suppress_fade_out_keeps_loop_at_full_volume_while_preserving_fade_in() {
+        let envelope = Envelope {
+            fade_in: Fade { curve: Curve::Linear, frames: 2, fade_in: true },
+            fade_out: Fade { curve: Curve::Linear, frames: 4, fade_in: false },
+            total_frames: 8,
+        };
+        let mut s = Stream::new(64, 1, envelope);
+        s.suppress_fade_out = true;
+        let mut block = vec![1.0f32; 8];
+        s.push(&mut block);
+        let mut out = [0.0; 8];
+        s.ring.read(&mut out);
+        assert!(out[0].abs() < 1e-6, "fade-in still applies at frame 0");
+        assert!((out[7] - 1.0).abs() < 1e-6, "fade-out is suppressed while looping");
+    }
+
+    #[test]
+    fn tempo_milli_scales_envelope_progression_to_passage_time() {
+        let envelope = Envelope {
+            fade_in: Fade::none(),
+            fade_out: Fade { curve: Curve::Linear, frames: 4, fade_in: false },
+            total_frames: 8,
+        };
+        // At 0.5x tempo (tempo_milli = 500), 8 output frames represent only 4
+        // passage frames (0..4), which is entirely before fade_out_start = 4.
+        let mut s = Stream::new(64, 1, envelope);
+        s.tempo_milli = 500;
+        let mut block = vec![1.0f32; 8];
+        s.push(&mut block);
+        let mut out = [0.0; 8];
+        s.ring.read(&mut out);
+        assert!(
+            out.iter().all(|&x| (x - 1.0).abs() < 1e-6),
+            "at 0.5x tempo, first 8 output frames cover passage frames 0..4 (before fade-out): {out:?}"
+        );
+        assert_eq!(s.frames_written, 4);
     }
 }

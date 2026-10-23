@@ -42,7 +42,12 @@
       <div id="plays"></div>
     </div>
   </div>
-  <div id="bar" title="Click to move within the track"><div id="fill"></div></div>
+  <div id="bar" title="Click to move within the track">
+    <div id="fill"></div>
+    <div id="loop-range" hidden></div>
+    <div id="loop-mark-a" class="loop-mark" hidden></div>
+    <div id="loop-mark-b" class="loop-mark" hidden></div>
+  </div>
   <div id="time">0:00 / 0:00</div>
 
   <div class="controls">
@@ -50,6 +55,63 @@
     <button data-cmd="pause">Pause</button>
     <button data-cmd="skip">Skip</button>
     <label id="vol"><input type="range" id="volume" min="0" max="1" step="any" value="1"><span id="volnum">0.0 dB</span></label>
+  </div>
+  <div id="audio-controls-bar" class="audio-bar" hidden>
+    <button type="button" id="audio-controls-toggle" aria-expanded="false">Audio controls</button>
+    <span id="warp-badge" class="warp-badge" hidden></span>
+  </div>
+  <div id="audio-controls-drawer" class="audio-drawer" hidden>
+    <div id="tpl-section" class="audio-section" hidden>
+      <div class="audio-row">
+        <label for="tempo-slider">Tempo</label>
+        <span id="tempo-readout" class="audio-readout">1.00×</span>
+        <button type="button" id="tempo-reset" class="audio-mini">1.0×</button>
+      </div>
+      <input type="range" id="tempo-slider" min="250" max="4000" step="10" value="1000">
+      <div class="audio-presets">
+        <button type="button" class="audio-mini" data-tempo="500">0.5×</button>
+        <button type="button" class="audio-mini" data-tempo="750">0.75×</button>
+        <button type="button" class="audio-mini" data-tempo="1000">1.0×</button>
+        <button type="button" class="audio-mini" data-tempo="1250">1.25×</button>
+        <button type="button" class="audio-mini" data-tempo="1500">1.5×</button>
+        <button type="button" class="audio-mini" data-tempo="2000">2.0×</button>
+      </div>
+      <div class="audio-row">
+        <label for="pitch-slider">Pitch</label>
+        <span id="pitch-readout" class="audio-readout">0.0 st</span>
+        <button type="button" id="pitch-down" class="audio-mini">−1 st</button>
+        <button type="button" id="pitch-up" class="audio-mini">+1 st</button>
+        <button type="button" id="pitch-reset" class="audio-mini">0 st</button>
+      </div>
+      <input type="range" id="pitch-slider" min="-1200" max="1200" step="10" value="0">
+    </div>
+    <div id="ab-loop-section" class="audio-section" hidden>
+      <div class="audio-row">
+        <label>A–B Loop</label>
+        <span id="loop-readout" class="audio-readout">Off</span>
+        <button type="button" id="loop-set-a" class="audio-mini">Set A</button>
+        <button type="button" id="loop-set-b" class="audio-mini">Set B</button>
+        <button type="button" id="loop-clear" class="audio-mini" disabled>Clear</button>
+      </div>
+    </div>
+    <div id="eq-section" class="audio-section" hidden>
+      <div class="audio-row">
+        <label><input type="checkbox" id="eq-enabled"> 5-Band EQ</label>
+        <label for="eq-preamp" class="eq-preamp-lbl">Preamp <input type="range" id="eq-preamp" min="-12" max="12" step="0.1" value="0"> <span id="eq-preamp-readout" class="audio-readout">0.0 dB</span></label>
+        <label title="Lower the preamp by the curve's highest boost, so no setting can clip"><input type="checkbox" id="eq-auto" checked> Auto headroom</label>
+        <select id="eq-preset">
+          <option value="custom">Custom</option>
+          <option value="flat">Flat</option>
+          <option value="bass">Bass Boost</option>
+          <option value="vocal">Vocal Presence</option>
+          <option value="treble">Treble Air</option>
+          <option value="loudness">Loudness</option>
+        </select>
+        <button type="button" id="eq-flat-btn" class="audio-mini">Flat</button>
+      </div>
+      <canvas id="eq-canvas" width="520" height="150"></canvas>
+      <div id="eq-bands" class="eq-bands"></div>
+    </div>
   </div>
   <!-- Under the transport, because both describe what the transport is doing.
        Two equal columns, so Underruns begins at the half-way mark. -->

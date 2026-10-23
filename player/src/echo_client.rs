@@ -271,6 +271,9 @@ struct FollowState {
     /// the trim to `R - A` when it already holds `A`, which settles at half
     /// the drift and oscillates about it.
     applied_ppm: f64,
+    /// True while either master or follower has non-neutral tempo, pitch, or
+    /// an active A-B loop `[SPEC-ECHO-045]`, `[SPEC-TPL-100]`.
+    suspended_warp: bool,
 }
 
 impl FollowState {
@@ -289,6 +292,7 @@ impl FollowState {
             applied_ppm: 0.0,
             filtered: crate::echo::ResidualFilter::new(
                 RESIDUAL_WINDOW, RESIDUAL_MIN_SAMPLES),
+            suspended_warp: false,
         }
     }
 }
@@ -599,6 +603,9 @@ pub async fn run(cfg: Following, handle: Arc<EngineHandle>) {
                 }
             };
             let Ok(snap) = serde_json::from_str::<Snapshot>(&text) else { continue };
+            if check_warp_suspension(&snap.echo, &handle, &mut fs) {
+                continue;
+            }
             adopt_queue(&snap, &cfg, &handle, &mut fs).await;
             act(&mut follower, &snap.echo, &cfg, &handle, &mut fs).await;
         }
@@ -609,6 +616,61 @@ pub async fn run(cfg: Following, handle: Arc<EngineHandle>) {
     }
 }
 
+/// Suspend following when either the master or this node has non-neutral
+/// tempo, pitch, or an active A-B loop, and rejoin mid-passage when both
+/// return to neutral `[SPEC-ECHO-045]`, `[SPEC-TPL-100]`.
+///
+/// Checked before `adopt_queue` and `act`, which would otherwise act on a
+/// master with no anchor. While suspended this node's own warm Director keeps
+/// it playing `[GDE-ECHO-500]`; nothing the master says is adopted.
+fn check_warp_suspension(
+    st: &EchoState,
+    handle: &Arc<EngineHandle>,
+    fs: &mut FollowState,
+) -> bool {
+    let master_warped = st.voided_by == Some(crate::echo::Voided::Warped);
+    let self_warped = handle.state.lock().is_ok_and(|s| {
+        s.tempo_milli != crate::stretch::TEMPO_NEUTRAL_MILLI
+            || s.pitch_cents != crate::stretch::PITCH_NEUTRAL_CENTS
+            || s.ab_loop.is_active()
+    });
+    if master_warped || self_warped {
+        if !fs.suspended_warp {
+            fs.suspended_warp = true;
+            fs.rate.clear();
+            fs.filtered.clear();
+            fs.corrected = None;
+            fs.mid_joined = None;
+            fs.landing = None;
+            fs.applied_ppm = 0.0;
+            fs.queue.clear();
+            handle.send(Command::SetEchoRate(0.0));
+            set_status(
+                handle,
+                "Echo suspended (tempo, pitch, or loop active); playing independently.",
+            );
+            note(
+                &mut fs.note,
+                "echo-follow: suspended while tempo, pitch, or loop is active".to_string(),
+            );
+        }
+        return true;
+    }
+    if fs.suspended_warp {
+        fs.suspended_warp = false;
+        // The same passage is not the same place after a warp: positions
+        // diverged, so the join must re-place even a node that is "near".
+        fs.queue.clear();
+        fs.want_rejoin = true;
+        fs.mid_joined = None;
+        note(
+            &mut fs.note,
+            "echo-follow: tempo, pitch, and loop returned to neutral; rejoining master".to_string(),
+        );
+    }
+    false
+}
+
 async fn act(
     f: &mut Follower,
     st: &EchoState,
@@ -616,6 +678,9 @@ async fn act(
     handle: &Arc<EngineHandle>,
     fs: &mut FollowState,
 ) {
+    if check_warp_suspension(st, handle, fs) {
+        return;
+    }
     // The offset the listener has set, this instant. Assigned rather than
     // passed, because `submit_at` and the trim both read it off the follower.
     f.timing = live_timing(handle, cfg.timing);
@@ -655,7 +720,7 @@ async fn act(
     // not retry twice a second forever, and when the master moves on the
     // ordinary schedule path takes over anyway.
     let (join_now, _) = join_intent(handle);
-    if join_now {
+    if join_now || fs.want_rejoin {
         if let Some(a) = st.anchor.as_ref() {
             // Coming to it is enough to skip the join only while the node is
             // roughly in the right place. Grossly out -- a node that has just
@@ -1834,5 +1899,62 @@ join cuts the ring and re-imposes the join bias",
         e.tick();
         assert_ne!(e.echo.prep_ms, 1_500,
                    "the join was declined rather than fired");
+    }
+
+    #[tokio::test]
+    async fn warp_on_master_or_follower_suspends_following_and_forces_rejoin_at_neutral() {
+        let h = node();
+        let now = now_nanos();
+        // Follower is already playing passage 5164 with join_now = false.
+        if let Ok(mut s) = h.state.lock() {
+            s.echo_node.join_now = false;
+            s.echo_node.rate = 44_100;
+            s.current = Some(entry(5164));
+        }
+
+        // Master reports Voided::Warped (with no anchor).
+        let warped_master = EchoState {
+            anchor: None,
+            schedule: None,
+            voided_by: Some(crate::echo::Voided::Warped),
+        };
+        let mut fs = FollowState::new();
+        fs.applied_ppm = 12.5;
+        fs.queue = vec![5164, 5165];
+        one_pass(&h, &warped_master, &mut fs).await;
+
+        assert!(fs.suspended_warp, "master Voided::Warped must suspend follower");
+        assert_eq!(fs.applied_ppm, 0.0, "applied_ppm must reset on warp suspension");
+        assert_eq!(
+            status_of(&h),
+            "Echo suspended (tempo, pitch, or loop active); playing independently."
+        );
+        assert!(fs.queue.is_empty(), "the master's queue is not adopted while suspended");
+
+        // Master returns to neutral on the SAME passage 5164, while follower has join_now = false.
+        let neutral_master = EchoState {
+            anchor: Some(crate::echo::DriftAnchor {
+                passage_id: 5164,
+                sample: 44_100 * 10,
+                heard_at: now,
+                rate: 44_100,
+                ppm: None,
+            }),
+            schedule: Some(crate::echo::Schedule {
+                passage_id: 5164,
+                start_sample: 0,
+                sound_at: now + 100_000_000,
+                rate: 44_100,
+            }),
+            voided_by: None,
+        };
+        one_pass(&h, &neutral_master, &mut fs).await;
+
+        assert!(!fs.suspended_warp, "returning to neutral clears suspended_warp");
+        assert_eq!(
+            fs.mid_joined.map(|(id, _)| id),
+            Some(5164),
+            "returning from warp must force mid-passage rejoin even on the same passage with join_now=false"
+        );
     }
 }

@@ -13,6 +13,7 @@
 //! **Nothing here alters the audio** `[REQ-AUD-100]`. Sample rate conversion
 //! happens downstream in [`resample`](../resample.rs) and gain in the mixer;
 //! what this yields is what the file holds.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use std::fs::File;
 use std::path::Path;
@@ -50,6 +51,12 @@ pub struct PassageDecoder {
     track_id: u32,
     pub sample_rate: u32,
     pub channels: usize,
+    /// Container start offset of this passage in milliseconds `[SPEC-TPL-025]`.
+    start_ms: u64,
+    /// Container end offset of this passage in milliseconds, if bounded.
+    end_ms: Option<u64>,
+    /// Passage-relative frame offset of the most recent open or `seek_ms`.
+    offset_frames: u64,
     /// Interleaved f32 for the packet just decoded. Reused every call, so the
     /// allocation happens once regardless of passage length.
     scratch: Vec<f32>,
@@ -78,6 +85,17 @@ impl PassageDecoder {
     /// Open `path` and seek to `start_ms`, decoding at most `end_ms - start_ms`.
     /// `end_ms == None` means "to end of file".
     pub fn open(path: &Path, start_ms: u64, end_ms: Option<u64>) -> Result<Self, DecodeError> {
+        Self::open_at(path, start_ms, end_ms, 0)
+    }
+
+    /// Open `path` for the passage spanning `[start_ms, end_ms)` and begin
+    /// decoding `passage_offset_ms` into that passage `[SPEC-TPL-025]`.
+    pub fn open_at(
+        path: &Path,
+        start_ms: u64,
+        end_ms: Option<u64>,
+        passage_offset_ms: u64,
+    ) -> Result<Self, DecodeError> {
         let file = File::open(path).map_err(DecodeError::Io)?;
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
         let mut hint = Hint::new();
@@ -110,9 +128,10 @@ impl PassageDecoder {
         // silent, but it shifts trim points and, because frame_limit is measured
         // from the requested start, drags the end boundary with it. Discard the
         // shortfall so start_ms means start_ms.
+        let target_ms = start_ms.saturating_add(passage_offset_ms);
         let mut skip_frames = 0u64;
-        if start_ms > 0 {
-            let t = Time::from(std::time::Duration::from_millis(start_ms));
+        if target_ms > 0 {
+            let t = Time::from(std::time::Duration::from_millis(target_ms));
             let landed = format
                 .seek(SeekMode::Accurate, SeekTo::Time { time: t, track_id: Some(track_id) })
                 .map_err(DecodeError::Symphonia)?;
@@ -120,9 +139,10 @@ impl PassageDecoder {
         }
 
         let frame_limit = end_ms.map(|e| {
-            let span_ms = e.saturating_sub(start_ms);
+            let span_ms = e.saturating_sub(target_ms);
             (span_ms as f64 * sample_rate as f64 / 1000.0) as u64
         });
+        let offset_frames = (passage_offset_ms as f64 * sample_rate as f64 / 1000.0) as u64;
 
         Ok(Self {
             format,
@@ -130,6 +150,9 @@ impl PassageDecoder {
             track_id,
             sample_rate,
             channels,
+            start_ms,
+            end_ms,
+            offset_frames,
             scratch: Vec::new(),
             frames_emitted: 0,
             frame_limit,
@@ -137,6 +160,41 @@ impl PassageDecoder {
             underflows: 0,
             path: path.to_path_buf(),
         })
+    }
+
+    /// Seek in-place to `passage_offset_ms` relative to the passage's own
+    /// `start_ms` without reopening the underlying file `[SPEC-TPL-025]`.
+    pub fn seek_ms(&mut self, passage_offset_ms: u64) -> Result<(), DecodeError> {
+        let target_ms = self.start_ms.saturating_add(passage_offset_ms);
+        let t = Time::from(std::time::Duration::from_millis(target_ms));
+        let landed = self
+            .format
+            .seek(
+                SeekMode::Accurate,
+                SeekTo::Time { time: t, track_id: Some(self.track_id) },
+            )
+            .map_err(DecodeError::Symphonia)?;
+        self.decoder.reset();
+        self.skip_frames = landed.required_ts.saturating_sub(landed.actual_ts);
+        self.frames_emitted = 0;
+        self.frame_limit = self.end_ms.map(|e| {
+            let span_ms = e.saturating_sub(target_ms);
+            (span_ms as f64 * self.sample_rate as f64 / 1000.0) as u64
+        });
+        self.offset_frames = (passage_offset_ms as f64 * self.sample_rate as f64 / 1000.0) as u64;
+        Ok(())
+    }
+
+    /// Current decoded position relative to the passage's `start_ms`, in
+    /// milliseconds `[SPEC-TPL-025]`.
+    pub fn position_ms(&self) -> u64 {
+        self.position_frames().saturating_mul(1000) / (self.sample_rate.max(1) as u64)
+    }
+
+    /// Current decoded position relative to the passage's `start_ms`, in
+    /// frames at the file's own rate `[SPEC-TPL-025]`.
+    pub fn position_frames(&self) -> u64 {
+        self.offset_frames + self.frames_emitted
     }
 
     /// Decode the next packet. Returns interleaved f32 frames, or `None` at end
@@ -342,6 +400,33 @@ pub(crate) mod tests {
         let want = 44_100;
         let err = (frames as i64 - want as i64).abs();
         assert!(err < 4096, "decoded {frames} frames for 1000 ms, wanted ~{want}");
+        let _ = std::fs::remove_file(f);
+    }
+
+    /// `[SPEC-TPL-025]`: `seek_ms` seeks relative to the passage's `start_ms`
+    /// inside a multi-track container and updates `position_ms` accordingly.
+    #[test]
+    fn seek_ms_preserves_passage_start_and_resets_position() {
+        let f = tmp("seek_ms_loop");
+        // Passage starts at 1_000 ms and ends at 4_000 ms in the 5_000 ms file.
+        let mut d = PassageDecoder::open(&f, 1_000, Some(4_000)).unwrap();
+        assert_eq!(d.position_ms(), 0);
+        let first = frame_of(d.next().unwrap().unwrap()[0]);
+        assert!(first.abs_diff(44_100) <= 8, "started at 1_000 ms in file, got {first}");
+
+        // Seek to 1_500 ms into the passage (= 2_500 ms into the file).
+        d.seek_ms(1_500).unwrap();
+        assert_eq!(d.position_ms(), 1_500);
+        let at_b = frame_of(d.next().unwrap().unwrap()[0]);
+        let want_b = 2_500 * 44_100 / 1000;
+        assert!(at_b.abs_diff(want_b) <= 8, "seek_ms(1500) landed at {at_b}, wanted {want_b}");
+
+        // Loop back to 500 ms into the passage (= 1_500 ms into the file).
+        d.seek_ms(500).unwrap();
+        assert_eq!(d.position_ms(), 500);
+        let at_a = frame_of(d.next().unwrap().unwrap()[0]);
+        let want_a = 1_500 * 44_100 / 1000;
+        assert!(at_a.abs_diff(want_a) <= 8, "seek_ms(500) landed at {at_a}, wanted {want_a}");
         let _ = std::fs::remove_file(f);
     }
 }

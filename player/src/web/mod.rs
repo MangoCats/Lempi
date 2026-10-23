@@ -283,6 +283,20 @@ pub struct Snapshot {
     /// Whether the live backend can move inside a passage `[REQ-VIS-225]`.
     /// The bar is a control only where this is true.
     pub can_seek: bool,
+    /// Whether the live backend supports the 5-band parametric EQ `[SPEC-EQ-070]`.
+    pub can_eq: bool,
+    /// Whether the live backend supports real-time tempo and pitch `[SPEC-TPL-110]`.
+    pub can_tempo_pitch: bool,
+    /// Whether the live backend supports A-B looping `[SPEC-TPL-110]`.
+    pub can_ab_loop: bool,
+    /// Playback tempo in milli-x (`250..=4000`, `1000` = `1.0x`) `[SPEC-TPL-110]`.
+    pub tempo_milli: u32,
+    /// Pitch shift in cents (`-1200..=1200`, `0` = neutral) `[SPEC-TPL-110]`.
+    pub pitch_cents: i32,
+    /// Active A-B loop state `[SPEC-TPL-110]`.
+    pub ab_loop: crate::engine::AbLoop,
+    /// Active 5-band parametric EQ configuration `[SPEC-EQ-070]`.
+    pub eq: crate::eq::EqConfig,
     pub covers_status: Option<String>,
     /// `[REQ-VIS-215]`
     pub lyrics_cache: bool,
@@ -418,6 +432,13 @@ impl From<&PlayerState> for Snapshot {
             // Replaced below from the live backend; the engine cannot answer for
             // a side that is not it.
             can_seek: false,
+            can_eq: false,
+            can_tempo_pitch: false,
+            can_ab_loop: false,
+            tempo_milli: s.tempo_milli,
+            pitch_cents: s.pitch_cents,
+            ab_loop: s.ab_loop,
+            eq: s.eq,
             lyrics_cache: s.lyrics_cache,
             lyrics_sidecar: s.lyrics_sidecar,
             dev_mode: s.dev_mode,
@@ -521,8 +542,14 @@ pub fn router(ui: Ui) -> Router {
         .route("/queue/:passages/:action", post(queue_passage))
         .route("/ws", get(ws_upgrade))
         .route("/audio/sink", get(audio_sink))
+        .route("/audio/eq", get(get_eq).post(set_eq))
         .route("/command/:name", post(command))
         .route("/volume/:db", post(set_volume))
+        .route("/tempo/:milli", post(set_tempo))
+        .route("/pitch/:cents", post(set_pitch))
+        .route("/loop/a/:ms", post(set_loop_a))
+        .route("/loop/b/:ms", post(set_loop_b))
+        .route("/loop/clear", post(clear_loop))
         .route("/seek/:ms", post(seek_to))
         .route("/seek/:passage/:ms", post(seek_passage))
         .route("/underruns/restart", post(restart_underruns))
@@ -743,20 +770,24 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
     // The queue as the edit controls see it: which entries, in what order, and
     // how many the mixer has taken -- which is what makes a row uneditable.
     let mut sent_queue: Option<(Vec<u64>, usize)> = None;
+    let mut sent_audio: Option<(u32, i32, crate::engine::AbLoop, crate::eq::EqConfig)> = None;
     loop {
         watch.tick().await;
         let state = ui.handle.snapshot();
         let queue: Vec<u64> = state.queue.iter().map(|e| e.qid).collect();
+        let audio = (state.tempo_milli, state.pitch_cents, state.ab_loop, state.eq);
         let now = std::time::Instant::now();
         let due = sent_at.is_none_or(|t| now.duration_since(t) >= PUSH_EVERY);
         let moved = sent_queue
             .as_ref()
-            .is_none_or(|(q, ahead)| q != &queue || *ahead != state.mixing_ahead);
+            .is_none_or(|(q, ahead)| q != &queue || *ahead != state.mixing_ahead)
+            || sent_audio.as_ref().is_none_or(|a| a != &audio);
         if !due && !moved {
             continue;
         }
         sent_at = Some(now);
         sent_queue = Some((queue, state.mixing_ahead));
+        sent_audio = Some(audio);
         let mut snap = Snapshot::from(&state);
         snap.capabilities = ui.capabilities;
         snap.power = crate::power::state_now();
@@ -773,6 +804,9 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
             snap.covers_status = c.covers_status.clone();
             snap.lyrics_status = c.lyrics_status.clone();
             snap.can_seek = c.can_seek;
+            snap.can_eq = c.can_eq;
+            snap.can_tempo_pitch = c.can_tempo_pitch;
+            snap.can_ab_loop = c.can_ab_loop;
             snap.sidecar_status = c.sidecar_status.clone();
             snap.pool = c.pool;
             snap.programs = c
@@ -2291,5 +2325,108 @@ mod tests {
         let store = crate::db::PlayerStore::open(&std::path::PathBuf::from(":memory:")).unwrap();
         let err = store.accept_segment(1).unwrap_err();
         assert!(err.message().contains("no such passage"), "{}", err.message());
+    }
+
+    /// `[SPEC-EQ-080]`, `[SPEC-TPL-120]`: the warp routes clamp rather than
+    /// refuse and answer 202; the loop rules are the engine's
+    /// `[SPEC-TPL-020]`, so they are checked in what it ends up holding.
+    /// `/audio/eq` returns the 64-point curve and persists per output.
+    #[tokio::test]
+    async fn the_audio_control_routes_validate_and_persist() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let d = std::env::temp_dir().join(format!("lempi-audio-routes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let db_path = d.join("listener.db");
+        let _ = crate::db::PlayerStore::open(&db_path).unwrap();
+
+        let (mut engine, h) = crate::engine::Engine::new(crate::path::PathHandle::silent(), 1);
+        let handle = Arc::new(h);
+        let ui = Ui {
+            handle: handle.clone(),
+            db: db_path.clone(),
+            library: db_path.clone(),
+            why: Default::default(),
+            controls: Default::default(),
+            capabilities: Default::default(),
+            web_loopback_only: false,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router(ui)).await });
+        tokio::task::spawn_blocking(move || {
+            for _ in 0..600 {
+                engine.tick();
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        });
+
+        let call = |method: &'static str, path: &'static str, body: Option<String>| async move {
+            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let req = match body {
+                Some(b) => format!(
+                    "{method} {path} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b}",
+                    b.len()
+                ),
+                None => format!("{method} {path} HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+            };
+            s.write_all(req.as_bytes()).await.unwrap();
+            let mut buf = Vec::new();
+            s.read_to_end(&mut buf).await.unwrap();
+            String::from_utf8_lossy(&buf).to_string()
+        };
+
+        let settled = |want: &dyn Fn(&crate::engine::PlayerState) -> bool| {
+            let handle = handle.clone();
+            let ok = (0..200).any(|_| {
+                if want(&handle.snapshot()) {
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                false
+            });
+            assert!(ok, "the engine never reached the expected state: {:?}", handle.snapshot());
+        };
+        let accepted = |r: String| assert!(r.contains(" 202 "), "{r}");
+
+        accepted(call("POST", "/tempo/100", None).await);
+        settled(&|s| s.tempo_milli == 250);
+        accepted(call("POST", "/tempo/5000", None).await);
+        settled(&|s| s.tempo_milli == 4000);
+        accepted(call("POST", "/pitch/-2000", None).await);
+        settled(&|s| s.pitch_cents == -1200);
+        accepted(call("POST", "/pitch/+300", None).await);
+        settled(&|s| s.pitch_cents == 300);
+        assert!(call("POST", "/pitch/high", None).await.contains(" 400 "), "not a number is refused");
+
+        use crate::engine::AbLoop;
+        accepted(call("POST", "/loop/b/5000", None).await);
+        settled(&|s| s.ab_loop == AbLoop { a_ms: Some(0), b_ms: Some(5000) });
+        accepted(call("POST", "/loop/a/2000", None).await);
+        settled(&|s| s.ab_loop == AbLoop { a_ms: Some(2000), b_ms: Some(5000) });
+        accepted(call("POST", "/loop/b/2100", None).await);
+        accepted(call("POST", "/tempo/1000", None).await);
+        settled(&|s| s.tempo_milli == 1000);
+        assert_eq!(handle.snapshot().ab_loop.b_ms, Some(5000), "a span under 200 ms changes nothing");
+        accepted(call("POST", "/loop/clear", None).await);
+        settled(&|s| s.ab_loop == AbLoop::default());
+
+        let get_eq = call("GET", "/audio/eq", None).await;
+        assert!(get_eq.contains(" 200 ") && get_eq.contains(r#""output_id":"dac""#), "{get_eq}");
+
+        let mut cfg = crate::eq::EqConfig { enabled: true, ..crate::eq::EqConfig::default() };
+        cfg.bands[0].gain_db = 4.5;
+        let post_eq = call("POST", "/audio/eq", Some(serde_json::to_string(&cfg).unwrap())).await;
+        assert!(post_eq.contains(" 200 "), "{post_eq}");
+        let body = post_eq.split("\r\n\r\n").nth(1).unwrap_or("");
+        let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(parsed["curve_db"].as_array().map(|a| a.len()), Some(64));
+
+        let store = crate::db::PlayerStore::open(&db_path).unwrap();
+        let saved = store.load_output_eq("dac");
+        assert!(saved.enabled);
+        assert!((saved.bands[0].gain_db - 4.5).abs() < 1e-4);
+
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

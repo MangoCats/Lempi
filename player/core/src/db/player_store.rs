@@ -1721,18 +1721,54 @@ impl PlayerStore {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
-    /// Clean up volume rows for an output and, if it was the active one, fall
-    /// back to `"dac"` `[IMPL-POV-020]` -- or, on a host with no DAC to fall
-    /// back to, clear the choice instead `[PI3-FOUND-820]`. A stored `"dac"`
-    /// there would tell the appliance's speaker keeper to stand aside for an
-    /// output that does not exist.
+    /// Save an output device's 5-band parametric equalizer configuration
+    /// `[SPEC-EQ-055]`.
+    pub fn save_output_eq(&self, output: &str, eq: &crate::eq::EqConfig) -> Result<(), DbError> {
+        let clamped = eq.clamped();
+        let json = serde_json::to_string(&clamped)
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        let key = format!("output_eq:{output}");
+        self.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES (?1, ?2, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![key, json],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Load an output device's 5-band parametric equalizer configuration,
+    /// returning the flat default when unset or unreadable `[SPEC-EQ-055]`.
+    pub fn load_output_eq(&self, output: &str) -> crate::eq::EqConfig {
+        let key = format!("output_eq:{output}");
+        self.conn
+            .query_row(
+                "SELECT value FROM player_settings WHERE key = ?1",
+                rusqlite::params![key],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|json| serde_json::from_str::<crate::eq::EqConfig>(&json).ok())
+            .map(crate::eq::EqConfig::clamped)
+            .unwrap_or_default()
+    }
+
+    /// Clean up volume and equalizer rows for an output and, if it was the
+    /// active one, fall back to `"dac"` `[IMPL-POV-020]`, `[SPEC-EQ-055]` --
+    /// or, on a host with no DAC to fall back to, clear the choice instead
+    /// `[PI3-FOUND-820]`. A stored `"dac"` there would tell the appliance's
+    /// speaker keeper to stand aside for an output that does not exist.
     pub fn forget_output(&self, output: &str, has_dac: bool) -> Result<(), DbError> {
         let pinned_key = format!("volume_pinned:{output}");
         let last_key = format!("volume_last:{output}");
+        let eq_key = format!("output_eq:{output}");
         self.conn
             .execute(
-                "DELETE FROM player_settings WHERE key IN (?1, ?2)",
-                rusqlite::params![pinned_key, last_key],
+                "DELETE FROM player_settings WHERE key IN (?1, ?2, ?3)",
+                rusqlite::params![pinned_key, last_key, eq_key],
             )
             .map_err(|e| DbError::Query(e.to_string()))?;
         if self.get_active_output() == output {
@@ -3951,17 +3987,42 @@ mod tests {
 
         store.save_output_volume(output, -15.0, true).unwrap();
         store.save_output_volume(output, -10.0, false).unwrap();
+        let mut custom_eq = crate::eq::EqConfig { enabled: true, ..crate::eq::EqConfig::default() };
+        custom_eq.bands[0].gain_db = 6.0;
+        store.save_output_eq(output, &custom_eq).unwrap();
         store.set_active_output(output).unwrap();
 
         assert_eq!(store.get_active_output(), output);
         assert!(store.load_output_volume(output).unwrap().pinned_db.is_some());
+        assert!(store.load_output_eq(output).enabled);
 
-        // Forgetting the output clears volume rows and resets active output to "dac"
+        // Forgetting the output clears volume and EQ rows and resets active output to "dac"
         store.forget_output(output, true).unwrap();
         let loaded = store.load_output_volume(output).unwrap();
         assert_eq!(loaded.pinned_db, None);
         assert_eq!(loaded.last_used_db, None);
+        assert_eq!(store.load_output_eq(output), crate::eq::EqConfig::default());
         assert_eq!(store.get_active_output(), "dac");
+    }
+
+    #[test]
+    fn test_output_eq_per_sink_isolation_and_clamping() {
+        let store = settings_store();
+        assert_eq!(store.load_output_eq("dac"), crate::eq::EqConfig::default());
+
+        let mut dac_eq = crate::eq::EqConfig { enabled: true, ..crate::eq::EqConfig::default() };
+        dac_eq.bands[2].gain_db = 4.5;
+        store.save_output_eq("dac", &dac_eq).unwrap();
+
+        let mut bt_eq = crate::eq::EqConfig { enabled: true, ..crate::eq::EqConfig::default() };
+        bt_eq.bands[0].gain_db = -3.0;
+        bt_eq.preamp_db = 42.0; // out of range, should clamp to 12.0 [SPEC-EQ-040]
+        store.save_output_eq("bt:AA:BB:CC:DD:EE:FF", &bt_eq).unwrap();
+
+        assert_eq!(store.load_output_eq("dac").bands[2].gain_db, 4.5);
+        let loaded_bt = store.load_output_eq("bt:AA:BB:CC:DD:EE:FF");
+        assert_eq!(loaded_bt.bands[0].gain_db, -3.0);
+        assert_eq!(loaded_bt.preamp_db, 12.0);
     }
 
     /// `[PI3-FOUND-820]`: with no DAC to fall back to, the choice is cleared,

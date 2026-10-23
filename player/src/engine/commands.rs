@@ -35,6 +35,18 @@ pub enum Command {
     Skip,
     /// Master volume, clamped to 0.0..=1.0.
     SetVolume(f32),
+    /// Five-band parametric equalizer configuration `[SPEC-EQ-060]`, `[SPEC-EQ-080]`.
+    SetEq(crate::eq::EqConfig),
+    /// Playback tempo in milli-x (`250..=4000`, `1000` = `1.00x`) `[SPEC-TPL-040]`.
+    SetTempo(u32),
+    /// Playback pitch shift in cents (`-1200..=1200`, `0` = neutral) `[SPEC-TPL-040]`.
+    SetPitch(i32),
+    /// Set A-B loop start marker in passage-relative milliseconds `[SPEC-TPL-020]`.
+    SetLoopA(u64),
+    /// Set A-B loop end marker in passage-relative milliseconds (`>= a_ms + 200`) `[SPEC-TPL-020]`.
+    SetLoopB(u64),
+    /// Clear the active or partial A-B loop `[SPEC-TPL-020]`.
+    ClearLoop,
     /// Hold the output ring below capacity so this node's submit-to-air total
     /// matches the fleet's `[LOG-ECHO-030]`.
     ///
@@ -348,6 +360,20 @@ impl Engine {
                     }
                     self.remember_settings();
                 }
+                Ok(Command::SetEq(cfg)) => {
+                    let clamped = cfg.clamped();
+                    self.eq = clamped;
+                    if let Some(r) = &self.path.ring {
+                        r.eq.set_config(clamped);
+                    }
+                    self.queue_edited = true;
+                    self.publish();
+                }
+                Ok(Command::SetTempo(milli)) => self.set_tempo(milli),
+                Ok(Command::SetPitch(cents)) => self.set_pitch(cents),
+                Ok(Command::SetLoopA(ms)) => self.set_loop_a(ms),
+                Ok(Command::SetLoopB(ms)) => self.set_loop_b(ms),
+                Ok(Command::ClearLoop) => self.clear_loop(),
                 Ok(Command::Enqueue(e)) => {
                     self.note_people_picks([&e]);
                     self.queue.push(e);

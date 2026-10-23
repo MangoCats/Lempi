@@ -1335,6 +1335,7 @@ dependencies = [
  "reqwest",
  "rubato",
  "rusqlite",
+ "rustfft",
  "serde",
  "serde_json",
  "sha2",

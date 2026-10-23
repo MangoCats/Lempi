@@ -82,6 +82,15 @@ pub struct Controls {
     /// each pass, so it follows a switch rather than describing whichever
     /// side happened to start first `[SPEC-BK-040]`.
     pub can_seek: bool,
+    /// Whether the side now sounding offers the 5-band parametric EQ
+    /// `[SPEC-EQ-070]`.
+    pub can_eq: bool,
+    /// Whether the side now sounding offers real-time tempo and pitch
+    /// controls `[SPEC-TPL-110]`.
+    pub can_tempo_pitch: bool,
+    /// Whether the side now sounding offers A-B loop controls
+    /// `[SPEC-TPL-110]`.
+    pub can_ab_loop: bool,
     /// What the guest *is* — "MPD at 127.0.0.1:6600" rather than "MPD". An
     /// option naming a category tells a listener nothing about whether the
     /// thing behind it is the one they are looking at.

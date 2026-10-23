@@ -19,7 +19,7 @@
   #plays { color: var(--dim); font-size: .8125rem; opacity: .8; margin-top: .15rem; }
   /* The bar is 4px of ink but a much larger target: padding gives the click
      somewhere to land without changing how the line looks [REQ-VIS-225]. */
-  #bar { height: 4px; background: var(--line); border-radius: 2px; margin: .9rem 0 .4rem;
+  #bar { position: relative; height: 4px; background: var(--line); border-radius: 2px; margin: .9rem 0 .4rem;
          background-clip: content-box; padding: 9px 0; box-sizing: content-box; }
   #bar.seekable { cursor: pointer; }
   #bar.seekable:hover #fill { filter: brightness(1.25); }
@@ -479,4 +479,77 @@ body:has(#panel-history:not([hidden])) main {
 #wifi-connect-password {
   width: 10rem;
 }
+
+/* Custom Audio Controls: A-B Loop markers, Tempo/Pitch, and 5-Band EQ [SPEC064], [SPEC065] */
+#loop-range:not([hidden]) {
+  position: absolute; top: 9px; height: 4px;
+  background: color-mix(in srgb, currentColor 35%, transparent);
+  pointer-events: none; border-radius: 2px;
+}
+.loop-mark:not([hidden]) {
+  position: absolute; top: 5px; width: 2px; height: 12px;
+  background: currentColor; pointer-events: none; transform: translateX(-1px);
+}
+.audio-bar:not([hidden]) {
+  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+  margin: -.75rem 0 1rem; font-size: .8125rem;
+}
+#audio-controls-toggle {
+  font-size: .75rem; padding: .25rem .65rem; color: var(--dim);
+}
+#audio-controls-toggle[aria-expanded="true"] {
+  color: var(--fg); border-color: var(--fg);
+}
+.warp-badge:not([hidden]) {
+  font-size: .75rem; font-variant-numeric: tabular-nums;
+  color: var(--fg); padding: .15rem .5rem;
+  border: 1px solid var(--line); border-radius: 999px;
+}
+.audio-drawer:not([hidden]) {
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: .75rem .9rem; margin: 0 0 1.2rem; font-size: .8125rem;
+}
+.audio-section:not([hidden]) {
+  padding: .45rem 0; border-bottom: 1px solid var(--line);
+}
+.audio-section:last-child { border-bottom: none; }
+.audio-row {
+  display: flex; align-items: center; gap: .45rem; flex-wrap: wrap;
+  margin-bottom: .3rem;
+}
+.audio-row > label:first-child { font-weight: 600; margin-right: auto; }
+.audio-readout {
+  font-variant-numeric: tabular-nums; color: var(--dim); min-width: 3.6rem; text-align: right;
+}
+.audio-mini {
+  font-size: .75rem; padding: .18rem .48rem; border-radius: 4px;
+}
+.audio-presets {
+  display: flex; gap: .3rem; flex-wrap: wrap; margin: .25rem 0 .5rem;
+}
+.audio-section input[type=range] {
+  width: 100%; accent-color: currentColor; margin: .15rem 0 .35rem;
+}
+.eq-preamp-lbl {
+  display: inline-flex; align-items: center; gap: .35rem; color: var(--dim);
+}
+.eq-preamp-lbl input[type=range] { width: 5rem; margin: 0; }
+#eq-canvas {
+  display: block; width: 100%; height: 150px;
+  border: 1px solid var(--line); border-radius: 4px;
+  margin: .4rem 0; touch-action: none; cursor: crosshair;
+}
+.eq-bands {
+  display: grid; gap: .3rem; font-size: .75rem;
+}
+.eq-band-row {
+  display: grid; grid-template-columns: 3.2rem 6.2rem 4.8rem 1fr 4.2rem;
+  gap: .35rem; align-items: center; font-variant-numeric: tabular-nums;
+}
+.eq-band-row input[type=number] {
+  width: 100%; box-sizing: border-box; font: inherit; padding: .15rem .25rem;
+  color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 4px;
+}
+.eq-band-row select { font-size: .75rem; padding: .15rem .25rem; }
+
 

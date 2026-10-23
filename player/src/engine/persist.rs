@@ -245,6 +245,16 @@ impl Engine {
 
         let Some((id, mbid, position_ms, span_ms, selected_by)) = head_now else { return };
 
+        if self.sounding_warped() {
+            // Altering tempo, pitch, or looping an A-B span is playing with
+            // the music rather than listening through a passage `[SPEC-TPL-015]`.
+            // Clearing `heard_from` both halts accumulation now and ensures the
+            // span crossed while warped is not credited when neutral playback
+            // resumes.
+            self.heard_from = None;
+            return;
+        }
+
         // **Credited from the gap between samples, never from the position.**
         // Only forward movement counts, and only movement this sample saw:
         // a seek clears `heard_from`, so the jump across contributes nothing

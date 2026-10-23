@@ -29,12 +29,14 @@ pub(crate) struct Segment {
     pub at_ms: u64,
     pub channels: u32,
     pub rate: u32,
+    /// Playback tempo in milli-x (`1000` = `1.00x`) `[SPEC-TPL-070]`.
+    pub tempo_milli: u32,
 }
 
 impl Segment {
     fn ms_at(&self, sample: u64) -> u64 {
         let frames = sample.saturating_sub(self.from) / self.channels.max(1) as u64;
-        self.at_ms + frames * 1000 / self.rate.max(1) as u64
+        self.at_ms + frames * self.tempo_milli.max(1) as u64 / self.rate.max(1) as u64
     }
 }
 
@@ -72,6 +74,7 @@ impl Timeline {
             if last.to == s.from
                 && last.channels == s.channels
                 && last.rate == s.rate
+                && last.tempo_milli == s.tempo_milli
                 && last.ms_at(s.from) == s.at_ms
             {
                 last.to = s.to;
@@ -175,7 +178,7 @@ mod tests {
 
     /// Stereo at 1 kHz, so one frame is one millisecond and two samples.
     fn seg(passage: i64, admitted: u64, from: u64, to: u64, at_ms: u64) -> Segment {
-        Segment { passage, admitted, from, to, at_ms, channels: 2, rate: 1000 }
+        Segment { passage, admitted, from, to, at_ms, channels: 2, rate: 1000, tempo_milli: 1000 }
     }
 
     #[test]
@@ -238,5 +241,47 @@ mod tests {
         t.prune(450);
         assert_eq!(t.len(), 2, "1 is gone; 2 stays to name the gap; 3 is to come");
         assert_eq!(t.audible_at(450).unwrap().passage, 2);
+    }
+
+    #[test]
+    fn variable_tempo_scales_audible_position_and_splits_segments() {
+        let mut t = Timeline::default();
+        // 100 frames (200 samples) at 2.0x tempo (2000 milli-x) advances 200 ms.
+        t.record(Segment {
+            passage: 1,
+            admitted: 1,
+            from: 0,
+            to: 200,
+            at_ms: 1000,
+            channels: 2,
+            rate: 1000,
+            tempo_milli: 2000,
+        });
+        // Next 100 frames (200 samples) at 0.5x tempo (500 milli-x) advances 50 ms.
+        t.record(Segment {
+            passage: 1,
+            admitted: 1,
+            from: 200,
+            to: 400,
+            at_ms: 1200,
+            channels: 2,
+            rate: 1000,
+            tempo_milli: 500,
+        });
+        assert_eq!(t.len(), 2, "different tempo_milli must not coalesce");
+        assert_eq!(t.audible_at(100).unwrap().position_ms, 1100);
+        assert_eq!(t.audible_at(300).unwrap().position_ms, 1225);
+    }
+
+    #[test]
+    fn ab_loop_wrap_starts_new_segment_at_a_ms() {
+        let mut t = Timeline::default();
+        // Playing from A=2000 ms to B=3000 ms (1000 frames = 2000 samples).
+        t.record(seg(1, 1, 0, 2000, 2000));
+        // Wrap back to A=2000 ms at sample 2000.
+        t.record(seg(1, 1, 2000, 4000, 2000));
+        assert_eq!(t.len(), 2, "wrap back to A must start a new segment");
+        assert_eq!(t.audible_at(1998).unwrap().position_ms, 2999);
+        assert_eq!(t.audible_at(2000).unwrap().position_ms, 2000);
     }
 }

@@ -46,6 +46,7 @@ pub use settings::*;
 pub mod bundle;
 pub mod db;
 pub mod director;
+pub mod eq;
 pub mod fade;
 pub mod mesh_sync;
 pub mod queue;

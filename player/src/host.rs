@@ -821,11 +821,12 @@ fn engine_thread(setup: EngineSetup, tx: SyncSender<Started>) {
         // read it `[SPEC-BK-040]`. Taken every pass rather than at a switch,
         // so it is right even for the side the player started on.
         {
-            let seekable = crate::playback::Playback::capabilities(&backend).seek;
+            let caps = crate::playback::Playback::capabilities(&backend);
             if let Ok(mut c) = controls_for_switch.lock() {
-                if c.can_seek != seekable {
-                    c.can_seek = seekable;
-                }
+                c.can_seek = caps.seek;
+                c.can_eq = caps.eq;
+                c.can_tempo_pitch = caps.tempo_pitch;
+                c.can_ab_loop = caps.ab_loop;
             }
         }
         session.refill(&mut backend, suppress);

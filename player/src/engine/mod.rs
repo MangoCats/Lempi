@@ -27,11 +27,59 @@ use prefs::Prefs;
 use timeline::{Segment, Timeline};
 use timeline::Audible;
 
+/// Non-persistent A-B loop state for the currently playing passage `[SPEC-TPL-020]`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AbLoop {
+    pub a_ms: Option<u64>,
+    pub b_ms: Option<u64>,
+}
+
+impl AbLoop {
+    /// Minimum loop span in milliseconds `[SPEC-TPL-020]`.
+    pub const MIN_SPAN_MS: u64 = 200;
+
+    /// True when both `a_ms` and `b_ms` are set and form a valid loop span.
+    pub fn is_active(&self) -> bool {
+        matches!((self.a_ms, self.b_ms), (Some(a), Some(b)) if b >= a + Self::MIN_SPAN_MS)
+    }
+}
+
+/// A run of mixed frames from one passage: `(at_ms, frames, tempo_milli)`,
+/// one `Segment` of the timeline each `[SPEC-TPL-070]`.
+type MixedSpan = (u64, u64, u32);
+
+/// What one passage gave a mix block: `(passage_id, admitted, spans)`.
+type Gave = (i64, u64, Vec<MixedSpan>);
+
 struct Live {
     dec: PassageDecoder,
     stream: Stream,
     resampler: Resampler,
+    /// `None` at neutral, which is nearly always: no FFT is planned and no
+    /// vocoder state allocated for a passage nobody has warped
+    /// `[SPEC-TPL-050]`.
+    stretcher: Option<crate::stretch::Stretcher>,
+    /// The pitch this passage was opened at; tempo lives on `stream`.
+    pitch_cents: i32,
+    /// One decoded packet, at the file's rate, on its way to the stretcher.
+    src: Vec<f32>,
     converted: Vec<f32>,
+    stretched: Vec<f32>,
+    /// Decoded audio from just past `B`, crossfaded into the start of `A`
+    /// at the loop seam `[SPEC-TPL-030]`. At the file's rate.
+    tail_scratch: Vec<f32>,
+    /// No audio past `B` to crossfade from (the passage ended there): fade
+    /// `A` in instead.
+    fade_in_pending: bool,
+    /// Loop wraps fed to the stretcher and resampler but not yet out of them,
+    /// as `(b_ms, a_ms)`: when the pushed-frame clock reaches `b_ms` it
+    /// continues from `a_ms` `[SPEC-TPL-030]`.
+    wraps: std::collections::VecDeque<(u64, u64)>,
+    spans: std::collections::VecDeque<(u64, u64, u64, u32)>,
+    next_span_ms: u64,
+    next_span_milli_rem: u64,
+    force_new_span: bool,
+    last_mixed_end_ms: u64,
     entry: QueueEntry,
     frames_mixed: u64,
     /// Where in the passage this decode began. Non-zero only when resuming, so
@@ -46,6 +94,211 @@ struct Live {
     /// Its place in the order passages joined `live`: in an overlap, the later
     /// one is the one shown `[REQ-AUD-164]`. Set by `admit_live`.
     admitted: u64,
+}
+
+impl Live {
+    /// Account `written_frames` pushed into the stream against passage time,
+    /// jumping from `B` to `A` where a loop wrap falls among them
+    /// `[SPEC-TPL-070]`.
+    ///
+    /// The wrap happened at the decoder, ahead of the stretcher and the
+    /// resampler, which still held audio from before `B` at the time. The
+    /// clock here is the linear one -- frames times tempo over rate -- so it
+    /// reaches `b_ms` exactly when the audio up to `B` has come out, wherever
+    /// in the pipeline it was when the decoder jumped.
+    fn record_pushed_frames(&mut self, mut written_frames: u64, out_rate: u32) {
+        let rate = out_rate.max(1) as u64;
+        let tempo = self.stream.tempo_milli.max(1) as u64;
+        while written_frames > 0 {
+            let until_wrap = self.wraps.front().map(|&(b, _)| {
+                b.saturating_sub(self.next_span_ms)
+                    .saturating_mul(rate)
+                    .saturating_sub(self.next_span_milli_rem)
+                    .div_ceil(tempo)
+            });
+            match until_wrap {
+                Some(u) if u <= written_frames => {
+                    self.advance_span(u, out_rate);
+                    written_frames -= u;
+                    if let Some((_, a)) = self.wraps.pop_front() {
+                        self.next_span_ms = a;
+                        self.next_span_milli_rem = 0;
+                        self.force_new_span = true;
+                    }
+                }
+                _ => {
+                    self.advance_span(written_frames, out_rate);
+                    written_frames = 0;
+                }
+            }
+        }
+    }
+
+    fn advance_span(&mut self, written_frames: u64, out_rate: u32) {
+        if written_frames == 0 {
+            return;
+        }
+        let tempo = self.stream.tempo_milli.max(1);
+        let at_ms = self.next_span_ms;
+        let coalesce = !self.force_new_span
+            && self.spans.back().is_some_and(|(_, _, _, t)| *t == tempo);
+        if coalesce {
+            if let Some(back) = self.spans.back_mut() {
+                back.0 += written_frames;
+            }
+        } else {
+            self.spans.push_back((written_frames, at_ms, 0, tempo));
+            self.force_new_span = false;
+        }
+        let total_milli = self.next_span_milli_rem + written_frames * (tempo as u64);
+        let rate = out_rate.max(1) as u64;
+        self.next_span_ms += total_milli / rate;
+        self.next_span_milli_rem = total_milli % rate;
+    }
+
+    fn take_mixed_spans(&mut self, mut frames: u64, out_rate: u32) -> Vec<MixedSpan> {
+        let rate = out_rate.max(1) as u64;
+        let mut out = Vec::new();
+        while frames > 0 {
+            if let Some(&(avail, base_at_ms, taken_so_far, tempo)) = self.spans.front() {
+                let take = frames.min(avail);
+                let t64 = tempo.max(1) as u64;
+                let at_ms = base_at_ms + taken_so_far * t64 / rate;
+                let new_taken = taken_so_far + take;
+                let end_ms = base_at_ms + new_taken * t64 / rate;
+                out.push((at_ms, take, tempo));
+                self.last_mixed_end_ms = end_ms;
+                if take < avail {
+                    if let Some(front) = self.spans.front_mut() {
+                        front.0 -= take;
+                        front.2 = new_taken;
+                    }
+                } else {
+                    self.spans.pop_front();
+                }
+                frames -= take;
+                self.frames_mixed += take;
+            } else {
+                let tempo = self.stream.tempo_milli.max(1);
+                let at_ms = self.last_mixed_end_ms;
+                out.push((at_ms, frames, tempo));
+                self.last_mixed_end_ms = at_ms + frames * (tempo as u64) / rate;
+                self.frames_mixed += frames;
+                frames = 0;
+            }
+        }
+        out
+    }
+
+    /// Rebuild the warp stages for new rates `[SPEC-TPL-050]`: the stretcher
+    /// for duration and the resampler for pitch, which is a different input
+    /// rate. Only at a cut -- the old stages' buffered audio is being
+    /// discarded with the ring anyway.
+    fn rewarp(&mut self, tempo_milli: u32, pitch_cents: i32, out_rate: u32) -> Result<(), String> {
+        let ch = self.stream.channels.max(1);
+        let neutral = tempo_milli == crate::stretch::TEMPO_NEUTRAL_MILLI
+            && pitch_cents == crate::stretch::PITCH_NEUTRAL_CENTS;
+        self.stretcher =
+            (!neutral).then(|| crate::stretch::Stretcher::new(ch, tempo_milli, pitch_cents));
+        self.resampler = Resampler::new(
+            crate::stretch::pitch_rate_hz(self.dec.sample_rate, pitch_cents),
+            out_rate,
+            ch,
+        )?;
+        self.pitch_cents = pitch_cents;
+        self.stream.tempo_milli = tempo_milli;
+        Ok(())
+    }
+
+    /// Whether this passage was opened at anything but neutral.
+    fn warped(&self) -> bool {
+        self.stretcher.is_some()
+    }
+
+    /// Start the packet in `src` with the loop seam, if one is pending: the
+    /// audio from past `B` fading out under the first of `A` (equal power), or
+    /// with nothing past `B` to use, `A` fading in `[SPEC-TPL-030]`.
+    fn blend_seam(&mut self, seam_frames: usize) {
+        let ch = self.stream.channels.max(1);
+        let frames = self.src.len() / ch;
+        if !self.tail_scratch.is_empty() {
+            let blend = (self.tail_scratch.len() / ch).min(frames);
+            for f in 0..blend {
+                let t = (f as f32 + 0.5) / blend as f32;
+                let gain_b = (t * std::f32::consts::FRAC_PI_2).cos();
+                let gain_a = (t * std::f32::consts::FRAC_PI_2).sin();
+                for c in 0..ch {
+                    let i = f * ch + c;
+                    self.src[i] = self.tail_scratch[i] * gain_b + self.src[i] * gain_a;
+                }
+            }
+            self.tail_scratch.drain(..blend * ch);
+        } else if self.fade_in_pending {
+            let ramp = seam_frames.min(frames);
+            for f in 0..ramp {
+                let g = (f as f32 + 0.5) / seam_frames as f32;
+                self.src[f * ch..(f + 1) * ch].iter_mut().for_each(|s| *s *= g);
+            }
+            self.fade_in_pending = false;
+        }
+    }
+
+    /// Send `src` through the stretcher and resampler into the stream.
+    fn feed(&mut self, out_rate: u32) -> Result<(), String> {
+        let ch = self.stream.channels.max(1);
+        let src = std::mem::take(&mut self.src);
+        let mut conv = std::mem::take(&mut self.converted);
+        conv.clear();
+        let done = match self.stretcher.as_mut() {
+            None => self.resampler.process(&src, &mut conv),
+            Some(s) => {
+                let mut st = std::mem::take(&mut self.stretched);
+                st.clear();
+                s.process(&src, &mut st);
+                let r = self.resampler.process(&st, &mut conv);
+                self.stretched = st;
+                r
+            }
+        };
+        if done.is_ok() {
+            // Gain after conversion, where it always was: at neutral the
+            // stream receives exactly what it did before warping existed.
+            if self.gain != 1.0 {
+                conv.iter_mut().for_each(|s| *s *= self.gain);
+            }
+            if !conv.is_empty() {
+                let written = self.stream.push(&mut conv);
+                self.record_pushed_frames((written / ch) as u64, out_rate);
+            }
+        }
+        self.converted = conv;
+        self.src = src;
+        done
+    }
+
+    /// End of file: flush what the stretcher still holds.
+    fn flush_stretcher(&mut self, out_rate: u32) -> Result<(), String> {
+        let Some(s) = self.stretcher.as_mut() else { return Ok(()) };
+        let mut st = std::mem::take(&mut self.stretched);
+        st.clear();
+        s.flush(&mut st);
+        let mut conv = std::mem::take(&mut self.converted);
+        conv.clear();
+        let done = self.resampler.process(&st, &mut conv);
+        if done.is_ok() {
+            let ch = self.stream.channels.max(1);
+            if self.gain != 1.0 {
+                conv.iter_mut().for_each(|s| *s *= self.gain);
+            }
+            if !conv.is_empty() {
+                let written = self.stream.push(&mut conv);
+                self.record_pushed_frames((written / ch) as u64, out_rate);
+            }
+        }
+        self.stretched = st;
+        self.converted = conv;
+        done
+    }
 }
 
 /// Whether a host names this very node `[SPEC-ECHO-050]`.
@@ -179,7 +432,7 @@ impl Default for EchoNode {
 }
 
 /// What the UI and the persistence layer read. Cheap to clone.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct PlayerState {
     pub playing: bool,
     pub current: Option<QueueEntry>,
@@ -203,6 +456,14 @@ pub struct PlayerState {
     pub mixing_ahead: usize,
     /// Master volume, 0.0 to 1.0.
     pub volume: f32,
+    /// Five-band parametric equalizer state `[SPEC-EQ-070]`.
+    pub eq: crate::eq::EqConfig,
+    /// Playback tempo in milli-x (`250..=4000`, `1000` = `1.00x`) `[SPEC-TPL-040]`.
+    pub tempo_milli: u32,
+    /// Playback pitch shift in cents (`-1200..=1200`, `0` = neutral) `[SPEC-TPL-040]`.
+    pub pitch_cents: i32,
+    /// Active or partial A-B loop state `[SPEC-TPL-020]`.
+    pub ab_loop: AbLoop,
     /// Skip transition shape `[REQ-AUD-162]`, so a UI can show what it will do.
     pub skip_fade_ms: u64,
     pub skip_lead_ms: u64,
@@ -245,6 +506,46 @@ pub struct PlayerState {
     /// while this is non-zero: the output ring holds ~14 s, so a short passage
     /// can be fully submitted before a single sample is audible.
     pub output_buffered: usize,
+}
+
+impl Default for PlayerState {
+    fn default() -> Self {
+        Self {
+            playing: false,
+            current: None,
+            position_ms: 0,
+            queue_len: 0,
+            shutdown_queued: false,
+            echo: crate::echo::EchoState::default(),
+            echo_node: EchoNode::default(),
+            queue: Vec::new(),
+            mixing_ahead: 0,
+            volume: 0.0,
+            eq: crate::eq::EqConfig::default(),
+            tempo_milli: crate::stretch::TEMPO_NEUTRAL_MILLI,
+            pitch_cents: crate::stretch::PITCH_NEUTRAL_CENTS,
+            ab_loop: AbLoop::default(),
+            skip_fade_ms: 0,
+            skip_lead_ms: 0,
+            resume_save_ms: 0,
+            skip_suppress_h: 0,
+            dequeue_suppress_h: 0,
+            queue_depth: 0,
+            sample_interval_ms: 0,
+            cue_sheets: false,
+            covers: false,
+            lyrics_cache: false,
+            lyrics_sidecar: false,
+            dev_mode: false,
+            active_streams: 0,
+            underrun_samples: 0,
+            underruns_since_reset: 0,
+            underruns_since: 0,
+            lock_failures: 0,
+            out_recoveries: 0,
+            output_buffered: 0,
+        }
+    }
 }
 
 impl PlayerState {
@@ -353,6 +654,18 @@ pub struct Engine {
     pub power_off_allowed: bool,
     shutdown_saved: bool,
     volume: f32,
+    pub(crate) eq: crate::eq::EqConfig,
+    pub(crate) tempo_milli: u32,
+    pub(crate) pitch_cents: i32,
+    pub(crate) ab_loop: AbLoop,
+    warp_passage_id: Option<i64>,
+    /// The last admission played warped. A track change returns the controls
+    /// to neutral at once, but the warped passage's tail is still in the ring
+    /// for up to ~14 s; until something later is heard, what is sounding is
+    /// still warped `[SPEC-TPL-015]`, `[SPEC-TPL-100]`.
+    warped_through: Option<u64>,
+    /// The admission the timeline last reported as heard.
+    heard_admitted: Option<u64>,
     /// Skip transition shape, adjustable while playing `[REQ-AUD-162]`.
     skip_fade_ms: u64,
     skip_lead_ms: u64,
@@ -540,6 +853,13 @@ impl Engine {
             power_off_allowed: false,
             shutdown_saved: false,
             volume: 1.0,
+            eq: crate::eq::EqConfig::default(),
+            tempo_milli: crate::stretch::TEMPO_NEUTRAL_MILLI,
+            pitch_cents: crate::stretch::PITCH_NEUTRAL_CENTS,
+            ab_loop: AbLoop::default(),
+            warp_passage_id: None,
+            warped_through: None,
+            heard_admitted: None,
             skip_fade_ms: crate::SKIP_FADE_MS,
             skip_lead_ms: crate::SKIP_LEAD_MS,
             store: None,
@@ -572,6 +892,12 @@ impl Engine {
     /// Persist playback state to `lempi.db` `[REQ-AUD-140]`. Optional: without
     /// it the engine runs identically and simply forgets across restarts.
     pub fn attach_store(&mut self, store: PlayerStore) {
+        let active = store.get_active_output();
+        let eq = store.load_output_eq(&active);
+        self.eq = eq;
+        if let Some(r) = &self.path.ring {
+            r.eq.set_config(eq);
+        }
         self.store = Some(store);
     }
 
@@ -635,6 +961,7 @@ impl Engine {
         self.record_play();
         self.advance_shown();
         self.check_queued_shutdown();
+        self.update_echo_basis();
         // Throttled by time, but never at the cost of a late answer to the
         // question anyone actually asks: a change of audible passage is
         // published the moment it happens, and the clock only governs the
@@ -646,10 +973,242 @@ impl Engine {
             self.publish_at = Some(now + Self::PUBLISH_EVERY);
             self.publish();
         }
-        self.update_echo_basis();
         self.log_clock(now);
         self.persist(false);
         submitted
+    }
+
+    /// Tempo, pitch or an active A-B loop is set for the current passage
+    /// `[SPEC-TPL-015]`.
+    pub(crate) fn is_warped(&self) -> bool {
+        self.tempo_milli != crate::stretch::TEMPO_NEUTRAL_MILLI
+            || self.pitch_cents != crate::stretch::PITCH_NEUTRAL_CENTS
+            || self.ab_loop.is_active()
+    }
+
+    /// What is *sounding* is warped: the controls are set, or a track change
+    /// has just returned them to neutral and the warped passage's tail is
+    /// still what the ear hears `[SPEC-TPL-015]`, `[SPEC-TPL-100]`.
+    ///
+    /// The difference is the ring's depth. Crediting a play, or letting Echo
+    /// re-anchor, on the controls alone would do either across up to ~14 s of
+    /// audio that is not at 1:1 with the clock.
+    pub(crate) fn sounding_warped(&self) -> bool {
+        self.is_warped()
+            || self
+                .warped_through
+                .is_some_and(|w| self.heard_admitted.is_none_or(|h| h <= w))
+    }
+
+    /// Return tempo, pitch and the loop to neutral on a track change
+    /// `[SPEC-TPL-010]`.
+    ///
+    /// Streams already admitted keep the rates they were opened at: an
+    /// outgoing passage finishes the way it was playing rather than lurching
+    /// to 1.00x for its last few seconds, and the next is opened at neutral.
+    fn reset_warp_controls(&mut self) {
+        if self.is_warped() || self.live.iter().any(Live::warped) {
+            self.warped_through = Some(self.admissions);
+        }
+        self.tempo_milli = crate::stretch::TEMPO_NEUTRAL_MILLI;
+        self.pitch_cents = crate::stretch::PITCH_NEUTRAL_CENTS;
+        self.ab_loop = AbLoop::default();
+        for l in &mut self.live {
+            l.stream.suppress_fade_out = false;
+        }
+    }
+
+    /// The fade given to the audio a warp change discards `[SPEC-TPL-060]`.
+    /// The replacement starts at once beneath it.
+    const WARP_CUT_FADE_MS: u64 = 40;
+
+    /// Equal-power crossfade at the `B -> A` loop seam `[SPEC-TPL-030]`.
+    const LOOP_SEAM_MS: u64 = 10;
+
+    /// The passage on screen, which is the one a warp control acts on.
+    fn warp_target(&self) -> Option<(QueueEntry, u64)> {
+        self.shown.clone().or_else(|| {
+            self.live.first().map(|l| (l.entry.clone(), self.audible_ms(l)))
+        })
+    }
+
+    /// Cut the output ring and re-prime the shown passage at `target_ms` under
+    /// the current tempo, pitch and loop, so a change is heard now rather than
+    /// a ring's depth later `[SPEC-TPL-030]`, `[SPEC-TPL-060]`.
+    fn cut_for_warp_change(&mut self, target_ms: u64) {
+        let Some((entry, _)) = self.warp_target() else { return };
+        let shown = entry.passage_id;
+        let at = target_ms.min(entry.duration_ms().saturating_sub(1));
+
+        // A cut, exactly as a seek is one `[GDE-ARC-066]`: the basis returns
+        // in `advance_shown` once the re-primed audio is heard -- and is held
+        // void as `Warped` meanwhile if the new settings are not neutral
+        // `[SPEC-TPL-100]`.
+        self.echo.basis.void(crate::echo::Voided::Skip);
+        self.echo.gap_frames = 0;
+        self.echo.next_shift_ms = 0;
+        self.echo.shown_is_sounding = false;
+        self.depart_all();
+
+        // Anything admitted after the shown passage goes back to the head of
+        // the queue, unheard: it will be admitted again when its turn comes.
+        let keep = usize::from(self.live.first().is_some_and(|l| l.entry.passage_id == shown));
+        let behind: Vec<QueueEntry> = self.live.drain(keep..).map(|l| l.entry).collect();
+        if !behind.is_empty() {
+            self.queue.insert_at(0, behind);
+            self.queue_edited = true;
+        }
+
+        let (tempo, pitch, out_rate) = (self.tempo_milli, self.pitch_cents, self.out_rate);
+        let looping = self.ab_loop.is_active();
+        let mut sought_in_place = false;
+        if let Some(l) = self.live.first_mut() {
+            if l.entry.passage_id == shown
+                && l.dec.seek_ms(at).is_ok()
+                && l.rewarp(tempo, pitch, out_rate).is_ok()
+            {
+                l.stream.ring.clear();
+                l.stream.finished = false;
+                l.stream.milli_rem = 0;
+                l.stream.suppress_fade_out = looping;
+                l.stream.frames_written = (at as f64 * out_rate as f64 / 1000.0) as u64;
+                l.tail_scratch.clear();
+                l.fade_in_pending = false;
+                l.wraps.clear();
+                l.spans.clear();
+                l.next_span_ms = at;
+                l.next_span_milli_rem = 0;
+                l.force_new_span = true;
+                l.last_mixed_end_ms = at;
+                l.origin_ms = at;
+                l.frames_mixed = 0;
+                self.admissions += 1;
+                l.admitted = self.admissions;
+                sought_in_place = true;
+            }
+        }
+        if !sought_in_place {
+            self.live.clear();
+            match self.open(&entry, at) {
+                Ok(opened) => self.admit_live(opened),
+                Err(e) => {
+                    tracing::warn!("warp: could not reopen passage {shown} at {at} ms: {e}");
+                    return;
+                }
+            }
+        }
+
+        self.shown = self.live.first().map(|l| (l.entry.clone(), at));
+        self.announced = self.live.first().map(|l| l.admitted);
+        self.heard_from = None;
+        self.out_room = 0;
+
+        let ch = self.out_channels.max(1);
+        let rate = self.out_rate as u64;
+        let saved_fade = self.skip_fade_ms;
+        self.skip_fade_ms = Self::WARP_CUT_FADE_MS;
+        let fade_samples = (self.skip_fade_ms * rate / 1000) as usize * ch;
+        self.cut_ring_to_incoming(fade_samples, 0);
+        self.skip_fade_ms = saved_fade;
+    }
+
+    /// `[SPEC-TPL-040]`, `[SPEC-TPL-060]`
+    pub(crate) fn set_tempo(&mut self, milli: u32) {
+        let clamped = milli.clamp(crate::stretch::TEMPO_MIN_MILLI, crate::stretch::TEMPO_MAX_MILLI);
+        if self.tempo_milli == clamped {
+            return;
+        }
+        self.tempo_milli = clamped;
+        self.warp_changed();
+    }
+
+    /// `[SPEC-TPL-040]`, `[SPEC-TPL-060]`
+    pub(crate) fn set_pitch(&mut self, cents: i32) {
+        let clamped = cents.clamp(crate::stretch::PITCH_MIN_CENTS, crate::stretch::PITCH_MAX_CENTS);
+        if self.pitch_cents == clamped {
+            return;
+        }
+        self.pitch_cents = clamped;
+        self.warp_changed();
+    }
+
+    fn warp_changed(&mut self) {
+        if let Some((_, at)) = self.warp_target() {
+            self.cut_for_warp_change(at);
+        }
+        self.update_echo_basis();
+        self.queue_edited = true;
+        self.publish();
+    }
+
+    /// `[SPEC-TPL-020]`: clamped to the passage; a `B` that would leave less
+    /// than the minimum span after it is cleared.
+    pub(crate) fn set_loop_a(&mut self, a_ms: u64) {
+        let was = self.ab_loop;
+        let end = self.warp_target().map_or(u64::MAX, |(e, _)| e.duration_ms());
+        let a_ms = a_ms.min(end);
+        self.ab_loop.a_ms = Some(a_ms);
+        if self.ab_loop.b_ms.is_some_and(|b| b < a_ms.saturating_add(AbLoop::MIN_SPAN_MS)) {
+            self.ab_loop.b_ms = None;
+        }
+        self.loop_changed(was);
+    }
+
+    /// `[SPEC-TPL-020]`: `A` defaults to the passage start; a span under the
+    /// minimum is refused and changes nothing.
+    pub(crate) fn set_loop_b(&mut self, b_ms: u64) {
+        let was = self.ab_loop;
+        let end = self.warp_target().map_or(u64::MAX, |(e, _)| e.duration_ms());
+        let a_ms = self.ab_loop.a_ms.unwrap_or(0);
+        let b_ms = b_ms.min(end);
+        if b_ms < a_ms.saturating_add(AbLoop::MIN_SPAN_MS) {
+            return;
+        }
+        self.ab_loop = AbLoop { a_ms: Some(a_ms), b_ms: Some(b_ms) };
+        self.loop_changed(was);
+    }
+
+    /// `[SPEC-TPL-020]`
+    pub(crate) fn clear_loop(&mut self) {
+        let was = self.ab_loop;
+        self.ab_loop = AbLoop::default();
+        self.loop_changed(was);
+    }
+
+    /// Make a loop change audible now `[SPEC-TPL-030]`.
+    ///
+    /// The decoder runs up to a stream ring plus an output ring ahead of the
+    /// ear -- some 30 s. Audio decoded under the loop as it was is already
+    /// queued: wraps that no longer apply, or the passage running on past a
+    /// new `B`. Activating a loop the decoder has not yet reached the end of,
+    /// with the ear already inside it, is the one change that needs no cut.
+    fn loop_changed(&mut self, was: AbLoop) {
+        let now = self.ab_loop;
+        if now != was {
+            let looping = now.is_active();
+            for l in &mut self.live {
+                l.stream.suppress_fade_out = looping;
+            }
+            if let Some((entry, audible)) = self.warp_target() {
+                let target = match (now.a_ms, now.b_ms) {
+                    (Some(a), Some(b)) if looping => {
+                        let inside = audible >= a && audible < b;
+                        let decoded_past_b = self.live.first().is_none_or(|l| {
+                            l.entry.passage_id != entry.passage_id || l.dec.position_ms() >= b
+                        });
+                        let at = if inside { audible } else { a };
+                        (was.is_active() || !inside || decoded_past_b).then_some(at)
+                    }
+                    _ => was.is_active().then_some(audible),
+                };
+                if let Some(at) = target {
+                    self.cut_for_warp_change(at);
+                }
+            }
+        }
+        self.update_echo_basis();
+        self.queue_edited = true;
+        self.publish();
     }
 
     /// Void the echo basis if anything has happened that the frame clock
@@ -675,6 +1234,12 @@ impl Engine {
         }
         if !self.playing {
             self.echo.basis.void(Voided::Pause);
+        }
+        if self.sounding_warped() {
+            self.echo.basis.void(Voided::Warped);
+            self.echo.schedule = None;
+        } else if self.echo.basis.voided_by() == Some(Voided::Warped) && self.playing {
+            self.echo.basis.establish();
         }
     }
 
@@ -925,6 +1490,7 @@ impl Engine {
         }
         self.depart_all();
         self.live.clear();
+        self.reset_warp_controls();
         // Promote the prepared passage. Without one this degrades to a plain
         // fade to silence, which is the right answer when the queue is empty.
         self.admit_due();
@@ -1006,26 +1572,28 @@ impl Engine {
         // attempts to cover the overlay and no more. Falling short is not a
         // failure — it degrades to the old behaviour rather than blocking.
         if let Some(l) = self.live.first_mut() {
+            let ab_loop = self.ab_loop;
+            let out_rate = self.out_rate;
             for _ in 0..crate::TOPUP_TRIES_BEFORE_CUT {
                 if l.stream.ring.len() >= wanted || l.stream.finished {
                     break;
                 }
-                Self::top_up(l);
+                Self::top_up(l, ab_loop, out_rate);
             }
         }
 
         let mut overlay = vec![0.0f32; wanted];
-        let rate = self.out_rate.max(1) as u64;
-        let mut incoming: Option<(i64, u64, u64)> = None;
+        let mut incoming: Option<Gave> = None;
         if let Some(l) = self.live.first_mut() {
-            incoming = Some((l.entry.passage_id, l.admitted, l.origin_ms + l.frames_mixed * 1000 / rate));
             // Through `mix`, not by reading the ring directly: the fade-in has
             // been applied on the way in `[XFD-ORTH-020]`, and this keeps the
             // accounting identical to an ordinary tick.
             let before = l.stream.ring.len();
             let filled = mix(std::iter::once(&mut l.stream), &mut overlay);
             let consumed = before.saturating_sub(l.stream.ring.len());
-            l.frames_mixed += (consumed / l.stream.channels.max(1)) as u64;
+            let frames = (consumed / l.stream.channels.max(1)) as u64;
+            let spans = l.take_mixed_spans(frames, self.out_rate);
+            incoming = Some((l.entry.passage_id, l.admitted, spans));
             overlay.truncate(filled);
         }
 
@@ -1039,17 +1607,28 @@ impl Engine {
             // What the cut discarded will never sound, and the overlay sounds
             // from the lead on.
             self.timeline.cut(front + kept as u64);
-            if let Some((passage, admitted, at_ms)) = incoming {
-                let from = front + lead_samples as u64;
-                self.timeline.record(Segment {
-                    passage,
-                    admitted,
-                    from,
-                    to: from + placed as u64,
-                    at_ms,
-                    channels: ch as u32,
-                    rate: self.out_rate,
-                });
+            if let Some((passage, admitted, spans)) = incoming {
+                let base = front + lead_samples as u64;
+                let limit = base + placed as u64;
+                let mut offset_samples = 0u64;
+                for (at_ms, span_frames, tempo_milli) in spans {
+                    let span_samples = span_frames * ch as u64;
+                    let from = base + offset_samples;
+                    let to = (from + span_samples).min(limit);
+                    if to > from {
+                        self.timeline.record(Segment {
+                            passage,
+                            admitted,
+                            from,
+                            to,
+                            at_ms,
+                            channels: ch as u32,
+                            rate: self.out_rate,
+                            tempo_milli,
+                        });
+                    }
+                    offset_samples += span_samples;
+                }
             }
         }
     }
@@ -1223,6 +1802,11 @@ impl Engine {
         if self.queue.peek().is_some_and(|e| e.is_shutdown) {
             return;
         }
+        // While an A-B loop is active on the current passage, natural auto-advance
+        // and crossfade admission are suppressed `[SPEC-TPL-030]`.
+        if self.ab_loop.is_active() && !self.live.is_empty() {
+            return;
+        }
         // **Split once, from the pair that is actually about to hand over.**
         // The overlap the coarse knob spends belongs to *this* transition, and
         // everything below either reads the queue head or removes it -- so
@@ -1258,6 +1842,11 @@ impl Engine {
         // `live`, where `live[0]` is what is sounding. Keeping a passage in
         // both places would mean two answers to "what is playing".
         let Some(entry) = self.queue.advance() else { return };
+        // Track change resets tempo, pitch, and A-B loop to neutral `[SPEC-TPL-010]`.
+        if !self.live.is_empty() || self.warp_passage_id.is_some() {
+            self.reset_warp_controls();
+        }
+        self.warp_passage_id = Some(entry.passage_id);
         // Spent. A correction left in place would be applied again at every
         // boundary, turning a one-off nudge into a standing rate error.
         // An earlier version consumed `echo.next_shift_ms` here and re-derived
@@ -1393,9 +1982,14 @@ impl Engine {
             }
         }
         // The prepared passage is the queue head already opened at its start,
-        // so it serves unless a resume offset overrides where to begin.
+        // so it serves unless a resume offset overrides where to begin or the
+        // prepared stream's rates do not match `self.tempo_milli`/`self.pitch_cents`.
         if origin.is_none() {
-            if let Some(l) = self.ready.take().filter(|l| l.entry.passage_id == entry.passage_id) {
+            if let Some(l) = self.ready.take().filter(|l| {
+                l.entry.passage_id == entry.passage_id
+                    && l.stream.tempo_milli == self.tempo_milli
+                    && l.pitch_cents == self.pitch_cents
+            }) {
                 self.admit_live(l);
                 return;
             }
@@ -1455,7 +2049,15 @@ impl Engine {
             return; // already standing by
         }
         let entry = next.clone();
-        match self.open(&entry, 0) {
+        // Because tempo, pitch, and A-B loop reset to neutral on every track
+        // change `[SPEC-TPL-010]`, `self.ready` is always pre-opened at neutral.
+        match self.open_with_rates(
+            &entry,
+            0,
+            crate::stretch::TEMPO_NEUTRAL_MILLI,
+            crate::stretch::PITCH_NEUTRAL_CENTS,
+            false,
+        ) {
             Ok(l) => self.ready = Some(l),
             Err(e) => {
                 // Dropped rather than left in place: retrying an unopenable
@@ -1470,13 +2072,39 @@ impl Engine {
     }
 
     fn open(&self, e: &QueueEntry, origin_ms: u64) -> Result<Live, String> {
+        self.open_with_rates(
+            e,
+            origin_ms,
+            self.tempo_milli,
+            self.pitch_cents,
+            self.ab_loop.is_active(),
+        )
+    }
+
+    fn open_with_rates(
+        &self,
+        e: &QueueEntry,
+        origin_ms: u64,
+        tempo_milli: u32,
+        pitch_cents: i32,
+        suppress_fade_out: bool,
+    ) -> Result<Live, String> {
         // Clamp: a resume point past the end (the passage was re-trimmed since)
         // must replay the passage, not decode nothing.
         let origin_ms = origin_ms.min(e.duration_ms().saturating_sub(1));
-        let dec = PassageDecoder::open(&e.path, e.start_ms + origin_ms, Some(e.end_ms))
+        let dec = PassageDecoder::open_at(&e.path, e.start_ms, Some(e.end_ms), origin_ms)
             .map_err(|err| err.to_string())?;
         let ch = dec.channels;
-        let resampler = Resampler::new(dec.sample_rate, self.out_rate, ch)?;
+        // Pitch is the resampler's input rate `[SPEC-TPL-050]`; at neutral
+        // this is the file's own rate, exactly as before warping existed.
+        let resampler = Resampler::new(
+            crate::stretch::pitch_rate_hz(dec.sample_rate, pitch_cents),
+            self.out_rate,
+            ch,
+        )?;
+        let neutral = tempo_milli == crate::stretch::TEMPO_NEUTRAL_MILLI
+            && pitch_cents == crate::stretch::PITCH_NEUTRAL_CENTS;
+        let stretcher = (!neutral).then(|| crate::stretch::Stretcher::new(ch, tempo_milli, pitch_cents));
         // Fades are measured in OUTPUT frames because they are applied after
         // conversion; using the file rate here would mis-time every fade on a
         // device that does not match the file.
@@ -1504,11 +2132,25 @@ impl Engine {
         };
         let mut stream = Stream::new(BUFFER_FRAMES * ch, ch, envelope);
         stream.frames_written = origin_frames;
+        stream.tempo_milli = tempo_milli;
+        stream.suppress_fade_out = suppress_fade_out;
         Ok(Live {
             stream,
             dec,
             resampler,
+            stretcher,
+            pitch_cents,
+            src: Vec::new(),
             converted: Vec::new(),
+            stretched: Vec::new(),
+            tail_scratch: Vec::new(),
+            fade_in_pending: false,
+            wraps: std::collections::VecDeque::new(),
+            spans: std::collections::VecDeque::new(),
+            next_span_ms: origin_ms,
+            next_span_milli_rem: 0,
+            force_new_span: false,
+            last_mixed_end_ms: origin_ms,
             gain: 10f32.powf(e.gain_db / 20.0),
             entry: e.clone(),
             frames_mixed: 0,
@@ -1527,39 +2169,114 @@ impl Engine {
     /// Feeds what is sounding AND what is merely ready, so the prepared passage
     /// arrives at the mixer already full `[REQ-AUD-160]`.
     fn top_up_decoders(&mut self) {
-        for l in self.live.iter_mut().chain(self.ready.iter_mut()) {
-            Self::top_up(l);
+        let ab_loop = self.ab_loop;
+        let out_rate = self.out_rate;
+        for l in self.live.iter_mut() {
+            Self::top_up(l, ab_loop, out_rate);
+        }
+        if let Some(l) = self.ready.as_mut() {
+            Self::top_up(l, AbLoop::default(), out_rate);
         }
     }
 
-    fn top_up(l: &mut Live) {
-        {
-            if l.stream.finished
-                || l.stream.ring.free() < crate::DECODE_TOPUP_FRAMES * l.stream.channels
-            {
+    fn top_up(l: &mut Live, ab_loop: AbLoop, out_rate: u32) {
+        let ch = l.stream.channels.max(1);
+        let sr = l.dec.sample_rate.max(1) as u64;
+        let seam = ((Self::LOOP_SEAM_MS * sr / 1000) as usize).max(1);
+        let tempo = l.stream.tempo_milli.max(1);
+        // One packet a call keeps pace at 1x with room to spare; a faster
+        // tempo spends proportionally more of the file per second heard, and
+        // 4.0x on one packet a call starves `[SPEC-TPL-050]`.
+        let packets = tempo.div_ceil(1000).max(1) as usize;
+        // A packet can come out of a slow stretch several times longer than
+        // it went in, and a ring write that does not fit is lost audio.
+        let room = if l.warped() {
+            let grows = (out_rate as u64 * 1000).div_ceil(sr * tempo as u64).max(1) as usize;
+            crate::DECODE_TOPUP_FRAMES * (grows + 1)
+        } else {
+            crate::DECODE_TOPUP_FRAMES
+        };
+        let mut fed = 0;
+        let mut empty_wraps = 0u8;
+        for _ in 0..packets + 4 {
+            if fed >= packets || l.stream.finished || l.stream.ring.free() < room * ch {
                 return;
             }
+            let start = l.dec.position_frames();
             match l.dec.next() {
                 Ok(Some(chunk)) => {
-                    l.converted.clear();
-                    let mut buf = std::mem::take(&mut l.converted);
-                    match l.resampler.process(chunk, &mut buf) {
-                        Ok(()) => {
-                            if l.gain != 1.0 {
-                                for s in buf.iter_mut() {
-                                    *s *= l.gain;
-                                }
-                            }
-                            l.stream.push(&mut buf);
-                        }
-                        Err(e) => {
-                            tracing::error!("resample: {e}");
-                            l.stream.finished = true;
+                    empty_wraps = 0;
+                    l.src.clear();
+                    l.src.extend_from_slice(chunk);
+                    l.blend_seam(seam);
+                    // The loop's end, met in the decoded audio itself, before
+                    // the stretcher and resampler: they see one continuous
+                    // signal and neither is reset at the seam `[SPEC-TPL-030]`.
+                    let mut wrap = None;
+                    if let (true, Some(a), Some(b)) = (ab_loop.is_active(), ab_loop.a_ms, ab_loop.b_ms) {
+                        let at_b = b * sr / 1000;
+                        let frames = (l.src.len() / ch) as u64;
+                        if start + frames >= at_b {
+                            let keep = (at_b.saturating_sub(start) as usize) * ch;
+                            l.tail_scratch.clear();
+                            l.tail_scratch.extend_from_slice(&l.src[keep..(keep + seam * ch).min(l.src.len())]);
+                            l.src.truncate(keep);
+                            wrap = Some((b, a));
                         }
                     }
-                    l.converted = buf;
+                    if let Some((b, a)) = wrap {
+                        // The rest of the crossfade's source, if the packet
+                        // ended inside it.
+                        while l.tail_scratch.len() < seam * ch {
+                            let Ok(Some(more)) = l.dec.next() else { break };
+                            let need = seam * ch - l.tail_scratch.len();
+                            l.tail_scratch.extend_from_slice(&more[..need.min(more.len())]);
+                        }
+                        if l.tail_scratch.len() < seam * ch {
+                            // Nothing past `B` to fade from: fade out to it.
+                            l.tail_scratch.clear();
+                            let frames = l.src.len() / ch;
+                            let ramp = seam.min(frames);
+                            for f in 0..ramp {
+                                let g = (ramp - f) as f32 / ramp as f32;
+                                let i = (frames - ramp + f) * ch;
+                                l.src[i..i + ch].iter_mut().for_each(|s| *s *= g);
+                            }
+                            l.fade_in_pending = true;
+                        }
+                        if l.dec.seek_ms(a).is_err() {
+                            l.stream.finished = true;
+                        }
+                        l.wraps.push_back((b, a));
+                    }
+                    if let Err(e) = l.feed(out_rate) {
+                        tracing::error!("resample: {e}");
+                        l.stream.finished = true;
+                        return;
+                    }
+                    fed += 1;
                 }
-                Ok(None) => l.stream.finished = true,
+                Ok(None) => {
+                    // A loop whose `B` is the passage's very end: the end of
+                    // the file is `B`. What came before it has already gone
+                    // on, so `A` fades in instead of crossfading.
+                    if ab_loop.is_active() && empty_wraps < 2 {
+                        if let Some(a) = ab_loop.a_ms {
+                            if l.dec.seek_ms(a).is_ok() {
+                                empty_wraps += 1;
+                                let b = start * 1000 / sr;
+                                l.tail_scratch.clear();
+                                l.fade_in_pending = true;
+                                l.wraps.push_back((b, a));
+                                continue;
+                            }
+                        }
+                    }
+                    if let Err(e) = l.flush_stretcher(out_rate) {
+                        tracing::error!("resample: {e}");
+                    }
+                    l.stream.finished = true;
+                }
                 Err(e) => {
                     tracing::error!("decode: {e}");
                     // Read the file back next [GDE-INT-140]: a failure here is
@@ -1817,6 +2534,9 @@ placing at the ring's own depth, which sounds early",
     /// cutting the ring, so the master announced a sound time some fourteen
     /// seconds later than the truth and every follower planned against it.
     fn publish_schedule(&mut self, passage_id: i64, origin_ms: u64, depth_frames: u64) {
+        if self.is_warped() {
+            return;
+        }
         let Some(r) = self.path.ring.as_ref() else { return };
         if r.clock.timestamps() != crate::output::Timestamps::Hardware {
             return;
@@ -2246,15 +2966,14 @@ placing at the ring's own depth, which sounds early",
         };
         // Each stream is summed from the block's first sample, so a passage
         // that gave `frames` covers that many from wherever the block lands.
-        let rate = self.out_rate.max(1) as u64;
-        let mut gave: Vec<(i64, u64, u64, u64)> = Vec::with_capacity(self.live.len());
+        let mut gave: Vec<Gave> = Vec::with_capacity(self.live.len());
         for (l, was) in self.live.iter_mut().zip(before) {
             let consumed = was.saturating_sub(l.stream.ring.len());
             let frames = (consumed / l.stream.channels.max(1)) as u64;
             if frames > 0 {
-                gave.push((l.entry.passage_id, l.admitted, l.origin_ms + l.frames_mixed * 1000 / rate, frames));
+                let spans = l.take_mixed_spans(frames, self.out_rate);
+                gave.push((l.entry.passage_id, l.admitted, spans));
             }
-            l.frames_mixed += frames;
         }
         if filled == 0 {
             return 0;
@@ -2275,16 +2994,27 @@ placing at the ring's own depth, which sounds early",
         };
         // A trim moved the block by a frame; the next block's segment starts
         // afresh from its own position, so that frame does not accumulate.
-        for (passage, admitted, at_ms, frames) in gave {
-            self.timeline.record(Segment {
-                passage,
-                admitted,
-                from: at,
-                to: at + (frames * ch as u64).min(taken as u64),
-                at_ms,
-                channels: ch as u32,
-                rate: self.out_rate,
-            });
+        for (passage, admitted, spans) in gave {
+            let limit = at + taken as u64;
+            let mut offset_samples = 0u64;
+            for (at_ms, span_frames, tempo_milli) in spans {
+                let span_samples = span_frames * ch as u64;
+                let from = at + offset_samples;
+                let to = (from + span_samples).min(limit);
+                if to > from {
+                    self.timeline.record(Segment {
+                        passage,
+                        admitted,
+                        from,
+                        to,
+                        at_ms,
+                        channels: ch as u32,
+                        rate: self.out_rate,
+                        tempo_milli,
+                    });
+                }
+                offset_samples += span_samples;
+            }
         }
         taken
     }
@@ -2301,16 +3031,24 @@ placing at the ring's own depth, which sounds early",
     /// Position within the passage of the audio that has been MIXED. Drives
     /// crossfade admission, which must lead what is heard by the buffer depth.
     fn played_ms(&self, l: &Live) -> u64 {
-        l.origin_ms + l.frames_mixed * 1000 / self.out_rate.max(1) as u64
+        l.last_mixed_end_ms
     }
 
     /// Position within the passage of the audio being HEARD: mixed, less what
     /// is still sitting in the output ring. This is what the UI shows and what
     /// a resume point must record.
     fn audible_ms(&self, l: &Live) -> u64 {
+        if let Some(read) = self.read_position() {
+            if let Some(a) = self.timeline.audible_at(read) {
+                if a.admitted == l.admitted {
+                    return a.position_ms.min(l.entry.duration_ms());
+                }
+            }
+        }
         let frames = self.out_buffered_frames() as u64;
+        let tempo = l.stream.tempo_milli.max(1) as u64;
         self.played_ms(l)
-            .saturating_sub(frames * 1000 / self.out_rate.max(1) as u64)
+            .saturating_sub(frames * tempo / self.out_rate.max(1) as u64)
     }
 
     fn out_buffered_frames(&self) -> usize {
@@ -2371,6 +3109,7 @@ placing at the ring's own depth, which sounds early",
                     // past the music, however long it sits there.
                     let at = h.position_ms.min(entry.duration_ms());
                     self.shown = Some((entry, at));
+                    self.heard_admitted = Some(h.admitted);
                     if !h.ended {
                         // **And a basis voided by a cut comes back here**
                         // `[GDE-ARC-066]`. `skip` is re-established by the
@@ -2568,6 +3307,10 @@ placing at the ring's own depth, which sounds early",
                 .collect();
             s.mixing_ahead = self.live.len().saturating_sub(after);
             s.volume = self.volume;
+            s.eq = self.eq;
+            s.tempo_milli = self.tempo_milli;
+            s.pitch_cents = self.pitch_cents;
+            s.ab_loop = self.ab_loop;
             s.skip_fade_ms = self.skip_fade_ms;
             s.skip_lead_ms = self.skip_lead_ms;
             s.resume_save_ms = self.prefs.resume_save_ms;
@@ -5497,5 +6240,311 @@ than one mix block");
         assert_eq!(state, Some((None, 0, true)), "player_state must be saved as (None, 0, true)");
         assert!(!h.snapshot().playing, "simulated shutdown cleanly pauses playback");
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn ab_loop_enforces_minimum_span_and_suppresses_auto_advance() {
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        let (a, b) = (wav_of(1_200), wav_of(1_200));
+        for (id, w) in [(201, &a), (202, &b)] {
+            let mut ent = entry(id, w.to_str().unwrap());
+            ent.end_ms = 1_200;
+            e.enqueue(ent);
+        }
+        h.send(Command::Play);
+        e.drain_commands();
+        assert!(tick_until(&mut e, |eng| eng.echo.shown_is_sounding));
+
+        // Minimum span is 200 ms (`[SPEC-TPL-020]`): B at 300 ms when A is 200 ms must be rejected.
+        h.send(Command::SetLoopA(200));
+        h.send(Command::SetLoopB(300));
+        e.drain_commands();
+        assert_eq!(e.ab_loop.a_ms, Some(200));
+        assert_eq!(e.ab_loop.b_ms, None);
+        assert!(!e.ab_loop.is_active());
+
+        // B at 600 ms (400 ms span >= 200 ms) activates the loop.
+        h.send(Command::SetLoopB(600));
+        e.drain_commands();
+        assert!(e.ab_loop.is_active());
+
+        // Play well past 1_200 ms of output time; passage 201 must keep looping in [200, 600]
+        // and passage 202 must not be admitted (`[SPEC-TPL-030]`).
+        let mut saw_wrap = false;
+        let mut prev_pos = 0u64;
+        for _ in 0..300 {
+            drain_keeping(&ring, 8_000);
+            e.tick();
+            if let Some((cur, pos)) = &e.shown {
+                assert_eq!(cur.passage_id, 201, "auto-advance must be suppressed while A-B loop is active");
+                if *pos + 50 < prev_pos {
+                    saw_wrap = true;
+                }
+                prev_pos = *pos;
+            }
+        }
+        assert!(saw_wrap, "expected audible position to wrap from B back toward A");
+
+        // Clearing the loop allows normal progression into passage 202.
+        h.send(Command::ClearLoop);
+        e.drain_commands();
+        assert!(!e.ab_loop.is_active());
+        let mut reached_202 = false;
+        for _ in 0..400 {
+            drain_keeping(&ring, 8_000);
+            e.tick();
+            if e.shown.as_ref().map(|(c, _)| c.passage_id) == Some(202) {
+                reached_202 = true;
+                break;
+            }
+        }
+        assert!(reached_202, "clearing loop must allow passage 202 to be admitted");
+        let _ = (std::fs::remove_file(&a), std::fs::remove_file(&b));
+    }
+
+    #[test]
+    fn track_change_resets_tempo_pitch_and_ab_loop_to_neutral() {
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring), 3);
+        let (a, b) = (wav_of(1_200), wav_of(1_200));
+        for (id, w) in [(211, &a), (212, &b)] {
+            let mut ent = entry(id, w.to_str().unwrap());
+            ent.end_ms = 1_200;
+            e.enqueue(ent);
+        }
+        h.send(Command::Play);
+        h.send(Command::SetTempo(1500));
+        h.send(Command::SetPitch(-400));
+        h.send(Command::SetLoopA(100));
+        h.send(Command::SetLoopB(600));
+        e.tick();
+        assert_eq!(e.tempo_milli, 1500);
+        assert_eq!(e.pitch_cents, -400);
+        assert!(e.ab_loop.is_active());
+
+        // Skipping to the next track resets all three controls to neutral (`[SPEC-TPL-010]`).
+        h.send(Command::Skip);
+        e.tick();
+        let snap = h.snapshot();
+        assert_eq!(snap.tempo_milli, 1000);
+        assert_eq!(snap.pitch_cents, 0);
+        assert_eq!(snap.ab_loop, AbLoop::default());
+        let _ = (std::fs::remove_file(&a), std::fs::remove_file(&b));
+    }
+
+    #[test]
+    fn scrobble_accounting_suspends_while_warped_and_resumes_at_neutral() {
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        let w = wav_of(4_000);
+        let mut ent = entry(221, w.to_str().unwrap());
+        ent.end_ms = 4_000;
+        e.enqueue(ent);
+        h.send(Command::Play);
+        e.drain_commands();
+        assert!(tick_until(&mut e, |eng| eng.echo.shown_is_sounding));
+        for _ in 0..40 {
+            drain_keeping(&ring, 10_000);
+            e.tick();
+        }
+        let before_warp = e.heard_ms;
+        assert!(before_warp > 0, "expected heard_ms to accumulate at neutral");
+
+        // Warp tempo off 1.0x: heard_ms must freeze (`[SPEC-TPL-015]`).
+        h.send(Command::SetTempo(1250));
+        e.drain_commands();
+        assert!(e.heard_from.is_none());
+        for _ in 0..40 {
+            drain_keeping(&ring, 10_000);
+            e.tick();
+        }
+        assert_eq!(e.heard_ms, before_warp, "heard_ms must not advance while tempo is warped");
+
+        // Return to neutral: heard_ms resumes accumulating from before_warp.
+        h.send(Command::SetTempo(1000));
+        e.drain_commands();
+        for _ in 0..80 {
+            drain_keeping(&ring, 10_000);
+            e.tick();
+        }
+        assert!(
+            e.heard_ms > before_warp,
+            "heard_ms must resume accumulating after returning to neutral (was {before_warp}, now {})",
+            e.heard_ms
+        );
+        let _ = std::fs::remove_file(&w);
+    }
+
+    #[test]
+    fn echo_basis_voids_with_warped_and_reestablishes_at_neutral() {
+        let (mut e, h) = Engine::new(crate::path::PathHandle::silent(), 3);
+        h.send(Command::Play);
+        e.drain_commands();
+        e.echo.basis.establish();
+        e.echo.schedule = Some(crate::echo::Schedule {
+            passage_id: 1,
+            start_sample: 0,
+            sound_at: 100,
+            rate: 44_100,
+        });
+        assert!(e.echo.basis.voided_by().is_none());
+
+        h.send(Command::SetPitch(200));
+        e.drain_commands();
+        assert_eq!(e.echo.basis.voided_by(), Some(crate::echo::Voided::Warped));
+        assert!(e.echo.schedule.is_none());
+
+        h.send(Command::SetPitch(0));
+        e.drain_commands();
+        assert!(e.echo.basis.voided_by().is_none(), "returning to neutral must re-establish basis");
+    }
+
+    /// The loop seam is cut in the decoded audio, ahead of the stretcher
+    /// `[SPEC-TPL-030]`; under a warped tempo the position the timeline reports
+    /// must still wrap from `B` to `A` and stay between them `[SPEC-TPL-070]`.
+    #[test]
+    fn a_loop_under_a_warped_tempo_wraps_and_stays_in_its_span() {
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        let w = wav_of(2_000);
+        let mut ent = entry(231, w.to_str().unwrap());
+        ent.end_ms = 2_000;
+        e.enqueue(ent);
+        h.send(Command::Play);
+        e.drain_commands();
+        assert!(tick_until(&mut e, |eng| eng.echo.shown_is_sounding));
+        h.send(Command::SetTempo(2_000));
+        h.send(Command::SetLoopA(300));
+        h.send(Command::SetLoopB(1_100));
+        e.drain_commands();
+        assert!(e.ab_loop.is_active());
+
+        let (mut wraps, mut prev) = (0, None::<u64>);
+        for _ in 0..600 {
+            drain_keeping(&ring, 8_000);
+            e.tick();
+            let Some((cur, pos)) = &e.shown else { continue };
+            assert_eq!(cur.passage_id, 231);
+            if e.announced.is_some() {
+                continue; // the activation cut, not yet heard
+            }
+            // A seam's crossfade and one mix block of slack either side.
+            assert!((250..=1_200).contains(pos), "position {pos} outside the loop");
+            if prev.is_some_and(|p| *pos + 200 < p) {
+                wraps += 1;
+            }
+            prev = Some(*pos);
+        }
+        assert!(wraps >= 2, "expected repeated B -> A wraps at 2.0x, saw {wraps}");
+        let _ = std::fs::remove_file(&w);
+    }
+
+    /// Moving `A` on an active loop is heard now: the ~30 s already decoded
+    /// under the old loop is cut, not played out `[SPEC-TPL-030]`.
+    #[test]
+    fn moving_a_on_an_active_loop_cuts_the_old_loop_out() {
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        let w = wav_of(2_000);
+        let mut ent = entry(241, w.to_str().unwrap());
+        ent.end_ms = 2_000;
+        e.enqueue(ent);
+        h.send(Command::Play);
+        e.drain_commands();
+        assert!(tick_until(&mut e, |eng| eng.echo.shown_is_sounding));
+        h.send(Command::SetLoopA(100));
+        h.send(Command::SetLoopB(1_500));
+        e.drain_commands();
+        for _ in 0..100 {
+            drain_keeping(&ring, 8_000);
+            e.tick();
+        }
+        h.send(Command::SetLoopA(900));
+        e.drain_commands();
+        assert_eq!(e.ab_loop, AbLoop { a_ms: Some(900), b_ms: Some(1_500) });
+        assert!(tick_until(&mut e, |eng| eng.announced.is_none()));
+        for _ in 0..200 {
+            drain_keeping(&ring, 8_000);
+            e.tick();
+            if let Some((_, pos)) = &e.shown {
+                assert!(*pos >= 850, "position {pos} is from the old loop, which was cut");
+            }
+        }
+        let _ = std::fs::remove_file(&w);
+    }
+
+    /// A track change returns the controls to neutral at once, but what is
+    /// sounding stays warped until the next passage is heard -- the old one's
+    /// tail is still in the ring `[SPEC-TPL-015]`.
+    #[test]
+    fn the_warped_tail_of_a_passage_is_still_warped() {
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        let (a, b) = (wav_of(1_500), wav_of(1_500));
+        for (id, w) in [(251, &a), (252, &b)] {
+            let mut ent = entry(id, w.to_str().unwrap());
+            ent.end_ms = 1_500;
+            e.enqueue(ent);
+        }
+        h.send(Command::Play);
+        e.drain_commands();
+        assert!(tick_until(&mut e, |eng| eng.echo.shown_is_sounding));
+        h.send(Command::SetTempo(1_250));
+        e.drain_commands();
+
+        let mut saw_tail = false;
+        let mut reached = false;
+        for _ in 0..2_000 {
+            drain_keeping(&ring, 30_000);
+            e.tick();
+            let shown = e.shown.as_ref().map(|(c, _)| c.passage_id);
+            if !e.is_warped() && shown == Some(251) {
+                // Reset by the admission of 252, still hearing 251.
+                assert!(e.sounding_warped(), "the warped tail must count as warped");
+                saw_tail = true;
+            }
+            if shown == Some(252) && e.announced.is_none() {
+                assert!(!e.sounding_warped(), "the neutral passage, once heard, is not warped");
+                reached = true;
+                break;
+            }
+        }
+        assert!(saw_tail, "never observed the warped tail after the track change");
+        assert!(reached, "never reached passage 252");
+        let _ = (std::fs::remove_file(&a), std::fs::remove_file(&b));
+    }
+
+    /// Returning to neutral is a cut like a seek: the Echo basis comes back
+    /// when the re-primed audio is heard, not at the command `[SPEC-TPL-100]`.
+    #[test]
+    fn returning_to_neutral_reestablishes_echo_only_once_heard() {
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        let w = wav_of(3_000);
+        let mut ent = entry(261, w.to_str().unwrap());
+        ent.end_ms = 3_000;
+        e.enqueue(ent);
+        h.send(Command::Play);
+        e.drain_commands();
+        assert!(tick_until(&mut e, |eng| eng.echo.shown_is_sounding));
+        h.send(Command::SetPitch(300));
+        e.drain_commands();
+        assert_eq!(e.echo.basis.voided_by(), Some(crate::echo::Voided::Warped));
+        h.send(Command::SetPitch(0));
+        e.drain_commands();
+        assert_eq!(e.echo.basis.voided_by(), Some(crate::echo::Voided::Skip),
+                   "back at neutral, but across a cut nothing has been heard yet");
+        let mut back = false;
+        for _ in 0..400 {
+            drain_keeping(&ring, 8_000);
+            e.tick();
+            if e.echo.basis.voided_by().is_none() {
+                back = true;
+                break;
+            }
+        }
+        assert!(back, "the basis must return once the re-primed audio sounds");
+        let _ = std::fs::remove_file(&w);
     }
 }

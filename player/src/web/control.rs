@@ -91,6 +91,58 @@ pub(super) async fn seek_passage(
     StatusCode::ACCEPTED
 }
 
+/// Set playback tempo in milli-x, clamped to `250..=4000` (`1000` = `1.00x`)
+/// `[SPEC-TPL-120]`.
+pub(super) async fn set_tempo(
+    State(ui): State<Ui>,
+    axum::extract::Path(milli): axum::extract::Path<u32>,
+) -> StatusCode {
+    let milli = milli.clamp(crate::stretch::TEMPO_MIN_MILLI, crate::stretch::TEMPO_MAX_MILLI);
+    ui.handle.send(Command::SetTempo(milli));
+    StatusCode::ACCEPTED
+}
+
+/// Set pitch shift in cents, clamped to `-1200..=1200` (`0` = neutral)
+/// `[SPEC-TPL-120]`.
+pub(super) async fn set_pitch(
+    State(ui): State<Ui>,
+    axum::extract::Path(cents): axum::extract::Path<String>,
+) -> StatusCode {
+    // Not a number is the one thing refused: there is nothing to clamp.
+    let Ok(v) = cents.trim().trim_start_matches('+').parse::<i32>() else {
+        return StatusCode::BAD_REQUEST;
+    };
+    let v = v.clamp(crate::stretch::PITCH_MIN_CENTS, crate::stretch::PITCH_MAX_CENTS);
+    ui.handle.send(Command::SetPitch(v));
+    StatusCode::ACCEPTED
+}
+
+/// Mark loop point `A` at `ms` into the current passage `[SPEC-TPL-120]`.
+pub(super) async fn set_loop_a(
+    State(ui): State<Ui>,
+    axum::extract::Path(ms): axum::extract::Path<u64>,
+) -> StatusCode {
+    ui.handle.send(Command::SetLoopA(ms));
+    StatusCode::ACCEPTED
+}
+
+/// Mark loop point `B` at `ms` into the current passage `[SPEC-TPL-120]`.
+/// The engine owns the rules -- `A` defaults to the start, and a span under
+/// the minimum changes nothing `[SPEC-TPL-020]` -- so this only relays.
+pub(super) async fn set_loop_b(
+    State(ui): State<Ui>,
+    axum::extract::Path(ms): axum::extract::Path<u64>,
+) -> StatusCode {
+    ui.handle.send(Command::SetLoopB(ms));
+    StatusCode::ACCEPTED
+}
+
+/// Clear any active or half-set `A-B` loop `[SPEC-TPL-120]`.
+pub(super) async fn clear_loop(State(ui): State<Ui>) -> StatusCode {
+    ui.handle.send(Command::ClearLoop);
+    StatusCode::ACCEPTED
+}
+
 /// Enqueue a shutdown event at the tail of the queue `[IMPL-QSD-020]`.
 ///
 /// The queue enforces cardinality 0 <= n <= 1; returns 204 No Content on success

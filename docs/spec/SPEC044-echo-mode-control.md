@@ -120,6 +120,17 @@ own Director is warm and its queue never stopped being maintained
 `[GDE-ECHO-500]`. There is nothing to restart and no boundary to wait for,
 which is the same property that makes a master going away a non-event.
 
+**`[SPEC-ECHO-045]` Warping playback (Tempo, Pitch, or A-B Loop) on either node
+suspends Echo synchronization automatically and resumes when both return to
+neutral.** While either the followed master or the following node has
+non-neutral Tempo, non-zero Pitch, or an active A-B Loop (`[SPEC-TPL-100]` in
+[SPEC065](SPEC065-tempo-pitch-and-loop.md)), the master voids its basis with
+`Voided::Warped` and the follower suspends queue adoption and clock tracking,
+playing its own warm Director queue independently while keeping the WebSocket
+open. When both nodes return to neutral (`1.0x` tempo, `0` pitch, loop cleared
+— including on track change), the master re-establishes its basis and the
+follower automatically re-adopts the master's queue and rejoins mid-passage.
+
 **`[SPEC-ECHO-050]` A node must refuse to follow itself.** Its own address in
 that field produces a socket to its own snapshot, a schedule derived from its
 own ring, and a join triggered by its own admission — a feedback loop that

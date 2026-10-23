@@ -796,6 +796,9 @@ pub enum Voided {
     Pause,
     /// The ring was cut `[REQ-AUD-158]`, so counted frames were discarded.
     Skip,
+    /// Playback rate, pitch, or A-B loop is non-neutral `[SPEC-ECHO-045]`,
+    /// `[SPEC-TPL-100]`.
+    Warped,
 }
 
 /// Whether the local frame clock can still be compared against an anchor.

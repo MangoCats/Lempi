@@ -79,12 +79,27 @@ const SPARSE = {
                   led: true, radios: true, follow: true, writes_beside_audio: true },
   // Where nothing is watched, `null` `[APP-PWR-010]`.
   power: null,
+  can_eq: false, can_tempo_pitch: false, can_ab_loop: false,
+  tempo_milli: 1000, pitch_cents: 0,
+  // What the engine sends `[SPEC-TPL-110]`, `[SPEC-EQ-030]`.
+  ab_loop: { a_ms: null, b_ms: null },
+  eq: {
+    enabled: false, preamp_db: 0.0, auto_preamp: true,
+    bands: [
+      { kind: 'low_shelf', freq_hz: 60.0, gain_db: 0.0, q: 0.707, enabled: true },
+      { kind: 'peaking', freq_hz: 250.0, gain_db: 0.0, q: 0.707, enabled: true },
+      { kind: 'peaking', freq_hz: 1000.0, gain_db: 0.0, q: 0.707, enabled: true },
+      { kind: 'peaking', freq_hz: 4000.0, gain_db: 0.0, q: 0.707, enabled: true },
+      { kind: 'high_shelf', freq_hz: 12000.0, gain_db: 0.0, q: 0.707, enabled: true },
+    ],
+  },
 };
 
 // A snapshot carrying a full Program Director explanation -- the richest
 // branch, and the one a live capture may not happen to include.
 const RICH = {
   ...SPARSE,
+  can_eq: true, can_tempo_pitch: true, can_ab_loop: true,
   // A dip in the last ten minutes `[APP-PWR-010]`.
   power: 'recent',
   playing: true, title: 'A Passage With Reasons', position_ms: 61000, duration_ms: 244000,
@@ -2304,10 +2319,138 @@ async function runEarlySnapshot(skin) {
   if (errors.length) failures++;
 }
 
+// ---------------------------------------------------------------------------
+// Custom Audio Controls `[SPEC064]`, `[SPEC065]`: Tempo, Pitch, A-B Loop, and
+// 5-Band Parametric EQ in the Lempi reference skin.
+async function runAudioControls() {
+  const shell = fs.readFileSync(path.join(ROOT, 'shell.html'), 'utf8')
+    .replace('<script>Lempi.start();</script>', '');
+  const dom = new JSDOM(shell,
+                        { runScripts: 'dangerously', url: 'http://localhost/?skin=lempi' });
+  const { window } = dom;
+  const errors = [];
+  window.console.error = (...a) => errors.push(a.join(' '));
+  const check = (cond, msg) => { if (!cond) errors.push(msg); };
+  const create = window.document.createElement.bind(window.document);
+  window.document.createElement = tag => {
+    const el = create(tag);
+    if (tag === 'link' || tag === 'script') setTimeout(() => el.onload && el.onload(), 0);
+    return el;
+  };
+  window.HTMLCanvasElement.prototype.getContext = () => null;
+
+  const posted = [];
+  const eqPayload = {
+    output_id: 'dac',
+    eq: RICH.eq,
+    curve_db: new Array(64).fill(0),
+  };
+  window.fetch = (url, opts) => {
+    if (opts && opts.method === 'POST') {
+      posted.push({ url, body: opts.body || null });
+      if (url === '/audio/eq') {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(eqPayload) });
+      }
+      return Promise.resolve({ ok: true, status: 202 });
+    }
+    if (url === '/audio/eq') {
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(eqPayload) });
+    }
+    if (url === '/skins') {
+      return Promise.resolve({ json: () => Promise.resolve(skins.map(n => ({ name: n, label: n }))) });
+    }
+    const m = /^\/skin\/([^/]+)\/(.+)$/.exec(url);
+    if (m) return Promise.resolve({ ok: true, text: () => Promise.resolve(fs.readFileSync(path.join(ROOT, 'skins', m[1], m[2]), 'utf8')) });
+    return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}), text: () => Promise.resolve('') });
+  };
+
+  let sock = null;
+  window.WebSocket = function () { sock = this; this.close = () => {}; };
+  const runScript = src => {
+    const el = create('script');
+    el.textContent = src;
+    window.document.body.appendChild(el);
+  };
+  const why = await startCore(window, runScript);
+  if (why || !sock) {
+    console.log(`${'audio'.padEnd(11)} FAIL  ${why || 'core never opened its socket'}`);
+    failures++;
+    return;
+  }
+
+  const $ = id => window.document.getElementById(id);
+
+  // SPARSE has can_eq/can_tempo_pitch/can_ab_loop = false: bar and drawer must be hidden.
+  sock.onopen && sock.onopen();
+  sock.onmessage({ data: JSON.stringify(SPARSE) });
+  check($('audio-controls-bar').hidden, 'audio bar must hide when no audio capability is true');
+  check($('audio-controls-drawer').hidden, 'audio drawer must hide when no audio capability is true');
+
+  // RICH enables all three: bar is shown, drawer starts closed, warp badge hidden at neutral.
+  sock.onmessage({ data: JSON.stringify(RICH) });
+  check(!$('audio-controls-bar').hidden, 'audio bar must show when capabilities are true');
+  check($('audio-controls-drawer').hidden, 'audio drawer must start closed');
+  check($('warp-badge').hidden, 'warp badge must hide at neutral');
+
+  // Open drawer and exercise Tempo, Pitch, A-B Loop, and 5-band EQ.
+  $('audio-controls-toggle').onclick();
+  await new Promise(r => setTimeout(r, 20));
+  check(!$('audio-controls-drawer').hidden, 'clicking toggle must open the audio drawer');
+  check($('audio-controls-toggle').getAttribute('aria-expanded') === 'true', 'aria-expanded must be true');
+
+  $('tempo-slider').value = '1250';
+  $('tempo-slider').onchange();
+  check(posted.some(p => p.url === '/tempo/1250'), 'tempo slider must post to /tempo/1250');
+
+  $('pitch-up').onclick();
+  check(posted.some(p => p.url === '/pitch/100'), 'pitch +1 st must post to /pitch/100');
+
+  $('loop-set-a').onclick();
+  check(posted.some(p => p.url === '/loop/a/61000'), 'Set A must post current position_ms');
+
+  // Push active loop + warped tempo/pitch/EQ snapshot and check markers & badge.
+  sock.onmessage({ data: JSON.stringify({
+    ...RICH,
+    tempo_milli: 1250,
+    pitch_cents: -200,
+    ab_loop: { a_ms: 61000, b_ms: 122000 },
+    eq: { ...RICH.eq, enabled: true },
+  }) });
+  check(!$('loop-mark-a').hidden && !$('loop-mark-b').hidden && !$('loop-range').hidden,
+        'active A-B loop must show A, B, and range markers on progress bar');
+  check(!$('warp-badge').hidden && $('warp-badge').textContent.includes('1.25×') &&
+        $('warp-badge').textContent.includes('A–B') && $('warp-badge').textContent.includes('EQ'),
+        `warp badge must summarize active controls, got "${$('warp-badge').textContent}"`);
+
+  $('loop-clear').onclick();
+  check(posted.some(p => p.url === '/loop/clear'), 'Clear loop must post to /loop/clear');
+
+  $('eq-preset').value = 'bass';
+  $('eq-preset').onchange();
+  await new Promise(r => setTimeout(r, 20));
+  const eqPost = posted.find(p => p.url === '/audio/eq');
+  check(!!eqPost, 'selecting an EQ preset must POST to /audio/eq');
+  if (eqPost) {
+    const sent = JSON.parse(eqPost.body);
+    check(sent.enabled === true && sent.bands.length === 5 && sent.bands[0].gain_db === 5,
+          `bass preset must enable 5-band EQ with +5 dB low shelf, got ${eqPost.body}`);
+    // The server parses bands strictly; one missing `enabled` was a request
+    // it could not read.
+    check(sent.bands.every(b => b.enabled === true && b.freq_hz > 0 && b.q > 0),
+          `every band sent must be complete, got ${eqPost.body}`);
+  }
+
+  console.log(`${'audio'.padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+              `tempo, pitch, A-B loop markers, and 5-band EQ verified`);
+  for (const e of errors) console.log('    ! ' + e);
+  if (errors.length) failures++;
+}
+
 (async () => {
   for (const s of skins) await run(s);
   for (const s of skins) await runEarlySnapshot(s);
   for (const s of skins) await runPreference(s);
+  await runAudioControls();
   await runBrowse();
   await runReview();
   await runReviewHandoff();

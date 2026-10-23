@@ -68,18 +68,40 @@ pub struct Capabilities {
     /// it: a queue entry's tags are the file's. So this is declared false and
     /// published out-of-band instead `[SPEC-MPD-050]`.
     pub naming: bool,
+    /// Can it apply the 5-band parametric graphic equalizer `[SPEC-EQ-070]`?
+    pub eq: bool,
+    /// Can it stretch tempo and shift pitch in real time `[SPEC-TPL-110]`?
+    pub tempo_pitch: bool,
+    /// Can it loop between A and B points inside a passage `[SPEC-TPL-110]`?
+    pub ab_loop: bool,
 }
 
 impl Capabilities {
     /// Everything, which is what the built-in engine does.
-    pub const FULL: Self =
-        Self { spans: true, gain: true, ramps: true, naming: true, seek: true };
+    pub const FULL: Self = Self {
+        spans: true,
+        gain: true,
+        ramps: true,
+        naming: true,
+        seek: true,
+        eq: true,
+        tempo_pitch: true,
+        ab_loop: true,
+    };
     /// A whole-file backend: it plays what you name, start to end.
     ///
     /// OpenSubsonic as deployed. `stream` returns a song; HTTP range requests
     /// seek within the bytes, which is not the same as being told to stop.
-    pub const WHOLE_FILE: Self =
-        Self { spans: false, gain: false, ramps: false, naming: false, seek: false };
+    pub const WHOLE_FILE: Self = Self {
+        spans: false,
+        gain: false,
+        ramps: false,
+        naming: false,
+        seek: false,
+        eq: false,
+        tempo_pitch: false,
+        ab_loop: false,
+    };
 
     /// **MPD, and the surprise of this investigation.**
     ///
@@ -90,8 +112,16 @@ impl Capabilities {
     /// trip to OpenSubsonic. `crossfade` exists but is global rather than
     /// per-passage, and ReplayGain is per-file rather than per-span, so gain
     /// and ramps are still lost.
-    pub const MPD: Self =
-        Self { spans: true, gain: false, ramps: false, naming: false, seek: true };
+    pub const MPD: Self = Self {
+        spans: true,
+        gain: false,
+        ramps: false,
+        naming: false,
+        seek: true,
+        eq: false,
+        tempo_pitch: false,
+        ab_loop: false,
+    };
 
     /// Would sending this passage to this backend play something other than
     /// what was chosen?

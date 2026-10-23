@@ -500,6 +500,468 @@
   // ever act on the track actually shown [REQ-VIS-225].
   Lempi.seekable($('bar'), () => latest);
 
+  // ---- Tempo, pitch, A-B loop `[SPEC-TPL-120]` and the EQ `[SPEC-EQ-090]` --
+  const audioBar = $('audio-controls-bar');
+  const audioToggle = $('audio-controls-toggle');
+  const audioDrawer = $('audio-controls-drawer');
+  const warpBadge = $('warp-badge');
+  const tplSection = $('tpl-section');
+  const abLoopSection = $('ab-loop-section');
+  const eqSection = $('eq-section');
+  const tempoSlider = $('tempo-slider');
+  const tempoReadout = $('tempo-readout');
+  const pitchSlider = $('pitch-slider');
+  const pitchReadout = $('pitch-readout');
+  const loopReadout = $('loop-readout');
+  const loopSetA = $('loop-set-a');
+  const loopSetB = $('loop-set-b');
+  const loopClear = $('loop-clear');
+  const loopRangeEl = $('loop-range');
+  const loopMarkA = $('loop-mark-a');
+  const loopMarkB = $('loop-mark-b');
+  const eqEnabled = $('eq-enabled');
+  const eqAuto = $('eq-auto');
+  const eqPreamp = $('eq-preamp');
+  const eqPreampReadout = $('eq-preamp-readout');
+  const eqPreset = $('eq-preset');
+  const eqFlatBtn = $('eq-flat-btn');
+  const eqCanvas = $('eq-canvas');
+  const eqBandsBox = $('eq-bands');
+
+  // The spec's bounds `[SPEC-EQ-030]`, `[SPEC-EQ-040]`. The server clamps
+  // as well; these keep the controls from offering what it would not keep.
+  const EQ_GAIN_DB = 12;
+  const EQ_Q_MIN = 0.1;
+  const EQ_Q_MAX = 18;
+  // The canvas shows a little more than a band can do, so the curve's peak
+  // with the preamp is still on it.
+  const EQ_VIEW_DB = 15;
+  const EQ_DEFAULT_BANDS = [
+    { kind: 'low_shelf', freq_hz: 60, gain_db: 0, q: 0.707, enabled: true },
+    { kind: 'peaking', freq_hz: 250, gain_db: 0, q: 0.707, enabled: true },
+    { kind: 'peaking', freq_hz: 1000, gain_db: 0, q: 0.707, enabled: true },
+    { kind: 'peaking', freq_hz: 4000, gain_db: 0, q: 0.707, enabled: true },
+    { kind: 'high_shelf', freq_hz: 12000, gain_db: 0, q: 0.707, enabled: true },
+  ];
+  const freshBands = () => EQ_DEFAULT_BANDS.map(b => ({ ...b }));
+  const clampNum = (v, lo, hi, fallback) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
+  };
+
+  let audioDrawerOpen = false;
+  let holdingTempo = false;
+  let holdingPitch = false;
+  let holdingPreamp = false;
+  let draggingBand = -1;
+  let eqCurveDb = null;
+  let currentEq = { enabled: false, preamp_db: 0, auto_preamp: true, bands: freshBands() };
+
+  const EQ_PRESETS = {
+    flat:     [0, 0, 0, 0, 0],
+    bass:     [5.0, 2.5, 0, 0, 0],
+    vocal:    [-1.5, 0, 3.5, 2.5, 0],
+    treble:   [0, 0, 0, 2.5, 5.0],
+    loudness: [4.5, 1.5, -1.0, 1.5, 4.0],
+  };
+
+  const fmtTempo = m => `${(Number(m) / 1000).toFixed(2)}×`;
+  const fmtPitch = c => {
+    const st = Number(c) / 100;
+    return `${st > 0 ? '+' : st < 0 ? '−' : ''}${Math.abs(st).toFixed(1)} st`;
+  };
+  const fmtSignedDb = d => {
+    const v = Number(d);
+    return `${v > 0.04 ? '+' : v < -0.04 ? '−' : ''}${Math.abs(v).toFixed(1)} dB`;
+  };
+
+  function buildEqBandsDom() {
+    if (!eqBandsBox || eqBandsBox.children.length) return;
+    for (let i = 0; i < 5; i++) {
+      const row = document.createElement('div');
+      row.className = 'eq-band-row';
+      row.dataset.band = String(i);
+      row.innerHTML = `
+        <span>B${i + 1}</span>
+        <select class="eq-kind" aria-label="Band ${i + 1} filter kind">
+          <option value="low_shelf">Low shelf</option>
+          <option value="peaking">Peaking</option>
+          <option value="high_shelf">High shelf</option>
+        </select>
+        <input type="number" class="eq-freq" min="20" max="20000" step="1" aria-label="Band ${i + 1} frequency Hz">
+        <input type="range" class="eq-gain" min="${-EQ_GAIN_DB}" max="${EQ_GAIN_DB}" step="0.1" aria-label="Band ${i + 1} gain dB">
+        <input type="number" class="eq-q" min="${EQ_Q_MIN}" max="${EQ_Q_MAX}" step="0.05" aria-label="Band ${i + 1} Q">`;
+      const kindSel = row.querySelector('.eq-kind');
+      const freqIn = row.querySelector('.eq-freq');
+      const gainIn = row.querySelector('.eq-gain');
+      const qIn = row.querySelector('.eq-q');
+      const edited = () => { eqPreset.value = 'custom'; pushEq(); };
+      kindSel.onchange = () => {
+        currentEq.bands[i].kind = kindSel.value;
+        edited();
+      };
+      freqIn.onchange = () => {
+        currentEq.bands[i].freq_hz = clampNum(freqIn.value, 20, 20000, 1000);
+        edited();
+      };
+      // Sent while it moves: the point of an EQ in the callback is hearing
+      // the change as it is made `[SPEC-EQ-010]`. `pushEq` keeps it to one
+      // request in flight.
+      gainIn.oninput = () => {
+        currentEq.bands[i].gain_db = clampNum(gainIn.value, -EQ_GAIN_DB, EQ_GAIN_DB, 0);
+        drawEqCanvas();
+        edited();
+      };
+      qIn.onchange = () => {
+        currentEq.bands[i].q = clampNum(qIn.value, EQ_Q_MIN, EQ_Q_MAX, 0.707);
+        edited();
+      };
+      eqBandsBox.appendChild(row);
+    }
+  }
+  buildEqBandsDom();
+
+  function syncEqDom() {
+    if (!eqBandsBox) return;
+    if (document.activeElement !== eqEnabled) eqEnabled.checked = Boolean(currentEq.enabled);
+    if (eqAuto && document.activeElement !== eqAuto) eqAuto.checked = currentEq.auto_preamp !== false;
+    if (!holdingPreamp && document.activeElement !== eqPreamp) {
+      eqPreamp.value = String(currentEq.preamp_db ?? 0);
+      setText(eqPreampReadout, fmtSignedDb(currentEq.preamp_db ?? 0));
+    }
+    const rows = eqBandsBox.querySelectorAll('.eq-band-row');
+    for (let i = 0; i < rows.length && i < currentEq.bands.length; i++) {
+      const b = currentEq.bands[i];
+      const r = rows[i];
+      const kindSel = r.querySelector('.eq-kind');
+      const freqIn = r.querySelector('.eq-freq');
+      const gainIn = r.querySelector('.eq-gain');
+      const qIn = r.querySelector('.eq-q');
+      if (document.activeElement !== kindSel) kindSel.value = b.kind;
+      if (document.activeElement !== freqIn) freqIn.value = String(Math.round(b.freq_hz));
+      if (document.activeElement !== gainIn) gainIn.value = String(b.gain_db);
+      if (document.activeElement !== qIn) qIn.value = String(Number(b.q).toFixed(2));
+    }
+    drawEqCanvas();
+  }
+
+  // Log frequency across, gain up; shared by drawing and hit-testing so a
+  // node is grabbed where it is drawn.
+  const fToX = (f, w) => (Math.log10(Math.min(20000, Math.max(20, f)) / 20) / 3) * w;
+  const gToY = (g, h) => (0.5 - Math.min(EQ_VIEW_DB, Math.max(-EQ_VIEW_DB, g)) / (2 * EQ_VIEW_DB)) * h;
+
+  function drawEqCanvas() {
+    if (!eqCanvas || typeof eqCanvas.getContext !== 'function') return;
+    const ctx = eqCanvas.getContext('2d');
+    if (!ctx) return;
+    const w = eqCanvas.width, h = eqCanvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    ctx.strokeStyle = 'rgba(128,128,136,0.28)';
+    ctx.lineWidth = 1;
+    for (const f of [50, 100, 250, 500, 1000, 2000, 5000, 10000]) {
+      const x = fToX(f, w);
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+    }
+    for (const g of [-12, -6, 0, 6, 12]) {
+      const y = gToY(g, h);
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    }
+
+    ctx.strokeStyle = currentEq.enabled ? '#4c9a5a' : 'rgba(128,128,136,0.6)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    if (Array.isArray(eqCurveDb) && eqCurveDb.length > 1) {
+      for (let i = 0; i < eqCurveDb.length; i++) {
+        const x = (i / (eqCurveDb.length - 1)) * w;
+        const y = gToY(eqCurveDb[i], h);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+    } else {
+      const y = gToY(currentEq.enabled ? (currentEq.preamp_db || 0) : 0, h);
+      ctx.moveTo(0, y); ctx.lineTo(w, y);
+    }
+    ctx.stroke();
+
+    for (let i = 0; i < currentEq.bands.length; i++) {
+      const b = currentEq.bands[i];
+      ctx.fillStyle = currentEq.enabled ? '#4c9a5a' : '#888';
+      ctx.beginPath();
+      ctx.arc(fToX(b.freq_hz, w), gToY(b.gain_db, h), i === draggingBand ? 7 : 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Sent as it changes, never more than one request in flight: a drag makes
+  // events far faster than a round trip, and only the latest one matters.
+  let eqSending = false;
+  let eqQueued = false;
+  function pushEq() {
+    if (eqSending) { eqQueued = true; return; }
+    eqSending = true;
+    Lempi.setEq(currentEq).then(res => {
+      if (res && Array.isArray(res.curve_db)) {
+        eqCurveDb = res.curve_db;
+        drawEqCanvas();
+      }
+    }).catch(() => {}).finally(() => {
+      eqSending = false;
+      if (eqQueued) { eqQueued = false; pushEq(); }
+    });
+  }
+  function fetchEqCurve() {
+    Lempi.getEq().then(res => {
+      if (res && Array.isArray(res.curve_db)) {
+        eqCurveDb = res.curve_db;
+        drawEqCanvas();
+      }
+    }).catch(() => {});
+  }
+
+  if (audioToggle) {
+    audioToggle.onclick = () => {
+      audioDrawerOpen = !audioDrawerOpen;
+      audioToggle.setAttribute('aria-expanded', String(audioDrawerOpen));
+      setHidden(audioDrawer, !audioDrawerOpen);
+      if (audioDrawerOpen && latest && latest.can_eq) fetchEqCurve();
+    };
+  }
+
+  if (tempoSlider) {
+    tempoSlider.oninput = () => {
+      holdingTempo = true;
+      setText(tempoReadout, fmtTempo(tempoSlider.value));
+    };
+    // On release only: each change is a cut of the ring `[SPEC-TPL-060]`,
+    // and a cut per pixel of drag would be heard as stutter.
+    tempoSlider.onchange = () => {
+      holdingTempo = false;
+      Lempi.setTempo(Number(tempoSlider.value));
+    };
+  }
+  $('tempo-reset').onclick = () => {
+    tempoSlider.value = '1000';
+    setText(tempoReadout, fmtTempo(1000));
+    Lempi.setTempo(1000);
+  };
+  for (const btn of document.querySelectorAll('[data-tempo]')) {
+    btn.onclick = () => {
+      const m = Number(btn.dataset.tempo);
+      tempoSlider.value = String(m);
+      setText(tempoReadout, fmtTempo(m));
+      Lempi.setTempo(m);
+    };
+  }
+
+  if (pitchSlider) {
+    pitchSlider.oninput = () => {
+      holdingPitch = true;
+      setText(pitchReadout, fmtPitch(pitchSlider.value));
+    };
+    pitchSlider.onchange = () => {
+      holdingPitch = false;
+      Lempi.setPitch(Number(pitchSlider.value));
+    };
+  }
+  const stepPitch = delta => {
+    const next = Math.min(1200, Math.max(-1200, (Number(pitchSlider.value) || 0) + delta));
+    pitchSlider.value = String(next);
+    setText(pitchReadout, fmtPitch(next));
+    Lempi.setPitch(next);
+  };
+  $('pitch-down').onclick = () => stepPitch(-100);
+  $('pitch-up').onclick = () => stepPitch(100);
+  $('pitch-reset').onclick = () => {
+    pitchSlider.value = '0';
+    setText(pitchReadout, fmtPitch(0));
+    Lempi.setPitch(0);
+  };
+
+  // Both mark where the listener is now. The engine owns the rules -- `B`
+  // without `A` loops from the start, a span under 200 ms is refused
+  // `[SPEC-TPL-020]` -- so a refused `B` simply leaves the readout as it was.
+  if (loopSetA) {
+    loopSetA.onclick = () => { if (latest) Lempi.setLoopA(latest.position_ms || 0); };
+  }
+  if (loopSetB) {
+    loopSetB.onclick = () => { if (latest) Lempi.setLoopB(latest.position_ms || 0); };
+  }
+  if (loopClear) {
+    loopClear.onclick = () => Lempi.clearLoop();
+  }
+
+  if (eqEnabled) {
+    eqEnabled.onchange = () => {
+      currentEq.enabled = eqEnabled.checked;
+      pushEq();
+    };
+  }
+  if (eqAuto) {
+    eqAuto.onchange = () => {
+      currentEq.auto_preamp = eqAuto.checked;
+      pushEq();
+    };
+  }
+  if (eqPreamp) {
+    eqPreamp.oninput = () => {
+      holdingPreamp = true;
+      currentEq.preamp_db = clampNum(eqPreamp.value, -EQ_GAIN_DB, EQ_GAIN_DB, 0);
+      setText(eqPreampReadout, fmtSignedDb(currentEq.preamp_db));
+      pushEq();
+    };
+    eqPreamp.onchange = () => {
+      holdingPreamp = false;
+      currentEq.preamp_db = clampNum(eqPreamp.value, -EQ_GAIN_DB, EQ_GAIN_DB, 0);
+      pushEq();
+    };
+  }
+  // A preset, and Flat, start from the default bands `[SPEC-EQ-030]`: they
+  // reset frequency, Q and kind as well as gain.
+  const applyEqPreset = name => {
+    const gains = EQ_PRESETS[name];
+    if (!gains) return;
+    if (name !== 'flat') currentEq.enabled = true;
+    currentEq.preamp_db = 0;
+    currentEq.bands = freshBands().map((b, i) => ({ ...b, gain_db: gains[i] }));
+    syncEqDom();
+    pushEq();
+  };
+  if (eqPreset) {
+    eqPreset.onchange = () => applyEqPreset(eqPreset.value);
+  }
+  if (eqFlatBtn) {
+    eqFlatBtn.onclick = () => {
+      eqPreset.value = 'flat';
+      applyEqPreset('flat');
+    };
+  }
+  if (eqCanvas) {
+    const posFromEvent = e => {
+      const rect = eqCanvas.getBoundingClientRect();
+      const w = rect.width || eqCanvas.width || 520;
+      const h = rect.height || eqCanvas.height || 150;
+      const x = Math.min(w, Math.max(0, e.clientX - rect.left));
+      const y = Math.min(h, Math.max(0, e.clientY - rect.top));
+      const freq = Math.round(20 * Math.pow(10, (x / w) * 3));
+      const gain = Math.round((0.5 - y / h) * 2 * EQ_VIEW_DB * 10) / 10;
+      return {
+        x, y, w, h,
+        freq: Math.min(20000, Math.max(20, freq)),
+        gain: Math.min(EQ_GAIN_DB, Math.max(-EQ_GAIN_DB, gain)),
+      };
+    };
+    // The node under the pointer, or -1. A press on empty canvas moves
+    // nothing: a band is taken hold of, not summoned.
+    const nodeAt = (p, reach) => {
+      let best = -1, bestDist = reach;
+      currentEq.bands.forEach((b, i) => {
+        const d = Math.hypot(fToX(b.freq_hz, p.w) - p.x, gToY(b.gain_db, p.h) - p.y);
+        if (d < bestDist) { bestDist = d; best = i; }
+      });
+      return best;
+    };
+    eqCanvas.addEventListener('pointerdown', e => {
+      const p = posFromEvent(e);
+      const i = nodeAt(p, 16);
+      if (i < 0) return;
+      draggingBand = i;
+      if (eqCanvas.setPointerCapture) eqCanvas.setPointerCapture(e.pointerId);
+      // Taking hold of a band means wanting to hear it.
+      currentEq.enabled = true;
+      eqPreset.value = 'custom';
+      syncEqDom();
+    });
+    eqCanvas.addEventListener('pointermove', e => {
+      if (draggingBand < 0) return;
+      const p = posFromEvent(e);
+      currentEq.bands[draggingBand].freq_hz = p.freq;
+      currentEq.bands[draggingBand].gain_db = p.gain;
+      syncEqDom();
+      pushEq();
+    });
+    const endDrag = () => {
+      if (draggingBand < 0) return;
+      draggingBand = -1;
+      syncEqDom();
+      pushEq();
+    };
+    eqCanvas.addEventListener('pointerup', endDrag);
+    eqCanvas.addEventListener('pointercancel', endDrag);
+    // The wheel over a node widens or narrows it `[SPEC-EQ-090]`.
+    eqCanvas.addEventListener('wheel', e => {
+      const i = nodeAt(posFromEvent(e), 24);
+      if (i < 0) return;
+      e.preventDefault();
+      const b = currentEq.bands[i];
+      b.q = clampNum(Math.round(b.q * (e.deltaY < 0 ? 1.12 : 1 / 1.12) * 100) / 100,
+                     EQ_Q_MIN, EQ_Q_MAX, 0.707);
+      eqPreset.value = 'custom';
+      syncEqDom();
+      pushEq();
+    }, { passive: false });
+  }
+
+  function renderAudioControls(s) {
+    if (!changed('audio-controls', s.can_eq, s.can_tempo_pitch, s.can_ab_loop,
+                 s.tempo_milli, s.pitch_cents, s.ab_loop, s.eq, s.duration_ms)) return;
+    const anyAudio = Boolean(s.can_eq || s.can_tempo_pitch || s.can_ab_loop);
+    setHidden(audioBar, !anyAudio);
+    setHidden(audioDrawer, !anyAudio || !audioDrawerOpen);
+    setHidden(tplSection, !s.can_tempo_pitch);
+    setHidden(abLoopSection, !s.can_ab_loop);
+    setHidden(eqSection, !s.can_eq);
+
+    const tm = s.tempo_milli ?? 1000;
+    const pc = s.pitch_cents ?? 0;
+    if (!holdingTempo && tempoSlider) {
+      tempoSlider.value = String(tm);
+      setText(tempoReadout, fmtTempo(tm));
+    }
+    if (!holdingPitch && pitchSlider) {
+      pitchSlider.value = String(pc);
+      setText(pitchReadout, fmtPitch(pc));
+    }
+
+    // `{ a_ms, b_ms }`, either null `[SPEC-TPL-110]`: a loop is active when
+    // both are set, and half-set with `A` alone.
+    const ab = s.ab_loop || {};
+    const hasA = ab.a_ms != null;
+    const active = hasA && ab.b_ms != null;
+    const dur = s.duration_ms || 0;
+    const pct = ms => Math.min(100, Math.max(0, (ms / dur) * 100));
+    setText(loopReadout, active ? `${clock(ab.a_ms)} – ${clock(ab.b_ms)}`
+                         : hasA ? `A: ${clock(ab.a_ms)}` : 'Off');
+    loopClear.disabled = !hasA;
+    const showA = Boolean(s.can_ab_loop && hasA && dur > 0);
+    const showB = Boolean(s.can_ab_loop && active && dur > 0);
+    if (showA) loopMarkA.style.left = `${pct(ab.a_ms)}%`;
+    if (showB) {
+      loopMarkB.style.left = `${pct(ab.b_ms)}%`;
+      loopRangeEl.style.left = `${pct(ab.a_ms)}%`;
+      loopRangeEl.style.width = `${Math.max(0, pct(ab.b_ms) - pct(ab.a_ms))}%`;
+    }
+    setHidden(loopMarkA, !showA);
+    setHidden(loopMarkB, !showB);
+    setHidden(loopRangeEl, !showB);
+
+    if (s.eq && draggingBand < 0) {
+      currentEq = JSON.parse(JSON.stringify(s.eq));
+      syncEqDom();
+      // A profile changed somewhere else -- another browser, or a switch of
+      // output `[SPEC-EQ-060]` -- needs its curve, which only the server draws.
+      if (changed('eq-curve', s.eq) && audioDrawerOpen && s.can_eq) fetchEqCurve();
+    }
+
+    const tags = [];
+    if (tm !== 1000) tags.push(fmtTempo(tm));
+    if (pc !== 0) tags.push(fmtPitch(pc));
+    if (active) tags.push('A–B');
+    else if (hasA) tags.push('A…');
+    if (s.eq && s.eq.enabled) tags.push('EQ');
+    setText(warpBadge, tags.join(' · '));
+    setHidden(warpBadge, tags.length === 0);
+  }
+
   Lempi.subscribe(s => { latest = s; render(s); });
 
   function render(s) {
@@ -522,6 +984,7 @@
       s.duration_ms ? `${(s.position_ms / s.duration_ms) * 100}%` : '0';
     // Offered only where the live backend can honour it [SPEC-BK-040].
     $('bar').classList.toggle('seekable', Boolean(s.can_seek && s.duration_ms));
+    renderAudioControls(s);
     setText($('state'), s.playing ? 'playing' : 'paused');
     // The ground shifts with it, so the state is legible without reading.
     setHidden($('devmode'), !s.dev_mode);
