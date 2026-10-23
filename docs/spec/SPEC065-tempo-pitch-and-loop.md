@@ -16,7 +16,7 @@ Specifies per-passage ephemeral playback warping controls for the native Lempi a
 **`[SPEC-TPL-010]` Ephemeral per-passage controls that reset on track change.**
 Tempo (`tempo_milli: u32`, default `1000`), Pitch (`pitch_cents: i32`, default `0`), and A-B Loop (`AbLoop { a_ms: Option<u64>, b_ms: Option<u64> }`) are tools for actively working with the current passage:
 1. None of the three is persisted to SQLite (`listener.db`).
-2. **All three reset to neutral (`tempo_milli = 1000`, `pitch_cents = 0`, `ab_loop = Clear`) whenever the playing passage changes**—whether by manual command (`Skip`, `Previous`, `SkipTo`) or by natural progression to the next passage in the queue.
+2. **All three reset to neutral (`tempo_milli = 1000`, `pitch_cents = 0`, `ab_loop` cleared) whenever the playing passage changes**—whether by manual command (`Command::Skip`, or `Command::PlayNow`, which puts its passage first and skips) or by natural progression to the next passage in the queue. A seek within the passage is not a change of passage and keeps them.
 3. Because the next passage always starts at neutral, the pre-decoded slot `self.ready` (`Engine::prepare_next` in `player/src/engine/mod.rs`) is always opened and topped up at neutral (`1000`, `0`), incurring zero time-stretcher overhead on pre-buffered next tracks. At neutral no stretcher exists at all (`Live::stretcher` is `None`).
 4. Passages already admitted keep the rates they were opened at: an outgoing passage finishes as it was playing rather than lurching to `1.00x` for its last seconds.
 
@@ -25,6 +25,7 @@ A passage is considered **warped** whenever `tempo_milli != 1000 || pitch_cents 
 1. While `self.sounding_warped()` is `true`, playback is treated as playing with the music rather than listening to a passage.
 2. In `Engine::record_play` (`player/src/engine/persist.rs`), whenever it is `true`, `self.heard_from` is cleared and the function returns early without adding to `self.heard_ms` and without recording a play in `PlayerStore`.
 3. When it is `false` again, normal `heard_ms` accumulation resumes from the next position sampled; the span crossed while warped is never credited.
+4. **Not yet as intended — see §6.** A passage that leaves having been heard mostly warped falls short of the play threshold, and `record_play` then records it as a `Skip` rejection, which the Director honours `[SPEC-PLAY-050]`.
 
 ---
 
@@ -46,7 +47,7 @@ A passage is considered **warped** whenever `tempo_milli != 1000 || pitch_cents 
 1. **Immediate cut on a loop change**: Because the decoder runs a stream ring plus the ~14 s `OutputRing` ahead of the ear `[REQ-AUD-158]` — some 30 s — audio decoded under the loop as it was is already queued. Activating `B` when the decoder has already passed `b_ms` or the audible position lies outside `[a_ms, b_ms)`, and **any** change to an active loop (moving `A` or `B`, or clearing it), cuts the ring (`Engine::cut_for_warp_change`, a 40 ms fade), returns any admitted incoming passage from `self.live` to the head of the queue, and re-seeks `self.live[0]` — to the current audible millisecond if it is inside the new loop, else to `a_ms`.
 2. **Decoder wrap & micro-crossfade**: In `Engine::top_up()`, when `ab_loop` is active and `l.dec.position_frames()` reaches `b_ms`, the decoded packet is truncated at `b_ms`, the next 10 ms past `B` are kept (decoding one more packet if the first ended inside them), `l.dec.seek_ms(a_ms)` is called, and the kept audio is crossfaded **equal-power over 10 ms** into the start of `A`. The seam is made in the decoded audio, before the stretcher and resampler, so both see one continuous signal and neither is reset at it. With nothing past `B` to fade from (the passage ended there), `B` is faded out and `A` faded in instead.
 3. **Position across the seam**: the wrap is queued on `Live::wraps` as `(b_ms, a_ms)`. `Live::record_pushed_frames` keeps a linear clock of pushed output frames (`frames × tempo_milli / rate`); when it reaches `b_ms` it continues from `a_ms` and starts a new span, which `take_mixed_spans` hands to `Timeline::record` as a new `Segment` anchored at `a_ms`. The clock reaches `b_ms` exactly when the audio up to `B` has come out of the stretcher and resampler, wherever it was when the decoder jumped.
-4. **Suppression of passage `fade_out` and auto-advance**: While `ab_loop.is_active()` is `true`, `Engine::advance` does not admit the next passage at `lead_out_ms`, and `Stream::suppress_fade_out` in `player/src/mixer.rs` disables the passage's end-of-track `fade_out` envelope.
+4. **Suppression of passage `fade_out` and auto-advance**: While `ab_loop.is_active()` is `true`, `Engine::admit_due` admits no next passage, and `Stream::suppress_fade_out` in `player/src/mixer.rs` disables the passage's end-of-track `fade_out` envelope. A loop therefore holds its passage until it is cleared or the listener skips.
 
 ---
 
@@ -76,14 +77,16 @@ When `Command::SetTempo` or `Command::SetPitch` changes `tempo_milli` or `pitch_
    ```
 2. **Segment non-coalescing across tempo changes**: `Timeline::record` requires `last.tempo_milli == s.tempo_milli` before merging adjacent segments, ensuring a mid-passage tempo adjustment starts a new `Segment` with the updated slope.
 3. **`Engine::played_ms` and `audible_ms` (`player/src/engine/mod.rs`)**: `Live` records pushed audio as spans of `(frames, at_ms, tempo_milli)`; mixing consumes them (`take_mixed_spans`), so `played_ms` is the passage position at the end of the last mixed span (`last_mixed_end_ms`), correct across tempo changes and loop wraps. `audible_ms` reads the `Timeline` at the device's read position when it names this admission, and otherwise subtracts the ring's depth scaled by tempo.
-4. **Tempo-scaled `Stream` envelope (`player/src/mixer.rs`)**: `Stream::gain_at` advances its envelope position by passage frames consumed (`frames * tempo_milli / 1000`) rather than raw stretched output frames, so `0.25x` tempo does not trigger `fade_out` at 25% of the passage and `4.0x` tempo still reaches `fade_out` at the end of the passage.
+4. **Tempo-scaled `Stream` envelope (`player/src/mixer.rs`)**: `Stream::push` advances its envelope position by passage frames consumed (`frames * tempo_milli / 1000`, the remainder kept in `milli_rem`) rather than raw stretched output frames, so `0.25x` tempo does not trigger `fade_out` at 25% of the passage and `4.0x` tempo still reaches `fade_out` at the end of the passage.
+
+**`[SPEC-TPL-080]` Cost, measured.** On `lp3-wifi` (Pi 3 B, 44.1 kHz), 2026-10-22, the player's share of one core, each setting held inside a loop so a track change could not reset it: 4.4–4.8% at neutral; 7.8–9.2% with a loop alone; 21–24% at `0.25x` and `0.5x`; 24–27% at `1.25x` and `2.0x`; 31% at `4.0x`; 21% at −12 st and 36% at +3 st; 28–31% at `1.5x`, −5 st with the equalizer; and 55% — 17% of the whole machine — at `4.0x`, +12 st with the equalizer. Resident memory stayed within 130–143 MB, peak 179 MB, set at start-up; 64.5 °C at most, never throttled; no underruns once `[SPEC-TPL-060]`'s cushion was in.
 
 ---
 
 ## 4. Echo Suspension & Automatic Resumption
 
 **`[SPEC-TPL-100]` Mutual Echo suspension under `Voided::Warped` and automatic resync.**
-Synchronized multi-room Echo playback (`player/src/echo.rs`, `player/src/echo_client.rs`) requires a 1:1 linear mapping between passage time and wall-clock time. Whenever either the followed master or the following node is warped (`is_warped()`), Echo synchronization suspends cleanly to independent playback:
+Synchronized multi-room Echo playback (`player/src/echo.rs`, `player/src/echo_client.rs`) requires a 1:1 linear mapping between passage time and wall-clock time. Whenever either the followed master or the following node is warped, Echo synchronization suspends cleanly to independent playback:
 1. **Master side (`player/src/engine/mod.rs`)**:
    - `Voided` (`player/src/echo.rs`) adds `Voided::Warped`.
    - `Engine::tick` calls `self.update_echo_basis()` **before** `self.publish()`.
@@ -91,7 +94,7 @@ Synchronized multi-room Echo playback (`player/src/echo.rs`, `player/src/echo_cl
    - A warp change is a cut, and voids the basis as `Voided::Skip` exactly as a seek does; `advance_shown` re-establishes it once the re-primed audio is heard `[GDE-ARC-066]`. So returning to neutral by command re-anchors when the new audio sounds, not at the command.
    - When the warped tail of a track change has played out (`voided_by() == Some(Voided::Warped)` and no longer `sounding_warped()`), `update_echo_basis` calls `self.echo.basis.establish()` so `publish()` emits a fresh `seq` and `anchor` from `self.air_position()`.
 2. **Follower side (`player/src/echo_client.rs`)**:
-   - At the top of the WebSocket message loop in `echo_client::run`—**before** `adopt_queue` and `act` (which would otherwise return early when `anchor` is `None`)—the follower checks whether `st.voided_by == Some(Voided::Warped)` on the master or `local_snap.is_warped()` on the follower itself.
+   - At the top of the WebSocket message loop in `echo_client::run`—**before** `adopt_queue` and `act` (which would otherwise return early when `anchor` is `None`)—and again at the top of `act`, `check_warp_suspension` asks whether `st.voided_by == Some(Voided::Warped)` on the master, or whether this node's own published `tempo_milli`, `pitch_cents` or `ab_loop` is non-neutral. The follower reads its controls, not the master's notion of a warped tail.
    - **While suspended (`fs.suspended_warp == true`)**: The follower keeps the WebSocket open, skips `adopt_queue` and `act` so its warm `Director` `[GDE-ECHO-500]` continues playing and topping up its own queue independently, sends `Command::SetEchoRate(0.0)`, clears `fs.rate`, `fs.filtered`, `fs.landing`, `fs.corrected`, `fs.mid_joined`, `fs.applied_ppm` and `fs.queue`, and sets `follow_status` to `"Echo suspended (tempo, pitch, or loop active); playing independently."`
    - **On return to neutral**: The follower sets the existing `fs.want_rejoin`, resumes `adopt_queue` and `act`, and so forces `join_mid_passage` in `act` even when `head == Some(a.passage_id)` — `want_rejoin` already means "re-place even a node that is near", which is the case here: master and follower positions within the same passage diverged during the warp.
 
@@ -108,6 +111,18 @@ Routes in `player/src/web/mod.rs` and `player/src/web/control.rs`:
 - `POST /pitch/:cents` — clamps `cents` to `-1200..=1200` (a leading `+` is accepted), sends `Command::SetPitch`, returns `202 Accepted`; only a value that is not a number is refused, `400`.
 - `POST /loop/a/:ms`, `POST /loop/b/:ms`, `POST /loop/clear` — sends `SetLoopA`, `SetLoopB`, or `ClearLoop`, returns `202 Accepted`.
 In `player/src/web/skins/lempi/skin.js` and `player/src/web/core.js`, the Tempo slider/presets (`0.25x–4.0x` + `1.0x` reset), Pitch slider/semitone steppers (`−12..+12 st` + `0 st` reset), and `A` / `B` / `Clear` loop controls (with visual `A–B` span markers on the passage seek bar) are gated by `s.can_tempo_pitch` and `s.can_ab_loop` and guarded with `changed(...)` for zero DOM churn.
+
+---
+
+## 6. Open
+
+Found reviewing the build against `lp3-wifi`, 2026-10-22.
+
+- **A warped play is recorded as a skip.** Shown by test the same evening: a passage played through to its natural end at `1.25x` left a `Skip` rejection in the store, which suppresses it from selection `[SPEC-PLAY-050]`. Practising a song with a loop and moving on does the same. Working with a passage should be neither a play nor a rejection: a departure from a passage that was ever `sounding_warped()` should skip `note_rejection`.
+- **Nothing on the device's own screen.** `fbui` shows no tempo, pitch or loop, and a loop holds its passage until cleared (`[SPEC-TPL-030]`), so a loop set from a phone on `lp3-wifi` plays on with no sign there and can be cleared only from a browser.
+- **The stretcher is unheard at its extremes.** Listened to on `lp3-wifi` through MIDDLETON and judged as expected; `0.25x`, `4.0x` and ±12 st were measured but not listened to. `FLUX_ONSET` (`0.35`) is reasoned, not tuned on music, and each channel's phases advance separately except at an onset.
+- **A warp cut works on the engine thread.** The cushion's decode (up to 96 top-ups) runs before the cut, synchronously, and the 1 s overlay is mixed into the output ring under its lock — as a skip's 1.5 s overlay already is. One missed ring lock was logged during the burst replay on `lp3-wifi`.
+- **Echo suspension has not been run between two nodes.** Its tests are the engine's and the follower's own, in isolation.
 
 ---
 

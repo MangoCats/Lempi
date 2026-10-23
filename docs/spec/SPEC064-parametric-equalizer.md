@@ -14,16 +14,17 @@ Defines a real-time 5-band parametric graphic equalizer evaluated in the audio o
 ## 1. Requirements & Placement in the Audio Path
 
 **`[SPEC-EQ-010]` Real-time callback placement downstream of the 14-second output ring.**
-Like master volume `[REQ-AUD-152]`, the parametric equalizer is a listening control rather than a property of an individual passage. Applying equalization before `OutputRing` submission would delay every adjustment by the ring's ~14-second depth and bake outgoing filter settings into crossfading passages. The equalizer therefore runs inside `fill()` in `player/src/output.rs` on samples read from `OutputState::ring`, immediately before `Volume::apply`.
+Like master volume `[REQ-AUD-152]`, the parametric equalizer is a listening control rather than a property of an individual passage. Applying equalization before `OutputRing` submission would delay every adjustment by the ring's ~14-second depth and bake outgoing filter settings into crossfading passages. The equalizer therefore runs inside `fill()` in `player/src/output.rs` on samples read from `OutputState::ring`, immediately before the master volume multiply (`volume.get()`).
 
 **`[SPEC-EQ-015]` Lock-free, zero-allocation callback execution outside the ring mutex.**
-1. The equalizer state (`Arc<EqProcessor>`) resides on `OutputRing` beside `volume: Arc<Volume>` and `clock: Arc<AudioClock>`, outside `Mutex<OutputState>`.
-2. In `fill()`, the `MutexGuard<OutputState>` is released as soon as samples are copied from `s.ring` and underrun/declick counters are updated. Both `eq.apply(&mut out[..got])` and `volume.apply(&mut out[..got])` execute **outside** the ring mutex so filter evaluation never extends lock hold time or increases `lock_failures`.
+1. The equalizer state (`eq: Arc<EqProcessor>`) resides on `OutputRing` beside `volume: Volume` and `clock: FrameClock`, outside `Mutex<OutputState>`.
+2. In `fill()`, the `MutexGuard<OutputState>` is dropped as soon as samples are copied from `s.ring`; the underrun and declick counters that follow are atomics on `Counts` and need no lock. `eq.apply(&mut out[..got])` and the volume multiply run **outside** the ring mutex, so filter evaluation never extends lock hold time or increases `lock_failures`.
 3. The callback path performs zero heap allocations, zero system calls, and zero blocking locks. Filter coefficients are precomputed on the control/engine thread and published through a seqlock: an odd/even generation counter with an explicit `Release` fence after the odd mark and an `Acquire` fence before the re-check. **The fences are required, not belt and braces** — without them the relaxed coefficient stores may be observed out of order on aarch64, which every appliance runs, and a reader could accept a half-written set. The callback's own filter state sits behind a `Mutex` only it ever takes, with `try_lock`.
 4. A coefficient change preserves the per-channel state variables (`ic1eq`, `ic2eq`), so a live drag is continuous. Switching the equalizer in or out crossfades dry and filtered over 20 ms, and the applied preamp glides (5 ms time constant) toward its target: both would otherwise be a level step mid-waveform — a click — whenever the preamp is non-zero.
+5. Measured on `lp3-wifi` (Pi 3 B, 44.1 kHz), 2026-10-22: with the equalizer on, the player used 7.5–10.1% of one core, against 4.4–4.8% with it off.
 
 **`[SPEC-EQ-020]` Stream sample-rate and channel adaptation.**
-When `Output::open_once` in `player/src/output.rs` negotiates the device's actual `sample_rate` and `channels` via `pick_config`, it informs `ring.eq.set_stream_format(sample_rate, channels)`. Filter coefficients are normalized against the active device sample rate so frequency placement remains accurate across 44.1 kHz, 48 kHz, and 96 kHz outputs.
+When `Output::attach_with` in `player/src/output.rs` has negotiated the device's actual `sample_rate` and `channels` (`pick_config`), it informs `ring.eq.set_stream_format(sample_rate, channels)` before building the stream, so a reopen onto a different device keeps the profile and re-derives its coefficients. Filter coefficients are normalized against the active device sample rate so frequency placement remains accurate across 44.1 kHz, 48 kHz, and 96 kHz outputs.
 
 ---
 
@@ -41,7 +42,7 @@ Each profile consists of five cascaded State Variable Filter stages (`bands: [Eq
 | 5 | `HighShelf` | 12,000.0 | 20.0 – 20,000.0 | 0.707 | 0.10 – 18.00 | 0.0 | −12.0 … +12.0 |
 
 **`[SPEC-EQ-035]` Cytomic Linear Trap Integrated State Variable Filter (SVF) formulation.**
-Each band is evaluated using Andrew Simper's (Cytomic) trapezoidal-integrated SVF structure (`g = tan(pi * freq_hz / sample_rate)`, `k = 1 / q`, `A = 10^(gain_db / 40)`):
+Each band is evaluated using Andrew Simper's (Cytomic) trapezoidal-integrated SVF structure, with `A = 10^(gain_db / 40)` and `g = tan(pi * freq_hz / sample_rate)` — divided by $\sqrt{A}$ for a low shelf and multiplied by it for a high shelf — and `k = 1 / q`, or `1 / (q · A)` for a peaking band:
 - Unlike Direct Form I biquads, trapezoidal SVF state variables represent physical integrator states and remain unconditionally stable when `freq_hz`, `q`, and `gain_db` are swept continuously in real time.
 - Any band whose `freq_hz >= 0.495 * sample_rate` is clamped below Nyquist (`0.495 * sample_rate`) prior to tangent evaluation.
 - When `enabled == false` or all five bands and effective preamp are at `0.0 dB`, `EqProcessor::apply` takes a zero-cost bypass fast-path leaving samples bit-identical — once the 20 ms switch-out ramp of `[SPEC-EQ-015]` has finished.
@@ -70,6 +71,7 @@ Equalizer profiles are associated with each output sink using `[SPEC-POV-030]`'s
 **`[SPEC-EQ-060]` Automatic profile restoration on startup and output handoff.**
 1. When the engine is given its store (`Engine::attach_store` in `player/src/engine/mod.rs`), it loads `store.load_output_eq(&store.get_active_output())` and applies it to `OutputRing::eq`.
 2. Whenever the active output changes in `player/src/web/bluetooth.rs` (`speaker_verb_on` for `Use`, `Pair`, `Forget` fallback, and `use_dac`), the target output's `EqConfig` is loaded from `PlayerStore` and dispatched via `Command::SetEq(target_eq)` alongside `Command::SetVolume(target_amp)`.
+3. Only those routes change the active output. An appliance's speaker keeper (`lempi-speaker`) moves the sound by asking the player to reopen its output (`/command/reopen-output`), which changes neither the stored active output nor the profile — exactly as for per-output volume `[SPEC-POV-030]`. See §5.
 
 ---
 
@@ -88,7 +90,18 @@ In `player/src/web/skins/lempi/skin.html`, `player/src/web/skins/lempi/skin.js`,
 1. Gated by `snapshot.can_eq` (hidden when `can_eq` is `false`).
 2. Displays an HTML5 `<canvas>` plotting log-frequency (`20 Hz` to `20 kHz`) on the horizontal axis and gain (`−15 dB` to `+15 dB`) on the vertical axis, rendering the composite response curve and 5 draggable band control nodes.
 3. Dragging a node horizontally adjusts `freq_hz`, dragging vertically adjusts `gain_db`, and mouse-wheel / numeric inputs adjust `q`, `freq_hz`, `gain_db`, `preamp_db`, `auto_preamp`, and `enabled`, plus a **Flat / Reset** button that restores the default bands of `[SPEC-EQ-030]`. A press grabs the node under the pointer and nothing else. Changes are sent while they are made, never more than one request in flight.
-4. All DOM updates inside `draw()` are guarded by `changed(...)`, `setText`, and `setHidden` so repeated WebSocket snapshots with unchanged `eq` state cause zero DOM churn in `build/verify-skins.js`.
+4. All DOM updates in `renderAudioControls()` are guarded by `changed(...)`, `setText`, and `setHidden` so repeated WebSocket snapshots with unchanged `eq` state cause zero DOM churn in `build/verify-skins.js`.
+
+---
+
+## 5. Open
+
+Found reviewing the build against `lp3-wifi`, 2026-10-22.
+
+- **The profile follows the stored active output, not the sink that is sounding.** On `lp3-wifi` the stored output was `bt:` MIDDLETON while the speaker was away and the keeper had the jack playing, so MIDDLETON's profile — and volume — applied to the jack. Per-output volume has the same gap `[SPEC-POV-030]`; closing it means the player learning which sink it actually opened.
+- **A failed save is reported as saved.** `POST /audio/eq` ignores the result of `save_output_eq` and answers `200`; the profile is then live but forgotten at the next restart.
+- **The curve is drawn at 48 kHz**, whatever the device runs at.
+- **`LowPass` and `HighPass` are reachable only through the API.** Tested, but no control offers them; keep them deliberately or remove them.
 
 ---
 

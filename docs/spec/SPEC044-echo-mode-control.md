@@ -128,8 +128,11 @@ non-neutral Tempo, non-zero Pitch, or an active A-B Loop (`[SPEC-TPL-100]` in
 `Voided::Warped` and the follower suspends queue adoption and clock tracking,
 playing its own warm Director queue independently while keeping the WebSocket
 open. When both nodes return to neutral (`1.0x` tempo, `0` pitch, loop cleared
-— including on track change), the master re-establishes its basis and the
-follower automatically re-adopts the master's queue and rejoins mid-passage.
+— including on track change), the master re-establishes its basis once neutral
+audio is what it is sounding: after a warp change, when the re-primed audio is
+heard, as after a seek; after a track change, when the warped passage's tail
+has left the ring, up to ~14 s later. The follower then re-adopts the master's
+queue and rejoins mid-passage.
 
 **`[SPEC-ECHO-050]` A node must refuse to follow itself.** Its own address in
 that field produces a socket to its own snapshot, a schedule derived from its
