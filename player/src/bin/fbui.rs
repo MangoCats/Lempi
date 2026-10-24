@@ -1545,6 +1545,350 @@ fn differs_ignoring_position(a: &ClientSnapshot, b: &ClientSnapshot) -> bool {
     a2 != *b
 }
 
+#[tokio::main]
+async fn main() {
+    let args = lempi_player::cli::specs::fbui::SPEC.parse();
+    let force_calibrate = args.has(&lempi_player::cli::specs::fbui::CALIBRATE);
+    let url = args.need(&lempi_player::cli::specs::fbui::URL).to_string();
+
+    let mut display = match FbDisplay::open(&FbDisplay::find_panel_path()) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::error!("fbui: {e}");
+            std::process::exit(1);
+        }
+    };
+    // Read out first: inside tracing's macros `display` names its own
+    // formatting helper, which shadows this variable.
+    let (width, height) = (display.width, display.height);
+    tracing::info!("fbui: {width}x{height} framebuffer opened");
+
+    // Calibrate once, re-triggerable, before anything else touches the
+    // screen `[SPEC-FBUI-050]` -- resolves the "what happens before
+    // calibration has ever run" gap `[SPEC036]` §7 named: first boot has
+    // no file at CALIBRATION_PATH, so this always runs then, with no
+    // separate manual step for anyone to forget. Run synchronously here,
+    // before any async work starts (no websocket connection exists yet,
+    // nothing else is scheduled) -- blocking the sole worker thread on a
+    // blocking file read is exactly correct at this specific point, not
+    // a shortcut around doing it properly.
+    let calibration: Option<AffineCalibration> = if force_calibrate
+        || AffineCalibration::load(CALIBRATION_PATH).is_none()
+    {
+        let touch_path = find_touch_path();
+        match TouchDevice::open(&touch_path) {
+            Ok(mut touch) => match run_calibration(&mut display, &mut touch) {
+                Ok(cal) => {
+                    match cal.save(CALIBRATION_PATH) {
+                        Ok(()) => tracing::info!("fbui: calibration saved to {CALIBRATION_PATH}"),
+                        Err(e) => tracing::error!("fbui: could not save calibration: {e}"),
+                    }
+                    Some(cal)
+                }
+                Err(e) => {
+                    tracing::warn!("fbui: calibration aborted: {e}");
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::warn!("fbui: could not open {touch_path} for calibration: {e}");
+                None
+            }
+        }
+    } else {
+        tracing::info!("fbui: using existing calibration at {CALIBRATION_PATH}");
+        AffineCalibration::load(CALIBRATION_PATH)
+    };
+
+    // Touch is read on its own OS thread, blocking on the same evdev
+    // protocol calibration above already used, and forwarded to `main`'s
+    // async loop over a channel -- a blocking file read has no place
+    // sharing this binary's one async worker thread once that loop also
+    // has a websocket to service concurrently, unlike calibration's
+    // one-time, nothing-else-running use of the same call above.
+    let (touch_tx, mut touch_rx) = tokio::sync::mpsc::unbounded_channel::<(f64, f64)>();
+    std::thread::spawn(move || loop {
+        // Re-resolved on every retry, not just once -- cheap (a handful of
+        // sysfs reads), and robust to a device that enumerates late rather
+        // than one that moved.
+        let touch_path = find_touch_path();
+        match TouchDevice::open(&touch_path) {
+            Ok(mut td) => loop {
+                match td.wait_for_tap() {
+                    Ok(pos) => {
+                        if touch_tx.send(pos).is_err() {
+                            return; // main has exited; nothing left to report to
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("fbui: touch read error: {e}");
+                        break;
+                    }
+                }
+            },
+            Err(e) => tracing::error!("fbui: could not open {touch_path}: {e}"),
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    });
+
+    // An explicit "disconnected" render before ever trying to connect, so
+    // a `lempi` that is not up yet shows an honest state rather than
+    // whatever garbage was in video memory at boot -- the same state
+    // `render_disconnected` also shows on every later drop, resolving
+    // `[SPEC036]` §7's reconnection-state gap for both cases now, not
+    // just this first one.
+    let _ = render_disconnected(&mut display);
+
+    let http_addr = http_addr_from_ws_url(&url);
+    let mut page = Page::NowPlaying;
+    let mut last: Option<ClientSnapshot> = None;
+    // Set in the past so the 5-second position-only throttle below is already
+    // expired when the first snapshot arrives. Belt-and-braces: `last` is
+    // `None` for that snapshot and the match below redraws unconditionally on
+    // it anyway.
+    //
+    // `checked_sub`, not `-`: `Instant` counts from boot, and `Instant -
+    // Duration` panics on underflow rather than saturating, so the plain
+    // subtraction is a panic in any process that starts within five seconds of
+    // boot. `fbui.service` starts at boot, on a node built around audio at
+    // power-on, which makes that window narrow but real -- and the same
+    // construct did fire in the engine's own tests on 2026-09-21. Saturating
+    // to now costs at most one throttled position redraw.
+    let mut last_position_redraw = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(5))
+        .unwrap_or_else(std::time::Instant::now);
+    // Keyed by passage_id, not refetched on every push -- `None` inside
+    // the tuple is cached too, so a passage confirmed to have no art (most
+    // of this all-radio sample library) is not re-requested on every
+    // ~1s snapshot push for as long as it keeps playing.
+    let mut art_cache: Option<(i64, Option<Vec<Rgb565>>)> = None;
+    // The last press of the pairing button and what it did, shown beside the
+    // button for `PAIR_NOTE_SECS` `[SPEC-NSH-170]`.
+    let mut pair_note: Option<(bool, std::time::Instant)> = None;
+    loop {
+        tracing::info!("fbui: connecting to {url}");
+        let ws = match tokio_tungstenite::connect_async(&url).await {
+            Ok((ws, _)) => ws,
+            Err(e) => {
+                tracing::warn!("fbui: connect failed: {e}; retrying in 3s");
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                continue;
+            }
+        };
+        tracing::info!("fbui: connected");
+        let (_, mut read) = ws.split();
+
+        // Any taps that queued up while disconnected are stale by the time
+        // a connection succeeds -- a button press firing a command the
+        // instant reconnection completes would be surprising, not useful.
+        while touch_rx.try_recv().is_ok() {}
+
+        loop {
+            tokio::select! {
+                msg = read.next() => {
+                    let msg = match msg {
+                        Some(Ok(m)) => m,
+                        Some(Err(e)) => {
+                            tracing::warn!("fbui: ws error: {e}");
+                            break;
+                        }
+                        None => break, // stream ended
+                    };
+                    let text = match msg.into_text() {
+                        Ok(t) => t,
+                        Err(_) => continue, // not a text frame; nothing this phase reads
+                    };
+                    let snap: ClientSnapshot = match serde_json::from_str(&text) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::warn!("fbui: snapshot parse failed: {e}");
+                            continue;
+                        }
+                    };
+                    // Throttled to once per 5s for a position-only change
+                    // (the once-a-second push while a track plays), full
+                    // speed for anything else -- a play/pause, skip,
+                    // programme, volume, or queue change always redraws
+                    // at once.
+                    let due = last_position_redraw.elapsed() >= std::time::Duration::from_secs(5);
+                    let should_redraw = match &last {
+                        None => true,
+                        Some(l) => differs_ignoring_position(l, &snap) || due,
+                    };
+                    if should_redraw {
+                        // Refetched only on an actual passage change, not on
+                        // every push -- position_ms alone changing must not
+                        // trigger this `[SPEC-FBUI-040]`'s "once per track"
+                        // reasoning is what makes a full bitmap blit
+                        // affordable at all. Awaited inline rather than
+                        // spawned+channeled: this only blocks the loop on
+                        // the one push where the track actually changed, not
+                        // on the far more frequent position-only updates.
+                        if art_cache.as_ref().map(|(id, _)| *id) != snap.passage_id {
+                            art_cache = match snap.passage_id {
+                                Some(pid) => {
+                                    let started = std::time::Instant::now();
+                                    let art = fetch_art(http_addr.clone(), pid).await;
+                                    tracing::info!("fbui: art fetch+decode for passage {pid} took {:?} ({})", started.elapsed(), if art.is_some() { "found" } else { "none" });
+                                    Some((pid, art))
+                                }
+                                None => None,
+                            };
+                        }
+                        let art = art_cache.as_ref().and_then(|(_, px)| px.as_deref());
+
+                        // Timed, not just called `[SPEC036]` §8 phase 7: this
+                        // is already a full-panel write every time (`render`
+                        // fills the whole 480x320 canvas unconditionally, not
+                        // a true per-region diff at the framebuffer level),
+                        // so its own latency is the real answer to "how long
+                        // does one full bitmap blit take" that phase 7 needs
+                        // before deciding whether album art fits -- measured
+                        // against real hardware, not estimated from the SPI
+                        // clock rate on paper.
+                        let started = std::time::Instant::now();
+                        let result = render_page(&mut display, page, &snap, art, pair_shown(pair_note));
+                        let elapsed = started.elapsed();
+                        if elapsed > std::time::Duration::from_millis(20) {
+                            tracing::info!("fbui: render took {elapsed:?}");
+                        }
+                        if let Err(e) = result {
+                            // Infallible today, per DrawTarget::Error above --
+                            // kept as a real match rather than `.unwrap()` so
+                            // a future fallible backend (the `drm` path
+                            // `[SPEC-FBUI-025]` leaves open) fails loudly
+                            // here instead of panicking.
+                            tracing::warn!("fbui: render failed: {e:?}");
+                        }
+                        last_position_redraw = std::time::Instant::now();
+                    }
+                    last = Some(snap);
+                }
+                Some((rx, ry)) = touch_rx.recv() => {
+                    let Some(cal) = &calibration else { continue };
+                    let (sx, sy) = cal.apply(rx, ry);
+                    let snap = last.clone().unwrap_or_default();
+                    match hit_test(page, sx, sy, &snap) {
+                        Some(zone @ (Zone::Gear | Zone::Audio)) => {
+                            // Each icon toggles its own page against Now
+                            // Playing, from wherever it is pressed.
+                            let own = if zone == Zone::Gear { Page::Settings } else { Page::Audio };
+                            page = if page == own { Page::NowPlaying } else { own };
+                            let art = art_cache.as_ref().and_then(|(_, px)| px.as_deref());
+                            if let Err(e) = render_page(&mut display, page, &snap, art, pair_shown(pair_note)) {
+                                tracing::warn!("fbui: render failed: {e:?}");
+                            }
+                        }
+                        // The Audio page's controls `[SPEC-FBUI-110]`. Each
+                        // sends and does not redraw: the snapshot that follows
+                        // is what the page shows, so it shows what the player
+                        // did rather than what was asked.
+                        Some(zone @ (Zone::TempoDown | Zone::TempoNeutral | Zone::TempoUp)) => {
+                            let t = match zone {
+                                Zone::TempoDown => tempo_step(snap.tempo(), false),
+                                Zone::TempoUp => tempo_step(snap.tempo(), true),
+                                _ => 1000,
+                            };
+                            tokio::spawn(http_post(http_addr.clone(), format!("/tempo/{t}")));
+                        }
+                        Some(zone @ (Zone::PitchDown | Zone::PitchNeutral | Zone::PitchUp)) => {
+                            let c = match zone {
+                                Zone::PitchDown => pitch_step(snap.pitch_cents, false),
+                                Zone::PitchUp => pitch_step(snap.pitch_cents, true),
+                                _ => 0,
+                            };
+                            tokio::spawn(http_post(http_addr.clone(), format!("/pitch/{c}")));
+                        }
+                        // Where the listener is now, from the latest snapshot:
+                        // at most a push old, as the browser's own marks are.
+                        Some(Zone::LoopA) => {
+                            tokio::spawn(http_post(http_addr.clone(), format!("/loop/a/{}", snap.position_ms)));
+                        }
+                        Some(Zone::LoopB) => {
+                            tokio::spawn(http_post(http_addr.clone(), format!("/loop/b/{}", snap.position_ms)));
+                        }
+                        Some(Zone::LoopClear) => {
+                            tokio::spawn(http_post(http_addr.clone(), "/loop/clear".to_string()));
+                        }
+                        Some(Zone::EqPreset(name)) => {
+                            tokio::spawn(http_post(http_addr.clone(), format!("/audio/eq/preset/{name}")));
+                        }
+                        Some(Zone::PlayPause) => {
+                            let playing = snap.playing;
+                            let name = if playing { "pause" } else { "play" };
+                            tokio::spawn(http_post(http_addr.clone(), format!("/command/{name}")));
+                        }
+                        Some(Zone::Skip) => {
+                            tokio::spawn(http_post(http_addr.clone(), "/command/skip".to_string()));
+                        }
+                        Some(Zone::Program(id)) => {
+                            // Never "auto" -- this appliance has no realtime
+                            // clock and time-of-day selection has no
+                            // relationship to a truck's driving hours. Only
+                            // ever a specific id, persisted server-side by
+                            // `set_program` so it survives a restart
+                            // `[SPEC-DIR-185]`.
+                            tokio::spawn(http_post(http_addr.clone(), format!("/program/{id}")));
+                        }
+                        Some(Zone::VolUp) => {
+                            let db = snap.volume_db + 3.0;
+                            tokio::spawn(http_post(http_addr.clone(), format!("/volume/{db}")));
+                        }
+                        Some(Zone::VolDown) => {
+                            let db = snap.volume_db - 3.0;
+                            tokio::spawn(http_post(http_addr.clone(), format!("/volume/{db}")));
+                        }
+                        Some(Zone::Seek) => {
+                            if snap.duration_ms > 0 {
+                                let frac = ((sx - 8.0) / (display.width as f64 - 16.0)).clamp(0.0, 1.0);
+                                let ms = (frac * snap.duration_ms as f64).round() as u64;
+                                // Named, so a touch that races a track change
+                                // is refused rather than moving the next one.
+                                let to = match snap.passage_id {
+                                    Some(id) => format!("/seek/{id}/{ms}"),
+                                    None => format!("/seek/{ms}"),
+                                };
+                                tokio::spawn(http_post(http_addr.clone(), to));
+                            }
+                        }
+                        Some(Zone::QueueSooner(qid)) => {
+                            tokio::spawn(http_post(http_addr.clone(), format!("/queue/{qid}/sooner")));
+                        }
+                        Some(Zone::QueueLater(qid)) => {
+                            tokio::spawn(http_post(http_addr.clone(), format!("/queue/{qid}/later")));
+                        }
+                        Some(Zone::QueueRemove(qid)) => {
+                            tokio::spawn(http_post(http_addr.clone(), format!("/queue/{qid}/remove")));
+                        }
+                        Some(Zone::Pair) => {
+                            // Awaited, not fired and forgotten: the person at
+                            // the screen is told what the press did. It is a
+                            // sudo and a pkill, well under a second.
+                            let ok = tokio::task::spawn_blocking(open_pairing_window).await.unwrap_or(false);
+                            pair_note = Some((ok, std::time::Instant::now()));
+                            if let Err(e) = render_settings(&mut display, &snap, pair_shown(pair_note)) {
+                                tracing::warn!("fbui: render failed: {e:?}");
+                            }
+                        }
+                        None => {}
+                    }
+                }
+            }
+        }
+        tracing::info!("fbui: disconnected; reconnecting in 3s");
+        let _ = render_disconnected(&mut display);
+        // Cleared, not carried over: the next successful snapshot must
+        // render even if it happens to be identical to the last one shown
+        // before this drop -- otherwise the diff check in the loop above
+        // would see no change and leave this disconnected screen up
+        // indefinitely despite `lempi` being back and pushing real data
+        // `[SPEC036]` §7's reconnection-state gap, the actual bug this
+        // phase exists to close, not just the missing message on its own.
+        last = None;
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::AffineCalibration;
@@ -1912,349 +2256,5 @@ mod tests {
 
         let c = snap(1000, "Different Title");
         assert!(super::differs_ignoring_position(&a, &c), "a real change must still count, regardless of position");
-    }
-}
-
-#[tokio::main]
-async fn main() {
-    let args = lempi_player::cli::specs::fbui::SPEC.parse();
-    let force_calibrate = args.has(&lempi_player::cli::specs::fbui::CALIBRATE);
-    let url = args.need(&lempi_player::cli::specs::fbui::URL).to_string();
-
-    let mut display = match FbDisplay::open(&FbDisplay::find_panel_path()) {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::error!("fbui: {e}");
-            std::process::exit(1);
-        }
-    };
-    // Read out first: inside tracing's macros `display` names its own
-    // formatting helper, which shadows this variable.
-    let (width, height) = (display.width, display.height);
-    tracing::info!("fbui: {width}x{height} framebuffer opened");
-
-    // Calibrate once, re-triggerable, before anything else touches the
-    // screen `[SPEC-FBUI-050]` -- resolves the "what happens before
-    // calibration has ever run" gap `[SPEC036]` §7 named: first boot has
-    // no file at CALIBRATION_PATH, so this always runs then, with no
-    // separate manual step for anyone to forget. Run synchronously here,
-    // before any async work starts (no websocket connection exists yet,
-    // nothing else is scheduled) -- blocking the sole worker thread on a
-    // blocking file read is exactly correct at this specific point, not
-    // a shortcut around doing it properly.
-    let calibration: Option<AffineCalibration> = if force_calibrate
-        || AffineCalibration::load(CALIBRATION_PATH).is_none()
-    {
-        let touch_path = find_touch_path();
-        match TouchDevice::open(&touch_path) {
-            Ok(mut touch) => match run_calibration(&mut display, &mut touch) {
-                Ok(cal) => {
-                    match cal.save(CALIBRATION_PATH) {
-                        Ok(()) => tracing::info!("fbui: calibration saved to {CALIBRATION_PATH}"),
-                        Err(e) => tracing::error!("fbui: could not save calibration: {e}"),
-                    }
-                    Some(cal)
-                }
-                Err(e) => {
-                    tracing::warn!("fbui: calibration aborted: {e}");
-                    None
-                }
-            },
-            Err(e) => {
-                tracing::warn!("fbui: could not open {touch_path} for calibration: {e}");
-                None
-            }
-        }
-    } else {
-        tracing::info!("fbui: using existing calibration at {CALIBRATION_PATH}");
-        AffineCalibration::load(CALIBRATION_PATH)
-    };
-
-    // Touch is read on its own OS thread, blocking on the same evdev
-    // protocol calibration above already used, and forwarded to `main`'s
-    // async loop over a channel -- a blocking file read has no place
-    // sharing this binary's one async worker thread once that loop also
-    // has a websocket to service concurrently, unlike calibration's
-    // one-time, nothing-else-running use of the same call above.
-    let (touch_tx, mut touch_rx) = tokio::sync::mpsc::unbounded_channel::<(f64, f64)>();
-    std::thread::spawn(move || loop {
-        // Re-resolved on every retry, not just once -- cheap (a handful of
-        // sysfs reads), and robust to a device that enumerates late rather
-        // than one that moved.
-        let touch_path = find_touch_path();
-        match TouchDevice::open(&touch_path) {
-            Ok(mut td) => loop {
-                match td.wait_for_tap() {
-                    Ok(pos) => {
-                        if touch_tx.send(pos).is_err() {
-                            return; // main has exited; nothing left to report to
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("fbui: touch read error: {e}");
-                        break;
-                    }
-                }
-            },
-            Err(e) => tracing::error!("fbui: could not open {touch_path}: {e}"),
-        }
-        std::thread::sleep(std::time::Duration::from_secs(2));
-    });
-
-    // An explicit "disconnected" render before ever trying to connect, so
-    // a `lempi` that is not up yet shows an honest state rather than
-    // whatever garbage was in video memory at boot -- the same state
-    // `render_disconnected` also shows on every later drop, resolving
-    // `[SPEC036]` §7's reconnection-state gap for both cases now, not
-    // just this first one.
-    let _ = render_disconnected(&mut display);
-
-    let http_addr = http_addr_from_ws_url(&url);
-    let mut page = Page::NowPlaying;
-    let mut last: Option<ClientSnapshot> = None;
-    // Set in the past so the 5-second position-only throttle below is already
-    // expired when the first snapshot arrives. Belt-and-braces: `last` is
-    // `None` for that snapshot and the match below redraws unconditionally on
-    // it anyway.
-    //
-    // `checked_sub`, not `-`: `Instant` counts from boot, and `Instant -
-    // Duration` panics on underflow rather than saturating, so the plain
-    // subtraction is a panic in any process that starts within five seconds of
-    // boot. `fbui.service` starts at boot, on a node built around audio at
-    // power-on, which makes that window narrow but real -- and the same
-    // construct did fire in the engine's own tests on 2026-09-21. Saturating
-    // to now costs at most one throttled position redraw.
-    let mut last_position_redraw = std::time::Instant::now()
-        .checked_sub(std::time::Duration::from_secs(5))
-        .unwrap_or_else(std::time::Instant::now);
-    // Keyed by passage_id, not refetched on every push -- `None` inside
-    // the tuple is cached too, so a passage confirmed to have no art (most
-    // of this all-radio sample library) is not re-requested on every
-    // ~1s snapshot push for as long as it keeps playing.
-    let mut art_cache: Option<(i64, Option<Vec<Rgb565>>)> = None;
-    // The last press of the pairing button and what it did, shown beside the
-    // button for `PAIR_NOTE_SECS` `[SPEC-NSH-170]`.
-    let mut pair_note: Option<(bool, std::time::Instant)> = None;
-    loop {
-        tracing::info!("fbui: connecting to {url}");
-        let ws = match tokio_tungstenite::connect_async(&url).await {
-            Ok((ws, _)) => ws,
-            Err(e) => {
-                tracing::warn!("fbui: connect failed: {e}; retrying in 3s");
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                continue;
-            }
-        };
-        tracing::info!("fbui: connected");
-        let (_, mut read) = ws.split();
-
-        // Any taps that queued up while disconnected are stale by the time
-        // a connection succeeds -- a button press firing a command the
-        // instant reconnection completes would be surprising, not useful.
-        while touch_rx.try_recv().is_ok() {}
-
-        loop {
-            tokio::select! {
-                msg = read.next() => {
-                    let msg = match msg {
-                        Some(Ok(m)) => m,
-                        Some(Err(e)) => {
-                            tracing::warn!("fbui: ws error: {e}");
-                            break;
-                        }
-                        None => break, // stream ended
-                    };
-                    let text = match msg.into_text() {
-                        Ok(t) => t,
-                        Err(_) => continue, // not a text frame; nothing this phase reads
-                    };
-                    let snap: ClientSnapshot = match serde_json::from_str(&text) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            tracing::warn!("fbui: snapshot parse failed: {e}");
-                            continue;
-                        }
-                    };
-                    // Throttled to once per 5s for a position-only change
-                    // (the once-a-second push while a track plays), full
-                    // speed for anything else -- a play/pause, skip,
-                    // programme, volume, or queue change always redraws
-                    // at once.
-                    let due = last_position_redraw.elapsed() >= std::time::Duration::from_secs(5);
-                    let should_redraw = match &last {
-                        None => true,
-                        Some(l) => differs_ignoring_position(l, &snap) || due,
-                    };
-                    if should_redraw {
-                        // Refetched only on an actual passage change, not on
-                        // every push -- position_ms alone changing must not
-                        // trigger this `[SPEC-FBUI-040]`'s "once per track"
-                        // reasoning is what makes a full bitmap blit
-                        // affordable at all. Awaited inline rather than
-                        // spawned+channeled: this only blocks the loop on
-                        // the one push where the track actually changed, not
-                        // on the far more frequent position-only updates.
-                        if art_cache.as_ref().map(|(id, _)| *id) != snap.passage_id {
-                            art_cache = match snap.passage_id {
-                                Some(pid) => {
-                                    let started = std::time::Instant::now();
-                                    let art = fetch_art(http_addr.clone(), pid).await;
-                                    tracing::info!("fbui: art fetch+decode for passage {pid} took {:?} ({})", started.elapsed(), if art.is_some() { "found" } else { "none" });
-                                    Some((pid, art))
-                                }
-                                None => None,
-                            };
-                        }
-                        let art = art_cache.as_ref().and_then(|(_, px)| px.as_deref());
-
-                        // Timed, not just called `[SPEC036]` §8 phase 7: this
-                        // is already a full-panel write every time (`render`
-                        // fills the whole 480x320 canvas unconditionally, not
-                        // a true per-region diff at the framebuffer level),
-                        // so its own latency is the real answer to "how long
-                        // does one full bitmap blit take" that phase 7 needs
-                        // before deciding whether album art fits -- measured
-                        // against real hardware, not estimated from the SPI
-                        // clock rate on paper.
-                        let started = std::time::Instant::now();
-                        let result = render_page(&mut display, page, &snap, art, pair_shown(pair_note));
-                        let elapsed = started.elapsed();
-                        if elapsed > std::time::Duration::from_millis(20) {
-                            tracing::info!("fbui: render took {elapsed:?}");
-                        }
-                        if let Err(e) = result {
-                            // Infallible today, per DrawTarget::Error above --
-                            // kept as a real match rather than `.unwrap()` so
-                            // a future fallible backend (the `drm` path
-                            // `[SPEC-FBUI-025]` leaves open) fails loudly
-                            // here instead of panicking.
-                            tracing::warn!("fbui: render failed: {e:?}");
-                        }
-                        last_position_redraw = std::time::Instant::now();
-                    }
-                    last = Some(snap);
-                }
-                Some((rx, ry)) = touch_rx.recv() => {
-                    let Some(cal) = &calibration else { continue };
-                    let (sx, sy) = cal.apply(rx, ry);
-                    let snap = last.clone().unwrap_or_default();
-                    match hit_test(page, sx, sy, &snap) {
-                        Some(zone @ (Zone::Gear | Zone::Audio)) => {
-                            // Each icon toggles its own page against Now
-                            // Playing, from wherever it is pressed.
-                            let own = if zone == Zone::Gear { Page::Settings } else { Page::Audio };
-                            page = if page == own { Page::NowPlaying } else { own };
-                            let art = art_cache.as_ref().and_then(|(_, px)| px.as_deref());
-                            if let Err(e) = render_page(&mut display, page, &snap, art, pair_shown(pair_note)) {
-                                tracing::warn!("fbui: render failed: {e:?}");
-                            }
-                        }
-                        // The Audio page's controls `[SPEC-FBUI-110]`. Each
-                        // sends and does not redraw: the snapshot that follows
-                        // is what the page shows, so it shows what the player
-                        // did rather than what was asked.
-                        Some(zone @ (Zone::TempoDown | Zone::TempoNeutral | Zone::TempoUp)) => {
-                            let t = match zone {
-                                Zone::TempoDown => tempo_step(snap.tempo(), false),
-                                Zone::TempoUp => tempo_step(snap.tempo(), true),
-                                _ => 1000,
-                            };
-                            tokio::spawn(http_post(http_addr.clone(), format!("/tempo/{t}")));
-                        }
-                        Some(zone @ (Zone::PitchDown | Zone::PitchNeutral | Zone::PitchUp)) => {
-                            let c = match zone {
-                                Zone::PitchDown => pitch_step(snap.pitch_cents, false),
-                                Zone::PitchUp => pitch_step(snap.pitch_cents, true),
-                                _ => 0,
-                            };
-                            tokio::spawn(http_post(http_addr.clone(), format!("/pitch/{c}")));
-                        }
-                        // Where the listener is now, from the latest snapshot:
-                        // at most a push old, as the browser's own marks are.
-                        Some(Zone::LoopA) => {
-                            tokio::spawn(http_post(http_addr.clone(), format!("/loop/a/{}", snap.position_ms)));
-                        }
-                        Some(Zone::LoopB) => {
-                            tokio::spawn(http_post(http_addr.clone(), format!("/loop/b/{}", snap.position_ms)));
-                        }
-                        Some(Zone::LoopClear) => {
-                            tokio::spawn(http_post(http_addr.clone(), "/loop/clear".to_string()));
-                        }
-                        Some(Zone::EqPreset(name)) => {
-                            tokio::spawn(http_post(http_addr.clone(), format!("/audio/eq/preset/{name}")));
-                        }
-                        Some(Zone::PlayPause) => {
-                            let playing = snap.playing;
-                            let name = if playing { "pause" } else { "play" };
-                            tokio::spawn(http_post(http_addr.clone(), format!("/command/{name}")));
-                        }
-                        Some(Zone::Skip) => {
-                            tokio::spawn(http_post(http_addr.clone(), "/command/skip".to_string()));
-                        }
-                        Some(Zone::Program(id)) => {
-                            // Never "auto" -- this appliance has no realtime
-                            // clock and time-of-day selection has no
-                            // relationship to a truck's driving hours. Only
-                            // ever a specific id, persisted server-side by
-                            // `set_program` so it survives a restart
-                            // `[SPEC-DIR-185]`.
-                            tokio::spawn(http_post(http_addr.clone(), format!("/program/{id}")));
-                        }
-                        Some(Zone::VolUp) => {
-                            let db = snap.volume_db + 3.0;
-                            tokio::spawn(http_post(http_addr.clone(), format!("/volume/{db}")));
-                        }
-                        Some(Zone::VolDown) => {
-                            let db = snap.volume_db - 3.0;
-                            tokio::spawn(http_post(http_addr.clone(), format!("/volume/{db}")));
-                        }
-                        Some(Zone::Seek) => {
-                            if snap.duration_ms > 0 {
-                                let frac = ((sx - 8.0) / (display.width as f64 - 16.0)).clamp(0.0, 1.0);
-                                let ms = (frac * snap.duration_ms as f64).round() as u64;
-                                // Named, so a touch that races a track change
-                                // is refused rather than moving the next one.
-                                let to = match snap.passage_id {
-                                    Some(id) => format!("/seek/{id}/{ms}"),
-                                    None => format!("/seek/{ms}"),
-                                };
-                                tokio::spawn(http_post(http_addr.clone(), to));
-                            }
-                        }
-                        Some(Zone::QueueSooner(qid)) => {
-                            tokio::spawn(http_post(http_addr.clone(), format!("/queue/{qid}/sooner")));
-                        }
-                        Some(Zone::QueueLater(qid)) => {
-                            tokio::spawn(http_post(http_addr.clone(), format!("/queue/{qid}/later")));
-                        }
-                        Some(Zone::QueueRemove(qid)) => {
-                            tokio::spawn(http_post(http_addr.clone(), format!("/queue/{qid}/remove")));
-                        }
-                        Some(Zone::Pair) => {
-                            // Awaited, not fired and forgotten: the person at
-                            // the screen is told what the press did. It is a
-                            // sudo and a pkill, well under a second.
-                            let ok = tokio::task::spawn_blocking(open_pairing_window).await.unwrap_or(false);
-                            pair_note = Some((ok, std::time::Instant::now()));
-                            if let Err(e) = render_settings(&mut display, &snap, pair_shown(pair_note)) {
-                                tracing::warn!("fbui: render failed: {e:?}");
-                            }
-                        }
-                        None => {}
-                    }
-                }
-            }
-        }
-        tracing::info!("fbui: disconnected; reconnecting in 3s");
-        let _ = render_disconnected(&mut display);
-        // Cleared, not carried over: the next successful snapshot must
-        // render even if it happens to be identical to the last one shown
-        // before this drop -- otherwise the diff check in the loop above
-        // would see no change and leave this disconnected screen up
-        // indefinitely despite `lempi` being back and pushing real data
-        // `[SPEC036]` §7's reconnection-state gap, the actual bug this
-        // phase exists to close, not just the missing message on its own.
-        last = None;
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     }
 }

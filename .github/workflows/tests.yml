@@ -44,8 +44,10 @@ jobs:
       # `[GDE-CLI-115]` is a startup panic that `cargo test` could not see
       # because the three binaries carrying it are behind `mpd`.
       #
-      # `build/verify-targets.sh` does not pass features either, so nothing
-      # in this repository compiled them until this job.
+      # `build/verify-targets.sh` did not pass features either, so nothing
+      # in this repository compiled them until this job. Its `--quick` gate
+      # has run this clippy step's exact command since 2026-10-23, so a
+      # commit on any branch is held to it, not only a push to `main`.
       #
       # Verified 2026-09-21 in `build/Dockerfile.linux`: 658 pass on Linux,
       # `fbui` included -- which cannot be checked from a Windows checkout at
@@ -58,7 +60,8 @@ jobs:
       # and a lock only clippy turns is a lock nothing turned until this step.
       # Deny-level lints fail; clippy's ordinary warnings do not -- measured
       # 2026-09-24 on Linux with all features: 0 errors, and two existing
-      # warnings in `fbui` this step leaves where they are.
+      # warnings in `fbui` this step left where they were. None since
+      # 2026-10-23.
       - name: cargo clippy
         run: cargo clippy --manifest-path player/Cargo.toml --workspace --all-targets --all-features --locked
 

@@ -227,9 +227,12 @@ for everything. Also on every commit,
 an added line that looks like private fleet detail — a LAN address, a MAC, a
 personal path, a `user@host:` — and with `fleet/private-tokens.txt` present,
 the real names too `[SPEC-FCP-050]`. On a commit touching `player/` or `sql/`, it also runs
-`build/verify-targets.sh --quick` — a Linux `cargo clippy`, an Android
-`cargo check` of the phone's crate beside it, and the `lempi-core` boundary; a
-docs-only commit skips that. Clippy rather than `check` since
+`build/verify-targets.sh --quick` — a Linux `cargo clippy` with every
+feature on, `fbui` included, an Android `cargo check` of the phone's crate
+beside it, and the `lempi-core` boundary; a docs-only commit skips that.
+Every feature since 2026-10-23: the gate's clippy is now CI's, and `fbui` —
+Unix-only, behind its feature — had been compiled by nothing before a
+deploy built it. Clippy rather than `check` since
 2026-09-24: the same compile plus the lints, so a module's
 `#![deny(clippy::print_stdout)]` actually refuses a `println!`. Warm cost measured 2026-09-22:
 **22 s** on a no-op, 14 s after a core edit; **37 s** since the phone's crate

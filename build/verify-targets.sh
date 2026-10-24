@@ -121,6 +121,18 @@ run_step() {
 # ordinary warnings do not, so adopting it failed nothing that passed before
 # (Linux, default features: 0 errors, 0 warnings, measured).
 #
+# **`--all-features`**, since 2026-10-23: the same command CI's clippy step
+# runs, so the gate is not narrower than what a push to `main` is held to. It
+# was, and `fbui` is the reason that mattered: the framebuffer UI is behind its
+# feature and Unix-only, so no default build and no Windows checkout compiled
+# it, and a change that broke it would have been found at deploy -- the
+# `deploy-appliance.sh` builds it for `lp3-wifi` -- not at commit. CI covers
+# only `main` and pull requests to it, so on a branch this gate was the only
+# check, and it did not build `fbui`, the `mpd` binaries or `vipunen-support`.
+# Measured 2026-10-23 on the hub: 77 s the first time, compiling those
+# features into this target dir once; then 15 s warm, against 19-20 s for the
+# default set -- no standing cost.
+#
 # **Docker not running is a FAILURE, not a skip** `[GDE-DEP-060]`. The whole
 # lesson of the bug this exists for is that a check which quietly did not
 # happen reads exactly like one that passed.
@@ -138,10 +150,10 @@ linux_compiles() {
     }
     out=$(mktemp)
     if MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w lempi-linux \
-        cargo clippy --manifest-path player/Cargo.toml --workspace --all-targets \
+        cargo clippy --manifest-path player/Cargo.toml --workspace --all-targets --all-features \
         --target-dir player/target/gate-linux >"$out" 2>&1
     then
-        echo "  compiles, and passes clippy's deny-level lints, for linux x86_64"
+        echo "  compiles with every feature, fbui included, and passes clippy's deny-level lints, for linux x86_64"
         rm -f "$out"
         return 0
     fi
