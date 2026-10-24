@@ -393,6 +393,10 @@ Restart=always
 WantedBy=multi-user.target
 EOF
 
+# The script is appliance/bluetooth's since 2026-10-23 and staged beside this
+# one; the unit below is appliance/bluetooth/lempi-afh-seed.service, which
+# lp3-wifi installs, written here from a heredoc -- keep the two the same.
+#
 # Experiment, installed and NOT enabled `[PI3-FOUND-520]`. Hands the
 # controller a channel classification saved from a settled link, so a mode A
 # boot starts adapted instead of learning this room again from scratch. It is

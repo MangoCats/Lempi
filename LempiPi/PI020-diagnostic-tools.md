@@ -136,7 +136,9 @@ classification saved from a settled link, so a boot starts adapted instead of
 learning the room again. `save` captures the live map, `show` decodes it into
 MHz, `apply` writes it, `boot` applies it seven times across the window in
 which the link comes up. Built to test `[PI3-FOUND-520]`, and it comes back
-out if that test fails.
+out if that test fails. It failed `[PI3-FOUND-530]` and was disabled here;
+since 2026-10-23 it lives in `appliance/bluetooth/`, staged beside this node's
+setup, because `lp3-wifi` has it too `[LP3-BT-020]`.
 
 Everything else here only watches. This one acts, and it encodes an assumption
 about one room, so it is the one to disable first when something is behaving

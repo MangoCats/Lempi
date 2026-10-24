@@ -132,3 +132,38 @@ heard at a given minute is read against that minute's line:
   it is powered near the Boom 2 -- it still prefers the Boom 2, so its keeper
   keeps paging a speaker that is streaming here; unplugging it for a while
   tests that.
+
+## 6. Glitches with a good supply: the radio, 2026-10-23
+
+**`[LP3-RAD-010]` After a connection, Wi-Fi's own background scanning is the
+likeliest source, and nothing of this project's sets it.** The listener heard
+glitches well into the third song after connecting the Boom 2. Measured on
+the node, `aabc18d`, twenty minutes after boot:
+
+- **Bluetooth asked for nothing.** `btmon`, three minutes: no inquiry, page,
+  remote-name request or LE scan; BlueZ `Discovering: no`. The only commands
+  were `lempi-btwatch`'s `Read Local Name`, once a minute. The keeper
+  (`lempi-speaker`) pages only while nothing is audible, and with a speaker
+  holding the audio its tick takes the `hold` path and exits.
+- **Wi-Fi scanned every 300 s.** `iw event`, ten minutes: scans at 16:28:57
+  and 16:33:58 and none between, at −66 to −72 dBm.
+- **NetworkManager's default `bgscan simple:30:-65:300`** is what runs: below
+  −65 dBm it scans every 30 s, and wpa_supplicant logs *"Failed to enable
+  signal strength monitoring"*, so it cannot react to the signal. The 300 s
+  seen above is its backed-off state. The 30 s phase after each association
+  was not observed directly; it is how `bgscan simple` behaves, and it fits
+  the journal: two reassociations in the five minutes after boot (16:11:11,
+  an authentication timeout; 16:13:55, a roam). The network has four access
+  points sharing `MangoCats-g` on channel 1. On a Pi 3 the Wi-Fi and
+  Bluetooth radios share one chip and antenna, so each scan takes the radio
+  from the speaker.
+- **The Bluetooth channel map was at 21 of 79 channels**
+  (`0x000080fc0000fc3c3300`), against a minimum of 20: the low band, Wi-Fi's
+  channel 1, and much of the rest excluded. A link with that little room to
+  hop has little left for anything that interrupts it.
+
+Not yet tried: locking the connection to one access point (stops the roams
+that restart the 30 s phase), turning `bgscan` down through a hook, Wi-Fi
+power save off (on now, the default). The seed `[LP3-BT-020]` is installed for
+its own trial. Not checked: whether `lempi02w`, which still prefers the Boom 2,
+was powered and paging it -- it did not answer that afternoon.
