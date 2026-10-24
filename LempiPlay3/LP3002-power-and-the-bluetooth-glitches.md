@@ -167,3 +167,31 @@ that restart the 30 s phase), turning `bgscan` down through a hook, Wi-Fi
 power save off (on now, the default). The seed `[LP3-BT-020]` is installed for
 its own trial. Not checked: whether `lempi02w`, which still prefers the Boom 2,
 was powered and paging it -- it did not answer that afternoon.
+
+**`[LP3-RAD-020]` The seed, tried on a reconnection: it kept more channels, and
+neither arm stalled (2026-10-23, evening).** The map saved from the settled
+link was 54 of 79 channels, only 2402-2426 MHz excluded -- Wi-Fi's channel 1.
+Two five-minute arms, the Boom 2 disconnected and reconnected before each;
+measured were the A2DP bytes handed to the controller per second (`btmon`,
+every second counted, a second with nothing sent as zero), the link's map
+every 10 s, and Wi-Fi scans:
+
+| arm | map over 5 min | median | seconds under half the median | Wi-Fi scans |
+| :--- | :--- | ---: | ---: | ---: |
+| no seed | 48 → 20-22 | 38,313 B/s | 0 | 1 |
+| seed applied | 51 → 30-31 | 45,900 B/s | 0 (the first, partial second aside) | 1 |
+
+**What it shows.** With the seed the controller still excluded channels as it
+went, as on lempi02w `[PI3-FOUND-530]`, but held about ten more at five
+minutes. Neither arm had a second the radio refused data in, so neither shows
+the glitch. The medians differ more than a map should explain -- likelier the
+bitrate each connection negotiated -- and are not read as the seed's.
+
+**Why it does not settle the glitches.** A Bluetooth reconnection does not
+make Wi-Fi reassociate, so both arms ran in Wi-Fi's backed-off 300 s phase
+(one scan each), not the 30 s phase suspected after a boot or a roam
+`[LP3-RAD-010]`. One-second buckets also hide a stall shorter than about half a
+second. The trial is on the seed alone; afterwards the host classification
+was cleared to all channels, the unit left disabled, and the saved map kept on
+STATE for a trial that reproduces the conditions -- a boot, with the unit
+enabled.
