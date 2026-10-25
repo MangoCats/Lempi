@@ -33,8 +33,8 @@ measurement made for it.
 | 9 | The travel access point only on request; fbui a button for it; a second LED brightness for "no Wi-Fi" | `[SPEC-WFO-090]`, `[SPEC-FBUI-120]`, `[PI3-LED-020]` |
 
 The next hardware to try is an Orange Pi Zero 2W, later. Everything below was
-built and tested on stubs and in the Linux gate on 2026-10-25, with both Pis
-off the network; none of it has run on a node yet (section 9).
+built and tested on stubs and in the Linux gate on 2026-10-25, then deployed
+to lp3-wifi and measured there (section 9); lempi02w was off the network.
 
 ## 2. The measurement
 
@@ -177,16 +177,59 @@ It applies wherever the LED setting is offered; lp3-wifi has a screen as well.
 The access point itself is SPEC061's `[SPEC-WFO-090]`, and fbui's button
 SPEC036's `[SPEC-FBUI-120]`.
 
-## 9. Not yet known
+## 9. Measured on lp3-wifi, 2026-10-25
 
-- Whether wpa_supplicant's control socket answers on these nodes, and whether
-  emptying `bgscan` stops its scans on the association in use. The keeper
-  says which; `iw event -t` for ten minutes after a hold is the check.
-- Whether the chip roams by itself: brcmfmac's `roamoff` is read and printed
-  with every hold, not set.
+**`[PI3-FOUND-870]` On lp3-wifi it all runs as designed, and its glitches
+are PipeWire's bitpool cuts, which come and go on their own.** `568cf38`,
+deployed 09:54 with the soundcore Boom 2 connected, the signal −67 to −70 dBm.
+Each packet's bitpool was read from its SBC header in `btmon`'s dump, and a
+fall from one packet to the next counted as a cut -- one dropped packet each.
+
+| | measured |
+| :--- | :--- |
+| hold | applied 41 s into the link; `list_networks` shows the BSSID, `bgscan` empty; brcmfmac `roamoff=1`, so the chip does not roam by itself |
+| `get_network N bssid` | `FAIL` -- the keeper reads `list_networks` instead |
+| judgement | 1,125 of 1,125 packets at 612 B in 15 s: steady, no redial |
+| settled | at 120 s; a quiet tick 188 ms with no `bluetoothctl`, a full one 895 ms with seven |
+| a redial, timed at the HCI | 4.47 s with no media sent, against 36.2 s `[PI3-FOUND-450]` -- 2 s of it the pause after the disconnect |
+| `ap-request` on the household network | refused, nothing tried |
+| `/transfer/hold` | `shared_radio:true`; the deploy's own two holds in the journal |
+
+**The cuts.** From 09:27, the player paused and PipeWire still feeding the
+speaker, the bitpool ran a sawtooth: up 1 a second from about 40 to 49, cut
+at 49-50 -- where a sixth frame no longer fits and the packet rate rises from
+62 to 75 a second -- and up again. In two minutes:
+
+| 2 min from | Wi-Fi | bitpool | cuts | scans |
+| :--- | :--- | :--- | ---: | ---: |
+| 09:34 | as it was | 37-49 | 40 | 1 |
+| 09:37 | held | 39-53 | 0 | 0 |
+| 09:39 | not held again | 53 | 0 | 3, 30 s apart |
+| 09:41, 6 min | not held | 53 | 0 | 6 |
+| 10:02, playing | held, settled | 53 | 0 | 0 |
+
+The bad stretch ended by itself near 09:36, so the hold coinciding with its
+end is not shown to be its cause; an outbound redial during it did not end
+it. Scans every 30 s -- the phase `bgscan simple` restarts in, seen here for
+the first time when bgscan was reset -- cut nothing at bitpool 53. **What
+the cuts measure:** each is a write the controller refused, so they are the
+glitch meter `[PI3-FOUND-850]` promised, read from any speaker. Twenty a
+minute is what "glitching into the third song" is likely to have been
+`[LP3-RAD-010]`; what made that stretch bad is not known.
+
+**What it means for the redial.** In a stretch like 09:27-09:36 the
+judgement would call the link failing and spend its one redial, which there
+did not help: a few seconds, once per boot. In Mode A on lempi02w it did
+`[PI3-FOUND-440]`.
+
+## 10. Not yet known
+
+- What made the stretch of cuts, and what ended it.
 - What a node with no link does to the radio. NetworkManager may scan for its
   known networks while disconnected; with the access point no longer up in
   the car, that is the first thing to measure there.
-- The redial's threshold on real packets, and what a 15 s `btmon` costs a
-  Pi Zero W while it plays.
+- What a 15 s `btmon` costs a Pi Zero W while it plays; lempi02w was off the
+  network on 2026-10-25, so none of this has run there.
+- The LED's no-link brightness and fbui's button with no link, which cannot
+  be shown from a session that needs the link.
 - That none of it removes a stutter until a stuttering boot shows it.
