@@ -1,0 +1,31 @@
+#!/bin/sh
+# Fake wpa_cli for the Wi-Fi hold [PI3-AIM-160]. `status` prints
+# $VT_STATE/wpa_status; `list_networks` shows the BSSID last set, or `any`;
+# `bssid` and `set_network` answer OK and record what they set.
+# WPA_FAIL=1 answers FAIL to both writes, as a refused change does.
+printf '%s\n' "wpa_cli $*" >> "$VT_STATE/calls"
+[ "$1" = -i ] && shift 2
+case "$1" in
+  status)
+    [ -f "$VT_STATE/wpa_status" ] && cat "$VT_STATE/wpa_status"
+    exit 0 ;;
+  # As lp3-wifi's answers it, 2026-10-25: `get_network N bssid` is FAIL, and
+  # `list_networks` carries the BSSID, `any` until one is set.
+  get_network)
+    echo FAIL
+    exit 0 ;;
+  list_networks)
+    printf 'network id / ssid / bssid / flags\n'
+    printf '0\tHome\t%s\t[CURRENT]\n' "$(cat "$VT_STATE/wpa_bssid" 2>/dev/null || echo any)"
+    exit 0 ;;
+  bssid)
+    [ "${WPA_FAIL:-0}" = 1 ] && { echo FAIL; exit 0; }
+    printf '%s\n' "$3" > "$VT_STATE/wpa_bssid"
+    echo OK
+    exit 0 ;;
+  set_network)
+    [ "${WPA_FAIL:-0}" = 1 ] && { echo FAIL; exit 0; }
+    echo OK
+    exit 0 ;;
+esac
+exit 0

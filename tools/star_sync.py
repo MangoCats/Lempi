@@ -64,6 +64,7 @@ import star_merge as sm  # noqa: E402
 import star_patch as sp  # noqa: E402
 import mesh as meshmod  # noqa: E402  -- the signed transport, and phones by upload [REQ-AND-330]
 import bundle_ledger  # noqa: E402  -- what a bundle send touched on a node [SPEC-STAR-945]
+import transfer_hold  # noqa: E402  -- a shared radio pauses for a transfer [PI3-AIM-170]
 
 
 SSH = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=5",
@@ -1250,16 +1251,22 @@ def player_step(plan, run, name, player, commit):
     if not has_rows(lis) and not has_rows(cat) and not parts:
         say(f"RESULT {name}: nothing to send")
         return 0
+    # The catalogue's parts are the bulk of a sync, megabytes to a part: with
+    # them, the node's playback is held for the step [PI3-AIM-170]. Rows alone
+    # are a few kilobytes, and are sent without.
+    hold = (transfer_hold.held(player["address"], player.get("web_port", transfer_hold.LEMPI_DEFAULT_PORT), say=say)
+            if parts else contextlib.nullcontext())
     try:
-        extra = None
-        if parts:
-            sent = stage_parts(plan, run, name, player, parts, pd)
-            extra = {"catalogue_parts": {"of": parts["of"], "sha256": [p["sha256"] for p in parts["parts"]]}}
-            say(f"  {name}: the catalogue's {parts['of']} parts are staged ({sent} sent now, "
-                f"{parts['of'] - sent} already there)")
-        got = meshmod.sync_step(mdir, player, "commit" if commit else "rehearse", stamp_of(run),
-                                cat if has_rows(cat) else None, lis if has_rows(lis) else None,
-                                timeout=3600.0 if parts else 600.0, extra=extra)
+        with hold:
+            extra = None
+            if parts:
+                sent = stage_parts(plan, run, name, player, parts, pd)
+                extra = {"catalogue_parts": {"of": parts["of"], "sha256": [p["sha256"] for p in parts["parts"]]}}
+                say(f"  {name}: the catalogue's {parts['of']} parts are staged ({sent} sent now, "
+                    f"{parts['of'] - sent} already there)")
+            got = meshmod.sync_step(mdir, player, "commit" if commit else "rehearse", stamp_of(run),
+                                    cat if has_rows(cat) else None, lis if has_rows(lis) else None,
+                                    timeout=3600.0 if parts else 600.0, extra=extra)
     except (ValueError, OSError) as err:
         say(f"RESULT {name}: REFUSED -- {err}")
         return 1

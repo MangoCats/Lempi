@@ -217,18 +217,15 @@ file_item "WirePlumber: bluez monitor not tied to seats [PI3-FOUND-040]" \
     LempiPlay3/wireplumber-no-seat.conf /etc/wireplumber/wireplumber.conf.d/51-lempi-no-seat.conf 644
 file_item "WirePlumber: a new output starts at the jack's 0 dB" \
     LempiPlay3/wireplumber-volume.conf /etc/wireplumber/wireplumber.conf.d/52-lempi-volume.conf 644
-# The channel-classification seed [PI3-FOUND-520], as lempi02w has it:
-# installed and NOT enabled. Withdrawn there the evening it ran -- the seed
-# reached the controller and the audio stuttered as before, the map a symptom
-# of failing packets rather than their cause [PI3-FOUND-530] -- and installed
-# here at the maintainer's request, 2026-10-23, for this node's own trial.
-# Enabling it needs a map saved while the link sounds right first
-# (`sudo lempi-afh-seed save`); this script neither saves nor enables, so a
-# trial is a deliberate step, not something a --go does.
-file_item "lempi-afh-seed (installed, not enabled)" appliance/bluetooth/lempi-afh-seed \
-    /usr/local/bin/lempi-afh-seed 755
-file_item "lempi-afh-seed.service" appliance/bluetooth/lempi-afh-seed.service \
-    /etc/systemd/system/lempi-afh-seed.service 644
+# The channel-classification seed, installed here 2026-10-23 for this node's
+# own trial [LP3-RAD-020] and retired 2026-10-25 with lempi02w's: neither
+# trial stopped a stutter [PI3-FOUND-860]. Never enabled here, so there is no
+# link to remove.
+retired_item "lempi-afh-seed (retired) [PI3-FOUND-860]" /usr/local/bin/lempi-afh-seed
+retired_item "lempi-afh-seed.service (retired)" /etc/systemd/system/lempi-afh-seed.service
+# The map the trial saved, on STATE; live, as /var/lempi is.
+state_item "the seed's saved map (retired)" "! test -e /var/lempi/afh-map" \
+     "sudo rm -f /var/lempi/afh-map" "retired, still present"
 # fbui owns tty1 [LP3-REP-030]; a login prompt would draw over it.
 item "getty on tty1 disabled" "! test -e $P/etc/systemd/system/getty.target.wants/getty@tty1.service" \
      "sudo systemctl disable getty@tty1.service"

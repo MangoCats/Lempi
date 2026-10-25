@@ -212,22 +212,23 @@ pub(super) async fn speaker_verb_on(
     bt_reply(result, false)
 }
 
-/// The appliance's status LED: which of the four modes, and the brightness
-/// `on` would use `[PI3-LED-010]`. Fetched once when the settings panel
+/// The appliance's status LED: which of the four modes, the brightness
+/// `on` would use `[PI3-LED-010]`, and the one it uses with no Wi-Fi link
+/// `[PI3-LED-020]`. Fetched once when the settings panel
 /// opens, the same way the speaker list is -- there is nothing here that
 /// changes on its own, so unlike playback state it has no reason to ride
 /// the live snapshot.
 pub(super) async fn led_state(State(ui): State<Ui>) -> Response {
     let db = ui.db.clone();
     let library = ui.library.clone();
-    let (mode, brightness) = tokio::task::spawn_blocking(move || {
+    let (mode, brightness, nowifi) = tokio::task::spawn_blocking(move || {
         crate::db::PlayerStore::open_split(&db, &library)
-            .map(|s| (s.load_led_mode(), s.load_led_brightness()))
-            .unwrap_or_else(|_| ("on".into(), 100))
+            .map(|s| (s.load_led_mode(), s.load_led_brightness(), s.load_led_nowifi_brightness()))
+            .unwrap_or_else(|_| ("on".into(), 100, 25))
     })
     .await
-    .unwrap_or_else(|_| ("on".into(), 100));
-    axum::Json(serde_json::json!({ "mode": mode, "brightness": brightness })).into_response()
+    .unwrap_or_else(|_| ("on".into(), 100, 25));
+    axum::Json(serde_json::json!({ "mode": mode, "brightness": brightness, "nowifi": nowifi })).into_response()
 }
 
 /// Switch the LED, and remember the choice `[PI3-LED-010]`. The write to
@@ -237,7 +238,9 @@ pub(super) async fn led_state(State(ui): State<Ui>) -> Response {
 /// half of the request. Brightness (`?pct=`) is only required, and only
 /// stored, for `mode=on` -- the other three modes leave whatever
 /// brightness was last set untouched, so switching back to `on` later
-/// remembers it.
+/// remembers it. `?nowifi=` is the brightness with no Wi-Fi link
+/// `[PI3-LED-020]`, stored with any mode; the Wi-Fi keeper applies it, since
+/// it is the one watching the link.
 pub(super) async fn set_led(
     State(ui): State<Ui>,
     axum::extract::Path(mode): axum::extract::Path<String>,
@@ -257,6 +260,13 @@ pub(super) async fn set_led(
     } else {
         None
     };
+    let nowifi: Option<u8> = match q.get("nowifi").map(|p| p.parse::<u8>()) {
+        Some(Ok(v)) => Some(v.clamp(1, 100)),
+        Some(Err(_)) => {
+            return (StatusCode::BAD_REQUEST, "nowifi must be a number 1-100").into_response();
+        }
+        None => None,
+    };
     let db = ui.db.clone();
     let library = ui.library.clone();
     let mode2 = mode.clone();
@@ -265,6 +275,9 @@ pub(super) async fn set_led(
         store.save_led_mode(&mode2).map_err(|e| e.message().to_string())?;
         if let Some(pct) = pct {
             store.save_led_brightness(pct).map_err(|e| e.message().to_string())?;
+        }
+        if let Some(n) = nowifi {
+            store.save_led_nowifi_brightness(n).map_err(|e| e.message().to_string())?;
         }
         // The effective brightness to apply below: whatever was just set,
         // or -- a bare `POST /led/on` with no `?pct=` -- whatever was

@@ -1,8 +1,10 @@
-# Periodic connectivity check and AP failover [SPEC061], [IMPL022].
+# The Wi-Fi keeper every twenty seconds [SPEC061], [IMPL022]. From 20 s, not
+# 45: there is no boot grace to wait out now nothing starts the access point
+# by itself [SPEC-WFO-090], and the LED should say "no link" early.
 [Unit]
-Description=Check Wi-Fi connectivity and failover to AP when offline
+Description=Run the Wi-Fi keeper every twenty seconds
 [Timer]
-OnBootSec=45s
+OnBootSec=20s
 OnUnitActiveSec=20s
 AccuracySec=5s
 [Install]

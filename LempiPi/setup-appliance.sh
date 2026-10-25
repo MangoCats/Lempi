@@ -321,7 +321,7 @@ echo "helpers"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 for f in lempi-underruns lempi-led-boot \
          lempi-wifi-revert lempi-wifi-failover lempi-radio-test lempi-startup-sample \
-         lempi-hci-capture lempi-linkstate lempi-afh-seed lempi-vitals; do
+         lempi-hci-capture lempi-linkstate lempi-vitals; do
     if [ -f "$HERE/$f" ]; then
         if ! cmp -s "$HERE/$f" "/usr/local/bin/$f"; then
             install -m755 "$HERE/$f" "/usr/local/bin/$f" && did "installed $f"
@@ -341,8 +341,16 @@ done
 if [ -e /usr/local/bin/lempi-rocker ]; then
     rm -f /usr/local/bin/lempi-rocker && did "retired lempi-rocker"
 fi
+# The channel-map seed, retired 2026-10-25: tried twice, on two nodes, and
+# neither time did it stop a stutter [PI3-FOUND-860].
+if [ -e /etc/systemd/system/lempi-afh-seed.service ] || [ -e /usr/local/bin/lempi-afh-seed ]; then
+    systemctl disable lempi-afh-seed.service >/dev/null 2>&1
+    rm -f /etc/systemd/system/lempi-afh-seed.service /usr/local/bin/lempi-afh-seed /var/lempi/afh-map \
+        && did "retired lempi-afh-seed [PI3-FOUND-860]"
+    NEED_RELOAD=1
+fi
 
-# The node's own units, written here: its diagnostics and its experiment.
+# The node's own units, written here: its diagnostics.
 # The keeper, the watchdog and the agent are appliance/bluetooth's.
 install_unit() {   # install_unit <name> <<'EOF' ... EOF
     local name="$1" tmp
@@ -388,35 +396,6 @@ ExecStart=/usr/local/bin/lempi-vitals
 Nice=19
 IOSchedulingClass=idle
 Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# The script is appliance/bluetooth's since 2026-10-23 and staged beside this
-# one; the unit below is appliance/bluetooth/lempi-afh-seed.service, which
-# lp3-wifi installs, written here from a heredoc -- keep the two the same.
-#
-# Experiment, installed and NOT enabled `[PI3-FOUND-520]`. Hands the
-# controller a channel classification saved from a settled link, so a mode A
-# boot starts adapted instead of learning this room again from scratch. It is
-# a claim about one room: seeded somewhere else, or after the interference
-# moves, it excludes channels that were fine. Turn it on for the experiment,
-# and off again if the experiment fails.
-install_unit lempi-afh-seed.service <<'EOF'
-[Unit]
-Description=Seed the controller with this room's channel classification (experiment)
-After=bluetooth.service
-Wants=bluetooth.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/local/bin/lempi-afh-seed boot
-# Seven passes at ten-second intervals is about a minute by design, so this
-# clears it comfortably. Finite because `Type=oneshot` defaults to infinity
-# `[PI3-FOUND-670]`, and this one talks to `hcitool`.
-TimeoutStartSec=120
 
 [Install]
 WantedBy=multi-user.target

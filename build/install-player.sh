@@ -65,6 +65,10 @@ if [ -n "$LOWER" ] && [ "$LOCAL_SUM" = "$REMOTE_SUM" ]; then
 fi
 echo "deploy: $REMOTE_SUM -> $LOCAL_SUM"
 
+# A shared radio pauses for the upload, and plays again when this ends
+# [PI3-AIM-170].
+transfer_hold "$HOST"
+trap 'transfer_release "$HOST"' EXIT
 scp -q "$BIN" "$HOST:/tmp/lempi.new" || die "upload failed"
 # `grep -q $LOCAL_SUM`, unquoted, was one empty variable away from useless: an
 # empty LOCAL_SUM makes the pattern empty, an empty pattern matches every line,

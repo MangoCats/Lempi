@@ -112,3 +112,49 @@ lempi_sources() {
     _t=$(lempi_target LEMPI_SOURCES)
     echo "${LEMPI_SOURCES:-${_t:-someone@workshop:/home/someone/Dev/Lempi}}"
 }
+
+# ---- a bulk transfer holds the playback on a shared radio [PI3-AIM-170] -------
+#
+# On a node whose Wi-Fi shares its radio with the Bluetooth speaker, an upload
+# takes airtime the audio needs; the player pauses for it and plays again
+# after. The player decides whether its radio is shared, so these are safe to
+# call for any host:
+#
+#     transfer_hold "$HOST"; trap 'transfer_release "$HOST"' EXIT
+#     scp ...
+#
+# Asked over ssh, of the player's own loopback port, so no web guard and no
+# name resolution stand between them. A player that restarts in between -- an
+# install of the player itself -- has forgotten the hold, and starts paused
+# because it was; the release then asks it to play, which is what the hold
+# owed it.
+transfer_hold() {
+    _TRANSFER_ID="" _TRANSFER_PAUSED=""
+    _r=$(ssh -o ConnectTimeout=10 "$1" \
+        "curl -s -m 5 -X POST 'http://localhost:$(lempi_port)/transfer/hold?seconds=${2:-900}'" 2>/dev/null)
+    _TRANSFER_ID=$(printf '%s' "$_r" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+    case "$_r" in *'"paused":true'*) _TRANSFER_PAUSED=1 ;; esac
+    if [ -z "$_TRANSFER_ID" ]; then
+        echo "transfer: no player on $1 answered a hold; sending anyway [PI3-AIM-170]"
+    elif [ -n "$_TRANSFER_PAUSED" ]; then
+        echo "transfer: $1 paused its playback for this transfer [PI3-AIM-170]"
+    fi
+}
+
+transfer_release() {
+    [ -n "${_TRANSFER_ID:-}" ] || return 0
+    _r=$(ssh -o ConnectTimeout=10 "$1" \
+        "curl -s -m 5 -X POST http://localhost:$(lempi_port)/transfer/release/$_TRANSFER_ID" 2>/dev/null)
+    case "$_r" in
+        *'"resumed":true'*) echo "transfer: $1 resumed its playback" ;;
+        *'"released":true'*) ;;
+        *)
+            if [ -n "$_TRANSFER_PAUSED" ]; then
+                ssh -o ConnectTimeout=10 "$1" \
+                    "curl -s -m 5 -o /dev/null -X POST http://localhost:$(lempi_port)/command/play" 2>/dev/null &&
+                    echo "transfer: $1's player had forgotten the hold (restarted); asked it to play"
+            fi
+            ;;
+    esac
+    _TRANSFER_ID="" _TRANSFER_PAUSED=""
+}

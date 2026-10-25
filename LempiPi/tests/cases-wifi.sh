@@ -303,49 +303,194 @@ SYS_CLASS_RFKILL="$VT_STATE/rfkill" sh "$BT/lempi-wifi-failover"
 assert_not_called "ap-failover" "lempi-wifi-failover honors rfkill soft block"
 teardown
 
-# lempi-wifi-failover honors boot grace period.
-setup
-printf '20.5 10.2\n' > "$VT_STATE/uptime"
-PROC_UPTIME="$VT_STATE/uptime" sh "$BT/lempi-wifi-failover"
-assert_not_called "ap-failover" "lempi-wifi-failover waits out boot grace period"
-teardown
+# --- the access point only on request [SPEC-WFO-090] ------------------------
 
-# lempi-wifi-failover takes no action when connected.
-setup
-printf '60.0 50.0\n' > "$VT_STATE/uptime"
-printf 'wlan0:connected\n' > "$VT_STATE/nm_dev_state"
-PROC_UPTIME="$VT_STATE/uptime" sh "$BT/lempi-wifi-failover"
-assert_not_called "ap-failover" "lempi-wifi-failover takes no action when connected"
-teardown
+# A fake lempi-btctl that records what the keeper asks of it, for the LED.
+fake_btctl() {
+    printf '#!/bin/sh\nprintf "btctl %%s\\n" "$*" >> "%s/calls"\nprintf "{\\"ok\\":true}\\n"\n' \
+        "$VT_STATE" > "$VT_STATE/btctl"
+    chmod +x "$VT_STATE/btctl"
+}
+wifi_keeper() { LEMPI_BTCTL="$VT_STATE/btctl" sh "$BT/lempi-wifi-failover" 2>&1; }
 
-# lempi-wifi-failover records timestamp on first drop without failing over yet.
+# No link, however long, with a speaker to ask with: nothing is started.
 setup
-printf '60.0 50.0\n' > "$VT_STATE/uptime"
+fake_btctl
+speaker aa:bb:cc:dd:ee:10 Boom no yes
 printf 'wlan0:disconnected\n' > "$VT_STATE/nm_dev_state"
-PROC_UPTIME="$VT_STATE/uptime" LEMPI_BTCTL="$BT/lempi-btctl" sh "$BT/lempi-wifi-failover"
-if [ -f "$LEMPI_RUN_DIR/wifi_disconnected_since" ]; then
-    ok "lempi-wifi-failover records first drop timestamp"
-else
-    bad "lempi-wifi-failover records first drop timestamp" "debounce file not written"
-fi
-assert_not_called "ap-failover" "and does not fail over on first drop"
+printf '%s\n' "$(( $(date +%s) - 3600 ))" > "$LEMPI_RUN_DIR/wifi_disconnected_since"
+OUT=$(wifi_keeper)
+assert_not_called "btctl ap-failover" "an hour with no link starts no access point by itself"
 teardown
 
-# lempi-wifi-failover brings up lempi-ap once debounce threshold is met.
+# No link and no paired speaker: nobody could ask, so after 75 s it starts.
+setup
+fake_btctl
+printf 'wlan0:disconnected\n' > "$VT_STATE/nm_dev_state"
+wifi_keeper >/dev/null
+assert_not_called "btctl ap-failover" "a node nobody could ask for it waits before starting the access point"
+printf '%s\n' "$(( $(date +%s) - 80 ))" > "$LEMPI_RUN_DIR/wifi_disconnected_since"
+OUT=$(wifi_keeper)
+assert_called "btctl ap-failover" "and after 75 s with no link starts it by itself"
+assert_in "$OUT" "no paired speaker to ask with" "saying why"
+teardown
+
+# Joining a network is never interrupted for it.
+setup
+fake_btctl
+printf 'wlan0:connecting (configuring)\n' > "$VT_STATE/nm_dev_state"
+printf '%s\n' "$(( $(date +%s) - 300 ))" > "$LEMPI_RUN_DIR/wifi_disconnected_since"
+wifi_keeper >/dev/null
+assert_not_called "btctl ap-failover" "a node joining a network is left to join it"
+teardown
+
+# ap-request with no link: says it is trying, then starts the access point.
 setup
 export LEMPI_NM_DIR="$VT_STATE/nm" LEMPI_DNSMASQ_DIR="$VT_STATE/dnsmasq"
-printf '60.0 50.0\n' > "$VT_STATE/uptime"
 printf 'wlan0:disconnected\n' > "$VT_STATE/nm_dev_state"
-now=$(date +%s)
-past=$((now - 35))
-printf '%s\n' "$past" > "$LEMPI_RUN_DIR/wifi_disconnected_since"
-PROC_UPTIME="$VT_STATE/uptime" LEMPI_BTCTL="$BT/lempi-btctl" sh "$BT/lempi-wifi-failover"
-assert_called "nmcli connection up lempi-ap" "lempi-wifi-failover brings up lempi-ap after debounce threshold"
-if [ ! -f "$LEMPI_RUN_DIR/wifi_disconnected_since" ]; then
-    ok "lempi-wifi-failover removes debounce file on failover"
-else
-    bad "lempi-wifi-failover removes debounce file on failover" "debounce file remains"
-fi
+OUT=$(btctl ap-request)
+assert_in "$OUT" '{"trying":true}' "ap-request with no link says it is trying"
+assert_called "nmcli connection up lempi-ap" "and starts the access point"
+assert_not_called "systemd-run" "standing, with no revert timer"
+teardown
+
+# ap-request on a known network: refused, and nothing is tried.
+setup
+printf 'wlan0:connected\n' > "$VT_STATE/nm_dev_state"
+OUT=$(btctl ap-request)
+assert_in "$OUT" "on a known network" "ap-request on a known network is refused"
+assert_not_in "$OUT" '"trying":true' "without saying it is trying"
+assert_not_called "connection up lempi-ap" "and starts nothing"
+teardown
+
+# ap-request on the access point: home, as ap-return.
+setup
+printf 'lempi-ap:802-11-wireless:no\nHome:802-11-wireless:yes\n' > "$VT_STATE/nm_conns"
+printf 'lempi-ap\n' > "$VT_STATE/nm_active"
+OUT=$(btctl ap-request)
+assert_in "$OUT" '"ok":true' "ap-request on the access point goes home"
+assert_called "nmcli --wait 15 connection up Home" "through ap-return"
+teardown
+
+# --- the LED says whether there is a link [PI3-LED-020] ---------------------
+
+# No link: the second brightness, 25% unless set.
+setup
+fake_btctl
+printf 'wlan0:disconnected\n' > "$VT_STATE/nm_dev_state"
+OUT=$(wifi_keeper)
+assert_called "btctl led on 25" "with no link the LED goes to 25% by default"
+assert_in "$OUT" "Left key starts the access point" "and the journal says what the key would do"
+: > "$VT_STATE/calls"
+wifi_keeper >/dev/null
+assert_not_called "btctl led" "and is not set again while nothing changes"
+teardown
+
+# The listener's two brightnesses, each in its state.
+setup
+fake_btctl
+printf '60\n' > "$VT_STATE/db_led_brightness_pct"
+printf '10\n' > "$VT_STATE/db_led_nowifi_pct"
+printf 'wlan0:disconnected\n' > "$VT_STATE/nm_dev_state"
+wifi_keeper >/dev/null
+assert_called "btctl led on 10" "the no-link brightness the listener chose"
+printf 'wlan0:connected\n' > "$VT_STATE/nm_dev_state"
+OUT=$(wifi_keeper)
+assert_called "btctl led on 60" "and with a link, the ordinary one"
+assert_in "$OUT" "LED back at 60%" "said when the link comes back"
+teardown
+
+# On the access point there is a link: the ordinary brightness.
+setup
+fake_btctl
+printf 'lempi-ap:802-11-wireless:yes\n' > "$VT_STATE/nm_active_conns"
+wifi_keeper >/dev/null
+assert_called "btctl led on 100" "on the access point the LED is at its ordinary brightness"
+teardown
+
+# Any mode but on is left alone.
+setup
+fake_btctl
+printf 'wifi\n' > "$VT_STATE/db_led_mode"
+printf 'wlan0:disconnected\n' > "$VT_STATE/nm_dev_state"
+wifi_keeper >/dev/null
+assert_not_called "btctl led" "an LED in wifi mode is not touched"
+teardown
+
+# --- the link held after thirty seconds [PI3-AIM-160] -----------------------
+
+linked() { # bssid seconds-ago
+    printf 'wlan0:connected\n' > "$VT_STATE/nm_dev_state"
+    printf 'Connected to %s (on wlan0)\n\tSSID: Home\n\tsignal: -68 dBm\n' "$1" > "$VT_STATE/iw_link"
+    printf 'bssid=%s\nid=0\nwpa_state=COMPLETED\n' "$1" > "$VT_STATE/wpa_status"
+    # Recorded as the keeper records it, lowercased; iw may print either.
+    [ -n "${2:-}" ] && printf '%s %s\n' "$(( $(date +%s) - $2 ))" "$(printf '%s' "$1" | tr A-F a-f)" \
+        > "$LEMPI_RUN_DIR/wifi_link"
+}
+
+# A new link is timed, not held.
+setup
+fake_btctl
+linked aa:bb:cc:dd:ee:21
+wifi_keeper >/dev/null
+assert_not_called "wpa_cli -i wlan0 bssid" "a link just up is not held yet"
+assert_in "$(cat "$LEMPI_RUN_DIR/wifi_link" 2>/dev/null)" "aa:bb:cc:dd:ee:21" "but its start is recorded"
+teardown
+
+# Thirty seconds on: held, on the BSSID it is on, background scans off.
+setup
+fake_btctl
+printf '0\n' > "$VT_STATE/roamoff"
+linked AA:BB:CC:DD:EE:21 40
+OUT=$(LEMPI_ROAMOFF="$VT_STATE/roamoff" wifi_keeper)
+assert_called "wpa_cli -i wlan0 bssid 0 aa:bb:cc:dd:ee:21" "after thirty seconds the link is held on its BSSID"
+assert_called "wpa_cli -i wlan0 set_network 0 bgscan" "with background scans emptied"
+assert_in "$OUT" "held Wi-Fi on aa:bb:cc:dd:ee:21" "said once"
+assert_in "$OUT" "the chip may still roam by itself" "with what the chip's own roaming is"
+: > "$VT_STATE/calls"
+OUT=$(wifi_keeper)
+assert_not_called "wpa_cli -i wlan0 bssid" "a held link is not held again"
+assert_eq "$OUT" "" "and nothing is said"
+teardown
+
+# Roamed between two ticks: a new link, timed again.
+setup
+fake_btctl
+linked aa:bb:cc:dd:ee:22 400
+printf '%s aa:bb:cc:dd:ee:21\n' "$(( $(date +%s) - 400 ))" > "$LEMPI_RUN_DIR/wifi_link"
+wifi_keeper >/dev/null
+assert_not_called "wpa_cli -i wlan0 bssid" "a different access point starts the thirty seconds again"
+teardown
+
+# Re-associated to the same access point between two ticks: held again.
+setup
+fake_btctl
+linked aa:bb:cc:dd:ee:21 400
+printf 'any\n' > "$VT_STATE/wpa_bssid"
+wifi_keeper >/dev/null
+assert_called "wpa_cli -i wlan0 bssid 0 aa:bb:cc:dd:ee:21" "a hold wpa_supplicant no longer has is made again"
+teardown
+
+# No control socket: said once, loudly, not taken as held.
+setup
+fake_btctl
+linked aa:bb:cc:dd:ee:21 400
+rm -f "$VT_STATE/wpa_status"
+OUT=$(wifi_keeper)
+assert_in "$OUT" "control socket did not answer" "a hold that cannot be made says so"
+OUT=$(wifi_keeper)
+assert_eq "$OUT" "" "once"
+teardown
+
+# A refused hold is said, and tried again next tick.
+setup
+fake_btctl
+linked aa:bb:cc:dd:ee:21 400
+OUT=$(WPA_FAIL=1 wifi_keeper)
+assert_in "$OUT" "could not hold Wi-Fi" "a refused hold is said"
+: > "$VT_STATE/calls"
+wifi_keeper >/dev/null
+assert_called "wpa_cli -i wlan0 bssid 0 aa:bb:cc:dd:ee:21" "and tried again"
 teardown
 
 # --- the way home from the access point [SPEC-WFO-080], [PI3-FOUND-800] -----

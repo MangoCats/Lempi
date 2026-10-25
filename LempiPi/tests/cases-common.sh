@@ -64,22 +64,13 @@ assert_eq "$(LEMPI_ACTIVE_OUTPUT=bt:12:34:56:78:9A:BC lempi_active_output)" "bt:
     "lempi_active_output honours the environment override"
 rm -f "$VT_STATE/db_active_output"
 
-# AFH decoding: three readers, one hex parser. The settled map measured on the
-# appliance is the fixture.
+# AFH decoding: the channel count `lempi-linkstate` prints. The settled map
+# measured on the appliance is the fixture. Its two siblings, the map as
+# `hcitool` bytes and read out in MHz, went with the seed that used them
+# [PI3-FOUND-860].
 MAP=000000fcffffffffff3f
 assert_eq "$(lempi_afh_channels $MAP)" "52" "lempi_afh_channels counts the settled map"
 assert_eq "$(lempi_afh_channels ffffffffffffffffff7f)" "79" "lempi_afh_channels counts a naive map"
-assert_eq "$(lempi_afh_bytes $MAP)" "0x00 0x00 0x00 0xfc 0xff 0xff 0xff 0xff 0xff 0x3f " \
-    "lempi_afh_bytes renders octets for hcitool"
-# Octet 9's top bit is reserved and must be cleared before it reaches the
-# controller.
-assert_eq "$(lempi_afh_bytes ffffffffffffffffffff | awk '{print $10}')" "0x7f" \
-    "lempi_afh_bytes clears the reserved bit"
-assert_in "$(lempi_afh_excluded $MAP)" "2402-2427 MHz" "lempi_afh_excluded names the WiFi band"
-assert_in "$(lempi_afh_excluded $MAP)" "2480-2480 MHz" "lempi_afh_excluded names the top channel"
-# The bug shipped on 2026-09-10 was a doubled backslash in this awk, which
-# produced no output at all rather than failing.
-if [ -n "$(lempi_afh_excluded $MAP)" ]; then ok "lempi_afh_excluded produces output"; else bad "lempi_afh_excluded produces output" "empty"; fi
 
 printf 'MIDDLETON\n' > "$VT_STATE/routed"
 assert_eq "$(lempi_routed)" "MIDDLETON" "lempi_routed reads the player's sink"

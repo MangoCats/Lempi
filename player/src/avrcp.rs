@@ -13,8 +13,9 @@
 //! State is owned by the engine, not by a local shell variable: Play/Pause
 //! toggling dispatches an atomic [`Command::TogglePlayPause`], eliminating
 //! snapshot latency race conditions. Previous/back keys are reserved per
-//! `[PI3-ROCKER-010]` and `[REQ-AUD-142]` -- except while the access point is
-//! up, when they mean "I'm home" `[SPEC-WFO-085]`.
+//! `[PI3-ROCKER-010]` and `[REQ-AUD-142]` -- except with no Wi-Fi link, when
+//! they start the access point, and while it is up, when they mean "I'm home"
+//! `[SPEC-WFO-085]`, `[SPEC-WFO-090]`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use std::sync::atomic::AtomicBool;
@@ -61,7 +62,8 @@ pub enum Action {
     Play,
     Pause,
     Skip,
-    /// "I'm home": try the known network, if the access point is up.
+    /// The access point, asked for: started with no Wi-Fi link, and the way
+    /// home while it is up `[SPEC-WFO-090]`.
     Home,
 }
 
@@ -85,9 +87,10 @@ pub fn map_key(code: u16) -> Option<Action> {
         KEY_PAUSE => Some(Action::Pause),
         KEY_NEXTSONG | KEY_FORWARD => Some(Action::Skip),
         // Previous/Back stays reserved per [PI3-ROCKER-010] and [REQ-AUD-142]
-        // everywhere but on the access point, where it means "I'm home"
-        // [SPEC-WFO-085]. `lempi-btctl ap-return` is what refuses it
-        // elsewhere, so the key itself does nothing on the household network.
+        // on the household network. With no link it starts the access point,
+        // and on it it means "I'm home" [SPEC-WFO-085], [SPEC-WFO-090].
+        // `lempi-btctl ap-request` is what refuses it on a network, so the key
+        // itself does nothing there.
         KEY_PREVIOUSSONG | KEY_BACK => Some(Action::Home),
         _ => None,
     }
@@ -307,15 +310,16 @@ fn read_device_loop(
     }
 }
 
-/// What `lempi-btctl ap-return` did, read from what it printed.
+/// What `lempi-btctl ap-request` did, read from what it printed.
 #[derive(Debug, PartialEq, Eq)]
 pub enum HomeOutcome {
-    /// Refused before trying: not on the access point, or a client is on it.
-    /// The key did nothing, so no tone says otherwise.
+    /// Refused before trying: on a known network, or a client is on the
+    /// access point. The key did nothing, so no tone says otherwise.
     Ignored(String),
-    /// Back on the known network.
+    /// Done: back on the known network, or the access point up.
     Home,
-    /// Tried, and the known network did not answer; the access point is back.
+    /// Tried and failed: the known network did not answer and the access
+    /// point is back, or the access point would not start.
     NotHome(String),
 }
 
@@ -323,7 +327,7 @@ fn is_trying(line: &str) -> bool {
     line.contains("\"trying\":true")
 }
 
-/// `ap-return` prints `{"trying":true}` when it starts the switch and one JSON
+/// `ap-request` prints `{"trying":true}` when it starts the switch and one JSON
 /// answer at the end. Whether it got as far as trying is what separates a
 /// press that did nothing from a try that failed.
 pub fn home_outcome(lines: &[String]) -> HomeOutcome {
@@ -340,11 +344,13 @@ pub fn home_outcome(lines: &[String]) -> HomeOutcome {
     }
 }
 
-/// Left, "I'm home" `[SPEC-WFO-085]`: one try for the known network, on a
-/// thread of its own -- it takes up to `ap-return`'s 15 s, and the input
-/// reader must not wait on it. A click when the try starts, then two rising
-/// notes or one low one; nothing at all if it was refused, because then the
-/// key did nothing. A second press while one try runs is ignored.
+/// Left: the access point, asked for `[SPEC-WFO-085]`, `[SPEC-WFO-090]` --
+/// started with no Wi-Fi link, and one try for the known network while it is
+/// up. On a thread of its own: a try takes up to `ap-return`'s 15 s, and the
+/// input reader must not wait on it. A click when the try starts, then two
+/// rising notes when it did what was asked or one low one when it did not;
+/// nothing at all if it was refused, because then the key did nothing. A
+/// second press while one try runs is ignored.
 #[cfg(all(target_os = "linux", feature = "appliance"))]
 fn go_home(handle: &Arc<EngineHandle>, busy: &Arc<AtomicBool>, code: u16) {
     use crate::output::Cue;
@@ -353,13 +359,13 @@ fn go_home(handle: &Arc<EngineHandle>, busy: &Arc<AtomicBool>, code: u16) {
         tracing::info!("avrcp: key {code} -> home, but a try is already under way");
         return;
     }
-    tracing::info!("avrcp: key {code} -> home: trying the known network if the access point is up");
+    tracing::info!("avrcp: key {code} -> the access point: start it with no link, go home from it");
     let handle = Arc::clone(handle);
     let done = Arc::clone(busy);
     let spawned = std::thread::Builder::new().name("lempi-home".into()).spawn(move || {
         let mut lines = Vec::new();
         match std::process::Command::new("sudo")
-            .args(["-n", crate::bluetooth::HELPER, "ap-return"])
+            .args(["-n", crate::bluetooth::HELPER, "ap-request"])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -381,7 +387,11 @@ fn go_home(handle: &Arc<EngineHandle>, busy: &Arc<AtomicBool>, code: u16) {
         }
         match home_outcome(&lines) {
             HomeOutcome::Home => {
-                tracing::info!("avrcp: home -- back on the known network");
+                if lines.iter().any(|l| l.contains("\"ap\":\"active\"")) {
+                    tracing::info!("avrcp: the access point is up");
+                } else {
+                    tracing::info!("avrcp: home -- back on the known network");
+                }
                 handle.send(Command::Cue(Cue::Home));
             }
             HomeOutcome::NotHome(why) => {
@@ -429,8 +439,9 @@ mod tests {
         assert_eq!(map_key(KEY_NEXTSONG), Some(Action::Skip));
         assert_eq!(map_key(KEY_FORWARD), Some(Action::Skip));
 
-        // Previous and Back mean "home", refused by ap-return off the access
-        // point, so still nothing there [PI3-ROCKER-010], [SPEC-WFO-085].
+        // Previous and Back ask for the access point, refused by ap-request
+        // on a known network, so still nothing there [PI3-ROCKER-010],
+        // [SPEC-WFO-090].
         assert_eq!(map_key(KEY_PREVIOUSSONG), Some(Action::Home));
         assert_eq!(map_key(KEY_BACK), Some(Action::Home));
         assert_eq!(map_key(999), None);
@@ -441,6 +452,11 @@ mod tests {
     fn the_home_key_reads_what_ap_return_did() {
         let l = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(home_outcome(&l(&[r#"{"trying":true}"#, r#"{"ok":true}"#])), HomeOutcome::Home);
+        // With no link, the same key starts the access point [SPEC-WFO-090].
+        assert_eq!(home_outcome(&l(&[r#"{"trying":true}"#, r#"{"ok":true,"ap":"active"}"#])), HomeOutcome::Home);
+        assert_eq!(
+            home_outcome(&l(&[r#"{"ok":false,"error":"on a known network: there is no access point to start"}"#])),
+            HomeOutcome::Ignored("on a known network: there is no access point to start".into()));
         assert_eq!(
             home_outcome(&l(&[r#"{"trying":true}"#,
                               r#"{"ok":false,"error":"the known network did not answer"}"#])),

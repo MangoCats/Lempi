@@ -16,9 +16,11 @@ in [PI011](PI011-two-speakers-and-placement.md) and its siblings, per
 Six tools were built during the 2026-09-08 investigation and the stutter hunt
 that followed -- five instruments (`lempi-underruns`, `lempi-startup-sample`,
 `lempi-hci-capture`, `lempi-linkstate`, `lempi-vitals`) and one intervention
-(`lempi-afh-seed`). Four are **off by default** because they cost something to
-run or because they change behaviour; all six stay installed, because the
-expensive part was working out what to measure, not writing it.
+(`lempi-afh-seed`). Four were **off by default** because they cost something to
+run or because they change behaviour. The five instruments stay installed,
+because the expensive part was working out what to measure, not writing it;
+the intervention was retired on 2026-10-25, having failed twice
+`[PI3-FOUND-860]`.
 
 **`lempi-underruns` — always available, costs nothing.** Prints the player's
 own `underrun_samples`: how many samples the output ring failed to supply.
@@ -130,23 +132,13 @@ reboots can reboot in a loop. See [PI027](PI027-the-controller-wedge.md)
     sudo systemctl disable --now lempi-btwatch.timer   # off
     LEMPI_BTWATCH_RESET=0                           # watch, never reset
 
-**`lempi-afh-seed` — installed, disabled, and the only other one that changes
-behaviour.** Not an instrument: it hands the controller a channel
-classification saved from a settled link, so a boot starts adapted instead of
-learning the room again. `save` captures the live map, `show` decodes it into
-MHz, `apply` writes it, `boot` applies it seven times across the window in
-which the link comes up. Built to test `[PI3-FOUND-520]`, and it comes back
-out if that test fails. It failed `[PI3-FOUND-530]` and was disabled here;
-since 2026-10-23 it lives in `appliance/bluetooth/`, staged beside this node's
-setup, because `lp3-wifi` has it too `[LP3-BT-020]`.
-
-Everything else here only watches. This one acts, and it encodes an assumption
-about one room, so it is the one to disable first when something is behaving
-strangely.
-
-    sudo lempi-afh-seed save                       # while it sounds right
-    sudo systemctl enable --now lempi-afh-seed     # on
-    sudo systemctl disable --now lempi-afh-seed    # off
+**`lempi-afh-seed` — retired 2026-10-25.** Not an instrument: it handed the
+controller a channel classification saved from a settled link, so a boot
+would start adapted instead of learning the room again. Built to test
+`[PI3-FOUND-520]`, to come back out if that test failed. It failed here
+`[PI3-FOUND-530]`, and on `lp3-wifi` it held more channels without showing a
+stall either way `[LP3-RAD-020]`; both nodes' setup scripts now remove it
+`[PI3-FOUND-860]`.
 
 **`[PI3-FOUND-620]` `lempi-vitals` — installed, disabled, and the answer to a
 record that died with the fault.** On 2026-09-10 the appliance stopped

@@ -1,8 +1,8 @@
 # SPEC061: Travel Wi-Fi Failover and Hotspot Pivot
 
-**Design Specification — Tier 2 · written 2026-10-07, updated 2026-10-07 · built 2026-10-07 (`88e249a`) · autonomous off-infrastructure access point failover, standalone offline operation, and in-browser hotspot pivot**
+**Design Specification — Tier 2 · written 2026-10-07, updated 2026-10-25 · built 2026-10-07 (`88e249a`); on request since 2026-10-25 · autonomous off-infrastructure access point failover, standalone offline operation, and in-browser hotspot pivot**
 
-When a Lempi appliance travels outside its home network, it loses infrastructure Wi-Fi association. This specification defines autonomous failover to the local access point (`lempi-ap`), establishes first-class standalone offline operation (Approach 1), and provides an in-browser pivot mechanism (Approach 3D) to transfer the appliance onto a mobile hotspot or venue network with confirm-or-revert safety.
+When a Lempi appliance travels outside its home network, it loses infrastructure Wi-Fi association. This specification defines the local access point (`lempi-ap`) -- autonomous failover until 2026-10-25, on request since `[SPEC-WFO-090]` -- establishes first-class standalone offline operation (Approach 1), and provides an in-browser pivot mechanism (Approach 3D) to transfer the appliance onto a mobile hotspot or venue network with confirm-or-revert safety.
 
 > **Related:** [SPEC034](SPEC034-wifi-configuration.md) `[SPEC-WIFI-010..050]` (Wi-Fi config, confirm-or-revert, port 80 listener) · [SPEC050](SPEC050-node-discovery.md) `[SPEC-DSC-010..020]` (UDP node discovery) · [SPEC051](SPEC051-trusted-networks.md) `[SPEC-TN-020]` (network trust boundaries) · [SPEC052](SPEC052-web-access-guard.md) `[SPEC-WAG-020]` (host allowance on LAN/AP) · [REQ003](REQ003-audio-playback.md) `[REQ-AUD-150]` (Bluetooth audio coexistence) · [IMPL022](../IMPL022-travel-wifi-failover.md) (implementation plan)
 
@@ -10,8 +10,8 @@ When a Lempi appliance travels outside its home network, it loses infrastructure
 
 ## 1. Requirements
 
-**`[REQ-WFO-010]` Autonomous failover to access point.**
-When the appliance boots without known Wi-Fi in range, or loses active Wi-Fi connectivity for more than a debounce threshold, it MUST automatically activate its internal access point (`lempi-ap`) without requiring manual console interaction. Failover bringup MUST be standing and MUST NOT schedule an automatic revert timer.
+**`[REQ-WFO-010]` The access point on request.**
+With no Wi-Fi link, the appliance MUST bring up its internal access point (`lempi-ap`) when the listener asks -- the speaker's Left key, or a screen's button -- without manual console interaction, and MUST NOT bring it up otherwise, except on a node where nobody could ask `[SPEC-WFO-090]`. Bringup MUST be standing and MUST NOT schedule an automatic revert timer. *Until 2026-10-25 it was automatic, after 45 s of boot and 30 s without a link; an access point on the radio a speaker's audio shares is now up only while someone wants it* [PI031](../../LempiPi/PI031-settling-the-shared-radio.md).
 
 **`[REQ-WFO-020]` Standalone offline operation (Approach 1).**
 A listener joining `lempi-ap` MUST be able to operate the player entirely offline. Full playback, catalog browsing, volume adjustments, and queue management MUST succeed with zero internet access, zero external app installation, and zero obligation to pivot.
@@ -29,14 +29,13 @@ Wi-Fi scanning and mode switching MUST NEVER run periodically in the background 
 
 ## 2. Autonomous Failover Timing & State Machine
 
-**`[SPEC-WFO-010]` Disconnection detection and debounce thresholds.**
-The failover keeper (`lempi-wifi-failover`) monitors NetworkManager connection state via periodic evaluation:
+**`[SPEC-WFO-010]` The Wi-Fi keeper's tick.**
+The keeper (`lempi-wifi-failover`, every 20 s from 20 s after boot) evaluates NetworkManager's state:
 1. **Radio State Guard**: If Wi-Fi is soft-blocked via `rfkill` (`radio wlan off`), the keeper exits immediately (`0`) to honor operator intent.
 2. **In-Flight Revert Guard**: If an active `lempi-revert-*.timer` is running, a user-directed network switch is underway; the keeper exits immediately (`0`) and defers to the revert timer.
-3. **Boot Grace Period (`45s`)**: On system boot, the keeper pauses 45 seconds before evaluating connectivity, allowing DHCP negotiation and initial association with known autoconnect networks to complete.
-4. **Link-Loss Debounce (`30s`)**: If an active Wi-Fi link drops during operation, the keeper records the timestamp in `/run/lempi/wifi_disconnected_since` and waits 30 seconds before intervening.
-5. **Connection Negotiation Guard**: If `wlan0` is actively negotiating (`connecting` state), the keeper exits cleanly (`0`).
-6. **Autonomous Bringup**: If disconnected for $\ge 30$ seconds, the keeper invokes `lempi-btctl ap-failover`, which writes scoped `dnsmasq` resolver configuration and brings up `lempi-ap` without scheduling the 5-minute self-destruct timer used by interactive `ap-start`.
+3. **On the access point**: its clients and the way home are watched `[SPEC-WFO-080]`.
+4. **On a network**: held after 30 s, no roaming and no background scans `[PI3-AIM-160]`.
+5. **No link**: the LED shows its no-link brightness `[PI3-LED-020]`; nothing is started, except as `[SPEC-WFO-090]` allows. `lempi-btctl ap-failover` still writes the scoped `dnsmasq` configuration and brings up `lempi-ap` without the 5-minute self-destruct timer interactive `ap-start` schedules.
 
 **`[SPEC-WFO-020]` Access point network topology.**
 When `lempi-ap` is activated by failover:
@@ -44,7 +43,7 @@ When `lempi-ap` is activated by failover:
 - Static IP: `10.42.0.1/24` on `wlan0`.
 - DHCP & DNS: NetworkManager's scoped `dnsmasq` serves IP leases and maps `lempi` and `lempi.lan` to `10.42.0.1` `[SPEC-WIFI-030]`.
 - Web Endpoints: Served concurrently on port `5720` and port `80` (`http://lempi/` or `http://10.42.0.1/`) via `CAP_NET_BIND_SERVICE` `[SPEC-WIFI-050]`.
-- Physical Status: ACT LED indicates radio status via `lempi-btctl led wifi` `[PI3-LED-010]`.
+- Physical Status: ACT LED indicates radio status via `lempi-btctl led wifi` `[PI3-LED-010]`; in its `on` mode, a second brightness with no link at all `[PI3-LED-020]`.
 
 ---
 
@@ -98,28 +97,33 @@ Wi-Fi scanning aggressively hops all 2.4 GHz channels, creating heavy RF content
 
 **`[SPEC-WFO-080]` Return-to-home infrastructure hysteresis.**
 When the appliance returns to its home network:
-1. **Reboot Path**: On power cycle, the 45-second boot grace period automatically prioritizes known autoconnect infrastructure profiles before AP failover can trigger.
+1. **Reboot Path**: On power cycle, known autoconnect profiles are joined as usual; the access point does not start by itself `[SPEC-WFO-090]`.
 2. **Runtime Manual Path**: User can tap **"Stop AP, return to Wi-Fi"** (`POST /wifi/ap/stop`), which reconnects to preferred known networks. *Until 2026-10-10 it never could: it looked for type `wifi`, which terse nmcli never prints `[PI3-FOUND-800]`. Nor did it record its change where the page reloaded at home looks for one, so a good return would have reverted to the access point five minutes later, with no banner to confirm it; it does now.*
 3. **Idle Return (built 2026-10-10)**: while `lempi-ap` is up, the failover keeper counts its associated client stations (`iw dev wlan0 station dump`) and logs each change — the record of when anyone joined or left [PI028](../../LempiPi/PI028-started-before-its-audio.md). With no clients, the way home is `[SPEC-WFO-085]`'s. Not conditioned on idle audio, as first written: an appliance that plays all day never is.
 
 **`[SPEC-WFO-085]` The way home: the speaker's key, or the keeper's backoff.** Decided by the maintainer 2026-10-10, on the reasoning that a Bluetooth speaker usually means a battery, and a wired one mains power:
 
-- **A Bluetooth speaker connected — the listener's way.** The speaker's Left key (previous track), reserved for a "like" everywhere else `[PI3-ROCKER-010]`, means "I'm home" while the access point is up. The player runs `lempi-btctl ap-return`, off its input thread. The keeper tries nothing itself: a try is a switch on the one radio the speaker's audio shares `[SPEC-WFO-070]`.
+- **A Bluetooth speaker connected — the listener's way.** The speaker's Left key (previous track), reserved for a "like" on a network `[PI3-ROCKER-010]`, means "I'm home" while the access point is up. The player runs `lempi-btctl ap-request`, which is `ap-return` there, off its input thread. The keeper tries nothing itself: a try is a switch on the one radio the speaker's audio shares `[SPEC-WFO-070]`.
 - **No speaker connected — the keeper's way.** After 90 s with no clients it tries; each failure doubles the wait (3, 6, 12 min) to 15 min at most, and a client resets it.
 - **`ap-return`** refuses while a client is on the access point, prints `{"trying":true}` the moment it starts the switch, waits 15 s at most (every try takes the access point off the air for that long), and puts the access point straight back if the known network does not answer. No confirm-or-revert timer: nobody is there to confirm.
 - **Cues**, because the speaker has no screen: a soft click when a try starts, two rising notes when it reaches home, one low note when it does not. Nothing for a press refused — then the key did nothing. Laid over the output in the device callback, at the listener's volume, so they are heard at once, over the music or a pause, and never pass through the ring or the history.
 - A speaker that powers the Pi has a third way already: off and on is a reboot, and the boot path goes home first (item 1).
 
+**`[SPEC-WFO-090]` The access point only on request.** Decided by the maintainer 2026-10-25 [PI031](../../LempiPi/PI031-settling-the-shared-radio.md): an access point broadcasts on the one radio a speaker's audio shares, so it runs only while someone wants it.
+- **Asked for** by the speaker's Left key, or fbui's **START AP** on its Settings page `[SPEC-FBUI-120]`, both through `lempi-btctl ap-request`: with no link it prints `{"trying":true}` and brings up `lempi-ap` standing, as `ap-failover`; on the access point it is `ap-return`; on a network it refuses, and the key stays silent. The cues are `[SPEC-WFO-085]`'s: a click, then two rising notes when it did what was asked, one low note when it did not.
+- **Shown** by the LED's no-link brightness `[PI3-LED-020]`, and by the button's label.
+- **Except where nobody could ask.** A node with no paired Bluetooth device has no key to press and no audio sharing the radio; brought to a new home, it would be unreachable short of rewriting its card. After 75 s with no link and no paired device, and not while a network is being joined, the keeper brings up `lempi-ap` itself, as `[SPEC-WFO-010]` always did.
+
 ---
 
 ## 6. Traceability Summary
 
-- Reference `[REQ-WFO-010]`: Autonomous AP failover on boot or link loss (`lempi-wifi-failover`)
+- Reference `[REQ-WFO-010]`: The access point on request (`lempi-btctl ap-request`, `avrcp.rs`, `fbui.rs`)
 - Reference `[REQ-WFO-020]`: First-class standalone offline operation (Web UI / `skin.js`)
 - Reference `[REQ-WFO-030]`: In-browser hotspot pivot workflow with manual SSID entry (`player/src/web/wifi.rs`)
 - Reference `[REQ-WFO-040]`: Confirm-or-revert pivot safety net without autoconnect poisoning (`lempi-wifi-revert`)
 - Reference `[REQ-WFO-050]`: Suppress active rescan during BT audio (`lempi-btctl` / WirePlumber)
-- Reference `[SPEC-WFO-010]`: 45s boot grace, 30s link-loss debounce, rfkill/revert guards (`lempi-wifi-failover`)
+- Reference `[SPEC-WFO-010]`: The keeper's tick: rfkill/revert guards, the access point watched, a link held, the LED (`lempi-wifi-failover`)
 - Reference `[SPEC-WFO-020]`: Fallback AP topology (`10.42.0.1`, port 80/5720, ACT LED) (`lempi-btctl` / `dnsmasq`)
 - Reference `[SPEC-WFO-030]`: Offline UI banner & mobile routing advisory (`skin.html` / `skin.js`)
 - Reference `[SPEC-WFO-040]`: Permanent stop-at-Approach-1 capability (Web UI)
@@ -128,3 +132,4 @@ When the appliance returns to its home network:
 - Reference `[SPEC-WFO-070]`: RF scan suppression during active playback via `lempi_routed` (`lempi-btctl`)
 - Reference `[SPEC-WFO-080]`: Return-to-infrastructure boot & idle hysteresis (`lempi-wifi-failover`)
 - Reference `[SPEC-WFO-085]`: The way home by speaker key or by backoff, and the cues (`avrcp.rs`, `output.rs`, `lempi-wifi-failover`, `lempi-btctl ap-return`)
+- Reference `[SPEC-WFO-090]`: The access point only on request, and on its own only where nobody could ask (`lempi-btctl ap-request`, `lempi-wifi-failover`)

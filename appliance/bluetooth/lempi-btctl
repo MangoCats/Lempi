@@ -1057,6 +1057,44 @@ case "$VERB" in
             die "the known network did not answer -- the access point is back up"
         fi
         ;;
+    a2dp-sample)
+        # `a2dp-sample [seconds]`: how steady the audio handed to the
+        # controller is, for the keeper's early judgement [PI3-AIM-150].
+        # Root because btmon is. Every ACL packet sent of at least 200
+        # bytes is a media packet, and with SBC its size is fixed by the
+        # bitpool: PipeWire lowers the bitpool by 2 every time a write to
+        # the controller would block -- dropping that packet -- and raises
+        # it by 1 a second while the queue stays empty. So a link the radio
+        # keeps up with sends one packet size, and one it does not keeps
+        # changing size [PI3-FOUND-850]. Prints how many media packets were
+        # sent, the commonest size, and how many were that size.
+        secs="${2:-15}"
+        [[ "$secs" =~ ^([1-9]|[1-5][0-9]|60)$ ]] || die "seconds must be 1-60"
+        command -v btmon >/dev/null 2>&1 || die "btmon is not installed"
+        timeout "$secs" btmon 2>/dev/null \
+            | sed -n 's/.*< ACL Data TX.* dlen \([0-9][0-9]*\).*/\1/p' \
+            | awk '$1 >= 200 { n++; c[$1]++ }
+                   END { m = 0; d = 0
+                         for (k in c) if (c[k] > m) { m = c[k]; d = k }
+                         printf "{\"ok\":true,\"packets\":%d,\"modal_dlen\":%d,\"at_modal\":%d}\n", n, d, m }'
+        ;;
+    ap-request)
+        # The one thing the speaker's Left key and fbui's button both ask
+        # [SPEC-WFO-090]: the access point is up only when somebody asked
+        # for it. With no Wi-Fi link at all, start it -- standing, as
+        # ap-failover always was; on it, go home, which is ap-return and
+        # refused the same ways; on a network, nothing. `{"trying":true}`
+        # first whenever something is about to change, for the key's click.
+        if [ "$(active_wifi_conn)" = "lempi-ap" ]; then
+            exec bash "$0" ap-return
+        fi
+        state="$(nmcli -t -f DEVICE,STATE dev 2>/dev/null | sed -n 's/^wlan0://p')"
+        case "$state" in
+            connected|connecting*) die "on a known network: there is no access point to start" ;;
+        esac
+        printf '{"trying":true}\n'
+        exec bash "$0" ap-failover
+        ;;
 
     *)
         die "unknown verb"

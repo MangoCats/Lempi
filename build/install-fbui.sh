@@ -26,6 +26,7 @@
 # can fail without stopping the music [SPEC-FBUI-010]. What a restart costs is
 # the panel blanking for a moment.
 set -uo pipefail
+. "$(dirname "$0")/lib-defaults.sh"
 
 HOST="${1:-}"
 BIN=player/target/aarch64-unknown-linux-gnu/release/fbui
@@ -62,6 +63,10 @@ if [ "$LOCAL_SUM" = "$REMOTE_SUM" ] && { [ -z "$LOWER" ] || [ "$LOCAL_SUM" = "$P
 fi
 echo "deploy-fbui: ${REMOTE_SUM:-absent} -> $LOCAL_SUM"
 
+# A shared radio pauses for the upload, and plays again when this ends
+# [PI3-AIM-170].
+transfer_hold "$HOST"
+trap 'transfer_release "$HOST"' EXIT
 scp -q "$BIN" "$HOST:/tmp/fbui.new" || die "upload failed"
 UPLOADED=$(ssh "$HOST" "md5sum /tmp/fbui.new 2>/dev/null | cut -d' ' -f1")
 [ "$UPLOADED" = "$LOCAL_SUM" ] || die "uploaded binary does not match (${UPLOADED:-nothing} != $LOCAL_SUM); not installing"

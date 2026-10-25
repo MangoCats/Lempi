@@ -88,6 +88,42 @@ else
     SPEAKER_KNOWN=no
 fi
 
+INCUMBENT_DIR="${LEMPI_RUN_DIR:-/run/lempi}"
+SETTLED="$INCUMBENT_DIR/settled"
+
+# **`[PI3-AIM-140]` Settled, then quiet.** Decided by the maintainer
+# 2026-10-25 [PI031](../../LempiPi/PI031-settling-the-shared-radio.md): once a
+# speaker has held the audio for two minutes and been judged steady
+# `[PI3-AIM-150]`, a tick asks only what it can without bluetoothd. The
+# keeper's own polling was audible once `[PI3-FOUND-230]`; a full tick is
+# still four `bluetoothctl` calls and more, and on a settled link every one of
+# them answers what the last one did.
+#
+# What a quiet tick asks: the kernel's link list (`hcitool con`, which never
+# touches the chip `[PI3-FOUND-730]`), the player's sink, and the listener's
+# choice -- one link, to the speaker settled on, the player still sending to
+# it, and the choice unchanged. Anything else -- a second link, a dropped one,
+# the stream moved, another speaker chosen -- ends the quiet, said once, and
+# the full tick runs at once.
+if [ -r "$SETTLED" ]; then
+    { read -r Q_ADDR; read -r Q_ALIAS; } < "$SETTLED" 2>/dev/null
+    Q_CON=$(hcitool con 2>/dev/null)
+    Q_WHY=""
+    if [ "$(cat "$INCUMBENT_DIR/incumbent" 2>/dev/null)" != "${Q_ADDR:-}" ]; then
+        Q_WHY="it is no longer the incumbent"
+    elif [ "$SPEAKER_KNOWN" = yes ] && [ -z "$SPEAKER_PINNED" ] && [ "${SPEAKER:-}" != "$Q_ADDR" ]; then
+        Q_WHY="another speaker was chosen"
+    elif [ "$(printf '%s\n' "$Q_CON" | grep -c 'ACL')" != 1 ] ||
+         ! printf '%s\n' "$Q_CON" | grep -qi "$Q_ADDR"; then
+        Q_WHY="the links changed"
+    elif [ "$(lempi_routed | tr a-z A-Z)" != "$(printf '%s' "${Q_ALIAS:-}" | tr a-z A-Z)" ]; then
+        Q_WHY="the stream moved"
+    fi
+    [ -z "$Q_WHY" ] && exit 0
+    rm -f "$SETTLED" 2>/dev/null
+    echo "${Q_ALIAS:-the speaker} is no longer settled ($Q_WHY): full ticks again [PI3-AIM-140]"
+fi
+
 # **`[PI3-FOUND-130]` Trust is what lets the speaker reconnect to US**, and it
 # is the first thing a recovery throws away.
 #
@@ -125,11 +161,10 @@ fi
 # information wanted is all in one `info` block, so it is fetched once and
 # read several times. The keeper polls; polling should cost as little as it
 # can while something is playing.
-# Does PipeWire actually offer a sink by this name? Parsed from the
-# numbered rows only, the same discipline as `lempi-wait-sink`
-# `[PI3-FOUND-110]`, so no header or box-drawing line can be mistaken for a
-# sink.
-INFO=$(bluetoothctl info "${SPEAKER:-none}" 2>/dev/null)
+#
+# The one `info` fetched here for that, into `INFO`, outlived every reader
+# of it and was asked for on every tick with nothing reading the answer;
+# removed 2026-10-25 [PI3-AIM-140].
 
 # **`[PI3-FOUND-680]` Trust is not a fact about the chosen speaker, it is the
 # enforcement.** This used to be asserted here, unconditionally, on the
@@ -207,8 +242,8 @@ trust_only() {
 # else may stay connected. A missing sink is something to wait for, never a
 # reason to switch.
 # Overridable so the test harness can run the real policy without touching
-# the machine it runs on `[PI3-AIM-100]`.
-INCUMBENT_DIR="${LEMPI_RUN_DIR:-/run/lempi}"
+# the machine it runs on `[PI3-AIM-100]`; `INCUMBENT_DIR` is set above, for
+# the quiet tick.
 INCUMBENT="$INCUMBENT_DIR/incumbent"
 
 # **`[PI3-FOUND-720]` A chase that never succeeds must get slower, because the
@@ -276,9 +311,133 @@ CHASE_BUDGET="${LEMPI_CHASE_SECONDS:-$(lempi_preferred_wait)}"
 # Recorded the moment a choice is made, not a tick later: `lempi-wait-sink`
 # holds the player until it sees one `[PI3-AIM-120]`, and thirty seconds of
 # waiting for the bookkeeping would be thirty seconds of silence for nothing.
+#
+# A claim starts the clock the early judgement and the settling run on
+# `[PI3-AIM-140]`, `[PI3-AIM-150]`.
 claim() {
     mkdir -p "$INCUMBENT_DIR" 2>/dev/null
     printf '%s\n' "$1" > "$INCUMBENT" 2>/dev/null
+    printf '%s %s\n' "$1" "$(date +%s)" > "$INCUMBENT_DIR/held_since" 2>/dev/null
+    rm -f "$INCUMBENT_DIR/judged" "$SETTLED" 2>/dev/null
+}
+
+# Seconds `$1` has held the audio. A record for anybody else, or none -- a
+# keeper upgraded under a speaker already connected -- starts the clock now.
+held_age() {
+    _ha="" _hs=""
+    [ -r "$INCUMBENT_DIR/held_since" ] && read -r _ha _hs < "$INCUMBENT_DIR/held_since" 2>/dev/null
+    case "${_hs:-}" in ''|*[!0-9]*) _ha="" ;; esac
+    if [ "${_ha:-}" != "$1" ]; then
+        printf '%s %s\n' "$1" "$(date +%s)" > "$INCUMBENT_DIR/held_since" 2>/dev/null
+        echo 0
+        return 0
+    fi
+    echo $(( $(date +%s) - _hs ))
+}
+
+# The player is sending to `$ALIAS` and playing.
+on_air() {
+    [ -n "${ALIAS:-}" ] &&
+        [ "$(printf '%s' "$ROUTED" | tr a-z A-Z)" = "$(printf '%s' "$ALIAS" | tr a-z A-Z)" ] &&
+        lempi_playing
+}
+
+# **`[PI3-AIM-150]` One redial, early, and only on a link that is failing.**
+# Decided by the maintainer 2026-10-25 [PI031](../../LempiPi/PI031-settling-the-shared-radio.md).
+# A redial -- the link dropped and dialled again, outbound -- is the only
+# thing that ever cured the power-up stutter `[PI3-FOUND-440]`. It was
+# removed because it ran on every boot and cost 36.2 s of silence
+# `[PI3-FOUND-450]`, on boots that never stuttered too.
+#
+# Now it is conditional, and it is judged rather than assumed: between
+# EARLY_FROM and EARLY_UNTIL seconds into a speaker's hold, while the player
+# is sending to it, one EARLY_SECS sample of the media packets handed to the
+# controller (`lempi-btctl a2dp-sample`). A link the radio keeps up with sends
+# one packet size; one it does not keeps changing size, because PipeWire
+# drops a packet and lowers the bitpool at every blocked write
+# `[PI3-FOUND-850]`. Fewer than nine in ten at the commonest size is a
+# failing link, and it is redialled -- once per speaker per boot. The silence
+# is the reconnection's, a few seconds: the reopen waits on the sink, not on
+# `Connected: yes`, which is what made the old one's half a minute
+# `[PI3-FOUND-450]`.
+EARLY_FROM="${LEMPI_EARLY_FROM:-20}"
+EARLY_UNTIL="${LEMPI_EARLY_UNTIL:-180}"
+EARLY_SECS="${LEMPI_EARLY_SAMPLE:-15}"
+BTCTL="${LEMPI_BTCTL:-/usr/local/bin/lempi-btctl}"
+early_judge() {
+    _who="$1"
+    [ -e "$INCUMBENT_DIR/judged" ] && return 0
+    _age=$(held_age "$_who")
+    if [ "$_age" -gt "$EARLY_UNTIL" ]; then
+        : > "$INCUMBENT_DIR/judged"
+        return 0
+    fi
+    [ "$_age" -ge "$EARLY_FROM" ] || return 0
+    on_air || return 0
+    _r=$(sudo -n "$BTCTL" a2dp-sample "$EARLY_SECS" 2>/dev/null)
+    _n=$(printf '%s' "$_r" | sed -n 's/.*"packets":\([0-9]*\).*/\1/p')
+    _d=$(printf '%s' "$_r" | sed -n 's/.*"modal_dlen":\([0-9]*\).*/\1/p')
+    _m=$(printf '%s' "$_r" | sed -n 's/.*"at_modal":\([0-9]*\).*/\1/p')
+    if [ -z "$_n" ] || [ -z "$_m" ]; then
+        # A guard that cannot run says so, and is not taken as a clean link.
+        echo "could not sample the audio to $ALIAS (${_r:-no answer}); this connection is not judged [PI3-AIM-150]"
+        : > "$INCUMBENT_DIR/judged"
+        return 0
+    fi
+    # Too little sent to judge: the stream barely ran. The next tick, while
+    # the window lasts.
+    [ "$_n" -ge 100 ] || return 0
+    if [ $(( _m * 10 )) -ge $(( _n * 9 )) ]; then
+        echo "$ALIAS is steady: $_m of $_n packets at $_d bytes in ${EARLY_SECS}s [PI3-AIM-150]"
+        : > "$INCUMBENT_DIR/judged"
+        return 0
+    fi
+    if [ -e "$INCUMBENT_DIR/redialed-$_who" ]; then
+        echo "$ALIAS is still failing after its redial: $_m of $_n packets at $_d bytes; not redialling again [PI3-AIM-150]"
+        : > "$INCUMBENT_DIR/judged"
+        return 0
+    fi
+    echo "$ALIAS is failing: $_m of $_n packets at $_d bytes in ${EARLY_SECS}s -- redialling it once [PI3-AIM-150]"
+    : > "$INCUMBENT_DIR/redialed-$_who"
+    bluetoothctl disconnect "$_who" >/dev/null 2>&1
+    sleep 2
+    _t0=$(date +%s)
+    # The speaker may have dialled back on its own in the pause; paging a
+    # link already coming up only collides with it `[PI3-FOUND-140]`.
+    hcitool con 2>/dev/null | grep -qi "$_who" || bluetoothctl connect "$_who" >/dev/null 2>&1
+    while ! lempi_sink_present "$ALIAS"; do
+        [ $(( $(date +%s) - _t0 )) -lt 20 ] || break
+        sleep 1
+    done
+    lempi_reopen
+    if lempi_sink_present "$ALIAS"; then
+        echo "redialled $ALIAS: its sink was back $(( $(date +%s) - _t0 ))s after the dial"
+    else
+        echo "redialled $ALIAS, and its sink was not back in 20s; the next tick takes it from here"
+    fi
+    # Judged again once the new link has run a while, to say whether it
+    # worked; the marker above stops a second redial either way.
+    printf '%s %s\n' "$_who" "$(date +%s)" > "$INCUMBENT_DIR/held_since" 2>/dev/null
+}
+
+# Two minutes held, judged, and on the air: the keeper goes quiet
+# `[PI3-AIM-140]`. Not while a dwell is still counting toward a new preferred
+# speaker `[PI3-AIM-130]` -- the quiet tick does not count it -- so a speaker
+# that is not the listener's choice settles once it has become it.
+SETTLE_AFTER="${LEMPI_SETTLE_SECONDS:-120}"
+settle() {
+    [ -e "$INCUMBENT_DIR/judged" ] || return 0
+    # The quiet tick reads `hcitool con`; without it every quiet tick would
+    # read "the links changed", and settle and unsettle in turn.
+    command -v hcitool >/dev/null 2>&1 || return 0
+    if [ "$SPEAKER_KNOWN" = yes ] && [ -z "$SPEAKER_PINNED" ] && [ "${SPEAKER:-}" != "$1" ]; then
+        return 0
+    fi
+    _age=$(held_age "$1")
+    [ "$_age" -ge "$SETTLE_AFTER" ] || return 0
+    on_air || return 0
+    printf '%s\n%s\n' "$1" "$ALIAS" > "$SETTLED" 2>/dev/null &&
+        echo "$ALIAS has held the audio for ${_age}s: settled, the keeper goes quiet [PI3-AIM-140]"
 }
 
 # **Exactly one.** Anything else that has managed to connect is shown the
@@ -402,6 +561,8 @@ hold() {
         echo "'$ALIAS' holds the audio but has no sink in PipeWire yet -- waiting, not switching"
     fi
     dwell "$CONNECTED"
+    early_judge "$CONNECTED"
+    settle "$CONNECTED"
     exit 0
 }
 

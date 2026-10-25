@@ -49,6 +49,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import star_merge  # noqa: E402  -- which listener tables are a node's own
 import star_patch  # noqa: E402
+import transfer_hold  # noqa: E402  -- a shared radio pauses for an upload [PI3-AIM-170]
 
 OWN = sorted(t for t, s in star_merge.TABLES.items() if s["rule"] in (star_merge.LOCAL, star_merge.HUB))
 
@@ -105,7 +106,8 @@ def sha256(path):
 
 
 def upload(host, local, remote):
-    r = subprocess.run(["scp", "-q", "-o", "ServerAliveInterval=10", local, f"{host}:{remote}"])
+    with transfer_hold.held_ssh(host, say=say):
+        r = subprocess.run(["scp", "-q", "-o", "ServerAliveInterval=10", local, f"{host}:{remote}"])
     rc, out = ssh(host, f"sha256sum {shlex.quote(remote)}", quiet=True)
     if r.returncode or rc or out.split()[0] != sha256(local):
         raise Failed(f"upload of {local} did not arrive intact")

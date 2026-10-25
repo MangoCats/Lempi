@@ -4,6 +4,8 @@
 
 This document details the concrete implementation plan for [SPEC061](spec/SPEC061-travel-wifi-failover.md), providing autonomous failover to `lempi-ap`, first-class offline operation (Approach 1), and a safe in-browser pivot to mobile hotspots or venue networks (Approach 3D).
 
+> **Since 2026-10-25 the failover is not autonomous**: the access point comes up when the listener asks, and on its own only on a node with no paired speaker `[SPEC-WFO-090]`. The plan below is the 2026-10-07 build, kept as built.
+
 > **Related:** [SPEC061](spec/SPEC061-travel-wifi-failover.md) (travel Wi-Fi failover specification) · [SPEC034](spec/SPEC034-wifi-configuration.md) (Wi-Fi config and confirm-or-revert) · [SPEC050](spec/SPEC050-node-discovery.md) (UDP discovery) · [SPEC052](spec/SPEC052-web-access-guard.md) (host access guards) · [PI026](../LempiPi/PI026-startup-preflight.md) (startup preflight) · [BOSE006](../BosePi/BOSE006-what-lands-where.md) (partition layout)
 
 ---

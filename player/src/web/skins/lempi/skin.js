@@ -1671,10 +1671,16 @@
   const ledMode = $('led-mode');
   const ledBrightness = $('led-brightness');
   const ledBrightnessLabel = $('led-brightness-label');
+  // The brightness with no Wi-Fi link `[PI3-LED-020]`: stored here, applied
+  // by the appliance's Wi-Fi keeper, which is the one watching the link.
+  const ledNowifiRow = $('led-nowifi-row');
+  const ledNowifi = $('led-nowifi');
+  const ledNowifiLabel = $('led-nowifi-label');
 
   function showBrightness(show) {
     setHidden(ledBrightness, !show);
     setHidden(ledBrightnessLabel, !show);
+    setHidden(ledNowifiRow, !show);
   }
 
   async function led() {
@@ -1683,6 +1689,8 @@
       ledMode.value = body.mode ?? 'on';
       ledBrightness.value = body.brightness ?? 100;
       setText(ledBrightnessLabel, `${ledBrightness.value}%`);
+      ledNowifi.value = body.nowifi ?? 25;
+      setText(ledNowifiLabel, `${ledNowifi.value}%`);
       showBrightness(ledMode.value === 'on');
     } catch { /* leave whatever it last showed */ }
   }
@@ -1710,6 +1718,16 @@
   };
   ledBrightness.oninput = () => {
     setText(ledBrightnessLabel, `${ledBrightness.value}%`);
+  };
+  // Posted on release too. This page is reached over a Wi-Fi link, so the
+  // light it changes is not the one showing; it is saved for when there is
+  // none.
+  ledNowifi.onchange = () => {
+    setText(ledNowifiLabel, `${ledNowifi.value}%`);
+    fetch(`/led/on?pct=${ledBrightness.value}&nowifi=${ledNowifi.value}`, { method: 'POST' });
+  };
+  ledNowifi.oninput = () => {
+    setText(ledNowifiLabel, `${ledNowifi.value}%`);
   };
 
   // ------------------------------------------------------------------ wifi

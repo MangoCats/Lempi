@@ -452,3 +452,143 @@ sinks "Built-in Audio Stereo"
 keeper >/dev/null
 assert_not_called "bluetoothctl connect $OONTZ" "still obeys a stored DAC on a node that has one"
 teardown
+
+# --- 20. the early judgement and its one redial `[PI3-AIM-150]` -----------
+
+# A fake lempi-btctl whose `a2dp-sample` answers what the fixture says.
+sampler() { # packets modal_dlen at_modal
+    printf '#!/bin/sh\nprintf "btctl %%s\n" "$*" >> "%s/calls"\nprintf "{\\"ok\\":true,\\"packets\\":%s,\\"modal_dlen\\":%s,\\"at_modal\\":%s}\n"\n' \
+        "$VT_STATE" "$1" "$2" "$3" > "$VT_STATE/btctl"
+    chmod +x "$VT_STATE/btctl"
+}
+# MIDDLETON holding the audio for `$1` seconds, the player sending to it.
+holding() {
+    speaker "$MIDDL" "MIDDLETON" yes yes
+    printf '%s\n' "$MIDDL" > "$VT_STATE/db_speaker"
+    printf '%s\n' "$MIDDL" > "$LEMPI_RUN_DIR/incumbent"
+    printf '%s %s\n' "$MIDDL" "$(( $(date +%s) - $1 ))" > "$LEMPI_RUN_DIR/held_since"
+    printf 'MIDDLETON\n' > "$VT_STATE/routed"
+    : > "$VT_STATE/playing"
+    sinks "MIDDLETON"
+    printf 'Connections:\n\t< ACL %s handle 11 state 1 lm CENTRAL\n' "$MIDDL" > "$VT_STATE/hci_con"
+}
+judge() { LEMPI_BTCTL="$VT_STATE/btctl" keeper; }
+
+# Too early: nothing sampled.
+setup
+holding 5; sampler 1100 612 1095
+judge >/dev/null
+assert_not_called "a2dp-sample" "a link five seconds old is not sampled yet"
+teardown
+
+# A steady link: judged once, never redialled.
+setup
+holding 30; sampler 1100 612 1095
+OUT=$(judge)
+assert_called "btctl a2dp-sample 15" "a link thirty seconds in is sampled"
+assert_in "$OUT" "MIDDLETON is steady: 1095 of 1100" "and a steady one is said to be"
+assert_not_called "bluetoothctl disconnect $MIDDL" "and is not redialled"
+: > "$VT_STATE/calls"
+judge >/dev/null
+assert_not_called "a2dp-sample" "judged once, not every tick"
+teardown
+
+# A failing link -- the packet size moving -- is redialled, once.
+setup
+holding 30; sampler 900 612 400
+printf '%s\n' "$MIDDL" > "$VT_STATE/reachable"
+# The kernel's link list as it is once the disconnect has gone through.
+: > "$VT_STATE/hci_con"
+OUT=$(judge)
+assert_in "$OUT" "MIDDLETON is failing: 400 of 900" "a moving packet size is a failing link"
+assert_called "bluetoothctl disconnect $MIDDL" "it is dropped"
+assert_called "bluetoothctl connect $MIDDL" "and dialled again, outbound"
+assert_called "reopen-output" "and the player sent back to it"
+assert_in "$OUT" "its sink was back" "with how long the sink took to return"
+# Still failing after it: said, and not redialled again.
+grep -q "$MIDDL" "$VT_STATE/connected" || printf 'Device %s MIDDLETON\n' "$MIDDL" >> "$VT_STATE/connected"
+printf '%s %s\n' "$MIDDL" "$(( $(date +%s) - 30 ))" > "$LEMPI_RUN_DIR/held_since"
+: > "$VT_STATE/calls"
+OUT=$(judge)
+assert_in "$OUT" "still failing after its redial" "a second failing sample is said"
+assert_not_called "bluetoothctl disconnect $MIDDL" "and never redials twice"
+teardown
+
+# Not playing: not judged, so silence cannot pass for a steady link.
+setup
+holding 30; sampler 1100 612 1095
+rm -f "$VT_STATE/playing"
+judge >/dev/null
+assert_not_called "a2dp-sample" "a paused player is not sampled"
+teardown
+
+# A sample that cannot be taken says so, and is not a clean bill.
+setup
+holding 30
+printf '#!/bin/sh\necho "{\\"ok\\":false,\\"error\\":\\"btmon is not installed\\"}"\n' > "$VT_STATE/btctl"
+chmod +x "$VT_STATE/btctl"
+OUT=$(judge)
+assert_in "$OUT" "could not sample the audio to MIDDLETON" "a sample that could not be taken is said"
+assert_not_in "$OUT" "is steady" "and not reported as steady"
+teardown
+
+# Past the window unjudged: no sample, and the keeper may settle.
+setup
+holding 400; sampler 1100 612 1095
+OUT=$(judge)
+assert_not_called "a2dp-sample" "a link past three minutes is not sampled"
+assert_in "$OUT" "settled, the keeper goes quiet" "and settles"
+teardown
+
+# --- 21. settled, then quiet `[PI3-AIM-140]` ------------------------------
+
+# Two minutes held and judged: settled.
+setup
+holding 130; sampler 1100 612 1095
+: > "$LEMPI_RUN_DIR/judged"
+OUT=$(judge)
+assert_in "$OUT" "MIDDLETON has held the audio for" "two minutes held and judged settles"
+# The next tick asks bluetoothd nothing.
+: > "$VT_STATE/calls"
+OUT=$(judge)
+assert_eq "$OUT" "" "a quiet tick says nothing"
+assert_not_called "bluetoothctl" "and never runs bluetoothctl"
+assert_called "hcitool con" "it asks the kernel's link list"
+teardown
+
+# Not yet judged -- too little sent to judge -- is not settled, however long.
+setup
+holding 130; sampler 50 612 50
+OUT=$(LEMPI_EARLY_UNTIL=999 judge)
+assert_not_in "$OUT" "goes quiet" "an unjudged link does not settle"
+teardown
+
+# A second link ends the quiet, and the full tick sends it away.
+setup
+holding 130
+speaker "$OONTZ" "OontZ_Angle 3 U412" yes no
+printf '%s\nMIDDLETON\n' "$MIDDL" > "$LEMPI_RUN_DIR/settled"
+printf 'Connections:\n\t< ACL %s handle 11 state 1 lm CENTRAL\n\t> ACL %s handle 12 state 1 lm PERIPHERAL\n' \
+    "$MIDDL" "$OONTZ" > "$VT_STATE/hci_con"
+OUT=$(keeper)
+assert_in "$OUT" "no longer settled (the links changed)" "a second link ends the quiet"
+assert_called "bluetoothctl disconnect $OONTZ" "and the full tick shows it the door"
+teardown
+
+# The stream moved off the settled speaker: full ticks again.
+setup
+holding 130
+printf '%s\nMIDDLETON\n' "$MIDDL" > "$LEMPI_RUN_DIR/settled"
+printf 'Dummy Output\n' > "$VT_STATE/routed"
+OUT=$(keeper)
+assert_in "$OUT" "no longer settled (the stream moved)" "a moved stream ends the quiet"
+teardown
+
+# Another speaker chosen on the settings page: full ticks again.
+setup
+holding 130
+printf '%s\nMIDDLETON\n' "$MIDDL" > "$LEMPI_RUN_DIR/settled"
+printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
+OUT=$(keeper)
+assert_in "$OUT" "no longer settled (another speaker was chosen)" "a new choice ends the quiet"
+teardown

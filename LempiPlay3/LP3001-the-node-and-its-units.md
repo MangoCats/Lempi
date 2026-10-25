@@ -170,12 +170,11 @@ back on it at **+23 s**; the jack's PCM went idle after, and the stream linked
 to the speaker alone. Not yet measured: this node's alignment in a synchronized
 group, through PipeWire's quantum and a speaker's Bluetooth latency.
 
-**`[LP3-BT-020]` The channel-classification seed is installed here, and not
-enabled (2026-10-23).** `lempi-afh-seed` and its unit, moved to
-`appliance/bluetooth/` from `LempiPi/` that day because a second node now has
-them; `setup-lp3.sh` installs both to both layers. Installed at the
-maintainer's request after this node's glitches were traced to the radio
-`[LP3-RAD-010]`, for a trial of its own: it was withdrawn on `lempi02w` the
-evening it ran `[PI3-FOUND-530]`. Nothing is saved and nothing enables it; a
-trial is `sudo lempi-afh-seed save` while the link sounds right, then
-`sudo systemctl enable --now lempi-afh-seed`.
+**`[LP3-BT-020]` The channel-classification seed was installed here, never
+enabled, and is retired (2026-10-23 to 10-25).** `lempi-afh-seed` and its
+unit, installed at the maintainer's request after this node's glitches were
+traced to the radio `[LP3-RAD-010]`, for a trial of its own after it had been
+withdrawn on `lempi02w` `[PI3-FOUND-530]`. The trial, on a reconnection, held
+more channels and showed no stall in either arm `[LP3-RAD-020]`. Retired with
+lempi02w's on 2026-10-25 `[PI3-FOUND-860]`: `setup-lp3.sh` now removes the
+script, the unit and the saved map from both layers.

@@ -78,10 +78,7 @@ if [ "$MODE" = go ]; then
     # installs from `$HERE`. Then run as root, on the node.
     stage=/tmp/lempi-setup
     on "rm -rf $stage && mkdir -p $stage" || die "could not make $stage on $HOST"
-    # The seed is appliance/bluetooth's since 2026-10-23, a second node
-    # having it; setup-appliance.sh still finds it beside itself.
-    scp -q LempiPi/setup-appliance.sh LempiPi/lempi-* LempiPi/*.conf \
-        appliance/bluetooth/lempi-afh-seed "$HOST:$stage/" \
+    scp -q LempiPi/setup-appliance.sh LempiPi/lempi-* LempiPi/*.conf "$HOST:$stage/" \
         || die "could not stage LempiPi/ on $HOST"
     on "sudo bash $stage/setup-appliance.sh --no-boot-tune" \
         || differ "setup-appliance.sh" "it reported a failure -- read its output above"

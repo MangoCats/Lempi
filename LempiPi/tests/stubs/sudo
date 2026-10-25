@@ -1,0 +1,13 @@
+#!/bin/sh
+# Fake sudo: records the call and runs the command as whoever ran the test,
+# `-n` and `-u USER` dropped. The keeper reaches lempi-btctl through it
+# [PI3-AIM-150]; what the root helper then does is the helper's own test.
+printf '%s\n' "sudo $*" >> "$VT_STATE/calls"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -n) shift ;;
+    -u) shift 2 ;;
+    *) break ;;
+  esac
+done
+exec "$@"

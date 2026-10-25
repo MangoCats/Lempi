@@ -18,6 +18,7 @@
 # `+dirty` build; install; persist to the lower layer, and check what landed
 # there [IMPL-BOS-185], [GDE-DEP-070].
 set -uo pipefail
+. "$(dirname "$0")/lib-defaults.sh"
 
 HOST="${1:-}"
 BIN=player/target/aarch64-unknown-linux-gnu/release/import_bundle
@@ -53,6 +54,10 @@ if [ "$LOCAL_SUM" = "$REMOTE_SUM" ] && { [ -z "$LOWER" ] || [ "$LOCAL_SUM" = "$P
 fi
 echo "deploy-import_bundle: ${REMOTE_SUM:-absent} -> $LOCAL_SUM"
 
+# A shared radio pauses for the upload, and plays again when this ends
+# [PI3-AIM-170].
+transfer_hold "$HOST"
+trap 'transfer_release "$HOST"' EXIT
 scp -q "$BIN" "$HOST:/tmp/import_bundle.new" || die "upload failed"
 UPLOADED=$(ssh "$HOST" "md5sum /tmp/import_bundle.new 2>/dev/null | cut -d' ' -f1")
 [ "$UPLOADED" = "$LOCAL_SUM" ] || die "uploaded binary does not match (${UPLOADED:-nothing} != $LOCAL_SUM); not installing"

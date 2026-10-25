@@ -1,6 +1,8 @@
-# A travel-safe appliance unit: fails over to AP when disconnected [SPEC061], [IMPL022].
+# The Wi-Fi keeper: holds a link still, shows on the LED whether there is one, and
+# watches the access point while it is up [SPEC061], [IMPL022]. It no longer
+# starts the access point by itself [SPEC-WFO-090].
 [Unit]
-Description=Failover to Lempi access point when disconnected
+Description=Hold the Wi-Fi link, show it on the LED, and watch the access point
 After=network.target
 
 [Service]

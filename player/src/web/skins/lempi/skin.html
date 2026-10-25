@@ -437,12 +437,20 @@
         </select>
         <input type="range" id="led-brightness" min="1" max="100" value="100" hidden>
         <small id="led-brightness-label" hidden></small>
+        <span id="led-nowifi-row" hidden>
+          <small>With no Wi-Fi</small>
+          <input type="range" id="led-nowifi" min="1" max="100" value="25">
+          <small id="led-nowifi-label"></small>
+        </span>
       </span>
       <p>The small light on the appliance itself. "Live Wi-Fi indicator"
          shows whether Wi-Fi is switched on, same as it always has.
          "Always on" lets you set a brightness &mdash; below full, this LED
          has no true dimmer of its own, so it blinks very fast to look
-         dimmer rather than glowing steadily at reduced power. Has no
+         dimmer rather than glowing steadily at reduced power. With no
+         Wi-Fi at all it uses the second brightness (a quarter, unless you
+         change it), which is how it tells you the speaker's Previous key
+         would now start the appliance's own Wi-Fi. Has no
          effect on playback either way. The choice is remembered and
          reapplied on every restart, including a full power cycle.</p>
     </div>

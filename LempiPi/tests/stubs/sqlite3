@@ -20,6 +20,11 @@ case "$*" in
             *preferred_speaker_wait_s*)
                 cat "$VT_STATE/db_preferred_wait" 2>/dev/null
                 exit 0 ;;
+            # The LED's three settings [PI3-LED-020], each from its own file.
+            *led_mode*|*led_brightness_pct*|*led_nowifi_pct*)
+                k=$(printf '%s' "$*" | sed -n "s/.*key = '\(led_[a-z_]*\)'.*/\1/p")
+                cat "$VT_STATE/db_$k" 2>/dev/null
+                exit 0 ;;
         esac
         cat "$VT_STATE/db_speaker" 2>/dev/null
         exit 0 ;;

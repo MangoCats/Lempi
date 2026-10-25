@@ -764,6 +764,99 @@ const PAIR_NOTE_SECS: u64 = 10;
 /// build).
 const BTCTL: &str = "/usr/local/bin/lempi-btctl";
 
+/// The access-point button `[SPEC-FBUI-120]`: the right end of the pairing
+/// row, which held nothing but the end of the pairing note -- the longest
+/// note ends by x 360. The access point comes up only when asked for
+/// `[SPEC-WFO-090]`, and this is the screen's way to ask, as the speaker's
+/// Left key is a speaker's.
+const AP_X: (i32, i32) = (376, 472);
+/// How often wlan0 is asked about while the Settings page shows: a link can
+/// drop with nobody touching the screen, and `nmcli` is a process.
+const WIFI_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// What wlan0 is doing, as far as the access-point button cares.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+enum Wifi {
+    /// On a network, or joining one: nothing to start, so no button. Also
+    /// what an unanswered question reads as -- a button that might do
+    /// nothing is worse than none.
+    #[default]
+    Network,
+    /// No link at all: the button starts the access point.
+    NoLink,
+    /// On the access point: the button goes home.
+    AccessPoint,
+}
+
+/// wlan0's line of `nmcli -t -f DEVICE,STATE,CONNECTION dev`.
+fn wifi_from(nmcli: &str) -> Wifi {
+    for line in nmcli.lines() {
+        let mut f = line.splitn(3, ':');
+        if f.next() != Some("wlan0") {
+            continue;
+        }
+        let state = f.next().unwrap_or("");
+        let conn = f.next().unwrap_or("");
+        return if state == "connected" && conn == "lempi-ap" {
+            Wifi::AccessPoint
+        } else if state.starts_with("connect") {
+            Wifi::Network
+        } else {
+            Wifi::NoLink
+        };
+    }
+    Wifi::Network
+}
+
+fn read_wifi() -> Wifi {
+    std::process::Command::new("nmcli")
+        .args(["-t", "-f", "DEVICE,STATE,CONNECTION", "dev"])
+        .output()
+        .map(|o| wifi_from(&String::from_utf8_lossy(&o.stdout)))
+        .unwrap_or_default()
+}
+
+fn ap_label(w: Wifi) -> Option<&'static str> {
+    match w {
+        Wifi::NoLink => Some("START AP"),
+        Wifi::AccessPoint => Some("GO HOME"),
+        Wifi::Network => None,
+    }
+}
+
+/// What `lempi-btctl ap-request` did, as the note beside the button says it:
+/// its answer, not its exit status `[GOV-SRC-040]`.
+fn ap_outcome(out: &str) -> &'static str {
+    let tried = out.contains(r#""trying":true"#);
+    let last = out.lines().rev().find(|l| !l.contains(r#""trying":true"#)).unwrap_or("");
+    if last.contains(r#""ok":true"#) {
+        if last.contains(r#""ap":"active""#) { "access point up" } else { "back on Wi-Fi" }
+    } else if tried {
+        "did not work"
+    } else if last.contains("client") {
+        "a phone is on it"
+    } else {
+        "not now"
+    }
+}
+
+/// Ask for the access point, as the speaker's Left key does. Up to the
+/// fifteen seconds `ap-return` allows a way home.
+fn request_ap() -> &'static str {
+    match std::process::Command::new("sudo").args(["-n", BTCTL, "ap-request"]).output() {
+        Ok(out) => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let note = ap_outcome(&text);
+            tracing::info!("fbui: access point requested: {note} ({})", text.trim().replace('\n', " "));
+            note
+        }
+        Err(e) => {
+            tracing::warn!("fbui: could not run {BTCTL}: {e}");
+            "did not work"
+        }
+    }
+}
+
 /// A queue row's three action buttons, right-aligned: "-"/"+" (sooner/
 /// later) grouped together since both reorder, "X" (remove) set apart at
 /// the far edge so reordering and deleting are not adjacent under a thumb.
@@ -777,8 +870,9 @@ fn queue_row_y(row: usize) -> (i32, i32) {
 }
 
 /// `pair`: the outcome of a recent press of the pairing button, if any --
-/// `Some(true)` opened the window, `Some(false)` could not.
-fn render_settings(display: &mut impl Panel, snap: &ClientSnapshot, pair: Option<bool>) -> Result<(), std::convert::Infallible> {
+/// `Some(true)` opened the window, `Some(false)` could not. `wifi` decides the
+/// access-point button, and `ap_note` is what its last press did.
+fn render_settings(display: &mut impl Panel, snap: &ClientSnapshot, pair: Option<bool>, wifi: Wifi, ap_note: Option<&str>) -> Result<(), std::convert::Infallible> {
     Rectangle::new(Point::zero(), display.bounding_box().size)
         .into_styled(PrimitiveStyle::with_fill(LCD_BG))
         .draw(display)?;
@@ -810,12 +904,17 @@ fn render_settings(display: &mut impl Panel, snap: &ClientSnapshot, pair: Option
     }
 
     draw_button_winamp(display, PAIR_X.0, PAIR_X.1, PAIR_ROW_Y.0, PAIR_ROW_Y.1, "PAIR", pair == Some(true))?;
+    // Lit while the access point is up, as PAIR is while its window is open.
+    if let Some(label) = ap_label(wifi) {
+        draw_button_winamp(display, AP_X.0, AP_X.1, PAIR_ROW_Y.0, PAIR_ROW_Y.1, label, wifi == Wifi::AccessPoint)?;
+    }
     // What the press did, not what it was meant to do: the helper's own
-    // answer, so a refusal reads as one `[GOV-SRC-040]`.
+    // answer, so a refusal reads as one `[GOV-SRC-040]`. One note at a time,
+    // the latest press's.
     let note = match pair {
         Some(true) => "pairing open",
         Some(false) => "could not open pairing",
-        None => "",
+        None => ap_note.unwrap_or(""),
     };
     if !note.is_empty() {
         draw_text(display, note, PAIR_NOTE_X, PAIR_ROW_Y.1 - 12);
@@ -1075,6 +1174,11 @@ fn pair_shown(note: Option<(bool, std::time::Instant)>) -> Option<bool> {
     note.filter(|(_, at)| at.elapsed() < std::time::Duration::from_secs(PAIR_NOTE_SECS)).map(|(ok, _)| ok)
 }
 
+/// An access-point press's outcome, for as long as a pairing one shows.
+fn ap_shown(note: Option<(&'static str, std::time::Instant)>) -> Option<&'static str> {
+    note.filter(|(_, at)| at.elapsed() < std::time::Duration::from_secs(PAIR_NOTE_SECS)).map(|(n, _)| n)
+}
+
 /// Fire-and-forget POST to `lempi`'s existing control API `[SPEC-FBUI-015]`
 /// -- a hand-rolled HTTP/1.1 request over a raw TCP socket rather than a
 /// client crate. `hyper` is already in this workspace's dependency tree
@@ -1190,6 +1294,8 @@ enum Zone {
     QueueRemove(u64),
     QueueLater(u64),
     Pair,
+    /// The access-point button `[SPEC-FBUI-120]`.
+    Ap,
     Audio,
     TempoDown,
     TempoNeutral,
@@ -1247,6 +1353,11 @@ fn hit_test(page: Page, sx: f64, sy: f64, snap: &ClientSnapshot) -> Option<Zone>
             if in_rect(x, y, PAIR_X.0, PAIR_X.1, PAIR_ROW_Y.0, PAIR_ROW_Y.1) {
                 return Some(Zone::Pair);
             }
+            // Where the button is drawn; on a network it is not, and the
+            // press is ignored where it is handled, which knows the link.
+            if in_rect(x, y, AP_X.0, AP_X.1, PAIR_ROW_Y.0, PAIR_ROW_Y.1) {
+                return Some(Zone::Ap);
+            }
             for (row, item) in snap.queue.iter().take(MAX_QUEUE_ROWS).enumerate() {
                 let (y0, y1) = queue_row_y(row);
                 if !item.is_shutdown && in_rect(x, y, QUEUE_BTN_MINUS.0, QUEUE_BTN_MINUS.1, y0, y1) {
@@ -1301,10 +1412,10 @@ fn hit_test(page: Page, sx: f64, sy: f64, snap: &ClientSnapshot) -> Option<Zone>
 }
 
 /// Whichever page is showing, drawn whole.
-fn render_page(display: &mut impl Panel, page: Page, snap: &ClientSnapshot, art: Option<&[Rgb565]>, pair: Option<bool>) -> Result<(), std::convert::Infallible> {
+fn render_page(display: &mut impl Panel, page: Page, snap: &ClientSnapshot, art: Option<&[Rgb565]>, pair: Option<bool>, wifi: Wifi, ap_note: Option<&str>) -> Result<(), std::convert::Infallible> {
     match page {
         Page::NowPlaying => render_now_playing(display, snap, art),
-        Page::Settings => render_settings(display, snap, pair),
+        Page::Settings => render_settings(display, snap, pair, wifi, ap_note),
         Page::Audio => render_audio(display, snap),
     }
 }
@@ -1665,6 +1776,11 @@ async fn main() {
     // The last press of the pairing button and what it did, shown beside the
     // button for `PAIR_NOTE_SECS` `[SPEC-NSH-170]`.
     let mut pair_note: Option<(bool, std::time::Instant)> = None;
+    // wlan0 as last read, when, and the last access-point press's outcome
+    // `[SPEC-FBUI-120]`. Read only while the Settings page shows.
+    let mut wifi = Wifi::default();
+    let mut wifi_read: Option<std::time::Instant> = None;
+    let mut ap_note: Option<(&'static str, std::time::Instant)> = None;
     loop {
         tracing::info!("fbui: connecting to {url}");
         let ws = match tokio_tungstenite::connect_async(&url).await {
@@ -1746,8 +1862,12 @@ async fn main() {
                         // before deciding whether album art fits -- measured
                         // against real hardware, not estimated from the SPI
                         // clock rate on paper.
+                        if page == Page::Settings && wifi_read.is_none_or(|t| t.elapsed() >= WIFI_EVERY) {
+                            wifi = tokio::task::spawn_blocking(read_wifi).await.unwrap_or_default();
+                            wifi_read = Some(std::time::Instant::now());
+                        }
                         let started = std::time::Instant::now();
-                        let result = render_page(&mut display, page, &snap, art, pair_shown(pair_note));
+                        let result = render_page(&mut display, page, &snap, art, pair_shown(pair_note), wifi, ap_shown(ap_note));
                         let elapsed = started.elapsed();
                         if elapsed > std::time::Duration::from_millis(20) {
                             tracing::info!("fbui: render took {elapsed:?}");
@@ -1774,8 +1894,12 @@ async fn main() {
                             // Playing, from wherever it is pressed.
                             let own = if zone == Zone::Gear { Page::Settings } else { Page::Audio };
                             page = if page == own { Page::NowPlaying } else { own };
+                            if page == Page::Settings {
+                                wifi = tokio::task::spawn_blocking(read_wifi).await.unwrap_or_default();
+                                wifi_read = Some(std::time::Instant::now());
+                            }
                             let art = art_cache.as_ref().and_then(|(_, px)| px.as_deref());
-                            if let Err(e) = render_page(&mut display, page, &snap, art, pair_shown(pair_note)) {
+                            if let Err(e) = render_page(&mut display, page, &snap, art, pair_shown(pair_note), wifi, ap_shown(ap_note)) {
                                 tracing::warn!("fbui: render failed: {e:?}");
                             }
                         }
@@ -1866,10 +1990,29 @@ async fn main() {
                             // sudo and a pkill, well under a second.
                             let ok = tokio::task::spawn_blocking(open_pairing_window).await.unwrap_or(false);
                             pair_note = Some((ok, std::time::Instant::now()));
-                            if let Err(e) = render_settings(&mut display, &snap, pair_shown(pair_note)) {
+                            ap_note = None;
+                            if let Err(e) = render_settings(&mut display, &snap, pair_shown(pair_note), wifi, None) {
                                 tracing::warn!("fbui: render failed: {e:?}");
                             }
                         }
+                        // Awaited too, though a way home takes up to fifteen
+                        // seconds: the screen says it is trying first, and
+                        // what arrives meanwhile waits in the socket.
+                        Some(Zone::Ap) if ap_label(wifi).is_some() => {
+                            pair_note = None;
+                            ap_note = Some(("trying...", std::time::Instant::now()));
+                            if let Err(e) = render_settings(&mut display, &snap, None, wifi, ap_shown(ap_note)) {
+                                tracing::warn!("fbui: render failed: {e:?}");
+                            }
+                            let note = tokio::task::spawn_blocking(request_ap).await.unwrap_or("did not work");
+                            ap_note = Some((note, std::time::Instant::now()));
+                            wifi = tokio::task::spawn_blocking(read_wifi).await.unwrap_or_default();
+                            wifi_read = Some(std::time::Instant::now());
+                            if let Err(e) = render_settings(&mut display, &snap, None, wifi, ap_shown(ap_note)) {
+                                tracing::warn!("fbui: render failed: {e:?}");
+                            }
+                        }
+                        Some(Zone::Ap) => {}
                         None => {}
                     }
                 }
@@ -2226,9 +2369,58 @@ mod tests {
         assert_eq!(now.at(371, 20), LCD_GREEN);
 
         let mut settings = MemPanel::new();
-        render_settings(&mut settings, &warped, None).unwrap();
+        render_settings(&mut settings, &warped, None, Wifi::Network, None).unwrap();
         settings.save("settings");
         assert_eq!(settings.at(371, 20), MULIB_GOLD);
+    }
+
+    /// The access-point button is drawn only where it can do something, and
+    /// lit while the access point is up `[SPEC-FBUI-120]`.
+    #[test]
+    fn the_access_point_button_follows_the_link() {
+        use super::*;
+        let s = audio_snap();
+        // Unlit, a button is its outline and label; lit, it is filled.
+        let drawn = |p: &MemPanel| {
+            (AP_X.0..AP_X.1).any(|x| (PAIR_ROW_Y.0..PAIR_ROW_Y.1).any(|y| p.at(x, y) != LCD_BG))
+        };
+        let inside = |p: &MemPanel| p.at(AP_X.0 + 6, PAIR_ROW_Y.0 + 6);
+        let mut on_network = MemPanel::new();
+        render_settings(&mut on_network, &s, None, Wifi::Network, None).unwrap();
+        let mut no_link = MemPanel::new();
+        render_settings(&mut no_link, &s, None, Wifi::NoLink, Some("did not work")).unwrap();
+        no_link.save("settings-no-wifi");
+        let mut on_ap = MemPanel::new();
+        render_settings(&mut on_ap, &s, None, Wifi::AccessPoint, Some("access point up")).unwrap();
+        on_ap.save("settings-access-point");
+        assert!(!drawn(&on_network), "no button on a network");
+        assert!(drawn(&no_link), "a button with no link");
+        assert_eq!(inside(&no_link), LCD_BG, "unlit with no link");
+        assert_eq!(inside(&on_ap), LCD_GREEN, "lit while the access point is up");
+
+        assert_eq!(hit_test(Page::Settings, 420.0, 298.0, &s), Some(Zone::Ap));
+        assert_eq!(hit_test(Page::Settings, 80.0, 298.0, &s), Some(Zone::Pair), "PAIR keeps its place");
+    }
+
+    #[test]
+    fn wlan0_is_read_from_nmcli() {
+        use super::{wifi_from, Wifi};
+        assert_eq!(wifi_from("eth0:unavailable:\nwlan0:connected:Home\n"), Wifi::Network);
+        assert_eq!(wifi_from("wlan0:connected:lempi-ap\n"), Wifi::AccessPoint);
+        assert_eq!(wifi_from("wlan0:connecting (configuring):Home\n"), Wifi::Network, "joining is not no link");
+        assert_eq!(wifi_from("wlan0:disconnected:\n"), Wifi::NoLink);
+        assert_eq!(wifi_from("wlan0:unavailable:\n"), Wifi::NoLink);
+        assert_eq!(wifi_from(""), Wifi::Network, "no answer offers no button");
+    }
+
+    #[test]
+    fn the_note_says_what_ap_request_did() {
+        use super::ap_outcome;
+        assert_eq!(ap_outcome("{\"trying\":true}\n{\"ok\":true,\"ap\":\"active\"}\n"), "access point up");
+        assert_eq!(ap_outcome("{\"trying\":true}\n{\"ok\":true}\n"), "back on Wi-Fi");
+        assert_eq!(ap_outcome("{\"trying\":true}\n{\"ok\":false,\"error\":\"the known network did not answer\"}\n"), "did not work");
+        assert_eq!(ap_outcome("{\"ok\":false,\"error\":\"a client is on the access point\"}\n"), "a phone is on it");
+        assert_eq!(ap_outcome(""), "not now");
     }
 
     #[test]

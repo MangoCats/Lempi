@@ -1,22 +1,154 @@
 #!/bin/sh
-# Keep the appliance reachable by failing over to lempi-ap when disconnected [SPEC061], [IMPL022].
+# The Wi-Fi keeper [SPEC061], [IMPL022]: hold the radio still once it has a
+# link, show on the LED whether it has one, and watch the access point while
+# it is up.
 #
-# Runs periodically via lempi-wifi-failover.timer.
-# Evaluates link state, boot grace period, rfkill status, and debounce thresholds
-# before executing lempi-btctl ap-failover without scheduling a revert timer.
+# Runs periodically via lempi-wifi-failover.timer. The name is its history:
+# until 2026-10-25 it brought the access point up by itself after 30 s with no
+# link. Now the access point comes up only when asked for -- the speaker's Left
+# key or fbui's button, through `lempi-btctl ap-request` [SPEC-WFO-090] -- so
+# what is left here is everything that must happen without anybody asking --
+# and the old automatic start for the one node nobody could ask for it on,
+# one with no paired speaker.
 set -u
 
 STATE_DIR="${LEMPI_RUN_DIR:-/run/lempi}"
 RFKILL_DIR="${SYS_CLASS_RFKILL:-/sys/class/rfkill}"
-PROC_UPTIME="${PROC_UPTIME:-/proc/uptime}"
 BTCTL="${LEMPI_BTCTL:-/usr/local/bin/lempi-btctl}"
+ROAMOFF="${LEMPI_ROAMOFF:-/sys/module/brcmfmac/parameters/roamoff}"
 # How long the access point sits with no clients before the keeper first tries
 # the way home, and the most it waits between tries as they keep failing
 # [SPEC-WFO-085]. Doubled after each failed try: 90 s, 3, 6, 12, then 15 min.
 RETURN_FIRST="${LEMPI_AP_RETURN_FIRST:-90}"
 RETURN_MAX="${LEMPI_AP_RETURN_MAX:-900}"
+# How long a link is left alone before it is held [PI3-AIM-160].
+HOLD_AFTER="${LEMPI_WIFI_HOLD_AFTER:-30}"
+# How long with no link before a node nobody could ask starts its access point
+# itself [SPEC-WFO-090]: the old 45 s boot grace and 30 s debounce, together.
+NOLINK_AFTER="${LEMPI_NOLINK_AFTER:-75}"
 . "${LEMPI_COMMON:-/usr/local/lib/lempi-common.sh}" 2>/dev/null ||
     . "$(dirname "$0")/lempi-common.sh"
+
+setting() {
+    sqlite3 "$(lempi_db)" "SELECT value FROM player_settings WHERE key = '$1'" 2>/dev/null
+}
+
+# Said once until the condition clears, so a state that lasts is one line in
+# the journal and not one every twenty seconds [PI3-FOUND-760].
+say_once() {
+    _key=$1; shift
+    [ -f "$STATE_DIR/said_$_key" ] && return 0
+    echo "$*"
+    : > "$STATE_DIR/said_$_key" 2>/dev/null
+}
+unsay(){ rm -f "$STATE_DIR/said_$1" 2>/dev/null; }
+
+# **`[PI3-LED-020]` A dimmer LED says "no Wi-Fi: the key starts the access
+# point".** Asked for by the listener with the access point made on-request:
+# a node with no link and no screen has to say, somehow, that the speaker's
+# Left key would now start its access point. The LED's own brightness is the
+# one output such a node has. So while `led_mode` is `on` it shows
+# `led_nowifi_pct` (25% by default) when wlan0 has no link at all -- neither a
+# network nor the access point -- and `led_brightness_pct` otherwise. The
+# other three modes are left exactly as the listener set them.
+#
+# Applied only on a change, so a steady state costs one database read a tick
+# and no write to the LED.
+led_follow() {
+    _mode=$(setting led_mode)
+    if [ "${_mode:-on}" != on ]; then
+        rm -f "$STATE_DIR/led_applied" 2>/dev/null
+        return 0
+    fi
+    if [ "$1" = yes ]; then
+        _pct=$(setting led_brightness_pct); _def=100
+    else
+        _pct=$(setting led_nowifi_pct); _def=25
+    fi
+    case "${_pct:-}" in ''|*[!0-9]*) _pct=$_def ;; esac
+    { [ "$_pct" -ge 1 ] && [ "$_pct" -le 100 ]; } || _pct=$_def
+    [ "$(cat "$STATE_DIR/led_applied" 2>/dev/null)" = "$_pct" ] && return 0
+    if "$BTCTL" led on "$_pct" >/dev/null 2>&1; then
+        printf '%s\n' "$_pct" > "$STATE_DIR/led_applied"
+        if [ "$1" = yes ]; then
+            echo "Wi-Fi link up: the LED back at ${_pct}% [PI3-LED-020]"
+        else
+            echo "no Wi-Fi link: the LED at ${_pct}%; the speaker's Left key starts the access point [PI3-LED-020]"
+        fi
+    else
+        say_once led_failed "could not set the LED to ${_pct}% [PI3-LED-020]"
+    fi
+}
+
+# What the Wi-Fi chip does about roaming on its own, below wpa_supplicant, so
+# a hold is never reported as more than it is [GDE-DEP-060].
+firmware_roaming() {
+    case "$(cat "$ROAMOFF" 2>/dev/null)" in
+        1) echo "off" ;;
+        0) echo "on -- the chip may still roam by itself" ;;
+        *) echo "unknown" ;;
+    esac
+}
+
+# **`[PI3-AIM-160]` Thirty seconds after a link comes up, it is held: no
+# roaming, no background scans, until it drops.** Decided by the maintainer
+# 2026-10-25 [PI031](../../LempiPi/PI031-settling-the-shared-radio.md). A
+# background scan hops every 2.4 GHz channel on the radio the speaker's audio
+# shares; NetworkManager's default `bgscan simple:30:-65:300` does one every
+# 30 s below -65 dBm, and with four access points on one network name a weak
+# node roams, and every roam starts that again `[LP3-RAD-010]`.
+#
+# Through wpa_supplicant's control socket, on the network it is using now: its
+# BSSID set to the one it is on, and its bgscan emptied. Nothing is written
+# anywhere -- NetworkManager hands wpa_supplicant a fresh network at every
+# activation, so a hold lasts exactly as long as the association it was made
+# on, and a reboot or a dropped link starts clean. Checked every tick against
+# what wpa_supplicant reports, so a re-association between two ticks is held
+# again rather than taken as still held.
+#
+# If the held access point goes away, wpa_supplicant cannot move to another;
+# NetworkManager fails the activation and starts a fresh, unheld one.
+wifi_hold() {
+    _now=$(date +%s)
+    _bssid=$(iw dev wlan0 link 2>/dev/null | sed -n 's/^Connected to \([0-9a-fA-F:]*\).*/\1/p' | tr A-F a-f)
+    if [ -z "$_bssid" ]; then
+        rm -f "$STATE_DIR/wifi_link" 2>/dev/null
+        return 0
+    fi
+    _since="" _was=""
+    [ -r "$STATE_DIR/wifi_link" ] && read -r _since _was < "$STATE_DIR/wifi_link" 2>/dev/null
+    case "${_since:-}" in ''|*[!0-9]*) _since="" ;; esac
+    if [ -z "$_since" ] || [ "${_was:-}" != "$_bssid" ]; then
+        printf '%s %s\n' "$_now" "$_bssid" > "$STATE_DIR/wifi_link"
+        return 0
+    fi
+    [ $(( _now - _since )) -ge "$HOLD_AFTER" ] || return 0
+    if ! command -v wpa_cli >/dev/null 2>&1; then
+        say_once hold_nocli "wpa_cli is not installed, so Wi-Fi roaming and background scans cannot be held [PI3-AIM-160]"
+        return 0
+    fi
+    _id=$(wpa_cli -i wlan0 status 2>/dev/null | sed -n 's/^id=\([0-9]*\)$/\1/p')
+    if [ -z "$_id" ]; then
+        say_once hold_nosock "wpa_supplicant's control socket did not answer, so Wi-Fi roaming and background scans cannot be held [PI3-AIM-160]"
+        return 0
+    fi
+    unsay hold_nosock
+    # Read back from `list_networks`, whose BSSID column says `any` until one is
+    # set: `get_network N bssid` answers FAIL on lp3-wifi's wpa_supplicant,
+    # measured 2026-10-25, and a check that can never match would hold again
+    # every tick.
+    _held=$(wpa_cli -i wlan0 list_networks 2>/dev/null |
+            awk -F '\t' -v id="$_id" '$1 == id { print $3 }' | tr A-F a-f)
+    [ "$_held" = "$_bssid" ] && return 0
+    _b=$(wpa_cli -i wlan0 bssid "$_id" "$_bssid" 2>/dev/null)
+    _s=$(wpa_cli -i wlan0 set_network "$_id" bgscan '""' 2>/dev/null)
+    if [ "$_b" = OK ] && [ "$_s" = OK ]; then
+        unsay hold_failed
+        echo "held Wi-Fi on $_bssid after $(( _now - _since ))s connected: no roaming and no background scans until the link drops; firmware roaming $(firmware_roaming) [PI3-AIM-160]"
+    else
+        say_once hold_failed "could not hold Wi-Fi on $_bssid (bssid: ${_b:-no answer}, bgscan: ${_s:-no answer}) [PI3-AIM-160]"
+    fi
+}
 
 # While the access point is up: who is on it, and the way home when nobody is
 # [SPEC-WFO-080], built 2026-10-10.
@@ -28,11 +160,11 @@ RETURN_MAX="${LEMPI_AP_RETURN_MAX:-900}"
 #
 # - **A Bluetooth speaker connected: the listener's.** The speaker's Left key
 #   means "I'm home" while the access point is up, and the player runs
-#   `ap-return` for it. The keeper tries nothing here: a try is a scan and a
+#   `ap-request` for it. The keeper tries nothing here: a try is a scan and a
 #   switch on the one radio the speaker's audio shares [SPEC-WFO-070], and a
 #   Bluetooth speaker usually means a battery. (A speaker that powers the Pi
-#   has a third way already: off and on is a reboot, and the boot path goes
-#   home first [SPEC-WFO-080].)
+#   has a third way already: off and on is a reboot, and a boot goes home,
+#   the access point never starting by itself [SPEC-WFO-090].)
 # - **No speaker connected -- wired output, so mains power: the keeper's.**
 #   After RETURN_FIRST with no clients it tries the known network
 #   (`lempi-btctl ap-return`, the access point straight back on failure), and
@@ -44,7 +176,6 @@ RETURN_MAX="${LEMPI_AP_RETURN_MAX:-900}"
 # said in the journal, which is the record of when anyone joined or left; a
 # client also resets the wait, and `ap-return` refuses while one is there.
 ap_watch() {
-    mkdir -p "$STATE_DIR"
     if ! DUMP=$(iw dev wlan0 station dump 2>&1); then
         # Cannot see the clients, so cannot know nobody is using it: stay.
         # Said once per access-point session, not every twenty seconds.
@@ -95,6 +226,8 @@ ap_watch() {
     fi
 }
 
+mkdir -p "$STATE_DIR" 2>/dev/null
+
 # 1. Radio State Guard: if Wi-Fi is soft-blocked by operator intent, honor it.
 if [ -d "$RFKILL_DIR" ]; then
     for r in "$RFKILL_DIR"/rfkill*; do
@@ -112,17 +245,12 @@ if systemctl list-timers 'lempi-revert-*' 2>/dev/null | grep -q 'lempi-revert-';
     exit 0
 fi
 
-# 3. Boot Grace Period (45 seconds): allow time for home Wi-Fi association on boot.
-UPTIME=$(cut -d. -f1 "$PROC_UPTIME" 2>/dev/null || echo 0)
-if [ "$UPTIME" -lt 45 ]; then
-    exit 0
-fi
-
-# 4. Connection Check: if connected or connecting, do nothing; if already in
-#    AP mode, watch its clients and the way home.
+# 3. On the access point: a link, as far as the LED is concerned, and its
+#    clients and the way home to watch.
 ACTIVE_CONNS=$(nmcli -t -f NAME,TYPE,ACTIVE connection show 2>/dev/null || true)
 if printf '%s\n' "$ACTIVE_CONNS" | grep -q '^lempi-ap:.*:yes$'; then
-    rm -f "$STATE_DIR/wifi_disconnected_since"
+    rm -f "$STATE_DIR/wifi_link"
+    led_follow yes
     ap_watch
     exit 0
 fi
@@ -130,34 +258,40 @@ fi
 rm -f "$STATE_DIR/ap_idle_since" "$STATE_DIR/ap_clients" "$STATE_DIR/ap_iw_failed" \
       "$STATE_DIR/ap_return_wait" "$STATE_DIR/ap_bt_said"
 
+# 4. On a network: held after HOLD_AFTER. With no link at all, nothing is
+#    started -- the access point is the listener's to ask for [SPEC-WFO-090],
+#    and the LED says it can be.
 DEV_STATE=$(nmcli -t -f DEVICE,STATE dev 2>/dev/null | grep '^wlan0:' || true)
-case "$DEV_STATE" in
-    wlan0:connected|wlan0:connecting)
-        rm -f "$STATE_DIR/wifi_disconnected_since"
-        exit 0
-        ;;
-esac
-
-# 5. Debounce Tracker: wait 30 continuous seconds of disconnection before acting.
-mkdir -p "$STATE_DIR"
-NOW=$(date +%s)
-DEBOUNCE_FILE="$STATE_DIR/wifi_disconnected_since"
-
-if [ ! -f "$DEBOUNCE_FILE" ]; then
-    printf '%s\n' "$NOW" > "$DEBOUNCE_FILE"
+if [ "$DEV_STATE" = wlan0:connected ]; then
+    rm -f "$STATE_DIR/wifi_disconnected_since"
+    led_follow yes
+    wifi_hold
     exit 0
 fi
+rm -f "$STATE_DIR/wifi_link"
+led_follow no
 
-SINCE=$(cat "$DEBOUNCE_FILE" 2>/dev/null || echo "$NOW")
-ELAPSED=$((NOW - SINCE))
-
-if [ "$ELAPSED" -ge 30 ]; then
-    # 6. Autonomous Bringup: standing AP bringup without revert timer.
-    # Said out loud: the unit's routine runs are kept out of the journal
-    # [PI3-FOUND-760], so this line is the only trace a failover leaves.
-    echo "wlan0 down for ${ELAPSED}s ($DEV_STATE): bringing up the access point"
-    "$BTCTL" ap-failover >/dev/null 2>&1 || { echo "the access point did not come up"; exit 1; }
-    rm -f "$DEBOUNCE_FILE"
+# 5. **Unless nobody could ask.** A node with no paired speaker has no key to
+#    press, and no audio sharing the radio either: brought to a new home, or
+#    set up before its first speaker, it would be unreachable short of
+#    rewriting its card. So after NOLINK_AFTER with no link and no paired
+#    device, the access point starts by itself, as it always did
+#    [SPEC-WFO-090]. Joining a network is never interrupted for it.
+case "$DEV_STATE" in wlan0:connecting*) exit 0 ;; esac
+if [ -n "$(bluetoothctl devices Paired 2>/dev/null)" ]; then
+    rm -f "$STATE_DIR/wifi_disconnected_since"
+    exit 0
 fi
-
+NOW=$(date +%s)
+if [ ! -f "$STATE_DIR/wifi_disconnected_since" ]; then
+    printf '%s\n' "$NOW" > "$STATE_DIR/wifi_disconnected_since"
+    exit 0
+fi
+SINCE=$(cat "$STATE_DIR/wifi_disconnected_since" 2>/dev/null || echo "$NOW")
+[ $(( NOW - SINCE )) -ge "$NOLINK_AFTER" ] || exit 0
+# Said out loud: the unit's routine runs are kept out of the journal
+# [PI3-FOUND-760], so this line is the only trace it leaves.
+echo "no Wi-Fi link for $(( NOW - SINCE ))s and no paired speaker to ask with: bringing up the access point [SPEC-WFO-090]"
+"$BTCTL" ap-failover >/dev/null 2>&1 || { echo "the access point did not come up"; exit 1; }
+rm -f "$STATE_DIR/wifi_disconnected_since"
 exit 0

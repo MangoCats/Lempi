@@ -1856,6 +1856,39 @@ impl PlayerStore {
             .unwrap_or(100)
     }
 
+    /// The brightness `on` shows while the node has no Wi-Fi link at all,
+    /// 1-100 `[PI3-LED-020]`: a dimmer light is how a node with no screen
+    /// says the speaker's Left key would now start its access point. Applied
+    /// by the Wi-Fi keeper, which watches the link; stored here only.
+    pub fn save_led_nowifi_brightness(&self, pct: u8) -> Result<(), DbError> {
+        let pct = pct.clamp(1, 100);
+        self.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES ('led_nowifi_pct', ?1, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![pct.to_string()],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Defaults to 25, the listener's own figure `[PI3-LED-020]`. The keeper
+    /// reads the same row with the same default.
+    pub fn load_led_nowifi_brightness(&self) -> u8 {
+        self.conn
+            .query_row(
+                "SELECT value FROM player_settings WHERE key = 'led_nowifi_pct'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|v| v.parse::<u8>().ok())
+            .map(|v| v.clamp(1, 100))
+            .unwrap_or(25)
+    }
+
     /// The programme chosen by hand, persisted so it survives a restart
     /// rather than reverting to time-of-day selection every power cycle
     /// `[SPEC-DIR-185]`. Written whenever `set_program` is asked for a real
@@ -3514,6 +3547,24 @@ mod tests {
 
         st.save_led_brightness(255).unwrap();
         assert_eq!(st.load_led_brightness(), 100, "clamped down to the maximum");
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    /// The no-link brightness is its own setting: 25 until set, clamped as
+    /// the other is, and independent of it `[PI3-LED-020]`.
+    #[test]
+    fn the_no_link_led_brightness_defaults_to_a_quarter_and_stands_alone() {
+        let dir = std::env::temp_dir().join(format!("lempi_lednowifi_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let st = PlayerStore::open(&dir).unwrap();
+
+        assert_eq!(st.load_led_nowifi_brightness(), 25);
+        st.save_led_nowifi_brightness(10).unwrap();
+        st.save_led_brightness(80).unwrap();
+        assert_eq!(st.load_led_nowifi_brightness(), 10);
+        assert_eq!(st.load_led_brightness(), 80, "the two are separate rows");
+        st.save_led_nowifi_brightness(0).unwrap();
+        assert_eq!(st.load_led_nowifi_brightness(), 1, "clamped up to the minimum");
         let _ = std::fs::remove_file(&dir);
     }
 

@@ -18,7 +18,14 @@
 # actually touches sysfs; running as root, this calls it directly, no
 # `sudo` needed.
 set -u
-DB="${LEMPI_DB:-/srv/library/library.db}"
+# The listener's file, where the settings page has written the LED since the
+# database split -- this read the pre-split copy until 2026-10-25, the trap of
+# [PI3-FOUND-280] in a quieter place. The Wi-Fi keeper reapplies the right
+# brightness within a tick either way [PI3-LED-020].
+if [ -n "${LEMPI_DB:-}" ]; then DB="$LEMPI_DB"
+elif [ -f /var/lempi/listener.db ]; then DB=/var/lempi/listener.db
+else DB=/srv/library/library.db
+fi
 
 mode="$(sqlite3 "$DB" \
     "SELECT value FROM player_settings WHERE key = 'led_mode'" 2>/dev/null)"
