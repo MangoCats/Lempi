@@ -33,6 +33,12 @@
 //! the music has paused. The music is never paused for it. Both of lempi02w's
 //! Wi-Fi freezes came while this read its card at 1 MiB/s under Bluetooth
 //! playback `[PI3-FOUND-830]`.
+//!
+//! **`[GDE-INT-138]` And for a bulk transfer to end.** A transfer hold pauses
+//! the music `[PI3-AIM-170]`, which is the pause the check waits for, so an
+//! export to lempi02w, 2026-10-26, ran with this reading its card at 1 MB/s
+//! beside it -- the two together, as in both freezes. On a shared radio it
+//! now waits while any hold is in force, the same way it waits for the music.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -298,17 +304,24 @@ fn summary_waiting(listener: &Path, library: &Path, busy: Duration) -> Result<se
 }
 
 /// What the check must give way to `[GDE-INT-137]`: whether the music is
-/// playing, asked before every chunk, and whether this node's radio is shared
-/// with the speaker, asked before every file.
+/// playing, and whether a bulk transfer is under way `[GDE-INT-138]`, both
+/// asked before every chunk, and whether this node's radio is shared with
+/// the speaker, asked before every file.
 pub struct GiveWay {
     pub playing: Box<dyn Fn() -> bool + Send>,
+    pub transfer: Box<dyn Fn() -> bool + Send>,
     pub shared_radio: Box<dyn Fn() -> bool + Send>,
 }
 
 impl GiveWay {
     /// Never gives way: a node with no speaker to share a radio with.
     pub fn never() -> Self {
-        GiveWay { playing: Box::new(|| false), shared_radio: Box::new(|| false) }
+        GiveWay { playing: Box::new(|| false), transfer: Box::new(|| false), shared_radio: Box::new(|| false) }
+    }
+
+    /// On a shared radio, wait: the music is playing, or a transfer is held.
+    fn waits(&self, shared: bool) -> bool {
+        shared && ((self.playing)() || (self.transfer)())
     }
 }
 
@@ -326,7 +339,8 @@ pub fn spawn(listener: PathBuf, library: PathBuf, controls: SharedControls, give
                 Ok(Step::Stopped) => return,
                 Ok(Step::Held) => {
                     if !held_said {
-                        tracing::info!("integrity: music is playing on a shared radio; reading again when it pauses [GDE-INT-137]");
+                        tracing::info!("integrity: music is playing or a transfer is under way on a shared radio; \
+                                        reading again when neither is [GDE-INT-137] [GDE-INT-138]");
                         held_said = true;
                     }
                     if !sleep(&stopped, HELD) {
@@ -370,7 +384,7 @@ fn one(listener: &Path, library: &Path, controls: &SharedControls, give_way: &Gi
     let e = |e: rusqlite::Error| e.to_string();
     // Asked once a file: it reads the database, and sometimes asks PipeWire.
     let shared = (give_way.shared_radio)();
-    if shared && (give_way.playing)() {
+    if give_way.waits(shared) {
         return Ok(Step::Held);
     }
     let l = Connection::open(listener).map_err(e)?;
@@ -394,7 +408,7 @@ fn one(listener: &Path, library: &Path, controls: &SharedControls, give_way: &Gi
     let mut stop = false;
     let mut held = false;
     let checked = check_file(&due.path, &due.sha256, &due.audio_md5, crate::identity::hash_audio, |read| {
-        if shared && (give_way.playing)() {
+        if give_way.waits(shared) {
             held = true;
             return false;
         }
@@ -623,9 +637,14 @@ mod tests {
         let (_tx, stopped) = std::sync::mpsc::channel::<()>();
         let controls = SharedControls::default();
         let playing = Arc::new(AtomicBool::new(true));
+        let transfer = Arc::new(AtomicBool::new(false));
         let give_way = |shared: bool| {
-            let p = playing.clone();
-            GiveWay { playing: Box::new(move || p.load(Ordering::SeqCst)), shared_radio: Box::new(move || shared) }
+            let (p, t) = (playing.clone(), transfer.clone());
+            GiveWay {
+                playing: Box::new(move || p.load(Ordering::SeqCst)),
+                transfer: Box::new(move || t.load(Ordering::SeqCst)),
+                shared_radio: Box::new(move || shared),
+            }
         };
 
         // Playing on a shared radio: not begun.
@@ -642,6 +661,7 @@ mod tests {
                 if n.fetch_add(1, Ordering::SeqCst) >= 1 { p.store(true, Ordering::SeqCst) }
                 p.load(Ordering::SeqCst)
             }),
+            transfer: Box::new(|| false),
             shared_radio: Box::new(|| true),
         };
         assert!(matches!(one(&lp, &bp, &controls, &starts_mid_read, &stopped), Ok(Step::Held)));
@@ -657,6 +677,78 @@ mod tests {
         playing.store(true, Ordering::SeqCst);
         assert!(matches!(one(&lp, &bp, &controls, &give_way(false), &stopped), Ok(Step::Checked)));
         assert_eq!(checked(), 1, "a radio of its own reads while playing");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// `[GDE-INT-138]`: a transfer's hold is waited for as the music is --
+    /// the hold pauses the music, and that pause is not the check's to use.
+    #[test]
+    fn on_a_shared_radio_the_check_waits_for_a_transfer() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let d = std::env::temp_dir().join(format!("lempi-scrub-transfer-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let (lp, bp, audio) = (d.join("listener.db"), d.join("library.db"), d.join("a.mp3"));
+        for f in [&lp, &bp] {
+            let _ = std::fs::remove_file(f);
+        }
+        let bytes = vec![7u8; CHUNK * 2];
+        std::fs::write(&audio, &bytes).unwrap();
+        Connection::open(&lp).unwrap()
+            .execute_batch("CREATE TABLE player_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT);
+                            INSERT INTO player_settings VALUES ('integrity_check_kib_per_s', '1000000', '');")
+            .unwrap();
+        let b = Connection::open(&bp).unwrap();
+        b.execute_batch("CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT, path TEXT, sha256 TEXT);")
+            .unwrap();
+        b.execute("INSERT INTO files VALUES (1, 'aaa', ?1, ?2)", params![audio.to_string_lossy(), sha(&bytes)])
+            .unwrap();
+        drop(b);
+        let checked = || -> i64 {
+            Connection::open(&lp).unwrap()
+                .query_row("SELECT COUNT(*) FROM file_checks", [], |r| r.get(0)).unwrap_or(0)
+        };
+        let (_tx, stopped) = std::sync::mpsc::channel::<()>();
+        let controls = SharedControls::default();
+        let held = Arc::new(AtomicBool::new(true));
+        let give_way = |shared: bool| {
+            let h = held.clone();
+            GiveWay {
+                playing: Box::new(|| false),
+                transfer: Box::new(move || h.load(Ordering::SeqCst)),
+                shared_radio: Box::new(move || shared),
+            }
+        };
+
+        // Paused by a hold, on a shared radio: not begun.
+        assert!(matches!(one(&lp, &bp, &controls, &give_way(true), &stopped), Ok(Step::Held)));
+        assert_eq!(checked(), 0, "nothing is read while a transfer is held");
+
+        // A hold arrives during a read: stopped, and nothing recorded.
+        held.store(false, Ordering::SeqCst);
+        let asked = Arc::new(AtomicUsize::new(0));
+        let (h, n) = (held.clone(), asked.clone());
+        let held_mid_read = GiveWay {
+            playing: Box::new(|| false),
+            transfer: Box::new(move || {
+                if n.fetch_add(1, Ordering::SeqCst) >= 1 { h.store(true, Ordering::SeqCst) }
+                h.load(Ordering::SeqCst)
+            }),
+            shared_radio: Box::new(|| true),
+        };
+        assert!(matches!(one(&lp, &bp, &controls, &held_mid_read, &stopped), Ok(Step::Held)));
+        assert_eq!(checked(), 0, "a read a transfer interrupted is not recorded");
+
+        // The hold released: read, whole.
+        held.store(false, Ordering::SeqCst);
+        assert!(matches!(one(&lp, &bp, &controls, &give_way(true), &stopped), Ok(Step::Checked)));
+        assert_eq!(checked(), 1, "read once the transfer ended");
+
+        // Off a shared radio a hold changes nothing.
+        Connection::open(&lp).unwrap().execute("DELETE FROM file_checks", []).unwrap();
+        held.store(true, Ordering::SeqCst);
+        assert!(matches!(one(&lp, &bp, &controls, &give_way(false), &stopped), Ok(Step::Checked)));
+        assert_eq!(checked(), 1, "a radio of its own reads through a transfer");
         let _ = std::fs::remove_dir_all(&d);
     }
 

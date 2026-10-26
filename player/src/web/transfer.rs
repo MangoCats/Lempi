@@ -113,6 +113,12 @@ fn holds() -> &'static Mutex<Holds> {
     HOLDS.get_or_init(Default::default)
 }
 
+/// Is a bulk transfer under way -- any hold in force? The integrity check
+/// waits for it on a shared radio `[GDE-INT-138]`.
+pub fn in_force() -> bool {
+    !holds().lock().unwrap_or_else(|e| e.into_inner()).live.is_empty()
+}
+
 /// The rule is `crate::radio`'s, shared with the integrity check.
 async fn shared_radio(ui: &Ui) -> bool {
     let (bluetooth, db, library) = (ui.capabilities.bluetooth, ui.db.clone(), ui.library.clone());

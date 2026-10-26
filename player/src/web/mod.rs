@@ -52,6 +52,7 @@ mod segment;
 mod settings;
 mod skins;
 mod transfer;
+pub use transfer::in_force as transfer_in_force;
 #[cfg(feature = "appliance")]
 mod wifi;
 

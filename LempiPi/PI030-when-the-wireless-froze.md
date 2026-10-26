@@ -104,8 +104,9 @@ result can be attributed to it:
 
 1. **Baseline.** Count freezes as they come, with the watchdog's lines as
    the record.
-2. **No integrity reads during a transfer** -- `integrity_check_kib_per_s`
-   at `0` for the length of an export.
+2. **No integrity reads during a transfer** -- built 2026-10-26: on a
+   shared radio the check waits while a transfer hold is in force
+   `[GDE-INT-138]`, so every held export from then on is this test.
 3. **`dtparam=sdio_overclock=25`**, through `setup-appliance.sh`, never by
    hand. At −76 dBm the link carries far less than 25 MHz allows.
 4. **Power save off for the length of a transfer only**, then back on.

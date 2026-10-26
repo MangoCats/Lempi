@@ -260,12 +260,14 @@ impl Player {
         // Its own stop: the sender lives as long as the backup's does.
         let (stop_scrub, scrub_stopped) = channel::<()>();
         if cfg.integrity_check {
-            // On a shared radio, the music first `[GDE-INT-137]`.
+            // On a shared radio, the music and a transfer first
+            // `[GDE-INT-137]` `[GDE-INT-138]`.
             let give_way = {
                 let h = handle.clone();
                 let (bluetooth, l, b) = (capabilities.bluetooth, cfg.listener.clone(), cfg.library.clone());
                 crate::scrub::GiveWay {
                     playing: Box::new(move || h.snapshot().playing),
+                    transfer: Box::new(crate::web::transfer_in_force),
                     shared_radio: Box::new(move || crate::radio::shares_radio(bluetooth, &l, &b)),
                 }
             };

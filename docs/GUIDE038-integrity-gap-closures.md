@@ -139,6 +139,13 @@ both of `lempi02w`'s Wi-Fi freezes came while this read its card at 1 MiB/s
 under Bluetooth playback `[PI3-FOUND-830]`. A node with a radio of its own,
 or a DAC, reads as before.
 
+**`[GDE-INT-138]` And for a bulk transfer to end.** *Asked for by the
+maintainer and built 2026-10-26.* A transfer hold pauses the music
+`[PI3-AIM-170]`, which was the pause the check waited for, so an export to
+`lempi02w` ran with this reading its card at 1 MB/s beside it -- the two
+together, as in both freezes. On a shared radio it now waits while any hold
+is in force, and a read under way stops, unrecorded, as for the music.
+
 **`[GDE-INT-140]` A decode failure is checked at once.** *Built.* A `decode:`
 error, or more bit-reservoir underflows than a start mid-file explains, puts
 that file at the front of the scrub's queue, so the failure becomes a finding
