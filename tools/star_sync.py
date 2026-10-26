@@ -228,7 +228,11 @@ def integrity_words(ic):
             f" since {str(ic['oldest'])[:10]}" if ic.get("oldest") else "")
     head += (f"; {len(bad)} NOT WHOLE, withheld there -- send them again from the Export page" if bad
              else "; all whole")
-    return head + (f"; {len(tags)} re-tagged (audio intact, still plays)" if tags else "")
+    head += f"; {len(tags)} re-tagged (audio intact, still plays)" if tags else ""
+    # [REQ-VIS-180]: files with no tags, so no album name there. Said, not stale:
+    # the node fills them at its next import, sync or start that can write.
+    n = ic.get("untagged")
+    return head + (f"; {n} without tags (no album name there until its catalogue is next written)" if n else "")
 
 
 def summary_rows(db):

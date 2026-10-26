@@ -260,9 +260,14 @@ fn summary_waiting(listener: &Path, library: &Path, busy: Duration) -> Result<se
         .optional()
         .map_err(e)?
         .is_some();
+    // Files with no tags -- no album name, no place in the browse index -- as
+    // the catalogue says, beside what was read of them `[REQ-VIS-180]`. Null
+    // when it cannot be counted, as `files` is.
+    let untagged = crate::tags::untagged(library).ok();
     if !has {
         return Ok(serde_json::json!({"files": files, "files_note": files_note, "checked": 0, "counts": {},
-                                     "not_ok": [], "oldest": null, "rate_kib_per_s": rate(&l) / 1024}));
+                                     "not_ok": [], "oldest": null, "rate_kib_per_s": rate(&l) / 1024,
+                                     "untagged": untagged}));
     }
     let mut counts = serde_json::Map::new();
     {
@@ -288,7 +293,8 @@ fn summary_waiting(listener: &Path, library: &Path, busy: Duration) -> Result<se
         .collect::<rusqlite::Result<_>>()
         .map_err(e)?;
     Ok(serde_json::json!({"files": files, "files_note": files_note, "checked": checked, "counts": counts,
-                          "not_ok": not_ok, "oldest": oldest, "rate_kib_per_s": rate(&l) / 1024}))
+                          "not_ok": not_ok, "oldest": oldest, "rate_kib_per_s": rate(&l) / 1024,
+                          "untagged": untagged}))
 }
 
 /// What the check must give way to `[GDE-INT-137]`: whether the music is

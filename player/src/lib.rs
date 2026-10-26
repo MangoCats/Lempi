@@ -127,6 +127,7 @@ pub mod report;
 /// `sudo lempi-btctl`, which only an appliance build carries `[GDE-HST-050]`.
 #[cfg(feature = "appliance")]
 pub mod bluetooth;
+pub mod catalogue_window;
 pub mod sink;
 pub mod session;
 

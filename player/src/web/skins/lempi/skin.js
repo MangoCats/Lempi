@@ -1493,7 +1493,8 @@
     const of = body.files == null ? '' : ` of ${body.files}`;
     setText($('ic-count'), body.rate_kib_per_s === 0 ? 'checking is off'
       : `${body.checked}${of} read back${since}` + (bad ? ` · ${bad} not whole` : '')
-        + (tags ? ` · ${tags} re-tagged` : ''));
+        + (tags ? ` · ${tags} re-tagged` : '')
+        + (body.untagged ? ` · ${body.untagged} without album tags yet` : ''));
     const list = $('ic-list');
     list.textContent = '';
     for (const x of body.not_ok) {

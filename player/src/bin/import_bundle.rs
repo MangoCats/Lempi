@@ -179,6 +179,15 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        // The tags of what just arrived, read now, while the catalogue is open
+        // for writing -- on `bose` this is the one moment it is, and without it
+        // every imported file waited, untagged and out of the browse index,
+        // for a start that could never write them `[REQ-VIS-180]`.
+        drop(db);
+        match lempi_player::tags::backfill(&db_path, false) {
+            Ok((n, art)) => println!("tags      {n} file(s) read, {art} with cover art"),
+            Err(e) => println!("tags      not read now ({e}); the player reads them at its next scan"),
+        }
     }
     // Unverified is a failure too: the audio is here and was not taken, which
     // a zero status would make look like success `[REQ-AND-230]`.

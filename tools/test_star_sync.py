@@ -226,7 +226,9 @@ def test_node_integrity():
                                        "not_ok": []}},
                  "locked": {"integrity": {"error": "database is locked"}},
                  "busy": {"integrity": {"files": None, "files_note": "the catalogue could not be counted",
-                                        "checked": 9, "oldest": recent, "not_ok": []}}}
+                                        "checked": 9, "oldest": recent, "not_ok": []}},
+                 "untagged": {"integrity": {"files": 9, "checked": 9, "oldest": recent, "not_ok": [],
+                                            "untagged": 340}}}
         for stamp, b in (("20261001T0100Z", older), ("20261015T2005Z", newer)):
             os.makedirs(os.path.join(runs, stamp))
             with open(os.path.join(runs, stamp, "baselines.json"), "w") as fh:
@@ -249,6 +251,8 @@ def test_node_integrity():
         check("could not be counted" in words["busy"] and "9 (its" in words["busy"], words["busy"])
         check("1 re-tagged (audio intact, still plays)" in words["fine"] and "all whole" in words["fine"],
               f"a re-tag is shown, and is not damage: {words['fine']}")
+        check("340 without tags" in words["untagged"] and stale["untagged"] == [],
+              f"files without tags are said, not stale: {words['untagged']} {stale['untagged']}")
 
         os.makedirs(os.path.join(root, "days"))
         with open(os.path.join(root, "days", "d.json"), "w") as fh:
