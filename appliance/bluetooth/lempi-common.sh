@@ -108,13 +108,16 @@ lempi_alias() {
     bluetoothctl info "$1" 2>/dev/null | sed -n 's/^[[:space:]]*Alias: //p'
 }
 
-# Every connected device that can actually play music, one address per line.
-lempi_connected_speakers() {
-    for _addr in $(bluetoothctl devices Connected 2>/dev/null | awk '{print $2}'); do
+# Every device in BlueZ's list `$1` -- `Connected` or `Paired` -- that can
+# actually play music, one address per line. A phone or a keyboard is not a
+# speaker, whichever list it is on.
+lempi_speakers() {
+    for _addr in $(bluetoothctl devices "$1" 2>/dev/null | awk '{print $2}'); do
         bluetoothctl info "$_addr" 2>/dev/null | grep -q 'UUID: Audio Sink' &&
             printf '%s\n' "$_addr"
     done
 }
+lempi_connected_speakers() { lempi_speakers Connected; }
 
 # Where the player says its stream is, or empty.
 lempi_routed() {

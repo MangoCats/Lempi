@@ -120,8 +120,11 @@ lempi_sources() {
 # after. The player decides whether its radio is shared, so these are safe to
 # call for any host:
 #
-#     transfer_hold "$HOST"; trap 'transfer_release "$HOST"' EXIT
+#     transfer_hold "$HOST" [SECONDS]; trap 'transfer_release "$HOST"' EXIT
 #     scp ...
+#
+# SECONDS, when given, is how long the hold may last; left out, the player's
+# own default (`DEFAULT_SECS` in player/src/web/transfer.rs) applies.
 #
 # Asked over ssh, of the player's own loopback port, so no web guard and no
 # name resolution stand between them. A player that restarts in between -- an
@@ -131,7 +134,7 @@ lempi_sources() {
 transfer_hold() {
     _TRANSFER_ID="" _TRANSFER_PAUSED=""
     _r=$(ssh -o ConnectTimeout=10 "$1" \
-        "curl -s -m 5 -X POST 'http://localhost:$(lempi_port)/transfer/hold?seconds=${2:-900}'" 2>/dev/null)
+        "curl -s -m 5 -X POST 'http://localhost:$(lempi_port)/transfer/hold${2:+?seconds=$2}'" 2>/dev/null)
     _TRANSFER_ID=$(printf '%s' "$_r" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
     case "$_r" in *'"paused":true'*) _TRANSFER_PAUSED=1 ;; esac
     if [ -z "$_TRANSFER_ID" ]; then

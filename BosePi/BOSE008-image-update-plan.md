@@ -221,9 +221,11 @@ diagnosing `bose` means improvising each time.
 | `lempi-wifi-revert` | **no** — see `[BOS-RUN-045]` | Hardware-neutral and beside the point: it is scheduled only by `lempi-btctl`, which is not being ported, so alone it is a script nothing calls |
 | `lempi-db-recover` | **on split** | `[BOS-IMG-045]`'s obligation, not optional once split |
 | `lempi-wait-sink` | no | Blocks until **PipeWire** has a sink; `bose` has no PipeWire and goes straight to ALSA via the HiFiBerry |
-| `lempi-btctl`, `-bt-agent`, `-hci-capture`, `-linkstate`, `-afh-seed`, `-radio-test`, `-speaker` | no | All Bluetooth. `bose`'s output is an I²S DAC |
-| `lempi-led-boot` | no | Status-LED hardware `[PI3-LED-010]` |
+| `lempi-btctl`, `-bt-agent`, `-hci-capture`, `-linkstate`, `-radio-test`, `-speaker` | no | All Bluetooth. `bose`'s output is an I²S DAC |
 | `lempi-rocker` | no | Not in the repository; `lempi02w`-local |
+
+*`lempi-afh-seed` and `lempi-led-boot` were in this list until 2026-10-25,
+when both retired from the tree `[PI3-FOUND-860]`, `[PI3-LED-010]`.*
 
 **`[BOS-IMG-065]`** These are `/bin/sh` and `python3` and cost nothing
 resident — they run when invoked and exit. The rule in `[BOS-IMG-035]`

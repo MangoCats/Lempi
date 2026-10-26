@@ -316,8 +316,10 @@ pub enum HomeOutcome {
     /// Refused before trying: on a known network, or a client is on the
     /// access point. The key did nothing, so no tone says otherwise.
     Ignored(String),
-    /// Done: back on the known network, or the access point up.
+    /// Back on the known network.
     Home,
+    /// The access point is up, as asked for with no link `[SPEC-WFO-090]`.
+    ApUp,
     /// Tried and failed: the known network did not answer and the access
     /// point is back, or the access point would not start.
     NotHome(String),
@@ -329,7 +331,8 @@ fn is_trying(line: &str) -> bool {
 
 /// `ap-request` prints `{"trying":true}` when it starts the switch and one JSON
 /// answer at the end. Whether it got as far as trying is what separates a
-/// press that did nothing from a try that failed.
+/// press that did nothing from a try that failed. The one reading of that
+/// answer: fbui's access-point button `[SPEC-FBUI-120]` uses it too.
 pub fn home_outcome(lines: &[String]) -> HomeOutcome {
     let tried = lines.iter().any(|l| is_trying(l));
     let last = lines.iter().rev().find(|l| !is_trying(l))
@@ -338,6 +341,9 @@ pub fn home_outcome(lines: &[String]) -> HomeOutcome {
     let why = last.as_ref().and_then(|v| v.get("error")).and_then(|v| v.as_str())
         .unwrap_or("no answer from lempi-btctl").to_string();
     match (ok, tried) {
+        (true, _) if last.as_ref().and_then(|v| v.get("ap")).and_then(|v| v.as_str()) == Some("active") => {
+            HomeOutcome::ApUp
+        }
         (true, _) => HomeOutcome::Home,
         (false, true) => HomeOutcome::NotHome(why),
         (false, false) => HomeOutcome::Ignored(why),
@@ -387,11 +393,12 @@ fn go_home(handle: &Arc<EngineHandle>, busy: &Arc<AtomicBool>, code: u16) {
         }
         match home_outcome(&lines) {
             HomeOutcome::Home => {
-                if lines.iter().any(|l| l.contains("\"ap\":\"active\"")) {
-                    tracing::info!("avrcp: the access point is up");
-                } else {
-                    tracing::info!("avrcp: home -- back on the known network");
-                }
+                tracing::info!("avrcp: home -- back on the known network");
+                handle.send(Command::Cue(Cue::Home));
+            }
+            // The same two rising notes: what was asked for happened.
+            HomeOutcome::ApUp => {
+                tracing::info!("avrcp: the access point is up");
                 handle.send(Command::Cue(Cue::Home));
             }
             HomeOutcome::NotHome(why) => {
@@ -453,7 +460,7 @@ mod tests {
         let l = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(home_outcome(&l(&[r#"{"trying":true}"#, r#"{"ok":true}"#])), HomeOutcome::Home);
         // With no link, the same key starts the access point [SPEC-WFO-090].
-        assert_eq!(home_outcome(&l(&[r#"{"trying":true}"#, r#"{"ok":true,"ap":"active"}"#])), HomeOutcome::Home);
+        assert_eq!(home_outcome(&l(&[r#"{"trying":true}"#, r#"{"ok":true,"ap":"active"}"#])), HomeOutcome::ApUp);
         assert_eq!(
             home_outcome(&l(&[r#"{"ok":false,"error":"on a known network: there is no access point to start"}"#])),
             HomeOutcome::Ignored("on a known network: there is no access point to start".into()));

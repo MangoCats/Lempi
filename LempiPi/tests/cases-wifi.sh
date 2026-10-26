@@ -335,6 +335,19 @@ assert_called "btctl ap-failover" "and after 75 s with no link starts it by itse
 assert_in "$OUT" "no paired speaker to ask with" "saying why"
 teardown
 
+# A paired phone is not a speaker: it has no Left key, so it does not stop
+# the access point starting.
+setup
+fake_btctl
+printf 'Device aa:bb:cc:dd:ee:30 Phone\n' >> "$VT_STATE/paired"
+printf '\tAlias: Phone\n\tPaired: yes\n\tUUID: Handsfree Audio Gateway (0000111f-0000-1000-8000-00805f9b34fb)\n' \
+    > "$VT_STATE/info.aa:bb:cc:dd:ee:30"
+printf 'wlan0:disconnected\n' > "$VT_STATE/nm_dev_state"
+printf '%s\n' "$(( $(date +%s) - 80 ))" > "$LEMPI_RUN_DIR/wifi_disconnected_since"
+wifi_keeper >/dev/null
+assert_called "btctl ap-failover" "a paired phone does not count as a speaker to ask with"
+teardown
+
 # Joining a network is never interrupted for it.
 setup
 fake_btctl
@@ -360,6 +373,14 @@ printf 'wlan0:connected\n' > "$VT_STATE/nm_dev_state"
 OUT=$(btctl ap-request)
 assert_in "$OUT" "on a known network" "ap-request on a known network is refused"
 assert_not_in "$OUT" '"trying":true' "without saying it is trying"
+assert_not_called "connection up lempi-ap" "and starts nothing"
+teardown
+
+# ap-request while a network is being joined: refused, and said as that.
+setup
+printf 'wlan0:connecting (configuring)\n' > "$VT_STATE/nm_dev_state"
+OUT=$(btctl ap-request)
+assert_in "$OUT" "joining a known network" "ap-request while joining says it is joining"
 assert_not_called "connection up lempi-ap" "and starts nothing"
 teardown
 
@@ -397,7 +418,7 @@ assert_called "btctl led on 10" "the no-link brightness the listener chose"
 printf 'wlan0:connected\n' > "$VT_STATE/nm_dev_state"
 OUT=$(wifi_keeper)
 assert_called "btctl led on 60" "and with a link, the ordinary one"
-assert_in "$OUT" "LED back at 60%" "said when the link comes back"
+assert_in "$OUT" "link up: the LED at 60%" "said when the link comes back"
 teardown
 
 # On the access point there is a link: the ordinary brightness.
@@ -408,13 +429,31 @@ wifi_keeper >/dev/null
 assert_called "btctl led on 100" "on the access point the LED is at its ordinary brightness"
 teardown
 
-# Any mode but on is left alone.
+# Every mode is the keeper's to apply [PI3-LED-010]: the other three once,
+# whatever the link, and again only when the listener changes it.
 setup
 fake_btctl
 printf 'wifi\n' > "$VT_STATE/db_led_mode"
 printf 'wlan0:disconnected\n' > "$VT_STATE/nm_dev_state"
+OUT=$(wifi_keeper)
+assert_called "btctl led wifi" "an LED in wifi mode is applied"
+assert_in "$OUT" "the LED set to wifi" "and said"
+: > "$VT_STATE/calls"
+printf 'wlan0:connected\n' > "$VT_STATE/nm_dev_state"
 wifi_keeper >/dev/null
-assert_not_called "btctl led" "an LED in wifi mode is not touched"
+assert_not_called "btctl led" "and not again when only the link changes"
+printf 'off\n' > "$VT_STATE/db_led_mode"
+wifi_keeper >/dev/null
+assert_called "btctl led off" "but again when the listener changes it"
+teardown
+
+# A mode the database does not hold is the player's default, on.
+setup
+fake_btctl
+printf 'sparkle\n' > "$VT_STATE/db_led_mode"
+printf 'wlan0:connected\n' > "$VT_STATE/nm_dev_state"
+wifi_keeper >/dev/null
+assert_called "btctl led on 100" "an unknown mode is the default, on at full brightness"
 teardown
 
 # --- the link held after thirty seconds [PI3-AIM-160] -----------------------

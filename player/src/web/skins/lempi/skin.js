@@ -1689,7 +1689,7 @@
       ledMode.value = body.mode ?? 'on';
       ledBrightness.value = body.brightness ?? 100;
       setText(ledBrightnessLabel, `${ledBrightness.value}%`);
-      ledNowifi.value = body.nowifi ?? 25;
+      ledNowifi.value = body.nowifi;
       setText(ledNowifiLabel, `${ledNowifi.value}%`);
       showBrightness(ledMode.value === 'on');
     } catch { /* leave whatever it last showed */ }

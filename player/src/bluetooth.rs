@@ -232,8 +232,9 @@ pub fn set_radio(kind: &str, on: bool) -> Result<serde_json::Value, String> {
 ///
 /// Applies immediately, live. Persisting the choice so it survives a
 /// reboot is a separate concern, done by the caller writing
-/// `player_settings` and by a boot-time script re-reading it -- this
-/// function only ever touches the hardware.
+/// `player_settings` and by the Wi-Fi keeper re-reading it
+/// (`appliance/bluetooth/lempi-wifi-failover`) -- this function only ever
+/// touches the hardware.
 pub fn set_led(mode: &str, pct: Option<u8>) -> Result<serde_json::Value, String> {
     if !matches!(mode, "on" | "wifi" | "off" | "default") {
         return Err("not a valid led mode".into());

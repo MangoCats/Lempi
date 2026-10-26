@@ -25,9 +25,6 @@ import urllib.request
 
 from lempi_control import LEMPI_DEFAULT_PORT  # the guarded mirror [GDE-CLI-100]
 
-SECONDS = 1800
-
-
 def _json(text):
     try:
         return json.loads(text)
@@ -59,8 +56,10 @@ def _ssh_post(host, path):
 
 
 @contextlib.contextmanager
-def _held(post, who, say):
-    got = post(f"/transfer/hold?seconds={SECONDS}") or {}
+def _held(post, who, say, seconds=None):
+    # Left out, the player's own default applies (`DEFAULT_SECS`,
+    # player/src/web/transfer.rs); a caller that knows its bound passes it.
+    got = post("/transfer/hold" + (f"?seconds={seconds}" if seconds else "")) or {}
     hid = got.get("id")
     paused = bool(got.get("paused"))
     if hid is None:
@@ -80,11 +79,11 @@ def _held(post, who, say):
                 say(f"  transfer: {who}'s player had forgotten the hold; asked it to play")
 
 
-def held(address, port=LEMPI_DEFAULT_PORT, say=print):
+def held(address, port=LEMPI_DEFAULT_PORT, say=print, seconds=None):
     """A hold asked of the player at `address`:`port`, over its web port."""
-    return _held(lambda path: _http_post(f"http://{address}:{port}{path}"), address, say)
+    return _held(lambda path: _http_post(f"http://{address}:{port}{path}"), address, say, seconds)
 
 
-def held_ssh(host, say=print):
+def held_ssh(host, say=print, seconds=None):
     """A hold asked over ssh of `host`'s player, on its loopback port."""
-    return _held(lambda path: _ssh_post(host, path), host, say)
+    return _held(lambda path: _ssh_post(host, path), host, say, seconds)

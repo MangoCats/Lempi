@@ -259,9 +259,12 @@ the access point `GO HOME`, lit; on a network it is not drawn, and a press
 there does nothing. Both run `lempi-btctl ap-request`, as the speaker's Left
 key does, and the note beside PAIR says what happened (`trying...`, then
 `access point up`, `back on Wi-Fi`, `did not work`, `a phone is on it`) — the
-helper's answer, not its exit status. wlan0 is read from `nmcli` when the page
-opens and at most every 10 s while it shows. A way home takes up to fifteen
-seconds and is awaited, so the screen holds still meanwhile.
+helper's answer, read as the speaker's key reads it (`avrcp::home_outcome`),
+not its exit status. wlan0 is read from `nmcli` when the page opens and every
+10 s while it shows -- on no other page -- and the button is redrawn when
+that changes, so a link that drops or returns shows without a touch. A way
+home takes up to fifteen seconds and is awaited, so the screen holds still
+meanwhile.
 
 ---
 

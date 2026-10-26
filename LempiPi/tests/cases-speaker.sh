@@ -590,5 +590,5 @@ holding 130
 printf '%s\nMIDDLETON\n' "$MIDDL" > "$LEMPI_RUN_DIR/settled"
 printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
 OUT=$(keeper)
-assert_in "$OUT" "no longer settled (another speaker was chosen)" "a new choice ends the quiet"
+assert_in "$OUT" "no longer settled (the listener's choice changed)" "a new choice ends the quiet"
 teardown

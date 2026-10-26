@@ -162,11 +162,13 @@ the node, `aabc18d`, twenty minutes after boot:
   channel 1, and much of the rest excluded. A link with that little room to
   hop has little left for anything that interrupts it.
 
-Not yet tried: locking the connection to one access point (stops the roams
-that restart the 30 s phase), turning `bgscan` down through a hook, Wi-Fi
-power save off (on now, the default). The seed `[LP3-BT-020]` is installed for
-its own trial. Not checked: whether `lempi02w`, which still prefers the Boom 2,
-was powered and paging it -- it did not answer that afternoon.
+*Since 2026-10-25* the link is held 30 s after it comes up -- one access
+point, no background scans `[PI3-AIM-160]` -- and the seed is retired
+`[PI3-FOUND-860]`. What was measured with them, and that the glitches are
+PipeWire's bitpool cuts in stretches that come and go on their own, is
+`[PI3-FOUND-870]`. Still not tried: Wi-Fi power save off (on, the default).
+Not checked: whether `lempi02w`, which still prefers the Boom 2, was powered
+and paging it -- it did not answer that afternoon.
 
 **`[LP3-RAD-020]` The seed, tried on a reconnection: it kept more channels, and
 neither arm stalled (2026-10-23, evening).** The map saved from the settled

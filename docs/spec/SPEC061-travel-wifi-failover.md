@@ -110,9 +110,9 @@ When the appliance returns to its home network:
 - A speaker that powers the Pi has a third way already: off and on is a reboot, and the boot path goes home first (item 1).
 
 **`[SPEC-WFO-090]` The access point only on request.** Decided by the maintainer 2026-10-25 [PI031](../../LempiPi/PI031-settling-the-shared-radio.md): an access point broadcasts on the one radio a speaker's audio shares, so it runs only while someone wants it.
-- **Asked for** by the speaker's Left key, or fbui's **START AP** on its Settings page `[SPEC-FBUI-120]`, both through `lempi-btctl ap-request`: with no link it prints `{"trying":true}` and brings up `lempi-ap` standing, as `ap-failover`; on the access point it is `ap-return`; on a network it refuses, and the key stays silent. The cues are `[SPEC-WFO-085]`'s: a click, then two rising notes when it did what was asked, one low note when it did not.
+- **Asked for** by the speaker's Left key, or fbui's **START AP** on its Settings page `[SPEC-FBUI-120]`, both through `lempi-btctl ap-request`: with no link it prints `{"trying":true}` and brings up `lempi-ap` standing, as `ap-failover`; on the access point it is `ap-return`; on a network, or while one is being joined, it refuses, and the key stays silent. The cues are `[SPEC-WFO-085]`'s: a click, then two rising notes when it did what was asked, one low note when it did not.
 - **Shown** by the LED's no-link brightness `[PI3-LED-020]`, and by the button's label.
-- **Except where nobody could ask.** A node with no paired Bluetooth device has no key to press and no audio sharing the radio; brought to a new home, it would be unreachable short of rewriting its card. After 75 s with no link and no paired device, and not while a network is being joined, the keeper brings up `lempi-ap` itself, as `[SPEC-WFO-010]` always did.
+- **Except where nobody could ask.** A node with no paired speaker -- no paired device offering an Audio Sink; a paired phone or keyboard has no Left key -- has no key to press and no audio sharing the radio; brought to a new home, it would be unreachable short of rewriting its card. After 75 s with no link and no paired speaker, and not while a network is being joined, the keeper brings up `lempi-ap` itself, as `[SPEC-WFO-010]` always did.
 
 ---
 

@@ -61,7 +61,7 @@ print("transfer_hold")
 
 p = Player(paused=True)
 said = run(p)
-check(p.asked[0] == "/transfer/hold?seconds=1800", "a hold is asked for first")
+check(p.asked[0] == "/transfer/hold", "a hold is asked for first, for the player's own default")
 check(p.asked[1:] == ["/transfer/release/7"], "and released after")
 check(any("paused" in s for s in said) and any("resumed" in s for s in said), "both said")
 
@@ -79,7 +79,7 @@ check("/command/play" not in p.asked, "one that had not paused starts nothing")
 
 p = Player(paused=False, answers=False)
 said = run(p)
-check(p.asked == ["/transfer/hold?seconds=1800"], "no player: nothing to release")
+check(p.asked == ["/transfer/hold"], "no player: nothing to release")
 check(any("sending anyway" in s for s in said), "and it is said")
 
 if FAILED:

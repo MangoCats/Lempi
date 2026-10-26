@@ -10,6 +10,11 @@ and an antenna -- the Zero W and Zero 2 W, the 3 B, and the 3 B+, 4 and 5 on
 2.4 GHz. That a dual-band model's Wi-Fi on 5 GHz removes most of the
 contention follows from the same physics, and has not been measured here.
 
+> **Since:** a report of 2026-10-24, kept as it stood. What was decided and
+> built from it the next day, and measured on lp3-wifi -- the link held, the
+> keeper quiet, one early redial, the seed retired -- is
+> [PI031](../LempiPi/PI031-settling-the-shared-radio.md).
+
 ---
 
 ## 1. The one fact everything else follows from

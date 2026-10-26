@@ -212,6 +212,11 @@ pub(super) async fn speaker_verb_on(
     bt_reply(result, false)
 }
 
+fn led_defaults() -> (String, u8, u8) {
+    use crate::db::PlayerStore as S;
+    (S::LED_DEFAULT_MODE.into(), S::LED_DEFAULT_PCT, S::LED_NOWIFI_DEFAULT_PCT)
+}
+
 /// The appliance's status LED: which of the four modes, the brightness
 /// `on` would use `[PI3-LED-010]`, and the one it uses with no Wi-Fi link
 /// `[PI3-LED-020]`. Fetched once when the settings panel
@@ -224,10 +229,10 @@ pub(super) async fn led_state(State(ui): State<Ui>) -> Response {
     let (mode, brightness, nowifi) = tokio::task::spawn_blocking(move || {
         crate::db::PlayerStore::open_split(&db, &library)
             .map(|s| (s.load_led_mode(), s.load_led_brightness(), s.load_led_nowifi_brightness()))
-            .unwrap_or_else(|_| ("on".into(), 100, 25))
+            .unwrap_or_else(|_| led_defaults())
     })
     .await
-    .unwrap_or_else(|_| ("on".into(), 100, 25));
+    .unwrap_or_else(|_| led_defaults());
     axum::Json(serde_json::json!({ "mode": mode, "brightness": brightness, "nowifi": nowifi })).into_response()
 }
 
@@ -291,9 +296,9 @@ pub(super) async fn set_led(
         Err(why) => return (StatusCode::INTERNAL_SERVER_ERROR, why).into_response(),
     };
     // A deliberate, listener-visible change -- worth its own journal line
-    // distinct from `lempi-led-boot`'s own (also now logged), so "who set
-    // this" is a fact one `journalctl` away rather than a guess the next
-    // time it looks surprising.
+    // distinct from the Wi-Fi keeper's when it applies the LED (also
+    // logged) `[PI3-LED-010]`, so "who set this" is a fact one `journalctl`
+    // away rather than a guess the next time it looks surprising.
     tracing::info!("led set to {mode} ({effective_pct}%) via web request");
     // The choice is already durable at this point -- a hardware failure
     // from here down is real and worth reporting, but it must not read as

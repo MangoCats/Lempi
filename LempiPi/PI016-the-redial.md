@@ -129,7 +129,9 @@ return on Mode A boots. What is gone is a mitigation whose price was declined.
 
 Two things kept, so this is not relearned: the reasoning stays in
 `lempi-speaker.sh` where the code was, and anyone reinstating it must wait on
-the `MediaTransport1` state rather than `Connected: yes` -- the removed
+the `MediaTransport1` state rather than `Connected: yes` *(the redial
+reinstated 2026-10-25 waits on PipeWire's sink instead, and why is in
+[PI031](PI031-settling-the-shared-radio.md) `[PI3-AIM-150]`)* -- the removed
 version posted `reopen-output` about 24 s before the speaker carried audio,
 and recovered by a later tick's routing check `[PI3-AIM-050]` rather than by
 design.

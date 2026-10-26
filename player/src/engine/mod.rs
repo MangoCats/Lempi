@@ -651,6 +651,10 @@ pub struct Engine {
     path: crate::path::PathHandle,
     out_rate: u32,
     out_channels: usize,
+    /// How long a warp cut's cushion may decode before the cut goes ahead
+    /// with what it has: `WARP_PREFILL_BUDGET`, a field only so a test can
+    /// give the cushion all the time it needs on a loaded machine, and none.
+    warp_prefill_budget: std::time::Duration,
     scratch: Vec<f32>,
     state: Arc<Mutex<PlayerState>>,
     rx: Receiver<Command>,
@@ -853,6 +857,7 @@ impl Engine {
             last_lock_failures: 0,
             out_rate,
             out_channels,
+            warp_prefill_budget: Self::WARP_PREFILL_BUDGET,
             // One frame longer than the block that is ever mixed into it, so
             // a duplicate always has somewhere to go `[GDE-ECHO-373]`.
             scratch: vec![0.0; (Self::MIX_FRAMES + 1) * out_channels.max(1)],
@@ -1622,13 +1627,14 @@ impl Engine {
             // decoded by then is laid in; the ordinary ticks bring the rest.
             let tries = if cushion > 0 { crate::TOPUP_TRIES_BEFORE_CUT * 4 } else { crate::TOPUP_TRIES_BEFORE_CUT };
             let started = std::time::Instant::now();
+            let budget = self.warp_prefill_budget;
             for _ in 0..tries {
                 if l.stream.ring.len() >= wanted || l.stream.finished {
                     break;
                 }
-                if cushion > 0 && started.elapsed() >= Self::WARP_PREFILL_BUDGET {
+                if cushion > 0 && started.elapsed() >= budget {
                     tracing::info!("warp: cushion decode stopped at its {} ms budget with {} of {wanted} samples",
-                                   Self::WARP_PREFILL_BUDGET.as_millis(), l.stream.ring.len());
+                                   budget.as_millis(), l.stream.ring.len());
                     break;
                 }
                 Self::top_up(l, ab_loop, out_rate);
@@ -6641,6 +6647,10 @@ than one mix block");
     fn a_warp_cut_leaves_a_cushion_in_the_ring() {
         let ring = crate::output::OutputRing::new(800_000, crate::output::Volume::new(1.0));
         let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        // The cushion, not this machine's speed: under 250 ms, a debug build
+        // among parallel tests decoded 720 ms of a pitch cut and failed, while
+        // the logic was sound. The budget's own half is the test below.
+        e.warp_prefill_budget = std::time::Duration::from_secs(30);
         let w = wav_of(20_000);
         let mut ent = entry(271, w.to_str().unwrap());
         ent.end_ms = 20_000;
@@ -6659,6 +6669,36 @@ than one mix block");
             let deep_ms = ring.buffered() as u64 * 1000 / (44_100 * 2);
             assert!(deep_ms >= 900, "after a {what} cut the ring holds {deep_ms} ms");
         }
+        let _ = std::fs::remove_file(&w);
+    }
+
+    /// The budget's half of `[SPEC-TPL-060]`: a cut whose decode has no time
+    /// goes ahead with what it has, at once, rather than holding the engine;
+    /// the ordinary ticks bring the rest.
+    #[test]
+    fn a_warp_cut_with_no_budget_goes_ahead_and_the_ticks_refill() {
+        let ring = crate::output::OutputRing::new(800_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        let w = wav_of(20_000);
+        let mut ent = entry(272, w.to_str().unwrap());
+        ent.end_ms = 20_000;
+        e.enqueue(ent);
+        h.send(Command::Play);
+        e.drain_commands();
+        assert!(tick_until(&mut e, |eng| eng.echo.shown_is_sounding));
+        for _ in 0..50 {
+            drain_keeping(&ring, 200_000);
+            e.tick();
+        }
+        e.warp_prefill_budget = std::time::Duration::ZERO;
+        h.send(Command::SetPitch(-500));
+        let started = std::time::Instant::now();
+        e.drain_commands();
+        let deep_ms = ring.buffered() as u64 * 1000 / (44_100 * 2);
+        assert!(deep_ms < 900, "with no budget the cut laid in {deep_ms} ms; it should not have waited");
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "and it did not hold the engine");
+        assert!(tick_until(&mut e, |_| ring.buffered() as u64 * 1000 / (44_100 * 2) >= 900),
+                "the ordinary ticks never brought the cushion back");
         let _ = std::fs::remove_file(&w);
     }
 

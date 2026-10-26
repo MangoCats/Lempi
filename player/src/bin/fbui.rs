@@ -770,8 +770,9 @@ const BTCTL: &str = "/usr/local/bin/lempi-btctl";
 /// `[SPEC-WFO-090]`, and this is the screen's way to ask, as the speaker's
 /// Left key is a speaker's.
 const AP_X: (i32, i32) = (376, 472);
-/// How often wlan0 is asked about while the Settings page shows: a link can
-/// drop with nobody touching the screen, and `nmcli` is a process.
+/// How often wlan0 is asked about while the Settings page shows -- a link can
+/// drop with nobody touching the screen -- and only then: `nmcli` is a
+/// process, and every other page has no use for the answer.
 const WIFI_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// What wlan0 is doing, as far as the access-point button cares.
@@ -825,18 +826,17 @@ fn ap_label(w: Wifi) -> Option<&'static str> {
 }
 
 /// What `lempi-btctl ap-request` did, as the note beside the button says it:
-/// its answer, not its exit status `[GOV-SRC-040]`.
+/// its answer, not its exit status `[GOV-SRC-040]`, read as the speaker's Left
+/// key reads it (`avrcp::home_outcome`).
 fn ap_outcome(out: &str) -> &'static str {
-    let tried = out.contains(r#""trying":true"#);
-    let last = out.lines().rev().find(|l| !l.contains(r#""trying":true"#)).unwrap_or("");
-    if last.contains(r#""ok":true"#) {
-        if last.contains(r#""ap":"active""#) { "access point up" } else { "back on Wi-Fi" }
-    } else if tried {
-        "did not work"
-    } else if last.contains("client") {
-        "a phone is on it"
-    } else {
-        "not now"
+    use lempi_player::avrcp::{home_outcome, HomeOutcome};
+    let lines: Vec<String> = out.lines().map(str::to_string).collect();
+    match home_outcome(&lines) {
+        HomeOutcome::ApUp => "access point up",
+        HomeOutcome::Home => "back on Wi-Fi",
+        HomeOutcome::NotHome(_) => "did not work",
+        HomeOutcome::Ignored(why) if why.contains("client") => "a phone is on it",
+        HomeOutcome::Ignored(_) => "not now",
     }
 }
 
@@ -1776,10 +1776,12 @@ async fn main() {
     // The last press of the pairing button and what it did, shown beside the
     // button for `PAIR_NOTE_SECS` `[SPEC-NSH-170]`.
     let mut pair_note: Option<(bool, std::time::Instant)> = None;
-    // wlan0 as last read, when, and the last access-point press's outcome
-    // `[SPEC-FBUI-120]`. Read only while the Settings page shows.
+    // wlan0 as last read, and the last access-point press's outcome
+    // `[SPEC-FBUI-120]`. Read when the Settings page opens and on every tick
+    // while it shows; on no other page.
     let mut wifi = Wifi::default();
-    let mut wifi_read: Option<std::time::Instant> = None;
+    let mut wifi_tick = tokio::time::interval(WIFI_EVERY);
+    wifi_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut ap_note: Option<(&'static str, std::time::Instant)> = None;
     loop {
         tracing::info!("fbui: connecting to {url}");
@@ -1862,10 +1864,6 @@ async fn main() {
                         // before deciding whether album art fits -- measured
                         // against real hardware, not estimated from the SPI
                         // clock rate on paper.
-                        if page == Page::Settings && wifi_read.is_none_or(|t| t.elapsed() >= WIFI_EVERY) {
-                            wifi = tokio::task::spawn_blocking(read_wifi).await.unwrap_or_default();
-                            wifi_read = Some(std::time::Instant::now());
-                        }
                         let started = std::time::Instant::now();
                         let result = render_page(&mut display, page, &snap, art, pair_shown(pair_note), wifi, ap_shown(ap_note));
                         let elapsed = started.elapsed();
@@ -1884,6 +1882,21 @@ async fn main() {
                     }
                     last = Some(snap);
                 }
+                // A link that drops or comes back while the Settings page
+                // shows redraws it, whether or not anything else does
+                // `[SPEC-FBUI-120]`; a tick that changes nothing draws nothing.
+                _ = wifi_tick.tick() => {
+                    if page == Page::Settings {
+                        let now = tokio::task::spawn_blocking(read_wifi).await.unwrap_or_default();
+                        if now != wifi {
+                            wifi = now;
+                            let snap = last.clone().unwrap_or_default();
+                            if let Err(e) = render_settings(&mut display, &snap, pair_shown(pair_note), wifi, ap_shown(ap_note)) {
+                                tracing::warn!("fbui: render failed: {e:?}");
+                            }
+                        }
+                    }
+                }
                 Some((rx, ry)) = touch_rx.recv() => {
                     let Some(cal) = &calibration else { continue };
                     let (sx, sy) = cal.apply(rx, ry);
@@ -1896,8 +1909,7 @@ async fn main() {
                             page = if page == own { Page::NowPlaying } else { own };
                             if page == Page::Settings {
                                 wifi = tokio::task::spawn_blocking(read_wifi).await.unwrap_or_default();
-                                wifi_read = Some(std::time::Instant::now());
-                            }
+                                }
                             let art = art_cache.as_ref().and_then(|(_, px)| px.as_deref());
                             if let Err(e) = render_page(&mut display, page, &snap, art, pair_shown(pair_note), wifi, ap_shown(ap_note)) {
                                 tracing::warn!("fbui: render failed: {e:?}");
@@ -2007,7 +2019,6 @@ async fn main() {
                             let note = tokio::task::spawn_blocking(request_ap).await.unwrap_or("did not work");
                             ap_note = Some((note, std::time::Instant::now()));
                             wifi = tokio::task::spawn_blocking(read_wifi).await.unwrap_or_default();
-                            wifi_read = Some(std::time::Instant::now());
                             if let Err(e) = render_settings(&mut display, &snap, None, wifi, ap_shown(ap_note)) {
                                 tracing::warn!("fbui: render failed: {e:?}");
                             }

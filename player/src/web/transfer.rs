@@ -15,7 +15,13 @@
 //! if it is playing when the first hold arrives. When the last hold ends, the
 //! playback a hold paused is resumed, unless the listener has already pressed
 //! play. A hold that is never released ends by itself after its `seconds`, so a
-//! transfer that dies cannot leave the music stopped for good.
+//! transfer that dies cannot leave the music stopped for good. A sender that
+//! knows how long it may take says so; one that does not gets `DEFAULT_SECS`.
+//!
+//! **Who may ask.** Anyone who can reach the player's web port, exactly as
+//! for `/command/pause`: on an appliance, the household network, or the
+//! access point's clients. The most a hold can do is that pause, for at most
+//! `MAX_SECS`, after which the music plays again by itself.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use std::collections::HashMap;

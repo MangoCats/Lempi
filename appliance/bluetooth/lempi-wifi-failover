@@ -8,8 +8,8 @@
 # link. Now the access point comes up only when asked for -- the speaker's Left
 # key or fbui's button, through `lempi-btctl ap-request` [SPEC-WFO-090] -- so
 # what is left here is everything that must happen without anybody asking --
-# and the old automatic start for the one node nobody could ask for it on,
-# one with no paired speaker.
+# the LED in all its modes [PI3-LED-010], and the old automatic start for the
+# one node nobody could ask for it on, one with no paired speaker.
 set -u
 
 STATE_DIR="${LEMPI_RUN_DIR:-/run/lempi}"
@@ -43,40 +43,60 @@ say_once() {
 }
 unsay(){ rm -f "$STATE_DIR/said_$1" 2>/dev/null; }
 
+# The LED's defaults, for a setting never made. The player's are the source --
+# `LED_DEFAULT_MODE`, `LED_DEFAULT_PCT` and `LED_NOWIFI_DEFAULT_PCT` in
+# `player/core/src/db/player_store.rs` -- and its test
+# `the_led_defaults_are_mirrored_in_the_wifi_keeper` holds these three lines
+# to them.
+LED_DEFAULT_MODE=on
+LED_DEFAULT_PCT=100
+LED_NOWIFI_DEFAULT_PCT=25
+
+# **`[PI3-LED-010]` The listener's LED, applied whenever it differs from what
+# was last applied** -- at boot, after a change on the page, and when the link
+# changes. This is the one place that keeps the LED: `lempi-led-boot` did the
+# boot half on lempi02w alone, from the pre-split database, and lp3-wifi had
+# nothing; retired 2026-10-25. Until the first tick, 20 s after boot, the LED
+# is the kernel's.
+#
 # **`[PI3-LED-020]` A dimmer LED says "no Wi-Fi: the key starts the access
 # point".** Asked for by the listener with the access point made on-request:
 # a node with no link and no screen has to say, somehow, that the speaker's
 # Left key would now start its access point. The LED's own brightness is the
 # one output such a node has. So while `led_mode` is `on` it shows
-# `led_nowifi_pct` (25% by default) when wlan0 has no link at all -- neither a
-# network nor the access point -- and `led_brightness_pct` otherwise. The
-# other three modes are left exactly as the listener set them.
+# `led_nowifi_pct` when wlan0 has no link at all -- neither a network nor the
+# access point -- and `led_brightness_pct` otherwise.
 #
-# Applied only on a change, so a steady state costs one database read a tick
-# and no write to the LED.
+# Applied only on a change, so a steady state costs a few database reads a
+# tick and no write to the LED.
 led_follow() {
     _mode=$(setting led_mode)
-    if [ "${_mode:-on}" != on ]; then
-        rm -f "$STATE_DIR/led_applied" 2>/dev/null
-        return 0
-    fi
-    if [ "$1" = yes ]; then
-        _pct=$(setting led_brightness_pct); _def=100
-    else
-        _pct=$(setting led_nowifi_pct); _def=25
-    fi
-    case "${_pct:-}" in ''|*[!0-9]*) _pct=$_def ;; esac
-    { [ "$_pct" -ge 1 ] && [ "$_pct" -le 100 ]; } || _pct=$_def
-    [ "$(cat "$STATE_DIR/led_applied" 2>/dev/null)" = "$_pct" ] && return 0
-    if "$BTCTL" led on "$_pct" >/dev/null 2>&1; then
-        printf '%s\n' "$_pct" > "$STATE_DIR/led_applied"
+    case "${_mode:-}" in on|wifi|off|default) ;; *) _mode=$LED_DEFAULT_MODE ;; esac
+    _want=$_mode
+    if [ "$_mode" = on ]; then
         if [ "$1" = yes ]; then
-            echo "Wi-Fi link up: the LED back at ${_pct}% [PI3-LED-020]"
+            _pct=$(setting led_brightness_pct); _def=$LED_DEFAULT_PCT
+        else
+            _pct=$(setting led_nowifi_pct); _def=$LED_NOWIFI_DEFAULT_PCT
+        fi
+        case "${_pct:-}" in ''|*[!0-9]*) _pct=$_def ;; esac
+        { [ "$_pct" -ge 1 ] && [ "$_pct" -le 100 ]; } || _pct=$_def
+        _want="on $_pct"
+    fi
+    [ "$(cat "$STATE_DIR/led_applied" 2>/dev/null)" = "$_want" ] && return 0
+    # shellcheck disable=SC2086 -- `on 25` is two arguments, as meant.
+    if "$BTCTL" led $_want >/dev/null 2>&1; then
+        printf '%s\n' "$_want" > "$STATE_DIR/led_applied"
+        unsay led_failed
+        if [ "$_mode" != on ]; then
+            echo "the LED set to $_mode [PI3-LED-010]"
+        elif [ "$1" = yes ]; then
+            echo "Wi-Fi link up: the LED at ${_pct}% [PI3-LED-020]"
         else
             echo "no Wi-Fi link: the LED at ${_pct}%; the speaker's Left key starts the access point [PI3-LED-020]"
         fi
     else
-        say_once led_failed "could not set the LED to ${_pct}% [PI3-LED-020]"
+        say_once led_failed "could not set the LED to $_want [PI3-LED-010]"
     fi
 }
 
@@ -275,10 +295,11 @@ led_follow no
 #    press, and no audio sharing the radio either: brought to a new home, or
 #    set up before its first speaker, it would be unreachable short of
 #    rewriting its card. So after NOLINK_AFTER with no link and no paired
-#    device, the access point starts by itself, as it always did
-#    [SPEC-WFO-090]. Joining a network is never interrupted for it.
+#    speaker -- a paired phone or keyboard has no Left key to press -- the
+#    access point starts by itself, as it always did [SPEC-WFO-090]. Joining
+#    a network is never interrupted for it.
 case "$DEV_STATE" in wlan0:connecting*) exit 0 ;; esac
-if [ -n "$(bluetoothctl devices Paired 2>/dev/null)" ]; then
+if [ -n "$(lempi_speakers Paired)" ]; then
     rm -f "$STATE_DIR/wifi_disconnected_since"
     exit 0
 fi

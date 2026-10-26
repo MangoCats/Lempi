@@ -46,9 +46,10 @@ captures already in `logs/`.
 PipeWire 1.4.2, the version on these nodes, read from its source
 (`spa/plugins/bluez5/a2dp-codec-sbc.c`, `media-sink.c`):
 
-- **No setting caps the bitpool.** The SBC codec reads no property; the
-  bitpool it starts at is the lower of the speaker's maximum and 53 (48 kHz)
-  or 64 (44.1 kHz) joint stereo.
+- **No setting caps the bitpool**, in 1.4.2 or in upstream's source today.
+  The SBC codec reads no property; it starts at its ceiling, the lower of the
+  speaker's maximum and a built-in 58 (48 kHz) or 64 (44.1 kHz) for joint
+  stereo. The MIDDLETON's 53 is the speaker's own maximum.
 - **It already makes room, by dropping audio.** When a write to the
   controller would block -- the radio not taking packets -- the packet is
   thrown away ("there will be a sound glitch in any case") and the bitpool
@@ -128,14 +129,33 @@ for costing 36.2 s of silence on every boot `[PI3-FOUND-450]`. Now it is
 earned. `lempi-btctl a2dp-sample 15` counts the media packets handed to the
 controller and how many are the commonest size `[PI3-FOUND-850]`. Nine in ten
 or more is steady: said, and the connection is judged. Fewer: the link is
-dropped and dialled again outbound, once per speaker per boot. The reopen
-waits for PipeWire's sink rather than for `Connected: yes`, which is what made
-the old silence half a minute `[PI3-FOUND-440]`. A second sample afterwards
-says whether it worked; nothing redials twice. A sample that cannot be taken
-is said, and not counted as steady.
+dropped and dialled again outbound, once per speaker per boot. A second
+sample afterwards says whether it worked; nothing redials twice. A sample that
+cannot be taken is said, and not counted as steady.
+
+**The reopen waits for PipeWire's sink, not the transport -- a departure from
+PI016's rule, on purpose.** PI016 says a reinstated redial must wait on the
+`MediaTransport1` state rather than `Connected: yes` `[PI3-FOUND-450]`,
+because the old one posted `reopen-output` some 24 s before the speaker
+carried audio `[PI3-FOUND-440]`. The fault was reopening onto nothing. What a
+reopen needs is a sink to open onto, and the sink is the test the player is
+already held to at every boot `[PI3-AIM-120]` (`lempi_sink_present`, as
+`lempi-wait-sink` uses). The transport is no better signal: it appears, `idle`,
+as A2DP connects, which is when PipeWire makes the sink, and turns `active`
+only once a stream plays on it -- after the reopen, so waiting for that would
+never end. Measured on
+lp3-wifi: the sink was back 1.2 s after the dial, the reopen went at 3.6 s,
+and the speaker went 4.5 s without media `[PI3-FOUND-870]`, against the old
+redial's 36.2 s.
 
 So the gap, when there is one, is a reconnection's few seconds, early, and
 only on a link already failing.
+
+**A reconnection is not a new hold.** The clock starts when a speaker is
+claimed, and the claim is dropped only when a tick finds nothing connected.
+A speaker that drops and comes back between two ticks -- under 30 s -- keeps
+its judgement and its settled state. That is deliberate: Mode A, the case
+this is for, is a boot, and a boot starts with an empty `/run/lempi`.
 
 ## 6. Wi-Fi held still
 
@@ -143,8 +163,10 @@ only on a link already failing.
 roaming, no background scans, until the link drops.** NetworkManager's
 `bgscan simple:30:-65:300` scans every 30 s below −65 dBm; with four access
 points on one name a weak node roams, and each roam starts it again
-`[LP3-RAD-010]`. NetworkManager 1.52 has no setting for either. So the keeper
-asks wpa_supplicant directly: the network in use gets the BSSID it is on, and
+`[LP3-RAD-010]`. NetworkManager 1.52 has no `bgscan` setting at all, and its
+`802-11-wireless.bssid` locks a profile only from its next activation -- a
+reconnection to make, and a lock that would follow the node to the next
+house. So the keeper asks wpa_supplicant directly: the network in use gets the BSSID it is on, and
 its `bgscan` emptied. Nothing is written; NetworkManager hands wpa_supplicant
 a fresh network at every activation, so a hold lasts exactly one association.
 A held access point that goes away cannot be roamed from; NetworkManager then
@@ -163,17 +185,27 @@ release plays again, unless the listener already did; a hold never released
 ends on its own. Held: the player, fbui and `import_bundle` uploads
 (`build/lib-defaults.sh`), the star sync's catalogue parts and
 `star_distribute`'s uploads (`tools/transfer_hold.py`). A player that restarts
-under a hold forgets it, so the release then asks it to play.
+under a hold forgets it, so the release then asks it to play. How long a hold
+lasts, who may ask for one and what that exposes are written once, in
+`player/src/web/transfer.rs`.
 
 ## 8. The access point on request, and what the LED says
 
 **`[PI3-LED-020]` With no Wi-Fi link at all, the LED shows a second
-brightness, 25% by default.** A node with no screen has to say that the
+brightness, a quarter by default.** A node with no screen has to say that the
 speaker's Left key would now start its access point `[SPEC-WFO-090]`. While
 the LED is in its "on" mode, the Wi-Fi keeper shows `led_nowifi_pct` with no
 link (neither a network nor the access point) and `led_brightness_pct`
-otherwise, changing it only when that changes. Both are on the Settings page.
-It applies wherever the LED setting is offered; lp3-wifi has a screen as well.
+otherwise. Both are on the Settings page. It applies wherever the LED setting
+is offered; lp3-wifi has a screen as well.
+
+**The keeper applies the LED in every mode, on both nodes `[PI3-LED-010]`.**
+Whatever the listener chose is applied 20 s after boot, and again whenever it
+or the link changes. That retires `lempi-led-boot`, which applied it at boot
+on lempi02w only, from the database the split had left behind, so lp3-wifi
+had never reapplied a mode other than "on". The defaults are the player's
+store's (`LED_*` in `player_store.rs`), mirrored in the keeper and held to it
+by a test.
 The access point itself is SPEC061's `[SPEC-WFO-090]`, and fbui's button
 SPEC036's `[SPEC-FBUI-120]`.
 
@@ -231,5 +263,7 @@ did not help: a few seconds, once per boot. In Mode A on lempi02w it did
 - What a 15 s `btmon` costs a Pi Zero W while it plays; lempi02w was off the
   network on 2026-10-25, so none of this has run there.
 - The LED's no-link brightness and fbui's button with no link, which cannot
-  be shown from a session that needs the link.
+  be shown from a session that needs the link. fbui reads wlan0 when its
+  Settings page opens and every 10 s while it shows, and redraws the button
+  when that changes `[SPEC-FBUI-120]`.
 - That none of it removes a stutter until a stuttering boot shows it.

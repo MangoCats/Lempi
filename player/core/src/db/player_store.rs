@@ -1783,18 +1783,26 @@ impl PlayerStore {
         Ok(())
     }
 
+    /// The LED's defaults, for a setting never made `[PI3-LED-010]`,
+    /// `[PI3-LED-020]`. These are the source; the Wi-Fi keeper, which applies
+    /// the LED, mirrors them, held to these by
+    /// `the_led_defaults_are_mirrored_in_the_wifi_keeper`.
+    pub const LED_DEFAULT_MODE: &str = "on";
+    pub const LED_DEFAULT_PCT: u8 = 100;
+    pub const LED_NOWIFI_DEFAULT_PCT: u8 = 25;
+
     /// The appliance's status LED `[PI3-LED-010]` -- one of four modes
     /// (`on`, `wifi`, `off`, `default`; see `player/src/bluetooth.rs`'s
     /// `set_led` for what each actually does to the hardware). Same table,
     /// same reasoning as `save_speaker_address` for living outside
     /// `Settings`: this has nothing to do with playback, and every reader
-    /// of it (a boot-time script, one settings-panel control) reads it
+    /// of it (the Wi-Fi keeper, one settings-panel control) reads it
     /// directly rather than through a live snapshot.
     ///
     /// Rejects anything outside the closed set **before** it reaches the
     /// database -- the same discipline `set_preference`'s `subject_kind`
     /// enforces, so a bad value cannot sit in storage waiting to confuse
-    /// the boot-time script that reads it back with no one watching.
+    /// the Wi-Fi keeper that reads it back with no one watching.
     pub fn save_led_mode(&self, mode: &str) -> Result<(), DbError> {
         if !matches!(mode, "on" | "wifi" | "off" | "default") {
             return Err(DbError::Query(format!("not a valid led mode: {mode:?}")));
@@ -1820,7 +1828,7 @@ impl PlayerStore {
             .query_row("SELECT value FROM player_settings WHERE key = 'led_mode'", [], |r| {
                 r.get::<_, String>(0)
             })
-            .unwrap_or_else(|_| "on".into())
+            .unwrap_or_else(|_| Self::LED_DEFAULT_MODE.into())
     }
 
     /// The brightness `led_mode = "on"` shows, 1-100 `[PI3-LED-010]`.
@@ -1841,8 +1849,8 @@ impl PlayerStore {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
-    /// Defaults to 100 -- full brightness, matching `load_led_mode`'s own
-    /// default `[PI3-LED-010]`.
+    /// Defaults to full brightness, matching `load_led_mode`'s own default
+    /// `[PI3-LED-010]`.
     pub fn load_led_brightness(&self) -> u8 {
         self.conn
             .query_row(
@@ -1853,7 +1861,7 @@ impl PlayerStore {
             .ok()
             .and_then(|v| v.parse::<u8>().ok())
             .map(|v| v.clamp(1, 100))
-            .unwrap_or(100)
+            .unwrap_or(Self::LED_DEFAULT_PCT)
     }
 
     /// The brightness `on` shows while the node has no Wi-Fi link at all,
@@ -1874,8 +1882,8 @@ impl PlayerStore {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
-    /// Defaults to 25, the listener's own figure `[PI3-LED-020]`. The keeper
-    /// reads the same row with the same default.
+    /// Defaults to a quarter, the listener's own figure `[PI3-LED-020]`. The
+    /// keeper reads the same row with the same default.
     pub fn load_led_nowifi_brightness(&self) -> u8 {
         self.conn
             .query_row(
@@ -1886,7 +1894,7 @@ impl PlayerStore {
             .ok()
             .and_then(|v| v.parse::<u8>().ok())
             .map(|v| v.clamp(1, 100))
-            .unwrap_or(25)
+            .unwrap_or(Self::LED_NOWIFI_DEFAULT_PCT)
     }
 
     /// The programme chosen by hand, persisted so it survives a restart
@@ -3531,7 +3539,7 @@ mod tests {
     }
 
     /// Brightness round-trips and clamps to 1-100 on the way in, so a
-    /// caller cannot store a value the boot script would then have to
+    /// caller cannot store a value the Wi-Fi keeper would then have to
     /// re-validate `[PI3-LED-010]`.
     #[test]
     fn led_brightness_round_trips_and_clamps() {
@@ -3548,6 +3556,23 @@ mod tests {
         st.save_led_brightness(255).unwrap();
         assert_eq!(st.load_led_brightness(), 100, "clamped down to the maximum");
         let _ = std::fs::remove_file(&dir);
+    }
+
+    /// The keeper applies the LED with defaults of its own, for a setting
+    /// never made; they are these, or the boot after a fresh image would show
+    /// something the page does not `[PI3-LED-010]`.
+    #[test]
+    fn the_led_defaults_are_mirrored_in_the_wifi_keeper() {
+        let keeper = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../appliance/bluetooth/lempi-wifi-failover");
+        let text = std::fs::read_to_string(&keeper).expect("the Wi-Fi keeper");
+        for line in [
+            format!("LED_DEFAULT_MODE={}", PlayerStore::LED_DEFAULT_MODE),
+            format!("LED_DEFAULT_PCT={}", PlayerStore::LED_DEFAULT_PCT),
+            format!("LED_NOWIFI_DEFAULT_PCT={}", PlayerStore::LED_NOWIFI_DEFAULT_PCT),
+        ] {
+            assert!(text.lines().any(|l| l == line), "{} does not say {line}", keeper.display());
+        }
     }
 
     /// The no-link brightness is its own setting: 25 until set, clamped as

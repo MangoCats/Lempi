@@ -1254,7 +1254,9 @@ def player_step(plan, run, name, player, commit):
     # The catalogue's parts are the bulk of a sync, megabytes to a part: with
     # them, the node's playback is held for the step [PI3-AIM-170]. Rows alone
     # are a few kilobytes, and are sent without.
-    hold = (transfer_hold.held(player["address"], player.get("web_port", transfer_hold.LEMPI_DEFAULT_PORT), say=say)
+    # As long as the step itself may take: its own timeout, below.
+    hold = (transfer_hold.held(player["address"], player.get("web_port", transfer_hold.LEMPI_DEFAULT_PORT),
+                               say=say, seconds=3600)
             if parts else contextlib.nullcontext())
     try:
         with hold:

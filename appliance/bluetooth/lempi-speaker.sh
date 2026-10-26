@@ -103,7 +103,7 @@ SETTLED="$INCUMBENT_DIR/settled"
 # touches the chip `[PI3-FOUND-730]`), the player's sink, and the listener's
 # choice -- one link, to the speaker settled on, the player still sending to
 # it, and the choice unchanged. Anything else -- a second link, a dropped one,
-# the stream moved, another speaker chosen -- ends the quiet, said once, and
+# the stream moved, the choice changed or cleared -- ends the quiet, said once, and
 # the full tick runs at once.
 if [ -r "$SETTLED" ]; then
     { read -r Q_ADDR; read -r Q_ALIAS; } < "$SETTLED" 2>/dev/null
@@ -112,7 +112,7 @@ if [ -r "$SETTLED" ]; then
     if [ "$(cat "$INCUMBENT_DIR/incumbent" 2>/dev/null)" != "${Q_ADDR:-}" ]; then
         Q_WHY="it is no longer the incumbent"
     elif [ "$SPEAKER_KNOWN" = yes ] && [ -z "$SPEAKER_PINNED" ] && [ "${SPEAKER:-}" != "$Q_ADDR" ]; then
-        Q_WHY="another speaker was chosen"
+        Q_WHY="the listener's choice changed"
     elif [ "$(printf '%s\n' "$Q_CON" | grep -c 'ACL')" != 1 ] ||
          ! printf '%s\n' "$Q_CON" | grep -qi "$Q_ADDR"; then
         Q_WHY="the links changed"

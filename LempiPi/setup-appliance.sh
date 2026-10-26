@@ -319,7 +319,7 @@ fi
 # appliance/common.sh's.
 echo "helpers"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-for f in lempi-underruns lempi-led-boot \
+for f in lempi-underruns \
          lempi-wifi-revert lempi-wifi-failover lempi-radio-test lempi-startup-sample \
          lempi-hci-capture lempi-linkstate lempi-vitals; do
     if [ -f "$HERE/$f" ]; then
@@ -453,47 +453,20 @@ systemd-tmpfiles --create /etc/tmpfiles.d/lempi-readahead.conf >/dev/null 2>&1 |
 [ "${NEED_RELOAD:-0}" = 1 ] && systemctl daemon-reload
 
 # ---------------------------------------------------------------- act led
-# The green ACT LED, under listener control [PI3-LED-010].
-#
-# This used to hard-code the LED to track the Wi-Fi radio (rfkill1 is
-# phy0) -- a real, deliberate, still-available choice ([PI3-ROCKER-020] has
-# playback take Wi-Fi down deliberately, and an unreachable appliance
-# otherwise just looks broken), but a hard-coded one, unreachable from the
-# settings panel. It is now one of four modes a listener picks
-# (`on`/`wifi`/`off`/`default`), stored in `player_settings` the same way
-# the chosen speaker is, and reapplied at every boot by `lempi-led-boot`
-# (staged and installed above, "bluetooth helper") -- /sys does not survive
-# a reboot on its own, hence a unit rather than a one-off write.
-#
-# This section only ever ensures the *mechanism* exists and is enabled. It
-# never forces a mode: the stored setting is the source of truth, and
-# `lempi-led-boot` already defaults sensibly (solid on) when nothing has
-# been chosen yet, including on a brand-new appliance with no library yet.
+# The green ACT LED, under listener control [PI3-LED-010]: one of four modes,
+# stored in `player_settings`. Applied since 2026-10-25 by the Wi-Fi keeper
+# (appliance/bluetooth/lempi-wifi-failover), which every Bluetooth appliance
+# has; `lempi-led-boot` and its unit, which did the boot half here alone and
+# from the pre-split database, retire. Reloaded here: the reload above has
+# already run.
 echo "act led"
-if [ ! -d /sys/class/leds/ACT ]; then
-    note "ACT led" "absent on this board"
-else
-    cat > /etc/systemd/system/lempi-led.service <<'UNIT'
-[Unit]
-Description=Apply the stored Lempi LED preference at boot
-After=local-fs.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/lempi-led-boot
-# Short work, but a oneshot without a ceiling is a boot that can hang forever
-# `[PI3-FOUND-670]`.
-TimeoutStartSec=30
-
-[Install]
-WantedBy=multi-user.target
-UNIT
+if [ -e /etc/systemd/system/lempi-led.service ] || [ -e /usr/local/bin/lempi-led-boot ]; then
+    systemctl disable lempi-led.service >/dev/null 2>&1
+    rm -f /etc/systemd/system/lempi-led.service /usr/local/bin/lempi-led-boot &&
+        did "retired lempi-led-boot (the Wi-Fi keeper applies the LED) [PI3-LED-010]"
     systemctl daemon-reload
-    if [ "$(systemctl is-enabled lempi-led 2>/dev/null)" != "enabled" ]; then
-        systemctl enable --now lempi-led >/dev/null 2>&1 && did "led unit enabled"
-    else
-        ok "led unit enabled"
-    fi
+else
+    ok "lempi-led-boot retired"
 fi
 
 # ---------------------------------------------------------------- platform

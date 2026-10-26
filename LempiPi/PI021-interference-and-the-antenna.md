@@ -196,9 +196,13 @@ radio without anything having to remember to update it, and a status flag we
 set ourselves could be wrong in exactly the situation where being wrong costs
 most. This one is read from the hardware.
 
-`/sys` does not survive a reboot, so it is a unit rather than a one-off write,
-and it hands the LED back on stop. Verified across a real reboot: the trigger
-reads `[rfkill1]` and the unit is active.
+`/sys` does not survive a reboot, so it was a unit rather than a one-off write,
+and it handed the LED back on stop. Verified across a real reboot: the trigger
+read `[rfkill1]` and the unit was active. *Since 2026-10-25 this is one of the
+four modes the Settings page offers, and the Wi-Fi keeper applies whichever is
+chosen, on every Bluetooth appliance, within 20 s of boot and of any change;
+the unit, `lempi-led-boot`, is retired [PI031](PI031-settling-the-shared-radio.md)
+`[PI3-LED-020]`.*
 
 The cost is the card-activity indication, which shares the one LED. On an
 appliance that is a fair trade -- radio state is something a listener can act

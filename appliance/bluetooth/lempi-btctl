@@ -1090,7 +1090,8 @@ case "$VERB" in
         fi
         state="$(nmcli -t -f DEVICE,STATE dev 2>/dev/null | sed -n 's/^wlan0://p')"
         case "$state" in
-            connected|connecting*) die "on a known network: there is no access point to start" ;;
+            connected) die "on a known network: there is no access point to start" ;;
+            connecting*) die "joining a known network: there is no access point to start" ;;
         esac
         printf '{"trying":true}\n'
         exec bash "$0" ap-failover
