@@ -187,7 +187,9 @@ release plays again, unless the listener already did; a hold never released
 ends on its own. Held: the player, fbui and `import_bundle` uploads
 (`build/lib-defaults.sh`), the star sync's catalogue parts and
 `star_distribute`'s uploads (`tools/transfer_hold.py`). A player that restarts
-under a hold forgets it, so the release then asks it to play. How long a hold
+under a hold forgets it, so the release then asks it to play. The integrity
+check gives way the other way round: it waits for the music to pause, and
+never pauses it `[GDE-INT-137]`; both ask `player/src/radio.rs`. How long a hold
 lasts, who may ask for one and what that exposes are written once, in
 `player/src/web/transfer.rs`.
 

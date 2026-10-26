@@ -223,7 +223,10 @@ def test_node_integrity():
                                           "not_ok": [{"outcome": "damaged", "path": "x.mp3"}]}},
                  "slow": {"integrity": {"files": 9, "checked": 4, "oldest": old, "not_ok": []}},
                  "off": {"integrity": {"files": 9, "checked": 4, "oldest": old, "rate_kib_per_s": 0,
-                                       "not_ok": []}}}
+                                       "not_ok": []}},
+                 "locked": {"integrity": {"error": "database is locked"}},
+                 "busy": {"integrity": {"files": None, "files_note": "the catalogue could not be counted",
+                                        "checked": 9, "oldest": recent, "not_ok": []}}}
         for stamp, b in (("20261001T0100Z", older), ("20261015T2005Z", newer)):
             os.makedirs(os.path.join(runs, stamp))
             with open(os.path.join(runs, stamp, "baselines.json"), "w") as fh:
@@ -238,6 +241,14 @@ def test_node_integrity():
               f"whole, a re-tag, or switched off: not stale: {stale}")
         check(len(stale["rotten"]) == 1 and "1 file(s) not whole" in stale["rotten"][0], f"{stale['rotten']}")
         check(len(stale["slow"]) == 1 and f"in {ss.PASS_DAYS} days" in stale["slow"][0], f"{stale['slow']}")
+        check(len(stale["locked"]) == 1 and "could not be read" in stale["locked"][0],
+              f"checks that could not be read are stale, the hub not knowing: {stale['locked']}")
+        check(stale["busy"] == [], f"a count that could not be made is not stale: {stale['busy']}")
+        words = {n: ss.integrity_words(ic) for n, (_r, ic) in got.items() if ic is not None}
+        check("could not be read (database is locked)" in words["locked"], words["locked"])
+        check("could not be counted" in words["busy"] and "9 (its" in words["busy"], words["busy"])
+        check("1 re-tagged (audio intact, still plays)" in words["fine"] and "all whole" in words["fine"],
+              f"a re-tag is shown, and is not damage: {words['fine']}")
 
         os.makedirs(os.path.join(root, "days"))
         with open(os.path.join(root, "days", "d.json"), "w") as fh:

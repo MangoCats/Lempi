@@ -119,6 +119,7 @@ pub mod mpd;
 #[cfg(feature = "mpd")]
 pub mod mpd_backend;
 pub mod output;
+pub mod radio;
 pub mod path;
 pub mod playback;
 /// One shape for what a folder-writing run did `[PI3-API-030]`.

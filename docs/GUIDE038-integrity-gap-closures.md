@@ -1,6 +1,6 @@
 # GUIDE038: Closing the Integrity Gaps
 
-**Guide — Tier 2 · plan, written 2026-10-14 · phases 0 and 1 done 2026-10-15, phase 2 built but for the phone; 165 measured; 175 built**
+**Guide — Tier 2 · plan, written 2026-10-14, updated 2026-10-25 · phases 0 and 1 done 2026-10-15, phase 2 built but for the phone; 137 and 170 built 2026-10-25; 165 measured; 175 built**
 
 The plan that follows from the
 [integrity audit of 2026-10-14](../reports/integrity-audit-2026-10-14.md): every
@@ -129,6 +129,16 @@ reads the change. The Lempi skin's Settings has a row, *Your music files*: how
 many have been read back, since when, and each one not whole. (A whole-album
 play is not built `[REQ-PD-127]`; when it is, it reads the same table.)
 
+**`[GDE-INT-137]` On a shared radio, the check waits for the music to pause.**
+*Decided by the maintainer and built 2026-10-25.* Where a node's Wi-Fi shares
+its radio with the speaker it plays to (`player/src/radio.rs`, the rule the
+transfer hold uses too `[PI3-AIM-170]`), no file is read while the music
+plays: a read under way stops, unrecorded, and begins again once the music
+has paused. The music is never paused for it. This answered open question 1:
+both of `lempi02w`'s Wi-Fi freezes came while this read its card at 1 MiB/s
+under Bluetooth playback `[PI3-FOUND-830]`. A node with a radio of its own,
+or a DAC, reads as before.
+
 **`[GDE-INT-140]` A decode failure is checked at once.** *Built.* A `decode:`
 error, or more bit-reservoir underflows than a start mid-file explains, puts
 that file at the front of the scrub's queue, so the failure becomes a finding
@@ -144,6 +154,15 @@ newest sync, and is STALE when one holds a file not whole or has not finished
 a pass in 30 days. A build that does not report is said, not stale: through a
 rollout most nodes run one, and a nightly alarm for that would teach the
 alarm to be ignored.
+
+*Since 2026-10-25* a report that cannot be read says so, as
+`{"error": ...}`, and is stale -- the hub does not know -- rather than
+passing for a build that does not report, which a node holding damaged files
+could otherwise have done `[GDE-INT-020]`. And a catalogue too busy to count
+-- an import, as on `bose` that evening, outlasting any wait -- costs the
+report its count of files (`files` null, `files_note` saying why), never its
+findings, which are the listener's. A re-tag is named beside the damage, and
+not counted with it.
 
 **`[GDE-INT-150]` Repair is a send.** *Built.* The Export page's *find what's
 missing* asks each speaker's player for `/integrity`, and sends a file it
@@ -187,11 +206,21 @@ the rollout.
 
 ## 6. Phase 4 -- the hub's own audio, and what nothing tracks
 
-**`[GDE-INT-170]` The hub repairs from a speaker.** The hub's audio has no
-backup of its own, only the speakers' three copies. Once `[GDE-INT-130]` has
-proven them, a damaged hub file is fetched from a speaker whose last check of
-it is `ok`, its hash confirmed, and put back -- the speakers become the
-verified backup they already are in fact.
+**`[GDE-INT-170]` The hub repairs from a speaker.** *Built 2026-10-25,
+`tools/repair_library.py`.* The hub's audio has no backup of its own, only the
+speakers' copies, and `[GDE-INT-130]` now proves those. So a file the night's
+verify found damaged, missing or unreadable is fetched from a speaker whose own
+last check of it is `ok` -- and whose copy, hashed again there at that moment,
+still matches the record -- under that speaker's transfer hold
+`[PI3-AIM-170]`; hashed again on arrival, and only then put in place, the
+damaged copy kept beside it as `<name>.damaged-<date>`. A speaker that cannot
+be asked, has not checked the file, found it otherwise, or whose copy no
+longer matches is said and passed over; a file no speaker holds whole is said
+and left. The *Lempi hub backup* task runs it after a verify that finds such a
+file, and verifies again, so the night's message says what is left after the
+repair. First run 2026-10-25: nothing to repair; a read of the fleet for one
+file found `bose`'s copy whole and `lempi02w` unreachable, and a fetch of it
+into scratch arrived byte for byte.
 
 **`[GDE-INT-175]` Sidecars and strays.** *Built 2026-10-15, `tools/sidecars.py`.*
 A CD import records the hash of its rip log, `.accurip` and CUE in
@@ -215,19 +244,24 @@ the add had re-pointed the first disc's sheet instead; fixed, and both mended.
 | 2 | `[GDE-INT-130]` to `[GDE-INT-150]` | the largest: a player task, a table, the Director, the snapshot | phase 0's numbers |
 | 2 | `[GDE-INT-155]` | medium | 2 |
 | 3 | `[GDE-INT-160]`, `[GDE-INT-165]` | medium; 165 after its measurement | -- |
-| 4 | `[GDE-INT-170]`, `[GDE-INT-175]` | medium, small | 2, 1 |
+| 4 | `[GDE-INT-170]`, `[GDE-INT-175]` | medium, small -- both built | 2, 1 |
 
 Phases 1 and 0 can go together; each phase is useful on its own.
 
 ## 8. Open
 
-1. **Does the scrub run while playing?** Reading a few hundred KB a second is
-   nothing beside an SD card's bandwidth, but `lempi02w` shares one radio and
-   one weak CPU; phase 0 decides.
-2. **Is `retagged` a finding?** The audio is intact; the bytes are not what
-   the catalogue records, so a bundle would call it different. Likely: shown,
-   not withheld, and the record brought up to date at the next send.
-3. **How long `quick_check` takes** on a 1.1 GB library on a Pi Zero 2 W.
+1. ~~**Does the scrub run while playing?**~~ *Decided 2026-10-25*: not on a
+   shared radio while the music plays `[GDE-INT-137]`. What a read costs the
+   radio there, measured by PipeWire's bitpool cuts
+   ([PI031](../LempiPi/PI031-settling-the-shared-radio.md) `[PI3-FOUND-870]`),
+   is for when `lempi02w` is back from travelling.
+2. ~~**Is `retagged` a finding?**~~ *Decided 2026-10-25*: a finding, shown --
+   on the Settings page, in the hub's sync summary and `status` -- and not
+   withheld, the audio being intact. Bringing the record up to date at the
+   next send is not built.
+3. **How long `quick_check` takes** on a 1.1 GB library on a Pi Zero 2 W --
+   waiting for `lempi02w`, travelling on 2026-10-25. `[GDE-INT-160]` waits on
+   it.
 
 ---
 

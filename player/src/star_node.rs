@@ -146,8 +146,11 @@ fn snapshot(listener: &Path, library: &Path) -> Result<Value, String> {
         "catalogue_rows": CATALOGUE_ROWS,
         "library_readonly": library.exists() && !writable(library),
         // [GDE-INT-145]: what this player found reading its own files back,
-        // for the hub to name. Null, not an error, if it cannot be read.
-        "file_checks": crate::scrub::summary(listener, library).ok(),
+        // for the hub to name. A report that cannot be read says so, as
+        // `{"error": ...}`: null is what a build without the check sends, and
+        // a node holding damaged files must not pass for one [GDE-INT-020].
+        "file_checks": crate::scrub::summary(listener, library)
+            .unwrap_or_else(|e| json!({ "error": e })),
     }))
 }
 

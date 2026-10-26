@@ -1485,10 +1485,15 @@
       if (!r.ok) return;
       body = await r.json();
     } catch { return; }
+    // A re-tag is shown, and is not counted with the damage: the audio is
+    // intact, and it plays [GDE-INT-135].
     const bad = body.not_ok.filter(x => x.outcome !== 'retagged').length;
+    const tags = body.not_ok.length - bad;
     const since = body.oldest ? ` since ${body.oldest.slice(0, 10)}` : '';
+    const of = body.files == null ? '' : ` of ${body.files}`;
     setText($('ic-count'), body.rate_kib_per_s === 0 ? 'checking is off'
-      : `${body.checked} of ${body.files} read back${since}` + (bad ? ` · ${bad} not whole` : ''));
+      : `${body.checked}${of} read back${since}` + (bad ? ` · ${bad} not whole` : '')
+        + (tags ? ` · ${tags} re-tagged` : ''));
     const list = $('ic-list');
     list.textContent = '';
     for (const x of body.not_ok) {

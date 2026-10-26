@@ -200,18 +200,35 @@ def db_of(export, path):
 SUMMARY_COLS = {"files": ["file_id", "audio_md5"], "passages": ["passage_id", "file_id", "kind", "start_ms", "end_ms"]}
 
 
+def not_whole(ic):
+    """The files a node found not whole: damaged, missing or unreadable --
+    withheld there. A re-tag is a finding too, but the audio is intact and it
+    plays [GDE-INT-135], so it is shown apart (`retagged`) and not counted."""
+    return [x for x in ic.get("not_ok", []) if x.get("outcome") != "retagged"]
+
+
+def retagged(ic):
+    return [x for x in ic.get("not_ok", []) if x.get("outcome") == "retagged"]
+
+
 def integrity_words(ic):
     """A node's file checks in one line [GDE-INT-145]: how much of its
-    catalogue it has read back, since when, and how many are not whole --
-    withheld from playing there, and sent again by the Export page."""
-    bad = [x for x in ic.get("not_ok", []) if x.get("outcome") != "retagged"]
+    catalogue it has read back, since when, how many are not whole --
+    withheld from playing there, and sent again by the Export page -- and how
+    many were re-tagged. A report the node could not read is said as that
+    [GDE-INT-020]; a count it could not make, as unknown."""
+    if ic.get("error"):
+        return f"its file checks could not be read ({ic['error']})"
+    bad, tags = not_whole(ic), retagged(ic)
     if ic.get("rate_kib_per_s") == 0:
         head = "it does not read its files back (switched off)"
     else:
-        head = f"{ic.get('checked', 0)} of {ic.get('files', 0)} files read back" + (
+        of = f" of {ic['files']}" if ic.get("files") is not None else " (its catalogue could not be counted)"
+        head = f"{ic.get('checked', 0)}{of} files read back" + (
             f" since {str(ic['oldest'])[:10]}" if ic.get("oldest") else "")
-    return head + (f"; {len(bad)} NOT WHOLE, withheld there -- send them again from the Export page" if bad
-                   else "; all whole")
+    head += (f"; {len(bad)} NOT WHOLE, withheld there -- send them again from the Export page" if bad
+             else "; all whole")
+    return head + (f"; {len(tags)} re-tagged (audio intact, still plays)" if tags else "")
 
 
 def summary_rows(db):
@@ -1091,7 +1108,7 @@ def patch(plan, run):
             ic = b["integrity"]
             summary.append(f"- its own files: {integrity_words(ic)}")
             summary += [f"  - **{x['outcome']}**: `{x.get('path') or x['audio_md5']}`"
-                        for x in ic.get("not_ok", []) if x.get("outcome") != "retagged"][:25]
+                        for x in not_whole(ic) + retagged(ic)][:25]
         if "member" in b:
             good, line = member_patch(b["listener"], t["listener"], os.path.join(pd, "member.patch.json"))
             ok = ok and good
@@ -1766,9 +1783,13 @@ def node_integrity(plan, depth=30):
 
 
 def integrity_stale(name, ic, at):
-    """What about a node's file checks makes `status` STALE: a file not whole, or
-    a pass not finished in PASS_DAYS. A node switched off is said, not stale."""
-    bad = [x for x in ic.get("not_ok", []) if x.get("outcome") != "retagged"]
+    """What about a node's file checks makes `status` STALE: a file not whole, a
+    pass not finished in PASS_DAYS, or checks that could not be read -- then the
+    hub does not know [GDE-INT-020]. A node switched off is said, not stale; a
+    re-tag is said by `integrity_words`, not stale."""
+    if ic.get("error"):
+        return [f"{name}'s file checks could not be read in its last sync ({ic['error']})"]
+    bad = not_whole(ic)
     out = []
     if bad:
         out.append(f"{name} holds {len(bad)} file(s) not whole -- send them again from the Export page")

@@ -260,7 +260,16 @@ impl Player {
         // Its own stop: the sender lives as long as the backup's does.
         let (stop_scrub, scrub_stopped) = channel::<()>();
         if cfg.integrity_check {
-            crate::scrub::spawn(cfg.listener.clone(), cfg.library.clone(), controls.clone(), scrub_stopped);
+            // On a shared radio, the music first `[GDE-INT-137]`.
+            let give_way = {
+                let h = handle.clone();
+                let (bluetooth, l, b) = (capabilities.bluetooth, cfg.listener.clone(), cfg.library.clone());
+                crate::scrub::GiveWay {
+                    playing: Box::new(move || h.snapshot().playing),
+                    shared_radio: Box::new(move || crate::radio::shares_radio(bluetooth, &l, &b)),
+                }
+            };
+            crate::scrub::spawn(cfg.listener.clone(), cfg.library.clone(), controls.clone(), give_way, scrub_stopped);
         }
         // The supply, watched beside the audio it can disturb [APP-PWR-010].
         // Does nothing where there is no voltage monitor to read.

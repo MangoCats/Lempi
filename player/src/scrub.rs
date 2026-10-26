@@ -23,7 +23,16 @@
 //! **What a finding does** `[GDE-INT-135]`: a file `damaged`, `missing` or
 //! `unreadable` is withheld from the Director, which reads `file_checks` when
 //! it loads; a file moving into or out of those asks for the reload the
-//! Settings page's own `/library/reload` asks for.
+//! Settings page's own `/library/reload` asks for. `retagged` -- the bytes
+//! changed, the audio intact -- is a finding shown, not withheld.
+//!
+//! **`[GDE-INT-137]` On a shared radio it waits for the music to pause.**
+//! Decided by the maintainer 2026-10-25: where the node's Wi-Fi shares its
+//! radio with the speaker playing (`crate::radio`), no file is read while the
+//! music plays -- a read under way stops, unrecorded, and is begun again once
+//! the music has paused. The music is never paused for it. Both of lempi02w's
+//! Wi-Fi freezes came while this read its card at 1 MiB/s under Bluetooth
+//! playback `[PI3-FOUND-830]`.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -48,6 +57,14 @@ const RECHECK: Duration = Duration::from_secs(3600);
 const START_DELAY: Duration = Duration::from_secs(300);
 /// With nothing due, how long until it looks again.
 const IDLE: Duration = Duration::from_secs(3600);
+/// While the music plays on a shared radio, how often it looks again
+/// `[GDE-INT-137]`.
+const HELD: Duration = Duration::from_secs(30);
+/// How long a read of the listener's or the catalogue's file waits for a
+/// writer -- an import, a sync's commit -- before it gives up. `rusqlite`'s
+/// own default is 5 s, and `bose`'s report answered "database is locked"
+/// through an import that held its catalogue longer, 2026-10-25.
+pub const BUSY: Duration = Duration::from_secs(10);
 const CHUNK: usize = 256 * 1024;
 
 fn urgent() -> &'static Mutex<VecDeque<PathBuf>> {
@@ -217,21 +234,35 @@ pub fn rate(listener: &Connection) -> u64 {
 /// This player's checks, as `/integrity` and the sync snapshot report them
 /// `[GDE-INT-145]`: how much of the catalogue has been read, the oldest read,
 /// and every file not `ok`.
+///
+/// The findings are the listener's; only the count of files is the
+/// catalogue's, which an import or a sync holds for longer than any wait is
+/// worth. So a catalogue that stays busy costs the count -- `files` null,
+/// `files_note` saying why -- and never the findings.
 pub fn summary(listener: &Path, library: &Path) -> Result<serde_json::Value, String> {
+    summary_waiting(listener, library, BUSY)
+}
+
+fn summary_waiting(listener: &Path, library: &Path, busy: Duration) -> Result<serde_json::Value, String> {
     let e = |e: rusqlite::Error| e.to_string();
     let l = Connection::open_with_flags(listener, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(e)?;
-    let b = Connection::open_with_flags(library, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(e)?;
-    let files: i64 = b
-        .query_row("SELECT COUNT(*) FROM files WHERE sha256 IS NOT NULL AND sha256 <> ''", [], |r| r.get(0))
-        .map_err(e)?;
+    l.busy_timeout(busy).map_err(e)?;
+    let counted = Connection::open_with_flags(library, OpenFlags::SQLITE_OPEN_READ_ONLY).and_then(|b| {
+        b.busy_timeout(busy)?;
+        b.query_row("SELECT COUNT(*) FROM files WHERE sha256 IS NOT NULL AND sha256 <> ''", [], |r| r.get::<_, i64>(0))
+    });
+    let (files, files_note) = match counted {
+        Ok(n) => (Some(n), None),
+        Err(err) => (None, Some(format!("the catalogue could not be counted: {err}"))),
+    };
     let has = l
         .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='file_checks'", [], |_| Ok(()))
         .optional()
         .map_err(e)?
         .is_some();
     if !has {
-        return Ok(serde_json::json!({"files": files, "checked": 0, "counts": {}, "not_ok": [], "oldest": null,
-                                     "rate_kib_per_s": rate(&l) / 1024}));
+        return Ok(serde_json::json!({"files": files, "files_note": files_note, "checked": 0, "counts": {},
+                                     "not_ok": [], "oldest": null, "rate_kib_per_s": rate(&l) / 1024}));
     }
     let mut counts = serde_json::Map::new();
     {
@@ -256,22 +287,50 @@ pub fn summary(listener: &Path, library: &Path) -> Result<serde_json::Value, Str
         .map_err(e)?
         .collect::<rusqlite::Result<_>>()
         .map_err(e)?;
-    Ok(serde_json::json!({"files": files, "checked": checked, "counts": counts, "not_ok": not_ok,
-                          "oldest": oldest, "rate_kib_per_s": rate(&l) / 1024}))
+    Ok(serde_json::json!({"files": files, "files_note": files_note, "checked": checked, "counts": counts,
+                          "not_ok": not_ok, "oldest": oldest, "rate_kib_per_s": rate(&l) / 1024}))
+}
+
+/// What the check must give way to `[GDE-INT-137]`: whether the music is
+/// playing, asked before every chunk, and whether this node's radio is shared
+/// with the speaker, asked before every file.
+pub struct GiveWay {
+    pub playing: Box<dyn Fn() -> bool + Send>,
+    pub shared_radio: Box<dyn Fn() -> bool + Send>,
+}
+
+impl GiveWay {
+    /// Never gives way: a node with no speaker to share a radio with.
+    pub fn never() -> Self {
+        GiveWay { playing: Box::new(|| false), shared_radio: Box::new(|| false) }
+    }
 }
 
 /// Start the check `[GDE-INT-130]`. Ends when `stopped` does.
-pub fn spawn(listener: PathBuf, library: PathBuf, controls: SharedControls, stopped: Receiver<()>) {
+pub fn spawn(listener: PathBuf, library: PathBuf, controls: SharedControls, give_way: GiveWay, stopped: Receiver<()>) {
     let _ = std::thread::Builder::new().name("lempi-scrub".into()).spawn(move || {
         lower_priority();
         if !sleep(&stopped, START_DELAY) {
             return;
         }
         let mut idle_said = false;
+        let mut held_said = false;
         loop {
-            match one(&listener, &library, &controls, &stopped) {
+            match one(&listener, &library, &controls, &give_way, &stopped) {
                 Ok(Step::Stopped) => return,
-                Ok(Step::Checked) => idle_said = false,
+                Ok(Step::Held) => {
+                    if !held_said {
+                        tracing::info!("integrity: music is playing on a shared radio; reading again when it pauses [GDE-INT-137]");
+                        held_said = true;
+                    }
+                    if !sleep(&stopped, HELD) {
+                        return;
+                    }
+                }
+                Ok(Step::Checked) => {
+                    idle_said = false;
+                    held_said = false;
+                }
                 Ok(Step::Idle) | Ok(Step::Off) => {
                     if !idle_said {
                         tracing::info!("integrity: nothing due to read; looking again in an hour [GDE-INT-130]");
@@ -294,21 +353,29 @@ pub fn spawn(listener: PathBuf, library: PathBuf, controls: SharedControls, stop
 
 enum Step {
     Checked,
+    Held,
     Idle,
     Off,
     Stopped,
 }
 
-fn one(listener: &Path, library: &Path, controls: &SharedControls, stopped: &Receiver<()>) -> Result<Step, String> {
+fn one(listener: &Path, library: &Path, controls: &SharedControls, give_way: &GiveWay,
+       stopped: &Receiver<()>) -> Result<Step, String> {
     let e = |e: rusqlite::Error| e.to_string();
+    // Asked once a file: it reads the database, and sometimes asks PipeWire.
+    let shared = (give_way.shared_radio)();
+    if shared && (give_way.playing)() {
+        return Ok(Step::Held);
+    }
     let l = Connection::open(listener).map_err(e)?;
-    l.busy_timeout(Duration::from_secs(10)).map_err(e)?;
+    l.busy_timeout(BUSY).map_err(e)?;
     l.execute_batch(lempi_core::db::FILE_CHECKS_TABLE).map_err(e)?;
     let per_s = rate(&l);
     if per_s == 0 {
         return Ok(Step::Off);
     }
     let b = Connection::open_with_flags(library, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(e)?;
+    b.busy_timeout(BUSY).map_err(e)?;
     let now_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -319,7 +386,12 @@ fn one(listener: &Path, library: &Path, controls: &SharedControls, stopped: &Rec
     drop(b);
     let start = Instant::now();
     let mut stop = false;
+    let mut held = false;
     let checked = check_file(&due.path, &due.sha256, &due.audio_md5, crate::identity::hash_audio, |read| {
+        if shared && (give_way.playing)() {
+            held = true;
+            return false;
+        }
         let should = Duration::from_secs_f64(read as f64 / per_s as f64);
         let ahead = should.saturating_sub(start.elapsed());
         if !ahead.is_zero() && !sleep(stopped, ahead) {
@@ -329,6 +401,14 @@ fn one(listener: &Path, library: &Path, controls: &SharedControls, stopped: &Rec
         true
     });
     let Some(c) = checked else {
+        if held {
+            // Put back at the front if playback had asked for it: the read
+            // was stopped, not made.
+            if due.urgent {
+                suspect(&due.path);
+            }
+            return Ok(Step::Held);
+        }
         return Ok(if stop { Step::Stopped } else { Step::Checked });
     };
     let now_iso = chrono_like::Now(now_unix).iso();
@@ -455,6 +535,123 @@ mod tests {
     fn sha(b: &[u8]) -> String {
         use sha2::Digest;
         sha2::Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect()
+    }
+
+    /// A writer that outlasts the wait -- an import, as on `bose` 2026-10-25
+    /// -- costs the report its count of files, and never its findings; one
+    /// that finishes in time costs nothing.
+    #[test]
+    fn a_busy_catalogue_costs_the_count_not_the_findings() {
+        let d = std::env::temp_dir().join(format!("lempi-scrub-busy-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let (lp, bp) = (d.join("listener.db"), d.join("library.db"));
+        for f in [&lp, &bp] {
+            let _ = std::fs::remove_file(f);
+        }
+        let l = Connection::open(&lp).unwrap();
+        l.execute_batch(lempi_core::db::FILE_CHECKS_TABLE).unwrap();
+        l.execute_batch("CREATE TABLE player_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT);")
+            .unwrap();
+        l.execute("INSERT INTO file_checks (audio_md5, checked_at, outcome, path) VALUES ('d', '2026-10-25T00:00:00Z', 'damaged', 'x.mp3')", [])
+            .unwrap();
+        drop(l);
+        let b = Connection::open(&bp).unwrap();
+        b.execute_batch("CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT, path TEXT, sha256 TEXT);")
+            .unwrap();
+        drop(b);
+        // A writer holding the catalogue for half a second.
+        let (held_tx, held) = std::sync::mpsc::channel();
+        let bp2 = bp.clone();
+        let writer = std::thread::spawn(move || {
+            let w = Connection::open(&bp2).unwrap();
+            w.execute_batch("BEGIN EXCLUSIVE; INSERT INTO files VALUES (1, 'a', 'p', 's');").unwrap();
+            held_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(500));
+            w.execute_batch("COMMIT;").unwrap();
+        });
+        held.recv().unwrap();
+        // Waiting less than the writer holds it: the findings, without the count.
+        let busy = summary_waiting(&lp, &bp, Duration::from_millis(50)).expect("a report, not an error");
+        writer.join().unwrap();
+        assert_eq!(busy["files"], serde_json::Value::Null, "the count is unknown");
+        assert!(busy["files_note"].as_str().is_some_and(|n| n.contains("could not be counted")), "and said");
+        assert_eq!(busy["not_ok"][0]["outcome"], "damaged", "the finding is still reported");
+        // Free again: all of it.
+        let free = summary(&lp, &bp).unwrap();
+        assert_eq!(free["files"], serde_json::json!(1));
+        assert_eq!(free["files_note"], serde_json::Value::Null);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// `[GDE-INT-137]`: on a shared radio, nothing is read while the music
+    /// plays -- not begun, and a read under way stopped and not recorded --
+    /// and everything is read once it pauses. Off a shared radio, the music
+    /// playing changes nothing.
+    #[test]
+    fn on_a_shared_radio_the_check_waits_for_the_music() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let d = std::env::temp_dir().join(format!("lempi-scrub-give-way-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let (lp, bp, audio) = (d.join("listener.db"), d.join("library.db"), d.join("a.mp3"));
+        for f in [&lp, &bp] {
+            let _ = std::fs::remove_file(f);
+        }
+        // Two chunks' worth, so a read can be stopped part-way.
+        let bytes = vec![7u8; CHUNK * 2];
+        std::fs::write(&audio, &bytes).unwrap();
+        Connection::open(&lp).unwrap()
+            .execute_batch("CREATE TABLE player_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT);
+                            INSERT INTO player_settings VALUES ('integrity_check_kib_per_s', '1000000', '');")
+            .unwrap();
+        let b = Connection::open(&bp).unwrap();
+        b.execute_batch("CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT, path TEXT, sha256 TEXT);")
+            .unwrap();
+        b.execute("INSERT INTO files VALUES (1, 'aaa', ?1, ?2)", params![audio.to_string_lossy(), sha(&bytes)])
+            .unwrap();
+        drop(b);
+        let checked = || -> i64 {
+            Connection::open(&lp).unwrap()
+                .query_row("SELECT COUNT(*) FROM file_checks", [], |r| r.get(0)).unwrap_or(0)
+        };
+        let (_tx, stopped) = std::sync::mpsc::channel::<()>();
+        let controls = SharedControls::default();
+        let playing = Arc::new(AtomicBool::new(true));
+        let give_way = |shared: bool| {
+            let p = playing.clone();
+            GiveWay { playing: Box::new(move || p.load(Ordering::SeqCst)), shared_radio: Box::new(move || shared) }
+        };
+
+        // Playing on a shared radio: not begun.
+        assert!(matches!(one(&lp, &bp, &controls, &give_way(true), &stopped), Ok(Step::Held)));
+        assert_eq!(checked(), 0, "nothing was read");
+
+        // The music starts during a read: stopped, and nothing recorded.
+        playing.store(false, Ordering::SeqCst);
+        let asked = Arc::new(AtomicUsize::new(0));
+        let (p, n) = (playing.clone(), asked.clone());
+        let starts_mid_read = GiveWay {
+            playing: Box::new(move || {
+                // Paused when the file is chosen; playing from the first chunk.
+                if n.fetch_add(1, Ordering::SeqCst) >= 1 { p.store(true, Ordering::SeqCst) }
+                p.load(Ordering::SeqCst)
+            }),
+            shared_radio: Box::new(|| true),
+        };
+        assert!(matches!(one(&lp, &bp, &controls, &starts_mid_read, &stopped), Ok(Step::Held)));
+        assert_eq!(checked(), 0, "a read the music interrupted is not recorded");
+
+        // Paused: read, whole.
+        playing.store(false, Ordering::SeqCst);
+        assert!(matches!(one(&lp, &bp, &controls, &give_way(true), &stopped), Ok(Step::Checked)));
+        assert_eq!(checked(), 1, "read once the music paused");
+
+        // Off a shared radio the music playing changes nothing.
+        Connection::open(&lp).unwrap().execute("DELETE FROM file_checks", []).unwrap();
+        playing.store(true, Ordering::SeqCst);
+        assert!(matches!(one(&lp, &bp, &controls, &give_way(false), &stopped), Ok(Step::Checked)));
+        assert_eq!(checked(), 1, "a radio of its own reads while playing");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// `[GDE-INT-130]`: each outcome, from real files: whole, re-tagged,

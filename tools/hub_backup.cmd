@@ -17,6 +17,15 @@ if not exist data\verify mkdir data\verify
 echo ==== %DATE% %TIME% >> data\verify\verify.log
 python tools\verify_library.py data\library.db >> data\verify\verify.log 2>&1
 set vrc=%ERRORLEVEL%
-if not "%vrc%"=="0" msg %USERNAME% "Lempi: the library's verification found damaged, missing or unreadable files, or could not run (exit %vrc%). See data\verify\verify.log"
+REM A file found not whole is fetched from a speaker that holds it whole, and
+REM put back [GDE-INT-170]; then verified again, so the message says what is
+REM left after the repair, not before it.
+if not "%vrc%"=="1" goto verified
+echo ==== repair %DATE% %TIME% >> data\verify\verify.log
+python tools\repair_library.py fleet\star-plan.json --go >> data\verify\verify.log 2>&1
+python tools\verify_library.py data\library.db >> data\verify\verify.log 2>&1
+set vrc=%ERRORLEVEL%
+:verified
+if not "%vrc%"=="0" msg %USERNAME% "Lempi: the library's verification found damaged, missing or unreadable files a speaker could not replace, or could not run (exit %vrc%). See data\verify\verify.log"
 if not "%rc%"=="0" exit /b %rc%
 exit /b %vrc%
