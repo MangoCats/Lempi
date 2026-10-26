@@ -201,8 +201,11 @@ music: §9's cuts ran on through a pause. Since 2026-10-26 the first hold on a
 shared radio also releases the output, playing or already paused, and
 PipeWire suspends the sink; the last takes it back, paused or not, so a long
 pause afterwards still holds the link. Pressing play mid-transfer reopens it,
-as the listener's choice. What the air carries while released, and what it
-costs the speaker's connection, is measured on lempi02w first.
+as the listener's choice. Measured on lempi02w with the Boom 2, `7ce4499`:
+596 packets in 8 s playing, 603 paused, **0 in 10 s held** either way; the
+speaker stayed connected, and the stream was back within 5 s of the
+release. Not yet measured: how much faster an export runs, and whether a
+long hold's idle sink lets a speaker switch itself off.
 
 ## 8. The access point on request, and what the LED says
 
