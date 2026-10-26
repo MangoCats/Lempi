@@ -18,6 +18,14 @@
 //! transfer that dies cannot leave the music stopped for good. A sender that
 //! knows how long it may take says so; one that does not gets `DEFAULT_SECS`.
 //!
+//! **`[PI3-AIM-175]` A pause alone does not free the radio, so a hold also
+//! releases the output.** Paused, the player feeds the device silence so the
+//! speaker's link survives `[PI3-OPEN-020]`, and an SBC packet of silence is
+//! the size of one of music: the air carries the same stream. So on a shared
+//! radio the first hold releases the device too -- whether or not it found the
+//! music playing, since a listener who paused first wants the same transfer --
+//! and the last one takes it back, paused or not.
+//!
 //! **Who may ask.** Anyone who can reach the player's web port, exactly as
 //! for `/command/pause`: on an appliance, the household network, or the
 //! access point's clients. The most a hold can do is that pause, for at most
@@ -42,36 +50,61 @@ use super::Ui;
 const DEFAULT_SECS: u64 = 900;
 const MAX_SECS: u64 = 3_600;
 
-/// The holds in force, and whether one of them paused the playback.
+/// The holds in force, and whether one of them paused the playback or
+/// released the output.
 #[derive(Debug, Default)]
 pub struct Holds {
     next: u64,
     live: Vec<u64>,
     paused: bool,
+    quiet: bool,
+}
+
+/// What a new hold does.
+#[derive(Debug, PartialEq)]
+pub struct Begun {
+    pub id: u64,
+    pub pause: bool,
+    /// Release the output `[PI3-AIM-175]`.
+    pub quiet: bool,
+}
+
+/// What the end of a hold undoes: nothing until the last one ends.
+#[derive(Debug, PartialEq)]
+pub struct Ended {
+    pub resume: bool,
+    /// Take the output back.
+    pub unquiet: bool,
 }
 
 impl Holds {
     /// A new hold, and whether to pause for it: only the first of a set, only
     /// while playing, only on a shared radio. A listener who presses play
     /// during a transfer has said what they want, and a second hold arriving
-    /// does not overrule them.
-    pub fn hold(&mut self, playing: bool, shared: bool) -> (u64, bool) {
+    /// does not overrule them. The first on a shared radio releases the output
+    /// as well, playing or not.
+    pub fn hold(&mut self, playing: bool, shared: bool) -> Begun {
         self.next += 1;
-        let pause = self.live.is_empty() && playing && shared;
-        if pause {
-            self.paused = true;
-        }
+        let first = self.live.is_empty();
+        let pause = first && playing && shared;
+        let quiet = first && shared;
+        self.paused |= pause;
+        self.quiet |= quiet;
         self.live.push(self.next);
-        (self.next, pause)
+        Begun { id: self.next, pause, quiet }
     }
 
     /// Ends a hold. `None` for one not in force -- released already, expired,
-    /// or never made by this process. Otherwise whether this was the last one
-    /// and a hold had paused the playback, which is the cue to resume it.
-    pub fn release(&mut self, id: u64) -> Option<bool> {
+    /// or never made by this process. Otherwise, if this was the last one,
+    /// whether a hold had paused the playback, which is the cue to resume it,
+    /// and whether one had released the output.
+    pub fn release(&mut self, id: u64) -> Option<Ended> {
         let at = self.live.iter().position(|&i| i == id)?;
         self.live.remove(at);
-        Some(self.live.is_empty() && std::mem::take(&mut self.paused))
+        if !self.live.is_empty() {
+            return Some(Ended { resume: false, unquiet: false });
+        }
+        Some(Ended { resume: std::mem::take(&mut self.paused), unquiet: std::mem::take(&mut self.quiet) })
     }
 }
 
@@ -91,8 +124,15 @@ async fn shared_radio(ui: &Ui) -> bool {
 /// End hold `id`, resuming the playback it paused. `None` when it was not in
 /// force.
 fn end(handle: &EngineHandle, id: u64, how: &str) -> Option<bool> {
-    let resume = holds().lock().unwrap_or_else(|e| e.into_inner()).release(id)?;
-    if resume && !handle.snapshot().playing {
+    let ended = holds().lock().unwrap_or_else(|e| e.into_inner()).release(id)?;
+    // The device first, then the music: a play that arrives first finds the
+    // output released and reopens it by recovery anyway, but this way round
+    // the line says what happened.
+    if ended.unquiet {
+        handle.send(Command::QuietOutput(false));
+        tracing::info!("transfer hold {id} {how}: output taken back [PI3-AIM-175]");
+    }
+    if ended.resume && !handle.snapshot().playing {
         handle.send(Command::Play);
         tracing::info!("transfer hold {id} {how}: playback resumed [PI3-AIM-170]");
         return Some(true);
@@ -110,19 +150,26 @@ pub(super) async fn hold(State(ui): State<Ui>, Query(q): Query<HashMap<String, S
         .clamp(1, MAX_SECS);
     let shared = shared_radio(&ui).await;
     let playing = ui.handle.snapshot().playing;
-    let (id, paused) = holds().lock().unwrap_or_else(|e| e.into_inner()).hold(playing, shared);
+    let Begun { id, pause: paused, quiet } = holds().lock().unwrap_or_else(|e| e.into_inner()).hold(playing, shared);
     if paused {
         ui.handle.send(Command::Pause);
         tracing::info!("transfer hold {id}: paused for a bulk transfer on the shared radio [PI3-AIM-170]");
+    } else if quiet {
+        tracing::info!("transfer hold {id} (not playing, shared radio true): nothing to pause");
     } else {
         tracing::info!("transfer hold {id} (playing {playing}, shared radio {shared}): nothing paused");
+    }
+    // After the pause, so the engine has stopped mixing before the device goes.
+    if quiet {
+        ui.handle.send(Command::QuietOutput(true));
     }
     let handle = ui.handle.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(secs)).await;
         end(&handle, id, "expired");
     });
-    axum::Json(json!({ "id": id, "paused": paused, "shared_radio": shared, "seconds": secs })).into_response()
+    axum::Json(json!({ "id": id, "paused": paused, "quiet": quiet, "shared_radio": shared, "seconds": secs }))
+        .into_response()
 }
 
 /// `POST /transfer/release/<id>`.
@@ -135,55 +182,68 @@ pub(super) async fn release(State(ui): State<Ui>, Path(id): Path<u64>) -> Respon
 
 #[cfg(test)]
 mod tests {
-    use super::Holds;
+    use super::{Ended, Holds};
+
+    const NOTHING: Ended = Ended { resume: false, unquiet: false };
 
     #[test]
     fn one_hold_pauses_a_shared_radio_and_its_release_resumes() {
         let mut h = Holds::default();
-        let (id, pause) = h.hold(true, true);
-        assert!(pause);
-        assert_eq!(h.release(id), Some(true));
+        let b = h.hold(true, true);
+        assert!(b.pause && b.quiet);
+        assert_eq!(h.release(b.id), Some(Ended { resume: true, unquiet: true }));
     }
 
     #[test]
-    fn nothing_is_paused_off_a_shared_radio_or_when_not_playing() {
+    fn nothing_is_touched_off_a_shared_radio() {
         let mut h = Holds::default();
-        let (a, pause) = h.hold(true, false);
-        assert!(!pause, "a radio of its own is not paused");
-        assert_eq!(h.release(a), Some(false));
-        let (b, pause) = h.hold(false, true);
-        assert!(!pause, "a paused player is left as it is");
-        assert_eq!(h.release(b), Some(false), "and is not started at the end");
+        let b = h.hold(true, false);
+        assert!(!b.pause && !b.quiet, "a radio of its own is neither paused nor released");
+        assert_eq!(h.release(b.id), Some(NOTHING));
+    }
+
+    /// `[PI3-AIM-175]`: a listener who paused first wants the radio freed too.
+    #[test]
+    fn a_paused_player_on_a_shared_radio_is_released_but_not_started() {
+        let mut h = Holds::default();
+        let b = h.hold(false, true);
+        assert!(!b.pause, "a paused player is left paused");
+        assert!(b.quiet, "but its silence still costs the radio, so the output goes");
+        assert_eq!(h.release(b.id), Some(Ended { resume: false, unquiet: true }),
+                   "taken back at the end, and not started");
     }
 
     #[test]
-    fn overlapping_holds_resume_once_at_the_last() {
+    fn overlapping_holds_undo_once_at_the_last() {
         let mut h = Holds::default();
-        let (a, pause) = h.hold(true, true);
-        assert!(pause);
+        let a = h.hold(true, true);
+        assert!(a.pause && a.quiet);
         // Paused now, so the second sees a player that is not playing.
-        let (b, pause) = h.hold(false, true);
-        assert!(!pause);
-        assert_eq!(h.release(a), Some(false), "one still in force");
-        assert_eq!(h.release(b), Some(true), "the last resumes");
+        let b = h.hold(false, true);
+        assert!(!b.pause && !b.quiet, "the first already did both");
+        assert_eq!(h.release(a.id), Some(NOTHING), "one still in force");
+        assert_eq!(h.release(b.id), Some(Ended { resume: true, unquiet: true }), "the last undoes both");
     }
 
     #[test]
     fn a_second_hold_does_not_overrule_a_listener_who_pressed_play() {
         let mut h = Holds::default();
-        let (a, _) = h.hold(true, true);
-        let (b, pause) = h.hold(true, true);
-        assert!(!pause, "playing again mid-transfer is the listener's choice");
-        h.release(a);
-        assert_eq!(h.release(b), Some(true), "the first hold's pause is still the one to undo");
+        let a = h.hold(true, true);
+        let b = h.hold(true, true);
+        assert!(!b.pause && !b.quiet, "playing again mid-transfer is the listener's choice");
+        h.release(a.id);
+        assert_eq!(h.release(b.id), Some(Ended { resume: true, unquiet: true }),
+                   "the first hold's pause is still the one to undo");
     }
 
     #[test]
     fn a_hold_ends_once() {
         let mut h = Holds::default();
-        let (a, _) = h.hold(true, true);
-        assert_eq!(h.release(a), Some(true));
-        assert_eq!(h.release(a), None, "released twice, or expired and then released");
+        let a = h.hold(true, true);
+        assert_eq!(h.release(a.id), Some(Ended { resume: true, unquiet: true }));
+        assert_eq!(h.release(a.id), None, "released twice, or expired and then released");
         assert_eq!(h.release(99), None, "never made");
+        let b = h.hold(true, true);
+        assert!(b.pause && b.quiet, "a set that has ended leaves nothing behind for the next");
     }
 }

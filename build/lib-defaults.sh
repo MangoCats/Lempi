@@ -141,6 +141,10 @@ transfer_hold() {
         echo "transfer: no player on $1 answered a hold; sending anyway [PI3-AIM-170]"
     elif [ -n "$_TRANSFER_PAUSED" ]; then
         echo "transfer: $1 paused its playback for this transfer [PI3-AIM-170]"
+    else
+        case "$_r" in *'"quiet":true'*)
+            echo "transfer: $1 was paused; released its speaker for this transfer [PI3-AIM-175]" ;;
+        esac
     fi
 }
 

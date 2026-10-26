@@ -157,6 +157,9 @@ pub enum Command {
     /// cosmetic -- it looks like it worked, and is silent -- unless the output
     /// is reopened `[PI3-WHY-020]`.
     ReopenOutput,
+    /// Release the output for a bulk transfer on a shared radio, or take it
+    /// back `[PI3-AIM-175]`. Sent after a `Pause`, and before a `Play`.
+    QuietOutput(bool),
     /// Write the resume point NOW, ignoring the save interval `[REQ-VIS-155]`.
     ///
     /// For the moments the interval was not designed for: the machine is about
@@ -188,6 +191,7 @@ impl Engine {
                     self.publish();
                 }
                 Ok(Command::ReopenOutput) => self.path.reopen(),
+                Ok(Command::QuietOutput(on)) => self.path.quiet(on),
                 Ok(Command::Cue(c)) => {
                     if let Some(r) = &self.path.ring {
                         r.play_cue(c);

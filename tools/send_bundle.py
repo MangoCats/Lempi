@@ -51,6 +51,12 @@ sys.path.insert(0, HERE)
 # written out here as a number, it was a second definition the crate's
 # guard test refused.
 from lempi_control import LEMPI_DEFAULT_PORT as PORT  # noqa: E402
+import transfer_hold  # noqa: E402  -- a shared radio frees itself for the copy [PI3-AIM-170]
+
+# The slowest a copy is allowed for, in bytes a second, when the hold says how
+# long it may last: lempi02w's Wi-Fi is the fleet's weakest. A copy that runs
+# past it is not stopped; the player takes its speaker back and plays on.
+HOLD_FLOOR_BPS = 250_000
 
 
 def say(msg: str) -> None:
@@ -355,20 +361,24 @@ def inside(host: str, bundle: str, library: str, audio_root: str, where: str) ->
         say("  no audio to copy: the speaker has these files already")
     else:
         say(f"  copying {files} audio file(s), {size / 1e6:.1f} MB, into {audio_root} ...")
-        try:
-            rc, out = ssh_stream(host, f"mkdir -p {shlex.quote(audio_root)} && "
-                                       f"tar -xf - -C {shlex.quote(audio_root)} --no-same-owner",
-                                 lambda pipe: audio_tar(audio, Progress(pipe, size), have))
-        except Stopped:
-            # The file cut short goes, so nothing on the speaker is half a
-            # song under a whole one's name; the ones that arrived whole stay,
-            # and the next send finds them there [REQ-AND-240].
-            cut = _IN_FLIGHT["path"]
-            if cut:
-                rc, _ = ssh(host, f"rm -f {shlex.quote(posixpath.join(audio_root, cut))}")
-                say(f"  removed the file the copy was part-way through: {cut}" if rc == 0
-                    else f"  WARNING: could not remove the file cut short: {cut}")
-            raise
+        # On a shared radio the player pauses and lets its speaker go for the
+        # copy, and takes it back after [PI3-AIM-175]; elsewhere it is left
+        # playing. Released on a stop or a failure too.
+        with transfer_hold.held_ssh(host, say=say, seconds=min(3600, 120 + size // HOLD_FLOOR_BPS)):
+            try:
+                rc, out = ssh_stream(host, f"mkdir -p {shlex.quote(audio_root)} && "
+                                           f"tar -xf - -C {shlex.quote(audio_root)} --no-same-owner",
+                                     lambda pipe: audio_tar(audio, Progress(pipe, size), have))
+            except Stopped:
+                # The file cut short goes, so nothing on the speaker is half a
+                # song under a whole one's name; the ones that arrived whole
+                # stay, and the next send finds them there [REQ-AND-240].
+                cut = _IN_FLIGHT["path"]
+                if cut:
+                    rc, _ = ssh(host, f"rm -f {shlex.quote(posixpath.join(audio_root, cut))}")
+                    say(f"  removed the file the copy was part-way through: {cut}" if rc == 0
+                        else f"  WARNING: could not remove the file cut short: {cut}")
+                raise
         if rc != 0:
             raise Failed(f"copy the audio on {host} failed (exit {rc}): {out[-300:]}")
     check_stop("staging the payload")

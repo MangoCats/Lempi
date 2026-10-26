@@ -10,6 +10,7 @@ that touches nothing.
 
     python tools/test_send_bundle.py
 """
+import contextlib
 import io
 import json
 import os
@@ -23,6 +24,18 @@ sys.path.insert(0, HERE)
 import send_bundle as sb  # noqa: E402
 
 FAILED = []
+HOLDS = []
+
+
+@contextlib.contextmanager
+def held(host, say=print, seconds=None):
+    """No player answers here; what is checked is that the copy asks
+    `[PI3-AIM-175]`. Replaced for every test, so none reaches a real host."""
+    HOLDS.append((host, seconds))
+    yield {}
+
+
+sb.transfer_hold.held_ssh = held
 
 
 def check(cond, msg):
@@ -209,7 +222,10 @@ def main() -> int:
 
         print("--apply on a read-write library: audio into the music folder, then the import, then a reload")
         f = Fake()
+        HOLDS.clear()
         rc, reloads = run([b, "pi@speaker-a", "--apply"], f)
+        check(HOLDS == [("pi@speaker-a", 120)],
+              f"the copy holds the speaker's playback, for at least two minutes [PI3-AIM-175]: {HOLDS}")
         cmds = [c for c, _ in f.calls]
         audio = next(i for i, c in enumerate(cmds) if c.startswith("mkdir -p /srv/library/audio"))
         imp = next(i for i, c in enumerate(cmds) if c.startswith("import_bundle"))

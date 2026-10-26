@@ -31,8 +31,8 @@ def check(cond, msg):
 class Player:
     """Answers the three paths as a player would."""
 
-    def __init__(self, paused, knows=True, answers=True):
-        self.paused, self.knows, self.answers = paused, knows, answers
+    def __init__(self, paused, knows=True, answers=True, quiet=True):
+        self.paused, self.knows, self.answers, self.quiet = paused, knows, answers, quiet
         self.asked = []
 
     def post(self, path):
@@ -40,7 +40,7 @@ class Player:
         if not self.answers:
             return None
         if path.startswith("/transfer/hold"):
-            return {"id": 7, "paused": self.paused, "shared_radio": True}
+            return {"id": 7, "paused": self.paused, "quiet": self.quiet, "shared_radio": True}
         if path == "/transfer/release/7":
             return {"released": True, "resumed": self.paused} if self.knows else {"released": False}
         return {}
@@ -76,6 +76,12 @@ check(p.asked[-1] == "/command/play", "a forgotten hold that had paused is answe
 p = Player(paused=False, knows=False)
 run(p)
 check("/command/play" not in p.asked, "one that had not paused starts nothing")
+
+# [PI3-AIM-175]: paused before the transfer, the speaker is still released.
+p = Player(paused=False)
+said = run(p)
+check(any("released its speaker" in s for s in said), "a paused node's released speaker is said")
+check("/command/play" not in p.asked, "and nothing is started")
 
 p = Player(paused=False, answers=False)
 said = run(p)

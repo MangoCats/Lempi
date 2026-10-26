@@ -185,13 +185,24 @@ that cannot tell is not paused, after `bose` was, for every upload of its
 2026-10-25 deploy -- and it is playing; the last
 release plays again, unless the listener already did; a hold never released
 ends on its own. Held: the player, fbui and `import_bundle` uploads
-(`build/lib-defaults.sh`), the star sync's catalogue parts and
-`star_distribute`'s uploads (`tools/transfer_hold.py`). A player that restarts
+(`build/lib-defaults.sh`), the star sync's catalogue parts,
+`star_distribute`'s uploads and, since 2026-10-26, the Export page's Send --
+`send_bundle.py`'s audio copy, which had held nothing (`tools/transfer_hold.py`). A player that restarts
 under a hold forgets it, so the release then asks it to play. The integrity
 check gives way the other way round: it waits for the music to pause, and
 never pauses it `[GDE-INT-137]`; both ask `player/src/radio.rs`. How long a hold
 lasts, who may ask for one and what that exposes are written once, in
 `player/src/web/transfer.rs`.
+
+**`[PI3-AIM-175]` The pause alone freed nothing, so a hold also lets the
+speaker go.** Paused, the player feeds the device silence so the link
+survives `[PI3-OPEN-020]`, and an SBC packet of silence is the size of one of
+music: §9's cuts ran on through a pause. Since 2026-10-26 the first hold on a
+shared radio also releases the output, playing or already paused, and
+PipeWire suspends the sink; the last takes it back, paused or not, so a long
+pause afterwards still holds the link. Pressing play mid-transfer reopens it,
+as the listener's choice. What the air carries while released, and what it
+costs the speaker's connection, is measured on lempi02w first.
 
 ## 8. The access point on request, and what the LED says
 

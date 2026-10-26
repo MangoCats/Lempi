@@ -62,10 +62,14 @@ def _held(post, who, say, seconds=None):
     got = post("/transfer/hold" + (f"?seconds={seconds}" if seconds else "")) or {}
     hid = got.get("id")
     paused = bool(got.get("paused"))
+    quiet = bool(got.get("quiet"))
     if hid is None:
         say(f"  transfer: no player on {who} answered a hold; sending anyway [PI3-AIM-170]")
     elif paused:
-        say(f"  transfer: {who} paused its playback for this transfer [PI3-AIM-170]")
+        say(f"  transfer: {who} paused its playback for this transfer"
+            + (" and released its speaker [PI3-AIM-175]" if quiet else " [PI3-AIM-170]"))
+    elif quiet:
+        say(f"  transfer: {who} was paused; released its speaker for this transfer [PI3-AIM-175]")
     try:
         yield got
     finally:

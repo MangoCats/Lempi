@@ -54,6 +54,13 @@ pub enum PathRequest {
     /// Reopen because the sink changed under us, not because it failed
     /// `[PI3-API-010]`.
     Reopen,
+    /// Release the device for a bulk transfer, or take it back `[PI3-AIM-175]`.
+    /// Paused, the stream still sends a Bluetooth speaker its silence, which
+    /// costs the shared radio exactly what music does; released, PipeWire
+    /// suspends the sink and nothing goes on the air. Taken back, the device
+    /// is reopened whether or not anything is playing, so a long pause after
+    /// the transfer still holds the link `[PI3-OPEN-020]`.
+    Quiet(bool),
     Shutdown,
 }
 
@@ -102,6 +109,9 @@ impl PathHandle {
     }
     pub fn reopen(&self) {
         self.ask(PathRequest::Reopen);
+    }
+    pub fn quiet(&self, on: bool) {
+        self.ask(PathRequest::Quiet(on));
     }
     pub fn shutdown(&self) {
         self.ask(PathRequest::Shutdown);
@@ -201,6 +211,9 @@ fn supervise(
     announce(crate::sink::observer());
 
     let mut playing = false;
+    // A quiet's end asks for the device back even while paused; cleared once
+    // it is open again `[PI3-AIM-175]`.
+    let mut reattach = false;
     let mut backoff = RETRY;
     let mut retry_at: Option<Instant> = None;
     let mut watch_at = Instant::now() + WATCH;
@@ -231,12 +244,32 @@ fn supervise(
                 retry_at = None;
                 backoff = RETRY;
             }
+            // Released as a failure is, so the engine mixes nothing into it
+            // and a listener who presses play mid-transfer gets the device
+            // back by the ordinary recovery -- their choice, not overruled.
+            Ok(PathRequest::Quiet(true)) => {
+                reattach = false;
+                if !out.released() {
+                    out.release();
+                    tracing::info!("output released for a transfer: nothing on the air until it ends [PI3-AIM-175]");
+                }
+            }
+            Ok(PathRequest::Quiet(false)) => {
+                if out.released() {
+                    reattach = true;
+                    retry_at = None;
+                    backoff = RETRY;
+                }
+            }
             Ok(PathRequest::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
             Err(RecvTimeoutError::Timeout) => {}
         }
 
         watch(out, playing, &mut watch_at);
-        recover(out, playing, &mut retry_at, &mut backoff, &mut refused, &recoveries);
+        recover(out, playing, playing || reattach, &mut retry_at, &mut backoff, &mut refused, &recoveries);
+        if reattach && !out.failed() {
+            reattach = false;
+        }
     }
 }
 
@@ -261,7 +294,7 @@ fn await_device(device: Option<&str>, ring_capacity: usize, rx: &Receiver<PathRe
     loop {
         match rx.recv_timeout(next.saturating_duration_since(Instant::now()).min(IDLE)) {
             Ok(PathRequest::Reopen) => next = Instant::now(),
-            Ok(PathRequest::SetPlaying(_)) | Err(RecvTimeoutError::Timeout) => {}
+            Ok(PathRequest::SetPlaying(_) | PathRequest::Quiet(_)) | Err(RecvTimeoutError::Timeout) => {}
             Ok(PathRequest::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
         }
         if Instant::now() < next {
@@ -348,15 +381,20 @@ fn watch(out: &Output, playing: bool, watch_at: &mut Instant) {
 /// a new failure while `!playing`; this stops an *already-armed* one from
 /// continuing to run. The next `SetPlaying(true)` re-arms `watch_at`
 /// immediately and this resumes exactly as before.
+///
+/// `wanted` is that gate, and is `playing` but for one case: the end of a
+/// transfer's quiet, which wants the device back while paused, so the link
+/// is held through the pause after it `[PI3-AIM-175]`.
 fn recover(
     out: &mut Output,
     playing: bool,
+    wanted: bool,
     retry_at: &mut Option<Instant>,
     backoff: &mut Duration,
     refused: &mut Option<Refused>,
     recoveries: &Arc<AtomicU64>,
 ) {
-    if !playing || !out.failed() {
+    if !wanted || !out.failed() {
         return;
     }
     let now = Instant::now();
@@ -452,6 +490,8 @@ mod tests {
         // Requests are dropped rather than panicking on a missing supervisor.
         h.set_playing(true);
         h.reopen();
+        h.quiet(true);
+        h.quiet(false);
         h.shutdown();
     }
 
