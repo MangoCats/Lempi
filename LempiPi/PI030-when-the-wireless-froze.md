@@ -84,6 +84,19 @@ boot, so a freeze that comes straight back cannot loop. It says each step
 once. No soft repair is attempted: upstream, reloading the driver did not
 bring a hung controller back.
 
+**`[PI3-FOUND-835]` It rebooted a working link, so a link still receiving is
+not frozen.** 2026-10-26 17:56:52, mid-way through an export from the Export
+page: three unanswered checks and an SDIO error somewhere in that boot's log
+-- which line, and when, is lost; the journal kept six kernel lines of it. At
+17:56:08, between the second miss and the third, the copy was arriving at
+606 kB/s and an ssh session worked. Likeliest, not measured: the pings waited
+behind the transfer's own traffic past their 3 s. The transfer hold had
+paused the music `[PI3-AIM-170]`, which is the pause the reboot waits for.
+Since then every check records what `wlan0` has received, and a link that
+took in 1 MiB since the last check is busy, not frozen: the slowest export
+brings in about 12 MB a minute, and a frozen chip nothing. An idle link
+takes in less, so there the test is as it was.
+
 ## 4. Next, one variable at a time
 
 The cause is unknown, so each change is a test, run one at a time so a

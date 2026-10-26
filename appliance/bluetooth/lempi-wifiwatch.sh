@@ -30,6 +30,18 @@
 # says once that it is waiting. Not within MIN_UPTIME of boot, so a freeze that
 # comes straight back cannot become a reboot loop.
 #
+# **`[PI3-FOUND-835]` And a chip still receiving is not frozen, whatever the
+# router says.** lempi02w, 2026-10-26 17:56:52, mid-way through an export:
+# three checks unanswered and an SDIO error somewhere in the boot's log, so it
+# rebooted -- while the copy was arriving at 606 kB/s and an ssh session
+# worked, read at 17:56:08 between the second miss and the third. Likeliest,
+# not measured: the pings waited behind the transfer's own queue past their
+# 3 s. The transfer hold had paused the music, which is the pause this
+# waits for. So every check records what wlan0 has received, and a link that
+# took in RX_ALIVE since the last one is busy, not frozen: the slowest export
+# measured brings in about 12 MB a minute, and a frozen chip brings in nothing.
+# An idle link takes in less than RX_ALIVE, so there nothing changes.
+#
 # A soft repair was considered and not attempted: upstream, reloading the
 # driver did not bring a hung controller back, and a failed unbind leaves the
 # chip in a worse state than the one being repaired.
@@ -40,6 +52,10 @@ set -u
 STATE_DIR="${LEMPI_RUN_DIR:-/run/lempi}"
 MISSES_FILE="$STATE_DIR/wifiwatch-misses"
 SAID_WAITING="$STATE_DIR/wifiwatch-waiting"
+RX_FILE="$STATE_DIR/wifiwatch-rx"
+SAID_BUSY="$STATE_DIR/wifiwatch-busy"
+RX_ALIVE="${LEMPI_WIFIWATCH_RX_ALIVE:-1048576}"
+SYS_WLAN_RX="${SYS_WLAN_RX:-/sys/class/net/wlan0/statistics/rx_bytes}"
 THRESHOLD="${LEMPI_WIFIWATCH_MISSES:-3}"
 MIN_UPTIME="${LEMPI_WIFIWATCH_MIN_UPTIME:-900}"
 MAY_REBOOT="${LEMPI_WIFIWATCH_REBOOT:-1}"
@@ -87,17 +103,40 @@ count() { cat "$MISSES_FILE" 2>/dev/null | tr -dc '0-9' | head -c 4; }
 
 GW=$(gateway)
 if [ -z "$GW" ] || ! connected; then
-    rm -f "$MISSES_FILE" "$SAID_WAITING" 2>/dev/null
+    rm -f "$MISSES_FILE" "$SAID_WAITING" "$SAID_BUSY" 2>/dev/null
     exit 0
+fi
+
+# What wlan0 has received since the last check `[PI3-FOUND-835]`, recorded on
+# every check so it always covers one interval and never the traffic of an
+# hour ago. Empty when either reading is missing, or the counter went back
+# (a reboot, a reloaded driver): unknown, and unknown exempts nothing.
+mkdir -p "$STATE_DIR" 2>/dev/null
+RX=$(cat "$SYS_WLAN_RX" 2>/dev/null | tr -dc '0-9')
+RX_LAST=$(cat "$RX_FILE" 2>/dev/null | tr -dc '0-9')
+[ -n "$RX" ] && printf '%s\n' "$RX" > "$RX_FILE" 2>/dev/null
+RX_GOT=""
+if [ -n "$RX" ] && [ -n "$RX_LAST" ] && [ "$RX" -ge "$RX_LAST" ]; then
+    RX_GOT=$(( RX - RX_LAST ))
 fi
 
 if ping -c 2 -W 3 "$GW" >/dev/null 2>&1; then
     n=$(count)
     [ "${n:-0}" -gt 0 ] 2>/dev/null &&
         echo "the router at $GW is answering again after $n failed checks"
+    rm -f "$MISSES_FILE" "$SAID_WAITING" "$SAID_BUSY" 2>/dev/null
+    exit 0
+fi
+
+if [ -n "$RX_GOT" ] && [ "$RX_GOT" -ge "$RX_ALIVE" ]; then
+    if [ ! -e "$SAID_BUSY" ]; then
+        echo "the router at $GW did not answer, but wlan0 received $(( RX_GOT / 1024 )) KiB since the last check: busy, not frozen [PI3-FOUND-835]"
+        : > "$SAID_BUSY" 2>/dev/null
+    fi
     rm -f "$MISSES_FILE" "$SAID_WAITING" 2>/dev/null
     exit 0
 fi
+rm -f "$SAID_BUSY" 2>/dev/null
 
 n=$(count); n=$(( ${n:-0} + 1 ))
 mkdir -p "$STATE_DIR" 2>/dev/null

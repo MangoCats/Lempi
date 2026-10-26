@@ -8,8 +8,13 @@ group wifiwatch || return 0
 printf '\nwifiwatch\n'
 
 wwatch() {
-    PROC_ROUTE="$VT_STATE/route" PROC_UPTIME="$VT_STATE/uptime" \
+    PROC_ROUTE="$VT_STATE/route" PROC_UPTIME="$VT_STATE/uptime" SYS_WLAN_RX="$VT_STATE/rx_bytes" \
     LEMPI_WIFIWATCH_MISSES="${MISSES:-3}" sh "$BT/lempi-wifiwatch.sh" 2>&1
+}
+# wlan0's receive counter now, and as the previous check recorded it.
+received() {
+    printf '%s\n' "$1" > "$LEMPI_RUN_DIR/wifiwatch-rx"
+    printf '%s\n' "$2" > "$VT_STATE/rx_bytes"
 }
 
 # The node on its home network: wlan0 connected, gateway 192.0.2.1 (as
@@ -137,4 +142,61 @@ OUT=$(wwatch)
 assert_in "$OUT" "router at 192.0.2.1 is answering again after 2 failed checks" \
     "says it recovered, naming the gateway read from the route table"
 assert_eq "$([ -e "$LEMPI_RUN_DIR/wifiwatch-misses" ] && echo present || echo gone)" "gone" "and the count is cleared"
+teardown
+
+# --- 10. a link still receiving is busy, not frozen [PI3-FOUND-835] ------
+# lempi02w, 2026-10-26: rebooted mid-export, the copy arriving at 606 kB/s.
+setup
+online
+touch "$VT_STATE/ping_fails"
+inhibit
+paused
+printf '2\n' > "$LEMPI_RUN_DIR/wifiwatch-misses"
+received 1000000 37000000
+OUT=$(MISSES=1 wwatch)
+assert_in "$OUT" "busy, not frozen" "says the link is busy"
+assert_not_called "systemctl reboot" "and does not reboot a link that is receiving"
+assert_eq "$([ -e "$LEMPI_RUN_DIR/wifiwatch-misses" ] && echo present || echo gone)" "gone" "its misses are cleared"
+printf '%s\n' 73000000 > "$VT_STATE/rx_bytes"
+OUT=$(MISSES=1 wwatch)
+assert_not_in "$OUT" "busy" "said once, not every minute"
+assert_not_called "systemctl reboot" "and still not rebooted while it keeps receiving"
+teardown
+
+# --- 11. a link that has stopped receiving still is ----------------------
+setup
+online
+touch "$VT_STATE/ping_fails"
+inhibit
+paused
+received 37000000 37004000
+OUT=$(MISSES=1 wwatch)
+assert_in "$OUT" "has frozen" "a trickle under RX_ALIVE exempts nothing"
+assert_called "systemctl reboot" "and it reboots at a pause"
+teardown
+
+# --- 12. every check records the counter, so it covers one interval ------
+# An exemption measured against an hour-old reading would let the traffic
+# before a freeze excuse the freeze.
+setup
+online
+received 5 900000000
+wwatch >/dev/null
+assert_eq "$(cat "$LEMPI_RUN_DIR/wifiwatch-rx")" "900000000" "a healthy check records what it read"
+touch "$VT_STATE/ping_fails"
+inhibit
+paused
+OUT=$(MISSES=1 wwatch)
+assert_in "$OUT" "has frozen" "so a link silent since the last check is not excused by the hour before"
+teardown
+
+# --- 13. a counter that went back is unknown, and excuses nothing --------
+setup
+online
+touch "$VT_STATE/ping_fails"
+inhibit
+paused
+received 900000000 4000000
+OUT=$(MISSES=1 wwatch)
+assert_called "systemctl reboot" "a reset counter is not read as traffic"
 teardown
