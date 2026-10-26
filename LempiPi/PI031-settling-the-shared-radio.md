@@ -180,7 +180,9 @@ Every byte over Wi-Fi is airtime the speaker's audio does not get, and a
 690 MB export under Bluetooth playback froze the Wi-Fi chip twice
 `[PI3-FOUND-830]`. The sender asks `POST /transfer/hold` first and
 `/transfer/release/<id>` after. The player pauses only if its radio is shared
-(a Bluetooth node not plainly on a DAC of its own) and it is playing; the last
+-- its output a Bluetooth speaker, `radio_shared` in `transfer.rs`; a node
+that cannot tell is not paused, after `bose` was, for every upload of its
+2026-10-25 deploy -- and it is playing; the last
 release plays again, unless the listener already did; a hold never released
 ends on its own. Held: the player, fbui and `import_bundle` uploads
 (`build/lib-defaults.sh`), the star sync's catalogue parts and

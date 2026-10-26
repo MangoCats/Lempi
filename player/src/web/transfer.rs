@@ -81,9 +81,17 @@ fn holds() -> &'static Mutex<Holds> {
 }
 
 /// Whether this node's Wi-Fi shares a radio with the speaker it is playing
-/// to: a node with the Bluetooth helper, unless it is plainly playing to a
-/// DAC of its own. A stored `dac` on a node with no DAC is not believed
-/// `[PI3-FOUND-820]`.
+/// to: it has the Bluetooth helper and its output is a Bluetooth speaker --
+/// a stored `bt:` output, or a stored `dac` on a node PipeWire shows has none,
+/// which is not believed `[PI3-FOUND-820]`. A node that cannot tell is not
+/// paused: `bose` has no PipeWire to ask, plays to its DAC, and was paused for
+/// every upload of 2026-10-25 by a first version that read "unknown" as shared.
+fn radio_shared(bluetooth: bool, active_output: &str, local: crate::sink::Tristate) -> bool {
+    bluetooth
+        && (active_output.starts_with("bt:")
+            || (active_output == "dac" && local == crate::sink::Tristate::No))
+}
+
 async fn shared_radio(ui: &Ui) -> bool {
     if !ui.capabilities.bluetooth {
         return false;
@@ -91,13 +99,14 @@ async fn shared_radio(ui: &Ui) -> bool {
     let db = ui.db.clone();
     let library = ui.library.clone();
     tokio::task::spawn_blocking(move || {
-        let dac = crate::db::PlayerStore::open_split(&db, &library)
-            .map(|s| s.get_active_output() == "dac")
-            .unwrap_or(false);
-        !(dac && crate::sink::local_output() == crate::sink::Tristate::Yes)
+        let active = crate::db::PlayerStore::open_split(&db, &library)
+            .map(|s| s.get_active_output())
+            .unwrap_or_default();
+        let local = if active == "dac" { crate::sink::local_output() } else { crate::sink::Tristate::Unknown };
+        radio_shared(true, &active, local)
     })
     .await
-    .unwrap_or(true)
+    .unwrap_or(false)
 }
 
 /// End hold `id`, resuming the playback it paused. `None` when it was not in
@@ -147,7 +156,17 @@ pub(super) async fn release(State(ui): State<Ui>, Path(id): Path<u64>) -> Respon
 
 #[cfg(test)]
 mod tests {
-    use super::Holds;
+    use super::{radio_shared, Holds};
+    use crate::sink::Tristate;
+
+    #[test]
+    fn only_a_bluetooth_output_shares_the_radio() {
+        assert!(radio_shared(true, "bt:AA:BB:CC:DD:EE:FF", Tristate::Unknown), "a speaker");
+        assert!(radio_shared(true, "dac", Tristate::No), "a stored DAC on a node with none [PI3-FOUND-820]");
+        assert!(!radio_shared(true, "dac", Tristate::Yes), "a real DAC");
+        assert!(!radio_shared(true, "dac", Tristate::Unknown), "a node that cannot tell -- bose -- is not paused");
+        assert!(!radio_shared(false, "bt:AA:BB:CC:DD:EE:FF", Tristate::Unknown), "no Bluetooth helper, no speaker");
+    }
 
     #[test]
     fn one_hold_pauses_a_shared_radio_and_its_release_resumes() {
