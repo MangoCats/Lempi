@@ -52,6 +52,12 @@ build/Dockerfile.*      text eol=lf
 android/gradlew         text eol=lf
 android/gradlew.bat     text eol=crlf
 
+# The hub's Windows batch files keep CRLF too: `cmd.exe` finds a `goto` label
+# in an LF-only file unreliably, and `hub_backup.cmd` carries one since
+# 2026-10-25 -- written LF by an editor that day, and run by Task Scheduler.
+*.cmd                   text eol=crlf
+*.bat                   text eol=crlf
+
 # Third-party files, kept exactly as their publisher shipped them
 # (vendor/essentia/README.md). Git took the 18 `.param` files and the
 # accuracy report for text on their first commit, 2026-10-01, and a Windows
