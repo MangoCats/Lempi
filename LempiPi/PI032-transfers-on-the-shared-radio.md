@@ -69,12 +69,32 @@ radio a hold leaves the keeper as it was.
 at an hour, and that export outlived it: at 19:44:59 the hold expired
 mid-copy, and the player took its speaker back and played on. The Export
 page's Send now asks for a ten-minute hold and, while the copy runs, takes a
-fresh one every half of a hold's life and releases the one before. Only a
+fresh one every third of a hold's life and releases the one before. Only a
 set's first hold pauses and only its last release resumes, so the
 overlapping renewals change nothing the listener hears; if the sender dies,
-the last hold ends by itself within ten minutes.
+the last hold ends by itself within ten minutes. Renewed at first every half
+with no retry, the next export lost its hold anyway: one renewal never
+arrived, the retry was due four seconds after the hold ended at 21:01:58,
+and the music came back with three minutes of the copy left. A renewal not
+answered is now tried again every 30 s, and said. This is the fallback,
+for a speaker that cannot hold itself.
 
-## 5. What else waits for a transfer
+## 5. The speaker holds itself
+
+**`[PI3-AIM-178]` Where it can, the speaker keeps the hold, on its own
+loopback.** Each renewal from the sender was a fresh ssh connection across
+the link its own transfer was filling, which is how one took 14 s and the
+next never landed. `lempi-held`, installed with the Bluetooth helpers, takes
+the hold from the player over localhost, runs the command it is given in the
+foreground -- the `tar` that receives the copy, reading the copy's stream --
+renews every third of a two-minute hold beside it, and releases after the
+command ends, however it ends; a session killed outright leaves the last hold
+to end within two minutes. The radio carries none of it, and the copy cannot
+starve it. `send_bundle.py` asks `command -v lempi-held` first and wraps its
+`tar` in it; a speaker without it is held from the sender as in §4. Not yet
+tried on a real export.
+
+## 6. What else waits for a transfer
 
 The integrity check reads nothing on a shared radio while a hold is in force
 `[GDE-INT-138]`: the hold's pause had been the pause it waited for, and the
@@ -83,7 +103,7 @@ watchdog no longer takes a link still receiving for a frozen one
 `[PI3-FOUND-835]`: mid-export, three gateway pings went unanswered while the
 copy arrived at 606 kB/s, and it rebooted the node at the hold's pause.
 
-## 6. The export of 2026-10-26, measured
+## 7. The export of 2026-10-26, measured
 
 The exporter's own figure rose from about 0.2 MB/s to 0.44 MB/s over the
 evening, as household Wi-Fi was reduced and four Wi-Fi cameras were moved to

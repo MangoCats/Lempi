@@ -123,6 +123,30 @@ try:
     with transfer_hold._held(p.post, "node", said.append, seconds=600):
         time.sleep(0.3)
     check(len([a for a in p.asked if a.startswith("/transfer/hold")]) == 1, "without renew, one hold only")
+
+    # 2026-10-26: one renewal lost, and the hold with it. Now a miss is
+    # retried soon, and said.
+    class Dropping(Renewing):
+        def __init__(self, drop):
+            super().__init__()
+            self.drop = drop
+            self.holds = 0
+
+        def post(self, path):
+            if path.startswith("/transfer/hold"):
+                self.holds += 1
+                if self.holds in self.drop:
+                    self.asked.append(path + " (unanswered)")
+                    return None
+            return super().post(path)
+
+    p, said = Dropping({2}), []
+    with transfer_hold._held(p.post, "node", said.append, seconds=600, renew=True):
+        time.sleep(0.5)
+    check(any("was not answered" in s for s in said), f"a renewal not answered is said: {said}")
+    check(any("renewed again" in s for s in said), f"and so is the one that lands after it: {said}")
+    check(not p.live, f"every hold that was answered is released: {p.live}")
+    check(sum("was not answered" in s for s in said) == 1, "a run of misses is said once")
 finally:
     transfer_hold.RENEW_FLOOR = saved_floor
 

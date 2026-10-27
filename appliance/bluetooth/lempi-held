@@ -1,0 +1,85 @@
+#!/bin/sh
+# Run a command under a transfer hold kept on this node's own loopback
+# `[PI3-AIM-178]`.
+#
+#     ssh pi@node 'lempi-held tar -xf - -C /srv/library/audio'
+#
+# **Why here and not at the sender.** The sender renewed its hold over ssh,
+# a fresh connection each time, across the link its own transfer was filling.
+# lempi02w, 2026-10-26: one renewal took 14 s to land, the next never did, and
+# the hold expired at 21:01:58 with three minutes of the copy left -- the
+# music came back on in the middle of it. Taken, renewed and released here,
+# over localhost, a hold costs the radio nothing and the copy cannot starve
+# it.
+#
+# The command runs in the foreground, so it reads this script's input -- the
+# transfer's stream -- and its exit status is this script's. The renewal runs
+# beside it, every third of a hold's life, and releases the hold in force
+# when told to. However the command ends, the hold is released after it; if
+# the whole session is killed outright, the last hold ends by itself within
+# LEMPI_HOLD_SECS. A player that does not answer is said once, and the
+# command runs unheld: the transfer matters more than the music's pause.
+set -u
+P="http://localhost:${LEMPI_PORT:-5720}"
+LIFE="${LEMPI_HOLD_SECS:-120}"
+EVERY=$(( LIFE / 3 ))
+[ "$EVERY" -ge 1 ] || EVERY=1
+
+say() { echo "lempi-held: $*" >&2; }
+take() { curl -s -m 5 -X POST "$P/transfer/hold?seconds=$LIFE" 2>/dev/null; }
+id_of() { printf '%s' "$1" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p'; }
+release() { curl -s -m 5 -o /dev/null -X POST "$P/transfer/release/$1" 2>/dev/null; }
+
+if [ $# -eq 0 ]; then
+    say "usage: lempi-held COMMAND [ARG...]"
+    exit 2
+fi
+
+r=$(take)
+ID=$(id_of "$r")
+if [ -z "$ID" ]; then
+    say "no player answered a hold; running unheld [PI3-AIM-178]"
+    exec "$@"
+fi
+case "$r" in
+    *'"paused":true'*) say "hold $ID: the player paused, and let its speaker go [PI3-AIM-178]" ;;
+    *'"quiet":true'*)  say "hold $ID: the player was paused, and let its speaker go [PI3-AIM-178]" ;;
+    *)                 say "hold $ID: nothing paused (its radio is its own) [PI3-AIM-178]" ;;
+esac
+
+# The renewal. `new` is read in the same assignment as the hold that sets it,
+# so a release arriving between two lines still knows every hold it holds.
+renew() {
+    cur=$1 new="" missed=""
+    trap 'release "$cur"; [ -n "$new" ] && release "$new"; exit 0' TERM
+    while :; do
+        # A sleep the trap can interrupt: a plain one would hold the release
+        # back for up to a third of a hold's life.
+        sleep "$EVERY" &
+        wait $!
+        new=$(id_of "$(take)")
+        if [ -z "$new" ]; then
+            [ -n "$missed" ] || say "a renewal was not answered; the hold in force lasts its ${LIFE}s, trying again"
+            missed=yes
+            continue
+        fi
+        [ -n "$missed" ] && say "renewed again, as hold $new"
+        missed=""
+        release "$cur"
+        cur=$new new=""
+    done
+}
+renew "$ID" &
+R=$!
+
+# A session hung up or interrupted still releases, rather than leaving the
+# music paused for a hold's life.
+stop_renewal() { kill -TERM "$R" 2>/dev/null; wait "$R" 2>/dev/null; }
+trap 'stop_renewal; say "released, the session having ended"; exit 129' HUP INT TERM
+
+"$@"
+rc=$?
+trap - HUP INT TERM
+stop_renewal
+say "released, the command having exited ($rc)"
+exit "$rc"

@@ -179,7 +179,8 @@ so once.
 Moved to [PI032](PI032-transfers-on-the-shared-radio.md) on 2026-10-26, when this
 record reached its 300-line limit: the transfer hold `[PI3-AIM-170]`, the
 speaker let go under it `[PI3-AIM-175]`, the keeper standing down
-`[PI3-AIM-176]`, and a hold renewed for a long transfer `[PI3-AIM-177]`.
+`[PI3-AIM-176]`, a hold renewed for a long transfer `[PI3-AIM-177]`, and
+the speaker keeping it itself `[PI3-AIM-178]`.
 The integrity check gives way the other way round: it waits for the music
 to pause, and never pauses it `[GDE-INT-137]`; both ask `player/src/radio.rs`.
 

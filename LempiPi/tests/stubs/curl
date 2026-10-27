@@ -2,6 +2,23 @@
 printf '%s\n' "curl $*" >> "$VT_STATE/calls"
 case "$*" in
     *reopen-output*) exit 0 ;;
+    # Holds numbered and remembered as the player does [PI3-AIM-178]; none
+    # answered at all when the fixture says there is no player.
+    */transfer/hold*)
+                     [ -f "$VT_STATE/no_player" ] && exit 7
+                     n=$(( $(cat "$VT_STATE/hold_next" 2>/dev/null || echo 0) + 1 ))
+                     printf '%s\n' "$n" > "$VT_STATE/hold_next"
+                     first=true; [ -s "$VT_STATE/holds_live" ] && first=false
+                     printf '%s\n' "$n" >> "$VT_STATE/holds_live"
+                     printf '{"id":%s,"paused":%s,"quiet":%s,"shared_radio":true,"seconds":120}\n' \
+                         "$n" "$first" "$first" ;;
+    */transfer/release/*)
+                     id=$(printf '%s' "$*" | sed -n 's#.*/transfer/release/\([0-9]*\).*#\1#p')
+                     grep -vx "$id" "$VT_STATE/holds_live" > "$VT_STATE/holds_live.new" 2>/dev/null
+                     mv "$VT_STATE/holds_live.new" "$VT_STATE/holds_live"
+                     # `-o /dev/null` is honoured, as curl does: the answer
+                     # must not land in the stream of the command being held.
+                     case "$*" in *"-o /dev/null"*) ;; *) printf '{"released":true}\n' ;; esac ;;
     # A hold has the shared radio only when the fixture says so [PI3-AIM-176].
     */transfer)      h=false; [ -f "$VT_STATE/transfer_held" ] && h=true
                      printf '{"in_force":%s,"shared_radio_held":%s}\n' "$h" "$h" ;;

@@ -33,6 +33,7 @@ bluetooth_items() {
     # on the machine, as their units have always called them.
     file_item "lempi-common.sh" $B/lempi-common.sh /usr/local/lib/lempi-common.sh 644
     file_item "lempi-wait-sink" $B/lempi-wait-sink /usr/local/bin/lempi-wait-sink 755
+    file_item "lempi-held" $B/lempi-held /usr/local/bin/lempi-held 755
     file_item "lempi-btctl" $B/lempi-btctl /usr/local/bin/lempi-btctl 755
     file_item "lempi-speaker" $B/lempi-speaker.sh /usr/local/bin/lempi-speaker 755
     file_item "lempi-btwatch" $B/lempi-btwatch.sh /usr/local/bin/lempi-btwatch 755

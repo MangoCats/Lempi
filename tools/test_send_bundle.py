@@ -59,14 +59,17 @@ def bundle(tmp):
 class Fake:
     """Answers the speaker's questions; records what was asked, in order."""
 
-    def __init__(self, ro=False, imported=2, awaiting=0, tool=True, root_exists=True, free=500 << 30):
+    def __init__(self, ro=False, imported=2, awaiting=0, tool=True, root_exists=True, free=500 << 30,
+                 held=False):
         self.calls, self.ro, self.imported, self.awaiting, self.tool = [], ro, imported, awaiting, tool
-        self.root_exists, self.free = root_exists, free
+        self.root_exists, self.free, self.held = root_exists, free, held
 
     def __call__(self, host, cmd, stdin=None):
         self.calls.append((cmd, stdin))
         if cmd.startswith("command -v import_bundle"):
             return 0, "/usr/local/bin/import_bundle" if self.tool else "MISSING"
+        if cmd.startswith("command -v lempi-held"):
+            return 0, "/usr/local/bin/lempi-held" if self.held else "MISSING"
         if cmd.startswith("findmnt"):
             return 0, f"/srv/library ext4 {'ro' if self.ro else 'rw'},noatime"
         if cmd.startswith("test -d"):
@@ -225,7 +228,16 @@ def main() -> int:
         HOLDS.clear()
         rc, reloads = run([b, "pi@speaker-a", "--apply"], f)
         check(HOLDS == [("pi@speaker-a", sb.HOLD_SECS, True)],
-              f"the copy holds the speaker's playback, renewed for as long as it runs [PI3-AIM-177]: {HOLDS}")
+              f"a speaker without lempi-held: held from here, renewed for as long as it runs [PI3-AIM-177]: {HOLDS}")
+
+        print("a speaker with lempi-held keeps the hold itself, around the tar that receives the copy")
+        f = Fake(held=True)
+        HOLDS.clear()
+        rc, _ = run([b, "pi@speaker-a", "--apply"], f)
+        tar = [c for c, _ in f.calls if c.startswith("mkdir -p /srv/library/audio")]
+        check(rc == 0 and tar and "&& lempi-held tar -xf - -C /srv/library/audio" in tar[0],
+              f"the copy's tar runs under lempi-held [PI3-AIM-178]: {tar}")
+        check(HOLDS == [], f"and no hold is taken from here: {HOLDS}")
         cmds = [c for c, _ in f.calls]
         audio = next(i for i, c in enumerate(cmds) if c.startswith("mkdir -p /srv/library/audio"))
         imp = next(i for i, c in enumerate(cmds) if c.startswith("import_bundle"))

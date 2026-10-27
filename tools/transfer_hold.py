@@ -71,21 +71,37 @@ class _Renewal:
     released. Overlapping, the fresh one undoes nothing and pauses nothing --
     only a set's first hold pauses, and only its last release resumes -- so
     the music stays as the first hold left it. If this process dies, the last
-    hold still ends by itself within one lifetime."""
+    hold still ends by itself within one lifetime.
 
-    def __init__(self, post, seconds, hid, life):
-        self.post, self.seconds = post, seconds
+    Every third of a hold's life, and after a renewal that was not answered,
+    again RENEW_FLOOR later: renewed every half, with no retry, one lost
+    renewal was the hold's whole margin, and on 2026-10-26 the next try came
+    four seconds after the hold had ended. A miss is said, and so is the
+    renewal that lands after one. Where the speaker can hold itself, it does,
+    and none of this runs `[PI3-AIM-178]`."""
+
+    def __init__(self, post, who, say, seconds, hid, life):
+        self.post, self.who, self.say, self.seconds = post, who, say, seconds
         self.hid, self.paused = hid, False
-        self.every = max(RENEW_FLOOR, float(life or 0) / 2)
+        self.every = max(RENEW_FLOOR, float(life or 0) / 3)
         self.stop = threading.Event()
         self.thread = threading.Thread(target=self.run, daemon=True)
 
     def run(self):
-        while not self.stop.wait(self.every):
+        wait, missed = self.every, 0
+        while not self.stop.wait(wait):
             got = self.post("/transfer/hold" + (f"?seconds={self.seconds}" if self.seconds else "")) or {}
             new = got.get("id")
             if new is None:
-                continue  # not answered this time; the hold in force has half its life left
+                missed += 1
+                if missed == 1:
+                    self.say(f"  transfer: a renewal of {self.who}'s hold was not answered; "
+                             f"trying again every {RENEW_FLOOR:g} s [PI3-AIM-177]")
+                wait = RENEW_FLOOR
+                continue
+            if missed:
+                self.say(f"  transfer: {self.who}'s hold renewed again, after {missed} unanswered")
+            wait, missed = self.every, 0
             # A hold taken after the last had ended -- an answer delayed past
             # its life, or a restarted player -- is a first one, and may pause.
             self.paused |= bool(got.get("paused"))
@@ -116,7 +132,7 @@ def _held(post, who, say, seconds=None, renew=False):
         say(f"  transfer: {who} was paused; released its speaker for this transfer [PI3-AIM-175]")
     renewal = None
     if renew and hid is not None:
-        renewal = _Renewal(post, seconds, hid, got.get("seconds"))
+        renewal = _Renewal(post, who, say, seconds, hid, got.get("seconds"))
         renewal.thread.start()
     try:
         yield got

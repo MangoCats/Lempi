@@ -33,6 +33,7 @@ do, uploads nothing, and writes nothing.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import posixpath
@@ -345,6 +346,15 @@ def import_run(host: str, library: str, where: str, audio_root: str, apply: bool
     return counts
 
 
+def remote_held(host: str) -> bool:
+    """Does the speaker keep a transfer's hold itself `[PI3-AIM-178]`? Asked
+    as `import_bundle` is: an answer naming no path is a speaker without it,
+    and one that cannot be asked is too -- the hold from here is the
+    fallback, not the copy."""
+    rc, out = ssh(host, "command -v lempi-held || echo MISSING")
+    return rc == 0 and "lempi-held" in out and not out.endswith("MISSING")
+
+
 def inside(host: str, bundle: str, library: str, audio_root: str, where: str) -> int:
     """The writes: the audio into place, the payload staged, the import. Run
     directly on a read-write library, or by attended-import.sh inside its
@@ -364,11 +374,17 @@ def inside(host: str, bundle: str, library: str, audio_root: str, where: str) ->
         say(f"  copying {files} audio file(s), {size / 1e6:.1f} MB, into {audio_root} ...")
         # On a shared radio the player pauses and lets its speaker go for the
         # copy, and takes it back after [PI3-AIM-175]; elsewhere it is left
-        # playing. Released on a stop or a failure too.
-        with transfer_hold.held_ssh(host, say=say, seconds=HOLD_SECS, renew=True):
+        # playing. Held on the speaker's own loopback where it can be, around
+        # the very tar that receives the copy [PI3-AIM-178]; from here,
+        # renewed over ssh, where it cannot. Released on a stop or a failure too.
+        local = remote_held(host)
+        hold = contextlib.nullcontext() if local else transfer_hold.held_ssh(
+            host, say=say, seconds=HOLD_SECS, renew=True)
+        unpack = (("lempi-held " if local else "")
+                  + f"tar -xf - -C {shlex.quote(audio_root)} --no-same-owner")
+        with hold:
             try:
-                rc, out = ssh_stream(host, f"mkdir -p {shlex.quote(audio_root)} && "
-                                           f"tar -xf - -C {shlex.quote(audio_root)} --no-same-owner",
+                rc, out = ssh_stream(host, f"mkdir -p {shlex.quote(audio_root)} && {unpack}",
                                      lambda pipe: audio_tar(audio, Progress(pipe, size), have))
             except Stopped:
                 # The file cut short goes, so nothing on the speaker is half a
@@ -380,6 +396,10 @@ def inside(host: str, bundle: str, library: str, audio_root: str, where: str) ->
                     say(f"  removed the file the copy was part-way through: {cut}" if rc == 0
                         else f"  WARNING: could not remove the file cut short: {cut}")
                 raise
+        # What the speaker's own hold did, said as the copy's output brings it.
+        for line in out.splitlines():
+            if line.startswith("lempi-held:"):
+                say(f"  {line}")
         if rc != 0:
             raise Failed(f"copy the audio on {host} failed (exit {rc}): {out[-300:]}")
     check_stop("staging the payload")
