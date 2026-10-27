@@ -16,9 +16,9 @@ PRAGMA foreign_keys = ON;
 
 -- Encoding scope. audio_md5 is Essentia's md5_encoded: the MD5 of the encoded
 -- audio stream with container and tags excluded, so it survives retagging,
--- renaming and moving [SPEC-DF-020]. Computable in ~70 ms via
--- `ffmpeg -i F -vn -c:a copy -f md5 -`, verified bit-identical to the
--- extractor's own value.
+-- renaming and moving [SPEC-DF-020]. Computed by `hash_audio` (symphonia)
+-- since the 2026-09-27 re-key [SPEC-RLK-152]; before it, by
+-- `ffmpeg -i F -vn -c:a copy -f md5 -`. `md5_generator` says which.
 CREATE TABLE IF NOT EXISTS files (
     file_id      INTEGER PRIMARY KEY,
     audio_md5    TEXT    NOT NULL UNIQUE,
@@ -304,6 +304,10 @@ CREATE TABLE IF NOT EXISTS identification_cache (
 -- CLASS D [SPEC-SC-020]. The only irreplaceable data in the system. Never
 -- travels with music [SPEC-DF-055]; exported on a schedule [SPEC-DF-094].
 
+-- `selected_by` [REQ-VIS-300] is not in this table's DDL: PlayerStore adds it
+-- on open (`ensure_history_columns`), as it does heard_ms/span_ms to an older
+-- file. Said here, not after the last column, for the reason `releases` gives.
+
 CREATE TABLE IF NOT EXISTS listener_play_history (
     play_id     INTEGER PRIMARY KEY,
     played_at   INTEGER NOT NULL,           -- unix seconds
@@ -542,9 +546,10 @@ CREATE TABLE IF NOT EXISTS player_state (
     updated_at   TEXT    NOT NULL
 );
 
--- Operational settings and saved queue: `player_settings` and `player_queue`
--- live in listener.db alongside player_state [SPEC-SC-099], but are created
--- and managed dynamically at runtime by PlayerStore (player/core/src/db/player_store.rs).
+-- Operational settings, saved queue and file checks: `player_settings`,
+-- `player_queue` and `file_checks` live in listener.db alongside player_state
+-- [SPEC-SC-099], but are created and managed at runtime by PlayerStore
+-- (player/core/src/db/player_store.rs), as is `listener_programme_pending`.
 
 -- ================================================================== metadata
 

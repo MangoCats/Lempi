@@ -5,8 +5,8 @@ player against a database called `--help`**
 
 > **Related:** [GUIDE031](GUIDE031-where-an-option-gets-its-value.md) `[GDE-CLI-090]`
 > — the four layers a value comes from · [`player/src/cli.rs`](../player/src/cli.rs) — the only parser ·
-> [`player/src/cli/specs.rs`](../player/src/cli/specs.rs) — the seventeen
-> tables · [GUIDE023](GUIDE023-lists-that-mirror-something-else.md) `[GDE-ARC-033]`
+> [`player/src/cli/specs.rs`](../player/src/cli/specs.rs) — the tables,
+> one per binary · [GUIDE023](GUIDE023-lists-that-mirror-something-else.md) `[GDE-ARC-033]`
 > — why nothing here is written twice ·
 > [GOV002](GOV002-sources-of-truth.md) `[GOV-SRC-040]` — a fallback must be
 > visible
@@ -27,11 +27,13 @@ own way, and two of them read an option their own usage text never mentioned.
 
 ## 2. The convention
 
-**`[GDE-CLI-010]` One parser, seventeen tables.**
+**`[GDE-CLI-010]` One parser, one table per binary** — seventeen when this was
+written, nineteen on 2026-10-27, pinned to `src/bin/` by
+`every_binary_has_exactly_one_spec`.
 [`player/src/cli.rs`](../player/src/cli.rs) is the only argument-parsing code
 in the repository. A binary contributes a `&[Opt]` and no parsing of its own:
 `--help`, `--version`, unknown options, malformed values and the usage text
-all come from the core, so the seventeen cannot drift apart as the project
+all come from the core, so the tables cannot drift apart as the project
 changes. No third-party crate — every dependency is a memory decision on a
 512 MB Pi `[REQ-HW-140]`, and nothing here needs subcommands or completions.
 
@@ -106,8 +108,8 @@ The old spelling is still read and warns.
 
 **`--help` is the definition.** This document does not list the options; every
 binary prints its own, and a guard checks that everything the repository types
-at one of them is something it accepts (§6). A table here would be an
-eighteenth copy.
+at one of them is something it accepts (§6). A table here would be a
+second copy of every one of them.
 
 ---
 
@@ -198,7 +200,7 @@ Three guards read the repository rather than restating it, which is
 
 - **`every_option_the_repository_types_is_one_the_binary_accepts`** walks every
   `.md`, `.sh`, `.service`, `.conf`, `.html` and `.py` in the tree, finds each
-  invocation of one of the seventeen, and checks every `--option` in it
+  invocation of any of the binaries, and checks every `--option` in it
   against that binary's table. Rename an option and the failure names the file
   and line. It asserts a floor on how many invocations it found, so a scan
   that reads nothing cannot pass by finding no fault `[GDE-ECHO-547]`.

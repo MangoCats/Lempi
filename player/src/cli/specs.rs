@@ -687,7 +687,7 @@ pub mod mpd_session {
 /// Every command line in the crate.
 ///
 /// Iterated by the tests, so a property asserted about one binary's grammar is
-/// asserted about all seventeen. Pinned against `Cargo.toml`'s own `[[bin]]`
+/// asserted about every one of them. Pinned against `Cargo.toml`'s own `[[bin]]`
 /// list and `src/bin/` by `every_binary_has_exactly_one_spec`, so a binary
 /// added without a table here fails the build's tests rather than shipping the
 /// old hand-rolled parsing `[GDE-ARC-031]`.

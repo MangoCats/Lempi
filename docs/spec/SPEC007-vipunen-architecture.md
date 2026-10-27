@@ -12,7 +12,7 @@ Structure of **Vipunen**, the library builder that turns raw audio into everythi
 
 ## 1. Identity and Boundaries
 
-**`[SPEC-SA-010]`** Vipunen is a **separate project**: own repository, own licence, own platform envelope.
+**`[SPEC-SA-010]`** Vipunen is a **separate program**: own licence, own platform envelope, and meant to have its own repository. Today it is `tools/` in this one, relicensed AGPL in place on 2026-08-15 ([`LICENSING.md`](../../LICENSING.md)); the repository split can still follow without changing anyone's terms.
 
 | | Value | Forced by |
 | :--- | :--- | :--- |
@@ -21,7 +21,13 @@ Structure of **Vipunen**, the library builder that turns raw audio into everythi
 | Platform | **x86 desktop only** | Essentia extractor has no ARM64 build `[GDE-FEX-137]` |
 | Runs | On demand, never on the appliance | `[GDE-ARC-010]` |
 
-**`[SPEC-SA-015]`** Vipunen and Lempi communicate **only through the shared SQLite file**. No RPC, no shared process, no linked code. Nothing AGPL enters Lempi.
+**`[SPEC-SA-015]`** Vipunen and Lempi share **no process and no linked code**. Nothing AGPL enters Lempi. They exchange data over three channels, each a documented payload rather than the other side's code *(revised 2026-10-27; until then this read "only through the shared SQLite file. No RPC", which the code had outgrown)*:
+
+1. **The library pair on disk.** On the hub, Vipunen writes `library.db` and the co-resident player reads it `[SPEC-SUI-012]`.
+2. **The hub to a node.** Star sync's snapshot, rehearsal and commit are signed requests from the hub (`tools/star_sync.py`) to a member player's `/mesh/sync/<op>`, which `player/src/star_node.rs` answers; the player applies its own patch `[SPEC-STAR-100]`, `[SPEC-NSH-020]`. A bundle still goes over ssh, to `import_bundle` `[SPEC-STAR-092]`.
+3. **A desktop player to its co-resident console**, on a build with `vipunen-support` only. The review page applies its decisions through the player, which relays Vipunen's own `/api/pending/detail`, `/api/apply-reviews` and job progress (`player/src/web/vipunen.rs`) `[REQ-LIB-177]`. The console in turn asks such a player two narrow questions about its build, never about its library `[SPEC-SUI-213]`, `[SPEC-SUI-227]`.
+
+A fourth exchange is a design decision, recorded here — never a convenience.
 
 **`[SPEC-SA-018]` The x86 restriction is Essentia's alone.** Measured 2026-08-09: `fpcalc` ships ARM64 builds for Linux and macOS `[SPEC-SA-060]`. So if the extractor is ever built for ARM64, nothing else in the toolchain blocks it — the constraint is one binary deep, not architectural.
 

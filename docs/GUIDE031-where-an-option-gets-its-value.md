@@ -6,7 +6,7 @@ itself. This is the four layers underneath it.**
 
 > **Related:** [`player/src/cli.rs`](../player/src/cli.rs) — the one resolver ·
 > [GUIDE030](GUIDE030-command-line-conventions.md) `[GDE-CLI-010]` — one parser,
-> seventeen tables · [GOV002](GOV002-sources-of-truth.md) — rank the sources,
+> one table per binary · [GOV002](GOV002-sources-of-truth.md) — rank the sources,
 > show which answered · [GUIDE023](GUIDE023-lists-that-mirror-something-else.md) `[GDE-ARC-033]`
 > — why none of this is written twice · `fleet-example/` — all of it worked
 > through
@@ -103,7 +103,7 @@ These carry `.not_from_env()` and a test holds it.
 
 ## 4. One long name means one thing
 
-**`[GDE-CLI-110]` No two of the seventeen may use the same long option name
+**`[GDE-CLI-110]` No two of the binaries may use the same long option name
 for different things.** Sharing a name for a shared concept is the point of
 `cli::specs::common` and is expected — `--library` means the same thing to
 nine binaries. What is forbidden is one name meaning two, because the

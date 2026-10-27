@@ -4,7 +4,7 @@
 
 Vipunen's web interface `[REQ-LIB-170]`: the surface that makes induction something a person can see and start, rather than seven scripts whose order lives in someone's head.
 
-> **Status.** §§1–4 are settled against tools that exist. **§5 specifies a two-part deliverable** — Vipunen's exporter and Lempi's importer, one payload between them — and neither half is built.
+> **Status.** §§1–4 are settled against tools that exist. **§5 specifies a two-part deliverable** — Vipunen's exporter and Lempi's importer, one payload between them — and both halves are built: the console's `/api/export/bundle`, sent by `tools/send_bundle.py` `[SPEC-STAR-092]`, and the player's `import_bundle`.
 
 > **Related:** [SPEC007 Vipunen](SPEC007-vipunen-architecture.md) · [SPEC006 Data Flow](SPEC006-data-flow-and-portability.md) · [SPEC012 Relink](SPEC012-library-relink.md) · [SPEC008 Schema](SPEC008-database-schema.md) · [REQ002 §4](REQ002-functional-requirements.md#4-library-building--lib-vipunen)
 
@@ -35,7 +35,7 @@ Three consequences, and together they are the requirement:
 
 Lempi's player is a LAN service for a household. This is an operator's console on the machine that owns the library, and the two exposures are not comparable.
 
-**`[SPEC-SUI-012]` In production there is one live database, and both programs are in it.** `[SPEC-DF-080]`'s co-resident row is the whole arrangement — Vipunen writes `lempi.db`, Lempi reads it, no transport — so the shared file is not a deployment variant of `[SPEC-SA-015]`'s channel, it *is* the channel. The only other copies are its backups `[SPEC-DF-094]`. **Several databases at once is a development and testing condition**: `data/`, `scratch/` and the appliance's own file are all real files, and none of them is the live one.
+**`[SPEC-SUI-012]` On the hub there is one live library pair, and both programs are in it.** *(Revised 2026-10-27: this read "in production there is one live database", true until the fleet.)* `[SPEC-DF-080]`'s co-resident row is the hub's arrangement — Vipunen writes `library.db`, the desktop's player reads it and keeps its own `listener.db` beside it `[IMPL-DBSPLIT-025]` — so there the shared file *is* `[SPEC-SA-015]`'s first channel. **Every other node holds its own pair**, a spoke of star sync and not a mirror: its catalogue arrives from the hub, its plays stay on it, and its listener edits are merged through the hub ([FLEET001](../../fleet/FLEET001-the-fleet.md) `[FLT-SHP-010]`, `[SPEC-STAR-100]`). Where the hub's pair is, and every surviving copy, is in [`data/README.md`](../../data/README.md). **Several pairs on one machine is a development and testing condition**: `data/`, `scratch/` and a test fixture are all real files, and only `data/` is the hub's.
 
 Two consequences run through this document:
 
@@ -54,9 +54,9 @@ Two consequences run through this document:
 
 One shared page means either a listener's page carrying model error figures, or an operator's page offering playback on a machine with no speakers. They browse the same rows to answer different questions.
 
-**`[SPEC-SUI-025]` No Vipunen process ever speaks to a Lempi process** `[SPEC-SA-015]`. Export writes files and moves them with ssh and rsync (§5). The receiving Lempi is never asked a question and need not know Vipunen exists — which is `[REQ-PORT-100]` restated as a network fact rather than an aspiration.
+**`[SPEC-SUI-025]` The console speaks to a Lempi process only over the channels `[SPEC-SA-015]` names.** *(Revised 2026-10-27; it read "no Vipunen process ever speaks to a Lempi process", which star sync and the review page's apply had both outgrown.)* A bundle is files moved over ssh (§5), and a Lempi receiving one is never asked a question — which is `[REQ-PORT-100]` restated as a network fact. Star sync does ask a member player, by signed request `[SPEC-STAR-100]`; the console asks a co-resident player only about its build `[SPEC-SUI-213]`; and a desktop player relays the review page's apply to the console `[REQ-LIB-177]`.
 
-A **link** is not a channel, and §3.4 leans on the difference: a hyperlink or a frame is the *browser* fetching a second page, with the two servers never in contact. What must not appear is Vipunen calling a Lempi route and reading the answer.
+A **link** is not a channel, and §3.4 leans on the difference: a hyperlink or a frame is the *browser* fetching a second page, with the two servers never in contact. What must not appear, outside star sync's signed requests, is the console calling a Lempi route and reading the library back from it.
 
 ---
 
@@ -143,7 +143,7 @@ Identification review is the first case. The review page can **play the passage*
 
 **Step 1 is correctness, not tidiness.** Two players on one library contend for the audio device and both write the single resume row `[SPEC-SC-098]`, so a duplicate launch damages a session the operator already had.
 
-**Step 2 is what makes `[SPEC-SUI-150]` sound.** That rule needed a structural guard rather than a documentary one, and this is it: Vipunen hands its *own* db path to the player it starts, so the handoff target is reading the file the passage ids came from — because Vipunen told it which file, not because a configuration was kept accurate by hand. In production this names the one live database there is `[SPEC-SUI-012]`; it earns its keep in development, where several are reachable and the wrong one still opens.
+**Step 2 is what makes `[SPEC-SUI-150]` sound.** That rule needed a structural guard rather than a documentary one, and this is it: Vipunen hands its *own* db path to the player it starts, so the handoff target is reading the file the passage ids came from — because Vipunen told it which file, not because a configuration was kept accurate by hand. On the hub this names its one live pair `[SPEC-SUI-012]`; it earns its keep in development, where several are reachable and the wrong one still opens.
 
 **Liveness is a socket question, not a route question.** Vipunen may ask the operating system whether the port accepts a connection; it may not ask Lempi anything about the library. `[SPEC-SUI-025]`'s invariant is about application exchanges, and a player Vipunen started is a child process it supervises rather than a service it queries.
 
@@ -153,7 +153,7 @@ The affordance is therefore always drawn — a launch that has not been attempte
 
 **`[SPEC-SUI-227]` Built 2026-08-31, narrowing "is it there and capable" by one further question: is it *current*.** Found live the same day: a co-resident Lempi that was the only one running, and that answered `[SPEC-SUI-213]`'s own capability probe, was still hours behind the checkout — a boundary edit saved through it did not reappear on reopening the editor, because the merge-with-draft logic that fixed that had landed in a commit the running binary predated. Neither earlier check catches this: `[SPEC-SUI-170]`'s reuse rule and `[SPEC-SUI-213]`'s capability probe both ask "is something there," never "is it the same something this checkout would build." `GET /build` — unconditional, the same build-capability-not-library-data boundary `[SPEC-SUI-213]` already draws — answers with the running Lempi's own compiled-in commit hash, the same one its Settings page already shows a person. `tools/lempi_control.py`'s `_lempi_staleness()` (`console.py` at the time, split into `lempi_control.py`) compares that against Vipunen's own commit snapshot (`[SPEC-SUI-211]`, taken once at Vipunen's own startup) and names a mismatch instead of leaving a fix silently absent. Silent, not refused, whenever either identity is unknowable — no git checkout under Vipunen, no `/build` route on a Lempi too old to have it — the same honest skip `[SPEC-DF-095]` already asks for elsewhere, since there is nothing here worth guessing past.
 
-**`[SPEC-SUI-145]` The round trip closes through the database, not through the browser.** Vipunen hands off; the operator works in the player; Vipunen learns what changed by re-reading the shared file — `id_reviews`, `passage_recordings` — on its next scan. Nothing reports back, because `[SPEC-SA-015]`'s one channel is the file and it is sufficient. This is what keeps a link from quietly becoming an integration: no callback, no postMessage, no polling a Lempi route.
+**`[SPEC-SUI-145]` The round trip closes through the database, not through the browser.** Vipunen hands off; the operator works in the player; Vipunen learns what changed by re-reading the shared file — `id_reviews`, `passage_recordings` — on its next scan. Nothing reports back, because for this round trip `[SPEC-SA-015]`'s first channel, the file, is sufficient. This is what keeps a link from quietly becoming an integration: no callback, no postMessage, no polling a Lempi route. The one exchange added since runs the other way and carries nothing back either: the player asking Vipunen to apply what Vipunen then reads from the file `[REQ-LIB-177]`.
 
 The division of labour that follows is worth stating plainly, because it is not the obvious one:
 
@@ -267,7 +267,7 @@ This is **not** the optimisation `[SPEC-RLK-140]` forbids. `--quick` narrows the
 
 > **Refined by `[SPEC-PL-085]`:** for a *bundle*, this is not a separate pass at all. Relink cannot bind an arriving row because it never creates one `[SPEC-RLK-090]`, so the importer must hash, verify and write the path itself — which is the same walk. The scoped relink described here is what the **importer does**, not a step after it. Relink proper remains for the whole-library case.
 
-**`[SPEC-SUI-110]` The target is an ssh host and a directory — never a Lempi endpoint** `[SPEC-SUI-025]`. rsync moves the bundle; binding it is the target's own work, offered over ssh as a convenience and never required for the export to be complete and correct. Requiring an API would put Vipunen-facing code in every Lempi, including the ones that will never meet one.
+**`[SPEC-SUI-110]` A bundle's target is an ssh host and a directory, not a Lempi endpoint** `[SPEC-SUI-025]`. ssh moves the bundle (`tools/send_bundle.py`, `[SPEC-STAR-092]`); binding it is the target's own `import_bundle`. *(Narrowed 2026-10-27: this said "never a Lempi endpoint" for any export, since requiring an API would put Vipunen-facing code in every Lempi.)* Star sync has since made that trade for a member of the mesh — the hub's signed requests, the player applying its own patch `[SPEC-STAR-100]`, `[SPEC-NSH-080]` — so `star_node.rs` is in every player, and a bundle remains how the audio itself reaches a speaker.
 
 **`[SPEC-SUI-120]` T3 survives for what it is good at**: first installation, and moving a whole library between a user's own machines `[SPEC-DF-080]`. The bundle is the incremental case, which `[REQ-LIB-130]` states is the common one.
 

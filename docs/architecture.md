@@ -1,6 +1,6 @@
 # System Architecture
 
-**Orientation — Tier 1 · describes what is built, as of 2026-10-08**
+**Orientation — Tier 1 · describes what is built, as of 2026-10-08 · §§1, 3, 6 checked against the tree 2026-10-27**
 
 How Lempi is put together: the components, the interfaces between them, and the
 few rules that decide where a new piece belongs. Written against the tree rather
@@ -33,6 +33,9 @@ of truth for something it only reads. A node with no Vipunen still has to
 *receive* that data, so the player crate carries the two ways it arrives —
 `import_bundle`, for a bundle the hub sends, and the star-sync commit the hub
 signs (`player/src/star_node.rs`) — and both apply the hub's rows unchanged.
+The two programs share no process and no code; the three channels they do
+exchange data over — the library pair, the hub's signed requests, and a desktop
+player relaying the review page's apply — are listed in `[SPEC-SA-015]`.
 
 ---
 
@@ -76,11 +79,17 @@ Four traits, deliberately separate, in `playback.rs` and `switch.rs`:
 
 | trait | methods | who wants it |
 | :--- | :--- | :--- |
-| `Playback` | `capabilities`, `enqueue`, `queued_ids`, `queued_ms`, `shortfall`, `take_dropped`, `resume_at`, `seek_to`, `tick`, `is_shutdown`, `apply_queue_settings` | ordinary playback |
+| `Playback` | `capabilities`, `enqueue`, `queued_ids`, `queued_ms`, `shortfall`, `take_dropped`, `take_outcomes`, `resume_at`, `seek_to`, `tick`, `is_shutdown`, `apply_queue_settings` | ordinary playback |
 | `FadeOut` | `fade_out`, `hand_off` | a handoff |
 | `Publish` | `publish` | a guest's clients |
 | `Progress` | `head_position`, `refresh`, `head_counted`, `adopt_counted` | a handoff |
 | `Backend` | all four | `Switching` |
+
+**`take_outcomes` is how the running Director learns what became of a pick**
+without waiting for a rebuild: a person queued it, it crossed the counting
+threshold `[SPEC-PLAY-010]`, or it was skipped or dequeued and the rejection
+written `[SPEC-PLAY-050]`. `take_dropped` is the narrower report of a passage
+the backend could not open at all.
 
 Fading, publishing and position are things a **handoff** wants and ordinary
 playback never does. Widening `Playback` for one caller is how a seam stops
@@ -150,7 +159,8 @@ no idea whether its choice will be decoded locally or handed to MPD.
 ## 6. Data
 
 `player/core/src/db/` is the only gateway to SQLite (`mod`, `library`,
-`player_store`). Each connection opens `listener.db` and attaches `library.db`
+`player_store` with its `programme` submodule, and `pair`, which makes a fresh
+installation's two empty files from `sql/schema.sql` `[REQ-AND-201]`). Each connection opens `listener.db` and attaches `library.db`
 read-only as `lib`; a query names a catalogue table `__LIB__.name`, and
 `QualifyingConn` is the one place that resolves it `[IMPL-DBSPLIT-035]`. Two
 classes of data, and the distinction is load-bearing `[SPEC-DF-055]`:
