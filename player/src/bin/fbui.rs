@@ -766,9 +766,10 @@ const BTCTL: &str = "/usr/local/bin/lempi-btctl";
 
 /// The access-point button `[SPEC-FBUI-120]`: the right end of the pairing
 /// row, which held nothing but the end of the pairing note -- the longest
-/// note ends by x 360. The access point comes up only when asked for
-/// `[SPEC-WFO-090]`, and this is the screen's way to ask, as the speaker's
-/// Left key is a speaker's.
+/// note ends by x 360. With no link it means "back onto Wi-Fi": the known
+/// network if it answers, the access point if not `[SPEC-WFO-095]` -- which
+/// comes up only when asked for `[SPEC-WFO-090]`. This is the screen's way to
+/// ask, as the speaker's Left key is a speaker's.
 const AP_X: (i32, i32) = (376, 472);
 /// How often wlan0 is asked about while the Settings page shows -- a link can
 /// drop with nobody touching the screen -- and only then: `nmcli` is a
@@ -783,7 +784,8 @@ enum Wifi {
     /// nothing is worse than none.
     #[default]
     Network,
-    /// No link at all: the button starts the access point.
+    /// No link at all: the button tries the known network, then starts the
+    /// access point if it does not answer.
     NoLink,
     /// On the access point: the button goes home.
     AccessPoint,
@@ -819,7 +821,7 @@ fn read_wifi() -> Wifi {
 
 fn ap_label(w: Wifi) -> Option<&'static str> {
     match w {
-        Wifi::NoLink => Some("START AP"),
+        Wifi::NoLink => Some("WI-FI"),
         Wifi::AccessPoint => Some("GO HOME"),
         Wifi::Network => None,
     }
@@ -840,8 +842,10 @@ fn ap_outcome(out: &str) -> &'static str {
     }
 }
 
-/// Ask for the access point, as the speaker's Left key does. Up to the
-/// fifteen seconds `ap-return` allows a way home.
+/// Back onto Wi-Fi, as the speaker's Left key asks: the known network, then
+/// the access point with no link; home from the access point. Up to the
+/// fifteen seconds a try for the known network is allowed, and the access
+/// point's start after it when that does not answer `[SPEC-WFO-095]`.
 fn request_ap() -> &'static str {
     match std::process::Command::new("sudo").args(["-n", BTCTL, "ap-request"]).output() {
         Ok(out) => {

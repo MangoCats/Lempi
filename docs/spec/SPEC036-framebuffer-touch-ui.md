@@ -254,11 +254,12 @@ so a test renders each page into memory and saves it where
 `FBUI_PREVIEW_DIR` points — the only way to look at a page without the
 panel. Not yet seen on the physical screen.
 
-**`[SPEC-FBUI-120]` The access point, on the Settings page (2026-10-25).**
-The access point comes up only when asked for `[SPEC-WFO-090]`, and this is
-the screen's way to ask: a button at the right end of the pairing row, space
-the pairing note never reached. With no Wi-Fi link it reads `START AP`; on
-the access point `GO HOME`, lit; on a network it is not drawn, and a press
+**`[SPEC-FBUI-120]` Back onto Wi-Fi, on the Settings page.**
+The screen's way to ask for Wi-Fi: a button at the right end of the pairing
+row, space the pairing note never reached. With no Wi-Fi link it reads
+`WI-FI` and tries the known network first, starting the access point only if
+that does not answer `[SPEC-WFO-095]` -- the access point comes up only when
+asked for `[SPEC-WFO-090]`; on the access point it reads `GO HOME`, lit; on a network it is not drawn, and a press
 there does nothing. Both run `lempi-btctl ap-request`, as the speaker's Left
 key does, and the note beside PAIR says what happened (`trying...`, then
 `access point up`, `back on Wi-Fi`, `did not work`, `a phone is on it`) — the

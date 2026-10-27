@@ -110,9 +110,13 @@ When the appliance returns to its home network:
 - A speaker that powers the Pi has a third way already: off and on is a reboot, and the boot path goes home first (item 1).
 
 **`[SPEC-WFO-090]` The access point only on request.** Decided by the maintainer 2026-10-25 [PI031](../../LempiPi/PI031-settling-the-shared-radio.md): an access point broadcasts on the one radio a speaker's audio shares, so it runs only while someone wants it.
-- **Asked for** by the speaker's Left key, or fbui's **START AP** on its Settings page `[SPEC-FBUI-120]`, both through `lempi-btctl ap-request`: with no link it prints `{"trying":true}` and brings up `lempi-ap` standing, as `ap-failover`; on the access point it is `ap-return`; on a network, or while one is being joined, it refuses, and the key stays silent. The cues are `[SPEC-WFO-085]`'s: a click, then two rising notes when it did what was asked, one low note when it did not.
+- **Asked for** by the speaker's Left key, or fbui's **WI-FI** on its Settings page `[SPEC-FBUI-120]`, both through `lempi-btctl ap-request`: with no link it prints `{"trying":true}`, asks for the known network by name `[SPEC-WFO-095]`, and only if that does not answer within 15 s brings up `lempi-ap` standing, as `ap-failover`; on the access point it is `ap-return`; on a network, or while one is being joined, it refuses, and the key stays silent. The cues are `[SPEC-WFO-085]`'s: a click, then two rising notes when it did what was asked, one low note when it did not.
 - **Shown** by the LED's no-link brightness `[PI3-LED-020]`, and by the button's label.
 - **Except where nobody could ask.** A node with no paired speaker -- no paired device offering an Audio Sink; a paired phone or keyboard has no Left key -- has no key to press and no audio sharing the radio; brought to a new home, it would be unreachable short of rewriting its card. After 75 s with no link and no paired speaker, and not while a network is being joined, the keeper brings up `lempi-ap` itself, as `[SPEC-WFO-010]` always did.
+
+**`[SPEC-WFO-095]` A lost link is asked for again, by name.** NetworkManager does not retry a connection it failed for want of a password, and a driver that refuses a key mid-handshake fails exactly that way. Measured on lp3-wifi 2026-10-27: the router dropped the link (reason 7), the re-association's key was refused by the driver (`key not allowed`, with a `cfg80211` warning), NetworkManager took it as a wrong password, and with no agent to ask it marked `MangoCats-g` failed and never tried again -- two hours off the network, the password stored and right, until a reboot. Asking for the connection by name uses the stored password.
+- **The keeper asks** (`lempi-btctl wifi-rejoin`) from a plain `disconnected`, never while a network is being joined: first after 60 s, so NetworkManager's own retries of an ordinary drop come first, then on a doubling wait to 15 min at most. A paired speaker does not stop it; the speaker decides only whether the access point may start by itself. Each ask is an association on the radio a speaker's audio may share, which is what the backoff bounds; with no link NetworkManager scans on its own anyway.
+- **The button and the key ask too**, by `ap-request` above, so a person need not wait for the keeper.
 
 ---
 
@@ -133,3 +137,4 @@ When the appliance returns to its home network:
 - Reference `[SPEC-WFO-080]`: Return-to-infrastructure boot & idle hysteresis (`lempi-wifi-failover`)
 - Reference `[SPEC-WFO-085]`: The way home by speaker key or by backoff, and the cues (`avrcp.rs`, `output.rs`, `lempi-wifi-failover`, `lempi-btctl ap-return`)
 - Reference `[SPEC-WFO-090]`: The access point only on request, and on its own only where nobody could ask (`lempi-btctl ap-request`, `lempi-wifi-failover`)
+- Reference `[SPEC-WFO-095]`: A lost link asked for again by name, on a backoff, and first by the button and the key (`lempi-btctl wifi-rejoin`, `ap-request`, `lempi-wifi-failover`)

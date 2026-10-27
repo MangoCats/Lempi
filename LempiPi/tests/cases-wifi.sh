@@ -306,9 +306,18 @@ teardown
 # --- the access point only on request [SPEC-WFO-090] ------------------------
 
 # A fake lempi-btctl that records what the keeper asks of it, for the LED.
+# Its wifi-rejoin fails, as with the known network out of range, unless
+# $VT_STATE/rejoin_ok exists [SPEC-WFO-095].
 fake_btctl() {
-    printf '#!/bin/sh\nprintf "btctl %%s\\n" "$*" >> "%s/calls"\nprintf "{\\"ok\\":true}\\n"\n' \
-        "$VT_STATE" > "$VT_STATE/btctl"
+    cat > "$VT_STATE/btctl" <<'EOF'
+#!/bin/sh
+printf 'btctl %s\n' "$*" >> "$VT_STATE/calls"
+if [ "$1" = wifi-rejoin ] && [ ! -f "$VT_STATE/rejoin_ok" ]; then
+    printf '{"ok":false,"error":"Home did not answer"}\n'
+    exit 1
+fi
+printf '{"ok":true}\n'
+EOF
     chmod +x "$VT_STATE/btctl"
 }
 wifi_keeper() { LEMPI_BTCTL="$VT_STATE/btctl" sh "$BT/lempi-wifi-failover" 2>&1; }
@@ -357,6 +366,104 @@ wifi_keeper >/dev/null
 assert_not_called "btctl ap-failover" "a node joining a network is left to join it"
 teardown
 
+# --- the known network asked for again [SPEC-WFO-095] -----------------------
+
+# lp3-wifi, 2026-10-27: an hour with no link and a paired speaker. The known
+# network is asked for by name, and the outage ends there.
+setup
+fake_btctl
+: > "$VT_STATE/rejoin_ok"
+speaker aa:bb:cc:dd:ee:10 Boom no yes
+printf 'wlan0:disconnected\n' > "$VT_STATE/nm_dev_state"
+printf '%s\n' "$(( $(date +%s) - 3600 ))" > "$LEMPI_RUN_DIR/wifi_disconnected_since"
+OUT=$(wifi_keeper)
+assert_called "btctl wifi-rejoin" "an hour with no link asks for the known network, speaker or not"
+assert_in "$OUT" "it is back" "and says the link came back"
+assert_not_called "btctl ap-failover" "and starts no access point"
+[ -f "$LEMPI_RUN_DIR/wifi_disconnected_since" ] && bad "the outage clock is cleared on rejoining" "still there" \
+    || ok "the outage clock is cleared on rejoining"
+teardown
+
+# Not before REJOIN_FIRST: NetworkManager's own retries of an ordinary drop come first.
+setup
+fake_btctl
+printf 'wlan0:disconnected\n' > "$VT_STATE/nm_dev_state"
+printf '%s\n' "$(( $(date +%s) - 30 ))" > "$LEMPI_RUN_DIR/wifi_disconnected_since"
+wifi_keeper >/dev/null
+assert_not_called "btctl wifi-rejoin" "thirty seconds with no link is left to NetworkManager"
+teardown
+
+# A failed ask waits, and the wait doubles.
+setup
+fake_btctl
+speaker aa:bb:cc:dd:ee:10 Boom no yes
+printf 'wlan0:disconnected\n' > "$VT_STATE/nm_dev_state"
+printf '%s\n' "$(( $(date +%s) - 120 ))" > "$LEMPI_RUN_DIR/wifi_disconnected_since"
+OUT=$(wifi_keeper)
+assert_called "btctl wifi-rejoin" "two minutes with no link asks once"
+assert_in "$OUT" "next try in 60s" "and, refused, says when it asks again"
+assert_eq "$(cat "$LEMPI_RUN_DIR/wifi_rejoin_wait")" "120" "with the wait after that doubled"
+: > "$VT_STATE/calls"
+wifi_keeper >/dev/null
+assert_not_called "btctl wifi-rejoin" "and does not ask again before then"
+teardown
+
+# Joining a network is not interrupted by a rejoin either.
+setup
+fake_btctl
+printf 'wlan0:connecting (configuring)\n' > "$VT_STATE/nm_dev_state"
+printf '%s\n' "$(( $(date +%s) - 3600 ))" > "$LEMPI_RUN_DIR/wifi_disconnected_since"
+wifi_keeper >/dev/null
+assert_not_called "btctl wifi-rejoin" "a node joining a network is not asked to join it again"
+teardown
+
+# wifi-rejoin itself: the known network by name, from `disconnected` only.
+setup
+printf 'lempi-ap:802-11-wireless:no\nHome:802-11-wireless:yes\n' > "$VT_STATE/nm_conns"
+printf 'wlan0:disconnected\n' > "$VT_STATE/nm_dev_state"
+OUT=$(btctl wifi-rejoin)
+assert_in "$OUT" '"ok":true' "wifi-rejoin brings the known network back"
+assert_called "nmcli --wait 15 connection up Home" "by name, waiting 15 s at most"
+assert_not_called "connection up lempi-ap" "and never the access point"
+teardown
+
+setup
+printf 'lempi-ap:802-11-wireless:no\nHome:802-11-wireless:yes\n' > "$VT_STATE/nm_conns"
+printf 'wlan0:disconnected\n' > "$VT_STATE/nm_dev_state"
+OUT=$(NM_UP_FAIL=Home btctl wifi-rejoin)
+assert_in "$OUT" "Home did not answer" "wifi-rejoin says so when the known network does not answer"
+teardown
+
+setup
+printf 'Home:802-11-wireless:yes\n' > "$VT_STATE/nm_conns"
+printf 'wlan0:connected\n' > "$VT_STATE/nm_dev_state"
+OUT=$(btctl wifi-rejoin)
+assert_in "$OUT" "nothing to rejoin" "wifi-rejoin on a network does nothing"
+assert_not_called "connection up" "and brings nothing up"
+teardown
+
+# ap-request with no link and the known network in reach: home, no access point.
+setup
+printf 'lempi-ap:802-11-wireless:no\nHome:802-11-wireless:yes\n' > "$VT_STATE/nm_conns"
+printf 'wlan0:disconnected\n' > "$VT_STATE/nm_dev_state"
+OUT=$(btctl ap-request)
+assert_in "$OUT" '{"trying":true}' "ap-request with no link says it is trying"
+assert_called "nmcli --wait 15 connection up Home" "and asks for the known network first"
+assert_in "$OUT" '{"ok":true}' "which answers"
+assert_not_called "connection up lempi-ap" "so no access point is started"
+teardown
+
+# And with the known network out of reach: the access point after all.
+setup
+export LEMPI_NM_DIR="$VT_STATE/nm" LEMPI_DNSMASQ_DIR="$VT_STATE/dnsmasq"
+printf 'lempi-ap:802-11-wireless:no\nHome:802-11-wireless:yes\n' > "$VT_STATE/nm_conns"
+printf 'wlan0:disconnected\n' > "$VT_STATE/nm_dev_state"
+OUT=$(NM_UP_FAIL=Home btctl ap-request)
+assert_called "nmcli --wait 15 connection up Home" "ap-request out of reach of home still asks for it"
+assert_called "nmcli connection up lempi-ap" "then starts the access point"
+assert_in "$OUT" '"ap":"active"' "and says so"
+teardown
+
 # ap-request with no link: says it is trying, then starts the access point.
 setup
 export LEMPI_NM_DIR="$VT_STATE/nm" LEMPI_DNSMASQ_DIR="$VT_STATE/dnsmasq"
@@ -401,7 +508,7 @@ fake_btctl
 printf 'wlan0:disconnected\n' > "$VT_STATE/nm_dev_state"
 OUT=$(wifi_keeper)
 assert_called "btctl led on 25" "with no link the LED goes to 25% by default"
-assert_in "$OUT" "Left key starts the access point" "and the journal says what the key would do"
+assert_in "$OUT" "tries the known network and then starts the access point" "and the journal says what the key would do"
 : > "$VT_STATE/calls"
 wifi_keeper >/dev/null
 assert_not_called "btctl led" "and is not set again while nothing changes"

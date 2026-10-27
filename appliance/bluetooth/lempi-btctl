@@ -1078,13 +1078,37 @@ case "$VERB" in
                          for (k in c) if (c[k] > m) { m = c[k]; d = k }
                          printf "{\"ok\":true,\"packets\":%d,\"modal_dlen\":%d,\"at_modal\":%d}\n", n, d, m }'
         ;;
+    wifi-rejoin)
+        # The known network, asked for by name, with no link at all
+        # [SPEC-WFO-095]. NetworkManager stops retrying a connection that
+        # failed for want of a password, and a driver that refuses a key
+        # mid-handshake looks exactly like a wrong one -- measured on
+        # lp3-wifi 2026-10-27, off the network for two hours with the right
+        # password stored. Asking for the connection by name uses the stored
+        # one. Refused on the access point or a network, where there is
+        # nothing to rejoin; 15 s at most, as ap-return.
+        [ "$(active_wifi_conn)" != "lempi-ap" ] || die "on the access point: the way home is ap-return"
+        state="$(nmcli -t -f DEVICE,STATE dev 2>/dev/null | sed -n 's/^wlan0://p')"
+        [ "$state" = disconnected ] || die "wlan0 is ${state:-unknown}, not disconnected: nothing to rejoin"
+        home="$(home_network)"
+        [ -n "$home" ] || die "no known network is set to connect automatically"
+        if nmcli --wait 15 connection up "$home" >/dev/null 2>&1; then
+            printf '{"ok":true}\n'
+        else
+            die "$home did not answer"
+        fi
+        ;;
+
     ap-request)
         # The one thing the speaker's Left key and fbui's button both ask
-        # [SPEC-WFO-090]: the access point is up only when somebody asked
-        # for it. With no Wi-Fi link at all, start it -- standing, as
-        # ap-failover always was; on it, go home, which is ap-return and
-        # refused the same ways; on a network, nothing. `{"trying":true}`
-        # first whenever something is about to change, for the key's click.
+        # [SPEC-WFO-090]: back onto Wi-Fi, by the known network if it
+        # answers and the access point if it does not. With no Wi-Fi link,
+        # the known network is tried first [SPEC-WFO-095] and the access
+        # point started -- standing, as ap-failover always was -- only when
+        # it does not answer; on the access point, go home, which is
+        # ap-return and refused the same ways; on a network, nothing.
+        # `{"trying":true}` first whenever something is about to change,
+        # for the key's click.
         if [ "$(active_wifi_conn)" = "lempi-ap" ]; then
             exec bash "$0" ap-return
         fi
@@ -1094,6 +1118,11 @@ case "$VERB" in
             connecting*) die "joining a known network: there is no access point to start" ;;
         esac
         printf '{"trying":true}\n'
+        home="$(home_network)"
+        if [ -n "$home" ] && nmcli --wait 15 connection up "$home" >/dev/null 2>&1; then
+            printf '{"ok":true}\n'
+            exit 0
+        fi
         exec bash "$0" ap-failover
         ;;
 

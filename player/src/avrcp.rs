@@ -350,9 +350,10 @@ pub fn home_outcome(lines: &[String]) -> HomeOutcome {
     }
 }
 
-/// Left: the access point, asked for `[SPEC-WFO-085]`, `[SPEC-WFO-090]` --
-/// started with no Wi-Fi link, and one try for the known network while it is
-/// up. On a thread of its own: a try takes up to `ap-return`'s 15 s, and the
+/// Left: back onto Wi-Fi `[SPEC-WFO-085]`, `[SPEC-WFO-090]`, `[SPEC-WFO-095]` --
+/// with no Wi-Fi link, the known network and then the access point if it does
+/// not answer; one try for the known network while the access point is up. On
+/// a thread of its own: a try takes up to 15 s, and the
 /// input reader must not wait on it. A click when the try starts, then two
 /// rising notes when it did what was asked or one low one when it did not;
 /// nothing at all if it was refused, because then the key did nothing. A
@@ -365,7 +366,7 @@ fn go_home(handle: &Arc<EngineHandle>, busy: &Arc<AtomicBool>, code: u16) {
         tracing::info!("avrcp: key {code} -> home, but a try is already under way");
         return;
     }
-    tracing::info!("avrcp: key {code} -> the access point: start it with no link, go home from it");
+    tracing::info!("avrcp: key {code} -> Wi-Fi: with no link the known network, else the access point; home from it");
     let handle = Arc::clone(handle);
     let done = Arc::clone(busy);
     let spawned = std::thread::Builder::new().name("lempi-home".into()).spawn(move || {

@@ -26,6 +26,12 @@ HOLD_AFTER="${LEMPI_WIFI_HOLD_AFTER:-30}"
 # How long with no link before a node nobody could ask starts its access point
 # itself [SPEC-WFO-090]: the old 45 s boot grace and 30 s debounce, together.
 NOLINK_AFTER="${LEMPI_NOLINK_AFTER:-75}"
+# How long with no link before the keeper first asks for the known network by
+# name, and the most it waits between asks as they keep failing
+# [SPEC-WFO-095]. Doubled after each: 60 s, 2, 4, 8, then 15 min. Long enough
+# that NetworkManager's own retries of an ordinary drop come first.
+REJOIN_FIRST="${LEMPI_REJOIN_FIRST:-60}"
+REJOIN_MAX="${LEMPI_REJOIN_MAX:-900}"
 . "${LEMPI_COMMON:-/usr/local/lib/lempi-common.sh}" 2>/dev/null ||
     . "$(dirname "$0")/lempi-common.sh"
 
@@ -93,7 +99,7 @@ led_follow() {
         elif [ "$1" = yes ]; then
             echo "Wi-Fi link up: the LED at ${_pct}% [PI3-LED-020]"
         else
-            echo "no Wi-Fi link: the LED at ${_pct}%; the speaker's Left key starts the access point [PI3-LED-020]"
+            echo "no Wi-Fi link: the LED at ${_pct}%; the speaker's Left key, or fbui's WI-FI, tries the known network and then starts the access point [PI3-LED-020]"
         fi
     else
         say_once led_failed "could not set the LED to $_want [PI3-LED-010]"
@@ -278,41 +284,66 @@ fi
 rm -f "$STATE_DIR/ap_idle_since" "$STATE_DIR/ap_clients" "$STATE_DIR/ap_iw_failed" \
       "$STATE_DIR/ap_return_wait" "$STATE_DIR/ap_bt_said"
 
-# 4. On a network: held after HOLD_AFTER. With no link at all, nothing is
-#    started -- the access point is the listener's to ask for [SPEC-WFO-090],
-#    and the LED says it can be.
+# 4. On a network: held after HOLD_AFTER. With no link at all, the access point
+#    is not started -- it is the listener's to ask for [SPEC-WFO-090], and the
+#    LED says it can be.
 DEV_STATE=$(nmcli -t -f DEVICE,STATE dev 2>/dev/null | grep '^wlan0:' || true)
 if [ "$DEV_STATE" = wlan0:connected ]; then
-    rm -f "$STATE_DIR/wifi_disconnected_since"
+    rm -f "$STATE_DIR/wifi_disconnected_since" "$STATE_DIR/wifi_rejoin_at" "$STATE_DIR/wifi_rejoin_wait"
     led_follow yes
     wifi_hold
     exit 0
 fi
 rm -f "$STATE_DIR/wifi_link"
 led_follow no
-
-# 5. **Unless nobody could ask.** A node with no paired speaker has no key to
-#    press, and no audio sharing the radio either: brought to a new home, or
-#    set up before its first speaker, it would be unreachable short of
-#    rewriting its card. So after NOLINK_AFTER with no link and no paired
-#    speaker -- a paired phone or keyboard has no Left key to press -- the
-#    access point starts by itself, as it always did [SPEC-WFO-090]. Joining
-#    a network is never interrupted for it.
+# Joining a network is never interrupted, for a rejoin or the access point.
 case "$DEV_STATE" in wlan0:connecting*) exit 0 ;; esac
-if [ -n "$(lempi_speakers Paired)" ]; then
-    rm -f "$STATE_DIR/wifi_disconnected_since"
-    exit 0
-fi
 NOW=$(date +%s)
 if [ ! -f "$STATE_DIR/wifi_disconnected_since" ]; then
     printf '%s\n' "$NOW" > "$STATE_DIR/wifi_disconnected_since"
     exit 0
 fi
 SINCE=$(cat "$STATE_DIR/wifi_disconnected_since" 2>/dev/null || echo "$NOW")
-[ $(( NOW - SINCE )) -ge "$NOLINK_AFTER" ] || exit 0
+DOWN=$(( NOW - SINCE ))
+
+# 5. **But the known network is asked for again** [SPEC-WFO-095]. A link that
+#    NetworkManager failed for want of a password is never retried by it, and
+#    a driver refusing a key mid-handshake fails exactly that way: lp3-wifi sat
+#    two hours off the network on 2026-10-27, its password stored and right.
+#    Asking for the connection by name uses the stored one. Only from a plain
+#    `disconnected`, after REJOIN_FIRST, and on a doubling backoff -- every ask
+#    is an association on the radio a speaker's audio may share. Whether a
+#    speaker is paired does not matter here: the speaker decides only whether
+#    the access point may start by itself, below.
+if [ "$DEV_STATE" = wlan0:disconnected ] && [ "$DOWN" -ge "$REJOIN_FIRST" ]; then
+    DUE=$(cat "$STATE_DIR/wifi_rejoin_at" 2>/dev/null || echo 0)
+    case "$DUE" in ''|*[!0-9]*) DUE=0 ;; esac
+    if [ "$NOW" -ge "$DUE" ]; then
+        if OUT=$("$BTCTL" wifi-rejoin 2>&1); then
+            rm -f "$STATE_DIR/wifi_disconnected_since" "$STATE_DIR/wifi_rejoin_at" "$STATE_DIR/wifi_rejoin_wait"
+            echo "no Wi-Fi link for ${DOWN}s: asked for the known network by name, and it is back [SPEC-WFO-095]"
+            exit 0
+        fi
+        WAIT=$(cat "$STATE_DIR/wifi_rejoin_wait" 2>/dev/null || echo "$REJOIN_FIRST")
+        case "$WAIT" in ''|*[!0-9]*) WAIT=$REJOIN_FIRST ;; esac
+        NEXT=$((WAIT * 2)); [ "$NEXT" -le "$REJOIN_MAX" ] || NEXT=$REJOIN_MAX
+        printf '%s\n' "$((NOW + WAIT))" > "$STATE_DIR/wifi_rejoin_at"
+        printf '%s\n' "$NEXT" > "$STATE_DIR/wifi_rejoin_wait"
+        echo "no Wi-Fi link for ${DOWN}s: the known network did not answer ($(printf '%s' "$OUT" | tail -n 1)); next try in ${WAIT}s [SPEC-WFO-095]"
+    fi
+fi
+
+# 6. **Unless nobody could ask.** A node with no paired speaker has no key to
+#    press, and no audio sharing the radio either: brought to a new home, or
+#    set up before its first speaker, it would be unreachable short of
+#    rewriting its card. So after NOLINK_AFTER with no link and no paired
+#    speaker -- a paired phone or keyboard has no Left key to press -- the
+#    access point starts by itself, as it always did [SPEC-WFO-090].
+[ -z "$(lempi_speakers Paired)" ] || exit 0
+[ "$DOWN" -ge "$NOLINK_AFTER" ] || exit 0
 # Said out loud: the unit's routine runs are kept out of the journal
 # [PI3-FOUND-760], so this line is the only trace it leaves.
 echo "no Wi-Fi link for $(( NOW - SINCE ))s and no paired speaker to ask with: bringing up the access point [SPEC-WFO-090]"
 "$BTCTL" ap-failover >/dev/null 2>&1 || { echo "the access point did not come up"; exit 1; }
-rm -f "$STATE_DIR/wifi_disconnected_since"
+rm -f "$STATE_DIR/wifi_disconnected_since" "$STATE_DIR/wifi_rejoin_at" "$STATE_DIR/wifi_rejoin_wait"
 exit 0
