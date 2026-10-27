@@ -30,7 +30,7 @@ import java.io.File
  * - an unpacked bundle folder, from the folder picker ([PICK_FOLDER]).
  *
  * Either way the bundle is copied into private staging first -- only
- * `payload.json`, `audio/...` and `covers/...`, and nothing whose name climbs
+ * `payload.json` (or its parts), `audio/...` and `covers/...`, and nothing whose name climbs
  * out of the folder -- and handed to the player library, which verifies every
  * file against Vipunen's byte hash before placing it in `Music/Lempi/`
  * [REQ-AND-210]. Each step first checks there is room for it, and refuses

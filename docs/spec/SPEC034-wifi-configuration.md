@@ -147,7 +147,7 @@ Instead the player's own `axum` server binds a **second**, best-effort
 listener directly on port 80, serving the identical `Router` (cloned) the
 main listener on the configured port already serves, in a second spawned
 task. Binding port 80 needs `CAP_NET_BIND_SERVICE`, since the process
-otherwise runs unprivileged (`User=lempi`, never root) — granted via
+otherwise runs unprivileged (`User=pi`, never root) — granted via
 `setcap 'cap_net_bind_service=+ep'` on the binary itself, not a
 capability the process could otherwise claim on its own. `libcap2-bin`
 (providing `setcap`/`getcap`) was already installed on this appliance;

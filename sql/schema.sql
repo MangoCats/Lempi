@@ -14,11 +14,10 @@ PRAGMA foreign_keys = ON;
 
 -- ============================================================ identity spine
 
--- Encoding scope. audio_md5 is Essentia's md5_encoded: the MD5 of the encoded
--- audio stream with container and tags excluded, so it survives retagging,
--- renaming and moving [SPEC-DF-020]. Computed by `hash_audio` (symphonia)
--- since the 2026-09-27 re-key [SPEC-RLK-152]; before it, by
--- `ffmpeg -i F -vn -c:a copy -f md5 -`. `md5_generator` says which.
+-- Encoding scope. audio_md5 is the MD5 of the encoded audio stream with
+-- container and tags excluded, so it survives retagging, renaming and moving
+-- [SPEC-DF-020]. Computed by `hash_audio` (symphonia) [SPEC-RLK-152];
+-- `md5_generator` names the hasher of each row.
 CREATE TABLE IF NOT EXISTS files (
     file_id      INTEGER PRIMARY KEY,
     audio_md5    TEXT    NOT NULL UNIQUE,
@@ -29,8 +28,8 @@ CREATE TABLE IF NOT EXISTS files (
     duration_ms  INTEGER NOT NULL,
     first_seen   TEXT    NOT NULL,
     last_seen    TEXT    NOT NULL,
-    -- Which hasher produced `audio_md5`, as `name@version` -- `ffmpeg@8.0`,
-    -- `symphonia@0.5.5` since the 2026-09-27 re-key [SPEC-RLK-152], [SPEC-SC-038].
+    -- Which hasher produced `audio_md5`, as `name@version` -- `symphonia@0.5.5`
+    -- [SPEC-RLK-152], [SPEC-SC-038].
     --
     -- `audio_md5` keys four tables and is treated as a stable identity, but it
     -- implements no standard: it is whatever the demuxer that computed it did.

@@ -1,4 +1,4 @@
-# GUIDE030: One Command Line, Seventeen Binaries
+# GUIDE030: One Command Line, Every Binary
 
 **Development Guidance — written 2026-09-20, from `./lempi --help` starting a
 player against a database called `--help`**
@@ -27,8 +27,7 @@ own way, and two of them read an option their own usage text never mentioned.
 
 ## 2. The convention
 
-**`[GDE-CLI-010]` One parser, one table per binary** — seventeen when this was
-written, nineteen on 2026-10-27, pinned to `src/bin/` by
+**`[GDE-CLI-010]` One parser, one table per binary**, pinned to `src/bin/` by
 `every_binary_has_exactly_one_spec`.
 [`player/src/cli.rs`](../player/src/cli.rs) is the only argument-parsing code
 in the repository. A binary contributes a `&[Opt]` and no parsing of its own:

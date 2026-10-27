@@ -19,8 +19,7 @@ Split from [SPEC036](SPEC036-framebuffer-touch-ui.md) on 2026-09-10, which had r
    `player/src/bin/fbui.rs` (feature-gated `fbui`, `bose`/`lempi02w` builds
    never compile it), a `ClientSnapshot` naming only the fields this phase
    draws rather than making the real `Snapshot` `Deserialize` too
-   (`[SPEC-FBUI-015]`'s "zero server-side changes" held in practice, not
-   just on paper). Deployed and run as a real systemd service on
+   (`[SPEC-FBUI-015]`). Deployed and run as a real systemd service on
    `lempiplay3` (`After=lempi.service`), stable, not crash-looping.
    Verified past "it didn't crash" — read `/dev/fb0` back after a render
    and counted actual pixel bytes: 496 pixels matching `LCD_GREEN`'s exact

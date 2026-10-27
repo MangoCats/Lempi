@@ -71,8 +71,9 @@ source — the two paths are read, the database is opened, `with_settings` is
 called, and only then is anything else read. Everything above that line
 resolves through three layers and everything below it through four.
 
-**Sixteen binaries have no layer 2 at all**, and that is expressed by never
-attaching one rather than by sixteen special cases. `Args` simply has no
+**Only `lempi`, `mpd_fill`, `mpd_direct` and `mpd_session` have a layer 2.**
+The other binaries have none, and that is expressed by never attaching one
+rather than by a special case each. `Args` simply has no
 settings until something gives it some.
 
 ---

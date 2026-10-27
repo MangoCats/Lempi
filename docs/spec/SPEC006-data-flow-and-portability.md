@@ -111,7 +111,7 @@ Ship `lempi.db` itself and rebind by `audio_md5` `[SPEC-DF-040]`. This is MuLibP
 1. **Verify before trusting encoding-scope data.** Recompute `audio_md5`; if it disagrees with the embedded value, discard all class C data — it describes a different encode. Cheap and decisive.
 2. **Class A/B may be accepted on `recording_mbid` alone**, since it is encoding-independent by construction.
 3. **Provenance is mandatory** `[GDE-FBD-020]`. Every imported value records its origin — `vipunen@<version>`, `acousticbrainz-dump-20220623`, `imported:<source>`, `manual`.
-4. **Conflict resolution by provenance rank, then recency.** `manual` outranks everything; a newer Vipunen model version outranks an older one; local outranks imported at equal rank. Never silently overwrite a user's correction. *(Amended 2026-09-06 — [SPEC035](SPEC035-mesh-library-sync.md) §6: "local outranks imported at equal rank" presumed only one side could ever be `manual`, true for every topology except Mesh. When **both** sides are `manual` and disagree, this rule does not apply — that case is routed to a person, not decided by either side unilaterally.)*
+4. **Conflict resolution by provenance rank, then recency.** `manual` outranks everything; a newer Vipunen model version outranks an older one; local outranks imported at equal rank. Never silently overwrite a user's correction. When **both** sides are `manual` and disagree — possible only in a mesh — this rule does not apply: that case is routed to a person, not decided by either side ([SPEC035](SPEC035-mesh-library-sync.md) §6).
 5. **Never execute or interpolate imported strings.** Text fields are display data.
 
 ---

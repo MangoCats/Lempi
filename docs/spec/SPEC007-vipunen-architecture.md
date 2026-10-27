@@ -4,7 +4,7 @@
 
 Structure of **Vipunen**, the library builder that turns raw audio into everything `lempi.db` needs. Named for the *Kalevala*'s Antero Vipunen, the ancient giant who had swallowed the world's songs and had to be entered to give them up — a separate being the bard depends on but never contains `[GDE-ARC-010]`.
 
-> **Status.** §§1–5 rest on measured results and are stable. **§6 remains provisional on segmentation**, now specified and partly built — [SPEC024](SPEC024-dao-segmentation-cascade.md)'s four cascade stages (grid search, DP assembly, RMS fallback, extra-track merging) replace the threshold-sweep-only tool that shipped before, but the automatic MusicBrainz edition search that would drive the cascade without a human supplying the expected track count is still deferred (SPEC024 §8), which is why this section stays PROVISIONAL rather than settling. The per-passage extraction question that previously gated it has been **measured and resolved** `[SPEC-SA-090]`. **Amplitude (`[SPEC-SA-075]`) is no longer unbuilt** — `tools/analyze_amplitude.py`, 2026-08-30 — but stays under the same PROVISIONAL heading: a real implementation, not yet independently re-verified against Lempi's own library the way `[SPEC-SA-070]`'s own figures still need to be.
+> **Status.** §§1–5 rest on measured results and are stable. **§6 is provisional on segmentation**: [SPEC024](SPEC024-dao-segmentation-cascade.md)'s four cascade stages (grid search, DP assembly, RMS fallback, extra-track merging) are built, but the automatic MusicBrainz edition search that would drive the cascade without a human supplying the expected track count is not (SPEC024 §8). Per-passage extraction is **measured and resolved** `[SPEC-SA-090]`. **Amplitude (`[SPEC-SA-075]`) is built** — `tools/analyze_amplitude.py` — and stays under the same PROVISIONAL heading because it has not been independently re-verified against Lempi's own library, as `[SPEC-SA-070]`'s figures also need to be.
 
 > **Related:** [GUIDE002 §2](../GUIDE002-rearchitecture-plan.md#2-architectural-decisions) · [GUIDE003](../GUIDE003-feature-extraction-strategy.md) · [SPEC006](SPEC006-data-flow-and-portability.md) · [SPEC024](SPEC024-dao-segmentation-cascade.md) for the segmentation cascade's own contract · inherited [MCR-SPEC033 Album Matching](../inherited/mcrhythm/MCR-SPEC033-album_matching.md) · [MCR-SPEC025 Amplitude Analysis](../inherited/mcrhythm/MCR-SPEC025-amplitude_analysis.md)
 
@@ -12,7 +12,7 @@ Structure of **Vipunen**, the library builder that turns raw audio into everythi
 
 ## 1. Identity and Boundaries
 
-**`[SPEC-SA-010]`** Vipunen is a **separate program**: own licence, own platform envelope, and meant to have its own repository. Today it is `tools/` in this one, relicensed AGPL in place on 2026-08-15 ([`LICENSING.md`](../../LICENSING.md)); the repository split can still follow without changing anyone's terms.
+**`[SPEC-SA-010]`** Vipunen is a **separate program** with its own licence and platform envelope. It lives in `tools/` in this repository, under the AGPL, while the player is MIT ([`LICENSING.md`](../../LICENSING.md)).
 
 | | Value | Forced by |
 | :--- | :--- | :--- |
@@ -21,10 +21,10 @@ Structure of **Vipunen**, the library builder that turns raw audio into everythi
 | Platform | **x86 desktop only** | Essentia extractor has no ARM64 build `[GDE-FEX-137]` |
 | Runs | On demand, never on the appliance | `[GDE-ARC-010]` |
 
-**`[SPEC-SA-015]`** Vipunen and Lempi share **no process and no linked code**. Nothing AGPL enters Lempi. They exchange data over three channels, each a documented payload rather than the other side's code *(revised 2026-10-27; until then this read "only through the shared SQLite file. No RPC", which the code had outgrown)*:
+**`[SPEC-SA-015]`** Vipunen and Lempi share **no process and no linked code**. Nothing AGPL enters Lempi. They exchange data over three channels, each a documented payload rather than the other side's code:
 
 1. **The library pair on disk.** On the hub, Vipunen writes `library.db` and the co-resident player reads it `[SPEC-SUI-012]`.
-2. **The hub to a node.** Star sync's snapshot, rehearsal and commit are signed requests from the hub (`tools/star_sync.py`) to a member player's `/mesh/sync/<op>`, which `player/src/star_node.rs` answers; the player applies its own patch `[SPEC-STAR-100]`, `[SPEC-NSH-020]`. A bundle still goes over ssh, to `import_bundle` `[SPEC-STAR-092]`.
+2. **The hub to a node.** Star sync's snapshot, rehearsal and commit are signed requests from the hub (`tools/star_sync.py`) to a member player's `/mesh/sync/<op>`, which `player/src/star_node.rs` answers; the player applies its own patch `[SPEC-STAR-100]`, `[SPEC-NSH-020]`. A bundle goes over ssh, to `import_bundle` `[SPEC-STAR-092]`.
 3. **A desktop player to its co-resident console**, on a build with `vipunen-support` only. The review page applies its decisions through the player, which relays Vipunen's own `/api/pending/detail`, `/api/apply-reviews` and job progress (`player/src/web/vipunen.rs`) `[REQ-LIB-177]`. The console in turn asks such a player two narrow questions about its build, never about its library `[SPEC-SUI-213]`, `[SPEC-SUI-227]`.
 
 A fourth exchange is a design decision, recorded here — never a convenience.
@@ -67,7 +67,7 @@ Subprocess invocation also keeps the AGPL boundary clean — aggregation rather 
 
 ## 4. Classification (S5) — Settled
 
-*(Corrected 2026-08-30: this section previously described distilled MLP/gradient-boosted models as production classification. That was the working plan while Route 2 below was still being reverse-engineered; it is not what shipped. `tools/extract_library.py` imports `gaia_classify` only — no distilled model is loaded anywhere in the production path. See `[LOG-FEX-065..108]` for how this was established.)*
+`tools/extract_library.py` imports `gaia_classify` only; no distilled model is loaded anywhere in the production path `[LOG-FEX-065..108]`.
 
 **`[SPEC-SA-040]` Classification reproduces AcousticBrainz's own SVM chain, not an approximation of it.** `tools/gaia_classify.py`, built on `tools/gaia_history.py`'s parser for Gaia's serialized `.history` transform chains — the same 18 files AcousticBrainz published alongside its SVM models — runs each chain (`remove → fixlength → enumerate → normalize →` gaussianize, where the chain has one `→ select → cleaner → normalize → svmtrain → select`) against the library's own lowlevel extraction. Verified against AcousticBrainz's own published highlevel values: **maximum error 0.0072 across all 18 classifiers**, three reproducing exactly, the rest consistent with rounding in the published dump rather than any error in the chain `[LOG-FEX-102]`. This is the sole production path for all 71 dimensions — every characteristic is classified the same way, not eleven one way and six another.
 
@@ -127,7 +127,7 @@ Ten recordings were truncated to centred excerpts and each excerpt's flavor comp
 
 **`[SPEC-SA-094]` Still open:** whether *genuinely short recordings* — 12-second interludes, not truncated long songs — yield reliable flavor. That needs short songs as subjects and is a different experiment.
 
-**`[SPEC-SA-110]` Built 2026-08-31: the album/radio duality `[GDE-BMK-030]` on Lempi's own ingest paths, not only the migrated data.** Found live starting from one flagged track with no album cut at all: every passage `[SPEC-SA-070]`/`tools/ingest_folder.py` had ever written on their own was `radio` only — 116 whole-file, 136 DAO-segmented, `inherited:mulib`'s 8,079/8,078 the sole properly-paired case. `tools/ingest_folder.py --kind both` (the new default) writes both per file; `segment_dao.py --commit` (previously a documented stub — "`--commit` is not implemented yet") now does the same per identified track, replacing a file's placeholder passages rather than adding to them; `tools/backfill_album_cuts.py` closes the gap already on disk, mechanically — `analyze_amplitude.py` only ever writes `lead_in_ms`/`lead_out_ms` on `kind='radio'`, never `start_ms`/`end_ms`, so a radio-only passage from either newer path already carries the exact span its album twin needs, no re-detection required. An album cut's `lead_in_ms`/`lead_out_ms`/`gain_db` are `0`/`0`/`0.0` on all three paths, permanently, not `NULL` the way a fresh radio cut's are: its segue points equal its own hard boundaries by definition, and it is never itself the subject of amplitude analysis.
+**`[SPEC-SA-110]` Built 2026-08-31: the album/radio duality `[GDE-BMK-030]` on Lempi's own ingest paths, not only the migrated data.** Found live starting from one flagged track with no album cut at all: every passage `[SPEC-SA-070]`/`tools/ingest_folder.py` had ever written on their own was `radio` only — 116 whole-file, 136 DAO-segmented, `inherited:mulib`'s 8,079/8,078 the sole properly-paired case. `tools/ingest_folder.py --kind both` (the default) writes both per file; `segment_dao.py --commit` does the same per identified track, replacing a file's placeholder passages rather than adding to them; `tools/backfill_album_cuts.py` closes the gap already on disk, mechanically — `analyze_amplitude.py` only ever writes `lead_in_ms`/`lead_out_ms` on `kind='radio'`, never `start_ms`/`end_ms`, so a radio-only passage from either newer path already carries the exact span its album twin needs, no re-detection required. An album cut's `lead_in_ms`/`lead_out_ms`/`gain_db` are `0`/`0`/`0.0` on all three paths, permanently, not `NULL` the way a fresh radio cut's are: its segue points equal its own hard boundaries by definition, and it is never itself the subject of amplitude analysis.
 
 ---
 

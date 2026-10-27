@@ -199,8 +199,8 @@ class MeshActivity : Activity() {
 
     /**
      * [SPEC050]: ask the network segment which hubs a device could join. The
-     * query is broadcast once; each hub answers this phone directly, so no
-     * multicast lock is held [GDE-NDS-130]. A list only -- choosing one fills
+     * query is broadcast, three times under one nonce; each hub answers this
+     * phone directly, so no multicast lock is held [GDE-NDS-130]. A list only -- choosing one fills
      * in its address, and joining still goes through the code comparison.
      */
     private fun lookForHubs(found: LinearLayout, hub: EditText) {

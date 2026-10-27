@@ -134,13 +134,16 @@ with the events named in `[SPEC-APS-050]`. Transport teardown becomes a fact the
 supervisor is told, at the moment it happens.
 
 **Status, against `[SPEC-APS-100]` below: this section is target design, not yet
-the shape of `path.rs`.** Step 1 (done) extracted the supervisor with today's
-subprocess backend behind it and nothing else — `PathHandle`/`PathRequest` and a
+the shape of `path.rs`.** Step 1 is built: `PathHandle`/`PathRequest` and a
 free-function `supervise` loop calling `crate::sink::current()`/`Output`
-directly. None of `PathState`, `PathBackend`, `PathEvent`, `LinkState`,
-`SinkState` or `Tristate` exist in the tree yet, and `audible()` returns a plain
-`bool` rather than the `Tristate` `[SPEC-APS-030]` calls for. They arrive with
-steps 2 and 3, not before.
+directly, with the subprocess backend behind it. The sink side has its
+observer interface: `player/src/sink.rs` defines `Tristate` and a
+`SinkObserver` trait (`Wpctl` on Linux, `Unknown` where nothing can be
+observed) `[GDE-HST-350]`, and `SinkStatus.audible` is a `Tristate`.
+`PathState`, `PathBackend`, `PathEvent`, `LinkState` and `SinkState` do not
+exist, and `PathHandle::audible()` still returns a `bool` — the device's own
+health, not the `Tristate` `[SPEC-APS-030]` calls for. Those arrive with steps
+2 and 3.
 
 ---
 
@@ -151,9 +154,8 @@ risky one lands last with a test harness already under it:
 
 1. **Extract the supervisor** with today's subprocess backend behind it. No
    behaviour change; the win is that one component owns the concern and
-   `Engine` loses its blocking capability. **Done 2026-08-16**, in
-   `player/src/path.rs`: `engine.rs` 1,297 -> 1,140 lines, `SinkWatch` and its
-   thread deleted rather than moved, 215 tests passing.
+   `Engine` loses its blocking capability. **Built**, in
+   `player/src/path.rs`; the engine holds no sink poller of its own.
 2. **Add the trait and the fake.** Write the failure cases that were only ever
    found in the room.
 3. **Port the backend to D-Bus.** Replaces working-if-ugly code, so it goes

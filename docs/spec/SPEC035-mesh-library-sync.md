@@ -10,12 +10,10 @@ against a concrete fourth node: a PC-based Lempi/Vipunen instance (`TeachersLoun
 an Ubuntu laptop) joining a family that already has a desktop, `lempi02w`, and
 `bose`.
 
-> **That node was not a Lempi instance when this was written, and is now half
-> of one** *(corrected 2026-09-22)*. It ran the previous repository until
-> 2026-09-21 `[GDE-NAM-030]`; it now runs Lempi against a verified copy of the
-> same catalogue, audibly, per
+> **That node runs Lempi** against a verified copy of the same catalogue,
+> audibly, per
 > [TL001](../../TeachersLounge/TL001-migration-and-the-silent-output.md) `[TL-MIG-030]`.
-> The Vipunen half this section assumes is still untested
+> The Vipunen half this section assumes is untested
 > there — `tools/console.py` has never been pointed at that machine's
 > database `[TL-OPN-010]` — so read the mesh design below as still resting on
 > a node that has not yet exercised it.

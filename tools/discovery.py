@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Look for Lempi nodes on this network [SPEC050].
 
-A query goes out once, on UDP 13492, to the broadcast address of the local
-segment; each node that answers does so directly to the asker. Nothing
+A query goes out on UDP 13492, to the broadcast address of the local segment,
+and again at `REPEATS` under the same nonce; each node that answers does so
+directly to the asker. Nothing
 connects to anything because it answered: this only lists [SPEC-MTR-330].
 
     python tools/discovery.py candidates      players not in any mesh

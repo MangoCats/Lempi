@@ -60,7 +60,7 @@ Created by Lempi on first write, the same way `id_reviews` is `[SPEC-SC-020]`-ad
 
 **`[SPEC-SUI-201]` `/info` exists because Lempi has no server-side templating.** Every page here is a static shell compiled in with `include_str!` and fetches its own state over a small JSON route once loaded — `/why/:id` and `/review/queue` are the same shape already. There was never a way to bake a passage's boundaries into the `/edit/:passage_id` response itself, so a sibling route carries them instead.
 
-**`[SPEC-SUI-224]` `/edit/:passage_id/audio` decodes through `PassageDecoder` and returns a WAV, scoped to a bounded window, not the raw file.** The original design served the raw file's bytes, `Range`-aware in principle — a first draft, corrected once a real 4-hour DAO capture proved decoding a whole file client-side unusable rather than merely slow. See [LOG004](../LOG004-waveform-editor-build-log.md) `[LOG-WFE-*]` for the full incident account; §4 and §6 below describe the interaction model this route serves, not this history.
+**`[SPEC-SUI-224]` `/edit/:passage_id/audio` decodes through `PassageDecoder` and returns a WAV, scoped to a bounded window, not the raw file.** Decoding a whole file client-side is unusable on a 4-hour DAO capture, not merely slow ([LOG004](../LOG004-waveform-editor-build-log.md) `[LOG-WFE-*]`); §4 and §6 below describe the interaction model this route serves.
 
 **Reached the same way review is.** `?passage=` deep-links `/edit` exactly as it deep-links `/review` `[SPEC-SUI-150]`; the profile page's handoff box gets a second button once this exists, not a second mechanism.
 

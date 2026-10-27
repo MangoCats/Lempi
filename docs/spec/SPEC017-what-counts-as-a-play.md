@@ -56,14 +56,12 @@ threshold — observed, in the MPD observer's first live run. Absent is not zero
 `[GOV-SRC-040]`.
 
 **`[SPEC-PLAY-017]` A passage is judged when it stops sounding, including when
-nothing follows it.** *(Corrected 2026-08-21.)* The engine reads the passage at
-the head of the queue to judge it, so an emptied queue once left it nothing to
-read — and **skipping the last passage of an evening judged nothing at all**. It
-was neither played nor suppressed, and the Director could offer it straight
-back. An empty queue is not "nothing to do": it is the strongest evidence a
-passage has just departed.
-
-Found by playing audio through the engine rather than by reading it.
+nothing follows it.** The engine reads the passage at the head of the queue to
+judge it, and an emptied queue still judges the one that just left — otherwise
+**skipping the last passage of an evening would judge nothing at all**, neither
+play nor rejection, and the Director could offer it straight back. An empty
+queue is not "nothing to do": it is the strongest evidence a passage has just
+departed.
 
 **Measured against what was *heard*.** For the local engine that is audible
 position, net of output buffering — the ring holds seconds of audio, and

@@ -20,8 +20,8 @@ happens at the moment of the exchange.
 ## 1. The exchange
 **`[SPEC-BK-030]` The outgoing backend stops sounding; the incoming one starts.**
 Both may hold a PipeWire stream at once, so the changeover *can* be a crossfade
-rather than a gap — the same `[REQ-AUD-158]` shape a skip already uses, and the
-reason it is available is the first measurement above.
+rather than a gap — the same `[REQ-AUD-158]` shape a skip already uses; the
+measurement that makes it available is [SPEC018](SPEC018-switching-backends.md) `[SPEC-BK-010]`.
 
 `switch_to_over` stops the outgoing side **before** switching — after would
 silence the side just arrived at — and returns `Faded` or `Cut`.
@@ -94,18 +94,15 @@ refuse. What is dropped is dropped from the *queue*, not from the library: the
 passage is as playable as it ever was, and the next thing that names it will
 get it.
 
-**The rule lives in the guest, where the names are** *(corrected 2026-08-22)*.
-An earlier draft described a `switch::adopt_queue` the handoff called on the way
-past; it was written and never wired to anything, because the resolution needs
-the URI → passage map, which belongs to the backend. `MpdBackend::queued_ids`
-now resolves MPD's whole queue — read per poll from `playlistinfo`, already being
+**The rule lives in the guest, where the names are**, because the resolution
+needs the URI → passage map, which belongs to the backend. `MpdBackend::queued_ids`
+resolves MPD's whole queue — read per poll from `playlistinfo`, already being
 called to find departures — through the same `names` map that adopts a person's
-own additions `[SPEC-MPD-115]`. `adopt_queue` is deleted.
+own additions `[SPEC-MPD-115]`.
 
 **Order is part of the rule.** `playlistinfo` returns the queue in the
-listener's order, and that order is what `carry_queue` re-enqueues in. It was
-being read out of a `HashMap` and arrived shuffled, so moving back to Lempi
-rearranged what was coming up — fixed with the same change.
+listener's order, and that order is what `carry_queue` re-enqueues in, so
+moving back to Lempi keeps what is coming up in its order.
 
 > **This asymmetry matches what is asked of it.** Seamlessness is wanted
 > Lempi → MPD and merely desirable MPD → Lempi — the direction that cannot be
@@ -117,12 +114,9 @@ as a skip is.** *(Settled 2026-08-21.)* No new rule, and that is the finding:
 another way for a passage to stop being heard. It is judged once, by the side
 it was sounding on, against what that side observed.
 
-This was written when **the sounding passage did not cross**: what crossed was
-the queue `[SPEC-BK-032]`, and a queue does not include what is already playing.
-It named the price of doing better — "the fix is not to carry it but to hand over
-what was already heard along with it" — and that price has since been paid
-`[SPEC-BK-065]`. The passage now crosses, with its position, and the two-sided
-judgement it warned about is settled below rather than avoided.
+The sounding passage crosses with its position `[SPEC-BK-065]`, and what was
+already heard goes with it, so the two-sided judgement is settled there: one
+side records it, never both.
 
 **`[SPEC-BK-040]` What a listener loses by moving to MPD is stated before they
 move, not discovered after.** `Capabilities::MPD` drops `gain` and `ramps`: per

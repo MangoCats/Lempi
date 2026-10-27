@@ -46,7 +46,11 @@ guard -- a bare IP `Host` (the WAN address a client types) is a valid IP literal
 decision, not something this guard defends; the controls that do are: do not
 forward the port, front it with a reverse proxy that adds auth and rewrites
 `Host`, or (a phone-style) launch key. Cross-site POSTs to the exposed port are
-still refused, and `/mesh/*` stays behind the pairing window `[SPEC-DSC-090]`.
+still refused. A membership change under `/mesh/*` needs the pairing window
+`[SPEC-DSC-090]`; the hub's roster update is authenticated by the pinned mesh
+key instead, and `/mesh/sync/:op`, star sync, by its signature
+`[SPEC-NSH-020]`. On a network the node does not trust
+none of them answers `[SPEC-NSH-180]`.
 
 ---
 

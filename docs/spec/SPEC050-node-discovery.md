@@ -13,8 +13,11 @@ decisions the building made.
 
 ## 1. The wire
 
-**`[SPEC-DSC-010]` One JSON datagram each way.** A query is sent once to the
-segment's broadcast address, port 13492:
+**`[SPEC-DSC-010]` One JSON datagram each way.** A query goes to the
+segment's broadcast address, port 13492, and is sent again at 0.5 s and 1.2 s
+under the same nonce, since Wi-Fi delivers a broadcast to a sleeping radio
+unreliably; answers to one nonce count once (`tools/discovery.py`'s `REPEATS`,
+and the phone's Mesh screen):
 
 ```json
 {"lempi": 1, "q": "candidates" | "hubs", "nonce": "<hex>"}

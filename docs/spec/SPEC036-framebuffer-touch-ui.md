@@ -68,23 +68,26 @@ discipline `[SPEC-DIR-190]`'s decision-recording and `backup.rs`'s
 snapshot already model, applied to the newest, least-proven part of the
 system.
 
-**`[SPEC-FBUI-015]` Talks to `lempi` exactly the way a browser skin
-does, and nothing more:**
+**`[SPEC-FBUI-015]` Talks to `lempi` the way a browser skin does, through
+the routes a browser skin uses:**
 
-- `GET /ws` — the same `Snapshot` struct, the same 500 ms push, already
-  serialized and already tested (`the_snapshot_keeps_the_field_names...`).
-  No new server-side field, no new endpoint.
-- `POST /command/play|pause|skip`, `POST /volume/:db`, `POST /seek/:ms` —
-  the exact routes `control.rs` already serves.
-- `GET /art/:passage_id` — for the one piece of bitmap content this UI
-  might show (§5's open question on whether it's worth the SPI cost).
+- `GET /ws` — the same `Snapshot` struct and 500 ms push every skin reads
+  (`the_snapshot_keeps_the_field_names...`). `eq_preset` in it names the EQ
+  in force for a control that can show a name but not a curve `[SPEC-EQ-085]`.
+- `POST /command/:name`, `/volume/:db`, `/seek/:ms` and `/seek/:id/:ms`,
+  `/program/:id`, `/queue/:qid/sooner|later|remove`, and the Audio page's
+  `/tempo/:t`, `/pitch/:c`, `/loop/a|b/:ms`, `/loop/clear`,
+  `/audio/eq/preset/:name` `[SPEC-FBUI-110]`.
+- `GET /art/:passage_id` — the one piece of bitmap content it shows.
 
-This means **zero changes to `lempi`'s own server code** for this whole
-feature. The new binary is purely a client of an interface that already
-exists, is already tested, and already has other consumers (every browser
-skin) exercising the exact same contract. `tokio-tungstenite` is already a
-dependency of this workspace (axum's `ws` feature pulls it in) and speaks
-both server and client roles — reused, not added.
+It has no route of its own in `lempi`. Two things on the Settings page are
+the appliance's rather than the player's, and fbui asks the host for them
+directly: the pairing button and the access-point button run `sudo -n
+lempi-btctl mesh-pair` and `lempi-btctl ap-request`, the same root helper
+the player uses, and the access-point button reads wlan0's state from
+`nmcli` `[SPEC-FBUI-120]`. `tokio-tungstenite` is already a dependency of
+this workspace (axum's `ws` feature pulls it in) and speaks both server and
+client roles — reused, not added.
 
 **`[SPEC-FBUI-020]` One held `Snapshot`, redrawn on diff, not on tick.**
 The client holds the last received `Snapshot` and compares it to the
