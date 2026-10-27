@@ -22,8 +22,9 @@ object Lempi {
     @JvmStatic
     external fun init(context: Context, logPath: String): String?
 
-    /** The port the service serves the skin on. */
-    const val PORT = 5720
+    /** The port the service serves the skin on: the player's own default,
+     *  read from the library rather than copied here [GDE-CLI-100]. */
+    val PORT: Int = io.github.mangocats.lempi.ffi.defaultPort().toInt()
 
     /** Made by the service at each start [REQ-AND-160]; read by the activity. */
     @Volatile

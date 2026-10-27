@@ -186,6 +186,8 @@ Python module can read a Rust macro: `build/lib-defaults.sh` and
 also fails if any other file under `build/` or `tools/` starts defining it
 again. `tools/console_web/jobs.html` still carries the number in a form
 field; it is a prefilled UI value rather than a default and is left alone.
+The phone needs no mirror: its app asks the library, through the UniFFI
+export `default_port()`, which reads `cli::DEFAULT_PORT`.
 
 To move the port, none of that matters: `--port`, the stored setting, or
 `LEMPI_PORT`. `build/deploy-local.sh` no longer computes the port it expects

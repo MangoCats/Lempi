@@ -70,7 +70,7 @@ pub use lempi_core::{
 #[cfg(feature = "appliance")]
 pub mod avrcp;
 pub mod backup;
-/// One command line, seventeen binaries `[GDE-CLI-010]`. The only argument
+/// One command line, every binary `[GDE-CLI-010]`. The only argument
 /// parser in the repository; each binary contributes a table of options and
 /// no parsing code of its own.
 pub mod cli;

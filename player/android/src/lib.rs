@@ -171,6 +171,13 @@ fn with_player<T>(f: impl FnOnce(&Player) -> T) -> Result<T, LempiError> {
     }
 }
 
+/// The port the app serves its skin on: the player's own default, asked for
+/// rather than written out again in Kotlin `[GDE-CLI-100]`.
+#[uniffi::export]
+pub fn default_port() -> u16 {
+    lempi_player::cli::DEFAULT_PORT.parse().expect("the default port is a number")
+}
+
 /// Start the player, its web server on loopback `port` behind `key`.
 #[uniffi::export]
 pub fn start(listener: String, library: String, port: u16, key: String) -> Result<(), LempiError> {

@@ -55,6 +55,8 @@ class SendActivity : Activity() {
     private lateinit var list: LinearLayout
     private lateinit var log: TextView
     private lateinit var send: Button
+    // `files`, `answers` and `repairs` are read and written on the main
+    // thread only: a worker computes into its own copy and posts it.
     private var files: List<FoundFile> = emptyList()
     private val boxes = mutableListOf<CheckBox>()
     /** By file index: what Vipunen answered, and whether it wants it. */
@@ -91,8 +93,8 @@ class SendActivity : Activity() {
         setContentView(fitBars(ScrollView(this).apply { addView(col) }))
         Thread({
             try {
-                files = foundToSend(File(filesDir, "library.db").path)
-                main.post { showFiles() }
+                val found = foundToSend(File(filesDir, "library.db").path)
+                main.post { files = found; showFiles() }
             } catch (e: Exception) {
                 say("Could not list the phone's music: $e")
             }
@@ -176,10 +178,10 @@ class SendActivity : Activity() {
         if (which.isEmpty()) {
             // Nothing to offer, but Vipunen may still have repairs for files here.
             say("\nAsking Vipunen at $base whether any file here needs repair…")
+            val listed = files
             Thread({
                 try {
-                    askRepairs(base)
-                    if (repairs.isEmpty()) say("None does. Choose files to offer them.")
+                    if (askRepairs(base, listed) == 0) say("None does. Choose files to offer them.")
                 } catch (e: Exception) {
                     say("Could not reach Vipunen: ${e.message ?: e}.")
                 }
@@ -187,6 +189,8 @@ class SendActivity : Activity() {
             return
         }
         say("\nAsking Vipunen at $base about ${which.size} file(s)…")
+        val listed = files
+        val body = description(which).toString().toByteArray()
         Thread({
             try {
                 val c = URL("$base/offer").openConnection() as HttpURLConnection
@@ -197,19 +201,21 @@ class SendActivity : Activity() {
                 c.setRequestProperty("Content-Type", "application/json")
                 c.setRequestProperty("X-Lempi-Key", theKey())
                 c.setRequestProperty("X-Lempi-Sender", "Lempi on ${Build.MODEL}")
-                c.outputStream.use { it.write(description(which).toString().toByteArray()) }
+                c.outputStream.use { it.write(body) }
                 val code = c.responseCode
                 if (code != 200) {
                     say(if (code == 403) "Vipunen refused the key." else "Vipunen answered $code.")
                     return@Thread
                 }
                 val ans = JSONObject(c.inputStream.bufferedReader().readText()).getJSONArray("files")
-                answers.clear()
+                val got = mutableMapOf<Int, Pair<String, Boolean>>()
                 for (k in 0 until ans.length()) {
                     val a = ans.getJSONObject(k)
-                    answers[a.getInt("id")] = a.getString("verdict") to a.getBoolean("want")
+                    got[a.getInt("id")] = a.getString("verdict") to a.getBoolean("want")
                 }
                 main.post {
+                    answers.clear()
+                    answers.putAll(got)
                     for ((i, a) in answers) {
                         val what = when (a.first) {
                             "held" -> "Vipunen has it"
@@ -222,9 +228,9 @@ class SendActivity : Activity() {
                     }
                     refreshSend()
                 }
-                val wanted = answers.values.count { it.second }
+                val wanted = got.values.count { it.second }
                 say("Vipunen wants $wanted of ${which.size}.")
-                askRepairs(base)
+                askRepairs(base, listed)
             } catch (e: Exception) {
                 say("Could not reach Vipunen: ${e.message ?: e}.\nIs its intake running (tools/intake.py), and the address right? " +
                     "Or save to a folder instead.")
@@ -235,11 +241,12 @@ class SendActivity : Activity() {
     private fun sendWanted() {
         val base = base() ?: return
         val which = files.indices.filter { boxes[it].isChecked && answers[it]?.second == true }
+        val listed = files
         send.isEnabled = false
         Thread({
             var sent = 0
             for (i in which) {
-                val f = files[i]
+                val f = listed[i]
                 try {
                     val c = URL("$base/file/${f.sha256}").openConnection() as HttpURLConnection
                     c.requestMethod = "PUT"
@@ -271,20 +278,23 @@ class SendActivity : Activity() {
     /**
      * Which of the phone's files a person at Vipunen found to be damaged
      * copies of files it holds, with the good copy on offer. Asked of every
-     * listed file, chosen or not. On the calling thread.
+     * listed file, chosen or not. On the calling thread, a worker's; the
+     * answer reaches [repairs] on the main thread. Returns how many.
      */
-    private fun askRepairs(base: String) {
+    private fun askRepairs(base: String, listed: List<FoundFile>): Int {
         val c = URL("$base/repairs").openConnection() as HttpURLConnection
         c.connectTimeout = 8000
         c.readTimeout = 30000
         c.setRequestProperty("X-Lempi-Key", theKey())
-        if (c.responseCode != 200) return   // an older intake: no repairs to offer
+        if (c.responseCode != 200) return 0   // an older intake: no repairs to offer
         val offered = JSONObject(c.inputStream.bufferedReader().readText()).getJSONArray("repairs")
         val bySha = (0 until offered.length()).map { offered.getJSONObject(it) }
             .associateBy { it.getString("damaged_sha256") }
-        repairs.clear()
-        files.forEachIndexed { i, f -> bySha[f.sha256]?.let { repairs[i] = it } }
+        val found = mutableMapOf<Int, JSONObject>()
+        listed.forEachIndexed { i, f -> bySha[f.sha256]?.let { found[i] = it } }
         main.post {
+            repairs.clear()
+            repairs.putAll(found)
             for (i in repairs.keys) {
                 boxes[i].text = label(files[i]) + "\n   damaged here; Vipunen has the good copy"
             }
@@ -292,9 +302,10 @@ class SendActivity : Activity() {
             repairButton.isEnabled = true
             repairButton.visibility = if (repairs.isEmpty()) View.GONE else View.VISIBLE
         }
-        if (repairs.isNotEmpty()) {
-            say("${repairs.size} file(s) here are damaged copies of Vipunen's; it offers the good copy of each.")
+        if (found.isNotEmpty()) {
+            say("${found.size} file(s) here are damaged copies of Vipunen's; it offers the good copy of each.")
         }
+        return found.size
     }
 
     /** Fetch each good copy, check it by its byte hash, then ask Android for
@@ -302,10 +313,12 @@ class SendActivity : Activity() {
     private fun fetchGood() {
         val base = base() ?: return
         repairButton.isEnabled = false
+        val todo = repairs.toMap()
+        val listed = files
         Thread({
             val got = mutableListOf<Triple<Int, Uri, File>>()
-            for ((i, r) in repairs) {
-                val f = files[i]
+            for ((i, r) in todo) {
+                val f = listed[i]
                 val good = r.getString("good_sha256")
                 val staged = File(cacheDir, "repair-$good")
                 try {
@@ -339,9 +352,9 @@ class SendActivity : Activity() {
                 main.post { repairButton.isEnabled = true }
                 return@Thread
             }
-            ready = got
             val request = MediaStore.createWriteRequest(contentResolver, got.map { it.second })
             main.post {
+                ready = got
                 say("Fetched and checked ${got.size} good copy(ies). Asking leave to write them over the damaged files…")
                 @Suppress("DEPRECATION")
                 startIntentSenderForResult(request.intentSender, REQ_WRITE, null, 0, 0, 0)
@@ -361,12 +374,23 @@ class SendActivity : Activity() {
             main.post { repairButton.isEnabled = true }
             return
         }
-        val base = base() ?: return
+        // The fetched copies are this call's to delete, whatever happens next.
+        val base = base() ?: run {
+            items.forEach { it.third.delete() }
+            repairButton.isEnabled = true
+            return
+        }
+        val todo = repairs.toMap()
+        val listed = files
         Thread({
             var done = 0
             for ((i, uri, staged) in items) {
-                val f = files[i]
-                val r = repairs[i] ?: continue
+                val f = listed[i]
+                val r = todo[i]
+                if (r == null) {
+                    staged.delete()
+                    continue
+                }
                 try {
                     contentResolver.openOutputStream(uri, "wt")?.use { out -> staged.inputStream().use { it.copyTo(out) } }
                         ?: throw IllegalStateException("could not open it for writing")
@@ -411,14 +435,17 @@ class SendActivity : Activity() {
         if (code == REQ_WRITE) return writeGood(result == RESULT_OK)
         val tree = data?.data
         if (code != REQ_FOLDER || result != RESULT_OK || tree == null) return
-        Thread({ toFolder(tree) }, "lempi-folder").start()
+        // What to write is read here, on the main thread, from the boxes.
+        val which = chosen()
+        val listed = files
+        val offer = description(which)
+        Thread({ toFolder(tree, which, listed, offer) }, "lempi-folder").start()
     }
 
     /** The offer, and the chosen files named by their byte hash, in a new
      *  folder inside the one chosen. */
-    private fun toFolder(tree: Uri) {
+    private fun toFolder(tree: Uri, which: List<Int>, listed: List<FoundFile>, offer: JSONObject) {
         try {
-            val which = chosen()
             val parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
             val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.ROOT).format(Date())
             val dir = DocumentsContract.createDocument(contentResolver, parent,
@@ -429,9 +456,9 @@ class SendActivity : Activity() {
                     ?: throw IllegalStateException("could not create $name")
                 contentResolver.openOutputStream(doc)?.use(body) ?: throw IllegalStateException("could not write $name")
             }
-            write("offer.json", "application/json") { it.write(description(which).toString(2).toByteArray()) }
+            write("offer.json", "application/json") { it.write(offer.toString(2).toByteArray()) }
             for (i in which) {
-                val f = files[i]
+                val f = listed[i]
                 val ext = File(f.path).extension.ifEmpty { "bin" }
                 write("${f.sha256}.$ext", "application/octet-stream") { out -> File(f.path).inputStream().use { it.copyTo(out) } }
                 say("  written: ${label(f)}")

@@ -260,6 +260,13 @@ class PlayerService : MediaLibraryService() {
         return START_NOT_STICKY
     }
 
+    /**
+     * Stop asked for while the start thread is still opening the player: that
+     * thread stops what it started, rather than leaving a player running --
+     * with a wake lock -- in a service that has already gone.
+     */
+    private var stopWanted = false
+
     private fun startPlayer() {
         val files = filesDir
         var err = Lempi.init(applicationContext, File(files, "lempi.log").path)
@@ -281,10 +288,18 @@ class PlayerService : MediaLibraryService() {
             show(notification("Could not start: $err", null))
             return
         }
-        wake = getSystemService(PowerManager::class.java)
-            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "lempi:playback")
-            .also { it.acquire() }
-        Lempi.status = "running"
+        synchronized(this) {
+            if (stopWanted) {
+                try { playerStop() } catch (e: LempiException) { Log.e(TAG, "stop: ${e.message}") }
+                Lempi.status = "stopped"
+                Log.i(TAG, "stopped as it finished starting, as asked")
+                return
+            }
+            wake = getSystemService(PowerManager::class.java)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "lempi:playback")
+                .also { it.acquire() }
+            Lempi.status = "running"
+        }
         registerReceiver(noisy, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
         main.post(refresh)
         // The hub, once per start of the player and whatever the screen is
@@ -308,6 +323,13 @@ class PlayerService : MediaLibraryService() {
 
     private fun stopPlayer() {
         main.removeCallbacks(refresh)
+        synchronized(this) {
+            // Still starting: the start thread stops it as it finishes.
+            if (Lempi.status == "starting") {
+                stopWanted = true
+                return
+            }
+        }
         if (Lempi.status == "running") {
             try { unregisterReceiver(noisy) } catch (e: IllegalArgumentException) { }
             audio.abandonAudioFocusRequest(focusRequest)
