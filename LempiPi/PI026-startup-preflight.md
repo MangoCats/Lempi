@@ -183,7 +183,10 @@ to the whole database that `[IMPL-DBSPLIT-025]` superseded. On `lempi02w` that
 is `/srv/library/library.db`: 1.16 GB, opened read-write on the slowest machine
 in the ecosystem at the one moment it is trying to start, on behalf of nobody.
 
-It is skipped now when **both** halves exist beside it. The rule is one-sided
+It is skipped when **both** halves exist beside it and it is not itself one
+of them: by default `LEMPI_DB` and `LEMPI_LIBRARY_DB` are the same path,
+`/srv/library/library.db`, the live library half, and a path named twice is
+opened once. The rule is one-sided
 by design, because the two mistakes are not equal: recovering a database
 nobody opens wastes a little boot time, while skipping one the player *does*
 open is a crash loop. So the halves' own existence is the test, and an

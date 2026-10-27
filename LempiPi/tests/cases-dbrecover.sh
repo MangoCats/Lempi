@@ -140,6 +140,15 @@ PATH="$REALPATH" sqlite3 "$SPLIT/listener.db" "CREATE TABLE t (x);" >/dev/null
 OUT=$(recover "$SPLIT/whole.db" "$SPLIT/library.db" "$SPLIT/listener.db")
 assert_in "$OUT" "superseded by the split halves" "names the whole database it is skipping"
 
+# The defaults name one file twice: `LEMPI_DB` and `LEMPI_LIBRARY_DB` are both
+# `/srv/library/library.db`. That is the live library half, not a superseded
+# whole, and it is opened -- once. A file that is not a database shows it.
+printf 'not a database either
+' > "$SPLIT/samepath.db"
+OUT=$(recover "$SPLIT/samepath.db" "$SPLIT/samepath.db" "$SPLIT/listener.db")
+assert_not_in "$OUT" "superseded" "does not skip the library half when the whole database's path is its own"
+assert_eq "$(printf '%s\n' "$OUT" | grep -c 'could not open')" "1" "opens a path named twice once"
+
 # And the skip must be confined to the whole database: a broken HALF still has
 # to be reported, or the rule would have silenced the databases that matter.
 printf 'this is not a database at all

@@ -94,8 +94,12 @@ DB="${LEMPI_DB:-/srv/library/library.db}"
 LIB="${LEMPI_LIBRARY_DB:-/srv/library/library.db}"
 LISTENER="${LEMPI_LISTENER_DB:-/var/lempi/listener.db}"
 
+seen=" "
 for db in "$DB" "$LIB" "$LISTENER"; do
     [ -f "$db" ] || continue
+    # One path named twice -- `$DB` and `$LIB` by default -- is opened once.
+    case "$seen" in *" $db "*) continue ;; esac
+    seen="$seen$db "
     # **`[PI-PRE-090]` Once the halves exist, the whole database is a rollback
     # artifact and recovering it is pure cost.** `$DB` is the pre-split file.
     # After `[IMPL-DBSPLIT-025]` the player opens the two halves and never
@@ -116,7 +120,12 @@ for db in "$DB" "$LIB" "$LISTENER"; do
     #
     # Said out loud rather than skipped in silence, because the file is still
     # sitting there taking a gigabyte: the line stops the day it is deleted.
-    if [ "$db" = "$DB" ] && [ -f "$LIB" ] && [ -f "$LISTENER" ]; then
+    #
+    # Only when `$DB` is a different file. By default it and `$LIB` are the
+    # same path, `/srv/library/library.db`, the library half's, and a test on
+    # the name alone skipped the live library half, on every node, as
+    # superseded by itself.
+    if [ "$db" = "$DB" ] && [ "$DB" != "$LIB" ] && [ -f "$LIB" ] && [ -f "$LISTENER" ]; then
         echo "lempi-db-recover: not recovering $db, superseded by the split halves"
         continue
     fi
