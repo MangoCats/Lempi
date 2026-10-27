@@ -592,3 +592,36 @@ printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
 OUT=$(keeper)
 assert_in "$OUT" "no longer settled (the listener's choice changed)" "a new choice ends the quiet"
 teardown
+
+# --- a transfer holding the shared radio stands the keeper down [PI3-AIM-176]
+# lempi02w, 2026-10-26: the Boom 2 off mid-export, and the keeper paging it
+# and two others on the radio the export needed.
+setup
+speaker "$OONTZ" "OontZ_Angle 3 U412" no yes
+speaker "$MIDDL" "MIDDLETON" no no
+printf '%s\n' "$OONTZ" > "$VT_STATE/db_speaker"
+sinks "Dummy Output"
+touch "$VT_STATE/transfer_held"
+OUT=$(keeper)
+assert_in "$OUT" "a transfer holds the shared radio" "says it stands down"
+assert_not_called "bluetoothctl connect" "and pages nothing while the hold has the radio"
+OUT=$(keeper)
+assert_not_in "$OUT" "a transfer holds" "said once, not every tick"
+rm -f "$VT_STATE/transfer_held"
+printf '%s\n' "$OONTZ" > "$VT_STATE/reachable"
+OUT=$(keeper)
+assert_in "$OUT" "hold has ended" "says it is back"
+assert_called "bluetoothctl connect $OONTZ" "and chases the speaker again once the hold ends"
+teardown
+
+# A settled speaker stays settled across a hold: the hold releases the
+# output, which must not read as the stream moving.
+setup
+holding 130
+printf '%s\nMIDDLETON\n' "$MIDDL" > "$LEMPI_RUN_DIR/settled"
+printf 'Dummy Output\n' > "$VT_STATE/routed"
+touch "$VT_STATE/transfer_held"
+OUT=$(keeper)
+assert_not_in "$OUT" "no longer settled" "a released output under a hold does not unsettle"
+assert_eq "$([ -e "$LEMPI_RUN_DIR/settled" ] && echo kept || echo gone)" "kept" "and the settled mark is kept"
+teardown

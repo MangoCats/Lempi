@@ -53,10 +53,11 @@ sys.path.insert(0, HERE)
 from lempi_control import LEMPI_DEFAULT_PORT as PORT  # noqa: E402
 import transfer_hold  # noqa: E402  -- a shared radio frees itself for the copy [PI3-AIM-170]
 
-# The slowest a copy is allowed for, in bytes a second, when the hold says how
-# long it may last: lempi02w's Wi-Fi is the fleet's weakest. A copy that runs
-# past it is not stopped; the player takes its speaker back and plays on.
-HOLD_FLOOR_BPS = 250_000
+# A hold's own life, renewed for as long as the copy runs [PI3-AIM-177]. It
+# bounds only how long the music stays paused if this process dies mid-copy;
+# it used to be sized from the copy at an assumed slowest rate, and an export
+# to lempi02w on 2026-10-26 ran past the player's one-hour cap anyway.
+HOLD_SECS = 600
 
 
 def say(msg: str) -> None:
@@ -364,7 +365,7 @@ def inside(host: str, bundle: str, library: str, audio_root: str, where: str) ->
         # On a shared radio the player pauses and lets its speaker go for the
         # copy, and takes it back after [PI3-AIM-175]; elsewhere it is left
         # playing. Released on a stop or a failure too.
-        with transfer_hold.held_ssh(host, say=say, seconds=min(3600, 120 + size // HOLD_FLOOR_BPS)):
+        with transfer_hold.held_ssh(host, say=say, seconds=HOLD_SECS, renew=True):
             try:
                 rc, out = ssh_stream(host, f"mkdir -p {shlex.quote(audio_root)} && "
                                            f"tar -xf - -C {shlex.quote(audio_root)} --no-same-owner",

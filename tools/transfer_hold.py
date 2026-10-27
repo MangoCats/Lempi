@@ -20,6 +20,7 @@ import contextlib
 import json
 import shlex
 import subprocess
+import threading
 import urllib.error
 import urllib.request
 
@@ -55,8 +56,51 @@ def _ssh_post(host, path):
     return _json(r.stdout.strip())
 
 
+# The shortest gap between renewals, in seconds, whatever life the player
+# grants a hold: one a few seconds long is not renewed in a busy loop.
+RENEW_FLOOR = 30
+
+
+class _Renewal:
+    """`[PI3-AIM-177]` A hold kept as long as its transfer, however long.
+
+    The player caps a hold at an hour, and an export to lempi02w on
+    2026-10-26 outlived it: at 19:44:59 the hold expired mid-copy and the
+    player played on, its speaker back and its scrub waiting again. So every
+    half of the hold's life a fresh hold is taken and the previous one
+    released. Overlapping, the fresh one undoes nothing and pauses nothing --
+    only a set's first hold pauses, and only its last release resumes -- so
+    the music stays as the first hold left it. If this process dies, the last
+    hold still ends by itself within one lifetime."""
+
+    def __init__(self, post, seconds, hid, life):
+        self.post, self.seconds = post, seconds
+        self.hid, self.paused = hid, False
+        self.every = max(RENEW_FLOOR, float(life or 0) / 2)
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self.run, daemon=True)
+
+    def run(self):
+        while not self.stop.wait(self.every):
+            got = self.post("/transfer/hold" + (f"?seconds={self.seconds}" if self.seconds else "")) or {}
+            new = got.get("id")
+            if new is None:
+                continue  # not answered this time; the hold in force has half its life left
+            # A hold taken after the last had ended -- an answer delayed past
+            # its life, or a restarted player -- is a first one, and may pause.
+            self.paused |= bool(got.get("paused"))
+            old, self.hid = self.hid, new
+            self.post(f"/transfer/release/{old}")
+
+    def end(self):
+        # Past a renewal's two posts at their 20 s each, so the last release
+        # names the hold in force, not one a renewal is replacing.
+        self.stop.set()
+        self.thread.join(timeout=60)
+
+
 @contextlib.contextmanager
-def _held(post, who, say, seconds=None):
+def _held(post, who, say, seconds=None, renew=False):
     # Left out, the player's own default applies (`DEFAULT_SECS`,
     # player/src/web/transfer.rs); a caller that knows its bound passes it.
     got = post("/transfer/hold" + (f"?seconds={seconds}" if seconds else "")) or {}
@@ -70,9 +114,17 @@ def _held(post, who, say, seconds=None):
             + (" and released its speaker [PI3-AIM-175]" if quiet else " [PI3-AIM-170]"))
     elif quiet:
         say(f"  transfer: {who} was paused; released its speaker for this transfer [PI3-AIM-175]")
+    renewal = None
+    if renew and hid is not None:
+        renewal = _Renewal(post, seconds, hid, got.get("seconds"))
+        renewal.thread.start()
     try:
         yield got
     finally:
+        if renewal is not None:
+            renewal.end()
+            hid = renewal.hid
+            paused = paused or renewal.paused
         if hid is not None:
             done = post(f"/transfer/release/{hid}") or {}
             if done.get("resumed"):
@@ -83,11 +135,13 @@ def _held(post, who, say, seconds=None):
                 say(f"  transfer: {who}'s player had forgotten the hold; asked it to play")
 
 
-def held(address, port=LEMPI_DEFAULT_PORT, say=print, seconds=None):
-    """A hold asked of the player at `address`:`port`, over its web port."""
-    return _held(lambda path: _http_post(f"http://{address}:{port}{path}"), address, say, seconds)
+def held(address, port=LEMPI_DEFAULT_PORT, say=print, seconds=None, renew=False):
+    """A hold asked of the player at `address`:`port`, over its web port.
+    `renew` keeps it for as long as the block runs `[PI3-AIM-177]`."""
+    return _held(lambda path: _http_post(f"http://{address}:{port}{path}"), address, say, seconds, renew)
 
 
-def held_ssh(host, say=print, seconds=None):
-    """A hold asked over ssh of `host`'s player, on its loopback port."""
-    return _held(lambda path: _ssh_post(host, path), host, say, seconds)
+def held_ssh(host, say=print, seconds=None, renew=False):
+    """A hold asked over ssh of `host`'s player, on its loopback port.
+    `renew` keeps it for as long as the block runs `[PI3-AIM-177]`."""
+    return _held(lambda path: _ssh_post(host, path), host, say, seconds, renew)

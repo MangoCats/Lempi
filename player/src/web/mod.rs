@@ -552,6 +552,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/audio/eq/preset/:name", post(set_eq_preset))
         .route("/command/:name", post(command))
         // A bulk transfer holds the playback on a shared radio [PI3-AIM-170].
+        .route("/transfer", get(transfer::state))
         .route("/transfer/hold", post(transfer::hold))
         .route("/transfer/release/:id", post(transfer::release))
         .route("/volume/:db", post(set_volume))

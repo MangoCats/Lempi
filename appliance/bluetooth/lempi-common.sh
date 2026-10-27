@@ -133,6 +133,14 @@ lempi_playing() {
         grep -q '"playing":true'
 }
 
+# Is a bulk transfer holding this node's shared radio `[PI3-AIM-176]`? A player
+# that cannot be asked, or a build older than `GET /transfer`, holds nothing,
+# so the keeper keeps the speaker as it always has.
+lempi_transfer_held() {
+    curl -s -m 5 "http://localhost:${LEMPI_PORT:-5720}/transfer" 2>/dev/null |
+        grep -q '"shared_radio_held":true'
+}
+
 # Ask the player to reopen its output. The stream does not dependably follow a
 # change of default sink `[PI3-WHY-020]`, so it is told explicitly.
 lempi_reopen() {

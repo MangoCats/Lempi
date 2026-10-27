@@ -14,6 +14,7 @@ A fake player answers here, so no node is needed.
 
 import os
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -82,6 +83,48 @@ p = Player(paused=False)
 said = run(p)
 check(any("released its speaker" in s for s in said), "a paused node's released speaker is said")
 check("/command/play" not in p.asked, "and nothing is started")
+
+# [PI3-AIM-177]: renewed for as long as the transfer runs. A fake player that
+# numbers its holds and remembers which are in force, as the real one does.
+class Renewing:
+    def __init__(self):
+        self.next, self.live, self.asked = 0, set(), []
+
+    def post(self, path):
+        self.asked.append(path)
+        if path.startswith("/transfer/hold"):
+            self.next += 1
+            first = not self.live
+            self.live.add(self.next)
+            return {"id": self.next, "paused": first, "quiet": first, "seconds": 0.2}
+        if path.startswith("/transfer/release/"):
+            hid = int(path.rsplit("/", 1)[1])
+            known = hid in self.live
+            self.live.discard(hid)
+            return {"released": known, "resumed": known and not self.live}
+        return {}
+
+
+saved_floor = transfer_hold.RENEW_FLOOR
+transfer_hold.RENEW_FLOOR = 0.05
+try:
+    p, said = Renewing(), []
+    with transfer_hold._held(p.post, "node", said.append, seconds=600, renew=True):
+        time.sleep(0.5)
+    holds = [a for a in p.asked if a.startswith("/transfer/hold")]
+    check(len(holds) >= 3, f"renewed while the transfer ran: {p.asked}")
+    check(all(a == "/transfer/hold?seconds=600" for a in holds), "each renewal asks the same life")
+    check(not p.live, f"every hold released by the end, the renewals' included: {p.live}")
+    check(p.asked[-1] == f"/transfer/release/{p.next}", "the last release names the hold in force")
+    check(any("resumed" in s for s in said) and "/command/play" not in p.asked,
+          "the last release resumes, once, and no play is needed")
+
+    p, said = Renewing(), []
+    with transfer_hold._held(p.post, "node", said.append, seconds=600):
+        time.sleep(0.3)
+    check(len([a for a in p.asked if a.startswith("/transfer/hold")]) == 1, "without renew, one hold only")
+finally:
+    transfer_hold.RENEW_FLOOR = saved_floor
 
 p = Player(paused=False, answers=False)
 said = run(p)

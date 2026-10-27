@@ -178,6 +178,14 @@ pub(super) async fn hold(State(ui): State<Ui>, Query(q): Query<HashMap<String, S
         .into_response()
 }
 
+/// `GET /transfer`: whether a hold is in force, and whether one holds the
+/// shared radio -- what the speaker keeper stands down for `[PI3-AIM-176]`.
+/// Off a shared radio a hold leaves the radio alone, and so does the keeper.
+pub(super) async fn state() -> Response {
+    let h = holds().lock().unwrap_or_else(|e| e.into_inner());
+    axum::Json(json!({ "in_force": !h.live.is_empty(), "shared_radio_held": h.quiet })).into_response()
+}
+
 /// `POST /transfer/release/<id>`.
 pub(super) async fn release(State(ui): State<Ui>, Path(id): Path<u64>) -> Response {
     match end(&ui.handle, id, "released") {

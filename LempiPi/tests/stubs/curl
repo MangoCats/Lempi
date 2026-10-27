@@ -2,6 +2,9 @@
 printf '%s\n' "curl $*" >> "$VT_STATE/calls"
 case "$*" in
     *reopen-output*) exit 0 ;;
+    # A hold has the shared radio only when the fixture says so [PI3-AIM-176].
+    */transfer)      h=false; [ -f "$VT_STATE/transfer_held" ] && h=true
+                     printf '{"in_force":%s,"shared_radio_held":%s}\n' "$h" "$h" ;;
     # `playing` is true only when the fixture says so [PI3-AIM-130].
     *audio/sink*)    p=false; [ -f "$VT_STATE/playing" ] && p=true
                      printf '{"sink":"%s","dummy":false,"known":true,"playing":%s}\n' \

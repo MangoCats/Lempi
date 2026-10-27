@@ -14,7 +14,8 @@ measurement made for it.
 > the redial in packets · [PI016](PI016-the-redial.md) for why the redial was
 > removed · [LP3002](../LempiPlay3/LP3002-power-and-the-bluetooth-glitches.md)
 > for lp3-wifi's radio · [SPEC061](../docs/spec/SPEC061-travel-wifi-failover.md)
-> for the access point
+> for the access point · [PI032](PI032-transfers-on-the-shared-radio.md) for
+> transfers
 
 ---
 
@@ -175,37 +176,12 @@ so once.
 
 ## 7. Transfers pause the music
 
-**`[PI3-AIM-170]` A bulk transfer to a shared-radio node holds its playback.**
-Every byte over Wi-Fi is airtime the speaker's audio does not get, and a
-690 MB export under Bluetooth playback froze the Wi-Fi chip twice
-`[PI3-FOUND-830]`. The sender asks `POST /transfer/hold` first and
-`/transfer/release/<id>` after. The player pauses only if its radio is shared
--- its output a Bluetooth speaker, `radio_shared` in `transfer.rs`; a node
-that cannot tell is not paused, after `bose` was, for every upload of its
-2026-10-25 deploy -- and it is playing; the last
-release plays again, unless the listener already did; a hold never released
-ends on its own. Held: the player, fbui and `import_bundle` uploads
-(`build/lib-defaults.sh`), the star sync's catalogue parts,
-`star_distribute`'s uploads and, since 2026-10-26, the Export page's Send --
-`send_bundle.py`'s audio copy, which had held nothing (`tools/transfer_hold.py`). A player that restarts
-under a hold forgets it, so the release then asks it to play. The integrity
-check gives way the other way round: it waits for the music to pause, and
-never pauses it `[GDE-INT-137]`; both ask `player/src/radio.rs`. How long a hold
-lasts, who may ask for one and what that exposes are written once, in
-`player/src/web/transfer.rs`.
-
-**`[PI3-AIM-175]` The pause alone freed nothing, so a hold also lets the
-speaker go.** Paused, the player feeds the device silence so the link
-survives `[PI3-OPEN-020]`, and an SBC packet of silence is the size of one of
-music: §9's cuts ran on through a pause. Since 2026-10-26 the first hold on a
-shared radio also releases the output, playing or already paused, and
-PipeWire suspends the sink; the last takes it back, paused or not, so a long
-pause afterwards still holds the link. Pressing play mid-transfer reopens it,
-as the listener's choice. Measured on lempi02w with the Boom 2, `7ce4499`:
-596 packets in 8 s playing, 603 paused, **0 in 10 s held** either way; the
-speaker stayed connected, and the stream was back within 5 s of the
-release. Not yet measured: how much faster an export runs, and whether a
-long hold's idle sink lets a speaker switch itself off.
+Moved to [PI032](PI032-transfers-on-the-shared-radio.md) on 2026-10-26, when this
+record reached its 300-line limit: the transfer hold `[PI3-AIM-170]`, the
+speaker let go under it `[PI3-AIM-175]`, the keeper standing down
+`[PI3-AIM-176]`, and a hold renewed for a long transfer `[PI3-AIM-177]`.
+The integrity check gives way the other way round: it waits for the music
+to pause, and never pauses it `[GDE-INT-137]`; both ask `player/src/radio.rs`.
 
 ## 8. The access point on request, and what the LED says
 

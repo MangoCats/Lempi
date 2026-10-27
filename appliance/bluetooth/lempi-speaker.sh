@@ -91,6 +91,28 @@ fi
 INCUMBENT_DIR="${LEMPI_RUN_DIR:-/run/lempi}"
 SETTLED="$INCUMBENT_DIR/settled"
 
+# **`[PI3-AIM-176]` A transfer holding the shared radio stands the keeper
+# down.** lempi02w, 2026-10-26: the Boom 2 was switched off mid-export, and
+# from 18:50 the keeper paged it and two other known speakers -- about 18 s a
+# round, every tick and then every three minutes -- on the radio the export's
+# Wi-Fi shares, which is what the hold exists to keep clear `[PI3-AIM-175]`.
+# So while a hold has the radio, a tick does nothing at all: no paging, no
+# moving the stream. Said once at each end. Before the quiet tick, because the
+# hold releases the player's output, which would read as the stream moving
+# and unsettle a speaker that has not changed.
+HELD_SAID="$INCUMBENT_DIR/keeper-held"
+if lempi_transfer_held; then
+    if [ ! -e "$HELD_SAID" ]; then
+        echo "a transfer holds the shared radio: paging and moving nothing until it ends [PI3-AIM-176]"
+        mkdir -p "$INCUMBENT_DIR" 2>/dev/null && : > "$HELD_SAID" 2>/dev/null
+    fi
+    exit 0
+fi
+if [ -e "$HELD_SAID" ]; then
+    rm -f "$HELD_SAID" 2>/dev/null
+    echo "the transfer's hold has ended: keeping the speaker again [PI3-AIM-176]"
+fi
+
 # **`[PI3-AIM-140]` Settled, then quiet.** Decided by the maintainer
 # 2026-10-25 [PI031](../../LempiPi/PI031-settling-the-shared-radio.md): once a
 # speaker has held the audio for two minutes and been judged steady

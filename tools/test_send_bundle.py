@@ -28,10 +28,10 @@ HOLDS = []
 
 
 @contextlib.contextmanager
-def held(host, say=print, seconds=None):
+def held(host, say=print, seconds=None, renew=False):
     """No player answers here; what is checked is that the copy asks
     `[PI3-AIM-175]`. Replaced for every test, so none reaches a real host."""
-    HOLDS.append((host, seconds))
+    HOLDS.append((host, seconds, renew))
     yield {}
 
 
@@ -224,8 +224,8 @@ def main() -> int:
         f = Fake()
         HOLDS.clear()
         rc, reloads = run([b, "pi@speaker-a", "--apply"], f)
-        check(HOLDS == [("pi@speaker-a", 120)],
-              f"the copy holds the speaker's playback, for at least two minutes [PI3-AIM-175]: {HOLDS}")
+        check(HOLDS == [("pi@speaker-a", sb.HOLD_SECS, True)],
+              f"the copy holds the speaker's playback, renewed for as long as it runs [PI3-AIM-177]: {HOLDS}")
         cmds = [c for c, _ in f.calls]
         audio = next(i for i, c in enumerate(cmds) if c.startswith("mkdir -p /srv/library/audio"))
         imp = next(i for i, c in enumerate(cmds) if c.startswith("import_bundle"))
