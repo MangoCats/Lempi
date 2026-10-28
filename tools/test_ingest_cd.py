@@ -221,6 +221,64 @@ def test_hidden_passages():
         c.close()
 
 
+def test_folded_passage():
+    """[SPEC-RIP-092]: a hidden intro ticked to be joined to the track it leads
+    into is one more radio passage, from the intro's start to the track's end,
+    carrying both recordings by their share -- beside the intro's own pair and
+    the track's, which stay as they were. No album passage, and nothing joined
+    that was not asked for."""
+    print("commit_rip: a hidden intro joined to its track")
+    tmpdir = tempfile.mkdtemp()
+    mp3_path = os.path.join(tmpdir, "dao.mp3")
+    with open(mp3_path, "wb") as f:
+        f.write(b"\0" * 128)
+    tracks = [cd_toc.TocTrack(number=1, start_ms=5000, end_ms=60000, start_sector=0, end_sector=0),
+              cd_toc.TocTrack(number=2, start_ms=70000, end_ms=180000, start_sector=0, end_sector=0),
+              cd_toc.TocTrack(number=3, start_ms=180000, end_ms=240000, start_sector=0, end_sector=0)]
+    toc = cd_toc.DiscToc(tracks=tracks, leadout_sector=0, source="eac-cue")
+    hidden = [{"where": "pregap", "start_ms": 0, "end_ms": 5000, "title": "Intro", "mbid": "rec-pregap",
+               "leads_into": 1},
+              {"where": "gap", "start_ms": 60000, "end_ms": 70000, "leads_into": 2,
+               "title": "Hidden audio, between tracks 1 and 2"}]
+    c = fixture()
+    try:
+        r = ingest_cd.commit_rip(c, "/rip", toc, mp3_path, MD5, "exact", [_three_track_release()], None, None,
+                                 chosen=True, hidden=hidden, fold=(0,))
+        radio = [tuple(x) for x in c.execute(
+            "SELECT start_ms, end_ms FROM passages WHERE kind = 'radio' ORDER BY start_ms, end_ms")]
+        check(radio == [(0, 5000), (0, 60000), (5000, 60000), (60000, 70000), (70000, 180000), (180000, 240000)],
+              f"the intro, the intro with track 1, track 1, the gap, tracks 2 and 3: {radio}")
+        check(c.execute("SELECT COUNT(*) FROM passages WHERE kind = 'album'").fetchone()[0] == 5,
+              "an album passage for each piece, and none for the join")
+        w = {m: wt for m, wt in c.execute(
+            "SELECT pr.mbid, pr.weight FROM passage_recordings pr JOIN passages p ON p.passage_id = pr.passage_id "
+            "WHERE p.kind = 'radio' AND p.start_ms = 0 AND p.end_ms = 60000")}
+        check(w == {"rec-pregap": round(5 / 60, 4), "rec-t1": round(55 / 60, 4)},
+              f"both recordings, by their share, so it is named by track 1: {w}")
+        check(r["folded"] == [{"start_ms": 0, "end_ms": 60000, "title": "Intro", "track": 1}],
+              f"said in the result: {r['folded']}")
+        check(c.execute("SELECT COUNT(*) FROM ingest_decisions WHERE outcome = 'hidden_folded'").fetchone()[0] == 1,
+              "and in the decisions")
+    finally:
+        c.close()
+    # A join naming no span that leads into a track is refused, never dropped:
+    # a start nothing hidden has, a hidden track after the last, or One piece.
+    for fold, hid, whole in (((12345,), hidden, False),
+                             ((280000,), [{"where": "postgap", "start_ms": 280000, "end_ms": 300000,
+                                           "trims": 200000, "title": "Hidden track"}], False),
+                             ((0,), hidden, True)):
+        c = fixture()
+        try:
+            ingest_cd.commit_rip(c, "/rip", toc, mp3_path, MD5, "exact", [_three_track_release()], None, None,
+                                 chosen=True, hidden=hid, fold=fold, whole_disc=whole)
+            check(False, f"a join of {fold} (whole disc {whole}) must be refused")
+        except ValueError:
+            check(c.execute("SELECT COUNT(*) FROM passages").fetchone()[0] == 0,
+                  f"refused before anything is written: {fold}")
+        finally:
+            c.close()
+
+
 def test_find_hidden():
     """[SPEC-RIP-090], with a real WAV and ffmpeg: audio before track 1, in a
     gap, and after a long silence at the end is found, measured; silence and
@@ -254,6 +312,10 @@ def test_find_hidden():
               f"the pregap, by MusicBrainz's name: {p}")
         check((g["start_ms"], g["end_ms"]) == (41000, 45000) and "between tracks 1 and 2" in g["title"],
               f"the gap, by where it is: {g}")
+        # [SPEC-RIP-092]: what each may be joined to -- the track it runs
+        # into; a hidden track after the last runs into nothing.
+        check((p.get("leads_into"), g.get("leads_into"), t.get("leads_into")) == (1, 2, None),
+              f"the pregap leads into track 1, the gap into track 2, the hidden track into nothing: {got}")
         check(near(t["start_ms"], 90000) and t["end_ms"] == 96000 and near(t["trims"], 80000)
               and t["title"] == "Hidden track, after track 2 ('Two')", f"the hidden track after the silence: {t}")
     # Silence where a pregap is, and a gap too short to count, are nothing.
@@ -1047,6 +1109,7 @@ def main() -> int:
     test_disc_in_the_names()
     test_whole_disc()
     test_hidden_passages()
+    test_folded_passage()
     test_find_hidden()
     test_second_disc_end_to_end()
     # `commit_rip` stats the encoded file for the `files` row -- a real,

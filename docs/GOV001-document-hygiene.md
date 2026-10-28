@@ -212,7 +212,7 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-RIP-010..056]`, `[SPEC-RIP-070..080]` | CD ripping via a disc's own TOC: exact boundaries instead of inferring them — built, single-disc case, person-assisted | [SPEC025-cd-ripping.md](spec/SPEC025-cd-ripping.md) |
 | `[SPEC-RIP-060..074]` | CD ripping: Disc ID, CD-TEXT and MusicBrainz identification — built | [SPEC028-cd-ripping-identification.md](spec/SPEC028-cd-ripping-identification.md) |
 | `[SPEC-RIP-082..089]` | CD ripping: how Vipunen drives a GUI-only Windows ripper — decided (person-assisted), built | [SPEC027-cd-ripping-windows-automation.md](spec/SPEC027-cd-ripping-windows-automation.md) |
-| `[SPEC-RIP-090..106]` | CD ripping: passage representation for hidden/pregap audio and multi-disc sets — designed, not yet built | [SPEC026-cd-ripping-passages.md](spec/SPEC026-cd-ripping-passages.md) |
+| `[SPEC-RIP-090..118]` | CD ripping: passage representation for hidden/pregap audio and multi-disc sets — built for image rips | [SPEC026-cd-ripping-passages.md](spec/SPEC026-cd-ripping-passages.md) |
 | `[SPEC-PREF-010..098]` | Editing an artist's or a recording's own rotation/recovery/restraint, and a recording's "special" tags — built | [SPEC029-listener-preference-editing.md](spec/SPEC029-listener-preference-editing.md) |
 | `[SPEC-PREF-100..150]` | Syncing listener preferences and specials between installations, last-write-wins — built | [SPEC030-preference-sync.md](spec/SPEC030-preference-sync.md) |
 | `[SPEC-DSC-*]` | Node discovery as built: the wire, who answers what, one responder per machine | [SPEC050-node-discovery.md](spec/SPEC050-node-discovery.md) |

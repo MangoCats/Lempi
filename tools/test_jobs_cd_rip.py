@@ -163,6 +163,13 @@ def test_choices_and_preview(tmp: str) -> None:
             {"folder": "C:/rips/x", "into": "C:/Music/A/B", "duplicate_ok": asked})))
         argv = next(a for s, a in reversed(seen) if s == "ingest")
         check(("--allow-duplicate" in argv) is want, f"duplicate_ok={asked!r}: {argv}")
+    # [SPEC-RIP-092]: each hidden span ticked to be joined, by its start --
+    # whole numbers only, so nothing else becomes an argument.
+    wait_for(runner, runner.submit("cd-rip", json.dumps(
+        {"folder": "C:/rips/x", "into": "C:/Music/A/B", "fold": [0, 41000, "--rm", True, 1.5]})))
+    argv = next(a for s, a in reversed(seen) if s == "ingest")
+    check([argv[i + 1] for i, a in enumerate(argv) if a == "--fold"] == ["0", "41000"] and "--rm" not in argv,
+          f"the two starts, and only they: {argv}")
     j = wait_for(runner, runner.submit("cd-preview", json.dumps({"folder": "C:/rips/x"})))
     stage, argv = seen[-1]
     check(stage == "preview" and "--commit" not in argv and "--json" in argv, f"a preview, got {argv}")

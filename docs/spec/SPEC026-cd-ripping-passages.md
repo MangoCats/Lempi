@@ -1,6 +1,6 @@
 # SPEC026: CD Ripping — Passage Representation for Hidden Audio and Multi-Disc Sets
 
-**Design Specification — Tier 2 · built for image rips, but for §1's folded-in passage**
+**Design Specification — Tier 2 · built for image rips**
 
 Two cases where a rip is not simply one passage per TOC track: real audio
 hidden in a pregap or at `INDEX 00`, and a box set ripped disc-by-disc.
@@ -22,9 +22,10 @@ squarely part of what a box set is, not a separate topic.
 > the banner of `[SPEC-RIP-112]`). A disc that is one piece is one passage pair, on a
 > person's tick (`[SPEC-RIP-114]`). Hidden audio is found and made its own
 > passages (`[SPEC-RIP-090]`, as `[SPEC-RIP-116]` measures it), for an image
-> rip. Not built: the folded-in passage of `[SPEC-RIP-092]`; hidden audio in
-> a tracks-mode rip, where a gap stays inside a track's own file and is
-> played with it, not lost.
+> rip, and one that leads into a track is joined to it on a person's tick
+> (`[SPEC-RIP-092]`, since 2026-10-27). Not built: hidden audio in a
+> tracks-mode rip, where a gap stays inside a track's own file and is played
+> with it, not lost.
 
 > **Related:** [SPEC025](SPEC025-cd-ripping.md) for the ripping mechanics
 > this extends · [SPEC028](SPEC028-cd-ripping-identification.md) for the
@@ -61,6 +62,21 @@ evidently intended when skipping straight to the visible track would clip
 a deliberate segue. Both, either, or neither may exist for a given hidden
 span — nothing requires the second passage to be created.
 
+What is built, 2026-10-27. A span that runs straight into a track — a
+pregap into track 1, a gap into the track after it — may be joined to that
+track; a hidden track after the last one's silence leads into nothing and is
+not offered. The join is **one radio passage**, from the span's start to the
+track's end. It carries both recordings, each weighted by its share, so it is
+named by the longer and rotates with it. It has no album twin: the Director
+plays only radio passages, and it is what clipped the intro by starting at
+the track. A whole-album play runs the album passages in order, which
+already plays the intro into its track, so a folded album passage beside
+them would play the intro twice. A track held as damaged `[SPEC-HOLD-030]`
+holds the join too. The cue sheet leaves the join out and lists its pieces,
+since a cue track that spans two others would end as soon as it began; the
+player's cue map leaves it out by the same rule. A join that names no such
+span is refused before anything is encoded, never quietly dropped.
+
 **`[SPEC-RIP-093]` Creating the folded-in passage is the user's decision,
 never an automatic heuristic.** No threshold reliably tells a short
 hidden intro that leads into the next track apart from a long,
@@ -70,7 +86,10 @@ review time ("also create a passage combining this with the next track?"),
 the same discover-then-let-a-person-confirm shape `[SPEC-SUI-215]`'s
 release-suggestion flow already takes: the tool finds the candidate and
 writes nothing until the operator picks it. The console makes the choice
-easy; it does not make the choice.
+easy; it does not make the choice. On the import page it is a tick under
+each such span, never ticked in advance — *Also add it joined to track 1,
+as one passage* — and `--fold START_MS` on the command line, whose preview
+lists each span's start.
 
 ---
 
@@ -214,10 +233,10 @@ refuses a folder that still holds more than one CUE.
 **`[SPEC-RIP-102]`** Both wider-passage triggers (§1, §2) are now decided
 — user's choice, offered rather than inferred (`[SPEC-RIP-093]`,
 `[SPEC-RIP-100]`) — so nothing about *when* a wider passage gets created
-remains open here. What the offer's own interaction looks like (a
-checkbox at review time, a prompt during the rip itself, something else)
-is first-build UI detail, not a design question this document exists to
-settle.
+remains open here. Both built offers are a tick on the import page —
+*One piece* `[SPEC-RIP-114]` and the join under each hidden span
+`[SPEC-RIP-093]`; a per-side grouping `[SPEC-RIP-098]` is not offered, and
+nobody has asked for one.
 
 [SPEC025 §8](SPEC025-cd-ripping.md#8-open) — updated 2026-09-03 after
 real-hardware testing found one genuine open item of its own, how Vipunen

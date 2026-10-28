@@ -31,6 +31,17 @@ use crate::report::Written;
 /// performs it. Named because four functions here take a slice of them.
 type Track = (i64, String, String);
 
+/// A radio passage that wholly spans another of its file's is not a track of
+/// the sheet: a hidden intro joined to the track it leads into
+/// `[SPEC-RIP-092]` starts where the intro does and ends where the track does,
+/// and as a track of its own it would end at once, where the intro starts
+/// again, and push every number after it one along. The sheet lists the
+/// pieces; the wider passage stays the Director's. [`crate::mpd_backend`]
+/// numbers by the same rule, which is why it is written once, here.
+pub(crate) const NOT_SPANNING: &str = "NOT EXISTS (SELECT 1 FROM passages q \
+    WHERE q.file_id = p.file_id AND q.kind = 'radio' AND q.passage_id != p.passage_id \
+      AND q.start_ms >= p.start_ms AND q.end_ms <= p.end_ms)";
+
 /// Why a capture might get no sheet.
 const ONE_PASSAGE: &str = "needed no sheet";
 const NOT_OURS: &str = "left as they were";
@@ -149,7 +160,7 @@ fn sheet(file: &Path, album: &str, tracks: &[Track]) -> Option<String> {
 pub fn generate(conn: &Connection, dry_run: bool) -> Result<Written, String> {
     let mut by_file: HashMap<String, (String, Vec<Track>)> = HashMap::new();
     let mut q = conn
-        .prepare(
+        .prepare(&format!(
             "SELECT f.path, \
                 COALESCE(t.album, ''), \
                 p.start_ms, \
@@ -163,8 +174,8 @@ pub fn generate(conn: &Connection, dry_run: bool) -> Result<Written, String> {
                           ORDER BY ra.weight DESC LIMIT 1), '') \
              FROM passages p JOIN files f USING(file_id) \
              LEFT JOIN file_tags t ON t.file_id = f.file_id \
-             WHERE p.kind = 'radio' ORDER BY f.path, p.start_ms",
-        )
+             WHERE p.kind = 'radio' AND {NOT_SPANNING} ORDER BY f.path, p.start_ms"
+        ))
         .map_err(|e| e.to_string())?;
     let rows = q
         .query_map([], |r| {
@@ -348,6 +359,29 @@ mod tests {
         assert!(out.contains("PERFORMER \"Various Artists\"\n"), "the album's own line");
         assert!(out.contains("    PERFORMER \"One Singer\""), "and each track keeps its own");
         assert!(out.contains("    PERFORMER \"Another Singer\""));
+    }
+
+    /// A hidden intro joined to its track `[SPEC-RIP-092]` is not a track of
+    /// the sheet; the intro and the track are, and a whole disc's one passage
+    /// still is.
+    #[test]
+    fn a_passage_spanning_others_is_not_a_track() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT,
+                                    start_ms INTEGER, end_ms INTEGER);
+             INSERT INTO passages VALUES (1, 1, 'radio', 0, 5000), (2, 1, 'radio', 5000, 60000),
+                                         (3, 1, 'radio', 0, 60000), (4, 1, 'album', 0, 5000),
+                                         (5, 1, 'radio', 60000, 90000), (6, 2, 'radio', 0, 240000);",
+        )
+        .unwrap();
+        let mut q = c
+            .prepare(&format!(
+                "SELECT passage_id FROM passages p WHERE kind = 'radio' AND {NOT_SPANNING} ORDER BY passage_id"
+            ))
+            .unwrap();
+        let ids: Vec<i64> = q.query_map([], |r| r.get(0)).unwrap().flatten().collect();
+        assert_eq!(ids, vec![1, 2, 5, 6], "the folded passage alone is left out");
     }
 
     /// A single-passage file is already named by its own tags.

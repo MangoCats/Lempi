@@ -1506,7 +1506,10 @@ class Handler(BaseHTTPRequestHandler):
                      # [SPEC-CDI-047]: a second copy only when asked, in so many words.
                      "duplicate_ok": b.get("duplicate_ok") is True,
                      # [SPEC-RIP-114]: the whole disc as one passage, when ticked.
-                     "whole_disc": b.get("whole_disc") is True}))
+                     "whole_disc": b.get("whole_disc") is True,
+                     # [SPEC-RIP-092]: each hidden span ticked to be joined to
+                     # its track, by its start; whole numbers only.
+                     "fold": [s for s in b.get("fold") or [] if isinstance(s, int) and not isinstance(s, bool)]}))
                 return self.send_json({"job_id": job, "into": into})
             if p in ("/api/import/split/find", "/api/import/split/preview", "/api/import/split/commit"):
                 # [SPEC-CDI-060]: find the album's release; show the cuts; split.

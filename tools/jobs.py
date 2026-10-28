@@ -1392,6 +1392,11 @@ class Runner:
         # The whole disc as one passage, when ticked [SPEC-RIP-114].
         if payload.get("whole_disc") is True:
             argv.append("--whole-disc")
+        # Each hidden span ticked to be joined to the track it leads into,
+        # by its start [SPEC-RIP-092]. Whole numbers only reach the argv.
+        for start in payload.get("fold") or ():
+            if isinstance(start, int) and not isinstance(start, bool):
+                argv += ["--fold", str(start)]
         self._emit(job_id, "stage", "ingest", stage="ingest")
         code, out = self._spawn(job_id, "ingest", argv)
         result = parse_json_tail(out) or {}

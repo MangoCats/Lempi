@@ -107,16 +107,18 @@ pub fn nameable_uris(
 /// Only for captures whose sheet is actually on disk. The track number is the
 /// passage's position among that file's radio passages ordered by start, which
 /// is exactly how [`crate::cue`] numbered them — the two must agree, and this
-/// is the place they do.
+/// is the place they do. A passage spanning others, which the sheet leaves
+/// out, has no cue track and is left out here too ([`crate::cue::NOT_SPANNING`]).
 pub fn cue_uris(
     conn: &rusqlite::Connection,
     root: &str,
 ) -> Result<HashMap<i64, String>, String> {
     let root_norm = root.replace('\\', "/").trim_end_matches('/').to_string();
     let mut q = conn
-        .prepare(
-            "SELECT f.path, p.passage_id FROM passages p JOIN files f USING(file_id)              WHERE p.kind = 'radio' ORDER BY f.path, p.start_ms",
-        )
+        .prepare(&format!(
+            "SELECT f.path, p.passage_id FROM passages p JOIN files f USING(file_id)              WHERE p.kind = 'radio' AND {} ORDER BY f.path, p.start_ms",
+            crate::cue::NOT_SPANNING
+        ))
         .map_err(|e| e.to_string())?;
     let rows = q
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))

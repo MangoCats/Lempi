@@ -264,11 +264,29 @@ function showPreview(p, folder, area) {
     S.el('span', { class: 'meta', text: ' -- for a disc that plays as one work, like Thick as a Brick' }));
   // [SPEC-RIP-090]: audio found where no track is -- before track 1, in a
   // gap, or after a long silence at the end -- each its own passage.
+  // [SPEC-RIP-092]: one that runs straight into a track may also be joined to
+  // it, as one more passage, on a tick that is never ticked for the person
+  // [SPEC-RIP-093] -- nothing tells an intro from a bonus track but listening.
+  const folds = [];
+  const trackName = n => {
+    const t = (p.track_list || []).find(x => x.number === n);
+    return `track ${n}` + (t && t.title ? ` ('${t.title}')` : '');
+  };
   const hidden = (p.hidden || []).length ? S.el('div', { class: 'verdict note' },
     S.el('b', { text: `Hidden audio found on this disc -- each is added as its own passage:` }),
-    S.el('ul', {}, ...p.hidden.map(h => S.el('li', { text:
-      `${h.title}  (${S.clock(h.start_ms)}–${S.clock(h.end_ms)} in the disc, ${S.clock(h.end_ms - h.start_ms)})` }))),
+    S.el('ul', {}, ...p.hidden.map(h => {
+      let join = null;
+      if (h.leads_into != null) {
+        const cb = S.el('input', { type: 'checkbox', value: String(h.start_ms) });
+        folds.push(cb);
+        join = S.el('label', { style: 'display:block;margin:.15rem 0 .3rem 1rem' }, cb,
+          ` Also add it joined to ${trackName(h.leads_into)}, as one passage -- for an intro that runs straight into its track`);
+      }
+      return S.el('li', {}, S.el('span', { text:
+        `${h.title}  (${S.clock(h.start_ms)}–${S.clock(h.end_ms)} in the disc, ${S.clock(h.end_ms - h.start_ms)})` }), join);
+    })),
     S.el('div', { class: 'meta', text: 'With "One piece" ticked, it is simply part of the whole disc.' })) : null;
+  whole.onchange = () => folds.forEach(cb => { cb.disabled = whole.checked; });
   const add = S.el('button', { class: 'chip on', text: 'Add to library' });
   if (rels.length === 1) setWarn(rels[0]);
   add.onclick = async () => {
@@ -278,7 +296,8 @@ function showPreview(p, folder, area) {
     const r = await (await fetch('/api/import/add', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ folder, release: chosen, into: into.value.trim(), occasions,
-        duplicate_ok: duplicate && again.checked, whole_disc: whole.checked }) })).json();
+        duplicate_ok: duplicate && again.checked, whole_disc: whole.checked,
+        fold: whole.checked ? [] : folds.filter(cb => cb.checked).map(cb => Number(cb.value)) }) })).json();
     if (r.error) { add.disabled = false; return alert(r.error); }
     // The rip leaves the inbox while it is added, and its card with it: the
     // work and its result move to "Just added", where they stay.
@@ -435,6 +454,9 @@ function done(job, into, rel, area, gaps) {
     (res.hidden || []).length ? S.el('p', { class: 'verdict note', text:
       `Hidden audio, each its own passage: ${res.hidden.map(h => `${h.title} (${S.clock(h.end_ms - h.start_ms)})`).join('; ')}.` })
       : null,
+    (res.folded || []).length ? S.el('p', { class: 'verdict note', text:
+      `Joined to the track it leads into, as one more passage: ${res.folded.map(f =>
+        `${f.title}, with track ${f.track} (${S.clock(f.end_ms - f.start_ms)})`).join('; ')}.` }) : null,
     setBanner(res.set, true),
     // Analysed as part of adding it [REQ-LIB-305]; a stage that failed is
     // said, with the button that finishes it [REQ-LIB-307].

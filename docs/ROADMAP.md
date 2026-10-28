@@ -27,7 +27,7 @@ folded into one spec.
 | DAO segmentation cascade | [SPEC024](spec/SPEC024-dao-segmentation-cascade.md) | [§8 Open](spec/SPEC024-dao-segmentation-cascade.md#8-open) |
 | CD ripping (built 2026-09-04, person-assisted — verified against a real disc; sets a disc at a time since 2026-10-14) | [SPEC025](spec/SPEC025-cd-ripping.md) | [§8 Open](spec/SPEC025-cd-ripping.md#8-open) |
 | CD ripping: how Vipunen drives a GUI-only Windows tool (decided — person-assisted, built) | [SPEC027](spec/SPEC027-cd-ripping-windows-automation.md) | whole document |
-| CD ripping — multi-disc sets, one-piece discs and hidden audio (built 2026-10-14, image rips); the folded-in passage (designed) | [SPEC026](spec/SPEC026-cd-ripping-passages.md) | [§3 Open](spec/SPEC026-cd-ripping-passages.md#3-open) |
+| CD ripping — multi-disc sets, one-piece discs and hidden audio (built 2026-10-14, image rips); the folded-in passage (built 2026-10-27) | [SPEC026](spec/SPEC026-cd-ripping-passages.md) | [§3 Open](spec/SPEC026-cd-ripping-passages.md#3-open) |
 | Database schema | [SPEC008](spec/SPEC008-database-schema.md) | [§8 Open](spec/SPEC008-database-schema.md#8-open) |
 | Program Director | [SPEC009](spec/SPEC009-program-director.md) | [§9 Open](spec/SPEC009-program-director.md#9-open) |
 | Audio path supervisor | [SPEC011](spec/SPEC011-audio-path-supervisor.md) | [§5 Risks and open questions](spec/SPEC011-audio-path-supervisor.md#5-risks-and-open-questions) |
@@ -197,8 +197,8 @@ what remains here is the work that crosses documents.
 5. **What CD import still lacks** ([SPEC026](spec/SPEC026-cd-ripping-passages.md)).
    Built 2026-10-14: a set files and browses as one album, its discs named
    apart, a missing disc said loudly; a disc that is one piece is one passage;
-   hidden audio is found and made its own passages. Left: the folded-in
-   passage of a hidden intro and the track it leads into `[SPEC-RIP-092]`;
+   hidden audio is found and made its own passages; since 2026-10-27, one
+   that leads into a track is joined to it on a tick `[SPEC-RIP-092]`. Left:
    hidden audio in a tracks-mode rip; hidden audio on a real disc, which no
    disc filed so far has had to prove the finding side.
 6. ~~**The hub backup's mirror has not been written since 2026-09-26**~~

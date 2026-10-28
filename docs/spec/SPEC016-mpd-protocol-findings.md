@@ -126,7 +126,9 @@ not called on it**: MPD applies the cue's own boundaries as a range and reports
 the real title, and a `rangeid` would overwrite that with offsets into the file
 and lose both. Measured on the queue: cue start 1324.7 s against a radio start
 of 1324.7 s — exact — and a cue end 3.8 s late, which the sampler ends itself
-`[SPEC-MPD-096]` rather than accepting.
+`[SPEC-MPD-096]` rather than accepting. A radio passage that spans others of
+its file — a hidden intro joined to its track `[SPEC-RIP-092]` — is no cue
+track; the sheet lists its pieces, and the passage stays the Director's.
 
 **`[SPEC-MPD-058]` The album's performer is whoever performs most of it, not
 whoever performs track one.** *(Fixed 2026-08-22.)* A cue sheet's disc-level
