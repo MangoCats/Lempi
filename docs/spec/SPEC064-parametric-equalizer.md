@@ -99,7 +99,9 @@ In `player/src/web/skins/lempi/skin.html`, `player/src/web/skins/lempi/skin.js`,
 
 ## 5. Open
 
-Found reviewing the build against `lp3-wifi`, 2026-10-22.
+Found reviewing the build against `lp3-wifi`, 2026-10-22. Heard since by the maintainer on `lempi02w`, `bose` and, from 2026-10-28, the Pixel 7a, working as expected on all three so far.
+
+- **On a phone, one curve serves every output.** Only the appliance build names an output (`web/bluetooth.rs`, behind the `appliance` feature), so the phone saves every profile as `dac` — speaker, headphones and Bluetooth alike. Accepted for now by the maintainer, 2026-10-28; a profile per output there needs the app to report which one is sounding.
 
 - **The profile follows the stored active output, not the sink that is sounding.** On `lp3-wifi` the stored output was `bt:` MIDDLETON while the speaker was away and the keeper had the jack playing, so MIDDLETON's profile — and volume — applied to the jack. Per-output volume has the same gap `[SPEC-POV-030]`; closing it means the player learning which sink it actually opened.
 - ~~**A failed save is reported as saved.**~~ *Resolved 2026-10-23* `[SPEC-EQ-080]`: answered `saved: false` with the reason, and shown in the skin.

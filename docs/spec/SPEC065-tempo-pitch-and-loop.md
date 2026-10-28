@@ -120,7 +120,7 @@ Found reviewing the build against `lp3-wifi`, 2026-10-22.
 
 - ~~**A warped play is recorded as a skip.**~~ *Resolved 2026-10-23* (`[SPEC-TPL-015]` item 4): shown by test the evening before, a passage played through to its natural end at `1.25x` left a `Skip` rejection. It is now neither a play nor a skip, and the passage after it is still skipped as an ordinary one would be.
 - ~~**Nothing on the device's own screen.**~~ *Resolved 2026-10-23* by the framebuffer UI's Audio page `[SPEC-FBUI-110]`, which shows the state from every page and can clear a loop; not yet seen on `lp3-wifi`'s physical panel.
-- **The stretcher is unheard at its extremes.** Listened to on `lp3-wifi` through MIDDLETON and judged as expected; `0.25x`, `4.0x` and ±12 st were measured but not listened to. `FLUX_ONSET` (`0.35`) is reasoned, not tuned on music, and each channel's phases advance separately except at an onset.
+- **The stretcher is unheard at its extremes.** Listened to on `lp3-wifi` through MIDDLETON and judged as expected, and tried by the maintainer on the Pixel 7a, 2026-10-28, so far as expected; `0.25x`, `4.0x` and ±12 st were measured but not listened to. `FLUX_ONSET` (`0.35`) is reasoned, not tuned on music, and each channel's phases advance separately except at an onset.
 - ~~**A warp cut works on the engine thread.**~~ *Resolved 2026-10-23* (`[SPEC-TPL-060]`): its decode has a 250 ms budget, and only the overlap with the fade is mixed under the output lock. Still on the engine thread by design, and not yet re-measured on `lp3-wifi`.
 - **Echo suspension has not been run between two nodes.** Its tests are the engine's and the follower's own, in isolation.
 
