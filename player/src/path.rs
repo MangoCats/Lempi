@@ -412,54 +412,82 @@ fn recover(
         // into a stutter.
         std::thread::sleep(SETTLE);
     }
-    match out.recover() {
-        Ok(name) => {
-            // Opening succeeded, which says nothing about whether anyone can
-            // hear it: the dummy accepts audio perfectly forever. Treat that as
-            // a failure so we keep looking for a real sink `[PI3-API-030]`.
-            if crate::sink::current().audible == Tristate::No {
-                tracing::warn!("output opened onto a dummy -- still silent, retrying");
-                out.mark_failed();
-            } else {
-                // The stream's own error callback writes only the first error
-                // of a failure and counts the rest; here is the count.
-                let errors = match out.take_stream_errors() {
-                    0 | 1 => String::new(),
-                    n => format!(" ({n} stream errors while it was down)"),
-                };
-                // How long a refusal lasted is the one measurement of it
-                // there is, so the line that ends one carries it.
-                match refused.take() {
-                    Some(r) => tracing::info!("output recovered on {name}{errors}, after {} [GDE-HST-230]",
-                                              r.describe(Instant::now())),
-                    None => tracing::info!("output recovered on {name}{errors}"),
-                }
-                *retry_at = None;
-                *backoff = RETRY;
-                // The stream comes back stopped; only resume it if the listener
-                // had not paused in the meantime.
-                out.set_playing(playing);
-            }
+    let refusal = match out.recover() {
+        Ok(name) => return opened(out, &name, "", playing, retry_at, backoff, refused),
+        Err(e) if e.is_com_refusal() => e,
+        Err(e) => {
+            tracing::warn!("output recovery failed, retrying: {e}");
+            return;
         }
-        // Said differently from an absent device, because it means something
-        // different: the speaker is there and this process may not have it
-        // `[GDE-HST-230]`. A line that read like "still searching" for ten
-        // minutes is what made it look like a stall rather than a refusal.
-        Err(e) if e.is_com_refusal() => match refused {
-            None => {
-                *refused = Some(Refused { since: now, attempts: 1 });
-                tracing::warn!("output refused by Windows, not missing: {e} -- the device is there \
-                                but this process cannot open it; retrying, and restarting the \
-                                player should clear it [GDE-HST-230]");
-            }
-            Some(r) => {
-                r.attempts += 1;
-                tracing::warn!("output still refused by Windows, {} -- restarting the player \
-                                should clear it [GDE-HST-230]", r.describe(now));
-            }
-        },
-        Err(e) => tracing::warn!("output recovery failed, retrying: {e}"),
+    };
+    // Refused on this thread: the same open, at once, on a new one. Which of
+    // the two opens it is the measurement `[GDE-HST-230]` still lacked --
+    // whether the refusal belongs to the thread or to the whole process --
+    // and it is written either way.
+    let fresh = match out.recover_on_fresh_thread() {
+        Ok(name) => return opened(out, &name, " on a fresh thread, after this thread was refused -- \
+                                              so the refusal belonged to the thread",
+                                  playing, retry_at, backoff, refused),
+        Err(e) if e.is_com_refusal() => "refused on a fresh thread too, so it is process-wide".to_string(),
+        Err(e) => format!("and a fresh thread failed otherwise: {e}"),
+    };
+    // Said differently from an absent device, because it means something
+    // different: the speaker is there and this process may not have it
+    // `[GDE-HST-230]`. A line that read like "still searching" for ten
+    // minutes is what made it look like a stall rather than a refusal.
+    match refused {
+        None => {
+            *refused = Some(Refused { since: now, attempts: 1 });
+            tracing::warn!("output refused by Windows, not missing: {refusal} -- the device is there \
+                            but this process cannot open it; {fresh}; retrying, and restarting the \
+                            player should clear it [GDE-HST-230]");
+        }
+        Some(r) => {
+            r.attempts += 1;
+            tracing::warn!("output still refused by Windows, {}; {fresh} -- restarting the player \
+                            should clear it [GDE-HST-230]", r.describe(now));
+        }
     }
+}
+
+/// A reopen that opened -- on this thread, or on a fresh one, which `how`
+/// says.
+fn opened(
+    out: &mut Output,
+    name: &str,
+    how: &str,
+    playing: bool,
+    retry_at: &mut Option<Instant>,
+    backoff: &mut Duration,
+    refused: &mut Option<Refused>,
+) {
+    // Opening succeeded, which says nothing about whether anyone can
+    // hear it: the dummy accepts audio perfectly forever. Treat that as
+    // a failure so we keep looking for a real sink `[PI3-API-030]`.
+    if crate::sink::current().audible == Tristate::No {
+        tracing::warn!("output opened onto a dummy -- still silent, retrying");
+        out.mark_failed();
+        return;
+    }
+    // The stream's own error callback writes only the first error
+    // of a failure and counts the rest; here is the count.
+    let errors = match out.take_stream_errors() {
+        0 | 1 => String::new(),
+        n => format!(" ({n} stream errors while it was down)"),
+    };
+    // How long a refusal lasted is the one measurement of it
+    // there is, so the line that ends one carries it.
+    match refused.take() {
+        Some(r) => tracing::info!("output recovered on {name}{how}{errors}, after {} [GDE-HST-230]",
+                                  r.describe(Instant::now())),
+        None if !how.is_empty() => tracing::info!("output recovered on {name}{how}{errors} [GDE-HST-230]"),
+        None => tracing::info!("output recovered on {name}{errors}"),
+    }
+    *retry_at = None;
+    *backoff = RETRY;
+    // The stream comes back stopped; only resume it if the listener
+    // had not paused in the meantime.
+    out.set_playing(playing);
 }
 
 /// A run of reopens Windows has refused `[GDE-HST-230]`, kept until one opens.

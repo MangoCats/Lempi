@@ -577,7 +577,7 @@ pub struct Output {
     //
     // Optional only so that recovery can drop it and leave the device closed
     // for the moment between attempts.
-    stream: Option<cpal::Stream>,
+    stream: Option<Held>,
     /// The shareable half. Cloned to whoever mixes; never replaced.
     pub ring: OutputRing,
     pub device_name: String,
@@ -585,6 +585,99 @@ pub struct Output {
     /// the name, because the sink it names may be a different ALSA object by
     /// the time it comes back.
     requested: Option<String>,
+}
+
+/// Where the open stream lives.
+///
+/// `cpal::Stream` is `!Send`: it is dropped, and played, on the thread that
+/// opened it. Almost always that is the supervisor's own. A stream opened on a
+/// fresh thread because Windows refused the supervisor's `[GDE-HST-230]` stays
+/// on that thread, which holds it until it is released.
+enum Held {
+    Here(cpal::Stream),
+    Hosted(Hosted),
+}
+
+impl Held {
+    fn play(&self) -> Result<(), String> {
+        match self {
+            Held::Here(s) => s.play().map_err(|e| e.to_string()),
+            Held::Hosted(h) => h.play(),
+        }
+    }
+}
+
+/// How long the supervisor waits on a fresh thread's open, or its play.
+///
+/// The open is cpal's activation of the default device, which on the desktop
+/// answers in well under a second. A thread still opening past this is given
+/// up on, not waited for; it closes whatever it opened once it finishes.
+const HOSTED_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A stream held by a thread of its own.
+struct Hosted {
+    /// Dropped to tell the thread to close the stream and end.
+    tx: Option<std::sync::mpsc::Sender<std::sync::mpsc::SyncSender<Result<(), String>>>>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Hosted {
+    /// Open the device on a new thread, which keeps the stream.
+    fn open(name: Option<&str>, ring: &OutputRing) -> Result<(Self, String), OutputError> {
+        let (opened_tx, opened_rx) = std::sync::mpsc::sync_channel(1);
+        let (tx, rx) = std::sync::mpsc::channel::<std::sync::mpsc::SyncSender<Result<(), String>>>();
+        let (name, ring) = (name.map(str::to_string), ring.clone());
+        let join = std::thread::Builder::new()
+            .name("lempi-output".into())
+            .spawn(move || {
+                let stream = match Output::attach(name.as_deref(), &ring) {
+                    Ok((stream, device_name)) => {
+                        let _ = opened_tx.send(Ok(device_name));
+                        stream
+                    }
+                    Err(e) => {
+                        let _ = opened_tx.send(Err(e));
+                        return;
+                    }
+                };
+                // Each message is a play, answered; the channel closing is
+                // the release, and the stream is dropped here, where it lives.
+                while let Ok(reply) = rx.recv() {
+                    let _ = reply.send(stream.play().map_err(|e| e.to_string()));
+                }
+                drop(stream);
+            })
+            .map_err(|e| OutputError::Build(format!("could not start an output thread: {e}")))?;
+        match opened_rx.recv_timeout(HOSTED_WAIT) {
+            Ok(Ok(device_name)) => Ok((Self { tx: Some(tx), join: Some(join) }, device_name)),
+            Ok(Err(e)) => {
+                let _ = join.join();
+                Err(e)
+            }
+            // Not joined: it may be stuck in the open. Dropping `tx` has it
+            // close the stream and end if the open ever completes.
+            Err(_) => Err(OutputError::Build(format!(
+                "a fresh thread's open did not answer within {}s", HOSTED_WAIT.as_secs()))),
+        }
+    }
+
+    fn play(&self) -> Result<(), String> {
+        let Some(tx) = &self.tx else { return Err("output thread already released".into()) };
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+        tx.send(reply_tx).map_err(|_| "output thread has ended".to_string())?;
+        reply_rx.recv_timeout(HOSTED_WAIT).map_err(|_| "output thread did not answer".to_string())?
+    }
+}
+
+impl Drop for Hosted {
+    /// Close the stream and wait for it to be closed, so the settle after a
+    /// release `[PI3-OPEN-010]` starts from a device that really is released.
+    fn drop(&mut self) {
+        self.tx = None;
+        if let Some(j) = self.join.take() {
+            let _ = j.join();
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -672,7 +765,7 @@ impl Output {
         let ring = OutputRing::new(ring_capacity_samples, Volume::new(1.0));
         let requested = name.map(str::to_string);
         let (stream, device_name) = Self::attach(requested.as_deref(), &ring)?;
-        Ok(Self { stream: Some(stream), ring, device_name, requested })
+        Ok(Self { stream: Some(Held::Here(stream)), ring, device_name, requested })
     }
 
     /// The shareable half, for whoever mixes into it `[SPEC-APS-070]`.
@@ -934,6 +1027,23 @@ impl Output {
         // stream first and assigning over the old one -- the obvious ordering --
         // fails every time on exactly the sink this exists for.
         let (stream, device_name) = Self::attach(self.requested.as_deref(), &self.ring)?;
+        Ok(self.adopt(Held::Here(stream), device_name))
+    }
+
+    /// [`Output::recover`], with the stream opened on a thread of its own.
+    ///
+    /// For a reopen Windows refused `[GDE-HST-230]`. On 2026-10-18 a separate
+    /// process opened the device the running player was refused, so the state
+    /// that refuses is inside the process -- in the supervisor's thread or in
+    /// the whole process, which was not measured. A new thread is a new COM
+    /// apartment, and this is the measurement: if it opens, the refusal
+    /// belonged to the thread, and no restart is needed to get past it.
+    pub fn recover_on_fresh_thread(&mut self) -> Result<String, OutputError> {
+        let (hosted, device_name) = Hosted::open(self.requested.as_deref(), &self.ring)?;
+        Ok(self.adopt(Held::Hosted(hosted), device_name))
+    }
+
+    fn adopt(&mut self, stream: Held, device_name: String) -> String {
         // Discard what the ring holds only now that a device has actually been
         // opened. Clearing on every ATTEMPT was a bug: a retry loop against an
         // absent sink emptied the buffer twice a second, the mixer refilled it
@@ -944,7 +1054,7 @@ impl Output {
         }
         self.stream = Some(stream);
         self.device_name = device_name.clone();
-        Ok(device_name)
+        device_name
     }
 
     /// Silence the device callback, or let it play again.
@@ -966,7 +1076,7 @@ impl Output {
         // reasons, but pausing no longer stops it.
         self.ring.set_silent(!on);
         let r = if on {
-            stream.play().map_err(|e| e.to_string())
+            stream.play()
         } else {
             Ok(())
         };
