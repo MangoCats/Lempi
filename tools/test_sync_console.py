@@ -95,6 +95,7 @@ def test_page():
               f"the page says who took part and who was left alone: {by['a']['in_run']}, {by['c']['in_run']}")
         check(set(r["old_players"]) == {"a", "b"} and by["a"]["old_player"] and not by["c"]["old_player"],
               f"and which players are old (the fake ones report no natural_keys): {r['old_players']}")
+        check(r["missing"] == {}, f"a node chosen and reached is not missing [SPEC-STAR-138]: {r['missing']}")
         check(sc.stage_target(plan, run, "rehearse", ["c"])[1].startswith("left alone in this run"),
               "a later stage cannot name a node the run left alone")
         check(r["merged"] and r["proven"] and r["items"] == 2 and r["pending"] == 2 and not r["ready"],

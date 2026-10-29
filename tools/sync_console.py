@@ -124,7 +124,7 @@ def state(plan) -> dict:
     out = {"hub": plan["hub"]["name"], "backup": hub_backup(plan), "nodes": nodes, "run": None}
     if not run:
         return out
-    info = {"id": rid, "old_players": old, "left_alone": sorted(left),
+    info = {"id": rid, "old_players": old, "left_alone": sorted(left), "missing": missing,
             "snapshot": os.path.exists(os.path.join(run, "manifest.json")),
             "merged": os.path.exists(os.path.join(run, "merge", "items.json")),
             "proven": bool((_json(os.path.join(run, "proven.json")) or {}).get("ok")),

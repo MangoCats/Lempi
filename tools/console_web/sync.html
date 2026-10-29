@@ -37,6 +37,7 @@
     </div>
 
     <h2>This run <small id="run-id"></small></h2>
+    <div id="missbanner" hidden style="border:2px solid var(--bad);background:var(--panel);padding:.6rem .8rem;margin:.4rem 0;font-size:.9rem"></div>
     <div id="oldbanner" hidden style="border:2px solid var(--bad);background:var(--panel);padding:.6rem .8rem;margin:.4rem 0;font-size:.9rem"></div>
     <div id="leftalone" style="font-size:.85rem;color:var(--dim);margin:.2rem 0"></div>
     <div class="controls" id="stages"></div>
@@ -89,6 +90,11 @@ function setChosen(set) {
 }
 let LIVE = null;
 const chosen = () => [...(LIVE || chosenSet())].filter(n => STATE && STATE.nodes.some(x => x.name === n)).sort();
+
+// Auto Advance [SPEC-STAR-136]: on until the person turns it off, remembered in this browser.
+// Each stage that leads on, and the one it leads to. Rehearse is not here: Commit is always a press.
+let AUTO = (() => { try { return localStorage.getItem('sync.autoAdvance') !== 'off'; } catch (e) { return true; } })();
+const NEXT = { snapshot: ['merge', '2 · Merge'], merge: ['patch', '3 · Prepare patches'], patch: ['rehearse', '4 · Rehearse'] };
 
 const kindPill = k => S.el('span', { class: 'pill ' + (k === 'delete-vs-edit' ? 'bad' : k === 'tie' ? 'warn' : ''), text: k });
 
@@ -144,6 +150,18 @@ function stageButton(label, stage, enabled, nodes, danger) {
   return b;
 }
 
+function autoBox() {
+  const box = S.el('input', { type: 'checkbox' });
+  box.checked = AUTO;
+  box.onchange = () => {
+    AUTO = box.checked;
+    try { localStorage.setItem('sync.autoAdvance', AUTO ? 'on' : 'off'); } catch (e) { /* kept for this visit only */ }
+  };
+  return S.el('label', { style: 'display:flex;gap:.3rem;align-items:center;font-size:.85rem;color:var(--dim)',
+                         title: 'when Snapshot, Merge or Prepare patches finishes and no item needs a verdict, start the next stage; never Commit' },
+              box, 'Auto Advance');
+}
+
 function paintRun(st) {
   const r = st.run;
   $('run-id').textContent = r ? r.id : '(no run yet)';
@@ -154,7 +172,8 @@ function paintRun(st) {
     stageButton('2 · Merge', 'merge', r && r.snapshot),
     stageButton('3 · Prepare patches', 'patch', r && r.merged),
     stageButton('4 · Rehearse', 'rehearse', r && r.proven),
-    stageButton('5 · Commit', 'commit', r && r.ready, [], true));
+    stageButton('5 · Commit', 'commit', r && r.ready, [], true),
+    autoBox());
   const marks = S.el('div', { style: 'display:flex;gap:.4rem;flex-wrap:wrap;margin:.2rem 0 .6rem' });
   if (r) {
     marks.append(step(r.snapshot, 'snapshot'), step(r.merged, 'merged'),
@@ -166,6 +185,18 @@ function paintRun(st) {
   document.querySelectorAll('.stage-marks').forEach(e => e.remove());
   marks.className = 'stage-marks';
   $('picked').textContent = chosen().length ? `the next run takes part with: ${chosen().join(', ')}` : 'no node chosen yet';
+  // [SPEC-STAR-138]: a node chosen and not reached is said as loudly as an old player, for the whole run.
+  const miss = (r && r.missing) || {};
+  const mb = $('missbanner');
+  mb.hidden = !Object.keys(miss).length;
+  if (!mb.hidden) {
+    mb.replaceChildren(
+      S.el('b', { style: 'color:var(--bad)', text: `NOT REACHED: ${Object.keys(miss).sort().join(', ')}` }),
+      S.el('div', { text: `${Object.keys(miss).length > 1 ? 'These nodes were' : 'This node was'} chosen and did not answer the snapshot. ` +
+                          'The run goes on without it: none of its edits are merged, and it is sent nothing. ' +
+                          'To include it, bring it up and take a new snapshot.' }),
+      ...Object.entries(miss).sort().map(([n, why]) => S.el('div', { style: 'color:var(--dim);font-size:.8rem', text: `${n}: ${why}` })));
+  }
   const old = (r && r.old_players) || {};
   const ob = $('oldbanner');
   ob.hidden = !Object.keys(old).length;
@@ -181,11 +212,14 @@ function paintRun(st) {
   bl.replaceChildren(...((r && r.blockers) || []).map(t => S.el('div', { style: 'color:var(--warn)', text: '• ' + t })));
 }
 
-async function runStage(stage, nodes, label) {
+// `chained`: started by Auto Advance, so the stage before it keeps its log above this one's.
+async function runStage(stage, nodes, label, chained) {
   if (stage === 'commit') {
     const od = STATE.nodes.filter(n => n.on_demand && STATE.run.names.includes(n.name)).map(n => n.name);
     const old = Object.keys(STATE.run.old_players || {});
+    const miss = Object.keys(STATE.run.missing || {}).sort();
     const msg = `Commit run ${STATE.run.id} to ${STATE.run.names.join(', ')}?\n\n` +
+      (miss.length ? `WARNING: NOT REACHED by the snapshot, so not in this run: ${miss.join(', ')}.\n\n` : '') +
       (STATE.run.left_alone && STATE.run.left_alone.length ? `Left alone, untouched: ${STATE.run.left_alone.join(', ')}.\n\n` : '') +
       (old.length ? `WARNING: old player${old.length > 1 ? 's' : ''} ${old.join(', ')} will get their listener edits but no catalogue patch.\n\n` : '') +
       `The hub's own pair is patched first, and the desktop player is paused for it.` +
@@ -194,11 +228,39 @@ async function runStage(stage, nodes, label) {
     if (!confirm(msg)) return;
   }
   busy = true;
+  const box = S.el('div');
+  if (chained) $('job-box').append(S.el('div', { style: 'color:var(--accent);font-size:.85rem;margin-top:.8rem',
+                                                 text: `Auto Advance: ${label}` }), box);
+  else $('job-box').replaceChildren(box);
   let job;
   try { job = await post('/api/sync/stage', { stage, nodes }); }
-  catch (e) { busy = false; paintRun(STATE); return S.fail('#job-box', e); }
+  catch (e) { busy = false; paintRun(STATE); return S.fail(box, e); }
   paintRun(STATE);
-  S.watchJob(job.job_id, $('job-box'), async () => { busy = false; await reload(true); });
+  S.watchJob(job.job_id, box, async done => { busy = false; await reload(true); advance(stage, done); });
+}
+
+// [SPEC-STAR-136]: a stage leads on to the next only while Auto Advance is ticked, its job
+// finished done, the next stage is ready, and no item waits for a verdict. A stop says why.
+function advance(stage, job) {
+  if (!AUTO) return;
+  const note = (text, colour) => $('job-box').append(S.el('div', { style: `color:var(${colour});font-size:.85rem;margin-top:.4rem`, text }));
+  const next = NEXT[stage];
+  if (!next) {
+    if (stage === 'rehearse') note('Auto Advance ends at Rehearse: 5 · Commit is always your own press.', '--dim');
+    return;
+  }
+  const r = STATE && STATE.run;
+  const ready = r && { merge: r.snapshot, patch: r.merged, rehearse: r.proven }[next[0]];
+  const why = job.state !== 'done' ? `the ${stage} job ended ${job.state || 'without a state'}`
+    : r && r.pending ? `${S.n(r.pending)} item${r.pending === 1 ? ' needs' : 's need'} a verdict`
+    : !ready ? `the run is not ready for it`
+    : null;
+  if (why) return note(`Auto Advance stopped before ${next[1]}: ${why}.`, '--warn');
+  // A node not reached does not stop it [SPEC-STAR-138]; the banner says so above, and so does this.
+  const miss = Object.keys((r && r.missing) || {}).sort();
+  if (stage === 'snapshot' && miss.length)
+    note(`NOT REACHED: ${miss.join(', ')}. Auto Advance goes on without ${miss.length > 1 ? 'them' : 'it'}.`, '--bad');
+  runStage(next[0], undefined, next[1], true);
 }
 
 // ---- items -------------------------------------------------------------------

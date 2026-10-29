@@ -55,6 +55,10 @@ status` answers at any time whether all of it is current.
 2. Press the stages in order: **Snapshot, Merge, Prepare patches, Rehearse,
    Commit.** Rehearse changes nothing anywhere. Commit stays disabled until
    every item has a verdict and every chosen node has rehearsed clean.
+   With **Auto Advance** ticked (the default), pressing Snapshot runs on through
+   Rehearse by itself, stopping wherever an item needs a verdict; give the
+   verdicts, then press the next stage. Commit is always your own press
+   `[SPEC-STAR-136]`.
 3. **Items** are changes the merge would otherwise discard (two nodes changed
    the same thing differently, or one deleted what another edited). Each shows
    its default, the most recent change; pick another per item, or press
