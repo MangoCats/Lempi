@@ -121,6 +121,10 @@ pub enum Ended {
     Engine,
     /// The web server stopped serving.
     Web,
+    /// Nothing stopped: Windows has refused the output long enough that a new
+    /// process is the remedy `[GDE-HST-230]`. The player is still running;
+    /// restarting it is the caller's to do, or not.
+    Refused,
 }
 
 /// Why a player could not be started.
@@ -242,6 +246,7 @@ impl Player {
             writes_beside_audio: cfg.writes_beside_audio,
             paused: cfg.paused,
             power_off_allowed,
+            ended: ended_tx.clone(),
         };
         let signal = Signal(ended_tx.clone(), Ended::Engine);
         std::thread::Builder::new()
@@ -466,7 +471,9 @@ impl Player {
         self.command(Command::Persist);
     }
 
-    /// Block until the engine or the web server stops, and say which.
+    /// Block until the engine or the web server stops, and say which -- or
+    /// until the output has been refused long enough to want a restart
+    /// ([`Ended::Refused`]), after which it may be called again.
     pub fn wait(&self) -> Ended {
         self.ended.recv().unwrap_or(Ended::Engine)
     }
@@ -496,7 +503,7 @@ fn wait_for_engine(ended: &Receiver<Ended>, limit: Duration) -> bool {
         let left = until.saturating_duration_since(std::time::Instant::now());
         match ended.recv_timeout(left) {
             Ok(Ended::Engine) | Err(RecvTimeoutError::Disconnected) => return true,
-            Ok(Ended::Web) => continue,
+            Ok(Ended::Web | Ended::Refused) => continue,
             Err(RecvTimeoutError::Timeout) => return false,
         }
     }
@@ -545,6 +552,8 @@ struct EngineSetup {
     writes_beside_audio: bool,
     paused: bool,
     power_off_allowed: bool,
+    /// Where the path supervisor asks for a restart `[GDE-HST-230]`.
+    ended: Sender<Ended>,
 }
 
 /// The published state, so the loop can read the listener's settings after the
@@ -554,8 +563,8 @@ fn state_of(h: &EngineHandle) -> Arc<Mutex<PlayerState>> {
 }
 
 fn engine_thread(setup: EngineSetup, tx: SyncSender<Started>) {
-    let EngineSetup { db, library, depth, device, mpd_addr, mpd_root, writes_beside_audio, paused, power_off_allowed } =
-        setup;
+    let EngineSetup { db, library, depth, device, mpd_addr, mpd_root, writes_beside_audio, paused, power_off_allowed,
+                      ended } = setup;
     let mut session = match Session::open(&db, &library, depth) {
         Ok(s) => s,
         Err(e) => {
@@ -569,7 +578,10 @@ fn engine_thread(setup: EngineSetup, tx: SyncSender<Started>) {
     // up and say so, which is more use than exiting silently.
     // The supervisor opens the device on its own thread and owns it from
     // there `[SPEC-APS-060]`; this reports only what happened.
-    let (path, why) = crate::path::start(device, BUFFER_FRAMES * 2);
+    let restart: crate::path::Restart = Box::new(move || {
+        let _ = ended.send(Ended::Refused);
+    });
+    let (path, why) = crate::path::start_restartable(device, BUFFER_FRAMES * 2, Some(restart));
     tracing::info!("{why}");
 
     let (mut engine, handle) = Engine::new(path, session.depth());

@@ -26,7 +26,14 @@
 use std::path::PathBuf;
 
 use lempi_player::cli::specs::lempi as opt;
-use lempi_player::host::{Config, Player, StartError};
+use lempi_player::host::{Config, Ended, Player, StartError};
+
+/// Set in a player this one started because Windows refused its output, to
+/// the time it did so, in Unix seconds `[GDE-HST-230]`.
+const REFUSAL_RESTART: &str = "LEMPI_REFUSAL_RESTART";
+/// A refusal sooner than this after a restart for one is not restarted for
+/// again: a new process did not clear it, and another would only loop.
+const RESTART_SPACING: u64 = 600;
 
 fn main() {
     // The pairing button's handler, before anything else `[SPEC-NSH-160]`.
@@ -54,6 +61,11 @@ fn main() {
         return;
     }
     println!("lempi {}", lempi_player::build_id());
+    if std::env::var_os(REFUSAL_RESTART).is_some() {
+        // Whether the output line below names the device is the measurement:
+        // a new process opening what the old one was refused `[GDE-HST-230]`.
+        println!("lempi: started again because Windows refused the last process its output [GDE-HST-230]");
+    }
     // **Bootstrap, and then everything else** `[GDE-CLI-095]`. These two are
     // declared `.bootstrap()`, so they resolve from the command line, the
     // environment and their defaults only -- they name the database the
@@ -130,6 +142,7 @@ fn main() {
         paused: args.has(&opt::PAUSED),
     };
 
+    let port = config.web_port;
     let player = match Player::start(config) {
         Ok(p) => p,
         Err(e) => {
@@ -146,5 +159,90 @@ fn main() {
     };
     // Returns when the engine or the web server stops -- the web server
     // ending ends the process, as it always did, and systemd restarts it.
-    player.wait();
+    // Or when Windows has refused the output long enough to want a new
+    // process, which only this file can start: it has the command line.
+    loop {
+        match player.wait() {
+            Ended::Refused => match restarted_for_refusal_ago() {
+                Some(ago) if ago < RESTART_SPACING => {
+                    // Loudly, and once: the supervisor asks only once per
+                    // process, so this player now waits the refusal out.
+                    tracing::error!("output refused again {ago}s after a restart for the same \
+                                     refusal; not restarting a second time -- waiting it out, \
+                                     and a restart by hand is the remedy left [GDE-HST-230]");
+                }
+                _ => restart_for_refusal(player, port),
+            },
+            Ended::Engine | Ended::Web => return,
+        }
+    }
+}
+
+/// How long ago this process was started by [`restart_for_refusal`], if it was.
+fn restarted_for_refusal_ago() -> Option<u64> {
+    let at: u64 = std::env::var(REFUSAL_RESTART).ok()?.parse().ok()?;
+    Some(unix_now().saturating_sub(at))
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// Start this player again, with the same command line, and end this one
+/// `[GDE-HST-230]`.
+///
+/// The resume point is written first, as the settings page's Restart writes it
+/// `[REQ-VIS-250]`, and the new process resumes the play state with it
+/// `[PI5-PWR-030]`. This one stops before the new one starts, because both
+/// cannot hold the port; the port is confirmed free rather than assumed so.
+/// Under systemd nothing reaches here -- the refusal is WASAPI's, and the
+/// appliances are Linux.
+fn restart_for_refusal(player: Player, port: Option<u16>) -> ! {
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(e) => {
+            // Before anything is stopped: a player that cannot find itself
+            // keeps playing what it can rather than exiting into nothing.
+            tracing::error!("cannot restart for the refused output -- this executable cannot be found ({e}); \
+                             waiting the refusal out [GDE-HST-230]");
+            loop {
+                if !matches!(player.wait(), Ended::Refused) {
+                    std::process::exit(0);
+                }
+            }
+        }
+    };
+    tracing::warn!("restarting: Windows refused this process its output [GDE-HST-230]");
+    player.persist();
+    if !player.shutdown() {
+        tracing::warn!("the engine did not stop within 5s; restarting regardless");
+    }
+    if let Some(p) = port {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::net::TcpListener::bind(("0.0.0.0", p)).is_err() {
+            if std::time::Instant::now() > until {
+                tracing::warn!("port {p} is still held 5s after stopping; starting anyway, \
+                                and the new process will say if it cannot listen");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+    match std::process::Command::new(&exe)
+        .args(std::env::args_os().skip(1))
+        .env(REFUSAL_RESTART, unix_now().to_string())
+        .spawn()
+    {
+        Ok(child) => {
+            tracing::warn!("restarted as process {} [GDE-HST-230]", child.id());
+            std::process::exit(0);
+        }
+        Err(e) => {
+            tracing::error!("could not start {} again: {e} -- the player has stopped [GDE-HST-230]",
+                            exe.display());
+            std::process::exit(1);
+        }
+    }
 }

@@ -45,6 +45,22 @@ const SETTLE: Duration = Duration::from_millis(700);
 const WATCH: Duration = Duration::from_secs(20);
 /// How long the loop waits for a request before going round again.
 const IDLE: Duration = Duration::from_millis(200);
+/// How long a process-wide refusal is waited out before the player asks to be
+/// restarted `[GDE-HST-230]`.
+///
+/// Three measured, on the desktop: about ten minutes on 2026-10-18 and
+/// 2 m 28 s on 2026-10-28, each clearing by itself, and 7 m 30 s on
+/// 2026-10-27, ended by a restart that opened the device at once. None cleared
+/// sooner than two minutes, so waiting longer buys nothing but silence; this is
+/// short of that by enough to let a refusal that merely blips go, and reached
+/// on the fourth refused attempt, at about 28 s.
+const RESTART_AFTER: Duration = Duration::from_secs(20);
+
+/// What the supervisor calls, once, when a refusal has outlasted
+/// [`RESTART_AFTER`]: whoever started the player, asked to start it again. The
+/// supervisor cannot do that itself -- it knows neither the command line nor
+/// the engine that must save its place first.
+pub type Restart = Box<dyn FnOnce() + Send>;
 
 /// Things only the supervisor can do, asked for from anywhere.
 pub enum PathRequest {
@@ -158,6 +174,15 @@ impl PathHandle {
 /// there; the supervisor opens it itself and reports back what happened. The
 /// returned string is for the startup line -- it says which device, or why not.
 pub fn start(device: Option<String>, ring_capacity: usize) -> (PathHandle, String) {
+    start_restartable(device, ring_capacity, None)
+}
+
+/// [`start`], with somewhere to ask for a restart when Windows goes on
+/// refusing the output `[GDE-HST-230]`. Without one, a refusal is retried and
+/// reported, and lasts as long as Windows makes it.
+pub fn start_restartable(device: Option<String>, ring_capacity: usize, restart: Option<Restart>)
+    -> (PathHandle, String)
+{
     let (ready_tx, ready_rx) = sync_channel::<(Option<OutputRing>, String)>(1);
     let (tx, rx) = std::sync::mpsc::channel::<PathRequest>();
     let recoveries = Arc::new(AtomicU64::new(0));
@@ -165,7 +190,7 @@ pub fn start(device: Option<String>, ring_capacity: usize) -> (PathHandle, Strin
 
     std::thread::Builder::new()
         .name("lempi-path".into())
-        .spawn(move || supervise(device, ring_capacity, ready_tx, rx, counter))
+        .spawn(move || supervise(device, ring_capacity, ready_tx, rx, counter, restart))
         .expect("spawn path supervisor");
 
     // Wait for the first open attempt, so the caller can print an honest line
@@ -181,6 +206,7 @@ fn supervise(
     ready: std::sync::mpsc::SyncSender<(Option<OutputRing>, String)>,
     rx: Receiver<PathRequest>,
     recoveries: Arc<AtomicU64>,
+    mut restart: Option<Restart>,
 ) {
     let mut out = match Output::open_device(device.as_deref(), ring_capacity) {
         Ok(o) => {
@@ -267,6 +293,7 @@ fn supervise(
 
         watch(out, playing, &mut watch_at);
         recover(out, playing, playing || reattach, &mut retry_at, &mut backoff, &mut refused, &recoveries);
+        restart_if_refused(&refused, playing, &mut restart);
         if reattach && !out.failed() {
             reattach = false;
         }
@@ -424,12 +451,12 @@ fn recover(
     // the two opens it is the measurement `[GDE-HST-230]` still lacked --
     // whether the refusal belongs to the thread or to the whole process --
     // and it is written either way.
-    let fresh = match out.recover_on_fresh_thread() {
+    let (fresh, process_wide) = match out.recover_on_fresh_thread() {
         Ok(name) => return opened(out, &name, " on a fresh thread, after this thread was refused -- \
                                               so the refusal belonged to the thread",
                                   playing, retry_at, backoff, refused),
-        Err(e) if e.is_com_refusal() => "refused on a fresh thread too, so it is process-wide".to_string(),
-        Err(e) => format!("and a fresh thread failed otherwise: {e}"),
+        Err(e) if e.is_com_refusal() => ("refused on a fresh thread too, so it is process-wide".to_string(), true),
+        Err(e) => (format!("and a fresh thread failed otherwise: {e}"), false),
     };
     // Said differently from an absent device, because it means something
     // different: the speaker is there and this process may not have it
@@ -437,16 +464,28 @@ fn recover(
     // minutes is what made it look like a stall rather than a refusal.
     match refused {
         None => {
-            *refused = Some(Refused { since: now, attempts: 1 });
+            *refused = Some(Refused { since: now, attempts: 1, process_wide });
             tracing::warn!("output refused by Windows, not missing: {refusal} -- the device is there \
                             but this process cannot open it; {fresh}; retrying, and restarting the \
                             player should clear it [GDE-HST-230]");
         }
         Some(r) => {
             r.attempts += 1;
+            r.process_wide = process_wide;
             tracing::warn!("output still refused by Windows, {}; {fresh} -- restarting the player \
                             should clear it [GDE-HST-230]", r.describe(now));
         }
+    }
+}
+
+/// Ask, once, for a new process when a refusal has lasted `[GDE-HST-230]`.
+fn restart_if_refused(refused: &Option<Refused>, playing: bool, restart: &mut Option<Restart>) {
+    let now = Instant::now();
+    let Some(r) = refused.as_ref().filter(|r| r.wants_restart(playing, now)) else { return };
+    if let Some(ask) = restart.take() {
+        tracing::warn!("output refused by Windows, {}, process-wide: asking for a restart, \
+                        which has opened it at once [GDE-HST-230]", r.describe(now));
+        ask();
     }
 }
 
@@ -494,9 +533,20 @@ fn opened(
 struct Refused {
     since: Instant,
     attempts: u32,
+    /// The latest attempt was refused on a fresh thread too.
+    process_wide: bool,
 }
 
 impl Refused {
+    /// Whether a new process should take this refusal over. Measured on
+    /// 2026-10-28: the refusal belongs to the process, so no open from inside
+    /// it gets past one, and a new process does. Only while playing: a
+    /// transfer's end wanting the device back during a pause is not worth a
+    /// restart, and the restarted player resumes what was playing.
+    fn wants_restart(&self, playing: bool, now: Instant) -> bool {
+        self.process_wide && playing && now.saturating_duration_since(self.since) >= RESTART_AFTER
+    }
+
     fn describe(&self, now: Instant) -> String {
         let s = now.saturating_duration_since(self.since).as_secs();
         format!("{} refused attempt{} over {}m{:02}s",
@@ -552,11 +602,23 @@ mod tests {
     }
 
     #[test]
+    fn only_a_lasting_process_wide_refusal_while_playing_asks_for_a_restart() {
+        let since = Instant::now();
+        let r = Refused { since, attempts: 4, process_wide: true };
+        assert!(r.wants_restart(true, since + RESTART_AFTER));
+        assert!(!r.wants_restart(true, since + RESTART_AFTER - Duration::from_secs(1)), "a blip is waited out");
+        assert!(!r.wants_restart(false, since + RESTART_AFTER * 10), "a paused player is not restarted into playing");
+        let other = Refused { process_wide: false, ..r };
+        assert!(!other.wants_restart(true, since + RESTART_AFTER * 10),
+                "a fresh thread's other failure is not a process-wide refusal");
+    }
+
+    #[test]
     fn a_refusal_reports_its_count_and_its_length() {
         let since = Instant::now();
-        let r = Refused { since, attempts: 15 };
+        let r = Refused { since, attempts: 15, process_wide: true };
         assert_eq!(r.describe(since + Duration::from_secs(605)), "15 refused attempts over 10m05s");
-        let one = Refused { since, attempts: 1 };
+        let one = Refused { since, attempts: 1, process_wide: true };
         assert_eq!(one.describe(since), "1 refused attempt over 0m00s");
     }
 }
