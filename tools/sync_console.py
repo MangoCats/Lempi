@@ -121,6 +121,11 @@ def state(plan) -> dict:
     for name in sorted(left - {n["name"] for n in nodes}):            # a phone left alone
         nodes.append(dict(name=name, kind="phone", on_demand=False, enrolled=True, last_sent=None, hours=None,
                           in_run="left alone", why=None, catalogue=None, old_player=False, old_why=None))
+    # A phone's row is keyed by its short fingerprint; the person knows it by the name in the roster.
+    called = {m["node"]: (m.get("name") or "").strip() for m in ss.meshmod.sync_members(ss.mesh_of(plan))}
+    for n in nodes:
+        if n["kind"] == "phone":
+            n["label"] = called.get(n["name"]) or None
     out = {"hub": plan["hub"]["name"], "backup": hub_backup(plan), "nodes": nodes, "run": None}
     if not run:
         return out

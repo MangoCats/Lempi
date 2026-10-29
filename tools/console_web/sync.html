@@ -131,7 +131,7 @@ function paintNodes(st) {
       return box;
     })()),
     S.el('td', {}, n.name, n.old_player ? S.el('span', { class: 'pill bad', style: 'margin-left:.4rem', text: 'OLD PLAYER', title: n.old_why || '' }) : null),
-    S.el('td', {}, n.kind === 'phone' ? 'phone (its own channel)' : n.on_demand ? 'on demand' : 'always running',
+    S.el('td', {}, n.kind === 'phone' ? (n.label ? `${n.label} · phone (its own channel)` : 'phone (its own channel)') : n.on_demand ? 'on demand' : 'always running',
          n.enrolled ? null : S.el('span', { class: 'pill bad', style: 'margin-left:.4rem', text: 'not enrolled' })),
     S.el('td', {}, ago(n.hours)),
     S.el('td', {}, n.in_run === 'missing' ? S.el('span', { class: 'pill bad', text: 'missing' }) :
