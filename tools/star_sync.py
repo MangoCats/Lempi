@@ -1957,8 +1957,10 @@ def adopt(plan, name, library, force=False, tmp="/var/tmp"):
     node = plan["nodes"].get(name)
     if node is None:
         raise SystemExit(f"{name} is not a node of this plan")
-    if not library or not library.startswith("/"):
-        raise SystemExit("--library takes the catalogue's absolute path on the node, e.g. /srv/library/library.db")
+    if not library or not library.startswith("/") or ":" in library or "\\" in library:
+        raise SystemExit(f"--library takes the catalogue's absolute path on the node, e.g. /srv/library/library.db; "
+                         f"got {library!r}. If it names this PC, a shell rewrote it: from Git Bash, run with "
+                         "MSYS_NO_PATHCONV=1")
     state = load_state(plan)
     old = state["nodes"].get(name, {})
     if sent_path(old, "library_sent") and not force:

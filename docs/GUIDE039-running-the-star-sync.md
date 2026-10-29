@@ -77,8 +77,8 @@ before anything else: a node sent no catalogue keeps every cover, credit and
 boundary as it was, and nothing else says so -- on 2026-10-29 that was why
 Queen's *Greatest Hits* showed Heart's sleeve on three nodes and not the
 fourth. *No copy was last sent* is a node seeded by hand: adopt it once,
-`python tools/star_sync.py fleet/star-plan.json adopt NODE --library
-/path/on/node/library.db`, then snapshot again `[SPEC-STAR-946]`. *Changed on
+`MSYS_NO_PATHCONV=1 python tools/star_sync.py fleet/star-plan.json adopt NODE
+--library /path/on/node/library.db`, then snapshot again `[SPEC-STAR-946]`. *Changed on
 the node* with a current player usually means a node's own rows have not been
 asked for: the snapshot's line for it says what was asked `[SPEC-STAR-945]`.
 

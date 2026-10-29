@@ -83,7 +83,7 @@ ssh mango@lrhtpc 'pkill -USR1 -x lempi'
 
 The window is open five minutes, for one pairing `[SPEC-NSH-170]`. Send the invite after the signal, not before.
 
-No star sync has reached it yet. Its catalogue was seeded by hand, not sent by a sync, so the hub has no record of what it last sent this node. Read what the first run's snapshot stage says about its catalogue before letting that run send it anything.
+No catalogue has reached it by sync yet; its listener half has, since run `20261029T1653Z`. Its catalogue was seeded by hand, not sent by a sync, so every run read *no copy was last sent* and sent it none -- and with it none of the 23 covers the hub corrected on 2026-10-29, Queen's *Greatest Hits* among them `[SPEC-STAR-945]`. **Adopted 2026-10-29 22:29 UTC** `[SPEC-STAR-946]`, after that evening's Export send to it had applied: its own catalogue, 1,376 MB, copied on the node through the backup API, `integrity_check` ok there, fetched and matched by SHA-256, is now its copy last sent (`data/sync/adopted/`). `tools/check_node_ready.py` then read it `ready`. Read what the next run's snapshot says about its catalogue before letting that run send it anything.
 
 **`[LRH-OPN-020]` A speaker the Export page sends to since 2026-10-29, and sent nothing yet.** Its `sync_peers` row in the hub's catalogue `[FLT-DAT-015]` names the catalogue `~/lempi-data/library.db` by its absolute path, the listener beside it, and the audio root `~/Music`, also absolute; it is left out of the older remote push, since its catalogue comes by star sync. It could be listed before it could be sent to `[LRH-DEP-020]`. The send itself, 65 files at the time of writing, is the maintainer's press.
 

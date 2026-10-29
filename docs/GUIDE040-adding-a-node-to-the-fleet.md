@@ -83,10 +83,10 @@ An invite sent before that is refused, and **the console's mesh page does not sa
 **`[GDE-ADD-115]` Lesson: adopt the seeded catalogue before the first sync** `[SPEC-STAR-946]`. A seeded catalogue was never *sent* by a sync, so the hub has no copy to patch it against, and without one it is sent no catalogue, ever: `lrhtpc` read *no copy was last sent* at every run, and kept every cover the hub later corrected. Once it is in the plan:
 
 ```
-python tools/star_sync.py fleet/star-plan.json adopt NODE --library /path/on/node/library.db
+MSYS_NO_PATHCONV=1 python tools/star_sync.py fleet/star-plan.json adopt NODE --library /path/on/node/library.db
 ```
 
-It copies the node's own catalogue on the node through the backup API, checks it, fetches it by hash, and records it as the copy last sent. Close the console first if it is older than the command: an older console takes the new `adopted/` folder for the newest run.
+From Git Bash the prefix is needed: without it the node's path is rewritten into one on this PC, and `adopt` refuses it. It copies the node's own catalogue on the node through the backup API, checks it, fetches it by hash, and records it as the copy last sent. Close the console first if it is older than the command: an older console takes the new `adopted/` folder for the newest run.
 
 **`[GDE-ADD-120]` Lesson: read the first sync's snapshot stage before letting it patch.** Run the stages one at a time ([GUIDE039](GUIDE039-running-the-star-sync.md)), and read what the snapshot says about the new node's catalogue and its listener before the patch stage is run. In the run's `SUMMARY.md`, a `catalogue: none sent` line for the new node means stop: whatever it names, the node will keep its catalogue as it is.
 
