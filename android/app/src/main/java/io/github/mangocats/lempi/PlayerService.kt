@@ -1,5 +1,6 @@
 package io.github.mangocats.lempi
 
+import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -12,6 +13,7 @@ import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -219,8 +221,33 @@ class PlayerService : MediaLibraryService() {
             .setSessionActivity(PendingIntent.getActivity(this, 0,
                 Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
             .build()
-        startForeground(1, notification("Starting", null),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+        // Android 12+ refuses a playback service started while the app is in the
+        // background -- a media button with no Lempi on screen. Measured on the
+        // Pixel 7a, 2026-10-28 and 2026-10-29: the refusal, unhandled, crashed
+        // the app twice in a row each time, and Android then offered to stop it.
+        // Declined instead: nothing plays, and Lempi starts when it is opened.
+        if (!foreground()) stopSelf()
+    }
+
+    /**
+     * Android would not let this service into the foreground. It does nothing
+     * until a start that may: the system's media resume binds it from the
+     * background (seen 2026-10-29), and a bound service outlives its stopSelf,
+     * so the person's own start must try again rather than find it refused.
+     */
+    private var refused = false
+
+    private fun foreground(): Boolean {
+        refused = try {
+            startForeground(1, notification("Starting", null),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+            false
+        } catch (e: IllegalStateException) {
+            if (Build.VERSION.SDK_INT < 31 || e !is ForegroundServiceStartNotAllowedException) throw e
+            Log.w(TAG, "not started: Android does not allow playback to start from the background (${e.message})")
+            true
+        }
+        return !refused
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession = session
@@ -231,6 +258,7 @@ class PlayerService : MediaLibraryService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (refused && !foreground()) return START_NOT_STICKY
         // Headset and Bluetooth buttons arrive here too; Media3 routes them to
         // the session.
         if (intent?.action == Intent.ACTION_MEDIA_BUTTON) return super.onStartCommand(intent, flags, startId)
@@ -255,6 +283,8 @@ class PlayerService : MediaLibraryService() {
             }
         }
         if (Lempi.status != "stopped") return START_NOT_STICKY
+        Lempi.startedAt = android.os.SystemClock.elapsedRealtime()
+        Lempi.phase = null
         Lempi.status = "starting"
         Thread({ startPlayer() }, "lempi-start").start()
         return START_NOT_STICKY
@@ -269,11 +299,14 @@ class PlayerService : MediaLibraryService() {
 
     private fun startPlayer() {
         val files = filesDir
+        Lempi.phase = "loading the player"
         var err = Lempi.init(applicationContext, File(files, "lempi.log").path)
         if (err == null) {
             val raw = ByteArray(24).also { SecureRandom().nextBytes(it) }
             val key = raw.joinToString("") { "%02x".format(it) }
             Lempi.key = key
+            val mb = (File(files, "library.db").length() + 999_999) / 1_000_000
+            Lempi.phase = "opening the catalogue ($mb MB) and your listening, then filling the queue"
             err = try {
                 playerStart(File(files, "listener.db").path, File(files, "library.db").path,
                     Lempi.PORT.toUShort(), key)

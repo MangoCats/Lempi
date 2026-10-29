@@ -34,6 +34,14 @@ object Lempi {
     @Volatile
     var status: String = "stopped"
 
+    /** What a start is doing now, in words, for the screen that waits on it. */
+    @Volatile
+    var phase: String? = null
+
+    /** When the current start began (`elapsedRealtime`), so a slow one can say so. */
+    @Volatile
+    var startedAt: Long = 0
+
     /**
      * Ask the running player to rebuild its choices, through its own
      * `POST /library/reload`: after an import or a scan has changed the

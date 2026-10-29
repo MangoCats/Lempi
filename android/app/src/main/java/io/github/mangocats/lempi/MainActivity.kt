@@ -8,12 +8,15 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
@@ -35,34 +38,69 @@ class MainActivity : Activity() {
         frame = FrameLayout(this)
         setContentView(fitBars(frame))
         showing(status)
-        val read = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO
-        else Manifest.permission.READ_EXTERNAL_STORAGE
-        if (checkSelfPermission(read) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(read), 1)
-        } else {
-            begin()
-        }
+        // The player itself is started by onStart, which follows at once.
+        if (!mayRead()) requestPermissions(arrayOf(read), 1)
     }
+
+    private val read = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO
+        else Manifest.permission.READ_EXTERNAL_STORAGE
+
+    private fun mayRead() = checkSelfPermission(read) == PackageManager.PERMISSION_GRANTED
 
     override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, results: IntArray) {
         begin()
     }
 
+    /** When this screen last asked the service to start (`elapsedRealtime`). */
+    private var askedAt = 0L
+
     private fun begin() {
+        askedAt = SystemClock.elapsedRealtime()
+        showing(status)
         startForegroundService(Intent(this, PlayerService::class.java))
         poll()
     }
 
-    /** Wait for the service; show its error if it gives one. */
+    private val tick = Runnable { poll() }
+
+    /**
+     * Wait for the service; show its error if it gives one. "Starting" is
+     * shown only for a start that is happening: a stopped player said it was
+     * starting, and the screen waited on it forever. Pixel 7a, 2026-10-29.
+     */
     private fun poll() {
+        main.removeCallbacks(tick)
+        val now = SystemClock.elapsedRealtime()
         when (val s = Lempi.status) {
             "running" -> show()
-            "starting", "stopped" -> {
-                status.text = "Starting Lempi…"
-                main.postDelayed({ poll() }, 250)
+            "starting" -> {
+                val secs = (now - Lempi.startedAt) / 1000
+                // Measured on the Pixel 7a, 2026-10-29: a start takes 40-60 ms.
+                status.text = "Starting Lempi…" + (Lempi.phase?.let { "\n\n$it" } ?: "") +
+                    (if (secs >= 10) "\n\n$secs s so far. A start usually takes well under a second." else "")
+                main.postDelayed(tick, 250)
+            }
+            "stopped" -> {
+                // Between asking and the service taking it up, it is still "stopped".
+                if (now - askedAt < 5_000) {
+                    status.text = "Starting Lempi…"
+                    main.postDelayed(tick, 250)
+                } else {
+                    showStopped()
+                }
             }
             else -> status.text = "Lempi could not start:\n\n$s"
         }
+    }
+
+    private fun showStopped() {
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 32, 32, 32) }
+        col.addView(TextView(this).apply { text = "Lempi is stopped." })
+        col.addView(Button(this).apply {
+            text = "Start Lempi"
+            setOnClickListener { begin() }
+        })
+        showing(col)
     }
 
     private fun show() {
@@ -116,7 +154,10 @@ class MainActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
-        if (web == null) poll()
+        if (web != null) return
+        // A player stopped while this screen was away -- from the
+        // notification, or by Android -- is started again on return.
+        if (Lempi.status == "stopped" && mayRead()) begin() else poll()
     }
 
     /** Importing a bundle [REQ-AND-230]; sharing a .zip with Lempi does the same. */
