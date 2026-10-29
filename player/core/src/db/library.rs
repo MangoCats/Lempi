@@ -1315,7 +1315,11 @@ impl Library {
     /// from a fallback to another `[REQ-VIS-183]`; a catalogue whose
     /// `releases` predates the column -- a speaker not yet synced, a phone
     /// not yet sent it -- knows no credit at all.
-    fn album_index(&self, plays: bool) -> Result<Vec<AlbumOf>, DbError> {
+    ///
+    /// `listing` asks for what the album listing shows and opening an album
+    /// does not need: each track's plays and its artist. Without them the
+    /// index is about a third cheaper -- 49 ms against 77 on the desk.
+    fn album_index(&self, listing: bool) -> Result<Vec<AlbumOf>, DbError> {
         let col = |t: &str, c: &str| {
             if self.has_column("releases", c) {
                 format!("NULLIF({t}.{c}, '')")
@@ -1326,23 +1330,30 @@ impl Library {
         let chosen = "(SELECT rr.release_mbid FROM __LIB__.release_recordings rr \
             JOIN __LIB__.releases rel ON rel.mbid = rr.release_mbid \
               WHERE rr.mbid = m.mbid ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1)";
-        let (own, own_join) = if self.has_file_releases() {
+        // The chosen release is looked for only where the file names none:
+        // asked in the join's own condition, it was looked for on every
+        // passage, and the index cost 187 ms on the desk instead of 77 --
+        // 1.78 s for the album listing on lempi02w, against 1.05 by name.
+        let (own, own_join, cid) = if self.has_file_releases() {
             (
-                format!("frel.mbid, frel.title, {}, frel.release_date, {}, f.path",
+                format!("frel.mbid AS o1, frel.title AS o2, {} AS o3, frel.release_date AS o4, {} AS o5, f.path AS o6",
                         col("frel", "artist_credit"), col("frel", "release_group")),
                 "LEFT JOIN __LIB__.files f ON f.file_id = m.file_id \
                  LEFT JOIN __LIB__.file_releases fr ON fr.audio_md5 = f.audio_md5 \
                  LEFT JOIN __LIB__.releases frel ON frel.mbid = fr.release_mbid",
+                format!("CASE WHEN frel.mbid IS NULL THEN {chosen} END"),
             )
         } else {
-            ("NULL, NULL, NULL, NULL, NULL, NULL".to_string(), "")
+            ("NULL AS o1, NULL AS o2, NULL AS o3, NULL AS o4, NULL AS o5, NULL AS o6".to_string(), "",
+             chosen.to_string())
         };
-        let crel_on = if own_join.is_empty() { "" } else { "frel.mbid IS NULL AND " };
-        let plays = if plays { PLAYS_EXPR } else { "0" };
+        let (artist, plays) = if listing { (ARTIST_EXPR, PLAYS_EXPR) } else { ("NULL", "0") };
         let sql = format!(
-            "SELECT m.passage_id, {own}, m.mbid, crel.title, {ccredit}, ft.album, {ARTIST_EXPR}, {plays} \
-               FROM ({NAMED}) m LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id {own_join} \
-               LEFT JOIN __LIB__.releases crel ON {crel_on}crel.mbid = {chosen}",
+            "SELECT x.pid, x.o1, x.o2, x.o3, x.o4, x.o5, x.o6, x.mbid, crel.title, {ccredit}, x.tag, x.artist, x.plays \
+               FROM (SELECT m.passage_id AS pid, {own}, m.mbid AS mbid, ft.album AS tag, \
+                            {artist} AS artist, {plays} AS plays, {cid} AS cid \
+                       FROM ({NAMED}) m LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id {own_join}) x \
+               LEFT JOIN __LIB__.releases crel ON crel.mbid = x.cid",
             ccredit = col("crel", "artist_credit")
         );
         /// The release a passage's file was taken from.
@@ -3741,6 +3752,10 @@ mod tests {
         let lib = Library::open(&path).unwrap();
         assert_eq!(albums(&lib, None)[1], ("Woodstock".into(), Some("John Sebastian".into())),
                    "a catalogue without the column browses as before");
+        drop(lib);
+        rusqlite::Connection::open(&path).unwrap().execute_batch("DROP TABLE file_releases").unwrap();
+        let lib = Library::open(&path).unwrap();
+        assert_eq!(albums(&lib, None).len(), 2, "and one without file_releases, as a phone's may be [SPEC-AID-010]");
         std::fs::remove_dir_all(&dir).ok();
     }
 
