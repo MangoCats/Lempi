@@ -1016,6 +1016,21 @@ async function runBrowse() {
   await new Promise(r => setTimeout(r, 260));
   check(ticked() === '', `a search inside an album must not re-tick it, got ${ticked()}`);
 
+  // Each track's artist is a link to that artist's page, the guest's too,
+  // and following it does not tick the row underneath.
+  const by = rows()[1].querySelector('a.artist');
+  check(by && by.textContent === 'Wayne Shorter',
+        `an opened album's artist must be a link, got ${by && by.textContent}`);
+  let followed = { stopped: false, prevented: false };
+  by && by.onclick({ stopPropagation: () => { followed.stopped = true; },
+                     preventDefault: () => { followed.prevented = true; } });
+  await settle();
+  check(followed.stopped && followed.prevented, "the artist link's handler must not tick the row or navigate");
+  check(ticked() === '', `following an artist must not tick the row, got ${ticked()}`);
+  check(window.document.querySelector('[data-kind="albums"]').getAttribute('aria-selected') === 'true'
+        && /^All artists › Wayne Shorter$/.test($('crumbs').textContent),
+        `the link leads to the artist's page, got "${$('crumbs').textContent}"`);
+
   // A failed query must say so, not render as an empty library.
   fail = 500;
   $('q').value = 'zzz';

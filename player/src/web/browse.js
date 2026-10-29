@@ -69,7 +69,8 @@
   }
 
   // One row shape for all three listings: a name, an optional second line, some
-  // numbers, and a tap. Only the contents differ.
+  // numbers, and a tap. Only the contents differ. The second line is text, or
+  // a list of text and elements -- an opened album's artist is a link.
   function row(title, sub, nums, onTap) {
     const li = document.createElement('li');
     const name = document.createElement('div');
@@ -77,9 +78,10 @@
     const b = document.createElement('b');
     b.textContent = title;
     name.appendChild(b);
-    if (sub) {
+    const parts = [].concat(sub || []).filter(Boolean);
+    if (parts.length) {
       const s = document.createElement('span');
-      s.textContent = sub;
+      s.append(...parts);
       name.appendChild(s);
     }
     li.appendChild(name);
@@ -324,8 +326,25 @@
             }
           }
         }
+        // In an opened album each track's artist is a way out to that
+        // artist's own page, the one the Artist tab leads to: a compilation
+        // names five acts, and any of them may be the one worth following.
+        // Its own tap target, so following it does not tick the row [REQ-VIS-197].
+        let by = r.artist;
+        if (filter.album && r.artist) {
+          by = document.createElement('a');
+          by.className = 'artist';
+          by.href = '#';
+          by.textContent = r.artist;
+          by.onclick = e => {
+            e.preventDefault();
+            e.stopPropagation();
+            filter = { artist: r.artist };
+            show('albums');
+          };
+        }
         const li = row(numbered,
-                       filter.album ? [r.artist, says].filter(Boolean).join(' · ')
+                       filter.album ? [by, by && says ? ' · ' : '', says]
                                     : [r.artist, r.album].filter(Boolean).join(' — '),
                        r.plays ? `${r.plays}×` : '');
         if (r.album_hold) li.title = `held: ${r.album_hold}`;
