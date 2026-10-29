@@ -163,6 +163,80 @@ fn build_half(schema: &Connection, out: &Path, half: Half) -> Result<(), DbError
     Ok(())
 }
 
+/// Give an open listener the tables of its half it lacks, from `schema.sql`,
+/// with their indexes, and `schema_meta`'s rows if that is one of them
+/// `[LRH-SEED-030]`. Returns the tables made, in [`LISTENER_TABLES`]'s order.
+///
+/// **A listener the player makes for itself is not a whole half.** Where only
+/// the catalogue is there -- a node seeded with the hub's, the way
+/// `HOWTO.md` §3 describes -- the player opens the missing
+/// listener with `SQLITE_OPEN_CREATE`, and until 2026-10-29 it then had only
+/// the tables the player itself writes. `create_pair_if_absent` above makes the
+/// whole half, but only when neither file exists. On `lrhtpc`, the first node
+/// seeded that way, the listener had 13 of the 22 tables, and its first star
+/// sync stopped on the first one missing. This closes that from the other
+/// side: whatever made the file, it ends up with every table of its half.
+///
+/// The three review tables are not in `schema.sql`; [`super::PlayerStore`]
+/// makes them, before this runs. One read of `sqlite_master` when nothing is
+/// missing, which is every open after the first.
+pub(crate) fn complete_listener(conn: &Connection) -> Result<Vec<String>, DbError> {
+    let query = |e: rusqlite::Error| DbError::Query(format!("completing the listener: {e}"));
+    let have: Vec<String> = {
+        let mut st = conn
+            .prepare("SELECT name FROM main.sqlite_master WHERE type = 'table'")
+            .map_err(query)?;
+        let rows = st.query_map([], |r| r.get(0)).map_err(query)?;
+        rows.collect::<Result<_, _>>().map_err(query)?
+    };
+    let missing: Vec<&str> = LISTENER_TABLES
+        .iter()
+        .chain(BOTH)
+        .copied()
+        .filter(|t| !have.iter().any(|h| h == t))
+        .collect();
+    if missing.is_empty() {
+        return Ok(Vec::new());
+    }
+    let schema = Connection::open_in_memory().map_err(|e| DbError::Open(e.to_string()))?;
+    schema.execute_batch(SCHEMA).map_err(|e| DbError::Query(format!("sql/schema.sql: {e}")))?;
+    let tx = conn.unchecked_transaction().map_err(query)?;
+    let mut made = Vec::new();
+    for table in missing {
+        // Tables before their indexes, as `build_half` orders them.
+        let mut st = schema
+            .prepare(
+                "SELECT sql FROM sqlite_master WHERE tbl_name = ?1 AND sql IS NOT NULL \
+                 ORDER BY type <> 'table', rowid",
+            )
+            .map_err(query)?;
+        let ddl: Vec<String> =
+            st.query_map([table], |r| r.get(0)).map_err(query)?.collect::<Result<_, _>>().map_err(query)?;
+        if ddl.is_empty() {
+            // Not `schema.sql`'s to make: one `PlayerStore` makes itself.
+            continue;
+        }
+        for sql in ddl {
+            tx.execute_batch(&sql).map_err(query)?;
+        }
+        if table == "schema_meta" {
+            let mut st = schema.prepare("SELECT key, value FROM schema_meta").map_err(query)?;
+            let meta: Vec<(String, String)> = st
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map_err(query)?
+                .collect::<Result<_, _>>()
+                .map_err(query)?;
+            for (k, v) in meta {
+                tx.execute("INSERT INTO main.schema_meta (key, value) VALUES (?1, ?2)", [k, v])
+                    .map_err(query)?;
+            }
+        }
+        made.push(table.to_string());
+    }
+    tx.commit().map_err(query)?;
+    Ok(made)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,6 +327,40 @@ mod tests {
         super::super::PlayerStore::open_split(&listener, &library).unwrap();
         // And a second start finds them and writes nothing.
         assert_eq!(create_pair_if_absent(&listener, &library).unwrap(), Pair::Present);
+    }
+
+    /// `[LRH-SEED-030]`: the catalogue there, the listener not -- a node seeded
+    /// with the hub's. The player's own open must leave a whole half, every
+    /// table `split_database.py` would have put there, in every build.
+    #[test]
+    fn a_listener_the_player_makes_is_a_whole_half() {
+        let dir = Scratch::new("seeded");
+        let (listener, library) = (dir.path().join("listener.db"), dir.path().join("library.db"));
+        create_pair_if_absent(&listener, &library).unwrap();
+        std::fs::remove_file(&listener).unwrap();
+
+        super::super::PlayerStore::open_split(&listener, &library).unwrap();
+        let lis = tables(&listener);
+        for t in LISTENER_TABLES.iter().chain(BOTH) {
+            assert!(lis.contains(&t.to_string()), "the player's own listener lacks {t}: {lis:?}");
+        }
+        let c = Connection::open(&listener).unwrap();
+        let meta: i64 = c.query_row("SELECT COUNT(*) FROM schema_meta", [], |r| r.get(0)).unwrap();
+        assert!(meta > 0, "schema_meta made without its rows");
+        // The review tables with the columns added after them, as the sync
+        // patches them: the hub's carry these.
+        let cols = |t: &str| -> Vec<String> {
+            let mut st = c.prepare(&format!("PRAGMA table_info({t})")).unwrap();
+            st.query_map([], |r| r.get(1)).unwrap().map(Result::unwrap).collect()
+        };
+        assert!(cols("id_reviews").contains(&"origin".to_string()));
+        assert!(cols("boundary_reviews").contains(&"orig_fade_out_curve".to_string()));
+        assert!(cols("artist_reviews").contains(&"origin".to_string()));
+        drop(c);
+
+        // A second open finds the half whole and makes nothing.
+        let c = Connection::open(&listener).unwrap();
+        assert!(complete_listener(&c).unwrap().is_empty());
     }
 
     #[test]

@@ -59,9 +59,27 @@ The root is an ordinary write, so nothing in CLAUDE.md §4 applies: `findmnt -no
 - **relink bound every row.** It hashed the 6,540 audio files in 480 s. All 6,433 catalogue rows were found and moved, with 0 missing and 0 corrupt. Then, read from the database rather than from relink: all 6,433 paths are under `~/Music`, all exist, all are distinct, and `integrity_check` is ok. The 107 files relink reported as unknown are audio the hub's catalogue does not hold either — `Sounds/`, two live sets — and nothing plays them.
 - **The first start.** 4 ms to open the session, 10,402 radio passages, paused as asked. Its stream reached PulseAudio's HDMI sink, uncorked: `ALSA plug-in [lempi]`. It cannot see whether that sink is heard, since it has no `wpctl` `[SPEC-APS-030]`, so the music has been *routed* to the television here, not yet heard there.
 
+**`[LRH-SEED-030]` A listener the player makes is not a whole listener half.** The first star sync to reach this node, run `20261029T1614Z`, failed in its patch stage with `no such table: boundary_reviews`. The listener made at the first start had 13 of the listener half's 22 tables. Nine were missing: `artist_reviews`, `boundary_reviews`, `id_reviews`, `listener_likes`, `listener_occasion_points`, `listener_occasions`, `listener_settings`, `selection_decisions` and `schema_meta`.
+
+The cause: on Linux the player opens a missing listener with `SQLITE_OPEN_CREATE` and makes only the tables it uses itself. `create_pair_if_absent` builds the whole half from `sql/schema.sql`, but only when neither file exists, and only the Android app calls it. The three review tables are in no schema at all: the player makes them only in a `vipunen-support` build. Every node before this one ran a listener split from a full database, so none had met this.
+
+**Repaired 2026-10-29 12:22, by hand.** The player was stopped, already paused, and the listener backed up as `listener-backups/pre-tables-20261029.db`. The nine tables were then created, with their indexes and `schema_meta`'s two rows, from the hub's listener's own DDL, the reference the sync patches against. Its columns turned out to be `schema.sql`'s, the review tables' included; only the statements' text differs. Afterwards: 22 tables, `integrity_check` ok, and the player back up paused, still a member. The failed run's snapshot of this node predates the repair, so the next sync starts from a new snapshot.
+
+**Fixed in the player the same day.** `PlayerStore::open_split` now completes the listener half on every open, from `schema.sql`, and makes the three review tables in every build: `complete_listener` in `player/core/src/db/pair.rs`. A test seeds a pair the way this node was seeded, and it fails without the fix. On a node running an older player, a seeded listener still needs this repair before its first sync. [GUIDE040](../docs/GUIDE040-adding-a-node-to-the-fleet.md) `[GDE-ADD-070]` says how to check.
+
 ## 4. What it is not, yet
 
-**`[LRH-OPN-010]` Not enrolled in the mesh, so no sync reaches it.** It is in `fleet/star-plan.json` by host alone, and a run reports it `MISSING ... not enrolled` rather than skipping it in silence. Enrolment is a person's act, confirmed on both sides `[SPEC-MTR-130]`. Until it is enrolled, its plays stay its own and its catalogue stays as seeded.
+**`[LRH-OPN-010]` Enrolled 2026-10-29 16:12 UTC, and not yet synced.** It is a player in the mesh "Home", roster version 10, fingerprint `86ac3e28…`, and that fingerprint is its `member` in `fleet/star-plan.json`. The code was 288 682, confirmed on both sides `[SPEC-MTR-130]`.
+
+**The first invite failed, and the console never said so.** The window had not been opened, so the player refused the invitation. The refusal went only to `data/mesh/invites/<address>.log`, and the mesh page looked as if nothing had happened. This node has no pair button and no `lempi-btctl`, so its window is opened by the signal the button sends, given by hand:
+
+```
+ssh mango@lrhtpc 'pkill -USR1 -x lempi'
+```
+
+The window is open five minutes, for one pairing `[SPEC-NSH-170]`. Send the invite after the signal, not before.
+
+No star sync has reached it yet. Its catalogue was seeded by hand, not sent by a sync, so the hub has no record of what it last sent this node. Read what the first run's snapshot stage says about its catalogue before letting that run send it anything.
 
 **`[LRH-OPN-020]` Not a speaker the Export page sends to.** That is a `sync_peers` row in the hub's catalogue `[FLT-DAT-015]`, and a send would put its audio in `~/Music`.
 
@@ -69,4 +87,4 @@ The root is an ordinary write, so nothing in CLAUDE.md §4 applies: `findmnt -no
 
 ---
 
-**Traceability:** `[LRH-HW-010]`, `[LRH-DAT-010]`, `[LRH-SVC-010]`, `[LRH-AUD-010]`, `[LRH-SET-010]`, `[LRH-DEP-010]`, `[LRH-SEED-010..020]`, `[LRH-OPN-010..030]` · read from the machine 2026-10-28
+**Traceability:** `[LRH-HW-010]`, `[LRH-DAT-010]`, `[LRH-SVC-010]`, `[LRH-AUD-010]`, `[LRH-SET-010]`, `[LRH-DEP-010]`, `[LRH-SEED-010..030]`, `[LRH-OPN-010..030]` · read from the machine 2026-10-28

@@ -103,7 +103,12 @@ both are named.
 
 The usual way to get one is a copy of the hub's catalogue: a new node is sent
 `library.db`, and the player creates an empty `listener.db` on its first
-start. To build one from nothing instead, `sql/schema.sql` makes a single
+start. **That listener is whole only from a build of 2026-10-29 or later.**
+An older player made just the tables it writes itself, and the first star
+sync to reach such a node fails on the first missing one; a node seeded
+that way is repaired before its first sync `[LRH-SEED-030]`. Every other
+step of adding a node is [GUIDE040](docs/GUIDE040-adding-a-node-to-the-fleet.md).
+To build one from nothing instead, `sql/schema.sql` makes a single
 file holding both halves' tables, which is inducted and then split:
 
 ```
@@ -261,6 +266,7 @@ references to "HOWTO §7" still lead somewhere.
 - `docs/spec/SPEC013-vipunen-console.md` — the console's own design.
 - `docs/IMPL003-vipunen-console-build.md`, `IMPL006`, `IMPL007` — what's
   actually built, stage by stage, with measured results.
+- [GUIDE040](docs/GUIDE040-adding-a-node-to-the-fleet.md) — adding a node to the fleet, from survey to its first sync.
 - [GUIDE039](docs/GUIDE039-running-the-star-sync.md) — running the star sync; `docs/spec/SPEC046-star-sync.md` and `SPEC058-catalogue-patch-by-natural-key.md` — its design and its catalogue patch; `fleet/FLEET001-the-fleet.md` — which nodes exist and what each runs.
 - `LempiPi/` — building and deploying the Raspberry Pi appliance image.
 - `build/README.md` — cross-compilation and the Windows `CC` trap in full.

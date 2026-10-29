@@ -363,9 +363,14 @@ pub(crate) const ART_TABLE: &str = "
 /// `tools/apply_reviews.py` is what folds accepted decisions into the library
 /// proper -- deliberately a separate, deliberate step.
 ///
-/// Gated behind `vipunen-support` along with everything else on this page
-/// `[SPEC-SUI-190]`: an appliance that never runs Vipunen has nothing to review.
-#[cfg(feature = "vipunen-support")]
+/// The page that writes it is gated behind `vipunen-support` `[SPEC-SUI-190]`,
+/// but **the table is made in every build**, and so are its two siblings
+/// below. They are listener tables the star sync shares with every node, and
+/// until 2026-10-29 only a listener split from a full database had them: a
+/// node whose player made its own listener, `lrhtpc`, lacked all three, and
+/// its first sync stopped on `no such table: boundary_reviews`
+/// `[LRH-SEED-030]`. Empty on an appliance, which never decides one here; a
+/// sync may still bring it rows decided elsewhere.
 pub(crate) const REVIEW_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS id_reviews (
         passage_id  INTEGER PRIMARY KEY,
@@ -389,7 +394,6 @@ pub(crate) const REVIEW_TABLE: &str = "
 /// `[SPEC-DF-104]`: `NULL` for a decision made on this machine, else the
 /// hostname it was synced in from -- so a decision's own history survives
 /// however many installations it has already crossed.
-#[cfg(feature = "vipunen-support")]
 pub(crate) const REVIEW_COLUMNS: [&str; 4] = [
     "chosen_release_mbid TEXT",
     "previous_mbid TEXT",
@@ -403,7 +407,6 @@ pub(crate) const REVIEW_COLUMNS: [&str; 4] = [
 /// and anything that builds one without the other gets a table the queries
 /// cannot read. That is not hypothetical: the test fixture did exactly that
 /// and every review test failed on `no such column`.
-#[cfg(feature = "vipunen-support")]
 pub(crate) fn ensure_review_table(conn: &Connection) -> Result<(), DbError> {
     conn.execute_batch(REVIEW_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
     for column in REVIEW_COLUMNS {
@@ -423,7 +426,6 @@ pub(crate) fn ensure_review_table(conn: &Connection) -> Result<(), DbError> {
 /// the automatic values a manual edit overrides are always recoverable by
 /// re-running the pass that produced them, so nothing here is the only copy
 /// of a fact. `orig_*` below exists for a different reason `[SPEC-DF-102]`.
-#[cfg(feature = "vipunen-support")]
 pub(crate) const BOUNDARY_REVIEW_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS boundary_reviews (
         passage_id  INTEGER PRIMARY KEY,
@@ -441,7 +443,6 @@ pub(crate) const BOUNDARY_REVIEW_TABLE: &str = "
 /// passage's only portable identity `[SPEC-DF-035]`. Without the span as it
 /// stood before this edit, a receiving installation that has not seen the
 /// edit yet has nothing stable to resolve the decision against.
-#[cfg(feature = "vipunen-support")]
 pub(crate) const BOUNDARY_REVIEW_COLUMNS: [&str; 8] = [
     "audio_md5 TEXT",
     "orig_kind TEXT",
@@ -459,7 +460,6 @@ pub(crate) const BOUNDARY_REVIEW_COLUMNS: [&str; 8] = [
 /// never re-runs one it already has. Same `orig_*` shape as lead/start/end
 /// for the same reason `[SPEC-DF-102]`: a fade edit needs a sync-safe
 /// pre-edit baseline exactly like a boundary edit already has one.
-#[cfg(feature = "vipunen-support")]
 pub(crate) const BOUNDARY_REVIEW_FADE_COLUMNS: [&str; 8] = [
     "fade_in_ms INTEGER",
     "fade_out_ms INTEGER",
@@ -471,7 +471,6 @@ pub(crate) const BOUNDARY_REVIEW_FADE_COLUMNS: [&str; 8] = [
     "orig_fade_out_curve TEXT",
 ];
 
-#[cfg(feature = "vipunen-support")]
 pub(crate) fn ensure_boundary_review_table(conn: &Connection) -> Result<(), DbError> {
     conn.execute_batch(BOUNDARY_REVIEW_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
     for column in BOUNDARY_REVIEW_COLUMNS {
@@ -511,7 +510,6 @@ pub(crate) fn ensure_boundary_review_table(conn: &Connection) -> Result<(), DbEr
 /// captures the single heaviest existing recording link; `NULL` when the
 /// recording had no credited artist at all, which is itself worth restoring
 /// to on revert rather than inventing one.
-#[cfg(feature = "vipunen-support")]
 pub(crate) const ARTIST_REVIEW_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS artist_reviews (
         recording_mbid         TEXT PRIMARY KEY,
@@ -527,10 +525,8 @@ pub(crate) const ARTIST_REVIEW_TABLE: &str = "
 /// `origin` `[SPEC-DF-104]`, added the same way the other two review tables
 /// gain it: `NULL` for a decision made on this machine, else the hostname it
 /// arrived from.
-#[cfg(feature = "vipunen-support")]
 pub(crate) const ARTIST_REVIEW_COLUMNS: [&str; 1] = ["origin TEXT"];
 
-#[cfg(feature = "vipunen-support")]
 pub(crate) fn ensure_artist_review_table(conn: &Connection) -> Result<(), DbError> {
     conn.execute_batch(ARTIST_REVIEW_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
     for column in ARTIST_REVIEW_COLUMNS {
@@ -896,11 +892,8 @@ impl PlayerStore {
         ensure_history_columns(&conn);
         ensure_flags_columns(&conn);
         ensure_occasion_columns(&conn);
-        #[cfg(feature = "vipunen-support")]
         ensure_review_table(&conn)?;
-        #[cfg(feature = "vipunen-support")]
         ensure_boundary_review_table(&conn)?;
-        #[cfg(feature = "vipunen-support")]
         ensure_artist_review_table(&conn)?;
         // Settings live in `player_settings`, one row each `[SPEC-SC-099]`.
         // They used to be columns on `player_state`, added by ALTER as each was
@@ -920,6 +913,20 @@ impl PlayerStore {
         // much as on one that came through the split.
         programme::ensure_programme_tables(&conn)?;
         ensure_library_tables_if_owned(&conn)?;
+        // Last, so it makes only what nothing above does: the rest of the
+        // listener half, from `schema.sql`, on a listener this player made
+        // for itself `[LRH-SEED-030]`. A split pair only -- the single-file
+        // form is a test fixture's, and holds both halves' tables already.
+        if db_path != library_path {
+            let made = super::pair::complete_listener(&conn)?;
+            if !made.is_empty() {
+                tracing::info!(
+                    "listener: made {} table(s) its half lacked, from schema.sql: {}",
+                    made.len(),
+                    made.join(", ")
+                );
+            }
+        }
         Ok(Self { conn })
     }
 
