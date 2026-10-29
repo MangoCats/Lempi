@@ -56,21 +56,47 @@
     const via = filter.artist ? 'artists' : 'albums';
     const all = document.createElement('a');
     all.textContent = via === 'artists' ? 'All artists' : 'All albums';
-    all.onclick = () => { filter = {}; show(via); };
+    all.onclick = () => narrow(via, {});
     c.appendChild(all);
     if (filter.artist) {
       c.append(' › ');
       const a = document.createElement('a');
       a.textContent = filter.artist;
-      a.onclick = () => { filter = { artist: filter.artist }; show('albums'); };
+      a.onclick = () => narrow('albums', { artist: filter.artist });
       c.appendChild(a);
     }
     if (filter.album) c.append(' › ' + filter.album);
   }
 
+  // Every narrowing goes through here: a row tapped, a link followed, a
+  // crumb. The search is cleared on the way, since it was typed for the
+  // listing being left. Kept, "beat" found the Beatles and then narrowed
+  // their albums to those named like it, and an album followed from a
+  // searched track opened as the one track that matched. Switching tabs
+  // keeps it: that is the same search, asked of another axis.
+  function narrow(next, f, open = false) {
+    filter = f;
+    opening = open;
+    clearTimeout(timer);
+    $('q').value = '';
+    show(next);
+  }
+
+  // A link inside a row's second line, to somewhere else in Browse: its own
+  // tap target, as the passage-details link is, so following it does not
+  // tick the row it sits on.
+  function away(text, cls, go) {
+    const a = document.createElement('a');
+    a.className = cls;
+    a.href = '#';
+    a.textContent = text;
+    a.onclick = e => { e.preventDefault(); e.stopPropagation(); go(); };
+    return a;
+  }
+
   // One row shape for all three listings: a name, an optional second line, some
   // numbers, and a tap. Only the contents differ. The second line is text, or
-  // a list of text and elements -- an opened album's artist is a link.
+  // a list of text and elements -- a track's artist or album is a link.
   function row(title, sub, nums, onTap) {
     const li = document.createElement('li');
     const name = document.createElement('div');
@@ -326,27 +352,25 @@
             }
           }
         }
-        // In an opened album each track's artist is a way out to that
-        // artist's own page, the one the Artist tab leads to: a compilation
-        // names five acts, and any of them may be the one worth following.
-        // Its own tap target, so following it does not tick the row [REQ-VIS-197].
-        let by = r.artist;
-        if (filter.album && r.artist) {
-          by = document.createElement('a');
-          by.className = 'artist';
-          by.href = '#';
-          by.textContent = r.artist;
-          by.onclick = e => {
-            e.preventDefault();
-            e.stopPropagation();
-            filter = { artist: r.artist };
-            show('albums');
-          };
+        // A track's artist is a way out to that artist's own page, the one
+        // the Artist tab leads to: a compilation names five acts, and any
+        // of them may be the one worth following [REQ-VIS-197].
+        const by = r.artist && away(r.artist, 'artist',
+                                    () => narrow('albums', { artist: r.artist }));
+        let sub;
+        if (filter.album) {
+          sub = [by, by && says ? ' · ' : '', says];
+        } else {
+          // Outside an opened album its album is the way to it, opened as
+          // an album tapped from where this listing stands [REQ-VIS-198]:
+          // an artist's tracks keep the artist, for the trail and what
+          // opens ticked [SPEC-ALB-025]; all tracks or a search open it
+          // whole.
+          const on = r.album && away(r.album, 'album',
+                                     () => narrow('tracks', { artist: filter.artist, album: r.album }, true));
+          sub = [by, by && on ? ' — ' : '', on];
         }
-        const li = row(numbered,
-                       filter.album ? [by, by && says ? ' · ' : '', says]
-                                    : [r.artist, r.album].filter(Boolean).join(' — '),
-                       r.plays ? `${r.plays}×` : '');
+        const li = row(numbered, sub, r.plays ? `${r.plays}×` : '');
         if (r.album_hold) li.title = `held: ${r.album_hold}`;
         const box = document.createElement('input');
         box.type = 'checkbox';
@@ -402,9 +426,7 @@
           // The artist this album was reached through, not its credit: that
           // is a label, and as a filter it matched none of a compilation's
           // tracks [REQ-VIS-183].
-          () => { filter = { artist: filter.artist, album: r.name };
-                  opening = true;
-                  show('tracks'); });
+          () => narrow('tracks', { artist: filter.artist, album: r.name }, true));
         // An artist's albums, each with its front [REQ-VIS-184]. Lazy, so a
         // long discography fetches only what scrolls into view; a missing
         // cover keeps its square, so the names stay in one column.
@@ -422,7 +444,7 @@
         body.appendChild(row(
           r.name, '',
           `${plural(r.passages, 'track')}\n${r.plays}×`,
-          () => { filter = { artist: r.name }; show('albums'); }));
+          () => narrow('albums', { artist: r.name })));
       }
     }
     if (byLetter) alphabet(anchors);

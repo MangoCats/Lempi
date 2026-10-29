@@ -1031,6 +1031,32 @@ async function runBrowse() {
         && /^All artists › Wayne Shorter$/.test($('crumbs').textContent),
         `the link leads to the artist's page, got "${$('crumbs').textContent}"`);
 
+  // In the Track tab a track's album is a link to it, and its artist to
+  // theirs [REQ-VIS-198]. A search carries across tabs, but not into what a
+  // link opens: an album followed from a searched track is the whole album.
+  $('q').value = 'cow';
+  window.document.querySelector('[data-kind="tracks"]').onclick();
+  await settle();
+  check(asked[asked.length - 1] === '/browse/tracks?q=cow',
+        `a search carries across tabs, got ${asked[asked.length - 1]}`);
+  const on = rows()[0].querySelector('a.album');
+  check(on && on.textContent === 'Aja', `a track's album must be a link, got ${on && on.textContent}`);
+  check((rows()[0].querySelector('a.artist') || {}).textContent === 'Steely Dan',
+        "a track's artist must be a link too");
+  on && on.onclick({ stopPropagation() {}, preventDefault() {} });
+  await settle();
+  check(asked[asked.length - 1] === '/browse/tracks?album=Aja' && $('q').value === '',
+        `the album opens whole, not searched, got ${asked[asked.length - 1]} q="${$('q').value}"`);
+  check(ticked() === '21,22,33', `followed from all tracks, it opens wholly ticked, got ${ticked()}`);
+  check(/^All albums › Aja$/.test($('crumbs').textContent),
+        `followed from all tracks, the trail leads to the albums, got "${$('crumbs').textContent}"`);
+  window.document.querySelector('[data-kind="tracks"]').onclick();
+  await settle();
+  rows()[1].querySelector('a.artist').onclick({ stopPropagation() {}, preventDefault() {} });
+  await settle();
+  check(/^All artists › Wayne Shorter$/.test($('crumbs').textContent),
+        `a track's artist leads to their page, got "${$('crumbs').textContent}"`);
+
   // A failed query must say so, not render as an empty library.
   fail = 500;
   $('q').value = 'zzz';

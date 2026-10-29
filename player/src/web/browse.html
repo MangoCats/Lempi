@@ -57,11 +57,11 @@
   .rows .name b { font-weight: 600; display: block; overflow-wrap: anywhere; }
   .rows .name span { font-size: .8125rem; opacity: .65;
                      display: block; overflow-wrap: anywhere; }
-  /* An opened album's artist, a way to that artist's page. The padding
-     reaches past the small type without moving the line, so a thumb finds
-     it. */
-  .rows .name a.artist { color: inherit; text-decoration: underline;
-                         cursor: pointer; padding: .4rem 0; }
+  /* A track's artist or album, a way to that artist's page or that album.
+     The padding reaches past the small type without moving the line, so a
+     thumb finds it. */
+  .rows .name a.artist, .rows .name a.album {
+    color: inherit; text-decoration: underline; cursor: pointer; padding: .4rem 0; }
   .rows .num { font-size: .8125rem; opacity: .65; text-align: right;
                white-space: pre-line; font-variant-numeric: tabular-nums;
                line-height: 1.25; }
