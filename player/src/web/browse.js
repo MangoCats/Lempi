@@ -248,7 +248,12 @@
     // to their own artist, so narrowing by one showed a third of the album
     // from the artist, and nothing at all from the Album tab, where the
     // artist was the release's "Various Artists" [REQ-VIS-183].
-    const ask = filter.album ? { album: filter.album } : filter;
+    // And asked for as itself, by identity: by name it is every album of
+    // that name, all eighteen Greatest Hits at once [SPEC-AID-010].
+    const ask = !filter.album ? filter
+      : filter.album_id ? { album_id: filter.album_id }
+      : filter.album_of ? { album_of: filter.album_of }
+      : { album: filter.album };
     let rows;
     try {
       rows = await Lempi.browse(kind, { ...ask, q: $('q').value.trim() });
@@ -308,6 +313,13 @@
 
     const anchors = new Map();
     let last = null;
+    const twins = new Map();
+    if (kind === 'albums') {
+      for (const r of rows) {
+        const k = `${r.name}\u001f${r.artist ?? ''}`;
+        twins.set(k, (twins.get(k) || 0) + 1);
+      }
+    }
     for (const r of rows) {
       const label = kind === 'tracks' ? r.title : (r.sort || r.name);
       const L = initial(label);
@@ -365,9 +377,12 @@
           // an album tapped from where this listing stands [REQ-VIS-198]:
           // an artist's tracks keep the artist, for the trail and what
           // opens ticked [SPEC-ALB-025]; all tracks or a search open it
-          // whole.
+          // whole. Through this passage, which names its album's identity
+          // where the name alone would open every album called that
+          // [SPEC-AID-040].
           const on = r.album && away(r.album, 'album',
-                                     () => narrow('tracks', { artist: filter.artist, album: r.album }, true));
+                                     () => narrow('tracks', { artist: filter.artist, album: r.album,
+                                                              album_of: r.passage_id }, true));
           sub = [by, by && on ? ' — ' : '', on];
         }
         const li = row(numbered, sub, r.plays ? `${r.plays}×` : '');
@@ -420,13 +435,17 @@
         li.onclick = () => { tick(box, !box.checked); armed(); };
         body.appendChild(li);
       } else if (kind === 'albums') {
+        // Two albums of one name and one credit -- Heart's two Greatest
+        // Hits -- are told apart by year [SPEC-AID-050]. Only those: on
+        // every other row the year is noise.
+        const twin = twins.get(`${r.name}\u001f${r.artist ?? ''}`) > 1;
         const li = row(
-          r.name, r.artist ?? '',
+          r.name, [r.artist ?? '', twin && r.year ? ` · ${r.year}` : ''],
           `${plural(r.passages, 'track')}\n${r.plays}×`,
           // The artist this album was reached through, not its credit: that
           // is a label, and as a filter it matched none of a compilation's
-          // tracks [REQ-VIS-183].
-          () => narrow('tracks', { artist: filter.artist, album: r.name }, true));
+          // tracks [REQ-VIS-183]. Opened by its identity [SPEC-AID-020].
+          () => narrow('tracks', { artist: filter.artist, album: r.name, album_id: r.id }, true));
         // An artist's albums, each with its front [REQ-VIS-184]. Lazy, so a
         // long discography fetches only what scrolls into view; a missing
         // cover keeps its square, so the names stay in one column.

@@ -843,7 +843,13 @@ async function runBrowse() {
 
   const ARTISTS = [{ name: 'ABBA', artist: null, passages: 3, plays: 9 },
                    { name: 'Steely Dan', artist: null, passages: 8, plays: 40 }];
-  const ALBUMS = [{ name: 'Aja', artist: 'Steely Dan', passages: 7, plays: 30 }];
+  // Each by its identity [SPEC-AID-020]. Heart's two Greatest Hits share a
+  // name and a credit, and are told apart by year [SPEC-AID-050]; ZZ Top's
+  // shares only the name, and needs none.
+  const ALBUMS = [{ name: 'Aja', artist: 'Steely Dan', passages: 7, plays: 30, id: 'r:aja', year: '1977' },
+                  { name: 'Greatest Hits', artist: 'Heart', passages: 15, plays: 0, id: 'r:h86', year: '1986' },
+                  { name: 'Greatest Hits', artist: 'Heart', passages: 17, plays: 0, id: 'r:h98', year: '1998' },
+                  { name: 'Greatest Hits', artist: 'ZZ Top', passages: 18, plays: 0, id: 'r:zz', year: '1992' }];
   // Opened as an album, each names its album passage [SPEC-ALB-010]: the
   // third is held with a stand-in on another album, the fourth held with
   // none, and the fifth is a join with no album passage [SPEC-ALB-040].
@@ -916,8 +922,8 @@ async function runBrowse() {
   check(rows().length === 5, `album tracks: ${rows().length}, want 5`);
   // Asked for whole: the artist it was reached through is not a filter, or
   // a compilation shows only that artist's tracks [REQ-VIS-183].
-  check(asked[asked.length - 1] === '/browse/tracks?album=Aja',
-        `an opened album is asked for whole, got ${asked[asked.length - 1]}`);
+  check(asked[asked.length - 1] === '/browse/tracks?album_id=r%3Aaja',
+        `an opened album is asked for whole, by its identity, got ${asked[asked.length - 1]}`);
   check($('crumbs').textContent.includes('Steely Dan'), 'the trail still names the artist it came through');
   // Opened from an artist, only that artist's tracks are ticked, as Select
   // all would tick them: Black Cow, and Deacon Blues by its stand-in. Not
@@ -1003,8 +1009,22 @@ async function runBrowse() {
   await settle();
   rows()[0].onclick();
   await settle();
-  check(asked[asked.length - 1] === '/browse/tracks?album=Aja',
-        `from the Album tab, asked for whole, got ${asked[asked.length - 1]}`);
+  check(asked[asked.length - 1] === '/browse/tracks?album_id=r%3Aaja',
+        `from the Album tab, asked for whole, by its identity, got ${asked[asked.length - 1]}`);
+  // Same-named albums: the year only where name and credit are the same.
+  const sub = i => rows()[i].querySelector('.name span').textContent;
+  window.document.querySelector('[data-kind="albums"]').onclick();
+  await settle();
+  check(sub(1) === 'Heart · 1986' && sub(2) === 'Heart · 1998' && sub(3) === 'ZZ Top',
+        `same-named albums told apart, got ${[1, 2, 3].map(sub).join(' | ')}`);
+  rows()[2].onclick();
+  await settle();
+  check(asked[asked.length - 1] === '/browse/tracks?album_id=r%3Ah98',
+        `a Greatest Hits opens as itself, got ${asked[asked.length - 1]}`);
+  window.document.querySelector('[data-kind="albums"]').onclick();
+  await settle();
+  rows()[0].onclick();
+  await settle();
   check(ticked() === '21,22,33', `from the Album tab, want 21,22,33 ticked, got ${ticked()}`);
   check($('v-all').disabled, 'opened whole, Select all has nothing left to do');
   check(/^All albums › Aja$/.test($('crumbs').textContent),
@@ -1045,7 +1065,7 @@ async function runBrowse() {
         "a track's artist must be a link too");
   on && on.onclick({ stopPropagation() {}, preventDefault() {} });
   await settle();
-  check(asked[asked.length - 1] === '/browse/tracks?album=Aja' && $('q').value === '',
+  check(asked[asked.length - 1] === '/browse/tracks?album_of=11' && $('q').value === '',
         `the album opens whole, not searched, got ${asked[asked.length - 1]} q="${$('q').value}"`);
   check(ticked() === '21,22,33', `followed from all tracks, it opens wholly ticked, got ${ticked()}`);
   check(/^All albums › Aja$/.test($('crumbs').textContent),

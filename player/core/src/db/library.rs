@@ -7,6 +7,7 @@
 //! [`crate::queue::QueueEntry`] or a page-shaped struct of its own -- so this
 //! layer adds no vocabulary the rest of the player does not already speak.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use rusqlite::OpenFlags;
@@ -705,34 +706,6 @@ impl Library {
         }
     }
 
-    /// The displayed album's own artist credit `[REQ-VIS-183]`: the credit of
-    /// the release `album_expr` named it after -- the file's release, else the
-    /// recording's chosen one, by the same order -- or NULL where that release
-    /// has none, or the album came from a tag. Taken from the one release
-    /// rather than a fallback to another, so a title and a credit never come
-    /// from two different records. `None` for a catalogue whose `releases`
-    /// predates the column: a speaker not yet synced, a phone not yet sent it.
-    fn album_artist_expr(&self, file: &str) -> Option<String> {
-        if !self.has_column("releases", "artist_credit") {
-            return None;
-        }
-        let chosen = "(SELECT rr.release_mbid FROM __LIB__.release_recordings rr \
-            JOIN __LIB__.releases rel ON rel.mbid = rr.release_mbid \
-              WHERE rr.mbid = m.mbid ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1)";
-        let release = if self.has_file_releases() {
-            format!(
-                "COALESCE((SELECT fr.release_mbid FROM __LIB__.files ff \
-                   JOIN __LIB__.file_releases fr ON fr.audio_md5 = ff.audio_md5 \
-                   JOIN __LIB__.releases rel ON rel.mbid = fr.release_mbid WHERE ff.file_id = {file}), {chosen})"
-            )
-        } else {
-            chosen.to_string()
-        };
-        Some(format!(
-            "(SELECT NULLIF(rel.artist_credit, '') FROM __LIB__.releases rel WHERE rel.mbid = {release})"
-        ))
-    }
-
     /// History's album: the played passage's file's release where the
     /// passage still exists, else the recording's chosen release.
     fn hist_album_expr(&self) -> String {
@@ -764,6 +737,33 @@ pub struct BrowseGroup {
     /// Absent for artists.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub passage: Option<i64>,
+    /// An album's identity, for opening it as itself rather than as every
+    /// album of its name `[SPEC-AID-020]`: `r:` and a release MBID, or `n:`
+    /// and the name and credit it was grouped by. Absent for artists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Its release's year, where its identity is a release: what tells
+    /// Heart's 1986 *Greatest Hits* from their 1998 one `[SPEC-AID-050]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub year: Option<String>,
+}
+
+/// One radio passage's album, by identity `[SPEC-AID-010]` -- a row of
+/// `Library::album_index`.
+#[derive(Debug, Clone)]
+struct AlbumOf {
+    passage: i64,
+    id: String,
+    name: String,
+    /// The release's own credit, where the catalogue has one.
+    credit: Option<String>,
+    year: Option<String>,
+    /// Which part of a set of releases this passage's release is, in folder
+    /// order `[SPEC-AID-025]`; 0 for an album of one.
+    place: usize,
+    /// The track's displayed artist, which an artist's albums are found by.
+    artist: Option<String>,
+    plays: i64,
 }
 
 /// A recording that could become a seed, as the Programme page's search
@@ -1204,7 +1204,16 @@ pub struct SegmentProgress {
 pub struct BrowseFilter {
     pub q: Option<String>,
     pub artist: Option<String>,
+    /// An album by its displayed name. Every release of that name at once,
+    /// so the page asks by `album_id` or `album_of` instead `[SPEC-AID-010]`.
     pub album: Option<String>,
+    /// An album by its identity, as `browse_albums` names it in `id`
+    /// `[SPEC-AID-020]`. Outranks `album`.
+    pub album_id: Option<String>,
+    /// The album this radio passage is shown under: how a track's own album
+    /// is opened from a listing that never worked out its identity
+    /// `[SPEC-AID-040]`. Outranks `album`.
+    pub album_of: Option<i64>,
 }
 
 impl BrowseFilter {
@@ -1228,25 +1237,265 @@ impl Library {
         self.groups(&sql, rusqlite::params![f.like()], false)
     }
 
-    /// Each album by its displayed name, under its release's own credit where
-    /// the catalogue has one `[REQ-VIS-183]`, else its first passage's artist.
-    /// The artist filter still matches the *track's* artist: John Sebastian's
-    /// albums include Woodstock, which is shown as Various Artists.
+    /// Each album by its identity `[SPEC-AID-010]`, shown by its displayed
+    /// name, under its release's own credit where the catalogue has one
+    /// `[REQ-VIS-183]`, else its first passage's artist. The artist filter
+    /// still matches the *track's* artist: John Sebastian's albums include
+    /// Woodstock, which is shown as Various Artists.
+    ///
+    /// Grouped here rather than in SQL, because the identity of an album a
+    /// file does not name depends on which albums the files that do name
+    /// theirs make up `[SPEC-AID-030]` -- a second pass over the first.
     pub fn browse_albums(&self, f: &BrowseFilter) -> Result<Vec<BrowseGroup>, DbError> {
-        let album = self.album_expr("m.file_id");
-        let credit = self.album_artist_expr("m.file_id").unwrap_or_else(|| "NULL".into());
+        let q = f.q.as_deref().map(str::to_lowercase).unwrap_or_default();
+        let mut groups: Vec<BrowseGroup> = Vec::new();
+        let mut at: HashMap<String, usize> = HashMap::new();
+        let mut theirs: HashSet<String> = HashSet::new();
+        // In passage order, so an album's first passage -- its cover, and
+        // its credit where its release has none -- is its lowest id.
+        let mut index = self.album_index(true)?;
+        index.sort_by_key(|a| a.passage);
+        for a in index {
+            if f.artist.is_some() && a.artist == f.artist {
+                theirs.insert(a.id.clone());
+            }
+            match at.get(&a.id) {
+                Some(&i) => {
+                    groups[i].passages += 1;
+                    groups[i].plays += a.plays;
+                }
+                None => {
+                    at.insert(a.id.clone(), groups.len());
+                    groups.push(BrowseGroup {
+                        name: a.name,
+                        artist: a.credit.or(a.artist),
+                        passages: 1,
+                        plays: a.plays,
+                        sort: None,
+                        passage: Some(a.passage),
+                        id: Some(a.id),
+                        year: a.year,
+                    });
+                }
+            }
+        }
+        groups.retain(|g| {
+            let id = g.id.as_deref().unwrap_or_default();
+            (q.is_empty() || g.name.to_lowercase().contains(&q))
+                && (f.artist.is_none() || theirs.contains(id))
+        });
+        let key = |g: &BrowseGroup| {
+            (g.name.to_lowercase(), g.artist.as_deref().unwrap_or_default().to_lowercase(), g.year.clone())
+        };
+        groups.sort_by_cached_key(key);
+        Ok(groups)
+    }
+
+    /// Every radio passage's album, by identity `[SPEC-AID-010]`.
+    ///
+    /// A file that names the release it was taken from `[SPEC-SC-125]` is on
+    /// that release, and releases of one title and credit are one album --
+    /// a set whose discs were matched to different editions, Billy Joel's
+    /// *Greatest Hits I & II* to an Australian and a US one -- unless they
+    /// are two: MusicBrainz says they are in different release groups, as
+    /// Heart's two *Greatest Hits* are, or the files hold a recording twice,
+    /// as two editions of *Woodstock* owned side by side do `[SPEC-AID-025]`.
+    /// The desk library's 18 *Greatest Hits* differ by credit.
+    ///
+    /// A file that names none is shown under its recording's chosen release,
+    /// a guess made one recording at a time -- one folder of *Ziggy Stardust*
+    /// is on four releases that way -- so its album is its name and its
+    /// release's credit, which the guesses agree on `[SPEC-AID-030]`. Where
+    /// a file-named album has that name and credit, it is that album:
+    /// otherwise a Beatles track whose file names no release would sit beside
+    /// *Rubber Soul* as a second one. Where no credit is known, the name
+    /// alone, as before: a track's own artist would split a compilation.
+    ///
+    /// A title and its credit always come from the one release, never one
+    /// from a fallback to another `[REQ-VIS-183]`; a catalogue whose
+    /// `releases` predates the column -- a speaker not yet synced, a phone
+    /// not yet sent it -- knows no credit at all.
+    fn album_index(&self, plays: bool) -> Result<Vec<AlbumOf>, DbError> {
+        let col = |t: &str, c: &str| {
+            if self.has_column("releases", c) {
+                format!("NULLIF({t}.{c}, '')")
+            } else {
+                "NULL".to_string()
+            }
+        };
+        let chosen = "(SELECT rr.release_mbid FROM __LIB__.release_recordings rr \
+            JOIN __LIB__.releases rel ON rel.mbid = rr.release_mbid \
+              WHERE rr.mbid = m.mbid ORDER BY rr.chosen DESC, rel.release_date, rel.title LIMIT 1)";
+        let (own, own_join) = if self.has_file_releases() {
+            (
+                format!("frel.mbid, frel.title, {}, frel.release_date, {}, f.path",
+                        col("frel", "artist_credit"), col("frel", "release_group")),
+                "LEFT JOIN __LIB__.files f ON f.file_id = m.file_id \
+                 LEFT JOIN __LIB__.file_releases fr ON fr.audio_md5 = f.audio_md5 \
+                 LEFT JOIN __LIB__.releases frel ON frel.mbid = fr.release_mbid",
+            )
+        } else {
+            ("NULL, NULL, NULL, NULL, NULL, NULL".to_string(), "")
+        };
+        let crel_on = if own_join.is_empty() { "" } else { "frel.mbid IS NULL AND " };
+        let plays = if plays { PLAYS_EXPR } else { "0" };
         let sql = format!(
-            "SELECT album, COUNT(*), SUM(plays), COALESCE(credit, artist), NULL, MIN(pid) FROM ( \
-               SELECT {album} AS album, {ARTIST_EXPR} AS artist, {credit} AS credit, {PLAYS_EXPR} AS plays, \
-                      m.passage_id AS pid \
-                 FROM ({NAMED}) m LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id) \
-             WHERE album IS NOT NULL AND album <> '' \
-               AND (?1 = '' OR album LIKE ?1) \
-               AND (?2 = '' OR artist = ?2) \
-             GROUP BY album ORDER BY album COLLATE NOCASE"
+            "SELECT m.passage_id, {own}, m.mbid, crel.title, {ccredit}, ft.album, {ARTIST_EXPR}, {plays} \
+               FROM ({NAMED}) m LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id {own_join} \
+               LEFT JOIN __LIB__.releases crel ON {crel_on}crel.mbid = {chosen}",
+            ccredit = col("crel", "artist_credit")
         );
-        let artist = f.artist.clone().unwrap_or_default();
-        self.groups(&sql, rusqlite::params![f.like(), artist], true)
+        /// The release a passage's file was taken from.
+        struct Own {
+            id: String,
+            title: String,
+            credit: Option<String>,
+            date: Option<String>,
+            group: Option<String>,
+        }
+        struct Row {
+            passage: i64,
+            release: Option<Own>,
+            path: String,
+            recording: Option<String>,
+            chosen: Option<(String, Option<String>)>,
+            tag: Option<String>,
+            artist: Option<String>,
+            plays: i64,
+        }
+        let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let rows: Vec<Row> = st
+            .query_map([], |r| {
+                let release = match (r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?) {
+                    (Some(id), Some(title)) if !title.is_empty() => {
+                        Some(Own { id, title, credit: r.get(3)?, date: r.get(4)?, group: r.get(5)? })
+                    }
+                    _ => None,
+                };
+                let chosen = r.get::<_, Option<String>>(8)?.filter(|t| !t.is_empty())
+                    .map(|t| r.get(9).map(|c| (t, c))).transpose()?;
+                Ok(Row {
+                    passage: r.get(0)?,
+                    release,
+                    path: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                    recording: r.get(7)?,
+                    chosen,
+                    tag: r.get::<_, Option<String>>(10)?.filter(|t| !t.is_empty()),
+                    artist: r.get(11)?,
+                    plays: r.get(12)?,
+                })
+            })
+            .map_err(|e| DbError::Query(e.to_string()))?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(|e| DbError::Query(e.to_string()))?;
+
+        // Each file-named release: its first file, which orders the parts of
+        // a set as its folders do; the recordings its files hold; its size.
+        struct Release<'a> {
+            title: &'a str,
+            credit: Option<&'a str>,
+            date: Option<&'a str>,
+            group: Option<&'a str>,
+            first: &'a str,
+            recordings: HashSet<&'a str>,
+            passages: usize,
+        }
+        let mut releases: HashMap<&str, Release> = HashMap::new();
+        for r in &rows {
+            if let Some(own) = &r.release {
+                let rel = releases.entry(own.id.as_str()).or_insert_with(|| Release {
+                    title: &own.title, credit: own.credit.as_deref(), date: own.date.as_deref(),
+                    group: own.group.as_deref(), first: &r.path, recordings: HashSet::new(), passages: 0,
+                });
+                rel.first = rel.first.min(r.path.as_str());
+                rel.passages += 1;
+                if let Some(rec) = &r.recording {
+                    rel.recordings.insert(rec);
+                }
+            }
+        }
+        // Releases of one title and credit, in folder order, each joining
+        // the first album it can: none of a group of its own, none of a
+        // recording it holds. The album is known by its first part.
+        let mut alike: HashMap<(&str, Option<&str>), Vec<&str>> = HashMap::new();
+        for (id, rel) in &releases {
+            alike.entry((rel.title, rel.credit)).or_default().push(id);
+        }
+        // release -> (the album's first part, this part's place in it)
+        let mut part: HashMap<&str, (&str, usize)> = HashMap::new();
+        // title and credit -> the largest album of them, for the rest to join
+        let mut named: HashMap<(&str, Option<&str>), (&str, usize)> = HashMap::new();
+        for (key, mut ids) in alike {
+            ids.sort_by_key(|id| (releases[id].first, *id));
+            let mut albums: Vec<Vec<&str>> = Vec::new();
+            for id in ids {
+                let rel = &releases[id];
+                let fits = |album: &Vec<&str>| album.iter().all(|other| {
+                    let o = &releases[other];
+                    (rel.group.is_none() || o.group.is_none() || rel.group == o.group)
+                        && rel.recordings.is_disjoint(&o.recordings)
+                });
+                match albums.iter_mut().find(|a| fits(a)) {
+                    Some(album) => album.push(id),
+                    None => albums.push(vec![id]),
+                }
+            }
+            for album in &albums {
+                let size: usize = album.iter().map(|id| releases[id].passages).sum();
+                for (place, id) in album.iter().enumerate() {
+                    part.insert(id, (album[0], place));
+                }
+                let slot = named.entry(key).or_insert((album[0], size));
+                if size > slot.1 || (size == slot.1 && album[0] < slot.0) {
+                    *slot = (album[0], size);
+                }
+            }
+        }
+        let year = |d: Option<&str>| d.map(|d| d.chars().take(4).collect::<String>()).filter(|y| !y.is_empty());
+
+        let mut out = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let (id, name, credit, year, place) = match &r.release {
+                Some(own) => {
+                    let (first, place) = part[own.id.as_str()];
+                    (format!("r:{first}"), own.title.clone(), own.credit.clone(), year(releases[first].date), place)
+                }
+                None => {
+                    let (name, credit) = match (&r.chosen, &r.tag) {
+                        (Some((t, c)), _) => (t.clone(), c.clone()),
+                        (None, Some(tag)) => (tag.clone(), None),
+                        (None, None) => continue,
+                    };
+                    match named.get(&(name.as_str(), credit.as_deref())) {
+                        Some((first, _)) => {
+                            let y = year(releases[first].date);
+                            (format!("r:{first}"), name, credit, y, 0)
+                        }
+                        None => (format!("n:{name}\u{1f}{}", credit.as_deref().unwrap_or_default()),
+                                 name, credit, None, 0),
+                    }
+                }
+            };
+            out.push(AlbumOf { passage: r.passage, id, name, credit, year, place, artist: r.artist.clone(),
+                               plays: r.plays });
+        }
+        Ok(out)
+    }
+
+    /// The radio passages of one album, by its identity or by one of its
+    /// passages `[SPEC-AID-040]`, each with its part's place in the album;
+    /// `None` when the filter names neither.
+    fn album_members(&self, f: &BrowseFilter) -> Result<Option<HashMap<i64, usize>>, DbError> {
+        if f.album_id.is_none() && f.album_of.is_none() {
+            return Ok(None);
+        }
+        let index = self.album_index(false)?;
+        let id = match (&f.album_id, f.album_of) {
+            (Some(id), _) => Some(id.clone()),
+            (None, Some(p)) => index.iter().find(|a| a.passage == p).map(|a| a.id.clone()),
+            (None, None) => None,
+        };
+        Ok(Some(index.into_iter().filter(|a| Some(&a.id) == id.as_ref()).map(|a| (a.passage, a.place)).collect()))
     }
 
     fn groups(
@@ -1267,6 +1516,8 @@ impl Library {
                     sort: r.get::<_, Option<String>>(4).ok().flatten(),
                     // And only the album listing a sixth.
                     passage: r.get::<_, Option<i64>>(5).ok().flatten(),
+                    id: None,
+                    year: None,
                 })
             })
             .map_err(|e| DbError::Query(e.to_string()))?;
@@ -1914,12 +2165,24 @@ impl Library {
     }
 
     pub fn browse_tracks(&self, f: &BrowseFilter) -> Result<Vec<BrowseTrack>, DbError> {
+        // An album opened as itself is its members, by identity
+        // `[SPEC-AID-040]`; by name, every album of that name, as before.
+        let members = self.album_members(f)?;
+        let opened = f.album.is_some() || members.is_some();
+        let (scope, by_name) = match &members {
+            Some(ids) if ids.is_empty() => return Ok(Vec::new()),
+            Some(ids) => {
+                let list = ids.keys().map(i64::to_string).collect::<Vec<_>>().join(",");
+                (format!("{NAMED} AND p.passage_id IN ({list})"), String::new())
+            }
+            None => (NAMED.to_string(), f.album.clone().unwrap_or_default()),
+        };
         // An album is a running order, not an index: opened as one, its tracks
         // belong in the order they were put on the record `[REQ-VIS-190]`.
         // Anywhere else alphabetical is what makes a long list findable.
         // Unnumbered tracks sort after the numbered ones rather than ahead of
         // them, which is where a bare NULL would put them.
-        let order = if f.album.is_some() {
+        let order = if opened {
             // MusicBrainz first, the file's tag second `[REQ-VIS-190]`. Both are
             // track numbers; one is the release's own and the other is whatever
             // the person who ripped the disc typed, so when Vipunen has chosen a
@@ -1941,7 +2204,7 @@ impl Library {
                       {album} AS album, {PLAYS_EXPR} AS plays, \
                       ft.track_no AS track_no, ft.disc_no AS disc_no, \
                       {track} AS mb_track, {disc} AS mb_disc \
-                 FROM ({NAMED}) m LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id) \
+                 FROM ({scope}) m LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id) \
              WHERE title IS NOT NULL AND title <> '' \
                AND (?1 = '' OR title LIKE ?1) \
                AND (?2 = '' OR artist = ?2) \
@@ -1952,11 +2215,7 @@ impl Library {
         let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
         let rows = st
             .query_map(
-                rusqlite::params![
-                    f.like(),
-                    f.artist.clone().unwrap_or_default(),
-                    f.album.clone().unwrap_or_default()
-                ],
+                rusqlite::params![f.like(), f.artist.clone().unwrap_or_default(), by_name],
                 |r| {
                     Ok(BrowseTrack {
                         passage_id: r.get(0)?,
@@ -1977,7 +2236,14 @@ impl Library {
         let mut out = rows
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|e| DbError::Query(e.to_string()))?;
-        if f.album.is_some() {
+        // A set of releases plays part by part, each in its own order: the
+        // discs of a set matched to two editions both number from 1, and
+        // by number alone they would interleave `[SPEC-AID-025]`. Stable,
+        // so each part keeps the order the query gave it.
+        if let Some(place) = &members {
+            out.sort_by_key(|t| place.get(&t.passage_id).copied().unwrap_or_default());
+        }
+        if opened {
             self.as_recorded(&mut out)?;
         }
         Ok(out)
@@ -3475,6 +3741,114 @@ mod tests {
         let lib = Library::open(&path).unwrap();
         assert_eq!(albums(&lib, None)[1], ("Woodstock".into(), Some("John Sebastian".into())),
                    "a catalogue without the column browses as before");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `[SPEC-AID-010]` Albums are told apart by identity: three *Greatest
+    /// Hits*, two of them Heart's and told apart by year `[SPEC-AID-050]`.
+    /// `[SPEC-AID-025]` A set whose discs name two editions of one release
+    /// group is one album, played part by part in folder order; two editions
+    /// owned side by side, holding a recording twice, are two.
+    /// `[SPEC-AID-030]` A file that names no release is grouped by name and
+    /// credit -- one *Ziggy* on two guessed editions is one album -- and
+    /// joins a file-named release of that name and credit, so *Rubber Soul*
+    /// is not shown twice. `[SPEC-AID-040]` Each opens as itself, by its id
+    /// or by one of its passages.
+    #[test]
+    fn albums_are_told_apart_by_identity() {
+        let dir = std::env::temp_dir().join(format!("lempi-albumid-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lib.db");
+        let _ = std::fs::remove_file(&path);
+        {
+            let c = rusqlite::Connection::open(&path).unwrap();
+            c.execute_batch(include_str!("../../../../sql/schema.sql")).unwrap();
+            c.execute_batch(
+                "INSERT INTO artists (mbid,name,source) VALUES ('zz','ZZ Top','mb'), ('heart','Heart','mb'),
+                                                             ('fab','The Beatles','mb'), ('db','David Bowie','mb'),
+                                                             ('bj','Billy Joel','mb'), ('cj','Country Joe','mb');
+                 INSERT INTO releases (mbid,title,source,artist_credit,release_date,release_group) VALUES
+                     ('gh-zz','Greatest Hits','mb','ZZ Top','1992','rg-zz'),
+                     ('gh-h98','Greatest Hits','mb','Heart','1998-11-10','rg-h98'),
+                     ('gh-h86','Greatest Hits','mb','Heart','1986','rg-h86'),
+                     ('rs','Rubber Soul','mb','The Beatles','1965-12-03','rg-rs'),
+                     ('rs-mono','Rubber Soul','mb','The Beatles','2009','rg-rs'),
+                     ('z72','Ziggy','mb','David Bowie','1972',NULL), ('z90','Ziggy','mb','David Bowie','1990',NULL),
+                     ('bj-us','GH I & II','mb','Billy Joel','1985','rg-bj'), ('bj-au','GH I & II','mb','Billy Joel','1985','rg-bj'),
+                     ('w99','Woodstock','mb','Various Artists','1999',NULL), ('w09','Woodstock','mb','Various Artists','2009',NULL);",
+            )
+            .unwrap();
+            // passage, artist, its file's own release (or none), its recording's chosen one,
+            // its folder, and its recording -- its own unless named
+            for (n, artist, own, chosen, folder, rec) in [
+                (1, "zz", Some("gh-zz"), "gh-zz", "a", None), (2, "heart", Some("gh-h98"), "gh-h98", "a", None),
+                (3, "heart", Some("gh-h86"), "gh-h86", "a", None), (4, "heart", Some("gh-h86"), "gh-h86", "a", None),
+                (5, "fab", Some("rs"), "rs", "a", None), (6, "fab", None, "rs-mono", "a", None),
+                (7, "db", None, "z72", "a", None), (8, "db", None, "z90", "a", None),
+                // Volume I's folder sorts first; by number alone 10 would come between.
+                (9, "bj", Some("bj-au"), "bj-au", "BJ_1973-1977", None), (10, "bj", Some("bj-us"), "bj-us", "BJ_Vol2", None),
+                (11, "bj", Some("bj-au"), "bj-au", "BJ_1973-1977", None),
+                (12, "cj", Some("w99"), "w99", "W1999", None), (13, "cj", Some("w09"), "w09", "W2009", Some("rec12")),
+            ] {
+                let rec = rec.map(String::from).unwrap_or_else(|| format!("rec{n}"));
+                c.execute("INSERT OR IGNORE INTO recordings (mbid,title,source) VALUES (?1,?1,'mb')", [&rec]).unwrap();
+                c.execute("INSERT OR IGNORE INTO recording_artists (mbid,artist_mbid,weight,source) VALUES (?1,?2,1.0,'mb')",
+                          rusqlite::params![rec, artist]).unwrap();
+                c.execute("INSERT INTO release_recordings (release_mbid,mbid,position,source,chosen) VALUES (?1,?2,?3,'mb',1)",
+                          rusqlite::params![chosen, rec, n]).unwrap();
+                c.execute("INSERT INTO files (file_id,audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen) \
+                           VALUES (?1,?2,?3,1,1.0,'mp3',1000,'t','t')",
+                          rusqlite::params![n, format!("m{n}"), format!("/{folder}/{n:02}.mp3")]).unwrap();
+                c.execute("INSERT INTO passages (passage_id,file_id,kind,start_ms,end_ms,boundary_src) \
+                           VALUES (?1,?1,'radio',0,1000,'x')", [n]).unwrap();
+                c.execute("INSERT INTO passage_recordings (passage_id,mbid,weight,source) VALUES (?1,?2,1.0,'mb')",
+                          rusqlite::params![n, rec]).unwrap();
+                if let Some(own) = own {
+                    c.execute("INSERT INTO file_releases (audio_md5,release_mbid,source) VALUES (?1,?2,'cd:import')",
+                              rusqlite::params![format!("m{n}"), own]).unwrap();
+                }
+            }
+        }
+        let lib = Library::open(&path).unwrap();
+        let albums = |artist: Option<&str>| -> Vec<(String, String, Option<String>, i64, String)> {
+            lib.browse_albums(&BrowseFilter { artist: artist.map(Into::into), ..Default::default() })
+                .unwrap()
+                .into_iter()
+                .map(|g| (g.name, g.artist.unwrap_or_default(), g.year, g.passages, g.id.unwrap_or_default()))
+                .collect()
+        };
+        let y = |s: &str| Some(s.to_string());
+        assert_eq!(albums(None), vec![
+            ("GH I & II".into(), "Billy Joel".into(), y("1985"), 3, "r:bj-au".into()),
+            ("Greatest Hits".into(), "Heart".into(), y("1986"), 2, "r:gh-h86".into()),
+            ("Greatest Hits".into(), "Heart".into(), y("1998"), 1, "r:gh-h98".into()),
+            ("Greatest Hits".into(), "ZZ Top".into(), y("1992"), 1, "r:gh-zz".into()),
+            ("Rubber Soul".into(), "The Beatles".into(), y("1965"), 2, "r:rs".into()),
+            ("Woodstock".into(), "Various Artists".into(), y("1999"), 1, "r:w99".into()),
+            ("Woodstock".into(), "Various Artists".into(), y("2009"), 1, "r:w09".into()),
+            ("Ziggy".into(), "David Bowie".into(), None, 2, "n:Ziggy\u{1f}David Bowie".into()),
+        ]);
+        let in_order = |id: &str| -> Vec<i64> {
+            lib.browse_tracks(&BrowseFilter { album_id: Some(id.into()), ..Default::default() })
+                .unwrap().into_iter().map(|t| t.passage_id).collect()
+        };
+        assert_eq!(in_order("r:bj-au"), [9, 11, 10], "part by part, in folder order -- not 9, 10, 11 by number");
+        assert_eq!(albums(Some("Heart")).iter().map(|a| a.4.as_str()).collect::<Vec<_>>(), ["r:gh-h86", "r:gh-h98"],
+                   "an artist's albums are theirs alone");
+
+        let opened = |f: BrowseFilter| -> Vec<i64> {
+            let mut ids: Vec<i64> = lib.browse_tracks(&f).unwrap().into_iter().map(|t| t.passage_id).collect();
+            ids.sort();
+            ids
+        };
+        let by_id = |id: &str| opened(BrowseFilter { album_id: Some(id.into()), ..Default::default() });
+        assert_eq!(by_id("r:gh-h86"), [3, 4], "one Greatest Hits, not all three");
+        assert_eq!(by_id("n:Ziggy\u{1f}David Bowie"), [7, 8]);
+        assert!(by_id("r:nothing").is_empty(), "an id that names nothing opens nothing, not everything");
+        assert_eq!(opened(BrowseFilter { album_of: Some(6), ..Default::default() }), [5, 6],
+                   "a track's own album, through the passage, is the whole of it");
+        assert_eq!(opened(BrowseFilter { album: Some("Greatest Hits".into()), ..Default::default() }), [1, 2, 3, 4],
+                   "by name, every album of that name, as before");
         std::fs::remove_dir_all(&dir).ok();
     }
 

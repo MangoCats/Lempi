@@ -25,6 +25,8 @@ pub(super) async fn browse(
         q: q.get("q").filter(|s| !s.is_empty()).cloned(),
         artist: q.get("artist").filter(|s| !s.is_empty()).cloned(),
         album: q.get("album").filter(|s| !s.is_empty()).cloned(),
+        album_id: q.get("album_id").filter(|s| !s.is_empty()).cloned(),
+        album_of: q.get("album_of").and_then(|s| s.parse().ok()),
     };
     let out = tokio::task::spawn_blocking(move || {
         let lib = crate::db::Library::open_split(&db, &library).ok()?;
