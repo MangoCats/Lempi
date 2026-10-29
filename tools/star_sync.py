@@ -28,6 +28,10 @@ its mirror.
     python tools/star_sync.py PLAN backup             the hub's daily backup, and its mirror
     python tools/star_sync.py PLAN mirror             the mirror brought up to date, if it is reachable
     python tools/star_sync.py PLAN status             exits 1 when a backup has gone stale
+    python tools/star_sync.py PLAN adopt NODE --library /path/on/node/library.db [--force] [--tmp DIR]
+                                                      a node whose catalogue was seeded by hand: its own
+                                                      catalogue, copied on it, becomes the copy last sent,
+                                                      so the next sync can patch it [SPEC-STAR-946]
 
 `merge`, `items`, `verdict`, `approve-all`, `patch`, `rehearse` and `commit` act
 on the newest run unless `--run DIR` names one. Nothing is committed until a
@@ -138,11 +142,22 @@ def save_state(plan, state):
     os.replace(tmp, p)
 
 
+RUN_NAME = re.compile(r"^\d{8}T\d{4}Z$")
+
+
+def run_names(runs):
+    """The runs under `runs`, oldest first: the folders named by a run's stamp. Others
+    live there too -- `adopted/` [SPEC-STAR-946] -- and are never the newest run."""
+    if not os.path.isdir(runs):
+        return []
+    return sorted(d for d in os.listdir(runs) if RUN_NAME.match(d) and os.path.isdir(os.path.join(runs, d)))
+
+
 def newest_run(plan, given=None):
     if given:
         return at_root(given)
     runs = at_root(plan["runs"])
-    found = sorted(d for d in os.listdir(runs) if os.path.isdir(os.path.join(runs, d)))
+    found = run_names(runs)
     if not found:
         raise SystemExit(f"no run under {runs}: `snapshot` makes one")
     return os.path.join(runs, found[-1])
@@ -323,17 +338,26 @@ def _in(c, sql, values):
 
 def files_to_ask(summary_db, sent_lib, touched):
     """The files whose rows the node is asked for: the ones it holds that the copy last
-    sent to it does not -- a bundle brought them -- and the ones a send has touched
-    since (`bundle_ledger`), held or not."""
+    sent to it does not -- a bundle brought them -- the ones a send has touched since
+    (`bundle_ledger`), held or not, and the ones both hold whose passages differ.
+
+    The last is a boundary decision the node applied itself, from the shared review
+    tables, as the hub did: no bundle carried it, so neither of the others names the
+    file. Found 2026-10-29: five such passages, the same edit on hub and node, held
+    bose, lp3-wifi and smartboardpc at *changed on the node* for two weeks, and with
+    them every cover the hub corrected [SPEC-STAR-945]."""
+    span = ("SELECT f.audio_md5, p.kind, p.start_ms, p.end_ms "
+            "FROM passages p JOIN files f USING (file_id)")
     s = sqlite3.connect(f"file:{summary_db}?mode=ro", uri=True)
     b = sqlite3.connect(f"file:{sent_lib}?mode=ro", uri=True)
     try:
         held = {r[0] for r in s.execute("SELECT audio_md5 FROM files")}
         sent = {r[0] for r in b.execute("SELECT audio_md5 FROM files")}
+        moved = {r[0] for r in set(s.execute(span)) ^ set(b.execute(span))} & held & sent
     finally:
         s.close()
         b.close()
-    return sorted((held - sent) | set(touched))
+    return sorted((held - sent) | moved | set(touched))
 
 
 def rows_wanted(files, *libs):
@@ -807,17 +831,24 @@ def snapshot(plan, only=None):
                     say(f"  {name}: its catalogue is on a read-only partition: the player opens it for the check "
                         f"and the commit, and closes it again [SPEC-STAR-104]")
             sent_lib = sent_path(ns, "library_sent")
-            cat = catalogue_state(sent_lib, os.path.join(nd, "summary.db"), os.path.join(hd, "library.db"))
+            baseline, rows_note = node_rows(mdir, player, run, name, snap, sent_lib, nd,
+                                            os.path.join(hd, "library.db"), at_root(hub["library"]), ns.get("at"))
+            # The state is judged against what the node is patched against: the copy last
+            # sent, corrected by its own rows where it gave them. Judged against the copy
+            # alone, a node that had made the hub's own edits read *changed* and was sent
+            # no catalogue at all, its rows already in hand (found 2026-10-29).
+            as_sent = catalogue_state(sent_lib, os.path.join(nd, "summary.db"), os.path.join(hd, "library.db"))
+            cat = (catalogue_state(baseline, os.path.join(nd, "summary.db"), os.path.join(hd, "library.db"))
+                   if baseline else as_sent)
             say(f"  {name}: {sum(len(t['rows']) for t in snap['listener']['tables'])} shared row(s), "
-                f"catalogue {catalogue_words(cat)}")
+                f"catalogue {catalogue_words(cat)}"
+                + (f" (against the copy last sent alone: {catalogue_words(as_sent)})" if cat != as_sent else ""))
+            if rows_note:
+                say(f"  {name}: {rows_note}")
             # [GDE-INT-145]: what the node found reading its own files back.
             ic = snap.get("file_checks")
             if ic is not None:
                 say(f"  {name}: {integrity_words(ic)} [GDE-INT-145]")
-            baseline, rows_note = node_rows(mdir, player, run, name, snap, sent_lib, nd,
-                                            os.path.join(hd, "library.db"), at_root(hub["library"]), ns.get("at"))
-            if rows_note:
-                say(f"  {name}: {rows_note}")
             manifest["nodes"].append(dict(
                 name=name, listener=os.path.join(nd, "listener.db"), taken_at=now().isoformat(),
                 sent=sent_path(ns, "listener_sent"),
@@ -825,7 +856,7 @@ def snapshot(plan, only=None):
                 catalogue=os.path.join(nd, "summary.db"), files=os.path.join(nd, "summary.db")))
             baselines[name] = {"listener": os.path.join(nd, "listener.db"), "signed": n["member"],
                                "library": baseline or sent_lib, "library_sent": sent_lib,
-                               "catalogue": cat, "natural_keys": cap,
+                               "catalogue": cat, "catalogue_as_sent": as_sent, "natural_keys": cap,
                                "catalogue_blocked": blocked, "integrity": snap.get("file_checks"),
                                "catalogue_in_step": not blocked and (cat["state"] in ("as-sent", "holds-hub-rows")
                                or (cat["state"] == "other-ids" and cap >= NATURAL_KEYS_NEEDED))}
@@ -1773,8 +1804,7 @@ def node_integrity(plan, depth=30):
     from the newest `depth` runs: {name: (run, the summary or None)}. A node
     missed by the newest run -- off, or skipped -- is read from the one before."""
     runs = at_root(plan["runs"])
-    found = sorted((d for d in os.listdir(runs) if os.path.isdir(os.path.join(runs, d))),
-                   reverse=True)[:depth] if os.path.isdir(runs) else []
+    found = run_names(runs)[::-1][:depth]
     out = {}
     for d in found:
         p = os.path.join(runs, d, "baselines.json")
@@ -1896,6 +1926,93 @@ def status(plan):
 
 
 
+# ------------------------------------------------------------------ adopt --
+# [SPEC-STAR-946]: a node whose catalogue was seeded by hand has no copy last sent,
+# and a node with none is never sent a catalogue patch [SPEC-STAR-940] -- so its
+# covers, credits and boundaries stay as seeded, whatever the hub corrects. Found
+# 2026-10-29 on lrhtpc, seeded the evening before. Adopting takes the node's own
+# catalogue, copied on the node through the backup API, as the copy last sent: the
+# first patch is then made against exactly what it holds, and its rehearsal proves it.
+
+ADOPT_SCRIPT = """
+import hashlib, sqlite3, sys
+src, dst = sys.argv[1], sys.argv[2]
+s = sqlite3.connect("file:" + src + "?mode=ro", uri=True)
+d = sqlite3.connect(dst)
+s.backup(d)
+ok = d.execute("PRAGMA integrity_check").fetchone()[0]
+d.close()
+s.close()
+h = hashlib.sha256()
+with open(dst, "rb") as fh:
+    for chunk in iter(lambda: fh.read(1 << 20), b""):
+        h.update(chunk)
+print(ok, h.hexdigest())
+"""
+
+
+def adopt(plan, name, library, force=False, tmp="/var/tmp"):
+    """Copy `name`'s catalogue `library` (a path on the node) here and record it as the
+    copy last sent to it. Refuses a node that already has one unless `force`."""
+    node = plan["nodes"].get(name)
+    if node is None:
+        raise SystemExit(f"{name} is not a node of this plan")
+    if not library or not library.startswith("/"):
+        raise SystemExit("--library takes the catalogue's absolute path on the node, e.g. /srv/library/library.db")
+    state = load_state(plan)
+    old = state["nodes"].get(name, {})
+    if sent_path(old, "library_sent") and not force:
+        raise SystemExit(f"{name} already has a copy last sent ({old['library_sent']}): a sync patches it "
+                         "routinely. --force replaces it with what the node holds now")
+    host = node["host"]
+    t = stamp()
+    remote = f"{tmp}/lempi-adopt-{t}.db"
+    say(f"{name}: adopting its catalogue {library} as the copy last sent [SPEC-STAR-946]")
+    # [GDE-DEP-060]: what is assumed of the node, said before acting on it.
+    size = subprocess.run(["ssh", *SSH, host, f"stat -c %s {shq(library)} && df -P -B1 {shq(tmp)} | tail -1"],
+                          capture_output=True, text=True)
+    if size.returncode != 0:
+        raise SystemExit(f"cannot read {library} or {tmp} on {host}: {size.stderr.strip() or size.stdout.strip()}")
+    lines = size.stdout.split("\n")
+    need, free = int(lines[0]), int(lines[1].split()[3])
+    if free < need * 1.2:
+        raise SystemExit(f"{host}:{tmp} has {free >> 20} MB free, and the copy needs {need >> 20} MB: "
+                         "name another folder with --tmp")
+    say(f"  {host}: catalogue {need >> 20} MB; copied through the backup API into {tmp}, {free >> 20} MB free")
+    try:
+        r = subprocess.run(["ssh", *SSH, host, f"python3 - {shq(library)} {shq(remote)}"],
+                           input=ADOPT_SCRIPT, capture_output=True, text=True, timeout=1800)
+        if r.returncode != 0:
+            raise SystemExit(f"the copy on {host} failed: {r.stderr.strip()}")
+        ok, want = r.stdout.split()
+        if ok != "ok":
+            raise SystemExit(f"the copy on {host} fails integrity_check: {ok}")
+        folder = os.path.join(at_root(plan["runs"]), "adopted", f"{name}-{t}")
+        os.makedirs(folder)
+        here = os.path.join(folder, "library.db")
+        say(f"  integrity_check ok on {host}; fetching it (sha256 {want[:12]})")
+        got = subprocess.run(["scp", "-q", *SSH, f"{host}:{remote}", here], capture_output=True, text=True)
+        if got.returncode != 0:
+            raise SystemExit(f"fetching the copy failed: {got.stderr.strip()}")
+        if sha256(here) != want:
+            raise SystemExit(f"the copy fetched is not the one made on {host}: its hash differs. Nothing recorded")
+        seal(here)
+    finally:
+        subprocess.run(["ssh", *SSH, host, f"rm -f {shq(remote)}"], capture_output=True)
+    # `at` is kept where there is one: a bundle sent since it is then asked about as
+    # well, which costs a question and can never miss a row [SPEC-STAR-945].
+    state["nodes"][name] = {**old, "library_sent": os.path.relpath(here, ROOT), "adopted": t,
+                            "at": old.get("at") or now().isoformat(), "run": old.get("run") or f"adopt-{t}"}
+    save_state(plan, state)
+    say(f"RESULT {name}: adopted -- {os.path.relpath(here, ROOT)} is the copy last sent; "
+        "the next sync's snapshot patches against it, and its rehearsal proves it")
+    return 0
+
+
+def shq(s):
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
 def take(rest, flag, valued=True):
     """Remove `flag` (and its value) from `rest`: its value, or whether it was there."""
     if flag not in rest:
@@ -1930,6 +2047,13 @@ def main(argv):
         return mirror_now(plan)
     if cmd == "status":
         return status(plan)
+    if cmd == "adopt":
+        library, rest = take(rest, "--library")
+        tmp, rest = take(rest, "--tmp")
+        force, rest = take(rest, "--force", valued=False)
+        if len(rest) != 1:
+            raise SystemExit("adopt takes one node: adopt NODE --library /path/on/node/library.db [--force] [--tmp DIR]")
+        return adopt(plan, rest[0], library, force, tmp or "/var/tmp")
     if cmd not in ("merge", "items", "verdict", "approve-all", "patch", "rehearse", "commit"):
         print(__doc__)
         return 2

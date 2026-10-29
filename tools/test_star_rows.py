@@ -122,6 +122,7 @@ def test_the_second_disc():
     s = sqlite3.connect(summary)
     s.execute("ATTACH ? AS n", (node,))
     s.execute("INSERT INTO files SELECT * FROM n.files")
+    s.execute("INSERT INTO passages SELECT * FROM n.passages")
     s.commit()
     s.close()
 
@@ -161,6 +162,47 @@ def test_the_second_disc():
     check(rows_of(old, "file_releases")[0]["was"] is None, "and the release arrives as an insert the node refuses")
 
 
+def test_a_boundary_both_made():
+    print("a boundary the node made as the hub did: asked about, and the node is not 'changed'")
+    d = tempfile.mkdtemp()
+    sent = db(os.path.join(d, "sent.db"), DISC1)
+    # The hub and the node both moved the passage's end, each applying the same review,
+    # and each numbered the passage it made itself -- as Givin the Dog a Bone was.
+    remade = ("DELETE FROM passages; INSERT INTO passages VALUES ({0}, 1, 'radio', 0, 900); "
+              "UPDATE passage_recordings SET passage_id = {0};")
+    hub = db(os.path.join(d, "hub.db"), DISC1, remade.format(30))
+    node = db(os.path.join(d, "node.db"), DISC1, remade.format(12))
+    summary = db(os.path.join(d, "summary.db"))
+    s = sqlite3.connect(summary)
+    s.execute("ATTACH ? AS n", (node,))
+    s.execute("INSERT INTO files SELECT * FROM n.files")
+    s.execute("INSERT INTO passages SELECT * FROM n.passages")
+    s.commit()
+    s.close()
+
+    alone = ss.catalogue_state(sent, summary, hub)
+    check(alone["state"] == "changed", f"against the copy alone it reads changed -- the bug this replaces: {alone}")
+    files = ss.files_to_ask(summary, sent, touched=set())
+    check(files == ["disc1"], f"the file whose passage moved is asked about, though no bundle touched it: {files}")
+    base = os.path.join(d, "baseline.db")
+    ss.baseline_from_rows(sent, hub, answer_of(node, ss.rows_wanted(files, sent, hub)), base)
+    st = ss.catalogue_state(base, summary, hub)
+    check(st["state"] in ("as-sent", "holds-hub-rows", "other-ids"), f"against the baseline it is in step: {st}")
+    patch = sp.make_values(base, hub, exclude=ss.SIGNED_EXCLUDE, natural=True, omit=ss.SIGNED_OMIT)
+    check(not rows_of(patch, "passages"), f"and the passage the node already holds is not sent: {rows_of(patch, 'passages')}")
+
+
+def test_run_names():
+    print("run_names: only a run's stamp is a run")
+    d = tempfile.mkdtemp()
+    for n in ("20261029T1653Z", "20261029T1745Z", "adopted", "bundled.json"):
+        if n.endswith(".json"):
+            open(os.path.join(d, n), "w").close()
+        else:
+            os.makedirs(os.path.join(d, n))
+    check(ss.run_names(d) == ["20261029T1653Z", "20261029T1745Z"], f"adopted/ is not the newest run: {ss.run_names(d)}")
+
+
 def test_the_ledger():
     print("bundle_ledger: an applied send, read back by node and time")
     d = tempfile.mkdtemp()
@@ -179,6 +221,8 @@ def test_the_ledger():
 
 def main() -> int:
     test_the_second_disc()
+    test_a_boundary_both_made()
+    test_run_names()
     test_the_ledger()
     print()
     if FAILED:

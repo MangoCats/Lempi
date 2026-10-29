@@ -4,7 +4,9 @@
 
 How to make a machine a node of the fleet: a player with its own pair and its own music, recorded in the repository, enrolled in the mesh and reached by the star sync. Each step points at the document that owns it rather than repeating it. What this guide adds is the order, and the checks between the steps.
 
-It exists because no such list did. On 2026-10-28 and 29 `lrhtpc` was added by reading six documents, and it still met three faults that none of them mentioned. Each is now a step below, marked **lesson**. The worked example throughout is [LRH001](../LRHTPC/LRH001-the-htpc.md).
+It exists because no such list did. On 2026-10-28 and 29 `lrhtpc` was added by reading six documents, and it still met five faults that none of them mentioned. Each is now a step below, marked **lesson**. The worked example throughout is [LRH001](../LRHTPC/LRH001-the-htpc.md).
+
+**The finish line is one command** `[GDE-ADD-140]`: `python tools/check_node_ready.py fleet/star-plan.json NODE` reads the plan, the roster, the sync's state, the speaker registry and the node itself, and names the remedy for anything missing. A node is added when it says `ready` and FLEET001 records it (§8).
 
 > **Related:** [FLEET001](../fleet/FLEET001-the-fleet.md) (the fleet, and the record every step ends in) · [appliance/](../appliance/README.md) (the setup engine) · [GUIDE039](GUIDE039-running-the-star-sync.md) (the sync, once the node is in it) · [HOWTO](../HOWTO.md) §3 (what a library is) · [CLAUDE.md](../CLAUDE.md) §4–§5 (overlay roots, and saying what you assume)
 
@@ -18,7 +20,7 @@ It exists because no such list did. On 2026-10-28 and 29 `lrhtpc` was added by r
 | :--- | :--- | :--- |
 | the root filesystem | `findmnt -no FSTYPE /` | `overlay` means every write goes to both layers — CLAUDE.md §4, `[IMPL-BOS-185]` |
 | architecture and OS release | `uname -m`, `/etc/os-release` | which build image: the binary needs the node's own glibc or older (§3) |
-| password-less sudo | `sudo -n true` | whether setup may touch the system at all, or must live in a home directory |
+| password-less sudo | `sudo -n true` | whether setup may touch the system at all, or must live in a home directory; and whether a deploy needs sudo granted for it (§3) |
 | the audio stack | `systemctl --user is-active pipewire pulseaudio`, `aplay -l` | a system unit or a user unit `[TL-OPS-020]`, and who else shares the device |
 | free space | `df -h` | whether the whole music folder fits |
 | the link | `/sys/class/net/*/speed` | how long the music takes, **at both ends** (§4) |
@@ -41,6 +43,8 @@ It exists because no such list did. On 2026-10-28 and 29 `lrhtpc` was added by r
 - Anything else: a build in the image of the node's own OS release, as `LRHTPC/deploy-lrhtpc.sh` does in the bookworm image. Building on a newer machine makes a binary that asks for a newer glibc than the node has.
 
 Commit first, in every case: the build stamp must name a commit that exists (`build/README.md`). Verify the installed copy and what is running — `--version`, then `/build` — never the exit code `[GDE-DEP-070]`.
+
+**`[GDE-ADD-055]` Lesson: install the binaries where a non-interactive ssh finds them — `/usr/local/bin`.** A send from the Export page looks for `import_bundle` with `command -v` over ssh, and that shell reads no profile. `lrhtpc`'s first install, in `~/lempi/bin` to avoid root, could be listed on the Export page and never sent to `[LRH-DEP-020]`. Where sudo asks for a password, grant it for the deploy — a sudoers drop-in removed by a `systemd-run --on-active` timer — rather than installing into a home directory. Check: `ssh NODE 'command -v import_bundle'` names `/usr/local/bin`.
 
 ## 4. Seed its library
 
@@ -76,7 +80,17 @@ An invite sent before that is refused, and **the console's mesh page does not sa
 
 **`[GDE-ADD-110]` Its fingerprint becomes its `member` in `fleet/star-plan.json`**, from the console's Members list. A node in the plan without one is reported `MISSING ... not enrolled`, never skipped silently. `fleet/targets.env` names only the appliance rollout and the source hosts: a node that is neither is not added there.
 
-**`[GDE-ADD-120]` Lesson: read the first sync's snapshot stage before letting it patch.** A seeded catalogue was never *sent* by a sync, so the hub has no record of a copy it sent this node. Run the stages one at a time ([GUIDE039](GUIDE039-running-the-star-sync.md)), and read what the snapshot says about the new node's catalogue and its listener before the patch stage is run.
+**`[GDE-ADD-115]` Lesson: adopt the seeded catalogue before the first sync** `[SPEC-STAR-946]`. A seeded catalogue was never *sent* by a sync, so the hub has no copy to patch it against, and without one it is sent no catalogue, ever: `lrhtpc` read *no copy was last sent* at every run, and kept every cover the hub later corrected. Once it is in the plan:
+
+```
+python tools/star_sync.py fleet/star-plan.json adopt NODE --library /path/on/node/library.db
+```
+
+It copies the node's own catalogue on the node through the backup API, checks it, fetches it by hash, and records it as the copy last sent. Close the console first if it is older than the command: an older console takes the new `adopted/` folder for the newest run.
+
+**`[GDE-ADD-120]` Lesson: read the first sync's snapshot stage before letting it patch.** Run the stages one at a time ([GUIDE039](GUIDE039-running-the-star-sync.md)), and read what the snapshot says about the new node's catalogue and its listener before the patch stage is run. In the run's `SUMMARY.md`, a `catalogue: none sent` line for the new node means stop: whatever it names, the node will keep its catalogue as it is.
+
+**`[GDE-ADD-150]` A speaker the Export page sends to is a row in the console's registry** `[FLT-DAT-015]`, made on **Flags → speakers**: its catalogue and listener as `user@host:/path`, and its **music folder** as the audio root — left empty, a send puts the audio in `audio/` beside the catalogue, the Pis' layout `[SPEC-STAR-094]`. A node whose catalogue comes by the star sync is unticked for the older remote push. Then **Send what's missing** to it and press **Send** once: that first press is a dry run, and says what it found on the node — the catalogue, read-write or not, the free space — without sending anything.
 
 ## 8. Record it
 
@@ -86,8 +100,10 @@ An invite sent before that is refused, and **the console's mesh page does not sa
 - §3, what it runs — written only once the deploy is verified `[FLT-RUN-010]`;
 - §3, how it plays.
 
-Commit the folder, FLEET001 and `tools/check_docs.py` together. Stage paths by name, never `git add -A` (CLAUDE.md §9). Optional, and each its own decision: a speaker the Export page sends to `[FLT-DAT-015]`, and the fleet clock `[GDE-ECHO-300]`. **Lesson:** a speaker needs `import_bundle` on the PATH a *non-interactive* ssh has. Check `ssh <node> 'command -v import_bundle'`: `lrhtpc`'s copy in `~/lempi/bin` was on none, so it was listed and could not be sent to `[LRH-DEP-020]`.
+Commit the folder, FLEET001 and `tools/check_docs.py` together. Stage paths by name, never `git add -A` (CLAUDE.md §9). The fleet clock is optional, and its own decision `[GDE-ECHO-300]`.
+
+**`[GDE-ADD-140]` Then the check, and it must read `ready`:** `python tools/check_node_ready.py fleet/star-plan.json NODE`. It changes nothing. Each line is something a sync or a send needs — enrolment, a copy last sent, `import_bundle` on the ssh PATH, the registry's paths and music folder present on the node, a whole listener half — and each missing one names its remedy. Every check in it was a fault `lrhtpc` met by failing.
 
 ---
 
-**Traceability:** `[GDE-ADD-010..130]` · from adding `lrhtpc`, 2026-10-28 and 29 · [LRH001](../LRHTPC/LRH001-the-htpc.md)
+**Traceability:** `[GDE-ADD-010..150]` · from adding `lrhtpc`, 2026-10-28 and 29 · [LRH001](../LRHTPC/LRH001-the-htpc.md)

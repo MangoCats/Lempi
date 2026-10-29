@@ -58,7 +58,7 @@ def load_plan():
 
 def newest(plan):
     runs = ss.at_root(plan["runs"])
-    found = sorted(d for d in os.listdir(runs) if os.path.isdir(os.path.join(runs, d))) if os.path.isdir(runs) else []
+    found = ss.run_names(runs)
     return os.path.join(runs, found[-1]) if found else None
 
 
