@@ -1,0 +1,31 @@
+# lrhtpc's player, as a systemd --user unit [LRH-SVC-010].
+#
+# A user unit, not a system one, as on smartboardpc [SMT-SVC-010]: the output
+# is PulseAudio's default sink -- HDMI, the television -- which runs in
+# mango's own user manager, and a player started outside it plays nothing
+# while serving HTTP 200 [TL-OPS-020]. Linger starts that manager at boot.
+#
+# --paused, because this machine is the living room's Kodi box first: it
+# shares PulseAudio's mixer with Kodi [LRH-AUD-010], and a player that took
+# up the music by itself whenever the box booted would play over whatever
+# the television was doing. Play is pressed on the player's page.
+#
+# Everything lives in mango's home: the machine has no password-less sudo,
+# and nothing here needs root [LRH-DAT-010].
+#
+# Installed by LRHTPC/setup-lrhtpc.sh to ~/.config/systemd/user/lempi.service.
+
+[Unit]
+Description=Lempi player
+Wants=pulseaudio.socket
+After=pulseaudio.socket
+StartLimitIntervalSec=0
+
+[Service]
+WorkingDirectory=%h/lempi-data
+ExecStart=%h/lempi/bin/lempi --listener %h/lempi-data/listener.db --library %h/lempi-data/library.db --paused
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

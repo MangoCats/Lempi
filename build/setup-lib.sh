@@ -206,7 +206,12 @@ retired_item() {
 # put the durable layer back read-only; then the summary, and the exit status
 # that matches it.
 setup_finish() {
-    if [ "$MODE" = go ] && [ "$CHANGED" -gt 0 ]; then
+    if [ "$MODE" = go ] && [ "$CHANGED" -gt 0 ] && [ -n "${SETUP_NO_ROOT:-}" ]; then
+        # A caller whose node has no password-less sudo, and whose items
+        # therefore change nothing of the system's (lrhtpc [LRH-DAT-010]).
+        say ""
+        say "  no system reload: this node's items need no root, and it has no password-less sudo"
+    elif [ "$MODE" = go ] && [ "$CHANGED" -gt 0 ]; then
         say ""
         if on "sudo systemctl daemon-reload"; then
             say "  systemd reloaded"

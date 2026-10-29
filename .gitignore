@@ -48,6 +48,9 @@ lempi.db
 # works), and the binary a worktree build hands back out.
 /.lempi-deploy-build.sh
 /.deploy-out/
+# LRHTPC/deploy-lrhtpc.sh's, the same two for the x86_64 build.
+/.lempi-lrhtpc-build.sh
+/.deploy-out-lrhtpc/
 
 # Vipunen / feature-extraction working data.
 # Large, re-derivable artifacts stay out; measured RESULTS stay in.
