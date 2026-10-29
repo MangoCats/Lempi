@@ -19,11 +19,17 @@
   // Told to us rather than assumed; `startBare` has no socket to learn it from,
   // so it is read from the first listing request's sibling endpoint.
   let browseLimit = 0;
-  let filter = {};          // { artist, album } -- the narrowing, not the search
+  // { artist, album } -- the narrowing, not the search. With an album, the
+  // artist is only the way in: the trail, and what opens ticked.
+  let filter = {};
   let timer = null;
   // An opened album's tracks, where a tick queues the album passage
   // [SPEC-ALB-010]. Everywhere else a tick queues the radio one, as before.
   let asAlbum = false;
+  // Set by tapping an album, and spent by the listing it opens: an album
+  // opens ticked [SPEC-ALB-025], and a search typed inside it does not
+  // tick it all again.
+  let opening = false;
 
   // The heading must be derived the same way the server sorts, or the letters
   // stop being monotonic: strip a leading "The" here while the ORDER BY does
@@ -45,9 +51,12 @@
                         tracks: 'All tracks' }[kind];
       return;
     }
+    // Back the way it was reached: an album opened from the Album tab has no
+    // artist in its trail, and its way out is the albums it was picked from.
+    const via = filter.artist ? 'artists' : 'albums';
     const all = document.createElement('a');
-    all.textContent = 'All artists';
-    all.onclick = () => { filter = {}; show('artists'); };
+    all.textContent = via === 'artists' ? 'All artists' : 'All albums';
+    all.onclick = () => { filter = {}; show(via); };
     c.appendChild(all);
     if (filter.artist) {
       c.append(' › ');
@@ -150,8 +159,7 @@
     let said = n ? `${plural(n, 'track')} selected` : '';
     if (asAlbum) {
       const all = wholeTicked();
-      $('v-all').textContent = all ? 'Clear' : 'Select all';
-      $('v-all').disabled = !whole().length;
+      $('v-all').disabled = all || !whole().length;
       // What the whole album leaves out is said, not silently missing.
       const out = document.querySelectorAll('.pick:not([data-whole])').length;
       if (all && out) said += ` · ${out} left out`;
@@ -160,14 +168,19 @@
   }
 
   // The whole album, in its running order [SPEC-ALB-020] -- the whole-album
-  // play [REQ-PD-127]. It replaces the selection rather than adding to it, and
-  // pressed again with the album ticked, it clears.
+  // play [REQ-PD-127]. It replaces the selection rather than adding to it.
   $('v-all').onclick = () => {
-    const clear = wholeTicked();
     for (const b of document.querySelectorAll('.pick')) {
-      if (!clear && b.dataset.whole) tick(b, true, b.dataset.whole);
+      if (b.dataset.whole) tick(b, true, b.dataset.whole);
       else tick(b, false);
     }
+    armed();
+  };
+  // Its opposite, as a button of its own: an album opens ticked
+  // [SPEC-ALB-025], so starting from nothing is one tap rather than one per
+  // track. Disabled, like the verbs, while nothing is ticked.
+  $('v-none').onclick = () => {
+    for (const b of document.querySelectorAll('.pick')) tick(b, false);
     armed();
   };
 
@@ -195,13 +208,22 @@
     crumbs();
     $('verbs').hidden = kind !== 'tracks';
     asAlbum = kind === 'tracks' && !!filter.album;
-    $('v-all').hidden = !asAlbum;
+    $('v-all').hidden = $('v-none').hidden = !asAlbum;
+    const fresh = opening;
+    opening = false;
     const body = $('rows');
     const note = $('note');
 
+    // An opened album is asked for whole. The artist it was reached through
+    // stays in the trail and decides what opens ticked [SPEC-ALB-025], but
+    // does not narrow the listing: a compilation's tracks are each credited
+    // to their own artist, so narrowing by one showed a third of the album
+    // from the artist, and nothing at all from the Album tab, where the
+    // artist was the release's "Various Artists" [REQ-VIS-183].
+    const ask = filter.album ? { album: filter.album } : filter;
     let rows;
     try {
-      rows = await Lempi.browse(kind, { ...filter, q: $('q').value.trim() });
+      rows = await Lempi.browse(kind, { ...ask, q: $('q').value.trim() });
     } catch (e) {
       // Say so. The first version of this page rendered a failed query as an
       // empty list, which is indistinguishable from an empty library and sent
@@ -315,6 +337,12 @@
         box.value = own;
         box.onclick = e => e.stopPropagation();
         box.onchange = () => { box.value = box.dataset.own; armed(); };
+        // Opened, it is ticked as Select all would tick it, from the Album
+        // tab; from an artist, only that artist's own tracks [SPEC-ALB-025],
+        // by the same displayed credit that put the album in their list.
+        if (fresh && all != null && (!filter.artist || r.artist === filter.artist)) {
+          tick(box, true, all);
+        }
         li.prepend(box);
         // A passage's own facts [REQ-VIS-270], one tap away without leaving
         // the checkbox underneath it -- its own click target, the same
@@ -352,7 +380,11 @@
         const li = row(
           r.name, r.artist ?? '',
           `${plural(r.passages, 'track')}\n${r.plays}×`,
-          () => { filter = { artist: r.artist ?? undefined, album: r.name };
+          // The artist this album was reached through, not its credit: that
+          // is a label, and as a filter it matched none of a compilation's
+          // tracks [REQ-VIS-183].
+          () => { filter = { artist: filter.artist, album: r.name };
+                  opening = true;
                   show('tracks'); });
         // An artist's albums, each with its front [REQ-VIS-184]. Lazy, so a
         // long discography fetches only what scrolls into view; a missing

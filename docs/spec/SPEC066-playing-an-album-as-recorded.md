@@ -32,13 +32,31 @@ by recording, so an album passage's play counts for its recording as a radio
 one's does, and the Director fills behind the album as it would behind any
 hand-picked passage.
 
-**`[SPEC-ALB-020]` *Select all* ticks the whole album.** A button beside Now,
-Next and Last, shown only in an opened album. It replaces the selection with
-every track it will play, in running order, and then reads *Clear*; pressed
-again, it unticks everything. A track it leaves out
-(`[SPEC-ALB-040]`, `[SPEC-ALB-050]`) is counted on the selection line --
-*11 tracks selected · 2 left out* -- not silently missing. It is disabled for
-an album with no album passages at all.
+**`[SPEC-ALB-020]` *Select all* ticks the whole album; *Unselect all* unticks
+it.** Two buttons beside Now, Next and Last, shown only in an opened album.
+*Select all* replaces the selection with every track it will play, in running
+order, and is disabled once that is what is ticked, or for an album with no
+album passages at all. A track it leaves out (`[SPEC-ALB-040]`,
+`[SPEC-ALB-050]`) is counted on the selection line -- *11 tracks selected · 2
+left out* -- not silently missing. *Unselect all* unticks every track, and is
+disabled, like the verbs, while nothing is ticked. Until 2026-10-28 the one
+button did both, reading *Clear* once pressed; an album that opens ticked
+needs the way back to nothing to be there from the start.
+
+**`[SPEC-ALB-025]` An album opens ticked, as MuLibPlay's did.** From the Album
+tab, every track *Select all* would tick. From an artist, only the tracks
+credited to that artist -- by the displayed credit that put the album in their
+list -- each ticked the same way, so a held one is its stand-in or unticked.
+Either way the whole album is listed, and a person ticks and unticks from
+there. Only the opening ticks: a search typed inside the album does not tick
+it again. Asked for 2026-10-28.
+
+The artist an album was reached through is the trail and the ticking, never a
+filter on the listing. Until 2026-10-28 it was, and the album's tap passed its
+displayed credit `[REQ-VIS-183]` as that artist: *Native American Flute
+Lullabies*, 18 tracks by five acts and credited to *Various Artists*, opened
+empty from the Album tab and as Native Flute Ensemble's 3 tracks from theirs,
+because no track carries the credit of the release.
 
 ## 2. Finding the album passage
 

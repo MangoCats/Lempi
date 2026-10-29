@@ -847,10 +847,12 @@ async function runBrowse() {
   // Opened as an album, each names its album passage [SPEC-ALB-010]: the
   // third is held with a stand-in on another album, the fourth held with
   // none, and the fifth is a join with no album passage [SPEC-ALB-040].
+  // The second is credited to a guest, as a compilation's tracks each are,
+  // so an album opened from Steely Dan opens with it unticked [SPEC-ALB-025].
   const TRACKS = [
     { passage_id: 11, title: 'Black Cow', artist: 'Steely Dan', album: 'Aja', plays: 4, track_no: 1, disc_no: 1,
       album_passage: 21 },
-    { passage_id: 12, title: 'Aja', artist: 'Steely Dan', album: 'Aja', plays: 2, track_no: 2, disc_no: 1,
+    { passage_id: 12, title: 'Aja', artist: 'Wayne Shorter', album: 'Aja', plays: 2, track_no: 2, disc_no: 1,
       album_passage: 22 },
     { passage_id: 13, title: 'Deacon Blues', artist: 'Steely Dan', album: 'Aja', plays: 0, track_no: 3, disc_no: 1,
       album_passage: 23, album_hold: 'damaged rip', stand_in: { passage_id: 33, album: 'Gold' } },
@@ -860,12 +862,14 @@ async function runBrowse() {
   ];
 
   const posted = [];
+  const asked = [];                      // every /browse/tracks request, as sent
   let fail = null;                       // set to make /browse/* answer 500
   window.fetch = (url, opts) => {
     if (opts && opts.method === 'POST') { posted.push(url); return Promise.resolve({ ok: true }); }
     if (url === '/skins') return Promise.resolve({ json: () => Promise.resolve([]) });
     const m = /^\/browse\/(\w+)/.exec(url);
     if (m) {
+      if (m[1] === 'tracks') asked.push(url);
       if (fail) return Promise.resolve({ ok: false, status: fail });
       const rows = { artists: ARTISTS, albums: ALBUMS, tracks: TRACKS }[m[1]] || [];
       return Promise.resolve({ ok: true, json: () => Promise.resolve(rows) });
@@ -898,7 +902,7 @@ async function runBrowse() {
   check(az.some(b => b.textContent === 'A' && !b.disabled), 'A should be live');
   check(az.some(b => b.textContent === 'Q' && b.disabled), 'Q should be disabled');
   check($('verbs').hidden, 'the verbs belong to the track listing only');
-  check($('v-all').hidden, 'Select all belongs to an opened album only');
+  check($('v-all').hidden && $('v-none').hidden, 'Select and Unselect all belong to an opened album only');
 
   // An artist narrows to albums; an album narrows to its tracks.
   rows()[1].onclick();
@@ -908,7 +912,25 @@ async function runBrowse() {
   await settle();
   check(!$('verbs').hidden, 'the verbs appear on tracks');
   check(!$('v-all').hidden && !$('v-all').disabled, 'an opened album offers Select all');
+  check(!$('v-none').hidden, 'an opened album offers Unselect all');
   check(rows().length === 5, `album tracks: ${rows().length}, want 5`);
+  // Asked for whole: the artist it was reached through is not a filter, or
+  // a compilation shows only that artist's tracks [REQ-VIS-183].
+  check(asked[asked.length - 1] === '/browse/tracks?album=Aja',
+        `an opened album is asked for whole, got ${asked[asked.length - 1]}`);
+  check($('crumbs').textContent.includes('Steely Dan'), 'the trail still names the artist it came through');
+  // Opened from an artist, only that artist's tracks are ticked, as Select
+  // all would tick them: Black Cow, and Deacon Blues by its stand-in. Not
+  // the guest's track, the held one with no stand-in, or the join.
+  const ticked = () => [...window.document.querySelectorAll('.pick:checked')].map(b => b.value).join(',');
+  check(ticked() === '21,33', `opened from Steely Dan, want 21,33 ticked, got ${ticked()}`);
+  check(!$('v-now').disabled && !$('v-none').disabled, 'an album opened ticked arms the verbs');
+  check(!$('v-all').disabled, 'Select all still offers the whole album');
+
+  // Unselect all clears it, and is then disabled like the verbs.
+  $('v-none').onclick();
+  check(ticked() === '', `Unselect all must untick everything, got ${ticked()}`);
+  check($('v-none').disabled, 'Unselect all is disabled with nothing ticked');
   // The album's sleeve, front and back, through its first track's passage.
   const sleeve = [...window.document.querySelectorAll('#rows li.sleeves img')].map(i => i.getAttribute('src'));
   check(sleeve.join(' ') === '/art/11 /art/11/back',
@@ -958,22 +980,41 @@ async function runBrowse() {
   // Select all: the whole album, a stand-in for the held track that has one,
   // and neither the held track without one nor the join [SPEC-ALB-050].
   $('v-all').onclick();
-  check($('v-all').textContent === 'Clear', `pressed, it offers to clear, got "${$('v-all').textContent}"`);
+  check($('v-all').disabled, 'with the whole album ticked, Select all has nothing left to do');
   check(/3 tracks selected · 2 left out/.test($('picked').textContent),
         `what it leaves out is counted, got "${$('picked').textContent}"`);
   $('v-last').onclick();
   await settle();
   check(posted[1] === '/queue/21,22,33/last', `Select all must send 21,22,33, got ${posted[1]}`);
 
-  // Pressed with the album ticked, it clears; a held track ticked by hand is
-  // the held passage itself, which a person may still choose.
+  // Unselect all after Select all; a held track ticked by hand is the held
+  // passage itself, which a person may still choose.
   $('v-all').onclick();
-  $('v-all').onclick();
-  check(window.document.querySelectorAll('.pick:checked').length === 0, 'Clear must untick everything');
+  $('v-none').onclick();
+  check(ticked() === '', 'Unselect all must untick the whole album');
   rows()[3].onclick();
   $('v-now').onclick();
   await settle();
   check(posted[2] === '/queue/24/now', `a held track ticked by hand is itself, got ${posted[2]}`);
+
+  // From the Album tab, an album opens wholly ticked, guest and all, and its
+  // trail leads back to the albums rather than naming an artist.
+  window.document.querySelector('[data-kind="albums"]').onclick();
+  await settle();
+  rows()[0].onclick();
+  await settle();
+  check(asked[asked.length - 1] === '/browse/tracks?album=Aja',
+        `from the Album tab, asked for whole, got ${asked[asked.length - 1]}`);
+  check(ticked() === '21,22,33', `from the Album tab, want 21,22,33 ticked, got ${ticked()}`);
+  check($('v-all').disabled, 'opened whole, Select all has nothing left to do');
+  check(/^All albums › Aja$/.test($('crumbs').textContent),
+        `the trail leads back to the albums, got "${$('crumbs').textContent}"`);
+  // A search inside the album does not tick it all again.
+  $('v-none').onclick();
+  $('q').value = 'a';
+  $('q').oninput();
+  await new Promise(r => setTimeout(r, 260));
+  check(ticked() === '', `a search inside an album must not re-tick it, got ${ticked()}`);
 
   // A failed query must say so, not render as an empty library.
   fail = 500;
