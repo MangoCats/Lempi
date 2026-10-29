@@ -145,9 +145,24 @@ def test_page():
     check(not sc.locked(), "and lifted")
 
 
+def test_phone_patch():
+    """[REQ-AND-330]: what waits for a phone, and what it last said it applied."""
+    with tempfile.TemporaryDirectory() as mdir:
+        fp = "ab" * 32
+        os.makedirs(ss.meshmod.member_dir(mdir, fp))
+        check(sc.phone_patch(mdir, fp) == {"waiting": None, "applied": None}, "a phone offered nothing has nothing waiting")
+        patch = {"tables": [{"name": "listener_flags", "rows": [1, 2]}, {"name": "listener_preferences", "rows": [3]}]}
+        ss.meshmod.put_outbox(mdir, fp, "20261029T1745Z", patch)
+        check(sc.phone_patch(mdir, fp)["waiting"] == {"run": "20261029T1745Z", "rows": 3}, "an offered patch waits, by its rows")
+        ss.meshmod.outbox_applied(mdir, fp, "20261029T1745Z", {"applied": 3})
+        got = sc.phone_patch(mdir, fp)
+        check(got["waiting"] is None and got["applied"]["run"] == "20261029T1745Z", "an applied patch no longer waits")
+
+
 def main() -> int:
     test_describe()
     test_page()
+    test_phone_patch()
     print()
     if FAILED:
         for m in FAILED:                     # again, since a check inside the fake fleet's redirect is not seen

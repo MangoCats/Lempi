@@ -1136,6 +1136,12 @@ class Handler(BaseHTTPRequestHandler):
             if target is None:
                 return self.send_json({"error": why}, code=409)
             return self.send_json({"job_id": STATE["jobs"].submit("star-sync", target)})
+        if p == "/api/sync/channel/start":
+            # A phone's patch is fetched, not sent [REQ-AND-330]: start what it is fetched from.
+            try:
+                return self.send_json(sync_console.start_channel(plan))
+            except SystemExit as err:
+                return self.send_json({"error": str(err)}, code=409)
         if run is None:
             return self.send_json({"error": "there is no run yet: take a snapshot"}, code=404)
         try:

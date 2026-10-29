@@ -30,6 +30,7 @@
       <thead><tr><th>take part</th><th>node</th><th>player</th><th>last synced</th><th>this run</th><th>catalogue</th></tr></thead>
       <tbody id="node-rows"></tbody>
     </table>
+    <div id="channel" style="font-size:.85rem;margin:.5rem 0"></div>
 
     <div class="controls">
       <button class="chip" id="pick-all">choose all</button><button class="chip" id="pick-none">choose none</button>
@@ -133,13 +134,59 @@ function paintNodes(st) {
     S.el('td', {}, n.name, n.old_player ? S.el('span', { class: 'pill bad', style: 'margin-left:.4rem', text: 'OLD PLAYER', title: n.old_why || '' }) : null),
     S.el('td', {}, n.kind === 'phone' ? (n.label ? `${n.label} · phone (its own channel)` : 'phone (its own channel)') : n.on_demand ? 'on demand' : 'always running',
          n.enrolled ? null : S.el('span', { class: 'pill bad', style: 'margin-left:.4rem', text: 'not enrolled' })),
-    S.el('td', {}, ago(n.hours)),
+    // A phone has synced when it says it applied a patch, not when one was offered to it.
+    S.el('td', {}, n.kind === 'phone' && n.applied ? ago((Date.now() - Date.parse(n.applied.at)) / 3.6e6) : ago(n.hours)),
     S.el('td', {}, n.in_run === 'missing' ? S.el('span', { class: 'pill bad', text: 'missing' }) :
                    n.in_run === 'left alone' ? S.el('span', { class: 'pill', text: 'left alone' }) :
                    n.in_run === 'taken' ? S.el('span', { class: 'pill ok', text: 'taken' }) : '—',
          n.why ? S.el('div', { style: 'color:var(--dim);font-size:.8rem', text: n.why }) : null),
-    S.el('td', {}, n.catalogue ? S.el('span', { class: 'pill ' + (n.catalogue_ok ? 'ok' : 'warn'),
+    S.el('td', {}, n.kind === 'phone' ? phonePatch(n) :
+                   n.catalogue ? S.el('span', { class: 'pill ' + (n.catalogue_ok ? 'ok' : 'warn'),
                                                 text: n.catalogue }) : '—'))));
+  paintChannel(st);
+}
+
+// A phone's patch waits at the hub until the phone fetches it [REQ-AND-330].
+function phonePatch(n) {
+  if (n.waiting) return S.el('span', { class: 'pill warn', title: `run ${n.waiting.run}`,
+                                       text: `patch waiting: ${n.waiting.rows} row(s)` });
+  if (n.applied) return S.el('span', { class: 'pill ok', text: `applied ${n.applied.run}` });
+  return '—';
+}
+
+function phoneName(n) { return n.label || n.name; }
+
+// What a phone fetches its patch from: tools/intake.py's members' port.
+function paintChannel(st) {
+  const ch = st.channel, box = $('channel');
+  if (!ch) return box.replaceChildren();
+  const waiting = st.nodes.filter(n => n.kind === 'phone' && n.waiting).map(phoneName);
+  const who = waiting.length ? waiting.join(', ') : '';
+  const how = 'In Lempi on the phone: ⋮ → Mesh membership… → Sync my edits with the mesh.';
+  if (ch.listening) {
+    box.className = '';
+    box.replaceChildren(S.el('span', { class: 'pill ok', text: `members' channel listening on port ${ch.port}` }),
+      S.el('span', { style: 'color:var(--dim);margin-left:.5rem',
+                     text: (ch.started_here ? `started from this page; its log is ${ch.log}.` : 'started outside this console.') +
+                           (waiting.length ? ` ${who} can fetch ${waiting.length > 1 ? 'their patches' : 'its patch'} now. ${how}` : '') }));
+    return;
+  }
+  if (!waiting.length) {
+    box.className = '';
+    box.replaceChildren(S.el('span', { style: 'color:var(--dim)',
+      text: `Members' channel: not running (port ${ch.port}). Nothing waits for a phone.` }));
+    return;
+  }
+  const b = S.el('button', { class: 'chip', style: 'margin-left:.6rem' }, "Start the members' channel");
+  const said = S.el('div', { style: 'margin-top:.3rem' });
+  b.onclick = async () => {
+    b.disabled = true; b.textContent = 'starting…';
+    try { await post('/api/sync/channel/start'); reload(false); }
+    catch (e) { said.style.color = 'var(--bad)'; said.textContent = e.message; b.disabled = false; b.textContent = "Start the members' channel"; }
+  };
+  box.className = 'caveat';
+  box.replaceChildren(S.el('b', { text: `${who} ${waiting.length > 1 ? 'have patches' : 'has a patch'} waiting` }),
+    ` — but the members' channel (tools/intake.py, port ${ch.port}) is not running, so no phone can fetch it.`, b, said);
 }
 
 function stageButton(label, stage, enabled, nodes, danger) {

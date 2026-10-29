@@ -13,8 +13,11 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import socket
+import subprocess
 import sys
 import threading
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -87,6 +90,73 @@ def committed_names(run):
     return [d["hub"]] + sorted(d.get("signed", {})) + sorted(d.get("members", {}))
 
 
+# ------------------------------------------------- the members' channel --
+# A phone is not reached from here [REQ-AND-330]: a commit leaves its patch in
+# the phone's outbox, and the phone fetches it over the members' channel that
+# `intake.py` serves. The page shows what waits and whether anything is there
+# to hand it over, and can start the intake when nothing is.
+_intake = None                 # the intake this console started, if it did
+START_WAIT_S = 10              # how long a started intake has to bind its members' port
+
+
+def phone_patch(mdir, fp) -> dict:
+    """What waits in a phone's outbox, and the last run it said it applied."""
+    o = ss.meshmod.outbox(mdir, fp)
+    waiting = ({"run": o["run"], "rows": sum(len(e["rows"]) for e in o["patch"].get("tables", []))}
+               if o else None)
+    d = os.path.join(ss.meshmod.member_dir(mdir, fp), "applied")
+    done = sorted(f for f in os.listdir(d) if f.endswith(".json")) if os.path.isdir(d) else []
+    a = _json(os.path.join(d, done[-1])) if done else None
+    return {"waiting": waiting, "applied": {"run": a["run"], "at": a.get("applied_at")} if a else None}
+
+
+def _listening(port) -> bool:
+    # Asked of the port, not of a process handle: an intake started by hand
+    # answers the phone just as well as one started here [GDE-DEP-070].
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def channel(mdir) -> dict:
+    port = ss.meshmod.MEMBER_PORT
+    ours = _intake is not None and _intake.poll() is None
+    return {"port": port, "listening": _listening(port), "started_here": ours,
+            "log": os.path.join(mdir, "intake.log")}
+
+
+def start_channel(plan) -> dict:
+    """`intake.py` on the hub's library, with the key beside it, as a person
+    would start it; answered only once its members' port is bound, or with the
+    reason it is not."""
+    global _intake
+    mdir = ss.mesh_of(plan)
+    ch = channel(mdir)
+    if ch["listening"]:
+        return dict(ch, already=True)
+    db = ss.at_root(plan["hub"]["library"])
+    key = os.path.join(os.path.dirname(db), "intake.key")
+    if not os.path.isfile(key):
+        # intake.py refuses the published key on a LAN address [SPEC-SEC-020].
+        raise SystemExit(f"no intake key at {key}: the intake will not serve the LAN without one")
+    with open(ch["log"], "w", encoding="utf-8") as fh:
+        _intake = subprocess.Popen([sys.executable, "-u", os.path.join(HERE, "intake.py"), db, "--key-file", key],
+                                   stdout=fh, stderr=subprocess.STDOUT, cwd=ROOT)
+    for _ in range(START_WAIT_S * 4):
+        if _intake.poll() is not None:
+            break
+        if _listening(ch["port"]):
+            return channel(mdir)
+        time.sleep(0.25)
+    with open(ch["log"], encoding="utf-8", errors="replace") as fh:
+        tail = fh.read()[-600:].strip()
+    why = (f"the intake exited ({_intake.returncode})" if _intake.poll() is not None
+           else f"the intake did not bind port {ch['port']} within {START_WAIT_S} s")
+    raise SystemExit(f"{why}: {tail or 'it wrote nothing'} -- see {ch['log']}")
+
+
 def state(plan) -> dict:
     """Everything the page's first paint needs, in one read."""
     st = ss.load_state(plan) if os.path.exists(os.path.join(ss.at_root(plan["runs"]), "state.json")) else {}
@@ -122,11 +192,15 @@ def state(plan) -> dict:
         nodes.append(dict(name=name, kind="phone", on_demand=False, enrolled=True, last_sent=None, hours=None,
                           in_run="left alone", why=None, catalogue=None, old_player=False, old_why=None))
     # A phone's row is keyed by its short fingerprint; the person knows it by the name in the roster.
-    called = {m["node"]: (m.get("name") or "").strip() for m in ss.meshmod.sync_members(ss.mesh_of(plan))}
+    mdir = ss.mesh_of(plan)
+    phones = {m["node"]: m for m in ss.meshmod.sync_members(mdir)}
     for n in nodes:
         if n["kind"] == "phone":
-            n["label"] = called.get(n["name"]) or None
-    out = {"hub": plan["hub"]["name"], "backup": hub_backup(plan), "nodes": nodes, "run": None}
+            m = phones.get(n["name"]) or {}
+            n["label"] = (m.get("name") or "").strip() or None
+            n.update(phone_patch(mdir, m["fingerprint"]) if m else {"waiting": None, "applied": None})
+    out = {"hub": plan["hub"]["name"], "backup": hub_backup(plan), "nodes": nodes, "run": None,
+           "channel": channel(mdir)}
     if not run:
         return out
     info = {"id": rid, "old_players": old, "left_alone": sorted(left), "missing": missing,

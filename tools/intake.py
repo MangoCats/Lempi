@@ -627,7 +627,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("db")
     ap.add_argument("--pending", help="where arrivals wait (default: pending-identification/ beside the library)")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
-    ap.add_argument("--member-port", type=int, default=5732,
+    ap.add_argument("--member-port", type=int, default=meshmod.MEMBER_PORT,
                     help="the members' TLS channel, served where a mesh exists [SPEC-MTR-200]")
     ap.add_argument("--bind", default="0.0.0.0",
                     help="address to listen on (default all -- a phone must reach it)")
