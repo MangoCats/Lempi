@@ -86,7 +86,7 @@ An invite sent before that is refused, and **the console's mesh page does not sa
 - §3, what it runs — written only once the deploy is verified `[FLT-RUN-010]`;
 - §3, how it plays.
 
-Commit the folder, FLEET001 and `tools/check_docs.py` together. Stage paths by name, never `git add -A` (CLAUDE.md §9). Optional, and each its own decision: a speaker the Export page sends to `[FLT-DAT-015]`, and the fleet clock `[GDE-ECHO-300]`.
+Commit the folder, FLEET001 and `tools/check_docs.py` together. Stage paths by name, never `git add -A` (CLAUDE.md §9). Optional, and each its own decision: a speaker the Export page sends to `[FLT-DAT-015]`, and the fleet clock `[GDE-ECHO-300]`. **Lesson:** a speaker needs `import_bundle` on the PATH a *non-interactive* ssh has. Check `ssh <node> 'command -v import_bundle'`: `lrhtpc`'s copy in `~/lempi/bin` was on none, so it was listed and could not be sent to `[LRH-DEP-020]`.
 
 ---
 

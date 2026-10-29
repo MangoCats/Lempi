@@ -9,12 +9,14 @@
 #     HOST=someone@other bash LRHTPC/deploy-lrhtpc.sh ...   # default mango@lrhtpc
 #
 # Runs on the development host. lrhtpc is neither an appliance nor a source
-# host: it has no toolchain and no password-less sudo, so the player is built
-# here, in the same bookworm image build/verify-targets.sh tests in -- the
-# same Debian release the machine runs, and so the same glibc -- and copied
-# into mango's home. Always from a commit, in a worktree made inside the
-# container, so a dirty checkout here is never what is built, and the build
-# stamp names a commit that exists [build/README.md].
+# host: it has no toolchain, so the player is built here, in the same
+# bookworm image build/verify-targets.sh tests in -- the same Debian release
+# the machine runs, and so the same glibc -- and installed in /usr/local/bin,
+# the PATH a send's non-interactive ssh has [LRH-DEP-020]. That needs sudo,
+# which asks for a password there unless granted for the deploy; the script
+# asks first and builds nothing without it. Always from a commit, in a
+# worktree made inside the container, so a dirty checkout here is never what
+# is built, and the build stamp names a commit that exists [build/README.md].
 #
 # The unit starts the player --paused [LRH-SVC-010], so a restart would
 # silence a player that was playing. Whether it was is read from its own
@@ -25,7 +27,7 @@ REPO_ROOT="$(pwd)"
 
 HOST="${HOST:-mango@lrhtpc}"
 REF="${1:-HEAD}"
-BIN=lempi/bin
+BIN=/usr/local/bin
 BINS="lempi import_bundle relink restore_listener"
 LISTENER=lempi-data/listener.db
 . build/lib-defaults.sh
@@ -42,7 +44,10 @@ ROOTFS=$(on "findmnt -no FSTYPE /")
 [ "$ROOTFS" != overlay ] || die "$HOST has an overlay root, which this script does not handle -- see CLAUDE.md section 4"
 ARCH=$(on "uname -m")
 [ "$ARCH" = x86_64 ] || die "$HOST is $ARCH; this script builds x86_64 only"
-say "$HOST has a writable root ($ROOTFS), $ARCH: an ordinary write to ~/$BIN is durable"
+say "$HOST has a writable root ($ROOTFS), $ARCH: an ordinary write to $BIN is durable"
+on "sudo -n true" 2>/dev/null \
+    || die "sudo on $HOST asks for a password, and $BIN is root's: grant it for the deploy (LRH001 [LRH-DEP-020]); nothing was built"
+say "sudo on $HOST answers without a password: will install into $BIN"
 
 EXPECTED=$(git rev-parse --short=12 "$REF^{commit}" 2>/dev/null) || die "no such ref: $REF"
 docker info >/dev/null 2>&1 || die "Docker is not running -- start Docker Desktop and try again"
@@ -94,10 +99,11 @@ esac
 # ---- install ----------------------------------------------------------------
 # Each binary beside its old one, then renamed over it: a rename leaves a
 # running process its own copy, and a half-copied file is never the one run.
-on "mkdir -p $BIN" || die "cannot make ~/$BIN"
+# scp cannot write root's folder, so each goes by way of /tmp.
 for b in $BINS; do
-    scp -q "$OUT/$b" "$HOST:$BIN/$b.new" || die "copy of $b failed"
-    on "chmod 755 $BIN/$b.new && mv -f $BIN/$b.new $BIN/$b" || die "install of $b failed"
+    scp -q "$OUT/$b" "$HOST:/tmp/lempi-$b.new" || die "copy of $b failed"
+    on "sudo install -o root -g root -m 755 /tmp/lempi-$b.new $BIN/$b.new && sudo mv -f $BIN/$b.new $BIN/$b; rc=\$?; rm -f /tmp/lempi-$b.new; exit \$rc" \
+        || die "install of $b failed"
     want=$(md5sum < "$OUT/$b" | cut -c1-32)
     have=$(on "md5sum $BIN/$b | cut -c1-32")
     [ "$want" = "$have" ] || die "$b on $HOST is ${have:-absent}, expected $want"
@@ -112,6 +118,12 @@ if ! user_systemctl is-enabled lempi.service >/dev/null 2>&1; then
     say "lempi.service is not enabled yet: installed only -- run LRHTPC/setup-lrhtpc.sh --go"
     exit 0
 fi
+# A unit still naming another copy would restart that one, and the check
+# below would only say the wrong build answered.
+case "$(user_systemctl show -p ExecStart --value lempi.service)" in
+    *"path=$BIN/lempi "*) ;;
+    *) die "lempi.service does not start $BIN/lempi: installed only -- run LRHTPC/setup-lrhtpc.sh --go, then deploy again" ;;
+esac
 user_systemctl restart lempi.service || die "the restart failed"
 # The Program Director is built before the web server binds; ~15 s on the
 # appliances' catalogue [build/install-player.sh].

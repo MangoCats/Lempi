@@ -10,8 +10,8 @@
 # up the music by itself whenever the box booted would play over whatever
 # the television was doing. Play is pressed on the player's page.
 #
-# Everything lives in mango's home: the machine has no password-less sudo,
-# and nothing here needs root [LRH-DAT-010].
+# The data lives in mango's home [LRH-DAT-010]; the binary is root's, in
+# /usr/local/bin, where a send's ssh finds import_bundle too [LRH-DEP-020].
 #
 # Installed by LRHTPC/setup-lrhtpc.sh to ~/.config/systemd/user/lempi.service.
 
@@ -23,7 +23,7 @@ StartLimitIntervalSec=0
 
 [Service]
 WorkingDirectory=%h/lempi-data
-ExecStart=%h/lempi/bin/lempi --listener %h/lempi-data/listener.db --library %h/lempi-data/library.db --paused
+ExecStart=/usr/local/bin/lempi --listener %h/lempi-data/listener.db --library %h/lempi-data/library.db --paused
 Restart=on-failure
 RestartSec=30
 

@@ -12,18 +12,21 @@
 #
 # Runs on the development host, over SSH, on build/setup-lib.sh. The root is
 # plain ext4, so an ordinary write is durable, and the engine says so before
-# writing [GDE-DEP-060]. **Nothing here needs root**: the machine has no
-# password-less sudo, so everything lives in mango's home [LRH-DAT-010], and
-# linger is one a user may set on itself. The player binary is put there by
-# LRHTPC/deploy-lrhtpc.sh.
+# writing [GDE-DEP-060]. **Nothing here needs root**: sudo asks for a password
+# there, so the data lives in mango's home [LRH-DAT-010], and linger is one a
+# user may set on itself. The binaries are root's, in /usr/local/bin, put
+# there by LRHTPC/deploy-lrhtpc.sh under a sudo granted for it [LRH-DEP-020];
+# this script only checks them.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 HOST="${HOST:-mango@lrhtpc}"
 # The machine names itself in capitals; the network, and this repository, do not.
 NAME=LRHTPC
+BIN=/usr/local/bin
+# Where the binaries were until 2026-10-29 [LRH-DEP-020].
+OLD_BIN=lempi/bin
 # In the ssh user's home, where every remote command starts.
-BIN=lempi/bin
 DATA=lempi-data
 UNIT=.config/systemd/user/lempi.service
 MODE=check
@@ -66,7 +69,15 @@ item "Kodi plays through PulseAudio [LRH-AUD-010]" \
 
 say ""
 say "the player"
-item "player installed" "test -x $BIN/lempi" "" "bash LRHTPC/deploy-lrhtpc.sh"
+item "player installed in $BIN" "test -x $BIN/lempi" "" "bash LRHTPC/deploy-lrhtpc.sh"
+# Where a send looks for it [SPEC-STAR-094]: ~/lempi/bin was on no PATH an
+# ssh command has, so the Export page could not send here [LRH-OPN-020].
+item "import_bundle on a non-interactive PATH" "test \"\$(command -v import_bundle)\" = $BIN/import_bundle" "" \
+     "bash LRHTPC/deploy-lrhtpc.sh"
+# The old copies, once the new ones are there: a second, staler player is
+# one a hand-typed command could start.
+item "no old copies in ~/$OLD_BIN" "! test -e $OLD_BIN" \
+     "test -x $BIN/lempi && test -x $BIN/import_bundle && rm -rf $OLD_BIN && rmdir lempi"
 user_file_item "user unit lempi.service is this repository's" LRHTPC/lempi.service "$UNIT" 644 \
     "XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl --user daemon-reload"
 item "user unit enabled" "XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl --user is-enabled lempi.service" \

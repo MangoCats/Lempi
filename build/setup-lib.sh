@@ -207,10 +207,10 @@ retired_item() {
 # that matches it.
 setup_finish() {
     if [ "$MODE" = go ] && [ "$CHANGED" -gt 0 ] && [ -n "${SETUP_NO_ROOT:-}" ]; then
-        # A caller whose node has no password-less sudo, and whose items
-        # therefore change nothing of the system's (lrhtpc [LRH-DAT-010]).
+        # A caller whose items change nothing of the system's, on a node
+        # whose sudo asks for a password (lrhtpc [LRH-DAT-010]).
         say ""
-        say "  no system reload: this node's items need no root, and it has no password-less sudo"
+        say "  no system reload: this node's items need no root"
     elif [ "$MODE" = go ] && [ "$CHANGED" -gt 0 ]; then
         say ""
         if on "sudo systemctl daemon-reload"; then

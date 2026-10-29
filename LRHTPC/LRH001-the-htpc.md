@@ -20,17 +20,17 @@
 | Network | `enp1s0`, 1000 Mb/s; its Wi-Fi is down |
 | Audio | PulseAudio, in mango's user manager; default sink the HDMI output |
 | Clock | `US/Eastern`, synchronised by the system's own client, not the fleet's chrony |
-| Login | mango, in groups `audio` and `sudo` — **sudo asks for a password** |
+| Login | mango, in groups `audio` and `sudo` — **sudo asks for a password**, except while granted for a deploy `[LRH-DEP-020]` |
 
 The root is an ordinary write, so nothing in CLAUDE.md §4 applies: `findmnt -no FSTYPE /` reads `ext4`, and both scripts below check it again before writing `[GDE-DEP-060]`.
 
 ## 2. How it plays
 
-**`[LRH-DAT-010]` Everything lives in mango's home, because nothing here may need root.** sudo asks for a password, and a script over ssh cannot answer one. So the layout is teacherslounge's rather than smartboardpc's:
+**`[LRH-DAT-010]` The data lives in mango's home, because nothing that runs here may need root.** sudo asks for a password, and a script over ssh cannot answer one. So the layout is teacherslounge's rather than smartboardpc's. Only the binaries are root's, installed by a deploy under a sudo granted for it `[LRH-DEP-020]`:
 
 | what | where |
 | :--- | :--- |
-| the player and its tools | `~/lempi/bin/` — `lempi`, `import_bundle`, `relink`, `restore_listener` |
+| the player and its tools | `/usr/local/bin/` — `lempi`, `import_bundle`, `relink`, `restore_listener`; in `~/lempi/bin/` until 2026-10-29 |
 | catalogue · listener | `~/lempi-data/library.db` · `~/lempi-data/listener.db` |
 | listening backups | `~/lempi-data/listener-backups/`, made by the player `[REQ-LIB-160]` |
 | music | `~/Music`, the hub's `%USERPROFILE%\Music` copied whole |
@@ -42,9 +42,13 @@ The root is an ordinary write, so nothing in CLAUDE.md §4 applies: `findmnt -no
 
 ## 3. Setting it up
 
-**`[LRH-SET-010]` One script records the node, on the same engine as every other** `[FLT-SHP-030]`: [`setup-lrhtpc.sh`](setup-lrhtpc.sh), `--check` or `--go`. It holds the hostname, the pair and the music, linger, Kodi's audio device, and the unit. It makes no change that needs root, so `--go` can always run over ssh.
+**`[LRH-SET-010]` One script records the node, on the same engine as every other** `[FLT-SHP-030]`: [`setup-lrhtpc.sh`](setup-lrhtpc.sh), `--check` or `--go`. It holds the hostname, the pair and the music, linger, Kodi's audio device, and the unit, and it checks the binaries the deploy installs. It makes no change that needs root, so `--go` can always run over ssh.
 
-**`[LRH-DEP-010]` The player is built on the desktop, by [`deploy-lrhtpc.sh`](deploy-lrhtpc.sh).** The machine has no Rust toolchain, and installing the build dependencies would need root. The script builds a commit — `HEAD` by default — in a worktree made inside the `lempi-linux` image, which is `rust:1.90-bookworm`: the same Debian release as the node, and so the same glibc. Building on smartboardpc would not do, since Ubuntu 24.04's glibc is newer than bookworm's. Then it copies each binary beside its old one and renames it over it, reads back each checksum and `lempi --version`, restarts the unit, and waits for `/build` to name the commit. The unit starts paused, so the script reads `player_state.playing` from the listener first, and presses Play afterwards if it was playing.
+**`[LRH-DEP-010]` The player is built on the desktop, by [`deploy-lrhtpc.sh`](deploy-lrhtpc.sh).** The machine has no Rust toolchain, and installing the build dependencies would need root. The script builds a commit — `HEAD` by default — in a worktree made inside the `lempi-linux` image, which is `rust:1.90-bookworm`: the same Debian release as the node, and so the same glibc. Building on smartboardpc would not do, since Ubuntu 24.04's glibc is newer than bookworm's. Then it installs each binary beside its old one and renames it over it, reads back each checksum and `lempi --version`, restarts the unit, and waits for `/build` to name the commit. The unit starts paused, so the script reads `player_state.playing` from the listener first, and presses Play afterwards if it was playing.
+
+**`[LRH-DEP-020]` The binaries are in `/usr/local/bin`, since 2026-10-29, so a send finds `import_bundle`.** A send looks for it with `command -v` over ssh `[SPEC-STAR-094]`, and a non-interactive ssh here has `PATH=/usr/local/bin:/usr/bin:/bin:/usr/games`: `~/lempi/bin` is on none of it, so the Export page could list this node and never send to it. smartboardpc and teacherslounge link it there with sudo; here sudo asks for a password, so the maintainer grants it for the deploy, as a drop-in `/etc/sudoers.d/zz-mango-temp` that a `systemd-run --on-active=120m` timer removes. The deploy asks `sudo -n true` before it builds, and stops with nothing done if sudo would ask. It copies each binary to `/tmp`, then `sudo install`s it as root's, 755, beside the old one and renames it over it; and it refuses to restart a unit whose `ExecStart` names another copy, which would only show as the wrong build answering.
+
+The move, 2026-10-29: `setup-lrhtpc.sh --go` installed the unit naming `/usr/local/bin/lempi` while the old player ran on; `deploy-lrhtpc.sh` built `65d4799`, installed the four, and the player answered `/build` as `65d4799a39cd`, still paused; a second `--go` removed `~/lempi` and `--check` read all as recorded. A non-interactive `command -v import_bundle` then answers `/usr/local/bin/import_bundle`. The Export page's diff against this node found 65 files it lacks (319.9 MB, seven albums) and four covers, and the send's dry run read the library read-write on ext4 with 29.0 GB free.
 
 **`[LRH-SEED-010]` The library was seeded once, 2026-10-28, and is not seeded by any script.** It is the procedure `BosePi/seed-library.sh` was written for, by hand, on a machine that has neither rsync nor root:
 
@@ -81,10 +85,10 @@ The window is open five minutes, for one pairing `[SPEC-NSH-170]`. Send the invi
 
 No star sync has reached it yet. Its catalogue was seeded by hand, not sent by a sync, so the hub has no record of what it last sent this node. Read what the first run's snapshot stage says about its catalogue before letting that run send it anything.
 
-**`[LRH-OPN-020]` Not a speaker the Export page sends to.** That is a `sync_peers` row in the hub's catalogue `[FLT-DAT-015]`, and a send would put its audio in `~/Music`.
+**`[LRH-OPN-020]` A speaker the Export page sends to since 2026-10-29, and sent nothing yet.** Its `sync_peers` row in the hub's catalogue `[FLT-DAT-015]` names the catalogue `~/lempi-data/library.db` by its absolute path, the listener beside it, and the audio root `~/Music`, also absolute; it is left out of the older remote push, since its catalogue comes by star sync. It could be listed before it could be sent to `[LRH-DEP-020]`. The send itself, 65 files at the time of writing, is the maintainer's press.
 
 **`[LRH-OPN-030]` Not on the fleet clock.** Joining it means installing chrony, which needs root. Until then it follows no echo leader closely enough to play in step `[GDE-ECHO-300]`.
 
 ---
 
-**Traceability:** `[LRH-HW-010]`, `[LRH-DAT-010]`, `[LRH-SVC-010]`, `[LRH-AUD-010]`, `[LRH-SET-010]`, `[LRH-DEP-010]`, `[LRH-SEED-010..030]`, `[LRH-OPN-010..030]` · read from the machine 2026-10-28
+**Traceability:** `[LRH-HW-010]`, `[LRH-DAT-010]`, `[LRH-SVC-010]`, `[LRH-AUD-010]`, `[LRH-SET-010]`, `[LRH-DEP-010]`, `[LRH-DEP-020]`, `[LRH-SEED-010..030]`, `[LRH-OPN-010..030]` · read from the machine 2026-10-28; binaries moved 2026-10-29
