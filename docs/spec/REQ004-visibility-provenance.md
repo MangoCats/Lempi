@@ -176,6 +176,8 @@ Several tracks go in **exactly as one would**, and in the order they appear in t
 >
 > Measured: all seven tracks of *Aja*, queued Next in one action, landed after the current passage as Black Cow → Aja → Deacon Blues → Peg → Home at Last → I Got the News → Josie.
 
+**`[REQ-VIS-196]` An opened album plays as recorded, and can be ticked whole.** *(Requested 2026-10-28; built 2026-10-28.)* In an album's own listing, a ticked track queues its **album** passage, not the radio one rotation plays: the record's own gaps, straight through to the next track `[SPEC-SC-047]`. Every other listing still queues radio passages. A *Select all* button beside the verbs ticks the whole album in running order, and is the whole-album play `[REQ-PD-127]`: a held track is left out, or played from another file that has it unheld. What it leaves out is counted, and a track that can only play its radio cut says so on its row. Designed in [SPEC066](SPEC066-playing-an-album-as-recorded.md).
+
 **`[REQ-VIS-190]` An album opens in its own running order.** An album is a sequence, not an index: opened as one, its tracks belong in the order they were put on the record. Alphabetical remains right everywhere else, where a long list has to be findable rather than faithful.
 
 Ordering is by disc, then track number, then title. **Unnumbered tracks sort after the numbered ones**, not ahead of them, which is where a bare `NULL` would put them.

@@ -96,15 +96,16 @@ to reload.
 ## 4. Playing a whole album
 
 **`[SPEC-HOLD-070]` A whole-album play skips a held album passage, or plays
-an equal one from another file.** *Not built: there is no whole-album play
-yet* `[REQ-PD-127]`. When there is, it queues the album's passages in order,
+an equal one from another file.** *Built 2026-10-28, as Browse's* Select all
+*in an opened album:* [SPEC066](SPEC066-playing-an-album-as-recorded.md)
+`[SPEC-ALB-050]`, for `[REQ-PD-127]`. It queues the album's passages in order,
 and for one that is held it queues, in its place, an unheld passage of the
 same recording from another file if the library has one -- a clean copy from a
 compilation, say -- and otherwise leaves the track out. Same recording means
 the same recording MBID, not the same title: a live take or a remaster is a
 different recording and is not a stand-in. The listener can still choose the
 held passage itself. Decided by the maintainer, 2026-10-01; the album passages
-are held now so that the play, when built, has the marks to read.
+were held then so that the play, when built, would have the marks to read.
 
 ## 5. Limits, named
 

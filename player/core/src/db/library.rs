@@ -789,6 +789,26 @@ pub struct BrowseTrack {
     /// Position on the record, when the file knows it `[REQ-VIS-190]`.
     pub track_no: Option<i64>,
     pub disc_no: Option<i64>,
+    /// In an opened album, the album passage a tick queues in place of this
+    /// radio one `[SPEC-ALB-010]`. Absent there for a track with none
+    /// `[SPEC-ALB-040]`, and absent from every other listing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_passage: Option<i64>,
+    /// Why that album passage is held back, when it is `[SPEC-ALB-050]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_hold: Option<String>,
+    /// What *Select all* plays for a held one instead, when the library has
+    /// an equal passage on another file `[SPEC-HOLD-070]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stand_in: Option<StandIn>,
+}
+
+/// An unheld passage of a held album passage's recording, from another file,
+/// and the album it is shown under there `[SPEC-ALB-050]`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StandIn {
+    pub passage_id: i64,
+    pub album: Option<String>,
 }
 
 /// One passage's own facts, for a person to look at `[REQ-VIS-270]` -- the
@@ -1947,12 +1967,99 @@ impl Library {
                         track_no: r.get(5)?,
                         disc_no: r.get(6)?,
                         mbid: r.get(7)?,
+                        album_passage: None,
+                        album_hold: None,
+                        stand_in: None,
                     })
                 },
             )
             .map_err(|e| DbError::Query(e.to_string()))?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|e| DbError::Query(e.to_string()))
+        let mut out = rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        if f.album.is_some() {
+            self.as_recorded(&mut out)?;
+        }
+        Ok(out)
+    }
+
+    /// An opened album's tracks, each with the album passage a tick queues
+    /// instead of its radio one `[SPEC-ALB-010]`, and what a whole-album play
+    /// does with one that is held `[SPEC-ALB-050]`.
+    ///
+    /// The twin is the one album passage on the same file that the radio
+    /// passage covers more than half of `[SPEC-ALB-030]`. Not an exact span:
+    /// that pairs 2,335 of the desk library's 10,402 radio passages, since
+    /// the migrated ones are trimmed inside their album cut. Not "names the
+    /// same recording", `passage_profile`'s fallback: a hidden intro joined
+    /// to its track `[SPEC-RIP-092]` names the track, and would queue it
+    /// twice. The join covers two album passages, so it has none. Measured
+    /// 2026-10-28: every one of the 10,402 has exactly one.
+    ///
+    /// Per row rather than in the listing's own query: an album is a dozen
+    /// rows, and the 2,000-row listings never come here.
+    fn as_recorded(&self, rows: &mut [BrowseTrack]) -> Result<(), DbError> {
+        // A catalogue without the column holds nothing `[SPEC-HOLD-055]`.
+        let hold = if self.has_column("passages", "director_hold") {
+            "NULLIF(a.director_hold, '')"
+        } else {
+            "NULL"
+        };
+        let twin = format!(
+            "SELECT a.passage_id, a.file_id, {hold}, \
+                    (SELECT pr.mbid FROM __LIB__.passage_recordings pr WHERE pr.passage_id = a.passage_id \
+                      ORDER BY pr.weight DESC, pr.mbid LIMIT 1) \
+               FROM __LIB__.passages r JOIN __LIB__.passages a \
+                 ON a.file_id = r.file_id AND a.kind = 'album' \
+                AND 2 * (MIN(a.end_ms, r.end_ms) - MAX(a.start_ms, r.start_ms)) > a.end_ms - a.start_ms \
+              WHERE r.passage_id = ?1 LIMIT 2"
+        );
+        // The same recording means its MBID, as the passage's heaviest
+        // credit -- not the same title, and not a medley that includes it.
+        // An album passage first, since the rest of the play is album
+        // passages; then the lowest id, so it is the same one every time.
+        let album = self.album_expr("m.file_id");
+        let stand_in = format!(
+            "SELECT m.passage_id, {album} FROM ( \
+               SELECT o.passage_id, o.file_id, o.kind, pr.mbid AS mbid \
+                 FROM __LIB__.passage_recordings pr JOIN __LIB__.passages o ON o.passage_id = pr.passage_id \
+                WHERE pr.mbid = ?1 AND o.file_id <> ?2 AND NULLIF(o.director_hold, '') IS NULL \
+                  AND pr.mbid = (SELECT p2.mbid FROM __LIB__.passage_recordings p2 \
+                                  WHERE p2.passage_id = o.passage_id ORDER BY p2.weight DESC, p2.mbid LIMIT 1)) m \
+               LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id \
+              ORDER BY m.kind = 'album' DESC, m.passage_id LIMIT 1"
+        );
+        let mut twin = self.conn.prepare(&twin).map_err(|e| DbError::Query(e.to_string()))?;
+        for row in rows.iter_mut() {
+            let found = twin
+                .query_map([row.passage_id], |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                    ))
+                })
+                .map_err(|e| DbError::Query(e.to_string()))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| DbError::Query(e.to_string()))?;
+            let (passage, file, held, mbid) = match found.as_slice() {
+                [one] => one.clone(),
+                _ => continue, // none, or a join across two `[SPEC-ALB-040]`
+            };
+            row.album_passage = Some(passage);
+            // Only a held one asks: the column exists whenever it is.
+            if let (Some(_), Some(mbid)) = (&held, &mbid) {
+                row.stand_in = self
+                    .conn
+                    .query_row(&stand_in, rusqlite::params![mbid, file], |r| {
+                        Ok(StandIn { passage_id: r.get(0)?, album: r.get(1)? })
+                    })
+                    .ok();
+            }
+            row.album_hold = held;
+        }
+        Ok(())
     }
 
     /// Everything one passage is, for a person to look at `[REQ-VIS-270]` --
@@ -3248,6 +3355,72 @@ mod tests {
         let mut e = lib.passage(2).unwrap();
         lib.describe(&mut e);
         assert_eq!(e.naming.mb_album.as_deref(), Some("Twelve Deadly Cyns"), "and now playing says so");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `[SPEC-ALB-030]` An opened album names each track's album passage:
+    /// one trimmed inside it, as the migrated library is; one of the same
+    /// span, as a disc image is; and none for a hidden intro joined to its
+    /// track `[SPEC-RIP-092]`, which would otherwise play that track twice.
+    /// `[SPEC-ALB-050]` A held one carries its reason, and a stand-in from
+    /// another file only where one exists -- an album passage before a radio
+    /// one. No other listing carries any of it.
+    #[test]
+    fn an_opened_album_names_its_album_passages() {
+        let dir = std::env::temp_dir().join(format!("lempi-asrecorded-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lib.db");
+        let _ = std::fs::remove_file(&path);
+        {
+            let c = rusqlite::Connection::open(&path).unwrap();
+            c.execute_batch(include_str!("../../../../sql/schema.sql")).unwrap();
+            c.execute_batch(
+                "INSERT INTO recordings (mbid,title,source) VALUES
+                     ('one','One','mb'), ('two','Two','mb'), ('intro','Intro','mb'), ('three','Three','mb');
+                 INSERT INTO files (file_id,audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen)
+                   VALUES (1,'m1','/1.mp3',1,1.0,'mp3',200000,'t','t'), (2,'m2','/2.flac',1,1.0,'flac',300000,'t','t'),
+                          (3,'m3','/3.mp3',1,1.0,'mp3',190000,'t','t');
+                 INSERT INTO file_tags (file_id,album,track_no,scanned_at) VALUES (1,'Rec',1,0), (2,'Rec',2,0),
+                                                                                  (3,'Best Of',1,0);
+                 INSERT INTO passages (passage_id,file_id,kind,start_ms,end_ms,boundary_src,director_hold) VALUES
+                     (1,1,'radio',300,199000,'inherited:mulib',NULL), (2,1,'album',0,200000,'inherited:mulib',NULL),
+                     (3,2,'album',0,100000,'cd',NULL),      (4,2,'radio',0,100000,'cd',NULL),
+                     (5,2,'album',100000,110000,'cd',NULL), (6,2,'radio',100000,110000,'cd',NULL),
+                     (7,2,'album',110000,300000,'cd','damaged rip'), (8,2,'radio',110000,300000,'cd','damaged rip'),
+                     (9,2,'radio',100000,300000,'cd','damaged rip'),
+                     (10,3,'radio',500,189000,'x',NULL), (11,3,'album',0,190000,'x',NULL);
+                 INSERT INTO passage_recordings (passage_id,mbid,weight,source) VALUES
+                     (1,'one',1,'mb'), (2,'one',1,'mb'), (3,'two',1,'mb'), (4,'two',1,'mb'),
+                     (5,'intro',1,'mb'), (6,'intro',1,'mb'), (7,'three',1,'mb'), (8,'three',1,'mb'),
+                     (9,'three',0.95,'mb'), (9,'intro',0.05,'mb'), (10,'three',1,'mb'), (11,'three',1,'mb');",
+            )
+            .unwrap();
+        }
+        let lib = Library::open(&path).unwrap();
+        let rec = lib.browse_tracks(&BrowseFilter { album: Some("Rec".into()), ..Default::default() }).unwrap();
+        let twin = |radio: i64| rec.iter().find(|t| t.passage_id == radio).unwrap();
+        assert_eq!(twin(1).album_passage, Some(2), "trimmed inside it, as the migrated library is");
+        assert_eq!(twin(4).album_passage, Some(3), "the same span, as a disc image is");
+        assert_eq!(twin(6).album_passage, Some(5), "a hidden intro is a track of its own");
+        assert_eq!(twin(9).album_passage, None, "a join covers two, and has none");
+        assert!(twin(4).album_hold.is_none() && twin(4).stand_in.is_none());
+
+        let held = twin(8);
+        assert_eq!((held.album_passage, held.album_hold.as_deref()), (Some(7), Some("damaged rip")));
+        let s = held.stand_in.as_ref().expect("Best Of carries the same recording, unheld");
+        assert_eq!((s.passage_id, s.album.as_deref()), (11, Some("Best Of")), "its album passage, not its radio one");
+
+        // Hold Best Of's copies too, and there is nothing to stand in.
+        drop(lib);
+        rusqlite::Connection::open(&path).unwrap()
+            .execute("UPDATE passages SET director_hold = 'mine' WHERE file_id = 3", []).unwrap();
+        let lib = Library::open(&path).unwrap();
+        let rec = lib.browse_tracks(&BrowseFilter { album: Some("Rec".into()), ..Default::default() }).unwrap();
+        assert!(rec.iter().find(|t| t.passage_id == 8).unwrap().stand_in.is_none(), "a held copy is no stand-in");
+
+        let all = lib.browse_tracks(&BrowseFilter::default()).unwrap();
+        assert!(all.iter().all(|t| t.album_passage.is_none() && t.album_hold.is_none()),
+                "only an opened album carries them");
         std::fs::remove_dir_all(&dir).ok();
     }
 

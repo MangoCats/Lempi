@@ -69,6 +69,8 @@
                   cursor: pointer; background: transparent; color: inherit;
                   border: 1px solid currentColor; border-radius: 4px; }
   .verbs button[disabled] { opacity: .35; cursor: default; }
+  /* A skin that gives buttons a display of their own must not show it. */
+  .verbs button[hidden] { display: none; }
   #picked { font-size: .8125rem; opacity: .7; }
   /* Big enough to hit, and the whole row works too. */
   .rows .pick { flex: none; width: 1.25rem; height: 1.25rem; margin: 0 .2rem 0 0; }
@@ -119,6 +121,8 @@
     <button type="button" id="v-now" disabled>Now</button>
     <button type="button" id="v-next" disabled>Next</button>
     <button type="button" id="v-last" disabled>Last</button>
+    <!-- An opened album only: the whole album, as recorded [SPEC-ALB-020]. -->
+    <button type="button" id="v-all" hidden>Select all</button>
     <span id="picked"></span>
   </div>
   <div class="crumbs" id="crumbs"></div>

@@ -78,7 +78,8 @@ folded into one spec.
 | Album names held short in folder and file names | [SPEC063](spec/SPEC063-album-names-held-short.md) | [§4. Open](spec/SPEC063-album-names-held-short.md#4-open) |
 | Parametric equalizer — built 2026-10-22; follows the stored output rather than the sounding one | [SPEC064](spec/SPEC064-parametric-equalizer.md) | [§5. Open](spec/SPEC064-parametric-equalizer.md#5-open) |
 | Tempo, pitch and A-B loop — built 2026-10-22; unheard at their extremes | [SPEC065](spec/SPEC065-tempo-pitch-and-loop.md) | [§6. Open](spec/SPEC065-tempo-pitch-and-loop.md#6-open) |
-| Holding a passage back (whole-album play, `[REQ-PD-127]`, not built) | [SPEC057](spec/SPEC057-holding-a-passage-back.md) | [§6. Open](spec/SPEC057-holding-a-passage-back.md#6-open) |
+| Holding a passage back (whole-album play `[REQ-PD-127]` built 2026-10-28, in SPEC066) | [SPEC057](spec/SPEC057-holding-a-passage-back.md) | [§6. Open](spec/SPEC057-holding-a-passage-back.md#6-open) |
+| Playing an album as recorded — built 2026-10-28; unheard across a segue | [SPEC066](spec/SPEC066-playing-an-album-as-recorded.md) | [§5. Open](spec/SPEC066-playing-an-album-as-recorded.md#5-open) |
 | Catalogue patch by natural key | [SPEC058](spec/SPEC058-catalogue-patch-by-natural-key.md) | [§9. Open](spec/SPEC058-catalogue-patch-by-natural-key.md#9-open) |
 | A node's own occasion policy, a profanity ceiling first (designed, not scheduled) | [GUIDE036](GUIDE036-node-occasion-policies.md) | [§2. The design](GUIDE036-node-occasion-policies.md#2-the-design-a-nodes-own-policy) |
 | Integrity -- every stored hash read again where the file lies, damage withheld and repaired (planned 2026-10-14; built but for the phone's scrub, the databases' weekly check -- waiting on a measurement on `lempi02w` -- and the changed-value tripwire) | [GUIDE038](GUIDE038-integrity-gap-closures.md) | [§7 Order and size](GUIDE038-integrity-gap-closures.md#7-order-and-size) |

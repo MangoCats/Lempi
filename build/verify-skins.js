@@ -844,9 +844,19 @@ async function runBrowse() {
   const ARTISTS = [{ name: 'ABBA', artist: null, passages: 3, plays: 9 },
                    { name: 'Steely Dan', artist: null, passages: 8, plays: 40 }];
   const ALBUMS = [{ name: 'Aja', artist: 'Steely Dan', passages: 7, plays: 30 }];
+  // Opened as an album, each names its album passage [SPEC-ALB-010]: the
+  // third is held with a stand-in on another album, the fourth held with
+  // none, and the fifth is a join with no album passage [SPEC-ALB-040].
   const TRACKS = [
-    { passage_id: 11, title: 'Black Cow', artist: 'Steely Dan', album: 'Aja', plays: 4, track_no: 1, disc_no: 1 },
-    { passage_id: 12, title: 'Aja', artist: 'Steely Dan', album: 'Aja', plays: 2, track_no: 2, disc_no: 1 },
+    { passage_id: 11, title: 'Black Cow', artist: 'Steely Dan', album: 'Aja', plays: 4, track_no: 1, disc_no: 1,
+      album_passage: 21 },
+    { passage_id: 12, title: 'Aja', artist: 'Steely Dan', album: 'Aja', plays: 2, track_no: 2, disc_no: 1,
+      album_passage: 22 },
+    { passage_id: 13, title: 'Deacon Blues', artist: 'Steely Dan', album: 'Aja', plays: 0, track_no: 3, disc_no: 1,
+      album_passage: 23, album_hold: 'damaged rip', stand_in: { passage_id: 33, album: 'Gold' } },
+    { passage_id: 14, title: 'Peg', artist: 'Steely Dan', album: 'Aja', plays: 0, track_no: 4, disc_no: 1,
+      album_passage: 24, album_hold: 'damaged rip' },
+    { passage_id: 15, title: 'Home at Last', artist: 'Steely Dan', album: 'Aja', plays: 0, track_no: 5, disc_no: 1 },
   ];
 
   const posted = [];
@@ -888,6 +898,7 @@ async function runBrowse() {
   check(az.some(b => b.textContent === 'A' && !b.disabled), 'A should be live');
   check(az.some(b => b.textContent === 'Q' && b.disabled), 'Q should be disabled');
   check($('verbs').hidden, 'the verbs belong to the track listing only');
+  check($('v-all').hidden, 'Select all belongs to an opened album only');
 
   // An artist narrows to albums; an album narrows to its tracks.
   rows()[1].onclick();
@@ -896,7 +907,8 @@ async function runBrowse() {
   rows()[0].onclick();
   await settle();
   check(!$('verbs').hidden, 'the verbs appear on tracks');
-  check(rows().length === 2, `album tracks: ${rows().length}, want 2`);
+  check(!$('v-all').hidden && !$('v-all').disabled, 'an opened album offers Select all');
+  check(rows().length === 5, `album tracks: ${rows().length}, want 5`);
   // The album's sleeve, front and back, through its first track's passage.
   const sleeve = [...window.document.querySelectorAll('#rows li.sleeves img')].map(i => i.getAttribute('src'));
   check(sleeve.join(' ') === '/art/11 /art/11/back',
@@ -927,15 +939,41 @@ async function runBrowse() {
   $('v-next').onclick();
   check(posted.length === 0, 'a disabled verb must not post');
 
-  // Select both, in listing order, and queue them as one request.
-  for (const box of window.document.querySelectorAll('.pick')) { box.checked = true; }
-  window.document.querySelector('.pick').onchange();
+  // Tick two by hand, in listing order, and queue them as one request -- as
+  // their album passages, since this is an opened album [SPEC-ALB-010].
+  rows()[0].onclick();
+  rows()[1].onclick();
   check(!$('v-next').disabled, 'a selection must arm the verbs');
   $('v-next').onclick();
   await settle();
   check(posted.length === 1, `one request, got ${posted.length}`);
-  check(posted[0] === '/queue/11,12/next',
-        `must send the list in listing order, got ${posted[0]}`);
+  check(posted[0] === '/queue/21,22/next',
+        `must send the album passages in listing order, got ${posted[0]}`);
+  check(window.document.querySelectorAll('.pick:checked').length === 0, 'queueing clears the selection');
+
+  // The fallbacks are said on the row, not silently equivalent.
+  check(/radio cut/.test(rows()[4].textContent), 'a track with no album passage says it plays its radio cut');
+  check(/from Gold/.test(rows()[2].textContent), 'a held track names where its stand-in comes from');
+
+  // Select all: the whole album, a stand-in for the held track that has one,
+  // and neither the held track without one nor the join [SPEC-ALB-050].
+  $('v-all').onclick();
+  check($('v-all').textContent === 'Clear', `pressed, it offers to clear, got "${$('v-all').textContent}"`);
+  check(/3 tracks selected · 2 left out/.test($('picked').textContent),
+        `what it leaves out is counted, got "${$('picked').textContent}"`);
+  $('v-last').onclick();
+  await settle();
+  check(posted[1] === '/queue/21,22,33/last', `Select all must send 21,22,33, got ${posted[1]}`);
+
+  // Pressed with the album ticked, it clears; a held track ticked by hand is
+  // the held passage itself, which a person may still choose.
+  $('v-all').onclick();
+  $('v-all').onclick();
+  check(window.document.querySelectorAll('.pick:checked').length === 0, 'Clear must untick everything');
+  rows()[3].onclick();
+  $('v-now').onclick();
+  await settle();
+  check(posted[2] === '/queue/24/now', `a held track ticked by hand is itself, got ${posted[2]}`);
 
   // A failed query must say so, not render as an empty library.
   fail = 500;

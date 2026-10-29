@@ -21,6 +21,9 @@
   let browseLimit = 0;
   let filter = {};          // { artist, album } -- the narrowing, not the search
   let timer = null;
+  // An opened album's tracks, where a tick queues the album passage
+  // [SPEC-ALB-010]. Everywhere else a tick queues the radio one, as before.
+  let asAlbum = false;
 
   // The heading must be derived the same way the server sorts, or the letters
   // stop being monotonic: strip a leading "The" here while the ORDER BY does
@@ -128,13 +131,45 @@
   const picked = () =>
     [...document.querySelectorAll('.pick:checked')].map(b => b.value);
 
+  // A box carries two answers: `own`, what a tick by hand queues, and
+  // `whole`, what Select all queues -- empty where it leaves the track out.
+  // They differ only for a held track [SPEC-ALB-050]: chosen by hand it is
+  // the held passage itself, in a whole-album play its stand-in or nothing.
+  const tick = (box, on, as = box.dataset.own) => { box.checked = on; box.value = as; };
+  const whole = () => [...document.querySelectorAll('.pick')].filter(b => b.dataset.whole);
+  const wholeTicked = () => {
+    const w = whole();
+    return w.length > 0 && w.every(b => b.checked && b.value === b.dataset.whole);
+  };
+
   // The verbs are useless without a selection, and a button that does nothing
   // when pressed teaches nothing. Disabled until there is something to act on.
   function armed() {
     const n = picked().length;
-    for (const b of document.querySelectorAll('#verbs button')) b.disabled = !n;
-    $('picked').textContent = n ? `${plural(n, 'track')} selected` : '';
+    for (const b of document.querySelectorAll('#verbs button:not(#v-all)')) b.disabled = !n;
+    let said = n ? `${plural(n, 'track')} selected` : '';
+    if (asAlbum) {
+      const all = wholeTicked();
+      $('v-all').textContent = all ? 'Clear' : 'Select all';
+      $('v-all').disabled = !whole().length;
+      // What the whole album leaves out is said, not silently missing.
+      const out = document.querySelectorAll('.pick:not([data-whole])').length;
+      if (all && out) said += ` · ${out} left out`;
+    }
+    $('picked').textContent = said;
   }
+
+  // The whole album, in its running order [SPEC-ALB-020] -- the whole-album
+  // play [REQ-PD-127]. It replaces the selection rather than adding to it, and
+  // pressed again with the album ticked, it clears.
+  $('v-all').onclick = () => {
+    const clear = wholeTicked();
+    for (const b of document.querySelectorAll('.pick')) {
+      if (!clear && b.dataset.whole) tick(b, true, b.dataset.whole);
+      else tick(b, false);
+    }
+    armed();
+  };
 
   for (const [label, action, said] of Lempi.VERBS.place) {
     $('v-' + action).onclick = () => {
@@ -144,8 +179,9 @@
       // separate requests they would arrive interleaved, and inserting each at
       // the same place would reverse them.
       Lempi.queue(ids.join(','), action).then(() => {
-        $('note').textContent = `${plural(ids.length, 'track')} — ${said}.`;
-        for (const b of document.querySelectorAll('.pick:checked')) b.checked = false;
+        $('note').textContent =
+          `${plural(ids.length, 'track')}${asAlbum ? ' as on the album' : ''} — ${said}.`;
+        for (const b of document.querySelectorAll('.pick:checked')) tick(b, false);
         armed();
       });
     };
@@ -158,6 +194,8 @@
     }
     crumbs();
     $('verbs').hidden = kind !== 'tracks';
+    asAlbum = kind === 'tracks' && !!filter.album;
+    $('v-all').hidden = !asAlbum;
     const body = $('rows');
     const note = $('note');
 
@@ -241,16 +279,42 @@
         const numbered = filter.album && r.track_no
           ? `${r.disc_no && r.disc_no > 1 ? r.disc_no + '-' : ''}${r.track_no}. ${r.title}`
           : r.title;
+        // In an opened album a tick queues the album passage, which keeps
+        // the record's own gaps and plays straight into the next, rather
+        // than the radio one rotation plays [SPEC-ALB-010]. A track without
+        // one falls back to its radio passage and says so [SPEC-ALB-040];
+        // Select all leaves it out, since a hidden intro joined to its track
+        // is one, and its audio is already in the album passages around it.
+        let own = r.passage_id, all = null, says = '';
+        if (asAlbum) {
+          if (r.album_passage == null) {
+            says = 'radio cut — not in Select all';
+          } else {
+            own = all = r.album_passage;
+            // Held: Select all plays an equal passage from another file in
+            // its place, or leaves it out [SPEC-HOLD-070]. By hand, the
+            // held passage itself, which a person may still choose.
+            if (r.album_hold) {
+              all = r.stand_in ? r.stand_in.passage_id : null;
+              says = r.stand_in
+                ? `held — Select all plays it from ${r.stand_in.album || 'another file'}`
+                : 'held — not in Select all';
+            }
+          }
+        }
         const li = row(numbered,
-                       filter.album ? (r.artist ?? '')
+                       filter.album ? [r.artist, says].filter(Boolean).join(' · ')
                                     : [r.artist, r.album].filter(Boolean).join(' — '),
                        r.plays ? `${r.plays}×` : '');
+        if (r.album_hold) li.title = `held: ${r.album_hold}`;
         const box = document.createElement('input');
         box.type = 'checkbox';
         box.className = 'pick';
-        box.value = r.passage_id;
+        box.dataset.own = own;
+        if (all != null) box.dataset.whole = all;
+        box.value = own;
         box.onclick = e => e.stopPropagation();
-        box.onchange = armed;
+        box.onchange = () => { box.value = box.dataset.own; armed(); };
         li.prepend(box);
         // A passage's own facts [REQ-VIS-270], one tap away without leaving
         // the checkbox underneath it -- its own click target, the same
@@ -282,7 +346,7 @@
         }
         // Tapping anywhere on the row ticks it: a 16-pixel checkbox is not a
         // phone target, and the whole row is.
-        li.onclick = () => { box.checked = !box.checked; armed(); };
+        li.onclick = () => { tick(box, !box.checked); armed(); };
         body.appendChild(li);
       } else if (kind === 'albums') {
         const li = row(
