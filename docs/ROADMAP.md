@@ -80,7 +80,7 @@ folded into one spec.
 | Tempo, pitch and A-B loop — built 2026-10-22; unheard at their extremes | [SPEC065](spec/SPEC065-tempo-pitch-and-loop.md) | [§6. Open](spec/SPEC065-tempo-pitch-and-loop.md#6-open) |
 | Holding a passage back (whole-album play `[REQ-PD-127]` built 2026-10-28, in SPEC066) | [SPEC057](spec/SPEC057-holding-a-passage-back.md) | [§6. Open](spec/SPEC057-holding-a-passage-back.md#6-open) |
 | Playing an album as recorded — built 2026-10-28; unheard across a segue | [SPEC066](spec/SPEC066-playing-an-album-as-recorded.md) | [§5. Open](spec/SPEC066-playing-an-album-as-recorded.md#5-open) |
-| An album by its identity — built 2026-10-28; unmeasured on an appliance | [SPEC067](spec/SPEC067-an-album-by-its-identity.md) | [§3. Open](spec/SPEC067-an-album-by-its-identity.md#3-open) |
+| An album by its identity — built 2026-10-28; two of one name, credit and year look alike | [SPEC067](spec/SPEC067-an-album-by-its-identity.md) | [§3. Open](spec/SPEC067-an-album-by-its-identity.md#3-open) |
 | Catalogue patch by natural key | [SPEC058](spec/SPEC058-catalogue-patch-by-natural-key.md) | [§9. Open](spec/SPEC058-catalogue-patch-by-natural-key.md#9-open) |
 | A node's own occasion policy, a profanity ceiling first (designed, not scheduled) | [GUIDE036](GUIDE036-node-occasion-policies.md) | [§2. The design](GUIDE036-node-occasion-policies.md#2-the-design-a-nodes-own-policy) |
 | Integrity -- every stored hash read again where the file lies, damage withheld and repaired (planned 2026-10-14; built but for the phone's scrub, the databases' weekly check -- waiting on a measurement on `lempi02w` -- and the changed-value tripwire) | [GUIDE038](GUIDE038-integrity-gap-closures.md) | [§7 Order and size](GUIDE038-integrity-gap-closures.md#7-order-and-size) |

@@ -74,10 +74,18 @@ album link `[REQ-VIS-198]` sends `album_of`, the passage, and the server opens
 the album that passage is shown under. An identity that names nothing opens
 nothing, not everything.
 
-Measured warm on the desk 2026-10-28: the album listing 0.39 s, from 0.31 s by
-name; an album opened by identity 0.39 s, from 0.28 s by name. Both now work
-out every passage's album, about 0.1 s of it. Not yet measured on an appliance,
-whose listing took 0.93 s by name `[PI-CHR-065]`.
+Both work out every passage's album, so the chosen release is looked for only
+where the file names none, and opening an album leaves out the plays and
+artists only the listing shows. Asked in a join's own condition it was looked
+for on every passage, and the first build, `1162858`, was the slower for it.
+Measured warm 2026-10-28:
+
+| | by name | `1162858` | `b4d65fd` |
+| :--- | ---: | ---: | ---: |
+| album listing, desk | 0.31 s | 0.39 s | 0.30 s |
+| an album opened, desk | 0.28 s | 0.39 s | 0.27 s |
+| album listing, lempi02w | 1.05 s | 1.78 s | 1.15 s |
+| an album opened, lempi02w | 0.85 s | 1.60 s | 0.60 s |
 
 **`[SPEC-AID-050]` Albums alike in name and credit are told apart by year.**
 Only those, beside the credit -- *Heart · 1986*, *Heart · 1998* -- since on
