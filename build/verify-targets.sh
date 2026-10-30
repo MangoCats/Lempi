@@ -400,6 +400,9 @@ echo "== Skins (in the Linux image, which carries node and jsdom) =="
 # like any other `[GDE-DEP-060]`.
 MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w lempi-linux node build/verify-skins.js \
     || fail=$((fail+1))
+# The picture frame's page, its clock and its colour rule `[SPEC068]`: node alone.
+MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w lempi-linux node build/verify-frame.js \
+    || fail=$((fail+1))
 
 # The Python tools are outside cargo's reach too. `apply_reviews` rewrites what
 # a passage IS, and shipped once in a state where it could not write at all, so

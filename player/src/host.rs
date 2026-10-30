@@ -431,6 +431,9 @@ impl Player {
                     }
                     Err(e) => tracing::warn!("discovery: no node identity, so not answering: {e}"),
                 }
+                // The picture frame on this machine's own screen `[SPEC068]`;
+                // a phone, on loopback alone, has none `[SPEC-PIC-140]`.
+                crate::frame::init(&cfg.listener, &cfg.library, port);
             }
         }
         drop(ended_tx);
@@ -487,6 +490,7 @@ impl Player {
     /// hanging on it.
     pub fn shutdown(mut self) -> bool {
         self._stop_avrcp.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        crate::frame::shutdown();
         self.command(Command::Shutdown);
         let stopped = wait_for_engine(&self.ended, Duration::from_secs(5));
         if let Some(rt) = self.runtime.take() {

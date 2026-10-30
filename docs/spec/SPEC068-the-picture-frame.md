@@ -57,10 +57,12 @@ never a silent one.
 
 **`[SPEC-PIC-060]` The screen is kept on while the frame shows.** Measured on
 lrhtpc 2026-10-29: X's DPMS turns the screen off after 600 s with no input, and
-a slideshow is not input. The page asks the browser for a screen wake lock.
-Where that alone does not hold the screen on, measured, the player also turns
-X's screen saver and DPMS off while the frame is up (`xset s off -dpms`), and
-puts back the values it read beforehand when it is hidden.
+a slideshow is not input. The page asks the browser for a screen wake lock,
+and, as built, the player also turns X's screen saver and DPMS off whenever
+the frame shows (`xset s off`, `xset -dpms`), rather than waiting to find the
+wake lock insufficient. It puts back the values it read beforehand when the
+frame is hidden. It keeps them on disk too, so a player that dies first has
+them put back by the next one at its start.
 
 ## 2. How it reaches the screen
 
@@ -94,11 +96,17 @@ screen. The person in the room has the last word. Switching it on again starts
 it again.
 
 **`[SPEC-PIC-140]` Offered only where there is a screen and a browser.** On
-Linux the player's environment must name a display (`DISPLAY`, which the user
-unit on lrhtpc and smartboardpc already has), and on Windows the player must
-be running in the session of the person signed in. Where either is missing, or
-no browser is found, the switch is shown disabled with the reason beside it. An
-appliance build does not offer it at all: a Pi's screen is fbui's `[SPEC036]`.
+Linux there must be a display: one named in the player's environment
+(`DISPLAY`, which the user unit on lrhtpc and smartboardpc already has), or
+else the first X server's socket, for a player started at boot before the
+session. On Windows the player must be running in the session of the person
+signed in. Where either is missing, or no browser is found, the switch is
+shown disabled with the reason beside it, and it is tried again each minute.
+It is decided by what the machine has, not by its build: every node is built
+with the default features, the appliances' among them. A Pi has no display in
+its player's environment and no browser, so it is never offered there, and its
+screen stays fbui's `[SPEC036]`. A phone, serving its own loopback alone, has
+no frame, and no row on its panel.
 X11 only for now (both machines are X11 sessions, read 2026-10-29). Under
 Wayland the frame would show full screen but could not be raised over other
 windows, and the panel would say so.

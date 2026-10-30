@@ -43,6 +43,7 @@ mod edit;
 mod guide;
 mod media;
 mod musicbrainz;
+mod picture_frame;
 mod preference;
 mod programme;
 mod review;
@@ -595,6 +596,16 @@ pub fn router(ui: Ui) -> Router {
         // How long an album name a rip's folder and files get `[SPEC-NAM-010]`.
         .route("/rips/album-name-max", get(cd_album_name_max))
         .route("/rips/album-name-max/:n", post(set_cd_album_name_max))
+        // The picture frame on this machine's own screen `[SPEC068]`: its page
+        // and pictures for the browser the player started, by token
+        // `[SPEC-PIC-300]`, and its three settings `[SPEC-PIC-200]`.
+        .route("/frame", get(picture_frame::page))
+        .route("/frame/next", get(picture_frame::next))
+        .route("/frame/picture/:n", get(picture_frame::picture))
+        .route("/frame/settings", get(picture_frame::settings))
+        .route("/frame/on/:on", post(picture_frame::set_on))
+        .route("/frame/folder", post(picture_frame::set_folder))
+        .route("/frame/clock/:pct", post(picture_frame::set_clock))
         .route("/skip/suppress/:hours", post(set_skip_suppress))
         .route("/dequeue/suppress/:hours", post(set_dequeue_suppress))
         .route("/queue/depth/:n", post(set_queue_depth))

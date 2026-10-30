@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lempi picture frame</title>
+<!-- [SPEC068]: shown only to the browser the player started, which holds the
+     token in this page's URL [SPEC-PIC-300]. Two pictures stacked for the
+     crossfade, and the clock drawn on a canvas above them, so its digits can
+     be exactly the height asked for and the patch beneath them measured. -->
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
+  img { position: fixed; inset: 0; width: 100vw; height: 100vh; object-fit: cover;
+        opacity: 0; transition: opacity 1s linear; }
+  img.on { opacity: 1; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; }
+  #note { position: fixed; left: 2vh; bottom: 2vh; color: #999;
+          font: 2.5vh system-ui, "DejaVu Sans", "Segoe UI", Arial, sans-serif; }
+</style>
+</head>
+<body>
+<img id="a" alt=""><img id="b" alt="">
+<canvas id="clock"></canvas>
+<div id="note"></div>
+<script>
+(function () {
+  'use strict';
+  const T = new URLSearchParams(location.search).get('t') || '';
+  const FONT = 'system-ui, "DejaVu Sans", "Segoe UI", Arial, sans-serif';
+  const imgs = [document.getElementById('a'), document.getElementById('b')];
+  const canvas = document.getElementById('clock');
+  const ctx = canvas.getContext('2d');
+  const note = document.getElementById('note');
+  let front = 0, last = null, pct = 15, colour = '#fff', text = '', preparing = null;
+
+  // [SPEC-PIC-030]: h:mm on a 12-hour clock, no leading zero, no AM or PM.
+  function timeText(d) {
+    const h = d.getHours() % 12 || 12;
+    return h + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+
+  // Where the clock goes, in CSS pixels: its digits pct% of the screen's
+  // height, measured from the font itself, and set in from the corner by a
+  // third of that height.
+  function geometry(t) {
+    const H = innerHeight, want = H * pct / 100;
+    ctx.font = 'bold 100px ' + FONT;
+    const ratio = (ctx.measureText('0123456789').actualBoundingBoxAscent || 72) / 100;
+    const px = want / ratio;
+    ctx.font = 'bold ' + px + 'px ' + FONT;
+    const inset = want / 3;
+    return { px: px, x: innerWidth - inset, y: H - inset, w: ctx.measureText(t).width, h: want };
+  }
+
+  function draw() {
+    const dpr = devicePixelRatio || 1;
+    canvas.width = Math.round(innerWidth * dpr);
+    canvas.height = Math.round(innerHeight * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, innerWidth, innerHeight);
+    const g = geometry(text);
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = colour;
+    ctx.fillText(text, g.x, g.y);
+  }
+
+  // [SPEC-PIC-040]: black or white, whichever has the higher contrast ratio
+  // against the mean relative luminance of the picture beneath the clock, as
+  // displayed -- cropped to cover, as the <img> is.
+  const lin = c => { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+  function pick(L) { return 1.05 / (L + 0.05) >= (L + 0.05) / 0.05 ? '#fff' : '#000'; }
+  function colourFor(img, t) {
+    const s = 0.25, cw = Math.max(1, Math.round(innerWidth * s)), ch = Math.max(1, Math.round(innerHeight * s));
+    const c = document.createElement('canvas');
+    c.width = cw; c.height = ch;
+    const x = c.getContext('2d', { willReadFrequently: true });
+    const k = Math.max(cw / img.naturalWidth, ch / img.naturalHeight);
+    const dw = img.naturalWidth * k, dh = img.naturalHeight * k;
+    x.drawImage(img, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+    const g = geometry(t);
+    const x0 = Math.max(0, Math.floor((g.x - g.w) * s)), y0 = Math.max(0, Math.floor((g.y - g.h) * s));
+    const d = x.getImageData(x0, y0, Math.max(1, Math.ceil(g.w * s)), Math.max(1, Math.ceil(g.h * s))).data;
+    let sum = 0, n = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      sum += 0.2126 * lin(d[i]) + 0.7152 * lin(d[i + 1]) + 0.0722 * lin(d[i + 2]);
+      n++;
+    }
+    return pick(n ? sum / n : 0);
+  }
+
+  // The next picture, loaded and decoded into the hidden layer, with the
+  // clock's colour for the time it will be shown at [SPEC-PIC-020].
+  async function prepare(at) {
+    const r = await fetch('/frame/next?t=' + encodeURIComponent(T) + (last === null ? '' : '&last=' + last),
+                          { cache: 'no-store' });
+    if (!r.ok) return null;  // hidden, or a newer frame: its browser goes with it
+    const d = await r.json();
+    pct = d.clock_pct || pct;
+    note.textContent = d.note || '';
+    if (d.n === null || d.n === undefined) return { img: null, n: null, colour: '#fff' };
+    const im = imgs[1 - front];
+    im.src = '/frame/picture/' + d.n + '?t=' + encodeURIComponent(T);
+    await im.decode();
+    return { img: im, n: d.n, colour: colourFor(im, timeText(at)) };
+  }
+
+  function show(p) {
+    text = timeText(new Date());
+    if (p && p.img) {
+      p.img.classList.add('on');
+      imgs[front].classList.remove('on');
+      front = imgs.indexOf(p.img);
+      last = p.n;
+      colour = p.colour;
+    } else if (p) {
+      imgs.forEach(i => i.classList.remove('on'));
+      colour = '#fff';
+    }
+    draw();
+  }
+
+  // Each minute: the next picture made ready fifteen seconds before, then
+  // shown with the new time at :00.
+  function schedule() {
+    const now = new Date();
+    const left = 60000 - (now.getSeconds() * 1000 + now.getMilliseconds());
+    const at = new Date(now.getTime() + left + 20);
+    setTimeout(() => { preparing = prepare(at).catch(() => null); }, Math.max(0, left - 15000));
+    setTimeout(async () => {
+      const p = preparing ? await preparing : null;
+      preparing = null;
+      show(p);
+      schedule();
+    }, left + 20);
+  }
+
+  // [SPEC-PIC-060]: the screen kept on while this shows.
+  async function wake() {
+    try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch (e) { /* the player's xset holds it */ }
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') wake(); });
+  addEventListener('resize', draw);
+
+  (async function start() {
+    wake();
+    text = timeText(new Date());
+    draw();
+    try { show(await prepare(new Date())); } catch (e) { draw(); }
+    schedule();
+  })();
+})();
+</script>
+</body>
+</html>

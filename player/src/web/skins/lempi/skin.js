@@ -2234,6 +2234,42 @@
     if (!r.ok) { alert('Could not change it.'); discovery(); }
   };
 
+  // ---------------------------------------------------- the picture frame
+  // [SPEC068]: shown wherever the player answers /frame/settings, which is
+  // every machine but a phone; the switch disabled, with the reason, where no
+  // frame can be shown. A refusal stays in view for ten seconds, over the
+  // panel's own refresh.
+  const frameOn = $('frameon'), frameFolder = $('framefolder'), frameClock = $('frameclock');
+  let frameError = null;
+  function frameShow(d) {
+    for (const id of ['frame-row', 'frame-folder-row', 'frame-clock-row']) setHidden($(id), false);
+    frameOn.checked = !!d.on;
+    frameOn.disabled = !d.available;
+    frameFolder.placeholder = d.default_folder || '';
+    if (document.activeElement !== frameFolder) frameFolder.value = d.folder || '';
+    frameClock.min = d.clock_min;
+    frameClock.max = d.clock_max;
+    if (document.activeElement !== frameClock) frameClock.value = d.clock_pct;
+    const err = frameError && Date.now() - frameError.at < 10000 ? frameError.text + ' — ' : '';
+    setText($('framestatus'), err + (d.status || ''));
+  }
+  function frameLoad() {
+    fetch('/frame/settings').then(r => (r.ok ? r.json() : null)).then(d => { if (d) frameShow(d); }).catch(() => {});
+  }
+  async function frameSend(path, body) {
+    const r = await fetch(path, body === undefined ? { method: 'POST' }
+      : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json().catch(() => null);
+    frameError = r.ok ? null : { text: (d && d.error) || 'could not save', at: Date.now() };
+    if (r.ok && d) frameShow(d); else frameLoad();
+  }
+  frameLoad();
+  setInterval(() => { if (!$('panel-settings').hidden) frameLoad(); }, 3000);
+  frameOn.onchange = () => frameSend(`/frame/on/${frameOn.checked ? 'on' : 'off'}`);
+  frameFolder.onchange = () => frameSend('/frame/folder', { folder: frameFolder.value });
+  $('framefolderdefault').onclick = () => frameSend('/frame/folder', { folder: '' });
+  frameClock.onchange = () => frameSend(`/frame/clock/${parseInt(frameClock.value, 10) || 0}`);
+
   // -------------------------------------------------------------- CD rips
   // [SPEC-CDI-058]: a lossless FLAC copy of each CD rip Vipunen adds, or not.
   // A standing choice, off unless ticked; shown only on a player built beside

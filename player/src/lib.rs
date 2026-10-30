@@ -100,6 +100,8 @@ pub mod host;
 pub mod logging;
 pub mod membership;
 pub mod pairing;
+/// The picture frame on this machine's own screen `[SPEC068]`.
+pub mod frame;
 /// The hub's programme handed over, signed, to a node with no client of its
 /// own for the members' channel `[SPEC-PGM-310]`.
 pub mod programme_node;

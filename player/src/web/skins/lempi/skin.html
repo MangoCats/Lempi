@@ -314,6 +314,34 @@
          Cantata showed these only after it was restarted, since it reads its
          cache as it draws a track.</p>
     </div>
+    <!-- [SPEC068]: the picture frame on this machine's own screen. Shown where
+         the player answers for it -- never on a phone -- and its switch
+         disabled, with the reason, where it cannot show one. -->
+    <div class="setting" id="frame-row" hidden>
+      <label for="frameon">Picture frame</label>
+      <span><input type="checkbox" id="frameon"> show pictures full screen on this machine&rsquo;s
+        own screen, with the time <small id="framestatus"></small></span>
+      <p>Over everything else on that screen: one picture a minute, chosen at
+         random and cropped to fill it, with the time in the lower right corner
+         in black or white, whichever stands out more. The music plays on as it
+         was. Switched off, the screen is as it was before. Closing it on the
+         screen itself switches it off here too.</p>
+      <p class="no-restart">Lempi needs no restart.</p>
+    </div>
+    <div class="setting" id="frame-folder-row" hidden>
+      <label for="framefolder">Its pictures</label>
+      <span><input type="text" id="framefolder" spellcheck="false" autocapitalize="none"
+                   style="width: 22rem; max-width: 100%">
+            <button type="button" id="framefolderdefault">Default</button></span>
+      <p>A folder on this machine, its subfolders included: JPEG, PNG, WebP and
+         GIF. Default is your own Pictures folder. A picture added appears
+         within the hour.</p>
+    </div>
+    <div class="setting" id="frame-clock-row" hidden>
+      <label for="frameclock">Its clock</label>
+      <span><input type="number" id="frameclock" min="5" max="40" step="1"> % of the screen&rsquo;s height</span>
+      <p>How tall the clock&rsquo;s digits are. A change shows at the next minute.</p>
+    </div>
     <div class="setting" id="sidecar-row">
       <label for="lyricssidecar">Lyrics beside the audio</label>
       <span><input type="checkbox" id="lyricssidecar"> write into the music folder

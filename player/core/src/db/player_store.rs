@@ -1480,6 +1480,48 @@ impl PlayerStore {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
+    /// The picture frame on this machine's own screen `[SPEC-PIC-210]`: on,
+    /// its folder, and its clock's height as a percentage of the screen's.
+    /// Off, the user's own Pictures folder, and 15% until a person says
+    /// otherwise. Rows of `player_settings`, which no star sync sends to a node.
+    pub fn load_frame(&self) -> (bool, Option<String>, Option<u32>) {
+        let get = |key: &str| {
+            self.conn
+                .query_row("SELECT value FROM player_settings WHERE key = ?1", [key], |r| r.get::<_, String>(0))
+                .ok()
+        };
+        (
+            get("picture_frame").is_some_and(|v| v == "1"),
+            get("picture_frame_folder").filter(|v| !v.is_empty()),
+            get("picture_frame_clock_pct").and_then(|v| v.parse().ok()),
+        )
+    }
+
+    pub fn save_frame_on(&self, on: bool) -> Result<(), DbError> {
+        self.save_frame_setting("picture_frame", if on { "1" } else { "0" })
+    }
+
+    pub fn save_frame_folder(&self, folder: &str) -> Result<(), DbError> {
+        self.save_frame_setting("picture_frame_folder", folder)
+    }
+
+    pub fn save_frame_clock_pct(&self, pct: u32) -> Result<(), DbError> {
+        self.save_frame_setting("picture_frame_clock_pct", &pct.to_string())
+    }
+
+    fn save_frame_setting(&self, key: &str, value: &str) -> Result<(), DbError> {
+        self.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES (?1, ?2, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![key, value],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
     /// The longest album name Vipunen gives a CD rip's folder and files
     /// `[SPEC-NAM-010]`: the default unless a person chose another within the
     /// range. Read by `tools/ingest_cd.py`, which holds the same numbers.
