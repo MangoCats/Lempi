@@ -212,6 +212,15 @@ image = { version = "0.25", optional = true, default-features = false, features 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# The picture frame's window brought to the front on Windows `[SPEC-PIC-120]`:
+# a player started in the background may not raise the browser it starts, so
+# Edge opened behind every window and the taskbar on the desktop, 2026-10-29.
+# The version `lempi-core` already uses, so no new crate is compiled; only
+# three more of its API areas are.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging",
+                                             "Win32_System_Threading"] }
+
 # `delayprobe` only `[GDE-ECHO-540]`. cpal already resolves and compiles this
 # on Linux, so naming it here adds no crate to the build graph -- it only makes
 # the already-compiled one callable, the same trade `tokio-tungstenite` above

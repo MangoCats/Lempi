@@ -1347,6 +1347,7 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "u8g2-fonts",
+ "windows-sys 0.61.2",
  "x509-cert",
 ]
 

@@ -214,6 +214,8 @@ fn show(f: &mut Frame) {
                 xset_hold(f, &d, auth.as_deref());
                 raise(d, auth);
             }
+            #[cfg(windows)]
+            raise_windows();
         }
         Err(e) => {
             f.shown = Shown::Failed;
@@ -317,6 +319,74 @@ fn raise(display: String, auth: Option<PathBuf>) {
             }
         }
         tracing::info!("frame: its window was not found to raise; it shows wherever the desktop put it");
+    });
+}
+
+/// Windows lets only the process a person is using bring a window to the
+/// front, and a player started in the background is not it: on the desktop,
+/// 2026-10-29, Edge opened full screen behind every window and the taskbar.
+/// So the frame's window, found by its page's title, is made topmost -- which
+/// that rule does not govern, and which puts a full-screen window over the
+/// taskbar too -- and then given the foreground by briefly sharing the input
+/// of the window that has it, the documented way, rather than by a faked
+/// keypress that could open a menu in someone's program. Both are read back
+/// and said `[SPEC-PIC-120]`.
+#[cfg(windows)]
+fn raise_windows() {
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
+    use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
+        IsWindowVisible, SetForegroundWindow, SetWindowPos, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    };
+    const TITLE: &str = "Lempi picture frame";
+
+    unsafe extern "system" fn each(hwnd: HWND, found: LPARAM) -> i32 {
+        let mut buf = [0u16; 256];
+        // SAFETY: `buf` outlives the call, and its length is what is passed.
+        let n = unsafe { GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32) };
+        // SAFETY: `found` is the `Vec` `frame_windows` passed, alive for the enumeration.
+        let found = unsafe { &mut *(found as *mut Vec<usize>) };
+        // SAFETY: any window handle the enumeration gives may be asked whether it is visible.
+        if n > 0 && unsafe { IsWindowVisible(hwnd) } != 0 && String::from_utf16_lossy(&buf[..n as usize]).contains(TITLE) {
+            found.push(hwnd as usize);
+        }
+        1
+    }
+    fn frame_windows() -> Vec<usize> {
+        let mut found: Vec<usize> = Vec::new();
+        // SAFETY: `each` reads `found` only while this call runs.
+        unsafe { EnumWindows(Some(each), &mut found as *mut Vec<usize> as LPARAM) };
+        found
+    }
+
+    let _ = std::thread::Builder::new().name("lempi-frame-raise".into()).spawn(|| {
+        for _ in 0..15 {
+            std::thread::sleep(Duration::from_secs(1));
+            let windows = frame_windows();
+            let Some(&first) = windows.first() else { continue };
+            let hwnd = first as HWND;
+            // SAFETY: plain calls on a window handle just enumerated; a window gone
+            // since makes them fail, which is read back below.
+            let (topmost, foreground) = unsafe {
+                let topmost = SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW) != 0;
+                let fg = GetForegroundWindow();
+                let theirs = GetWindowThreadProcessId(fg, std::ptr::null_mut());
+                let mine = GetCurrentThreadId();
+                let shared = theirs != 0 && theirs != mine && AttachThreadInput(mine, theirs, 1) != 0;
+                BringWindowToTop(hwnd);
+                SetForegroundWindow(hwnd);
+                if shared {
+                    AttachThreadInput(mine, theirs, 0);
+                }
+                (topmost, GetForegroundWindow() == hwnd)
+            };
+            tracing::info!("frame: its window {}, and {}",
+                           if topmost { "made topmost" } else { "could not be made topmost" },
+                           if foreground { "has the foreground" } else { "was refused the foreground" });
+            return;
+        }
+        tracing::info!("frame: its window was not found to raise; it shows wherever Windows put it");
     });
 }
 
