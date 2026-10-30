@@ -209,6 +209,13 @@ window, by switching it on and off through the Settings routes:
 - **Memory:** 1,111 MB, then 1,081 MB four minutes later, summed over its 10
   processes' resident sets (shared pages counted more than once).
 
+**On the desktop (Windows 11, Edge), the same evening:** on `45a7791`, the
+frame opened full screen *behind* the open windows and the taskbar. A player
+started in the background may not bring a window to the front. From
+`277bafa`, its window is made topmost and given the foreground, and the
+maintainer saw it come up full screen over everything. The log read *made
+topmost, and has the foreground*.
+
 **Not yet measured:** over a full-screen Kodi, which was not running; the
 screen held past a DPMS that is on, since it was off; memory after an hour,
 rather than four minutes; and the colour rule across all 102 pictures, rather
