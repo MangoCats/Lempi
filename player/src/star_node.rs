@@ -91,6 +91,17 @@ pub fn handle(listener: &Path, library: &Path, op: &str, body: &Value) -> Result
 
 /// Everything about a request but its signature, which is checked first.
 fn check(req: &Value, op: &str, me: &str, mesh_fp: &str, now: i64) -> Result<(), String> {
+    addressed(req, op, me, mesh_fp, now)?;
+    if !req["run"].as_str().is_some_and(is_run) {
+        return Err(format!("not a run: {}", req["run"]));
+    }
+    Ok(())
+}
+
+/// A signed request from the hub is for this step, this node and this mesh,
+/// carries a nonce, and was made within `FRESH_MS` of this node's clock
+/// `[SPEC-NSH-030]`. Shared with the programme's hand-over `[SPEC-PGM-310]`.
+pub(crate) fn addressed(req: &Value, op: &str, me: &str, mesh_fp: &str, now: i64) -> Result<(), String> {
     if req["op"].as_str() != Some(op) {
         return Err(format!("the request is for {}, not {op}", req["op"]));
     }
@@ -102,9 +113,6 @@ fn check(req: &Value, op: &str, me: &str, mesh_fp: &str, now: i64) -> Result<(),
     }
     if req["nonce"].as_str().is_none_or(|n| n.len() < 16) {
         return Err("the request has no nonce".into());
-    }
-    if !req["run"].as_str().is_some_and(is_run) {
-        return Err(format!("not a run: {}", req["run"]));
     }
     let at = req["at_ms"].as_i64().ok_or("the request has no time")?;
     if (now - at).abs() > FRESH_MS {
@@ -124,7 +132,7 @@ fn is_run(s: &str) -> bool {
         && b[13] == b'Z'
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
@@ -520,7 +528,7 @@ fn part_paths(listener: &Path, run: &str, spec: &Value) -> Result<Vec<PathBuf>, 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn req(op: &str) -> Value {
@@ -575,16 +583,16 @@ mod tests {
     }
 
     /// A member node with a real mesh key and identity, and the two files.
-    struct Node {
-        dir: PathBuf,
-        l: PathBuf,
-        lib: PathBuf,
-        mesh: p256::ecdsa::SigningKey,
-        mesh_fp: String,
-        me: String,
+    pub(crate) struct Node {
+        pub(crate) dir: PathBuf,
+        pub(crate) l: PathBuf,
+        pub(crate) lib: PathBuf,
+        pub(crate) mesh: p256::ecdsa::SigningKey,
+        pub(crate) mesh_fp: String,
+        pub(crate) me: String,
     }
 
-    fn node(name: &str) -> Node {
+    pub(crate) fn node(name: &str) -> Node {
         use p256::pkcs8::{EncodePublicKey, LineEnding};
         use sha2::Digest;
         let dir = std::env::temp_dir().join(format!("lempi-star-node-{name}-{}", std::process::id()));
@@ -612,7 +620,7 @@ mod tests {
         Node { dir, l, lib, mesh, mesh_fp, me }
     }
 
-    fn signed(key: &p256::ecdsa::SigningKey, req: &Value) -> Value {
+    pub(crate) fn signed(key: &p256::ecdsa::SigningKey, req: &Value) -> Value {
         use base64::Engine;
         use p256::ecdsa::signature::Signer;
         let text = req.to_string();

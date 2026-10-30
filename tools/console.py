@@ -817,6 +817,27 @@ def system_status() -> dict:
     }
 
 
+# [SPEC-PGM-310]: how often the console hands the players a programme they do not yet
+# have -- a player that was off when it was assigned gets it within the hour.
+PROGRAMME_PUSH_S = 3600
+
+
+def hand_programmes(mdir: str, only: str | None = None) -> None:
+    """Hand the players their assigned programmes, saying what each did, in
+    the console's own output. Never raises: it runs in a thread of its own."""
+    try:
+        for name, line in programmesmod.push_for(STATE["path"], mdir, only).items():
+            print(f"programmes: {name}: {line}", flush=True)
+    except Exception as e:  # noqa: BLE001 -- a thread's failure is said, not lost
+        print(f"programmes: the hand-over failed: {e}", flush=True)
+
+
+def _programme_loop(mdir: str) -> None:
+    while True:
+        hand_programmes(mdir)
+        time.sleep(PROGRAMME_PUSH_S)
+
+
 def _shutdown_soon(httpd) -> None:
     """Off the request-handling thread, on purpose `[SPEC-SUI-212]`:
     `BaseServer.shutdown()` blocks until `serve_forever()`'s own loop (the
@@ -1540,8 +1561,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"job_id": STATE["jobs"].submit("propose", folder)})
             if p.startswith("/api/programmes/"):
                 # [SPEC-PGM-440]: a person keeps the hub player's programme as
-                # a version, and assigns one to a node. The sidecar only;
-                # nothing reaches a node until it asks [SPEC-PGM-310].
+                # a version, and assigns one to a node. A phone is handed it
+                # when it asks; a player at once, in the background, signed on
+                # its own port [SPEC-PGM-310].
                 b = self.json_body() or {}
                 c = programmesmod.connect(STATE["path"])
                 try:
@@ -1559,7 +1581,10 @@ class Handler(BaseHTTPRequestHandler):
                             return self.send_json({"error": "not a member of this mesh"}, code=400)
                         if p.endswith("/unassign"):
                             return self.send_json({"ok": programmesmod.unassign(c, fp)})
-                        return self.send_json(programmesmod.assign(c, fp, str(b.get("programme") or "")))
+                        out = programmesmod.assign(c, fp, str(b.get("programme") or ""))
+                        if meshmod.member(mdir, fp)["role"] == "player":
+                            threading.Thread(target=hand_programmes, args=(mdir, fp), daemon=True).start()
+                        return self.send_json(out)
                 except ValueError as e:
                     return self.send_json({"error": str(e)}, code=400)
                 finally:
@@ -2073,6 +2098,10 @@ def main() -> int:
         print("build:   not a git checkout (or git not on PATH) -- /system will say so too")
     print(f"pid:     {os.getpid()}")
     print(f"console: http://127.0.0.1:{args.port}/   (library opened read-only)")
+    mdir = meshmod.mesh_dir(STATE["library"] or STATE["path"])
+    if meshmod.initialised(mdir):
+        print(f"programmes: handed to the players that lack theirs now, and every {PROGRAMME_PUSH_S // 60} min")
+        threading.Thread(target=_programme_loop, args=(mdir,), daemon=True).start()
     with Server(("127.0.0.1", args.port), Handler) as httpd:
         try:
             httpd.serve_forever()

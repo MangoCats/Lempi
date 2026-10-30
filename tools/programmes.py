@@ -4,15 +4,21 @@
 
 A programme is a named, complete day: its time slots and their seeds
 [SPEC-PGM-010]. The hub keeps each under its name with the versions it has had
-[SPEC-PGM-020], assigns one to a node [SPEC-PGM-040], and hands it over the
-members' channel when the node asks [SPEC-PGM-300]. The node asks a person
-before anything replaces what it runs [SPEC-PGM-050]; this side never reaches
-in [SPEC-PGM-310].
+[SPEC-PGM-020], assigns one to a node [SPEC-PGM-040], and hands it over: to a
+phone over the members' channel when it asks [SPEC-PGM-300], and to a player,
+which has no client for that channel, signed, on its own port, as the roster
+goes [SPEC-PGM-310]. Either way the node asks a person before anything
+replaces what it runs [SPEC-PGM-050].
 
     python tools/programmes.py data/library.db list
     python tools/programmes.py data/library.db add-from-listener data/listener.db [--name WKMP]
     python tools/programmes.py data/library.db assign <member> <programme>
     python tools/programmes.py data/library.db unassign <member>
+    python tools/programmes.py data/library.db push [<member>]
+
+`assign` hands a player its programme at once; `push` hands it to every player
+not yet running or asked about its current version (the console does so at
+start and hourly), or to one member, always.
 
 `<member>` is a name the mesh's roster holds, or the start of a fingerprint.
 
@@ -235,6 +241,77 @@ def record_state(c: sqlite3.Connection, member: str, body: dict) -> bool:
     return n > 0
 
 
+# What a player said it did with what it was handed, in the phone's words (`Programmes.kt`).
+OUTCOMES = {
+    "asking": "asked whether to replace its programme with {name} version {version}",
+    "already_runs": "runs {name} version {version}",
+    "kept_before": "keeps its own over {name} version {version}, as answered before",
+}
+
+
+def hand_over(c: sqlite3.Connection, mdir: str, member: str, player: dict) -> str:
+    """[SPEC-PGM-310] for a player, which has no client for the members'
+    channel: its assigned programme, signed by the mesh key, to its own port,
+    as the roster goes. The player only holds it until a person answers
+    there [SPEC-PGM-050]; its signed answer says what it runs and what waits,
+    and is recorded as a phone's report is. A sentence saying what happened."""
+    p = for_member(c, member)
+    prog = None if p is None else {"name": p["name"], "version": p["version"], "slots": p["slots"]}
+    got = meshmod.signed_step(mdir, player, "/mesh/programme", "programme", {"programme": prog}, timeout=20.0)
+    cur = got.get("current") or {}
+    record_state(c, member, {"name": cur.get("name"), "fingerprint": cur.get("fingerprint"),
+                             "source": cur.get("source"), "hub_version": cur.get("hub_version"),
+                             "waiting": got.get("waiting")})
+    if p is None:
+        return "assigned nothing; it runs " + (cur.get("name") or "an unnamed programme")
+    return OUTCOMES.get(got.get("outcome"), "answered {outcome!r} for {name} version {version}").format(
+        outcome=got.get("outcome"), **p)
+
+
+def push(c: sqlite3.Connection, mdir: str, only: str | None = None) -> dict:
+    """Hand each player its assigned programme, unless it already runs the
+    current version or has been asked about it -- or `only` that member,
+    always, as an assignment does. A player not found on the network is said
+    so, and is handed it at the next push. By name, a sentence each."""
+    players = {m["fingerprint"]: m for m in meshmod.roster(mdir)["members"] if m["role"] == "player"}
+    due = []
+    for member, pid, runs_fp, waiting in c.execute(
+            "SELECT member, programme_id, runs_fingerprint, waiting FROM hub_programme_assignments").fetchall():
+        if member not in players or (only and member != only):
+            continue
+        w = json.loads(waiting) if waiting else {}
+        if not only and latest(c, pid)[1] in (runs_fp, w.get("fingerprint")):
+            continue
+        due.append(member)
+    if not due:
+        return {}
+    found = meshmod.sync_players(mdir)
+    out = {}
+    for member in due:
+        name = players[member].get("name") or meshmod.show_fp(member, True)
+        if member not in found:
+            out[name] = "not found on the network: handed it at the next push"
+            continue
+        try:
+            out[name] = hand_over(c, mdir, member, found[member])
+        except (ValueError, OSError) as e:
+            # A player older than the hand-over answers the step it does not know as `unknown`.
+            out[name] = ("its player is older than the hand-over: a current build takes it" if str(e) == "unknown"
+                         else f"not handed over: {e}")
+    return out
+
+
+def push_for(db: str, mdir: str, only: str | None = None) -> dict:
+    """`push` on a connection of its own, for a thread or the command line."""
+    if not meshmod.initialised(mdir):
+        return {}
+    c = connect(db)
+    try:
+        return push(c, mdir, only)
+    finally:
+        c.close()
+
+
 def standing(c: sqlite3.Connection, mdir: str | None = None) -> dict:
     """The library and its assignments, for a person [SPEC-PGM-440]: each
     programme with its versions, and each assigned node with how what it
@@ -298,6 +375,8 @@ def main(argv: list[str]) -> int:
     b.add_argument("programme")
     d = sub.add_parser("unassign")
     d.add_argument("member")
+    e = sub.add_parser("push", help="hand each player its assigned programme [SPEC-PGM-310]")
+    e.add_argument("member", nargs="?")
     args = ap.parse_args(argv)
     mdir = meshmod.mesh_dir(args.db)
     c = connect(args.db)
@@ -315,20 +394,32 @@ def main(argv: list[str]) -> int:
                   f"{'' if out['new'] else ' (already held: the same content)'}, {len(slots)} time slot(s), "
                   f"fingerprint {out['fingerprint'][:12]}")
             return 0
-        if args.cmd in ("assign", "unassign"):
+        if args.cmd in ("assign", "unassign", "push"):
             if not meshmod.initialised(mdir):
                 print(f"no mesh in {mdir}", file=sys.stderr)
                 return 1
-            m = find_member(mdir, args.member)
+            m = find_member(mdir, args.member) if args.member else None
             if args.cmd == "unassign":
                 print(f"{m.get('name') or m['fingerprint'][:12]}: "
                       f"{'no longer assigned a programme' if unassign(c, m['fingerprint']) else 'was not assigned one'}")
                 return 0
-            out = assign(c, m["fingerprint"], args.programme)
-            print(f"{m.get('name') or m['fingerprint'][:12]} ({m['role']}) is assigned {out['programme']}, "
-                  f"version {out['version']} -- handed over when it next asks, and its person is asked "
-                  f"before it replaces anything")
-            return 0
+            if args.cmd == "assign":
+                out = assign(c, m["fingerprint"], args.programme)
+                print(f"{m.get('name') or m['fingerprint'][:12]} ({m['role']}) is assigned {out['programme']}, "
+                      f"version {out['version']}; its person is asked before it replaces anything")
+                if m["role"] != "player":
+                    print("  handed over when it next asks")
+                    return 0
+            elif m is not None and m["role"] != "player":
+                print(f"{m.get('name') or m['fingerprint'][:12]} is a {m['role']}: it asks for its programme itself",
+                      file=sys.stderr)
+                return 1
+            said = push(c, mdir, m["fingerprint"] if m else None)
+            for name, line in said.items():
+                print(f"  {name}: {line}")
+            if not said:
+                print("  every assigned player runs, or was asked about, its current version")
+            return 0 if all(not s.startswith(("not ", "its player")) for s in said.values()) else 1
         s = standing(c, mdir if meshmod.initialised(mdir) else None)
         if not s["programmes"]:
             print("no programmes in the library yet: add-from-listener keeps one")

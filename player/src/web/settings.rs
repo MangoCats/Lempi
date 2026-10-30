@@ -198,6 +198,10 @@ pub(super) async fn mesh_step(
             ["invite", id, "roster"] => crate::membership::take_roster(&db, id, &b),
             ["leave"] => crate::membership::leave(&db, b["mesh_fp"].as_str().unwrap_or("")).map(|()| serde_json::json!({"left": true})),
             ["roster"] => crate::membership::update_roster(&db, &b),
+            // The hub's programme, signed by the mesh key like `roster`, so not
+            // behind the window either; only held until a person answers
+            // `[SPEC-PGM-310]`.
+            ["programme"] => crate::programme_node::take(&db, &library, &b),
             _ => Err("unknown".into()),
         };
         if !loopback {

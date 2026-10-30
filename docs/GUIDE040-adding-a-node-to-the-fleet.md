@@ -92,6 +92,8 @@ From Git Bash the prefix is needed: without it the node's path is rewritten into
 
 **`[GDE-ADD-150]` A speaker the Export page sends to is a row in the console's registry** `[FLT-DAT-015]`, made on **Flags → speakers**: its catalogue and listener as `user@host:/path`, and its **music folder** as the audio root — left empty, a send puts the audio in `audio/` beside the catalogue, the Pis' layout `[SPEC-STAR-094]`. A node whose catalogue comes by the star sync is unticked for the older remote push. Then **Send what's missing** to it and press **Send** once: that first press is a dry run, and says what it found on the node — the catalogue, read-write or not, the free space — without sending anything.
 
+**`[GDE-ADD-160]` Give it a programme.** A fresh listener has no time slots, so the node plays from no programme until it is given one. Assign it on the console's **Programmes** page: a player on a current build is handed it at once, signed, and asks the person there whether to replace what it runs `[SPEC-PGM-540]`. Answer on the node's own page, `/programme`. The console's output says what each player did with it, and an older player answers that it cannot take it.
+
 ## 8. Record it
 
 **`[GDE-ADD-130]` The node is added when FLEET001 says so, and not before.** Give it a row in each table there:
@@ -106,4 +108,4 @@ Commit the folder, FLEET001 and `tools/check_docs.py` together. Stage paths by n
 
 ---
 
-**Traceability:** `[GDE-ADD-010..150]` · from adding `lrhtpc`, 2026-10-28 and 29 · [LRH001](../LRHTPC/LRH001-the-htpc.md)
+**Traceability:** `[GDE-ADD-010..160]` · from adding `lrhtpc`, 2026-10-28 and 29 · [LRH001](../LRHTPC/LRH001-the-htpc.md)

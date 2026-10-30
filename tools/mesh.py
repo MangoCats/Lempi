@@ -644,24 +644,31 @@ def sync_step(mdir: str, player: dict, op: str, run: str, catalogue_patch: dict 
     player's, and to this request."""
     if op not in SYNC_STEPS:
         raise ValueError(f"not a step: {op}")
+    # `[SPEC-NKP-925]`: a part to stage, or the parts a rehearsal or commit is to apply.
+    fields = {"run": run, "catalogue_patch": catalogue_patch, "listener_patch": listener_patch, **(extra or {})}
+    return signed_step(mdir, player, f"/mesh/sync/{op}", op, fields, timeout)
+
+
+def signed_step(mdir: str, player: dict, path: str, op: str, fields: dict, timeout: float = 10.0) -> dict:
+    """A request signed by the mesh key, to one player at `path`; its result,
+    once the answer is proven to be the player's, and to this request
+    [SPEC-NSH-030]. The request carries `fields` beside what addresses it."""
     r = roster(mdir)
     fp = player["fingerprint"]
     m = next((m for m in r["members"] if m["fingerprint"] == fp and m["role"] == "player"), None)
     if m is None:
         raise ValueError(f"{fp[:8]} is not a player in this mesh")
-    req = {"op": op, "run": run, "node": fp, "mesh": r["mesh"]["fingerprint"], "nonce": os.urandom(16).hex(),
-           "at_ms": int(time.time() * 1000), "catalogue_patch": catalogue_patch, "listener_patch": listener_patch}
-    # `[SPEC-NKP-925]`: a part to stage, or the parts a rehearsal or commit is to apply.
-    req.update(extra or {})
+    req = {"op": op, "node": fp, "mesh": r["mesh"]["fingerprint"], "nonce": os.urandom(16).hex(),
+           "at_ms": int(time.time() * 1000), **fields}
     text = json.dumps(req, ensure_ascii=False, separators=(",", ":"))
-    got = _http("POST", f"http://{player['address']}:{player.get('web_port', LEMPI_DEFAULT_PORT)}/mesh/sync/{op}",
+    got = _http("POST", f"http://{player['address']}:{player.get('web_port', LEMPI_DEFAULT_PORT)}{path}",
                 {"request": text, "signature": sign(load_key(os.path.join(mdir, "mesh.key")), text.encode())},
                 timeout=timeout)
     pub = cert_from_pem(m["certificate"]).public_key()
     if not verify(pub, str(got.get("answer", "")).encode(), str(got.get("signature", ""))):
         raise ValueError(f"the answer from {player['address']} is not signed by {fp[:8]}")
     a = json.loads(got["answer"])
-    if (a.get("op"), a.get("run"), a.get("nonce"), a.get("node")) != (op, run, req["nonce"], fp):
+    if (a.get("op"), a.get("run"), a.get("nonce"), a.get("node")) != (op, fields.get("run"), req["nonce"], fp):
         raise ValueError("the answer is not to this request")
     return a["result"]
 

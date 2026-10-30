@@ -1790,6 +1790,34 @@ mod tests {
         assert!(r.contains(" 409 ") && r.contains("in no mesh"), "a 3 MB request reached the signature check: {r}");
         let r = post("/mesh/invite/x/reveal", "{}".into()).await;
         assert!(r.contains(" 409 ") && !r.contains("no request"), "the membership steps still reach mesh_step: {r}");
+        // `[SPEC-PGM-310]`: on a node on the network the hub's programme comes
+        // signed, and the unsigned arrival the phone's app uses is not served.
+        let r = post("/mesh/programme", "{}".into()).await;
+        assert!(r.contains(" 409 ") && r.contains("no request"), "the signed hand-over reached its handler: {r}");
+        let r = post("/programme/arrival", r#"{"name":"WKMP","version":1,"slots":[]}"#.into()).await;
+        assert!(r.contains(" 404 ") && r.contains("/mesh/programme"), "an unsigned arrival is refused: {r}");
+        // A phone's player is loopback-only: its app hands the arrival in.
+        let (_e2, h2) = crate::engine::Engine::new(crate::path::PathHandle::silent(), 1);
+        let phone = Ui {
+            handle: Arc::new(h2),
+            db: d.join("listener.db"),
+            library: d.join("library.db"),
+            why: Default::default(),
+            controls: Default::default(),
+            capabilities: Default::default(),
+            web_loopback_only: true,
+        };
+        let l2 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let a2 = l2.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(l2, router(phone)).await });
+        let mut s = tokio::net::TcpStream::connect(a2).await.unwrap();
+        let body = r#"{"name":"WKMP","version":1,"slots":[]}"#;
+        s.write_all(format!("POST /programme/arrival HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n\
+                             Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        let mut buf = Vec::new();
+        s.read_to_end(&mut buf).await.unwrap();
+        let r = String::from_utf8_lossy(&buf).to_string();
+        assert!(!r.contains(" 404 "), "a loopback-only host still takes the app's arrival: {r}");
         let _ = std::fs::remove_dir_all(&d);
     }
 

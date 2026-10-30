@@ -114,10 +114,15 @@ updates and the hub's roster `[SPEC-MTR-010]`, signed and per member:
   replaced or kept on the last arrival;
 - `POST /member/programme/offer` — a programme offered to the hub.
 
-**`[SPEC-PGM-310]` A member asks; the hub does not reach in.** The phone already
-asks the members' channel when its Mesh screen opens; a player asks at start and
-hourly, as it asks the clock for its offset `[SPEC-DIR-180]`. A player has no
-client for the channel yet; this is the first thing it fetches there.
+**`[SPEC-PGM-310]` A phone asks; a player is handed it, signed.** The phone
+asks the members' channel when its Mesh screen opens. A player has no client
+for that channel, so the hub hands it the programme on the player's own port,
+as it hands over the roster: `POST /mesh/programme`, the request signed by the
+mesh key and checked as a star-sync step is (step, node, mesh, nonce, made
+within ten minutes), the answer signed by the player's key and saying what it
+runs and what waits. *Refined 2026-10-30, from "a member asks; the hub does not
+reach in":* the hub now opens the exchange, but what arrives is still only a
+question for the person there `[SPEC-PGM-050]`.
 
 ---
 
@@ -233,17 +238,30 @@ for a daily phone that had no programme and no way to get one but a hand edit.
 - **The phone asks** when its player has started and when its Mesh screen
   opens (`Programmes.kt`), then says what it runs, for the console's view.
 
-Open: a player's own client for the channel, which an appliance needs to
-ask at start and hourly `[SPEC-PGM-310]`. Until it is built, an appliance is
-assigned on the page and never hears of it. *The maintainer, 2026-10-17:*
-the appliances catch up as they are updated for other reasons; no deploy
-is made for this. What such an update carries is the node's half -- the
-pending table and the question -- with nothing yet to ask the hub: an
-appliance has no HTTPS client (`membership.rs`), and `reqwest` is kept out
-of its build. So the client is a decision still to make: one in the
-appliance binary, or the hub handing a mesh-signed programme over the
-player's own port as it hands over the roster, which would refine
-`[SPEC-PGM-310]`.
+**`[SPEC-PGM-540]` The players' half, as built 2026-10-30** -- closing what
+step 2 left open, an appliance that was assigned on the page and never heard
+of it. Decided by the maintainer: the hub hands a mesh-signed programme over
+the player's own port, rather than an HTTPS client in the appliance binary,
+which keeps `reqwest` out of its build `[SPEC-PGM-310]`.
+- **The player** (`programme_node.rs`): `/mesh/programme`, a step of
+  `/mesh/*step` like `roster`, so not behind the pairing window. It holds what
+  arrives as `/programme/arrival` does; a request with no programme only asks.
+  `/programme/arrival`, unsigned, is now served only on a loopback-only host,
+  the phone, whose app is its one caller: on a node on the network, any host
+  on the LAN could otherwise put a question on its screen.
+- **The hub** (`programmes.py`, through `mesh.signed_step`, which the star
+  sync's steps now share): an assignment hands a player its programme at
+  once; `push` hands it to every player not yet running or asked about the
+  current version, and the console runs it at start and hourly. Each answer
+  is recorded as a phone's report is, and each outcome is said by name -- a
+  player not found on the network, or one older than the step, which answers
+  it `unknown`.
+- **Found first by hand, 2026-10-29:** lrhtpc, assigned WKMP, was handed it by
+  posting to its unsigned `/programme/arrival` from the desktop -- which
+  worked, and is the opening this closes.
+
+The appliances take it with their next player deploy, as the maintainer
+decided on 2026-10-17; no deploy is made for this alone.
 ---
 
-**Traceability:** `[SPEC-PGM-010..520]`, `[SPEC-PGM-115]` · from the maintainer's decisions of 2026-10-09 · words in [SPEC023](SPEC023-domain-vocabulary.md) `[ENT-PROGRAMME-010]`, `[ENT-SLOT-010]`, `[ENT-SEED-010]`, `[SPEC-VOC-020]` · refines `[SPEC-MTR-040]`
+**Traceability:** `[SPEC-PGM-010..540]`, `[SPEC-PGM-115]` · from the maintainer's decisions of 2026-10-09 and 2026-10-30 · words in [SPEC023](SPEC023-domain-vocabulary.md) `[ENT-PROGRAMME-010]`, `[ENT-SLOT-010]`, `[ENT-SEED-010]`, `[SPEC-VOC-020]` · refines `[SPEC-MTR-040]`

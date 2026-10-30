@@ -196,12 +196,21 @@ pub(super) async fn save_programme(
 }
 
 /// A programme the hub sent `[SPEC-PGM-300]`, handed in by whatever reached
-/// the members' channel -- the phone's app today. Held, never applied: the
-/// answer is a person's `[SPEC-PGM-050]`.
+/// the members' channel -- the phone's app. Held, never applied: the answer
+/// is a person's `[SPEC-PGM-050]`.
+///
+/// Unsigned, so only on a loopback-only host, where the caller is the app on
+/// the same device. A node on the network takes the hub's programme signed,
+/// at `/mesh/programme` (`crate::programme_node`); served here too, any host
+/// on the LAN could put a question on its screen.
 pub(super) async fn arrived(
     State(ui): State<Ui>,
     axum::Json(a): axum::Json<crate::db::Arrival>,
 ) -> axum::response::Response {
+    if !ui.web_loopback_only {
+        return (StatusCode::NOT_FOUND, "a node on the network takes the hub's programme signed, at /mesh/programme")
+            .into_response();
+    }
     let (db, library) = (ui.db.clone(), ui.library.clone());
     let (name, version) = (a.name.clone(), a.version);
     let got = tokio::task::spawn_blocking(move || {
