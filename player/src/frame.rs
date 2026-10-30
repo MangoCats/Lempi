@@ -805,7 +805,8 @@ mod tests {
         assert!(a.iter().any(|x| x == "--user-data-dir=/s/frame-browser"));
         assert_eq!(a.last().unwrap(), "http://127.0.0.1:5720/frame?t=x");
         assert!(a.iter().any(|x| x.starts_with("--simulate-outdated-no-au=")), "no update bubble over the pictures");
-        let e = browser_args(Path::new(r"C:\Edge\msedge.exe"), "u", Path::new("p"));
+        // A bare name: on Linux a Windows path is one file name, backslashes and all.
+        let e = browser_args(Path::new("msedge.exe"), "u", Path::new("p"));
         assert!(e.iter().any(|x| x == "--edge-kiosk-type=fullscreen"));
     }
 
@@ -842,8 +843,9 @@ mod tests {
         assert!(set_clock_pct(4).unwrap_err().contains("5% to 40%"));
         assert_eq!(set_clock_pct(20).unwrap()["clock_pct"], 20);
         assert!(set_folder(&d.join("nowhere").display().to_string()).unwrap_err().contains("not a folder"));
+        // Counted whether or not this machine could show them: a test host may have no display.
         let s = status().unwrap();
-        assert!(s["status"].as_str().unwrap().contains("3 pictures in"), "{s}");
+        assert_eq!(s["pictures"], 3, "{s}");
         *FRAME.lock().unwrap() = None;
         let (on, folder, pct) = crate::db::PlayerStore::open_split(&d.join("listener.db"), &d.join("library.db"))
             .unwrap().load_frame();
