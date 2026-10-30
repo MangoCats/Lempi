@@ -1,6 +1,6 @@
 # SPEC068: The Picture Frame
 
-**Design Specification — Tier 2 · written 2026-10-29, at the maintainer's request, for `lrhtpc` first · being built**
+**Design Specification — Tier 2 · written 2026-10-29, at the maintainer's request, for `lrhtpc` first · built 2026-10-29 (`17fffb3`, `9099338`)**
 
 A player whose machine has a screen of its own can show a picture frame on it:
 the pictures in a folder, full screen and over everything else, one a minute,
@@ -55,9 +55,13 @@ restart. A folder that is missing or holds no pictures shows the clock on
 black, with one line saying so, and the panel says it too: an empty frame is
 never a silent one.
 
-**`[SPEC-PIC-060]` The screen is kept on while the frame shows.** Measured on
-lrhtpc 2026-10-29: X's DPMS turns the screen off after 600 s with no input, and
-a slideshow is not input. The page asks the browser for a screen wake lock,
+**`[SPEC-PIC-060]` The screen is kept on while the frame shows.** A slideshow
+is not input, so anything that blanks an idle screen would blank the frame.
+Read on lrhtpc 2026-10-29: DPMS's timers set at 600 s; at 23:05, DPMS itself
+**disabled** and the screen saver's timeout 0, so nothing blanked it that
+evening. The first reading, which said "after 600 s", saw the timers and not
+whether DPMS was on. A desktop's power manager can turn it on, so the frame
+holds the screen anyway. The page asks the browser for a screen wake lock,
 and, as built, the player also turns X's screen saver and DPMS off whenever
 the frame shows (`xset s off`, `xset -dpms`), rather than waiting to find the
 wake lock insufficient. It puts back the values it read beforehand when the
@@ -138,8 +142,11 @@ as it can.
 **`[SPEC-PIC-300]` The pictures are served only to the browser the player
 started.** They are a person's own photographs, and the player's port is open
 to the LAN. Each time the player starts the browser it makes a random token,
-which is in the URL it gives the browser and known to nobody else. The frame's
-page and its pictures are refused to any request without that token. A picture
+which is in the URL it gives the browser and known to nothing else on the
+network. The frame's page and its pictures are refused to any request without
+that token. It guards them from the LAN, not from that machine: the URL is in
+the browser's command line, which a person signed in there can read, as they
+can read the folder itself. A picture
 is asked for by its number in the player's own list, never by a path. The list
 holds only files whose resolved path lies under the resolved folder, so a link
 cannot lead out of it.
@@ -155,7 +162,7 @@ exist and be readable, or the setting is refused with the reason.
 
 | machine | its screen, read 2026-10-29 | browser | the switch |
 | :--- | :--- | :--- | :--- |
-| `lrhtpc` | X11, XFCE under LightDM; HDMI, 3840×2160 at 60 Hz; DPMS off after 600 s | Chrome | off, then switched on there |
+| `lrhtpc` | X11, XFCE under LightDM; HDMI, 3840×2160 at 60 Hz; DPMS disabled, its timers 600 s; 7.7 GB of memory | Chrome 148 | off; tested on and off, left off |
 | `smartboardpc` | X11, GNOME on Xorg (Ubuntu 24.04) | Chrome, Firefox | off |
 | the desktop (`localhost`) | Windows 11 | Edge, Chrome | off |
 | `teacherslounge` | not read: not on the network that evening | not read | off |
@@ -182,11 +189,30 @@ Proposed as defaults, and kept as they are by the maintainer, 2026-10-29:
 3. the Settings row, the two settings, and the capability that offers it;
 4. tests: the token refused and accepted, a path outside the folder never listed, the colour rule at its threshold, and the switch's states.
 
-**`[SPEC-PIC-910]` Measured on lrhtpc before it is called done:**
-- that the frame comes up over a full-screen Kodi, and that Kodi is as it was afterwards;
-- that the screen stays on past 600 s, and that the DPMS values are restored on hiding;
-- how long a 4K picture takes from request to shown, and the browser's memory after an hour;
-- that the clock's colour is right on the darkest and the brightest of its pictures.
+**`[SPEC-PIC-910]` Measured on lrhtpc, 2026-10-29 23:05 to 23:20,** on
+`17fffb3` and then `9099338`, over a YouTube live camera in an ordinary Chrome
+window, by switching it on and off through the Settings routes:
+- **Over the screen, and gone without trace:** started on `:0`, raised
+  (xdotool), and the active window, full screen at 3840×2160. Switched off,
+  no process of its profile was left. The YouTube window was active again and
+  `xset q` read as before.
+- **The clock:** its digits 15% of the screen's height and set in by a third
+  of that, measured from screenshots. White on a dim corner, then black at
+  11:08 on bright surf and sand, each changing at the minute with a new picture.
+- **A bubble found:** on the first run, Chrome's "Can't update Chrome" bubble,
+  from the frame's own browser, sat in a corner of the pictures. Suppressed
+  in `9099338`, and absent on the next run.
+- **A player restarted under it:** the new player put back the blanking the
+  old one had turned off, and showed the frame again a second after starting.
+- **Its pictures:** 4.7 MB served in 5 ms over loopback, and 404 without the
+  token, from the machine and from the LAN.
+- **Memory:** 1,111 MB, then 1,081 MB four minutes later, summed over its 10
+  processes' resident sets (shared pages counted more than once).
+
+**Not yet measured:** over a full-screen Kodi, which was not running; the
+screen held past a DPMS that is on, since it was off; memory after an hour,
+rather than four minutes; and the colour rule across all 102 pictures, rather
+than the few that came up.
 
 ---
 
