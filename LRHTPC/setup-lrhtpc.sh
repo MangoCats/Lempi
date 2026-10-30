@@ -12,11 +12,12 @@
 #
 # Runs on the development host, over SSH, on build/setup-lib.sh. The root is
 # plain ext4, so an ordinary write is durable, and the engine says so before
-# writing [GDE-DEP-060]. **Nothing here needs root**: sudo asks for a password
+# writing [GDE-DEP-060]. **Little here needs root**: sudo asks for a password
 # there, so the data lives in mango's home [LRH-DAT-010], and linger is one a
 # user may set on itself. The binaries are root's, in /usr/local/bin, put
 # there by LRHTPC/deploy-lrhtpc.sh under a sudo granted for it [LRH-DEP-020];
-# this script only checks them.
+# this script only checks them. The fleet clock is root's too, and --go
+# applies it only under such a grant [LRH-CLK-010]; --check never needs one.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
@@ -66,6 +67,36 @@ item "linger on for mango" "test \"\$(loginctl show-user mango -p Linger --value
 item "Kodi plays through PulseAudio [LRH-AUD-010]" \
      "grep -q 'id=\"audiooutput.audiodevice\">PULSE:' .kodi/userdata/guisettings.xml" "" \
      "Kodi opens the device itself: the player and Kodi would lock each other out"
+
+say ""
+say "the fleet clock [GDE-ECHO-300] [LRH-CLK-010]"
+# chrony, preferring the fleet's own time server, as on the source hosts
+# (build/source-host-items.sh): without it this node follows no echo leader
+# closely enough to play in step. Applying needs root, so --go needs a sudo
+# granted for it, as a deploy does [LRH-DEP-020], and asks with `sudo -n` so a
+# missing grant fails at once rather than waiting for a password. --check
+# needs none: all it reads is world-readable.
+SOURCES=/etc/chrony/sources.d/lempi-fleet.sources
+rendered=$(mktemp)
+build/render-fleet-sources.sh "$rendered" || die "the fleet sources could not be rendered"
+want=$(md5sum < "$rendered" | cut -c1-32)
+if [ "$MODE" = go ]; then
+    scp -q "$rendered" "$HOST:/tmp/lempi-fleet.sources" || die "could not copy the fleet sources to $HOST"
+fi
+rm -f "$rendered"
+# The index refreshed first: lrhtpc's named a chrony build the archive had
+# replaced, and the install failed 404, 2026-10-30.
+item "package chrony" "dpkg -s chrony" \
+     "sudo -n apt-get update -qq && sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq chrony"
+item "chrony: the fleet's server preferred" "test \"\$(md5sum < $SOURCES | cut -c1-32)\" = $want" \
+     "sudo -n install -m 644 /tmp/lempi-fleet.sources $SOURCES"
+# chrony reads its sources at start, so it must have started after the file
+# last changed.
+item "chrony started after its fleet file last changed" \
+     "test \"\$(stat -c %Y $SOURCES)\" -le \"\$(date -d \"\$(systemctl show chrony -p ActiveEnterTimestamp --value)\" +%s)\"" \
+     "sudo -n systemctl restart chrony"
+item "chrony enabled" "systemctl is-enabled chrony" "sudo -n systemctl enable chrony"
+[ "$MODE" = go ] && on "rm -f /tmp/lempi-fleet.sources"
 
 say ""
 say "the player"

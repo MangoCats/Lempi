@@ -87,7 +87,9 @@ No catalogue has reached it by sync yet; its listener half has, since run `20261
 
 **`[LRH-OPN-020]` A speaker the Export page sends to since 2026-10-29, and sent nothing yet.** Its `sync_peers` row in the hub's catalogue `[FLT-DAT-015]` names the catalogue `~/lempi-data/library.db` by its absolute path, the listener beside it, and the audio root `~/Music`, also absolute; it is left out of the older remote push, since its catalogue comes by star sync. It could be listed before it could be sent to `[LRH-DEP-020]`. The send itself, 65 files at the time of writing, is the maintainer's press.
 
-**`[LRH-OPN-030]` Not on the fleet clock.** Joining it means installing chrony, which needs root. Until then it follows no echo leader closely enough to play in step `[GDE-ECHO-300]`.
+**`[LRH-OPN-030]` On the fleet clock since 2026-10-30.** Until then it was not, so it could follow no echo leader closely enough to play in step `[GDE-ECHO-300]`. Joining needed root, under a sudo granted for it `[LRH-CLK-010]`.
+
+**`[LRH-CLK-010]` chrony, preferring the fleet's own time server, as the source hosts have it** (`build/source-host-items.sh`). Set up by `setup-lrhtpc.sh` in four items: the package, the fleet's sources file rendered from `fleet/targets.env` `[SPEC-FCP-030]`, chrony restarted after that file last changed, and enabled. Applying needs root, so `--go` asks with `sudo -n` and fails at once without a grant; `--check` reads only what is world-readable, and needs none. The first `--go` failed: lrhtpc's package index named a chrony build the archive had replaced, so the download was a 404. The item now refreshes the index first. Installed 2026-10-30, chrony 4.3, replacing `systemd-timesyncd`; `--check` then read all as recorded. Read from chrony itself, a minute later: the fleet's server selected (`^*`, smartboardpc, stratum 5), and lrhtpc 0.14 ms from it. The public servers it also lists agreed with lrhtpc's clock to within 0.4 ms, while smartboardpc's last sample read 40 ms off, ±44 ms. So lrhtpc is now in step with the fleet, whose server is itself loosely held.
 
 ---
 
