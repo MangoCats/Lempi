@@ -420,6 +420,11 @@ fn browser_args(browser: &Path, url: &str, profile: &Path) -> Vec<String> {
         "--disable-translate".into(),
         "--disable-features=Translate".into(),
         "--overscroll-history-navigation=0".into(),
+        // Chrome's "Can't update Chrome" bubble, which a kiosk window on
+        // lrhtpc showed in its corner the first time it ran, 2026-10-29: a
+        // frame is not where a browser's own upkeep is asked about.
+        "--simulate-outdated-no-au=Tue, 31 Dec 2099 23:59:59 GMT".into(),
+        "--check-for-update-interval=31536000".into(),
     ];
     let name = browser.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
     if name.starts_with("msedge") {
@@ -799,6 +804,7 @@ mod tests {
         assert_eq!(a[0], "--kiosk");
         assert!(a.iter().any(|x| x == "--user-data-dir=/s/frame-browser"));
         assert_eq!(a.last().unwrap(), "http://127.0.0.1:5720/frame?t=x");
+        assert!(a.iter().any(|x| x.starts_with("--simulate-outdated-no-au=")), "no update bubble over the pictures");
         let e = browser_args(Path::new(r"C:\Edge\msedge.exe"), "u", Path::new("p"));
         assert!(e.iter().any(|x| x == "--edge-kiosk-type=fullscreen"));
     }
