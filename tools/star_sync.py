@@ -176,6 +176,9 @@ SIGNED_EXCLUDE = {"files": sorted(sm.MACHINE_SCOPE["files"]), "file_tags": ["sca
 # [SPEC-NKP-082]: the hub's own bookkeeping, which no node needs and which travels in neither direction.
 # `caa_asked_at` is when Vipunen last asked the Cover Art Archive; only `fetch_cover_art.py` reads it.
 SIGNED_OMIT = {"cover_art": ["caa_asked_at"]}
+# A node's own record of the bundles it imported (`bundle.rs`), which the hub never has. lrhtpc's
+# adopted catalogue held one, and its first patch was refused for it, 2026-10-30 [SPEC-STAR-946].
+NODE_OWN = ["imported_payloads"]
 NATURAL_KEYS_NEEDED = 1    # [SPEC-NKP-075]: the catalogue patch by natural key
 CATALOGUE_WINDOW_NEEDED = 1  # [SPEC-STAR-104]: a player that opens a read-only catalogue's partition to rehearse a patch too
 CATALOGUE_PATCH_MAX = 16 << 20   # [SPEC-NKP-920]: the most a player is sent in one request, in bytes of JSON
@@ -1167,7 +1170,7 @@ def patch(plan, run):
                 # strict id-keyed patch, which only reaches a catalogue numbered as ours.
                 natural = (b.get("natural_keys", 0) or 0) >= NATURAL_KEYS_NEEDED
                 try:
-                    cat = sp.make_values(b["library"], t["library"], exclude=SIGNED_EXCLUDE, natural=natural, omit=SIGNED_OMIT)
+                    cat = sp.make_values(b["library"], t["library"], exclude=SIGNED_EXCLUDE, natural=natural, omit=SIGNED_OMIT, own=NODE_OWN)
                 except sp.NaturalUnsupported as err:
                     unsupported = f"the hub cannot name what changed: {err} [SPEC-NKP-080]"
             if cat is not None:

@@ -331,7 +331,7 @@ def natural_entry(b, t, name, skip):
     return entry
 
 
-def make_values(baseline, target, tables=None, exclude=None, natural=False, omit=None):
+def make_values(baseline, target, tables=None, exclude=None, natural=False, omit=None, own=()):
     """A patch as values, for the player to apply itself over the signed
     transport [SPEC-NSH-070] -- `lempi_core::mesh_sync::apply_with` reads it.
 
@@ -351,13 +351,18 @@ def make_values(baseline, target, tables=None, exclude=None, natural=False, omit
 
     `omit` maps a table to columns that are the hub's own bookkeeping: they travel in
     neither direction and, unlike `exclude`, a row the node lacks is not given the
-    hub's value either -- the node need not even have the column `[SPEC-NKP-082]`."""
+    hub's value either -- the node need not even have the column `[SPEC-NKP-082]`.
+
+    `own` names tables only a node keeps, which the hub never has: a baseline
+    holding one is not refused for it, and the patch leaves it as it is. A
+    node's catalogue adopted as its copy last sent carries them
+    `[SPEC-STAR-946]`; one the hub built never did."""
     exclude = exclude or {}
     omit = omit or {}
     b, t = open_ro(baseline), open_ro(target)
     patch = {"tables": []}
     try:
-        extra = sorted((tables_of(b) - tables_of(t)) & set(tables or tables_of(b)))
+        extra = sorted((tables_of(b) - tables_of(t) - set(own)) & set(tables or tables_of(b)))
         if extra:
             raise SystemExit(f"the target lacks table(s) {extra}: a patch never drops a table")
         for name in sorted(tables_of(t) & set(tables or tables_of(t))):

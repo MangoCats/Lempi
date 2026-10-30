@@ -76,6 +76,18 @@ def test_values(tmp):
     check(t["genres"]["create"][0].startswith("CREATE TABLE genres"), "a table the node lacks is made")
     check("path" not in str(sp.make_values(base, target, tables=["flags"])), "tables= limits the patch")
 
+    # [SPEC-STAR-946]: an adopted node's catalogue holds a table of its own, which the hub never has.
+    db(base, "CREATE TABLE imported_payloads (import_id INTEGER PRIMARY KEY, body TEXT)",
+       "INSERT INTO imported_payloads VALUES (1, '{}')")
+    try:
+        sp.make_values(base, target)
+        check(False, "a baseline holding a table the target lacks must be refused")
+    except SystemExit as e:
+        check("never drops a table" in str(e), "and said so")
+    own = sp.make_values(base, target, exclude={"files": ["path"]}, own=["imported_payloads"])
+    check("imported_payloads" not in [e["name"] for e in own["tables"]], "a node's own table is left as it is")
+    check(own["tables"] == p["tables"], "and the rest of the patch is unchanged")
+
 
 def main() -> int:
     tmp = tempfile.mkdtemp()
