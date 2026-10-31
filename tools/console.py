@@ -1536,7 +1536,11 @@ class Handler(BaseHTTPRequestHandler):
                      "whole_disc": b.get("whole_disc") is True,
                      # [SPEC-RIP-092]: each hidden span ticked to be joined to
                      # its track, by its start; whole numbers only.
-                     "fold": [s for s in b.get("fold") or [] if isinstance(s, int) and not isinstance(s, bool)]}))
+                     "fold": [s for s in b.get("fold") or [] if isinstance(s, int) and not isinstance(s, bool)],
+                     # [SPEC-AGN-035]: into an earlier rip's folder, the tracks
+                     # kept from it, as chosen on the card; absent, the logs decide.
+                     "keep_earlier": [n for n in b["keep_earlier"] if isinstance(n, int) and not isinstance(n, bool)]
+                     if isinstance(b.get("keep_earlier"), list) else None}))
                 return self.send_json({"job_id": job, "into": into})
             if p in ("/api/import/split/find", "/api/import/split/preview", "/api/import/split/commit"):
                 # [SPEC-CDI-060]: find the album's release; show the cuts; split.

@@ -324,7 +324,8 @@ class PathTooLong(ValueError):
     """A file the move would make is longer than Windows opens `[SPEC-NAM-030]`."""
 
 
-def check_paths(folder: str, into: str, renames: dict[str, str], extra: tuple = ()) -> None:
+def check_paths(folder: str, into: str, renames: dict[str, str], extra: tuple = (),
+                leaving=frozenset()) -> None:
     """Refuse, before anything is encoded or moved, a destination this
     computer cannot hold `[SPEC-NAM-030]`: two files given one name, a name
     the folder already holds `[SPEC-AGN-015]`, or -- on Windows -- a path
@@ -339,7 +340,8 @@ def check_paths(folder: str, into: str, renames: dict[str, str], extra: tuple = 
     # A file already there is a refusal too, and found here, before the
     # encode, rather than by the move after it [SPEC-AGN-015]: Highway 61's
     # second rip was encoded whole, then refused for its sheet's name.
-    clash = sorted(n for n in set(final) if os.path.exists(os.path.join(into, n)))
+    # `leaving`: the earlier rip's names a merge moves out or renames first.
+    clash = sorted(n for n in set(final) if os.path.exists(os.path.join(into, n)) and n not in leaving)
     if clash:
         raise FileExistsError(f"{into!r} already holds {clash[:3]}: not moved over")
     if os.name != "nt":
@@ -831,11 +833,14 @@ def earlier_rip(conn, release: dict | None, disc_id: str | None = None,
     61*'s first rip is found by its edition, and under any other of the
     sixteen MusicBrainz offers for the disc, by the sheet's barcode.
 
-    `{"folder", "files", "tracks", "held", "missing", "damaged", "since",
-    "release", "said"}`: the folder holding most of it, the disc's track count
-    and which of its tracks the earlier rip holds, never ripped, and ripped
-    damaged, by track number; `since`, the day it was added; `release`, the
-    edition it was added as; `said`, all that in words."""
+    `{"folder", "rel_folder", "files", "tracks", "held", "missing", "damaged",
+    "since", "release", "mode", "by_track", "said"}`: the folder holding most of
+    it, and that folder as `Artist\Album` within the music folder; the disc's
+    track count and which of its tracks the earlier rip holds, never ripped,
+    and ripped damaged, by track number; `since`, the day it was added;
+    `release`, the edition it was added as; `mode`, `"tracks"` for a file a
+    track and `"image"` otherwise, and for the first, `by_track`, each track's
+    file (`file_id`, `path`, `md5`); `said`, all that in words."""
     media = (release or {}).get("media") or []
     pos_of = {t.get("position"): (t.get("recording") or {}).get("id")
               for t in (media[0].get("tracks") or [] if len(media) == 1 else [])}
@@ -868,21 +873,30 @@ def earlier_rip(conn, release: dict | None, disc_id: str | None = None,
     held_mbids = set().union(*(mbids_of.get(f[0], set()) for f in files))
     mine = [f[2] for f in files]
     q = ",".join("?" * len(mine))
-    damaged, since = set(), None
-    for outcome, detail, at in conn.execute(
-            f"SELECT outcome, detail, decided_at FROM ingest_decisions WHERE stage = 'rip' AND audio_md5 IN ({q})",
-            mine):
+    damaged, since, track_of = set(), None, {}
+    for md5, outcome, detail, at in conn.execute(
+            "SELECT audio_md5, outcome, detail, decided_at FROM ingest_decisions "
+            f"WHERE stage = 'rip' AND audio_md5 IN ({q})", mine):
         since = min(since or at, at) if at else since
+        d = json.loads(detail or "{}") or {}
         if outcome == "verification_failed":
-            n = (json.loads(detail or "{}") or {}).get("track")
-            if n is not None:
-                damaged.add(n)
+            if d.get("track") is not None:
+                damaged.add(d["track"])
+        elif d.get("tracks_mode") and d.get("track") is not None:
+            track_of[md5] = d["track"]
     folders = [os.path.dirname(f[1]) for f in files if f[1]]
     held = sorted(n for n, m in pos_of.items() if m in held_mbids)
     e = {"folder": max(set(folders), key=folders.count) if folders else None, "files": len(files),
          "tracks": len(pos_of) or None, "held": held,
          "missing": sorted(n for n in pos_of if n not in held) if pos_of else [],
          "damaged": sorted(damaged), "since": since[:10] if since else None, "release": None}
+    # A file a track, as a tracks-mode add records it -- every file named to
+    # its track -- or the disc in one file.
+    by_track = {track_of[f[2]]: {"file_id": f[0], "path": f[1], "md5": f[2]} for f in files if f[2] in track_of}
+    e["mode"] = "tracks" if len(by_track) == len(files) else "image"
+    e["by_track"] = by_track if e["mode"] == "tracks" else {}
+    f = e["folder"]
+    e["rel_folder"] = os.path.join(os.path.basename(os.path.dirname(f)), os.path.basename(f)) if f else None
     linked = [r[0] for r in conn.execute(
         f"SELECT release_mbid FROM file_releases WHERE audio_md5 IN ({q})", mine)]
     if linked:
@@ -906,6 +920,61 @@ def said_earlier(e: dict) -> str:
     if e.get("since"):
         parts.append(f"added {e['since']}")
     return "; ".join(parts)
+
+
+# How good a copy of a track is, by its rip log `[SPEC-AGN-020]`: lower is
+# better. A tie goes to the DAO, for the disc.
+RANKS = {1: "accurately ripped", 2: "read cleanly, not in AccurateRip's database", 3: "no log",
+         4: "ripped damaged", 5: "not ripped"}
+
+
+def track_rank(report, number: int, damaged=()) -> int:
+    """`number`'s rank by `report` (`cd_toc.parse_eac_log`'s), or by the
+    damage an earlier add recorded: 1 matched in AccurateRip, 2 read cleanly
+    but not in its database, 3 no log to say, 4 damaged."""
+    if number in damaged:
+        return 4
+    tr = next((t for t in (report.tracks if report else []) if t.number == number), None)
+    if tr is None:
+        return 3
+    if not tr.ok:
+        return 4
+    return 1 if (tr.detail or "").strip().lower() == "accurately ripped" else 2
+
+
+def merge_plan(earlier: dict, toc: cd_toc.DiscToc, report, keep_earlier=None) -> list[dict]:
+    """For each of the disc's tracks, which copy plays it once this DAO rip is
+    merged into `earlier`'s album `[SPEC-AGN-020]`: the earlier rip's file only
+    when its rank is better, otherwise the DAO's span -- or, given
+    `keep_earlier`, exactly the tracks a person chose `[SPEC-AGN-035]`, each of
+    which must have an earlier file to keep. The earlier rip is ranked by the
+    log in its folder, where there is one, and by the damage its add recorded.
+
+    `{"number", "title", "dao", "dao_said", "earlier", "earlier_said", "file",
+    "keep"}` a track, `keep` being `"dao"` or `"earlier"`."""
+    by = {int(k): v for k, v in (earlier.get("by_track") or {}).items()}
+    if keep_earlier is not None:
+        stray = sorted(set(keep_earlier) - set(by))
+        if stray:
+            raise ValueError(f"the earlier rip has no file for track {', '.join(map(str, stray))}, "
+                             "so it cannot be kept -- nothing was encoded or moved")
+    folder = earlier.get("folder")
+    log = find_log(folder) if folder and os.path.isdir(folder) else None
+    before = cd_toc.parse_eac_log(log) if log else None
+    damaged = set(earlier.get("damaged") or [])
+    rows = []
+    for t in toc.tracks:
+        n = t.number
+        dao = track_rank(report, n)
+        old = track_rank(before, n, damaged) if n in by else 5
+        if keep_earlier is not None:
+            keep = "earlier" if n in keep_earlier else "dao"
+        else:
+            keep = "earlier" if old < dao else "dao"
+        rows.append({"number": n, "title": t.title, "dao": dao, "dao_said": RANKS[dao], "earlier": old,
+                     "earlier_said": RANKS[old], "file": os.path.basename(by[n]["path"]) if n in by else None,
+                     "keep": keep})
+    return rows
 
 
 def refuse_clash(conn, err: FileExistsError, releases: list[dict], disc_id: str | None,
@@ -1230,7 +1299,7 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
                audio_md5: str, disc_outcome: str, releases: list[dict],
                rip_report: "cd_toc.RipReport | None", acoustid_key: str | None,
                chosen: bool = False, occasions: tuple = (), whole_disc: bool = False,
-               hidden: list | tuple = (), fold: list | tuple = ()) -> dict:
+               hidden: list | tuple = (), fold: list | tuple = (), kept=frozenset()) -> dict:
     """Register the file, write TOC-exact passages, resolve each track's
     identity, and record every decision -- the CD-ripping analogue of
     `segment_dao.commit_segments()`, same shape, ground-truth boundaries
@@ -1260,8 +1329,15 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
     album passages one after another, which already plays the intro into its
     track, and a folded album passage beside them would play it twice. A start
     that names no foldable span is refused, never quietly dropped.
+
+    `kept` `[SPEC-AGN-030]`: the tracks an earlier rip's file plays, in a merge.
+    Each has no passage on this file -- two album passages of one recording
+    would make the album two -- though the file still holds its audio, and
+    damage the log found in it is still recorded against this file.
     """
     check_fold(hidden, fold, whole_disc)
+    if kept and any(h.get("leads_into") in kept for h in hidden if h["start_ms"] in set(fold)):
+        raise ValueError("hidden audio is joined only to a track this rip plays, not to one the earlier rip keeps")
     st = os.stat(mp3_path)
     total_ms = toc.tracks[-1].end_ms if toc.tracks else 0
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -1310,6 +1386,15 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
     landed: dict[int, dict] = {}
 
     for track in toc.tracks:
+        if track.number in kept:
+            tr = next((t for t in rip_report.tracks if t.number == track.number), None) if rip_report else None
+            if tr is not None and not tr.ok:
+                conn.execute(
+                    "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,"
+                    "detail,decided_at) VALUES (?1,'rip','verification_failed',NULL,?2,?3)",
+                    (audio_md5, json.dumps({"track": track.number, "detail": tr.detail,
+                                            "kept_from_earlier": True}), now))
+            continue
         start_ms, end_ms = track.start_ms, track.end_ms
         if trim is not None and track is toc.tracks[-1]:
             end_ms = trim
@@ -1691,6 +1776,173 @@ def _record_sidecars(db_path: str, audio_md5: str, folder: str, brought) -> int 
     return n
 
 
+def retire_dir(into: str, today: str | None = None) -> str:
+    """Where a merge puts the earlier rip's files it no longer plays
+    `[SPEC-AGN-030]`: `_Retired/Artist/Album/<date>` in the music folder,
+    kept, not deleted -- beside `_Rips`, and skipped as it is by
+    `verify_library.py`'s walk for strays. A second retirement the same day
+    takes the next free name."""
+    album = os.path.abspath(into)
+    base = os.path.join(os.path.dirname(os.path.dirname(album)), "_Retired",
+                        os.path.basename(os.path.dirname(album)), os.path.basename(album),
+                        today or time.strftime("%Y-%m-%d"))
+    out, k = base, 2
+    while os.path.exists(out):
+        out, k = f"{base} ({k})", k + 1
+    return out
+
+
+def retire_rows(conn, file_ids) -> dict:
+    """The catalogue rows of files a merge retires `[SPEC-AGN-030]`: their
+    passages and what names those -- recordings, review checks -- their tags,
+    release, own cover and the files themselves; then every listener reference
+    left naming a passage now gone, NULLed as a single file's cascade would
+    (`passage_orphans`). Plays and stars are the recording's, and stay. The
+    rip's decisions stay too: they are its history. Returns what was removed,
+    and the listener rows still naming a gone passage that nothing clears --
+    reviews, rejections, a saved queue -- counted, so they are said."""
+    import passage_orphans
+    ids = list(file_ids)
+    if not ids:
+        return {"files": 0, "passages": 0, "orphans": {}, "left": {}}
+    q = ",".join("?" * len(ids))
+    pids = [r[0] for r in conn.execute(f"SELECT passage_id FROM passages WHERE file_id IN ({q})", ids)]
+    md5s = [r[0] for r in conn.execute(f"SELECT audio_md5 FROM files WHERE file_id IN ({q})", ids)]
+    pq = ",".join("?" * len(pids)) or "NULL"
+    mq = ",".join("?" * len(md5s)) or "NULL"
+    for sql, args in ((f"DELETE FROM id_checks WHERE passage_id IN ({pq})", pids),
+                      (f"DELETE FROM passage_recordings WHERE passage_id IN ({pq})", pids),
+                      (f"DELETE FROM passages WHERE file_id IN ({q})", ids),
+                      (f"DELETE FROM file_tags WHERE file_id IN ({q})", ids),
+                      (f"DELETE FROM file_releases WHERE audio_md5 IN ({mq})", md5s),
+                      (f"DELETE FROM file_art WHERE audio_md5 IN ({mq})", md5s),
+                      (f"DELETE FROM files WHERE file_id IN ({q})", ids)):
+        try:
+            conn.execute(sql, args)
+        except sqlite3.OperationalError as e:
+            if "no such table" not in str(e):
+                raise
+    orphans = passage_orphans.clear(conn)
+    left = {}
+    for table in ("artist_reviews", "boundary_reviews", "id_reviews", "listener_rejections", "player_queue"):
+        try:
+            n = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE passage_id IN ({pq})", pids).fetchone()[0]
+        except sqlite3.OperationalError:
+            continue
+        if n:
+            left[table] = n
+    return {"files": len(ids), "passages": len(pids), "orphans": orphans, "left": left}
+
+
+def _same_folder(a: str | None, b: str | None) -> bool:
+    return bool(a and b) and os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
+def plan_merge(earlier: dict, toc: cd_toc.DiscToc, report, into: str, keep_earlier=None,
+               whole_disc: bool = False) -> dict:
+    """What adding this DAO rip to `earlier`'s own folder will do
+    `[SPEC-AGN-020]`..`[SPEC-AGN-030]`, decided before anything is encoded:
+    each track's copy (`merge_plan`), the earlier files it retires and where,
+    and the names in the album folder that leave it first, so the move does
+    not see them as a clash. The earlier rip's sheet and log go with its files
+    when none of them is kept; with one kept they stay, and only a name the
+    new rip also brings is renamed (`side_renames`, settled by the caller once
+    the new names are known)."""
+    if earlier.get("mode") != "tracks":
+        raise FileExistsError(
+            f"{into!r} holds an earlier rip of this disc as one file ({earlier['said']}): merging two "
+            "DAO rips of one disc is not built yet -- nothing was encoded or moved")
+    if whole_disc:
+        raise ValueError("a disc added to its earlier rip keeps a passage a track; One piece is not offered "
+                         "with it -- nothing was encoded or moved")
+    plan = merge_plan(earlier, toc, report, keep_earlier)
+    kept = frozenset(r["number"] for r in plan if r["keep"] == "earlier")
+    by = {int(k): v for k, v in (earlier.get("by_track") or {}).items()}
+    gone = [v for n, v in sorted(by.items()) if n not in kept]
+    side = sidecars.of_rip(into)
+    return {"plan": plan, "kept": kept, "file_ids": [v["file_id"] for v in gone],
+            "kept_files": [by[n] for n in sorted(kept)],
+            "retire": [v["path"] for v in gone] + ([] if kept else [os.path.join(into, n) for n in side]),
+            "sidecars": side, "side_renames": {},
+            "leaving": frozenset(os.path.basename(v["path"]) for v in gone) | frozenset(side),
+            "to": retire_dir(into)}
+
+
+def _retire_files(into: str, merge: dict) -> list[tuple[str, str]]:
+    """Move the earlier rip's retired files out, and rename its sidecars that
+    stay where the new rip brings the same name; all or nothing. Returns each
+    `(from, to)` done, for `_put_back`."""
+    done = []
+    try:
+        if merge["retire"]:
+            os.makedirs(merge["to"], exist_ok=True)
+        for path in merge["retire"]:
+            dst = os.path.join(merge["to"], os.path.basename(path))
+            shutil.move(path, dst)
+            done.append((path, dst))
+        for old, new in merge["side_renames"].items():
+            src, dst = os.path.join(into, old), os.path.join(into, new)
+            os.rename(src, dst)
+            done.append((src, dst))
+    except Exception:
+        _put_back(done, merge["to"])
+        raise
+    return done
+
+
+def _put_back(done: list[tuple[str, str]], to: str | None = None) -> None:
+    """Undo `_retire_files`, newest first, and the retirement folder with it if
+    nothing else is in it."""
+    for src, dst in reversed(done):
+        try:
+            shutil.move(dst, src)
+        except OSError:
+            pass
+    d = to
+    while d:
+        try:
+            os.rmdir(d)             # only if empty
+        except OSError:
+            break
+        if os.path.basename(d) == "_Retired":
+            break
+        d = os.path.dirname(d)
+
+
+def _move_back(album: str, inbox: str, names: list[str], renames: dict[str, str]) -> None:
+    """Undo a rip's move into its album: each file back to the inbox under its
+    own name, and its sheet's `FILE` lines with it."""
+    os.makedirs(inbox, exist_ok=True)
+    back = {new: old for old, new in renames.items()}
+    for n in names:
+        src = os.path.join(album, renames.get(n, n))
+        if os.path.exists(src):
+            shutil.move(src, os.path.join(inbox, n))
+            if n.lower().endswith(".cue") and renames:
+                try:
+                    rename_in_cue(os.path.join(inbox, n), back)
+                except OSError:
+                    pass
+
+
+def link_kept(conn, merge: dict, release: dict) -> int:
+    """The earlier files a merge keeps, taken from the edition now chosen
+    `[SPEC-AGN-030]`, so the album is one: their recordings at their places
+    on it, and each file recorded as from it (`record_release`)."""
+    placed, md5s = [], []
+    for row in merge["plan"]:
+        if row["keep"] != "earlier":
+            continue
+        f = next(v for v in merge["kept_files"] if os.path.basename(v["path"]) == row["file"])
+        m = conn.execute("SELECT pr.mbid FROM passages p JOIN passage_recordings pr USING (passage_id) "
+                         "WHERE p.file_id = ?1 ORDER BY p.kind = 'radio' DESC, pr.weight DESC LIMIT 1",
+                         (f["file_id"],)).fetchone()
+        if m:
+            placed.append((row["number"], m[0]))
+        md5s.append(f["md5"])
+    return record_release(conn, release, placed, md5s) if md5s else 0
+
+
 def _drop(paths) -> None:
     """MP3s made for an add that was then refused: the rip goes back to the
     inbox as it was."""
@@ -1702,7 +1954,7 @@ def _drop(paths) -> None:
 
 
 def _plan_move(folder: str, into: str | None, releases: list[dict], toc: cd_toc.DiscToc,
-               limit: int, made: list[str]) -> dict[str, str]:
+               limit: int, made: list[str], leaving=frozenset(), merging: bool = False) -> dict[str, str]:
     """The names the move gives each file, `made` included (the MP3s and FLACs
     not encoded yet), and the destination refused now if it cannot be held --
     before twenty seconds of encoding, not after `[SPEC-NAM-030]`. The artist
@@ -1713,7 +1965,17 @@ def _plan_move(folder: str, into: str | None, releases: list[dict], toc: cd_toc.
     artist = release_credit(releases[0]) if len(releases) == 1 else toc.performer
     disc = disc_of_set(releases)
     renames = renamed_files(folder, into, artist, limit, tuple(made), disc[0] if disc else None)
-    check_paths(folder, into, renames, tuple(made))
+    if merging:
+        # Into an album already there [SPEC-AGN-030]: a cover it has is its
+        # own, so the rip's comes in beside it, numbered.
+        for n in os.listdir(folder):
+            stem, ext = os.path.splitext(renames.get(n, n))
+            if ext.lower() in _IMAGE_EXT and os.path.exists(os.path.join(into, stem + ext)):
+                k = 2
+                while os.path.exists(os.path.join(into, f"{stem} ({k}){ext}")):
+                    k += 1
+                renames[n] = f"{stem} ({k}){ext}"
+    check_paths(folder, into, renames, tuple(made), leaving)
     return renames
 
 
@@ -1834,6 +2096,16 @@ def preview(db_path: str, folder: str) -> dict:
         earlier = None if rels else earlier_rip(conn, None, disc_id, toc.barcode)    # [SPEC-AGN-015]
     finally:
         conn.close()
+    # [SPEC-AGN-020]: an earlier rip a file a track, each track from its better
+    # copy -- added to that rip's folder, which is then the one proposed.
+    for r in rels:
+        e = r.get("earlier")
+        if e and e.get("mode") == "tracks":
+            e["plan"] = merge_plan(e, toc, rip_report)
+            r["folder"] = e["rel_folder"] or r["folder"]
+            # A merge replaces; it is not a second copy [SPEC-CDI-047]. Sent
+            # elsewhere, the add itself still refuses one unless asked.
+            r["duplicate"] = False
     cd_folder = proposed_folder(toc.performer, toc.title, None, limit) if toc.title else None
     # [SPEC-RIP-090]: audio no track holds, measured on the WAV, so the page
     # can say what the add will make of it.
@@ -1854,7 +2126,11 @@ def preview(db_path: str, folder: str) -> dict:
 def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = None,
               into: str | None = None, keep_flac: bool | None = None, occasions: tuple = (),
               allow_duplicate: bool = False, album_name_max: int | None = None,
-              whole_disc: bool = False, fold: tuple = ()) -> dict:
+              whole_disc: bool = False, fold: tuple = (), keep_earlier=None) -> dict:
+    """Preview a rip, or, with `commit`, add it. `keep_earlier`, for an add
+    into the folder of an earlier rip of the disc `[SPEC-AGN-035]`: the tracks
+    whose earlier file a person chose to keep; `None` takes the plan's own
+    choice, by the logs."""
     import sqlite3  # noqa: F401  -- the connection below is lempi_db's
 
     if not commit:
@@ -1874,15 +2150,20 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
             # [SPEC-RIP-092]: nor is hidden audio looked for in one.
             raise ValueError("hidden audio is joined to its track only in an image rip -- one file for the disc; "
                              "this rip is a file per track")
+        if keep_earlier is not None:
+            raise ValueError("a rip a file a track is not merged into an earlier one yet; only a DAO rip is "
+                             "-- nothing was encoded or moved")
         return ingest_tracks(db_path, folder, release, into, keep_flac, occasions, allow_duplicate,
                              album_name_max)
     fmt, _cue, toc, wav_path, rip_report = open_rip(folder)
 
-    # Catalogue-only, and it writes -- library half as `main`.
-    conn = lempi_db.connect(db_path, lempi_db.ROLE_LIBRARY, writable=True, timeout=60)
+    # Catalogue-only, and it writes -- library half as `main`; the listener
+    # half writable too, for a merge's references to the passages it retires.
+    conn = lempi_db.connect(db_path, lempi_db.ROLE_LIBRARY, writable=True, peer_writable=True, timeout=60)
     conn.execute("PRAGMA busy_timeout = 60000")
     conn.execute("PRAGMA foreign_keys = ON")
     mp3_path = os.path.splitext(wav_path)[0] + ".mp3"
+    merge = None
     try:
         # Looked up first, and a whole edition already held refused
         # `[SPEC-CDI-047]` -- before anything is encoded or moved.
@@ -1893,15 +2174,42 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
             releases = [r for r in releases if r.get("id") == release]
             if not releases:
                 raise ValueError(f"release {release} is not among this disc's matches")
-        refuse_duplicate(conn, releases, [t.number for t in toc.tracks], allow_duplicate)
+        # [SPEC-AGN-015]: into the folder of an earlier rip of this disc, the
+        # add is a merge into that album, each track from its better copy
+        # [SPEC-AGN-020] -- a replacement, so a whole edition held is not a
+        # second copy [SPEC-CDI-047].
+        disc_id = cd_toc.musicbrainz_disc_id(toc)
+        earlier = earlier_rip(conn, releases[0] if len(releases) == 1 else None, disc_id, toc.barcode) \
+            if into else None
+        if earlier and _same_folder(earlier["folder"], into):
+            merge = plan_merge(earlier, toc, rip_report, into, keep_earlier, whole_disc)
+            for row in merge["plan"]:
+                say(f"  track {row['number']}: {'the earlier ' + row['file'] if row['keep'] == 'earlier' else 'this rip'}"
+                    f" -- this rip {row['dao_said']}, the earlier {row['earlier_said']}")
+        elif keep_earlier is not None:
+            raise ValueError("there is no earlier rip of this disc in that album folder to keep tracks from "
+                             "-- nothing was encoded or moved")
+        else:
+            refuse_duplicate(conn, releases, [t.number for t in toc.tracks], allow_duplicate)
         # The destination, before the WAV is measured or encoded: a refusal
         # here costs nothing [SPEC-AGN-015].
         stem = os.path.splitext(os.path.basename(wav_path))[0]
         made = [stem + ".mp3"] + ([stem + ".flac"] if keep_flac else [])
         try:
-            renames = _plan_move(folder, into, releases, toc, album_name_max, made)
+            renames = _plan_move(folder, into, releases, toc, album_name_max, made,
+                                 merge["leaving"] if merge else frozenset(), merging=bool(merge))
         except FileExistsError as e:
-            raise refuse_clash(conn, e, releases, cd_toc.musicbrainz_disc_id(toc), toc.barcode, into) from None
+            # In a merge the earlier rip's own names are expected; anything
+            # else in the way is said as itself.
+            raise (e if merge else refuse_clash(conn, e, releases, disc_id, toc.barcode, into)) from None
+        if merge and merge["kept"]:
+            # An earlier sheet or log that stays, where this rip brings the
+            # same name: renamed, never written over.
+            new = {renames.get(n, n) for n in os.listdir(folder)} | set(made)
+            for n in merge["sidecars"]:
+                if n in new:
+                    stem_, ext = os.path.splitext(n)
+                    merge["side_renames"][n] = f"{stem_} (track files){ext}"
         # [SPEC-RIP-090]: measured on the WAV before it is encoded and gone;
         # inside the one passage of a whole disc, nothing is hidden.
         hidden = [] if whole_disc else find_hidden(wav_path, toc, releases[0] if len(releases) == 1 else None)
@@ -1910,6 +2218,9 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
         # [SPEC-RIP-092]: measured again here, so a join the preview offered
         # and this measurement does not find is refused before encoding.
         check_fold(hidden, fold, whole_disc)
+        if merge and any(h.get("leads_into") in merge["kept"] for h in hidden if h["start_ms"] in set(fold)):
+            raise ValueError("hidden audio is joined only to a track this rip plays, not to one the earlier rip "
+                             "keeps -- nothing was encoded or moved")
 
         say("encoding the MP3 ...")
         if not encode_to_mp3(wav_path, mp3_path):
@@ -1927,20 +2238,74 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
         conn.close()
         raise
     # The rip's own files, by the names the move gives them [GDE-INT-175].
-    brought = [renames.get(n, n) for n in os.listdir(folder)]
+    names = os.listdir(folder)
+    brought = [renames.get(n, n) for n in names]
+    inbox = folder
+    retired = []
     try:
+        if merge:
+            # [SPEC-AGN-030]: the earlier files out first, kept, so the rip's
+            # own names are free; put back if anything after fails.
+            if merge["retire"]:
+                say(f"retiring {len(merge['retire'])} file(s) of the earlier rip to {merge['to']} ...")
+            try:
+                retired = _retire_files(into, merge)
+            except Exception:
+                _drop([mp3_path])
+                raise
         if into:
             say(f"filing it in {into} ...")
-            folder = _move_or_drop(folder, into, renames, made)
+            try:
+                folder = _move_or_drop(folder, into, renames, made)
+            except Exception:
+                _put_back(retired, merge["to"] if merge else None)
+                raise
             wav_path = os.path.join(folder, renames.get(os.path.basename(wav_path), os.path.basename(wav_path)))
             mp3_path = os.path.join(folder, renames.get(os.path.basename(mp3_path), os.path.basename(mp3_path)))
 
         say("writing the album ...")
         conn.execute("BEGIN IMMEDIATE")
-        result = commit_rip(conn, folder, toc, mp3_path, audio_md5, disc_outcome, releases,
-                            rip_report, secret.acoustid_key(required=False), chosen=bool(release),
-                            occasions=occasions, whole_disc=whole_disc, hidden=hidden, fold=fold)
-        conn.commit()
+        try:
+            gone = retire_rows(conn, merge["file_ids"]) if merge else None
+            result = commit_rip(conn, folder, toc, mp3_path, audio_md5, disc_outcome, releases,
+                                rip_report, secret.acoustid_key(required=False), chosen=bool(release),
+                                occasions=occasions, whole_disc=whole_disc, hidden=hidden, fold=fold,
+                                kept=merge["kept"] if merge else frozenset())
+            if merge:
+                certain = bool(release) or (disc_outcome == "exact" and len(releases) == 1)
+                if certain and releases:
+                    link_kept(conn, merge, releases[0])
+                now = time.strftime("%Y-%m-%dT%H:%M:%S")
+                for f in merge["kept_files"]:
+                    # A sheet of the earlier rip renamed: the new name recorded,
+                    # the old one marked so, not reported missing [GDE-INT-175].
+                    if merge["side_renames"]:
+                        sidecars.record(conn, f["md5"], folder, list(merge["side_renames"].values()), now=now)
+                        conn.execute(
+                            "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
+                            "VALUES (?1,?2,'renamed',NULL,?3,?4)",
+                            (f["md5"], sidecars.STAGE,
+                             json.dumps({"files": {n: None for n in merge["side_renames"]}}, sort_keys=True), now))
+                conn.execute(
+                    "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
+                    "VALUES (?1,'rip','merged',1.0,?2,?3)",
+                    (audio_md5, json.dumps({"plan": merge["plan"], "kept": sorted(merge["kept"]),
+                                            "retired": [d for _s, d in retired], "to": merge["to"]}), now))
+                result["merge"] = {"plan": merge["plan"], "kept": sorted(merge["kept"]),
+                                   "retired": [os.path.basename(s) for s, _d in retired
+                                               if os.path.dirname(_d) == merge["to"]],
+                                   "renamed": merge["side_renames"], "to": merge["to"] if merge["retire"] else None,
+                                   "removed": gone}
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            if merge:
+                # All or nothing [SPEC-NAM-050]: the rip back in the inbox, the
+                # earlier rip back as it was.
+                _move_back(folder, inbox, names, renames)
+                _drop([os.path.join(inbox, n) for n in made])
+                _put_back(retired, merge["to"])
+            raise
         if result.get("album_linked"):
             result["cover"] = fetch_disc_cover(conn, releases[0].get("id"))
             result["set"] = set_summary(releases[0], conn)   # [SPEC-RIP-112]
@@ -1972,6 +2337,18 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
     return result
 
 
+def keep_earlier_arg(text: str | None) -> frozenset | None:
+    """`--keep-earlier`: `3,5`, `none`, or absent -- the plan's own choice."""
+    if text is None:
+        return None
+    if text.strip().lower() == "none":
+        return frozenset()
+    try:
+        return frozenset(int(n) for n in text.split(",") if n.strip())
+    except ValueError:
+        raise SystemExit(f"--keep-earlier takes track numbers separated by commas, or 'none': {text!r}") from None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("db")
@@ -1998,6 +2375,9 @@ def main() -> int:
     ap.add_argument("--fold", type=int, action="append", default=[], metavar="START_MS",
                     help="also join the hidden audio starting at START_MS to the track it leads into, "
                          "as one more radio passage; repeat for each [SPEC-RIP-092]")
+    ap.add_argument("--keep-earlier", metavar="N,N|none",
+                    help="added to the folder of an earlier rip of this disc: the tracks to keep playing from "
+                         "the earlier rip's files, or 'none'; omitted, the logs decide [SPEC-AGN-035]")
     for occ, label in (("christmas", "Christmas"), ("childrens", "children's")):
         ap.add_argument(f"--{occ}", dest="occasions", action="append_const", const=occ,
                         help=f"mark every recording on the disc fully {label} [SPEC-CDI-096]")
@@ -2008,7 +2388,7 @@ def main() -> int:
                            into=args.into, keep_flac=args.keep_flac,
                            occasions=tuple(args.occasions or ()), allow_duplicate=args.allow_duplicate,
                            album_name_max=args.album_name_max, whole_disc=args.whole_disc,
-                           fold=tuple(args.fold))
+                           fold=tuple(args.fold), keep_earlier=keep_earlier_arg(args.keep_earlier))
     except Exception as e:                                    # noqa: BLE001
         if args.json:
             print(json.dumps({"ok": False, "error": str(e)}))

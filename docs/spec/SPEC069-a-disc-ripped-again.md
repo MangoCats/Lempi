@@ -1,6 +1,6 @@
 # SPEC069: A Disc Ripped Again
 
-**Design Specification — Tier 2 · written 2026-10-30, at the maintainer's direction · steps 1 and 2 of §4 built 2026-10-30, the merge not yet · extends [SPEC056](SPEC056-cd-import.md) `[SPEC-CDI-047]`, `[SPEC-CDI-094]`**
+**Design Specification — Tier 2 · written 2026-10-30, at the maintainer's direction · steps 1 to 3 of §4 built 2026-10-30, the merge not yet run on the real library · extends [SPEC056](SPEC056-cd-import.md) `[SPEC-CDI-047]`, `[SPEC-CDI-094]`**
 
 A disc already in the library, ripped a second time. On 2026-10-30 a DAO rip
 of *Highway 61 Revisited* -- all nine tracks, every one accurately ripped --
@@ -42,11 +42,11 @@ so no Disc ID, and under every edition but the one it was added as it is
 found by its barcode alone (eight shown of the sixteen MusicBrainz offers). An image add now records its barcode, as a tracks add did.
 
 Any clash of names in the album folder is found in the move's planning,
-before the WAV is measured or encoded, not in the move after it. Until the
-merge is built (§4, step 3), an add into the earlier rip's own folder is
-refused there and says why: on *Highway 61*, 3 s, where it was a whole encode.
-Once built, it is the merge into that album, and the earlier sheet is renamed,
-never written over.
+before the WAV is measured or encoded, not in the move after it: on *Highway
+61*, a refusal in 3 s where it was a whole encode. An add into the earlier
+rip's own folder is now the merge into that album (§2); one the merge cannot
+yet make -- two DAO rips, or a rip a file a track -- is refused there, and
+says why.
 
 ## 2. Each track from its better copy
 
@@ -74,8 +74,11 @@ AccurateRip CRC, equal CRCs are two reads agreeing, and need no encode to
 show it.
 
 **`[SPEC-AGN-030]` A track file is kept only if it wins its track.** The rest
-go to a backup folder beside the music folder, not the bin, and their rows --
-`files`, `passages`, `passage_recordings`, `file_tags` -- leave the catalogue.
+go to `_Retired\Artist\Album\<date>` in the music folder, kept, and their
+rows -- `files`, `passages`, `passage_recordings`, `file_tags`, `file_releases`,
+`file_art`, `id_checks` -- leave the catalogue (`ingest_cd.retire_rows`); the
+listener references `passage_orphans` knows are NULLed, and any other left
+naming a retired passage is counted on the finished card.
 That is all that hangs off them: plays and stars are the recording's, and the
 recording stays. For *Highway 61* every DAO track is perfect, so all eighteen
 passages are the DAO's and the six track files are retired.
@@ -93,6 +96,20 @@ recording would make the album two `[SPEC-AID-025]`.
 it.** One row a track: the copy it will play from, and why -- *DAO, accurately
 ripped (370)*, *track file: the DAO's read errors* -- chosen in advance by
 `[SPEC-AGN-020]`, and changeable before **Add**.
+
+*Built 2026-10-30, for a DAO rip added to the folder of an earlier rip a file
+a track* (`ingest_cd.merge_plan`, `plan_merge`; `--keep-earlier` on the
+command line). The earlier rip is ranked by the log in its folder and the
+damage its add recorded; the preview proposes its folder and shows the plan
+as a table of choices. The add retires, files the DAO rip, and writes the
+catalogue in one transaction, putting every file back where it was if any step
+fails. A kept earlier file is linked to the edition now chosen, so the album
+stays one; an earlier sheet that stays and shares the new sheet's name is
+renamed *(track files)*, and recorded under that name. Not yet: a rip a file a
+track merged into another, two DAO rips `[SPEC-AGN-040]`, and the length check
+of `[SPEC-AGN-050]`. Measured on *Highway 61*'s real rip, read only: all nine
+tracks from the DAO, every one *accurately ripped*, the six earlier files *no
+log*.
 
 **`[SPEC-AGN-040]` Two DAO rips of one disc follow the same rule.** The better
 of the two is the disc. The other is kept whole only if it wins a track, and
@@ -218,7 +235,9 @@ measured join is found that a butt cannot make clean.
    again with the probe; the probe's table is the test -- built 2026-10-30.
 3. The merge, `[SPEC-AGN-020]`–`[SPEC-AGN-035]`, `[SPEC-AGN-050]` and
    samples at a join `[SPEC-AGN-066]`, for a library album of track files --
-   the 29 -- with *Highway 61* first.
+   the 29 -- with *Highway 61* first. The merge built 2026-10-30; the length
+   check and a kept file's joins (still faded, and still decoded untrimmed)
+   not yet, nor run on the real library, for `[SPEC-AGN-920]`.
 4. Two DAOs, `[SPEC-AGN-040]`, and a damaged DAO repaired by later track
    files -- the 20.
 
@@ -233,7 +252,12 @@ samples early against their CUE times, as they have always played.
 the evidence; nobody has heard a repaired album across a segue.
 
 **`[SPEC-AGN-920]`** How star sync retires a file the catalogue has dropped,
-on a speaker that still holds it, is not designed.
+on a speaker that still holds it, is not designed -- and *Highway 61* needs it
+first: its six earlier files were sent to `bose`, `lp3-wifi` and
+`smartboardpc` on 2026-10-26 and to `lempi02w` on 2026-10-27 (`sync/bundled.json`).
+Merged on the hub alone, those four would keep them, and the DAO sent after
+would give each both copies. What the next star sync makes of a hub without
+them is not yet known.
 
 **`[SPEC-AGN-930]`** A DAO file's tracks and a later DAO's are compared by
 their logs alone; two spans of two whole-disc encodes do not encode alike, so

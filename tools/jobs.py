@@ -1397,6 +1397,13 @@ class Runner:
         for start in payload.get("fold") or ():
             if isinstance(start, int) and not isinstance(start, bool):
                 argv += ["--fold", str(start)]
+        # Added to the folder of an earlier rip of the disc: the tracks the
+        # person chose to keep from it, every one said, so an empty list is
+        # "none" and not "let the logs decide" [SPEC-AGN-035].
+        keep = payload.get("keep_earlier")
+        if isinstance(keep, list):
+            nums = [str(n) for n in keep if isinstance(n, int) and not isinstance(n, bool)]
+            argv += ["--keep-earlier", ",".join(nums) or "none"]
         self._emit(job_id, "stage", "ingest", stage="ingest")
         code, out = self._spawn(job_id, "ingest", argv)
         result = parse_json_tail(out) or {}

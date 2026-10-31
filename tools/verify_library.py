@@ -25,7 +25,8 @@ log, AccurateRip report and CUE sheet `sidecars.py` recorded is read again --
 ok, changed or missing -- and the sidecars no record names are counted. And
 the music folder is walked for audio no row claims, for a person to induct or
 remove: the strays. The CD inbox, `_Rips`, is skipped and said to be: what
-waits there is not lost, it is not added yet.
+waits there is not lost, it is not added yet. So is `_Retired`, where a disc
+ripped again keeps the earlier rip's files it no longer plays `[SPEC-AGN-030]`.
 
 Read-only: the library is opened `mode=ro` and nothing in it is written. The
 result goes to `<library's folder>/verify/<date>.json`, the newest kept 14
@@ -54,6 +55,7 @@ KEEP = 14
 BAD = ("damaged", "missing", "unreadable")
 AUDIO = (".mp3", ".flac", ".wav", ".aif", ".aiff", ".m4a", ".ogg", ".opus", ".wma", ".ape", ".wv")
 INBOX = "_Rips"
+RETIRED = "_Retired"
 
 
 def say(text: str) -> None:
@@ -75,6 +77,8 @@ def check_sidecars(records: list[dict], unrecorded: int) -> dict:
     no catalogued file has its audio any more, so there is no folder to look in."""
     out = {"ok": 0, "changed": [], "missing": [], "orphaned": 0, "unrecorded": unrecorded}
     for r in records:
+        if r["outcome"] in ("renamed", "retired"):
+            continue        # its latest word is that it is gone under that name [SPEC-AGN-030]
         if not r["folder"]:
             out["orphaned"] += 1
             continue
@@ -103,7 +107,8 @@ def strays(paths: list[str]) -> dict:
         root = os.path.commonpath([p for p in paths if p]) if paths else ""
     except ValueError:
         root = ""
-    out = {"root": root, "audio": [], "lossless_copies": 0, "inbox": None, "inbox_audio": 0}
+    out = {"root": root, "audio": [], "lossless_copies": 0, "inbox": None, "inbox_audio": 0,
+           "retired": None, "retired_audio": 0}
     if not root or not os.path.isdir(root):
         return out
     claimed = {os.path.normcase(os.path.normpath(p)) for p in paths if p}
@@ -111,6 +116,8 @@ def strays(paths: list[str]) -> dict:
     for d, dirs, files in os.walk(root):
         if d == root and INBOX in dirs:
             out["inbox"] = os.path.join(root, INBOX)
+        if d == root and RETIRED in dirs:
+            out["retired"] = os.path.join(root, RETIRED)
         for n in files:
             if not n.lower().endswith(AUDIO):
                 continue
@@ -120,6 +127,8 @@ def strays(paths: list[str]) -> dict:
                 continue
             if out["inbox"] and key.startswith(os.path.normcase(out["inbox"]) + os.sep):
                 out["inbox_audio"] += 1
+            elif out["retired"] and key.startswith(os.path.normcase(out["retired"]) + os.sep):
+                out["retired_audio"] += 1
             elif n.lower().endswith(".flac") and os.path.splitext(key)[0] in stems:
                 out["lossless_copies"] += 1
             else:
@@ -241,6 +250,8 @@ def main() -> int:
         say(f"  STRAY: {p}")
     if st["inbox"]:
         say(f"  (the CD inbox {st['inbox']} was not counted: {st['inbox_audio']} audio file(s) wait there)")
+    if st.get("retired"):
+        say(f"  (nor {st['retired']}: {st['retired_audio']} audio file(s) an earlier rip no longer plays, kept)")
     say(f"kept in {where}")
     whole = r["ok_whole"] and r["sidecars_whole"]
     if args.json:

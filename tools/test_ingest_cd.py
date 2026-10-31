@@ -1028,7 +1028,7 @@ def test_tracks_end_to_end():
         # the first rip's name -- Highway 61, 2026-10-30. The preview names
         # the earlier rip; the add into its folder is refused before the WAV
         # is measured or encoded, and says what is there.
-        print("a disc ripped again: the earlier rip named, the clash found before encoding")
+        print("a disc ripped again: the earlier rip named, and each track's copy planned")
         dao = tempfile.mkdtemp()
         subprocess.run([ingest_cd.FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=330:duration=9",
                         "-ar", "44100", "-ac", "2", os.path.join(dao, "Artist - Album.wav")], check=True)
@@ -1044,21 +1044,13 @@ def test_tracks_end_to_end():
         check(ingest_cd.said_earlier(e).startswith("2 of 3 tracks; 3 never ripped; 2 ripped damaged; added "),
               f"in words: {ingest_cd.said_earlier(e)}")
         check(p3["releases"][0]["duplicate"] is False, "not a whole duplicate: the earlier rip lacks a track")
-        before = snapshot(dao)
-        measured = []
-        old_hidden = ingest_cd.find_hidden
-        ingest_cd.find_hidden = lambda *a, **k: measured.append(1) or []
-        try:
-            ingest_cd.do_ingest(db, dao, commit=True, release="rel-T", into=home, keep_flac=False)
-            check(False, "an add into the earlier rip's folder is refused")
-        except FileExistsError as err:
-            check("earlier rip of this disc (2 of 3 tracks; 3 never ripped" in str(err)
-                  and "nothing was encoded or moved" in str(err), f"and says what is there: {err}")
-        finally:
-            ingest_cd.find_hidden = old_hidden
-        check(snapshot(dao) == before and not measured, "refused before the WAV was measured or encoded")
-        check(sorted(os.listdir(home)) == ["01. One.mp3", "02. Two.mp3", "Artist - Album.cue", "Artist - Album.log"],
-              f"the earlier rip untouched: {sorted(os.listdir(home))}")
+        # [SPEC-AGN-020]: this rip has no log (rank 3 throughout); the earlier
+        # one's log says track 1 matched and track 2 could not be verified.
+        plan = [(r["number"], r["dao"], r["earlier"], r["keep"]) for r in e["plan"]]
+        check(plan == [(1, 3, 1, "earlier"), (2, 3, 4, "dao"), (3, 3, 5, "dao")],
+              f"each track from its better copy, the DAO on a tie: {plan}")
+        check(p3["releases"][0]["folder"] == os.path.join("Artist", "Album (2001)") and e["mode"] == "tracks",
+              f"the earlier rip's folder proposed: {p3['releases'][0]['folder']}")
         c = sqlite3.connect(db)
         other = dict(rel, id="rel-other")
         check(ingest_cd.earlier_rip(c, other) is None, "another edition's files are not this disc's")
@@ -1083,6 +1075,60 @@ def test_tracks_end_to_end():
         out = ingest_cd.identify_disc(trk, None)
         check(looked == [("barcode", "0075678341427")] and out[0] == "barcode" and out[2] is None,
               f"tracks with no log: no disc id at all, the barcode instead: {looked} {out[:1]}")
+
+        # [SPEC-AGN-030]: added to the earlier rip's own folder, the two are
+        # merged -- the DAO whole, track 1 kept from the earlier file, track 2's
+        # earlier file retired, the earlier sheet renamed where the DAO's has
+        # its name, and the catalogue left with one passage pair a track.
+        print("a disc ripped again, merged: the DAO whole, each track from its better copy")
+        ingest_cd.lookup_disc_id = lambda toc: ("exact", [rel])
+        toc3 = cd_toc.parse_eac_cue(os.path.join(dao, "Artist - Album.cue"))
+        try:
+            ingest_cd.plan_merge({"mode": "image", "said": "one file"}, toc3, None, home)
+            check(False, "two DAO rips of one disc are not merged yet")
+        except FileExistsError as err:
+            check("not built yet" in str(err), f"said so: {err}")
+        try:
+            ingest_cd.merge_plan(e, toc3, None, keep_earlier={3})
+            check(False, "a track the earlier rip never ripped cannot be kept from it")
+        except ValueError as err:
+            check("no file for track 3" in str(err), f"said so: {err}")
+        check([r["keep"] for r in ingest_cd.merge_plan(e, toc3, None, keep_earlier=frozenset())]
+              == ["dao", "dao", "dao"], "a person's 'none' is every track from this rip [SPEC-AGN-035]")
+
+        r3 = ingest_cd.do_ingest(db, dao, commit=True, release="rel-T", into=home, keep_flac=False)
+        m = r3.get("merge") or {}
+        check(m.get("kept") == [1] and m.get("retired") == ["02. Two.mp3"]
+              and m.get("renamed") == {"Artist - Album.cue": "Artist - Album (track files).cue"},
+              f"track 1 kept, track 2's file retired, the earlier sheet renamed: {m}")
+        check(sorted(os.listdir(home)) == ["01. One.mp3", "Artist - Album (track files).cue", "Artist - Album.cue",
+                                           "Artist - Album.log", "Artist - Album.mp3"],
+              f"the album folder: {sorted(os.listdir(home))}")
+        to = m.get("to") or ""
+        check(os.path.isfile(os.path.join(to, "02. Two.mp3"))
+              and os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(to)))) == "_Retired",
+              f"retired to _Retired, kept: {to}")
+        c = sqlite3.connect(db)
+        names = sorted(os.path.basename(p) for (p,) in c.execute("SELECT path FROM files"))
+        check(names == ["01. One.mp3", "Artist - Album.mp3"], f"the retired file left the catalogue: {names}")
+        rows = c.execute("SELECT f.path, p.kind, p.start_ms, pr.mbid FROM passages p JOIN files f USING (file_id) "
+                         "JOIN passage_recordings pr USING (passage_id) ORDER BY pr.mbid, p.kind").fetchall()
+        got = [(os.path.basename(f), k, s, mb) for f, k, s, mb in rows]
+        check(got == [("01. One.mp3", "album", 0, "rec-t1"), ("01. One.mp3", "radio", 0, "rec-t1"),
+                      ("Artist - Album.mp3", "album", 3000, "rec-t2"), ("Artist - Album.mp3", "radio", 3000, "rec-t2"),
+                      ("Artist - Album.mp3", "album", 5493, "rec-t3"), ("Artist - Album.mp3", "radio", 5493, "rec-t3")],
+              f"one passage pair a track, each on its copy: {got}")
+        rels_of = dict(c.execute("SELECT f.path, fr.release_mbid FROM file_releases fr JOIN files f USING (audio_md5)"))
+        check(sorted(set(rels_of.values())) == ["rel-T"] and len(rels_of) == 2,
+              f"both files from the one edition, so one album: {rels_of}")
+        check(c.execute("SELECT COUNT(*) FROM ingest_decisions WHERE outcome = 'merged'").fetchone()[0] == 1,
+              "the merge recorded")
+        import sidecars
+        import verify_library
+        s3 = verify_library.check_sidecars(sidecars.recorded(c), 0)
+        check(not s3["missing"] and not s3["changed"],
+              f"the renamed sheet is not reported missing: {s3['missing']} {s3['changed']}")
+        c.close()
     finally:
         ingest_cd.lookup_disc_id, ingest_cd.lookup_barcode = old
 

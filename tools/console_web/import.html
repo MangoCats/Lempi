@@ -222,12 +222,41 @@ function showPreview(p, folder, area) {
   const showPrior = (e, rel) => {
     // Found by barcode under another edition: say which one it was added as.
     const was = e && e.release && rel && e.release !== rel.id && rels.find(x => x.id === e.release);
-    prior.replaceChildren(e
-      ? `An earlier rip of this disc is in the library, in ${e.folder}: ${e.said}`
-        + (was ? `, as the ${[was.year, was.country].filter(Boolean).join(' ')} edition` : '')
-        + '. Adding this rip to that folder is not built yet, and is refused before anything is encoded; '
-        + 'added to another folder, the tracks both rips hold would be in the library twice.'
-      : '');
+    const said = e ? `An earlier rip of this disc is in the library, in ${e.folder}: ${e.said}`
+      + (was ? `, as the ${[was.year, was.country].filter(Boolean).join(' ')} edition` : '') + '. ' : '';
+    prior.replaceChildren(!e ? '' : e.plan
+      ? said + 'This rip is proposed for that folder, and is merged into it; added to another folder, '
+        + 'the tracks both rips hold would be in the library twice.'
+      : said + 'It is one file for the disc, and merging two such rips is not built yet: adding this one to '
+        + 'that folder is refused before anything is encoded.');
+    showPlan(e);
+  };
+  // [SPEC-AGN-020], [SPEC-AGN-035]: merged, each track plays from one copy --
+  // chosen by the rip logs, the earlier file only where it is the better --
+  // and the person may change any of them before Add.
+  const planBox = S.el('div');
+  let planRadios = null;
+  const showPlan = e => {
+    planRadios = null;
+    if (!e || !e.plan) return planBox.replaceChildren('');
+    planRadios = {};
+    const rows = e.plan.map(r => {
+      const name = `keep-${folder}-${r.number}`;
+      const dao = S.el('input', { type: 'radio', name, value: 'dao' });
+      const old = S.el('input', { type: 'radio', name, value: 'earlier' });
+      dao.checked = r.keep === 'dao';
+      old.checked = r.keep === 'earlier';
+      old.disabled = !r.file;
+      planRadios[r.number] = old;
+      return S.el('tr', {}, S.el('td', { text: `${r.number}. ${r.title || ''}` }),
+        S.el('td', {}, S.el('label', {}, dao, ` this rip -- ${r.dao_said}`)),
+        S.el('td', {}, S.el('label', {}, old, ` the earlier ${r.file ? 'file' : 'rip'} -- ${r.earlier_said}`)));
+    });
+    planBox.replaceChildren(
+      S.el('p', { class: 'steps', text: 'Added to that folder, each track plays from the copy ticked. This rip '
+        + 'is kept whole, as the disc; an earlier file not ticked is moved to _Retired in the music folder, '
+        + 'not deleted.' }),
+      S.el('table', { class: 'tracks' }, ...rows));
   };
   const setWarn = rel => {
     showPrior(rel && rel.earlier, rel);
@@ -309,10 +338,15 @@ function showPreview(p, folder, area) {
     if (rels.length > 1 && !chosen) return alert('Choose which edition this is first.');
     add.disabled = true;
     const occasions = [...occ.querySelectorAll('input:checked')].map(c => c.value);
+    // The tracks kept from the earlier rip, every one said, when it goes into
+    // that rip's own folder; anywhere else there is nothing to merge.
+    const cur = rels.find(x => x.id === chosen);
+    const keepEarlier = planRadios && cur && cur.earlier && into.value.trim() === cur.earlier.rel_folder
+      ? Object.entries(planRadios).filter(([, r]) => r.checked).map(([n]) => Number(n)) : undefined;
     const r = await (await fetch('/api/import/add', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ folder, release: chosen, into: into.value.trim(), occasions,
-        duplicate_ok: duplicate && again.checked, whole_disc: whole.checked,
+        duplicate_ok: duplicate && again.checked, whole_disc: whole.checked, keep_earlier: keepEarlier,
         fold: whole.checked ? [] : folds.filter(cb => cb.checked).map(cb => Number(cb.value)) }) })).json();
     if (r.error) { add.disabled = false; return alert(r.error); }
     // The rip leaves the inbox while it is added, and its card with it: the
@@ -337,7 +371,7 @@ function showPreview(p, folder, area) {
   area.replaceChildren(
     S.el('div', { class: 'steps' }, S.el('span', { text: rels.length > 1
       ? 'MusicBrainz knows several editions of this disc -- choose yours:' : 'This is the disc:' }), help('add')),
-    setBox, gap, prior, pick, warn, hidden, occ, wholeRow,
+    setBox, gap, prior, planBox, pick, warn, hidden, occ, wholeRow,
     S.el('div', { class: 'controls' }, S.el('span', { style: 'align-self:center;font-size:.88rem',
       text: 'Album folder, in your music folder:' }), into, add),
     // [SPEC-NAM-010..040]: why a long title's folder is shorter than the
@@ -470,6 +504,14 @@ function done(job, into, rel, area, gaps) {
     (res.hidden || []).length ? S.el('p', { class: 'verdict note', text:
       `Hidden audio, each its own passage: ${res.hidden.map(h => `${h.title} (${S.clock(h.end_ms - h.start_ms)})`).join('; ')}.` })
       : null,
+    // [SPEC-AGN-030]: merged into the earlier rip, and what became of it.
+    res.merge ? S.el('p', { class: 'verdict note', text: 'Merged into the earlier rip: '
+      + (res.merge.kept.length ? `track ${res.merge.kept.join(', ')} still play${res.merge.kept.length > 1 ? '' : 's'} `
+        + 'from its files, the rest from this one' : 'every track plays from this rip')
+      + (res.merge.retired.length ? `; ${res.merge.retired.length} earlier file(s) moved to ${res.merge.to}` : '')
+      + (res.merge.removed && Object.keys(res.merge.removed.left || {}).length
+        ? `; still naming a retired passage: ${Object.entries(res.merge.removed.left).map(([t, n]) => `${n} in ${t}`).join(', ')}`
+        : '') + '.' }) : null,
     (res.folded || []).length ? S.el('p', { class: 'verdict note', text:
       `Joined to the track it leads into, as one more passage: ${res.folded.map(f =>
         `${f.title}, with track ${f.track} (${S.clock(f.end_ms - f.start_ms)})`).join('; ')}.` }) : null,

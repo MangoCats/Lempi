@@ -170,6 +170,14 @@ def test_choices_and_preview(tmp: str) -> None:
     argv = next(a for s, a in reversed(seen) if s == "ingest")
     check([argv[i + 1] for i, a in enumerate(argv) if a == "--fold"] == ["0", "41000"] and "--rm" not in argv,
           f"the two starts, and only they: {argv}")
+    # [SPEC-AGN-035]: the tracks kept from an earlier rip, every one said --
+    # an empty choice is "none", and no choice at all leaves it to the logs.
+    for keep, want in (([1, 3, "--rm", True], "1,3"), ([], "none"), (None, None)):
+        wait_for(runner, runner.submit("cd-rip", json.dumps(
+            {"folder": "C:/rips/x", "into": "C:/Music/A/B", "keep_earlier": keep})))
+        argv = next(a for s, a in reversed(seen) if s == "ingest")
+        got = argv[argv.index("--keep-earlier") + 1] if "--keep-earlier" in argv else None
+        check(got == want and "--rm" not in argv, f"keep_earlier={keep!r}: {argv}")
     j = wait_for(runner, runner.submit("cd-preview", json.dumps({"folder": "C:/rips/x"})))
     stage, argv = seen[-1]
     check(stage == "preview" and "--commit" not in argv and "--json" in argv, f"a preview, got {argv}")
