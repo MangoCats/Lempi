@@ -835,7 +835,7 @@ def earlier_rip(conn, release: dict | None, disc_id: str | None = None,
 
     `{"folder", "rel_folder", "files", "tracks", "held", "missing", "damaged",
     "since", "release", "mode", "by_track", "said"}`: the folder holding most of
-    it, and that folder as `Artist\Album` within the music folder; the disc's
+    it, and that folder as `Artist/Album` within the music folder; the disc's
     track count and which of its tracks the earlier rip holds, never ripped,
     and ripped damaged, by track number; `since`, the day it was added;
     `release`, the edition it was added as; `mode`, `"tracks"` for a file a

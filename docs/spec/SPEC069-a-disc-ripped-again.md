@@ -1,6 +1,6 @@
 # SPEC069: A Disc Ripped Again
 
-**Design Specification — Tier 2 · written 2026-10-30, at the maintainer's direction · steps 1 to 3 of §4 built 2026-10-30, the merge not yet run on the real library · extends [SPEC056](SPEC056-cd-import.md) `[SPEC-CDI-047]`, `[SPEC-CDI-094]`**
+**Design Specification — Tier 2 · written 2026-10-30, at the maintainer's direction · steps 1 to 3 of §4 built 2026-10-30, and *Highway 61* merged on the hub · extends [SPEC056](SPEC056-cd-import.md) `[SPEC-CDI-047]`, `[SPEC-CDI-094]`**
 
 A disc already in the library, ripped a second time. On 2026-10-30 a DAO rip
 of *Highway 61 Revisited* -- all nine tracks, every one accurately ripped --
@@ -251,13 +251,19 @@ samples early against their CUE times, as they have always played.
 **`[SPEC-AGN-910]`** Measured, not yet listened to. The probe's renders are
 the evidence; nobody has heard a repaired album across a segue.
 
-**`[SPEC-AGN-920]`** How star sync retires a file the catalogue has dropped,
-on a speaker that still holds it, is not designed -- and *Highway 61* needs it
-first: its six earlier files were sent to `bose`, `lp3-wifi` and
-`smartboardpc` on 2026-10-26 and to `lempi02w` on 2026-10-27 (`sync/bundled.json`).
-Merged on the hub alone, those four would keep them, and the DAO sent after
-would give each both copies. What the next star sync makes of a hub without
-them is not yet known.
+**`[SPEC-AGN-920]`** What a node makes of a file the hub retired. *Highway
+61*'s six earlier files were sent to `bose`, `lp3-wifi` and `smartboardpc` on
+2026-10-26 and to `lempi02w` on 2026-10-27 (`sync/bundled.json`). Merged on
+the hub 2026-10-30 -- the databases saved first, in
+`data/backups/before-highway61-merge-2026-10-30` -- and synced read-only:
+star sync sends each node the hub's catalogue on the files it holds, so the
+patch removes the six files' rows, passages and recordings there, and adds
+`files.gapless`. Its first rehearsal on `bose` and `smartboardpc` was refused
+-- a removed file's cascade took its passages first ([SPEC058](SPEC058-catalogue-patch-by-natural-key.md)
+`[SPEC-NKP-060]`) -- and, removals ordered children first, both rehearsed
+clean. Not committed; `lempi02w` and `lp3-wifi` did not answer. Still open:
+the six audio files stay on each node's disk, catalogued nowhere -- a stray
+there -- and the DAO is not yet sent to any node.
 
 **`[SPEC-AGN-930]`** A DAO file's tracks and a later DAO's are compared by
 their logs alone; two spans of two whole-disc encodes do not encode alike, so
