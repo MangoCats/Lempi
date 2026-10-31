@@ -952,6 +952,10 @@ pub fn catalogue_summary(library: &Path) -> Result<Json, String> {
 /// `scope` is the scope used, keys this node lacks included -- they are what it lacks.
 /// A blob travels as its SHA-256: the hub holds the candidates and only needs to know
 /// which one is here, and a cover is a megabyte a Pi need not send.
+///
+/// With `by_recording: true`, the files whose passages credit a wanted recording are
+/// wanted too, and the answer says `by_recording` -- an older build says nothing, and the
+/// hub cannot tell "no such file" from "not asked" `[SPEC-LNK-050]`.
 pub fn catalogue_rows(library: &Path, want: &Json) -> Result<Json, String> {
     use std::collections::BTreeSet;
     let c = Connection::open_with_flags(library, OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -978,8 +982,17 @@ pub fn catalogue_rows(library: &Path, want: &Json) -> Result<Json, String> {
         v.into_iter().filter_map(|x| if let Value::Text(s) = x { Some(s) } else { None }).collect()
     };
 
-    let files = list("files");
+    let mut files = list("files");
     let (mut recordings, mut releases, mut artists) = (list("recordings"), list("releases"), list("artists"));
+    // `[SPEC-LNK-050]`: asked by recording, the files whose passages credit one are in scope
+    // too -- how the hub learns which of this node's files would repair a link it lacks.
+    let by_recording = want["by_recording"].as_bool() == Some(true) && has("passage_recordings");
+    if by_recording {
+        files.extend(as_text(column(
+            &format!("SELECT DISTINCT f.audio_md5 FROM passage_recordings pr JOIN passages p ON p.passage_id = pr.passage_id \
+                      JOIN files f ON f.file_id = p.file_id WHERE pr.mbid IN ({})", inl(recordings.len())),
+            texts(&recordings))?));
+    }
     let fids = column(&format!("SELECT file_id FROM files WHERE audio_md5 IN ({})", inl(files.len())), texts(&files))?;
     let pids = column(&format!("SELECT passage_id FROM passages WHERE file_id IN ({})", inl(fids.len())), fids.clone())?;
     recordings.extend(as_text(column(
@@ -1050,6 +1063,7 @@ pub fn catalogue_rows(library: &Path, want: &Json) -> Result<Json, String> {
     Ok(serde_json::json!({
         "scope": {"files": files, "recordings": recordings, "releases": releases, "artists": artists},
         "tables": tables,
+        "by_recording": by_recording,
     }))
 }
 

@@ -18,6 +18,10 @@ its mirror.
     python tools/star_sync.py PLAN items              each item, and where its verdict stands
     python tools/star_sync.py PLAN verdict ID V       one verdict: approved | chose:NODE
     python tools/star_sync.py PLAN approve-all        every item still without one takes its default
+    python tools/star_sync.py PLAN integrity          the catalogue's links to nothing, and where each
+                                                      stands [SPEC070]
+    python tools/star_sync.py PLAN decide ID D        one: leave | remove | repair:NODE | repair-files:NODE;
+                                                      `decide all leave|remove` every undecided one
     python tools/star_sync.py PLAN patch              every patch, each proven (merging again if a
                                                       verdict changed an outcome)
     python tools/star_sync.py PLAN rehearse [NODE..]  read-only, against the live files
@@ -33,8 +37,8 @@ its mirror.
                                                       catalogue, copied on it, becomes the copy last sent,
                                                       so the next sync can patch it [SPEC-STAR-946]
 
-`merge`, `items`, `verdict`, `approve-all`, `patch`, `rehearse` and `commit` act
-on the newest run unless `--run DIR` names one. Nothing is committed until a
+`merge`, `items`, `verdict`, `approve-all`, `integrity`, `decide`, `patch`,
+`rehearse` and `commit` act on the newest run unless `--run DIR` names one. Nothing is committed until a
 person has read the run's SUMMARY.md and the merge's report.md, every item has
 a verdict, the patches are proven and each node has been rehearsed clean
 [SPEC-STAR-070, SPEC-STAR-116].
@@ -52,6 +56,7 @@ import hashlib
 import io
 import json
 import os
+import posixpath
 import re
 import shutil
 import sqlite3
@@ -68,6 +73,7 @@ import star_merge as sm  # noqa: E402
 import star_patch as sp  # noqa: E402
 import mesh as meshmod  # noqa: E402  -- the signed transport, and phones by upload [REQ-AND-330]
 import bundle_ledger  # noqa: E402  -- what a bundle send touched on a node [SPEC-STAR-945]
+import catalogue_integrity as ci  # noqa: E402  -- links to nothing [SPEC070]
 import transfer_hold  # noqa: E402  -- a shared radio pauses for a transfer [PI3-AIM-170]
 
 
@@ -509,6 +515,59 @@ def baseline_from_rows(sent_lib, hub_lib, answer, out):
 
 ROW_KEY = {"cover_art": "release_mbid", "file_art": "audio_md5"}
 CATALOGUE_ROWS_NEEDED = 1    # [SPEC-STAR-945]: a player that answers `rows`
+LINK_FILES_NEEDED = 2        # [SPEC-LNK-050]: one that also lists its files by recording
+
+
+# ------------------------------------------------ links to nothing [SPEC070] --
+def links_path(run):
+    """[SPEC-LNK-030]: decisions are kept beside the runs, not in one, so they
+    outlive the run they were made in."""
+    return os.path.join(os.path.dirname(os.path.abspath(run)), "integrity.json")
+
+
+def node_music_root(summary_db):
+    """The one folder every file a node catalogues lies under [SPEC-LNK-052]."""
+    s = sqlite3.connect(f"file:{summary_db}?mode=ro", uri=True)
+    try:
+        dirs = [posixpath.dirname(r[0].replace("\\", "/")) for r in s.execute("SELECT path FROM files") if r[0]]
+    finally:
+        s.close()
+    try:
+        return posixpath.commonpath(dirs) if dirs else None
+    except ValueError:
+        return None
+
+
+def ask_links(mdir, player, run, name, snap, nd, want, node, links):
+    """[SPEC-LNK-040]: the node's own rows of what the hub's catalogue names and
+    does not hold. Returns (the saved answer, or None, and a line to say)."""
+    cap = snap.get("catalogue_rows", 0) or 0
+    asked = sum(len(v) for v in want.values())
+    if cap < CATALOGUE_ROWS_NEEDED:
+        return None, (f"not asked about the {asked} key(s) the hub's catalogue names and does not hold: this build "
+                      "answers no `rows` request [SPEC-LNK-040]")
+    try:
+        answer = meshmod.sync_step(mdir, player, "rows", stamp_of(run),
+                                   extra={"want": dict(want, files=[], by_recording=True)}, timeout=600.0)
+    except (ValueError, OSError) as err:
+        return None, f"WARNING: asked about the links to nothing and got no answer ({err}) [SPEC-LNK-040]"
+    rec = {"answer": answer, "by_recording": cap >= LINK_FILES_NEEDED and bool(answer.get("by_recording")),
+           "fetchable": bool(node.get("host")), "root": node_music_root(os.path.join(nd, "summary.db"))}
+    path = os.path.join(nd, "links.json")
+    write_json(path, rec)
+    seal(path)
+    offers = ci.offers_of(links, {name: rec})
+    held = sorted({k for xs in offers.values() for o in xs for k in o["keys"]})
+    if not held:
+        return path, f"holds none of the {asked} key(s) the hub's catalogue names and does not hold [SPEC-LNK-040]"
+    files = sum(len(o["files"]) for xs in offers.values() for o in xs)
+    line = (f"HOLDS {len(held)} of the {asked} key(s) the hub's catalogue names and does not hold, in "
+            f"{len(offers)} finding(s): its links are whole there, and it can repair the hub's [SPEC-LNK-040]")
+    if rec["by_recording"]:
+        line += f"; {files} of its file(s) name them" if files else "; none of its files names them"
+    else:
+        line += "; which of its files name them, this build cannot say [SPEC-LNK-050]"
+    return path, line
 
 
 def node_rows(mdir, player, run, name, snap, sent_lib, nd, hub_copy, hub_library, last_sent_at):
@@ -786,6 +845,17 @@ def snapshot(plan, only=None):
                                backups=history_of(hs.get("listener_sent"), hs.get("at", ""), os.path.join(hd, "history")))]}
     baselines = {hub["name"]: {"listener": os.path.join(hd, "listener.db"), "library": os.path.join(hd, "library.db")}}
     say(f"  {hub['name']}: both halves copied here")
+    # [SPEC-LNK-040]: what the hub's catalogue names and does not hold, asked of each node below.
+    hc = sqlite3.connect(f"file:{os.path.join(hd, 'library.db')}?mode=ro", uri=True)
+    try:
+        links = ci.find(hc)
+    finally:
+        hc.close()
+    want = ci.want_of(links)
+    link_answers, not_asked = {}, {}
+    if links:
+        say(f"  {hub['name']}: {sum(len(f['rows']) for f in links)} catalogue row(s) name something it does not hold, "
+            f"in {len(links)} finding(s); each node taking part is asked whether it holds them [SPEC070]")
     missing = {}
     # [SPEC-STAR-100]: every node, by signed request. An on-demand player is
     # started for this stage and stopped after it.
@@ -848,6 +918,13 @@ def snapshot(plan, only=None):
                 + (f" (against the copy last sent alone: {catalogue_words(as_sent)})" if cat != as_sent else ""))
             if rows_note:
                 say(f"  {name}: {rows_note}")
+            if want:
+                got, line = ask_links(mdir, player, run, name, snap, nd, want, n, links)
+                if got:
+                    link_answers[name] = got
+                else:
+                    not_asked[name] = line
+                say(f"  {name}: {line}")
             # [GDE-INT-145]: what the node found reading its own files back.
             ic = snap.get("file_checks")
             if ic is not None:
@@ -896,8 +973,11 @@ def snapshot(plan, only=None):
         baselines[name] = {"listener": os.path.join(nd, "listener.db"), "member": fp}
         say(f"  {name} ({m['name'] or 'unnamed'}): its upload of {up['uploaded_at']}, "
             f"clock {up['clock_offset_ms']:+d} ms, {up['rows']}")
+        if want:
+            not_asked[name] = "a phone uploads its edits and answers no request"
     for name, path in (("manifest.json", manifest), ("baselines.json", baselines),
-                       ("missing.json", missing), ("old_players.json", old)):
+                       ("missing.json", missing), ("old_players.json", old),
+                       ("links.json", {"answers": link_answers, "not_asked": not_asked})):
         with open(os.path.join(run, name), "w", encoding="utf-8", newline="\n") as fh:
             json.dump(path, fh, indent=1, sort_keys=True)
     old_player_banner(old)
@@ -941,7 +1021,151 @@ def merge(plan, run):
     void_merge(run)
     if os.path.exists(verdicts_path(run)):
         manifest["verdicts"] = verdicts_path(run)
+    manifest["integrity"] = links_config(plan, run)
     return sm.run(manifest, os.path.join(run, "merge"))
+
+
+def links_config(plan, run):
+    """[SPEC-LNK-034]: what the merge needs to apply what was decided, and to say
+    which nodes this run's commit carries it to. A run snapshotted before
+    [SPEC070] has no answers: its findings are found, with nothing offered."""
+    asked = read_json(os.path.join(run, "links.json")) or {}
+    base = read_json(os.path.join(run, "baselines.json")) or {}
+    missing = read_json(os.path.join(run, "missing.json")) or {}
+    left = (read_json(os.path.join(run, "selected.json")) or {}).get("left_alone", [])
+    carried = sorted(n for n, b in base.items() if "signed" in b and b.get("catalogue_in_step"))
+    not_carried = {}
+    for n in sorted(plan["nodes"]):
+        if n not in carried:
+            not_carried[n] = ("left alone" if n in left else "not reached" if n in missing
+                              else "sent no catalogue patch in this run")
+    return {"decisions": links_path(run), "answers": asked.get("answers", {}), "not_asked": asked.get("not_asked", {}),
+            "carried_to": carried, "not_carried": not_carried}
+
+
+def links_of(run):
+    p = os.path.join(run, "merge", "integrity.json")
+    if not os.path.exists(p):
+        raise SystemExit(f"no merge in {run}: `merge` makes one")
+    return read_json(p)
+
+
+def links_stale(run):
+    """[SPEC-LNK-030]: findings whose decision now does something other than what
+    the merge did with it -- a remove or a repair given since, or taken back. A
+    change between undecided and leave writes nothing either way, and is not."""
+    p = os.path.join(run, "merge", "integrity.json")
+    if not os.path.exists(p):
+        return []
+    ds = ci.load_decisions(links_path(run))
+    quiet = {"undecided", "leave"}
+    out = []
+    for f in read_json(p)["findings"]:
+        now_ = ci.effect(f, ds, f.get("offers", []))
+        was = f.get("intended") or {"effect": f["effect"], "node": f.get("node")}
+        if {now_["effect"], was["effect"]} <= quiet:
+            continue
+        if (now_["effect"], now_["node"]) != (was["effect"], was["node"]):
+            out.append(f)
+    return out
+
+
+def decide_link(run, ident, value, by="cli"):
+    """One decision, or `all` for every undecided finding [SPEC-LNK-060]. A
+    decision already given is never replaced by `all`."""
+    res = links_of(run)
+    path = links_path(run)
+    if ident == "all":
+        if value not in ("leave", "remove"):
+            raise SystemExit("`decide all` takes leave or remove: a repair names a node, one finding at a time")
+        ds = ci.load_decisions(path)
+        n = 0
+        for f in res["findings"]:
+            if f["id"] in ds or (value == "remove" and not f["removable"]):
+                continue
+            ci.decide(path, f, value, f.get("offers", []), by)
+            n += 1
+        return n
+    f = next((f for f in res["findings"] if f["id"] == ident), None)
+    if f is None:
+        raise SystemExit(f"{ident} is not a finding of this merge: `integrity` lists them")
+    ci.decide(path, f, value, f.get("offers", []), by)
+    return 1
+
+
+def links_summary(run):
+    """[SPEC-LNK-024]: SUMMARY.md's lines -- the count, and every finding that
+    is waiting on a person or held, named."""
+    p = os.path.join(run, "merge", "integrity.json")
+    res = read_json(p) if os.path.exists(p) else None
+    if not res or not res["findings"]:
+        return []
+    fs = res["findings"]
+    by = {}
+    for f in fs:
+        by.setdefault(f["effect"], []).append(f)
+    L = [f"**Links to nothing [SPEC070]:** {len(fs)} finding(s), {sum(len(f['rows']) for f in fs)} row(s) -- "
+         + ", ".join(f"{len(v)} {k}" for k, v in sorted(by.items())) + "."]
+    if by.get("undecided"):
+        L.append("Undecided ones are left as they are in this run; decide each on the Sync page, or with "
+                 "`integrity` and `decide` [SPEC-LNK-060].")
+    for f in by.get("held", []) + [f for f in fs if f.get("offers") and f["effect"] == "undecided"]:
+        L.append(f"- `{f['id']}` {f['effect']}: {ci.words(f)}" + (f" -- {f['why']}" if f.get("why") else "")
+                 + "".join(f"; **{o['node']} holds {len(o['keys'])}**" for o in f.get("offers", [])))
+    applied = [f for f in fs if f["effect"] in ("remove", "repair", "repair-files")]
+    if applied:
+        L.append(f"Applied in this merge: {len(applied)}, carried to the hub and {', '.join(res['carried_to']) or 'no node'} "
+                 "by the commit" + (f"; {', '.join(sorted(res['not_carried']))} at their next sync" if res.get("not_carried") else "")
+                 + ".")
+    if res.get("fetch"):
+        L.append(f"**{len(res['fetch'])} file(s) to be copied to the hub at the commit** [SPEC-LNK-052].")
+    return L + [""]
+
+
+def show_links(run):
+    res = links_of(run)
+    for line in ci.report_lines(res)[2:]:
+        say(line)
+    st = links_stale(run)
+    if st:
+        say(f"  {len(st)} decision(s) the merge does not yet reflect: `patch` merges again")
+    return 0
+
+
+def fetch_links(plan, run):
+    """[SPEC-LNK-052]: a node's files a repair brings, copied to the hub before
+    the hub is patched. A copy that fails, or a file already at the place that is
+    not the node's, stops the commit before any catalogue is patched; a file
+    copied before it stays, uncatalogued, and the next commit finds it there."""
+    res = read_json(os.path.join(run, "merge", "integrity.json")) or {}
+    todo = res.get("fetch", [])
+    for x in todo:
+        host = (plan["nodes"].get(x["node"]) or {}).get("host")
+        if not host:
+            raise SystemExit(f"{x['src']} is to come from {x['node']}, which has no ssh host in the plan: "
+                             "no catalogue patched")
+        dest, size, sha = x["dest"], x.get("size_bytes"), x.get("sha256")
+        if os.path.exists(dest):
+            if (size is None or os.path.getsize(dest) == size) and (not sha or sha256(dest) == sha):
+                say(f"  {dest}: already here")
+                continue
+            raise SystemExit(f"{dest} exists and is not {x['node']}'s {x['src']}: a file is never written over; "
+                             "no catalogue patched")
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        part = dest + ".part"
+        say(f"  {x['node']}:{x['src']} -> {dest} [SPEC-LNK-052]")
+        with open(part, "wb") as fh:
+            r = subprocess.run(["ssh", *SSH, host, f"cat -- {shq(x['src'])}"], stdout=fh,
+                               stderr=subprocess.PIPE, timeout=3600)
+        got = os.path.getsize(part)
+        bad = (f"ssh exited {r.returncode}: {r.stderr.decode(errors='replace').strip()[:200]}" if r.returncode
+               else f"{got} bytes, the node holds {size}" if size is not None and got != size
+               else "its SHA-256 is not the node's" if sha and sha256(part) != sha else None)
+        if bad:
+            rm(part)
+            raise SystemExit(f"copying {x['src']} from {x['node']} failed ({bad}): no catalogue patched")
+        os.replace(part, dest)
+    return len(todo)
 
 
 def verdicts_path(run):
@@ -1055,6 +1279,10 @@ def gate_problems(run, names):
         problems.append(f"{len(rv['pending'])} item(s) have no verdict: `items`, then `verdict` or `approve-all`")
     if rv["stale"]:
         problems.append(f"{len(rv['stale'])} verdict(s) change an outcome the merge does not reflect: `patch` merges again")
+    ls = links_stale(run)
+    if ls:
+        problems.append(f"{len(ls)} decision(s) about links to nothing the merge does not reflect: `patch` merges again "
+                        "[SPEC-LNK-030]")
     pr = os.path.join(run, "proven.json")
     if not os.path.exists(pr) or not json.load(open(pr, encoding="utf-8")).get("ok"):
         problems.append("the patches are not proven: run `patch`")
@@ -1105,8 +1333,10 @@ def values_patch(base, target):
 
 def patch(plan, run):
     rv = review(run)
-    if rv["stale"]:
-        say(f"  {len(rv['stale'])} verdict(s) change an outcome: merging again")
+    ls = links_stale(run)
+    if rv["stale"] or ls:
+        say(f"  {len(rv['stale'])} verdict(s) and {len(ls)} decision(s) about links to nothing change an outcome: "
+            "merging again")
         if merge(plan, run):
             return 1
     with open(os.path.join(run, "baselines.json"), encoding="utf-8") as fh:
@@ -1118,6 +1348,7 @@ def patch(plan, run):
                "before `commit` [SPEC-STAR-070].", ""]
     summary += [f"**Items for a verdict:** {len(rv['items'])}, {len(rv['pending'])} without one "
                 "[SPEC-STAR-116].", ""]
+    summary += links_summary(run)
     old = read_json(os.path.join(run, "old_players.json")) or {}
     if old:
         summary += ["**WARNING -- OLD PLAYER" + ("S" if len(old) > 1 else "") + ": " + ", ".join(sorted(old))
@@ -1472,6 +1703,9 @@ def distribute(plan, run, names, commit, excuse=None, bulk=False):
             kinds = approve_all(run)
             say("  approve-all: " + (", ".join(f"{n} {k}" for k, n in sorted(kinds.items())) or "no item was waiting"))
         gate(run, names)
+        n = fetch_links(plan, run)
+        if n:
+            say(f"  {n} file(s) a repair brings are on the hub [SPEC-LNK-052]")
     state = load_state(plan) if commit else None
     done = read_json(os.path.join(run, "rehearsal.json")) or {}
     started = {}
@@ -1502,6 +1736,9 @@ def distribute(plan, run, names, commit, excuse=None, bulk=False):
                          "at": now().isoformat(), "run": stamp_of(run)}
                 if name == hub:
                     state["hub"] = entry
+                    lp = os.path.join(run, "merge", "integrity.json")
+                    if os.path.exists(lp):
+                        ci.mark_committed(links_path(run), read_json(lp)["findings"], stamp_of(run))
                 else:
                     state["nodes"][name] = entry
                 save_state(plan, state)
@@ -2068,7 +2305,7 @@ def main(argv):
         if len(rest) != 1:
             raise SystemExit("adopt takes one node: adopt NODE --library /path/on/node/library.db [--force] [--tmp DIR]")
         return adopt(plan, rest[0], library, force, tmp or "/var/tmp")
-    if cmd not in ("merge", "items", "verdict", "approve-all", "patch", "rehearse", "commit"):
+    if cmd not in ("merge", "items", "verdict", "approve-all", "integrity", "decide", "patch", "rehearse", "commit"):
         print(__doc__)
         return 2
     run = newest_run(plan, given)
@@ -2076,6 +2313,15 @@ def main(argv):
         return merge(plan, run)
     if cmd == "items":
         return show_items(run)
+    if cmd == "integrity":
+        return show_links(run)
+    if cmd == "decide":
+        if len(rest) != 2:
+            raise SystemExit("decide takes a finding id (or `all`) and leave | remove | repair:NODE | repair-files:NODE")
+        n = decide_link(run, rest[0], rest[1], by or "cli")
+        say(f"{n} decision(s): {rest[1]}" + (f"; {len(links_stale(run))} await a new merge -- `patch` merges again"
+                                             if links_stale(run) else ""))
+        return 0
     if cmd == "verdict":
         if len(rest) != 2:
             raise SystemExit("verdict takes an item id and `approved` or `chose:NODE`")

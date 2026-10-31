@@ -96,6 +96,36 @@ class Fleet:
         self.window = set()         # ... and which of them can open it themselves
         self.staged = {}            # (node, run) -> {n: (sha256, text)}  [SPEC-NKP-925]
         self.parts_applied = {}     # (node, run) -> the parts a commit applied
+        self.rows_cap = {}          # node -> the `catalogue_rows` it reports [SPEC-STAR-945, SPEC-LNK-050]
+        self.asked = []             # (node, want) for every `rows` request
+
+    def rows(self, name, want):
+        """`mesh_sync::catalogue_rows`, cut to the tables these tests hold."""
+        c = sqlite3.connect(self.nodes[name]["library"])
+        inl = lambda xs: ",".join("?" * len(xs)) or "NULL"         # noqa: E731
+        recs = list(want.get("recordings", []))
+        files = list(want.get("files", []))
+        by = bool(want.get("by_recording")) and self.rows_cap.get(name, 0) >= 2
+        if by:
+            files += [r[0] for r in c.execute(
+                "SELECT DISTINCT f.audio_md5 FROM passage_recordings pr JOIN passages p ON p.passage_id = pr.passage_id "
+                f"JOIN files f ON f.file_id = p.file_id WHERE pr.mbid IN ({inl(recs)})", recs)]
+        fids = [r[0] for r in c.execute(f"SELECT file_id FROM files WHERE audio_md5 IN ({inl(files)})", files)]
+        pids = [r[0] for r in c.execute(f"SELECT passage_id FROM passages WHERE file_id IN ({inl(fids)})", fids)]
+
+        def dump(t, col, vals):
+            cols = [r[1] for r in c.execute(f"PRAGMA table_info({t})")]
+            if not cols:
+                return None
+            return {"name": t, "columns": cols, "key": [cols[0]],
+                    "rows": [list(r) for r in c.execute(f"SELECT {', '.join(cols)} FROM {t} WHERE {col} IN ({inl(vals)})", vals)]}
+        tables = [x for x in (dump("files", "audio_md5", files), dump("passages", "file_id", fids),
+                              dump("passage_recordings", "passage_id", pids), dump("recordings", "mbid", recs)) if x]
+        c.close()
+        out = {"scope": {"files": files, "recordings": recs, "releases": [], "artists": []}, "tables": tables}
+        if self.rows_cap.get(name, 0) >= 2:
+            out["by_recording"] = by
+        return out
 
     def add(self, name, prefs, always_up=True):
         d = os.path.join(self.tmp, name)
@@ -145,7 +175,12 @@ class Fleet:
                 res["library_readonly"] = True
             if name in self.window:
                 res["catalogue_window"] = 1
+            if name in self.rows_cap:
+                res["catalogue_rows"] = self.rows_cap[name]
             return res
+        if op == "rows":
+            self.asked.append((name, (extra or {})["want"]))
+            return self.rows(name, extra["want"])
         self.log.append((name, op, run, bool(catalogue_patch) or bool(parts), bool(listener_patch)))
         if not listener_patch:
             return {"listener": None, "catalogue": None}
@@ -651,6 +686,158 @@ def test_old_players(tmp):
         check("OLD PLAYER" not in out.getvalue(), "a fleet of current players says nothing")
 
 
+LINKS = """
+CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT NOT NULL, length_ms INTEGER, source TEXT NOT NULL);
+CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT NOT NULL, source TEXT NOT NULL);
+CREATE TABLE release_recordings (release_mbid TEXT NOT NULL REFERENCES releases(mbid) ON DELETE CASCADE,
+    mbid TEXT NOT NULL REFERENCES recordings(mbid) ON DELETE CASCADE, position INTEGER, source TEXT NOT NULL,
+    PRIMARY KEY (release_mbid, mbid)) WITHOUT ROWID;
+CREATE TABLE passage_recordings (passage_id INTEGER NOT NULL REFERENCES passages(passage_id) ON DELETE CASCADE,
+    mbid TEXT NOT NULL REFERENCES recordings(mbid), weight REAL NOT NULL DEFAULT 1.0, source TEXT NOT NULL,
+    PRIMARY KEY (passage_id, mbid)) WITHOUT ROWID;
+INSERT INTO recordings VALUES ('rec-ok', 'Pinky', 233000, 'musicbrainz');
+INSERT INTO releases VALUES ('rel-c', 'Caribou', 'musicbrainz');
+INSERT INTO release_recordings VALUES ('rel-c', 'rec-ok', 2, 'musicbrainz');
+INSERT INTO release_recordings VALUES ('rel-c', 'rec-ghost', 9, 'musicbrainz');
+"""
+
+
+def links_fleet(tmp, b_holds):
+    """[SPEC070]: the hub, a and b, and every copy last sent, hold Caribou's tracklist with a track 9
+    naming a recording their catalogues do not hold. With `b_holds`, b's own catalogue holds it, and a
+    file of b's own credits it."""
+    fleet = Fleet(tmp)
+    same = [("X", 1, "2026-09-01 00:00:00")]
+    plan, hub = build(tmp, fleet, same, {"a": (same, False), "b": (same, False)})
+    fleet.rows_cap = {"a": 2, "b": 2}
+    music = os.path.join(tmp, "hubmusic")
+    hub_dbs = [hub["library"], os.path.join(tmp, "sent", "hub.library.db")]
+    node_dbs = [p for n in ("a", "b") for p in (fleet.nodes[n]["library"], os.path.join(tmp, "sent", f"{n}.library.db"))]
+    for db in hub_dbs + node_dbs:
+        c = sqlite3.connect(db)
+        c.executescript(LINKS)
+        if db in hub_dbs:             # the hub's music under a root of two folders, as a library's is
+            c.execute("UPDATE files SET path = ? WHERE file_id = 1", (os.path.join(music, "Elton John", "a.mp3"),))
+            c.execute("INSERT INTO files VALUES (2, 'F', ?, 100, 1, 1)", (os.path.join(music, "Foghat", "f.mp3"),))
+        c.commit()
+        c.close()
+    if b_holds:
+        c = sqlite3.connect(fleet.nodes["b"]["library"])
+        c.execute("INSERT INTO recordings VALUES ('rec-ghost', 'Ticking', 335000, 'musicbrainz')")
+        c.execute("INSERT INTO files VALUES (5, 'G', '/b/Elton John/09 Ticking.mp3', 100, 1, 1)")
+        c.execute("INSERT INTO passages VALUES (50, 5, 'album', 0, 335000)")
+        c.execute("INSERT INTO passage_recordings VALUES (50, 'rec-ghost', 1.0, 'musicbrainz')")
+        c.commit()
+        c.close()
+    return fleet, plan, hub, music
+
+
+def rows_of(db, sql):
+    c = sqlite3.connect(db)
+    try:
+        return c.execute(sql).fetchall()
+    finally:
+        c.close()
+
+
+def test_links_removed(tmp):
+    """[SPEC070]: found at the merge, said, not a stop; removed by a decision, carried by the commit."""
+    fleet, plan, hub, _ = links_fleet(tmp, b_holds=False)
+    with faked(fleet) as out:
+        ss.snapshot(plan)
+        run = ss.newest_run(plan)
+        ss.merge(plan, run)
+        ss.patch(plan, run)
+    said = out.getvalue()
+    check("1 catalogue row(s) name something it does not hold" in said and "a: holds none of the 1 key(s)" in said,
+          f"the snapshot says what it found and what each node said: {said}")
+    check([(n, w.get("recordings"), w.get("by_recording")) for n, w in fleet.asked]
+          == [("a", ["rec-ghost"], True), ("b", ["rec-ghost"], True)], f"each node asked by recording: {fleet.asked}")
+    res = ss.links_of(run)
+    f = res["findings"][0] if res["findings"] else {}
+    check(len(res["findings"]) == 1 and f["effect"] == "undecided" and f["offers"] == [],
+          f"one finding, undecided, nobody holding it: {res['findings']}")
+    check(res["carried_to"] == ["a", "b"], f"this run's commit would carry a correction to a and b: {res['carried_to']}")
+    check(not any("links" in p for p in ss.gate_problems(run, ["desktop", "a", "b"])), "an undecided finding stops nothing")
+    summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
+    check("**Links to nothing [SPEC070]:** 1 finding(s), 1 row(s) -- 1 undecided" in summary, summary)
+    ss.decide_link(run, f["id"], "remove")
+    check(len(ss.links_stale(run)) == 1 and any("links to nothing" in p for p in ss.gate_problems(run, ["desktop"])),
+          "a removal decided after the merge leaves it stale, and the gate says so")
+    with faked(fleet):
+        ss.patch(plan, run)
+        stages(plan)
+        stages(plan, commit=True)
+    check(ss.links_stale(run) == [] and ss.links_of(run)["findings"][0]["effect"] == "remove", "merged again, removed")
+    hp = json.load(open(os.path.join(run, "patches", "desktop", "library.patch.json")))
+    check(ss.table_rows(hp) == {"release_recordings": 1}, f"the hub's own patch removes it: {ss.table_rows(hp)}")
+    pa = json.load(open(os.path.join(run, "patches", "a", "catalogue.values.json")))
+    rr = [r for e in pa["tables"] if e["name"] == "release_recordings" for r in e["rows"]]
+    check(len(rr) == 1 and rr[0]["now"] is None, f"and a's removes it: {rr}")
+    check(rows_of(hub["library"], "SELECT mbid FROM release_recordings ORDER BY mbid") == [("rec-ok",)],
+          "on the hub, after the commit, only the whole row is left")
+    check(ci_load(run)[f["id"]].get("committed") == ss.stamp_of(run), "and the decision says which commit carried it")
+
+
+def ci_load(run):
+    return ss.ci.load_decisions(ss.links_path(run))
+
+
+def test_links_repaired_with_files(tmp):
+    """[SPEC-LNK-042, SPEC-LNK-052]: a node holding what the hub lacks holds a removal back; its repair, with
+    its file, brings the audio to the hub before the hub is patched."""
+    fleet, plan, hub, music = links_fleet(tmp, b_holds=True)
+    with faked(fleet) as out:
+        ss.snapshot(plan)
+        run = ss.newest_run(plan)
+        ss.merge(plan, run)
+        ss.patch(plan, run)
+    check("b: HOLDS 1 of the 1 key(s)" in out.getvalue() and "1 of its file(s) name them" in out.getvalue(),
+          f"the snapshot says b holds it, and its file: {out.getvalue()}")
+    f = ss.links_of(run)["findings"][0]
+    check([(o["node"], o["keys"], [x["audio_md5"] for x in o["files"]]) for o in f["offers"]]
+          == [("b", ["rec-ghost"], ["G"])], f"b offers the recording and its file: {f['offers']}")
+    summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
+    check("**b holds 1**" in summary, f"the summary names it: {summary}")
+    # A removal decided without b's offer in front of the person -- in an earlier run -- is held.
+    ss.ci.decide(ss.links_path(run), f, "remove", [])
+    with faked(fleet):
+        ss.patch(plan, run)
+    f = ss.links_of(run)["findings"][0]
+    check(f["effect"] == "held" and "b holds" in f["why"], f"held, and why: {f['effect']} {f.get('why')}")
+    check(len(rows_of(os.path.join(run, "merge", "library.db"), "SELECT * FROM release_recordings")) == 2,
+          "and nothing removed")
+    ss.decide_link(run, f["id"], "repair-files:b")
+    calls = []
+
+    def fake_run(argv, stdout=None, **kw):
+        calls.append(argv)
+        stdout.write(b"x" * 100)
+        return type("R", (), {"returncode": 0, "stderr": b""})()
+    real = ss.subprocess.run
+    ss.subprocess.run = fake_run
+    try:
+        with faked(fleet):
+            ss.patch(plan, run)
+            stages(plan)
+            stages(plan, commit=True)
+    finally:
+        ss.subprocess.run = real
+    f = ss.links_of(run)["findings"][0]
+    dest = os.path.join(music, "Elton John", "09 Ticking.mp3")
+    check(f["effect"] == "repair-files" and [os.path.normpath(x["dest"]) for x in f.get("fetch", [])] == [os.path.normpath(dest)],
+          f"repaired from b, its file placed as under b's root: {f['effect']} {f.get('why')} {f.get('fetch')}")
+    check(len(calls) == 1 and calls[0][0] == "ssh" and "u@b" in calls[0] and calls[0][-1] == "cat -- '/b/Elton John/09 Ticking.mp3'",
+          f"copied from b over ssh: {calls}")
+    check(os.path.getsize(dest) == 100, "the audio is on the hub")
+    check(rows_of(hub["library"], "SELECT title FROM recordings WHERE mbid = 'rec-ghost'") == [("Ticking",)]
+          and rows_of(hub["library"], "SELECT path FROM files WHERE audio_md5 = 'G'") == [(dest,)],
+          "the hub catalogues the recording, and the file where it put it")
+    lib = sqlite3.connect(hub["library"])
+    check(ss.ci.find(lib) == [], "and the hub's catalogue has no link to nothing left")
+    lib.close()
+
+
 def test_lost_answer():
     """A node whose answer to the members' query is lost once is asked again,
     not marked MISSING for the run -- lp3-wifi, 2026-10-15."""
@@ -702,7 +889,7 @@ def main() -> int:
     test_split_catalogue()
     for test in (test_quiet, test_conflict, test_approve_all, test_on_demand, test_catalogue_moved,
                  test_catalogue_states, test_catalogue_old_player, test_catalogue_in_parts, test_a_patch_that_cannot_be_cut, test_selection, test_read_only_catalogue,
-                 test_old_players):
+                 test_old_players, test_links_removed, test_links_repaired_with_files):
         tmp = tempfile.mkdtemp()
         try:
             test(tmp)

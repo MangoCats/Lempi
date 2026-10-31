@@ -215,7 +215,8 @@ def state(plan) -> dict:
     if info["merged"]:
         rv = ss.review(run)
         info.update(items=len(rv["items"]), pending=len(rv["pending"]), stale=len(rv["stale"]), void=len(rv["void"]),
-                    propagated=_json(os.path.join(run, "merge", "items.json")).get("propagated", {}))
+                    propagated=_json(os.path.join(run, "merge", "items.json")).get("propagated", {}),
+                    links=links_counts(run))
     names = committed_names(run)
     info["names"] = names
     info["blockers"] = ss.gate_problems(run, names) if info["merged"] else ["the run has not been merged"]
@@ -317,6 +318,52 @@ def set_verdicts(run, body: dict) -> dict:
         try:
             ss.give_verdict(run, ident, value, "item")
             done += 1
+        except SystemExit as err:
+            errors[ident] = str(err)
+    return {"set": done, "errors": errors}
+
+
+# ------------------------------------------------------- links to nothing --
+def links_counts(run) -> dict | None:
+    """[SPEC-LNK-024]: the counts the page's banner needs; None before a merge."""
+    res = _json(os.path.join(run, "merge", "integrity.json"))
+    if res is None:
+        return None
+    by = {}
+    for f in res["findings"]:
+        by[f["effect"]] = by.get(f["effect"], 0) + 1
+    return {"findings": len(res["findings"]), "rows": sum(len(f["rows"]) for f in res["findings"]), "by": by,
+            "offered": sum(1 for f in res["findings"] if f.get("offers")), "stale": len(ss.links_stale(run))}
+
+
+def links_page(run) -> dict:
+    """[SPEC-LNK-060]: each finding with what it is, what the nodes said of it, its
+    decision and what this merge did with it."""
+    res = _json(os.path.join(run, "merge", "integrity.json"))
+    if res is None:
+        return {"merged": False, "findings": []}
+    ds = ss.ci.load_decisions(ss.links_path(run))
+    stale = {f["id"] for f in ss.links_stale(run)}
+    out = []
+    for f in res["findings"]:
+        out.append({"id": f["id"], "table": f["table"], "parent": f["parent"], "removable": f["removable"],
+                    "about": f["about"], "words": ss.ci.words(f), "rows": len(f["rows"]), "missing": len(f["missing"]),
+                    "offers": f.get("offers", []), "effect": f["effect"], "node": f.get("node"), "why": f.get("why"),
+                    "decision": ds.get(f["id"]), "stale": f["id"] in stale, "fetch": f.get("fetch", [])})
+    return {"merged": True, "findings": out, "counts": links_counts(run), "carried_to": res.get("carried_to", []),
+            "not_carried": res.get("not_carried", {}), "not_asked": res.get("not_asked", {}),
+            "asked": res.get("asked", {})}
+
+
+def set_links(run, body: dict) -> dict:
+    """{"decisions": {id: decision}} or {"all": "leave" | "remove"}; each checked
+    against its finding [SPEC-LNK-030]."""
+    if "all" in body:
+        return {"set": ss.decide_link(run, "all", body["all"], "page"), "errors": {}}
+    done, errors = 0, {}
+    for ident, value in (body.get("decisions") or {}).items():
+        try:
+            done += ss.decide_link(run, ident, value, "page")
         except SystemExit as err:
             errors[ident] = str(err)
     return {"set": done, "errors": errors}

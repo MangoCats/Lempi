@@ -220,6 +220,9 @@ def test_discover(tmp: str) -> None:
     tracks_cached = conn.execute(
         "SELECT COUNT(*) FROM release_recordings WHERE release_mbid=?1", (REL_1,)).fetchone()[0]
     check(tracks_cached == 3, f"all three tracks must be cached, got {tracks_cached}")
+    dangling = conn.execute("SELECT COUNT(*) FROM release_recordings WHERE release_mbid=?1 "
+                            "AND mbid NOT IN (SELECT mbid FROM recordings)", (REL_1,)).fetchone()[0]
+    check(dangling == 0, f"every cached track must name a recording the catalogue holds [SPEC-LNK-015], {dangling} did not")
     check(conn.execute("SELECT COUNT(*) FROM passage_recordings").fetchone()[0] == 0,
           "discovery must never touch passage_recordings")
     conn.close()

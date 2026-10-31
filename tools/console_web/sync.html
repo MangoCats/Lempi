@@ -45,6 +45,17 @@
     <div id="blockers" style="font-size:.85rem"></div>
     <div id="job-box"></div>
 
+    <h2>Links to nothing <small>[SPEC070]</small></h2>
+    <div id="links-banner" hidden style="border:2px solid var(--warn);background:var(--panel);padding:.6rem .8rem;margin:.4rem 0;font-size:.9rem"></div>
+    <p class="empty" style="font-size:.85rem;padding:.2rem 0">
+      Catalogue rows that name a row the catalogue does not hold. They do not stop the sync: one without a decision is
+      left as it is in this run. <b>Leave</b> keeps it, and it is not raised again until it changes; <b>Remove</b> takes the
+      broken rows out on the desktop and on every node; <b>Repair from</b> a node adds what that node holds instead. What
+      you decide goes out with this run's commit, and to a node not in this run at its next sync. A decision made after the
+      merge is applied when <b>3 · Prepare patches</b> merges again.
+    </p>
+    <div id="links-box"></div>
+
     <h2>Items for a verdict <small>[SPEC-STAR-110]</small></h2>
     <p class="empty" style="font-size:.85rem;padding:.2rem 0">
       A row is listed only where the merge would discard a change somebody made. The default is the most recent
@@ -397,6 +408,120 @@ async function loadItems(append) {
   };
 }
 
+// ---- links to nothing [SPEC070] ---------------------------------------------------
+const EFFECT = { undecided: ['warn', 'no decision: left this run'], leave: ['', 'left as is'], remove: ['ok', 'removed in this merge'],
+                 repair: ['ok', 'repaired in this merge'], 'repair-files': ['ok', 'repaired, with files, in this merge'],
+                 held: ['bad', 'held'] };
+
+function linkAbout(f) {
+  const a = f.about || {};
+  if (a.kind === 'release') {
+    const head = S.el('div', {}, S.el('b', { text: a.title || a.mbid }),
+      a.credit ? ` — ${a.credit}` : '', a.date ? S.el('span', { style: 'color:var(--dim)', text: ` (${a.date})` }) : '');
+    const tracks = (a.tracks || []).map(t => `${t.disc ? 'd' + t.disc + ' ' : ''}#${t.position ?? '?'} ${t.mbid.slice(0, 8)}…${t.length ? ' ' + t.length : ''}`);
+    return S.el('div', {}, head,
+      S.el('div', { style: 'font-size:.8rem', text: `${f.rows} of its ${a.listed} tracklist row(s) name a recording the catalogue does not hold; ` +
+        (a.left_after ? `${a.left_after} would be left` : 'nothing of its tracklist would be left') +
+        (a.files_from_it ? `; ${a.files_from_it} file(s) taken from this release` : '; no file is taken from it') }),
+      S.el('div', { style: 'font:11px var(--mono);color:var(--dim)', text: tracks.join(' · ') }));
+  }
+  return S.el('div', { text: f.words });
+}
+
+function linkNodes(f, d) {
+  const out = S.el('div', { style: 'font-size:.8rem' });
+  for (const o of f.offers) {
+    out.append(S.el('div', {}, S.el('span', { class: 'pill ok', text: `${o.node} holds ${o.keys.length} of ${f.missing}` }),
+      o.files_known ? ` — ${o.files.length ? o.files.length + ' of its file(s) name them' : 'none of its files names them'}`
+                    : f.parent === 'recordings' ? ' — which of its files name them, its build cannot say' : ''));
+    for (const x of o.files.slice(0, 5)) out.append(S.el('div', { style: 'font:11px var(--mono);color:var(--dim)', text: x.path || x.audio_md5 }));
+  }
+  const asked = Object.keys(d.asked || {}).filter(n => !f.offers.some(o => o.node === n));
+  if (asked.length) out.append(S.el('div', { style: 'color:var(--dim)', text: `asked, holds none: ${asked.join(', ')}` }));
+  return out;
+}
+
+function linkActions(f) {
+  const say = S.el('div', { style: 'font-size:.78rem;color:var(--bad)' });
+  const decide = async value => {
+    try {
+      const r = await post('/api/sync/integrity', { decisions: { [f.id]: value } });
+      if (Object.keys(r.errors || {}).length) return say.textContent = Object.values(r.errors).join('; ');
+      await reload(false);
+    } catch (e) { say.textContent = e.message; }
+  };
+  const mine = f.decision ? f.decision.decision : null;
+  const chip = (label, value, title) => {
+    const b = S.el('button', { class: 'chip' + (mine === value ? ' on' : ''), title: title || '' }, label);
+    b.onclick = () => decide(value);
+    return b;
+  };
+  const row = S.el('div', { style: 'display:flex;gap:.3rem;flex-wrap:wrap' },
+    chip('Leave', 'leave', 'keep it as it is; it is not raised again until it changes'));
+  if (f.removable) row.append(chip('Remove', 'remove', 'take the broken rows out, on the desktop and every node'));
+  for (const o of f.offers) {
+    row.append(chip(`Repair from ${o.node}`, 'repair:' + o.node, `add the rows ${o.node} holds, to the desktop and every node`));
+    if (o.files_known && o.files.length && o.fetchable)
+      row.append(chip(`Repair from ${o.node}, with its ${o.files.length} file(s)`, 'repair-files:' + o.node,
+                      'and copy its audio to the desktop at the commit; the Export page then sends it to the other nodes'));
+  }
+  const [cls, text] = EFFECT[f.effect] || ['', f.effect];
+  const st = S.el('div', { style: 'margin-top:.25rem' },
+    S.el('span', { class: 'pill ' + cls, text: f.effect === 'remove' || f.effect.startsWith('repair') && f.node
+                                                 ? text.replace('repaired', `repaired from ${f.node}`) : text }),
+    f.stale ? S.el('span', { class: 'pill warn', style: 'margin-left:.3rem', text: 'awaiting a new merge' }) : null,
+    f.decision ? S.el('span', { style: 'color:var(--dim);font-size:.75rem;margin-left:.3rem',
+                                text: `decided ${f.decision.decision}, ${f.decision.at.slice(0, 10)}${f.decision.committed ? ', committed in ' + f.decision.committed : ''}` }) : null,
+    f.why ? S.el('div', { style: 'color:var(--warn);font-size:.78rem', text: f.why }) : null,
+    f.fetch && f.fetch.length ? S.el('div', { style: 'font-size:.78rem', text: `${f.fetch.length} file(s) are copied to the desktop at the commit` }) : null);
+  return S.el('div', {}, row, st, say);
+}
+
+async function loadLinks() {
+  let d;
+  try { d = await S.get('/api/sync/integrity'); } catch (e) { return S.fail('#links-box', e); }
+  const box = $('links-box'), banner = $('links-banner');
+  if (!d.merged) { banner.hidden = true; return box.replaceChildren(S.el('p', { class: 'empty', text: 'merge the run to look for them' })); }
+  if (!d.findings.length) { banner.hidden = true; return box.replaceChildren(S.el('p', { class: 'empty', text: 'None: every link in the catalogue names a row it holds.' })); }
+  const c = d.counts, by = c.by || {};
+  const open = (by.undecided || 0) + (by.held || 0);
+  banner.hidden = !open && !c.stale;
+  if (!banner.hidden) {
+    banner.replaceChildren(
+      S.el('b', { text: `${S.n(c.findings)} finding(s), ${S.n(c.rows)} catalogue row(s) naming nothing` }),
+      S.el('div', { text: (by.undecided ? `${by.undecided} without a decision, left as they are in this run. ` : '') +
+                          (by.held ? `${by.held} held: a decision that cannot go ahead as it was made — see why below. ` : '') +
+                          (c.offered ? `A node holds what is missing for ${c.offered}: repairing is offered. ` : '') +
+                          (c.stale ? `${c.stale} decision(s) await a new merge: 3 · Prepare patches merges again.` : '') }));
+  }
+  const where = S.el('div', { style: 'font-size:.85rem;color:var(--dim);margin:.2rem 0' },
+    d.carried_to.length ? `What is removed or repaired goes to the desktop and ${d.carried_to.join(', ')} in this run's commit` : 'This run carries a correction to the desktop alone',
+    Object.keys(d.not_carried).length ? `; ${Object.entries(d.not_carried).map(([n, w]) => `${n} (${w})`).join(', ')} at their next sync.` : '.',
+    ...Object.entries(d.not_asked || {}).map(([n, w]) => S.el('div', { text: `not asked: ${n} — ${w}` })));
+  const bulk = S.el('div', { class: 'controls' });
+  for (const [label, value] of [['Leave all undecided', 'leave'], ['Remove all undecided', 'remove']]) {
+    const b = S.el('button', { class: 'chip' + (value === 'remove' ? ' danger' : '') }, label);
+    b.disabled = !by.undecided; b.style.opacity = by.undecided ? 1 : .5;
+    b.onclick = async () => {
+      const offered = d.findings.filter(f => f.effect === 'undecided' && f.offers.length).length;
+      if (!confirm(`${label}: ${by.undecided} finding(s)?\n\n` +
+        (value === 'remove' ? 'Their broken rows are taken out on the desktop and on every node, by this run\'s commit and each node\'s next sync.' +
+                              (offered ? `\n\n${offered} of them could be repaired from a node instead; a remove is held for any node found holding them later.` : '')
+                            : 'Each is kept as it is, and is not raised again until it changes.') +
+        '\nA decision already given is kept.')) return;
+      try { await post('/api/sync/integrity', { all: value }); await reload(false); } catch (e) { alert(e.message); }
+    };
+    bulk.append(b);
+  }
+  const rows = d.findings.map(f => S.el('tr', {},
+    S.el('td', {}, linkAbout(f), S.el('div', { style: 'color:var(--dim);font-size:.75rem', text: `${f.table} → ${f.parent} · ${f.id}` })),
+    S.el('td', {}, linkNodes(f, d)),
+    S.el('td', {}, linkActions(f))));
+  box.replaceChildren(where, bulk, S.el('table', { class: 'peers' },
+    S.el('thead', {}, S.el('tr', {}, S.el('th', { text: 'what' }), S.el('th', { text: 'the nodes' }), S.el('th', { text: 'decision' }))),
+    S.el('tbody', {}, ...rows)));
+}
+
 // ---- the page ----------------------------------------------------------------
 async function reload(withItems) {
   let st;
@@ -408,11 +533,13 @@ async function reload(withItems) {
   $('noplan').hidden = true; $('body').hidden = false;
   paintNodes(st); paintRun(st);
   if (st.run && st.run.merged) {
+    await loadLinks();
     await loadItems(false);
     try { const s = await S.get('/api/sync/summary'); $('summary').textContent = (s.summary || '') + '\n\n' + (s.report || ''); }
     catch (e) { /* no summary yet */ }
   } else {
     $('item-rows').replaceChildren(); $('tiles').replaceChildren(); $('shown').textContent = 'merge the run to list its items';
+    $('links-banner').hidden = true; $('links-box').replaceChildren(S.el('p', { class: 'empty', text: 'merge the run to look for them' }));
     $('approve-all').textContent = 'Approve all'; $('approve-all').disabled = true;
   }
 }

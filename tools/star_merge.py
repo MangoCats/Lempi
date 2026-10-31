@@ -47,6 +47,9 @@ import shutil
 import sqlite3
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import catalogue_integrity as ci  # noqa: E402  -- links to nothing, found and decided [SPEC070]
+
 
 def open_ro(path: str) -> sqlite3.Connection:
     """Immutable: SQLite then writes nothing, not even a -shm, beside it."""
@@ -497,6 +500,12 @@ def build(manifest: dict, out: str) -> Report:
         rep.data["hub_library"] = dict(source=manifest["hub_library"],
                                        integrity=dst.execute("PRAGMA integrity_check").fetchone()[0])
         dst.close()
+    if hub_cat and "integrity" in manifest:
+        # [SPEC-LNK-020]: before any node's copy is made from it, so what a
+        # person decided is in the hub's own patch and in every node's.
+        rep.data["links"] = ci.correct(hub_cat, manifest["integrity"])
+        with open(os.path.join(out, "integrity.json"), "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(rep.data["links"], fh, indent=1, sort_keys=True, default=str)
     if "nodes" in manifest:
         build_listener(manifest, out, rep, hub_cat)
         if hub_cat:
@@ -1083,6 +1092,8 @@ def write_report(rep: Report, out: str):
         L += ["", "# Catalogue half", "",
               f"The hub's own, taken as it stands [SPEC-STAR-085]: `{d['hub_library']['source']}`. "
               f"Integrity **{d['hub_library']['integrity']}**."]
+    if "links" in d:
+        L += ci.report_lines(d["links"])
     L += items_section(d)
     if d.get("copies"):
         L += copies_section(d["copies"])
@@ -1244,6 +1255,14 @@ def run(manifest: dict, out: str) -> int:
     print(f"merged into {out}: integrity {checks}, {len(rep.data['decisions'])} listener "
           f"decision(s), {conflicts} catalogue conflict(s), {len(rep.data['items'])} item(s) "
           f"for a verdict -- see report.md")
+    fs = rep.data.get("links", {}).get("findings", [])
+    if fs:
+        by = {}
+        for f in fs:
+            by[f["effect"]] = by.get(f["effect"], 0) + 1
+        # [SPEC-LNK-024]: said, not a stop.
+        print(f"links to nothing: {len(fs)} finding(s), {sum(len(f['rows']) for f in fs)} row(s) -- "
+              + ", ".join(f"{n} {k}" for k, n in sorted(by.items())) + " [SPEC070]")
     return 0 if all(v == "ok" for v in checks.values()) else 1
 
 

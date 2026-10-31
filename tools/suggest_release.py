@@ -276,6 +276,11 @@ def store_release_detail(conn: sqlite3.Connection, detail: dict) -> None:
          detail.get("country"), sum(m.get("track-count") or 0 for m in media) or None,
          artist_credit_name(detail.get("artist-credit"))))
     for t in tracks_from_detail(detail):
+        # The recording beside its tracklist row: until 2026-10-31 only the row was
+        # written, and 34 of them named a recording the catalogue never held [SPEC-LNK-015].
+        conn.execute(
+            "INSERT OR IGNORE INTO recordings (mbid, title, length_ms, source) VALUES (?1,?2,?3,'musicbrainz')",
+            (t["recording_mbid"], t["recording_title"] or t["title"] or t["recording_mbid"], t["length"]))
         conn.execute(
             "INSERT OR REPLACE INTO release_recordings (release_mbid, mbid, position, source, track_length_ms) "
             "VALUES (?1,?2,?3,'musicbrainz',?4)",

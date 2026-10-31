@@ -95,7 +95,9 @@ def answer_of(node_db, want):
 
 
 def rows_of(patch, name):
-    return next((t["rows"] for t in patch["tables"] if t["name"] == name), [])
+    # Every entry: a natural table's removals and its writes are two since
+    # 2026-10-31 [SPEC-NKP-060], and the first alone holds only the removals.
+    return [r for t in patch["tables"] if t["name"] == name for r in t["rows"]]
 
 
 def test_the_second_disc():

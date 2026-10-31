@@ -4,7 +4,7 @@
 
 The Vipunen primary was lost when this repository was seeded (`data/README.md`), and no surviving copy was complete: the desktop lineage stopped in early September, while the latest listener edits lived on `lempi02w`. The maintainer's direction: merge the latest information from every database, **latest edit wins, in a star topology**, into one central copy on the desktop. That copy is verified by hand, then distributed. And a **deterministic program** is to do this from now on, so the same thing never depends on care alone again.
 
-> **Related:** [SPEC006](SPEC006-data-flow-and-portability.md) (data classes, `[SPEC-DF-070]`) · [SPEC030](SPEC030-preference-sync.md) (last-write-wins; its two-node tool is kept for ad hoc use) · [SPEC022](SPEC022-flag-and-edit-sync.md) (flags, patching a node) · [SPEC035](SPEC035-mesh-library-sync.md) (manual vs manual) · [SPEC054](SPEC054-mesh-without-ssh.md) (the signed transport, §8) · [SPEC013](SPEC013-vipunen-console.md) (the console §10 extends) · `data/README.md` · [FLEET001](../../fleet/FLEET001-the-fleet.md)
+> **Related:** [SPEC006](SPEC006-data-flow-and-portability.md) (data classes, `[SPEC-DF-070]`) · [SPEC030](SPEC030-preference-sync.md) (last-write-wins; its two-node tool is kept for ad hoc use) · [SPEC022](SPEC022-flag-and-edit-sync.md) (flags, patching a node) · [SPEC035](SPEC035-mesh-library-sync.md) (manual vs manual) · [SPEC054](SPEC054-mesh-without-ssh.md) (the signed transport, §8) · [SPEC013](SPEC013-vipunen-console.md) (the console §10 extends) · [SPEC070](SPEC070-a-link-to-nothing.md) (links to nothing, found at the merge) · `data/README.md` · [FLEET001](../../fleet/FLEET001-the-fleet.md)
 
 ---
 

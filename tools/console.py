@@ -1142,6 +1142,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": str(err)}, code=404)
         if p == "/api/sync/summary":
             return self.send_json(sync_console.summary(run))
+        if p == "/api/sync/integrity":                     # [SPEC-LNK-060]
+            return self.send_json(sync_console.links_page(run))
         return self.send_error(404)
 
     def _sync_post(self, p):
@@ -1170,6 +1172,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(sync_console.set_verdicts(run, body.get("verdicts") or {}))
             if p == "/api/sync/approve-all":
                 return self.send_json({"approved": sync_console.ss.approve_all(run, "approve-all")})
+            if p == "/api/sync/integrity":
+                return self.send_json(sync_console.set_links(run, body))
         except SystemExit as err:
             return self.send_json({"error": str(err)}, code=409)
         return self.send_error(404)

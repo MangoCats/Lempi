@@ -78,6 +78,7 @@ Folding reviewed decisions into the library, and syncing them — and flags — 
 | `install_hub_tasks.ps1` | Creates or updates the hub's two scheduled tasks, *Lempi hub backup* and *Lempi hub mirror* -- run once on a new or rebuilt hub ([GUIDE039](../docs/GUIDE039-running-the-star-sync.md)). |
 | `verify_library.py` | Every catalogued file re-hashed against its recorded SHA-256: ok, re-tagged, damaged, missing, unreadable; each rip's recorded sidecars read again; audio no row claims listed as strays, the CD inbox apart; read-only, the result kept in `data/verify/` `[GDE-INT-115]`, `[GDE-INT-175]`. |
 | `sidecars.py` | A CD rip's log, AccurateRip report and CUE sheet, hashed into `ingest_decisions` when the rip is added; `--adopt` records those already in the library, as they are today `[GDE-INT-175]`. |
+| `catalogue_integrity.py` | A catalogue row that names a row the catalogue does not hold: found at the star merge, left, removed or repaired from a node as a person decides, and carried by the commit `[SPEC070]`. |
 | `bundle_ledger.py` | What each applied send touched on each speaker (`sync/bundled.json`), for the next star sync to ask that speaker about `[SPEC-STAR-945]`. |
 
 ## Flavor extraction & classifier training

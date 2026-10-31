@@ -145,8 +145,9 @@ const NATURAL_KEYS: i64 = 1;
 const CATALOGUE_WINDOW: i64 = 1;
 /// `[SPEC-STAR-945]`: this build answers `rows`, its own catalogue rows about some files.
 /// A node that does not report it is patched against what the hub last sent, and the hub
-/// says so.
-const CATALOGUE_ROWS: i64 = 1;
+/// says so. 2 since 2026-10-31: asked by recording, it lists the files that credit one
+/// too `[SPEC-LNK-050]`.
+const CATALOGUE_ROWS: i64 = 2;
 
 fn snapshot(listener: &Path, library: &Path) -> Result<Value, String> {
     Ok(json!({
@@ -732,6 +733,38 @@ pub(crate) mod tests {
         assert!(table("id_checks").is_none() && table("file_art").is_none(), "a table this catalogue lacks is left out");
         let stranger = p256::ecdsa::SigningKey::random(&mut rand_core::OsRng);
         assert!(handle(&n.l, &n.lib, "rows", &signed(&stranger, &r)).is_err(), "and only the mesh may ask");
+        let _ = std::fs::remove_dir_all(&n.dir);
+    }
+
+    /// `[SPEC-LNK-050]`: asked by recording, with no file named, the node answers with
+    /// the files whose passages credit it -- and says that it did.
+    #[test]
+    fn asked_by_recording_the_rows_step_names_the_files_that_credit_it() {
+        let n = node("rows-by-recording");
+        rusqlite::Connection::open(&n.lib).unwrap().execute_batch(
+            "CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL, source TEXT,
+                 PRIMARY KEY (passage_id, mbid));
+             CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);
+             INSERT INTO files VALUES (2,'m2','mp3','/music/b.mp3');
+             INSERT INTO passages VALUES (20,2,'radio',0,500);
+             INSERT INTO passage_recordings VALUES (10,'rec-mine',1.0,'musicbrainz'), (20,'rec-other',1.0,'musicbrainz');
+             INSERT INTO recordings VALUES ('rec-mine','Ticking'), ('rec-other','Elsewhere');").unwrap();
+        let ask = |by: bool| {
+            let mut r = request(&n, "rows", "20261031T1500Z", json!(null), json!(null));
+            r["want"] = json!({"files": [], "recordings": ["rec-mine"], "by_recording": by});
+            let got = handle(&n.l, &n.lib, "rows", &signed(&n.mesh, &r)).unwrap();
+            let a: Value = serde_json::from_str(got.answer["answer"].as_str().unwrap()).unwrap();
+            a["result"].clone()
+        };
+        let res = ask(true);
+        assert_eq!(res["by_recording"], json!(true), "and says it was asked so");
+        assert_eq!(res["scope"]["files"], json!(["m1"]), "the file crediting the recording, not the other");
+        let table = |t: &str| res["tables"].as_array().unwrap().iter().find(|x| x["name"] == t).cloned();
+        assert_eq!(table("files").unwrap()["rows"], json!([[1, "m1", "flac", "/music/a.flac"]]));
+        assert_eq!(table("recordings").unwrap()["rows"], json!([["rec-mine", "Ticking"]]));
+        let plain = ask(false);
+        assert_eq!(plain["by_recording"], json!(false));
+        assert_eq!(plain["scope"]["files"], json!([]), "not asked by recording, no file is in scope");
         let _ = std::fs::remove_dir_all(&n.dir);
     }
 
