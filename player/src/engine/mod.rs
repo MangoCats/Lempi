@@ -6794,4 +6794,88 @@ than one mix block");
         let _ = ws.iter().map(std::fs::remove_file).count();
         let _ = std::fs::remove_file(&path);
     }
+
+    /// **A probe, not a test** `[SPEC-AGN-060]`: two passages through the
+    /// whole engine -- decode, envelope, admission, mix -- and what reaches
+    /// the output ring written out as a float WAV, so a join can be measured
+    /// against the disc it came from (`tools/join_measure.py`). Ignored, and
+    /// run by hand, one join a run:
+    ///
+    /// ```text
+    ///   LEMPI_JOIN_A='path|start_ms|end_ms|lead_out_ms|fade_out_ms|curve'
+    ///   LEMPI_JOIN_B='path|start_ms|end_ms|lead_in_ms|fade_in_ms|curve'
+    ///   LEMPI_JOIN_OUT=join.wav   [LEMPI_JOIN_GAPLESS=1]
+    ///   cargo test --lib join_probe -- --ignored --nocapture
+    /// ```
+    ///
+    /// At the ring's 44.1 kHz, the desktop's own rate, so nothing resamples:
+    /// what is measured is the join and nothing else.
+    #[test]
+    #[ignore]
+    // Run by hand, and its one line of output is what it is run for.
+    #[allow(clippy::print_stdout)]
+    fn join_probe() {
+        let side = |var: &str| {
+            let v = std::env::var(var).unwrap_or_else(|_| panic!("{var} is not set"));
+            let f: Vec<&str> = v.split('|').collect();
+            assert_eq!(f.len(), 6, "{var}: path|start_ms|end_ms|lead_ms|fade_ms|curve");
+            let n = |i: usize| f[i].parse::<u64>().unwrap_or_else(|_| panic!("{var}: {:?} is not a number", f[i]));
+            let curve = Curve::parse(f[5]).unwrap_or_else(|| panic!("{var}: no curve {:?}", f[5]));
+            (f[0].to_string(), n(1), n(2), n(3), n(4), curve)
+        };
+        let (pa, sa, ea, lead_a, fade_a, curve_a) = side("LEMPI_JOIN_A");
+        let (pb, sb, eb, lead_b, fade_b, curve_b) = side("LEMPI_JOIN_B");
+        let out = std::env::var("LEMPI_JOIN_OUT").expect("LEMPI_JOIN_OUT is not set");
+        let mut a = entry(1, &pa);
+        (a.start_ms, a.end_ms, a.lead_out_ms, a.fade_out_ms, a.fade_out_curve) = (sa, ea, lead_a, fade_a, curve_a);
+        let mut b = entry(2, &pb);
+        (b.start_ms, b.end_ms, b.lead_in_ms, b.fade_in_ms, b.fade_in_curve) = (sb, eb, lead_b, fade_b, curve_b);
+
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 1);
+        e.enqueue(a);
+        e.enqueue(b);
+        h.send(Command::Play);
+        e.drain_commands();
+        // Drained as fast as it is mixed, so the ring never fills; done once
+        // a long run of ticks has added nothing.
+        let mut got: Vec<f32> = Vec::new();
+        let mut quiet = 0;
+        while quiet < 5_000 {
+            e.tick();
+            let mut st = ring.state.lock().unwrap();
+            let len = st.ring.len();
+            if len == 0 {
+                quiet += 1;
+                continue;
+            }
+            quiet = 0;
+            let at = got.len();
+            got.resize(at + len, 0.0);
+            st.ring.read(&mut got[at..]);
+        }
+        let ch = e.out_channels.max(1);
+        let rate = e.out_rate;
+        assert!(!got.is_empty(), "nothing reached the ring: the join was not played");
+
+        let data = (got.len() * 4) as u32;
+        let mut v = Vec::with_capacity(44 + data as usize);
+        v.extend(b"RIFF");
+        v.extend((36 + data).to_le_bytes());
+        v.extend(b"WAVEfmt ");
+        v.extend(16u32.to_le_bytes());
+        v.extend(3u16.to_le_bytes()); // IEEE float
+        v.extend((ch as u16).to_le_bytes());
+        v.extend(rate.to_le_bytes());
+        v.extend((rate * ch as u32 * 4).to_le_bytes());
+        v.extend((ch as u16 * 4).to_le_bytes());
+        v.extend(32u16.to_le_bytes());
+        v.extend(b"data");
+        v.extend(data.to_le_bytes());
+        for s in &got {
+            v.extend(s.to_le_bytes());
+        }
+        std::fs::write(&out, v).unwrap();
+        println!("join_probe: {} frames at {rate} Hz, {ch} ch -> {out}", got.len() / ch);
+    }
 }

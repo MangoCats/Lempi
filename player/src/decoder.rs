@@ -103,7 +103,7 @@ impl PassageDecoder {
             hint.with_extension(ext);
         }
         let probed = symphonia::default::get_probe()
-            .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+            .format(&hint, mss, &format_options(), &MetadataOptions::default())
             .map_err(DecodeError::Symphonia)?;
         let mut format = probed.format;
 
@@ -269,6 +269,25 @@ impl PassageDecoder {
 
     pub fn frames_emitted(&self) -> u64 {
         self.frames_emitted
+    }
+}
+
+/// How a file is opened. Gapless trimming -- dropping an MP3's encoder delay
+/// and padding, as its LAME tag records them -- is off, as it always has
+/// been, so a position in an MP3 is about 25 ms early against the audio it
+/// was encoded from. One file, one offset, and nobody hears it; a join
+/// between two files is where it shows. The join probe turns it on to
+/// measure that `[SPEC-AGN-060]`.
+#[cfg(not(test))]
+fn format_options() -> FormatOptions {
+    FormatOptions::default()
+}
+
+#[cfg(test)]
+fn format_options() -> FormatOptions {
+    FormatOptions {
+        enable_gapless: std::env::var_os("LEMPI_JOIN_GAPLESS").is_some(),
+        ..Default::default()
     }
 }
 
