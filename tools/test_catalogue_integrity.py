@@ -219,6 +219,14 @@ def test_empty(tmp):
     c.close()
     o = offers.get(ids["empty:rel-url"], [{}])[0]
     check(o.get("node") == "bose" and o.get("tracks") == 1, f"bose offers its tracklist: {offers}")
+    # 2026-10-31, run 20261031T2117Z: a node not yet synced still held the dangling rows the hub had
+    # removed, naming recordings it did not hold either -- and was offered as a repair that adds nothing.
+    stale = answer_with_tracklist()
+    stale["answer"]["tables"][1]["rows"] = []
+    c = sqlite3.connect(db)
+    check(ids["empty:rel-url"] not in ci.offers_of(ci.find(c), {"lempi02w": stale}),
+          "a tracklist naming recordings the node does not hold is no offer")
+    c.close()
     held = ci.effect({"id": "x", "table": "releases", "removable": True, "empty": True, "parent": "release_recordings"},
                      {"x": {"decision": "remove", "offers_seen": []}}, [o])
     check(held["effect"] == "held", f"a removal decided before bose was seen holding one is held: {held}")

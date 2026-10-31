@@ -223,11 +223,17 @@ def offers_of(findings, answers) -> dict:
         files = {d["file_id"]: d for d in _answer_rows(ans, "files")}
         passages = {d["passage_id"]: d for d in _answer_rows(ans, "passages")}
         credits = _answer_rows(ans, "passage_recordings")
+        recs = {d["mbid"] for d in _answer_rows(ans, "recordings")}
         for f in findings:
             if f["parent"] not in SCOPE:
                 continue
             pcol = f["parent_column"]
-            held = sorted({d[pcol] for d in _answer_rows(ans, f["parent"])} & set(f["missing"]))
+            rows = _answer_rows(ans, f["parent"])
+            if f["parent"] == "release_recordings":
+                # [SPEC-LNK-072]: a tracklist only where the node can name its tracks -- a node not yet
+                # synced still holds the dangling rows the hub removed, and they repair nothing.
+                rows = [d for d in rows if d["mbid"] in recs]
+            held = sorted({d[pcol] for d in rows} & set(f["missing"]))
             if not held:
                 continue
             fl = []
@@ -241,7 +247,7 @@ def offers_of(findings, answers) -> dict:
                  "files_known": bool(a.get("by_recording")) and f["parent"] == "recordings",
                  "fetchable": bool(a.get("fetchable")) and bool(a.get("root"))}
             if f["parent"] == "release_recordings":
-                o["tracks"] = sum(1 for d in _answer_rows(ans, "release_recordings") if d[pcol] in held)
+                o["tracks"] = sum(1 for d in rows if d[pcol] in held)
             out.setdefault(f["id"], []).append(o)
     return out
 
@@ -414,7 +420,8 @@ def repair(conn, f, offer, answer) -> dict:
         _recordings(conn, answer, keys, add)
     elif f["parent"] == "release_recordings":
         # [SPEC-LNK-072]: the node's tracklist, and the recordings it names first.
-        tracks = [d for d in _answer_rows(answer, "release_recordings") if d[pcol] in keys]
+        named = {d["mbid"] for d in _answer_rows(answer, "recordings")}
+        tracks = [d for d in _answer_rows(answer, "release_recordings") if d[pcol] in keys and d["mbid"] in named]
         _recordings(conn, answer, {d["mbid"] for d in tracks}, add)
         for d in tracks:
             if conn.execute("SELECT 1 FROM recordings WHERE mbid = ?", (d["mbid"],)).fetchone():
