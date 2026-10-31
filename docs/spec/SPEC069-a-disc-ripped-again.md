@@ -261,9 +261,15 @@ patch removes the six files' rows, passages and recordings there, and adds
 `files.gapless`. Its first rehearsal on `bose` and `smartboardpc` was refused
 -- a removed file's cascade took its passages first ([SPEC058](SPEC058-catalogue-patch-by-natural-key.md)
 `[SPEC-NKP-060]`) -- and, removals ordered children first, both rehearsed
-clean. Not committed; `lempi02w` and `lp3-wifi` did not answer. Still open:
-the six audio files stay on each node's disk, catalogued nowhere -- a stray
-there -- and the DAO is not yet sent to any node.
+clean. Committed to both 2026-10-31, run `20261031T0220Z`, by players built
+before `files.gapless` existed: each applied it in place and rebuilt its
+director in 3 to 5 s, playing throughout. Read back from the durable files,
+read-only: neither catalogues any of the six, no passage or tag outlived its
+file, and the column is there. A fresh snapshot then merged to nothing of
+this run's -- only an album the hub imported since. `lempi02w` and `lp3-wifi`
+did not answer, and still hold the six catalogued. Still open: the six audio
+files stay on each node's disk, catalogued nowhere -- a stray there -- and the
+DAO is not yet sent to any node.
 
 **`[SPEC-AGN-930]`** A DAO file's tracks and a later DAO's are compared by
 their logs alone; two spans of two whole-disc encodes do not encode alike, so
