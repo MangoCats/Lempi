@@ -146,8 +146,9 @@ const CATALOGUE_WINDOW: i64 = 1;
 /// `[SPEC-STAR-945]`: this build answers `rows`, its own catalogue rows about some files.
 /// A node that does not report it is patched against what the hub last sent, and the hub
 /// says so. 2 since 2026-10-31: asked by recording, it lists the files that credit one
-/// too `[SPEC-LNK-050]`.
-const CATALOGUE_ROWS: i64 = 2;
+/// too `[SPEC-LNK-050]`. 3, the same day: asked for tracklists, a release's own
+/// tracklist `[SPEC-LNK-072]`.
+const CATALOGUE_ROWS: i64 = 3;
 
 fn snapshot(listener: &Path, library: &Path) -> Result<Value, String> {
     Ok(json!({
@@ -765,6 +766,39 @@ pub(crate) mod tests {
         let plain = ask(false);
         assert_eq!(plain["by_recording"], json!(false));
         assert_eq!(plain["scope"]["files"], json!([]), "not asked by recording, no file is in scope");
+        let _ = std::fs::remove_dir_all(&n.dir);
+    }
+
+    /// `[SPEC-LNK-072]`: asked for tracklists, the node answers a release's own tracklist
+    /// and the recordings it names -- and says that it did.
+    #[test]
+    fn asked_for_tracklists_the_rows_step_names_a_releases_own_tracks() {
+        let n = node("rows-tracklists");
+        rusqlite::Connection::open(&n.lib).unwrap().execute_batch(
+            "CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, PRIMARY KEY (passage_id, mbid));
+             CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);
+             CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT);
+             CREATE TABLE release_recordings (release_mbid TEXT, mbid TEXT, position INTEGER, chosen INTEGER,
+                 PRIMARY KEY (release_mbid, mbid));
+             INSERT INTO recordings VALUES ('rec-o1','One'), ('rec-x','Elsewhere');
+             INSERT INTO releases VALUES ('rel-org','Org'), ('rel-x','Other');
+             INSERT INTO release_recordings VALUES ('rel-org','rec-o1',1,0), ('rel-x','rec-x',1,0);").unwrap();
+        let ask = |tl: bool| {
+            let mut r = request(&n, "rows", "20261031T2000Z", json!(null), json!(null));
+            r["want"] = json!({"files": [], "releases": ["rel-org"], "tracklists": tl});
+            let got = handle(&n.l, &n.lib, "rows", &signed(&n.mesh, &r)).unwrap();
+            let a: Value = serde_json::from_str(got.answer["answer"].as_str().unwrap()).unwrap();
+            a["result"].clone()
+        };
+        let res = ask(true);
+        assert_eq!(res["tracklists"], json!(true), "and says it was asked so");
+        let table = |r: &Value, t: &str| r["tables"].as_array().unwrap().iter().find(|x| x["name"] == t).cloned();
+        assert_eq!(table(&res, "release_recordings").unwrap()["rows"], json!([["rel-org", "rec-o1", 1, 0]]),
+                   "the release's own tracklist, not another's");
+        assert_eq!(table(&res, "recordings").unwrap()["rows"], json!([["rec-o1", "One"]]), "and what it names");
+        let plain = ask(false);
+        assert_eq!(plain["tracklists"], json!(false));
+        assert_eq!(table(&plain, "release_recordings").unwrap()["rows"], json!([]), "not asked, no tracklist");
         let _ = std::fs::remove_dir_all(&n.dir);
     }
 

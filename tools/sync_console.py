@@ -348,7 +348,7 @@ def links_page(run) -> dict:
     for f in res["findings"]:
         out.append({"id": f["id"], "table": f["table"], "parent": f["parent"], "removable": f["removable"],
                     "about": f["about"], "words": ss.ci.words(f), "rows": len(f["rows"]), "missing": len(f["missing"]),
-                    "offers": f.get("offers", []), "effect": f["effect"], "node": f.get("node"), "why": f.get("why"),
+                    "offers": f.get("offers", []), "cannot_say": f.get("cannot_say", []), "effect": f["effect"], "node": f.get("node"), "why": f.get("why"),
                     "decision": ds.get(f["id"]), "stale": f["id"] in stale, "fetch": f.get("fetch", [])})
     return {"merged": True, "findings": out, "counts": links_counts(run), "carried_to": res.get("carried_to", []),
             "not_carried": res.get("not_carried", {}), "not_asked": res.get("not_asked", {}),

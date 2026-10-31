@@ -158,9 +158,79 @@ def run_correct(tmp, name, decisions, answers=None, extra=""):
         with open(apaths[n], "w", encoding="utf-8") as fh:
             json.dump(a, fh)
     c = sqlite3.connect(db)
-    ids = {f["owner"]["release_mbid"]: f["id"] for f in ci.find(c)}
+    ids = {f["owner"].get("release_mbid") or "empty:" + f["owner"]["mbid"]: f["id"] for f in ci.find(c)}
     c.close()
     return db, ids, dpath, apaths
+
+
+EMPTY = """
+CREATE TABLE cover_art (release_mbid TEXT PRIMARY KEY, front BLOB, source TEXT NOT NULL);
+INSERT INTO releases VALUES ('rel-url', 'https://derpibooru.org/', '2018-08-07', 'musicbrainz', 7, NULL);
+INSERT INTO cover_art VALUES ('rel-url', X'00', 'caa');
+INSERT INTO releases VALUES ('rel-kept', 'Bare', NULL, 'musicbrainz', 1, NULL);
+INSERT INTO file_releases VALUES ('md5-k', 'rel-kept', 'review');
+"""
+
+
+def answer_with_tracklist(tracklists=True):
+    """A node's `rows` answer asked for tracklists [SPEC-LNK-072]: it holds one track of rel-url."""
+    tables = [table("release_recordings", ["release_mbid", "mbid", "position", "source", "track_length_ms", "chosen", "disc"],
+                    [["rel-url", "rec-u1", 1, "musicbrainz", 26849, 0, None]] if tracklists else []),
+              table("recordings", ["mbid", "title", "length_ms", "source"],
+                    [["rec-u1", "Intro", 26849, "musicbrainz"]] if tracklists else [])]
+    return {"answer": {"tables": tables, "tracklists": tracklists}, "tracklists": tracklists,
+            "fetchable": True, "root": "/srv/library/audio"}
+
+
+def test_empty(tmp):
+    print("a release with no tracklist: found, removed with its cover, held by a file, repaired from a node [SPEC-LNK-070]")
+    c = make(os.path.join(tmp, "empty.db"), EMPTY)
+    es = {f["owner"]["mbid"]: f for f in ci.find(c) if f.get("empty")}
+    c.close()
+    url, kept = es.get("rel-url"), es.get("rel-kept")
+    check(url and url["removable"] and url["about"]["covers"] == 1 and url["about"]["track_count"] == 7,
+          f"the URL candidate: removable, its cover counted: {url}")
+    check(kept and not kept["removable"] and kept["about"]["files_from_it"] == 1, f"one a file is taken from is not: {kept}")
+    check("a release with no tracklist -- 7 track(s) by its own count, none listed; its 1 cover(s) would go with it"
+          in ci.words(url), ci.words(url))
+    check(ci.want_of([url]) == {"releases": ["rel-url"]}, "a node is asked about it by release")
+    try:
+        ci.decide(os.path.join(tmp, "e.json"), kept, "remove", [])
+        check(False, "removing a release a file is taken from must be refused")
+    except SystemExit as err:
+        check("a file is taken from this release" in str(err), str(err))
+
+    db, ids, dpath, apaths = run_correct(tmp, "empty-rm", {}, {"old": answer_with_tracklist(False)}, EMPTY)
+    ci.save_decisions(dpath, {ids["empty:rel-url"]: {"decision": "remove", "offers_seen": []}})
+    res = ci.correct(db, {"decisions": dpath, "answers": apaths})
+    f = next(f for f in res["findings"] if f["id"] == ids["empty:rel-url"])
+    check(f["effect"] == "remove" and f["applied"] == {"cover_art": -1, "releases": -1}, f"removed, cover first: {f.get('applied')}")
+    check(f["cannot_say"] == ["old"], f"a build that cannot say is named: {f['cannot_say']}")
+    check("whether old holds a tracklist for it, its build cannot say" in "\n".join(ci.report_lines(res)), "and said")
+    c = sqlite3.connect(db)
+    check(c.execute("SELECT COUNT(*) FROM releases WHERE mbid = 'rel-url'").fetchone()[0] == 0
+          and c.execute("SELECT COUNT(*) FROM cover_art").fetchone()[0] == 0, "the release and its cover are gone")
+    c.close()
+
+    ans = {"bose": answer_with_tracklist()}
+    db, ids, dpath, apaths = run_correct(tmp, "empty-fix", {}, ans, EMPTY)
+    c = sqlite3.connect(db)
+    offers = ci.offers_of(ci.find(c), ans)
+    c.close()
+    o = offers.get(ids["empty:rel-url"], [{}])[0]
+    check(o.get("node") == "bose" and o.get("tracks") == 1, f"bose offers its tracklist: {offers}")
+    held = ci.effect({"id": "x", "table": "releases", "removable": True, "empty": True, "parent": "release_recordings"},
+                     {"x": {"decision": "remove", "offers_seen": []}}, [o])
+    check(held["effect"] == "held", f"a removal decided before bose was seen holding one is held: {held}")
+    ci.save_decisions(dpath, {ids["empty:rel-url"]: {"decision": "repair:bose"}})
+    res = ci.correct(db, {"decisions": dpath, "answers": apaths})
+    f = next(f for f in res["findings"] if f["id"] == ids["empty:rel-url"])
+    check(f["effect"] == "repair" and f["applied"] == {"recordings": 1, "release_recordings": 1},
+          f"its tracklist added, the recording first: {f.get('applied')}")
+    c = sqlite3.connect(db)
+    check(c.execute("SELECT mbid FROM release_recordings WHERE release_mbid = 'rel-url'").fetchall() == [("rec-u1",)],
+          "and the release has a tracklist")
+    c.close()
 
 
 def test_remove_and_leave(tmp):
@@ -178,9 +248,11 @@ def test_remove_and_leave(tmp):
     check(c.execute("SELECT COUNT(*) FROM release_recordings WHERE release_mbid = 'rel-caribou'").fetchone()[0] == 2,
           "the left one untouched")
     check(c.execute("SELECT COUNT(*) FROM releases WHERE mbid = 'rel-org'").fetchone()[0] == 1,
-          "the release itself stays [SPEC-LNK-900]")
+          "the release itself stays, for a finding of its own [SPEC-LNK-070]")
+    left = ci.find(c)
     c.close()
-    check(res["remaining"] == 1, f"one finding remains: {res['remaining']}")
+    check(res["remaining"] == 2 and [f["owner"] for f in left if f.get("empty")] == [{"mbid": "rel-org"}],
+          f"Caribou remains, and Org, now with no tracklist, is found as such: {res['remaining']}")
     text = "\n".join(ci.report_lines(res))
     check("1 leave, 1 remove" in text and "Org" in text, text)
 
@@ -265,6 +337,7 @@ def main() -> int:
         test_repair(tmp)
         test_repair_with_files(tmp)
         test_decide(tmp)
+        test_empty(tmp)
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")

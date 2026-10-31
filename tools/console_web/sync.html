@@ -425,19 +425,36 @@ function linkAbout(f) {
         (a.files_from_it ? `; ${a.files_from_it} file(s) taken from this release` : '; no file is taken from it') }),
       S.el('div', { style: 'font:11px var(--mono);color:var(--dim)', text: tracks.join(' · ') }));
   }
+  if (a.kind === 'empty release') {   // [SPEC-LNK-070]
+    const head = S.el('div', {}, S.el('b', { text: a.title || a.mbid }),
+      a.credit ? ` — ${a.credit}` : '', a.date ? S.el('span', { style: 'color:var(--dim)', text: ` (${a.date})` }) : '');
+    return S.el('div', {}, head,
+      S.el('div', { style: 'font-size:.8rem', text: 'A release with no tracklist: ' +
+        (a.track_count ? `${a.track_count} track(s) by its own count, none listed` : 'none listed') +
+        (a.covers ? `; its ${a.covers} cover(s) would go with it` : '') +
+        (a.files_from_it ? `; ${a.files_from_it} file(s) taken from it, so it is not removed` : '; no file is taken from it') }),
+      S.el('div', { style: 'font:11px var(--mono);color:var(--dim)', text: a.mbid }));
+  }
   return S.el('div', { text: f.words });
 }
 
 function linkNodes(f, d) {
   const out = S.el('div', { style: 'font-size:.8rem' });
   for (const o of f.offers) {
+    if ('tracks' in o) {
+      out.append(S.el('div', {}, S.el('span', { class: 'pill ok', text: `${o.node} holds a tracklist for it: ${o.tracks} track(s)` })));
+      continue;
+    }
     out.append(S.el('div', {}, S.el('span', { class: 'pill ok', text: `${o.node} holds ${o.keys.length} of ${f.missing}` }),
       o.files_known ? ` — ${o.files.length ? o.files.length + ' of its file(s) name them' : 'none of its files names them'}`
                     : f.parent === 'recordings' ? ' — which of its files name them, its build cannot say' : ''));
     for (const x of o.files.slice(0, 5)) out.append(S.el('div', { style: 'font:11px var(--mono);color:var(--dim)', text: x.path || x.audio_md5 }));
   }
-  const asked = Object.keys(d.asked || {}).filter(n => !f.offers.some(o => o.node === n));
+  const unsaid = f.cannot_say || [];
+  const asked = Object.keys(d.asked || {}).filter(n => !f.offers.some(o => o.node === n) && !unsaid.includes(n));
   if (asked.length) out.append(S.el('div', { style: 'color:var(--dim)', text: `asked, holds none: ${asked.join(', ')}` }));
+  if (unsaid.length) out.append(S.el('div', { style: 'color:var(--warn)',
+    text: `asked, cannot say whether it holds a tracklist (an older build): ${unsaid.join(', ')}` }));
   return out;
 }
 
@@ -458,7 +475,9 @@ function linkActions(f) {
   };
   const row = S.el('div', { style: 'display:flex;gap:.3rem;flex-wrap:wrap' },
     chip('Leave', 'leave', 'keep it as it is; it is not raised again until it changes'));
-  if (f.removable) row.append(chip('Remove', 'remove', 'take the broken rows out, on the desktop and every node'));
+  if (f.removable) row.append(chip('Remove', 'remove', f.about && f.about.kind === 'empty release'
+    ? 'take the release out, and its cover art, on the desktop and every node'
+    : 'take the broken rows out, on the desktop and every node'));
   for (const o of f.offers) {
     row.append(chip(`Repair from ${o.node}`, 'repair:' + o.node, `add the rows ${o.node} holds, to the desktop and every node`));
     if (o.files_known && o.files.length && o.fetchable)

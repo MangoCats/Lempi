@@ -104,12 +104,18 @@ class Fleet:
         c = sqlite3.connect(self.nodes[name]["library"])
         inl = lambda xs: ",".join("?" * len(xs)) or "NULL"         # noqa: E731
         recs = list(want.get("recordings", []))
+        rels = list(want.get("releases", []))
         files = list(want.get("files", []))
         by = bool(want.get("by_recording")) and self.rows_cap.get(name, 0) >= 2
         if by:
             files += [r[0] for r in c.execute(
                 "SELECT DISTINCT f.audio_md5 FROM passage_recordings pr JOIN passages p ON p.passage_id = pr.passage_id "
                 f"JOIN files f ON f.file_id = p.file_id WHERE pr.mbid IN ({inl(recs)})", recs)]
+        has = lambda t: c.execute("SELECT 1 FROM sqlite_master WHERE name = ?", (t,)).fetchone()  # noqa: E731
+        tl = bool(want.get("tracklists")) and self.rows_cap.get(name, 0) >= 3 and has("release_recordings")
+        if tl:
+            recs += [r[0] for r in c.execute(
+                f"SELECT DISTINCT mbid FROM release_recordings WHERE release_mbid IN ({inl(rels)})", rels)]
         fids = [r[0] for r in c.execute(f"SELECT file_id FROM files WHERE audio_md5 IN ({inl(files)})", files)]
         pids = [r[0] for r in c.execute(f"SELECT passage_id FROM passages WHERE file_id IN ({inl(fids)})", fids)]
 
@@ -120,11 +126,14 @@ class Fleet:
             return {"name": t, "columns": cols, "key": [cols[0]],
                     "rows": [list(r) for r in c.execute(f"SELECT {', '.join(cols)} FROM {t} WHERE {col} IN ({inl(vals)})", vals)]}
         tables = [x for x in (dump("files", "audio_md5", files), dump("passages", "file_id", fids),
-                              dump("passage_recordings", "passage_id", pids), dump("recordings", "mbid", recs)) if x]
+                              dump("passage_recordings", "passage_id", pids), dump("recordings", "mbid", recs),
+                              dump("release_recordings", "mbid", recs), dump("releases", "mbid", rels)) if x]
         c.close()
-        out = {"scope": {"files": files, "recordings": recs, "releases": [], "artists": []}, "tables": tables}
+        out = {"scope": {"files": files, "recordings": recs, "releases": rels, "artists": []}, "tables": tables}
         if self.rows_cap.get(name, 0) >= 2:
             out["by_recording"] = by
+        if self.rows_cap.get(name, 0) >= 3:
+            out["tracklists"] = tl
         return out
 
     def add(self, name, prefs, always_up=True):
@@ -838,6 +847,53 @@ def test_links_repaired_with_files(tmp):
     lib.close()
 
 
+EMPTY = """
+CREATE TABLE cover_art (release_mbid TEXT PRIMARY KEY, front BLOB, back BLOB, source TEXT NOT NULL);
+INSERT INTO releases VALUES ('rel-org', 'Org', 'musicbrainz');
+INSERT INTO cover_art VALUES ('rel-org', NULL, NULL, 'caa');
+"""
+
+
+def test_empty_release_removed(tmp):
+    """[SPEC-LNK-070..074]: a release no tracklist names is found, each node asked for a tracklist of its own;
+    removed by a decision, its cover goes with it, on the hub and on the nodes."""
+    fleet, plan, hub, _ = links_fleet(tmp, b_holds=False)
+    fleet.rows_cap = {"a": 3, "b": 2}            # b's build cannot say whether it holds a tracklist
+    for db in [hub["library"], os.path.join(tmp, "sent", "hub.library.db")] + \
+              [p for n in ("a", "b") for p in (fleet.nodes[n]["library"], os.path.join(tmp, "sent", f"{n}.library.db"))]:
+        c = sqlite3.connect(db)
+        c.executescript(EMPTY)
+        c.commit()
+        c.close()
+    with faked(fleet) as out:
+        ss.snapshot(plan)
+        run = ss.newest_run(plan)
+        ss.merge(plan, run)
+        ss.patch(plan, run)
+    said = out.getvalue()
+    check("1 release(s) with no tracklist" in said, f"the snapshot says what it found: {said}")
+    check("b: holds none" in said and "whether it holds a tracklist for the 1 release(s) with none, this build cannot say" in said,
+          f"and that b's build cannot say: {said}")
+    check(all(w.get("tracklists") and "rel-org" in w.get("releases", []) for _, w in fleet.asked),
+          f"each node asked for the release's tracklist: {fleet.asked}")
+    e = next((f for f in ss.links_of(run)["findings"] if f.get("empty")), None)
+    check(e and e["removable"] and e["effect"] == "undecided" and e["cannot_say"] == ["b"],
+          f"one empty release, removable, undecided, b unable to say: {e}")
+    ss.decide_link(run, e["id"], "remove")
+    with faked(fleet):
+        ss.patch(plan, run)
+        stages(plan)
+        stages(plan, commit=True)
+    e = next(f for f in ss.links_of(run)["findings"] if f.get("empty"))
+    check(e["effect"] == "remove" and e["applied"] == {"cover_art": -1, "releases": -1}, f"removed with its cover: {e}")
+    check(rows_of(hub["library"], "SELECT mbid FROM releases ORDER BY mbid") == [("rel-c",)]
+          and rows_of(hub["library"], "SELECT * FROM cover_art") == [], "on the hub, the release and its cover are gone")
+    for n in ("a", "b"):
+        p = json.load(open(os.path.join(run, "patches", n, "catalogue.values.json")))
+        got = [(e["name"], [r["now"] for r in e["rows"]]) for e in p["tables"]]
+        check(got == [("cover_art", [None]), ("releases", [None])], f"{n}'s patch removes the cover, then the release: {got}")
+
+
 def test_lost_answer():
     """A node whose answer to the members' query is lost once is asked again,
     not marked MISSING for the run -- lp3-wifi, 2026-10-15."""
@@ -889,7 +945,7 @@ def main() -> int:
     test_split_catalogue()
     for test in (test_quiet, test_conflict, test_approve_all, test_on_demand, test_catalogue_moved,
                  test_catalogue_states, test_catalogue_old_player, test_catalogue_in_parts, test_a_patch_that_cannot_be_cut, test_selection, test_read_only_catalogue,
-                 test_old_players, test_links_removed, test_links_repaired_with_files):
+                 test_old_players, test_links_removed, test_links_repaired_with_files, test_empty_release_removed):
         tmp = tempfile.mkdtemp()
         try:
             test(tmp)

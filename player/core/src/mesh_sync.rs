@@ -955,7 +955,9 @@ pub fn catalogue_summary(library: &Path) -> Result<Json, String> {
 ///
 /// With `by_recording: true`, the files whose passages credit a wanted recording are
 /// wanted too, and the answer says `by_recording` -- an older build says nothing, and the
-/// hub cannot tell "no such file" from "not asked" `[SPEC-LNK-050]`.
+/// hub cannot tell "no such file" from "not asked" `[SPEC-LNK-050]`. With `tracklists:
+/// true`, a wanted release's own tracklist rows are returned with the recordings they
+/// name, and the answer says `tracklists` `[SPEC-LNK-072]`.
 pub fn catalogue_rows(library: &Path, want: &Json) -> Result<Json, String> {
     use std::collections::BTreeSet;
     let c = Connection::open_with_flags(library, OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -992,6 +994,15 @@ pub fn catalogue_rows(library: &Path, want: &Json) -> Result<Json, String> {
             &format!("SELECT DISTINCT f.audio_md5 FROM passage_recordings pr JOIN passages p ON p.passage_id = pr.passage_id \
                       JOIN files f ON f.file_id = p.file_id WHERE pr.mbid IN ({})", inl(recordings.len())),
             texts(&recordings))?));
+    }
+    // `[SPEC-LNK-072]`: asked for tracklists, a wanted release's own tracklist is in scope,
+    // and the recordings it names -- how the hub learns whether this node holds a tracklist
+    // for a release that, on the hub, has none. After the files: they are not widened by it.
+    let tracklists = want["tracklists"].as_bool() == Some(true) && has("release_recordings");
+    if tracklists {
+        recordings.extend(as_text(column(
+            &format!("SELECT DISTINCT mbid FROM release_recordings WHERE release_mbid IN ({})", inl(releases.len())),
+            texts(&releases))?));
     }
     let fids = column(&format!("SELECT file_id FROM files WHERE audio_md5 IN ({})", inl(files.len())), texts(&files))?;
     let pids = column(&format!("SELECT passage_id FROM passages WHERE file_id IN ({})", inl(fids.len())), fids.clone())?;
@@ -1064,6 +1075,7 @@ pub fn catalogue_rows(library: &Path, want: &Json) -> Result<Json, String> {
         "scope": {"files": files, "recordings": recordings, "releases": releases, "artists": artists},
         "tables": tables,
         "by_recording": by_recording,
+        "tracklists": tracklists,
     }))
 }
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A catalogue row that names a row the catalogue does not hold [SPEC070].
+"""A catalogue row that names a row the catalogue does not hold [SPEC070], and
+a release no tracklist row names [SPEC-LNK-070].
 
 Found at the merge of a sync, decided by a person, and carried by the commit
 to the hub and every node taking part [SPEC-LNK-020]. Nothing here talks to a
@@ -31,8 +32,10 @@ import sqlite3
 REMOVABLE = {"release_recordings", "recording_artists", "recording_relations"}
 
 # The parent tables a node can be asked about, and the `rows` scope that asks
-# [SPEC-STAR-945].
-SCOPE = {"recordings": "recordings", "releases": "releases", "artists": "artists"}
+# [SPEC-STAR-945]. A release with no tracklist lacks `release_recordings` rows,
+# asked for by release [SPEC-LNK-072].
+SCOPE = {"recordings": "recordings", "releases": "releases", "artists": "artists",
+         "release_recordings": "releases"}
 
 DECISIONS = ("leave", "remove", "repair:", "repair-files:")
 
@@ -102,6 +105,27 @@ def find(conn) -> list[dict]:
                      "missing": missing, "rows": ds, "removable": t in REMOVABLE}
                 f["about"] = describe(conn, f)
                 out.append(f)
+    return out + empty_releases(conn)
+
+
+def empty_releases(conn) -> list[dict]:
+    """[SPEC-LNK-070]: a release no tracklist row names -- the other end of a link
+    gone. What it lacks is `release_recordings` rows of its own, so that is its
+    parent; it is removable only while no file is taken from it."""
+    if not (_has(conn, "releases") and _has(conn, "release_recordings")):
+        return []
+    out = []
+    cols = _cols(conn, "releases")
+    for r in conn.execute(f"SELECT {', '.join(cols)} FROM releases r WHERE NOT EXISTS "
+                          "(SELECT 1 FROM release_recordings x WHERE x.release_mbid = r.mbid) ORDER BY mbid"):
+        d = dict(zip(cols, r))
+        owner = {"mbid": d["mbid"]}
+        f = {"id": finding_id("releases", None, "release_recordings", owner, [d["mbid"]]), "table": "releases",
+             "column": None, "parent": "release_recordings", "parent_column": "release_mbid", "key": ["mbid"],
+             "owner": owner, "missing": [d["mbid"]], "rows": [d], "empty": True}
+        f["about"] = describe(conn, f)
+        f["removable"] = not f["about"]["files_from_it"]
+        out.append(f)
     return out
 
 
@@ -117,6 +141,13 @@ def describe(conn, f) -> dict:
     """What a person needs to judge a finding: what owns it, in words, and what
     removing its rows would leave."""
     t, owner = f["table"], f["owner"]
+    if f.get("empty"):
+        d, rel = f["rows"][0], owner["mbid"]
+        count = lambda tb: (_one(conn, f"SELECT COUNT(*) FROM {tb} WHERE release_mbid = ?", rel) or [0])[0] \
+            if _has(conn, tb) else 0  # noqa: E731
+        return {"kind": "empty release", "mbid": rel, "title": d.get("title"), "credit": d.get("artist_credit"),
+                "date": d.get("release_date"), "track_count": d.get("track_count"),
+                "files_from_it": count("file_releases"), "covers": count("cover_art")}
     if t == "release_recordings" and "release_mbid" in owner:
         rel = owner["release_mbid"]
         r = _one(conn, "SELECT title, artist_credit, release_date, track_count FROM releases WHERE mbid = ?", rel)
@@ -142,6 +173,13 @@ def describe(conn, f) -> dict:
 def words(f) -> str:
     """One line for a finding, as the summary and the CLI say it."""
     a = f["about"]
+    if a.get("kind") == "empty release":
+        name = f"*{a['title'] or a['mbid']}*" + (f", {a['credit']}" if a["credit"] else "") + (f" ({a['date']})" if a["date"] else "")
+        count = f"{a['track_count']} track(s) by its own count, none listed" if a.get("track_count") else "none listed"
+        cover = f"; its {a['covers']} cover(s) would go with it" if a["covers"] else ""
+        files = (f"; {a['files_from_it']} file(s) taken from it, so it is not removed" if a["files_from_it"]
+                 else "; no file taken from it")
+        return f"{name}: a release with no tracklist -- {count}{cover}{files}"
     n, m = len(f["rows"]), len(f["missing"])
     what = f"{n} `{f['table']}` row(s) naming {m} {f['parent'][:-1] if f['parent'].endswith('s') else f['parent']}(s) " \
            f"not in `{f['parent']}`"
@@ -199,16 +237,32 @@ def offers_of(findings, answers) -> dict:
                 fl = [{"audio_md5": files[i]["audio_md5"], "path": files[i].get("path"),
                        "size_bytes": files[i].get("size_bytes"), "sha256": files[i].get("sha256")}
                       for i in sorted(fids) if i in files]
-            out.setdefault(f["id"], []).append({
-                "node": name, "keys": held, "files": fl,
-                "files_known": bool(a.get("by_recording")) and f["parent"] == "recordings",
-                "fetchable": bool(a.get("fetchable")) and bool(a.get("root"))})
+            o = {"node": name, "keys": held, "files": fl,
+                 "files_known": bool(a.get("by_recording")) and f["parent"] == "recordings",
+                 "fetchable": bool(a.get("fetchable")) and bool(a.get("root"))}
+            if f["parent"] == "release_recordings":
+                o["tracks"] = sum(1 for d in _answer_rows(ans, "release_recordings") if d[pcol] in held)
+            out.setdefault(f["id"], []).append(o)
     return out
+
+
+def cannot_say(f, answers) -> list[str]:
+    """[SPEC-LNK-072]: the nodes asked whose build could not say whether they hold
+    a tracklist for a release with none -- asked, but not answered."""
+    if f["parent"] != "release_recordings":
+        return []
+    return sorted(n for n, a in answers.items() if not a.get("tracklists"))
 
 
 # ---------------------------------------------------------------- deciding --
 def valid(value: str) -> bool:
     return value in ("leave", "remove") or any(value.startswith(p) and value[len(p):] for p in DECISIONS[2:])
+
+
+def not_removable(f) -> str:
+    if f.get("empty"):
+        return "a file is taken from this release, so it is not removed: repair its tracklist from a node, or leave it"
+    return f"a `{f['table']}` row is not a link only: repair it or leave it"
 
 
 def effect(f, decisions: dict, offers: list) -> dict:
@@ -223,7 +277,7 @@ def effect(f, decisions: dict, offers: list) -> dict:
     by = {o["node"]: o for o in offers}
     if v == "remove":
         if not f["removable"]:
-            return {"effect": "held", "node": None, "why": f"a `{f['table']}` row is not a link only: repair it or leave it"}
+            return {"effect": "held", "node": None, "why": not_removable(f)}
         new = sorted(set(by) - set(d.get("offers_seen") or []))
         if new:
             who = ", ".join(new)
@@ -265,7 +319,7 @@ def decide(path, f, value, offers, by="person"):
     if not valid(value):
         raise SystemExit(f"a decision is leave, remove, repair:NODE or repair-files:NODE: {value!r} is none of them")
     if value == "remove" and not f["removable"]:
-        raise SystemExit(f"`{f['table']}` rows are not links only, and are repaired or left, never removed")
+        raise SystemExit(not_removable(f))
     if ":" in value and value.split(":", 1)[1] not in {o["node"] for o in offers}:
         raise SystemExit(f"{value.split(':', 1)[1]} holds nothing of this finding: offered by "
                          f"{[o['node'] for o in offers] or 'no node'}")
@@ -310,12 +364,39 @@ def _insert(conn, t, d, replace=None) -> bool:
     return cur.rowcount > 0
 
 
-def remove(conn, f) -> int:
+def remove(conn, f) -> dict:
+    """The finding's rows, gone: {table: -rows}. A release with no tracklist takes
+    its covers with it, children first [SPEC-LNK-074]."""
+    out = {}
+    if f.get("empty") and _has(conn, "cover_art"):
+        n = conn.execute("DELETE FROM cover_art WHERE release_mbid = ?", (f["owner"]["mbid"],)).rowcount
+        if n:
+            out["cover_art"] = -n
     n = 0
     for d in f["rows"]:
         n += conn.execute(f"DELETE FROM {f['table']} WHERE " + " AND ".join(f"{k} = ?" for k in f["key"]),
                           [d[k] for k in f["key"]]).rowcount
-    return n
+    out[f["table"]] = -n
+    return out
+
+
+def _recordings(conn, answer, keys, add):
+    """A node's recordings of `keys`, parents first: their artists, the recordings,
+    a credit only where its artist is then held, their flavor."""
+    credits = [d for d in _answer_rows(answer, "recording_artists") if d["mbid"] in keys]
+    need = {d["artist_mbid"] for d in credits}
+    for d in _answer_rows(answer, "artists"):
+        if d["mbid"] in need:
+            add("artists", d)
+    for d in _answer_rows(answer, "recordings"):
+        if d["mbid"] in keys:
+            add("recordings", d)
+    for d in credits:
+        if conn.execute("SELECT 1 FROM artists WHERE mbid = ?", (d["artist_mbid"],)).fetchone():
+            add("recording_artists", d)
+    for d in _answer_rows(answer, "flavor"):
+        if d.get("subject_kind") == "recording" and d.get("subject_id") in keys:
+            add("flavor", d)
 
 
 def repair(conn, f, offer, answer) -> dict:
@@ -330,21 +411,18 @@ def repair(conn, f, offer, answer) -> dict:
 
     pcol = f["parent_column"]
     if f["parent"] == "recordings":
-        credits = [d for d in _answer_rows(answer, "recording_artists") if d["mbid"] in keys]
-        need = {d["artist_mbid"] for d in credits}
-        for d in _answer_rows(answer, "artists"):
-            if d["mbid"] in need:
-                add("artists", d)
-    for d in _answer_rows(answer, f["parent"]):
-        if d[pcol] in keys:
-            add(f["parent"], d)
-    if f["parent"] == "recordings":
-        for d in credits:
-            if conn.execute("SELECT 1 FROM artists WHERE mbid = ?", (d["artist_mbid"],)).fetchone():
-                add("recording_artists", d)
-        for d in _answer_rows(answer, "flavor"):
-            if d.get("subject_kind") == "recording" and d.get("subject_id") in keys:
-                add("flavor", d)
+        _recordings(conn, answer, keys, add)
+    elif f["parent"] == "release_recordings":
+        # [SPEC-LNK-072]: the node's tracklist, and the recordings it names first.
+        tracks = [d for d in _answer_rows(answer, "release_recordings") if d[pcol] in keys]
+        _recordings(conn, answer, {d["mbid"] for d in tracks}, add)
+        for d in tracks:
+            if conn.execute("SELECT 1 FROM recordings WHERE mbid = ?", (d["mbid"],)).fetchone():
+                add("release_recordings", d)
+    else:
+        for d in _answer_rows(answer, f["parent"]):
+            if d[pcol] in keys:
+                add(f["parent"], d)
     return added
 
 
@@ -434,6 +512,7 @@ def correct(catalogue: str, cfg: dict) -> dict:
         fetch = []
         for f in findings:
             f["offers"] = offers.get(f["id"], [])
+            f["cannot_say"] = cannot_say(f, answers)
             f["decision"] = decisions.get(f["id"])
             e = effect(f, decisions, f["offers"])
             # What the decision asked for, kept apart from what came of it: one that
@@ -443,7 +522,7 @@ def correct(catalogue: str, cfg: dict) -> dict:
                 conn.execute("SAVEPOINT finding")
                 try:
                     if e["effect"] == "remove":
-                        e["applied"] = {f["table"]: -remove(conn, f)}
+                        e["applied"] = remove(conn, f)
                     else:
                         a = answers[e["node"]]
                         o = next(o for o in f["offers"] if o["node"] == e["node"])
@@ -467,6 +546,7 @@ def correct(catalogue: str, cfg: dict) -> dict:
         conn.close()
     return {"findings": findings, "fetch": fetch, "hub_root": hub_root,
             "remaining": len(after), "asked": {n: {"by_recording": bool(a.get("by_recording")),
+                                                   "tracklists": bool(a.get("tracklists")),
                                                    "fetchable": bool(a.get("fetchable"))}
                                                for n, a in answers.items()},
             "not_asked": cfg.get("not_asked", {}), "carried_to": cfg.get("carried_to", []),
@@ -491,9 +571,15 @@ def report_lines(res: dict) -> list[str]:
         tag = f["effect"] + (f" from {f['node']}" if f.get("node") and f["effect"] != "held" else "")
         L.append(f"- `{f['id']}` **{tag}** -- {words(f)}" + (f" -- held: {f['why']}" if f.get("why") else ""))
         for o in f.get("offers", []):
+            if "tracks" in o:
+                L.append(f"  - {o['node']} holds a tracklist for it: {o['tracks']} track(s)")
+                continue
             L.append(f"  - {o['node']} holds {len(o['keys'])} of the {len(f['missing'])} missing"
                      + (f", and {len(o['files'])} file(s) naming them" if o["files"] else "")
                      + ("" if o["files_known"] or f["parent"] != "recordings" else "; which of its files name them, its build cannot say"))
+        if f.get("cannot_say"):
+            L.append(f"  - whether {', '.join(f['cannot_say'])} hold{'s' if len(f['cannot_say']) == 1 else ''} "
+                     "a tracklist for it, its build cannot say [SPEC-LNK-072]")
         if f.get("fetch"):
             L.append(f"  - to be copied to the hub at the commit: {len(f['fetch'])} file(s); the Export page then "
                      "sends them to the nodes without them [SPEC-LNK-054]")

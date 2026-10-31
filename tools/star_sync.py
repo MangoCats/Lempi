@@ -516,6 +516,7 @@ def baseline_from_rows(sent_lib, hub_lib, answer, out):
 ROW_KEY = {"cover_art": "release_mbid", "file_art": "audio_md5"}
 CATALOGUE_ROWS_NEEDED = 1    # [SPEC-STAR-945]: a player that answers `rows`
 LINK_FILES_NEEDED = 2        # [SPEC-LNK-050]: one that also lists its files by recording
+LINK_TRACKS_NEEDED = 3       # [SPEC-LNK-072]: ... and a release's own tracklist
 
 
 # ------------------------------------------------ links to nothing [SPEC070] --
@@ -548,18 +549,23 @@ def ask_links(mdir, player, run, name, snap, nd, want, node, links):
                       "answers no `rows` request [SPEC-LNK-040]")
     try:
         answer = meshmod.sync_step(mdir, player, "rows", stamp_of(run),
-                                   extra={"want": dict(want, files=[], by_recording=True)}, timeout=600.0)
+                                   extra={"want": dict(want, files=[], by_recording=True, tracklists=True)},
+                                   timeout=600.0)
     except (ValueError, OSError) as err:
         return None, f"WARNING: asked about the links to nothing and got no answer ({err}) [SPEC-LNK-040]"
     rec = {"answer": answer, "by_recording": cap >= LINK_FILES_NEEDED and bool(answer.get("by_recording")),
+           "tracklists": cap >= LINK_TRACKS_NEEDED and bool(answer.get("tracklists")),
            "fetchable": bool(node.get("host")), "root": node_music_root(os.path.join(nd, "summary.db"))}
     path = os.path.join(nd, "links.json")
     write_json(path, rec)
     seal(path)
     offers = ci.offers_of(links, {name: rec})
     held = sorted({k for xs in offers.values() for o in xs for k in o["keys"]})
+    empty = sum(1 for f in links if f.get("empty"))
+    unsaid = (f"; whether it holds a tracklist for the {empty} release(s) with none, this build cannot say "
+              "[SPEC-LNK-072]") if empty and not rec["tracklists"] else ""
     if not held:
-        return path, f"holds none of the {asked} key(s) the hub's catalogue names and does not hold [SPEC-LNK-040]"
+        return path, f"holds none of the {asked} key(s) the hub's catalogue names and does not hold [SPEC-LNK-040]" + unsaid
     files = sum(len(o["files"]) for xs in offers.values() for o in xs)
     line = (f"HOLDS {len(held)} of the {asked} key(s) the hub's catalogue names and does not hold, in "
             f"{len(offers)} finding(s): its links are whole there, and it can repair the hub's [SPEC-LNK-040]")
@@ -567,7 +573,7 @@ def ask_links(mdir, player, run, name, snap, nd, want, node, links):
         line += f"; {files} of its file(s) name them" if files else "; none of its files names them"
     else:
         line += "; which of its files name them, this build cannot say [SPEC-LNK-050]"
-    return path, line
+    return path, line + unsaid
 
 
 def node_rows(mdir, player, run, name, snap, sent_lib, nd, hub_copy, hub_library, last_sent_at):
@@ -853,9 +859,14 @@ def snapshot(plan, only=None):
         hc.close()
     want = ci.want_of(links)
     link_answers, not_asked = {}, {}
-    if links:
-        say(f"  {hub['name']}: {sum(len(f['rows']) for f in links)} catalogue row(s) name something it does not hold, "
-            f"in {len(links)} finding(s); each node taking part is asked whether it holds them [SPEC070]")
+    dangling = [f for f in links if not f.get("empty")]
+    empties = len(links) - len(dangling)
+    if dangling:
+        say(f"  {hub['name']}: {sum(len(f['rows']) for f in dangling)} catalogue row(s) name something it does not hold, "
+            f"in {len(dangling)} finding(s); each node taking part is asked whether it holds them [SPEC070]")
+    if empties:
+        say(f"  {hub['name']}: {empties} release(s) with no tracklist; each node taking part is asked whether it "
+            "holds one [SPEC-LNK-070]")
     missing = {}
     # [SPEC-STAR-100]: every node, by signed request. An on-demand player is
     # started for this stage and stopped after it.

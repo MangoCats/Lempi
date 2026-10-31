@@ -1,6 +1,6 @@
 # SPEC070: A Link to Nothing
 
-**Design Specification — Tier 2 · written 2026-10-31, at the maintainer's direction · built 2026-10-31: found, said and decided in the sync; removal and repair carried by its commit · extends [SPEC046](SPEC046-star-sync.md) `[SPEC-STAR-110]`, `[SPEC-STAR-085]`**
+**Design Specification — Tier 2 · written 2026-10-31, at the maintainer's direction · built 2026-10-31: found, said and decided in the sync; removal and repair carried by its commit; a release with no tracklist found the same way (§7) · extends [SPEC046](SPEC046-star-sync.md) `[SPEC-STAR-110]`, `[SPEC-STAR-085]`**
 
 A catalogue row that names a row the catalogue does not hold. SQLite would
 refuse one with foreign keys on; most of the tools that write the catalogue
@@ -133,11 +133,35 @@ where each stands; `decide ID leave|remove|repair:NODE|repair-files:NODE`
 gives one decision, `decide all leave|remove` every undecided one. The Sync
 page shows the same, with the details, above the items for a verdict.
 
-## 7. Open
+## 7. A release with no tracklist
 
-**`[SPEC-LNK-900]`** A release whose whole tracklist was removed stays, empty:
-the five URL-named candidates would. Whether a candidate with no tracks should
-go too is a question about candidates, not links, and is not decided here.
+**`[SPEC-LNK-070]` A release no `release_recordings` row names is a finding of
+its own**, found beside the others at the merge: the far end of a link gone.
+The sync of `20261031T1948Z` made five, removing the whole tracklists of the
+URL-named candidates; no other release in the hub's 62,083 had none. One
+finding per release, its id from the release alone. It is not assumed to be
+junk: a release whose tracklist was never fetched looks the same, so it waits on
+a person like any other finding, and an undecided one is left.
+
+**`[SPEC-LNK-072]` Every player taking part is asked for a tracklist of its own**
+for it -- the `rows` request given the release, with `tracklists: true`
+(`catalogue_rows: 3`), answers the node's tracklist rows for it and the
+recordings they name. A node that holds one offers **repair from NODE**: its
+recordings are added first, with their artists, then the tracklist, never
+replacing a row the hub has `[SPEC-LNK-044]`. An earlier build cannot say, and
+the finding names it as one that *cannot say*, not as one holding none.
+
+**`[SPEC-LNK-074]` Remove takes the release and its covers**, `cover_art` first, on
+the hub and in every node's patch. A release a file is taken from
+(`file_releases`) is not removed: its tracklist is repaired from a node, or it is
+left. A removal decided before a node was seen holding a tracklist is held, as
+for a link `[SPEC-LNK-042]`.
+
+## 8. Open
+
+**`[SPEC-LNK-900]`** A release whose whole tracklist was removed stays, empty.
+*Decided 2026-10-31, at the maintainer's direction:* it is found as a release
+with no tracklist, and decided like any other finding `[SPEC-LNK-070]`.
 
 **`[SPEC-LNK-910]`** A node's own dangling references, ones the hub does not
 share, are not looked for: the hub asks only about the keys it is missing.
