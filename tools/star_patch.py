@@ -410,12 +410,32 @@ def make_values(baseline, target, tables=None, exclude=None, natural=False, omit
             if entry["rows"] or "create" in entry or "add_columns" in entry:
                 patch["tables"].append(entry)
         if natural:
+            built = []
             for name in NATURAL_ORDER:
                 if tables is not None and name not in tables:
                     continue
                 entry = natural_entry(b, t, name, set(exclude.get(name, ())))
                 if entry:
-                    patch["tables"].append(entry)
+                    built.append(entry)
+            # Removals first, children before parents; then the rest, parents
+            # first. A node's catalogue cascades -- `passages`, `file_tags` and
+            # `passage_recordings` are `ON DELETE CASCADE` from their parents --
+            # so a file removed ahead of its passages took them with it, and the
+            # passage's own removal then found no row: *passages: the row just
+            # written cannot be read back*, refused on bose and smartboardpc,
+            # 2026-10-31, the first sync ever to remove a file from a node (a
+            # disc ripped again, [SPEC-AGN-030]). The node checks every entry
+            # against its database before it writes any, so one table may come
+            # twice; each half keeps the table's new columns, added once.
+            removals, writes = [], []
+            for entry in built:
+                gone = [r for r in entry["rows"] if r["now"] is None]
+                rest = [r for r in entry["rows"] if r["now"] is not None]
+                if gone:
+                    removals.append(dict(entry, rows=gone))
+                if rest or not gone:
+                    writes.append(dict(entry, rows=rest))
+            patch["tables"] += list(reversed(removals)) + writes
     finally:
         b.close()
         t.close()

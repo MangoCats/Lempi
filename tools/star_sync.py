@@ -1189,14 +1189,14 @@ def patch(plan, run):
                         cat = None
             if cat is not None and parts is not None:
                 man = write_parts(pd, parts)
-                crow = {e["name"]: len(e["rows"]) for e in cat["tables"]}
+                crow = table_rows(cat)
                 summary.append("- catalogue: " + ", ".join(f"`{k}` {v}" for k, v in sorted(crow.items()))
                                + (" by natural key" if any("natural" in e for e in cat["tables"]) else "")
                                + f", {size / 1048576:.0f} MB in {man['of']} parts, staged on the node and committed there in one "
                                  "transaction [SPEC-NKP-920] (proven by the player's own rehearsal, strictly)")
             elif cat is not None:
                 write_json(os.path.join(pd, "catalogue.values.json"), cat)
-                crow = {e["name"]: len(e["rows"]) for e in cat["tables"]}
+                crow = table_rows(cat)
                 summary.append("- catalogue: " + (", ".join(f"`{k}` {v}" for k, v in sorted(crow.items())) or "nothing to send")
                                + (" by natural key" if any("natural" in e for e in cat["tables"]) else "")
                                + " (proven by the player's own rehearsal, strictly)")
@@ -1578,6 +1578,15 @@ def due(st, where, wanted):
     limit = now() - dt.timedelta(days=PROVE_DAYS)
     return sorted(o for o in wanted
                   if not st[where].get(o) or dt.datetime.fromisoformat(st[where][o]) < limit)
+
+
+def table_rows(patch) -> dict:
+    """Rows a patch carries, by table. Summed: a natural table's removals and
+    its writes are two entries since 2026-10-31 (`star_patch.make_values`)."""
+    out = {}
+    for e in patch["tables"]:
+        out[e["name"]] = out.get(e["name"], 0) + len(e["rows"])
+    return out
 
 
 def prove_local(root, wanted, st):

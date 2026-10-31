@@ -89,6 +89,10 @@ def apply_natural(db, patch):
     """`[SPEC-NKP-060]`: check every row against the database before the patch, then write
     parents first. Refuses the whole patch on one row not as expected; returns the counts."""
     c = sqlite3.connect(db)
+    # As a node's is: rusqlite's bundled SQLite enforces foreign keys, so a
+    # removed file takes its passages with it. Python's default does not, and
+    # this applier passed a patch the nodes refused, 2026-10-31.
+    c.execute("PRAGMA foreign_keys = ON")
     counts = {"applied": 0, "already": 0}
     plans = []
     try:
@@ -213,9 +217,17 @@ def main() -> int:
         expected = json.load(fh)
     check(dump(target) == expected, "and expected.json is the target, named without ids")
 
-    names = [e["name"] for e in patch["tables"]]
-    check(names == ["files", "passages", "passage_recordings"], f"parents before children, only what changed: {names}")
-    files = next(e for e in patch["tables"] if e["name"] == "files")
+    # Removals first, children before parents, then the rest, parents first: a
+    # node's cascade takes a removed file's passages with it, and a passage
+    # removal after its file's found no row -- the refusal on bose and
+    # smartboardpc, 2026-10-31, which `mesh_sync.rs` reproduces from this fixture.
+    names = [(e["name"], all(r["now"] is None for r in e["rows"])) for e in patch["tables"]]
+    check(names == [("passage_recordings", True), ("passages", True), ("files", True),
+                    ("files", False), ("passages", False), ("passage_recordings", False)],
+          f"removals children first, then the rest parents first, only what changed: {names}")
+    gone = [r["key"] for e in patch["tables"] if e["name"] in ("files", "passages") for r in e["rows"] if r["now"] is None]
+    check(gone == [["E", "radio", 0, 800], ["E"]], f"the retired file and its passage, removed: {gone}")
+    files = next(e for e in patch["tables"] if e["name"] == "files" and any(r["now"] is not None for r in e["rows"]))
     check(files["columns"] == ["audio_md5"] and "file_id" not in files["columns"],
           f"the surrogate and the machine-scope columns are not carried: {files['columns']}")
     check(not any(r["key"] == ["A"] for r in files["rows"]), "a file whose only change is a machine-scope column is not sent")
@@ -224,12 +236,13 @@ def main() -> int:
     new = next(r for r in files["rows"] if r["key"] == ["D"])
     check(new["was"] is None and new["also"] == {"path": "/hub/d", "first_seen": "hub-time"},
           f"a new file brings its machine-scope values as `also`: {new}")
-    pas = next(e for e in patch["tables"] if e["name"] == "passages")
+    pas = next(e for e in patch["tables"] if e["name"] == "passages" and any(r["now"] is not None for r in e["rows"]))
     check([r["key"] for r in pas["rows"]] == [["B", "radio", 0, 500], ["D", "radio", 0, 900]],
           f"a passage whose boundary moved is sent under its old span, and a child naming only a re-keyed file is not: "
           f"{[r['key'] for r in pas['rows']]}")
-    kids = next(e for e in patch["tables"] if e["name"] == "passage_recordings")
-    check(len(kids["rows"]) == 3 and any(r["now"] is None for r in kids["rows"]), "a child's delete, change and insert")
+    kids = [r for e in patch["tables"] if e["name"] == "passage_recordings" for r in e["rows"]]
+    check(len(kids) == 4 and sum(r["now"] is None for r in kids) == 2,
+          "a child's delete, change and insert, and the retired passage's recording")
 
     # The reference applier takes the node to the target, whatever the node numbers.
     got = apply_natural(node, patch)

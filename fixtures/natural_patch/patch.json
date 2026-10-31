@@ -2,6 +2,140 @@
  "tables": [
   {
    "columns": [
+    "passage_id",
+    "mbid",
+    "weight"
+   ],
+   "key": [
+    "passage_id",
+    "mbid"
+   ],
+   "name": "passage_recordings",
+   "natural": {
+    "refs": [
+     {
+      "col": "passage_id",
+      "kind": "passage"
+     }
+    ],
+    "surrogate": null
+   },
+   "rows": [
+    {
+     "key": [
+      [
+       "A",
+       "radio",
+       0,
+       1000
+      ],
+      "m-a"
+     ],
+     "now": null,
+     "was": [
+      [
+       "A",
+       "radio",
+       0,
+       1000
+      ],
+      "m-a",
+      1.0
+     ]
+    },
+    {
+     "key": [
+      [
+       "E",
+       "radio",
+       0,
+       800
+      ],
+      "m-e"
+     ],
+     "now": null,
+     "was": [
+      [
+       "E",
+       "radio",
+       0,
+       800
+      ],
+      "m-e",
+      1.0
+     ]
+    }
+   ]
+  },
+  {
+   "columns": [
+    "file_id",
+    "kind",
+    "start_ms",
+    "end_ms",
+    "gain"
+   ],
+   "key": [
+    "file_id",
+    "kind",
+    "start_ms",
+    "end_ms"
+   ],
+   "name": "passages",
+   "natural": {
+    "refs": [
+     {
+      "col": "file_id",
+      "kind": "file"
+     }
+    ],
+    "surrogate": "passage_id"
+   },
+   "rows": [
+    {
+     "key": [
+      "E",
+      "radio",
+      0,
+      800
+     ],
+     "now": null,
+     "was": [
+      "E",
+      "radio",
+      0,
+      800,
+      null
+     ]
+    }
+   ]
+  },
+  {
+   "columns": [
+    "audio_md5"
+   ],
+   "key": [
+    "audio_md5"
+   ],
+   "name": "files",
+   "natural": {
+    "refs": [],
+    "surrogate": "file_id"
+   },
+   "rows": [
+    {
+     "key": [
+      "E"
+     ],
+     "now": null,
+     "was": [
+      "E"
+     ]
+    }
+   ]
+  },
+  {
+   "columns": [
     "audio_md5"
    ],
    "key": [
@@ -125,28 +259,6 @@
     "surrogate": null
    },
    "rows": [
-    {
-     "key": [
-      [
-       "A",
-       "radio",
-       0,
-       1000
-      ],
-      "m-a"
-     ],
-     "now": null,
-     "was": [
-      [
-       "A",
-       "radio",
-       0,
-       1000
-      ],
-      "m-a",
-      1.0
-     ]
-    },
     {
      "key": [
       [
