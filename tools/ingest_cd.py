@@ -183,6 +183,15 @@ _BAD_NAME = str.maketrans({c: "_" for c in '<>:"/\\|?*'})
 _TRAILING = " .,;:-_&+"
 
 
+def ensure_gapless_column(conn) -> None:
+    """`files.gapless` `[SPEC-AGN-062]`, on a library from before it. The
+    same already-present-is-expected shape as `ensure_sha256_column`."""
+    try:
+        conn.execute("ALTER TABLE files ADD COLUMN gapless INTEGER")
+    except sqlite3.OperationalError:
+        pass
+
+
 def safe_name(text: str) -> str:
     """A folder name Windows accepts: no reserved characters, no trailing dot
     or space."""
@@ -1263,10 +1272,11 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
     # a bundle checks its copy against, and how a speaker or phone that already
     # holds the file finds it. Missing from every CD add until 2026-10-01.
     ensure_sha256_column(conn)
+    ensure_gapless_column(conn)     # its files decode trimmed [SPEC-AGN-062]
     cur = conn.execute(
         "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,"
-        "                   first_seen,last_seen,md5_generator,sha256)"
-        " VALUES (?1,?2,?3,?4,'mp3',?5,?6,?6,?7,?8)",
+        "                   first_seen,last_seen,md5_generator,sha256,gapless)"
+        " VALUES (?1,?2,?3,?4,'mp3',?5,?6,?6,?7,?8,1)",
         (audio_md5, mp3_path, st.st_size, st.st_mtime, total_ms, now,
          ingest_folder.md5_generator(), sha256_file(mp3_path)))
     file_id = cur.lastrowid
@@ -1589,6 +1599,7 @@ def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[
     now = _now()
     ingest_folder.ensure_md5_generator_column(conn)
     ensure_sha256_column(conn)
+    ensure_gapless_column(conn)     # its files decode trimmed [SPEC-AGN-062]
     counts = {"identified": 0, "ambiguous": 0, "unidentified": 0}
     failed, file_ids, mbids = 0, [], []
     certain = chosen or (disc_outcome == "exact" and len(releases) == 1)
@@ -1597,8 +1608,8 @@ def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[
         end_ms = t.end_ms
         file_id = conn.execute(
             "INSERT INTO files (audio_md5,path,size_bytes,mtime,format,duration_ms,"
-            "                   first_seen,last_seen,md5_generator,sha256)"
-            " VALUES (?1,?2,?3,?4,'mp3',?5,?6,?6,?7,?8)",
+            "                   first_seen,last_seen,md5_generator,sha256,gapless)"
+            " VALUES (?1,?2,?3,?4,'mp3',?5,?6,?6,?7,?8,1)",
             (audio_md5, mp3_path, st.st_size, st.st_mtime, end_ms, now,
              ingest_folder.md5_generator(), sha256_file(mp3_path))).lastrowid
         file_ids.append(file_id)

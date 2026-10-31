@@ -184,6 +184,7 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "", slim=froze
     # absent falls back to `passages`' own schema default `[SPEC008 §3]`.
     have_fade = has_column(conn, "passages", "fade_in_ms")
     have_hold = has_column(conn, "passages", "director_hold")
+    have_gapless = has_column(conn, "files", "gapless")
     # A file with no release has a cover of its own [SPEC-COV-040]: it travels
     # on its encoding, as a release's travels on the release.
     have_file_art = has_table(conn, "file_art")
@@ -257,6 +258,11 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "", slim=froze
             },
             "passages": passages,
         })
+        if have_gapless and f["gapless"] == 1:
+            # How the file is decoded [SPEC-AGN-062]: every passage on it was
+            # placed against the trimmed decode, so a receiver must trim too.
+            # Sent only when set; absent leaves the receiver's value alone.
+            encodings[-1]["gapless"] = True
         if have_file_art:
             cover = cover_entry(f"file-{f['audio_md5']}", conn.execute(
                 "SELECT front, back, source, fetched_at FROM file_art WHERE audio_md5 = ?",

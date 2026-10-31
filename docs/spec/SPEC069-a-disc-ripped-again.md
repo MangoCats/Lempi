@@ -1,6 +1,6 @@
 # SPEC069: A Disc Ripped Again
 
-**Design Specification — Tier 2 · written 2026-10-30, at the maintainer's direction · step 1 of §4 built 2026-10-30, the rest not yet · extends [SPEC056](SPEC056-cd-import.md) `[SPEC-CDI-047]`, `[SPEC-CDI-094]`**
+**Design Specification — Tier 2 · written 2026-10-30, at the maintainer's direction · steps 1 and 2 of §4 built 2026-10-30, the merge not yet · extends [SPEC056](SPEC056-cd-import.md) `[SPEC-CDI-047]`, `[SPEC-CDI-094]`**
 
 A disc already in the library, ripped a second time. On 2026-10-30 a DAO rip
 of *Highway 61 Revisited* -- all nine tracks, every one accurately ripped --
@@ -154,6 +154,17 @@ is and still move what each one points at by 25 ms -- a boundary set by ear
 in a file this import never touched included. A file already in the library
 keeps today's decoding, and every boundary on it plays exactly as before.
 
+*Built 2026-10-30.* The choice is `files.gapless`: 1 for each file the CD
+import writes, NULL for every other. The player reads it through the one column
+list every loader shares, as `0` on a library without the column, and the
+waveform editor decodes a file as playback does, so a boundary set by ear there
+lands where it is heard. It reaches a speaker in the bundle, as `"gapless":
+true` on the file's encoding ([SPEC014](SPEC014-payload-schema.md)
+`[SPEC-PL-088]`). Measured the same day, ffmpeg -- which `tools/` analyses with
+-- already trims: its decode of the DAO MP3 sits at lag 0 against the disc, so
+a gapless file and its analysis now agree, where every other MP3's analysis
+sits 1,105 samples from what the player plays.
+
 **`[SPEC-AGN-064]` A passage starting mid-file is decoded from before it.**
 After a seek into the middle of an MP3 the first packets come out wrong: up to
 499 samples of digital silence, then distortion, for up to 26 ms -- at 6 of the
@@ -178,6 +189,17 @@ DAO file -- inaudible where a disc leaves silence between its tracks, a
 dropout where it does not `[SPEC-ALB-910]`. An end that meets its disc
 neighbour has no fade; the first and last ends of a run keep theirs.
 
+*Built 2026-10-30, for the files the CD import writes alone*
+(`QueueEntry::runs_into`): a passage followed by one starting where it ends,
+on the same gapless file, ends without its fade-out, and the next begins
+without its fade-in; a passage played on its own keeps both. Measured through
+the engine on the DAO MP3 at four places, the production fades in place: on
+the gapless file, 0 ms disturbed and the level within 0.5 dB of the disc at
+every one; on the same file unmarked, the −70 to −78 dB dip as before, since
+no album already held changes. Extending it to them -- at a join where both
+fades are still the untouched default, so a fade set by hand stays -- is a
+choice offered later, not made here.
+
 **`[SPEC-AGN-070]` A join is butted, not crossfaded.** A constant-gain
 crossfade -- curves that sum to one, as linear and cosine do and exponential
 does not -- is inaudible only if the two sides are the same audio at the same
@@ -193,9 +215,7 @@ measured join is found that a butt cannot make clean.
 1. The clash found before encoding, and the earlier rip named, `[SPEC-AGN-015]`
    -- built 2026-10-30.
 2. The player, `[SPEC-AGN-062]`, `[SPEC-AGN-064]` and `[SPEC-AGN-068]`, measured
-   again with the probe; the probe's table is the test. The preroll built
-   2026-10-30; the other two wait on where a file's decoding is kept
-   `[SPEC-AGN-900]` and on which fades a join may set aside.
+   again with the probe; the probe's table is the test -- built 2026-10-30.
 3. The merge, `[SPEC-AGN-020]`–`[SPEC-AGN-035]`, `[SPEC-AGN-050]` and
    samples at a join `[SPEC-AGN-066]`, for a library album of track files --
    the 29 -- with *Highway 61* first.
@@ -204,12 +224,10 @@ measured join is found that a butt cannot make clean.
 
 ## 5. Open
 
-**`[SPEC-AGN-900]`** Where a file's way of decoding is kept, and how it
-reaches the speakers with the catalogue, is not designed. Until it is, nothing
-decodes gapless `[SPEC-AGN-062]`. The DAO passages already held stay 1,105
-samples early against their CUE times, as they have always played; the
-analysis in `tools/` decodes with ffmpeg, which is expected to trim the delay
-(not measured), so its positions may sit 25 ms from the player's.
+**`[SPEC-AGN-900]`** A speaker running a player built before 2026-10-30
+ignores `"gapless"` and plays such a file untrimmed, 25 ms early, until it is
+updated; not yet measured on one. The DAO passages already held stay 1,105
+samples early against their CUE times, as they have always played.
 
 **`[SPEC-AGN-910]`** Measured, not yet listened to. The probe's renders are
 the evidence; nobody has heard a repaired album across a segue.

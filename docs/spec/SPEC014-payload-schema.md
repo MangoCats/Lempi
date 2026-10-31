@@ -113,6 +113,16 @@ The one payload `[SPEC-DF-065]` promises and does not contain. Written because `
 
 ---
 
+**`[SPEC-PL-088]` An encoding the CD import marked carries `"gapless": true`.**
+Since 2026-10-30 a file the import writes is decoded with its MP3 encoder
+delay and padding trimmed, and every passage on it is placed against that
+decode ([SPEC069](SPEC069-a-disc-ripped-again.md) `[SPEC-AGN-062]`), so a
+receiver that did not trim would play each one 1,105 samples early. Sent only
+when `files.gapless` is 1; absent leaves the receiver's value alone, since a
+sender from before the setting says nothing about it. The receiver writes it
+on a new file and on one it already holds. A player built before it ignores
+the key, and plays the file untrimmed.
+
 ## 5. Size, and a correction
 
 **`[SPEC-PL-090]`** Measured on fixture `01` — four recordings, full 71-characteristic flavor:

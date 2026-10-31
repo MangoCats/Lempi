@@ -861,6 +861,10 @@ def test_end_to_end():
         check(path == os.path.join(home, "Artist - Album.mp3"), f"the catalogue names the album's home, got {path!r}")
         from byte_hash import sha256_file
         check(sha == sha256_file(path), f"and records its byte hash, as folder induction does [REQ-AND-960]: {sha}")
+        c = sqlite3.connect(db)
+        check(c.execute("SELECT gapless FROM files").fetchone()[0] == 1,
+              "and marks it decoded gapless, as every file this import writes [SPEC-AGN-062]")
+        c.close()
 
         # [SPEC-CDI-047]: the same edition again -- a different rip, so the
         # audio hash cannot catch it -- is refused before anything is encoded,
@@ -988,6 +992,8 @@ def test_tracks_end_to_end():
         from byte_hash import sha256_file
         check(all(f["sha256"] == sha256_file(f["path"]) for f in files),
               "each track's byte hash recorded [REQ-AND-960]")
+        check([r[0] for r in c.execute("SELECT gapless FROM files")] == [1, 1],
+              "each track's file marked decoded gapless [SPEC-AGN-062]")
         check([os.path.basename(f["path"]) for f in files] == ["01. One.mp3", "02. Two.mp3"]
               and all(os.path.dirname(f["path"]) == home for f in files), f"{[tuple(f) for f in files]}")
         ps = c.execute("SELECT f.path, p.kind, p.start_ms, p.end_ms, p.director_hold FROM passages p "

@@ -957,6 +957,7 @@ mod tests {
             start_ms: 0,
             end_ms: 200_000,
             file_ms: 0,
+            gapless: false,
             lead_in_ms: 0,
             lead_out_ms: 0,
             fade_in_ms: 0,
@@ -2160,7 +2161,7 @@ mod tests {
     #[test]
     fn decode_window_wav_serves_only_the_requested_span() {
         let f = crate::decoder::tests::tmp("edit_audio"); // 5s of 44.1kHz stereo
-        let wav = decode_window_wav(&f, 1_000, 2_000).expect("a readable fixture");
+        let wav = decode_window_wav(&f, false, 1_000, 2_000).expect("a readable fixture");
         assert_eq!(&wav[0..4], b"RIFF");
         let data_len = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]) as usize;
         let got_frames = data_len / 2 / 2; // bytes -> int16 samples -> stereo frames
@@ -2180,7 +2181,7 @@ mod tests {
     #[test]
     fn overview_peaks_cover_the_whole_file_in_buckets() {
         let f = crate::decoder::tests::tmp("edit_overview"); // 5s ramp, 44.1kHz stereo
-        let ov = overview_peaks(&f, OVERVIEW_BUCKET_MS).expect("a readable fixture");
+        let ov = overview_peaks(&f, false, OVERVIEW_BUCKET_MS).expect("a readable fixture");
         assert_eq!(ov.bucket_ms, OVERVIEW_BUCKET_MS);
         assert!((ov.decoded_ms as i64 - 5_000).abs() <= 1, "decoded {} ms of a 5 s file", ov.decoded_ms);
         assert_eq!(ov.peaks.len(), 2 * 50, "5 s in 100 ms buckets is 50 min/max pairs");
@@ -2192,8 +2193,8 @@ mod tests {
         assert!((maxes[49] - top).abs() <= 1, "last peak {} should be the ramp's top {top}", maxes[49]);
 
         // Kept, not decoded again, for the next passage of the same file.
-        let a = cached_overview(&f).expect("first read");
-        let b = cached_overview(&f).expect("second read");
+        let a = cached_overview(&f, false).expect("first read");
+        let b = cached_overview(&f, false).expect("second read");
         assert!(std::sync::Arc::ptr_eq(&a, &b), "the same file must be served from the cache");
         std::fs::remove_file(&f).ok();
     }
@@ -2208,7 +2209,7 @@ mod tests {
         // Ask for far more than the fixture even contains -- the cap must
         // still be the thing that bounds the *request*, not merely the
         // fixture's own short length standing in for it by coincidence.
-        let wav = decode_window_wav(&f, 0, EDIT_AUDIO_MAX_MS * 10).expect("a readable fixture");
+        let wav = decode_window_wav(&f, false, 0, EDIT_AUDIO_MAX_MS * 10).expect("a readable fixture");
         let data_len = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]) as usize;
         let got_frames = data_len / 2 / 2;
         // The fixture itself is only 5s, so this mostly confirms decoding

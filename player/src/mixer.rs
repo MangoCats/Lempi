@@ -223,6 +223,10 @@ pub struct Stream {
     /// Suppress the passage's fade-out while an A-B loop is active
     /// `[SPEC-TPL-030]`.
     pub suppress_fade_out: bool,
+    /// The next passage carries straight on from this one's last frame
+    /// `[SPEC-AGN-068]`, so this one ends without its fade-out. Apart from
+    /// `suppress_fade_out`, which an A-B loop sets and clears as it pleases.
+    pub runs_on: bool,
     /// Playback tempo in milli-x (`1000` = `1.00x`), used to scale
     /// envelope progression to passage content time `[SPEC-TPL-070]`.
     pub tempo_milli: u32,
@@ -238,6 +242,7 @@ impl Stream {
             channels,
             finished: false,
             suppress_fade_out: false,
+            runs_on: false,
             tempo_milli: 1000,
         }
     }
@@ -248,7 +253,7 @@ impl Stream {
     /// always already faded -- the invariant the mixer relies on.
     pub fn push(&mut self, samples: &mut [f32]) -> usize {
         let ch = self.channels.max(1);
-        let env = if self.suppress_fade_out {
+        let env = if self.suppress_fade_out || self.runs_on {
             Envelope {
                 fade_in: self.envelope.fade_in,
                 fade_out: crate::fade::Fade::none(),

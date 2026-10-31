@@ -36,6 +36,7 @@ fn main() {
                 start_ms: start,
                 end_ms: end,
                 file_ms: 0,
+                gapless: false,
                 lead_in_ms: lin,
                 lead_out_ms: lout,
                 // The production default `[SPEC-SUI-226]` -- this tool

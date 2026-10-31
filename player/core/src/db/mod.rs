@@ -160,6 +160,21 @@ pub fn attach_library(
 /// which schema a catalog table actually resolves to `[IMPL-DBSPLIT-035]`.
 pub(crate) const LIB_PLACEHOLDER: &str = "__LIB__.";
 
+/// `files.gapless` `[SPEC-AGN-062]` where the library has the column, `0`
+/// where it does not -- a speaker's, until a bundle carrying the setting
+/// arrives -- so the one column list every loader shares (`COLS`) reads on
+/// both. Resolved by [`QualifyingConn::qualify`], against the `f` alias
+/// `COLS` and `FROM` give `files`.
+pub(crate) const GAPLESS_PLACEHOLDER: &str = "__FILES_GAPLESS__";
+
+/// `files.gapless` `[SPEC-AGN-062]`: 1 for a file the CD import wrote, which
+/// is decoded with its MP3 encoder delay and padding trimmed; NULL for every
+/// other, decoded as it always was. The same already-present-is-expected
+/// shape as [`ensure_sha256_column`].
+pub fn ensure_gapless_column(conn: &rusqlite::Connection) {
+    let _ = conn.execute("ALTER TABLE files ADD COLUMN gapless INTEGER", []);
+}
+
 /// Wraps a [`Connection`](rusqlite::Connection) that has already run
 /// [`attach_library`], and rewrites `__LIB__.`-prefixed catalog references
 /// in every query text passed through it before handing the query to
@@ -180,6 +195,10 @@ pub(crate) const LIB_PLACEHOLDER: &str = "__LIB__.";
 pub struct QualifyingConn {
     conn: rusqlite::Connection,
     lib: &'static str,
+    /// `files.gapless` has been seen. Latched, never cleared: a column once
+    /// added is not taken away, and a bundle import can add it while the
+    /// player runs, so absence is asked again rather than remembered.
+    gapless: std::sync::atomic::AtomicBool,
 }
 
 impl QualifyingConn {
@@ -216,7 +235,7 @@ impl QualifyingConn {
         conn.execute("PRAGMA foreign_keys = OFF", [])
             .map_err(|e| DbError::Open(e.to_string()))?;
         let lib = attach_library(&conn, db_path, library_path)?;
-        Ok(Self { conn, lib })
+        Ok(Self { conn, lib, gapless: Default::default() })
     }
 
     /// Wraps an already-open connection as unsplit (`lib = "main"`),
@@ -227,7 +246,7 @@ impl QualifyingConn {
     /// just to get a `QualifyingConn`.
     #[cfg(test)]
     pub(crate) fn wrap_unsplit(conn: rusqlite::Connection) -> Self {
-        Self { conn, lib: "main" }
+        Self { conn, lib: "main", gapless: Default::default() }
     }
 
     /// `"lib"` on every installation, all of them split `[IMPL-DBSPLIT-025]`;
@@ -239,7 +258,33 @@ impl QualifyingConn {
         self.lib
     }
 
+    /// Whether the library's `files` has `gapless` -- asked until it does.
+    fn has_gapless(&self) -> bool {
+        use std::sync::atomic::Ordering::Relaxed;
+        if self.gapless.load(Relaxed) {
+            return true;
+        }
+        let found = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('files', ?1) WHERE name = 'gapless'",
+                [self.lib],
+                |r| r.get::<_, i64>(0),
+            )
+            .is_ok_and(|n| n > 0);
+        if found {
+            self.gapless.store(true, Relaxed);
+        }
+        found
+    }
+
     fn qualify<'a>(&self, sql: &'a str) -> std::borrow::Cow<'a, str> {
+        let sql: std::borrow::Cow<'a, str> = if sql.contains(GAPLESS_PLACEHOLDER) {
+            let col = if self.has_gapless() { "f.gapless" } else { "0" };
+            std::borrow::Cow::Owned(sql.replace(GAPLESS_PLACEHOLDER, col))
+        } else {
+            std::borrow::Cow::Borrowed(sql)
+        };
         if sql.contains(LIB_PLACEHOLDER) {
             std::borrow::Cow::Owned(if self.lib == "main" {
                 sql.replace(LIB_PLACEHOLDER, "")
@@ -247,7 +292,7 @@ impl QualifyingConn {
                 sql.replace(LIB_PLACEHOLDER, &format!("{}.", self.lib))
             })
         } else {
-            std::borrow::Cow::Borrowed(sql)
+            sql
         }
     }
 

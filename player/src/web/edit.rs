@@ -192,7 +192,7 @@ pub(super) async fn edit_audio(
         // request that omits them, not the primary path.
         let from = want_from.unwrap_or(entry.start_ms);
         let to = want_to.unwrap_or(entry.end_ms).max(from + 1);
-        decode_window_wav(&entry.path, from, to)
+        decode_window_wav(&entry.path, entry.gapless, from, to)
     })
     .await
     .ok()
@@ -221,12 +221,14 @@ pub(super) const EDIT_AUDIO_MAX_MS: u64 = 30 * 60 * 1000;
 /// HTTP round trip -- the same shape `read_audio_range` (its predecessor)
 /// used to keep the filesystem-touching logic reachable from a plain test.
 #[cfg(feature = "vipunen-support")]
-pub(super) fn decode_window_wav(path: &std::path::Path, from_ms: u64, to_ms: u64) -> Option<Vec<u8>> {
+pub(super) fn decode_window_wav(path: &std::path::Path, gapless: bool, from_ms: u64, to_ms: u64) -> Option<Vec<u8>> {
     // A cap independent of what is asked for: a malformed or malicious
     // request cannot reintroduce the whole-file problem this exists to fix,
     // no matter what `from_ms`/`to_ms` claim.
     let to_ms = to_ms.min(from_ms + EDIT_AUDIO_MAX_MS);
-    let mut dec = crate::decoder::PassageDecoder::open(path, from_ms, Some(to_ms)).ok()?;
+    // Decoded as the passage plays `[SPEC-AGN-062]`, or a boundary set by
+    // ear here would sit 25 ms from where it is heard.
+    let mut dec = crate::decoder::PassageDecoder::open_at(path, from_ms, Some(to_ms), 0, gapless).ok()?;
     let (sr, ch) = (dec.sample_rate, dec.channels as u16);
     let mut samples: Vec<f32> = Vec::new();
     while let Ok(Some(chunk)) = dec.next() {
@@ -260,7 +262,7 @@ pub(super) async fn edit_overview(
     let found = tokio::task::spawn_blocking(move || {
         let lib = crate::db::Library::open_split(&db, &library).ok()?;
         let entry = lib.passage(passage_id).ok()?;
-        cached_overview(&entry.path)
+        cached_overview(&entry.path, entry.gapless)
     })
     .await
     .ok()
@@ -298,7 +300,7 @@ pub(super) struct Overview {
 /// so a changed file is read again rather than served stale. Several passages
 /// share one file -- the reason it is worth keeping at all.
 #[cfg(feature = "vipunen-support")]
-type OverviewKey = (std::path::PathBuf, Option<std::time::SystemTime>, u64);
+type OverviewKey = (std::path::PathBuf, Option<std::time::SystemTime>, u64, bool);
 #[cfg(feature = "vipunen-support")]
 static OVERVIEW_CACHE: std::sync::Mutex<Vec<(OverviewKey, std::sync::Arc<Overview>)>> =
     std::sync::Mutex::new(Vec::new());
@@ -306,9 +308,9 @@ static OVERVIEW_CACHE: std::sync::Mutex<Vec<(OverviewKey, std::sync::Arc<Overvie
 const OVERVIEW_CACHE_FILES: usize = 4;
 
 #[cfg(feature = "vipunen-support")]
-pub(super) fn cached_overview(path: &std::path::Path) -> Option<std::sync::Arc<Overview>> {
+pub(super) fn cached_overview(path: &std::path::Path, gapless: bool) -> Option<std::sync::Arc<Overview>> {
     let meta = std::fs::metadata(path).ok()?;
-    let key: OverviewKey = (path.to_path_buf(), meta.modified().ok(), meta.len());
+    let key: OverviewKey = (path.to_path_buf(), meta.modified().ok(), meta.len(), gapless);
     if let Ok(cache) = OVERVIEW_CACHE.lock() {
         if let Some((_, ov)) = cache.iter().find(|(k, _)| *k == key) {
             return Some(ov.clone());
@@ -316,7 +318,7 @@ pub(super) fn cached_overview(path: &std::path::Path) -> Option<std::sync::Arc<O
     }
     // Decoded outside the lock: two first requests for one file both pay for
     // it, which is cheaper than every other file's request waiting on it.
-    let ov = std::sync::Arc::new(overview_peaks(path, OVERVIEW_BUCKET_MS)?);
+    let ov = std::sync::Arc::new(overview_peaks(path, gapless, OVERVIEW_BUCKET_MS)?);
     if let Ok(mut cache) = OVERVIEW_CACHE.lock() {
         cache.retain(|(k, _)| *k != key);
         cache.push((key, ov.clone()));
@@ -330,8 +332,8 @@ pub(super) fn cached_overview(path: &std::path::Path) -> Option<std::sync::Arc<O
 /// channels averaged first -- the same mono `edit.js` draws its detail from,
 /// so the two resolutions agree about what the signal is.
 #[cfg(feature = "vipunen-support")]
-pub(super) fn overview_peaks(path: &std::path::Path, bucket_ms: u64) -> Option<Overview> {
-    let mut dec = crate::decoder::PassageDecoder::open(path, 0, None).ok()?;
+pub(super) fn overview_peaks(path: &std::path::Path, gapless: bool, bucket_ms: u64) -> Option<Overview> {
+    let mut dec = crate::decoder::PassageDecoder::open_at(path, 0, None, 0, gapless).ok()?;
     let (sr, ch) = (dec.sample_rate as u64, dec.channels.max(1));
     let per_bucket = (sr * bucket_ms / 1000).max(1);
     let q = |v: f32| (v.clamp(-1.0, 1.0) * 127.0).round() as i8;

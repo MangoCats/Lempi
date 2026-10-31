@@ -505,6 +505,7 @@ mod tests {
             start_ms: 0,
             end_ms: 1000,
             file_ms: 0,
+            gapless: false,
             lead_in_ms: 0,
             lead_out_ms: 0,
             fade_in_ms: 0,

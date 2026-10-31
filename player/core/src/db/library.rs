@@ -68,7 +68,8 @@ pub(crate) const COLS: &str = "p.passage_id, f.path, p.start_ms, p.end_ms, f.dur
                                p.fade_in_ms, p.fade_out_ms, p.fade_in_curve, p.fade_out_curve, \
                                (SELECT pr.mbid FROM __LIB__.passage_recordings pr \
                                 WHERE pr.passage_id = p.passage_id \
-                                ORDER BY pr.weight DESC, pr.mbid LIMIT 1)";
+                                ORDER BY pr.weight DESC, pr.mbid LIMIT 1), \
+                               __FILES_GAPLESS__";
 pub(crate) const FROM: &str = "FROM __LIB__.passages p JOIN __LIB__.files f USING (file_id)";
 
 pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEntry> {
@@ -82,6 +83,9 @@ pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEnt
         // probed, which is a gap in knowledge rather than a zero-length file;
         // the interface shows it as unknown rather than as 0:00.
         file_ms: row.get::<_, Option<i64>>(4)?.unwrap_or(0).max(0) as u64,
+        // `[SPEC-AGN-062]`: 1 only where the CD import set it; NULL, and a
+        // library without the column (read as 0), decode as they always did.
+        gapless: row.get::<_, Option<i64>>(13)? == Some(1),
         // NULL lead means "not analysed": treat as no fade rather than
         // inventing one. overlap_ms then yields zero and the handover is
         // gapless, which is the safe default [XFD-OV-010].
@@ -2819,6 +2823,21 @@ mod tests {
         let lib = Library { conn: QualifyingConn::wrap_unsplit(fixture()) };
         assert!(lib.stored_art(2, false).is_none());
         assert!(lib.stored_art(2, true).is_none());
+    }
+
+    /// `[SPEC-AGN-062]`: a file is decoded gapless only where `files.gapless`
+    /// says so. A library without the column -- every speaker's until a
+    /// bundle carries it -- still plays, every file as before; and the column
+    /// added while the library is open is seen, as a bundle import adds it.
+    #[test]
+    fn a_file_is_gapless_only_where_the_catalogue_says_so() {
+        let lib = Library { conn: QualifyingConn::wrap_unsplit(fixture()) };
+        assert!(!lib.passage(1).unwrap().gapless, "no column: decoded as always");
+        crate::db::ensure_gapless_column(&lib.conn);
+        assert!(!lib.passage(1).unwrap().gapless, "NULL: decoded as always");
+        lib.conn.execute("UPDATE files SET gapless = 1 WHERE file_id = 1", []).unwrap();
+        assert!(lib.passage(1).unwrap().gapless && lib.passage(2).unwrap().gapless,
+                "set: both its passages decode trimmed");
     }
 
     /// A passage with no real id is not a *questionable* identification, it is

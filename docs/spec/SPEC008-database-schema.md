@@ -38,7 +38,7 @@ CREATE TABLE files (
     first_seen   TEXT    NOT NULL,
     last_seen    TEXT    NOT NULL,
     md5_generator TEXT,                     -- what hashed it [SPEC-SC-038]
-    sha256       TEXT                       -- the bytes' hash [SPEC-SC-039]
+    sha256       TEXT,  gapless INTEGER     -- the bytes' hash [SPEC-SC-039]; 1: decode trimmed [SPEC-AGN-062]
 );
 CREATE INDEX files_path ON files(path);
 CREATE INDEX files_sha256 ON files(sha256);

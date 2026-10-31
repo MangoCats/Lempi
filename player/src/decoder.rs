@@ -84,17 +84,20 @@ impl Drop for PassageDecoder {
 impl PassageDecoder {
     /// Open `path` and seek to `start_ms`, decoding at most `end_ms - start_ms`.
     /// `end_ms == None` means "to end of file".
+    /// Decoded as every file was before `[SPEC-AGN-062]`, untrimmed.
     pub fn open(path: &Path, start_ms: u64, end_ms: Option<u64>) -> Result<Self, DecodeError> {
-        Self::open_at(path, start_ms, end_ms, 0)
+        Self::open_at(path, start_ms, end_ms, 0, false)
     }
 
     /// Open `path` for the passage spanning `[start_ms, end_ms)` and begin
-    /// decoding `passage_offset_ms` into that passage `[SPEC-TPL-025]`.
+    /// decoding `passage_offset_ms` into that passage `[SPEC-TPL-025]`;
+    /// `gapless` is the file's own setting `[SPEC-AGN-062]`.
     pub fn open_at(
         path: &Path,
         start_ms: u64,
         end_ms: Option<u64>,
         passage_offset_ms: u64,
+        gapless: bool,
     ) -> Result<Self, DecodeError> {
         let file = File::open(path).map_err(DecodeError::Io)?;
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -103,7 +106,7 @@ impl PassageDecoder {
             hint.with_extension(ext);
         }
         let probed = symphonia::default::get_probe()
-            .format(&hint, mss, &format_options(), &MetadataOptions::default())
+            .format(&hint, mss, &format_options(gapless), &MetadataOptions::default())
             .map_err(DecodeError::Symphonia)?;
         let mut format = probed.format;
 
@@ -306,23 +309,16 @@ fn seek_before(
     Ok((ticks as f64 * tb.numer as f64 / tb.denom as f64 * sample_rate as f64).round() as u64)
 }
 
-/// How a file is opened. Gapless trimming -- dropping an MP3's encoder delay
-/// and padding, as its LAME tag records them -- is off, as it always has
-/// been, so a position in an MP3 is about 25 ms early against the audio it
-/// was encoded from. One file, one offset, and nobody hears it; a join
-/// between two files is where it shows. The join probe turns it on to
-/// measure that `[SPEC-AGN-060]`.
-#[cfg(not(test))]
-fn format_options() -> FormatOptions {
-    FormatOptions::default()
-}
-
-#[cfg(test)]
-fn format_options() -> FormatOptions {
-    FormatOptions {
-        enable_gapless: std::env::var_os("LEMPI_JOIN_GAPLESS").is_some(),
-        ..Default::default()
-    }
+/// How a file is opened `[SPEC-AGN-062]`. Gapless trimming -- dropping an
+/// MP3's encoder delay and padding, as its LAME tag records them -- is the
+/// file's own setting (`files.gapless`). Off, as every file was decoded until
+/// 2026-10-30, a position in an MP3 is 1,105 samples early against the audio
+/// it was encoded from: one file, one offset, and nobody hears it, but every
+/// boundary on it was set against that offset. On, a position is the audio's
+/// own -- the CUE's, and ffmpeg's, which `tools/` analyses with -- and a join
+/// between two files is clean to the sample.
+fn format_options(gapless: bool) -> FormatOptions {
+    FormatOptions { enable_gapless: gapless, ..Default::default() }
 }
 
 /// Interleave a decoded packet into `scratch`, converting to f32.

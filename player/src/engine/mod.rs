@@ -2124,6 +2124,14 @@ impl Engine {
             return; // already standing by
         }
         let entry = next.clone();
+        // [SPEC-AGN-068]: the passage sounding now ends without its fade-out
+        // where this one carries straight on from it -- decided here, while
+        // its tail is still to be decoded, and again whenever what comes
+        // next changes. The next one's fade-in is left out as it opens.
+        let runs = self.live.last().is_some_and(|h| h.entry.runs_into(&entry));
+        if let Some(h) = self.live.last_mut() {
+            h.stream.runs_on = runs;
+        }
         // Because tempo, pitch, and A-B loop reset to neutral on every track
         // change `[SPEC-TPL-010]`, `self.ready` is always pre-opened at neutral.
         match self.open_with_rates(
@@ -2167,7 +2175,7 @@ impl Engine {
         // Clamp: a resume point past the end (the passage was re-trimmed since)
         // must replay the passage, not decode nothing.
         let origin_ms = origin_ms.min(e.duration_ms().saturating_sub(1));
-        let dec = PassageDecoder::open_at(&e.path, e.start_ms, Some(e.end_ms), origin_ms)
+        let dec = PassageDecoder::open_at(&e.path, e.start_ms, Some(e.end_ms), origin_ms, e.gapless)
             .map_err(|err| err.to_string())?;
         let ch = dec.channels;
         // Pitch is the resampler's input rate `[SPEC-TPL-050]`; at neutral
@@ -2192,10 +2200,13 @@ impl Engine {
         // is seeded below from `origin_frames` for exactly this reason.
         let total_frames = (e.duration_ms() as f32 * sr / 1000.0) as u64;
         let origin_frames = (origin_ms as f32 * sr / 1000.0) as u64;
+        // [SPEC-AGN-068]: no fade-in where this carries straight on from the
+        // passage sounding now; `prepare_next` takes that one's fade-out.
+        let runs_on_from_head = self.live.last().is_some_and(|h| h.entry.runs_into(e));
         let envelope = Envelope {
             fade_in: Fade {
                 curve: e.fade_in_curve,
-                frames: (e.fade_in_ms as f32 * sr / 1000.0) as u64,
+                frames: if runs_on_from_head { 0 } else { (e.fade_in_ms as f32 * sr / 1000.0) as u64 },
                 fade_in: true,
             },
             fade_out: Fade {
@@ -3938,6 +3949,7 @@ mod tests {
             start_ms: 0,
             end_ms: 5_000,
             file_ms: 0,
+            gapless: false,
             lead_in_ms: 0,
             lead_out_ms: 0,
             // Pass-through, not the production default `[SPEC-SUI-226]` --
@@ -6795,6 +6807,76 @@ than one mix block");
         let _ = std::fs::remove_file(&path);
     }
 
+    /// `[SPEC-AGN-068]`: two passages back to back on one file, the second
+    /// starting where the first ends, each with the production 20 ms fades.
+    /// On a file the CD import wrote they play as the file does, straight
+    /// through; on any other the two fades still dip the join, as they always
+    /// have. A constant level makes the dip the only thing that can move.
+    #[test]
+    fn a_passage_that_runs_on_keeps_no_fade_at_the_join() {
+        let level = 0.5f32;
+        let wav = std::env::temp_dir().join(format!("lempi_runs_on_{}.wav", std::process::id()));
+        {
+            let frames = 44_100u32 * 2;
+            let data = frames * 4;
+            let mut v = Vec::with_capacity(44 + data as usize);
+            v.extend(b"RIFF");
+            v.extend((36 + data).to_le_bytes());
+            v.extend(b"WAVEfmt ");
+            v.extend(16u32.to_le_bytes());
+            v.extend(1u16.to_le_bytes());
+            v.extend(2u16.to_le_bytes());
+            v.extend(44_100u32.to_le_bytes());
+            v.extend((44_100u32 * 4).to_le_bytes());
+            v.extend(4u16.to_le_bytes());
+            v.extend(16u16.to_le_bytes());
+            v.extend(b"data");
+            v.extend(data.to_le_bytes());
+            let s = ((level * 32_768.0) as i16).to_le_bytes();
+            for _ in 0..frames * 2 {
+                v.extend(s);
+            }
+            std::fs::write(&wav, v).unwrap();
+        }
+        let lowest_near_the_join = |gapless: bool| -> f32 {
+            let mut a = entry(1, wav.to_str().unwrap());
+            let mut b = entry(2, wav.to_str().unwrap());
+            (a.start_ms, a.end_ms, b.start_ms, b.end_ms) = (0, 1_000, 1_000, 2_000);
+            for e in [&mut a, &mut b] {
+                (e.fade_in_ms, e.fade_out_ms, e.gapless) = (20, 20, gapless);
+            }
+            let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+            let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 1);
+            e.enqueue(a);
+            e.enqueue(b);
+            h.send(Command::Play);
+            e.drain_commands();
+            let mut got: Vec<f32> = Vec::new();
+            let mut quiet = 0;
+            while quiet < 2_000 {
+                e.tick();
+                let mut st = ring.state.lock().unwrap();
+                let len = st.ring.len();
+                if len == 0 {
+                    quiet += 1;
+                    continue;
+                }
+                quiet = 0;
+                let at = got.len();
+                got.resize(at + len, 0.0);
+                st.ring.read(&mut got[at..]);
+            }
+            // 100 ms either side of the join, at 44.1 kHz stereo.
+            let join = 44_100 * 2;
+            got[join - 8_820..join + 8_820].iter().fold(f32::MAX, |m, s| m.min(*s))
+        };
+        let through = lowest_near_the_join(true);
+        assert!((through - level).abs() < 0.01, "a file the CD import wrote plays straight through: {through}");
+        let dipped = lowest_near_the_join(false);
+        assert!(dipped < 0.05, "any other keeps its fades, and dips at the join: {dipped}");
+        let _ = std::fs::remove_file(&wav);
+    }
+
     /// **A probe, not a test** `[SPEC-AGN-060]`: two passages through the
     /// whole engine -- decode, envelope, admission, mix -- and what reaches
     /// the output ring written out as a float WAV, so a join can be measured
@@ -6830,6 +6912,9 @@ than one mix block");
         (a.start_ms, a.end_ms, a.lead_out_ms, a.fade_out_ms, a.fade_out_curve) = (sa, ea, lead_a, fade_a, curve_a);
         let mut b = entry(2, &pb);
         (b.start_ms, b.end_ms, b.lead_in_ms, b.fade_in_ms, b.fade_in_curve) = (sb, eb, lead_b, fade_b, curve_b);
+        // Both files as the CD import marks its own `[SPEC-AGN-062]`.
+        let gapless = std::env::var_os("LEMPI_JOIN_GAPLESS").is_some();
+        (a.gapless, b.gapless) = (gapless, gapless);
 
         let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
         let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 1);

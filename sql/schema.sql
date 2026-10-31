@@ -49,7 +49,14 @@ CREATE TABLE IF NOT EXISTS files (
     -- already. Set at induction (tools/ingest_folder.py) and by a bundle
     -- import that verified it; tools/add_byte_hashes.py fills existing rows.
     -- NULL means not yet hashed.
-    sha256        TEXT
+    sha256        TEXT,
+    -- 1: decode this file with its MP3 encoder delay and padding trimmed
+    -- [SPEC-AGN-062], so a position in it is the audio's own -- the CUE's, and
+    -- ffmpeg's. Set only by the CD import (tools/ingest_cd.py) for the files it
+    -- writes, and carried to a speaker in its bundle. NULL: decoded as every
+    -- file was before 2026-10-30, 1,105 samples early, which is what every
+    -- boundary already on it -- some set by ear -- was set against.
+    gapless       INTEGER
 );
 CREATE INDEX IF NOT EXISTS files_path ON files(path);
 CREATE INDEX IF NOT EXISTS files_sha256 ON files(sha256);

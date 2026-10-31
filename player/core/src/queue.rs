@@ -55,6 +55,12 @@ pub struct QueueEntry {
     /// what crosses to a backend `[SPEC-BK-030]`: a length it does not hold is a
     /// length the far side cannot show either.
     pub file_ms: u64,
+    /// Decode the file with its MP3 encoder delay and padding trimmed
+    /// `[SPEC-AGN-062]` -- `files.gapless`, set only by the CD import for the
+    /// files it writes. Off for every other file, which decodes as it always
+    /// has: its boundaries, some set by ear, were set against that decode,
+    /// and trimming would move what each one points at by 25 ms.
+    pub gapless: bool,
     /// Silence-to-full at the start; 0 means begin at full level.
     pub lead_in_ms: u64,
     /// Full-to-silence at the end; 0 means end abruptly.
@@ -160,6 +166,24 @@ impl QueueEntry {
         self.end_ms.saturating_sub(self.start_ms)
     }
 
+    /// Whether `next` carries on from this passage with nothing between them
+    /// `[SPEC-AGN-068]`: the same file, starting exactly where this one ends,
+    /// so the two played back to back are that file played through, and
+    /// neither fade belongs at the join. Measured 2026-10-30, those two 20 ms
+    /// fades dip the music to −82 dB for 38 ms at every such join.
+    ///
+    /// Only on files the CD import wrote, which are also the gapless ones
+    /// `[SPEC-AGN-062]`: an album already held keeps its fades until a person
+    /// chooses otherwise.
+    pub fn runs_into(&self, next: &QueueEntry) -> bool {
+        self.gapless
+            && next.gapless
+            && !self.is_shutdown
+            && !next.is_shutdown
+            && self.path == next.path
+            && self.end_ms == next.start_ms
+    }
+
     /// A human label for this passage.
     ///
     /// The filename stem, until Vipunen supplies real titles `[SPEC-SA-100]`.
@@ -228,6 +252,7 @@ impl QueueEntry {
             start_ms: 0,
             end_ms: 0,
             file_ms: 0,
+            gapless: false,
             lead_in_ms: 0,
             lead_out_ms: 0,
             fade_in_ms: 0,
@@ -666,6 +691,7 @@ mod tests {
             start_ms: 0,
             end_ms: dur_ms,
             file_ms: 0,
+            gapless: false,
             lead_in_ms: lead_in,
             lead_out_ms: lead_out,
             // Pass-through, not the production default `[SPEC-SUI-226]` --
@@ -682,6 +708,27 @@ mod tests {
             selected_by: None,
             is_shutdown: false,
         }
+    }
+
+    /// `[SPEC-AGN-068]`: a join with nothing between -- the same gapless file,
+    /// the next starting where this one ends -- and nothing else.
+    #[test]
+    fn a_passage_runs_into_its_neighbour_only_on_the_same_gapless_file() {
+        let span = |start: u64, end: u64| {
+            let mut e = entry(1, 0, 0, 0);
+            (e.start_ms, e.end_ms, e.gapless) = (start, end, true);
+            e
+        };
+        let (a, b) = (span(0, 6_000), span(6_000, 9_000));
+        assert!(a.runs_into(&b), "the next track of one disc file");
+        assert!(!b.runs_into(&a), "not backwards");
+        assert!(!a.runs_into(&span(6_001, 9_000)), "not across a gap of a millisecond");
+        let mut other = b.clone();
+        other.path = PathBuf::from("y.mp3");
+        assert!(!a.runs_into(&other), "not into another file");
+        let mut held_before = b.clone();
+        held_before.gapless = false;
+        assert!(!a.runs_into(&held_before), "not on a file decoded as it always was");
     }
 
     /// SPEC002's worked example: A lead-out 3s, B lead-in 5s, overlap 3s.

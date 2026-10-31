@@ -126,6 +126,21 @@ def test_a_decided_hold_travels_and_an_undecided_one_does_not():
     check(got == ["rip damaged", "", "ABSENT"], f"holds in the payload: {got}")
 
 
+def test_a_gapless_file_says_so_and_no_other_does():
+    """`[SPEC-AGN-062]` A file the CD import marked carries `"gapless": true`,
+    so a receiver trims it as the sender does; NULL, and a library without the
+    column, carry nothing -- absent leaves the receiver's value alone."""
+    conn = make_db(":memory:", SCHEMA)
+    conn.execute("INSERT INTO passages (passage_id,file_id,kind,start_ms,end_ms,boundary_src) "
+                 "VALUES (1,1,'radio',0,10000,'x')")
+    check("gapless" not in pl.build(conn, ["md5"])["encodings"][0], "no column: nothing said")
+    conn.execute("ALTER TABLE files ADD COLUMN gapless INTEGER")
+    check("gapless" not in pl.build(conn, ["md5"])["encodings"][0], "NULL: nothing said")
+    conn.execute("UPDATE files SET gapless = 1")
+    e = pl.build(conn, ["md5"])["encodings"][0]
+    check(e.get("gapless") is True, f"marked: said, got {e.get('gapless')!r}")
+
+
 def test_committed_fixture_09_round_trips():
     """`fixtures/payload/09-fade-fields.json` `[SPEC-PL-032]` -- the same file
     `player/src/bundle.rs`'s own test checks with `unacceptable()`, checked
@@ -324,6 +339,7 @@ def main() -> int:
     test_fade_travels_when_the_schema_has_it()
     test_fade_absent_from_a_pre_migration_source()
     test_a_decided_hold_travels_and_an_undecided_one_does_not()
+    test_a_gapless_file_says_so_and_no_other_does()
     test_committed_fixture_09_round_trips()
     test_byte_hash_is_optional_but_must_be_usable()
 

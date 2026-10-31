@@ -455,6 +455,7 @@ fn import_bound(
         crate::db::ensure_md5_generator_column(db);
         crate::db::ensure_sha256_column(db);
         crate::db::ensure_director_hold_column(db);
+        crate::db::ensure_gapless_column(db);
         rep.rekeyed = apply_aliases(db, doc)?;
     }
     // Asked, not assumed: a dry run adds no column, so on a library made
@@ -531,6 +532,7 @@ fn import_bound(
             }
             if apply {
                 set_file_release(&tx, &md5, e, &mut rep)?;
+                set_gapless(&tx, &md5, e)?;
             }
             rep.outcomes.push((md5, Landed::Already));
             continue;
@@ -634,6 +636,7 @@ fn import_bound(
         let file_id = tx.last_insert_rowid();
         rep.rows_written += 1;
         set_file_release(&tx, &md5, e, &mut rep)?;
+        set_gapless(&tx, &md5, e)?;
 
         if let Some(t) = e.get("tags").filter(|v| !v.is_null()) {
             // Tags travel although they are re-derivable: for audio with no
@@ -716,6 +719,20 @@ fn import_bound(
         tx.commit().map_err(|e| e.to_string())?;
     }
     Ok(rep)
+}
+
+/// How the file is decoded `[SPEC-AGN-062]`: `"gapless": true` in the
+/// payload, sent only for a file the CD import marked, is written to
+/// `files.gapless`, so a speaker trims what the hub trims and every passage
+/// on the file lands where the hub's does. Absent leaves the receiver's
+/// value alone -- a sender from before the setting says nothing about it.
+fn set_gapless(tx: &rusqlite::Transaction, md5: &str, e: &Value) -> Result<(), String> {
+    if e.get("gapless").and_then(Value::as_bool) != Some(true) {
+        return Ok(());
+    }
+    tx.execute("UPDATE files SET gapless = 1 WHERE audio_md5 = ?1 AND gapless IS NOT 1", [md5])
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// The release a file was taken from `[SPEC-SC-125]`, as the payload names it
@@ -2189,6 +2206,34 @@ mod tests {
         assert_eq!(rep.file_releases, 0, "the same again writes nothing");
         let rep = import(&mut c, &with("essential"), "b3", &audio_dir, true, Some(TEST_HASHER)).unwrap();
         assert_eq!((rep.file_releases, now(&c)), (1, "essential".into()), "a correction reaches a file already here");
+        std::fs::remove_dir_all(&audio_dir).ok();
+    }
+
+    /// `[SPEC-AGN-062]` A file the CD import marked arrives marked, so the
+    /// speaker trims it as the hub does; one sent without the mark is
+    /// decoded as it always was, and a later send carrying it reaches a file
+    /// already here.
+    #[test]
+    fn a_gapless_file_arrives_gapless_and_an_unmarked_one_does_not() {
+        let mut c = empty_library();
+        let audio_dir = std::env::temp_dir().join(format!("lempi-bundle-gapless-{}", std::process::id()));
+        std::fs::create_dir_all(&audio_dir).unwrap();
+        let audio_path = audio_dir.join("a.wav");
+        write_tiny_wav(&audio_path);
+        let md5 = (TEST_HASHER.hash)(&audio_path).unwrap();
+        let gapless = |c: &Connection| -> Option<i64> {
+            c.query_row("SELECT gapless FROM files", [], |r| r.get(0)).unwrap()
+        };
+        let plain = one_encoding_bundle(&md5, "m1", 0.5, "computed:x@1");
+        import(&mut c, &plain, "b1", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!(gapless(&c), None, "unmarked: decoded as always");
+        let mut marked = plain.clone();
+        marked["encodings"][0]["gapless"] = Value::Bool(true);
+        let rep = import(&mut c, &marked, "b2", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep.outcomes, vec![(md5.clone(), Landed::Already)]);
+        assert_eq!(gapless(&c), Some(1), "the mark reaches a file already here");
+        import(&mut c, &plain, "b3", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!(gapless(&c), Some(1), "and a send without it says nothing, so leaves it");
         std::fs::remove_dir_all(&audio_dir).ok();
     }
 
