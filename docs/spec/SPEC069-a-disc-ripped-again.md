@@ -159,7 +159,10 @@ After a seek into the middle of an MP3 the first packets come out wrong: up to
 499 samples of digital silence, then distortion, for up to 26 ms -- at 6 of the
 8 places measured, gapless or not, by where the seek lands in a frame. Every
 passage's 20 ms fade-in has hidden most of it. The decoder seeks some frames
-earlier and discards up to the exact sample.
+earlier and discards up to the exact sample. *Built 2026-10-30*
+(`PREROLL_MS`, 100 ms, in `player/src/decoder.rs`): the same eight places,
+gapless off and on, all sixteen measured clean -- 0 ms disturbed, the level
+within 0.6 dB of the disc -- and every lag as it was, so no passage moved.
 
 **`[SPEC-AGN-066]` Album passages that meet on the disc meet at a sample.**
 A track starts on a sector, 1/75 s, and a passage boundary is a whole
@@ -190,7 +193,9 @@ measured join is found that a butt cannot make clean.
 1. The clash found before encoding, and the earlier rip named, `[SPEC-AGN-015]`
    -- built 2026-10-30.
 2. The player, `[SPEC-AGN-062]`, `[SPEC-AGN-064]` and `[SPEC-AGN-068]`, measured
-   again with the probe; the probe's table is the test.
+   again with the probe; the probe's table is the test. The preroll built
+   2026-10-30; the other two wait on where a file's decoding is kept
+   `[SPEC-AGN-900]` and on which fades a join may set aside.
 3. The merge, `[SPEC-AGN-020]`–`[SPEC-AGN-035]`, `[SPEC-AGN-050]` and
    samples at a join `[SPEC-AGN-066]`, for a library album of track files --
    the 29 -- with *Highway 61* first.

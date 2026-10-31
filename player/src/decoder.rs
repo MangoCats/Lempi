@@ -25,7 +25,7 @@ use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use symphonia::core::units::Time;
+use symphonia::core::units::{Time, TimeBase};
 
 #[derive(Debug)]
 pub enum DecodeError {
@@ -115,6 +115,7 @@ impl PassageDecoder {
         let track_id = track.id;
         let sample_rate = track.codec_params.sample_rate.unwrap_or(44_100);
         let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(2);
+        let time_base = track.codec_params.time_base;
 
         let decoder = symphonia::default::get_codecs()
             .make(&track.codec_params, &DecoderOptions::default())
@@ -129,14 +130,7 @@ impl PassageDecoder {
         // from the requested start, drags the end boundary with it. Discard the
         // shortfall so start_ms means start_ms.
         let target_ms = start_ms.saturating_add(passage_offset_ms);
-        let mut skip_frames = 0u64;
-        if target_ms > 0 {
-            let t = Time::from(std::time::Duration::from_millis(target_ms));
-            let landed = format
-                .seek(SeekMode::Accurate, SeekTo::Time { time: t, track_id: Some(track_id) })
-                .map_err(DecodeError::Symphonia)?;
-            skip_frames = landed.required_ts.saturating_sub(landed.actual_ts);
-        }
+        let skip_frames = seek_before(&mut *format, track_id, time_base, sample_rate, target_ms)?;
 
         let frame_limit = end_ms.map(|e| {
             let span_ms = e.saturating_sub(target_ms);
@@ -166,16 +160,10 @@ impl PassageDecoder {
     /// `start_ms` without reopening the underlying file `[SPEC-TPL-025]`.
     pub fn seek_ms(&mut self, passage_offset_ms: u64) -> Result<(), DecodeError> {
         let target_ms = self.start_ms.saturating_add(passage_offset_ms);
-        let t = Time::from(std::time::Duration::from_millis(target_ms));
-        let landed = self
-            .format
-            .seek(
-                SeekMode::Accurate,
-                SeekTo::Time { time: t, track_id: Some(self.track_id) },
-            )
-            .map_err(DecodeError::Symphonia)?;
+        let time_base = self.format.tracks().iter().find(|t| t.id == self.track_id)
+            .and_then(|t| t.codec_params.time_base);
+        self.skip_frames = seek_before(&mut *self.format, self.track_id, time_base, self.sample_rate, target_ms)?;
         self.decoder.reset();
-        self.skip_frames = landed.required_ts.saturating_sub(landed.actual_ts);
         self.frames_emitted = 0;
         self.frame_limit = self.end_ms.map(|e| {
             let span_ms = e.saturating_sub(target_ms);
@@ -270,6 +258,52 @@ impl PassageDecoder {
     pub fn frames_emitted(&self) -> u64 {
         self.frames_emitted
     }
+}
+
+/// How far before a passage's start its decoding begins `[SPEC-AGN-064]`.
+///
+/// symphonia's accurate seek lands on the frame holding the start, and steps
+/// back for the bit reservoir that frame's data begins in -- but the frames
+/// it steps back to are themselves decoded without theirs, and their output
+/// is what the next frame overlaps with. Measured 2026-10-30 on *Highway 61
+/// Revisited*'s DAO MP3: started mid-file, a passage came out wrong for up to
+/// 26 ms, up to 499 samples of it digital silence, at 6 of 8 places tried.
+/// Every passage's 20 ms fade-in had hidden most of it. Decoding from 100 ms
+/// before -- nearly four MP3 frames -- and discarding up to the exact sample
+/// leaves the start where it was and its audio as encoded.
+const PREROLL_MS: u64 = 100;
+
+/// Seek `format` so that decoding from here reaches `target_ms` after
+/// discarding the frames returned. Starts `PREROLL_MS` early, measured in
+/// the track's own time base; a track with none is sought to its start
+/// directly, as every track was before.
+fn seek_before(
+    format: &mut dyn FormatReader,
+    track_id: u32,
+    time_base: Option<TimeBase>,
+    sample_rate: u32,
+    target_ms: u64,
+) -> Result<u64, DecodeError> {
+    let at = |ms: u64| Time::from(std::time::Duration::from_millis(ms));
+    let Some(tb) = time_base else {
+        if target_ms == 0 {
+            return Ok(0);
+        }
+        let landed = format
+            .seek(SeekMode::Accurate, SeekTo::Time { time: at(target_ms), track_id: Some(track_id) })
+            .map_err(DecodeError::Symphonia)?;
+        return Ok(landed.required_ts.saturating_sub(landed.actual_ts));
+    };
+    let landed = format
+        .seek(
+            SeekMode::Accurate,
+            SeekTo::Time { time: at(target_ms.saturating_sub(PREROLL_MS)), track_id: Some(track_id) },
+        )
+        .map_err(DecodeError::Symphonia)?;
+    // The shortfall in the track's units, then in frames: a time base need
+    // not be one tick a frame.
+    let ticks = tb.calc_timestamp(at(target_ms)).saturating_sub(landed.actual_ts);
+    Ok((ticks as f64 * tb.numer as f64 / tb.denom as f64 * sample_rate as f64).round() as u64)
 }
 
 /// How a file is opened. Gapless trimming -- dropping an MP3's encoder delay
