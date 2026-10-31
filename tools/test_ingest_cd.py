@@ -1018,6 +1018,53 @@ def test_tracks_end_to_end():
               "held counted over the tracks this rip would add")
         c.close()
 
+        # [SPEC-AGN-015]: the same disc again, as a DAO image whose sheet has
+        # the first rip's name -- Highway 61, 2026-10-30. The preview names
+        # the earlier rip; the add into its folder is refused before the WAV
+        # is measured or encoded, and says what is there.
+        print("a disc ripped again: the earlier rip named, the clash found before encoding")
+        dao = tempfile.mkdtemp()
+        subprocess.run([ingest_cd.FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=330:duration=9",
+                        "-ar", "44100", "-ac", "2", os.path.join(dao, "Artist - Album.wav")], check=True)
+        with open(os.path.join(dao, "Artist - Album.cue"), "w", encoding="utf-8", newline="\r\n") as f:
+            f.write('PERFORMER "Artist"\nTITLE "Album"\nFILE "Artist - Album.wav" WAVE\n'
+                    '  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    INDEX 01 00:03:00\n'
+                    '  TRACK 03 AUDIO\n    INDEX 01 00:05:37\n')
+        p3 = ingest_cd.do_ingest(db, dao, commit=False)
+        e = p3["releases"][0]["earlier"]
+        check(e and e["folder"] == home and e["held"] == [1, 2] and e["missing"] == [3] and e["damaged"] == [2]
+              and e["tracks"] == 3 and e["files"] == 2 and e["since"],
+              f"the preview names the earlier rip, what it holds and lacks: {e}")
+        check(ingest_cd.said_earlier(e).startswith("2 of 3 tracks; 3 never ripped; 2 ripped damaged; added "),
+              f"in words: {ingest_cd.said_earlier(e)}")
+        check(p3["releases"][0]["duplicate"] is False, "not a whole duplicate: the earlier rip lacks a track")
+        before = snapshot(dao)
+        measured = []
+        old_hidden = ingest_cd.find_hidden
+        ingest_cd.find_hidden = lambda *a, **k: measured.append(1) or []
+        try:
+            ingest_cd.do_ingest(db, dao, commit=True, release="rel-T", into=home, keep_flac=False)
+            check(False, "an add into the earlier rip's folder is refused")
+        except FileExistsError as err:
+            check("earlier rip of this disc (2 of 3 tracks; 3 never ripped" in str(err)
+                  and "nothing was encoded or moved" in str(err), f"and says what is there: {err}")
+        finally:
+            ingest_cd.find_hidden = old_hidden
+        check(snapshot(dao) == before and not measured, "refused before the WAV was measured or encoded")
+        check(sorted(os.listdir(home)) == ["01. One.mp3", "02. Two.mp3", "Artist - Album.cue", "Artist - Album.log"],
+              f"the earlier rip untouched: {sorted(os.listdir(home))}")
+        c = sqlite3.connect(db)
+        other = dict(rel, id="rel-other")
+        check(ingest_cd.earlier_rip(c, other) is None, "another edition's files are not this disc's")
+        by_code = ingest_cd.earlier_rip(c, other, barcode="0075678341427")
+        check(by_code and by_code["held"] == [1, 2] and by_code["release"] == "rel-T",
+              f"unless the sheet's barcode says it is this disc, added as rel-T: {by_code}")
+        set_disc = dict(rel, media=[{"position": 2, "tracks": [
+            {"position": 1, "recording": {"id": "rec-elsewhere"}}]}])
+        check(ingest_cd.earlier_rip(c, set_disc) is None,
+              "nor are the same release's files with none of this disc's recordings -- a set's other disc")
+        c.close()
+
         print("which lookup: the sheet for an image, the log for tracks, the barcode without it")
         looked.clear()
         img = cd_toc.DiscToc(tracks=[cd_toc.TocTrack(1, 0, 1000, 0, 74, file="a.wav")], leadout_sector=75,

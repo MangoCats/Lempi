@@ -317,15 +317,22 @@ class PathTooLong(ValueError):
 
 def check_paths(folder: str, into: str, renames: dict[str, str], extra: tuple = ()) -> None:
     """Refuse, before anything is encoded or moved, a destination this
-    computer cannot hold `[SPEC-NAM-030]`: two files given one name, or -- on
-    Windows -- a path longer than `WINDOWS_PATH_MAX`. The message names the
-    longest and what to do about it."""
+    computer cannot hold `[SPEC-NAM-030]`: two files given one name, a name
+    the folder already holds `[SPEC-AGN-015]`, or -- on Windows -- a path
+    longer than `WINDOWS_PATH_MAX`. The message names the longest and what to
+    do about it."""
     names = [n for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n))]
     names += [n for n in extra if n not in names]
     final = [renames.get(n, n) for n in names]
     twice = sorted({n for n in final if final.count(n) > 1})
     if twice:
         raise ValueError(f"the move would give two files one name: {twice[:3]}")
+    # A file already there is a refusal too, and found here, before the
+    # encode, rather than by the move after it [SPEC-AGN-015]: Highway 61's
+    # second rip was encoded whole, then refused for its sheet's name.
+    clash = sorted(n for n in set(final) if os.path.exists(os.path.join(into, n)))
+    if clash:
+        raise FileExistsError(f"{into!r} already holds {clash[:3]}: not moved over")
     if os.name != "nt":
         return
     longest = max((os.path.join(os.path.abspath(into), n) for n in final), key=len, default="")
@@ -805,6 +812,109 @@ def held_of_edition(conn, release: dict, positions) -> tuple[int, int] | None:
     return conn.execute(q, mbids).fetchone()[0], len(mbids)
 
 
+def earlier_rip(conn, release: dict | None, disc_id: str | None = None,
+                barcode: str | None = None) -> dict | None:
+    """An earlier rip of this disc already in the library `[SPEC-AGN-015]`, or
+    `None`: the files taken from this edition (`file_releases`), or added
+    under this Disc ID or barcode, that hold this disc's own recordings -- so
+    a set's other disc, the same release, is not it. `release` is cut to this
+    disc (`for_this_disc`). A rip added with no log has no Disc ID: *Highway
+    61*'s first rip is found by its edition, and under any other of the
+    sixteen MusicBrainz offers for the disc, by the sheet's barcode.
+
+    `{"folder", "files", "tracks", "held", "missing", "damaged", "since",
+    "release", "said"}`: the folder holding most of it, the disc's track count
+    and which of its tracks the earlier rip holds, never ripped, and ripped
+    damaged, by track number; `since`, the day it was added; `release`, the
+    edition it was added as; `said`, all that in words."""
+    media = (release or {}).get("media") or []
+    pos_of = {t.get("position"): (t.get("recording") or {}).get("id")
+              for t in (media[0].get("tracks") or [] if len(media) == 1 else [])}
+    md5s = set()
+    try:
+        if release and release.get("id"):
+            md5s |= {r[0] for r in conn.execute(
+                "SELECT audio_md5 FROM file_releases WHERE release_mbid = ?1", (release["id"],))}
+        for key, value in (("disc_id", disc_id), ("barcode", barcode)):
+            if value:
+                md5s |= {r[0] for r in conn.execute(
+                    "SELECT audio_md5 FROM ingest_decisions WHERE stage = 'rip' "
+                    f"AND json_extract(detail, '$.{key}') = ?1", (value,))}
+    except sqlite3.OperationalError:
+        return None     # no file_releases yet: no disc has been added
+    if not md5s:
+        return None
+    q = ",".join("?" * len(md5s))
+    files = conn.execute(f"SELECT file_id, path, audio_md5 FROM files WHERE audio_md5 IN ({q})",
+                         sorted(md5s)).fetchall()
+    mbids_of = {}
+    for fid, mbid in conn.execute(
+            "SELECT p.file_id, pr.mbid FROM passages p JOIN passage_recordings pr USING (passage_id) "
+            f"WHERE p.file_id IN ({','.join('?' * len(files))})", [f[0] for f in files]) if files else []:
+        mbids_of.setdefault(fid, set()).add(mbid)
+    ours = set(pos_of.values()) - {None}
+    files = [f for f in files if not ours or mbids_of.get(f[0], set()) & ours]
+    if not files:
+        return None
+    held_mbids = set().union(*(mbids_of.get(f[0], set()) for f in files))
+    mine = [f[2] for f in files]
+    q = ",".join("?" * len(mine))
+    damaged, since = set(), None
+    for outcome, detail, at in conn.execute(
+            f"SELECT outcome, detail, decided_at FROM ingest_decisions WHERE stage = 'rip' AND audio_md5 IN ({q})",
+            mine):
+        since = min(since or at, at) if at else since
+        if outcome == "verification_failed":
+            n = (json.loads(detail or "{}") or {}).get("track")
+            if n is not None:
+                damaged.add(n)
+    folders = [os.path.dirname(f[1]) for f in files if f[1]]
+    held = sorted(n for n, m in pos_of.items() if m in held_mbids)
+    e = {"folder": max(set(folders), key=folders.count) if folders else None, "files": len(files),
+         "tracks": len(pos_of) or None, "held": held,
+         "missing": sorted(n for n in pos_of if n not in held) if pos_of else [],
+         "damaged": sorted(damaged), "since": since[:10] if since else None, "release": None}
+    linked = [r[0] for r in conn.execute(
+        f"SELECT release_mbid FROM file_releases WHERE audio_md5 IN ({q})", mine)]
+    if linked:
+        e["release"] = max(set(linked), key=linked.count)
+    e["said"] = said_earlier(e)     # the import page shows it as written
+    return e
+
+
+def said_earlier(e: dict) -> str:
+    """`earlier_rip`'s answer in words: *6 of 9 tracks; 7, 8 and 9 never
+    ripped; added 2026-10-24*."""
+    def listed(ns):
+        ns = [str(n) for n in ns]
+        return ns[0] if len(ns) == 1 else f"{', '.join(ns[:-1])} and {ns[-1]}"
+    parts = [f"{len(e['held'])} of {e['tracks']} tracks" if e.get("tracks") else
+             f"{e['files']} file{'s' if e['files'] != 1 else ''}"]
+    if e.get("missing"):
+        parts.append(f"{listed(e['missing'])} never ripped")
+    if e.get("damaged"):
+        parts.append(f"{listed(e['damaged'])} ripped damaged")
+    if e.get("since"):
+        parts.append(f"added {e['since']}")
+    return "; ".join(parts)
+
+
+def refuse_clash(conn, err: FileExistsError, releases: list[dict], disc_id: str | None,
+                 barcode: str | None, into: str) -> FileExistsError:
+    """The move's clash `[SPEC-AGN-015]`, found before anything is encoded,
+    and said as what it is when the folder holds an earlier rip of this disc:
+    re-ripping a disc into its own album is SPEC069's merge, not built yet.
+    Any other clash is returned as it was."""
+    e = earlier_rip(conn, releases[0] if len(releases) == 1 else None, disc_id, barcode)
+    same = e and e["folder"] and os.path.normcase(os.path.abspath(e["folder"])) == \
+        os.path.normcase(os.path.abspath(into))
+    if not same:
+        return err
+    return FileExistsError(
+        f"{into!r} holds an earlier rip of this disc ({said_earlier(e)}): adding a disc again to its own "
+        "album folder is not built yet -- nothing was encoded or moved")
+
+
 def refuse_duplicate(conn, releases: list[dict], positions, allow: bool) -> None:
     """A second copy of an album is added only when a person asked for one
     `[SPEC-CDI-047]`: the disc resolved to one edition, and every recording
@@ -826,7 +936,8 @@ def release_credit(release: dict) -> str:
 
 
 def release_summary(release: dict, track_count: int, conn=None, positions=None,
-                    limit: int = ALBUM_NAME_MAX) -> dict:
+                    limit: int = ALBUM_NAME_MAX, disc_id: str | None = None,
+                    barcode: str | None = None) -> dict:
     """One candidate edition as the preview shows it `[SPEC-CDI-040]`: who,
     what, when, its track list for this disc, the folder it would be filed
     under -- its album name held to `limit` `[SPEC-NAM-020]` -- and how many of
@@ -854,6 +965,8 @@ def release_summary(release: dict, track_count: int, conn=None, positions=None,
             "year": year, "country": release.get("country"), "tracks": tracks,
             "in_library": held, "duplicate": bool(dup and dup[0] == dup[1]),
             "folder": proposed_folder(credit, release.get("title"), year, limit),
+            # [SPEC-AGN-015]: an earlier rip of this disc, said before Add.
+            "earlier": earlier_rip(conn, release, disc_id, barcode) if conn is not None else None,
             **set_summary(release, conn)}
 
 
@@ -1254,6 +1367,8 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
         "chosen": releases[0].get("id") if certain and releases else None,
         "chosen_by": "person" if chosen else None,
         "disc_id": cd_toc.musicbrainz_disc_id(toc),
+        # By which a later rip of the disc finds this one [SPEC-AGN-015].
+        "barcode": toc.barcode,
         "titles": [r.get("title") for r in releases[:5]],
     }
     conn.execute(
@@ -1434,8 +1549,10 @@ def preview_tracks(db_path: str, folder: str) -> dict:
     limit = album_name_max_setting(db_path)
     conn = lempi_db.connect(db_path, lempi_db.ROLE_LIBRARY)
     try:
-        rels = [release_summary(r, toc.track_count, conn, [t.number for t, _p in rip["present"]], limit)
-                for r in releases[:8]]
+        rels = [release_summary(r, toc.track_count, conn, [t.number for t, _p in rip["present"]], limit,
+                                disc_id, toc.barcode) for r in releases[:8]]
+        # [SPEC-AGN-015]: a disc MusicBrainz does not know is found by its Disc ID or barcode alone.
+        earlier = None if rels else earlier_rip(conn, None, disc_id, toc.barcode)
     finally:
         conn.close()
     cd_folder = proposed_folder(toc.performer, toc.title, None, limit) if toc.title else None
@@ -1449,7 +1566,7 @@ def preview_tracks(db_path: str, folder: str) -> dict:
             "barcode": toc.barcode, "disc_id": disc_id, "disc_outcome": disc_outcome,
             "candidates": len(releases), "releases": rels, "rip": rip_verdict(rip["rip_report"]),
             "occasions": guess_occasions(toc.title, *(r.get("title") for r in releases[:8])),
-            "folder": rels[0]["folder"] if len(rels) == 1 else cd_folder}
+            "earlier": earlier, "folder": rels[0]["folder"] if len(rels) == 1 else cd_folder}
 
 
 def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[int],
@@ -1624,7 +1741,10 @@ def ingest_tracks(db_path: str, folder: str, release: str | None, into: str | No
         refuse_duplicate(conn, releases, [t.number for t, _w in rip["present"]], allow_duplicate)
         exts = (".mp3", ".flac") if keep_flac else (".mp3",)
         made = [os.path.splitext(os.path.basename(w))[0] + e for _t, w in rip["present"] for e in exts]
-        renames = _plan_move(folder, into, releases, toc, album_name_max, made)
+        try:
+            renames = _plan_move(folder, into, releases, toc, album_name_max, made)
+        except FileExistsError as e:
+            raise refuse_clash(conn, e, releases, disc_id, toc.barcode, into) from None
 
         for i, (t, wav) in enumerate(rip["present"], 1):
             say(f"encoding track {t.number} ({i} of {len(rip['present'])}) ...")
@@ -1697,7 +1817,10 @@ def preview(db_path: str, folder: str) -> dict:
     limit = album_name_max_setting(db_path)
     conn = lempi_db.connect(db_path, lempi_db.ROLE_LIBRARY)
     try:
-        rels = [release_summary(r, toc.track_count, conn, limit=limit) for r in releases[:8]]
+        disc_id = cd_toc.musicbrainz_disc_id(toc)
+        rels = [release_summary(r, toc.track_count, conn, limit=limit, disc_id=disc_id, barcode=toc.barcode)
+                for r in releases[:8]]
+        earlier = None if rels else earlier_rip(conn, None, disc_id, toc.barcode)    # [SPEC-AGN-015]
     finally:
         conn.close()
     cd_folder = proposed_folder(toc.performer, toc.title, None, limit) if toc.title else None
@@ -1713,6 +1836,7 @@ def preview(db_path: str, folder: str) -> dict:
             "disc_id": cd_toc.musicbrainz_disc_id(toc), "disc_outcome": disc_outcome,
             "candidates": len(releases), "releases": rels, "rip": rip_verdict(rip_report),
             "occasions": guess_occasions(toc.title, *(r.get("title") for r in releases[:8])),
+            "earlier": earlier,
             "folder": rels[0]["folder"] if len(rels) == 1 else cd_folder}
 
 
@@ -1759,6 +1883,14 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
             if not releases:
                 raise ValueError(f"release {release} is not among this disc's matches")
         refuse_duplicate(conn, releases, [t.number for t in toc.tracks], allow_duplicate)
+        # The destination, before the WAV is measured or encoded: a refusal
+        # here costs nothing [SPEC-AGN-015].
+        stem = os.path.splitext(os.path.basename(wav_path))[0]
+        made = [stem + ".mp3"] + ([stem + ".flac"] if keep_flac else [])
+        try:
+            renames = _plan_move(folder, into, releases, toc, album_name_max, made)
+        except FileExistsError as e:
+            raise refuse_clash(conn, e, releases, cd_toc.musicbrainz_disc_id(toc), toc.barcode, into) from None
         # [SPEC-RIP-090]: measured on the WAV before it is encoded and gone;
         # inside the one passage of a whole disc, nothing is hidden.
         hidden = [] if whole_disc else find_hidden(wav_path, toc, releases[0] if len(releases) == 1 else None)
@@ -1767,9 +1899,6 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
         # [SPEC-RIP-092]: measured again here, so a join the preview offered
         # and this measurement does not find is refused before encoding.
         check_fold(hidden, fold, whole_disc)
-        stem = os.path.splitext(os.path.basename(wav_path))[0]
-        made = [stem + ".mp3"] + ([stem + ".flac"] if keep_flac else [])
-        renames = _plan_move(folder, into, releases, toc, album_name_max, made)
 
         say("encoding the MP3 ...")
         if not encode_to_mp3(wav_path, mp3_path):

@@ -215,7 +215,22 @@ function showPreview(p, folder, area) {
     ' Add it again anyway, as a second copy');
   let duplicate = false;
   const setBox = S.el('div');
+  // [SPEC-AGN-015]: an earlier rip of this disc, named before Add. Putting a
+  // second rip into the first one's folder is SPEC069's merge, not built yet;
+  // the add refuses it before anything is encoded.
+  const prior = S.el('div', { class: 'verdict note' });
+  const showPrior = (e, rel) => {
+    // Found by barcode under another edition: say which one it was added as.
+    const was = e && e.release && rel && e.release !== rel.id && rels.find(x => x.id === e.release);
+    prior.replaceChildren(e
+      ? `An earlier rip of this disc is in the library, in ${e.folder}: ${e.said}`
+        + (was ? `, as the ${[was.year, was.country].filter(Boolean).join(' ')} edition` : '')
+        + '. Adding this rip to that folder is not built yet, and is refused before anything is encoded; '
+        + 'added to another folder, the tracks both rips hold would be in the library twice.'
+      : '');
+  };
   const setWarn = rel => {
+    showPrior(rel && rel.earlier, rel);
     setBox.replaceChildren(setBanner(rel, false) || '');
     duplicate = !!(rel && rel.duplicate);
     again.checked = false;
@@ -289,6 +304,7 @@ function showPreview(p, folder, area) {
   whole.onchange = () => folds.forEach(cb => { cb.disabled = whole.checked; });
   const add = S.el('button', { class: 'chip on', text: 'Add to library' });
   if (rels.length === 1) setWarn(rels[0]);
+  else if (!rels.length) showPrior(p.earlier);
   add.onclick = async () => {
     if (rels.length > 1 && !chosen) return alert('Choose which edition this is first.');
     add.disabled = true;
@@ -321,7 +337,7 @@ function showPreview(p, folder, area) {
   area.replaceChildren(
     S.el('div', { class: 'steps' }, S.el('span', { text: rels.length > 1
       ? 'MusicBrainz knows several editions of this disc -- choose yours:' : 'This is the disc:' }), help('add')),
-    setBox, gap, pick, warn, hidden, occ, wholeRow,
+    setBox, gap, prior, pick, warn, hidden, occ, wholeRow,
     S.el('div', { class: 'controls' }, S.el('span', { style: 'align-self:center;font-size:.88rem',
       text: 'Album folder, in your music folder:' }), into, add),
     // [SPEC-NAM-010..040]: why a long title's folder is shorter than the

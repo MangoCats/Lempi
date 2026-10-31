@@ -1,6 +1,6 @@
 # SPEC069: A Disc Ripped Again
 
-**Design Specification — Tier 2 · written 2026-10-30, at the maintainer's direction · not yet built · extends [SPEC056](SPEC056-cd-import.md) `[SPEC-CDI-047]`, `[SPEC-CDI-094]`**
+**Design Specification — Tier 2 · written 2026-10-30, at the maintainer's direction · step 1 of §4 built 2026-10-30, the rest not yet · extends [SPEC056](SPEC056-cd-import.md) `[SPEC-CDI-047]`, `[SPEC-CDI-094]`**
 
 A disc already in the library, ripped a second time. On 2026-10-30 a DAO rip
 of *Highway 61 Revisited* -- all nine tracks, every one accurately ripped --
@@ -32,12 +32,21 @@ hand -- and album passages played in order are the record as it plays. Track
 files are kept beside it only to repair it.
 
 **`[SPEC-AGN-015]` A rip of a disc already held is recognised before anything
-is encoded.** The same Disc ID, or the same chosen release `[SPEC-CDI-098]`, as
-an album already in the library makes the add a merge into that album, and the
-card says so -- *an earlier rip of this disc: 6 of 9 tracks, 7–9 missing since
-2026-10-24* -- instead of failing at the move. Any clash of names in the album
-folder is found in the move's planning, before ffmpeg runs, not in the move
-after it; the earlier sheet is renamed, never written over.
+is encoded.** *Recognised and said: built 2026-10-30.* The same Disc ID,
+barcode or chosen release `[SPEC-CDI-098]` as files already in the library,
+holding this disc's own recordings, is an earlier rip of it
+(`ingest_cd.earlier_rip`), and the card says so before **Add** -- *in Bob
+Dylan\Highway 61 Revisited (1987): 6 of 9 tracks; 7, 8 and 9 never ripped;
+added 2026-10-24* -- under whichever edition is chosen: that rip had no log,
+so no Disc ID, and under every edition but the one it was added as it is
+found by its barcode alone (eight shown of the sixteen MusicBrainz offers). An image add now records its barcode, as a tracks add did.
+
+Any clash of names in the album folder is found in the move's planning,
+before the WAV is measured or encoded, not in the move after it. Until the
+merge is built (§4, step 3), an add into the earlier rip's own folder is
+refused there and says why: on *Highway 61*, 3 s, where it was a whole encode.
+Once built, it is the merge into that album, and the earlier sheet is renamed,
+never written over.
 
 ## 2. Each track from its better copy
 
@@ -178,7 +187,8 @@ measured join is found that a butt cannot make clean.
 
 ## 4. Order of building
 
-1. The clash found before encoding, and the earlier rip named, `[SPEC-AGN-015]`.
+1. The clash found before encoding, and the earlier rip named, `[SPEC-AGN-015]`
+   -- built 2026-10-30.
 2. The player, `[SPEC-AGN-062]`, `[SPEC-AGN-064]` and `[SPEC-AGN-068]`, measured
    again with the probe; the probe's table is the test.
 3. The merge, `[SPEC-AGN-020]`–`[SPEC-AGN-035]`, `[SPEC-AGN-050]` and
