@@ -136,7 +136,8 @@ the library, the preview says so and offers **Add it again anyway**; **Add**
 stays off until it is ticked. The add refuses without it too, so a stale page
 or a command line (`--allow-duplicate`) cannot slip one past, and it refuses
 before anything is encoded or moved: the rip is left as it was. A partial
-overlap -- a compilation sharing a few songs -- is said, never refused. Asking
+overlap -- a compilation sharing a few songs -- is said, never refused; the same
+disc ripped again is a merge, [SPEC069](SPEC069-a-disc-ripped-again.md). Asking
 for a second copy of an edition is not asking for the same file twice: an
 encoded track whose audio hash the library already holds is still refused.
 

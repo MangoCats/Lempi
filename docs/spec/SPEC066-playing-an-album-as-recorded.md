@@ -133,7 +133,9 @@ alone would need Browse to list them.
 own 20 ms fade at each end `[SPEC-SC-046]`; between two album passages of a
 disc image that falls in the real silence `tools/segment_dao.py` leaves between
 them, but a record whose tracks run into each other has not been heard played
-this way.
+this way. Measured 2026-10-30, not heard: inside continuous music those two
+fades dip to −82 dB for 38 ms -- [SPEC069](SPEC069-a-disc-ripped-again.md)
+`[SPEC-AGN-068]`.
 
 ---
 
