@@ -271,9 +271,9 @@ this run's -- only an album the hub imported since. `lempi02w` and `lp3-wifi`
 did not answer, and still hold the six catalogued. Still open: the six audio
 files stay on each node's disk, catalogued nowhere -- a stray there. *Built
 2026-11-01:* the node moves them to its own `_Retired` in the commit that
-removes their rows ([SPEC073](SPEC073-a-retired-file-on-a-node.md)). That day's run moved them on
-`bose`, `smartboardpc` and `lrhtpc`, with *Wish You Were Here*'s five; still
-there on `lempi02w` and `lp3-wifi` until they take part. The DAO was bundled
+removes their rows ([SPEC073](SPEC073-a-retired-file-on-a-node.md)). That day's runs moved them on
+`bose`, `smartboardpc`, `lrhtpc`, `lempi02w` and `lp3-wifi`, with *Wish You
+Were Here*'s five; `teacherslounge` did not answer. The DAO was bundled
 for every node but `teacherslounge` on 2026-11-01 (`sync/bundled.json`); a
 node patched before its bundle arrives has the album's tracks in neither copy
 until it does.

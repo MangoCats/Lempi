@@ -1,6 +1,6 @@
 # SPEC073: A Retired File on a Node
 
-**Design Specification — Tier 2 · written 2026-11-01, at the maintainer's direction · built and run on three nodes 2026-11-01 · answers [SPEC069](SPEC069-a-disc-ripped-again.md) `[SPEC-AGN-920]`, `[SPEC-AGN-045]`**
+**Design Specification — Tier 2 · written 2026-11-01, at the maintainer's direction · built and run on five nodes 2026-11-01 · answers [SPEC069](SPEC069-a-disc-ripped-again.md) `[SPEC-AGN-920]`, `[SPEC-AGN-045]`**
 
 When a disc ripped again is merged, the hub moves the files it no longer
 plays to `_Retired` and removes their rows `[SPEC-AGN-030]`. The next star
@@ -167,7 +167,7 @@ named `[SPEC-NSH-085]`. The hub records each node's moves in
 the bundle ledger `[SPEC-STAR-945]`. A later run doesn't ask about a file
 already moved.
 
-*The node's half built 2026-11-01, deployed to three nodes the same day (§7)* (`player/src/retire.rs`,
+*The node's half built 2026-11-01, deployed to five nodes the same day (§7)* (`player/src/retire.rs`,
 called from `star_node.rs`):
 
 - **Snapshot.** It says `retire_files: 1`.
@@ -272,9 +272,12 @@ SSH, not from the hub:
 - the catalogue names none of the 11, and nothing under `_Retired`;
 - `bose`'s `/srv/library` is mounted `ro` again.
 
-`lempi02w` and `lp3-wifi` were left out of this run, and still hold the 11
-in their album folders until they run this build and take part in a sync;
-`teacherslounge` did not answer.
+`lempi02w` and `lp3-wifi` followed the same afternoon: the same build, then
+run `20261101T1814Z`, read back the same way, 11 of 11 on each. Both
+`/srv/library` are ext4, so the moves are durable even on `lp3-wifi`'s
+overlay root. `lempi02w`'s first rehearsal timed out connecting over its
+Wi-Fi, before the request reached the player, and the second was clean.
+`teacherslounge` did not answer, and still holds the 11.
 
 ## 8. Open
 
