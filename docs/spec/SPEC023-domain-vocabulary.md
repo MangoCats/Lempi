@@ -120,8 +120,8 @@ and `slots`, a decision records `slot`, and a slot is held by
 
 - **The schema.** `listener_programs` holds the slots of the programme a node
   runs, `listener_program_seeds` their seeds, `program_id` is a slot's id
-  (also in `selection_decisions`), and `player_settings` keys the held slot
-  `manual_program`. Renaming them would mean a migration on every node.
+  (also in `selection_decisions`, where each pick records the slot it was
+  made under), and `player_settings` keys the held slot `manual_program`. Renaming them would mean a migration on every node.
 - **Aliases for clients not yet updated.** `POST /program/:id` is the same
   route; the snapshot also sends `program`, `program_manual` and `programs`;
   a decision also records `program`; the backup summary also sends
@@ -130,7 +130,8 @@ and `slots`, a decision records `slot`, and a slot is held by
 - **The phone's native binding.** `BackupReady.programs` is read by the
   phone app's built library, and keeps its name until that is rebuilt.
 
-`selection_decisions` rows written before 2026-11-01 carry only `program`.
+`selection_decisions` rows written before 2026-11-01 carry only `program`, and a
+NULL `program_id`. A slot's id changes when its seeds do `[SPEC-PGM-125]`.
 
 ### Characteristic and dimension
 

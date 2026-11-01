@@ -113,6 +113,10 @@ pub struct Explanation {
     pub occasion: f64,
     /// The programme slot in force `[SPEC-DIR-180]`, if any.
     pub slot: Option<String>,
+    /// Its id, which `selection_decisions.program_id` records `[SPEC-DIR-190]`.
+    /// A slot renewed by new seeds has a new one `[SPEC-PGM-125]`, so the id
+    /// names the seeds this pick was shaped by, where the name may not.
+    pub slot_id: Option<i64>,
     /// The same value under its name before 2026-11-01, written for readers
     /// that have not learned `slot` yet. Never read here.
     pub program: Option<String>,
@@ -1172,7 +1176,9 @@ impl Director {
         rest.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
 
         let pool_size = pool.len();
-        let slot = self.programme.active_slot(now).map(|p| p.name.clone());
+        let on_air = self.programme.active_slot(now);
+        let slot = on_air.map(|p| p.name.clone());
+        let slot_id = on_air.map(|p| p.id);
         Some(Decision {
             entry: (*entry).clone(),
             why: Explanation {
@@ -1193,6 +1199,7 @@ impl Director {
                 pool_size,
                 pool_weight: total,
                 slot: slot.clone(),
+                slot_id,
                 program: slot,
                 shaping: shaping.clone(),
                 seed_distances: self.seed_distances(entry.passage_id, seeds),
@@ -2025,6 +2032,25 @@ mod tests {
         assert!(dec.why.runners_up.iter().all(|r| r.passage_id != dec.why.passage_id),
                 "the winner must not be listed among those it beat");
         assert!(!dec.why.title.is_empty());
+    }
+
+    /// A pick names the slot in force by id as well as by name, for
+    /// `selection_decisions.program_id` `[SPEC-DIR-190]`; with none, neither.
+    #[test]
+    fn a_decision_names_its_slot_by_id() {
+        let c = fixture();
+        let d = Director::load(&c).unwrap();
+        let dec = d.decide(NOW, &mut Rng::seeded(3), &[], None).unwrap();
+        assert_eq!((dec.why.slot.as_deref(), dec.why.slot_id), (None, None), "no slot, no id");
+        c.execute_batch(
+            "CREATE TABLE IF NOT EXISTS listener_programs (program_id INTEGER PRIMARY KEY, name TEXT, start_time TEXT);
+             CREATE TABLE IF NOT EXISTS listener_program_seeds (program_id INTEGER, mbid TEXT, position INTEGER);
+             INSERT INTO listener_programs VALUES (7, 'Allday', '00:00');",
+        )
+        .unwrap();
+        let d = Director::load(&c).unwrap();
+        let dec = d.decide(NOW, &mut Rng::seeded(3), &[], None).unwrap();
+        assert_eq!((dec.why.slot.as_deref(), dec.why.slot_id), (Some("Allday"), Some(7)));
     }
 
     /// Runners-up are the HEAVIEST losers, not an arbitrary five.

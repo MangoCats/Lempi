@@ -79,6 +79,16 @@ the order the hub first held it. A node records which programme it runs, the
 fingerprint it runs, and where that came from: the hub's version *n*, or edited
 on the node since.
 
+**`[SPEC-PGM-125]` A slot whose seeds change is a new slot, with a new id**
+(the maintainer, 2026-11-01). Every pick records the id of the slot in force
+`[SPEC-DIR-190]`, and a slot's seeds are what it sounds like, so a decision
+should go on naming the seeds that shaped it. An edit — the Programme page, one
+seed box, or a hub programme a person accepts — that changes a slot's seeds
+gives it an id above any a slot or `selection_decisions` has had, even under
+the same name. A rename or a new start time keeps the id, and so does the same
+seeds in another order `[SPEC-PGM-115]`. A slot held by hand keeps its hold
+through a renewal; a slot removed takes its hold with it `[SPEC-DIR-185]`.
+
 ---
 
 ## 3. Where it is kept
@@ -210,7 +220,8 @@ the move.
 - The fingerprint is checked against Python's standard JSON form `[SPEC-PGM-110]`:
   computed both ways over the hub's eight slots, it was the same value.
 - A save is one transaction. A kept slot keeps its id, so history still
-  names it. A new slot takes an id above any a slot or `selection_decisions`
+  names it — kept meaning its seeds are unchanged, since 2026-11-01
+  `[SPEC-PGM-125]`. A new slot takes an id above any a slot or `selection_decisions`
   has had, never the deleted one SQLite would reuse. The running Director
   takes the new slots at its next refill, keeping its clock offset and a
   slot held by hand unless the edit removed it.

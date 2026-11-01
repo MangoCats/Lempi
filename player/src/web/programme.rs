@@ -136,13 +136,17 @@ pub(super) async fn set_seed(
     let saved = tokio::task::spawn_blocking(move || {
         let store = crate::db::PlayerStore::open_split(&db, &library).map_err(|e| (true, e.message().to_string()))?;
         let v = store.set_seed(slot, &mbid, on).map_err(|e| (false, e.message().to_string()))?;
-        Ok::<_, (bool, String)>(page_view(&store, v))
+        // A changed slot takes a new id, and a hold on it moves with it
+        // `[SPEC-PGM-125]`: what the store now holds is the hold.
+        let held = store.load_manual_slot();
+        Ok::<_, (bool, String)>((page_view(&store, v), held))
     })
     .await;
     match saved {
-        Ok(Ok(v)) => {
+        Ok(Ok((v, held))) => {
             if let Ok(mut c) = ui.controls.lock() {
                 c.programme_changed = true;
+                c.manual_slot = held;
             }
             axum::Json(v).into_response()
         }
@@ -167,28 +171,23 @@ pub(super) async fn save_programme(
     axum::Json(edit): axum::Json<Edit>,
 ) -> axum::response::Response {
     let (db, library) = (ui.db.clone(), ui.library.clone());
-    let manual = ui.controls.lock().ok().and_then(|c| c.manual_slot);
     let saved = tokio::task::spawn_blocking(move || {
         let store = crate::db::PlayerStore::open_split(&db, &library).map_err(|e| (true, e.message().to_string()))?;
         let v = store
             .save_programme(edit.name.as_deref(), &edit.slots)
             .map_err(|e| (false, e.message().to_string()))?;
-        // A slot held by hand that the edit removed: the hold goes, here and
-        // in what a restart reads, and time of day decides again.
-        let held_gone = manual.is_some_and(|id| !v.slots.iter().any(|s| s.id == Some(id)));
-        if held_gone {
-            let _ = store.save_manual_slot(None);
-        }
-        Ok::<_, (bool, String)>((page_view(&store, v), held_gone))
+        // The save moves a hold to a slot renewed by new seeds, and drops one
+        // whose slot it removed `[SPEC-PGM-125]`: what the store now holds is
+        // the hold, here and in what a restart reads.
+        let held = store.load_manual_slot();
+        Ok::<_, (bool, String)>((page_view(&store, v), held))
     })
     .await;
     match saved {
-        Ok(Ok((v, held_gone))) => {
+        Ok(Ok((v, held))) => {
             if let Ok(mut c) = ui.controls.lock() {
                 c.programme_changed = true;
-                if held_gone {
-                    c.manual_slot = None;
-                }
+                c.manual_slot = held;
             }
             tracing::info!(
                 "programme: saved {} ({} time slot(s)) from the page",
@@ -277,26 +276,22 @@ pub(super) async fn answer(
     axum::Json(a): axum::Json<Answer>,
 ) -> axum::response::Response {
     let (db, library) = (ui.db.clone(), ui.library.clone());
-    let manual = ui.controls.lock().ok().and_then(|c| c.manual_slot);
     let replace = a.replace;
     let got = tokio::task::spawn_blocking(move || {
         let store = crate::db::PlayerStore::open_split(&db, &library).map_err(|e| (true, e.message().to_string()))?;
         let v = store.answer_programme(&a.fingerprint, a.replace).map_err(|e| (false, e.message().to_string()))?;
-        let held_gone = a.replace && manual.is_some_and(|id| !v.slots.iter().any(|s| s.id == Some(id)));
-        if held_gone {
-            let _ = store.save_manual_slot(None);
-        }
-        Ok::<_, (bool, String)>((page_view(&store, v), held_gone))
+        // As a save from the page: the hold follows a renewed slot and goes
+        // with a removed one `[SPEC-PGM-125]`.
+        let held = store.load_manual_slot();
+        Ok::<_, (bool, String)>((page_view(&store, v), held))
     })
     .await;
     match got {
-        Ok(Ok((v, held_gone))) => {
+        Ok(Ok((v, held))) => {
             if replace {
                 if let Ok(mut c) = ui.controls.lock() {
                     c.programme_changed = true;
-                    if held_gone {
-                        c.manual_slot = None;
-                    }
+                    c.manual_slot = held;
                 }
             }
             tracing::info!(

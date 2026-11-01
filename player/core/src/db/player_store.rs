@@ -2557,12 +2557,21 @@ impl PlayerStore {
     /// `detail` is the full decomposition as JSON. A failure here must never
     /// stop the music: the record is for explaining a choice afterwards, not
     /// for making it.
-    pub fn record_decision(&self, at: i64, passage_id: i64, detail: &str) -> Result<(), DbError> {
+    ///
+    /// `slot_id` is the programme slot in force when it was chosen, written
+    /// to `program_id` `[SPEC-DIR-190]`; `None` when none was.
+    pub fn record_decision(
+        &self,
+        at: i64,
+        passage_id: i64,
+        slot_id: Option<i64>,
+        detail: &str,
+    ) -> Result<(), DbError> {
         self.conn
             .execute(
-                "INSERT INTO selection_decisions (selected_at, passage_id, detail)
-                 VALUES (?1, ?2, ?3)",
-                rusqlite::params![at, passage_id, detail],
+                "INSERT INTO selection_decisions (selected_at, passage_id, program_id, detail)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![at, passage_id, slot_id, detail],
             )
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))

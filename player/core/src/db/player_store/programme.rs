@@ -57,9 +57,11 @@ pub(super) fn ensure_programme_tables(conn: &Connection) -> Result<(), DbError> 
 /// reads it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Slot {
-    /// Its row in `listener_programs`. Kept across an edit, so that what
-    /// `selection_decisions` recorded under it still names it; `None` for a
-    /// slot the edit adds.
+    /// Its row in `listener_programs`, and what `selection_decisions` records
+    /// a pick under. Kept across an edit that leaves its seeds as they were
+    /// -- a rename, a new start time -- so history still names it; an edit
+    /// that changes its seeds makes it a new slot with a new id
+    /// `[SPEC-PGM-125]`. `None` for a slot the edit adds.
     #[serde(default)]
     pub id: Option<i64>,
     pub name: String,
@@ -345,6 +347,33 @@ impl PlayerStore {
                 "Time slot {bad} is no longer on this node; reload the page and edit again."
             )));
         }
+        // A slot whose seeds change is a different slot `[SPEC-PGM-125]`: it
+        // takes a new id, even under the same name, so that a decision made
+        // under the old seeds goes on naming them and not the new ones. A
+        // rename or a new start time keeps the id -- the seeds are what a
+        // slot sounds like. Seeds are a set: their order is not content
+        // `[SPEC-PGM-115]`. `was` remembers which old slot a renewed one
+        // replaces, for a hold to follow it.
+        fn seed_set(seeds: &[String]) -> std::collections::HashSet<&str> {
+            seeds.iter().map(String::as_str).collect()
+        }
+        let mut was: Vec<Option<i64>> = Vec::with_capacity(slots.len());
+        let slots: Vec<Slot> = slots
+            .iter()
+            .map(|s| {
+                let changed = s.id.and_then(|id| current.iter().find(|c| c.id == Some(id))).is_some_and(|c| {
+                    seed_set(&c.seeds) != seed_set(&s.seeds)
+                });
+                if changed {
+                    was.push(s.id);
+                    Slot { id: None, ..s.clone() }
+                } else {
+                    was.push(None);
+                    s.clone()
+                }
+            })
+            .collect();
+        let renewed: Vec<i64> = was.iter().flatten().copied().collect();
         let keep: Vec<i64> = slots.iter().filter_map(|s| s.id).collect();
         let fp = fingerprint(&slots);
         // A new slot takes an id no slot has had, by the slots now or by what
@@ -363,6 +392,16 @@ impl PlayerStore {
         for id in known.iter().filter(|id| !keep.contains(id)) {
             tx.execute("DELETE FROM listener_program_seeds WHERE program_id = ?1", [id]).map_err(q)?;
             tx.execute("DELETE FROM listener_programs WHERE program_id = ?1", [id]).map_err(q)?;
+            // A slot held by hand that the edit removed: the hold goes with it,
+            // and time of day decides again `[SPEC-DIR-185]`. One renewed is
+            // followed below instead.
+            if !renewed.contains(id) {
+                tx.execute(
+                    "DELETE FROM player_settings WHERE key = 'manual_program' AND value = ?1",
+                    [id.to_string()],
+                )
+                .map_err(q)?;
+            }
         }
         // Names are UNIQUE: swapping two slots' names would collide halfway,
         // so every kept slot steps aside to a name no person types first.
@@ -373,7 +412,7 @@ impl PlayerStore {
             )
             .map_err(q)?;
         }
-        for s in &slots {
+        for (s, was) in slots.iter().zip(&was) {
             let id = match s.id {
                 Some(id) => {
                     tx.execute(
@@ -391,6 +430,16 @@ impl PlayerStore {
                         rusqlite::params![id, s.name, s.start],
                     )
                     .map_err(q)?;
+                    // A held slot renewed by a change of seeds is still the one
+                    // the listener holds: the hold moves to its new id.
+                    if let Some(old) = was {
+                        tx.execute(
+                            "UPDATE player_settings SET value = ?1, updated_at = datetime('now')
+                              WHERE key = 'manual_program' AND value = ?2",
+                            [id.to_string(), old.to_string()],
+                        )
+                        .map_err(q)?;
+                    }
                     id
                 }
             };
@@ -587,6 +636,11 @@ mod tests {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
         ensure_programme_tables(&c).unwrap();
+        // As `PlayerStore::open` makes it: the held slot lives here.
+        c.execute_batch(
+            "CREATE TABLE player_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);",
+        )
+        .unwrap();
         PlayerStore { conn: QualifyingConn::wrap_unsplit(c) }
     }
 
@@ -638,12 +692,16 @@ mod tests {
         let v = st.set_seed(2, "y", true).unwrap();
         assert_eq!(v.name.as_deref(), Some("WKMP"));
         assert_eq!(v.source, "node");
-        let seeds = |v: &ProgrammeView, id: i64| v.slots.iter().find(|s| s.id == Some(id)).unwrap().seeds.clone();
-        assert_eq!(seeds(&v, 2), vec!["y".to_string()]);
-        assert_eq!(seeds(&v, 1), vec!["x".to_string()]);
-        let again = st.set_seed(2, "y", true).unwrap();
+        let by = |v: &ProgrammeView, n: &str| v.slots.iter().find(|s| s.name == n).unwrap().clone();
+        assert_eq!(by(&v, "Mellow").seeds, vec!["y".to_string()]);
+        assert_eq!(by(&v, "Soft").seeds, vec!["x".to_string()]);
+        assert_eq!(by(&v, "Soft").id, Some(1), "the slot not touched keeps its id");
+        let mellow = by(&v, "Mellow").id.unwrap();
+        assert_ne!(mellow, 2, "a changed slot is a new one [SPEC-PGM-125]");
+        let again = st.set_seed(mellow, "y", true).unwrap();
         assert_eq!(again.fingerprint, v.fingerprint, "adding a seed it has changes nothing");
-        assert!(seeds(&st.set_seed(1, "x", false).unwrap(), 1).is_empty());
+        assert_eq!(by(&again, "Mellow").id, Some(mellow), "and renews nothing");
+        assert!(by(&st.set_seed(1, "x", false).unwrap(), "Soft").seeds.is_empty());
         assert!(st.set_seed(99, "y", true).unwrap_err().message().contains("no longer on this node"));
         assert!(st.set_seed(1, " ", true).is_err());
     }
@@ -715,6 +773,7 @@ mod tests {
         st.conn
             .execute_batch(
                 "INSERT INTO listener_programs VALUES (1, 'Soft', '04:00'), (2, 'Mellow', '22:00'), (3, 'Gone', '12:00');
+                 INSERT INTO listener_program_seeds VALUES (1, 's2', 1), (1, 's1', 2);
                  INSERT INTO listener_programme VALUES (1, 'WKMP', 'old', 'hub', 1, 't');",
             )
             .unwrap();
@@ -733,6 +792,56 @@ mod tests {
         assert!(by_name("New").id.is_some_and(|id| id > 3));
         assert!(v.slots.iter().all(|s| s.name != "Gone"));
         assert_eq!(st.programme().unwrap().fingerprint, v.fingerprint);
+    }
+
+    /// A change of seeds makes a slot a different slot, with a new id, even
+    /// under its old name; a rename or a new start does not `[SPEC-PGM-125]`.
+    /// A hold follows a renewed slot, and goes with a removed one.
+    #[test]
+    fn a_change_of_seeds_is_a_new_slot_and_a_hold_follows_it() {
+        let st = store();
+        let v = st
+            .save_programme(None, &[slot("Soft", Some("04:00"), &["a"]), slot("Loud", Some("12:00"), &["x"])])
+            .unwrap();
+        let id_of = |v: &ProgrammeView, n: &str| v.slots.iter().find(|s| s.name == n).unwrap().id.unwrap();
+        let (soft, loud) = (id_of(&v, "Soft"), id_of(&v, "Loud"));
+        st.save_manual_slot(Some(loud)).unwrap();
+        // A pick made under the old Loud, so the new one must not reuse its id.
+        st.conn
+            .execute_batch(&format!(
+                "CREATE TABLE IF NOT EXISTS selection_decisions (decision_id INTEGER PRIMARY KEY,
+                     selected_at INTEGER, passage_id INTEGER, program_id INTEGER, detail BLOB);
+                 INSERT INTO selection_decisions (selected_at, passage_id, program_id, detail)
+                     VALUES (1, 1, {loud}, '{{}}');"
+            ))
+            .unwrap();
+
+        let mut s = slot("Soft", Some("05:00"), &["a"]);
+        s.id = Some(soft);
+        let mut l = slot("Loud", Some("12:00"), &["y", "x"]);
+        l.id = Some(loud);
+        let v = st.save_programme(None, &[s, l]).unwrap();
+        assert_eq!(id_of(&v, "Soft"), soft, "a new start alone keeps the id");
+        let renewed = id_of(&v, "Loud");
+        assert!(renewed != loud && renewed > loud, "new seeds, new id, above any history names");
+        assert_eq!(st.load_manual_slot(), Some(renewed), "the hold follows the renewed slot");
+
+        let mut s = slot("Gentle", Some("05:00"), &["a"]);
+        s.id = Some(soft);
+        let mut l = slot("Loud", Some("12:00"), &["x", "y"]);
+        l.id = Some(renewed);
+        let v = st.save_programme(None, &[s, l]).unwrap();
+        assert_eq!(id_of(&v, "Gentle"), soft, "a rename keeps the id");
+        assert_eq!(id_of(&v, "Loud"), renewed, "the same seeds in another order are no change");
+
+        let v = st.set_seed(soft, "b", true).unwrap();
+        assert_ne!(id_of(&v, "Gentle"), soft, "a seed added by one box is a change of seeds too");
+
+        let gentle = id_of(&v, "Gentle");
+        let mut g = slot("Gentle", Some("05:00"), &["a", "b"]);
+        g.id = Some(gentle);
+        st.save_programme(None, &[g]).unwrap();
+        assert_eq!(st.load_manual_slot(), None, "a removed slot takes its hold with it");
     }
 
     #[test]
@@ -784,7 +893,7 @@ mod tests {
             .save_programme(Some("Mine"), &[slot("Soft", Some("04:00"), &["a"]), slot("Loud", Some("12:00"), &["x"])])
             .unwrap();
         let soft_id = before.slots.iter().find(|s| s.name == "Soft").unwrap().id;
-        let sent = vec![slot("soft", Some("05:00"), &["c"]), slot("Night", Some("22:00"), &["n"])];
+        let sent = vec![slot("soft", Some("05:00"), &["a"]), slot("Night", Some("22:00"), &["n"])];
         assert_eq!(st.programme_arrived(&arrival(2, sent)).unwrap(), Arrived::Asking);
         let p = st.programme_pending().unwrap().unwrap();
         assert!(!p.kept);

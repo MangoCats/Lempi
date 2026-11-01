@@ -932,7 +932,10 @@ impl Session {
                     Some(Ok(fresh)) => {
                         d.programme_mut().replace_slots(fresh);
                         c.slots.clear();
-                        if c.manual_slot.is_some() && d.programme().manual_slot().is_none() {
+                        // The page has already said which slot is held now --
+                        // one renewed by new seeds has a new id `[SPEC-PGM-125]`
+                        // -- and set below; a hold on a slot that is gone goes.
+                        if c.manual_slot.is_some_and(|id| d.programme().slot(id).is_none()) {
                             c.manual_slot = None;
                         }
                         tracing::info!("programme: {} time slot(s) taken from the edit", d.programme().len());
@@ -1037,7 +1040,9 @@ impl Session {
                 if let Some(store) = &self.decisions {
                     match serde_json::to_string(&decision.why) {
                         Ok(json) => {
-                            if let Err(e) = store.record_decision(now, entry.passage_id, &json) {
+                            if let Err(e) =
+                                store.record_decision(now, entry.passage_id, decision.why.slot_id, &json)
+                            {
                                 tracing::error!("record decision: {e}");
                             }
                         }
