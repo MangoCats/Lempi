@@ -1413,7 +1413,8 @@ impl PlayerStore {
     /// another process steering by the same listener file -- `mpd_direct` --
     /// rebuilds too `[SPEC-DIR-109]`. The player rebuilds when what the
     /// Director reads at load has changed: a preference saved, a star sync,
-    /// a file found damaged, music imported. Best-effort: a stamp that fails
+    /// a file found damaged, music imported -- but not its first build at
+    /// start, which is no change at all. Best-effort: a stamp that fails
     /// costs the other process a refresh, not this one its rebuild.
     pub fn note_director_rebuild(&self) {
         let _ = self.conn.execute(

@@ -640,8 +640,10 @@ impl Session {
                 self.say_reload("rebuilding");
                 // Said where another process can read it: `mpd_direct`, steering
                 // by this listener file, rebuilds its own Director too
-                // `[SPEC-DIR-109]`.
-                if let Some(s) = &self.decisions {
+                // `[SPEC-DIR-109]`. Not the first build at start: that is this
+                // player having none yet, not anything having changed, and
+                // `mpd_direct` waits for something that has.
+                if let (Some(s), true) = (&self.decisions, self.director.is_some()) {
                     s.note_director_rebuild();
                 }
             }
@@ -1646,6 +1648,27 @@ mod tests {
             assert_ne!(b.got[0], 3, "seed {seed}: the passage on air was queued to follow itself");
             session.notes.clear();
         }
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// The player's first build at start leaves no rebuild stamp -- nothing
+    /// changed, it simply had no Director -- and a rebuild after that does
+    /// `[SPEC-DIR-109]`.
+    #[test]
+    fn only_a_rebuild_after_start_is_stamped() {
+        let tmp = director_library_on_disk("stamp");
+        let mut session = Session::open(&tmp, &tmp, 5).unwrap();
+        let stamp = |s: &Session| s.decisions.as_ref().unwrap().director_rebuilt_at();
+        session.tend_rebuild(&Sounding(1)); // the first build, asked for by `open`
+        assert!(session.rebuild.is_some(), "the first build started");
+        assert_eq!(stamp(&session), None, "and left no stamp");
+
+        session.rebuild = None;
+        session.director = Some(crate::db::Library::open_split(&tmp, &tmp).unwrap().director().unwrap());
+        session.controls.lock().unwrap().reload_requested = true;
+        session.tend_rebuild(&Sounding(1));
+        assert!(session.rebuild.is_some(), "a rebuild started");
+        assert!(stamp(&session).is_some(), "and was stamped");
         let _ = std::fs::remove_file(&tmp);
     }
 
