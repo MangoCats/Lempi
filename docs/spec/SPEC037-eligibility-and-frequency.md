@@ -120,7 +120,7 @@ The `ArtistCoupling` enum is named for behaviour rather than provenance, because
 | **`Damped`** (default) | artist ramp multiplies into the recording weight | Lempi's behaviour |
 | `GateOnly` | artist can block, never damps | measuring divergence only `[REQ-PD-110]` |
 
-Both are pinned by test so neither can drift into the other. `GateOnly` is retained to *measure* how far Lempi departs from six years of observed behaviour — diagnostic, never a listening mode and never a gate.
+Both are pinned by test so neither can drift into the other. `GateOnly` was kept to *measure* how far Lempi departs from six years of observed behaviour — diagnostic, never a listening mode and never a gate. **Nothing selects it today**: the measurement below was taken once, and no tool exposes the coupling to repeat it. It is a `Policy` field a future diagnostic could set.
 
 **Measured divergence.** Against the migrated library — 8,079 radio passages, 37,134 plays, 428 artists with history of which 329 carry tuned preferences — evaluated at the instant the play history ends:
 

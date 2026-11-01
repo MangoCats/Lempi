@@ -84,8 +84,10 @@ on the node since.
 `[SPEC-DIR-190]`, and a slot's seeds are what it sounds like, so a decision
 should go on naming the seeds that shaped it. An edit — the Programme page, one
 seed box, or a hub programme a person accepts — that changes a slot's seeds
-gives it an id above any a slot or `selection_decisions` has had, even under
-the same name. A rename or a new start time keeps the id, and so does the same
+gives it a new id even under the same name: one above every slot now on the
+node and every id `selection_decisions` records, so no recorded pick can come
+to name it. (An id a deleted slot had but no pick ever recorded may be used
+again — nothing names it.) A rename or a new start time keeps the id, and so does the same
 seeds in another order `[SPEC-PGM-115]`. A slot held by hand keeps its hold
 through a renewal; a slot removed takes its hold with it `[SPEC-DIR-185]`.
 
