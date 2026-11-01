@@ -78,8 +78,30 @@ way a file can carry a bad tag — only more *authoritative about this
 specific object*, which is the same distinction `[SPEC-RIP-010]` already
 draws for boundaries.
 
+**`[SPEC-RIP-067]` A track the disc's own ISRC confirms is that recording,
+with no pick.** Decided by the maintainer 2026-10-31, built the same day. Where
+every candidate edition puts one recording at a track's place, and that
+recording carries the ISRC the disc's subcode gives for it -- read into the
+CUE sheet by the ripper -- the track is identified as that recording,
+CD-TEXT or not (`ingest_cd.isrc_confirms`). The reasoning of
+`[SPEC-RIP-066]` still holds: the ISRC is *this pressing's* own data, and it
+names a recording, not an edition. So only the edition stays a person's to
+choose, and with it the album link `[SPEC-CDI-098]`. Editions that disagree,
+a code the recording does not carry, or no code at all all leave the track
+in review, as before. Where the editions came from a barcode or CD-TEXT,
+which name a product rather than this pressing, the code must also be that
+recording's alone in MusicBrainz (`mark_shared_isrcs`). It files some codes
+under two to four recordings, and on *Blonde on Blonde* that would have
+named one other than the edition in hand. The codes the rule went by are
+kept in the disc's decision (`isrcs`, `isrc`). Found on *Pure McCartney*: three country editions
+sharing all 39 recordings, every one of its ISRCs agreeing, and 24 tracks in
+the review queue with nothing to choose between. What the rule would have
+done across the library is measured in
+[SPEC071 §3](SPEC071-a-disc-no-lookup-found.md#3-measured-on-the-hub-2026-11-01).
+
 **`[SPEC-RIP-068]` Accepting the MusicBrainz alternative is a one-action
-choice at review time, never automatic.** The same discover-then-confirm
+choice at review time, never automatic** -- except where `[SPEC-RIP-067]`
+has the disc's own ISRC confirm it. The same discover-then-confirm
 shape `[SPEC-RIP-093]` and `[SPEC-RIP-100]` establish for a wider
 passage: both readings are shown side by side when they disagree, and
 picking either is a single click, recorded the same way a release match

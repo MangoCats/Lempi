@@ -20,6 +20,7 @@ Covers the four branches `[SPEC028] §3` describes:
     python tools/test_ingest_cd.py
 """
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -27,6 +28,7 @@ import sqlite3
 import sys
 import tempfile
 import time
+import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -1212,7 +1214,234 @@ ingest_cd.fetch_cover_art.covers = (
 ingest_cd.fetch_cover_art.time.sleep = lambda s: None
 
 
+def _sheet(*tracks):
+    """A sheet as `open_tracks` leaves it: `(number, title, isrc, length_ms)`
+    a track, a length of 0 for one the ripper never wrote."""
+    return cd_toc.DiscToc(tracks=[cd_toc.TocTrack(n, 0, ms, 0, 0, title=title, isrc=isrc, file=f"{n:02d}.mp3")
+                                  for n, title, isrc, ms in tracks],
+                          leadout_sector=0, title="Pure Album", performer="The Artist", source="eac-cue")
+
+
+def _edition(rid, recs, extra_disc=None, fmt="CD"):
+    """An edition whose disc holds `recs` -- `(mbid, title, isrcs, length_ms)`
+    a track -- with another disc of `extra_disc` tracks before it."""
+    disc = {"position": 2 if extra_disc else 1, "format": fmt, "track-count": len(recs), "tracks": [
+        {"position": n, "title": title, "length": ms,
+         "recording": {"id": mbid, "title": title, "isrcs": isrcs,
+                       "artist-credit": [{"artist": {"id": "art-x", "name": "The Artist"}}]}}
+        for n, (mbid, title, isrcs, ms) in enumerate(recs, 1)]}
+    media = ([{"position": 1, "format": fmt, "track-count": extra_disc, "tracks": [
+        {"position": n, "title": f"Other {n}", "length": 1000, "recording": {"id": f"other-{n}"}}
+        for n in range(1, extra_disc + 1)]}] if extra_disc else []) + [disc]
+    return {"id": rid, "title": "Pure Album", "artist-credit": [{"name": "The Artist"}], "media": media}
+
+
+def test_sheet_fit():
+    """[SPEC-CDI-093]: an edition is the disc only if every track is named by
+    its title or its ISRC, and none is the wrong length."""
+    print("sheet_fit: an edition is this disc only track by track")
+    sheet = _sheet((1, "Maybe I’m Amazed", "GBAAA1000001", 231573), (2, "Jet", None, 249760),
+                   (3, "Uncle Albert/Admiral Halsey", None, 0))
+    right = [("r1", "Maybe I'm Amazed", ["GBAAA1000001"], 232000), ("r2", "Jet", [], 250000),
+             ("r3", "Uncle Albert / Admiral Halsey", [], 296000)]
+    fit = ingest_cd.sheet_fit(_edition("e", right), sheet)
+    check(fit == {"tracks": 3, "titles": 3, "isrcs": 1},
+          f"titles alike past punctuation, the ISRC counted, the unripped track by its title alone: {fit}")
+    renamed = [("r1", "Maybe I'm Amazed (Remastered)", ["GBAAA1000001"], 232000)] + right[1:]
+    check(ingest_cd.sheet_fit(_edition("e", renamed), _sheet((1, "Something else", "GBAAA1000001", 231573),
+                                                           *[(2, "Jet", None, 249760), (3, "Uncle Albert", None, 0)]))
+          is not None, "a title that does not match, rescued by the disc's own code")
+    check(ingest_cd.sheet_fit(_edition("e", [right[0], ("r2", "Jets Overture", [], 250000), right[2]]), sheet) is None,
+          "one track neither title nor code names: not this disc")
+    check(ingest_cd.sheet_fit(_edition("e", [right[0], ("r2", "Jet", [], 290000), right[2]]), sheet) is None,
+          "a track forty seconds longer than the file: not this disc")
+    check(ingest_cd.sheet_fit(_edition("e", right[:2]), sheet) is None, "another track count: not this disc")
+    two = ingest_cd.for_this_disc([_edition("e", right, extra_disc=5)], None, sheet)
+    check(len(two) == 1 and ingest_cd.sheet_fit(two[0], sheet) is not None,
+          "a set's disc with this one's count, once cut to it")
+
+
+def test_cd_text_lookup():
+    """[SPEC-CDI-093]: searched by album and performer; only editions with a
+    disc of this one's track count fetched, a CD first; each cut and checked."""
+    print("lookup_cd_text: the disc's own CD-TEXT, searched and checked")
+    sheet = _sheet((1, "One", None, 60000), (2, "Two", None, 60000))
+    good = [("g1", "One", [], 60500), ("g2", "Two", [], 59800)]
+    bad = [("b1", "One", [], 60500), ("b2", "Twenty", [], 59800)]
+    hits = {"releases": [
+        {"id": "digital", "media": [{"format": "Digital Media", "track-count": 2}]},
+        {"id": "long", "media": [{"format": "CD", "track-count": 14}]},
+        {"id": "cd-set", "media": [{"format": "CD", "track-count": 9}, {"format": "CD", "track-count": 2}]},
+        {"id": "cd-bad", "media": [{"format": "CD", "track-count": 2}]}]}
+    full = {"digital": _edition("digital", good, fmt="Digital Media"), "cd-set": _edition("cd-set", good, extra_disc=9),
+            "cd-bad": _edition("cd-bad", bad)}
+    asked = []
+
+    def fake(url, tries=4):
+        asked.append(url)
+        if "/release/?" in url:
+            return hits
+        rid = url.split("/release/")[1].split("?")[0]
+        return full.get(rid)
+    old = (ingest_cd.fetch_releases.get, ingest_cd.fetch_releases.RATE_S)
+    ingest_cd.fetch_releases.get, ingest_cd.fetch_releases.RATE_S = fake, 0
+    try:
+        outcome, rels = ingest_cd.lookup_cd_text(sheet)
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(asked[0]).query)["query"][0]
+        check(query == 'release:"Pure Album" AND artist:"The Artist"', f"searched by album and performer: {query}")
+        fetched = [u.split("/release/")[1].split("?")[0] for u in asked[1:]]
+        check(fetched == ["cd-set", "cd-bad", "digital"],
+              f"no edition without a disc of two tracks; the CDs before the download: {fetched}")
+        check(all("isrcs" in u for u in asked[1:]), "each asked for its ISRCs")
+        check(outcome == "cd-text" and [r["id"] for r in rels] == ["cd-set", "digital"]
+              and len(rels[0]["media"]) == 1 and rels[0]["media"][0]["position"] == 2,
+              f"the set cut to its second disc, the misfit left out: {outcome} {[r['id'] for r in rels]}")
+        check(ingest_cd.lookup_cd_text(dataclasses.replace(sheet, title=None)) == ("none", []) and len(asked) == 4,
+              "no CD-TEXT title: nothing asked")
+        hits["releases"] = hits["releases"][-1:]
+        check(ingest_cd.lookup_cd_text(sheet) == ("none", []), "only a misfit: nothing, not a guess")
+    finally:
+        ingest_cd.fetch_releases.get, ingest_cd.fetch_releases.RATE_S = old
+
+
+def test_lookup_cascade():
+    """[SPEC-CDI-092], [SPEC-CDI-093]: each lookup only where every one before
+    it left no candidate -- a CD stub counts as none."""
+    print("identify_disc: Disc ID, barcode, then CD-TEXT, each only on nothing")
+    rel = _edition("rel-1", [("x1", "One", [], 60000), ("x2", "Two", [], 60000)])
+    sheet = _sheet((1, "One", None, 60000), (2, "Two", None, 60000))
+    image = dataclasses.replace(sheet, leadout_sector=9150, barcode="0666999387173")
+    for t in image.tracks:
+        t.file = "a.wav"
+    looked = []
+    old = (ingest_cd.lookup_disc_id, ingest_cd.lookup_barcode, ingest_cd.lookup_cd_text)
+
+    def run(disc, code, text, toc=image):
+        looked.clear()
+        ingest_cd.lookup_disc_id = lambda toc: looked.append("disc") or disc
+        ingest_cd.lookup_barcode = lambda b: looked.append("barcode") or code
+        ingest_cd.lookup_cd_text = lambda toc, disc_id=None: looked.append("cd-text") or text
+        o, rels, _d = ingest_cd.identify_disc(toc, None)
+        return o, [r["id"] for r in rels], list(looked)
+    try:
+        check(run(("exact", [rel]), None, None) == ("exact", ["rel-1"], ["disc"]), "found by Disc ID: nothing else")
+        check(run(("exact", []), ("barcode", [rel]), None) == ("barcode", ["rel-1"], ["disc", "barcode"]),
+              "a Disc ID with no release -- a CD stub -- goes on to the barcode")
+        check(run(("none", []), ("none", []), ("cd-text", [dict(rel, _fit={})]))
+              == ("cd-text", ["rel-1"], ["disc", "barcode", "cd-text"]), "and on to CD-TEXT")
+        check(run(("exact", []), ("none", []), ("none", [])) == ("exact", [], ["disc", "barcode", "cd-text"]),
+              "a stub nothing else finds keeps its own outcome")
+        # Two discs, neither with this one's track count or any length to fit.
+        other = {"id": "set", "media": [{"position": n, "tracks": [{"position": 1, "recording": {"id": f"s{n}"}}]}
+                                        for n in (1, 2)]}
+        check(run(("exact", [other]), None, ("cd-text", [dict(rel, _fit={})]))[1:] == (["rel-1"], ["disc", "cd-text"]),
+              "a release whose disc cannot be told is no candidate either")
+        check(run(("none", []), None, None, dataclasses.replace(image, title=None, barcode=None))
+              == ("none", [], ["disc"]), "no barcode and no CD-TEXT: the Disc ID alone, as before")
+    finally:
+        ingest_cd.lookup_disc_id, ingest_cd.lookup_barcode, ingest_cd.lookup_cd_text = old
+
+
+def test_isrc_without_a_pick():
+    """[SPEC-RIP-067]: a track every candidate edition puts the same recording
+    at, carrying the disc's ISRC for it, is that recording with no pick -- the
+    edition, and so the album link, still a person's."""
+    print("commit_rip: the disc's ISRC names the recording; the edition waits")
+    tmpdir = tempfile.mkdtemp()
+    mp3_path = os.path.join(tmpdir, "dao.mp3")
+    with open(mp3_path, "wb") as f:
+        f.write(b"\0" * 128)
+    tracks = [cd_toc.TocTrack(n, (n - 1) * 60000, n * 60000, 0, 0, title=f"Song {n}", isrc=isrc)
+              for n, isrc in ((1, "GBAAA1000001"), (2, "GBAAA1000099"), (3, "GBAAA1000003"), (4, None))]
+    toc = cd_toc.DiscToc(tracks=tracks, leadout_sector=0, title="Album", source="eac-cue")
+    same = [("p1", "Song 1", ["GBAAA1000001"], 60000), ("p2", "Song 2", ["GBAAA1000002"], 60000),
+            ("p3", "Song 3", ["GBAAA1000003"], 60000), ("p4", "Song 4", ["GBAAA1000004"], 60000)]
+    us, au = _edition("rel-us", same), _edition("rel-au", same)
+    eu = _edition("rel-eu", same[:2] + [("p3-live", "Song 3", [], 60000)] + same[3:])
+    c = fixture()
+    try:
+        r = ingest_cd.commit_rip(c, "/rip", toc, mp3_path, MD5, "cd-text", [us, au, eu], None, None)
+        got = {s: (m, src) for s, m, src in c.execute(
+            "SELECT p.start_ms, pr.mbid, pr.source FROM passages p JOIN passage_recordings pr USING (passage_id) "
+            "WHERE p.kind = 'radio' ORDER BY p.start_ms")}
+        check(got[0] == ("p1", "musicbrainz"), f"track 1: every edition, and its code -- identified: {got[0]}")
+        check(all(got[s][1] == "cd:text" for s in (60000, 120000, 180000)),
+              f"track 2 a code the recording lacks, 3 the editions disagree, 4 no code: CD-TEXT, for review: {got}")
+        check(r["identified"] == 1 and r["ambiguous"] == 3, f"counted so: {r}")
+        # `record_release` makes its tables as it links: none here, none ran.
+        check(r["album_linked"] == 0
+              and not c.execute("SELECT 1 FROM sqlite_master WHERE name = 'release_recordings'").fetchone(),
+              "three editions: no album link without a pick")
+        held = [row[0] for row in c.execute(
+            "SELECT p.start_ms FROM id_checks k JOIN passages p USING (passage_id) ORDER BY p.start_ms")]
+        check(held == [60000, 120000, 180000], f"track 1 waits in no review queue: {held}")
+        detail = json.loads(c.execute("SELECT detail FROM ingest_decisions WHERE stage = 'rip'").fetchone()[0])
+        check(detail["isrcs"] == {"1": "GBAAA1000001", "2": "GBAAA1000099", "3": "GBAAA1000003"},
+              f"the codes it went by are recorded: {detail['isrcs']}")
+        check(ingest_cd.isrc_confirms([us, au], 1, "GBAAA1000001") == "p1"
+              and ingest_cd.isrc_confirms([us, au], 1, None) is None
+              and ingest_cd.isrc_confirms([], 1, "GBAAA1000001") is None,
+              "isrc_confirms: an agreed recording with the code; nothing without either")
+    finally:
+        c.close()
+    c = fixture()
+    try:
+        r = ingest_cd.commit_rip(c, "/rip", toc, mp3_path, MD5, "none", [us], None, None)
+        check(r["identified"] == 0, f"no lookup outcome, no candidate: the code alone names nothing: {r}")
+    finally:
+        c.close()
+
+    # Editions a barcode or CD-TEXT found name a product, not this pressing:
+    # a code MusicBrainz files under several recordings confirms none of them
+    # (*Blonde on Blonde*, 2026-11-01). Asked only of a code that would confirm.
+    print("mark_shared_isrcs: a code under several recordings names none")
+    asked = []
+
+    def isrc_lookup(url, tries=4):
+        code = url.split("/isrc/")[1].split("?")[0]
+        asked.append(code)
+        return {"GBAAA1000001": {"recordings": [{"id": "p1"}, {"id": "p1-dup"}]}}.get(
+            code, {"recordings": [{"id": "x"}]} if code != "GBAAA1000003" else None)
+    old = (ingest_cd.fetch_releases.get, ingest_cd.fetch_releases.RATE_S, ingest_cd.lookup_disc_id,
+           ingest_cd.lookup_barcode, ingest_cd.lookup_cd_text)
+    ingest_cd.fetch_releases.get, ingest_cd.fetch_releases.RATE_S = isrc_lookup, 0
+    try:
+        tracks3 = [cd_toc.TocTrack(n, 0, 60000, 0, 0, title=f"Song {n}", isrc=code)
+                   for n, code in ((1, "GBAAA1000001"), (2, "GBAAA1000099"), (3, "GBAAA1000003"))]
+        toc3 = cd_toc.DiscToc(tracks=tracks3, leadout_sector=9000, title="Album", source="eac-cue")
+        eds = [_edition(r, same[:3]) for r in ("a", "b")]
+        shared = ingest_cd.mark_shared_isrcs(toc3, eds)
+        check(asked == ["GBAAA1000001", "GBAAA1000003"] and shared == ["GBAAA1000001", "GBAAA1000003"],
+              f"track 2's code the recording lacks is not asked; under two recordings, or no answer, is shared: "
+              f"{asked} {shared}")
+        check(ingest_cd.isrc_confirms(eds, 1, "GBAAA1000001") is None
+              and ingest_cd.isrc_confirms([_edition("a", same[:3])], 1, "GBAAA1000001") == "p1",
+              "the marked code confirms nothing; on editions not marked, it would")
+        asked.clear()
+        ingest_cd.mark_shared_isrcs(toc3, eds)
+        check(asked == ["GBAAA1000001", "GBAAA1000003"] and eds[0]["_shared_isrcs"] == ["GBAAA1000001", "GBAAA1000003"],
+              f"marked again, the same codes asked and still marked -- a mark is not undone by its own reading: "
+              f"{asked} {eds[0]['_shared_isrcs']}")
+        asked.clear()
+        ingest_cd.lookup_disc_id = lambda t: ("exact", [_edition("d", same[:3])])
+        ingest_cd.identify_disc(dataclasses.replace(toc3, tracks=[dataclasses.replace(t) for t in tracks3]), None)
+        check(asked == [], f"editions the disc's own Disc ID found: nothing asked [SPEC-RIP-067]: {asked}")
+        ingest_cd.lookup_disc_id = lambda t: ("none", [])
+        ingest_cd.lookup_barcode = lambda b: ("none", [])
+        ingest_cd.lookup_cd_text = lambda t, disc_id=None: ("cd-text", [_edition("e", same[:3])])
+        o, rels, _d = ingest_cd.identify_disc(toc3, None)
+        check(o == "cd-text" and rels[0]["_shared_isrcs"] == ["GBAAA1000001", "GBAAA1000003"],
+              f"editions found by CD-TEXT: marked: {o} {rels[0].get('_shared_isrcs')}")
+    finally:
+        (ingest_cd.fetch_releases.get, ingest_cd.fetch_releases.RATE_S, ingest_cd.lookup_disc_id,
+         ingest_cd.lookup_barcode, ingest_cd.lookup_cd_text) = old
+
+
 def main() -> int:
+    test_sheet_fit()
+    test_cd_text_lookup()
+    test_lookup_cascade()
+    test_isrc_without_a_pick()
     test_end_to_end()
     test_tracks_end_to_end()
     test_occasions()

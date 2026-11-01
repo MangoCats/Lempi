@@ -452,6 +452,36 @@ def main() -> int:
           f"the lead-in added as for any disc: {cd_toc.musicbrainz_toc_param(lt) if lt else None}")
     check(none is None, "a log with no table: None, not an empty disc")
 
+    # [SPEC-RIP-067]: each track's ISRC, as CUERipper writes them for *Pure
+    # McCartney* -- gaps appended, so track 2's TRACK and ISRC lines sit in
+    # track 1's FILE block, and its code must still be track 2's.
+    print("ISRC: each track's own code, from either sheet")
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "disc.cue")
+        with open(p, "w", encoding="utf-8", newline="\r\n") as f:
+            f.write('PERFORMER "Paul McCartney"\nTITLE "Pure McCartney"\nCATALOG 0666999387173\n'
+                    'FILE "01. Maybe I’m Amazed.mp3" MP3\n  TRACK 01 AUDIO\n    TITLE "Maybe I’m Amazed"\n'
+                    '    ISRC GBCCS1000115\n    INDEX 01 00:00:00\n'
+                    '  TRACK 02 AUDIO\n    TITLE "Heart of the Country"\n    ISRC gbccs1100094\n'
+                    '    INDEX 00 03:49:61\n'
+                    'FILE "02. Heart of the Country.mp3" MP3\n    INDEX 01 00:00:00\n'
+                    '  TRACK 03 AUDIO\n    TITLE "Jet"\n    ISRC 000000000000\n    INDEX 00 02:22:71\n'
+                    'FILE "03. Jet.mp3" MP3\n    INDEX 01 00:00:00\n'
+                    '  TRACK 04 AUDIO\n    TITLE "No code"\n    INDEX 00 04:08:00\n'
+                    'FILE "04. No code.mp3" MP3\n    INDEX 01 00:00:00\n')
+        toc = cd_toc.parse_eac_cue(p)
+        q = os.path.join(d, "disc.toc")
+        with open(q, "w", encoding="utf-8") as f:
+            f.write('CD_DA\n\nTRACK AUDIO\nISRC "USRC17607839"\nFILE "data.wav" 0 03:00:00\n\n'
+                    'TRACK AUDIO\nFILE "data.wav" 03:00:00 02:00:00\n')
+        dao = cd_toc.parse_cdrdao_toc(q)
+    check([t.isrc for t in toc.tracks] == ["GBCCS1000115", "GBCCS1100094", None, None],
+          f"each its own, upper case; a run of zeros is no code, and a track without one has none: "
+          f"{[t.isrc for t in toc.tracks]}")
+    check([t.title for t in toc.tracks][:2] == ["Maybe I’m Amazed", "Heart of the Country"],
+          f"and the titles are read as before: {[t.title for t in toc.tracks]}")
+    check([t.isrc for t in dao.tracks] == ["USRC17607839", None], f"cdrdao's too: {[t.isrc for t in dao.tracks]}")
+
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")

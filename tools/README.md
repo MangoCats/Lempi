@@ -51,6 +51,7 @@ Resolving what a file actually is, against MusicBrainz.
 | `fetch_cover_art.py` | Fetch missing cover art from the Cover Art Archive `[REQ-VIS-170]`. |
 | `fetch_release_credits.py` | Fill `releases.artist_credit` for the releases Browse names albums after `[REQ-VIS-183]`. |
 | `relink_cd_disc.py` | Re-link a CD's tracks catalogued as another disc's recordings to the disc they are `[SPEC-CDI-099]`. |
+| `identify_cd_rips.py` | Identify the waiting tracks of CD rips already added, by the rules an add uses now; take a person's pick of edition after the add; `--audit` measures the lookups `[SPEC-CDI-095]`. |
 | `import_lyrics.py` | Bring MuLibPlay's lyrics into Lempi `[SPEC-LYR-030]`. |
 
 ## Review & sync

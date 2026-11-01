@@ -73,6 +73,8 @@ class TocTrack:
     file: str | None = None            # the audio this track is in, by name:
                                         # one for every track of an image rip,
                                         # its own of a tracks-mode rip
+    isrc: str | None = None            # the disc's own code for the recording,
+                                        # read from its subcode `[SPEC-RIP-067]`
 
 
 @dataclass
@@ -117,6 +119,10 @@ _CUE_TITLE = re.compile(r'^\s*TITLE\s+"(.*)"\s*$')
 _CUE_PERFORMER = re.compile(r'^\s*PERFORMER\s+"(.*)"\s*$')
 _CUE_FILE = re.compile(r'^\s*FILE\s+"(.*)"\s+\w+\s*$')
 _CUE_CATALOG = re.compile(r'^\s*CATALOG\s+(\d{12,14})\s*$')
+# Country, registrant, year, designation: `GBCCS1000115`. A ripper that read
+# none writes no line, so anything else on one is not trusted as a code.
+_ISRC = r'([A-Z]{2}[A-Z0-9]{3}\d{7})'
+_CUE_ISRC = re.compile(r'^\s*ISRC\s+' + _ISRC + r'\s*$', re.IGNORECASE)
 
 
 def read_cue_text(path: str) -> str:
@@ -168,19 +174,21 @@ def parse_eac_cue(path: str) -> DiscToc:
     cur_track: int | None = None
     cur_title: str | None = None
     cur_performer: str | None = None
+    cur_isrc: str | None = None
     cur_indexes: dict[int, int] = {}
     seen_track_line = False
 
     def flush():
-        nonlocal cur_track, cur_title, cur_performer, cur_indexes, cur_track_file
+        nonlocal cur_track, cur_title, cur_performer, cur_indexes, cur_track_file, cur_isrc
         if cur_track is not None:
             tracks.append(TocTrack(
                 number=cur_track, start_ms=0, end_ms=0,
                 start_sector=0, end_sector=0,
                 index_points=dict(cur_indexes),
-                title=cur_title, performer=cur_performer, file=cur_track_file))
+                title=cur_title, performer=cur_performer, file=cur_track_file,
+                isrc=cur_isrc))
         cur_track, cur_title, cur_performer, cur_indexes = None, None, None, {}
-        cur_track_file = None
+        cur_track_file, cur_isrc = None, None
 
     for line in read_cue_text(path).splitlines(keepends=True):
         m = _CUE_FILE.match(line)
@@ -204,6 +212,11 @@ def parse_eac_cue(path: str) -> DiscToc:
             cur_track = int(m.group(1))
             cur_track_file = cur_file
             seen_track_line = True
+            continue
+        m = _CUE_ISRC.match(line)
+        if m:
+            if cur_track is not None:
+                cur_isrc = m.group(1).upper()
             continue
         m = _CUE_INDEX.match(line)
         if m and cur_track is not None:
@@ -445,6 +458,7 @@ _TOC_FILE_START = re.compile(
     r'^\s*(?:FILE|AUDIOFILE)\s+"([^"]*)"\s+(\d+):(\d+):(\d+)'
     r'(?:\s+(\d+):(\d+):(\d+))?\s*$')
 _TOC_PREGAP = re.compile(r'^\s*PREGAP\s+(\d+):(\d+):(\d+)\s*$')
+_TOC_ISRC = re.compile(r'^\s*ISRC\s+"' + _ISRC + r'"\s*$', re.IGNORECASE)
 _TOC_CD_TITLE = re.compile(r'^\s*TITLE\s+"(.*)"\s*$')
 _TOC_CD_PERFORMER = re.compile(r'^\s*PERFORMER\s+"(.*)"\s*$')
 
@@ -517,6 +531,10 @@ def parse_cdrdao_toc(path: str) -> DiscToc:
             m = _TOC_PREGAP.match(raw_line)
             if m and tracks:
                 tracks[-1].pregap_ms = frames_to_ms(*(int(g) for g in m.groups()))
+                continue
+            m = _TOC_ISRC.match(raw_line)
+            if m and tracks:
+                tracks[-1].isrc = m.group(1).upper()
                 continue
             m = _TOC_FILE_START.match(raw_line)
             if m and tracks:

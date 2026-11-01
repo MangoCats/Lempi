@@ -212,8 +212,8 @@ table of contents (`cd_toc.toc_from_log`), the disc's own sectors and leadout:
 on *The Essential Cyndi Lauper* it gives the Disc ID and the freedb id
 `B90E090E` that the image rip of 2026-09-03 gave. With no log, there is no
 Disc ID; the sheet's barcode (`CATALOG`) is looked up instead, and for any rip
-whose Disc ID finds nothing. A barcode names a product, not a pressing: on
-*Sugar Ray* (2001) it found two editions, German and US, for a person to choose.
+whose Disc ID finds nothing, a CD stub included; then the disc's CD-TEXT `[SPEC-CDI-093]`.
+A barcode names a product, not a pressing: on *Sugar Ray* (2001) it found two editions.
 
 **`[SPEC-CDI-094]` A track the ripper never wrote is named, and does not keep
 the rest out.** CUERipper rips the whole disc in every mode and has no way to

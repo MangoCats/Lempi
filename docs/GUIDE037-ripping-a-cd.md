@@ -196,7 +196,8 @@ Open **EAC → EAC Options…** (F9), **Tools** tab, and tick:
   Vipunen knows the rip is finished and whether it is good.
 - **Append checksum to status report** -- proves the log was not edited.
 - **Use CD-Text information in CUE sheet generation** -- puts the disc's own
-  titles in the CUE sheet, for discs MusicBrainz does not know.
+  titles in the CUE sheet, for discs MusicBrainz does not know. When the Disc ID
+  and the barcode find nothing, Vipunen searches MusicBrainz by those titles.
 
 Then, on the **General** tab of the same window, tick **Create log files always
 in english language** -- Vipunen reads the log's English wording. (Not on the

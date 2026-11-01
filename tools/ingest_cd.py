@@ -65,6 +65,7 @@ import cd_toc                 # noqa: E402
 import artist_sort            # noqa: E402  -- an artist's sort name [REQ-VIS-182]
 import fetch_cover_art        # noqa: E402  -- the disc's cover [SPEC-COV-060]
 import fetch_releases         # noqa: E402  -- get(), UA, rate-limit/backoff
+from choose_release import name_match  # noqa: E402  -- one title comparison, not two
 import ingest_folder          # noqa: E402  -- audio_md5(), LOCAL_PREFIX
 import passage_hold           # noqa: E402  -- a damaged track held back [SPEC-HOLD-010]
 from byte_hash import ensure_sha256_column, sha256_file  # noqa: E402  -- [REQ-AND-960]
@@ -455,11 +456,16 @@ def point_cue_at(cue_path: str, ext: str = ".mp3", kind: str = "MP3") -> None:
 
 # -------------------------------------------------------------- disc lookup
 
+# What every lookup asks MusicBrainz for. `release-groups`, or a release
+# arrives without its group, and the cover fetcher's one fallback for a front
+# -- the group's -- can never run `[SPEC-COV-060]`: 114 of 155 discs added had
+# none on 2026-10-31. `isrcs`, or a sheet's ISRC has nothing to be checked
+# against `[SPEC-RIP-067]`.
+MB_INC = "recordings+artist-credits+release-groups+isrcs"
+
+
 def _discid_url(disc_id: str, toc_param: str | None) -> str:
-    # `release-groups`, or a release arrives without its group, and the cover
-    # fetcher's one fallback for a front -- the group's -- can never run
-    # `[SPEC-COV-060]`: 114 of 155 discs added had none on 2026-10-31.
-    q = {"fmt": "json", "inc": "recordings+artist-credits+release-groups"}
+    q = {"fmt": "json", "inc": MB_INC}
     if toc_param is not None:
         q["toc"] = toc_param
     return f"{MB_DISCID_BASE}/{urllib.parse.quote(disc_id)}?{urllib.parse.urlencode(q)}"
@@ -509,26 +515,143 @@ def lookup_barcode(barcode: str) -> tuple[str, list[dict]]:
     releases = []
     for rid in found[:5]:
         time.sleep(fetch_releases.RATE_S)
-        full = fetch_releases.get(f"{MB_WS}/release/{rid}?fmt=json&inc=recordings+artist-credits+release-groups")
+        full = fetch_releases.get(f"{MB_WS}/release/{rid}?fmt=json&inc={MB_INC}")
         if full:
             releases.append(full)
     return ("barcode" if releases else "none"), releases
+
+
+# `[SPEC-CDI-093]`: how alike a sheet's title and an edition's must be for the
+# track to count as that one -- `name_match`, so containment is 0.9 and
+# punctuation is ignored ("Maybe I’m Amazed" is "Maybe I'm Amazed").
+TITLE_FIT = 0.85
+# And its length, where the rip has one: a file a track holds the gap before
+# the next, which measured +/-0.43 s on *Pure McCartney*'s 24.
+LENGTH_FIT_MS = 5000
+CD_TEXT_FETCHES = 8     # editions fetched whole, one a second
+
+
+def _lucene_phrase(text: str) -> str:
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def sheet_fit(release: dict, toc: cd_toc.DiscToc) -> dict | None:
+    """How an edition, cut to one disc, agrees with the sheet track by track
+    `[SPEC-CDI-093]` -- `{"tracks", "titles", "isrcs"}` counted -- or `None`
+    when it does not. Every track must be named by its title or its ISRC, and
+    none may be the wrong length: the disc's track count and a fuzzy album
+    title are not, by themselves, a reason to believe anything."""
+    media = release.get("media") or []
+    if len(media) != 1 or _medium_tracks(media[0]) != toc.track_count:
+        return None
+    theirs = {t.get("position"): t for t in media[0].get("tracks") or []}
+    titles = isrcs = 0
+    for t in toc.tracks:
+        mt = theirs.get(t.number)
+        if mt is None:
+            return None
+        rec = mt.get("recording") or {}
+        by_isrc = bool(t.isrc) and t.isrc in (rec.get("isrcs") or [])
+        by_title = bool(t.title) and name_match(t.title, mt.get("title") or rec.get("title") or "") >= TITLE_FIT
+        if not (by_isrc or by_title):
+            return None
+        length = (t.end_ms or 0) - (t.start_ms or 0)
+        if length > 0 and mt.get("length") and abs(length - mt["length"]) > LENGTH_FIT_MS:
+            return None
+        titles += by_title
+        isrcs += by_isrc
+    return {"tracks": toc.track_count, "titles": titles, "isrcs": isrcs}
+
+
+def lookup_cd_text(toc: cd_toc.DiscToc, disc_id: str | None = None) -> tuple[str, list[dict]]:
+    """The editions the disc's own CD-TEXT names, for a disc neither its Disc
+    ID nor its barcode finds `[SPEC-CDI-093]`: a search by album and performer,
+    each edition with a disc of this one's track count fetched whole, cut to
+    that disc, and kept only if the sheet's tracks fit it (`sheet_fit`). A CD
+    first, among editions the search ranks alike. Returns `('cd-text',
+    releases)` already cut, or `('none', [])`.
+
+    *Pure McCartney*, 2026-10-31: no log, so no Disc ID, and its `CATALOG` the
+    disc's own code, not the set's barcode -- 24 tracks added with no
+    candidate at all, while this search finds its three editions."""
+    if not toc.title or not toc.tracks:
+        return "none", []
+    q = f"release:{_lucene_phrase(toc.title)}"
+    if toc.performer:
+        q += f" AND artist:{_lucene_phrase(toc.performer)}"
+    doc = fetch_releases.get(f"{MB_WS}/release/?" + urllib.parse.urlencode({"query": q, "fmt": "json", "limit": 25}))
+
+    def disc_like(hit):
+        same = [m for m in hit.get("media") or [] if m.get("track-count") == toc.track_count]
+        return same, any("CD" in (m.get("format") or "") for m in same)
+    hits = [h for h in (doc or {}).get("releases") or [] if h.get("id") and disc_like(h)[0]]
+    hits.sort(key=lambda h: not disc_like(h)[1])        # stable: the search's own order otherwise
+    found = []
+    for h in hits[:CD_TEXT_FETCHES]:
+        time.sleep(fetch_releases.RATE_S)
+        full = fetch_releases.get(f"{MB_WS}/release/{h['id']}?fmt=json&inc={MB_INC}+discids")
+        if full:
+            found.append(full)
+    fits = []
+    for r in for_this_disc(found, disc_id, toc):
+        fit = sheet_fit(r, toc)
+        if fit is not None:
+            fits.append(dict(r, _fit=fit))
+    return ("cd-text" if fits else "none"), fits
 
 
 def identify_disc(toc: cd_toc.DiscToc, log_toc: cd_toc.DiscToc | None) -> tuple[str, list[dict], str | None]:
     """`(outcome, releases, disc_id)`: the Disc ID from the disc's own
     positions -- the sheet's for an image rip, the log's table of contents
     for a tracks-mode rip, whose sheet has only each file's own times -- then
-    the barcode if that finds nothing `[SPEC-CDI-092]`."""
+    the barcode if that finds nothing `[SPEC-CDI-092]`, then the disc's own
+    CD-TEXT `[SPEC-CDI-093]`. Each later lookup runs only where every earlier
+    one left no candidate at all, so a disc found today is found as it was.
+
+    "Nothing" includes a Disc ID MusicBrainz holds only as a CD stub, with no
+    release: *Smooth Grooves Wedding Songs* matched exactly, and until
+    2026-10-31 that skipped the barcode as if it had been an answer."""
     positions = log_toc if toc.tracks_mode else toc
     disc_id = None
     outcome, releases = "none", []
     if positions is not None and positions.leadout_sector:
         disc_id = cd_toc.musicbrainz_disc_id(positions)
         outcome, releases = lookup_disc_id(positions)
-    if outcome == "none" and toc.barcode:
-        outcome, releases = lookup_barcode(toc.barcode)
-    return outcome, for_this_disc(releases, disc_id, positions or toc), disc_id
+    if not releases and toc.barcode:
+        by_code, coded = lookup_barcode(toc.barcode)
+        if coded or outcome == "none":
+            outcome, releases = by_code, coded
+    found = for_this_disc(releases, disc_id, positions or toc)
+    if not found and toc.title:
+        by_text, texted = lookup_cd_text(toc, disc_id)
+        if texted:
+            outcome, found = by_text, texted
+    if outcome in ("barcode", "cd-text"):
+        mark_shared_isrcs(toc, found)
+    return outcome, found, disc_id
+
+
+def mark_shared_isrcs(toc: cd_toc.DiscToc, releases: list[dict]) -> list[str]:
+    """For editions a barcode or CD-TEXT found -- a product, not this pressing
+    -- the ISRCs MusicBrainz files under more than one recording, marked on
+    each edition (`_shared_isrcs`) so `isrc_confirms` takes none of them
+    `[SPEC-RIP-067]`. Asked only of a code the editions would otherwise
+    confirm, before anything is written. Measured 2026-11-01: by Disc ID,
+    1,305 confirmations and none differing from the recording a person's pick
+    gave; by CD-TEXT, 25 of 1,382 differing, 15 of them a code MusicBrainz
+    files under two to four recordings (*Blonde on Blonde*, *Hot Rocks*)."""
+    shared = []
+    for t in toc.tracks:
+        if not _agreed_with(releases, t.number, t.isrc):     # not by isrc_confirms: it reads the marks
+            continue
+        time.sleep(fetch_releases.RATE_S)
+        doc = fetch_releases.get(f"{MB_WS}/isrc/{urllib.parse.quote(t.isrc)}?fmt=json")
+        if len((doc or {}).get("recordings") or []) != 1:
+            shared.append(t.isrc)    # several recordings, or no answer: not this one's alone
+    for r in releases:
+        # Added to, never replaced: marked once, a code stays marked.
+        r["_shared_isrcs"] = sorted(set(r.get("_shared_isrcs") or ()) | set(shared))
+    return shared
 
 
 def _medium_tracks(medium: dict) -> int:
@@ -1204,14 +1327,46 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 
+def isrc_confirms(releases: list[dict], number: int, isrc: str | None) -> str | None:
+    """The recording every candidate edition puts at `number`, when they all
+    agree on one and it carries the disc's own ISRC for the track
+    `[SPEC-RIP-067]`; else `None`. Which edition is still a person's to say;
+    which recording is not, once the disc and MusicBrainz name the same one.
+    A code `mark_shared_isrcs` found under several recordings names none."""
+    if any(isrc in (rel.get("_shared_isrcs") or ()) for rel in releases[:8]):
+        return None
+    return _agreed_with(releases, number, isrc)
+
+
+def _agreed_with(releases: list[dict], number: int, isrc: str | None) -> str | None:
+    """`isrc_confirms` before any mark: the one recording the editions agree
+    on at `number`, if it carries `isrc`."""
+    if not isrc:
+        return None
+    seen: dict[str, list] = {}
+    for rel in releases[:8]:
+        t = _track_at_position(rel, number)
+        rec = (t or {}).get("recording") or {}
+        if rec.get("id"):
+            seen[rec["id"]] = rec.get("isrcs") or []
+    if len(seen) != 1:
+        return None
+    mbid, isrcs = next(iter(seen.items()))
+    return mbid if isrc in isrcs else None
+
+
 def _resolve_track(conn, number: int, cd_text_title: str | None, radio_pid: int, mp3_path: str,
                    start_ms: int, end_ms: int, audio_md5: str, disc_outcome: str,
                    releases: list[dict], chosen: bool, acoustid_key: str | None,
-                   now: str) -> tuple[str, str, str]:
+                   now: str, isrc: str | None = None) -> tuple[str, str, str]:
     """One track's identity, by the release's track at `number`, CD-TEXT, or
     AcoustID -- `(outcome, mbid, source)`, `outcome` one of identified,
     ambiguous, unidentified. Shared by an image rip and a tracks-mode rip
-    `[SPEC-CDI-090]`: the same rules whichever way the disc was ripped."""
+    `[SPEC-CDI-090]`: the same rules whichever way the disc was ripped.
+
+    `isrc`, the sheet's for this track: where every candidate agrees on the
+    recording and it carries that code, the track is that recording with no
+    pick, CD-TEXT or not `[SPEC-RIP-067]`."""
     # -------------------------------------------------- resolve identity
     # `candidates` and `candidate_releases` stay index-aligned so the
     # single-match branch below can find which release the one
@@ -1226,7 +1381,8 @@ def _resolve_track(conn, number: int, cd_text_title: str | None, radio_pid: int,
                 candidates.append(c)
                 candidate_releases.append(rel)
 
-    if cd_text_title and not (chosen and len(candidates) == 1):
+    confirmed = disc_outcome != "none" and isrc_confirms(releases, number, isrc) is not None
+    if cd_text_title and not ((chosen or confirmed) and len(candidates) == 1):
         # CD-TEXT is the default shown identity when the disc carries
         # it `[SPEC-RIP-066]` -- always through the placeholder/review
         # path (no stable artist mbid comes from CD-TEXT alone, so
@@ -1410,7 +1566,7 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
 
         outcome, mbid, source = _resolve_track(
             conn, track.number, track.title or toc.title, radio_pid, mp3_path, start_ms, end_ms,
-            audio_md5, disc_outcome, releases, chosen, acoustid_key, now)
+            audio_md5, disc_outcome, releases, chosen, acoustid_key, now, isrc=track.isrc)
         mbids.append(mbid)
         placed.append((track.number, mbid))
         identified += outcome == "identified"
@@ -1473,6 +1629,8 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
         # By which a later rip of the disc finds this one [SPEC-AGN-015].
         "barcode": toc.barcode,
         "titles": [r.get("title") for r in releases[:5]],
+        # The disc's own codes, what [SPEC-RIP-067] checked a recording by.
+        "isrcs": {t.number: t.isrc for t in toc.tracks if t.isrc} or None,
     }
     conn.execute(
         "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
@@ -1715,7 +1873,7 @@ def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[
             "VALUES (?1,'album',0,?2,0,0,0.0,'imported:tracks-cue')", (file_id, end_ms)).lastrowid
         outcome, mbid, source = _resolve_track(
             conn, t.number, t.title or toc.title, radio_pid, mp3_path, radio_start, end_ms,
-            audio_md5, disc_outcome, releases, chosen, acoustid_key, now)
+            audio_md5, disc_outcome, releases, chosen, acoustid_key, now, isrc=t.isrc)
         counts[outcome] += 1
         mbids.append(mbid)
         for pid in (radio_pid, album_pid):
@@ -1737,7 +1895,7 @@ def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[
                   "missing": missing, "verified": rip_report is not None, "format": "tracks-cue",
                   "candidates": len(releases), "chosen": releases[0].get("id") if certain and releases else None,
                   "chosen_by": "person" if chosen else None, "disc_id": disc_id, "barcode": toc.barcode,
-                  "titles": [r.get("title") for r in releases[:5]]}
+                  "titles": [r.get("title") for r in releases[:5]], "isrc": t.isrc}
         conn.execute(
             "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
             "VALUES (?1,'rip',?2,?3,?4,?5)",
@@ -2093,8 +2251,9 @@ def preview(db_path: str, folder: str) -> dict:
     if is_tracks_rip(folder):
         return preview_tracks(db_path, folder)
     fmt, _cue, toc, wav_path, rip_report = open_rip(folder)
-    disc_outcome, releases = lookup_disc_id(toc)
-    releases = for_this_disc(releases, cd_toc.musicbrainz_disc_id(toc), toc)   # [SPEC-CDI-099]
+    # Cut to this disc [SPEC-CDI-099]; the barcode and CD-TEXT only where the
+    # Disc ID finds nothing [SPEC-CDI-092], [SPEC-CDI-093].
+    disc_outcome, releases, _disc_id = identify_disc(toc, None)
     limit = album_name_max_setting(db_path)
     conn = lempi_db.connect(db_path, lempi_db.ROLE_LIBRARY)
     try:
@@ -2176,8 +2335,7 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
         # Looked up first, and a whole edition already held refused
         # `[SPEC-CDI-047]` -- before anything is encoded or moved.
         say("looking the disc up ...")
-        disc_outcome, releases = lookup_disc_id(toc)
-        releases = for_this_disc(releases, cd_toc.musicbrainz_disc_id(toc), toc)   # [SPEC-CDI-099]
+        disc_outcome, releases, _disc_id = identify_disc(toc, None)   # [SPEC-CDI-099], [SPEC-CDI-093]
         if release:
             releases = [r for r in releases if r.get("id") == release]
             if not releases:
