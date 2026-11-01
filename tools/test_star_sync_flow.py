@@ -16,6 +16,7 @@ import hashlib
 import io
 import json
 import os
+import posixpath
 import shutil
 import sqlite3
 import sys
@@ -26,6 +27,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import star_patch as sp  # noqa: E402
 import star_sync as ss  # noqa: E402
+import retired  # noqa: E402  -- the hub's ledger of retired files [SPEC-RTF-035]
 import test_star_merge as tm  # noqa: E402  -- its schemas
 
 FAILED = []
@@ -98,6 +100,9 @@ class Fleet:
         self.parts_applied = {}     # (node, run) -> the parts a commit applied
         self.rows_cap = {}          # node -> the `catalogue_rows` it reports [SPEC-STAR-945, SPEC-LNK-050]
         self.asked = []             # (node, want) for every `rows` request
+        self.retire_cap = set()     # players that report retire_files [SPEC-RTF-060]
+        self.disk = {}              # node -> {path: sha256}: what its music folder holds [SPEC-RTF-025]
+        self.retire_asked = []      # (node, op, [audio_md5]) for every step carrying a retire list
 
     def rows(self, name, want):
         """`mesh_sync::catalogue_rows`, cut to the tables these tests hold."""
@@ -186,19 +191,38 @@ class Fleet:
                 res["catalogue_window"] = 1
             if name in self.rows_cap:
                 res["catalogue_rows"] = self.rows_cap[name]
+            if name in self.retire_cap:
+                res["retire_files"] = 1
             return res
         if op == "rows":
             self.asked.append((name, (extra or {})["want"]))
             return self.rows(name, extra["want"])
         self.log.append((name, op, run, bool(catalogue_patch) or bool(parts), bool(listener_patch)))
+        retire = None
+        if (extra or {}).get("retire"):
+            # As star_node.rs answers [SPEC-RTF-025]: a file where it was sent, with the
+            # hub's bytes, moved at a commit and only said at a rehearsal.
+            self.retire_asked.append((name, op, [e["audio_md5"] for e in extra["retire"]]))
+            disk, files = self.disk.setdefault(name, {}), []
+            for e in extra["retire"]:
+                have = disk.get(e["path"])
+                outcome = "not there" if have is None else "bytes differ" if have != e["sha256"] else \
+                    ("moved" if op == "commit" else "to move")
+                to = None
+                if outcome == "moved":
+                    root = e["path"][:-len(e["rel_path"])]
+                    to = f"{root}_Retired/{posixpath.dirname(e['rel_path'])}/{e['retired_at']}/{posixpath.basename(e['path'])}"
+                    disk[to] = disk.pop(e["path"])
+                files.append({"audio_md5": e["audio_md5"], "outcome": outcome, "from": e["path"], "to": to})
+            retire = {"files": files}
         if not listener_patch:
-            return {"listener": None, "catalogue": None}
+            return {"listener": None, "catalogue": None, **({"retire": retire} if retire else {})}
         target = node["listener"]
         if op == "rehearse":
             target = target + ".rehearse"
             shutil.copyfile(node["listener"], target)
         counts = sp.apply_member(target, listener_patch, set(ss.SIGNED_TABLES))
-        return {"listener": counts, "catalogue": None}
+        return {"listener": counts, "catalogue": None, **({"retire": retire} if retire else {})}
 
     def ssh(self, host, cmd, quiet=False):
         self.ssh_log.append((host, cmd))
@@ -373,6 +397,78 @@ def test_hub_edited_during_sync(tmp):
           "the hub's edit stands")
     c.close()
     check(prefs_of(hub["listener"])["X"] == 4, "and the node's change reached the hub")
+
+
+def test_retired_files_moved(tmp):
+    """[SPEC-RTF-020..060]: a merge retired two files on the hub -- one whose row
+    the nodes still hold, one whose row an earlier run already took, as Highway
+    61's. A player that can is told both, the second found beside the disc that
+    replaced it; it moves the one there, says the other is not, and neither is
+    asked about again. A player that cannot is sent nothing, and the files are
+    named loudly."""
+    fleet = Fleet(tmp)
+    same = [("X", 1, "2026-09-01 00:00:00")]
+    plan, hub = build(tmp, fleet, same, {"a": (same, False), "b": (same, False)})
+    fleet.retire_cap.add("a")
+
+    hub_sent = os.path.join(tmp, "sent", "hub.library.db")
+    for p in (hub["library"], hub_sent):
+        c = sqlite3.connect(p)
+        c.execute("INSERT INTO files VALUES (2,'D','C:/Music/Artist/Album/disc.mp3',900,1,1)")
+        c.execute("INSERT INTO files VALUES (3,'R','C:/Music/Artist/Album/old.mp3',100,1,1)")
+        c.commit()
+        c.close()
+    c = sqlite3.connect(hub["library"])     # the merge, on the hub only
+    c.execute("DELETE FROM files WHERE audio_md5 = 'R'")
+    c.execute("CREATE TABLE ingest_decisions (decision_id INTEGER PRIMARY KEY, audio_md5 TEXT NOT NULL, "
+              "stage TEXT NOT NULL, outcome TEXT NOT NULL, confidence REAL, detail TEXT, decided_at TEXT)")
+    for md5, rel in (("R", "Artist/Album/old.mp3"), ("R2", "Artist/Album/older.mp3")):
+        c.execute("INSERT INTO ingest_decisions (audio_md5, stage, outcome, detail, decided_at) "
+                  "VALUES (?1, 'retire', 'retired', ?2, '2026-10-30T22:19:02')",
+                  (md5, json.dumps({"sha256": f"sha-{md5}", "size_bytes": 100, "rel_path": rel, "replaced_by": "D"})))
+    c.commit()
+    c.close()
+    for n in ("a", "b"):
+        for p in (fleet.nodes[n]["library"], os.path.join(tmp, "sent", f"{n}.library.db")):
+            c = sqlite3.connect(p)
+            c.execute(f"INSERT INTO files VALUES (2,'D','/{n}/Music/Artist/Album/disc.mp3',900,1,1)")
+            c.execute(f"INSERT INTO files VALUES (3,'R','/{n}/Music/Artist/Album/old.mp3',100,1,1)")
+            c.commit()
+            c.close()
+        fleet.disk[n] = {f"/{n}/Music/Artist/Album/disc.mp3": "sha-D", f"/{n}/Music/Artist/Album/old.mp3": "sha-R"}
+    hub_lib = hub["library"]
+    with faked(fleet) as out:
+        ss.snapshot(plan)
+        run = ss.newest_run(plan)
+        ss.merge(plan, run)
+        ss.patch(plan, run)
+        told = ss.read_json(os.path.join(run, "patches", "a", ss.RETIRE_FILE)) or {}
+        by = {e["audio_md5"]: e for e in told.get("files", [])}
+        check(sorted(by) == ["R", "R2"] and by["R"]["path"] == "/a/Music/Artist/Album/old.mp3"
+              and by["R"]["found_by"] == "its row" and by["R2"]["path"] == "/a/Music/Artist/Album/older.mp3"
+              and by["R2"]["found_by"] == "beside its replacement" and by["R"]["replacement_here"],
+              f"a is told both: the one by its row, the other beside its replacement: {told}")
+        check(not os.path.exists(os.path.join(run, "patches", "b", ss.RETIRE_FILE)), "b, which cannot, is told nothing")
+        summary_ = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
+        check("OLD PLAYER: 2 retired file(s) left on its disk" in summary_ and "/b/Music/Artist/Album/old.mp3" in summary_,
+              "and its files are named for a person, loudly")
+        check(stages(plan) == 0 and fleet.disk["a"].get("/a/Music/Artist/Album/old.mp3") == "sha-R",
+              "a rehearsal moves nothing")
+        check(stages(plan, commit=True) == 0, "commit")
+        said = out.getvalue()
+        ss.snapshot(plan)                   # the next run, in the same clock
+        run2 = ss.newest_run(plan)
+        ss.merge(plan, run2)
+        ss.patch(plan, run2)
+    check("a: retired files: 1 moved, 1 not there" in said, f"each outcome counted: {said[-1200:]}")
+    check(fleet.disk["a"].get("/a/Music/_Retired/Artist/Album/2026-10-30/old.mp3") == "sha-R"
+          and "/a/Music/Artist/Album/old.mp3" not in fleet.disk["a"], "the file moved to a's own _Retired")
+    check([x for x in fleet.retire_asked if x[0] == "b"] == [], "b was never sent a retire list")
+    led = retired.ledger(hub_lib)
+    check(sorted((e["node"], e["audio_md5"], e["outcome"]) for e in led) == [("a", "R", "moved"), ("a", "R2", "not there")],
+          f"the hub keeps what a answered: {led}")
+    check(run2 != run and not os.path.exists(os.path.join(run2, "patches", "a", ss.RETIRE_FILE)),
+          "the next run asks a about neither: both are settled there")
 
 
 def test_approve_all(tmp):
@@ -977,7 +1073,7 @@ def main() -> int:
     test_hub_writers()
     test_lost_answer()
     test_split_catalogue()
-    for test in (test_quiet, test_conflict, test_hub_edited_during_sync, test_approve_all, test_on_demand, test_catalogue_moved,
+    for test in (test_quiet, test_conflict, test_hub_edited_during_sync, test_retired_files_moved, test_approve_all, test_on_demand, test_catalogue_moved,
                  test_catalogue_states, test_catalogue_old_player, test_catalogue_in_parts, test_a_patch_that_cannot_be_cut, test_selection, test_read_only_catalogue,
                  test_old_players, test_links_removed, test_links_repaired_with_files, test_empty_release_removed):
         tmp = tempfile.mkdtemp()

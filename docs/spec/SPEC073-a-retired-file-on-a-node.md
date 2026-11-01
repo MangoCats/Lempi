@@ -1,6 +1,6 @@
 # SPEC073: A Retired File on a Node
 
-**Design Specification — Tier 2 · written 2026-11-01, at the maintainer's direction · designed; §4 built 2026-11-01 · answers [SPEC069](SPEC069-a-disc-ripped-again.md) `[SPEC-AGN-920]`, `[SPEC-AGN-045]`**
+**Design Specification — Tier 2 · written 2026-11-01, at the maintainer's direction · designed; §2, §4 and the hub side of §3 built 2026-11-01 · answers [SPEC069](SPEC069-a-disc-ripped-again.md) `[SPEC-AGN-920]`, `[SPEC-AGN-045]`**
 
 When a disc ripped again is merged, the hub moves the files it no longer
 plays to `_Retired` and removes their rows `[SPEC-AGN-030]`. The next star
@@ -109,6 +109,22 @@ hub has retired (`ingest_cd.retired_files`). Each entry holds:
 - the path the node's own row gave it, from the baseline the patch is cut
   against;
 - the hub's `rel_path` and `retired_at`.
+
+*Hub side built 2026-11-01* (`tools/retired.py`, `star_sync.retire_lines`;
+the node's half is §7 step 4). The list is a file of its own,
+`patches/<node>/retire.json`, sent with the commit as `retire`, not a section
+of the catalogue patch. A node whose row an earlier run already removed is
+still told: its path is taken from beside the disc that replaced it, since a
+merge files the disc in the album's folder. That is how *Highway 61*'s six
+are reached. A file settled on a node (`moved`, `not there`, `bytes differ`
+in `sync/retired.json`) is not sent again.
+
+Measured read-only the same day, against what each node was last sent:
+`bose`, `lempi02w`, `lp3-wifi`, `lrhtpc` and `smartboardpc` would each be
+told 11 files. *Wish You Were Here*'s five are found by their rows, *Highway
+61*'s six beside their replacement, and every node holds both replacements.
+No player reports `retire_files` yet, so the next run names all 11 under each
+node as left on its disk.
 
 **`[SPEC-RTF-025]` The node moves the file only when all of these hold:**
 

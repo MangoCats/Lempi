@@ -78,6 +78,7 @@ import star_merge as sm  # noqa: E402
 import star_patch as sp  # noqa: E402
 import mesh as meshmod  # noqa: E402  -- the signed transport, and phones by upload [REQ-AND-330]
 import bundle_ledger  # noqa: E402  -- what a bundle send touched on a node [SPEC-STAR-945]
+import retired  # noqa: E402  -- what the hub retired, and what each node did with it [SPEC-RTF-020]
 import catalogue_integrity as ci  # noqa: E402  -- links to nothing [SPEC070]
 import transfer_hold  # noqa: E402  -- a shared radio pauses for a transfer [PI3-AIM-170]
 
@@ -265,6 +266,7 @@ SIGNED_OMIT = {"cover_art": ["caa_asked_at"]}
 NODE_OWN = ["imported_payloads"]
 NATURAL_KEYS_NEEDED = 1    # [SPEC-NKP-075]: the catalogue patch by natural key
 CATALOGUE_WINDOW_NEEDED = 1  # [SPEC-STAR-104]: a player that opens a read-only catalogue's partition to rehearse a patch too
+RETIRE_FILES_NEEDED = 1  # [SPEC-RTF-060]: a player that moves the files the hub retired to its own _Retired
 CATALOGUE_PATCH_MAX = 16 << 20   # [SPEC-NKP-920]: the most a player is sent in one request, in bytes of JSON
 PART_MAX = 8 << 20               # [SPEC-NKP-930]: the most JSON in one part of a patch sent in parts
 NATURAL_PART_MAX = 32 << 20      # the natural entries stay whole in the first part; the player takes no more than this
@@ -1026,6 +1028,7 @@ def snapshot(plan, only=None):
             baselines[name] = {"listener": os.path.join(nd, "listener.db"), "signed": n["member"],
                                "library": baseline or sent_lib, "library_sent": sent_lib,
                                "catalogue": cat, "catalogue_as_sent": as_sent, "natural_keys": cap,
+                               "retire_files": snap.get("retire_files", 0) or 0,
                                "catalogue_blocked": blocked, "integrity": snap.get("file_checks"),
                                "catalogue_in_step": not blocked and (cat["state"] in ("as-sent", "holds-hub-rows")
                                or (cat["state"] == "other-ids" and cap >= NATURAL_KEYS_NEEDED))}
@@ -1420,6 +1423,35 @@ def values_patch(base, target):
     return p, good
 
 
+RETIRE_FILE = "retire.json"
+
+
+def retire_lines(plan, b, t, name, pd) -> list[str]:
+    """`[SPEC-RTF-020]` The files the hub retired that this run leaves `name`
+    no row for, written to `retire.json` for its commit to move, and said: each
+    whose replacement it will not hold `[SPEC-RTF-050]`. A player that cannot
+    move them is sent none, and the files are named for a person, loudly
+    `[SPEC-RTF-060]`."""
+    hub_lib = at_root(plan["hub"]["library"])
+    entries = retired.retire_entries(hub_lib, b["library"], t["library"], retired.settled_on(hub_lib, name))
+    if not entries:
+        return []
+    lacking = sorted({posixpath.dirname(e["rel_path"]) for e in entries if not e["replacement_here"]})
+    out = []
+    if (b.get("retire_files", 0) or 0) >= RETIRE_FILES_NEEDED:
+        write_json(os.path.join(pd, RETIRE_FILE), {"files": entries})
+        out.append(f"- retired files to move to its own `_Retired`: {len(entries)}, in "
+                   + ", ".join(f"`{a}`" for a in sorted({posixpath.dirname(e['rel_path']) for e in entries}))
+                   + " [SPEC-RTF-020]")
+    else:
+        out.append(f"- **OLD PLAYER: {len(entries)} retired file(s) left on its disk** -- this build cannot move them "
+                   "[SPEC-RTF-060]:")
+        out += [f"  - `{e['path']}`" for e in entries][:25]
+        say(f"  {name}: OLD PLAYER -- {len(entries)} retired file(s) left on its disk [SPEC-RTF-060]")
+    out += [f"- **no copy of `{a}` there once this lands**: Send what's missing first [SPEC-RTF-050]" for a in lacking]
+    return out
+
+
 def patch(plan, run):
     rv = review(run)
     ls = links_stale(run)
@@ -1482,8 +1514,9 @@ def patch(plan, run):
                            + ("" if good else " -- **NOT PROVEN: do not commit**"))
             cat, unsupported, parts = None, None, None
             for old in os.listdir(pd):                # nothing of an earlier patch lingers
-                if old.startswith("catalogue."):
+                if old.startswith("catalogue.") or old == RETIRE_FILE:
                     os.remove(os.path.join(pd, old))
+            summary += retire_lines(plan, b, t, name, pd)
             if b.get("catalogue_in_step"):
                 # A player that can apply it gets the tables that hold ids named by
                 # what identifies them everywhere [SPEC-NKP-075]; any other, the
@@ -1611,6 +1644,20 @@ def has_rows(p):
     return bool(p and p.get("tables"))
 
 
+def retire_words(answer, sent: int) -> str:
+    """`[SPEC-RTF-030]` A node's answer about the files it was told to retire,
+    in words: every outcome counted, and a node that said nothing said so --
+    no answer is not "none moved"."""
+    if not answer:
+        return f"NO ANSWER about the {sent} sent: this player said nothing of them"
+    counts: dict[str, int] = {}
+    for f in answer.get("files") or []:
+        counts[f.get("outcome") or "?"] = counts.get(f.get("outcome") or "?", 0) + 1
+    words = ", ".join(f"{n} {k}" for k, n in sorted(counts.items())) or "none"
+    told = sum(counts.values())
+    return words + ("" if told == sent else f" -- {sent} sent, {told} answered")
+
+
 def player_step(plan, run, name, player, commit):
     """[SPEC-STAR-100]: one player's rehearsal or commit, by signed request.
     The player applies its own patch, and is not stopped."""
@@ -1619,11 +1666,12 @@ def player_step(plan, run, name, player, commit):
     lis = read_json(os.path.join(pd, "listener.values.json"))
     cat = read_json(os.path.join(pd, "catalogue.values.json"))
     parts = read_json(os.path.join(pd, "catalogue.parts.json"))
+    retire = (read_json(os.path.join(pd, RETIRE_FILE)) or {}).get("files") or []
     say(f"== {name} (signed) -- {'COMMIT' if commit else 'rehearsal: nothing is kept'}")
     if player is None:
         say(f"RESULT {name}: REFUSED -- its player did not answer the members' query")
         return 1
-    if not has_rows(lis) and not has_rows(cat) and not parts:
+    if not has_rows(lis) and not has_rows(cat) and not parts and not retire:
         say(f"RESULT {name}: nothing to send")
         return 0
     # The catalogue's parts are the bulk of a sync, megabytes to a part: with
@@ -1641,12 +1689,25 @@ def player_step(plan, run, name, player, commit):
                 extra = {"catalogue_parts": {"of": parts["of"], "sha256": [p["sha256"] for p in parts["parts"]]}}
                 say(f"  {name}: the catalogue's {parts['of']} parts are staged ({sent} sent now, "
                     f"{parts['of'] - sent} already there)")
+            if retire:
+                # [SPEC-RTF-020]: moved by the node after its catalogue lands, never sent to a
+                # player that did not say it can (`retire_lines`).
+                extra = dict(extra or {}, retire=retire)
             got = meshmod.sync_step(mdir, player, "commit" if commit else "rehearse", stamp_of(run),
                                     cat if has_rows(cat) else None, lis if has_rows(lis) else None,
                                     timeout=3600.0 if parts else 600.0, extra=extra)
     except (ValueError, OSError) as err:
         say(f"RESULT {name}: REFUSED -- {err}")
         return 1
+    if retire:
+        said = retire_words(got.get("retire"), len(retire))
+        say(f"  {name}: retired files: {said}")
+        if commit:
+            try:
+                retired.record_answers(at_root(plan["hub"]["library"]), name, stamp_of(run),
+                                       (got.get("retire") or {}).get("files") or [])
+            except OSError as err:
+                say(f"  {name}: NOT RECORDED in sync/retired.json: {err} -- the next run asks about these files again")
     kept = (got.get("listener") or {}).get("kept", 0)
     note = f"; {kept} row(s) it had changed since its snapshot were kept, and travel next time" if kept else ""
     warn = got.get("warning")

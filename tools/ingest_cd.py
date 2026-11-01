@@ -68,6 +68,7 @@ import fetch_releases         # noqa: E402  -- get(), UA, rate-limit/backoff
 from choose_release import name_match  # noqa: E402  -- one title comparison, not two
 import ingest_folder          # noqa: E402  -- audio_md5(), LOCAL_PREFIX
 import passage_hold           # noqa: E402  -- a damaged track held back [SPEC-HOLD-010]
+import retired                # noqa: E402  -- what the hub retired [SPEC-RTF-015]
 from byte_hash import ensure_sha256_column, sha256_file  # noqa: E402  -- [REQ-AND-960]
 import secret                 # noqa: E402
 import sidecars               # noqa: E402  -- the rip log, AccurateRip and CUE hashed [GDE-INT-175]
@@ -2065,63 +2066,16 @@ def retire_dir(into: str, today: str | None = None) -> str:
     return out
 
 
-RETIRE_STAGE = "retire"
+# [SPEC-RTF-015]: the hub's word on each file a merge retires, kept where
+# star sync can read it without this module's imports.
+RETIRE_STAGE = retired.STAGE
+retired_files = retired.retired_files
 
 
 def record_retired(conn, file_ids, into: str, moved: dict, replaced_by: str | None,
                    now: str | None = None) -> int:
-    """`[SPEC-RTF-015]` The hub's word that it retired each of these files,
-    written in the merge's own transaction, before their rows go: one
-    `ingest_decisions` row a file, stage `retire`, keyed by its `audio_md5`.
-    A node retires a file only on this word, matched by its bytes
-    `[SPEC-RTF-010]`, never because nothing catalogues it.
-
-    `detail`: `sha256` and `size_bytes`, the bytes; `rel_path`, its place under
-    the music folder -- what a node's own path for it ends in; `retired_to`,
-    where the hub moved it (`moved`, `{path: destination}`); `replaced_by`, the
-    audio that plays it now. A decision row and not a table of its own: the
-    catalogue merge takes every table the hub holds to every node, and a patch
-    never drops one, so a hub-only table could be neither kept home nor left
-    out. Returns how many were recorded."""
-    ids = list(file_ids)
-    if not ids:
-        return 0
-    have = {r[1] for r in conn.execute("PRAGMA table_info(files)")}
-    extra = [c for c in ("sha256", "size_bytes") if c in have]
-    root = os.path.dirname(os.path.dirname(os.path.abspath(into)))
-    now = now or _now()
-    n = 0
-    q = ",".join("?" * len(ids))
-    for row in conn.execute(f"SELECT audio_md5, path{''.join(', ' + c for c in extra)} FROM files "
-                            f"WHERE file_id IN ({q})", ids).fetchall():
-        md5, path = row[0], row[1]
-        got = dict(zip(extra, row[2:]))
-        detail = {"sha256": got.get("sha256"), "size_bytes": got.get("size_bytes"),
-                  "rel_path": os.path.relpath(path, root).replace(os.sep, "/"),
-                  "retired_to": moved.get(path), "replaced_by": replaced_by, "why": "merge"}
-        conn.execute("INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
-                     "VALUES (?1,?2,'retired',1.0,?3,?4)", (md5, RETIRE_STAGE, json.dumps(detail, sort_keys=True), now))
-        n += 1
-    return n
-
-
-def retired_files(conn) -> dict[str, dict]:
-    """Every audio the hub has retired `[SPEC-RTF-015]`, `{audio_md5: detail}`,
-    the newest word on each -- unless the hub catalogues it again since, when
-    it is not retired whatever was once said."""
-    out = {}
-    try:
-        rows = conn.execute("SELECT audio_md5, detail FROM ingest_decisions WHERE stage = ?1 "
-                            "AND outcome = 'retired' ORDER BY decision_id", (RETIRE_STAGE,)).fetchall()
-    except sqlite3.OperationalError:
-        return {}
-    for md5, detail in rows:
-        out[md5] = json.loads(detail or "{}")
-    if out:
-        q = ",".join("?" * len(out))
-        for (md5,) in conn.execute(f"SELECT audio_md5 FROM files WHERE audio_md5 IN ({q})", list(out)).fetchall():
-            out.pop(md5, None)
-    return out
+    """`retired.record_retired`, dated now unless told."""
+    return retired.record_retired(conn, file_ids, into, moved, replaced_by, now or _now())
 
 
 def clear_retired_refs(conn) -> dict:
