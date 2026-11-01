@@ -27,8 +27,8 @@ file the console already keeps its jobs in: the library is the hub's, not
 any one listener's, and star sync never reads the sidecar [SPEC-PGM-220].
 
 **The fingerprint is the player's**, computed here without sharing its code
-[SPEC-PGM-110]: SHA-256 over the slots in start-time order (slots chosen
-only by hand last, by name), each `{"name", "seeds", "start"}` with its seeds
+[SPEC-PGM-110]: SHA-256 over the slots in start-time order (any slot
+without a start last, by name), each `{"name", "seeds", "start"}` with its seeds
 as a sorted set [SPEC-PGM-115], written as Python's sorted, compact JSON.
 `lempi-core`'s `programme::canonical` writes the same text, and both are
 tested against one example.
@@ -101,7 +101,8 @@ def name_key(name: str) -> str:
 
 def normal_start(t):
     """`HH:MM` from `9:05` or `09:05`, as the player reads a start; `None` for
-    a slot chosen only by hand, or a value that is not a time of day."""
+    a missing start or a value that is not a time of day -- which `store`
+    refuses, since every slot in a programme has one [ENT-SLOT-010]."""
     if t is None or not str(t).strip():
         return None
     try:
@@ -144,6 +145,11 @@ def store(c: sqlite3.Connection, name: str, slots: list, origin: str) -> dict:
     name = name.strip()
     if not name:
         raise ValueError("a programme needs a name")
+    missing = [str(s.get("name", "")).strip() for s in slots if normal_start(s.get("start")) is None]
+    if missing:
+        # Every slot in a programme comes on air at a time of its own
+        # [ENT-SLOT-010]; a node would refuse one without, so the hub does too.
+        raise ValueError(f"{name}: no usable start time for " + ", ".join(missing))
     slots = tidy(slots)
     if not slots:
         raise ValueError(f"{name} has no time slots")

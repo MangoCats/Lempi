@@ -251,11 +251,19 @@ impl Programme {
             conn.prepare("SELECT program_id, name, start_time FROM listener_programs")
         {
             if let Ok(rows) = stmt.query_map([], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
             }) {
                 for (id, name, start) in rows.flatten() {
-                    if let Some(start_minute) = parse_hhmm(&start) {
-                        slots.push(ProgrammeSlot { id, name, start_minute });
+                    match start.as_deref().and_then(parse_hhmm) {
+                        Some(start_minute) => slots.push(ProgrammeSlot { id, name, start_minute }),
+                        // Every slot has a start `[ENT-SLOT-010]`, and the
+                        // page and the hub refuse one without. A row that
+                        // has none anyway -- a tool, an older build -- is
+                        // left out, and said, rather than silently missing.
+                        None => tracing::warn!(
+                            "programme: slot \"{name}\" has no usable start time ({start:?}); \
+                             left out, so it is never on air and cannot be held [ENT-SLOT-010]"
+                        ),
                     }
                 }
             }

@@ -123,7 +123,7 @@ def main() -> int:
                                '{"name":"Mellow","seeds":["a","b"],"start":"22:00"}]',
           "the canonical form is the player's, slot order and seed order aside")
     check(pg.canonical([slot("Ä", None, [])]) == '[{"name":"Ä","seeds":[],"start":null}]',
-          "unescaped UTF-8, and a slot chosen by hand has a null start")
+          "unescaped UTF-8, and a missing start written as null, as the player writes it")
     check(pg.fingerprint([slot("Soft", "4:00", "c"), slot("Mellow", "22:00", "ab")]) == pg.fingerprint(two),
           "a start written 4:00 and seeds in another order are the same content")
 
@@ -211,6 +211,12 @@ def main() -> int:
     cur = pg.standing(c, mdir, music)["programmes"][0]["versions"][-1]
     check(cur["unflavored"] is not None and {x["mbid"] for x in cur["unflavored"]} >= {"b", "c"},
           f"the current version carries its seeds without flavor: {cur.get('unflavored')}")
+
+    try:
+        pg.store(c, "WKMP", [slot("Late", None, "x")], "test")
+        check(False, "a slot without a start time is refused")
+    except ValueError as e:
+        check("Late" in str(e), f"a slot without a start time is refused, by name: {e}")
 
     stranger = Candidate(tmp, "stranger")
     try:

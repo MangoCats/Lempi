@@ -464,7 +464,10 @@ CREATE TABLE IF NOT EXISTS listener_characteristics (
 CREATE TABLE IF NOT EXISTS listener_programs (
     program_id  INTEGER PRIMARY KEY,
     name        TEXT NOT NULL UNIQUE,
-    start_time  TEXT                        -- 'HH:MM', NULL = manual only
+    start_time  TEXT                        -- 'HH:MM'; every slot has one [ENT-SLOT-010].
+                                            -- Nullable only because SQLite cannot add
+                                            -- NOT NULL in place; the page, the node and
+                                            -- the hub all refuse a slot without.
 );
 CREATE TABLE IF NOT EXISTS listener_program_seeds (
     program_id  INTEGER NOT NULL REFERENCES listener_programs(program_id) ON DELETE CASCADE,

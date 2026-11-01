@@ -63,7 +63,8 @@ pub struct Slot {
     #[serde(default)]
     pub id: Option<i64>,
     pub name: String,
-    /// `HH:MM`, wall-clock; `None` is a slot chosen only by hand.
+    /// `HH:MM`, wall-clock. Every slot in a programme has one `[ENT-SLOT-010]`;
+    /// `None` is only ever a submission [`validate`] refuses.
     #[serde(default)]
     pub start: Option<String>,
     /// Recording mbids, in order `[ENT-SEED-010]`.
@@ -82,7 +83,7 @@ pub struct ProgrammeView {
     pub hub_version: Option<i64>,
     /// SHA-256 of [`canonical`], hex `[SPEC-PGM-110]`.
     pub fingerprint: String,
-    /// In start-time order, slots chosen only by hand last.
+    /// In start-time order (any slot an older build left without a start, last).
     pub slots: Vec<Slot>,
 }
 
@@ -132,7 +133,7 @@ pub fn normalize_start(s: &str) -> Option<String> {
 
 fn ordered(slots: &[Slot]) -> Vec<&Slot> {
     let mut v: Vec<&Slot> = slots.iter().collect();
-    // Timed slots by start, then those chosen only by hand; a name breaks a
+    // Slots by start, then any left without one by an older build; a name breaks a
     // tie so the order never depends on how the rows came back.
     v.sort_by(|a, b| {
         (a.start.is_none(), &a.start, a.name.to_lowercase())
@@ -143,8 +144,8 @@ fn ordered(slots: &[Slot]) -> Vec<&Slot> {
 
 /// The one canonical form of a programme's content `[SPEC-PGM-110]`.
 ///
-/// A JSON array, one object per slot in start-time order (slots chosen only
-/// by hand last, by name), each with exactly the keys `name`, `seeds`,
+/// A JSON array, one object per slot in start-time order (any without a
+/// start last, by name), each with exactly the keys `name`, `seeds`,
 /// `start` in that order, no spaces, UTF-8 unescaped. That is what Python's
 /// `json.dumps(slots, sort_keys=True, separators=(",", ":"),
 /// ensure_ascii=False)` writes, so the hub's tools compute the same
@@ -209,8 +210,11 @@ pub fn validate(name: Option<&str>, slots: &[Slot]) -> Result<(Option<String>, V
         if !names.insert(n.to_lowercase()) {
             return Err(format!("Two time slots are called \"{n}\"; each needs its own name."));
         }
+        // Every slot in a programme comes on air at a time of its own
+        // `[ENT-SLOT-010]`: one without a start would never be on air, and the
+        // Director could not hold it either.
         let start = match s.start.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
-            None => None,
+            None => return Err(format!("\"{n}\" needs a start time, as HH:MM: every time slot comes on air at one.")),
             Some(t) => Some(normalize_start(t).ok_or_else(|| {
                 format!("\"{t}\" is not a time of day; write it as HH:MM, e.g. 22:00.")
             })?),
@@ -677,6 +681,9 @@ mod tests {
         assert!(same_start.unwrap_err().contains("start at 04:00"));
         assert!(validate(None, &[slot("A", Some("25:00"), &[])]).unwrap_err().contains("not a time of day"));
         assert!(validate(None, &[slot("", None, &[])]).unwrap_err().contains("needs a name"));
+        assert!(validate(None, &[slot("Late", None, &[])]).unwrap_err().contains("needs a start time"),
+                "every slot in a programme has a start time [ENT-SLOT-010]");
+        assert!(validate(None, &[slot("Late", Some("  "), &[])]).unwrap_err().contains("needs a start time"));
     }
 
     /// The first read records what the node already runs, unnamed and its own.

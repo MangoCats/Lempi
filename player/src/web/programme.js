@@ -41,7 +41,7 @@
   const ranges = slots => {
     const starts = slots.map(s => s.start).filter(Boolean).sort();
     return s => {
-      if (!s.start) return 'chosen by hand only';
+      if (!s.start) return 'needs a start time';
       if (starts.length < 2) return `from ${s.start}, all day`;
       const i = starts.indexOf(s.start);
       return `${s.start} – ${starts[(i + 1) % starts.length]}`;
@@ -80,7 +80,7 @@
       const start = document.createElement('input');
       start.className = 'slot-start'; start.value = s.start || '';
       start.placeholder = 'HH:MM'; start.inputMode = 'numeric'; start.maxLength = 5;
-      start.title = 'When it comes on air, 24-hour; empty for one chosen only by hand';
+      start.title = 'When it comes on air, 24-hour; every time slot needs one';
       start.onchange = () => { s.start = start.value.trim() || null; touched(true); };
       head.append(name, start, button('Remove', 'Remove this time slot', () => {
         work.slots.splice(i, 1); touched(true);
@@ -281,11 +281,11 @@
     for (const s of p.slots) {
       const o = now.get(key(s));
       if (!o) {
-        lines.push(`${s.name}: new, from ${s.start || 'chosen by hand'}, ${s.seeds.length} seed(s)`);
+        lines.push(`${s.name}: new, from ${s.start || '(no start yet)'}, ${s.seeds.length} seed(s)`);
         continue;
       }
       const parts = [];
-      if ((o.start || null) !== (s.start || null)) parts.push(`starts ${s.start || 'by hand'} instead of ${o.start || 'by hand'}`);
+      if ((o.start || null) !== (s.start || null)) parts.push(`starts ${s.start || '(no start yet)'} instead of ${o.start || '(none)'}`);
       const gained = s.seeds.filter(m => !o.seeds.includes(m)).length;
       const lost = o.seeds.filter(m => !s.seeds.includes(m)).length;
       if (gained) parts.push(`${gained} seed(s) added`);
