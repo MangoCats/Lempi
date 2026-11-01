@@ -269,13 +269,14 @@ read-only: neither catalogues any of the six, no passage or tag outlived its
 file, and the column is there. A fresh snapshot then merged to nothing of
 this run's -- only an album the hub imported since. `lempi02w` and `lp3-wifi`
 did not answer, and still hold the six catalogued. Still open: the six audio
-files stay on each node's disk, catalogued nowhere -- a stray there. *Designed
-2026-11-01, not built:* the node moves them to its own `_Retired` in the
-commit that removes their rows ([SPEC073](SPEC073-a-retired-file-on-a-node.md)). The DAO
-was bundled for `bose`, `lrhtpc` and `smartboardpc` on 2026-11-01
-(`sync/bundled.json`), and not yet for `lempi02w`, `lp3-wifi` or
-`teacherslounge`; a node patched before its bundle arrives has the album's
-tracks in neither copy until it does.
+files stay on each node's disk, catalogued nowhere -- a stray there. *Built
+2026-11-01:* the node moves them to its own `_Retired` in the commit that
+removes their rows ([SPEC073](SPEC073-a-retired-file-on-a-node.md)). That day's run moved them on
+`bose`, `smartboardpc` and `lrhtpc`, with *Wish You Were Here*'s five; still
+there on `lempi02w` and `lp3-wifi` until they take part. The DAO was bundled
+for every node but `teacherslounge` on 2026-11-01 (`sync/bundled.json`); a
+node patched before its bundle arrives has the album's tracks in neither copy
+until it does.
 
 **`[SPEC-AGN-930]`** A DAO file's tracks and a later DAO's are compared by
 their logs alone; two spans of two whole-disc encodes do not encode alike, so

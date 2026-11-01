@@ -1,6 +1,6 @@
 # SPEC073: A Retired File on a Node
 
-**Design Specification — Tier 2 · written 2026-11-01, at the maintainer's direction · §2–§4 built 2026-11-01, the node's half not yet deployed · answers [SPEC069](SPEC069-a-disc-ripped-again.md) `[SPEC-AGN-920]`, `[SPEC-AGN-045]`**
+**Design Specification — Tier 2 · written 2026-11-01, at the maintainer's direction · built and run on three nodes 2026-11-01 · answers [SPEC069](SPEC069-a-disc-ripped-again.md) `[SPEC-AGN-920]`, `[SPEC-AGN-045]`**
 
 When a disc ripped again is merged, the hub moves the files it no longer
 plays to `_Retired` and removes their rows `[SPEC-AGN-030]`. The next star
@@ -167,7 +167,7 @@ named `[SPEC-NSH-085]`. The hub records each node's moves in
 the bundle ledger `[SPEC-STAR-945]`. A later run doesn't ask about a file
 already moved.
 
-*The node's half built 2026-11-01, not yet deployed* (`player/src/retire.rs`,
+*The node's half built 2026-11-01, deployed to three nodes the same day (§7)* (`player/src/retire.rs`,
 called from `star_node.rs`):
 
 - **Snapshot.** It says `retire_files: 1`.
@@ -254,6 +254,27 @@ sent one. That way a result never reads as if a move might have happened.
 5. A run. `bose`, `smartboardpc` and `lrhtpc` first: they hold both merges'
    files and have their replacements. Each node's `_Retired` is read back
    over its own report, not from the hub's ledger.
+
+*Run 2026-11-01, `20261101T1757Z`.* `954422c` went to `bose` by
+`build/deploy-appliance.sh`, to `smartboardpc` by
+`build/update-source-host.sh`, and to `lrhtpc` by `LRHTPC/deploy-lrhtpc.sh`.
+Each answered as that build: `bose` from its durable copy, the other two
+from the running player. All three were playing before and after.
+
+The sync then went from the console with those three. The rehearsal said
+`11 to move` on each, and the commit `11 moved`. Read back on each node over
+SSH, not from the hub:
+
+- `_Retired` holds 11 audio files, each matching the hub's SHA-256;
+- none is left in the album folders, which hold the two DAO files, their
+  covers, and on `lrhtpc` a sheet;
+- `_Retired/.mpdignore` reads `*`;
+- the catalogue names none of the 11, and nothing under `_Retired`;
+- `bose`'s `/srv/library` is mounted `ro` again.
+
+`lempi02w` and `lp3-wifi` were left out of this run, and still hold the 11
+in their album folders until they run this build and take part in a sync;
+`teacherslounge` did not answer.
 
 ## 8. Open
 
