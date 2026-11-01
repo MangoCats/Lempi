@@ -1286,6 +1286,16 @@ def test_inherited_merge():
               "the recording's own measurements stand")
         check(c.execute("SELECT COUNT(*) FROM passages p JOIN files f USING (file_id) WHERE f.path LIKE '%Hit 1.mp3'")
               .fetchone()[0] == 2, "and nothing outside the album is touched")
+        # [SPEC-RTF-015]: the hub's word on each file it retired, for a node to act on.
+        dao_md5 = c.execute("SELECT audio_md5 FROM files WHERE path LIKE '%Artist - Album.mp3'").fetchone()[0]
+        gone = ingest_cd.retired_files(c)
+        check(sorted(gone) == ["m1".ljust(32, "0"), "m2".ljust(32, "0"), "m3".ljust(32, "0")],
+              f"each retired file recorded, by its audio: {sorted(gone)}")
+        one = gone.get("m1".ljust(32, "0")) or {}
+        check(one.get("rel_path") == "Artist/Album/Song One.mp3" and one.get("replaced_by") == dao_md5
+              and os.path.normcase(os.path.dirname(one.get("retired_to") or "")) == os.path.normcase(m["to"])
+              and one.get("why") == "merge",
+              f"where it was under the music folder, where it went, what plays it now: {one}")
         c.close()
     finally:
         ingest_cd.lookup_disc_id, ingest_cd.lookup_barcode = old

@@ -2065,6 +2065,65 @@ def retire_dir(into: str, today: str | None = None) -> str:
     return out
 
 
+RETIRE_STAGE = "retire"
+
+
+def record_retired(conn, file_ids, into: str, moved: dict, replaced_by: str | None,
+                   now: str | None = None) -> int:
+    """`[SPEC-RTF-015]` The hub's word that it retired each of these files,
+    written in the merge's own transaction, before their rows go: one
+    `ingest_decisions` row a file, stage `retire`, keyed by its `audio_md5`.
+    A node retires a file only on this word, matched by its bytes
+    `[SPEC-RTF-010]`, never because nothing catalogues it.
+
+    `detail`: `sha256` and `size_bytes`, the bytes; `rel_path`, its place under
+    the music folder -- what a node's own path for it ends in; `retired_to`,
+    where the hub moved it (`moved`, `{path: destination}`); `replaced_by`, the
+    audio that plays it now. A decision row and not a table of its own: the
+    catalogue merge takes every table the hub holds to every node, and a patch
+    never drops one, so a hub-only table could be neither kept home nor left
+    out. Returns how many were recorded."""
+    ids = list(file_ids)
+    if not ids:
+        return 0
+    have = {r[1] for r in conn.execute("PRAGMA table_info(files)")}
+    extra = [c for c in ("sha256", "size_bytes") if c in have]
+    root = os.path.dirname(os.path.dirname(os.path.abspath(into)))
+    now = now or _now()
+    n = 0
+    q = ",".join("?" * len(ids))
+    for row in conn.execute(f"SELECT audio_md5, path{''.join(', ' + c for c in extra)} FROM files "
+                            f"WHERE file_id IN ({q})", ids).fetchall():
+        md5, path = row[0], row[1]
+        got = dict(zip(extra, row[2:]))
+        detail = {"sha256": got.get("sha256"), "size_bytes": got.get("size_bytes"),
+                  "rel_path": os.path.relpath(path, root).replace(os.sep, "/"),
+                  "retired_to": moved.get(path), "replaced_by": replaced_by, "why": "merge"}
+        conn.execute("INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
+                     "VALUES (?1,?2,'retired',1.0,?3,?4)", (md5, RETIRE_STAGE, json.dumps(detail, sort_keys=True), now))
+        n += 1
+    return n
+
+
+def retired_files(conn) -> dict[str, dict]:
+    """Every audio the hub has retired `[SPEC-RTF-015]`, `{audio_md5: detail}`,
+    the newest word on each -- unless the hub catalogues it again since, when
+    it is not retired whatever was once said."""
+    out = {}
+    try:
+        rows = conn.execute("SELECT audio_md5, detail FROM ingest_decisions WHERE stage = ?1 "
+                            "AND outcome = 'retired' ORDER BY decision_id", (RETIRE_STAGE,)).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    for md5, detail in rows:
+        out[md5] = json.loads(detail or "{}")
+    if out:
+        q = ",".join("?" * len(out))
+        for (md5,) in conn.execute(f"SELECT audio_md5 FROM files WHERE audio_md5 IN ({q})", list(out)).fetchall():
+            out.pop(md5, None)
+    return out
+
+
 def clear_retired_refs(conn) -> dict:
     """Every listener reference to a passage a merge retired, NULLed as a
     single file's cascade would (`passage_orphans`) -- in a transaction of its
@@ -2571,6 +2630,9 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
         say("writing the album ...")
         conn.execute("BEGIN IMMEDIATE")
         try:
+            if merge:
+                # [SPEC-RTF-015]: what was retired, while its rows still say what it was.
+                record_retired(conn, merge["file_ids"], into, {s: d for s, d in retired}, audio_md5)
             gone = retire_rows(conn, merge["file_ids"], orphans=False) if merge else None
             result = commit_rip(conn, folder, toc, mp3_path, audio_md5, disc_outcome, releases,
                                 rip_report, secret.acoustid_key(required=False), chosen=bool(release),

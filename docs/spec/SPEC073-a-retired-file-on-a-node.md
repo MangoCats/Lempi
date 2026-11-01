@@ -57,27 +57,38 @@ empty answer is not evidence (`CLAUDE.md` §6, [GOV002](../GOV002-sources-of-tru
 so the evidence here is positive: the hub's own record, matched by
 `audio_md5` and confirmed by `sha256`.
 
-**`[SPEC-RTF-015]` The hub keeps that record: `retired_files`, a catalogue
-table the hub alone holds.** One row per audio:
+**`[SPEC-RTF-015]` The hub keeps that record: one `ingest_decisions` row
+per retired audio file,** with stage `retire`, outcome `retired`, keyed by
+its `audio_md5`, and dated when the merge ran. Its `detail` holds:
 
-- `audio_md5` and `sha256`, the identity and the bytes;
-- `size_bytes`;
+- `sha256` and `size_bytes`, the bytes;
 - `rel_path`, its place under the music folder
   (`Pink Floyd/Wish You Were Here/Have a Cigar.mp3`);
 - `retired_to`, where the hub moved it;
-- `retired_at`, when;
-- `why`, the merge decision's id.
+- `replaced_by`, the audio that plays it now;
+- `why` (`merge`).
 
-`ingest_cd.retire_rows` writes it in the merge's own transaction, so a merge
-that fails leaves no row naming files that are still in place. Sync doesn't
-govern the table: no node is sent it, and none needs it.
+*Built 2026-11-01* (`ingest_cd.record_retired`, read back by
+`ingest_cd.retired_files`). The merge writes it in its own transaction,
+while the files' rows still say what they were, so a merge that fails
+leaves no row naming files that are still in place. A file the hub
+catalogues again is not retired, whatever was once said.
 
-*Backfilled* for the two merges already made, from the backups each was
-preceded by. *Highway 61*'s six come from
-`data/backups/before-highway61-merge-2026-10-30`, *Wish You Were Here*'s five
-from `data/backups/before-wywh-swap-2026-11-01`; the swap there changed
-passages, not files. Each merge's `merged` decision names where its files
-went.
+*Designed as a table of its own, and changed when it was built.* The
+catalogue merge carries every table the hub holds to each node
+(`star_merge.build_catalogue`). And a patch never drops a table
+(`star_patch.make_values` refuses a baseline that holds one its target
+lacks). So a table kept on the hub alone could be neither kept home nor
+left out. The per-file decision log was already the hub's record of what was
+done to each file.
+
+*Backfilled 2026-11-01* by `tools/backfill_retired.py`: 11 files, *Highway
+61*'s six and *Wish You Were Here*'s five, each with its `sha256` and size.
+They were read from the copies taken before each merge,
+`data/backups/before-highway61-merge-2026-10-30` and
+`data/backups/before-wywh-swap-2026-11-01`; the swap that copy preceded
+changed passages, not files. Each merge's `merged` decision named where its
+files went, and none was missing.
 
 ## 3. The node moves its own file
 
@@ -91,8 +102,8 @@ transport replaced [SPEC054](SPEC054-mesh-without-ssh.md), and a node reached
 only that way would be left out.
 
 The hub's patch gains a `retire` section. It is written by `star_sync.py
-patch` for each `files` row the catalogue patch removes whose `audio_md5` is
-in `retired_files`. Each entry holds:
+patch` for each `files` row the catalogue patch removes whose `audio_md5` the
+hub has retired (`ingest_cd.retired_files`). Each entry holds:
 
 - the `audio_md5` and `sha256`;
 - the path the node's own row gave it, from the baseline the patch is cut
@@ -193,7 +204,7 @@ sent one. That way a result never reads as if a move might have happened.
 
 1. Scanners skip `_Retired` `[SPEC-RTF-040]`: Python and the phone, each
    with a test, deployed to the phones.
-2. The hub's record `[SPEC-RTF-015]`, written by `retire_rows`, and its
+2. The hub's record `[SPEC-RTF-015]`, written by `record_retired`, and its
    backfill, compared by count against both merges' decisions.
 3. The `retire` section `[SPEC-RTF-020]`: `star_sync.py patch`, and
    `test_star_sync_flow.py`'s fake fleet answering it.
@@ -215,8 +226,8 @@ cataloguing a stray.
 
 **`[SPEC-RTF-910]`** A file the hub removes for any reason other than a
 merge (deleted from the hub, or a duplicate cleared) leaves its node copy as
-a stray too. It is out of scope until a tool writes `retired_files` for it,
-and then the same mechanism applies.
+a stray too. It is out of scope until a tool records it as retired
+(`ingest_cd.record_retired`), and then the same mechanism applies.
 
 ---
 
