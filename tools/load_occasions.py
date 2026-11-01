@@ -32,6 +32,7 @@ Omitted, the one database given is both.
 
 from __future__ import annotations
 
+import math
 import sqlite3
 import sys
 
@@ -93,6 +94,24 @@ PROFANITY_DEFAULT = 1.0
 SPIRITUAL_DEFAULT = 1.0
 
 
+# The smallest multiplier a curve point may hold [SPEC-DIR-132]: x0.000001,
+# MuLibPlay's own "never". `linear` curves blend in log space, where 0 has no
+# logarithm, so the player raises anything smaller -- and this refuses it
+# before it is written. `occasion.rs`'s MIN_CURVE_POINT is the same number.
+MIN_CURVE_POINT = 0.000001
+
+
+def below_floor(rows) -> list[str]:
+    """Each point of `curves()` rows that is not a finite number at least
+    MIN_CURVE_POINT, as a line naming it."""
+    bad = []
+    for ch, cl, _label, _interp, pts in rows:
+        for m, d, v in pts:
+            if not (math.isfinite(v) and v >= MIN_CURVE_POINT):
+                bad.append(f"{ch}/{cl} {m:02d}-{d:02d}: {v}")
+    return bad
+
+
 def curves(kids: float, profanity: float, spiritual: float) -> list[tuple[str, str, str, str, list]]:
     return [
         ("user.christmas", "christmasy", "Christmas", "linear", CHRISTMAS),
@@ -120,6 +139,12 @@ def main() -> int:
                  else PROFANITY_DEFAULT)
     spiritual = (float(args[args.index("--spiritual") + 1]) if "--spiritual" in args
                  else SPIRITUAL_DEFAULT)
+    bad = below_floor(curves(kids, profanity, spiritual))
+    if bad:
+        print(f"refused: a curve point must be at least {MIN_CURVE_POINT} [SPEC-DIR-132]:")
+        for line in bad:
+            print(f"  {line}")
+        return 2
 
     # Writes the occasion registry, which is listener-side, and counts
     # reach over `passages`/`flavor`, which are not. One connection sees

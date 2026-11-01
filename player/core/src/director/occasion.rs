@@ -18,6 +18,13 @@
 
 use std::collections::HashMap;
 
+/// The smallest multiplier a curve point may hold `[SPEC-DIR-132]`: ×0.000001,
+/// MuLibPlay's own "never" (`kidSongWeight`). `linear` blends in log space,
+/// where 0 is `-∞` and the blend is not a number, so nothing below this is
+/// allowed: the loader refuses it, a new schema refuses it, and a curve built
+/// from an older row raises it here.
+pub const MIN_CURVE_POINT: f64 = 0.000001;
+
 /// Days before the first of each month, in a non-leap year.
 const MONTH_START: [u16; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
 const YEAR_DAYS: f64 = 365.0;
@@ -78,7 +85,15 @@ pub struct Curve {
 }
 
 impl Curve {
-    pub fn new(interp: Interp, mut points: Vec<(u16, f64)>) -> Option<Self> {
+    /// A point that is not a finite number is dropped, and one below
+    /// [`MIN_CURVE_POINT`] raised to it; the caller says so, since it knows
+    /// which occasion the point belongs to.
+    pub fn new(interp: Interp, points: Vec<(u16, f64)>) -> Option<Self> {
+        let mut points: Vec<(u16, f64)> = points
+            .into_iter()
+            .filter(|p| p.1.is_finite())
+            .map(|(o, v)| (o, v.max(MIN_CURVE_POINT)))
+            .collect();
         if points.is_empty() {
             return None;
         }
@@ -111,7 +126,10 @@ impl Curve {
         }
         let t = wrap_days(prev_ord, ord) / span;
         // Log space: these are ratios, and a linear blend of 0.000001 and 10
-        // would sit at 5 for half the gap.
+        // would sit at 5 for half the gap. Geometrically it is prev^(1-t) ·
+        // next^t: halfway between ×0.5 and ×2 is ×1, and halfway between
+        // ×0.000001 and ×10 is ×0.0032. Every point is at least
+        // `MIN_CURVE_POINT`, so the logarithm is always defined.
         (prev.ln() + t * (next.ln() - prev.ln())).exp()
     }
 }
@@ -281,6 +299,21 @@ mod tests {
         );
         let o = Occasions::new(curves, values);
         assert!((o.multiplier(Some("r"), 0) - 6.0).abs() < 1e-9, "both apply");
+    }
+
+    /// A point below the floor is raised to it, and one that is not a number
+    /// is dropped, so a linear blend can never produce NaN `[SPEC-DIR-132]`.
+    #[test]
+    fn a_curve_point_is_never_below_the_floor() {
+        let c = Curve::new(Interp::Linear, vec![(0, 0.0), (100, 10.0), (200, f64::NAN)]).unwrap();
+        for ord in [0u16, 50, 99, 150, 364] {
+            let v = c.at(ord);
+            assert!(v.is_finite() && v >= MIN_CURVE_POINT, "day {ord}: {v}");
+        }
+        assert!((c.at(0) / MIN_CURVE_POINT - 1.0).abs() < 1e-9, "0 was raised to the floor: {}", c.at(0));
+        let halfway = c.at(50);
+        assert!((halfway - (MIN_CURVE_POINT * 10.0).sqrt()).abs() < 1e-12, "geometric, not arithmetic: {halfway}");
+        assert!(Curve::new(Interp::Step, vec![(0, f64::NAN)]).is_none(), "nothing usable is no curve");
     }
 
     /// A season may say "never right now"; it may not invert the weight.

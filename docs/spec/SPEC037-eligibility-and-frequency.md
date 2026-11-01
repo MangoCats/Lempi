@@ -172,7 +172,15 @@ Curves are data, not code: a new occasion is a new characteristic plus a curve, 
 | `step` | hold the previous point's value | month-granular curves, as MuLibPlay's `[W]`/`[S]`/`[K]` were |
 | `linear` | interpolate in **log** space | smooth curves, as `[C]` effectively was |
 
-Interpolation is logarithmic because these are *ratios*: halfway between ×0.5 and ×2.0 is ×1.0, not ×1.25, and a linear blend of 0.000001 and 10 would sit near 5 for half the gap.
+Interpolation is logarithmic because these are *ratios*: halfway between ×0.5 and ×2.0 is ×1.0, not ×1.25, and a linear blend of 0.000001 and 10 would sit near 5 for half the gap. Between neighbouring points `a` (on day `d₀`) and `b` (on `d₁`), the curve on day `d` is
+
+```
+curve(d) = exp( ln a + t·(ln b − ln a) ) = a^(1−t) · b^t,   t = (d − d₀) / (d₁ − d₀), counted around the year
+```
+
+so halfway between ×0.000001 and ×10 is ×0.0032, and ×1 is reached a seventh of the way from ×10 down to ×0.000001.
+
+**`[SPEC-DIR-131]` No point is below ×0.000001** — MuLibPlay's own "never". A logarithm of 0 is not a number, and a blend through one would make the weight not a number too. `tools/load_occasions.py` refuses such a point before writing, a schema created since 2026-11-01 refuses it (`CHECK (multiplier >= 0.000001)`), and the Director raises any older row up to the floor, and drops one that is not a number, saying so in its log.
 
 Leap years are deliberately ignored — 29 February shares an ordinal with 1 March. A season is not accurate to the day, and honouring it would shift every curve by a day in three years out of four.
 

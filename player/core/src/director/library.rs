@@ -1358,6 +1358,17 @@ pub(crate) fn load_occasions(conn: &QualifyingConn) -> Result<Occasions, DbError
             ))
         }) {
             for (ch, cl, m, d, mult) in rows.flatten() {
+                // Nothing below ×0.000001 `[SPEC-DIR-132]`: `Curve::new`
+                // raises such a point to the floor and drops one that is not
+                // a number. Said here, where the occasion has a name.
+                #[allow(clippy::neg_cmp_op_on_partial_ord)]
+                if !(mult >= crate::director::occasion::MIN_CURVE_POINT) {
+                    tracing::warn!(
+                        "director: occasion {ch}/{cl} on {m:02}-{d:02} has multiplier {mult}, \
+                         below the floor of {} or not a number; raised or dropped [SPEC-DIR-132]",
+                        crate::director::occasion::MIN_CURVE_POINT
+                    );
+                }
                 pts.entry((ch, cl)).or_default().push((ordinal(m, d), mult));
             }
         }

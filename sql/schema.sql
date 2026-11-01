@@ -430,7 +430,8 @@ CREATE TABLE IF NOT EXISTS listener_occasion_points (
     class           TEXT    NOT NULL,
     month           INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
     day             INTEGER NOT NULL CHECK (day BETWEEN 1 AND 31),
-    multiplier      REAL    NOT NULL CHECK (multiplier > 0.0),
+    -- At least x0.000001, "never" [SPEC-DIR-132]: `linear` blends in log space.
+    multiplier      REAL    NOT NULL CHECK (multiplier >= 0.000001),
     PRIMARY KEY (characteristic, class, month, day),
     FOREIGN KEY (characteristic, class)
         REFERENCES listener_occasions(characteristic, class) ON DELETE CASCADE
