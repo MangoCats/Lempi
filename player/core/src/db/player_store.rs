@@ -1399,7 +1399,7 @@ impl PlayerStore {
     /// this process holds that can actually write.
     /// Returns what the OS said, for a caller holding a Director to apply.
     pub fn sync_utc_offset(&self) -> Option<i64> {
-        crate::director::program::sync_os_utc_offset(&self.conn)
+        crate::director::programme::sync_os_utc_offset(&self.conn)
     }
 
     /// Remember which speaker was chosen `[PI3-AIM-020]`, `[REQ-VIS-260]`.
@@ -1946,13 +1946,14 @@ impl PlayerStore {
             .unwrap_or(Self::LED_NOWIFI_DEFAULT_PCT)
     }
 
-    /// The programme chosen by hand, persisted so it survives a restart
+    /// The programme slot chosen by hand, persisted so it survives a restart
     /// rather than reverting to time-of-day selection every power cycle
-    /// `[SPEC-DIR-185]`. Written whenever `set_program` is asked for a real
+    /// `[SPEC-DIR-185]`. Written whenever `set_slot` is asked for a real
     /// id; cleared (deleted, not written as empty) when asked for `auto`,
-    /// so `load_manual_program` returning `None` means the same thing on
-    /// read as it does when nothing has ever been chosen.
-    pub fn save_manual_program(&self, id: Option<i64>) -> Result<(), DbError> {
+    /// so `load_manual_slot` returning `None` means the same thing on
+    /// read as it does when nothing has ever been chosen. The key keeps its
+    /// older name, `manual_program`, as the tables keep theirs.
+    pub fn save_manual_slot(&self, id: Option<i64>) -> Result<(), DbError> {
         match id {
             Some(id) => self
                 .conn
@@ -1975,9 +1976,9 @@ impl PlayerStore {
 
     /// `None` both when nothing has ever been chosen and when a stored value
     /// no longer parses -- either way there is nothing to override the clock
-    /// with, and `Programs::active`'s own stale-id fallback already handles
+    /// with, and `Programme::active_slot`'s own stale-id fallback already handles
     /// an id that no longer exists.
-    pub fn load_manual_program(&self) -> Option<i64> {
+    pub fn load_manual_slot(&self) -> Option<i64> {
         self.conn
             .query_row("SELECT value FROM player_settings WHERE key = 'manual_program'", [], |r| {
                 r.get::<_, String>(0)
@@ -2213,6 +2214,21 @@ impl PlayerStore {
             })
     }
 
+    /// Whether a recording has flavor the Director can shape a slot by
+    /// `[SPEC-DIR-142]`: any `flavor` row, which is the Director's own test.
+    /// `None` when the question could not be asked, which is not the same
+    /// answer as "none" and is not shown as one.
+    pub fn has_flavor(&self, mbid: &str) -> Option<bool> {
+        self.conn
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM __LIB__.flavor \
+                  WHERE subject_kind = 'recording' AND subject_id = ?1)",
+                [mbid],
+                |r| r.get::<_, bool>(0),
+            )
+            .ok()
+    }
+
     /// Every artist a recording credits, in the order the display names them
     /// (weight, then name) -- so the artist link can open a preference panel
     /// for each, the way the Program Director rotates by each
@@ -2239,7 +2255,7 @@ impl PlayerStore {
     ///
     /// One fetch of every matching `(selected_by, played_at)` pair, then
     /// aggregated here rather than in a cross-tab SQL query that would need
-    /// to already know the distinct program names -- the same "a handful
+    /// to already know the distinct slot names -- the same "a handful
     /// of rows even on a well-used appliance" scale `remote_flags.py`
     /// reasons about for `listener_flags`.
     ///
@@ -2248,8 +2264,8 @@ impl PlayerStore {
     /// of, which is what makes All's count the true ceiling: never less
     /// than any other row, often more. **User** is always present, even at
     /// all-zero, since "never manually played" is itself the answer.
-    /// Program rows -- including the `"auto"` sentinel for a genuine
-    /// Director pick with no program in force -- appear only if this
+    /// Slot rows -- including the `"auto"` sentinel for a genuine
+    /// Director pick with no programme slot in force -- appear only if this
     /// subject has at least one such play, sorted by their own all-time
     /// count so the most relevant shows first.
     pub fn play_frequency(&self, kind: &str, id: &str) -> Result<Vec<FrequencyRow>, DbError> {
@@ -2500,7 +2516,7 @@ impl PlayerStore {
     /// `selected_by` is the entry's own `QueueEntry::selected_by`
     /// `[REQ-VIS-300]` -- `None` where the caller has nothing to report
     /// (an alternate backend that does not yet track this), `Some("user")`
-    /// or a program name where it does. Stored, never inferred here.
+    /// or a programme slot name where it does. Stored, never inferred here.
     pub fn record_play(
         &self,
         passage_id: i64,
@@ -3472,7 +3488,7 @@ mod tests {
     /// does, so a future version that makes the same mistake fails here too.
     #[test]
     fn sync_utc_offset_actually_reaches_disk() {
-        let Some(os) = crate::director::program::os_utc_offset_minutes() else {
+        let Some(os) = crate::director::programme::os_utc_offset_minutes() else {
             return; // nothing to prove on a platform this cannot ask
         };
         let dir = std::env::temp_dir().join(format!("lempi_tz_{}.db", std::process::id()));
@@ -3647,18 +3663,18 @@ mod tests {
     /// tell those two states apart as "fall back to the schedule" versus
     /// "fall back to something else" `[SPEC-DIR-185]`.
     #[test]
-    fn manual_program_round_trips_and_auto_clears_it() {
+    fn manual_slot_round_trips_and_auto_clears_it() {
         let dir = std::env::temp_dir().join(format!("lempi_program_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&dir);
         let st = PlayerStore::open(&dir).unwrap();
 
-        assert_eq!(st.load_manual_program(), None, "nothing chosen yet");
-        st.save_manual_program(Some(4)).unwrap();
-        assert_eq!(st.load_manual_program(), Some(4));
-        st.save_manual_program(Some(7)).unwrap();
-        assert_eq!(st.load_manual_program(), Some(7), "a later choice replaces the earlier one");
-        st.save_manual_program(None).unwrap();
-        assert_eq!(st.load_manual_program(), None, "auto clears it rather than storing empty");
+        assert_eq!(st.load_manual_slot(), None, "nothing chosen yet");
+        st.save_manual_slot(Some(4)).unwrap();
+        assert_eq!(st.load_manual_slot(), Some(4));
+        st.save_manual_slot(Some(7)).unwrap();
+        assert_eq!(st.load_manual_slot(), Some(7), "a later choice replaces the earlier one");
+        st.save_manual_slot(None).unwrap();
+        assert_eq!(st.load_manual_slot(), None, "auto clears it rather than storing empty");
         let _ = std::fs::remove_file(&dir);
     }
 
@@ -3977,7 +3993,7 @@ mod tests {
         assert!(store.recording_credits("no-such-recording").unwrap().is_empty());
     }
 
-    /// Program rows sort by their own all-time count, most-played first --
+    /// Slot rows sort by their own all-time count, most-played first --
     /// the same "most relevant first" instinct behind runner-up ordering.
     #[test]
     fn play_frequency_program_rows_sort_by_all_time_count_descending() {

@@ -73,7 +73,7 @@ class BackupActivity : Activity() {
             }
             val taken = SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault()).format(Date(b.takenAt * 1000))
             say("\nBackup written, and checked where it landed.")
-            say("Taken $taken: ${b.plays} plays, ${b.preferences} preferences, ${b.likes} likes, ${b.programs} programmes.")
+            say("Taken $taken: ${b.plays} plays, ${b.preferences} preferences, ${b.likes} likes, ${b.programs} programme slots.")
             say("${b.bytes / 1024u} KB.")
         } catch (e: LempiException) {
             say("\nNo backup written: ${e.message}")

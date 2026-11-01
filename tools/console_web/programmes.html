@@ -22,7 +22,7 @@
 
   <h3 style="font-size:.95rem">The library</h3>
   <table class="peers">
-    <thead><tr><th>programme</th><th>versions</th><th>current</th><th>time slots</th></tr></thead>
+    <thead><tr><th>programme</th><th>versions</th><th>current</th><th>time slots</th><th>seeds without flavor</th></tr></thead>
     <tbody id="lib-rows"></tbody>
   </table>
   <p id="hub-player" style="font-size:.85rem"></p>
@@ -43,6 +43,20 @@
 (() => {
   const $ = id => document.getElementById(id);
   const td = (t) => { const c = document.createElement('td'); c.textContent = t; return c; };
+  // A seed with no flavor shapes nothing: the Director passes it over, and
+  // its slot is shaped by its other seeds [SPEC-DIR-142]. `null` is a
+  // library that could not be asked, said as that rather than as "none".
+  const seedName = u => `${u.title || u.mbid} (${u.slot})`;
+  const unflavoredCell = list => {
+    if (list == null) return td('could not be checked');
+    const c = td(list.length ? `${list.length}: ${list.map(seedName).join(', ')}` : 'none');
+    if (list.length) {
+      c.title = 'These seeds have no flavor yet, so they cannot say what their slot sounds like. '
+              + 'The Director passes them over.';
+      c.style.fontWeight = 'bold';
+    }
+    return c;
+  };
   const post = async (path, body) => {
     const r = await fetch(path, { method: 'POST', body: JSON.stringify(body || {}) });
     const out = await r.json();
@@ -59,13 +73,14 @@
       const cur = p.versions[p.versions.length - 1];
       const tr = document.createElement('tr');
       tr.append(td(p.name), td(String(p.versions.length)),
-                td(`${cur.version} · ${cur.fingerprint.slice(0, 12)} · ${cur.made_at}`), td(String(cur.slots)));
+                td(`${cur.version} · ${cur.fingerprint.slice(0, 12)} · ${cur.made_at}`), td(String(cur.slots)),
+                unflavoredCell(cur.unflavored));
       lib.appendChild(tr);
     }
     if (!s.programmes.length) {
       const tr = document.createElement('tr');
       const c = td('None yet: keep the hub player\'s programme below to start the library.');
-      c.colSpan = 4;
+      c.colSpan = 5;
       tr.appendChild(c);
       lib.appendChild(tr);
     }
@@ -75,7 +90,10 @@
       : `The hub's player runs ${hp.name || 'an unnamed programme'}: ${hp.slots} time slot(s), ` +
         `${(hp.fingerprint || '').slice(0, 12)}` +
         (s.programmes.some(p => p.versions.some(v => v.fingerprint === hp.fingerprint))
-          ? ' — already in the library.' : ' — not in the library yet.');
+          ? ' — already in the library.' : ' — not in the library yet.') +
+        (hp.unflavored && hp.unflavored.length
+          ? ` ${hp.unflavored.length} seed(s) without flavor, passed over: ${hp.unflavored.map(seedName).join(', ')}.`
+          : '');
     if (hp.name && !$('keep-name').value) $('keep-name').value = hp.name;
 
     const assigned = new Map(s.nodes.map(n => [n.member, n]));

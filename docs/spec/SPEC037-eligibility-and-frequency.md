@@ -6,13 +6,33 @@ Split from [SPEC009](SPEC009-program-director.md) on 2026-09-10, which had
 reached 309 lines against `[GOV-DOC-010]`'s 300-line limit. Stage A is the
 largest stage of the pipeline and the one with the most rules of its own.
 
-> **Related:** [SPEC009](SPEC009-program-director.md) for the pipeline
+> **Related:** [SPEC009](SPEC009-program-director.md) for the pipeline, whose §3 this is · [SPEC074](SPEC074-when-the-director-cannot-choose.md) for what the two fallbacks keep of it · [SPEC017](SPEC017-what-counts-as-a-play.md) for rejection windows · [SPEC057](SPEC057-holding-a-passage-back.md) for holds
 
 ---
 
-> **Section numbers below are the pre-split document's.** This file was carved out of a larger one on 2026-09-10, and its cross-references still use the original numbering: §3 in [SPEC037](SPEC037-eligibility-and-frequency.md), the rest in [SPEC009](SPEC009-program-director.md).
-
 ## 3. Stage A — Eligibility & Frequency
+
+**`[SPEC-DIR-111]` Everything that keeps a passage out, in the order the code checks it.** *(Read from `Director::weigh_all` and `frequency::weigh`, 2026-11-01.)* A radio passage that clears every row is eligible, at the weight the rest of this section computes. Each exclusion carries its reason into the census and the "why" panel.
+
+| # | out when | for how long | rule |
+| ---: | :--- | :--- | :--- |
+| 1 | it is not `kind = 'radio'` | always | `[REQ-PD-120]` |
+| 2 | it is held: `passages.director_hold` is set, or its file failed this player's own check | until cleared | `[SPEC-HOLD-010]`, `[GDE-INT-135]` |
+| 3 | it is shorter than 30 s, longer than 3600 s, or starts more than 10,800 s into its file | always | `[SPEC-DIR-125]` |
+| 4 | its recording was skipped within the skip window (156 h by default) or taken out of the queue unheard within the dequeue window (18 h); the longer remaining one is the reason | the window | `[SPEC-PLAY-050]`, `[SPEC-PLAY-055]`, `[SPEC-PLAY-057]` |
+| 5 | any credited artist — or, for a passage no credit reaches, its file's artist tag — played inside that artist's own rotation | the rotation | `[SPEC-DIR-114]`, `[REQ-AND-315]` |
+| 6 | the same passage, the same recording, or a recording of the same song (work) played inside **this** passage's recording rotation | the rotation | `[SPEC-DIR-119]` |
+| 7 | a related recording played inside that rotation (`recording_relations`, empty today) | the rotation | `[SPEC-DIR-116]` |
+| 8 | its weight, after every multiplier below, is not above `min_weight` (0.001) | while it stays there | `[SPEC-DIR-115]` step 5, `[SPEC-DIR-137]` |
+
+Beside Stage A, a passage already in the queue is kept out of the next pick by the Director's skip list, which is what keeps an unidentified passage from appearing twice `[REQ-AND-310]`. Two consequences of the keys: rows 4 and 6's recording and work tiers need a recording MBID, so an unidentified or tags-only passage is never suppressed by a rejection and rotates on its passage id (and its tag artist) alone `[GDE-WRK-055]`.
+
+The weight of a passage that clears them all is, with the default `Damped` coupling `[SPEC-DIR-117]`:
+
+```
+w = recording restraint × recording ramp × related damping × length bonus × occasion
+    × Π over credited artists 10^(−restraint) × the least-recovered artist's ramp
+```
 
 **`[SPEC-DIR-110]` Log-scale time encoding.** `seconds(v) = 10^v × 3600`. One float spans four orders of magnitude: `-1.0` → 6 min, `0.0` → 1 h, `2.0` → 4.2 days, `3.0` → 41 days.
 
@@ -133,7 +153,7 @@ Two consequences to watch:
 
 Tuned medians sit close to the defaults, which is evidence the defaults are well chosen — users nudged rather than fought them. Restraint spans −0.939 to 5.0, i.e. an 8.7× boost to a 10⁻⁵ suppression: it is the "much more / never again" knob.
 
-**`[SPEC-DIR-125]` Passage-level filters and length bonus.** `radio` passages only `[REQ-PD-120]`. Reject shorter than 30 s, longer than 3600 s, or starting more than 10800 s into a file. Then `w *= sqrt(min(4.0, 180 s / length))` — a mild preference for ~3-minute passages, capped at 2× for short ones.
+**`[SPEC-DIR-125]` Passage-level filters and length bonus.** `radio` passages only `[REQ-PD-120]`. Reject shorter than 30 s, longer than 3600 s, or starting more than 10800 s into a file. Then `w *= sqrt(min(4.0, 180 s / length))`. **This favours short passages, not three-minute ones**: 180 s is where it is neutral, not where it peaks. It rises to its cap of ×2 at 45 s and below, and falls for anything longer — ×0.71 at 6 minutes, ×0.5 at 12, ×0.22 at the 60-minute limit. MuLibPlay's own formula, transcribed; in practice it is a penalty on long passages more than a reward for short ones, since only 30–180 s passages gain at all.
 
 **`[SPEC-DIR-130]` Occasion multiplier — a time layer, not a flavor dimension.** User-defined characteristics `[GDE-MCR-060]` supply the *value*; a seasonal curve turns it into a multiplier:
 
@@ -157,6 +177,8 @@ Interpolation is logarithmic because these are *ratios*: halfway between ×0.5 a
 Leap years are deliberately ignored — 29 February shares an ordinal with 1 March. A season is not accurate to the day, and honouring it would shift every curve by a day in three years out of four.
 
 The multiplier is clamped at zero. A characteristic value above 1.0 against a curve below 1.0 would otherwise drive it negative and *invert* the weight; "never right now" is the strongest thing a season may say.
+
+**`[SPEC-DIR-133]` Which day, which value, how several combine.** "Today" is the **listener's local date** `[SPEC-DIR-182]` — a season turns at local midnight, as a programme slot starts at local time; until 2026-11-01 it turned at UTC midnight. A recording's value for an occasion is its `flavor` row, replaced — not averaged — by the listener's own hand-set value where one exists `[SPEC-PREF-085]`. A recording carrying several occasions takes each one's multiplier, and they multiply. The same values also take part in flavor distance as characteristics, which moves shaping and never a weight `[SPEC-FD-112]`.
 
 **`[SPEC-DIR-134]` The inherited four are data, and the data already exists.** MuLibPlay's `[C]`, `[W]`, `[S]`, `[K]` migrate to `user.christmas`, `user.winter`, `user.summer`, `user.childrens` — already present in the migrated library as **binary characteristics**, `christmasy` paired with `not_christmasy`. The curve attaches to the positive class; the negative class carries no curve and is ignored.
 
@@ -192,3 +214,4 @@ Measured effect in August: eligible passages fall **8,038 → 7,851**, with 187 
 
 ---
 
+**Traceability:** `[SPEC-DIR-110..137]` · §3 of [SPEC009](SPEC009-program-director.md) · builds on `[REQ-PD-120]`, `[SPEC-HOLD-010]`, `[GDE-INT-135]`, `[SPEC-PLAY-050]`, `[SPEC-PREF-085]`, `[REQ-AND-315]`, `[GDE-WRK-035]`

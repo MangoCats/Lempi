@@ -1,8 +1,15 @@
 //! Flavor distance `[SPEC005]` — how alike two passages sound.
 //!
 //! Partial data degrades rather than disqualifies `[REQ-PD-160]`: a passage
-//! with 11 known characteristics stays selectable beside one with 71, because
-//! aggregation divides by what is actually known.
+//! with 11 known characteristics stays selectable beside one with all 18,
+//! because aggregation divides by what is actually known.
+//!
+//! A **characteristic** is one distribution (`danceability`, `genre_dortmund`);
+//! a **dimension** is one class value within it, and the 18 have 71
+//! `[ENT-CHAR-010]`. Distance is taken per characteristic, never over
+//! dimensions as separate axes. The listener's own characteristics
+//! (`user.christmas` …) are characteristics like any other and take part
+//! whenever both vectors carry them `[SPEC-FD-112]`.
 //!
 //! Per characteristic the distance is **total variation**, `½·Σ|a−b|`, which
 //! unifies binary and complex characteristics without a fudge factor: for K=2

@@ -102,9 +102,9 @@ fn main() {
 
     match backup::inspect(&snap) {
         Ok(i) => println!(
-            "snapshot: {} plays ({} to {}), {} preferences, {} likes, {} programmes",
+            "snapshot: {} plays ({} to {}), {} preferences, {} likes, {} programme slots",
             i.plays, when(i.first_play), when(i.last_play),
-            i.preferences, i.likes, i.programs
+            i.preferences, i.likes, i.slots
         ),
         Err(e) => {
             eprintln!("cannot read {}: {e}", snap.display());

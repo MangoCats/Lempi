@@ -2,7 +2,7 @@
 
 **Design Specification — Tier 2**
 
-File, passage, recording, release, album and track name overlapping, easily-conflated things; so, since 2026-10-09, do programme, time slot and seed. This is the one place that says what each word means and what it does not — every other document should link here rather than re-explain, per `[GOV-DOC-020]`.
+File, passage, recording, release, album and track name overlapping, easily-conflated things; so, since 2026-10-09, do programme, programme slot and seed, and characteristic and dimension in flavor. This is the one place that says what each word means and what it does not — every other document should link here rather than re-explain, per `[GOV-DOC-020]`.
 
 > **Related:** [SPEC008 §2–3b](SPEC008-database-schema.md) for the tables these terms name · [SPEC010 §3](SPEC010-identification-review.md#3-searching-musicbrainz-directly) for release identification in practice · inherited [MCR-REQ002](../inherited/mcrhythm/MCR-REQ002-entity_definitions.md) for the McRhythm-era entity tags this extends, not replaces
 
@@ -27,9 +27,11 @@ Two collisions kept recurring across the docs before this was written: **"album"
 | **Album** *(informal)* | situational — see below, always say which sense | a table, a single identity, or a synonym for `kind='album'` |
 | **Artist** | a MusicBrainz Artist, credited to a recording by a weighted link | a single value — a recording's credits are a weighted set |
 | **Track** | a recording's position in a release's running order | a stand-in for "passage" or "recording" in normative prose |
-| **Programme** | a named, complete day of listening: a node's time slots and their seeds, run whole | one time slot, or the Program Director |
-| **Time slot** | one timed part of a programme: a name, a start time, its seeds | a programme — though older text calls it one |
-| **Seed** | a recording a time slot names as an exemplar of its sound | a passage, or a rule the Director must obey |
+| **Programme** | a named, complete day of listening: a node's programme slots and their seeds, run whole | one slot, or the Program Director |
+| **Programme slot** | one timed part of a programme: a name, a start time, its seeds; on air until the next slot starts | a programme — though older text and code called it one |
+| **Seed** | a recording a programme slot names as an exemplar of its sound | a passage, or a rule the Director must obey |
+| **Characteristic** | one measured property of a recording's sound, a distribution over its classes | one number — it is several |
+| **Dimension** | one class value inside a characteristic | an independent axis of sound |
 
 ### File
 
@@ -71,45 +73,74 @@ None of the three implies either of the others.
 
 **The `[REQ-VIS-100]` panel was corrected, not carved out.** It was "Why this track?" until this review found `track_restraint`/`track_ramp` were computed per *recording* (rotation state keyed by `mbid`, shared by every passage of the same recording) while the panel's own anchor (`passage_id`) is per *passage* — two different scopes wearing one word. Fixed by splitting them: the panel is "Why this passage?" (it explains one passage's selection), and the two rotation terms are "Recording restraint"/"Recording recovery" (they are recording-scoped, and two passages of the same recording show identical values for both). The rename touches the `/why/:id` JSON shape (`Explanation` in `player/core/src/director/library.rs`) and `skin.js`'s `TERMS` array together; historical `selection_decisions.detail` rows written before it keep the old field names, since that column is freeform archived JSON, not a versioned schema.
 
-### Programme, time slot and seed
+### Programme, programme slot and seed
 
 *Defined 2026-10-09, at the maintainer's direction, when programmes became
 named things the hub keeps and sends ([SPEC062](SPEC062-named-programmes.md)).
 Until then one word meant two things, and the second meaning is now called a
-time slot.*
+programme slot. Named so throughout on 2026-11-01, again at the maintainer's
+direction, code and wire included.*
 
 `[ENT-PROGRAMME-010]` **A programme is a named, complete day of listening.**
-It is an ordered set of time slots covering the whole day, each with its
+It is an ordered set of programme slots covering the whole day, each with its
 seeds, and it is run whole: **a node runs exactly one programme at a time.**
 Its name is its identity in the hub's programme library ("Household",
 "Kitchen", "Phone (travel)"), and the same name always means a complete
-replacement, never a merge of slots or seeds. It is **not** a time slot, and
+replacement, never a merge of slots or seeds. It is **not** a slot, and
 it is not the Program Director, which is the selection engine that runs it
 `[SPEC009]`.
 
-`[ENT-SLOT-010]` **A time slot is one timed part of a programme**: a name
-("Mellow"), a wall-clock start time (22:00) and its seeds. It is in force from
-its start until the next slot's, and exactly one slot is **on air** at any
-moment `[SPEC-DIR-180]`. The skins' picker chooses among the slots of the
-programme a node runs: "Automatic (by time of day)", or one slot held by hand
-`[SPEC-DIR-185]`. Its full name is *programme time slot*; *time slot* is enough
-wherever the programme is plain.
+`[ENT-SLOT-010]` **A programme slot is one timed part of a programme**: a
+name ("Mellow"), a local wall-clock start time (22:00) and its seeds. Its end
+is not stored: it is on air from its start until the next slot's start, so the
+slots always cover the day, with no gap and no overlap, and exactly one slot is
+**on air** at any moment `[SPEC-DIR-180]`. The skins' picker chooses among the
+slots of the programme a node runs: "Automatic (by time of day)", or one slot
+held by hand `[SPEC-DIR-185]`. *Slot* is enough wherever the programme is
+plain, and *time slot*, which on-screen text still uses, means the same thing.
 
-`[ENT-SEED-010]` **A seed is a recording a time slot names** as an exemplar of
-the sound it wants. The Director shapes its pool toward the on-air slot's
-seeds `[SPEC-DIR-140]`, so a seed is a direction, not a rule; and it names a
-recording, not a passage `[ENT-RECORDING-010]`.
+`[ENT-SEED-010]` **A seed is a recording a programme slot names** as an
+exemplar of the sound it wants. The Director shapes its pool toward the on-air
+slot's seeds `[SPEC-DIR-140]`, so a seed is a direction, not a rule; and it
+names a recording, not a passage `[ENT-RECORDING-010]`. A seed only works
+through its flavor: one without flavor shapes nothing and is passed over
+`[SPEC-DIR-142]`.
 
-`[SPEC-VOC-020]` **Reading older text, and the code.** Before 2026-10-09 every
-document, the skins' copy and MuLibPlay before them used *programme* for what
-is now a time slot: [SPEC009](SPEC009-program-director.md)'s "eight programmes
+`[SPEC-VOC-020]` **Reading older text, and what keeps the old name.** Before
+2026-10-09 every document, the skins' copy and MuLibPlay before them used
+*programme* or *program* for what is now a programme slot: "eight programmes
 defined by start time", "no programmes configured", the picker's list. Read
-those as time slots. The tables keep their names: `listener_programs` holds
-the time slots of the programme a node runs, and `listener_program_seeds` their
-seeds. And *program*, without the *-me*, is the same word in code identifiers
-(`Programs`, `program_id`, `/program/:id`), kept as written; prose spells it
-*programme*.
+those as slots. Since 2026-11-01 the code says so too: the Director's
+`Programme` holds `ProgrammeSlot`s, the snapshot sends `slot`, `slot_manual`
+and `slots`, a decision records `slot`, and a slot is held by
+`POST /programme/slot/:id`. What keeps the old name, deliberately:
+
+- **The schema.** `listener_programs` holds the slots of the programme a node
+  runs, `listener_program_seeds` their seeds, `program_id` is a slot's id
+  (also in `selection_decisions`), and `player_settings` keys the held slot
+  `manual_program`. Renaming them would mean a migration on every node.
+- **Aliases for clients not yet updated.** `POST /program/:id` is the same
+  route; the snapshot also sends `program`, `program_manual` and `programs`;
+  a decision also records `program`; the backup summary also sends
+  `programs`. Each carries the same value as its new name. Readers try the
+  new name first, the old one after, so either side may be the newer.
+- **The phone's native binding.** `BackupReady.programs` is read by the
+  phone app's built library, and keeps its name until that is rebuilt.
+
+`selection_decisions` rows written before 2026-11-01 carry only `program`.
+
+### Characteristic and dimension
+
+`[ENT-CHAR-010]` **A characteristic is one measured property of a
+recording's sound**, held as a probability distribution over its own
+classes: `danceability` over two, `genre_dortmund` over nine. AcousticBrainz
+supplies 18; the listener's own (`user.christmas`, `user.childrens` …) are
+characteristics too. **A dimension is one class value inside a
+characteristic**, and the 18 have 71 between them. The two are not
+interchangeable: distance is computed per characteristic and then combined
+across characteristics, never over dimensions as independent axes. How each
+is used is [SPEC005](SPEC005-flavor-distance.md) §1 and `[SPEC-FD-112]`.
 
 ---
 
-**Traceability:** `[SPEC-VOC-010..020]` · `[ENT-FILE-010]`, `[ENT-PASSAGE-010]`, `[ENT-RECORDING-010]`, `[ENT-RELEASE-010]`, `[ENT-ALBUM-010]`, `[ENT-ARTIST-010]`, `[ENT-TRACK-010]`, `[ENT-PROGRAMME-010]`, `[ENT-SLOT-010]`, `[ENT-SEED-010]` · extends inherited `[ENT-MB-010..040]`, `[ENT-MP-010..035]`
+**Traceability:** `[SPEC-VOC-010..020]` · `[ENT-FILE-010]`, `[ENT-PASSAGE-010]`, `[ENT-RECORDING-010]`, `[ENT-RELEASE-010]`, `[ENT-ALBUM-010]`, `[ENT-ARTIST-010]`, `[ENT-TRACK-010]`, `[ENT-PROGRAMME-010]`, `[ENT-SLOT-010]`, `[ENT-SEED-010]`, `[ENT-CHAR-010]` · extends inherited `[ENT-MB-010..040]`, `[ENT-MP-010..035]`

@@ -1,14 +1,20 @@
-//! Programmes and their seeds `[SPEC-DIR-140]`, `[SPEC-DIR-180]`,
-//! `[REQ-PD-140]`.
+//! The programme, its slots and their seeds `[SPEC-DIR-140]`, `[SPEC-DIR-180]`,
+//! `[REQ-PD-140]`, `[SPEC-PGM-010]`.
 //!
-//! A programme is a list of exemplar passages, not a set of tuned parameters.
-//! Naming songs beats moving sliders, and it is the mechanism MuLibPlay's user
-//! actually exercised — eight programmes, 49 seeds, over six years.
+//! A **programme** is a whole day: a set of **programme slots**, each with a
+//! start time and its own seeds. A slot runs from its start until the next
+//! slot's start, so the slots always cover the day with no gap. The seeds are
+//! exemplar recordings, not a set of tuned parameters. Naming songs beats
+//! moving sliders, and it is the mechanism MuLibPlay's user actually exercised
+//! — eight slots, 49 seeds, over six years.
 //!
-//! The active programme is whichever most recently started. A **hard switch**,
+//! The slot in force is whichever most recently started. A **hard switch**,
 //! deliberately: blending was rejected because the flow stage already smooths
-//! transitions `[SPEC-DIR-160]` and blending would make "which programme am I
-//! in?" ambiguous for a tunable nobody asked for.
+//! transitions `[SPEC-DIR-160]` and blending would make "which slot am I in?"
+//! ambiguous for a tunable nobody asked for.
+//!
+//! The tables keep their older names: `listener_programs` holds slots and
+//! `program_id` is a slot's id.
 
 use std::collections::{HashMap, HashSet};
 
@@ -21,8 +27,9 @@ pub const MAX_SEEDS: usize = 5;
 
 const MINUTES_PER_DAY: i64 = 24 * 60;
 
+/// One programme slot: a name, a start time, and (in [`Programme`]) its seeds.
 #[derive(Debug, Clone)]
-pub struct Program {
+pub struct ProgrammeSlot {
     pub id: i64,
     pub name: String,
     /// Minutes past local midnight.
@@ -103,8 +110,11 @@ pub fn os_utc_offset_minutes() -> Option<i64> {
     None
 }
 
-pub struct Programs {
-    programs: Vec<Program>,
+/// The whole day's programme: its slots, each slot's seeds, and which slot is
+/// held by hand.
+pub struct Programme {
+    slots: Vec<ProgrammeSlot>,
+    /// Slot id → its seeds' recording MBIDs, in the listener's order.
     seeds: HashMap<i64, Vec<String>>,
     /// Minutes to add to UTC to get local wall-clock time.
     ///
@@ -117,25 +127,37 @@ pub struct Programs {
     manual: Option<i64>,
 }
 
-impl Programs {
+impl Programme {
     pub fn is_empty(&self) -> bool {
-        self.programs.is_empty()
+        self.slots.is_empty()
     }
     pub fn len(&self) -> usize {
-        self.programs.len()
+        self.slots.len()
     }
-    pub fn all(&self) -> &[Program] {
-        &self.programs
+    pub fn slots(&self) -> &[ProgrammeSlot] {
+        &self.slots
     }
-    pub fn get(&self, id: i64) -> Option<&Program> {
-        self.programs.iter().find(|p| p.id == id)
+    pub fn slot(&self, id: i64) -> Option<&ProgrammeSlot> {
+        self.slots.iter().find(|p| p.id == id)
     }
 
-    /// Choose a programme by hand, overriding time of day `[SPEC-DIR-185]`.
-    pub fn set_manual(&mut self, id: Option<i64>) {
+    /// A slot's seeds as stored, before any down-selection.
+    pub fn seeds_of(&self, slot_id: i64) -> &[String] {
+        self.seeds.get(&slot_id).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// Unix seconds moved onto the listener's wall clock, for anything that
+    /// asks "what time of day, what day of the year" `[SPEC-DIR-180]`,
+    /// `[SPEC-DIR-132]`: slots and seasons both read local time.
+    pub fn local_secs(&self, now: i64) -> i64 {
+        now + self.utc_offset_minutes * 60
+    }
+
+    /// Choose a slot by hand, overriding time of day `[SPEC-DIR-185]`.
+    pub fn set_manual_slot(&mut self, id: Option<i64>) {
         self.manual = id;
     }
-    pub fn manual(&self) -> Option<i64> {
+    pub fn manual_slot(&self) -> Option<i64> {
         self.manual
     }
 
@@ -143,41 +165,46 @@ impl Programs {
     /// what this Director knows that the tables do not: the clock's offset,
     /// and a slot held by hand -- unless that slot is gone, when the hold goes
     /// with it and time of day decides again.
-    pub fn replace_slots(&mut self, fresh: Programs) {
-        let manual = self.manual.filter(|id| fresh.get(*id).is_some());
+    pub fn replace_slots(&mut self, fresh: Programme) {
+        let manual = self.manual.filter(|id| fresh.slot(*id).is_some());
         let offset = self.utc_offset_minutes;
-        *self = Programs { utc_offset_minutes: offset, manual, ..fresh };
+        *self = Programme { utc_offset_minutes: offset, manual, ..fresh };
     }
 
-    /// The programme in force at `now` (unix seconds).
+    /// The slot in force at `now` (unix seconds).
     ///
     /// Whichever started most recently, wrapping through midnight — before the
     /// first start time of the day, the one that began last night is still
     /// running.
-    pub fn active(&self, now: i64) -> Option<&Program> {
+    pub fn active_slot(&self, now: i64) -> Option<&ProgrammeSlot> {
         if let Some(id) = self.manual {
-            if let Some(p) = self.get(id) {
+            if let Some(p) = self.slot(id) {
                 return Some(p);
             }
         }
-        if self.programs.is_empty() {
+        if self.slots.is_empty() {
             return None;
         }
-        let local = (now / 60 + self.utc_offset_minutes).rem_euclid(MINUTES_PER_DAY);
+        let local = (self.local_secs(now) / 60).rem_euclid(MINUTES_PER_DAY);
         // Largest start <= now, else the latest of the day (yesterday's).
-        self.programs
+        self.slots
             .iter()
             .filter(|p| p.start_minute <= local)
             .max_by_key(|p| p.start_minute)
-            .or_else(|| self.programs.iter().max_by_key(|p| p.start_minute))
+            .or_else(|| self.slots.iter().max_by_key(|p| p.start_minute))
     }
 
-    /// The seeds of a programme, down-selected `[SPEC-DIR-140]`.
+    /// The seeds of a slot, down-selected `[SPEC-DIR-140]`.
     ///
     /// One per artist, preferring the least-recently-played, then capped at
-    /// `MAX_SEEDS`. Preferring the least-recently-played keeps a programme from
+    /// `MAX_SEEDS`. Preferring the least-recently-played keeps a slot from
     /// being defined by whatever it happened to play an hour ago, and makes the
     /// target drift slowly around the exemplars rather than sitting still.
+    ///
+    /// Only seeds `usable` accepts are considered -- the Director passes "has
+    /// flavor". A seed without flavor shapes nothing, so it is passed over
+    /// **before** the cap rather than taking a place a seed with flavor could
+    /// fill `[SPEC-DIR-142]`.
     ///
     /// A seed crediting several artists takes all of them: once a Prince +
     /// The Time seed is chosen, neither a Prince seed nor a The Time seed
@@ -187,17 +214,18 @@ impl Programs {
     /// best-per-artist pass did.
     pub fn seeds_for(
         &self,
-        program_id: i64,
+        slot_id: i64,
         artist_of: &HashMap<String, Vec<String>>,
         last_played: &HashMap<String, i64>,
+        usable: impl Fn(&str) -> bool,
     ) -> Vec<String> {
-        let Some(all) = self.seeds.get(&program_id) else { return Vec::new() };
+        let Some(all) = self.seeds.get(&slot_id) else { return Vec::new() };
 
         // Ordering is by (last played, mbid). The mbid breaks ties so the
         // choice is stable: two never-played seeds must not swap between runs.
         let key = |m: &String| (last_played.get(m).copied().unwrap_or(i64::MIN), m.clone());
 
-        let mut ordered: Vec<&String> = all.iter().collect();
+        let mut ordered: Vec<&String> = all.iter().filter(|m| usable(m)).collect();
         ordered.sort_by_key(|m| key(m));
         let mut taken: HashSet<&str> = HashSet::new();
         let mut chosen: Vec<String> = Vec::new();
@@ -218,7 +246,7 @@ impl Programs {
     }
 
     pub fn load(conn: &Connection) -> Result<Self, DbError> {
-        let mut programs = Vec::new();
+        let mut slots = Vec::new();
         if let Ok(mut stmt) =
             conn.prepare("SELECT program_id, name, start_time FROM listener_programs")
         {
@@ -227,7 +255,7 @@ impl Programs {
             }) {
                 for (id, name, start) in rows.flatten() {
                     if let Some(start_minute) = parse_hhmm(&start) {
-                        programs.push(Program { id, name, start_minute });
+                        slots.push(ProgrammeSlot { id, name, start_minute });
                     }
                 }
             }
@@ -253,7 +281,7 @@ impl Programs {
             .unwrap_or(0)
             .clamp(-(MINUTES_PER_DAY), MINUTES_PER_DAY);
 
-        Ok(Self { programs, seeds, utc_offset_minutes, manual: None })
+        Ok(Self { slots, seeds, utc_offset_minutes, manual: None })
     }
 }
 
@@ -313,9 +341,9 @@ mod tests {
     /// `[SPEC-PGM-400]`.
     #[test]
     fn an_edit_s_slots_replace_these_keeping_the_offset_and_a_live_hold() {
-        let mut running = Programs::load(&fixture()).unwrap();
+        let mut running = Programme::load(&fixture()).unwrap();
         running.utc_offset_minutes = -240;
-        running.set_manual(Some(4));
+        running.set_manual_slot(Some(4));
         let edited = QualifyingConn::wrap_unsplit(Connection::open_in_memory().unwrap());
         edited
             .execute_batch(
@@ -324,13 +352,13 @@ mod tests {
                  INSERT INTO listener_programs VALUES (4,'Late','23:00'),(9,'Dawn','05:00');",
             )
             .unwrap();
-        running.replace_slots(Programs::load(&edited).unwrap());
+        running.replace_slots(Programme::load(&edited).unwrap());
         assert_eq!(running.len(), 2);
         assert_eq!(running.utc_offset_minutes, -240, "the offset is the clock's, not the edit's");
-        assert_eq!(running.manual(), Some(4), "the held slot is still there");
+        assert_eq!(running.manual_slot(), Some(4), "the held slot is still there");
         edited.execute_batch("DELETE FROM listener_programs WHERE program_id = 4").unwrap();
-        running.replace_slots(Programs::load(&edited).unwrap());
-        assert_eq!(running.manual(), None, "the held slot is gone, and so is the hold");
+        running.replace_slots(Programme::load(&edited).unwrap());
+        assert_eq!(running.manual_slot(), None, "the held slot is gone, and so is the hold");
     }
 
     fn fixture() -> QualifyingConn {
@@ -418,27 +446,27 @@ mod tests {
     }
 
     #[test]
-    fn a_malformed_start_time_drops_the_programme() {
-        let p = Programs::load(&fixture()).unwrap();
+    fn a_malformed_start_time_drops_the_slot() {
+        let p = Programme::load(&fixture()).unwrap();
         assert_eq!(p.len(), 4, "'not a time' must not become midnight and win every comparison");
     }
 
     #[test]
-    fn the_active_programme_is_the_one_that_started_most_recently() {
-        let p = Programs::load(&fixture()).unwrap();
-        assert_eq!(p.active(at(4, 0)).unwrap().name, "Soft", "exactly at its start");
-        assert_eq!(p.active(at(9, 59)).unwrap().name, "Soft");
-        assert_eq!(p.active(at(10, 0)).unwrap().name, "Light");
-        assert_eq!(p.active(at(13, 30)).unwrap().name, "Cool");
-        assert_eq!(p.active(at(23, 59)).unwrap().name, "Mellow");
+    fn the_active_slot_is_the_one_that_started_most_recently() {
+        let p = Programme::load(&fixture()).unwrap();
+        assert_eq!(p.active_slot(at(4, 0)).unwrap().name, "Soft", "exactly at its start");
+        assert_eq!(p.active_slot(at(9, 59)).unwrap().name, "Soft");
+        assert_eq!(p.active_slot(at(10, 0)).unwrap().name, "Light");
+        assert_eq!(p.active_slot(at(13, 30)).unwrap().name, "Cool");
+        assert_eq!(p.active_slot(at(23, 59)).unwrap().name, "Mellow");
     }
 
     /// Before the first start of the day, last night's programme is still on.
     #[test]
     fn the_small_hours_belong_to_yesterdays_programme() {
-        let p = Programs::load(&fixture()).unwrap();
-        assert_eq!(p.active(at(2, 0)).unwrap().name, "Mellow", "22:00 is still running at 02:00");
-        assert_eq!(p.active(at(0, 0)).unwrap().name, "Mellow");
+        let p = Programme::load(&fixture()).unwrap();
+        assert_eq!(p.active_slot(at(2, 0)).unwrap().name, "Mellow", "22:00 is still running at 02:00");
+        assert_eq!(p.active_slot(at(0, 0)).unwrap().name, "Mellow");
     }
 
     /// Programme times are wall-clock, so the offset must move them.
@@ -446,35 +474,35 @@ mod tests {
     fn the_utc_offset_shifts_the_schedule() {
         let c = fixture();
         c.execute("INSERT INTO listener_settings VALUES (1, -300)", []).unwrap(); // UTC-5
-        let p = Programs::load(&c).unwrap();
+        let p = Programme::load(&c).unwrap();
         assert_eq!(p.utc_offset_minutes, -300);
         // 15:00 UTC is 10:00 local, so Light has just begun.
-        assert_eq!(p.active(at(15, 0)).unwrap().name, "Light");
-        assert_eq!(p.active(at(14, 59)).unwrap().name, "Soft");
+        assert_eq!(p.active_slot(at(15, 0)).unwrap().name, "Light");
+        assert_eq!(p.active_slot(at(14, 59)).unwrap().name, "Soft");
     }
 
     #[test]
     fn a_manual_choice_overrides_the_clock() {
-        let mut p = Programs::load(&fixture()).unwrap();
-        assert_eq!(p.active(at(13, 0)).unwrap().name, "Cool");
-        p.set_manual(Some(4));
-        assert_eq!(p.active(at(13, 0)).unwrap().name, "Mellow", "manual outranks time of day");
-        p.set_manual(None);
-        assert_eq!(p.active(at(13, 0)).unwrap().name, "Cool", "and reverting restores it");
+        let mut p = Programme::load(&fixture()).unwrap();
+        assert_eq!(p.active_slot(at(13, 0)).unwrap().name, "Cool");
+        p.set_manual_slot(Some(4));
+        assert_eq!(p.active_slot(at(13, 0)).unwrap().name, "Mellow", "manual outranks time of day");
+        p.set_manual_slot(None);
+        assert_eq!(p.active_slot(at(13, 0)).unwrap().name, "Cool", "and reverting restores it");
     }
 
     /// A manual id that no longer exists must fall back to the clock rather
-    /// than leaving the station with no programme at all.
+    /// than leaving the station with no slot at all.
     #[test]
     fn a_stale_manual_choice_falls_back_to_the_clock() {
-        let mut p = Programs::load(&fixture()).unwrap();
-        p.set_manual(Some(999));
-        assert_eq!(p.active(at(13, 0)).unwrap().name, "Cool");
+        let mut p = Programme::load(&fixture()).unwrap();
+        p.set_manual_slot(Some(999));
+        assert_eq!(p.active_slot(at(13, 0)).unwrap().name, "Cool");
     }
 
     #[test]
     fn seeds_are_capped_and_one_per_artist() {
-        let p = Programs::load(&fixture()).unwrap();
+        let p = Programme::load(&fixture()).unwrap();
         let mut artist = HashMap::new();
         // a and b share an artist; the rest are distinct
         for (m, a) in [("a", "x"), ("b", "x"), ("c", "y"), ("d", "z"), ("e", "w"), ("f", "v"), ("g", "u")] {
@@ -482,7 +510,7 @@ mod tests {
         }
         let mut played = HashMap::new();
         played.insert("a".to_string(), 100i64); // a played recently, b never
-        let seeds = p.seeds_for(1, &artist, &played);
+        let seeds = p.seeds_for(1, &artist, &played, |_| true);
         assert_eq!(seeds.len(), MAX_SEEDS, "capped at max_seeds");
         assert!(seeds.contains(&"b".to_string()), "the least-recently-played of the pair");
         assert!(!seeds.contains(&"a".to_string()), "only one per artist");
@@ -492,25 +520,25 @@ mod tests {
     /// drifts around the exemplars instead of sitting on whatever just played.
     #[test]
     fn the_cap_drops_the_most_recently_played() {
-        let p = Programs::load(&fixture()).unwrap();
+        let p = Programme::load(&fixture()).unwrap();
         let artist: HashMap<String, Vec<String>> =
             ["a", "b", "c", "d", "e", "f", "g"].iter().map(|m| (m.to_string(), vec![m.to_string()])).collect();
         let played: HashMap<String, i64> =
             [("a", 900i64), ("b", 800), ("c", 700)].iter().map(|(m, t)| (m.to_string(), *t)).collect();
-        let seeds = p.seeds_for(1, &artist, &played);
+        let seeds = p.seeds_for(1, &artist, &played, |_| true);
         assert_eq!(seeds.len(), MAX_SEEDS);
         assert!(!seeds.contains(&"a".to_string()), "the most recently played is dropped first");
     }
 
     #[test]
     fn seed_selection_is_stable_across_runs() {
-        let p = Programs::load(&fixture()).unwrap();
+        let p = Programme::load(&fixture()).unwrap();
         let artist: HashMap<String, Vec<String>> =
             ["a", "b", "c", "d", "e", "f", "g"].iter().map(|m| (m.to_string(), vec![m.to_string()])).collect();
         let played = HashMap::new(); // none played: every key ties on time
-        let first = p.seeds_for(1, &artist, &played);
+        let first = p.seeds_for(1, &artist, &played, |_| true);
         for _ in 0..5 {
-            assert_eq!(p.seeds_for(1, &artist, &played), first, "ties must break deterministically");
+            assert_eq!(p.seeds_for(1, &artist, &played, |_| true), first, "ties must break deterministically");
         }
     }
 
@@ -518,21 +546,42 @@ mod tests {
     /// later Prince seed and a later The Time seed alike.
     #[test]
     fn a_seed_with_several_artists_takes_each_of_them() {
-        let p = Programs::load(&fixture()).unwrap();
+        let p = Programme::load(&fixture()).unwrap();
         let mut artist: HashMap<String, Vec<String>> =
             ["d", "e", "f", "g"].iter().map(|m| (m.to_string(), vec![m.to_string()])).collect();
         artist.insert("a".into(), vec!["prince".into(), "the-time".into()]);
         artist.insert("b".into(), vec!["prince".into()]);
         artist.insert("c".into(), vec!["the-time".into()]);
-        let seeds = p.seeds_for(1, &artist, &HashMap::new()); // ties break by mbid: a first
+        let seeds = p.seeds_for(1, &artist, &HashMap::new(), |_| true); // ties break by mbid: a first
         assert!(seeds.contains(&"a".to_string()));
         assert!(!seeds.contains(&"b".to_string()), "Prince is already taken");
         assert!(!seeds.contains(&"c".to_string()), "The Time is already taken");
     }
 
     #[test]
-    fn an_unknown_programme_has_no_seeds() {
-        let p = Programs::load(&fixture()).unwrap();
-        assert!(p.seeds_for(99, &HashMap::new(), &HashMap::new()).is_empty());
+    fn an_unknown_slot_has_no_seeds() {
+        let p = Programme::load(&fixture()).unwrap();
+        assert!(p.seeds_for(99, &HashMap::new(), &HashMap::new(), |_| true).is_empty());
+    }
+
+    /// A seed without flavor is passed over before the cap, so it cannot take
+    /// a place a seed with flavor would fill `[SPEC-DIR-142]`.
+    #[test]
+    fn a_seed_without_flavor_does_not_take_a_place() {
+        let p = Programme::load(&fixture()).unwrap();
+        let artist: HashMap<String, Vec<String>> =
+            ["a", "b", "c", "d", "e", "f", "g"].iter().map(|m| (m.to_string(), vec![m.to_string()])).collect();
+        // Never played, so ties break by mbid: a..e would be the five.
+        let seeds = p.seeds_for(1, &artist, &HashMap::new(), |m| m != "a" && m != "b");
+        assert_eq!(seeds.len(), MAX_SEEDS, "f and g fill the places a and b would have held");
+        assert!(!seeds.contains(&"a".to_string()) && !seeds.contains(&"b".to_string()));
+    }
+
+    /// Slots and seasons read the listener's wall clock, not UTC.
+    #[test]
+    fn local_secs_carries_the_offset() {
+        let mut p = Programme::load(&fixture()).unwrap();
+        p.utc_offset_minutes = -300;
+        assert_eq!(p.local_secs(at(5, 0)), at(0, 0), "05:00 UTC is midnight in UTC-5");
     }
 }

@@ -102,7 +102,18 @@
         const t = document.createElement('span');
         t.textContent = seedText(seed);
         if (seed.title) t.title = seed.mbid;
-        li.append(t, button('✕', 'Remove this seed', () => { s.seeds.splice(j, 1); touched(true); }));
+        li.append(t);
+        // A seed with no flavor shapes nothing: the Director passes it over
+        // and the slot is shaped by its other seeds [SPEC-DIR-142].
+        if (seed.has_flavor === false) {
+          const flag = document.createElement('span');
+          flag.className = 'no-flavor';
+          flag.textContent = 'no flavor: shapes nothing';
+          flag.title = 'This recording has no flavor yet, so it cannot say what the slot sounds like. '
+                     + 'The Director passes it over; the slot is shaped by its other seeds.';
+          li.append(' ', flag);
+        }
+        li.append(button('✕', 'Remove this seed', () => { s.seeds.splice(j, 1); touched(true); }));
         ol.appendChild(li);
       });
       card.append(head, r, ol, seedSearch(s));
@@ -144,10 +155,12 @@
           const li = document.createElement('li');
           const t = document.createElement('span');
           t.textContent = seedText(c);
+          if (c.has_flavor === false) t.textContent += ' (no flavor: would shape nothing)';
           const already = slot.seeds.some(x => x.mbid === c.mbid);
           const add = button(already ? 'added' : 'Add', null, () => {
             if (!slot.seeds.some(x => x.mbid === c.mbid)) {
-              slot.seeds.push({ mbid: c.mbid, title: c.title, artist: c.artist, album: c.album });
+              slot.seeds.push({ mbid: c.mbid, title: c.title, artist: c.artist, album: c.album,
+                                has_flavor: c.has_flavor });
             }
             add.disabled = true; add.textContent = 'added';
             refreshSeeds();

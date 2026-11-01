@@ -46,7 +46,9 @@ pub(super) async fn backups(State(ui): State<Ui>) -> Response {
                 let more = match backup::inspect(&h.path) {
                     Ok(s) => json!({
                         "plays": s.plays, "first_play": s.first_play, "last_play": s.last_play,
-                        "preferences": s.preferences, "likes": s.likes, "programs": s.programs,
+                        "preferences": s.preferences, "likes": s.likes, "slots": s.slots,
+                        // `slots` under its name before 2026-11-01.
+                        "programs": s.slots,
                     }),
                     Err(e) => json!({ "error": e.to_string() }),
                 };

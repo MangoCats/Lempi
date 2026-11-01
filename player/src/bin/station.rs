@@ -62,7 +62,7 @@ fn main() {
 
     // List what the engine will actually play, not a second draw from the
     // library: a preview that re-randomised would describe a different evening.
-    if let Some(p) = session.program() {
+    if let Some(p) = session.slot() {
         println!("programme: {p}");
     }
     let entries: Vec<_> = engine.queued().cloned().collect();

@@ -63,7 +63,7 @@ sha2 = "0.10"
 base64 = "0.22"
 
 # The appliance's own local UTC offset `[SPEC-DIR-180]`, for
-# `director/program.rs`. Unix only -- Windows has no `tm_gmtoff` and is asked
+# `director/programme.rs`. Unix only -- Windows has no `tm_gmtoff` and is asked
 # through `GetTimeZoneInformation` instead, below.
 #
 # **Missed when this crate was split out, and Windows hid it.** `libc` was

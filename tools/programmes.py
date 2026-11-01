@@ -312,16 +312,47 @@ def push_for(db: str, mdir: str, only: str | None = None) -> dict:
         c.close()
 
 
-def standing(c: sqlite3.Connection, mdir: str | None = None) -> dict:
+def unflavored(library: str | None, slots: list) -> list | None:
+    """The seeds of `slots` with no flavor in `library`, each as
+    `{"slot", "mbid", "title"}` [SPEC-DIR-142]: a seed without flavor shapes
+    nothing, and the Director passes it over. Any `flavor` row counts, which
+    is the Director's own test. `None` when the library could not be read,
+    which is not the same answer as "none" and is not shown as one."""
+    if not library:
+        return None
+    try:
+        lib = sqlite3.connect(f"file:{library}?mode=ro", uri=True, timeout=10)
+    except sqlite3.Error:
+        return None
+    try:
+        out = []
+        for s in slots:
+            for m in s.get("seeds") or []:
+                if lib.execute("SELECT 1 FROM flavor WHERE subject_kind = 'recording' AND subject_id = ? LIMIT 1",
+                               (m,)).fetchone():
+                    continue
+                row = lib.execute("SELECT title FROM recordings WHERE mbid = ?", (m,)).fetchone()
+                out.append({"slot": s.get("name"), "mbid": m, "title": row[0] if row else None})
+        return out
+    except sqlite3.Error:
+        return None
+    finally:
+        lib.close()
+
+
+def standing(c: sqlite3.Connection, mdir: str | None = None, library: str | None = None) -> dict:
     """The library and its assignments, for a person [SPEC-PGM-440]: each
     programme with its versions, and each assigned node with how what it
-    runs stands against what it was assigned."""
+    runs stands against what it was assigned. With the music `library`, each
+    current version also names its seeds without flavor [SPEC-DIR-142]."""
     programmes = []
     for pid, name in c.execute("SELECT programme_id, name FROM hub_programmes ORDER BY name_key").fetchall():
+        rows = c.execute("SELECT version, fingerprint, slots, made_at, origin FROM hub_programme_versions "
+                         "WHERE programme_id = ? ORDER BY version", (pid,)).fetchall()
         versions = [{"version": v, "fingerprint": fp, "made_at": t, "origin": o, "slots": len(json.loads(s))}
-                    for v, fp, s, t, o in c.execute(
-                        "SELECT version, fingerprint, slots, made_at, origin FROM hub_programme_versions "
-                        "WHERE programme_id = ? ORDER BY version", (pid,))]
+                    for v, fp, s, t, o in rows]
+        if versions:
+            versions[-1]["unflavored"] = unflavored(library, json.loads(rows[-1][2]))
         programmes.append({"name": name, "versions": versions})
     nodes = []
     for (member, pid, name, assigned_at, sent_v, sent_at, runs_fp, runs_name, runs_src, runs_v, waiting,

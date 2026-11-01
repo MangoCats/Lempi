@@ -185,15 +185,16 @@ pub struct QueueItem {
     pub is_shutdown: bool,
 }
 
-#[derive(Serialize)]
-pub struct ProgramItem {
+/// One programme slot, as the picker offers it.
+#[derive(Serialize, Clone)]
+pub struct SlotItem {
     pub id: i64,
     pub name: String,
     pub start: String,
 }
 
 /// What the listening surface shows `[REQ-VIS-150]`: the queue in play order,
-/// the programme in force with its manual override, and master volume -- all of
+/// the programme slot in force with its manual override, and master volume -- all of
 /// it as one complete snapshot, so a render is a pure function of the last
 /// message and cannot drift.
 #[derive(Serialize)]
@@ -255,7 +256,11 @@ pub struct Snapshot {
     /// without a second copy of the number `[REQ-VIS-180]`.
     pub browse_limit: usize,
     pub skip: SkipShape,
-    /// The programme in force, and whether it was chosen by hand.
+    /// The programme slot in force, and whether it was chosen by hand.
+    pub slot: Option<String>,
+    pub slot_manual: bool,
+    /// `slot` and `slot_manual` under their names before 2026-11-01, written
+    /// for clients that have not learned the new ones.
     pub program: Option<String>,
     pub program_manual: bool,
     /// What a live Director rebuild is doing, if one has been asked for
@@ -314,7 +319,10 @@ pub struct Snapshot {
     /// visible rather than asserted: importing music and reloading moves
     /// `total`. Absent when there is no Director.
     pub pool: Option<(usize, usize)>,
-    pub programs: Vec<ProgramItem>,
+    /// The programme's slots, for the picker.
+    pub slots: Vec<SlotItem>,
+    /// `slots` under its name before 2026-11-01.
+    pub programs: Vec<SlotItem>,
     /// Development mode is on `[PI-SET-016]`: sshd and diagnostics are
     /// running. Always false off the appliance -- the setting belongs to the
     /// Pi's privileged helper, and the player only reports what it is told.
@@ -415,6 +423,7 @@ impl From<&PlayerState> for Snapshot {
                 sample_interval_min_ms: crate::SAMPLE_INTERVAL_MIN_MS,
                 sample_interval_max_ms: crate::SAMPLE_INTERVAL_MAX_MS,
             },
+            slot: None,
             program: None,
             build: crate::build_id(),
             branch: crate::BRANCH.to_string(),
@@ -431,7 +440,9 @@ impl From<&PlayerState> for Snapshot {
             lyrics_status: None,
             sidecar_status: None,
             pool: None,
+            slot_manual: false,
             program_manual: false,
+            slots: Vec::new(),
             programs: Vec::new(),
             cue_sheets: s.cue_sheets,
             covers: s.covers,
@@ -610,7 +621,11 @@ pub fn router(ui: Ui) -> Router {
         .route("/dequeue/suppress/:hours", post(set_dequeue_suppress))
         .route("/queue/depth/:n", post(set_queue_depth))
         .route("/sample/interval/:ms", post(set_sample_interval))
-        .route("/program/:id", post(set_program))
+        // Choose a programme slot by id, or "auto" for time of day
+        // `[SPEC-DIR-185]`. `/program/:id` is its name before 2026-11-01,
+        // kept for skins, frames and phones not yet updated.
+        .route("/programme/slot/:id", post(set_slot))
+        .route("/program/:id", post(set_slot))
         .route("/library/reload", post(reload_library))
         .route("/backend/:which", post(switch_backend))
         .route("/cue/:on", post(set_cue_sheets))
@@ -815,8 +830,10 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
         snap.power = crate::power::state_now();
         explain(&ui, &mut snap, &state);
         if let Ok(c) = ui.controls.lock() {
-            snap.program = c.active.clone();
-            snap.program_manual = c.manual_program.is_some();
+            snap.slot = c.active_slot.clone();
+            snap.slot_manual = c.manual_slot.is_some();
+            snap.program = snap.slot.clone();
+            snap.program_manual = snap.slot_manual;
             snap.reload_status = c.reload_status.clone();
             snap.backend = c.backend.clone();
             snap.guest_available = c.guest_available;
@@ -831,15 +848,16 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
             snap.can_ab_loop = c.can_ab_loop;
             snap.sidecar_status = c.sidecar_status.clone();
             snap.pool = c.pool;
-            snap.programs = c
-                .programs
+            snap.slots = c
+                .slots
                 .iter()
-                .map(|(id, name, start)| ProgramItem {
+                .map(|(id, name, start)| SlotItem {
                     id: *id,
                     name: name.clone(),
                     start: start.clone(),
                 })
                 .collect();
+            snap.programs = snap.slots.clone();
         }
         let Ok(text) = serde_json::to_string(&snap) else { continue };
         if socket.send(Message::Text(text)).await.is_err() {
@@ -1156,9 +1174,12 @@ mod tests {
     #[test]
     fn the_snapshot_carries_every_field_its_readers_read() {
         let mut snap = Snapshot::from(&state());
-        // Programmes are filled from the session, not from `PlayerState`; one
-        // is needed so `programs[].*` has an element to be checked in.
-        snap.programs.push(ProgramItem { id: 1, name: "Mellow".into(), start: "20:00".into() });
+        // Slots are filled from the session, not from `PlayerState`; one is
+        // needed so `slots[].*` and its older name `programs[].*` have an
+        // element to be checked in.
+        let mellow = SlotItem { id: 1, name: "Mellow".into(), start: "20:00".into() };
+        snap.slots.push(mellow.clone());
+        snap.programs.push(mellow);
         let sent = serde_json::to_value(&snap).expect("a snapshot serializes");
         let readers = contract::consumers();
         // The three readers with a check of their own side. One dropped from
@@ -1437,8 +1458,8 @@ mod tests {
         for field in [
             "playing", "passage_id", "title", "artist", "mbid", "artist_mbid", "album", "plays",
             "last_played", "position_ms", "duration_ms", "queue_len", "queue",
-            "volume_db", "fader_min_db", "skip", "program", "program_manual",
-            "programs", "underrun_samples", "branch", "commit_date",
+            "volume_db", "fader_min_db", "skip", "slot", "slot_manual", "slots",
+            "program", "program_manual", "programs", "underrun_samples", "branch", "commit_date",
             "commit_subject", "dirty_files",
         ] {
             assert!(json.contains(&format!("\"{field}\"")), "snapshot lost {field}");

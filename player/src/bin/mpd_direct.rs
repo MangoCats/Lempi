@@ -301,17 +301,27 @@ fn main() {
         }
 
         // --- the queue diff, which is this stage's real work ---
-        let live: HashSet<String> = match mpd.cmd("playlistid") {
-            Ok(lines) => lines
-                .iter()
-                .filter_map(|l| l.strip_prefix("Id: "))
-                .map(|s| s.to_string())
-                .collect(),
+        // `(Id, file)` in MPD's own play order: each entry opens with its
+        // `file:` line and carries its `Id:` after.
+        let order: Vec<(String, String)> = match mpd.cmd("playlistid") {
+            Ok(lines) => {
+                let mut out: Vec<(String, String)> = Vec::new();
+                let mut file = String::new();
+                for l in &lines {
+                    if let Some(f) = l.strip_prefix("file: ") {
+                        file = f.to_string();
+                    } else if let Some(id) = l.strip_prefix("Id: ") {
+                        out.push((id.to_string(), std::mem::take(&mut file)));
+                    }
+                }
+                out
+            }
             Err(e) => {
                 eprintln!("playlistid: {e}");
                 break;
             }
         };
+        let live: HashSet<String> = order.iter().map(|(id, _)| id.clone()).collect();
         let gone: Vec<String> = ours.keys().filter(|id| !live.contains(*id)).cloned().collect();
         for id in gone {
             let Some(o) = ours.remove(&id) else { continue };
@@ -396,13 +406,36 @@ fn main() {
         }
 
         // --- selection, which is not reimplemented ---
+        // The flow tail is the passage each new one will follow
+        // `[SPEC-DIR-160]`: the last entry in MPD's own queue order, whoever
+        // put it there -- this program, or a person through another client.
+        // Ours are known by Id; anything else is resolved by its URI, then by
+        // the sticker this MPD keeps `[SPEC-MPD-065]`. Unresolvable, there is
+        // nothing to flow from, and the pick says so in its record.
+        let mut after: Option<i64> = order.last().and_then(|(id, file)| {
+            ours.get(id).map(|o| o.passage_id).or_else(|| {
+                by_uri.get(file).and_then(|v| v.as_ref()).map(|(pid, _, _)| *pid).or_else(|| {
+                    mpd.cmd(&format!("sticker get song {} lempi.passage", quote(file)))
+                        .ok()
+                        .and_then(|l| {
+                            l.iter()
+                                .find_map(|s| s.strip_prefix("sticker: lempi.passage="))
+                                .and_then(|v| v.parse().ok())
+                        })
+                })
+            })
+        });
         for _ in 0..(depth - len) {
-            // The exclusion set is what is already queued, and the flow tail is
-            // the last of them `[SPEC-DIR-160]` — exactly `Session::refill`.
+            // The exclusion set is what is already queued -- exactly
+            // `Session::refill`, as is the relaxed fallback: with every
+            // candidate held by rotation, a repeat is a better answer than
+            // silence `[SPEC-DIR-230]`.
             let skip: Vec<i64> = ours.values().map(|o| o.passage_id).collect();
-            let after = ours.values().last().map(|o| o.passage_id);
-            let Some(decision) = director.decide(now(), &mut rng, &skip, after) else {
-                println!("  director has nothing eligible to offer");
+            let Some(decision) = director
+                .decide(now(), &mut rng, &skip, after)
+                .or_else(|| director.decide_relaxed(now(), &mut rng, &skip))
+            else {
+                println!("  director has nothing eligible to offer, even with rotation set aside");
                 break;
             };
             let e = &decision.entry;
@@ -454,6 +487,8 @@ fn main() {
                     stickered += 1;
 
                     let note = director.note_queued(e.passage_id, now());
+                    // The next pick follows this one.
+                    after = Some(e.passage_id);
                     let title = e.title();
                     println!("  + [{:>6}] {}  {}", e.passage_id, title, flavor);
                     ours.insert(

@@ -52,12 +52,14 @@ pub type Explanations = Arc<Mutex<ExplanationLog>>;
 /// back to show what is active.
 #[derive(Default)]
 pub struct Controls {
-    /// Chosen by hand, overriding time of day until cleared `[SPEC-DIR-185]`.
-    pub manual_program: Option<i64>,
-    /// `(id, name, start_time)`, for the browser to offer.
-    pub programs: Vec<(i64, String, String)>,
-    /// The programme actually in force, as the engine last resolved it.
-    pub active: Option<String>,
+    /// The programme slot chosen by hand, overriding time of day until
+    /// cleared `[SPEC-DIR-185]`.
+    pub manual_slot: Option<i64>,
+    /// The programme's slots as `(id, name, start_time)`, for the browser to
+    /// offer.
+    pub slots: Vec<(i64, String, String)>,
+    /// The slot actually in force, as the engine last resolved it.
+    pub active_slot: Option<String>,
     /// Set when the page saved an edited programme `[SPEC-PGM-400]`: the
     /// engine takes its time slots on its next refill, the same intent-cell
     /// pattern as `reload_requested`.
@@ -65,7 +67,7 @@ pub struct Controls {
     /// Asks for a live Director rebuild, so music imported into the library
     /// becomes selectable without restarting the player `[IMPL-SUI-075]`.
     ///
-    /// The same intent-cell pattern as `manual_program`, and for the same
+    /// The same intent-cell pattern as `manual_slot`, and for the same
     /// reason: the Director is not `Sync`, so the browser cannot reach it.
     pub reload_requested: bool,
     /// What the rebuild is doing, for the browser to show. Set by the engine.
@@ -434,7 +436,7 @@ impl Session {
             // `[SPEC-DIR-185]`. `active()`'s own stale-id fallback already
             // handles a program that no longer exists, so this is safe to
             // set blind, before the Director that would validate it exists.
-            c.manual_program = store.as_ref().and_then(|s| s.load_manual_program());
+            c.manual_slot = store.as_ref().and_then(|s| s.load_manual_slot());
         }
         Ok(Self {
             lib,
@@ -483,13 +485,13 @@ impl Session {
             return;
         };
         if let Some(d) = self.director.as_mut() {
-            let programs = d.programs_mut();
-            if programs.utc_offset_minutes != offset {
+            let programme = d.programme_mut();
+            if programme.utc_offset_minutes != offset {
                 tracing::info!(
-                    "utc offset is now {offset:+} min (was {:+}); programmes follow it",
-                    programs.utc_offset_minutes
+                    "utc offset is now {offset:+} min (was {:+}); programme slots and seasons follow it",
+                    programme.utc_offset_minutes
                 );
-                programs.utc_offset_minutes = offset;
+                programme.utc_offset_minutes = offset;
             }
         }
     }
@@ -872,31 +874,31 @@ impl Session {
             // picker's list is rebuilt from what the Director now holds.
             if c.programme_changed {
                 c.programme_changed = false;
-                match self.decisions.as_ref().map(|s| s.load_programs()) {
+                match self.decisions.as_ref().map(|s| s.load_programme()) {
                     Some(Ok(fresh)) => {
-                        d.programs_mut().replace_slots(fresh);
-                        c.programs.clear();
-                        if c.manual_program.is_some() && d.programs().manual().is_none() {
-                            c.manual_program = None;
+                        d.programme_mut().replace_slots(fresh);
+                        c.slots.clear();
+                        if c.manual_slot.is_some() && d.programme().manual_slot().is_none() {
+                            c.manual_slot = None;
                         }
-                        tracing::info!("programme: {} time slot(s) taken from the edit", d.programs().len());
+                        tracing::info!("programme: {} time slot(s) taken from the edit", d.programme().len());
                     }
                     Some(Err(e)) => tracing::error!("programme: the edit could not be read: {e}"),
                     None => tracing::error!("programme: no store to read the edit from"),
                 }
             }
-            if c.programs.is_empty() {
-                c.programs = d
-                    .programs()
-                    .all()
+            if c.slots.is_empty() {
+                c.slots = d
+                    .programme()
+                    .slots()
                     .iter()
                     .map(|p| (p.id, p.name.clone(), format!("{:02}:{:02}", p.start_minute / 60, p.start_minute % 60)))
                     .collect();
             }
-            if d.programs().manual() != c.manual_program {
-                d.programs_mut().set_manual(c.manual_program);
+            if d.programme().manual_slot() != c.manual_slot {
+                d.programme_mut().set_manual_slot(c.manual_slot);
             }
-            c.active = d.programs().active(now).map(|p| p.name.clone());
+            c.active_slot = d.programme().active_slot(now).map(|p| p.name.clone());
             // The listener's suppression window lives with the other settings
             // and is persisted by the engine `[REQ-VIS-155]`; the Director is
             // told when it moves `[SPEC-PLAY-050]`.
@@ -970,11 +972,11 @@ impl Session {
                 // Captured before `decision.why` moves into the log below
                 // `[REQ-VIS-300]` -- the same field the runner-up
                 // enrichment above already reads. `"auto"` marks a genuine
-                // Director pick with no program in force, distinct from
+                // Director pick with no programme slot in force, distinct from
                 // `None` on the entry itself, which means "no selection
                 // event to report at all" (a resumed or reconstructed
                 // entry, never this one).
-                let picked_by = decision.why.program.clone().unwrap_or_else(|| "auto".into());
+                let picked_by = decision.why.slot.clone().unwrap_or_else(|| "auto".into());
 
                 // Recording the reasoning must never be able to stop the
                 // music, so both sinks are best-effort [SPEC-DIR-190].
@@ -1059,9 +1061,9 @@ impl Session {
                     self.fallback_rest = None;
                     self.refill_recovered();
                     entries.into_iter().for_each(|mut e| {
-                        // Also an auto-selection, with no program steering it
+                        // Also an auto-selection, with no programme slot steering it
                         // `[REQ-VIS-300]` -- the same "auto" the main loop
-                        // above uses when no program is in force.
+                        // above uses when no slot is in force.
                         e.selected_by = Some("auto".into());
                         Self::describe(&self.lib, &mut e);
                         engine.enqueue(e);
@@ -1260,10 +1262,10 @@ impl Session {
         Arc::clone(&self.controls)
     }
 
-    /// The programme in force `[SPEC-DIR-180]`.
-    pub fn program(&self) -> Option<String> {
+    /// The programme slot in force `[SPEC-DIR-180]`.
+    pub fn slot(&self) -> Option<String> {
         let d = self.director.as_ref()?;
-        d.programs().active(unix_now()).map(|p| p.name.clone())
+        d.programme().active_slot(unix_now()).map(|p| p.name.clone())
     }
 
     pub fn depth(&self) -> usize {
@@ -1576,18 +1578,18 @@ mod tests {
     /// offset it was built with until the player restarted.
     #[test]
     fn a_changed_utc_offset_reaches_the_running_director() {
-        let Some(os) = crate::director::program::os_utc_offset_minutes() else {
+        let Some(os) = crate::director::programme::os_utc_offset_minutes() else {
             return; // nothing to prove on a platform this cannot ask
         };
         let tmp = director_library_on_disk("utc");
         let mut session = Session::open(&tmp, &tmp, 5).unwrap();
         let lib = crate::db::Library::open_split(&tmp, &tmp).unwrap();
         session.director = Some(lib.director().unwrap());
-        session.director.as_mut().unwrap().programs_mut().utc_offset_minutes = os + 60;
+        session.director.as_mut().unwrap().programme_mut().utc_offset_minutes = os + 60;
 
         session.apply_utc_offset();
 
-        assert_eq!(session.director.as_ref().unwrap().programs().utc_offset_minutes, os);
+        assert_eq!(session.director.as_ref().unwrap().programme().utc_offset_minutes, os);
         let _ = std::fs::remove_file(&tmp);
     }
 

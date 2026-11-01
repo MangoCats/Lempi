@@ -469,6 +469,8 @@ pub struct BackupReady {
     pub plays: i64,
     pub preferences: i64,
     pub likes: i64,
+    /// Rows in `listener_programs`: programme slots. The field keeps its
+    /// older name because the phone app's built native library reads it.
     pub programs: i64,
     /// Its bytes' hash, to check the copy where it lands.
     pub sha256: String,
@@ -540,7 +542,7 @@ pub fn prepare_backup(listener: String) -> Result<BackupReady, LempiError> {
         plays: e.summary.plays,
         preferences: e.summary.preferences,
         likes: e.summary.likes,
-        programs: e.summary.programs,
+        programs: e.summary.slots,
         sha256: e.sha256,
         bytes: e.bytes,
     })

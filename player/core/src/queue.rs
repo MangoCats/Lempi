@@ -87,8 +87,8 @@ pub struct QueueEntry {
     /// Who or what put this entry in the queue `[REQ-VIS-300]` -- `None`
     /// when unknown (an entry reconstructed from a passage read, not
     /// freshly selected), `Some("user")` for one the listener queued
-    /// directly, else the Program Director's own program name at the
-    /// moment it was chosen, or `"auto"` when no program was in force.
+    /// directly, else the Program Director's programme slot name at the
+    /// moment it was chosen, or `"auto"` when no slot was in force.
     /// Carried through unchanged to `listener_play_history`, so a play's
     /// provenance survives exactly as far as the entry that earned it
     /// does.

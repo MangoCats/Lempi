@@ -1,6 +1,6 @@
 //! Playback control: volume, seek, queue actions, the WebSocket command
 //! verb, and the handful of process-level actions (power, restart, backend
-//! switch, program override) that do not fit any other topic here.
+//! switch, programme slot override) that do not fit any other topic here.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 // Only the power routes use these, and only an appliance build has them.
@@ -288,19 +288,21 @@ pub(super) async fn switch_backend(
     StatusCode::ACCEPTED
 }
 
-pub(super) async fn set_program(
+/// Hold a programme slot by hand, or `auto` to let time of day choose again
+/// `[SPEC-DIR-185]`.
+pub(super) async fn set_slot(
     State(ui): State<Ui>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> StatusCode {
     let new_value = {
         let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
         if id == "auto" {
-            c.manual_program = None;
+            c.manual_slot = None;
             Some(None)
         } else {
             match id.parse::<i64>() {
-                Ok(n) if c.programs.iter().any(|p| p.0 == n) => {
-                    c.manual_program = Some(n);
+                Ok(n) if c.slots.iter().any(|p| p.0 == n) => {
+                    c.manual_slot = Some(n);
                     Some(Some(n))
                 }
                 _ => None,
@@ -316,11 +318,11 @@ pub(super) async fn set_program(
     let library = ui.library.clone();
     let _ = tokio::task::spawn_blocking(move || match crate::db::PlayerStore::open_split(&db, &library) {
         Ok(store) => {
-            if let Err(e) = store.save_manual_program(new_value) {
-                tracing::error!("save manual program: {e}");
+            if let Err(e) = store.save_manual_slot(new_value) {
+                tracing::error!("save manual slot: {e}");
             }
         }
-        Err(e) => tracing::error!("save manual program: {e}"),
+        Err(e) => tracing::error!("save manual slot: {e}"),
     })
     .await;
     StatusCode::NO_CONTENT

@@ -516,23 +516,31 @@ const Lempi = (() => {
   // "starting" for ever would be a lie on a system that simply has none.
   const directorReady = s => s.pool != null;
 
-  // The programme picker. The option list is rebuilt only when it actually
-  // changes; replacing it on every push would close the dropdown in the hand
-  // of whoever is reading it.
+  // A snapshot's programme slots, under their names since 2026-11-01 or,
+  // from a player older than that, under the old ones (`program`,
+  // `program_manual`, `programs`). The player is the one serving this file,
+  // so the old names are only ever a fallback.
+  const slotOf = s => s.slot ?? s.program ?? null;
+  const slotManual = s => s.slot_manual ?? s.program_manual ?? false;
+  const slotsOf = s => (s.slots && s.slots.length ? s.slots : s.programs) || [];
+
+  // The programme slot picker. The option list is rebuilt only when it
+  // actually changes; replacing it on every push would close the dropdown in
+  // the hand of whoever is reading it.
   //
   // With nothing to offer the control is disabled and says why. Disabled
-  // rather than merely empty because `/program/{id}` validates the id against
+  // rather than merely empty because `/programme/slot/{id}` validates the id against
   // this same list: a choice made during the startup window is answered 404
   // and dropped without a word, so a picker that looked usable would be one
   // more control that takes a press and does nothing `[REQ-VIS-185]`.
-  function bindProgram(select, autoLabel = 'Automatic (by time of day)', labels = {}) {
+  function bindSlot(select, autoLabel = 'Automatic (by time of day)', labels = {}) {
     const starting = labels.starting ?? 'Program Director starting…';
     // The picker lists the time slots of the programme this node runs
     // [ENT-SLOT-010]. With none, it says where to make them, and the link
     // beside it goes there [SPEC-PGM-430].
     const none = labels.none ?? 'no time slots: edit the programme';
     let signature = '';
-    select.onchange = e => post(`/program/${e.target.value}`);
+    select.onchange = e => post(`/programme/slot/${e.target.value}`);
     if (!select.parentNode?.querySelector('a.programme-edit')) {
       const edit = document.createElement('a');
       edit.className = 'programme-edit';
@@ -542,12 +550,12 @@ const Lempi = (() => {
       select.insertAdjacentElement('afterend', edit);
     }
     return s => {
-      const programs = s.programs || [];
-      const waiting = programs.length === 0;
+      const slots = slotsOf(s);
+      const waiting = slots.length === 0;
       // A real signature is `id + name` joined, so it always starts with a
       // digit and can never collide with either of these.
       const sig = waiting ? (directorReady(s) ? 'empty:none' : 'empty:starting')
-                          : programs.map(p => p.id + p.name).join('|');
+                          : slots.map(p => p.id + p.name).join('|');
       if (sig !== signature) {
         signature = sig;
         select.textContent = '';
@@ -560,7 +568,7 @@ const Lempi = (() => {
           auto.value = 'auto';
           auto.textContent = autoLabel;
           select.appendChild(auto);
-          for (const p of programs) {
+          for (const p of slots) {
             const o = document.createElement('option');
             o.value = p.id;
             o.textContent = `${p.name} — from ${p.start}`;
@@ -570,10 +578,10 @@ const Lempi = (() => {
       }
       select.disabled = waiting;
       if (waiting) return;
-      if (!s.program_manual) {
+      if (!slotManual(s)) {
         select.value = 'auto';
       } else {
-        const m = programs.find(p => p.name === s.program);
+        const m = slots.find(p => p.name === slotOf(s));
         if (m) select.value = String(m.id);
       }
     };
@@ -625,7 +633,7 @@ const Lempi = (() => {
   // arrives twice a second and the queue does not change twice a second, so
   // wiping and rebuilding on every push meant the edit buttons were replaced
   // under the listener's own finger -- and a press that spans a rebuild is
-  // never delivered as a click at all. The same guard `bindProgram` above
+  // never delivered as a click at all. The same guard `bindSlot` above
   // already keeps, for the same shape of reason: a render that throws away
   // live DOM costs more than the comparison that avoids it.
   //
@@ -811,7 +819,7 @@ const Lempi = (() => {
   // same way `prefPanelSlot()` builds `#pref-panel` -- a skin that carries
   // no slot (WinAmp) silently gets no frequency table, same posture as the
   // preference panel it sits under. Table, not a list: five windows are
-  // columns, "All"/"User"/each program are rows, so a grid reads far more
+  // columns, "All"/"User"/each programme slot are rows, so a grid reads far more
   // directly than repeating five labelled numbers per row.
   function freqPanelSlot() {
     const panel = document.getElementById('freq-panel');
@@ -1417,7 +1425,12 @@ const Lempi = (() => {
     fader,
     fmt,
     bindVolume,
-    bindProgram,
+    bindSlot,
+    // `bindSlot` under its name before 2026-11-01.
+    bindProgram: bindSlot,
+    slotOf,
+    slotManual,
+    slotsOf,
     bindQueue,
     queueRow,
     showArt,
@@ -1473,7 +1486,9 @@ const Lempi = (() => {
         Lempi.seek(at * s.duration_ms, s.passage_id);
       });
     },
-    program: id => post(`/program/${id}`),
+    // Hold a programme slot by id, or 'auto' for time of day.
+    slot: id => post(`/programme/slot/${id}`),
+    program: id => post(`/programme/slot/${id}`),
     skipFade: ms => post(`/skip/fade/${Math.round(ms)}`),
     skipLead: ms => post(`/skip/lead/${Math.round(ms)}`),
     resumeSave: ms => post(`/resume/save/${Math.round(ms)}`),
@@ -1558,7 +1573,7 @@ const Lempi = (() => {
     queueControls,
     // Exported because a skin that draws its own programme list -- MuLibPlay
     // draws stacked buttons rather than a picker -- needs the same reading of
-    // an empty one that `bindProgram` makes.
+    // an empty one that `bindSlot` makes.
     directorReady,
     // Look for the hub's programme now: the phone's app calls it once it has
     // handed one in [SPEC-PGM-310].

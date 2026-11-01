@@ -560,8 +560,8 @@ impl PlayerStore {
 
     /// The time slots as the Director reads them, for a running Director to
     /// take after an edit `[SPEC-PGM-400]`.
-    pub fn load_programs(&self) -> Result<crate::director::program::Programs, DbError> {
-        crate::director::program::Programs::load(&self.conn)
+    pub fn load_programme(&self) -> Result<crate::director::programme::Programme, DbError> {
+        crate::director::programme::Programme::load(&self.conn)
     }
 }
 

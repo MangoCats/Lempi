@@ -258,7 +258,8 @@ pub struct Summary {
     pub last_play: Option<i64>,
     pub preferences: i64,
     pub likes: i64,
-    pub programs: i64,
+    /// Rows in `listener_programs`: programme slots, not programmes.
+    pub slots: i64,
 }
 
 pub fn inspect(snapshot: &Path) -> Result<Summary, DbError> {
@@ -293,7 +294,7 @@ pub fn inspect(snapshot: &Path) -> Result<Summary, DbError> {
         last_play,
         preferences: count("listener_preferences")?,
         likes: count("listener_likes")?,
-        programs: count("listener_programs")?,
+        slots: count("listener_programs")?,
     })
 }
 

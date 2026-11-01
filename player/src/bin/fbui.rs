@@ -105,10 +105,11 @@ use futures_util::StreamExt;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
 use u8g2_fonts::FontRenderer;
 
-/// Named in the real `Snapshot` as `ProgramItem` -- only `id`/`name` are
-/// drawn here, `start` is not; serde ignores the field it never asked for.
+/// One programme slot, named in the real `Snapshot` as `SlotItem` -- only
+/// `id`/`name` are drawn here, `start` is not; serde ignores the field it
+/// never asked for.
 #[derive(serde::Deserialize, Default, Clone, PartialEq)]
-struct ProgramItem {
+struct SlotItem {
     id: i64,
     name: String,
 }
@@ -144,14 +145,22 @@ struct ClientSnapshot {
     position_ms: u64,
     duration_ms: u64,
     volume_db: f32,
-    /// The programme in force, by name -- the real `Snapshot` carries no
-    /// numeric id for it, only `programs[].id` for the *available* list.
-    /// Matched against `programs` by name to decide which button to
-    /// highlight; names are unique in practice (`listener_programs` has no
-    /// uniqueness constraint on `name`, but nothing in this project has
-    /// ever given two programmes the same one).
+    /// The programme slot in force, by name -- the real `Snapshot` carries no
+    /// numeric id for it, only `slots[].id` for the *available* list.
+    /// Matched against `slots` by name to decide which button to highlight;
+    /// names are unique in practice (`listener_programs` has no uniqueness
+    /// constraint on `name`, but nothing in this project has ever given two
+    /// slots the same one).
+    #[serde(default)]
+    slot: Option<String>,
+    #[serde(default)]
+    slots: Vec<SlotItem>,
+    /// `slot` and `slots` under their names before 2026-11-01, read only
+    /// when a player too old to send the new ones is on the other end.
+    #[serde(default)]
     program: Option<String>,
-    programs: Vec<ProgramItem>,
+    #[serde(default)]
+    programs: Vec<SlotItem>,
     queue: Vec<QueueItem>,
     /// The supply in one word -- `ok`, `recent`, `low` -- or `None` where
     /// the player watches nothing `[APP-PWR-010]`. Drawn as a glyph by the
@@ -190,6 +199,15 @@ struct AbLoopView {
 }
 
 impl ClientSnapshot {
+    /// The slot in force: the new name, else the old one.
+    fn slot_name(&self) -> Option<&str> {
+        self.slot.as_deref().or(self.program.as_deref())
+    }
+    /// The slots to offer: the new name, else the old one.
+    fn slot_list(&self) -> &[SlotItem] {
+        if self.slots.is_empty() { &self.programs } else { &self.slots }
+    }
+
     fn tempo(&self) -> u32 {
         if self.tempo_milli == 0 { 1000 } else { self.tempo_milli }
     }
@@ -592,9 +610,9 @@ const ROW1_Y1: i32 = 208;
 const ROW2_Y0: i32 = 214;
 const ROW2_Y1: i32 = 260;
 
-/// `programs[0..8]`'s screen slots, in row-major reading order matching the
-/// physical grid: row 1 is transport, row 2 is entirely programmes 4-8.
-const PROGRAM_SLOTS: [(i32, i32, i32, i32); 8] = [
+/// Where the buttons for `slots[0..8]` sit, in row-major reading order
+/// matching the physical grid: row 1 is transport, row 2 is entirely slots 4-8.
+const SLOT_BUTTONS: [(i32, i32, i32, i32); 8] = [
     (GRID_XS[2].0, GRID_XS[2].1, ROW1_Y0, ROW1_Y1),
     (GRID_XS[3].0, GRID_XS[3].1, ROW1_Y0, ROW1_Y1),
     (GRID_XS[4].0, GRID_XS[4].1, ROW1_Y0, ROW1_Y1),
@@ -716,12 +734,9 @@ fn render_now_playing(display: &mut impl Panel, snap: &ClientSnapshot, art: Opti
 
     draw_button_mulib(display, GRID_XS[0].0, GRID_XS[0].1, ROW1_Y0, ROW1_Y1, if snap.playing { "PAUSE" } else { "PLAY" }, false)?;
     draw_button_mulib(display, GRID_XS[1].0, GRID_XS[1].1, ROW1_Y0, ROW1_Y1, "SKIP", false)?;
-    for (i, &(x0, x1, y0, y1)) in PROGRAM_SLOTS.iter().enumerate() {
-        let label = snap.programs.get(i).map(|p| truncate_display(&normalize_for_display(&p.name), 8));
-        let active = snap
-            .programs
-            .get(i)
-            .is_some_and(|p| snap.program.as_deref() == Some(p.name.as_str()));
+    for (i, &(x0, x1, y0, y1)) in SLOT_BUTTONS.iter().enumerate() {
+        let label = snap.slot_list().get(i).map(|p| truncate_display(&normalize_for_display(&p.name), 8));
+        let active = snap.slot_list().get(i).is_some_and(|p| snap.slot_name() == Some(p.name.as_str()));
         draw_button_mulib(display, x0, x1, y0, y1, label.as_deref().unwrap_or(""), active)?;
     }
 
@@ -1290,7 +1305,7 @@ enum Zone {
     Gear,
     PlayPause,
     Skip,
-    Program(i64),
+    Slot(i64),
     VolDown,
     VolUp,
     Seek,
@@ -1340,9 +1355,9 @@ fn hit_test(page: Page, sx: f64, sy: f64, snap: &ClientSnapshot) -> Option<Zone>
             if in_rect(x, y, GRID_XS[1].0, GRID_XS[1].1, ROW1_Y0, ROW1_Y1) {
                 return Some(Zone::Skip);
             }
-            for (i, &(x0, x1, y0, y1)) in PROGRAM_SLOTS.iter().enumerate() {
+            for (i, &(x0, x1, y0, y1)) in SLOT_BUTTONS.iter().enumerate() {
                 if in_rect(x, y, x0, x1, y0, y1) {
-                    return snap.programs.get(i).map(|p| Zone::Program(p.id));
+                    return snap.slot_list().get(i).map(|p| Zone::Slot(p.id));
                 }
             }
             None
@@ -1961,14 +1976,15 @@ async fn main() {
                         Some(Zone::Skip) => {
                             tokio::spawn(http_post(http_addr.clone(), "/command/skip".to_string()));
                         }
-                        Some(Zone::Program(id)) => {
+                        Some(Zone::Slot(id)) => {
                             // Never "auto" -- this appliance has no realtime
                             // clock and time-of-day selection has no
                             // relationship to a truck's driving hours. Only
-                            // ever a specific id, persisted server-side by
-                            // `set_program` so it survives a restart
-                            // `[SPEC-DIR-185]`.
-                            tokio::spawn(http_post(http_addr.clone(), format!("/program/{id}")));
+                            // ever a specific slot id, persisted server-side
+                            // by `set_slot` so it survives a restart
+                            // `[SPEC-DIR-185]`. fbui ships with its player, so
+                            // the new route is always there.
+                            tokio::spawn(http_post(http_addr.clone(), format!("/programme/slot/{id}")));
                         }
                         Some(Zone::VolUp) => {
                             let db = snap.volume_db + 3.0;
@@ -2062,7 +2078,8 @@ mod tests {
             contract::fields_of::<super::ClientSnapshot>(),
             &[
                 ("queue[]", contract::fields_of::<super::QueueItem>()),
-                ("programs[]", contract::fields_of::<super::ProgramItem>()),
+                ("slots[]", contract::fields_of::<super::SlotItem>()),
+                ("programs[]", contract::fields_of::<super::SlotItem>()),
                 ("ab_loop", contract::fields_of::<super::AbLoopView>()),
             ],
         );

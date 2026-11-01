@@ -148,16 +148,16 @@ fn main() {
 
 /// `[SPEC-FD-080]` — the perceptual check the spec has been waiting on.
 ///
-/// MuLibPlay's eight programmes each carry hand-picked seeds: direct human
+/// MuLibPlay's eight programme slots each carry hand-picked seeds: direct human
 /// judgments that these songs belong together. A sound metric should place
-/// same-programme seeds closer than cross-programme ones. Fifty recordings is a
+/// same-slot seeds closer than cross-slot ones. Fifty recordings is a
 /// small sample, but it is genuine perceptual signal from the actual listener,
 /// and it is the only such signal available.
 fn seed_separation(conn: &rusqlite::Connection, idx: &FlavorIndex) {
-    use lempi_player::director::program::Programs;
+    use lempi_player::director::programme::Programme;
 
-    let Ok(programs) = Programs::load(conn) else { return };
-    if programs.is_empty() {
+    let Ok(programme) = Programme::load(conn) else { return };
+    if programme.is_empty() {
         return;
     }
     // All seeds, not the down-selected five: this measures the metric against
@@ -179,17 +179,17 @@ fn seed_separation(conn: &rusqlite::Connection, idx: &FlavorIndex) {
         return;
     }
 
-    println!("\n=== [SPEC-FD-080] programme seed separation ===");
-    println!("{} seeds with flavor across {} programmes\n", seeds.len(), programs.len());
+    println!("\n=== [SPEC-FD-080] programme slot seed separation ===");
+    println!("{} seeds with flavor across {} programme slots\n", seeds.len(), programme.len());
 
     let (mut within, mut cross) = (Vec::new(), Vec::new());
-    let mut per_program: std::collections::HashMap<i64, Vec<f64>> = Default::default();
+    let mut per_slot: std::collections::HashMap<i64, Vec<f64>> = Default::default();
     for i in 0..seeds.len() {
         for j in (i + 1)..seeds.len() {
             let Some(d) = idx.distance(&seeds[i].1, &seeds[j].1) else { continue };
             if seeds[i].0 == seeds[j].0 {
                 within.push(d);
-                per_program.entry(seeds[i].0).or_default().push(d);
+                per_slot.entry(seeds[i].0).or_default().push(d);
             } else {
                 cross.push(d);
             }
@@ -198,10 +198,10 @@ fn seed_separation(conn: &rusqlite::Connection, idx: &FlavorIndex) {
     let mean = |v: &Vec<f64>| if v.is_empty() { f64::NAN } else { v.iter().sum::<f64>() / v.len() as f64 };
     let (mw, mc) = (mean(&within), mean(&cross));
 
-    println!("  {:<10} {:>6} {:>9}  vs library", "programme", "seeds", "mean d");
+    println!("  {:<10} {:>6} {:>9}  vs library", "slot", "seeds", "mean d");
     let mut rows: Vec<(f64, String, usize)> = Vec::new();
-    for p in programs.all() {
-        let Some(ds) = per_program.get(&p.id) else { continue };
+    for p in programme.slots() {
+        let Some(ds) = per_slot.get(&p.id) else { continue };
         let n = seeds.iter().filter(|s| s.0 == p.id).count();
         rows.push((mean(ds), p.name.clone(), n));
     }
@@ -210,20 +210,20 @@ fn seed_separation(conn: &rusqlite::Connection, idx: &FlavorIndex) {
         println!("  {:<10} {:>6} {:>9.3}  {:>6.0}%", name, n, d, d / mc * 100.0);
     }
 
-    println!("\n  within-programme mean : {mw:.4}  ({} pairs)", within.len());
-    println!("  cross-programme mean  : {mc:.4}  ({} pairs)", cross.len());
+    println!("\n  within-slot mean     : {mw:.4}  ({} pairs)", within.len());
+    println!("  cross-slot mean      : {mc:.4}  ({} pairs)", cross.len());
     let ratio = mw / mc;
     println!("  ratio                 : {ratio:.4}");
     // A ratio below 1.0 means the listener's groupings are tighter than chance
     // -- the metric agrees with them. Above 1.0 would mean it does not.
     if ratio < 1.0 {
         println!(
-            "\n  the metric agrees with the listener: same-programme seeds sit {:.1}% closer",
+            "\n  the metric agrees with the listener: same-slot seeds sit {:.1}% closer",
             (1.0 - ratio) * 100.0
         );
     } else {
-        println!("\n  NO AGREEMENT: same-programme seeds are no closer than random pairs");
+        println!("\n  NO AGREEMENT: same-slot seeds are no closer than random pairs");
     }
-    println!("  caveat: {} seeds over {} programmes is a small sample [SPEC-FD-080]",
+    println!("  caveat: {} seeds over {} programme slots is a small sample [SPEC-FD-080]",
              seeds.len(), rows.len());
 }

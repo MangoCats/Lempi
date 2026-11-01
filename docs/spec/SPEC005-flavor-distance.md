@@ -12,7 +12,7 @@ Defines how the distance between two Musical Flavor vectors is computed. This me
 
 ## 1. The Problem With Naive Euclidean Distance
 
-**`[SPEC-FD-010]`** A flavor vector is not 71 independent numbers. It is **18 characteristics**, each a probability distribution over its own classes summing to 1.0:
+**`[SPEC-FD-010]`** A flavor vector is not 71 independent numbers. It is **18 characteristics**, each a probability distribution over its own classes summing to 1.0. The 71 are the **dimensions**: one per class, so a characteristic of K classes is K dimensions and one distribution `[ENT-CHAR-010]`. Everything below works per characteristic; a dimension is never an axis on its own:
 
 - **Binary** characteristics (K=2) — `danceability`, `gender`, `mood_*`, `timbre`, `tonal_atonal`, `voice_instrumental`. Twelve of them. Each carries **one** degree of freedom; the second class is `1 − p`.
 - **Complex** characteristics (K≥3) — `genre_dortmund` (9), `genre_tzanetakis` (10), `ismir04_rhythm` (10), `genre_rosamerica` (8), `genre_electronic` (5), `moods_mirex` (5). Six of them, K−1 degrees of freedom each.
@@ -203,6 +203,12 @@ The third is the interesting one: *You* is among Radiohead's heaviest early trac
 **`[SPEC-FD-100]`** Characteristics whose classes fail to sum to 1.0 ± 1e-4 are flagged, per McRhythm's `[MFL-DEF-040]`. Verified clean on 21,636 of 21,636 characteristic instances in the sample dump.
 
 **`[SPEC-FD-110]`** User-defined characteristics `[GDE-MCR-060]` participate identically: they are distributions summing to 1.0 and take part in `S` whenever present in both vectors. Their `β_c` and `w_c` cannot be measured from AcousticBrainz submissions and must be assigned — default `w_c = 1.0`, `β_c` = observed mean between-recording TV over the library.
+
+**`[SPEC-FD-112]` The listener's own characteristics take part in distance today, and that is kept** (the maintainer, 2026-11-01). Five are in the hub's flavor table: `user.childrens`, `user.christmas`, `user.profanity`, `user.summer` and `user.winter`, each a binary pair (`christmasy` / `not_christmasy` …). Measured 2026-11-01 on the hub, they sit on 140, 112, 69, 1 and 2 recordings respectively — 324 of 10,627 with any flavor. Per `[SPEC-FD-110]` each takes part in `S` only when **both** vectors carry it, at `w_c = 1.0` with `β_c` estimated `[SPEC-FD-090]`. Three consequences a reader would not guess:
+
+1. **Its weight is the highest in the metric.** Measured reliabilities run 0.66–0.88; 1.0 outweighs every one of them, so two Christmas songs compared on `user.christmas` and the 18 are pulled together more by the tag than by any single measured characteristic.
+2. **A recording carrying only these counts as having flavor.** The Director's test is "any flavor row" `[SPEC-DIR-142]`. None of the hub's recordings is in that state today (every one of the 324 also has the 18).
+3. **It does not contradict `[SPEC-DIR-130]`.** There, an occasion is a *time layer*: the seasonal curve turns the same value into a frequency multiplier, and that multiplier is the only way the season moves a weight. Here the value is a fact about the recording's character, and it moves only shaping and flow — which passages are in the running, and in what order — never a weight `[SPEC-DIR-100]`.
 
 **`[SPEC-FD-120]`** *Superseded by `[SPEC-FD-145]`/`[SPEC-FD-150]`, 2026-08-13 — kept for its history, not as current design.* This originally proposed scaling `w_c` by a locally-extracted characteristic's own measured agreement, bounded above by the ceiling in `[GDE-FEX-085]`, so a less trustworthy characteristic contributed less. That assumed a library holding a mix of dump-sourced and locally-extracted values with different reliability per recording. Once provenance was made uniform-local `[SPEC-FD-084]`, the premise disappeared: every recording shares the same extractor, so there is no per-recording provenance signal left to scale by — `[SPEC-FD-150]` says this in as many words. `w_c` in `player/core/src/director/flavor.rs` is, correctly, a single corpus-wide reliability per characteristic (`[SPEC-FD-052]`), not a per-value one; `flavor.accuracy` (`[SPEC-SC-070]`) is populated but not read into distance, and that is no longer a gap.
 

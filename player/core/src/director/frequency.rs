@@ -439,8 +439,10 @@ pub fn weigh(c: &Candidate<'_>, policy: &Policy) -> Weighing {
     w
 }
 
-/// A mild preference for passages near three minutes `[SPEC-DIR-125]`.
-/// Capped at 2× so a 20-second fragment cannot dominate the pool.
+/// MuLibPlay's length bonus `[SPEC-DIR-125]`: neutral at 180 s, rising to its
+/// ×2 cap at 45 s and below, falling above -- ×0.5 at 12 minutes, ×0.22 at the
+/// 60-minute limit. A preference for short passages, not for three-minute
+/// ones; the cap keeps a 30-second fragment from dominating the pool.
 pub fn length_bonus(length_s: f64) -> f64 {
     (LENGTH_CAP.min(LENGTH_MIDPOINT_S / length_s.max(f64::EPSILON))).sqrt()
 }

@@ -9,7 +9,7 @@
   const showVolume = Lempi.bindVolume($('volume'), $('volnum'));
   // Short forms: this panel is fixed-width at 10px monospace, and the long
   // labels core defaults to would simply not fit beside the "Prog" caption.
-  const showProgram = Lempi.bindProgram($('prog'), 'auto (by clock)',
+  const showSlot = Lempi.bindSlot($('prog'), 'auto (by clock)',
     { starting: 'director starting…', none: 'no time slots' });
   const showQueue = Lempi.bindQueue(
     $('queue'), q => (q.artist ? `${q.artist} - ${q.title}` : q.title));
@@ -60,10 +60,10 @@
     $('fill').style.width =
       s.duration_ms ? `${(s.position_ms / s.duration_ms) * 100}%` : '0';
     showVolume(s);
-    showProgram(s);
+    showSlot(s);
     showQueue(s);
     $('why').textContent = s.why
-      ? `${s.why.program ? s.why.program + ': ' : ''}` +
+      ? `${(s.why.slot ?? s.why.program) ? (s.why.slot ?? s.why.program) + ': ' : ''}` +
         `${s.why.share_pct.toFixed(2)}% of ${s.why.pool_size.toLocaleString()} ` +
         `candidates, rank #${s.why.rank + 1}`
       : '';

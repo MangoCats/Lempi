@@ -20,7 +20,7 @@
 //!
 //! One thing in here reaches outside the process:
 //!
-//! * [`director::program`]'s UTC-offset sync calls `libc::localtime_r` on Unix
+//! * [`director::programme`]'s UTC-offset sync calls `libc::localtime_r` on Unix
 //!   and `powershell` on Windows `[SPEC-DIR-180]`, falling back to `None`
 //!   elsewhere. Android and iOS are both Unix with a working `tm_gmtoff`, so
 //!   this one is already portable; it is named here only because it is the

@@ -18,6 +18,10 @@ struct SeedView {
     title: Option<String>,
     artist: Option<String>,
     album: Option<String>,
+    /// `Some(false)` for a seed with no flavor, which the Director passes
+    /// over because it shapes nothing `[SPEC-DIR-142]`; the page flags it.
+    /// `None` when the library could not be asked.
+    has_flavor: Option<bool>,
 }
 
 #[derive(serde::Serialize)]
@@ -62,7 +66,13 @@ fn page_view(store: &crate::db::PlayerStore, v: ProgrammeView) -> PageView {
                     // An unknown recording still shows, by its id: a seed the
                     // library does not hold yet is not an error.
                     let n = store.subject_naming("recording", m).unwrap_or_default();
-                    SeedView { mbid: m.clone(), title: n.title, artist: n.artist, album: n.album }
+                    SeedView {
+                        mbid: m.clone(),
+                        title: n.title,
+                        artist: n.artist,
+                        album: n.album,
+                        has_flavor: store.has_flavor(m),
+                    }
                 })
                 .collect(),
         })
@@ -157,7 +167,7 @@ pub(super) async fn save_programme(
     axum::Json(edit): axum::Json<Edit>,
 ) -> axum::response::Response {
     let (db, library) = (ui.db.clone(), ui.library.clone());
-    let manual = ui.controls.lock().ok().and_then(|c| c.manual_program);
+    let manual = ui.controls.lock().ok().and_then(|c| c.manual_slot);
     let saved = tokio::task::spawn_blocking(move || {
         let store = crate::db::PlayerStore::open_split(&db, &library).map_err(|e| (true, e.message().to_string()))?;
         let v = store
@@ -167,7 +177,7 @@ pub(super) async fn save_programme(
         // in what a restart reads, and time of day decides again.
         let held_gone = manual.is_some_and(|id| !v.slots.iter().any(|s| s.id == Some(id)));
         if held_gone {
-            let _ = store.save_manual_program(None);
+            let _ = store.save_manual_slot(None);
         }
         Ok::<_, (bool, String)>((page_view(&store, v), held_gone))
     })
@@ -177,7 +187,7 @@ pub(super) async fn save_programme(
             if let Ok(mut c) = ui.controls.lock() {
                 c.programme_changed = true;
                 if held_gone {
-                    c.manual_program = None;
+                    c.manual_slot = None;
                 }
             }
             tracing::info!(
@@ -267,14 +277,14 @@ pub(super) async fn answer(
     axum::Json(a): axum::Json<Answer>,
 ) -> axum::response::Response {
     let (db, library) = (ui.db.clone(), ui.library.clone());
-    let manual = ui.controls.lock().ok().and_then(|c| c.manual_program);
+    let manual = ui.controls.lock().ok().and_then(|c| c.manual_slot);
     let replace = a.replace;
     let got = tokio::task::spawn_blocking(move || {
         let store = crate::db::PlayerStore::open_split(&db, &library).map_err(|e| (true, e.message().to_string()))?;
         let v = store.answer_programme(&a.fingerprint, a.replace).map_err(|e| (false, e.message().to_string()))?;
         let held_gone = a.replace && manual.is_some_and(|id| !v.slots.iter().any(|s| s.id == Some(id)));
         if held_gone {
-            let _ = store.save_manual_program(None);
+            let _ = store.save_manual_slot(None);
         }
         Ok::<_, (bool, String)>((page_view(&store, v), held_gone))
     })
@@ -285,7 +295,7 @@ pub(super) async fn answer(
                 if let Ok(mut c) = ui.controls.lock() {
                     c.programme_changed = true;
                     if held_gone {
-                        c.manual_program = None;
+                        c.manual_slot = None;
                     }
                 }
             }

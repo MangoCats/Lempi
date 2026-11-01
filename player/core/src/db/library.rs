@@ -299,7 +299,14 @@ impl Library {
               WHERE mbid IS NOT NULL AND kind = 'dequeue' GROUP BY mbid",
         );
         let occasions = crate::director::library::load_occasions(&self.conn)?;
-        let (_, month, day) = civil_from_unix(now);
+        // The listener's day, as the Director reads it `[SPEC-DIR-132]`: the
+        // same stored offset its programme carries, 0 where none is stored.
+        let offset_min: i64 = self
+            .conn
+            .query_row("SELECT utc_offset_minutes FROM listener_settings WHERE id = 1", [], |r| r.get(0))
+            .unwrap_or(0)
+            .clamp(-1440, 1440);
+        let (_, month, day) = civil_from_unix(now + offset_min * 60);
         let today = ordinal(month, day);
         let policy = Policy {
             skip_suppress_s: suppress_h.0 as f64 * 3600.0,
@@ -778,6 +785,9 @@ pub struct SeedCandidate {
     pub title: String,
     pub artist: Option<String>,
     pub album: Option<String>,
+    /// False for a recording with no flavor, which would shape nothing as a
+    /// seed `[SPEC-DIR-142]`; the page says so before it is chosen.
+    pub has_flavor: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -2163,7 +2173,9 @@ impl Library {
         let like = format!("%{}%", q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
         let album = self.album_expr("m.file_id");
         let sql = format!(
-            "SELECT mbid, title, artist, album FROM ( \
+            "SELECT mbid, title, artist, album, \
+                    EXISTS (SELECT 1 FROM __LIB__.flavor fl \
+                             WHERE fl.subject_kind = 'recording' AND fl.subject_id = mbid) FROM ( \
                SELECT m.mbid AS mbid, {TITLE_EXPR} AS title, {ARTIST_EXPR} AS artist, {album} AS album \
                  FROM ({NAMED}) m LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id) \
              WHERE mbid IS NOT NULL AND title IS NOT NULL AND title <> '' \
@@ -2173,7 +2185,13 @@ impl Library {
         let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
         let rows = st
             .query_map([like], |r| {
-                Ok(SeedCandidate { mbid: r.get(0)?, title: r.get(1)?, artist: r.get(2)?, album: r.get(3)? })
+                Ok(SeedCandidate {
+                    mbid: r.get(0)?,
+                    title: r.get(1)?,
+                    artist: r.get(2)?,
+                    album: r.get(3)?,
+                    has_flavor: r.get(4)?,
+                })
             })
             .map_err(|e| DbError::Query(e.to_string()))?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| DbError::Query(e.to_string()))

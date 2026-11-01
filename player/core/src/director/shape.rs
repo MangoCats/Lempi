@@ -63,9 +63,12 @@ pub struct Shaping {
 /// whatever the caller identifies a passage by. Returns the keys that survive,
 /// in no meaningful order — ordering is Stage C's job `[SPEC-DIR-160]`.
 ///
-/// A candidate with no flavor is **kept**, not dropped. Unmeasured is not the
-/// same as unsuitable, and silently excluding every unanalysed passage would
-/// make a half-scanned library play only the half it had scanned.
+/// A candidate with no flavor is an unknown quantity, meant to play only as a
+/// last resort `[SPEC-DIR-147]`. Here that means: pruned first, so a full
+/// library cuts every one of them; admitted beside the gathered pool only if
+/// they survive the prune. With no seeds the pool passes through untouched,
+/// and they are drawn at their ordinary weight -- one of the cases
+/// `[SPEC-DIR-212]` leaves open.
 pub fn shape<K: Copy + Eq + std::hash::Hash>(
     schema: &FlavorSchema,
     candidates: &[(K, Option<&Flavor>)],
@@ -114,8 +117,9 @@ pub fn shape<K: Copy + Eq + std::hash::Hash>(
     let mut scored: Vec<(K, Option<&Flavor>, Option<f64>)> =
         pool.into_iter().map(|(k, f)| (k, f, nearest(f))).collect();
     if scored.len() > EXCL_POOL {
-        // Unmeasured passages sort last but are not dropped unless the pool is
-        // genuinely over-full, so an unanalysed library still plays.
+        // Unmeasured passages sort last, so they are the first cut: whenever
+        // `EXCL_POOL` passages are comparable to a seed, every one of them
+        // goes. An unanalysed library, with fewer than that, still plays.
         scored.sort_by(|a, b| match (a.2, b.2) {
             (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
             (Some(_), None) => std::cmp::Ordering::Less,
@@ -152,8 +156,9 @@ pub fn shape<K: Copy + Eq + std::hash::Hash>(
         }
     }
 
-    // Passages with no flavor cannot be gathered by distance, so they are
-    // admitted separately rather than being silently unplayable.
+    // Passages with no flavor cannot be gathered by distance. Those that
+    // survived the prune are admitted beside the gathered ones; Stage C sorts
+    // them after every passage it can measure.
     for (k, f, _) in &scored {
         if f.is_none() && chosen.insert(*k) {
             out.push(*k);

@@ -193,6 +193,25 @@ def main() -> int:
     check(pg.standing(c, mdir)["nodes"][0]["state"] == "runs version 2, an older one",
           "a newer version leaves it on an older one until it asks again")
 
+    # Seeds without flavor are named, with their slot [SPEC-DIR-142].
+    music = os.path.join(tmp, "music.db")
+    m = sqlite3.connect(music)
+    m.executescript("CREATE TABLE flavor (subject_kind TEXT, subject_id TEXT, characteristic TEXT);"
+                    "CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);"
+                    "INSERT INTO flavor VALUES ('recording','a','danceability');"
+                    "INSERT INTO recordings VALUES ('b','Bare');")
+    m.commit()
+    m.close()
+    u = pg.unflavored(music, two)
+    check(sorted((x["slot"], x["mbid"], x["title"]) for x in u)
+          == [("Mellow", "b", "Bare"), ("Soft", "c", None)],
+          f"each seed without flavor is named with its slot, a title where the library has one: {u}")
+    check(pg.unflavored(None, two) is None and pg.unflavored(os.path.join(tmp, "absent", "x.db"), two) is None,
+          "no library, or one that cannot be opened, is 'could not be checked', not 'none'")
+    cur = pg.standing(c, mdir, music)["programmes"][0]["versions"][-1]
+    check(cur["unflavored"] is not None and {x["mbid"] for x in cur["unflavored"]} >= {"b", "c"},
+          f"the current version carries its seeds without flavor: {cur.get('unflavored')}")
+
     stranger = Candidate(tmp, "stranger")
     try:
         stranger.call(port, "GET", "/member/programme", present=True, pin=hub_pem)

@@ -68,6 +68,9 @@ const SPARSE = {
   passage_id: null, artist: null, album: null, plays: 0, last_played: null,
   title_source: 'unknown', artist_source: 'unknown', album_source: 'unknown',
   queue_len: 0, queue: [], volume_db: -72.0, fader_min_db: -72.0,
+  // The slot fields under their names since 2026-11-01, and the older names
+  // the player still sends beside them for clients not yet updated.
+  slot: null, slot_manual: false, slots: [],
   program: null, program_manual: false, programs: [],
   skip: { fade_ms: 0, lead_ms: 500, fade_max_ms: 10000, lead_min_ms: 100, lead_max_ms: 2000,
           resume_save_ms: 5000, resume_save_min_ms: 1000, resume_save_max_ms: 300000 },
@@ -118,12 +121,14 @@ const RICH = {
           { qid: 102, passage_id: 2, title: 'The One After', artist: null, duration_ms: 205000,
             is_shutdown: false }],
   volume_db: -12.5,
+  slot: 'Mellow', slot_manual: true,
+  slots: [{ id: 1, name: 'Mellow', start: '20:00' }, { id: 2, name: 'Prog', start: '09:00' }],
   program: 'Mellow', program_manual: true,
   programs: [{ id: 1, name: 'Mellow', start: '20:00' }, { id: 2, name: 'Prog', start: '09:00' }],
   skip: { fade_ms: 2000, lead_ms: 500, fade_max_ms: 10000, lead_min_ms: 100, lead_max_ms: 2000,
           resume_save_ms: 5000, resume_save_min_ms: 1000, resume_save_max_ms: 300000 },
   why: {
-    program: 'Mellow', weight: 0.8123, decayed_weight: 0.4211, pool_weight: 3120.5,
+    slot: 'Mellow', program: 'Mellow', weight: 0.8123, decayed_weight: 0.4211, pool_weight: 3120.5,
     pool_size: 8078, share_pct: 0.0135,
     artist_weight: 1.0, recording_restraint: 0.75, recording_ramp: 1.0,
     related_damping: 0.9, length_bonus: 1.08, occasion: 1.0,
@@ -222,7 +227,7 @@ async function run(skin) {
     // exercised rather than only its failure path.
     if (/^\/why\/\d+$/.test(url)) {
       return Promise.resolve({ ok: true, json: () => Promise.resolve(
-        { ...RICH.why, program: 'Queued Reasons' }) });
+        { ...RICH.why, slot: 'Queued Reasons', program: 'Queued Reasons' }) });
     }
     if (/^\/history\?/.test(url)) {
       return Promise.resolve({ ok: true, json: () => Promise.resolve(HISTORY) });
@@ -511,16 +516,16 @@ async function run(skin) {
   const stations = window.document.getElementById('stations');
   if (stations) {
     const rows = () => [...stations.querySelectorAll('.stationrow')];
-    check(rows().length === RICH.programs.length,
-          `stations should render ${RICH.programs.length} rows, got ${rows().length}`);
+    check(rows().length === RICH.slots.length,
+          `stations should render ${RICH.slots.length} rows, got ${rows().length}`);
     const starts = rows().map(r => r.querySelector('.engagetime').textContent);
     const sorted = [...starts].sort();
     check(JSON.stringify(starts) === JSON.stringify(sorted),
           `programmes should be ordered by start time, got ${JSON.stringify(starts)}`);
-    // RICH sets program_manual: true -- the clock is not the one choosing.
+    // RICH sets slot_manual: true -- the clock is not the one choosing.
     check(rows().every(r => r.querySelector('.engagetime').classList.contains('dim')),
           'engagement times must read as inert while a manual pick is in force');
-    sock.onmessage({ data: JSON.stringify({ ...RICH, program_manual: false }) });
+    sock.onmessage({ data: JSON.stringify({ ...RICH, slot_manual: false, program_manual: false }) });
     check(rows().every(r => !r.querySelector('.engagetime').classList.contains('dim')),
           'engagement times must read as live once the clock is choosing again');
     // Restore the state later checks in this run expect.
@@ -529,13 +534,13 @@ async function run(skin) {
     // Unchecking must freeze on whatever is engaged right now, not do
     // nothing and let the next snapshot spring the box back on -- the
     // control being a dead end in that direction is the bug this guards.
-    sock.onmessage({ data: JSON.stringify({ ...RICH, program_manual: false }) });
+    sock.onmessage({ data: JSON.stringify({ ...RICH, slot_manual: false, program_manual: false }) });
     const autoclock = window.document.getElementById('autoclock');
     autoclock.checked = false;
     autoclock.onchange({ target: autoclock });
-    const active = RICH.programs.find(p => p.name === RICH.program);
-    check(posted.includes(`/program/${active.id}`),
-          `unchecking must freeze on the active programme, posted ${JSON.stringify(posted)}`);
+    const active = RICH.slots.find(p => p.name === RICH.slot);
+    check(posted.includes(`/programme/slot/${active.id}`),
+          `unchecking must freeze on the active slot, posted ${JSON.stringify(posted)}`);
   }
 
   // Picking which passage the explanation panel describes `[REQ-VIS-100]`.
@@ -690,14 +695,14 @@ async function run(skin) {
   // those seconds the snapshot reports no programmes because none are KNOWN
   // yet. Rendering that as a silently blank panel read as the feature having
   // broken, and keeping the previous rows on screen instead would be worse --
-  // `/program/{id}` validates against this very list, so a press in that
+  // `/programme/slot/{id}` validates against this very list, so a press in that
   // window is answered 404 and dropped without a word.
   //
   // `pool` is absent exactly while there is no Director, which is what tells
   // "not yet" apart from "none configured" without resorting to a timer.
   {
     const prog = window.document.getElementById('prog');
-    const starting = { ...RICH, programs: [], program: null, pool: null };
+    const starting = { ...RICH, slots: [], slot: null, programs: [], program: null, pool: null };
     sock.onmessage({ data: JSON.stringify(starting) });
     await new Promise(r => setTimeout(r, 20));
     if (stations) {
@@ -725,7 +730,7 @@ async function run(skin) {
     sock.onmessage({ data: JSON.stringify(RICH) });
     await new Promise(r => setTimeout(r, 20));
     if (stations) {
-      check(stations.querySelectorAll('.button, .buttonOn').length === RICH.programs.length,
+      check(stations.querySelectorAll('.button, .buttonOn').length === RICH.slots.length,
             'the station buttons must return when the Director does');
       check(!window.document.getElementById('autoclock').disabled,
             'and the autoselect box must be usable again');

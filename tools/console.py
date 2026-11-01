@@ -1241,7 +1241,7 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     mdir = meshmod.mesh_dir(STATE["library"] or STATE["path"])
                     mesh_ok = meshmod.initialised(mdir)
-                    out = programmesmod.standing(c, mdir if mesh_ok else None)
+                    out = programmesmod.standing(c, mdir if mesh_ok else None, STATE["path"])
                 finally:
                     c.close()
                 out["members"] = ([{k: m[k] for k in ("fingerprint", "name", "role")}
@@ -1249,7 +1249,8 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     name, slots = programmesmod.read_listener(STATE["listener"])
                     out["hub_player"] = {"name": name, "slots": len(slots),
-                                         "fingerprint": programmesmod.fingerprint(slots), "file": STATE["listener"]}
+                                         "fingerprint": programmesmod.fingerprint(slots), "file": STATE["listener"],
+                                         "unflavored": programmesmod.unflavored(STATE["path"], slots)}
                 except Exception as e:
                     out["hub_player"] = {"error": f"{STATE['listener']}: {e}"}
                 return self.send_json(out)

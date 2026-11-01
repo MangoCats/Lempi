@@ -34,14 +34,14 @@
   }
 
   // Checked means the clock is choosing, which is Lempi's "no manual override".
-  // Unchecking has to name something to switch TO -- "manual" is a programme
-  // id, not a bare flag -- so it freezes on whatever is engaged right now
+  // Unchecking has to name something to switch TO -- "manual" is a slot id,
+  // not a bare flag -- so it freezes on whatever is engaged right now
   // rather than doing nothing and leaving the box to spring back on the next
   // snapshot, which is what a `false` branch here used to be `[SPEC-DIR-185]`.
-  let activeProgramId = null;
+  let activeSlotId = null;
   $('autoclock').onchange = e => {
-    if (e.target.checked) { Lempi.program('auto'); }
-    else if (activeProgramId != null) { Lempi.program(activeProgramId); }
+    if (e.target.checked) { Lempi.slot('auto'); }
+    else if (activeSlotId != null) { Lempi.slot(activeSlotId); }
   };
 
   // Gold is "this is what is on" throughout the original -- transport and
@@ -53,9 +53,9 @@
     const host = $('stations');
     // By engagement time, not by name -- the order the list is actually
     // used in, since that is the question "what comes on when" asks.
-    const sorted = [...(s.programs || [])].sort((a, b) => a.start.localeCompare(b.start));
-    const active = sorted.find(p => p.name === s.program);
-    activeProgramId = active ? active.id : null;
+    const sorted = [...Lempi.slotsOf(s)].sort((a, b) => a.start.localeCompare(b.start));
+    const active = sorted.find(p => p.name === Lempi.slotOf(s));
+    activeSlotId = active ? active.id : null;
     // Nothing to show, and two different reasons for it. The Director is built
     // after the web server binds, so for those seconds the list is empty
     // because nothing is KNOWN yet -- which used to render as a silently blank
@@ -92,7 +92,7 @@
         b.className = 'button';
         b.textContent = p.name;
         b.title = `from ${p.start}`;
-        b.onclick = () => Lempi.program(p.id);
+        b.onclick = () => Lempi.slot(p.id);
         row.append(time, b);
         host.appendChild(row);
       }
@@ -104,15 +104,15 @@
         host.appendChild(edit);
       }
     }
-    for (const b of host.querySelectorAll('.button, .buttonOn')) lit(b, b.textContent === s.program);
+    for (const b of host.querySelectorAll('.button, .buttonOn')) lit(b, b.textContent === Lempi.slotOf(s));
     // Dimmed once a manual pick has made the schedule inert -- the same
     // signal the checkbox itself gives, read here for the times beside it.
-    for (const t of host.querySelectorAll('.engagetime')) t.classList.toggle('dim', s.program_manual);
-    // Unticking has to name a programme to switch TO, and while the Director
-    // is starting there is none: `activeProgramId` is null, so the box would
+    for (const t of host.querySelectorAll('.engagetime')) t.classList.toggle('dim', Lempi.slotManual(s));
+    // Unticking has to name a slot to switch TO, and while the Director
+    // is starting there is none: `activeSlotId` is null, so the box would
     // spring back on the next snapshot having done nothing at all.
     $('autoclock').disabled = waiting;
-    $('autoclock').checked = !s.program_manual;
+    $('autoclock').checked = !Lempi.slotManual(s);
   }
 
 
@@ -214,7 +214,7 @@
     }
     renderStations(s);
     $('why').textContent = s.why
-      ? `${s.why.program ? s.why.program + ': ' : ''}weight ` +
+      ? `${(s.why.slot ?? s.why.program) ? (s.why.slot ?? s.why.program) + ': ' : ''}weight ` +
         `${s.why.decayed_weight.toFixed(3)} of ${s.why.pool_weight.toFixed(1)} across ` +
         `${s.why.pool_size.toLocaleString()} candidates — ` +
         `${s.why.share_pct.toFixed(2)}% chance of being picked.`

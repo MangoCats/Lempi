@@ -54,7 +54,7 @@ the control that reverts to automatic actually reverts.** *(Fixed
 `[SPEC-DIR-185]`.
 
 **The wrong programme was engaged.** `listener_settings.utc_offset_minutes`
-governs what "local" means to `Programs::active` `[SPEC-DIR-180]`, and
+governs what "local" means to `Programme::active_slot` `[SPEC-DIR-180]`, and
 nothing had ever written it — every library sat at the column's own default
 of 0, so every programme was chosen against raw UTC clock time. Reported at
 local 11:34 (UTC 15:34): Groove, which starts at 15:00, was on; Light, which
@@ -66,7 +66,7 @@ off until someone notices. Not re-asked on an explicit library reload
 mid-session -- rare enough, and startup already close enough behind it, that
 the gap was left rather than opening a second writable connection to close it.
 
-> **Not folded into `Programs::load` itself.** That function is exercised
+> **Not folded into `Programme::load` itself.** That function is exercised
 > directly by a great many fixture-backed tests, every one of them relying on
 > an absent `listener_settings` row reading as offset 0 to keep their
 > time-of-day assertions independent of whichever timezone happens to run
@@ -82,7 +82,7 @@ the gap was left rather than opening a second writable connection to close it.
 **"Autoselect by clock time" re-checked itself the moment it was
 unchecked.** The MuLibPlay skin only ever sent a command when the box
 *became* checked (`Lempi.program('auto')`); unchecking sent nothing, so the
-next snapshot — twice a second — read `program_manual` as still false and
+next snapshot — twice a second — read `program_manual` (now `slot_manual`) as still false and
 put the tick back. Manual mode is a specific programme id, not a bare flag,
 so there was never anything for a bare uncheck to mean. It now freezes on
 whichever programme is engaged at the moment of unchecking, giving the

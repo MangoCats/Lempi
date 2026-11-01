@@ -20,7 +20,7 @@ use super::frequency::{
 };
 use super::flavor::{centroid, Flavor, FlavorIndex};
 use super::occasion::{civil_from_unix, ordinal, Curve, Interp, Occasions};
-use super::program::Programs;
+use super::programme::Programme;
 use super::shape::{shape, Seed, Shaping, LIKE_SEED_WEIGHT, RAND_POOL};
 use crate::db::{row_to_entry, DbError, COLS, FROM};
 use crate::queue::QueueEntry;
@@ -84,7 +84,7 @@ pub(crate) const IDLE_FLOOR_S: f64 = 60.0;
 
 /// Rank decay `[SPEC-DIR-165]`. Applied over the flow-ordered pool, so the
 /// passages that follow the queue tail best are favoured — without ever
-/// becoming certain. At rank 100 this is ×0.017.
+/// becoming certain. At rank 99, the last of `RAND_POOL`, this is ×0.018.
 pub const RANK_DECAY: f64 = 0.96;
 
 /// A complete answer to "why this passage?" `[REQ-VIS-100]`.
@@ -111,22 +111,27 @@ pub struct Explanation {
     pub related_damping: f64,
     pub length_bonus: f64,
     pub occasion: f64,
-    /// Eligible candidates it beat.
-    /// The programme in force `[SPEC-DIR-180]`, if any.
+    /// The programme slot in force `[SPEC-DIR-180]`, if any.
+    pub slot: Option<String>,
+    /// The same value under its name before 2026-11-01, written for readers
+    /// that have not learned `slot` yet. Never read here.
     pub program: Option<String>,
     /// What pool shaping did `[SPEC-DIR-145]`.
     pub shaping: Shaping,
     /// Distance to each seed, in seed order `[SPEC-DIR-190]`.
     pub seed_distances: Vec<f64>,
     pub pool_size: usize,
+    /// The sum of the weights the roulette drew on -- decayed, where there
+    /// was a flow order.
     pub pool_weight: f64,
-    /// This passage's share of the total weight, as a percentage — the honest
-    /// statement of how likely it was, as opposed to how good it is.
+    /// This passage's chance of winning the draw, as a percentage: the
+    /// weight it was drawn on over `pool_weight` -- the honest statement of
+    /// how likely it was, as opposed to how good it is `[SPEC-DIR-191]`.
     pub share_pct: f64,
     pub runners_up: Vec<RunnerUp>,
-    /// Stages B and C have not run: there is no flavor shaping yet
-    /// `[SPEC-FD-040]`. Stated in the record so a stored decision is not later
-    /// mistaken for a shaped one.
+    /// Which stages ran for this pick, in words: whether there was a flow
+    /// order to decay over, or whether the relaxed fallback chose it. Stated
+    /// in the record so a stored decision says how it was made.
     pub stages: &'static str,
 }
 
@@ -239,7 +244,7 @@ pub struct Director {
     relations: HashMap<String, Vec<(String, f64)>>,
     occasions: Occasions,
     flavor: FlavorIndex,
-    programs: Programs,
+    programme: Programme,
     /// Centroids of liked and disliked flavor `[SPEC-DIR-150]`. Built once:
     /// they change only when the listener does.
     like: Option<Flavor>,
@@ -514,7 +519,28 @@ impl Director {
 
         let occasions = load_occasions(conn)?;
         let flavor = FlavorIndex::load(conn)?;
-        let programs = Programs::load(conn)?;
+        let programme = Programme::load(conn)?;
+        // A seed without flavor shapes nothing and is passed over `[SPEC-DIR-142]`;
+        // said once here, per slot, so the gap is a line rather than a silence.
+        for slot in programme.slots() {
+            let missing: Vec<String> = programme
+                .seeds_of(slot.id)
+                .iter()
+                .filter(|m| flavor.get(m).is_none())
+                .map(|m| match rows.iter().find(|r| r.mbid.as_deref() == Some(m.as_str())) {
+                    Some(r) => format!("{} ({m})", r.entry.title()),
+                    None => m.clone(),
+                })
+                .collect();
+            if !missing.is_empty() {
+                tracing::warn!(
+                    "director: slot \"{}\" has {} seed(s) without flavor, passed over: {} [SPEC-DIR-142]",
+                    slot.name,
+                    missing.len(),
+                    missing.join(", ")
+                );
+            }
+        }
         let (like, dislike) = load_taste(conn, &flavor);
 
         // Absent settings are the defaults, not an error: a library that has
@@ -593,7 +619,7 @@ impl Director {
             relations,
             occasions,
             flavor,
-            programs,
+            programme,
             like,
             dislike,
         })
@@ -640,22 +666,24 @@ impl Director {
     pub fn occasion_count(&self) -> usize {
         self.occasions.curve_count()
     }
-    pub fn programs(&self) -> &Programs {
-        &self.programs
+    pub fn programme(&self) -> &Programme {
+        &self.programme
     }
-    pub fn programs_mut(&mut self) -> &mut Programs {
-        &mut self.programs
+    pub fn programme_mut(&mut self) -> &mut Programme {
+        &mut self.programme
     }
     pub fn flavor(&self) -> &FlavorIndex {
         &self.flavor
     }
 
-    /// The seeds shaping the pool right now: the active programme's, plus
-    /// Like-Taste as an additional seed `[SPEC-DIR-150]`.
+    /// The seeds shaping the pool right now: the slot in force's, plus
+    /// Like-Taste as an additional seed `[SPEC-DIR-150]`. A seed without
+    /// flavor is passed over before the cap `[SPEC-DIR-142]`.
     fn seeds_now(&self, now: i64) -> Vec<Seed<'_>> {
         let mut out: Vec<Seed<'_>> = Vec::new();
-        if let Some(p) = self.programs.active(now) {
-            for mbid in self.programs.seeds_for(p.id, &self.artist_of, &self.last_played) {
+        if let Some(p) = self.programme.active_slot(now) {
+            let usable = |m: &str| self.flavor.get(m).is_some();
+            for mbid in self.programme.seeds_for(p.id, &self.artist_of, &self.last_played, usable) {
                 if let Some(f) = self.flavor.get(&mbid) {
                     out.push(Seed { flavor: f, weight: 1.0 });
                 }
@@ -701,8 +729,10 @@ impl Director {
         let mut artist_buf: Vec<ArtistCredit> = Vec::new();
         // The day is resolved once per pass, not per passage: every candidate is
         // weighed against the same "today", which is also what keeps a selection
-        // replayable from a frozen `now`.
-        let (_, month, day) = civil_from_unix(now);
+        // replayable from a frozen `now`. The listener's day, not UTC's: a
+        // season turns at local midnight, as a slot starts at local time
+        // `[SPEC-DIR-132]`.
+        let (_, month, day) = civil_from_unix(self.programme.local_secs(now));
         let today = ordinal(month, day);
         self.rows
             .iter()
@@ -928,27 +958,27 @@ impl Director {
         }
     }
 
-    /// Weighted-random pick over the eligible pool.
-    ///
-    /// This is Stage D applied directly to Stage A, with no flavor shaping in
-    /// between: stages B and C need flavor distance `[SPEC-FD-040]`. It is an
-    /// honest increment -- frequency alone already beats uniform random -- and
-    /// the seam is exactly where the shaped pool will be inserted.
+    /// One pick with nothing queued and nothing to follow, discarding the
+    /// reasoning: [`Director::decide`] with no skip list and no queue tail.
     pub fn choose(&self, now: i64, rng: &mut Rng) -> Option<QueueEntry> {
         self.decide(now, rng, &[], None).map(|d| d.entry)
     }
 
-    /// As [`Director::decide`], discarding the reasoning.
+    /// As [`Director::decide`], discarding the reasoning, with the last of
+    /// `skip` taken as the queue tail.
     pub fn choose_excluding(&self, now: i64, rng: &mut Rng, skip: &[i64]) -> Option<QueueEntry> {
         self.decide(now, rng, skip, skip.last().copied()).map(|d| d.entry)
     }
 
-    /// As [`Director::choose`], skipping passages already in the queue.
+    /// One pick through all four stages `[SPEC-DIR-110..165]`, with the
+    /// record of why. `None` when nothing is eligible; the caller then asks
+    /// [`Director::decide_relaxed`].
     ///
-    /// [`Director::note_queued`] handles this for anything identified, by
-    /// making it its own rotation block. This is the structural guarantee for
-    /// the rest: an unidentified passage has no MBID to block on, and must
-    /// still not appear twice in one queue.
+    /// `skip` is what is already queued, kept out of this pick.
+    /// [`Director::note_queued`] already blocks anything identified by making
+    /// it its own rotation block; this is the structural guarantee for the
+    /// rest, so an unidentified passage cannot appear twice in one queue.
+    ///
     /// `after` is the passage this one will follow — the queue tail. Flow
     /// ordering is measured from it `[SPEC-DIR-160]`. Passed explicitly rather
     /// than taken as the last of `skip`, because "do not pick these" and "this
@@ -1142,6 +1172,7 @@ impl Director {
         rest.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
 
         let pool_size = pool.len();
+        let slot = self.programme.active_slot(now).map(|p| p.name.clone());
         Some(Decision {
             entry: (*entry).clone(),
             why: Explanation {
@@ -1161,13 +1192,15 @@ impl Director {
                 occasion: w.occasion,
                 pool_size,
                 pool_weight: total,
-                program: self
-                    .programs
-                    .active(now)
-                    .map(|p| p.name.clone()),
+                slot: slot.clone(),
+                program: slot,
                 shaping: shaping.clone(),
                 seed_distances: self.seed_distances(entry.passage_id, seeds),
-                share_pct: if total > 0.0 { w.weight / total * 100.0 } else { 0.0 },
+                // The weight it was drawn on, over the total of the same
+                // weights: decayed against decayed. The undecayed weight over
+                // a decayed total overstated a rank-99 pick some 57-fold
+                // `[SPEC-DIR-191]`.
+                share_pct: if total > 0.0 { decayed / total * 100.0 } else { 0.0 },
                 runners_up: rest
                     .iter()
                     .take(RUNNERS_UP)
@@ -2184,6 +2217,22 @@ mod tests {
                 dec.why.rank,
                 dec.why.decayed_weight
             );
+        }
+    }
+
+    /// The stated chance is the weight drawn on over the total drawn on --
+    /// decayed over decayed `[SPEC-DIR-191]`. Undecayed over a decayed total
+    /// overstated every pick below rank 0.
+    #[test]
+    fn the_stated_chance_is_the_decayed_share() {
+        let c = fixture();
+        with_flavor(&c);
+        let d = Director::load(&c).unwrap();
+        for seed in 0..30 {
+            let dec = d.decide(NOW, &mut Rng::seeded(seed), &[1], Some(1)).unwrap();
+            let expect = dec.why.decayed_weight / dec.why.pool_weight * 100.0;
+            assert!((dec.why.share_pct - expect).abs() < 1e-9, "share {} expected {expect}", dec.why.share_pct);
+            assert!(dec.why.share_pct <= 100.0 + 1e-9, "a chance above certainty");
         }
     }
 

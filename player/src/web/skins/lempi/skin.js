@@ -29,7 +29,7 @@
   // they come from core; this skin says only where they live and how a row
   // should read `[REQ-VIS-160]`.
   const showVolume = Lempi.bindVolume($('volume'), $('volnum'));
-  const showProgram = Lempi.bindProgram($('prog'));
+  const showSlot = Lempi.bindSlot($('prog'));
   // Which track the explanation panel is describing `[REQ-VIS-100]`.
   //
   // `null` means "whatever is playing", and it follows the track changes --
@@ -399,7 +399,8 @@
       $('stages').textContent = '';
       return;
     }
-    const prog = w.program ? `${w.program}: ` : '';
+    const slot = w.slot ?? w.program;
+    const prog = slot ? `${slot}: ` : '';
     $('why').textContent =
       `${prog}weight ${w.decayed_weight.toFixed(3)} of ${w.pool_weight.toFixed(1)} across ` +
       `${w.pool_size.toLocaleString()} candidates — a ` +
@@ -1003,10 +1004,11 @@
     setText($('undersince'), since ? `since ${since}` : '');
     showSource(s);
     showQueue(s);
-    showProgram(s);
+    showSlot(s);
     showVolume(s);
-    setText($('progmode'), s.program
-      ? (s.program_manual ? `${s.program}, chosen` : `${s.program}, by the clock`)
+    const slot = Lempi.slotOf(s);
+    setText($('progmode'), slot
+      ? (Lempi.slotManual(s) ? `${slot}, chosen` : `${slot}, by the clock`)
       : '');
     renderSkip(s.skip);
     renderEchoNode(s.echo_node);
