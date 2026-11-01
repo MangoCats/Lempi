@@ -103,6 +103,14 @@ long that row had been there. *Found 2026-10-31* on lp3-wifi, run
 `[SPEC-LNK-030]`, the listener failed (*database is locked*), and the restore was
 refused, leaving the catalogue switched and the listener not.
 
+**`[SPEC-NSH-087]` A patch waits its turn for the write lock.** Each apply and
+undo takes the lock as its transaction begins (`BEGIN IMMEDIATE`), so a write
+the player has in progress delays it by up to the busy timeout rather than
+refusing it. Begun deferred, as they were, the transaction read first, and
+SQLite refuses a reader's upgrade to writer at once, timeout or not -- which is
+what lp3-wifi's *database is locked* was, a race with the player's own writes
+to its WAL listener. Found and reproduced in a test 2026-10-31.
+
 **`[SPEC-NSH-090]` The run is still a person's.** The hub's stages stay as
 `[SPEC-STAR-087]` has them: a person starts a run, reads its report, rehearses and
 commits. Rehearsal asks each player to check its patch without writing. A player

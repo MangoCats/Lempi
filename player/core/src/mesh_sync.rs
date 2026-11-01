@@ -23,6 +23,9 @@ use std::path::Path;
 
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
+// `[SPEC-NSH-087]`: every write here takes the write lock as it begins, so the busy timeout
+// covers it. Begun deferred, a transaction that has read is refused its upgrade at once.
+use rusqlite::TransactionBehavior::Immediate;
 use serde_json::Value as Json;
 
 /// The household's edits a member shares: preferences, occasion values and
@@ -152,7 +155,7 @@ pub fn apply_with(db: &Path, patch: &Json, allowed: Option<&[&str]>, rule: Rule,
     let mut c = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .map_err(|e| format!("open {}: {e}", db.display()))?;
     c.busy_timeout(std::time::Duration::from_secs(10)).map_err(|e| e.to_string())?;
-    let tx = c.transaction().map_err(|e| e.to_string())?;
+    let tx = c.transaction_with_behavior(Immediate).map_err(|e| e.to_string())?;
     tx.execute_batch("PRAGMA defer_foreign_keys = ON").map_err(es)?;
     let before = fk_before(&tx, patch, &mut HashMap::new())?;
     let out = apply_tx(&tx, patch, allowed, rule)?;
@@ -190,7 +193,7 @@ pub fn undo_parts(db: &Path, inverses: &mut dyn Iterator<Item = Result<Json, Str
     c.busy_timeout(std::time::Duration::from_secs(10)).map_err(|e| e.to_string())?;
     // Outside the transaction: SQLite ignores it inside one.
     c.execute_batch("PRAGMA foreign_keys = OFF").map_err(es)?;
-    let tx = c.transaction().map_err(|e| e.to_string())?;
+    let tx = c.transaction_with_behavior(Immediate).map_err(|e| e.to_string())?;
     let mut before = HashMap::new();
     let mut restored: HashMap<String, i64> = HashMap::new();
     let mut total = Applied::default();
@@ -339,7 +342,7 @@ pub fn apply_parts(
     let mut c = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .map_err(|e| format!("open {}: {e}", db.display()))?;
     c.busy_timeout(std::time::Duration::from_secs(10)).map_err(|e| e.to_string())?;
-    let tx = c.transaction().map_err(|e| e.to_string())?;
+    let tx = c.transaction_with_behavior(Immediate).map_err(|e| e.to_string())?;
     tx.execute_batch("PRAGMA defer_foreign_keys = ON").map_err(es)?;
     let mut before = HashMap::new();
     let mut total = Applied::default();
@@ -1977,5 +1980,23 @@ mod tests {
         let err = undo(&db, &out.inverse).unwrap_err();
         assert!(err.contains("pointing at nothing") && err.contains("release_recordings"), "{err}");
         assert_eq!(count(&db, "releases"), 2, "nothing undone: r2 is still there for the row that names it");
+    }
+
+    /// `[SPEC-NSH-087]`: a patch waits for a write the player has in progress. Begun deferred, it read
+    /// first, and SQLite refuses a reader's upgrade to writer at once, without the busy timeout --
+    /// *database is locked*, as lp3-wifi's listener answered in run `20261031T2117Z`.
+    #[test]
+    fn a_patch_waits_for_a_write_in_progress() {
+        let (_d, db) = fk_db("busy");
+        let other = Connection::open(&db).unwrap();
+        other.execute_batch("PRAGMA journal_mode = WAL; BEGIN IMMEDIATE; INSERT INTO releases VALUES ('p1', 'player');").unwrap();
+        let done = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            other.execute_batch("COMMIT").unwrap();
+        });
+        let out = apply_with(&db, &serde_json::json!({"tables": [parent("r1")]}), None, Rule::Strict, true);
+        done.join().unwrap();
+        assert_eq!(out.unwrap().counts.applied, 1);
+        assert_eq!(count(&db, "releases"), 3, "both writes kept: r0, the player's p1 and the patch's r1");
     }
 }
