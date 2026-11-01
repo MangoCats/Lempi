@@ -1156,6 +1156,197 @@ def test_tracks_end_to_end():
         ingest_cd.lookup_disc_id, ingest_cd.lookup_barcode = old
 
 
+def test_inherited_merge():
+    """[SPEC-AGN-016], [SPEC-AGN-052]: *Wish You Were Here*, 2026-11-01. A DAO
+    rip of a disc whose album the library already had -- MuLib's MP3s, never a
+    CD import, matched to an edition this disc's Disc ID does not find -- is
+    found by its recordings and merged as an earlier rip a file a track would
+    be. A file whose length is not its track's is never kept, and says which
+    track it does fit: two of the inherited files had been filed under each
+    other's recordings."""
+    import subprocess
+    print("an album never added by a CD import: found by its recordings, and merged")
+    rel = {"id": "rel-W", "title": "Album", "date": "1975", "artist-credit": [{"name": "Artist"}],
+           "media": [{"tracks": [{"position": n, "title": f"Song {n}", "length": 4000,
+                                  "recording": {"id": f"rec-w{n}", "title": f"Song {n}"}} for n in (1, 2, 3)]}]}
+    root = tempfile.mkdtemp()
+    album = os.path.join(root, "Artist", "Album")
+    other = os.path.join(root, "Various", "Hits")
+    os.makedirs(album)
+    os.makedirs(other)
+    db = os.path.join(tempfile.mkdtemp(), "lempi.db")
+    c = sqlite3.connect(db)
+    c.executescript(SCHEMA + "CREATE TABLE player_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);"
+                    "CREATE TABLE file_releases (audio_md5 TEXT PRIMARY KEY, release_mbid TEXT NOT NULL, "
+                    "source TEXT NOT NULL, decided_at TEXT);"
+                    "CREATE TABLE flavor (subject_kind TEXT, subject_id TEXT, characteristic TEXT, class TEXT, "
+                    "value REAL, source TEXT, accuracy REAL, "
+                    "PRIMARY KEY (subject_kind, subject_id, characteristic, class));")
+
+    def inherit(folder, name, mbid, ms, md5):
+        path = os.path.join(folder, name)
+        with open(path, "wb") as f:
+            f.write(b"\0" * 64)
+        fid = c.execute("INSERT INTO files (audio_md5, path, duration_ms) VALUES (?1, ?2, ?3)",
+                        (md5, path, ms)).lastrowid
+        c.execute("INSERT OR IGNORE INTO recordings VALUES (?1, ?2, NULL, 'inherited:mulib')", (mbid, name))
+        for kind in ("album", "radio"):
+            pid = c.execute("INSERT INTO passages (file_id, kind, start_ms, end_ms, gain_db, boundary_src) "
+                            "VALUES (?1, ?2, 50, ?3, -3.0, 'inherited:mulib')", (fid, kind, ms)).lastrowid
+            c.execute("INSERT INTO passage_recordings VALUES (?1, ?2, 1.0, 'inherited:mulib')", (pid, mbid))
+        c.execute("INSERT INTO file_releases VALUES (?1, 'rel-mulib', 'folder:match', 'then')", (md5,))
+        return fid
+    # The disc's tracks run 2, 2 and 8 seconds. The album's track 1 and 3
+    # files are filed under each other's recordings, as MuLib had Shine On.
+    inherit(album, "Song One.mp3", "rec-w1", 8000, "m1".ljust(32, "0"))
+    inherit(album, "Song Two.mp3", "rec-w2", 2100, "m2".ljust(32, "0"))
+    inherit(album, "Song Three.mp3", "rec-w3", 2000, "m3".ljust(32, "0"))
+    with open(os.path.join(album, "cover.jpg"), "wb") as f:
+        f.write(b"\xff\xd8\xff" + b"c" * 64)
+    # A compilation holding one of its songs, and the same song again.
+    inherit(other, "Hit 1.mp3", "rec-w2", 2100, "h1".ljust(32, "0"))
+    inherit(other, "Hit 2.mp3", "rec-elsewhere", 3000, "h2".ljust(32, "0"))
+    c.execute("INSERT INTO flavor VALUES ('recording', 'rec-w2', 'danceability', 'danceable', 0.4, 'local:essentia', NULL)")
+    c.commit()
+
+    e = ingest_cd.earlier_rip(c, rel)
+    check(e and e["inherited"] and e["mode"] == "tracks" and os.path.normcase(e["folder"]) == os.path.normcase(album)
+          and e["held"] == [1, 2, 3] and e["release"] == "rel-mulib",
+          f"the album's folder, found by its recordings, as the edition MuLib matched: {e}")
+    check(e and sorted(e["by_track"]) == [1, 2, 3]
+          and os.path.basename(e["by_track"][1]["path"]) == "Song One.mp3" and e["by_track"][1]["duration_ms"] == 8000,
+          f"each file to its recording's track, with its length: {e and e['by_track']}")
+    check(e and "found by its recordings" in e["said"] and "never ripped" not in e["said"], f"in words: {e and e['said']}")
+    one = dict(rel, media=[{"tracks": [{"position": 1, "recording": {"id": "rec-w2"}},
+                                       {"position": 2, "recording": {"id": "rec-x"}},
+                                       {"position": 3, "recording": {"id": "rec-y"}}]}])
+    check(ingest_cd.earlier_rip(c, one) is None, "a folder holding one of a disc's tracks is not its album")
+    # A file the CD import wrote is found by what it was added as, never by
+    # its recordings: another edition's rip is not this disc's.
+    c.execute("INSERT INTO ingest_decisions (audio_md5, stage, outcome, detail, decided_at) "
+              "VALUES (?1, 'rip', 'chosen', '{}', 'then')", ("m1".ljust(32, "0"),))
+    c.execute("INSERT INTO ingest_decisions (audio_md5, stage, outcome, detail, decided_at) "
+              "VALUES (?1, 'rip', 'chosen', '{}', 'then')", ("m2".ljust(32, "0"),))
+    check(ingest_cd.earlier_rip(c, rel) is None, "nor are files a CD import added")
+    c.execute("DELETE FROM ingest_decisions")
+    c.commit()
+    c.close()
+
+    dao = tempfile.mkdtemp()
+    subprocess.run([ingest_cd.FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=330:duration=12",
+                    "-ar", "44100", "-ac", "2", os.path.join(dao, "Artist - Album.wav")], check=True)
+    with open(os.path.join(dao, "Artist - Album.cue"), "w", encoding="utf-8", newline="\r\n") as f:
+        f.write('PERFORMER "Artist"\nTITLE "Album"\nFILE "Artist - Album.wav" WAVE\n'
+                '  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    INDEX 01 00:02:00\n'
+                '  TRACK 03 AUDIO\n    INDEX 01 00:04:00\n')
+    old = (ingest_cd.lookup_disc_id, ingest_cd.lookup_barcode)
+    ingest_cd.lookup_disc_id = lambda toc: ("exact", [rel])
+    ingest_cd.lookup_barcode = lambda code: ("none", [])
+    try:
+        p = ingest_cd.do_ingest(db, dao, commit=False)
+        r0 = p["releases"][0]
+        pe = r0.get("earlier") or {}
+        check(r0["duplicate"] is False and r0["folder"] == os.path.join("Artist", "Album"),
+              f"the preview proposes the album's folder, a merge and not a second copy: {r0['folder']} {r0['duplicate']}")
+        plan = {r["number"]: r for r in pe.get("plan") or []}
+        check(plan and [plan[n]["keep"] for n in (1, 2, 3)] == ["dao", "dao", "dao"]
+              and plan[2]["earlier_said"] == "no log" and plan[2]["misfit"] is None,
+              f"every track from this rip; the album has no log: {plan}")
+        check(plan and "it fits track 3's length" in (plan[1]["misfit"] or "")
+              and "it fits track 1's length" in (plan[3]["misfit"] or ""),
+              f"the two files filed under each other's recordings, said: {plan and (plan[1]['misfit'], plan[3]['misfit'])}")
+        toc = cd_toc.parse_eac_cue(os.path.join(dao, "Artist - Album.cue"))
+        cd_toc.finalize_leadout(toc, 12000)
+        try:
+            ingest_cd.merge_plan(pe, toc, None, keep_earlier={1})
+            check(False, "a file not its track's length cannot be kept")
+        except ValueError as err:
+            check("cannot be kept" in str(err) and "not this track's audio" in str(err), f"said so: {err}")
+        check([r["keep"] for r in ingest_cd.merge_plan(pe, toc, None, keep_earlier={2})] == ["dao", "earlier", "dao"],
+              "one that fits may be kept [SPEC-AGN-035]")
+
+        r = ingest_cd.do_ingest(db, dao, commit=True, release="rel-W", into=album, keep_flac=False)
+        m = r.get("merge") or {}
+        check(m.get("kept") == [] and sorted(m.get("retired") or []) == ["Song One.mp3", "Song Three.mp3", "Song Two.mp3"],
+              f"all three files retired: {m}")
+        check(sorted(os.listdir(album)) == ["Artist - Album.cue", "Artist - Album.mp3", "cover.jpg"],
+              f"the album folder holds the disc, its sheet and the cover: {sorted(os.listdir(album))}")
+        c = sqlite3.connect(db)
+        names = sorted(os.path.basename(p) for (p,) in c.execute("SELECT path FROM files"))
+        check(names == ["Artist - Album.mp3", "Hit 1.mp3", "Hit 2.mp3"], f"the album's files left the catalogue: {names}")
+        got = sorted((k, s, mb) for k, s, mb in c.execute(
+            "SELECT p.kind, p.start_ms, pr.mbid FROM passages p JOIN files f USING (file_id) "
+            "JOIN passage_recordings pr USING (passage_id) WHERE f.path LIKE '%Artist - Album.mp3'"))
+        check([mb for k, s, mb in got if k == "radio"] == ["rec-w1", "rec-w2", "rec-w3"]
+              and [s for k, s, mb in got if k == "radio"] == [0, 2000, 4000],
+              f"a radio and an album passage a track on the disc, each its edition's recording: {got}")
+        check(c.execute("SELECT COUNT(*) FROM file_releases WHERE audio_md5 LIKE 'm%'").fetchone()[0] == 0,
+              "MuLib's edition left with the album's files")
+        check(c.execute("SELECT value FROM flavor WHERE subject_id = 'rec-w2'").fetchone() == (0.4,),
+              "the recording's own measurements stand")
+        check(c.execute("SELECT COUNT(*) FROM passages p JOIN files f USING (file_id) WHERE f.path LIKE '%Hit 1.mp3'")
+              .fetchone()[0] == 2, "and nothing outside the album is touched")
+        c.close()
+    finally:
+        ingest_cd.lookup_disc_id, ingest_cd.lookup_barcode = old
+
+
+def test_retire_on_a_split_pair():
+    """[IMPL-DBSPLIT-055]: on the hub's split pair, a merge's retired passages
+    named by the listener's plays could not be cleared inside the add's
+    transaction, foreign keys on -- `no such table: listener.passages`, *Wish
+    You Were Here*, 2026-11-01. The catalogue's rows go in that transaction,
+    the listener's references just after it, with the pragma off."""
+    import lempi_db
+    print("a merge on a split pair: the plays of a retired passage cleared, after the catalogue")
+    d = tempfile.mkdtemp()
+    lib, lis = os.path.join(d, "library.db"), os.path.join(d, "listener.db")
+    c = sqlite3.connect(lib)
+    c.executescript(SCHEMA + "INSERT INTO files (file_id, audio_md5, path) VALUES (1, 'old', 'x.mp3');"
+                    "INSERT INTO files (file_id, audio_md5, path) VALUES (2, 'keep', 'y.mp3');"
+                    "INSERT INTO passages (passage_id, file_id, kind) VALUES (10, 1, 'radio'), (20, 2, 'radio');"
+                    "INSERT INTO recordings VALUES ('rec-a', 'A', NULL, 'x'), ('rec-b', 'B', NULL, 'x');"
+                    "INSERT INTO passage_recordings VALUES (10, 'rec-a', 1.0, 'x'), (20, 'rec-b', 1.0, 'x');")
+    c.commit()
+    c.close()
+    c = sqlite3.connect(lis)
+    c.executescript(
+        "CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY, played_at INTEGER NOT NULL, "
+        "passage_id INTEGER REFERENCES passages(passage_id) ON DELETE SET NULL, mbid TEXT);"
+        "CREATE TABLE selection_decisions (decision_id INTEGER PRIMARY KEY, selected_at INTEGER NOT NULL, "
+        "passage_id INTEGER REFERENCES passages(passage_id) ON DELETE SET NULL, detail TEXT);"
+        "CREATE TABLE player_state (id INTEGER PRIMARY KEY CHECK (id = 1), "
+        "passage_id INTEGER REFERENCES passages(passage_id) ON DELETE SET NULL, updated_at TEXT);"
+        "INSERT INTO listener_play_history VALUES (1, 100, 10, 'rec-a'), (2, 200, 20, 'rec-b');"
+        "INSERT INTO selection_decisions VALUES (1, 100, 10, '{}');"
+        "INSERT INTO player_state VALUES (1, 10, 'then');")
+    c.commit()
+    c.close()
+    conn = lempi_db.connect(lib, lempi_db.ROLE_LIBRARY, writable=True, peer_writable=True)
+    conn.isolation_level = None
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        ingest_cd.retire_rows(conn, [1])
+        check(False, "the old way, inside the add's transaction, reproduces the failure")
+    except sqlite3.OperationalError as err:
+        check("no such table" in str(err) and "passages" in str(err), f"reproduced: {err}")
+    conn.execute("ROLLBACK")
+    conn.execute("BEGIN IMMEDIATE")
+    gone = ingest_cd.retire_rows(conn, [1], orphans=False)
+    conn.execute("COMMIT")
+    check(gone["passages"] == 1 and gone["orphans"] == {}, f"the catalogue's rows, in the add's transaction: {gone}")
+    cleared = ingest_cd.clear_retired_refs(conn)
+    check(cleared == {"listener_play_history": 1, "selection_decisions": 1, "player_state": 1},
+          f"then every listener reference to the passage gone: {cleared}")
+    check(conn.execute("PRAGMA foreign_keys").fetchone() == (1,), "and foreign keys on again")
+    conn.close()
+    c = sqlite3.connect(lis)
+    check(c.execute("SELECT play_id, passage_id, mbid FROM listener_play_history ORDER BY play_id").fetchall()
+          == [(1, None, "rec-a"), (2, 20, "rec-b")], "the play keeps its recording; the other play is untouched")
+    c.close()
+
+
 def test_occasions():
     """[SPEC-CDI-096]: the disc's title suggests Christmas or children's;
     ticked, every recording on the disc is marked fully that occasion, as
@@ -1444,6 +1635,8 @@ def main() -> int:
     test_isrc_without_a_pick()
     test_end_to_end()
     test_tracks_end_to_end()
+    test_inherited_merge()
+    test_retire_on_a_split_pair()
     test_occasions()
     test_chosen_edition()
     test_record_release()

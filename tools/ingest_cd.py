@@ -954,6 +954,68 @@ def held_of_edition(conn, release: dict, positions) -> tuple[int, int] | None:
     return conn.execute(q, mbids).fetchone()[0], len(mbids)
 
 
+def inherited_copy(conn, pos_of: dict) -> dict[str, int]:
+    """`[SPEC-AGN-016]` An album the library held before any CD import --
+    *Wish You Were Here*, five MP3s inherited from MuLib -- as this disc's
+    earlier rip: `{audio_md5: track number}`, or empty. It was never ripped
+    here, so no edition, Disc ID or barcode of this disc names it, and the
+    edition its folder was matched to need not be one this disc's Disc ID
+    finds. What it has is its recordings, and they are the disc's own.
+
+    So: the one folder whose files hold this disc's recordings, a file a
+    recording, each file one radio passage of one recording, and none of
+    them a file a CD import wrote -- that rip is found by what it was added
+    as, and another edition's is not this disc's. The folder must hold at
+    least half the disc's tracks, two at the least, and be mostly them: a
+    compilation holding one or two of its songs is not this album. Two
+    folders holding as many is an answer nobody can choose between: none."""
+    ours = {}
+    for n, m in pos_of.items():
+        if m:
+            ours.setdefault(m, []).append(n)
+    ours = {m: ns[0] for m, ns in ours.items() if len(ns) == 1}
+    if len(ours) < 2:
+        return {}
+    q = ",".join("?" * len(ours))
+    try:
+        rows = conn.execute(
+            "SELECT f.file_id, f.path, f.audio_md5, pr.mbid FROM files f JOIN passages p USING (file_id) "
+            f"JOIN passage_recordings pr USING (passage_id) WHERE p.kind = 'radio' AND pr.mbid IN ({q})",
+            list(ours)).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    by_folder: dict[str, dict[str, list]] = {}
+    as_stored: dict[str, str] = {}
+    for fid, path, md5, mbid in rows:
+        if not path:
+            continue
+        one = conn.execute("SELECT COUNT(*) FROM passages p JOIN passage_recordings pr USING (passage_id) "
+                           "WHERE p.file_id = ?1 AND p.kind = 'radio'", (fid,)).fetchone()[0]
+        ripped = conn.execute("SELECT 1 FROM ingest_decisions WHERE stage = 'rip' AND audio_md5 = ?1 LIMIT 1",
+                              (md5,)).fetchone()
+        if one == 1 and not ripped:
+            d = os.path.normcase(os.path.abspath(os.path.dirname(path)))
+            by_folder.setdefault(d, {}).setdefault(mbid, []).append(md5)
+            as_stored.setdefault(d, os.path.dirname(path))
+    best: list[tuple[int, str, dict]] = []
+    for d, held in by_folder.items():
+        held = {m: v[0] for m, v in held.items() if len(set(v)) == 1}   # a recording twice there: not a file a track
+        if len(held) < max(2, (len(pos_of) + 1) // 2):
+            continue
+        # Everything catalogued in that folder, by the path as it is stored
+        # there -- separators and all -- not a scan of the library.
+        prefix = as_stored[d].replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        siblings = sum(1 for (p,) in conn.execute("SELECT path FROM files WHERE path LIKE ?1 ESCAPE '\\'",
+                                                   (prefix + "%",))
+                       if p and os.path.normcase(os.path.abspath(os.path.dirname(p))) == d)
+        if len(held) * 2 >= siblings:
+            best.append((len(held), d, held))
+    best.sort(key=lambda b: -b[0])
+    if not best or (len(best) > 1 and best[1][0] == best[0][0]):
+        return {}
+    return {md5: ours[m] for m, md5 in best[0][2].items()}
+
+
 def earlier_rip(conn, release: dict | None, disc_id: str | None = None,
                 barcode: str | None = None) -> dict | None:
     """An earlier rip of this disc already in the library `[SPEC-AGN-015]`, or
@@ -962,16 +1024,19 @@ def earlier_rip(conn, release: dict | None, disc_id: str | None = None,
     a set's other disc, the same release, is not it. `release` is cut to this
     disc (`for_this_disc`). A rip added with no log has no Disc ID: *Highway
     61*'s first rip is found by its edition, and under any other of the
-    sixteen MusicBrainz offers for the disc, by the sheet's barcode.
+    sixteen MusicBrainz offers for the disc, by the sheet's barcode. Where
+    none of those finds one, an album the library had before any CD import
+    is found by its recordings (`inherited_copy`, `[SPEC-AGN-016]`).
 
     `{"folder", "rel_folder", "files", "tracks", "held", "missing", "damaged",
-    "since", "release", "mode", "by_track", "said"}`: the folder holding most of
-    it, and that folder as `Artist/Album` within the music folder; the disc's
-    track count and which of its tracks the earlier rip holds, never ripped,
-    and ripped damaged, by track number; `since`, the day it was added;
-    `release`, the edition it was added as; `mode`, `"tracks"` for a file a
-    track and `"image"` otherwise, and for the first, `by_track`, each track's
-    file (`file_id`, `path`, `md5`); `said`, all that in words."""
+    "since", "release", "mode", "by_track", "inherited", "said"}`: the folder
+    holding most of it, and that folder as `Artist/Album` within the music
+    folder; the disc's track count and which of its tracks the earlier rip
+    holds, never ripped, and ripped damaged, by track number; `since`, the day
+    it was added; `release`, the edition it was added as; `mode`, `"tracks"`
+    for a file a track and `"image"` otherwise, and for the first, `by_track`,
+    each track's file (`file_id`, `path`, `md5`, `duration_ms`); `inherited`,
+    whether it was found by its recordings; `said`, all that in words."""
     media = (release or {}).get("media") or []
     pos_of = {t.get("position"): (t.get("recording") or {}).get("id")
               for t in (media[0].get("tracks") or [] if len(media) == 1 else [])}
@@ -987,10 +1052,12 @@ def earlier_rip(conn, release: dict | None, disc_id: str | None = None,
                     f"AND json_extract(detail, '$.{key}') = ?1", (value,))}
     except sqlite3.OperationalError:
         return None     # no file_releases yet: no disc has been added
+    inherited = {} if md5s else inherited_copy(conn, pos_of)
+    md5s |= set(inherited)
     if not md5s:
         return None
     q = ",".join("?" * len(md5s))
-    files = conn.execute(f"SELECT file_id, path, audio_md5 FROM files WHERE audio_md5 IN ({q})",
+    files = conn.execute(f"SELECT file_id, path, audio_md5, duration_ms FROM files WHERE audio_md5 IN ({q})",
                          sorted(md5s)).fetchall()
     mbids_of = {}
     for fid, mbid in conn.execute(
@@ -1015,6 +1082,7 @@ def earlier_rip(conn, release: dict | None, disc_id: str | None = None,
                 damaged.add(d["track"])
         elif d.get("tracks_mode") and d.get("track") is not None:
             track_of[md5] = d["track"]
+    track_of.update(inherited)      # never ripped here: each file's track is its recording's place
     folders = [os.path.dirname(f[1]) for f in files if f[1]]
     held = sorted(n for n, m in pos_of.items() if m in held_mbids)
     e = {"folder": max(set(folders), key=folders.count) if folders else None, "files": len(files),
@@ -1023,9 +1091,11 @@ def earlier_rip(conn, release: dict | None, disc_id: str | None = None,
          "damaged": sorted(damaged), "since": since[:10] if since else None, "release": None}
     # A file a track, as a tracks-mode add records it -- every file named to
     # its track -- or the disc in one file.
-    by_track = {track_of[f[2]]: {"file_id": f[0], "path": f[1], "md5": f[2]} for f in files if f[2] in track_of}
+    by_track = {track_of[f[2]]: {"file_id": f[0], "path": f[1], "md5": f[2], "duration_ms": f[3]}
+                for f in files if f[2] in track_of}
     e["mode"] = "tracks" if len(by_track) == len(files) else "image"
     e["by_track"] = by_track if e["mode"] == "tracks" else {}
+    e["inherited"] = bool(inherited)
     f = e["folder"]
     e["rel_folder"] = os.path.join(os.path.basename(os.path.dirname(f)), os.path.basename(f)) if f else None
     linked = [r[0] for r in conn.execute(
@@ -1044,7 +1114,13 @@ def said_earlier(e: dict) -> str:
         return ns[0] if len(ns) == 1 else f"{', '.join(ns[:-1])} and {ns[-1]}"
     parts = [f"{len(e['held'])} of {e['tracks']} tracks" if e.get("tracks") else
              f"{e['files']} file{'s' if e['files'] != 1 else ''}"]
-    if e.get("missing"):
+    if e.get("inherited"):
+        # [SPEC-AGN-016]: not a rip of this disc's at all, so nothing was
+        # "never ripped" -- the album has none of those tracks.
+        parts[0] += ", a file a track, not added by a CD import: found by its recordings"
+        if e.get("missing"):
+            parts.append(f"{listed(e['missing'])} not among them")
+    elif e.get("missing"):
         parts.append(f"{listed(e['missing'])} never ripped")
     if e.get("damaged"):
         parts.append(f"{listed(e['damaged'])} ripped damaged")
@@ -1073,6 +1149,24 @@ def track_rank(report, number: int, damaged=()) -> int:
     return 1 if (tr.detail or "").strip().lower() == "accurately ripped" else 2
 
 
+# `[SPEC-AGN-052]` An earlier file this far from its track's length on the
+# disc is not that track's audio, whatever its recording says. A file ripped
+# here differs by a gap, seconds; MuLib's *Wish You Were Here* by up to 18 s,
+# where it drew two boundaries elsewhere; its two *Shine On* files, filed
+# under each other's recordings, by 71 s and 63 s.
+MISFIT_MS = 30000
+MISFIT_SHARE = 0.15
+
+
+def _misfit(have_ms, span_ms) -> bool:
+    d = abs(have_ms - span_ms)
+    return d > MISFIT_MS or d > MISFIT_SHARE * span_ms
+
+
+def _clock(ms: int) -> str:
+    return f"{ms // 60000}:{ms % 60000 / 1000:04.1f}"
+
+
 def merge_plan(earlier: dict, toc: cd_toc.DiscToc, report, keep_earlier=None) -> list[dict]:
     """For each of the disc's tracks, which copy plays it once this DAO rip is
     merged into `earlier`'s album `[SPEC-AGN-020]`: the earlier rip's file only
@@ -1080,9 +1174,12 @@ def merge_plan(earlier: dict, toc: cd_toc.DiscToc, report, keep_earlier=None) ->
     `keep_earlier`, exactly the tracks a person chose `[SPEC-AGN-035]`, each of
     which must have an earlier file to keep. The earlier rip is ranked by the
     log in its folder, where there is one, and by the damage its add recorded.
+    An earlier file whose length is not its track's (`_misfit`) is never kept,
+    and the row says which track it does fit, if one `[SPEC-AGN-052]`.
 
     `{"number", "title", "dao", "dao_said", "earlier", "earlier_said", "file",
-    "keep"}` a track, `keep` being `"dao"` or `"earlier"`."""
+    "misfit", "keep"}` a track, `keep` being `"dao"` or `"earlier"`, `misfit`
+    the words for a file that does not fit, else `None`."""
     by = {int(k): v for k, v in (earlier.get("by_track") or {}).items()}
     if keep_earlier is not None:
         stray = sorted(set(keep_earlier) - set(by))
@@ -1093,18 +1190,28 @@ def merge_plan(earlier: dict, toc: cd_toc.DiscToc, report, keep_earlier=None) ->
     log = find_log(folder) if folder and os.path.isdir(folder) else None
     before = cd_toc.parse_eac_log(log) if log else None
     damaged = set(earlier.get("damaged") or [])
+    span = {t.number: t.end_ms - t.start_ms for t in toc.tracks
+            if t.end_ms is not None and t.start_ms is not None and t.end_ms > t.start_ms}
     rows = []
     for t in toc.tracks:
         n = t.number
         dao = track_rank(report, n)
         old = track_rank(before, n, damaged) if n in by else 5
+        have = (by.get(n) or {}).get("duration_ms")
+        misfit = None
+        if have and n in span and _misfit(have, span[n]):
+            fits = [m for m in sorted(span, key=lambda m: abs(have - span[m])) if m != n and not _misfit(have, span[m])]
+            misfit = (f"the earlier file is {_clock(have)} long, this track {_clock(span[n])}: it is not this "
+                      "track's audio" + (f" -- it fits track {fits[0]}'s length" if fits else ""))
         if keep_earlier is not None:
+            if n in keep_earlier and misfit:
+                raise ValueError(f"track {n}'s earlier file cannot be kept: {misfit} -- nothing was encoded or moved")
             keep = "earlier" if n in keep_earlier else "dao"
         else:
-            keep = "earlier" if old < dao else "dao"
+            keep = "earlier" if old < dao and not misfit else "dao"
         rows.append({"number": n, "title": t.title, "dao": dao, "dao_said": RANKS[dao], "earlier": old,
                      "earlier_said": RANKS[old], "file": os.path.basename(by[n]["path"]) if n in by else None,
-                     "keep": keep})
+                     "misfit": misfit, "keep": keep})
     return rows
 
 
@@ -1958,15 +2065,46 @@ def retire_dir(into: str, today: str | None = None) -> str:
     return out
 
 
-def retire_rows(conn, file_ids) -> dict:
+def clear_retired_refs(conn) -> dict:
+    """Every listener reference to a passage a merge retired, NULLed as a
+    single file's cascade would (`passage_orphans`) -- in a transaction of its
+    own, after the catalogue's, with foreign keys off for it alone.
+
+    `[IMPL-DBSPLIT-055]`: SQLite checks a foreign key only against a table in
+    its own schema. `listener_play_history`, `selection_decisions` and
+    `player_state` each say `REFERENCES passages`, which on a split pair is in
+    the other file, so with foreign keys on -- as the add holds them, for the
+    catalogue's own -- no statement writing one can even be prepared: *Wish
+    You Were Here*'s merge, 2026-11-01, failed `no such table:
+    listener.passages`, and was put back whole. *Highway 61*'s had nothing
+    there to clear. The pragma cannot change inside a transaction, hence this
+    one."""
+    import passage_orphans
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            out = passage_orphans.clear(conn)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    return out
+
+
+def retire_rows(conn, file_ids, orphans: bool = True) -> dict:
     """The catalogue rows of files a merge retires `[SPEC-AGN-030]`: their
     passages and what names those -- recordings, review checks -- their tags,
-    release, own cover and the files themselves; then every listener reference
-    left naming a passage now gone, NULLed as a single file's cascade would
-    (`passage_orphans`). Plays and stars are the recording's, and stay. The
-    rip's decisions stay too: they are its history. Returns what was removed,
-    and the listener rows still naming a gone passage that nothing clears --
-    reviews, rejections, a saved queue -- counted, so they are said."""
+    release, own cover and the files themselves; then, with `orphans`, every
+    listener reference left naming a passage now gone, NULLed as a single
+    file's cascade would (`passage_orphans`). Without it the caller does that
+    after its own commit (`clear_retired_refs`). Plays and stars are the
+    recording's, and stay. The rip's decisions stay too: they are its history.
+    Returns what was removed, and the listener rows still naming a gone
+    passage that nothing clears -- reviews, rejections, a saved queue --
+    counted, so they are said."""
     import passage_orphans
     ids = list(file_ids)
     if not ids:
@@ -1988,7 +2126,7 @@ def retire_rows(conn, file_ids) -> dict:
         except sqlite3.OperationalError as e:
             if "no such table" not in str(e):
                 raise
-    orphans = passage_orphans.clear(conn)
+    orphans = passage_orphans.clear(conn) if orphans else {}
     left = {}
     for table in ("artist_reviews", "boundary_reviews", "id_reviews", "listener_rejections", "player_queue"):
         try:
@@ -2351,7 +2489,8 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
             merge = plan_merge(earlier, toc, rip_report, into, keep_earlier, whole_disc)
             for row in merge["plan"]:
                 say(f"  track {row['number']}: {'the earlier ' + row['file'] if row['keep'] == 'earlier' else 'this rip'}"
-                    f" -- this rip {row['dao_said']}, the earlier {row['earlier_said']}")
+                    f" -- this rip {row['dao_said']}, the earlier {row['earlier_said']}"
+                    + (f"; {row['misfit']}" if row["misfit"] else ""))
         elif keep_earlier is not None:
             raise ValueError("there is no earlier rip of this disc in that album folder to keep tracks from "
                              "-- nothing was encoded or moved")
@@ -2432,7 +2571,7 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
         say("writing the album ...")
         conn.execute("BEGIN IMMEDIATE")
         try:
-            gone = retire_rows(conn, merge["file_ids"]) if merge else None
+            gone = retire_rows(conn, merge["file_ids"], orphans=False) if merge else None
             result = commit_rip(conn, folder, toc, mp3_path, audio_md5, disc_outcome, releases,
                                 rip_report, secret.acoustid_key(required=False), chosen=bool(release),
                                 occasions=occasions, whole_disc=whole_disc, hidden=hidden, fold=fold,
@@ -2472,6 +2611,15 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
                 _drop([os.path.join(inbox, n) for n in made])
                 _put_back(retired, merge["to"])
             raise
+        if merge:
+            # The album is written: a failure here leaves plays naming a
+            # passage that is gone, which `passage_orphans.py` clears on any
+            # later run -- said, not raised over an add that has landed.
+            try:
+                gone["orphans"] = clear_retired_refs(conn)
+            except Exception as e:
+                gone["orphans_error"] = str(e)
+                say(f"the listener's references to the retired passages are left for passage_orphans.py: {e}")
         if result.get("album_linked"):
             result["cover"] = fetch_disc_cover(conn, releases[0].get("id"))
             result["set"] = set_summary(releases[0], conn)   # [SPEC-RIP-112]

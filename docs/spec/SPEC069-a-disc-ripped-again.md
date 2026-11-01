@@ -46,7 +46,8 @@ before the WAV is measured or encoded, not in the move after it: on *Highway
 61*, a refusal in 3 s where it was a whole encode. An add into the earlier
 rip's own folder is now the merge into that album (§2); one the merge cannot
 yet make -- two DAO rips, or a rip a file a track -- is refused there, and
-says why.
+says why. An album the library had before any CD import, which none of these
+names, is found by its recordings ([SPEC072](SPEC072-an-album-from-before-the-cd-import.md) `[SPEC-AGN-016]`).
 
 ## 2. Each track from its better copy
 
@@ -268,8 +269,11 @@ read-only: neither catalogues any of the six, no passage or tag outlived its
 file, and the column is there. A fresh snapshot then merged to nothing of
 this run's -- only an album the hub imported since. `lempi02w` and `lp3-wifi`
 did not answer, and still hold the six catalogued. Still open: the six audio
-files stay on each node's disk, catalogued nowhere -- a stray there -- and the
-DAO is not yet sent to any node.
+files stay on each node's disk, catalogued nowhere -- a stray there. The DAO
+was bundled for `bose`, `lrhtpc` and `smartboardpc` on 2026-11-01
+(`sync/bundled.json`), and not yet for `lempi02w`, `lp3-wifi` or
+`teacherslounge`; a node patched before its bundle arrives has the album's
+tracks in neither copy until it does.
 
 **`[SPEC-AGN-930]`** A DAO file's tracks and a later DAO's are compared by
 their logs alone; two spans of two whole-disc encodes do not encode alike, so

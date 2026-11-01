@@ -222,7 +222,9 @@ function showPreview(p, folder, area) {
   const showPrior = (e, rel) => {
     // Found by barcode under another edition: say which one it was added as.
     const was = e && e.release && rel && e.release !== rel.id && rels.find(x => x.id === e.release);
-    const said = e ? `An earlier rip of this disc is in the library, in ${e.folder}: ${e.said}`
+    // [SPEC-AGN-016]: an album the library had before any CD import is a copy
+    // of the disc, not a rip of it.
+    const said = e ? `An earlier ${e.inherited ? 'copy' : 'rip'} of this disc is in the library, in ${e.folder}: ${e.said}`
       + (was ? `, as the ${[was.year, was.country].filter(Boolean).join(' ')} edition` : '') + '. ' : '';
     prior.replaceChildren(!e ? '' : e.plan
       ? said + 'This rip is proposed for that folder, and is merged into it; added to another folder, '
@@ -246,11 +248,13 @@ function showPreview(p, folder, area) {
       const old = S.el('input', { type: 'radio', name, value: 'earlier' });
       dao.checked = r.keep === 'dao';
       old.checked = r.keep === 'earlier';
-      old.disabled = !r.file;
+      // [SPEC-AGN-052]: a file not its track's length is not its audio.
+      old.disabled = !r.file || !!r.misfit;
       planRadios[r.number] = old;
       return S.el('tr', {}, S.el('td', { text: `${r.number}. ${r.title || ''}` }),
         S.el('td', {}, S.el('label', {}, dao, ` this rip -- ${r.dao_said}`)),
-        S.el('td', {}, S.el('label', {}, old, ` the earlier ${r.file ? 'file' : 'rip'} -- ${r.earlier_said}`)));
+        S.el('td', {}, S.el('label', {}, old, ` the earlier ${r.file ? 'file' : 'rip'} -- ${r.earlier_said}`
+          + (r.misfit ? `; ${r.misfit}` : ''))));
     });
     planBox.replaceChildren(
       S.el('p', { class: 'steps', text: 'Added to that folder, each track plays from the copy ticked. This rip '
