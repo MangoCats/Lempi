@@ -14,6 +14,12 @@ recording's chosen release, through the same `record_release()` an add now
 calls. A rip whose recordings are all linked already is not fetched, so
 running it twice asks nothing.
 
+A disc linked already but whose release has no group is fetched too, for the
+group alone: a CD add did not ask MusicBrainz for one until 2026-10-31, when
+114 of 155 discs had none, and the cover fetcher's fallback for a front is the
+group's `[SPEC-COV-060]`. Nothing is linked for it; only what the row lacks is
+filled.
+
 Dry run unless `--commit`.
 
     python tools/backfill_cd_releases.py data/library.db [--commit]
@@ -60,6 +66,16 @@ def chosen_editions(conn) -> dict[str, set[str]]:
             if any((rid, m) not in linked for m in mbids)}
 
 
+def groupless(conn) -> list[str]:
+    """The discs' releases with no release group recorded."""
+    try:
+        return [r for (r,) in conn.execute(
+            "SELECT DISTINCT r.mbid FROM releases r JOIN release_recordings rr ON rr.release_mbid = r.mbid "
+            "WHERE rr.source = 'cd:import' AND r.release_group IS NULL ORDER BY r.mbid")]
+    except Exception:
+        return []   # no table, or no release_group column yet: nothing to tell
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("db")
@@ -67,10 +83,13 @@ def main() -> int:
     args = ap.parse_args()
     conn = lempi_db.connect(args.db, lempi_db.ROLE_LIBRARY, writable=args.commit)
     todo = chosen_editions(conn)
+    # Asked for the group alone: linked already, and nothing to link.
+    for rid in groupless(conn):
+        todo.setdefault(rid, set())
     if not todo:
-        print("every CD rip's recordings are linked to their release already")
+        print("every CD rip's recordings are linked to their release already, and each has its group")
         return 0
-    total = failed = 0
+    total = failed = groups = 0
     for i, (rid, mbids) in enumerate(sorted(todo.items())):
         if i:
             time.sleep(fetch_releases.RATE_S)
@@ -89,13 +108,20 @@ def main() -> int:
              sum(1 for p, m in mine
                  if ((ingest_cd._track_at_position(release, p) or {}).get("recording") or {}).get("id") == m))
         total += n
+        group = (release.get("release-group") or {}).get("id")
+        if not mbids:   # record_release() above, with no tracks, filled the row alone
+            groups += bool(group)
+            print(f"  {release.get('title')} ({(release.get('date') or '?')[:4]})  "
+                  + (f"group {group}" if group else "MusicBrainz names no group for it"))
+            continue
         print(f"  {release.get('title')} ({(release.get('date') or '?')[:4]})  {n} of {len(mbids)} recording(s)"
               + ("" if n == len(mbids) else "  -- the rest are not on this release at their place"))
     if args.commit:
         conn.commit()
-        print(f"\nlinked {total} recording(s) to their release" + (f"; {failed} release(s) not found" if failed else ""))
+        print(f"\nlinked {total} recording(s) to their release, filled {groups} release group(s)"
+              + (f"; {failed} release(s) not found" if failed else ""))
     else:
-        print(f"\nwould link {total} recording(s). Nothing written; re-run with --commit.")
+        print(f"\nwould link {total} recording(s) and fill {groups} release group(s). Nothing written; re-run with --commit.")
     return 1 if failed else 0
 
 

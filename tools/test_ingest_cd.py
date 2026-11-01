@@ -356,6 +356,27 @@ def test_record_release():
     c.close()
 
 
+def test_record_release_fills_what_a_row_lacks():
+    """A release row a disc wrote without its group takes the group when the
+    disc is fetched again -- the cover fetcher's fallback for a front is the
+    group's `[SPEC-COV-060]`, and until 2026-10-31 a CD add asked for none
+    and a row once written was never filled. What the row has, it keeps."""
+    c = fixture()
+    c.executescript("CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT NOT NULL, release_date TEXT, "
+                    "source TEXT NOT NULL, release_group TEXT, status TEXT, primary_type TEXT, "
+                    "secondary_types TEXT, country TEXT, track_count INTEGER, artist_credit TEXT);"
+                    "INSERT INTO releases (mbid, title, release_date, source, country) "
+                    "VALUES ('rel-A', 'Release A', '1990', 'musicbrainz', 'US');")
+    print("record_release: a row with no group takes the disc's, and keeps what it had")
+    rel = dict(RELEASES[0], date="2004", country="GB",
+               **{"release-group": {"id": "rg-A", "primary-type": "Album"}})
+    ingest_cd.record_release(c, rel, [])
+    row = c.execute("SELECT release_group, primary_type, release_date, country FROM releases "
+                    "WHERE mbid = 'rel-A'").fetchone()
+    check(tuple(row) == ("rg-A", "Album", "1990", "US"), f"group filled, date and country kept: {tuple(row)}")
+    c.close()
+
+
 def test_choose_release_leaves_a_disc_alone():
     """`choose_release.py` re-scores every recording -- but not one whose
     release a CD add recorded: the disc is the evidence it approximates."""
@@ -1197,6 +1218,7 @@ def main() -> int:
     test_occasions()
     test_chosen_edition()
     test_record_release()
+    test_record_release_fills_what_a_row_lacks()
     test_choose_release_leaves_a_disc_alone()
     test_preview_pieces()
     test_files_on_disk()

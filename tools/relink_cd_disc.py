@@ -157,7 +157,7 @@ def fetch_release(rid: str) -> dict:
     """The release with every disc, its tracks and the Disc IDs each is known
     by. A connection that drops is tried again; one that never answers is
     said and left out, never taken for a release with no discs."""
-    url = f"{ingest_cd.MB_WS}/release/{rid}?fmt=json&inc=recordings+artist-credits+discids"
+    url = f"{ingest_cd.MB_WS}/release/{rid}?fmt=json&inc=recordings+artist-credits+discids+release-groups"
     for attempt in range(4):
         try:
             return fetch_releases.get(url) or {}

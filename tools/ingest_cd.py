@@ -456,7 +456,10 @@ def point_cue_at(cue_path: str, ext: str = ".mp3", kind: str = "MP3") -> None:
 # -------------------------------------------------------------- disc lookup
 
 def _discid_url(disc_id: str, toc_param: str | None) -> str:
-    q = {"fmt": "json", "inc": "recordings+artist-credits"}
+    # `release-groups`, or a release arrives without its group, and the cover
+    # fetcher's one fallback for a front -- the group's -- can never run
+    # `[SPEC-COV-060]`: 114 of 155 discs added had none on 2026-10-31.
+    q = {"fmt": "json", "inc": "recordings+artist-credits+release-groups"}
     if toc_param is not None:
         q["toc"] = toc_param
     return f"{MB_DISCID_BASE}/{urllib.parse.quote(disc_id)}?{urllib.parse.urlencode(q)}"
@@ -506,7 +509,7 @@ def lookup_barcode(barcode: str) -> tuple[str, list[dict]]:
     releases = []
     for rid in found[:5]:
         time.sleep(fetch_releases.RATE_S)
-        full = fetch_releases.get(f"{MB_WS}/release/{rid}?fmt=json&inc=recordings+artist-credits")
+        full = fetch_releases.get(f"{MB_WS}/release/{rid}?fmt=json&inc=recordings+artist-credits+release-groups")
         if full:
             releases.append(full)
     return ("barcode" if releases else "none"), releases
@@ -667,11 +670,16 @@ def record_release(conn, release: dict, tracks, files=()) -> int:
     # A release already known keeps its row: fetch_releases.py's is the fuller.
     conn.execute(f"INSERT OR IGNORE INTO releases ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
                  [row[c] for c in cols])
-    # ... but takes the disc's credit if it has none: what Browse shows the
-    # album under `[REQ-VIS-183]`, which a release fetch did not ask for.
-    if "artist_credit" in have and row["artist_credit"]:
-        conn.execute("UPDATE releases SET artist_credit = ?1 WHERE mbid = ?2 AND artist_credit IS NULL",
-                     (row["artist_credit"], rid))
+    # ... but takes from the disc whatever it has none of: the credit, what
+    # Browse shows the album under `[REQ-VIS-183]`, which a release fetch did
+    # not ask for; and the release group, the cover fetcher's fallback for a
+    # front `[SPEC-COV-060]`, which a CD add did not ask for until 2026-10-31.
+    # Only the credit was filled before that, so a row a disc wrote without
+    # its group kept none however often the disc was fetched again.
+    fill = [c for c in cols if c not in ("mbid", "title", "source") and row[c] is not None]
+    if fill:
+        conn.execute(f"UPDATE releases SET {', '.join(f'{c} = COALESCE({c}, ?)' for c in fill)} WHERE mbid = ?",
+                     [row[c] for c in fill] + [rid])
     linked = 0
     for position, mbid in tracks:
         t = _track_at_position(release, position, mbid)
