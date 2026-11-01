@@ -44,6 +44,16 @@ struct PageView {
     slots: Vec<SlotView>,
 }
 
+/// The slots as the pickers offer them, from what was just saved. Set in the
+/// same lock as the hold, so a slot renewed by new seeds `[SPEC-PGM-125]` can
+/// be held at once: `POST /programme/slot/:id` checks this list, and the
+/// engine rebuilds it from its Director only at its next refill -- a window in
+/// which the new id would have been refused, and the picker, which reads no
+/// answer, would have snapped back without a word.
+fn picker_slots(v: &PageView) -> Vec<(i64, String, String)> {
+    v.slots.iter().filter_map(|s| Some((s.id?, s.name.clone(), s.start.clone()?))).collect()
+}
+
 fn page_view(store: &crate::db::PlayerStore, v: ProgrammeView) -> PageView {
     let starts: Vec<&str> = v.slots.iter().filter_map(|s| s.start.as_deref()).collect();
     let until = |start: Option<&str>| -> Option<String> {
@@ -147,6 +157,7 @@ pub(super) async fn set_seed(
             if let Ok(mut c) = ui.controls.lock() {
                 c.programme_changed = true;
                 c.manual_slot = held;
+                c.slots = picker_slots(&v);
             }
             axum::Json(v).into_response()
         }
@@ -188,6 +199,7 @@ pub(super) async fn save_programme(
             if let Ok(mut c) = ui.controls.lock() {
                 c.programme_changed = true;
                 c.manual_slot = held;
+                c.slots = picker_slots(&v);
             }
             tracing::info!(
                 "programme: saved {} ({} time slot(s)) from the page",
@@ -292,6 +304,7 @@ pub(super) async fn answer(
                 if let Ok(mut c) = ui.controls.lock() {
                     c.programme_changed = true;
                     c.manual_slot = held;
+                    c.slots = picker_slots(&v);
                 }
             }
             tracing::info!(

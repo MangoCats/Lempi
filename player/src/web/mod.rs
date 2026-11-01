@@ -1804,6 +1804,67 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// A slot renewed by a save can be held at once `[SPEC-PGM-125]`: the save
+    /// refreshes the list `POST /programme/slot/:id` checks, rather than
+    /// leaving it to the engine's next refill -- with no engine running here
+    /// at all, a stale list would answer 404. And the hold moves with the
+    /// slot when its seeds change again.
+    #[tokio::test]
+    async fn a_slot_just_saved_can_be_held_at_once() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let d = std::env::temp_dir().join(format!("lempi-hold-now-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        rusqlite::Connection::open(d.join("library.db")).unwrap();
+        let (_e, h) = crate::engine::Engine::new(crate::path::PathHandle::silent(), 1);
+        let controls: crate::session::SharedControls = Default::default();
+        let ui = Ui {
+            handle: Arc::new(h),
+            db: d.join("listener.db"),
+            library: d.join("library.db"),
+            why: Default::default(),
+            controls: controls.clone(),
+            capabilities: Default::default(),
+            web_loopback_only: false,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router(ui)).await });
+        let post = |path: String, body: String| async move {
+            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let head = format!("POST {path} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n\
+                                Content-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+            s.write_all(head.as_bytes()).await.unwrap();
+            s.write_all(body.as_bytes()).await.unwrap();
+            let mut buf = Vec::new();
+            s.read_to_end(&mut buf).await.unwrap();
+            String::from_utf8_lossy(&buf).to_string()
+        };
+        let id_in = |r: &str| -> i64 {
+            let body = &r[r.find("\r\n\r\n").unwrap() + 4..];
+            let v: serde_json::Value = serde_json::from_str(body).unwrap();
+            v["slots"][0]["id"].as_i64().unwrap()
+        };
+        let r = post("/programme/current".into(), r#"{"slots":[{"name":"Late","start":"23:00","seeds":["a"]}]}"#.into()).await;
+        assert!(r.contains(" 200 "), "the save: {r}");
+        let first = id_in(&r);
+        let r = post(format!("/programme/slot/{first}"), String::new()).await;
+        assert!(r.contains(" 204 "), "a slot just saved is held at once, not refused: {r}");
+
+        let r = post(
+            "/programme/current".into(),
+            format!(r#"{{"slots":[{{"id":{first},"name":"Late","start":"23:00","seeds":["a","b"]}}]}}"#),
+        )
+        .await;
+        assert!(r.contains(" 200 "), "the second save: {r}");
+        let renewed = id_in(&r);
+        assert_ne!(renewed, first, "new seeds, new id");
+        assert_eq!(controls.lock().unwrap().manual_slot, Some(renewed), "the hold moved with the slot");
+        let r = post(format!("/programme/slot/{renewed}"), String::new()).await;
+        assert!(r.contains(" 204 "), "and the renewed id can be held at once: {r}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     /// `[SPEC-NSH-020]`: the star sync's steps reach their own handler beside
     /// `/mesh/*step`, which still answers the membership steps, and take a body
     /// past axum's 2 MB default -- a catalogue patch can be.

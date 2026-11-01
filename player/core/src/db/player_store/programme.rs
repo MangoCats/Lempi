@@ -844,6 +844,36 @@ mod tests {
         assert_eq!(st.load_manual_slot(), None, "a removed slot takes its hold with it");
     }
 
+    /// A slot an older build left without a start is listed, and can be given
+    /// one: the save is then accepted, the slot keeps its id, and the
+    /// Director puts it on air `[ENT-SLOT-010]`.
+    #[test]
+    fn a_slot_left_without_a_start_can_be_given_one() {
+        let st = store();
+        st.conn
+            .execute_batch(
+                "INSERT INTO listener_programs VALUES (1, 'Soft', '04:00'), (2, 'Late', NULL);
+                 INSERT INTO listener_program_seeds VALUES (2, 'n', 1);",
+            )
+            .unwrap();
+        let v = st.programme().unwrap();
+        let late = v.slots.iter().find(|s| s.name == "Late").unwrap().clone();
+        assert_eq!((late.id, late.start.as_deref()), (Some(2), None), "listed, with no start");
+        assert!(st.save_programme(None, &v.slots).unwrap_err().message().contains("needs a start time"),
+                "and the programme cannot be saved as it stands");
+        assert_eq!(st.load_programme().unwrap().len(), 1, "nor is the slot on air");
+
+        let fixed: Vec<Slot> = v
+            .slots
+            .iter()
+            .map(|s| if s.name == "Late" { Slot { start: Some("23:00".into()), ..s.clone() } } else { s.clone() })
+            .collect();
+        let v = st.save_programme(None, &fixed).unwrap();
+        let late = v.slots.iter().find(|s| s.name == "Late").unwrap();
+        assert_eq!((late.id, late.start.as_deref()), (Some(2), Some("23:00")), "the same slot, now timed");
+        assert_eq!(st.load_programme().unwrap().len(), 2, "and the Director has it");
+    }
+
     #[test]
     fn a_slot_that_is_no_longer_there_is_refused() {
         let st = store();

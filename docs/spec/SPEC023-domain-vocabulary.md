@@ -95,7 +95,8 @@ name ("Mellow"), a local wall-clock start time (22:00) and its seeds. **Every
 slot in a programme has a start time** (the maintainer, 2026-11-01): the
 Programme page, a node receiving one from the hub, and the hub's library all
 refuse a slot without, and the Director leaves out — and logs — a row an older
-build or a tool left without one. Its end is not stored: it is on air from its start until the next slot's start, so the
+build or a tool left without one. The Programme page lists such a slot with its
+start field marked, so it can be given one and the programme saved. Its end is not stored: it is on air from its start until the next slot's start, so the
 slots always cover the day, with no gap and no overlap, and exactly one slot is
 **on air** at any moment `[SPEC-DIR-180]`. The skins' picker chooses among the
 slots of the programme a node runs: "Automatic (by time of day)", or one slot

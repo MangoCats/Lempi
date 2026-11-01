@@ -81,6 +81,13 @@
       start.className = 'slot-start'; start.value = s.start || '';
       start.placeholder = 'HH:MM'; start.inputMode = 'numeric'; start.maxLength = 5;
       start.title = 'When it comes on air, 24-hour; every time slot needs one';
+      // A slot an older build left without a start is listed so it can be
+      // given one: until it is, the programme cannot be saved, and the
+      // player does not put it on air [ENT-SLOT-010].
+      start.required = true;
+      const missing = () => start.classList.toggle('missing', !start.value.trim());
+      missing();
+      start.oninput = missing;
       start.onchange = () => { s.start = start.value.trim() || null; touched(true); };
       head.append(name, start, button('Remove', 'Remove this time slot', () => {
         work.slots.splice(i, 1); touched(true);
