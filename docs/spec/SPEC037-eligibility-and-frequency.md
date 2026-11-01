@@ -53,6 +53,8 @@ w = recording restraint × recording ramp × related damping × length bonus × 
 
 **`[SPEC-DIR-113]` The artist link opens a preference panel for every credited artist.** Prince + The Time are two subjects with two rotations, so clicking the artist on any surface opens Prince's panel and The Time's, each with its own play-frequency table `[REQ-VIS-300]` and its own Save. The clicked artist's panel opens at once; the others follow from `GET /credits/:mbid`, in display order.
 
+**`[SPEC-DIR-112]` A passage is its top recording, in this generation.** A passage may name several recordings — a medley, a segue — as a weighted set `[ENT-RECORDING-010]`. The Director reads only the highest-weighted one (ties by MBID): its tuning, its rotation and recovery, its works, its relations, its occasions, its flavor, and the key a play is stamped under. The others are not stamped when it plays, and their own plays hold it out only through a work they share with the top one `[SPEC-DIR-119]`. Kept simple deliberately (the maintainer, 2026-11-01); a later generation may weigh the whole set.
+
 **`[SPEC-DIR-119]` `last_played` in step 2 is the freshest of three identity tiers, not the recording's alone.** Built 2026-09-12, superseding `[SPEC-DIR-116]`'s graded relation for the same-song case — see [GUIDE012](../GUIDE012-work-based-song-blocking.md) `[GDE-WRK-035]` for the measurements and the decision.
 
 A play stamps every key the passage has: its `passage_id`, its recording MBID if it has one, and every work MBID that recording performs. The recording pass then reads the **most recent** stamp across the keys *this* passage has, because a wider key can never be staler than a narrower one:
@@ -194,16 +196,20 @@ Verified on the migrated library: with the Christmas curve loaded, 81 christmasy
 
 Note that `[K]` was never seasonal at all — a flat ×0.000001 on 140 children's recordings. It expresses fine as a single-point curve, which is a fair test of whether "curves are data" actually holds.
 
-**`[SPEC-DIR-136]` Loaded 2026-08-13** by `tools/load_occasions.py`, transcribed from `occasionWeight()` in the inherited `musicdirector.cpp`:
+**`[SPEC-DIR-136]` Loaded 2026-08-13** by `tools/load_occasions.py`, transcribed from `occasionWeight()` in the inherited `musicdirector.cpp`. As stored on the hub, read 2026-11-01 — a `step` curve holds each point's value until the next point, a `linear` one blends between them in log space:
 
-| occasion | class | interp | points | peak | reach |
+| occasion | class | interp | points | over the year | reach, radio passages |
 | :--- | :--- | :--- | ---: | :--- | ---: |
-| `user.christmas` | `christmasy` | linear | 11 | **×10 on 25 Dec** | 41 passages |
-| `user.winter` | `wintry` | step | 6 | ×2 in December | 2 |
-| `user.summer` | `summery` | step | 6 | ×2 in June | 1 |
-| `user.childrens` | `for_children` | step | 1 | ×0.000001 all year | **149** |
+| `user.christmas` | `christmasy` | linear | 11 | ×0.000001 from 1 Jan to 31 Oct; ×0.099 on 1 Nov, ×1 on 30 Nov, ×5 on 24 Dec, **×10 on 25 Dec**, ×1 on 26 Dec, ×0.17 on 31 Dec | 118 |
+| `user.winter` | `wintry` | step | 6 | ×1.5 Jan, ×1 Feb, ×0.25 Mar, **×0.000001 Apr–Oct**, ×0.5 Nov, **×2 Dec** | 3 |
+| `user.summer` | `summery` | step | 6 | ×0.2 Jan–Apr, ×0.5 May, **×2 Jun**, ×1.5 Jul, ×1 Aug, ×0.2 Sep–Dec | 1 |
+| `user.childrens` | `for_children` | step | 1 | **×0.000001 all year** | 151 |
+| `user.profanity` | `profane` | step | 1 | ×1 all year: registered, and inert until a value is chosen | 84 |
+| `user.spiritual` | `spiritual` | step | 1 | ×1 all year: registered, and inert | 5 |
 
-Measured effect in August: eligible passages fall **8,038 → 7,851**, with 187 more dropping under `min_weight` — the christmas and children's passages, suppressed out of season. The mechanism had been complete and inert since it was written; the library already carried the characteristic values from six years of MuLibPlay tagging, so loading the curves is what made that tagging act again.
+At ×0.000001 a recording carrying the full value falls under `min_weight` and is **excluded**, not damped `[SPEC-DIR-137]`: christmasy ones outside November and December, wintry ones from April to October, children's all year. Reach counts radio passages whose top recording `[SPEC-DIR-112]` carries a value above 0, the listener's own included `[SPEC-PREF-085]`.
+
+Measured effect in August 2026: eligible passages fell **8,038 → 7,851**, with 187 more dropping under `min_weight` — the christmas, children's and wintry passages, out of season. Reach then was 41, 149 and 2. The mechanism had been complete and inert since it was written; the library already carried the characteristic values from six years of MuLibPlay tagging, so loading the curves is what made that tagging act again.
 
 > **`[SPEC-DIR-137]` The children's weight interacts with `min_weight`, and 0.000001 means *never*, not *rarely*.** A children's passage weighs `average × multiplier`; at the library's average of 1.214 that is 0.0000012, which falls **below `min_weight` (0.001)** and is therefore *excluded entirely* rather than made unlikely. There is a cliff at multiplier ≈ 0.00083.
 >

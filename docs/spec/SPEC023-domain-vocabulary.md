@@ -43,7 +43,7 @@ Two collisions kept recurring across the docs before this was written: **"album"
 
 ### Recording
 
-`[ENT-RECORDING-010]` A MusicBrainz Recording — one particular piece of recorded audio — identified by `recordings.mbid`, or a synthetic `local:audio:<md5>` id before or absent identification (`[SPEC-SC-030]`). A passage names a weighted set of recordings (`passage_recordings`, `[SPEC-SC-050]`) — a medley, or none at all if unidentified; an unidentified passage is still legal and playable (`[ENT-MP-035]`).
+`[ENT-RECORDING-010]` A MusicBrainz Recording — one particular piece of recorded audio — identified by `recordings.mbid`, or a synthetic `local:audio:<md5>` id before or absent identification (`[SPEC-SC-030]`). A passage names a weighted set of recordings (`passage_recordings`, `[SPEC-SC-050]`) — a medley, or none at all if unidentified; an unidentified passage is still legal and playable (`[ENT-MP-035]`). The Program Director reads only a passage's highest-weighted recording, in this generation `[SPEC-DIR-112]`.
 
 ### Release
 
