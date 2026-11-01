@@ -187,6 +187,10 @@ fn main() {
     let (mut added, mut played, mut removed, mut unhonoured) = (0u32, 0u32, 0u32, 0u32);
     let (mut skipped, mut stickered, mut adopted) = (0u32, 0u32, 0u32);
     let mut unresolved: HashSet<String> = HashSet::new();
+    // MPD Id -> the passage an entry this program did not queue is, once
+    // resolved; `None` for one that names no passage. Kept so a sticker is
+    // asked about each entry once, not on every pass.
+    let mut theirs: HashMap<String, Option<i64>> = HashMap::new();
 
     loop {
         let status = match mpd.status() {
@@ -406,31 +410,40 @@ fn main() {
         }
 
         // --- selection, which is not reimplemented ---
-        // The flow tail is the passage each new one will follow
-        // `[SPEC-DIR-160]`: the last entry in MPD's own queue order, whoever
+        // Every entry in MPD's queue as a passage, in MPD's own order, whoever
         // put it there -- this program, or a person through another client.
         // Ours are known by Id; anything else is resolved by its URI, then by
-        // the sticker this MPD keeps `[SPEC-MPD-065]`. Unresolvable, there is
-        // nothing to flow from, and the pick says so in its record.
-        let mut after: Option<i64> = order.last().and_then(|(id, file)| {
-            ours.get(id).map(|o| o.passage_id).or_else(|| {
-                by_uri.get(file).and_then(|v| v.as_ref()).map(|(pid, _, _)| *pid).or_else(|| {
-                    mpd.cmd(&format!("sticker get song {} lempi.passage", quote(file)))
-                        .ok()
-                        .and_then(|l| {
-                            l.iter()
-                                .find_map(|s| s.strip_prefix("sticker: lempi.passage="))
-                                .and_then(|v| v.parse().ok())
-                        })
-                })
-            })
-        });
+        // the sticker this MPD keeps `[SPEC-MPD-065]`, once per entry.
+        theirs.retain(|id, _| live.contains(id));
+        let mut queued: Vec<Option<i64>> = Vec::with_capacity(order.len());
+        for (id, file) in &order {
+            let pid = match ours.get(id) {
+                Some(o) => Some(o.passage_id),
+                None => *theirs.entry(id.clone()).or_insert_with(|| {
+                    by_uri.get(file).and_then(|v| v.as_ref()).map(|(pid, _, _)| *pid).or_else(|| {
+                        mpd.cmd(&format!("sticker get song {} lempi.passage", quote(file)))
+                            .ok()
+                            .and_then(|l| {
+                                l.iter()
+                                    .find_map(|s| s.strip_prefix("sticker: lempi.passage="))
+                                    .and_then(|v| v.parse().ok())
+                            })
+                    })
+                }),
+            };
+            queued.push(pid);
+        }
+        // Everything queued is kept out of the next pick, hand-added or ours
+        // `[SPEC-DIR-107]` -- exactly `Session::refill`, whose queue holds the
+        // listener's choices beside the Director's.
+        let mut skip: Vec<i64> = queued.iter().flatten().copied().collect();
+        // The flow tail is the passage each new one will follow
+        // `[SPEC-DIR-160]`: the last entry in that order. Unresolvable, there
+        // is nothing to flow from, and the pick says so in its record.
+        let mut after: Option<i64> = queued.last().copied().flatten();
         for _ in 0..(depth - len) {
-            // The exclusion set is what is already queued -- exactly
-            // `Session::refill`, as is the relaxed fallback: with every
-            // candidate held by rotation, a repeat is a better answer than
-            // silence `[SPEC-DIR-230]`.
-            let skip: Vec<i64> = ours.values().map(|o| o.passage_id).collect();
+            // With every candidate held by rotation, a repeat is a better
+            // answer than silence, as in `Session::refill` `[SPEC-DIR-232]`.
             let Some(decision) = director
                 .decide(now(), &mut rng, &skip, after)
                 .or_else(|| director.decide_relaxed(now(), &mut rng, &skip))
@@ -487,8 +500,9 @@ fn main() {
                     stickered += 1;
 
                     let note = director.note_queued(e.passage_id, now());
-                    // The next pick follows this one.
+                    // The next pick follows this one, and cannot be it.
                     after = Some(e.passage_id);
+                    skip.push(e.passage_id);
                     let title = e.title();
                     println!("  + [{:>6}] {}  {}", e.passage_id, title, flavor);
                     ours.insert(

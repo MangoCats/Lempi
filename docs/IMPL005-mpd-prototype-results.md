@@ -88,7 +88,7 @@ Every `rangeid` is now read back and compared against the span requested `[SPEC-
 
 `mpd_direct` — `Director::decide` with the queued ids as the exclusion set and the last of them as the flow tail, which is `Session::refill`'s call unchanged. **No selection logic is reimplemented**, and that was the point of the stage.
 
-> **Corrected 2026-11-01.** "The last of them" was the last of a `HashMap`'s values, so the flow tail was whichever queued passage the map happened to yield, and `mpd_direct` had no relaxed fallback when everything was blocked. It now takes the last entry in MPD's own queue order, resolved by Id, URI or sticker, and each new pick follows the one before; and it asks `decide_relaxed` as `Session::refill` does `[SPEC-DIR-232]`. The census below was measured before the correction.
+> **Corrected 2026-11-01.** "The last of them" was the last of a `HashMap`'s values, so the flow tail was whichever queued passage the map happened to yield, and `mpd_direct` had no relaxed fallback when everything was blocked. It now takes the last entry in MPD's own queue order, resolved by Id, URI or sticker, and each new pick follows the one before; and it asks `decide_relaxed` as `Session::refill` does `[SPEC-DIR-232]`. The exclusion set was only what this program queued, so a song a person added through another client could be offered again; every entry in MPD's queue is now kept out `[SPEC-DIR-107]`. The census below was measured before the correction.
 
 **The census moves as it does locally.** Over one session, with five passages offered:
 

@@ -25,7 +25,7 @@ They never mix. Frequency produces a weight; character shapes and orders a pool.
 
 ## 2. Every Path a Pick Can Take
 
-**`[SPEC-DIR-107]`** The engine asks for a pick whenever its queue is shorter than its depth (five by default), one pick at a time, each marked as coming before the next is asked for `[SPEC-DIR-115]`. `mpd_direct` asks the same Director the same way, with MPD's queue as the queue `[SPEC015]`.
+**`[SPEC-DIR-107]`** The engine asks for a pick whenever its queue is shorter than its depth (five by default), one pick at a time, each marked as coming before the next is asked for `[SPEC-DIR-115]`. **Everything in the queue is kept out of the next pick**, whether the listener put it there or the Director did. `mpd_direct` asks the same Director the same way, with MPD's queue as the queue `[SPEC015]`: every entry in it, added through any client, is resolved to its passage (by Id, URI or sticker) and kept out.
 
 ```
  player start ─ Session::prime ................................. SPEC074 §1
