@@ -341,6 +341,40 @@ def test_conflict(tmp):
     check(list(v.values())[0]["by"] == "item", "the verdict records that a person gave it")
 
 
+def test_hub_edited_during_sync(tmp):
+    """The hub's catalogue edited after the snapshot, while the hub's patch is
+    the listener's alone: the commit lands, the edit is kept and said, and the
+    commit is not failed for it -- 2026-11-01, a recording swap made three
+    minutes after the snapshot read `COMMITTED but a table DIFFERS`."""
+    fleet = Fleet(tmp)
+    base = [("X", 1, "2026-09-01 00:00:00")]
+    plan, hub = build(tmp, fleet, base, {"a": (base, False)})
+    c = sqlite3.connect(fleet.nodes["a"]["listener"])
+    c.execute("UPDATE listener_preferences SET rotation=4, recovery=4, updated_at='2026-10-02 00:00:00' "
+              "WHERE subject_id='X'")
+    c.commit()
+    c.close()
+    with faked(fleet) as out:
+        ss.snapshot(plan)
+        run = ss.newest_run(plan)
+        ss.merge(plan, run)
+        ss.patch(plan, run)
+        check(stages(plan) == 0, "rehearsal clean")
+        c = sqlite3.connect(hub["library"])
+        c.execute("UPDATE artists SET name = 'Ex, renamed on the hub' WHERE mbid = 'x'")
+        c.commit()
+        c.close()
+        check(stages(plan, commit=True) == 0, "the commit is not failed by the hub's own edit")
+    said = out.getvalue()
+    check("library: no patch for it; ['artists'] changed here since the snapshot, and were kept" in said
+          and "COMMITTED and verified" in said, f"the edit said, and kept: {said[-900:]}")
+    c = sqlite3.connect(hub["library"])
+    check(c.execute("SELECT name FROM artists WHERE mbid = 'x'").fetchone() == ("Ex, renamed on the hub",),
+          "the hub's edit stands")
+    c.close()
+    check(prefs_of(hub["listener"])["X"] == 4, "and the node's change reached the hub")
+
+
 def test_approve_all(tmp):
     """Approve all takes every default, records it, and keeps a verdict already given."""
     fleet = Fleet(tmp)
@@ -943,7 +977,7 @@ def main() -> int:
     test_hub_writers()
     test_lost_answer()
     test_split_catalogue()
-    for test in (test_quiet, test_conflict, test_approve_all, test_on_demand, test_catalogue_moved,
+    for test in (test_quiet, test_conflict, test_hub_edited_during_sync, test_approve_all, test_on_demand, test_catalogue_moved,
                  test_catalogue_states, test_catalogue_old_player, test_catalogue_in_parts, test_a_patch_that_cannot_be_cut, test_selection, test_read_only_catalogue,
                  test_old_players, test_links_removed, test_links_repaired_with_files, test_empty_release_removed):
         tmp = tempfile.mkdtemp()

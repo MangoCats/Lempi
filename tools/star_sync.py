@@ -1756,6 +1756,17 @@ def hub_apply(plan, run, commit, excuse=None):
         got = {l.split()[0]: l for l in quiet_prints(at_root(hub[h])).splitlines()}
         want = {l.split()[0]: l for l in quiet_prints(targets(plan, run, hub["name"])[h]).splitlines()}
         bad = [t for t in want if got.get(t) != want[t] and not (h == "listener" and t in sd.OWN)]
+        if bad and h not in halves:
+            # No patch for this half, so its target is the hub's own as the
+            # snapshot found it, and a difference can only be the hub edited
+            # since -- a catalogue change made while the sync ran. Kept, and
+            # sent with the next run. Until 2026-11-01 this failed the commit:
+            # a recording swap made on the hub 3 minutes after the snapshot
+            # read as `DIFFERS ['flavor', 'passage_recordings']`, on a commit
+            # that had landed everywhere.
+            say(f"  {h}: no patch for it; {bad} changed here since the snapshot, and were kept "
+                "-- the next sync sends them")
+            continue
         if bad and h in halves:
             # As on a node: changed here since the snapshot, in rows the
             # patch never named, is kept and reported, not a failure.
