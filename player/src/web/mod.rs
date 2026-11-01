@@ -185,6 +185,15 @@ pub struct QueueItem {
     pub is_shutdown: bool,
 }
 
+/// The UTC offset as the Settings page shows it `[SPEC-DIR-183]`.
+#[derive(Serialize, Clone, Copy)]
+pub struct UtcOffsetView {
+    /// Minutes east of UTC: -300 is UTC-05:00.
+    pub minutes: i64,
+    /// Set by hand, so the OS is not asked until the page resyncs it.
+    pub by_hand: bool,
+}
+
 /// One programme slot, as the picker offers it.
 #[derive(Serialize, Clone)]
 pub struct SlotItem {
@@ -319,6 +328,9 @@ pub struct Snapshot {
     /// visible rather than asserted: importing music and reloading moves
     /// `total`. Absent when there is no Director.
     pub pool: Option<(usize, usize)>,
+    /// The UTC offset slots and seasons read, and whether a person holds it
+    /// by hand `[SPEC-DIR-183]`. `None` until the engine has read it.
+    pub utc_offset: Option<UtcOffsetView>,
     /// The programme's slots, for the picker.
     pub slots: Vec<SlotItem>,
     /// `slots` under its name before 2026-11-01.
@@ -440,6 +452,7 @@ impl From<&PlayerState> for Snapshot {
             lyrics_status: None,
             sidecar_status: None,
             pool: None,
+            utc_offset: None,
             slot_manual: false,
             program_manual: false,
             slots: Vec::new(),
@@ -620,6 +633,9 @@ pub fn router(ui: Ui) -> Router {
         .route("/skip/suppress/:hours", post(set_skip_suppress))
         .route("/dequeue/suppress/:hours", post(set_dequeue_suppress))
         .route("/queue/depth/:n", post(set_queue_depth))
+        // Minutes east of UTC, held by hand; or `os` to take the OS's again
+        // `[SPEC-DIR-183]`.
+        .route("/clock/utc-offset/:value", post(set_utc_offset))
         .route("/sample/interval/:ms", post(set_sample_interval))
         // Choose a programme slot by id, or "auto" for time of day
         // `[SPEC-DIR-185]`. `/program/:id` is its name before 2026-11-01,
@@ -848,6 +864,7 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
             snap.can_ab_loop = c.can_ab_loop;
             snap.sidecar_status = c.sidecar_status.clone();
             snap.pool = c.pool;
+            snap.utc_offset = c.utc_offset.map(|(minutes, by_hand)| UtcOffsetView { minutes, by_hand });
             snap.slots = c
                 .slots
                 .iter()
@@ -1178,6 +1195,9 @@ mod tests {
         // needed so `slots[].*` and its older name `programs[].*` have an
         // element to be checked in.
         let mellow = SlotItem { id: 1, name: "Mellow".into(), start: "20:00".into() };
+        // Likewise the offset, filled from the engine: one is needed so its
+        // fields are there to be checked.
+        snap.utc_offset = Some(UtcOffsetView { minutes: -300, by_hand: false });
         snap.slots.push(mellow.clone());
         snap.programs.push(mellow);
         let sent = serde_json::to_value(&snap).expect("a snapshot serializes");

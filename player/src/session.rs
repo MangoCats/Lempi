@@ -43,6 +43,15 @@ fn unix_now() -> i64 {
 /// second source of truth for the same fact.
 pub type Explanations = Arc<Mutex<ExplanationLog>>;
 
+/// What the Settings page asked of the UTC offset `[SPEC-DIR-183]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UtcOffsetRequest {
+    /// Set it to this many minutes east of UTC, and hold it there.
+    ByHand(i64),
+    /// Release a hand-set offset and take the OS's, now.
+    FromOs,
+}
+
 /// Programme selection, shared between the web thread and the engine thread.
 ///
 /// The Director lives on the engine thread and is not `Sync`, so the browser
@@ -64,6 +73,12 @@ pub struct Controls {
     /// engine takes its time slots on its next refill, the same intent-cell
     /// pattern as `reload_requested`.
     pub programme_changed: bool,
+    /// The Settings page's ask of the UTC offset, taken by the engine on its
+    /// next refill -- the same intent-cell pattern `[SPEC-DIR-183]`.
+    pub utc_offset_request: Option<UtcOffsetRequest>,
+    /// The offset in force, in minutes east of UTC, and whether it is held
+    /// by hand; `None` until the engine has read it.
+    pub utc_offset: Option<(i64, bool)>,
     /// Asks for a live Director rebuild, so music imported into the library
     /// becomes selectable without restarting the player `[IMPL-SUI-075]`.
     ///
@@ -357,6 +372,8 @@ pub struct Session {
     /// When the OS's UTC offset was last read `[SPEC-DIR-180]`; see
     /// `resync_utc_offset`.
     utc_synced: std::time::Instant,
+    /// Whether `Controls::utc_offset` has been filled since start.
+    utc_published: bool,
 }
 
 impl Session {
@@ -460,6 +477,7 @@ impl Session {
             fallback_rest: None,
             // `open` has just synced it, above.
             utc_synced: std::time::Instant::now(),
+            utc_published: false,
         })
     }
 
@@ -470,6 +488,26 @@ impl Session {
     /// up across a change of daylight saving time chose every programme an hour
     /// off until something restarted it (review O-06, 2026-10-08).
     fn resync_utc_offset(&mut self) {
+        // A request from the Settings page first, at once, rather than at the
+        // next hourly resync `[SPEC-DIR-183]`.
+        let asked = self.controls.lock().ok().and_then(|mut c| c.utc_offset_request.take());
+        if let Some(req) = asked {
+            let applied = self.decisions.as_ref().and_then(|s| match req {
+                UtcOffsetRequest::ByHand(m) => s
+                    .set_utc_offset_by_hand(m)
+                    .map_err(|e| tracing::error!("utc offset by hand: {e}"))
+                    .ok(),
+                UtcOffsetRequest::FromOs => s.resync_utc_offset_from_os(),
+            });
+            tracing::info!("utc offset: {req:?} asked, {applied:?} in force");
+            if let Some(offset) = applied {
+                self.give_director_utc_offset(offset);
+            }
+            self.publish_utc_offset();
+        }
+        if !self.utc_published {
+            self.publish_utc_offset();
+        }
         if self.utc_synced.elapsed() < UTC_RESYNC {
             return;
         }
@@ -477,13 +515,29 @@ impl Session {
         self.apply_utc_offset();
     }
 
-    /// Store what the OS says, and give it to the Director in hand: a rebuild
-    /// would read it from the store, but the running Director read it once,
-    /// when it was built.
+    /// Tell the Settings page what offset is in force and how it was set.
+    fn publish_utc_offset(&mut self) {
+        let Some(s) = self.decisions.as_ref() else { return };
+        let shown = s.stored_utc_offset().map(|m| (m, s.utc_offset_by_hand()));
+        if let Ok(mut c) = self.controls.lock() {
+            c.utc_offset = shown;
+            self.utc_published = true;
+        }
+    }
+
+    /// Store what the OS says -- unless a person holds the offset by hand,
+    /// when the store answers with theirs `[SPEC-DIR-183]` -- and give it to
+    /// the Director in hand: a rebuild would read it from the store, but the
+    /// running Director read it once, when it was built.
     fn apply_utc_offset(&mut self) {
         let Some(offset) = self.decisions.as_ref().and_then(|s| s.sync_utc_offset()) else {
             return;
         };
+        self.give_director_utc_offset(offset);
+        self.publish_utc_offset();
+    }
+
+    fn give_director_utc_offset(&mut self, offset: i64) {
         if let Some(d) = self.director.as_mut() {
             let programme = d.programme_mut();
             if programme.utc_offset_minutes != offset {

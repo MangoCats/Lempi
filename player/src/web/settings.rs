@@ -436,6 +436,27 @@ pub(super) async fn set_queue_depth(
     StatusCode::NO_CONTENT
 }
 
+/// The UTC offset `[SPEC-DIR-183]`: a number of minutes east of UTC, set and
+/// held by hand, or `os` to release it and take the OS's again. Handed to the
+/// engine, which owns the store and the Director; the snapshot says what took.
+pub(super) async fn set_utc_offset(
+    State(ui): State<Ui>,
+    axum::extract::Path(value): axum::extract::Path<String>,
+) -> StatusCode {
+    use crate::session::UtcOffsetRequest;
+    let req = if value == "os" {
+        UtcOffsetRequest::FromOs
+    } else {
+        match value.parse::<i64>() {
+            Ok(m) if m.abs() <= crate::db::PlayerStore::UTC_OFFSET_MAX_MIN => UtcOffsetRequest::ByHand(m),
+            _ => return StatusCode::BAD_REQUEST,
+        }
+    };
+    let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
+    c.utc_offset_request = Some(req);
+    StatusCode::ACCEPTED
+}
+
 /// How often a guest backend samples `status` `[SPEC-MPD-105]`.
 pub(super) async fn set_sample_interval(
     State(ui): State<Ui>,

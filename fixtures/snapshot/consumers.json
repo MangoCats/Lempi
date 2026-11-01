@@ -111,6 +111,9 @@
     "tempo_milli",
     "title",
     "title_source",
+    "utc_offset",
+    "utc_offset.by_hand",
+    "utc_offset.minutes",
     "underrun_samples",
     "volume_db",
     "why"

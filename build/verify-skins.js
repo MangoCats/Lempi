@@ -74,7 +74,7 @@ const SPARSE = {
   program: null, program_manual: false, programs: [],
   skip: { fade_ms: 0, lead_ms: 500, fade_max_ms: 10000, lead_min_ms: 100, lead_max_ms: 2000,
           resume_save_ms: 5000, resume_save_min_ms: 1000, resume_save_max_ms: 300000 },
-  underrun_samples: 0, why: null, dev_mode: false,
+  underrun_samples: 0, why: null, dev_mode: false, utc_offset: null,
   // Every host control offered -- the appliance case, so every check below
   // that drives one still finds it. The absent case is its own check
   // `[GDE-HST-360]`.
@@ -121,6 +121,8 @@ const RICH = {
           { qid: 102, passage_id: 2, title: 'The One After', artist: null, duration_ms: 205000,
             is_shutdown: false }],
   volume_db: -12.5,
+  // UTC-05:00, from the OS [SPEC-DIR-183].
+  utc_offset: { minutes: -300, by_hand: false },
   slot: 'Mellow', slot_manual: true,
   slots: [{ id: 1, name: 'Mellow', start: '20:00' }, { id: 2, name: 'Prog', start: '09:00' }],
   program: 'Mellow', program_manual: true,
@@ -508,6 +510,28 @@ async function run(skin) {
 
     histBtn.onclick();
     check(!main.hidden && hist.hidden, 'the history button must close it again');
+  }
+
+  // The clock's offset from UTC, where a skin offers it [SPEC-DIR-183]:
+  // shown as RICH says, typed by hand, and resynced from the OS.
+  const utcBox = window.document.getElementById('utcoffset');
+  if (utcBox) {
+    check(utcBox.value === '-05:00', `the offset should read -05:00, got "${utcBox.value}"`);
+    check(window.document.getElementById('utcsource').textContent === 'from the OS',
+          'and say it came from the OS');
+    // Its own posts only, taken back out after: the run's tally of what a
+    // skin posts is checked below and knows nothing of this control.
+    const before = posted.length;
+    const mine = () => posted.slice(before);
+    utcBox.value = '+05:30';
+    utcBox.onchange();
+    check(mine().includes('/clock/utc-offset/330'), `typing +05:30 posts 330, posted ${JSON.stringify(mine())}`);
+    utcBox.value = 'noon';
+    utcBox.onchange();
+    check(mine().length === 1, 'something that is not an offset posts nothing');
+    window.document.getElementById('utcresync').onclick();
+    check(mine().includes('/clock/utc-offset/os'), `resync posts os, posted ${JSON.stringify(mine())}`);
+    posted.splice(before);
   }
 
   // The programme list orders by engagement time, not by name, and the

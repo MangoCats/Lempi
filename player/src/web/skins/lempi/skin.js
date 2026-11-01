@@ -128,6 +128,31 @@
   dequeueSuppress.onchange = () => Lempi.dequeueSuppress(dequeueSuppress.value);
   const queueDepth = $('queuedepth');
   queueDepth.onchange = () => Lempi.queueDepth(queueDepth.value);
+  // The clock's offset from UTC [SPEC-DIR-183]: typed as +HH:MM / -HH:MM
+  // (or a bare number of hours), held by hand until "Resync from OS".
+  const utcOffset = $('utcoffset');
+  const utcSource = $('utcsource');
+  const fmtOffset = m => {
+    const a = Math.abs(m);
+    return `${m < 0 ? '-' : '+'}${String(Math.floor(a / 60)).padStart(2, '0')}:${String(a % 60).padStart(2, '0')}`;
+  };
+  const parseOffset = t => {
+    const m = /^\s*([+\-\u2212])?\s*(\d{1,2})(?::?(\d{2}))?\s*$/.exec(t);
+    if (!m || (m[3] && +m[3] > 59)) return null;
+    const minutes = (+m[2]) * 60 + (+(m[3] || 0));
+    return minutes > 18 * 60 ? null : (m[1] && m[1] !== '+' ? -minutes : minutes);
+  };
+  // A note of the page's own -- a refusal, or "asking" -- shows for a few
+  // seconds, then the snapshot's own reading of the offset returns.
+  let utcNoteUntil = 0;
+  const utcNote = t => { utcSource.textContent = t; utcNoteUntil = Date.now() + 4000; };
+  utcOffset.onchange = () => {
+    const m = parseOffset(utcOffset.value);
+    if (m == null) { utcNote('write it as +HH:MM or -HH:MM'); return; }
+    utcNote('setting…');
+    Lempi.utcOffset(m);
+  };
+  $('utcresync').onclick = () => { utcNote('asking the OS…'); Lempi.utcOffset('os'); };
   const sampleInterval = $('sampleinterval');
   sampleInterval.onchange = () => Lempi.sampleInterval(sampleInterval.value * 1000);
   // Which backend is sounding `[SPEC-BK-030]`. Hidden entirely when no guest is
@@ -343,6 +368,13 @@
       // true is the difference between a working fleet and a silent failure.
       setText(st, n.follow_status || `Set to follow ${n.follow_host}; not connected yet.`);
     }
+  }
+
+  function renderUtcOffset(o) {
+    utcOffset.disabled = $('utcresync').disabled = !o;
+    if (!o) { utcSource.textContent = 'not read yet'; return; }
+    if (document.activeElement !== utcOffset) utcOffset.value = fmtOffset(o.minutes);
+    if (Date.now() >= utcNoteUntil) utcSource.textContent = o.by_hand ? 'set by hand' : 'from the OS';
   }
 
   function renderSkip(k) {
@@ -1011,6 +1043,7 @@
       ? (Lempi.slotManual(s) ? `${slot}, chosen` : `${slot}, by the clock`)
       : '');
     renderSkip(s.skip);
+    renderUtcOffset(s.utc_offset);
     renderEchoNode(s.echo_node);
     renderBackend(s);
     renderCue(s);

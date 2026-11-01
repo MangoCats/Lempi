@@ -1398,7 +1398,77 @@ impl PlayerStore {
     /// and never once reached the disk. `PlayerStore` is the one connection
     /// this process holds that can actually write.
     /// Returns what the OS said, for a caller holding a Director to apply.
+    ///
+    /// **Not while the offset is held by hand** `[SPEC-DIR-183]`: then the
+    /// OS is not asked, and what is stored is returned as it stands -- or the
+    /// hourly resync would undo a hand edit within the hour.
     pub fn sync_utc_offset(&self) -> Option<i64> {
+        if self.utc_offset_by_hand() {
+            return self.stored_utc_offset();
+        }
+        crate::director::programme::sync_os_utc_offset(&self.conn)
+    }
+
+    /// The largest offset a person may type, either way: 18 hours, the
+    /// widest any standard allows. Real zones span -12:00 to +14:00.
+    pub const UTC_OFFSET_MAX_MIN: i64 = 18 * 60;
+
+    /// What `listener_settings` holds now, in minutes east of UTC; `None`
+    /// when there is no row to read.
+    pub fn stored_utc_offset(&self) -> Option<i64> {
+        self.conn
+            .query_row("SELECT utc_offset_minutes FROM listener_settings WHERE id = 1", [], |r| r.get(0))
+            .ok()
+    }
+
+    /// Whether a person set the offset by hand, so the OS is not asked until
+    /// they resync `[SPEC-DIR-183]`. Kept in `player_settings`, beside the
+    /// slot held by hand: a setting of this player, not a listener's.
+    pub fn utc_offset_by_hand(&self) -> bool {
+        self.conn
+            .query_row("SELECT value FROM player_settings WHERE key = 'utc_offset_by_hand'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .is_ok_and(|v| v == "1")
+    }
+
+    /// Set the offset by hand, and hold it there `[SPEC-DIR-183]`. Refused
+    /// beyond [`Self::UTC_OFFSET_MAX_MIN`]; returns what was stored.
+    pub fn set_utc_offset_by_hand(&self, minutes: i64) -> Result<i64, DbError> {
+        if minutes.abs() > Self::UTC_OFFSET_MAX_MIN {
+            return Err(DbError::Query(format!(
+                "a UTC offset is at most {} hours either way; {minutes} minutes is not one",
+                Self::UTC_OFFSET_MAX_MIN / 60
+            )));
+        }
+        let q = |e: rusqlite::Error| DbError::Query(e.to_string());
+        let tx = self.conn.unchecked_transaction().map_err(q)?;
+        // As `sync_os_utc_offset` writes it: the row may not exist yet, and
+        // `updated_at` has no default.
+        tx.execute(
+            "INSERT INTO listener_settings (id, utc_offset_minutes, updated_at) \
+             VALUES (1, ?1, datetime('now')) \
+             ON CONFLICT(id) DO UPDATE SET \
+                 utc_offset_minutes = excluded.utc_offset_minutes, \
+                 updated_at = excluded.updated_at",
+            [minutes],
+        )
+        .map_err(q)?;
+        tx.execute(
+            "INSERT INTO player_settings (key, value, updated_at) VALUES ('utc_offset_by_hand', '1', datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            [],
+        )
+        .map_err(q)?;
+        tx.commit().map_err(q)?;
+        Ok(minutes)
+    }
+
+    /// Release a hand-set offset and take the OS's again, now
+    /// `[SPEC-DIR-183]`. `None` when the OS could not be asked -- the hold is
+    /// released all the same, so the next hourly resync tries again.
+    pub fn resync_utc_offset_from_os(&self) -> Option<i64> {
+        let _ = self.conn.execute("DELETE FROM player_settings WHERE key = 'utc_offset_by_hand'", []);
         crate::director::programme::sync_os_utc_offset(&self.conn)
     }
 
@@ -3515,6 +3585,37 @@ mod tests {
             })
             .unwrap();
         assert_eq!(after, os, "the write must reach disk through PlayerStore's own connection");
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    /// A hand-set offset holds against the hourly resync, and "resync from
+    /// the OS" releases it `[SPEC-DIR-183]`.
+    #[test]
+    fn a_hand_set_utc_offset_holds_until_resynced() {
+        let dir = std::env::temp_dir().join(format!("lempi_tz_hand_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let st = PlayerStore::open(&dir).unwrap();
+        st.conn
+            .execute_batch(
+                "CREATE TABLE listener_settings (id INTEGER PRIMARY KEY,
+                     utc_offset_minutes INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);",
+            )
+            .unwrap();
+        assert!(!st.utc_offset_by_hand(), "nothing held yet");
+        // Unlike any zone's real offset, so a sync that ignored the hold shows.
+        let typed = -17 * 60 - 7;
+        assert_eq!(st.set_utc_offset_by_hand(typed).unwrap(), typed);
+        assert!(st.utc_offset_by_hand());
+        assert_eq!(st.sync_utc_offset(), Some(typed), "the hourly sync leaves a hand edit alone");
+        assert_eq!(st.stored_utc_offset(), Some(typed));
+        assert!(st.set_utc_offset_by_hand(19 * 60).is_err(), "beyond 18 hours is refused");
+        assert_eq!(st.stored_utc_offset(), Some(typed), "and changes nothing");
+
+        let os = st.resync_utc_offset_from_os();
+        assert!(!st.utc_offset_by_hand(), "resync releases the hold");
+        if let Some(os) = os {
+            assert_eq!(st.stored_utc_offset(), Some(os), "and stores what the OS says");
+        }
         let _ = std::fs::remove_file(&dir);
     }
 

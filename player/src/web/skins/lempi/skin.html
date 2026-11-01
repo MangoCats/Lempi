@@ -244,6 +244,18 @@
          it adds nothing, so anything you queue yourself simply stands.</p>
     </div>
     <div class="setting">
+      <label for="utcoffset">Clock offset from UTC</label>
+      <span>
+        <input type="text" id="utcoffset" size="7" placeholder="-05:00" autocomplete="off" spellcheck="false">
+        <button type="button" id="utcresync">Resync from OS</button>
+        <small id="utcsource"></small>
+      </span>
+      <p>The local time programme slots start by and seasons turn on. Taken
+         from the operating system and checked hourly. Type one here, as
+         &plusmn;HH:MM, to hold it there until you resync &mdash; for a player
+         whose own clock keeps another zone's time.</p>
+    </div>
+    <div class="setting">
       <label for="sampleinterval">Guest sampling interval</label>
       <span><input type="number" id="sampleinterval" step="0.5"> s</span>
       <p>How often a guest backend such as MPD is asked where playback has

@@ -51,7 +51,8 @@ for the full account.
 **`[REQ-VIS-255]` A programme is chosen against the listener's own clock, and
 the control that reverts to automatic actually reverts.** *(Fixed
 2026-08-24.)* Two faults reported together, both in service of
-`[SPEC-DIR-185]`.
+`[SPEC-DIR-185]`. Since 2026-11-01 the offset is also shown on the Settings
+page, can be set there by hand, and resynced from the OS `[SPEC-DIR-183]`.
 
 **The wrong programme was engaged.** `listener_settings.utc_offset_minutes`
 governs what "local" means to `Programme::active_slot` `[SPEC-DIR-180]`, and

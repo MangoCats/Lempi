@@ -1502,6 +1502,9 @@ const Lempi = (() => {
     skipSuppress: h => post(`/skip/suppress/${Math.round(h)}`),
     dequeueSuppress: h => post(`/dequeue/suppress/${Math.round(h)}`),
     queueDepth: n => post(`/queue/depth/${Math.round(n)}`),
+    // Minutes east of UTC, held by hand; or 'os' to take the OS's again
+    // [SPEC-DIR-183].
+    utcOffset: v => post(`/clock/utc-offset/${v === 'os' ? 'os' : Math.round(v)}`),
     sampleInterval: ms => post(`/sample/interval/${Math.round(ms)}`),
     switchBackend: which => post(`/backend/${which}`),
     cueSheets: on => post(`/cue/${on ? 'on' : 'off'}`),
