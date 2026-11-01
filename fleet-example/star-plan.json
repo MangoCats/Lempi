@@ -1,6 +1,7 @@
 {
  "hub": {"name": "desk", "listener": "data/listener.db", "library": "data/library.db"},
  "runs": "data/sync",
+ "keep_runs": 5,
  "prune": {"prefix": "pre-sync-", "keep": 3},
  "backups": {"dir": "data/backups", "keep_daily": 14, "keep_monthly": 12, "max_age_hours": 30,
              "mirror": {"host": "someone@workshop", "dir": "/home/someone/lempi-hub-backups"}},

@@ -32,6 +32,11 @@ its mirror.
     python tools/star_sync.py PLAN backup             the hub's daily backup, and its mirror
     python tools/star_sync.py PLAN mirror             the mirror brought up to date, if it is reachable
     python tools/star_sync.py PLAN status             exits 1 when a backup has gone stale
+    python tools/star_sync.py PLAN prune-runs [--keep N] [--commit]
+                                                      the runs older than the newest N (the plan's
+                                                      `keep_runs`) that nothing still needs; removed
+                                                      only with --commit, and by every commit when the
+                                                      plan sets `keep_runs` [SPEC-STAR-089]
     python tools/star_sync.py PLAN adopt NODE --library /path/on/node/library.db [--force] [--tmp DIR]
                                                       a node whose catalogue was seeded by hand: its own
                                                       catalogue, copied on it, becomes the copy last sent,
@@ -168,6 +173,79 @@ def newest_run(plan, given=None):
         raise SystemExit(f"no run under {runs}: `snapshot` makes one")
     return os.path.join(runs, found[-1])
 
+
+# ---------------------------------------------------------------- pruning --
+# [SPEC-STAR-089]: a run holds every node's catalogue copy, 1.4 GB each, so a run
+# is 6-13 GB; nothing removed them, and by 2026-10-31 51 runs held 392 GB of a
+# full disk. The newest `keep_runs` are kept, and so is any older run a copy
+# last sent still lies in: `sent_path` reads a missing one as *never sent*, and
+# a node with none is sent no catalogue patch [SPEC-STAR-940] -- it would need
+# adopting again. On that day three older runs were still named: lp3-wifi's
+# catalogue, missed by every later patch, and teacherslounge and a phone, not
+# synced since September.
+
+def runs_named(runs, paths):
+    """The runs these paths lie in. state.json writes them relative, with this PC's separators."""
+    out = set()
+    for p in paths:
+        if not p:
+            continue
+        try:
+            rel = os.path.relpath(os.path.normpath(at_root(p.replace("\\", "/"))), runs)
+        except ValueError:                             # another drive: not in a run
+            continue
+        first = rel.split(os.sep)[0]
+        if RUN_NAME.match(first):
+            out.add(first)
+    return out
+
+
+def runs_to_prune(plan, keep, spare=()):
+    """The runs older than the newest `keep`, less those still needed -- named by
+    state.json, by a kept run's baselines, or in `spare`. ([...], {run: [why]})"""
+    if keep < 1:
+        raise SystemExit(f"keep_runs is {keep}: at least the newest run is kept, or nothing could be committed")
+    runs = at_root(plan["runs"])
+    found = run_names(runs)
+    kept = found[-keep:]
+    state = load_state(plan)
+    why = {}
+    hub = plan["hub"]["name"]
+    for name, e in [(hub, state.get("hub"))] + sorted(state.get("nodes", {}).items()):
+        for key in ("listener_sent", "library_sent"):
+            for r in runs_named(runs, [(e or {}).get(key)]):
+                why.setdefault(r, []).append(f"{name}'s {key[:-5]} last sent")
+    for d in spare:
+        why.setdefault(d, []).append("the run in hand")
+    for d in sorted(set(kept) | set(spare)):
+        for name, b in (read_json(os.path.join(runs, d, "baselines.json")) or {}).items():
+            for r in runs_named(runs, [b.get("library"), b.get("library_sent")]) - {d}:
+                why.setdefault(r, []).append(f"{name}'s baseline in {d}")
+    older = found[:-keep]
+    return [d for d in older if d not in why], {d: why[d] for d in older if d in why}
+
+
+def tree_bytes(path):
+    return sum(os.path.getsize(os.path.join(d, f)) for d, _s, fs in os.walk(path) for f in fs)
+
+
+def prune_runs(plan, keep, spare=(), commit=True):
+    """Remove the runs `runs_to_prune` names, saying what is kept and why."""
+    runs = at_root(plan["runs"])
+    gone, pinned = runs_to_prune(plan, keep, spare)
+    say(f"  runs: the newest {keep} kept" + ("" if pinned else "; no older run is still needed"))
+    for d, why in pinned.items():
+        say(f"  runs: {d} kept, still needed -- {'; '.join(why)}")
+    freed = 0
+    for d in gone:
+        n = tree_bytes(os.path.join(runs, d))
+        if commit:
+            rm(os.path.join(runs, d))
+        freed += n
+        say(f"  {'pruned' if commit else 'would prune'} {d} ({n / 1e9:.1f} GB)")
+    say(f"RESULT runs: {len(gone)} {'pruned' if commit else 'to prune'}, {freed / 1e9:.1f} GB"
+        + ("" if commit else " -- nothing removed: --commit removes them"))
+    return 0
 
 
 # --------------------------------------------------------------- the players --
@@ -1758,6 +1836,9 @@ def distribute(plan, run, names, commit, excuse=None, bulk=False):
         stop_started(plan, started)
         if not commit:
             write_json(os.path.join(run, "rehearsal.json"), done)
+    # Whatever the commit's outcome: what it did send is in state.json, and this run is spared for another try.
+    if commit and plan.get("keep_runs"):
+        prune_runs(plan, plan["keep_runs"], spare=[stamp_of(run)])
     return worst
 
 
@@ -2309,6 +2390,13 @@ def main(argv):
         return mirror_now(plan)
     if cmd == "status":
         return status(plan)
+    if cmd == "prune-runs":
+        keep, rest = take(rest, "--keep")
+        go, rest = take(rest, "--commit", valued=False)
+        keep = int(keep) if keep is not None else plan.get("keep_runs")
+        if keep is None:
+            raise SystemExit("prune-runs needs --keep N, or `keep_runs` in the plan")
+        return prune_runs(plan, keep, commit=go)
     if cmd == "adopt":
         library, rest = take(rest, "--library")
         tmp, rest = take(rest, "--tmp")

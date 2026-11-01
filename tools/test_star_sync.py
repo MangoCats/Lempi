@@ -272,11 +272,69 @@ def test_node_integrity():
               and "STALE: oldbuild" not in said, f"status: {said}")
 
 
+def test_prune_runs():
+    """[SPEC-STAR-089]: the newest `keep` runs kept, and every older one a copy last
+    sent lies in, a kept run's baseline names, or the commit has in hand; the rest
+    removed, sealed files and all. `adopted/` is not a run, and is never touched."""
+    import io
+    import json
+    import contextlib
+    print("runs pruned to the newest few, never one still needed")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as root:
+        runs = os.path.join(root, "data", "sync")
+        stamps = [f"202610{d:02d}T0100Z" for d in range(1, 10)]
+        for s in stamps + ["adopted"]:
+            os.makedirs(os.path.join(runs, s, "merge", "nodes", "n"))
+            p = os.path.join(runs, s, "merge", "nodes", "n", "library.db")
+            open(p, "wb").write(b"x" * 10)
+            ss.seal(p)
+        rel = lambda s, f: os.path.relpath(os.path.join(runs, s, "merge", "nodes", "n", f), root)
+        win = lambda p: p.replace("/", "\\")                     # as the hub writes it
+        state = {"hub": {"listener_sent": win(rel(stamps[8], "listener.db")), "library_sent": win(rel(stamps[8], "library.db"))},
+                 "nodes": {"old": {"listener_sent": win(rel(stamps[0], "listener.db")), "library_sent": None},
+                           "cat": {"listener_sent": rel(stamps[8], "listener.db"), "library_sent": rel(stamps[2], "library.db")},
+                           "adopt": {"library_sent": rel("adopted", "library.db")}}}
+        json.dump(state, open(os.path.join(runs, "state.json"), "w"))
+        # the newest kept run's baseline still names the copy in stamps[1]
+        json.dump({"cat": {"library": os.path.join(runs, stamps[1], "merge", "nodes", "n", "library.db")}},
+                  open(os.path.join(runs, stamps[8], "baselines.json"), "w"))
+        plan = {"runs": runs, "hub": {"name": "desk"}}
+        real = ss.ROOT
+        ss.ROOT = root
+        try:
+            gone, pinned = ss.runs_to_prune(plan, 5, spare=[stamps[3]])
+            check(gone == [], f"every run older than the newest 5 is still needed here: {gone}")
+            check(sorted(pinned) == stamps[:4], f"pinned: {pinned}")
+            check(any("old's listener" in w for w in pinned[stamps[0]])
+                  and any("cat's library" in w for w in pinned[stamps[2]])
+                  and any("baseline in" in w for w in pinned[stamps[1]])
+                  and pinned[stamps[3]] == ["the run in hand"], f"and each says why: {pinned}")
+            gone, pinned = ss.runs_to_prune(plan, 3)
+            check(gone == [stamps[3], stamps[4], stamps[5]], f"past the newest 3, the unneeded: {gone}")
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                ss.prune_runs(plan, 3, commit=False)
+            check(all(os.path.isdir(os.path.join(runs, s)) for s in stamps) and "would prune" in out.getvalue(),
+                  "without --commit nothing is removed")
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                ss.prune_runs(plan, 3)
+            left = sorted(os.listdir(runs))
+            check(left == sorted(stamps[:3] + stamps[6:] + ["adopted", "state.json"]),
+                  f"removed, sealed files and all; adopted/ and state.json stay: {left}\n{out.getvalue()}")
+            try:
+                ss.runs_to_prune(plan, 0)
+                check(False, "keeping no run is refused")
+            except SystemExit:
+                pass
+        finally:
+            ss.ROOT = real
+
+
 def main() -> int:
     test_backup_proofs()
     test_mirror_when_reachable()
     test_mirror_limits()
     test_node_integrity()
+    test_prune_runs()
     days = [f"2026-{m:02d}-{d:02d}" for m in (7, 8, 9) for d in (1, 10, 20, 28)]
     keep = ss.retained(days, 3, 2)
     check({"2026-09-10", "2026-09-20", "2026-09-28"} <= keep, f"the newest 3 days are kept: {sorted(keep)}")
