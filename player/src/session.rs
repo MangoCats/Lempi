@@ -638,6 +638,12 @@ impl Session {
             Ok(_) => {
                 self.rebuild = Some(rx);
                 self.say_reload("rebuilding");
+                // Said where another process can read it: `mpd_direct`, steering
+                // by this listener file, rebuilds its own Director too
+                // `[SPEC-DIR-109]`.
+                if let Some(s) = &self.decisions {
+                    s.note_director_rebuild();
+                }
             }
             Err(e) => self.say_reload(&format!("could not start rebuild: {e}")),
         }

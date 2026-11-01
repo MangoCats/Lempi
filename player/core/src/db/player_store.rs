@@ -1409,6 +1409,28 @@ impl PlayerStore {
         crate::director::programme::sync_os_utc_offset(&self.conn)
     }
 
+    /// Record that this player has started rebuilding its Director, so that
+    /// another process steering by the same listener file -- `mpd_direct` --
+    /// rebuilds too `[SPEC-DIR-109]`. The player rebuilds when what the
+    /// Director reads at load has changed: a preference saved, a star sync,
+    /// a file found damaged, music imported. Best-effort: a stamp that fails
+    /// costs the other process a refresh, not this one its rebuild.
+    pub fn note_director_rebuild(&self) {
+        let _ = self.conn.execute(
+            "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES ('director_rebuilt_at', strftime('%s', 'now') || '.' || abs(random() % 1000000), datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            [],
+        );
+    }
+
+    /// The last [`Self::note_director_rebuild`] stamp; `None` if there is none.
+    pub fn director_rebuilt_at(&self) -> Option<String> {
+        self.conn
+            .query_row("SELECT value FROM player_settings WHERE key = 'director_rebuilt_at'", [], |r| r.get(0))
+            .ok()
+    }
+
     /// The largest offset a person may type, either way: 18 hours, the
     /// widest any standard allows. Real zones span -12:00 to +14:00.
     pub const UTC_OFFSET_MAX_MIN: i64 = 18 * 60;
@@ -3594,6 +3616,28 @@ mod tests {
             })
             .unwrap();
         assert_eq!(after, os, "the write must reach disk through PlayerStore's own connection");
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    /// Each rebuild the player starts leaves a stamp another process can see
+    /// change `[SPEC-DIR-109]`.
+    #[test]
+    fn a_director_rebuild_leaves_a_stamp_that_changes() {
+        let dir = std::env::temp_dir().join(format!("lempi_rebuilt_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+        let st = PlayerStore::open(&dir).unwrap();
+        assert_eq!(st.director_rebuilt_at(), None, "nothing rebuilt yet");
+        st.note_director_rebuild();
+        let first = st.director_rebuilt_at().expect("stamped");
+        let mut second = first.clone();
+        for _ in 0..20 {
+            st.note_director_rebuild();
+            second = st.director_rebuilt_at().unwrap();
+            if second != first {
+                break;
+            }
+        }
+        assert_ne!(first, second, "a second rebuild reads as a change, even within the second");
         let _ = std::fs::remove_file(&dir);
     }
 

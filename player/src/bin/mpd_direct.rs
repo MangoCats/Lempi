@@ -56,6 +56,83 @@ struct Offered {
     was_current: bool,
 }
 
+/// URI -> passage, from the library, for naming a song this program did not
+/// queue: a person's own additions feed rotation `[SPEC-MPD-115]`. Built at
+/// start and again whenever the Director is rebuilt, so a file imported since
+/// can be named.
+///
+/// **A file carrying more than one radio passage is left ambiguous**, not
+/// guessed. Added whole, a DAO capture is forty songs; picking one of them
+/// would attribute a play to a passage the listener never heard, which is the
+/// failure `[SPEC-MPD-060]`'s third rung exists to refuse. The recording is
+/// the passage's top one, as the Director reads it `[SPEC-DIR-112]`.
+fn uri_map(conn: &QualifyingConn, root_norm: &str) -> HashMap<String, Option<(i64, Option<String>, u64)>> {
+    let mut by_uri: HashMap<String, Option<(i64, Option<String>, u64)>> = HashMap::new();
+    let mut q = conn
+        .prepare(
+            "SELECT f.path, f.duration_ms, p.passage_id, \
+                (SELECT pr.mbid FROM passage_recordings pr \
+                 WHERE pr.passage_id = p.passage_id ORDER BY pr.weight DESC, pr.mbid LIMIT 1) \
+             FROM passages p JOIN files f USING(file_id) WHERE p.kind = 'radio'",
+        )
+        .expect("map uris");
+    let rows = q
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<i64>>(1)?.unwrap_or(0) as u64,
+                r.get::<_, i64>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .expect("read uris");
+    for (path, dur, pid, mbid) in rows.flatten() {
+        let norm = path.replace('\\', "/");
+        let Some(rel) = norm.strip_prefix(root_norm) else { continue };
+        let uri = rel.trim_start_matches('/').to_string();
+        match by_uri.entry(uri) {
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                e.insert(None); // a second passage: ambiguous, so refuse both
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(Some((pid, mbid, dur)));
+            }
+        }
+    }
+    by_uri
+}
+
+/// What `mpd_direct` last applied of what the player can change while it runs
+/// `[SPEC-DIR-109]`. The player's own Director learns of these through its
+/// in-process controls; this program is another process, so it reads them
+/// from the listener file, every `WATCH_S`.
+#[derive(Default)]
+struct Watched {
+    /// Slots and seeds, as one string: a change is a programme edit.
+    programme: String,
+    /// When the player last started a Director rebuild -- a preference saved,
+    /// a star sync, a file found damaged, music imported.
+    rebuilt_at: Option<String>,
+}
+
+/// How often the listener file is read for changes, in seconds.
+const WATCH_S: u64 = 5;
+/// How often the OS is asked for its UTC offset, as the player asks it.
+const UTC_RESYNC_S: u64 = 3600;
+
+/// The programme's slots and seeds as one comparable string.
+fn programme_signature(conn: &QualifyingConn) -> String {
+    conn.query_row(
+        "SELECT IFNULL((SELECT group_concat(program_id || '|' || name || '|' || IFNULL(start_time, ''), ';') \
+                          FROM (SELECT * FROM listener_programs ORDER BY program_id)), '') || '#' || \
+                IFNULL((SELECT group_concat(program_id || '|' || mbid, ';') \
+                          FROM (SELECT * FROM listener_program_seeds ORDER BY program_id, mbid)), '')",
+        [],
+        |r| r.get::<_, String>(0),
+    )
+    .unwrap_or_default()
+}
+
 fn main() {
     use lempi_player::cli::specs::mpd_direct as opt;
     let mut args = opt::SPEC.parse();
@@ -103,48 +180,7 @@ fn main() {
     });
     let root_norm = root.replace('\\', "/").trim_end_matches('/').to_string();
 
-    // A person's own additions feed rotation `[SPEC-MPD-115]`, so a song this
-    // program did not queue still has to be nameable. URI -> passage, built
-    // once from the library.
-    //
-    // **A file carrying more than one radio passage is left ambiguous**, not
-    // guessed. Added whole, a DAO capture is forty songs; picking one of them
-    // would attribute a play to a passage the listener never heard, which is
-    // the failure `[SPEC-MPD-060]`'s third rung exists to refuse.
-    let mut by_uri: HashMap<String, Option<(i64, Option<String>, u64)>> = HashMap::new();
-    {
-        let mut q = conn
-            .prepare(
-                "SELECT f.path, f.duration_ms, p.passage_id, \
-                    (SELECT pr.mbid FROM passage_recordings pr \
-                     WHERE pr.passage_id = p.passage_id LIMIT 1) \
-                 FROM passages p JOIN files f USING(file_id) WHERE p.kind = 'radio'",
-            )
-            .expect("map uris");
-        let rows = q
-            .query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, Option<i64>>(1)?.unwrap_or(0) as u64,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, Option<String>>(3)?,
-                ))
-            })
-            .expect("read uris");
-        for (path, dur, pid, mbid) in rows.flatten() {
-            let norm = path.replace('\\', "/");
-            let Some(rel) = norm.strip_prefix(&root_norm) else { continue };
-            let uri = rel.trim_start_matches('/').to_string();
-            match by_uri.entry(uri) {
-                std::collections::hash_map::Entry::Occupied(mut e) => {
-                    e.insert(None); // a second passage: ambiguous, so refuse both
-                }
-                std::collections::hash_map::Entry::Vacant(e) => {
-                    e.insert(Some((pid, mbid, dur)));
-                }
-            }
-        }
-    }
+    let mut by_uri = uri_map(&conn, &root_norm);
     let unambiguous = by_uri.values().filter(|v| v.is_some()).count();
 
     let mut mpd = Mpd::connect(&addr).unwrap_or_else(|e| {
@@ -192,7 +228,95 @@ fn main() {
     // asked about each entry once, not on every pass.
     let mut theirs: HashMap<String, Option<i64>> = HashMap::new();
 
+    // What the player can change while this runs, read from the listener file
+    // `[SPEC-DIR-109]`. The rebuild stamp and the programme start as they are,
+    // so the first pass applies the rest without rebuilding what was just
+    // loaded.
+    let reader = PlayerStore::open(std::path::Path::new(&db_path)).ok();
+    let mut watched = Watched {
+        programme: programme_signature(&conn),
+        rebuilt_at: reader.as_ref().and_then(|r| r.director_rebuilt_at()),
+    };
+    let mut last_watch: Option<Instant> = None;
+    let mut utc_synced = Instant::now();
+    // Without `--write` a play is known only here, so a rebuild, which reads
+    // history, would forget it: kept to be noted again.
+    let mut heard_here: Vec<(i64, i64)> = Vec::new();
+
     loop {
+        if last_watch.is_none_or(|t| t.elapsed().as_secs() >= WATCH_S) {
+            last_watch = Some(Instant::now());
+            if let Some(r) = &reader {
+                // A rebuild the player started: what the Director reads at
+                // load has changed. Rebuilt here too, with the URI map, and
+                // what is queued and heard noted again on the new Director.
+                let stamp = r.director_rebuilt_at();
+                if stamp != watched.rebuilt_at {
+                    watched.rebuilt_at = stamp;
+                    let began = Instant::now();
+                    match Director::load(&conn) {
+                        Ok(d) => {
+                            director = d;
+                            by_uri = uri_map(&conn, &root_norm);
+                            watched.programme = programme_signature(&conn);
+                            for o in ours.values_mut() {
+                                o.note = director.note_queued(o.passage_id, now());
+                            }
+                            for &(pid, at) in &heard_here {
+                                if let Some(n) = director.note_queued(pid, at) {
+                                    director.settle(n);
+                                }
+                            }
+                            println!(
+                                "  director rebuilt, as the player's was, in {:.1}s",
+                                began.elapsed().as_secs_f64()
+                            );
+                        }
+                        Err(e) => eprintln!("director rebuild: {e}; the one in hand goes on choosing"),
+                    }
+                }
+                // A programme edit: its slots, taken as the player takes them.
+                let sig = programme_signature(&conn);
+                if sig != watched.programme {
+                    match lempi_player::director::programme::Programme::load(&conn) {
+                        Ok(fresh) => {
+                            director.programme_mut().replace_slots(fresh);
+                            println!("  programme: {} slot(s) taken from the edit", director.programme().len());
+                        }
+                        Err(e) => eprintln!("programme: {e}"),
+                    }
+                    watched.programme = sig;
+                }
+                // The slot held by hand, or none.
+                let held = r.load_manual_slot();
+                if director.programme().manual_slot() != held {
+                    director.programme_mut().set_manual_slot(held);
+                    println!("  slot held by hand: {held:?}");
+                }
+                // The UTC offset: the OS asked hourly, as the player asks it,
+                // only when writing -- and never past a hand-set hold
+                // `[SPEC-DIR-183]` -- then whatever is stored applied.
+                if let (Some(st), true) = (&store, utc_synced.elapsed().as_secs() >= UTC_RESYNC_S) {
+                    st.sync_utc_offset();
+                    utc_synced = Instant::now();
+                }
+                if let Some(off) = r.stored_utc_offset() {
+                    if director.programme().utc_offset_minutes != off {
+                        director.programme_mut().utc_offset_minutes = off;
+                        println!("  utc offset {off:+} min");
+                    }
+                }
+                // The listener's suppression windows `[SPEC-PLAY-050]`.
+                if let Some(s) = r.load_settings() {
+                    let windows = (s.skip_suppress_h, s.dequeue_suppress_h);
+                    if director.suppress_h() != windows {
+                        director.set_suppress_h(windows);
+                        println!("  suppression windows {}h / {}h", windows.0, windows.1);
+                    }
+                }
+            }
+        }
+
         let status = match mpd.status() {
             Ok(s) => s,
             Err(e) => {
@@ -345,6 +469,9 @@ fn main() {
                 );
                 if heard {
                     played += 1;
+                    if store.is_none() {
+                        heard_here.push((o.passage_id, now()));
+                    }
                 } else {
                     skipped += 1;
                 }
@@ -555,4 +682,43 @@ fn now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::programme_signature;
+    use lempi_player::db::QualifyingConn;
+
+    /// Every kind of programme edit reads as a change -- a slot added, renamed,
+    /// re-timed, a seed added or removed -- and nothing else does
+    /// `[SPEC-DIR-109]`.
+    #[test]
+    fn the_programme_signature_notices_every_edit() {
+        let f = std::env::temp_dir().join(format!("mpd_direct_sig_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&f);
+        let c = QualifyingConn::open(&f, &f, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE)
+            .unwrap();
+        c.execute_batch(
+            "CREATE TABLE listener_programs (program_id INTEGER PRIMARY KEY, name TEXT, start_time TEXT);
+             CREATE TABLE listener_program_seeds (program_id INTEGER, mbid TEXT, position INTEGER);",
+        )
+        .unwrap();
+        let mut seen = vec![programme_signature(&c)];
+        for sql in [
+            "INSERT INTO listener_programs VALUES (1, 'Soft', '04:00')",
+            "INSERT INTO listener_program_seeds VALUES (1, 'a', 1)",
+            "UPDATE listener_programs SET name = 'Gentle' WHERE program_id = 1",
+            "UPDATE listener_programs SET start_time = '05:00' WHERE program_id = 1",
+            "INSERT INTO listener_program_seeds VALUES (1, 'b', 2)",
+            "DELETE FROM listener_program_seeds WHERE mbid = 'a'",
+        ] {
+            c.execute_batch(sql).unwrap();
+            let now = programme_signature(&c);
+            assert!(!seen.contains(&now), "{sql}: read as no change");
+            seen.push(now);
+        }
+        assert_eq!(programme_signature(&c), *seen.last().unwrap(), "reading twice is no change");
+        drop(c);
+        let _ = std::fs::remove_file(&f);
+    }
 }
