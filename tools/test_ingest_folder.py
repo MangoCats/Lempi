@@ -228,6 +228,30 @@ def main() -> int:
         conn.close()
 
     print()
+    print("[SPEC-RTF-040]: a _Retired folder, at any depth, is never inducted")
+    fd, tmp_db3 = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    os.remove(tmp_db3)
+    conn = sqlite3.connect(tmp_db3)
+    conn.executescript(SCHEMA)
+    conn.close()
+    with tempfile.TemporaryDirectory() as folder:
+        for rel in (("Artist", "Album", "disc.mp3"), ("_Retired", "Artist", "Album", "2026-11-01", "old.mp3"),
+                    ("Artist", "Album", "_Retired", "2026-11-01", "older.mp3")):
+            os.makedirs(os.path.join(folder, *rel[:-1]), exist_ok=True)
+            with open(os.path.join(folder, *rel), "wb") as f:
+                f.write(b"not real audio")
+        hashes = iter(f"{n:032x}" for n in range(1, 99))
+        ingest_folder.audio_md5 = lambda p: next(hashes)
+        run(tmp_db3, folder)
+        conn = sqlite3.connect(tmp_db3)
+        names = [os.path.basename(p) for (p,) in conn.execute("SELECT path FROM files")]
+        conn.close()
+        check(names == ["disc.mp3"], f"only the album's own file, neither retired one: {names}")
+        walked = sorted(n for _d, _s, ns in ingest_folder.walk_music(folder) for n in ns)
+        check(walked == ["disc.mp3"], f"walk_music never enters one: {walked}")
+
+    print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")
         return 1

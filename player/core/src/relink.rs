@@ -140,7 +140,13 @@ pub fn is_audio(p: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Every audio file under `root`, depth first.
+/// `[SPEC-RTF-040]` The folder a merge keeps the files the hub no longer plays
+/// in `[SPEC-AGN-030]`, on the hub and on a node. No scan enters one, at any
+/// depth: its files are not music to find, and a moved file is never found
+/// there.
+pub const RETIRED: &str = "_Retired";
+
+/// Every audio file under `root`, depth first, never inside a `_Retired`.
 pub fn walk(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -149,6 +155,7 @@ pub fn walk(root: &Path) -> Vec<PathBuf> {
         for e in entries.flatten() {
             let p = e.path();
             match e.file_type() {
+                Ok(t) if t.is_dir() && e.file_name() == RETIRED => {}
                 Ok(t) if t.is_dir() => stack.push(p),
                 Ok(t) if t.is_file() && is_audio(&p) => out.push(p),
                 _ => {}
@@ -286,6 +293,29 @@ mod tests {
         assert!(!is_audio(Path::new("/x/folder.jpg")));
         assert!(!is_audio(Path::new("/x/Thumbs.db")));
         assert!(!is_audio(Path::new("/x/notes")));
+    }
+
+    /// `[SPEC-RTF-040]`: a merge's retired files, at the root as the hub keeps
+    /// them and inside an album folder, are never walked -- neither unclaimed
+    /// music nor a moved file's new place.
+    #[test]
+    fn a_retired_folder_is_never_walked() {
+        let root = std::env::temp_dir().join(format!("relink-retired-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for rel in ["Artist/Album/disc.mp3", "_Retired/Artist/Album/2026-11-01/old.mp3",
+                    "Artist/Album/_Retired/2026-11-01/older.mp3", "_Retired Hits/kept.mp3"] {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"x").unwrap();
+        }
+        let mut got: Vec<String> = walk(&root)
+            .iter()
+            .map(|p| p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"))
+            .collect();
+        got.sort();
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(got, vec!["Artist/Album/disc.mp3", "_Retired Hits/kept.mp3"],
+                   "neither retired file, and a folder only named like one is walked");
     }
 
 }

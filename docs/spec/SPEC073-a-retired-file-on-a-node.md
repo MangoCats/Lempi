@@ -1,6 +1,6 @@
 # SPEC073: A Retired File on a Node
 
-**Design Specification — Tier 2 · written 2026-11-01, at the maintainer's direction · designed, not built · answers [SPEC069](SPEC069-a-disc-ripped-again.md) `[SPEC-AGN-920]`, `[SPEC-AGN-045]`**
+**Design Specification — Tier 2 · written 2026-11-01, at the maintainer's direction · designed; §4 built 2026-11-01 · answers [SPEC069](SPEC069-a-disc-ripped-again.md) `[SPEC-AGN-920]`, `[SPEC-AGN-045]`**
 
 When a disc ripped again is merged, the hub moves the files it no longer
 plays to `_Retired` and removes their rows `[SPEC-AGN-030]`. The next star
@@ -155,9 +155,17 @@ within it, at any depth.** That covers three scanners:
 created, so `bose`'s MPD does not index the retired files. Its player plays
 by catalogue, so this is tidiness, not a fix.
 
-*To be built first, and on its own.* It is the one live hazard: an induct of
-the hub's music folder today would catalogue *Highway 61*'s six and *Wish You
-Were Here*'s five again.
+*Built 2026-11-01, first and on its own,* except `.mpdignore`, which goes
+with the move (§3). It was the one live hazard: until then, an induct of the
+hub's music folder would have catalogued *Highway 61*'s six and *Wish You
+Were Here*'s five again. Built in these places:
+
+- `ingest_folder.walk_music`, which the console's disk view also uses;
+- `verify_library.strays`, which counts the files as retired at any depth;
+- `relink::walk`, with its `RETIRED` constant;
+- `found::in_music_folder`.
+
+Each has a test.
 
 ## 5. The replacement before the original
 

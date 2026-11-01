@@ -44,7 +44,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
-from ingest_folder import AUDIO  # noqa: E402  -- one list of what counts as audio
+from ingest_folder import AUDIO, walk_music  # noqa: E402  -- one list of what counts as audio, and where
 import jobs as jobmod  # noqa: E402
 import lempi_control  # noqa: E402  -- process/network side of the handoff
 import pending as pendingmod  # noqa: E402  -- what waits for a person [SPEC048]
@@ -916,7 +916,8 @@ def scan(conn, roots: list) -> dict:
 
     disk = {}
     for root in roots:
-        for dp, _, names in os.walk(root):
+        # Not a retired file: it is not new music to induct [SPEC-RTF-040].
+        for dp, _, names in walk_music(root):
             for n in names:
                 if n.lower().endswith(AUDIO):
                     full = os.path.join(dp, n)

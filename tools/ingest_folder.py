@@ -35,6 +35,19 @@ from byte_hash import ensure_sha256_column, sha256_file  # noqa: E402
 
 AUDIO = (".mp3", ".flac", ".ogg", ".m4a", ".wav", ".opus")
 
+# `[SPEC-RTF-040]` Where a merge keeps the files it no longer plays
+# `[SPEC-AGN-030]`. Never catalogued, at any depth: until 2026-11-01 an induct
+# of the whole music folder would have catalogued Highway 61's six earlier
+# files and Wish You Were Here's five again, beside the discs that replaced them.
+RETIRED = "_Retired"
+
+
+def walk_music(root: str):
+    """`os.walk` of a music folder, never entering a `_Retired` folder."""
+    for dp, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs if d != RETIRED]
+        yield dp, dirs, names
+
 # Self-published music has no MusicBrainz entry and inventing one would be a
 # lie that everything downstream believes. The id is derived from the audio, so
 # it is stable across re-ingests, unique per recording, and -- crucially --
@@ -227,7 +240,7 @@ def main() -> int:
     # then reports already-imported audio as missing.
     files = sorted(
         os.path.normpath(os.path.join(dp, n))
-        for dp, _, ns in os.walk(args.folder)
+        for dp, _, ns in walk_music(args.folder)
         for n in ns if n.lower().endswith(AUDIO))
     if not files:
         if args.json:

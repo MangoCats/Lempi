@@ -55,7 +55,7 @@ KEEP = 14
 BAD = ("damaged", "missing", "unreadable")
 AUDIO = (".mp3", ".flac", ".wav", ".aif", ".aiff", ".m4a", ".ogg", ".opus", ".wma", ".ape", ".wv")
 INBOX = "_Rips"
-RETIRED = "_Retired"
+from ingest_folder import RETIRED  # noqa: E402  -- one name for it [SPEC-RTF-040]
 
 
 def say(text: str) -> None:
@@ -118,6 +118,8 @@ def strays(paths: list[str]) -> dict:
             out["inbox"] = os.path.join(root, INBOX)
         if d == root and RETIRED in dirs:
             out["retired"] = os.path.join(root, RETIRED)
+        # Any `_Retired`, at any depth, as `ingest_folder.walk_music` skips it.
+        retired_here = RETIRED in os.path.relpath(d, root).split(os.sep)
         for n in files:
             if not n.lower().endswith(AUDIO):
                 continue
@@ -127,7 +129,7 @@ def strays(paths: list[str]) -> dict:
                 continue
             if out["inbox"] and key.startswith(os.path.normcase(out["inbox"]) + os.sep):
                 out["inbox_audio"] += 1
-            elif out["retired"] and key.startswith(os.path.normcase(out["retired"]) + os.sep):
+            elif retired_here:
                 out["retired_audio"] += 1
             elif n.lower().endswith(".flac") and os.path.splitext(key)[0] in stems:
                 out["lossless_copies"] += 1

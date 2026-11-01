@@ -165,6 +165,15 @@ def main() -> int:
         check(st["root"] == music and st["audio"] == [os.path.join(music, n) for n in ("Basso.aiff", "rot.mp3")]
               and st["lossless_copies"] == 1 and st["inbox_audio"] == 1,
               f"two strays, one lossless copy, one waiting in the inbox: {st}")
+        # [SPEC-RTF-040]: a merge's retired files, at the root as the hub keeps
+        # them and deeper as a node might, are counted as retired, not strays.
+        os.makedirs(os.path.join(music, "_Retired", "A", "B", "2026-11-01"))
+        open(os.path.join(music, "_Retired", "A", "B", "2026-11-01", "old.mp3"), "wb").close()
+        os.makedirs(os.path.join(moved, "_Retired", "2026-11-01"))
+        open(os.path.join(moved, "_Retired", "2026-11-01", "older.mp3"), "wb").close()
+        st = vl.verify(db, progress=lambda s: None)["strays"]
+        check(st["audio"] == [os.path.join(music, n) for n in ("Basso.aiff", "rot.mp3")] and st["retired_audio"] == 2,
+              f"two retired files, at any depth, and still the two strays: {st}")
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")

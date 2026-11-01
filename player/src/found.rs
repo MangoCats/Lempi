@@ -92,8 +92,15 @@ fn mtime(meta: &std::fs::Metadata) -> f64 {
 /// counts audio elsewhere as music: on 2026-09-26 the first scan on the Moto
 /// G catalogued a `voicemail.mp3` and other recordings from `Download/`,
 /// which radio has no business choosing.
+///
+/// Not inside a `_Retired` folder, at any depth `[SPEC-RTF-040]`: there a
+/// merge keeps the files the hub no longer plays, and a retired file's bytes
+/// match nothing catalogued, by construction -- so without this every one
+/// would come back as a tags-only passage, beside the disc that replaced it.
 pub fn in_music_folder(path: &str) -> bool {
-    path.replace('\\', "/").split('/').any(|c| c == "Music")
+    let path = path.replace('\\', "/");
+    let mut parts = path.split('/');
+    parts.clone().any(|c| c == "Music") && !parts.any(|c| c == crate::relink::RETIRED)
 }
 
 /// How many files each transaction takes. A phone found 5,761 on its SD card
@@ -700,6 +707,11 @@ mod tests {
         assert!(in_music_folder("/storage/emulated/0/Music/Lempi/a.mp3"));
         assert!(!in_music_folder("/storage/emulated/0/Download/voicemail.mp3"));
         assert!(!in_music_folder("/storage/emulated/0/Musical/a.mp3"), "a whole folder name, not a prefix");
+        // [SPEC-RTF-040]: a merge's retired files are not music to find.
+        assert!(!in_music_folder("/storage/emulated/0/Music/_Retired/Pink Floyd/WYWH/2026-11-01/a.mp3"));
+        assert!(!in_music_folder("/storage/emulated/0/Music/Pink Floyd/WYWH/_Retired/a.mp3"), "at any depth");
+        assert!(!in_music_folder(r"D:\Music\_Retired\a.mp3"), "either separator");
+        assert!(in_music_folder("/storage/emulated/0/Music/_Retired Hits/a.mp3"), "a whole folder name only");
 
         // Beside `Music`, not in it: the helper's folder is `Music` itself.
         let root = dir("scope").parent().unwrap().to_path_buf();
