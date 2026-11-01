@@ -27,7 +27,7 @@ Read honestly: **most of the gain comes from using all 18 characteristics** (+3.
 
 **`[SPEC-FD-070]` Limitation — this validates robustness, not perceptual similarity.** The test measures whether a metric recognizes the same recording through a different encoding. That is necessary but not sufficient for "finds the most similar-sounding track": a metric could score well here and still rank perceptually unrelated songs as close.
 
-**`[SPEC-FD-080]` Perceptual validation — run 2026-08-10. The metric agrees with the listener.** MuLibPlay's eight programmes each carry 6–8 hand-picked seeds `[GDE-PD-040]` — direct human judgments that these songs belong together. All 49 have flavor.
+**`[SPEC-FD-080]` Perceptual validation — run 2026-08-10. The metric agrees with the listener.** MuLibPlay's eight programme slots each carry 6–8 hand-picked seeds `[GDE-PD-040]` — direct human judgments that these songs belong together. All 49 have flavor.
 
 | | mean distance | pairs |
 | :--- | ---: | ---: |

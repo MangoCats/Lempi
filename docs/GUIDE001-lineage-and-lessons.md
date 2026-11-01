@@ -69,7 +69,7 @@ Source: [musicdirector.cpp](inherited/mulibplay/musicdirector.cpp). This algorit
 5. Seasonal `occasionWeight()` multiplier — `[C]`hristmas, `[W]`inter, `[S]`ummer, `[K]`ids.
 6. Drop below `minWeightLimit = 0.001`.
 
-**`[GDE-PD-030]` Cut-level filters and length bonus.** Radio cuts only; reject `< 30 s`, `> 3600 s`, or starting `> 10800 s` into a file. Then `w *= sqrt(min(4.0, 180s / cutLength))` — a mild preference for ~3-minute cuts, capped at 2.0× for short ones.
+**`[GDE-PD-030]` Cut-level filters and length bonus.** Radio cuts only; reject `< 30 s`, `> 3600 s`, or starting `> 10800 s` into a file. Then `w *= sqrt(min(4.0, 180s / cutLength))` — capped at 2.0× for short ones; neutral at 180 s and a penalty above it, so a preference for short cuts rather than for three-minute ones `[SPEC-DIR-125]`.
 
 **`[GDE-PD-040]` Programs are defined by seed tracks, not by tuned curves.** Eight time-of-day programs, each a list of 6–8 exemplar track IDs:
 

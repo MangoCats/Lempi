@@ -159,8 +159,9 @@ done and verified against real `lempiplay3` hardware between
   rather than an outline — "which programme is active" has no other
   indicator on this screen). Never sends `auto`: this appliance has
   no realtime clock and a truck's driving hours have no relationship to a
-  schedule tuned for home listening, so only a specific programme id is
-  ever posted to `/program/:id`. Persistence for this was a real,
+  schedule tuned for home listening, so only a specific programme slot id
+  is ever posted to `/program/:id` (`/programme/slot/:id` since
+  2026-11-01). Persistence for this was a real,
   necessary backend fix, not a UI-only change — `[SPEC-DIR-185]`,
   `SPEC009` §6.
 - **Settings**: volume +/− (moved off Now Playing to make room for the

@@ -118,7 +118,7 @@ empty *User* row would hide the most actionable case the panel has.
 **`[SPEC-FREQ-060]` Programme rows are dynamic: one per programme that has
 actually selected this subject, sorted by its own all-time count.** A
 programme that has never chosen this recording gets no row rather than a row
-of zeros — with eight programmes defined, six empty rows would push the two
+of zeros — with eight programme slots defined, six empty rows would push the two
 that matter off the bottom. Sorting by all-time count puts the most
 relevant first. `"auto"` renders as `Auto`, the only cosmetic difference
 between a stored value and its label.

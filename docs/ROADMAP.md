@@ -29,7 +29,7 @@ folded into one spec.
 | CD ripping: how Vipunen drives a GUI-only Windows tool (decided — person-assisted, built) | [SPEC027](spec/SPEC027-cd-ripping-windows-automation.md) | whole document |
 | CD ripping — multi-disc sets, one-piece discs and hidden audio (built 2026-10-14, image rips); the folded-in passage (built 2026-10-27) | [SPEC026](spec/SPEC026-cd-ripping-passages.md) | [§3 Open](spec/SPEC026-cd-ripping-passages.md#3-open) |
 | Database schema | [SPEC008](spec/SPEC008-database-schema.md) | [§8 Open](spec/SPEC008-database-schema.md#8-open) |
-| Program Director | [SPEC009](spec/SPEC009-program-director.md) | [§9 Open](spec/SPEC009-program-director.md#9-open) |
+| Program Director | [SPEC009](spec/SPEC009-program-director.md), [SPEC074](spec/SPEC074-when-the-director-cannot-choose.md) | [§9 Open](spec/SPEC009-program-director.md#9-open), [§4 Open](spec/SPEC074-when-the-director-cannot-choose.md#4-open) |
 | Audio path supervisor | [SPEC011](spec/SPEC011-audio-path-supervisor.md) | [§5 Risks and open questions](spec/SPEC011-audio-path-supervisor.md#5-risks-and-open-questions) |
 | Library relink — the identity hash (re-keyed to Symphonia 2026-09-27; one file it cannot read remains) | [SPEC045](spec/SPEC045-the-identity-hash.md) | [§3 Done, 2026-09-27](spec/SPEC045-the-identity-hash.md#3-done-2026-09-27) |
 | Vipunen console | [SPEC013](spec/SPEC013-vipunen-console.md) | [§6 Open](spec/SPEC013-vipunen-console.md#6-open) |
@@ -186,9 +186,11 @@ what remains here is the work that crosses documents.
    `[SPEC-STAR-945]`. The two deferred
    device checks of `[FLT-ISS-070]` -- a restore from the Listening backups
    row, and the play-rate check -- remain.
-2. **The Program Director's open items**, [SPEC009 §9](spec/SPEC009-program-director.md#9-open):
+2. **The Program Director's open items**, [SPEC009 §9](spec/SPEC009-program-director.md#9-open)
+   and [SPEC074 §4](spec/SPEC074-when-the-director-cannot-choose.md#4-open):
    a restored queue re-weighed and its provenance kept, `[SPEC-DIR-235]` and
-   `[SPEC-DIR-245]` together. (`[SPEC-DIR-240]`, a passage that
+   `[SPEC-DIR-245]` together; passages without flavor as a true last resort
+   `[SPEC-DIR-212]`. (`[SPEC-DIR-240]`, a passage that
    crashed the player coming straight back, was built 2026-10-14.)
 3. **How a seek feels.** A seek cuts the ring with the skip's own fade (2 s)
    and lead (0.5 s); a shorter fade of its own may feel crisper. The

@@ -75,7 +75,7 @@ the routes a browser skin uses:**
   (`the_snapshot_keeps_the_field_names...`). `eq_preset` in it names the EQ
   in force for a control that can show a name but not a curve `[SPEC-EQ-085]`.
 - `POST /command/:name`, `/volume/:db`, `/seek/:ms` and `/seek/:id/:ms`,
-  `/program/:id`, `/queue/:qid/sooner|later|remove`, and the Audio page's
+  `/programme/slot/:id` (`/program/:id` before 2026-11-01), `/queue/:qid/sooner|later|remove`, and the Audio page's
   `/tempo/:t`, `/pitch/:c`, `/loop/a|b/:ms`, `/loop/clear`,
   `/audio/eq/preset/:name` `[SPEC-FBUI-110]`.
 - `GET /art/:passage_id` — the one piece of bitmap content it shows.
