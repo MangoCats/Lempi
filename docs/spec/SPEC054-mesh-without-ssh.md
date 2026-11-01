@@ -93,6 +93,16 @@ the second fails the first is restored, so a node never keeps half a switch. A
 library partition mounted read-only is remounted by a narrow root verb that takes
 only *on* or *off* and resolves the mount itself, never from a path it is given.
 
+**`[SPEC-NSH-085]` The restore puts back what was there, dangling or not.** The
+forward patch already tolerates references a node had pointing at nothing; the
+undo is held to the same rule, less the ones it puts back itself, and it also
+checks every table with a key into the ones it writes. SQLite's own check is off
+for it, because its deferred check refuses a re-inserted dangling row however
+long that row had been there. *Found 2026-10-31* on lp3-wifi, run
+`20261031T2117Z`: the patch removed the 34 dangling tracklist rows the node held
+`[SPEC-LNK-030]`, the listener failed (*database is locked*), and the restore was
+refused, leaving the catalogue switched and the listener not.
+
 **`[SPEC-NSH-090]` The run is still a person's.** The hub's stages stay as
 `[SPEC-STAR-087]` has them: a person starts a run, reads its report, rehearses and
 commits. Rehearsal asks each player to check its patch without writing. A player

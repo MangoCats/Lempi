@@ -156,7 +156,7 @@ pub fn apply_with(db: &Path, patch: &Json, allowed: Option<&[&str]>, rule: Rule,
     tx.execute_batch("PRAGMA defer_foreign_keys = ON").map_err(es)?;
     let before = fk_before(&tx, patch, &mut HashMap::new())?;
     let out = apply_tx(&tx, patch, allowed, rule)?;
-    fk_after(&tx, &before)?;
+    fk_after(&tx, &before, "the patch")?;
     if commit {
         tx.commit().map_err(|e| e.to_string())?;
     }
@@ -173,21 +173,134 @@ pub fn undo(db: &Path, inverse: &Json) -> Result<Applied, String> {
 /// `[SPEC-NKP-940]`: the inverses of a patch sent in parts, each put back in the
 /// order given -- the last part's first -- all in one transaction, so the undo
 /// is whole or not at all, as the commit it reverses was.
+///
+/// `[SPEC-NSH-085]`: SQLite's own foreign-key check is off for an undo, and [`fk_after`] stands
+/// in for it. An undo puts back what a patch removed, and a row that pointed at nothing when the
+/// patch removed it points at nothing again -- which SQLite's deferred check refuses at the
+/// commit, however long the row had been that way. Found 2026-10-31 on lp3-wifi: a patch removed
+/// the dangling rows the node held `[SPEC-LNK-030]`, its listener failed, and the undo was
+/// refused, leaving half a switch. So the undo is held to what the patch is held to -- no more
+/// references pointing at nothing than it found -- less the ones it puts back itself; and a table
+/// whose rows point into the ones it writes is checked too, since a parent it removes may be named
+/// by a row written since. With the check off, a cascade does not fire either: what is put back
+/// is exactly what the inverse records.
 pub fn undo_parts(db: &Path, inverses: &mut dyn Iterator<Item = Result<Json, String>>) -> Result<Applied, String> {
     let mut c = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .map_err(|e| format!("open {}: {e}", db.display()))?;
     c.busy_timeout(std::time::Duration::from_secs(10)).map_err(|e| e.to_string())?;
+    // Outside the transaction: SQLite ignores it inside one.
+    c.execute_batch("PRAGMA foreign_keys = OFF").map_err(es)?;
     let tx = c.transaction().map_err(|e| e.to_string())?;
-    tx.execute_batch("PRAGMA defer_foreign_keys = ON").map_err(es)?;
+    let mut before = HashMap::new();
+    let mut restored: HashMap<String, i64> = HashMap::new();
     let mut total = Applied::default();
     for inverse in inverses {
-        let counts = undo_tx(&tx, &inverse?)?;
+        let inverse = inverse?;
+        let entries = inverse["tables"].as_array().ok_or("an inverse has tables")?;
+        let names: Vec<String> = entries.iter().filter_map(|t| t["name"].as_str().map(str::to_string)).collect();
+        for t in fk_scope(&tx, &names)? {
+            if !before.contains_key(&t) {
+                before.insert(t.clone(), fk_violations(&tx, &t)?);
+            }
+        }
+        // A row it changes or removes that dangles now, as it is; then the rows it writes, as written.
+        let mut pre = HashMap::new();
+        for t in entries.iter().filter(|t| t["drop_table"] != true) {
+            *pre.entry(t["name"].as_str().unwrap_or("").to_string()).or_insert(0) += dangling_rows(&tx, t, "was")?;
+        }
+        let counts = undo_tx(&tx, &inverse)?;
+        for t in entries.iter().filter(|t| t["drop_table"] != true) {
+            let name = t["name"].as_str().unwrap_or("").to_string();
+            let post = dangling_rows(&tx, t, "now")?;
+            *restored.entry(name.clone()).or_insert(0) += post - pre.get(&name).copied().unwrap_or(0);
+        }
         total.applied += counts.applied;
         total.already += counts.already;
         total.kept += counts.kept;
     }
+    let allowed: HashMap<String, usize> = before
+        .iter()
+        .map(|(t, n)| (t.clone(), (*n as i64 + restored.get(t).copied().unwrap_or(0)).max(0) as usize))
+        .collect();
+    fk_after(&tx, &allowed, "the undo")?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(total)
+}
+
+/// `names`, and every table with a foreign key into one of them.
+fn fk_scope(tx: &Connection, names: &[String]) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = names.to_vec();
+    let mut q = tx.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").map_err(es)?;
+    let all: Vec<String> = q.query_map([], |r| r.get(0)).map_err(es)?.collect::<Result<_, _>>().map_err(es)?;
+    for t in all {
+        if out.contains(&t) {
+            continue;
+        }
+        let mut k = tx.prepare(&format!("SELECT \"table\" FROM pragma_foreign_key_list('{}')", t.replace('\'', "''"))).map_err(es)?;
+        let parents: Vec<String> = k.query_map([], |r| r.get(0)).map_err(es)?.collect::<Result<_, _>>().map_err(es)?;
+        if parents.iter().any(|p| names.contains(p)) {
+            out.push(t);
+        }
+    }
+    Ok(out)
+}
+
+/// How many foreign keys of the rows in inverse entry `t` -- each row's `which` side, "was" or
+/// "now" -- name a parent this database does not hold now: counted as `foreign_key_check` counts,
+/// once per key per row, and a key with a NULL in it never.
+fn dangling_rows(tx: &Connection, t: &Json, which: &str) -> Result<i64, String> {
+    let name = ident(t["name"].as_str().unwrap_or(""))?;
+    let cols: Vec<&str> = t["columns"].as_array().into_iter().flatten().filter_map(|c| c.as_str()).collect();
+    // (id, parent, [(from, to)]) for each of the table's keys; `to` empty is the parent's primary key.
+    type Key = (i64, String, Vec<(String, Option<String>)>);
+    let mut keys: Vec<Key> = Vec::new();
+    {
+        let mut q = tx.prepare(&format!("SELECT id, \"table\", \"from\", \"to\" FROM pragma_foreign_key_list('{name}') ORDER BY id, seq"))
+            .map_err(es)?;
+        let rows = q.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?)))
+            .map_err(es)?;
+        for r in rows {
+            let (id, parent, from, to) = r.map_err(es)?;
+            match keys.last_mut() {
+                Some(k) if k.0 == id => k.2.push((from, to)),
+                _ => keys.push((id, parent, vec![(from, to)])),
+            }
+        }
+    }
+    if keys.is_empty() {
+        return Ok(0);
+    }
+    let mut n = 0;
+    'keys: for (_, parent, pairs) in &keys {
+        let parent = ident(parent)?;
+        let pk: Vec<String> = {
+            let mut q = tx.prepare(&format!("SELECT name FROM pragma_table_info('{parent}') WHERE pk > 0 ORDER BY pk")).map_err(es)?;
+            let v = q.query_map([], |r| r.get(0)).map_err(es)?.collect::<Result<Vec<String>, _>>().map_err(es)?;
+            v
+        };
+        let mut froms = Vec::new();
+        let mut tos = Vec::new();
+        for (i, (from, to)) in pairs.iter().enumerate() {
+            // A key the entry does not carry is not one its rows can break.
+            let Some(at) = cols.iter().position(|c| c == from) else { continue 'keys };
+            froms.push(at);
+            tos.push(ident(to.as_deref().or(pk.get(i).map(String::as_str)).unwrap_or("rowid"))?.to_string());
+        }
+        let sql = format!("SELECT 1 FROM {parent} WHERE {} LIMIT 1",
+                          tos.iter().enumerate().map(|(i, c)| format!("{c} = ?{}", i + 1)).collect::<Vec<_>>().join(" AND "));
+        for r in t["rows"].as_array().into_iter().flatten() {
+            let Some(vals) = r[which].as_array() else { continue };
+            let k: Vec<Value> = froms.iter().map(|&i| vals.get(i).map(to_sql).unwrap_or(Value::Null)).collect();
+            if k.iter().any(|v| matches!(v, Value::Null)) {
+                continue;
+            }
+            let held = tx.query_row(&sql, params_from_iter(k.iter()), |_| Ok(())).optional().map_err(es)?.is_some();
+            if !held {
+                n += 1;
+            }
+        }
+    }
+    Ok(n)
 }
 
 fn undo_tx(tx: &Connection, inverse: &Json) -> Result<Applied, String> {
@@ -239,7 +352,7 @@ pub fn apply_parts(
         total.already += out.counts.already;
         total.kept += out.counts.kept;
     }
-    fk_after(&tx, &before)?;
+    fk_after(&tx, &before, "the patch")?;
     if commit {
         tx.commit().map_err(|e| e.to_string())?;
     }
@@ -275,13 +388,13 @@ fn fk_before(tx: &Connection, patch: &Json, seen: &mut HashMap<String, usize>) -
 /// it points at. Foreign keys are therefore checked at the end of the transaction, not row by
 /// row, and the patch is refused only if it leaves more dangling references than it found: a
 /// reference the node already had broken is not the patch's to answer for.
-fn fk_after(tx: &Connection, before: &HashMap<String, usize>) -> Result<(), String> {
+fn fk_after(tx: &Connection, before: &HashMap<String, usize>, what: &str) -> Result<(), String> {
     let mut tables: Vec<&String> = before.keys().collect();
     tables.sort();
     for t in tables {
         let now = fk_violations(tx, t)?;
         if now > before[t] {
-            return Err(format!("{t}: the patch would leave {} row(s) pointing at nothing, {} more than before; nothing written",
+            return Err(format!("{t}: {what} would leave {} row(s) pointing at nothing, {} more than before; nothing written",
                                now, now - before[t]));
         }
     }
@@ -1837,5 +1950,32 @@ mod tests {
         let ok = apply_with(&db, &serde_json::json!({"tables": [child("m2", "r0")]}), None, Rule::Strict, true).unwrap();
         assert_eq!(ok.counts.applied, 1, "an old dangling row does not stop an unrelated good one");
         assert_eq!(count(&db, "release_recordings"), 2);
+    }
+
+    /// `[SPEC-NSH-085]`: found 2026-10-31 on lp3-wifi, run `20261031T2117Z`. A patch removed the dangling
+    /// rows the node held `[SPEC-LNK-030]`; its listener then failed, and the undo -- putting those rows
+    /// back -- was refused by SQLite's own deferred check, leaving the node with half a switch. An undo
+    /// puts back what was there, dangling or not; it may not leave anything else pointing at nothing.
+    #[test]
+    fn an_undo_puts_back_a_dangling_row_the_patch_removed() {
+        let (_d, db) = fk_db("fk-undo-dangling");
+        let c = Connection::open(&db).unwrap();
+        c.execute_batch("PRAGMA foreign_keys = OFF; INSERT INTO release_recordings VALUES ('ghost', 'm9'); PRAGMA foreign_keys = ON;").unwrap();
+        drop(c);
+        let remove = serde_json::json!({"tables": [
+            {"name": "release_recordings", "columns": ["release_mbid", "mbid"], "key": ["release_mbid", "mbid"],
+             "rows": [{"key": ["ghost", "m9"], "was": ["ghost", "m9"], "now": null}]},
+            parent("r1")]});
+        let out = apply_with(&db, &remove, None, Rule::Strict, true).unwrap();
+        assert_eq!((count(&db, "release_recordings"), count(&db, "releases")), (0, 2), "the dangling row removed, r1 added");
+        undo(&db, &out.inverse).unwrap();
+        assert_eq!((count(&db, "release_recordings"), count(&db, "releases")), (1, 1), "both put back as they were");
+
+        // What an undo may not do: leave a reference pointing at nothing that it did not put back itself.
+        let out = apply_with(&db, &serde_json::json!({"tables": [parent("r2")]}), None, Rule::Strict, true).unwrap();
+        apply_with(&db, &serde_json::json!({"tables": [child("m3", "r2")]}), None, Rule::Strict, true).unwrap();
+        let err = undo(&db, &out.inverse).unwrap_err();
+        assert!(err.contains("pointing at nothing") && err.contains("release_recordings"), "{err}");
+        assert_eq!(count(&db, "releases"), 2, "nothing undone: r2 is still there for the row that names it");
     }
 }
