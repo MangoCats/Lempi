@@ -158,6 +158,7 @@ fn snapshot(listener: &Path, library: &Path) -> Result<Value, String> {
         "natural_keys": NATURAL_KEYS,
         "catalogue_window": CATALOGUE_WINDOW,
         "catalogue_rows": CATALOGUE_ROWS,
+        "retire_files": crate::retire::RETIRE_FILES,
         "library_readonly": library.exists() && !writable(library),
         // [GDE-INT-145]: what this player found reading its own files back,
         // for the hub to name. A report that cannot be read says so, as
@@ -172,6 +173,11 @@ fn has_rows(p: &Value) -> bool {
     p["tables"].as_array().is_some_and(|t| !t.is_empty())
 }
 
+/// `[SPEC-RTF-020]` The files the hub retired that this commit is to move, as it sent them.
+fn retire_list(req: &Value) -> &[Value] {
+    req["retire"].as_array().map(Vec::as_slice).unwrap_or(&[])
+}
+
 fn counts(c: &mesh_sync::Applied) -> Value {
     json!({"applied": c.applied, "already": c.already, "kept": c.kept})
 }
@@ -183,7 +189,8 @@ fn counts(c: &mesh_sync::Applied) -> Value {
 /// catalogue open for writing, so on a read-only partition it too is inside the window.
 fn rehearse(listener: &Path, library: &Path, req: &Value) -> Result<Value, String> {
     let has_cat = req.get("catalogue_parts").is_some_and(|v| !v.is_null()) || has_rows(&req["catalogue_patch"]);
-    let win = Window::open(library, has_cat)?;
+    // A file to retire is on the music partition, which on bose is the catalogue's.
+    let win = Window::open(library, has_cat || !retire_list(req).is_empty())?;
     let out = rehearse_in(listener, library, req);
     if let Some(w) = win.close(library) {
         tracing::warn!("star sync: after a rehearsal: {w}");
@@ -209,6 +216,9 @@ fn rehearse_in(listener: &Path, library: &Path, req: &Value) -> Result<Value, St
         out["listener"] = counts(&mesh_sync::apply_with(listener, lis, Some(&mesh_sync::MERGED), Rule::Member, false)
             .map_err(|e| format!("listener: {e}"))?.counts);
     }
+    if !retire_list(req).is_empty() {
+        out["retire"] = crate::retire::retire(library, retire_list(req), false);
+    }
     Ok(out)
 }
 
@@ -232,7 +242,8 @@ fn commit(listener: &Path, library: &Path, req: &Value, run: &str, apply_listene
     let (cat, lis) = (&req["catalogue_patch"], &req["listener_patch"]);
     let parts = req.get("catalogue_parts").filter(|v| !v.is_null());
     let has_cat = parts.is_some() || has_rows(cat);
-    if !has_cat && !has_rows(lis) {
+    let to_retire = retire_list(req);
+    if !has_cat && !has_rows(lis) && to_retire.is_empty() {
         set_last_run(listener, run)?;
         return Ok((json!({"catalogue": null, "listener": null}), false));
     }
@@ -240,7 +251,7 @@ fn commit(listener: &Path, library: &Path, req: &Value, run: &str, apply_listene
     // read-only partition, as on bose. A catalogue already writable (on the
     // root filesystem, or anywhere a test puts one) never reaches it. The window spans
     // the rehearsal as well as the apply: both write, the first to roll back.
-    let win = Window::open(library, has_cat)?;
+    let win = Window::open(library, has_cat || !to_retire.is_empty())?;
     let applied = (|| -> Result<Committed, String> {
         // Rehearsed first, here, whatever the hub rehearsed before: the files may
         // have moved since.
@@ -298,6 +309,10 @@ fn commit(listener: &Path, library: &Path, req: &Value, run: &str, apply_listene
         };
         Ok((c, l))
     })();
+    // `[SPEC-RTF-025]`: the files the hub retired, moved only once both halves have
+    // landed and inside the same window -- a move left undone is said, never a failed
+    // commit: the catalogue is in, and a stray is something to tidy, not something lost.
+    let retired = (applied.is_ok() && !to_retire.is_empty()).then(|| crate::retire::retire(library, to_retire, true));
     // The tags of any file the catalogue gained, read while it is open for
     // writing -- on a read-only catalogue the one moment it is `[REQ-VIS-180]`.
     // Never fatal to the commit; the scan says what it could not do.
@@ -314,7 +329,8 @@ fn commit(listener: &Path, library: &Path, req: &Value, run: &str, apply_listene
         Some(CatInverse::Parts(n)) => (None, *n),
         None => (None, 0),
     };
-    keep_inverse(listener, run, mem, n_parts, l.as_ref().map(|o| &o.inverse))?;
+    let moved = retired.as_ref().map(crate::retire::moves);
+    keep_inverse(listener, run, mem, n_parts, l.as_ref().map(|o| &o.inverse), moved.as_ref())?;
     set_last_run(listener, run)?;
     if n_parts > 0 {
         let _ = std::fs::remove_dir_all(staged_dir(listener, run));       // consumed
@@ -323,6 +339,9 @@ fn commit(listener: &Path, library: &Path, req: &Value, run: &str, apply_listene
                             "listener": l.as_ref().map(|o| counts(&o.counts))});
     if n_parts > 0 {
         result["catalogue_parts"] = json!(n_parts);
+    }
+    if let Some(r) = retired {
+        result["retire"] = r;
     }
     if let Some(w) = warning {
         result["warning"] = json!(w);
@@ -352,13 +371,15 @@ fn set_last_run(listener: &Path, run: &str) -> Result<(), String> {
 /// are kept. `mesh_sync::undo` with either half puts that half back. A catalogue sent
 /// in parts has each part's inverse in `inverse-<run>-c<n>.json`, which this file
 /// lists, and which `undo_parts` puts back together `[SPEC-NKP-940]`.
-fn keep_inverse(listener: &Path, run: &str, cat: Option<&Value>, cat_parts: usize, lis: Option<&Value>) -> Result<(), String> {
+fn keep_inverse(listener: &Path, run: &str, cat: Option<&Value>, cat_parts: usize, lis: Option<&Value>,
+                moved: Option<&Value>) -> Result<(), String> {
     let d = sync_dir(listener);
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
     let names: Vec<String> = (1..=cat_parts).map(|i| format!("inverse-{run}-c{i}.json")).collect();
     std::fs::write(
         d.join(format!("inverse-{run}.json")),
-        json!({"run": run, "catalogue": cat, "catalogue_parts": names, "listener": lis}).to_string(),
+        // `moved`: the files retired here, `{from, to}`, for `retire::undo` [SPEC-RTF-035].
+        json!({"run": run, "catalogue": cat, "catalogue_parts": names, "listener": lis, "moved": moved}).to_string(),
     )
     .map_err(|e| e.to_string())?;
     let files: Vec<String> = std::fs::read_dir(&d)
@@ -823,7 +844,7 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&d).unwrap();
         let l = d.join("listener.db");
         for run in ["20260901T0000Z", "20260902T0000Z", "20260903T0000Z", "20260904T0000Z"] {
-            keep_inverse(&l, run, None, 0, Some(&json!({"tables": []}))).unwrap();
+            keep_inverse(&l, run, None, 0, Some(&json!({"tables": []})), None).unwrap();
             set_last_run(&l, run).unwrap();
         }
         let mut names: Vec<String> = std::fs::read_dir(sync_dir(&l)).unwrap()
@@ -886,6 +907,61 @@ pub(crate) mod tests {
         assert_eq!(format_of(&n.lib), "opus", "the commit landed through the window");
         assert_eq!(calls(), ["on", "off", "on", "off", "on", "off"], "one window, around the rehearsal inside it and the apply");
         assert!(!writable(&n.lib), "and the partition is back to read-only");
+        let _ = std::fs::remove_dir_all(&n.dir);
+    }
+
+    /// `[SPEC-RTF-020..035]`, end to end through `handle`, on a read-only catalogue as bose's:
+    /// the snapshot says this build retires files; a rehearsal says what would move and moves
+    /// nothing; a commit whose patch removes a file's row moves that file to the node's own
+    /// `_Retired` inside the window, leaves one still catalogued where it is, answers both,
+    /// and keeps the move in its inverse.
+    #[test]
+    fn a_commit_retires_the_files_its_patch_uncatalogues() {
+        let n = node("retire");
+        let music = n.dir.join("Music");
+        let (old, kept) = (music.join("Artist/Album/old.mp3"), music.join("Artist/Album/kept.mp3"));
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        std::fs::write(&old, b"the old rip").unwrap();
+        std::fs::write(&kept, b"still played").unwrap();
+        rusqlite::Connection::open(&n.lib).unwrap().execute_batch(&format!(
+            "INSERT INTO files VALUES (2,'old','mp3','{}'); INSERT INTO files VALUES (3,'kept','mp3','{}');",
+            old.display(), kept.display())).unwrap();
+        let entry = |md5: &str, p: &Path, rel: &str| json!({"audio_md5": md5, "path": p.to_string_lossy(), "rel_path": rel,
+            "sha256": crate::bundle::sha256_file(p).unwrap(), "size_bytes": std::fs::metadata(p).unwrap().len(),
+            "retired_at": "2026-10-30"});
+        let list = json!([entry("old", &old, "Artist/Album/old.mp3"), entry("kept", &kept, "Artist/Album/kept.mp3")]);
+        let drop_old = json!({"tables": [{"name": "files", "columns": ["file_id","audio_md5","format","path"], "key": ["file_id"],
+            "rows": [{"key": [2], "was": [2,"old","mp3",old.to_string_lossy()], "now": null}]}]});
+        let ro = make_read_only(&n.lib);
+        WINDOW_CALLS.with(|c| c.borrow_mut().clear());
+        let result = |h: Handled| -> Value {
+            serde_json::from_str::<Value>(h.answer["answer"].as_str().unwrap()).unwrap()["result"].clone()
+        };
+        let snap = result(handle(&n.l, &n.lib, "snapshot", &signed(&n.mesh, &request(&n, "snapshot", "20261101T0000Z", json!(null), json!(null)))).unwrap());
+        assert_eq!(snap["retire_files"], 1, "the build says it retires files [SPEC-RTF-060]");
+
+        let mut r = request(&n, "rehearse", "20261101T0000Z", drop_old.clone(), json!(null));
+        r["retire"] = list.clone();
+        let rehearsed = result(handle(&n.l, &n.lib, "rehearse", &signed(&n.mesh, &r)).unwrap());
+        assert_eq!(rehearsed["retire"]["files"][0]["outcome"], "to move", "{rehearsed}");
+        assert!(old.is_file(), "a rehearsal moves nothing");
+
+        let mut r = request(&n, "commit", "20261101T0000Z", drop_old, json!(null));
+        r["retire"] = list;
+        let done = result(handle(&n.l, &n.lib, "commit", &signed(&n.mesh, &r)).unwrap());
+        let outcomes: Vec<&str> = done["retire"]["files"].as_array().unwrap().iter().map(|f| f["outcome"].as_str().unwrap()).collect();
+        assert_eq!(outcomes, ["moved", "still catalogued"], "{done}");
+        let to = music.join("_Retired/Artist/Album/2026-10-30/old.mp3");
+        assert!(to.is_file() && !old.exists(), "moved to the node's own _Retired");
+        assert!(kept.is_file(), "a file still catalogued is left where it is");
+        if ro {
+            assert_eq!(calls(), ["on", "off", "on", "off"], "the rehearsal's window, then the commit's, around the move");
+            assert!(!writable(&n.lib), "and the partition is read-only again");
+        }
+        let inv: Value = serde_json::from_str(&std::fs::read_to_string(sync_dir(&n.l).join("inverse-20261101T0000Z.json")).unwrap()).unwrap();
+        assert_eq!(inv["moved"][0]["from"].as_str().unwrap(), old.to_string_lossy(), "the move kept with the commit's inverse");
+        assert_eq!(crate::retire::undo(&inv["moved"]), Ok(1));
+        assert!(old.is_file() && !to.exists(), "and an undo puts it back [SPEC-RTF-035]");
         let _ = std::fs::remove_dir_all(&n.dir);
     }
 

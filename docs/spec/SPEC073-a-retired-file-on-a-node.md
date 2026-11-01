@@ -1,6 +1,6 @@
 # SPEC073: A Retired File on a Node
 
-**Design Specification — Tier 2 · written 2026-11-01, at the maintainer's direction · designed; §2, §4 and the hub side of §3 built 2026-11-01 · answers [SPEC069](SPEC069-a-disc-ripped-again.md) `[SPEC-AGN-920]`, `[SPEC-AGN-045]`**
+**Design Specification — Tier 2 · written 2026-11-01, at the maintainer's direction · §2–§4 built 2026-11-01, the node's half not yet deployed · answers [SPEC069](SPEC069-a-disc-ripped-again.md) `[SPEC-AGN-920]`, `[SPEC-AGN-045]`**
 
 When a disc ripped again is merged, the hub moves the files it no longer
 plays to `_Retired` and removes their rows `[SPEC-AGN-030]`. The next star
@@ -166,6 +166,29 @@ named `[SPEC-NSH-085]`. The hub records each node's moves in
 `sync/retired.json`, an entry being `{node, run, audio_md5, from, to}`, beside
 the bundle ledger `[SPEC-STAR-945]`. A later run doesn't ask about a file
 already moved.
+
+*The node's half built 2026-11-01, not yet deployed* (`player/src/retire.rs`,
+called from `star_node.rs`):
+
+- **Snapshot.** It says `retire_files: 1`.
+- **Rehearsal.** It answers `to move` for each file it would move. It moves
+  and hashes nothing, and it cannot ask whether a row still names the audio,
+  since the patch that removes the row has not run yet.
+- **Commit.** Files move only after both halves of the commit have landed,
+  inside the window the commit opens. A file to retire opens that window even
+  when the run has no catalogue rows, because on `bose` the music is on the
+  catalogue's partition.
+- **Inverse.** The commit's inverse keeps the moves as `moved`, and
+  `retire::undo` puts them back, never over a file already there. Like the
+  rows' inverse, it is applied by hand: no step on the node reads an inverse
+  back by itself.
+- **MPD.** `_Retired/.mpdignore` is written (`*`) when the folder is first
+  made.
+- **The date.** The hub's date becomes a folder name of digits and dashes
+  only, so it cannot climb out of `_Retired`.
+
+Tested in `retire.rs`, and through `handle` on a read-only catalogue
+(`a_commit_retires_the_files_its_patch_uncatalogues`).
 
 ## 4. A `_Retired` folder is never catalogued
 

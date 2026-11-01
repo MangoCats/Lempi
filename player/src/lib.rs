@@ -107,6 +107,8 @@ pub mod frame;
 pub mod programme_node;
 /// The player's half of the signed star sync `[SPEC-NSH-020]`.
 pub mod star_node;
+/// The files the hub retired, moved to this node's own `_Retired` `[SPEC-RTF-020]`.
+pub mod retire;
 /// Trusted networks: where this node takes part in the mesh `[SPEC051]`.
 pub mod trust;
 /// Per-song lyrics where a client will find them `[SPEC-LYR-070]`.
