@@ -243,7 +243,7 @@ pub const RELOAD_MIN_QUEUE_MS: u64 = 180_000;
 /// only the rebuild gives way. A process-wide `Nice=` in the unit file could
 /// not express this, which is why it is here and not there.
 #[cfg(target_os = "linux")]
-fn step_aside() {
+pub fn step_aside() {
     // `IOPRIO_CLASS_IDLE` is 3, in the top three bits of the priority word:
     // the card is touched only when nothing else wants it. Failures are
     // ignored on purpose -- a rebuild that could not lower itself is still a
@@ -259,7 +259,7 @@ fn step_aside() {
 
 /// Nothing to do where the notion does not exist; the rebuild simply runs.
 #[cfg(not(target_os = "linux"))]
-fn step_aside() {}
+pub fn step_aside() {}
 
 /// Bounded on purpose. Only the queue and what is playing can be asked about,
 /// so a handful is plenty and an unbounded map would grow for the life of the

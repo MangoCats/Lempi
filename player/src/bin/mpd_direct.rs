@@ -27,9 +27,10 @@
 //! this passage" panel without a line of code changing.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use lempi_player::db::{PlayerStore, QualifyingConn, Rejection};
+use lempi_player::db::{Library, PlayerStore, QualifyingConn, Rejection};
 use lempi_player::director::library::{Director, QueuedNote, Rng};
 use lempi_player::mpd::{parse, quote, Mpd};
 use lempi_player::scrobble::counts_as_play;
@@ -56,6 +57,64 @@ struct Offered {
     was_current: bool,
 }
 
+/// URI -> passage, its top recording and its length; `None` for a URI that
+/// names more than one radio passage.
+type UriMap = HashMap<String, Option<(i64, Option<String>, u64)>>;
+
+/// What this program heard or was told while it ran, kept so a Director built
+/// since can be told again `[SPEC-DIR-109]`: one built on its own thread read
+/// the history before these may have reached it, and without `--write` they
+/// never reach it at all.
+enum Seen {
+    Played(i64, i64),
+    Rejected(Rejection, String, i64),
+}
+
+impl Seen {
+    fn at(&self) -> i64 {
+        match self {
+            Seen::Played(_, at) | Seen::Rejected(_, _, at) => *at,
+        }
+    }
+}
+
+/// A Director being built on its own thread, as the player builds one
+/// `[IMPL-SUI-075]`: the one in hand goes on choosing until it lands.
+struct Building {
+    rx: mpsc::Receiver<Result<(Director, UriMap), String>>,
+    /// When it began, in unix seconds: what was written before this is in
+    /// the history it read.
+    started_at: i64,
+    began: Instant,
+}
+
+/// Build a Director and its URI map on a thread of their own, as the player
+/// builds one `[IMPL-SUI-075]`, and hand them back on the channel. Opened as
+/// the player's builder opens the library: read-only, its own connection.
+fn spawn_rebuild(
+    db_path: &str,
+    library_path: &str,
+    root_norm: &str,
+) -> std::io::Result<mpsc::Receiver<Result<(Director, UriMap), String>>> {
+    let (tx, rx) = mpsc::channel();
+    let (db, lib, root) = (db_path.to_string(), library_path.to_string(), root_norm.to_string());
+    std::thread::Builder::new().name("director-rebuild".into()).spawn(move || {
+        // Below the sampler, and idle on the card, as the player's builder is.
+        lempi_player::session::step_aside();
+        let (db, lib) = (std::path::Path::new(&db), std::path::Path::new(&lib));
+        let built = Library::open_split(db, lib)
+            .and_then(|l| l.director())
+            .map_err(|e| format!("{e:?}"))
+            .and_then(|d| {
+                let c = QualifyingConn::open(db, lib, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                    .map_err(|e| format!("{e:?}"))?;
+                Ok((d, uri_map(&c, &root)))
+            });
+        let _ = tx.send(built);
+    })?;
+    Ok(rx)
+}
+
 /// URI -> passage, from the library, for naming a song this program did not
 /// queue: a person's own additions feed rotation `[SPEC-MPD-115]`. Built at
 /// start and again whenever the Director is rebuilt, so a file imported since
@@ -66,8 +125,8 @@ struct Offered {
 /// would attribute a play to a passage the listener never heard, which is the
 /// failure `[SPEC-MPD-060]`'s third rung exists to refuse. The recording is
 /// the passage's top one, as the Director reads it `[SPEC-DIR-112]`.
-fn uri_map(conn: &QualifyingConn, root_norm: &str) -> HashMap<String, Option<(i64, Option<String>, u64)>> {
-    let mut by_uri: HashMap<String, Option<(i64, Option<String>, u64)>> = HashMap::new();
+fn uri_map(conn: &QualifyingConn, root_norm: &str) -> UriMap {
+    let mut by_uri: UriMap = HashMap::new();
     let mut q = conn
         .prepare(
             "SELECT f.path, f.duration_ms, p.passage_id, \
@@ -239,40 +298,72 @@ fn main() {
     };
     let mut last_watch: Option<Instant> = None;
     let mut utc_synced = Instant::now();
-    // Without `--write` a play is known only here, so a rebuild, which reads
-    // history, would forget it: kept to be noted again.
-    let mut heard_here: Vec<(i64, i64)> = Vec::new();
+    let mut seen: Vec<Seen> = Vec::new();
+    let mut building: Option<Building> = None;
 
     loop {
+        // A Director built on its own thread, landed: swapped in, told again
+        // what is queued and what was heard and declined while it built, and
+        // the watch below run at once so the hold, the offset and the windows
+        // reach it before it chooses anything.
+        if let Some(b) = &building {
+            match b.rx.try_recv() {
+                Err(mpsc::TryRecvError::Empty) => {}
+                landed => {
+                    let b = building.take().expect("checked above");
+                    match landed {
+                        Ok(Ok((d, map))) => {
+                            director = d;
+                            by_uri = map;
+                            for o in ours.values_mut() {
+                                o.note = director.note_queued(o.passage_id, now());
+                            }
+                            for s in &seen {
+                                match s {
+                                    Seen::Played(pid, at) => {
+                                        if let Some(n) = director.note_queued(*pid, *at) {
+                                            director.settle(n);
+                                        }
+                                    }
+                                    Seen::Rejected(kind, mbid, at) => director.note_rejection(*kind, mbid, *at),
+                                }
+                            }
+                            // Written to history before the build began, so it
+                            // read them; only the rest need keeping. Without
+                            // `--write` nothing is written, and all are kept.
+                            if store.is_some() {
+                                seen.retain(|s| s.at() >= b.started_at - 1);
+                            }
+                            watched.programme = String::new();
+                            last_watch = None;
+                            println!(
+                                "  director rebuilt, as the player's was, in {:.1}s, and swapped in",
+                                b.began.elapsed().as_secs_f64()
+                            );
+                        }
+                        Ok(Err(e)) => eprintln!("director rebuild: {e}; the one in hand goes on choosing"),
+                        Err(_) => eprintln!("director rebuild stopped without answering; the one in hand goes on choosing"),
+                    }
+                }
+            }
+        }
         if last_watch.is_none_or(|t| t.elapsed().as_secs() >= WATCH_S) {
             last_watch = Some(Instant::now());
             if let Some(r) = &reader {
                 // A rebuild the player started: what the Director reads at
-                // load has changed. Rebuilt here too, with the URI map, and
-                // what is queued and heard noted again on the new Director.
+                // load has changed. Built here too, on its own thread, the
+                // way the player builds one `[IMPL-SUI-075]`, so sampling and
+                // choosing go on meanwhile. One at a time: a stamp that moves
+                // again while one builds is seen once it has landed.
                 let stamp = r.director_rebuilt_at();
-                if stamp != watched.rebuilt_at {
+                if stamp != watched.rebuilt_at && building.is_none() {
                     watched.rebuilt_at = stamp;
-                    let began = Instant::now();
-                    match Director::load(&conn) {
-                        Ok(d) => {
-                            director = d;
-                            by_uri = uri_map(&conn, &root_norm);
-                            watched.programme = programme_signature(&conn);
-                            for o in ours.values_mut() {
-                                o.note = director.note_queued(o.passage_id, now());
-                            }
-                            for &(pid, at) in &heard_here {
-                                if let Some(n) = director.note_queued(pid, at) {
-                                    director.settle(n);
-                                }
-                            }
-                            println!(
-                                "  director rebuilt, as the player's was, in {:.1}s",
-                                began.elapsed().as_secs_f64()
-                            );
+                    match spawn_rebuild(&db_path, &library_path, &root_norm) {
+                        Ok(rx) => {
+                            building = Some(Building { rx, started_at: now(), began: Instant::now() });
+                            println!("  director rebuilding, as the player's is; the one in hand goes on choosing");
                         }
-                        Err(e) => eprintln!("director rebuild: {e}; the one in hand goes on choosing"),
+                        Err(e) => eprintln!("could not start a director rebuild: {e}"),
                     }
                 }
                 // A programme edit: its slots, taken as the player takes them.
@@ -469,11 +560,16 @@ fn main() {
                 );
                 if heard {
                     played += 1;
-                    if store.is_none() {
-                        heard_here.push((o.passage_id, now()));
-                    }
+                    seen.push(Seen::Played(o.passage_id, now()));
                 } else {
                     skipped += 1;
+                    // Its window starts now, in this Director, as the
+                    // player's does `[SPEC-PLAY-050]` -- not at the next
+                    // build, and with no `--write`, not never.
+                    if let Some(m) = &o.mbid {
+                        director.note_rejection(Rejection::Skip, m, now());
+                        seen.push(Seen::Rejected(Rejection::Skip, m.clone(), now()));
+                    }
                 }
                 if let Some(st) = &store {
                     let r = if heard {
@@ -511,6 +607,10 @@ fn main() {
                     "  removed by hand [{}] {} -- queue mark undone, dequeue recorded",
                     o.passage_id, o.title
                 );
+                if let Some(m) = &o.mbid {
+                    director.note_rejection(Rejection::Dequeue, m, now());
+                    seen.push(Seen::Rejected(Rejection::Dequeue, m.clone(), now()));
+                }
                 if let Some(st) = &store {
                     // Never sounded, so there is no percentage to report
                     // `[REQ-VIS-250]`.
@@ -686,7 +786,35 @@ fn now() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::programme_signature;
+    use super::{programme_signature, spawn_rebuild};
+
+    /// A rebuild on its own thread hands back a Director and the URI map
+    /// over a library as the schema makes it, with a passage under the
+    /// music root named by its URI `[SPEC-DIR-109]`.
+    #[test]
+    fn a_rebuild_on_its_own_thread_hands_back_a_director_and_its_uri_map() {
+        let f = std::env::temp_dir().join(format!("mpd_direct_rebuild_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&f);
+        let c = rusqlite::Connection::open(&f).unwrap();
+        c.execute_batch(include_str!("../../../sql/schema.sql")).unwrap();
+        c.execute_batch(
+            "INSERT INTO files (file_id, audio_md5, path, size_bytes, mtime, format, duration_ms, first_seen, last_seen)
+                 VALUES (1, 'm1', '/m/a/b.mp3', 1, 1, 'mp3', 200000, 't', 't');
+             INSERT INTO passages (passage_id, file_id, kind, start_ms, end_ms, boundary_src)
+                 VALUES (7, 1, 'radio', 0, 200000, 'test');",
+        )
+        .unwrap();
+        drop(c);
+        let path = f.to_string_lossy().to_string();
+        let rx = spawn_rebuild(&path, &path, "/m").unwrap();
+        let (d, map) = rx
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("the builder answered")
+            .expect("and built");
+        assert_eq!(d.len(), 1, "the one radio passage");
+        assert_eq!(map.get("a/b.mp3").and_then(|v| v.as_ref()).map(|v| v.0), Some(7), "named by its URI");
+        let _ = std::fs::remove_file(&f);
+    }
     use lempi_player::db::QualifyingConn;
 
     /// Every kind of programme edit reads as a change -- a slot added, renamed,
