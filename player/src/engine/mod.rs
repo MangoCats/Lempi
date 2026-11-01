@@ -1810,6 +1810,13 @@ impl Engine {
         self.live.first().map(|l| (l.entry.passage_id, self.audible_ms(l)))
     }
 
+    /// Every passage admitted to the mixer: the one sounding and any fading
+    /// in. Out of the queue, and so out of `queued_ids`, but still not to be
+    /// chosen again `[SPEC-DIR-107]`.
+    pub fn sounding_ids(&self) -> Vec<i64> {
+        self.live.iter().map(|l| l.entry.passage_id).filter(|&id| id > 0).collect()
+    }
+
     /// Whether the sounding passage's play is already in the history
     /// `[SPEC-BK-065]`.
     pub fn head_counted(&self) -> bool {

@@ -309,6 +309,9 @@ impl crate::switch::Progress for Engine {
     fn head_position(&self) -> Option<(i64, u64)> {
         Engine::head_position(self)
     }
+    fn sounding_ids(&self) -> Vec<i64> {
+        Engine::sounding_ids(self)
+    }
     fn head_counted(&self) -> bool {
         Engine::head_counted(self)
     }

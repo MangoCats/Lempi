@@ -975,6 +975,14 @@ impl Session {
             return;
         }
         let mut chosen: Vec<i64> = engine.queued_ids();
+        // Kept out of every pick: what is queued, and what has already left
+        // the queue for the mixer -- the passage on air and one fading in
+        // `[SPEC-DIR-107]`. Rotation holds those out of an ordinary pick, but
+        // the relaxed fallback sets rotation aside, and the no-Director
+        // fallback never had it; without this either could queue the passage
+        // now playing to play again straight after itself.
+        let mut skip: Vec<i64> = engine.sounding_ids();
+        skip.extend(&chosen);
         // Read once, before the loop: the passage on air does not change while
         // this refill picks, and `engine` is borrowed mutably below.
         let sounding = engine.head_position().map(|(id, _)| id);
@@ -992,8 +1000,8 @@ impl Session {
                 // answer than silence [REQ-PD-100], so rotation and recovery
                 // are set aside, and nothing else is (`decide_relaxed`).
                 let Some(mut decision) = d
-                    .decide(now, &mut self.rng, &chosen, tail)
-                    .or_else(|| d.decide_relaxed(now, &mut self.rng, &chosen))
+                    .decide(now, &mut self.rng, &skip, tail)
+                    .or_else(|| d.decide_relaxed(now, &mut self.rng, &skip))
                 else {
                     starved = true;
                     break;
@@ -1003,6 +1011,7 @@ impl Session {
                     self.notes.entry(entry.passage_id).or_default().notes.push_back(note);
                 }
                 chosen.push(entry.passage_id);
+                skip.push(entry.passage_id);
 
                 // The Director's own bulk pool load never resolves a real
                 // artist name for every candidate -- the same reasoning
@@ -1106,7 +1115,8 @@ impl Session {
         // so an empty answer is not recomputed on every tick.
         let still_short = engine.shortfall();
         if still_short > 0 && self.director.is_none() && !resting {
-            let queued = engine.queued_ids();
+            let mut queued = engine.sounding_ids();
+            queued.extend(engine.queued_ids());
             match self.lib.fallback_radio(still_short, now, suppress, &queued, &mut self.rng) {
                 Ok(entries) if entries.is_empty() => {
                     self.fallback_rest = Some(std::time::Instant::now() + FALLBACK_REST);
@@ -1557,6 +1567,80 @@ mod tests {
         fn head_position(&self) -> Option<(i64, u64)> {
             Some((self.0, 1_000))
         }
+    }
+
+    /// One passage on air, nothing queued, room for one more: the refill's
+    /// view when everything else is held by rotation.
+    struct OnAir {
+        on_air: i64,
+        got: Vec<i64>,
+    }
+
+    impl Playback for OnAir {
+        fn capabilities(&self) -> crate::playback::Capabilities {
+            crate::playback::Capabilities::FULL
+        }
+        fn enqueue(&mut self, e: crate::queue::QueueEntry) {
+            self.got.push(e.passage_id);
+        }
+        fn queued_ids(&self) -> Vec<i64> {
+            self.got.clone()
+        }
+        fn queued_ms(&self) -> u64 {
+            0
+        }
+        fn shortfall(&self) -> usize {
+            usize::from(self.got.is_empty())
+        }
+        fn take_dropped(&mut self) -> Vec<i64> {
+            Vec::new()
+        }
+        fn resume_at(&mut self, _position_ms: u64) {}
+        fn tick(&mut self) -> usize {
+            0
+        }
+        fn is_shutdown(&self) -> bool {
+            false
+        }
+    }
+    impl crate::switch::FadeOut for OnAir {
+        fn fade_out(&mut self, _ms: u64) -> crate::switch::Stopped {
+            crate::switch::Stopped::Cut
+        }
+    }
+    impl crate::switch::Publish for OnAir {
+        fn publish(&mut self, _p: &crate::switch::Published<'_>) {}
+    }
+    impl crate::switch::Progress for OnAir {
+        fn head_position(&self) -> Option<(i64, u64)> {
+            Some((self.on_air, 1_000))
+        }
+    }
+
+    /// The passage on air is out of the queue but must not be picked again
+    /// `[SPEC-DIR-107]`. With every passage held by rotation the relaxed
+    /// fallback sets rotation aside, and before this it would draw the one
+    /// playing as readily as any other -- to play straight after itself.
+    #[test]
+    fn the_passage_on_air_is_never_picked_to_follow_itself() {
+        let tmp = director_library_on_disk("onair");
+        let mut session = Session::open(&tmp, &tmp, 5).unwrap();
+        let lib = crate::db::Library::open_split(&tmp, &tmp).unwrap();
+        session.director = Some(lib.director().unwrap());
+        let now = unix_now();
+        for id in [1, 2, 3] {
+            session.mark(id, now); // all three held by rotation
+        }
+        for seed in 0..40 {
+            session.rng = Rng::seeded(seed);
+            session.fallback_rest = None;
+            let mut b = OnAir { on_air: 3, got: Vec::new() };
+            session.refill(&mut b, (0, 0));
+            assert_eq!(b.got.len(), 1, "seed {seed}: the relaxed fallback still fills the slot");
+            assert_ne!(b.got[0], 3, "seed {seed}: the passage on air was queued to follow itself");
+            session.notes.clear();
+        }
+        let _ = std::fs::remove_file(&tmp);
     }
 
     /// The first half of the 2026-09-11 incident `[GDE-WRK-010]`. A passage

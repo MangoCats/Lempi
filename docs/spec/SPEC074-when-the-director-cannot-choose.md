@@ -42,7 +42,7 @@ It weighs each radio passage with the Director's own `weigh`, but as a library c
 | the skip and dequeue windows `[SPEC-PLAY-050]`, `[SPEC-PLAY-055]` | the programme: no seeds, no shaping, no flow |
 | the occasion multiplier on the listener's local date `[SPEC-DIR-132]`, and `min_weight` | related recordings |
 
-In rotation's place, **the longest unplayed is the likeliest**: each weight is multiplied by the seconds since its passage or its recording last played, ten years for one never played and at least 60 s. The batch is then drawn **without replacement** in one go (Efraimidis–Spirakis), so nothing spaces the picks *within* one fill: two passages of one recording, or several by one artist, can land together. Nothing is written to `selection_decisions`; each entry is `selected_by = "auto"`.
+What is queued, on air or fading in is skipped `[SPEC-DIR-107]`: with no rotation at all, nothing else would stop the passage playing now from being queued again. In rotation's place, **the longest unplayed is the likeliest**: each weight is multiplied by the seconds since its passage or its recording last played, ten years for one never played and at least 60 s. The batch is then drawn **without replacement** in one go (Efraimidis–Spirakis), so nothing spaces the picks *within* one fill: two passages of one recording, or several by one artist, can land together. Nothing is written to `selection_decisions`; each entry is `selected_by = "auto"`.
 
 Nothing eligible: nothing is queued, the reason is logged once, and refill rests 30 s before asking again.
 
@@ -50,7 +50,7 @@ Nothing eligible: nothing is queued, the reason is logged once, and refill rests
 
 ## 3. Everything eligible is blocked: `Director::decide_relaxed`
 
-**`[SPEC-DIR-232]` The relaxed fallback.** Called when `Director::decide` returns nothing — after Stage A, no passage is both eligible and not already queued. A repeat is a better answer than silence `[REQ-PD-100]`. Built 2026-10-08, and used by both `Session::refill` and `mpd_direct`.
+**`[SPEC-DIR-232]` The relaxed fallback.** Called when `Director::decide` returns nothing — after Stage A, no passage is both eligible and neither queued nor on air. A repeat is a better answer than silence `[REQ-PD-100]`. Built 2026-10-08, and used by both `Session::refill` and `mpd_direct`.
 
 - **Stage A, with every age removed.** Passage, recording, work, artist and related-recording ages are all treated as never played, so no rotation block or recovery ramp applies. Everything else stays: holds and failed files, the length and depth filters, the rejection windows, **the listener's restraint** (recording and every credited artist), the occasion multiplier, and `min_weight`. A passage turned all the way down stays out.
 - **Stage B as usual**: the seeds of the slot on air, Like-Taste, and the Dislike filter where there are seeds `[SPEC-DIR-150]`.

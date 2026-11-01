@@ -99,6 +99,14 @@ pub trait Progress {
     /// agreeing is what lets a position cross unaltered.
     fn head_position(&self) -> Option<(i64, u64)>;
 
+    /// Every passage already handed to the output and no longer in the
+    /// queue: the one sounding, and one fading in over it. The Director must
+    /// not pick any of them again `[SPEC-DIR-107]`. By default the head alone,
+    /// which is all a backend whose queue still holds what follows can have.
+    fn sounding_ids(&self) -> Vec<i64> {
+        self.head_position().map(|(id, _)| id).into_iter().collect()
+    }
+
     /// Read the backend's own clock now rather than at its next scheduled poll.
     ///
     /// Free for the local engine, which is the clock. One request for a guest,
@@ -317,6 +325,9 @@ impl Publish for Switching {
 impl Progress for Switching {
     fn head_position(&self) -> Option<(i64, u64)> {
         self.live().head_position()
+    }
+    fn sounding_ids(&self) -> Vec<i64> {
+        self.live().sounding_ids()
     }
     fn refresh(&mut self) {
         self.live_mut().refresh()
