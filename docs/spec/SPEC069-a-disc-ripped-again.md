@@ -269,7 +269,9 @@ read-only: neither catalogues any of the six, no passage or tag outlived its
 file, and the column is there. A fresh snapshot then merged to nothing of
 this run's -- only an album the hub imported since. `lempi02w` and `lp3-wifi`
 did not answer, and still hold the six catalogued. Still open: the six audio
-files stay on each node's disk, catalogued nowhere -- a stray there. The DAO
+files stay on each node's disk, catalogued nowhere -- a stray there. *Designed
+2026-11-01, not built:* the node moves them to its own `_Retired` in the
+commit that removes their rows ([SPEC073](SPEC073-a-retired-file-on-a-node.md)). The DAO
 was bundled for `bose`, `lrhtpc` and `smartboardpc` on 2026-11-01
 (`sync/bundled.json`), and not yet for `lempi02w`, `lp3-wifi` or
 `teacherslounge`; a node patched before its bundle arrives has the album's
