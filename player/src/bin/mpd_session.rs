@@ -27,6 +27,7 @@ fn main() {
     use lempi_player::cli::specs::mpd_session as opt;
     let mut args = opt::SPEC.parse();
     let db = args.need(&opt::LISTENER).to_string();
+    let library = args.need(&opt::LIBRARY).to_string();
     let root = args.need(&opt::ROOT).to_string();
     let write = args.has(&opt::WRITE);
     // **No default duration.** Without `--for` this runs until interrupted,
@@ -44,7 +45,12 @@ fn main() {
     // options declare `.setting(..)` and the chain does it `[GDE-CLI-090]`.
     // The struct is still wanted for the two suppression windows below,
     // which are settings and not options.
-    let saved = PlayerStore::open(Path::new(&db))
+    //
+    // `open_split`, never `open`: `open(p)` is `open_split(p, p)`, which takes
+    // the listener for the whole database and creates empty `file_tags` and
+    // `cover_art` in it, shadowing the catalogue's own (`host.rs`,
+    // `[IMPL-DBSPLIT-025]`).
+    let saved = PlayerStore::open_split(Path::new(&db), Path::new(&library))
         .ok()
         .and_then(|s| s.load_settings())
         .unwrap_or_default();
@@ -55,7 +61,7 @@ fn main() {
     let interval: u64 = args.must_int(&opt::INTERVAL);
 
     let loading = Instant::now();
-    let mut session = Session::open(Path::new(&db), Path::new(&db), depth).unwrap_or_else(|e| {
+    let mut session = Session::open(Path::new(&db), Path::new(&library), depth).unwrap_or_else(|e| {
         eprintln!("session: {e}");
         std::process::exit(1);
     });
@@ -66,7 +72,8 @@ fn main() {
         std::process::exit(1);
     });
     // Teach it to name what the listener queues themselves `[SPEC-MPD-115]`.
-    match rusqlite::Connection::open(&db)
+    // From the catalogue, read-only: the passages are there `[IMPL-DBSPLIT-025]`.
+    match rusqlite::Connection::open_with_flags(&library, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| e.to_string())
         .and_then(|c| lempi_player::mpd_backend::nameable_uris(&c, &root))
     {
@@ -78,7 +85,7 @@ fn main() {
         Err(e) => eprintln!("cannot name the library's URIs ({e}); hand-added songs will not count"),
     }
     if write {
-        match PlayerStore::open(Path::new(&db)) {
+        match PlayerStore::open_split(Path::new(&db), Path::new(&library)) {
             Ok(s) => guest.attach_store(s),
             Err(e) => {
                 eprintln!("cannot open {db} for writing: {e}");

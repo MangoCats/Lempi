@@ -598,6 +598,10 @@ pub mod mpd_fill {
     pub const LISTENER: crate::cli::Opt = common::LISTENER.needed().formerly(&["--db"])
         .short("l").bootstrap();
     pub const ROOT: crate::cli::Opt = common::ROOT.needed();
+    /// The catalogue, which is where the passages are: every installation is
+    /// split `[IMPL-DBSPLIT-025]`, and the listener alone holds none.
+    pub const LIBRARY: crate::cli::Opt = common::LIBRARY.needed()
+        .short("lib").bootstrap();
     pub const DEPTH: crate::cli::Opt =
         common::DEPTH.or(crate::default_queue_depth!()).setting("queue_depth");
     // Seconds on the command line, milliseconds in the store. The scale is
@@ -612,7 +616,7 @@ pub mod mpd_fill {
     pub const SPEC: Cli = Cli {
         program: "mpd_fill",
         summary: "top MPD's queue up to depth with random picks; the shape without a Director",
-        opts: &[ADDR, LISTENER, ROOT, DEPTH, INTERVAL, RUN_FOR, SEED],
+        opts: &[ADDR, LISTENER, LIBRARY, ROOT, DEPTH, INTERVAL, RUN_FOR, SEED],
         notes: &[],
     };
 }
@@ -657,6 +661,9 @@ pub mod mpd_session {
     pub const LISTENER: Opt = common::LISTENER.needed().formerly(&["--db"])
         .short("l").bootstrap();
     pub const ROOT: Opt = common::ROOT.needed();
+    /// The catalogue `[IMPL-DBSPLIT-025]`: the Session's Director and the
+    /// backend's URI map both read passages, which the listener has none of.
+    pub const LIBRARY: Opt = common::LIBRARY.needed().short("lib").bootstrap();
     pub const DEPTH: Opt =
         common::DEPTH.or(crate::default_queue_depth!()).setting("queue_depth");
     /// **`--interval-ms`, not `--interval`.** Three other binaries take
@@ -679,7 +686,7 @@ pub mod mpd_session {
     pub const SPEC: Cli = Cli {
         program: "mpd_session",
         summary: "Lempi's own Session with an MPD backend instead of an Engine",
-        opts: &[ADDR, LISTENER, ROOT, DEPTH, INTERVAL, RUN_FOR, WRITE, THEN_HANDOFF],
+        opts: &[ADDR, LISTENER, LIBRARY, ROOT, DEPTH, INTERVAL, RUN_FOR, WRITE, THEN_HANDOFF],
         notes: &[],
     };
 }

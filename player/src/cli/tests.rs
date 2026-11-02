@@ -1004,7 +1004,7 @@ fn a_stored_setting_that_cannot_be_read_complains_and_falls_through() {
 /// pushing the conversion into the binary `[GDE-CLI-090]`.
 #[test]
 fn a_scaled_setting_arrives_in_the_options_own_unit() {
-    let Outcome::Run(mut a) = run(&specs::mpd_fill::SPEC, "--listener a --root b") else {
+    let Outcome::Run(mut a) = run(&specs::mpd_fill::SPEC, "--listener a --library c --root b") else {
         panic!()
     };
     a.with_settings(|k| (k == "sample_interval_ms").then(|| "2500".to_string()));

@@ -51,15 +51,19 @@ fn quote(s: &str) -> String {
 
 /// Every passage whose file resolves to a URI under `root` — rung 1 of the
 /// ladder `[SPEC-MPD-060]`, which stage 0 measured at 100% same-platform.
-fn load(db_path: &str, root: &str) -> Result<Vec<Pick>, String> {
-    let db = Connection::open(db_path).map_err(|e| format!("{db_path}: {e}"))?;
+fn load(library_path: &str, root: &str) -> Result<Vec<Pick>, String> {
+    // The catalogue, read-only: the passages are there and nowhere else
+    // `[IMPL-DBSPLIT-025]`, and this tool has no business writing it.
+    let db = Connection::open_with_flags(library_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("{library_path}: {e}"))?;
     let root = root.replace('\\', "/").trim_end_matches('/').to_string();
     let mut q = db
         .prepare(
             "SELECT p.passage_id, f.path, p.start_ms, p.end_ms, \
                     COALESCE((SELECT r.title FROM passage_recordings pr \
                               JOIN recordings r ON r.mbid = pr.mbid \
-                              WHERE pr.passage_id = p.passage_id LIMIT 1), '') \
+                              WHERE pr.passage_id = p.passage_id \
+                              ORDER BY pr.weight DESC, pr.mbid LIMIT 1), '') \
              FROM passages p JOIN files f USING(file_id) \
              WHERE p.kind = 'radio' AND p.end_ms > p.start_ms",
         )
@@ -120,6 +124,7 @@ fn main() {
     use lempi_player::cli::specs::mpd_fill as opt;
     let mut args = opt::SPEC.parse();
     let db_path = args.need(&opt::LISTENER).to_string();
+    let library_path = args.need(&opt::LIBRARY).to_string();
     let root = args.need(&opt::ROOT).to_string();
     // `[SPEC-MPD-095]`: at or above the depth, the Director adds nothing.
     let run_for: Option<f64> = args.real(&opt::RUN_FOR);
@@ -127,8 +132,16 @@ fn main() {
     // The listener's settings own these `[SPEC-MPD-105]`; the flags override.
     // Neither precedence nor the fallback is written here any more -- the
     // options declare `.setting(..)` and the chain does it `[GDE-CLI-090]`.
-    if let Some(saved) = lempi_player::db::PlayerStore::open(std::path::Path::new(&db_path))
-        .ok()
+    //
+    // `open_split`, never `open`: `open(p)` is `open_split(p, p)`, which takes
+    // the listener for the whole database and creates empty `file_tags` and
+    // `cover_art` in it, shadowing the catalogue's own (`host.rs`,
+    // `[IMPL-DBSPLIT-025]`).
+    if let Some(saved) = lempi_player::db::PlayerStore::open_split(
+        std::path::Path::new(&db_path),
+        std::path::Path::new(&library_path),
+    )
+    .ok()
         .and_then(|s| s.load_settings())
     {
         for complaint in args.with_settings(|k| saved.value_of(k)) {
@@ -139,7 +152,7 @@ fn main() {
     let interval: f64 = args.must_real(&opt::INTERVAL);
     let addr = args.need(&opt::ADDR).to_string();
 
-    let picks = load(&db_path, &root).unwrap_or_else(|e| {
+    let picks = load(&library_path, &root).unwrap_or_else(|e| {
         eprintln!("{e}");
         std::process::exit(1);
     });

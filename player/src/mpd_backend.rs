@@ -71,7 +71,14 @@ pub fn nameable_uris(
     let root = root.replace('\\', "/").trim_end_matches('/').to_string();
     let mut q = conn
         .prepare(
-            "SELECT f.path, f.duration_ms, p.passage_id,                 (SELECT pr.mbid FROM passage_recordings pr                  WHERE pr.passage_id = p.passage_id LIMIT 1)              FROM passages p JOIN files f USING(file_id) WHERE p.kind = 'radio'",
+            // The passage's top recording, as the Director reads it
+            // `[SPEC-DIR-112]`: highest weight, ties by MBID. Without the
+            // `ORDER BY` a medley's play was stamped under whichever of its
+            // recordings SQLite returned first.
+            "SELECT f.path, f.duration_ms, p.passage_id, \
+                (SELECT pr.mbid FROM passage_recordings pr \
+                  WHERE pr.passage_id = p.passage_id ORDER BY pr.weight DESC, pr.mbid LIMIT 1) \
+             FROM passages p JOIN files f USING(file_id) WHERE p.kind = 'radio'",
         )
         .map_err(|e| e.to_string())?;
     let rows = q
