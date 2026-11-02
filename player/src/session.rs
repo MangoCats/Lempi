@@ -852,10 +852,12 @@ impl Session {
         // minutes later it queued another recording of the same song, through
         // an 8-hour artist block that never saw a reason to fire
         // `[GDE-WRK-010]`.
-        let sounding = engine.head_position().map(|(id, _)| id);
-        let ids: Vec<i64> = sounding.into_iter().chain(engine.queued_ids()).collect();
-        for id in ids {
-            self.mark(id, now);
+        //
+        // Each is marked at the moment it is projected to start, as a pick is
+        // marked when chosen `[SPEC-DIR-186]`: the next pick is judged at its
+        // own start, and measures each of these from theirs.
+        for (id, at) in self.projected_starts(engine, now) {
+            self.mark(id, at);
         }
         // **And what was heard while it was built.** The build read the
         // history once, near its start; a play or a skip after that reached
@@ -895,9 +897,38 @@ impl Session {
         self.heard.push(h);
     }
 
-    /// Mark a passage as coming, in the running Director `[REQ-PD-112]`.
-    fn mark(&mut self, passage: i64, now: i64) {
-        if let Some(note) = self.director.as_mut().and_then(|d| d.note_queued(passage, now)) {
+    /// When each passage the backend holds is projected to start
+    /// `[SPEC-DIR-186]`: the one on air at `now`, and each queued one when what
+    /// is ahead of it has played through. Counted back from the end of
+    /// everything ahead (`ahead_ms`), each queued passage starting its own
+    /// length before the next, so a passage this Director cannot measure
+    /// moves only the ones before it.
+    fn projected_starts(&self, engine: &dyn crate::switch::Backend, now: i64) -> Vec<(i64, i64)> {
+        let length = |id: i64| self.director.as_ref().and_then(|d| d.passage_ms(id)).unwrap_or(0);
+        let queued = engine.queued_ids();
+        let mut end_ms = engine.ahead_ms();
+        let mut starts: Vec<(i64, i64)> = queued
+            .iter()
+            .rev()
+            .map(|&id| {
+                end_ms = end_ms.saturating_sub(length(id));
+                (id, now + (end_ms / 1000) as i64)
+            })
+            .collect();
+        starts.reverse();
+        // The one on air, unless the queue already names it -- MPD's does.
+        if let Some(head) = engine.head_position().map(|(id, _)| id) {
+            if queued.first() != Some(&head) {
+                starts.insert(0, (head, now));
+            }
+        }
+        starts
+    }
+
+    /// Mark a passage as coming, in the running Director `[REQ-PD-112]`, as of
+    /// `at`: when it is projected to start `[SPEC-DIR-186]`.
+    fn mark(&mut self, passage: i64, at: i64) {
+        if let Some(note) = self.director.as_mut().and_then(|d| d.note_queued(passage, at)) {
             self.notes.entry(passage).or_default().notes.push_back(note);
         }
     }
@@ -927,7 +958,15 @@ impl Session {
         }
         for outcome in engine.take_outcomes() {
             match outcome {
-                Outcome::Queued { passage } => self.mark(passage, now),
+                // A person's pick, marked as of where it stands in the queue.
+                Outcome::Queued { passage } => {
+                    let at = self
+                        .projected_starts(&*engine, now)
+                        .into_iter()
+                        .find(|(id, _)| *id == passage)
+                        .map_or(now, |(_, at)| at);
+                    self.mark(passage, at);
+                }
                 Outcome::Played { passage } => {
                     self.resolve_mark(passage, true);
                     self.keep_heard(Heard::Played { passage, at: now });
@@ -1225,14 +1264,16 @@ impl Session {
                 // answer than silence [REQ-PD-100], so rotation and recovery
                 // are set aside, and nothing else is (`decide_relaxed`).
                 let Some(mut decision) = d
-                    .decide(now, starts_at, &mut self.rng, &skip, tail)
-                    .or_else(|| d.decide_relaxed(now, starts_at, &mut self.rng, &skip))
+                    .decide(starts_at, &mut self.rng, &skip, tail)
+                    .or_else(|| d.decide_relaxed(starts_at, &mut self.rng, &skip))
                 else {
                     starved = true;
                     break;
                 };
                 let entry = decision.entry;
-                if let Some(note) = d.note_queued(entry.passage_id, now) {
+                // Marked as of its own start: the pick after it is judged at
+                // that pick's start, and measures this one from this one's.
+                if let Some(note) = d.note_queued(entry.passage_id, starts_at) {
                     self.notes.entry(entry.passage_id).or_default().notes.push_back(note);
                 }
                 chosen.push(entry.passage_id);
@@ -1343,7 +1384,10 @@ impl Session {
         if still_short > 0 && self.director.is_none() && !resting {
             let mut queued = engine.sounding_ids();
             queued.extend(engine.queued_ids());
-            match self.lib.fallback_radio(still_short, now, suppress, &queued, &mut self.rng) {
+            // Judged as of when the first of the batch will start
+            // `[SPEC-DIR-186]`; the batch is one draw, so one time for it.
+            let first_start = now + (engine.ahead_ms() / 1000) as i64;
+            match self.lib.fallback_radio(still_short, first_start, suppress, &queued, &mut self.rng) {
                 Ok(entries) if entries.is_empty() => {
                     self.fallback_rest = Some(std::time::Instant::now() + FALLBACK_REST);
                     self.refill_failed(
@@ -1918,6 +1962,31 @@ mod tests {
         let _ = std::fs::remove_file(&tmp);
     }
 
+    /// A pick is marked as of when it will start, not when it was chosen
+    /// `[SPEC-DIR-186]`: picks are judged at their own starts, so the next
+    /// measures this one from this one's. An hour ahead, the recording's 4.2
+    /// days of rotation run from an hour from now -- half an hour short of
+    /// them it is still held out, where a mark made now would have freed it.
+    #[test]
+    fn a_pick_is_marked_as_of_when_it_will_start() {
+        let tmp = director_library_on_disk("marked-at-start");
+        let mut session = Session::open(&tmp, &tmp, 5).unwrap();
+        session.build_director_now().unwrap();
+        let mut b = Behind { ahead_ms: 3_600_000, got: Vec::new() };
+        session.refill(&mut b, (0, 0));
+        let pick = b.got[0].passage_id;
+        let starts = session.explanations().lock().unwrap().get(pick).unwrap().starts_at;
+        let rotation = crate::director::frequency::seconds(crate::director::frequency::DEF_ROTATION_REC) as i64;
+        let held = |at: i64| {
+            session.director.as_ref().unwrap().weigh_all(at).iter()
+                .any(|(e, w)| e.passage_id == pick && !w.is_eligible())
+        };
+        assert!(held(starts + rotation - 1800), "held out until its rotation has run from its own start");
+        // A day past it, well clear of the weight floor its ramp starts under.
+        assert!(!held(starts + rotation + 86_400), "and free after");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
     /// The passage on air is out of the queue but must not be picked again
     /// `[SPEC-DIR-107]`. With every passage held by rotation the relaxed
     /// fallback sets rotation aside, and before this it would draw the one
@@ -2413,14 +2482,14 @@ mod tests {
         c.execute("INSERT INTO listener_play_history (played_at, passage_id, mbid)
                    VALUES (?1, 6, 'rec-f')", [now]).unwrap();
         let d = crate::db::Library::open_split(&tmp, &tmp).unwrap().director().unwrap();
-        assert!(d.decide(now, now, &mut session.rng, &[], None).is_none(),
+        assert!(d.decide(now, &mut session.rng, &[], None).is_none(),
                 "everything eligible is blocked, or this proves nothing");
         for _ in 0..30 {
-            let pick = d.decide_relaxed(now, now, &mut session.rng, &[]).expect("a repeat over silence");
+            let pick = d.decide_relaxed(now, &mut session.rng, &[]).expect("a repeat over silence");
             assert!([1, 6].contains(&pick.entry.passage_id), "picked {}", pick.entry.passage_id);
             assert!(pick.why.stages.starts_with("fallback"), "and the panel says so");
         }
-        assert!(d.decide_relaxed(now, now, &mut session.rng, &[1, 6]).is_none(),
+        assert!(d.decide_relaxed(now, &mut session.rng, &[1, 6]).is_none(),
                 "nothing queued twice, and no hard rule relaxed to fill the gap");
         drop(c);
         let _ = std::fs::remove_file(&tmp);
