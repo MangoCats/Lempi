@@ -28,6 +28,14 @@ fn flow_tail(chosen: &[i64], sounding: Option<i64>) -> Option<i64> {
     chosen.last().copied().or(sounding)
 }
 
+/// A programme's slots as the pickers offer them: `(id, name, "HH:MM")`.
+fn picker_slots(p: &crate::director::programme::Programme) -> Vec<(i64, String, String)> {
+    p.slots()
+        .iter()
+        .map(|s| (s.id, s.name.clone(), format!("{:02}:{:02}", s.start_minute / 60, s.start_minute % 60)))
+        .collect()
+}
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -476,6 +484,14 @@ impl Session {
             // handles a program that no longer exists, so this is safe to
             // set blind, before the Director that would validate it exists.
             c.manual_slot = store.as_ref().and_then(|s| s.load_manual_slot());
+            // The slots too, from the store, so one can be held before the
+            // Director lands `[SPEC-DIR-185]`: `POST /programme/slot/:id`
+            // checks this list, and it was filled only from a Director, so
+            // for the 10-15 s of the first build every hold was refused --
+            // lempiplay3's buttons, pressed as it starts, among them.
+            if let Some(p) = store.as_ref().and_then(|s| s.load_programme().ok()) {
+                c.slots = picker_slots(&p);
+            }
         }
         Ok(Self {
             lib,
@@ -691,6 +707,11 @@ impl Session {
     fn adopt(&mut self, fresh: Director, engine: &dyn crate::switch::Backend) {
         self.director = Some(fresh);
         self.notes.clear();
+        // The pickers' list is rebuilt from the Director that just landed at
+        // the next refill, which may hold slots the last one did not.
+        if let Ok(mut c) = self.controls.lock() {
+            c.slots.clear();
+        }
         // A new Director may have something to choose where the last had not.
         self.fallback_rest = None;
         let now = unix_now();
@@ -1023,12 +1044,7 @@ impl Session {
                 }
             }
             if c.slots.is_empty() {
-                c.slots = d
-                    .programme()
-                    .slots()
-                    .iter()
-                    .map(|p| (p.id, p.name.clone(), format!("{:02}:{:02}", p.start_minute / 60, p.start_minute % 60)))
-                    .collect();
+                c.slots = picker_slots(d.programme());
             }
             if d.programme().manual_slot() != c.manual_slot {
                 d.programme_mut().set_manual_slot(c.manual_slot);
@@ -1798,6 +1814,28 @@ mod tests {
             assert_ne!(b.got[0], 3, "seed {seed}: the passage on air was queued to follow itself");
             session.notes.clear();
         }
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A slot can be held before the Director lands `[SPEC-DIR-185]`: the
+    /// pickers' list, which `POST /programme/slot/:id` checks, comes from the
+    /// store at open, not only from a Director.
+    #[test]
+    fn the_slots_can_be_held_before_the_director_lands() {
+        let tmp = director_library_on_disk("slots-at-start");
+        rusqlite::Connection::open(&tmp)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS listener_programs (program_id INTEGER PRIMARY KEY,
+                     name TEXT NOT NULL UNIQUE, start_time TEXT);
+                 INSERT INTO listener_programs VALUES (4, 'Soft', '04:00'), (9, 'Bright', '9:00');",
+            )
+            .unwrap();
+        let session = Session::open(&tmp, &tmp, 5).unwrap();
+        assert!(session.director.is_none(), "no Director yet");
+        let mut slots = session.controls().lock().unwrap().slots.clone();
+        slots.sort();
+        assert_eq!(slots, vec![(4, "Soft".into(), "04:00".into()), (9, "Bright".into(), "09:00".into())]);
         let _ = std::fs::remove_file(&tmp);
     }
 
