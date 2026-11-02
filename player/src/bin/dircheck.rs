@@ -103,8 +103,8 @@ fn main() {
     for _ in 0..PICKS {
         let t = Instant::now();
         let pick = picker
-            .decide(now, &mut rng, &queued, queued.last().copied())
-            .or_else(|| picker.decide_relaxed(now, &mut rng, &queued));
+            .decide(now, now, &mut rng, &queued, queued.last().copied())
+            .or_else(|| picker.decide_relaxed(now, now, &mut rng, &queued));
         took.push(t.elapsed().as_secs_f64() * 1000.0);
         let Some(pick) = pick else { break };
         let _ = picker.note_queued(pick.entry.passage_id, now);

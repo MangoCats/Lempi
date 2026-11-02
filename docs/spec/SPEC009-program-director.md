@@ -41,9 +41,10 @@ They never mix. Frequency produces a weight; character shapes and orders a pool.
    │                     no programme, no flavor; a batch at once
    │
    └─ Director::decide(skip = what is queued,
-   │                   after = the queue's tail, else the passage on air)
+   │                   after = the queue's tail, else the passage on air,
+   │                   starts_at = when the pick will begin) ...... §6
    │     A. eligibility & frequency .. weight per radio passage .. SPEC037
-   │     B. pool shaping .............. seeds of the slot on air,
+   │     B. pool shaping .............. seeds of the slot then,
    │                                    Like-Taste, Dislike ...... §4
    │     C. flow ...................... sort by distance to `after`,
    │                                    when `after` has flavor .. §5
@@ -67,7 +68,7 @@ Its own document: [SPEC037](SPEC037-eligibility-and-frequency.md). Stage A reads
 
 ## 4. Stage B — Pool Shaping
 
-**`[SPEC-DIR-140]` Seeds define the target.** The slot on air names its seeds, recordings that exemplify its sound `[ENT-SEED-010]` — MuLibPlay's were 6–8 per slot `[GDE-PD-040]`, though nothing enforces a count. At most `max_seeds` are used: one per artist, counting every credit of each seed, the least-recently-played first. Naming songs beats tuning sliders, and it is the mechanism MuLibPlay users actually exercised.
+**`[SPEC-DIR-140]` Seeds define the target.** The slot a pick is for `[SPEC-DIR-186]` names its seeds, recordings that exemplify its sound `[ENT-SEED-010]` — MuLibPlay's were 6–8 per slot `[GDE-PD-040]`, though nothing enforces a count. At most `max_seeds` are used: one per artist, counting every credit of each seed, the least-recently-played first. Naming songs beats tuning sliders, and it is the mechanism MuLibPlay users actually exercised.
 
 **`[SPEC-DIR-142]` A seed without flavor shapes nothing, and is passed over.** A seed works only through its flavor. One with none is skipped **before** the cap, so it never takes a place a seed with flavor could fill; it is named once in the log when the Director is built, and flagged on the player's Programme page and the hub's Programmes page. "Has flavor" is any `flavor` row for the recording. Measured 2026-11-01: none of the hub's 49 seeds lacks flavor.
 
@@ -147,11 +148,13 @@ A slot with seeds is the minimum for a station with a character of its own.
 
 **`[SPEC-DIR-185]` A slot held by hand overrides the clock** until the listener reverts. `POST /programme/slot/:id` holds slot `id`; the literal `auto` releases it, and the pickers offer that as "Automatic (by time of day)" `[REQ-VIS-255]`. `POST /program/:id` is the same route under its older name `[SPEC-VOC-020]`. The hold is persisted (`PlayerStore::save_manual_slot`) and restored at start; `auto` deletes it, so "never chosen" and "released" read back alike. A held slot that an edit removes is released; one an edit renews with new seeds keeps its hold under its new id `[SPEC-PGM-125]`. A save refreshes the list the route checks at once, so a slot just saved can be held straight away, rather than being refused until the engine's next refill rebuilds the list from its Director. Motivated by `lempiplay3` `[SPEC036]`, a vehicle with no realtime clock, whose buttons never send `auto`.
 
+**`[SPEC-DIR-186]` A pick is chosen for the slot in force when it will start**, not when it is chosen (the maintainer, 2026-11-01). Its start is projected: now, plus what is left of the passage on air and of every passage queued ahead of it, played through without a skip (`Playback::ahead_ms`), plus each pick made before it in the same refill. A pick queued at 21:50 behind fifteen minutes of music is the 22:00 slot's, and its seeds shape it. A paused player projects as though it were playing now. The record carries the projection as `starts_at` `[SPEC-DIR-190]`. Only the slot moves: rotation, the rejection windows and the season are judged at the moment of choosing `[SPEC-DIR-210]`. Not counted: the overlap of a crossfade, a loop held by hand, and in MPD a song a person queued that the library cannot name. A slot held by hand `[SPEC-DIR-185]` is held at every start.
+
 ---
 
 ## 7. Visibility Contract
 
-**`[SPEC-DIR-190]`** Every pick the player's Director makes writes a `selection_decisions` record `[SPEC-SC-100]` sufficient to reconstruct it `[REQ-VIS-100]`: the Stage-A terms (artist weight, recording restraint and ramp, related damping, length bonus, occasion), the final weight, the shaping counts, the distance to each seed, the flow distance, the rank, the decayed weight, the roulette target, the slot on air by name and by id — the id also in the row's own `program_id`, since 2026-11-01 — **and the five heaviest runners-up, by decayed weight**. A slot whose seeds change takes a new id `[SPEC-PGM-125]`, so `program_id` names the seeds a pick was shaped by. The no-Director fallback writes none `[SPEC-DIR-230]`; `mpd_direct` writes the same record as the sticker `lempi.why` instead `[SPEC-MPD-050]`.
+**`[SPEC-DIR-190]`** Every pick the player's Director makes writes a `selection_decisions` record `[SPEC-SC-100]` sufficient to reconstruct it `[REQ-VIS-100]`: the Stage-A terms (artist weight, recording restraint and ramp, related damping, length bonus, occasion), the final weight, the shaping counts, the distance to each seed, the flow distance, the rank, the decayed weight, the roulette target, the slot the pick was chosen for by name and by id — the id also in the row's own `program_id`, since 2026-11-01 — and when it was projected to start (`starts_at`) `[SPEC-DIR-186]`, **and the five heaviest runners-up, by decayed weight**. A slot whose seeds change takes a new id `[SPEC-PGM-125]`, so `program_id` names the seeds a pick was shaped by. The no-Director fallback writes none `[SPEC-DIR-230]`; `mpd_direct` writes the same record as the sticker `lempi.why` instead `[SPEC-MPD-050]`.
 
 **`[SPEC-DIR-191]` The stated chance is the chance it had.** `share_pct` is the weight the passage was drawn on over the total drawn on: decayed over decayed with a flow order, undecayed over undecayed without. *Corrected 2026-11-01*: it had divided the undecayed weight by the decayed total, overstating every pick below rank 0 — some 8-fold at rank 50 and 57-fold at rank 99.
 
@@ -193,7 +196,7 @@ The orthogonality of `[SPEC-DIR-100]` is what makes this legible: the panel tell
 
 ## 9. Open
 
-1. **`[SPEC-DIR-210]` Eligibility is evaluated at selection time**, not projected to estimated play time — MuLibPlay's explicit `TODO`. Deferred: `[REQ-PD-110]` requires reproducing MuLibPlay's selections first `[GDE-PHS-030]`.
+1. **`[SPEC-DIR-210]` Eligibility is evaluated at selection time**, not projected to estimated play time — MuLibPlay's explicit `TODO`. The slot already is `[SPEC-DIR-186]`; rotation and the season are not. Deferred: `[REQ-PD-110]` requires reproducing MuLibPlay's selections first `[GDE-PHS-030]`.
 2. **`[SPEC-DIR-212]` Passages without flavor as a true last resort** `[SPEC-DIR-147]`: in the bold cells of that table — no flow order, the relaxed fallback, the no-Director fallback — they are still drawn at their ordinary weight.
 3. **`[SPEC-DIR-215]`** Whether Like-Taste should age or cap. Likes accumulate without bound; a handful of curated seeds could be swamped.
 4. **`[SPEC-DIR-220]`** Taste per listener, and a shared queue between listeners — McRhythm's multi-user model is inherited but undecided `[REQ002 §8]`. One of several possible future directions, as is Dislike-Taste beyond its filter `[SPEC-DIR-150]`.

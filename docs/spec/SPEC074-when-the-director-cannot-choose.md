@@ -53,7 +53,7 @@ Nothing eligible: nothing is queued, the reason is logged once, and refill rests
 **`[SPEC-DIR-232]` The relaxed fallback.** Called when `Director::decide` returns nothing — after Stage A, no passage is both eligible and neither queued nor on air. A repeat is a better answer than silence `[REQ-PD-100]`. Built 2026-10-08, and used by both `Session::refill` and `mpd_direct`.
 
 - **Stage A, with every age removed.** Passage, recording, work, artist and related-recording ages are all treated as never played, so no rotation block or recovery ramp applies. Everything else stays: holds and failed files, the length and depth filters, the rejection windows, **the listener's restraint** (recording and every credited artist), the occasion multiplier, and `min_weight`. A passage turned all the way down stays out.
-- **Stage B as usual**: the seeds of the slot on air, Like-Taste, and the Dislike filter where there are seeds `[SPEC-DIR-150]`.
+- **Stage B as usual**: the seeds of the slot in force when the pick will start `[SPEC-DIR-186]`, Like-Taste, and the Dislike filter where there are seeds `[SPEC-DIR-150]`.
 - **No Stage C, no rank decay.** The draw is over the whole shaped pool, each weight multiplied by the seconds since anything it rotates by — passage, recording, any work, any credited artist — last played or was marked as coming (ten years if never, at least 60 s).
 - **Recorded** in `selection_decisions` like any pick, its `stages` saying it was the fallback. Its `rank` is the position in scan order, which means nothing here.
 

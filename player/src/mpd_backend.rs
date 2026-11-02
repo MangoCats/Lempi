@@ -957,6 +957,23 @@ impl Playback for MpdBackend {
         self.ours.values().map(|o| o.span_ms.saturating_sub(o.furthest_ms)).sum()
     }
 
+    /// Ours, what is left of each, as `queued_ms` counts them -- the song on
+    /// air among them -- and beside them every song a person queued that the
+    /// library can name, at its file's length `[SPEC-DIR-186]`. A song it
+    /// cannot name has no length here, and counts for nothing.
+    fn ahead_ms(&self) -> u64 {
+        let theirs: u64 = self
+            .order
+            .iter()
+            .filter(|(id, _)| !self.ours.contains_key(id))
+            .filter_map(|(_, uri)| match self.names.get(uri) {
+                Some(Some((_, _, file_ms))) => Some(*file_ms),
+                _ => None,
+            })
+            .sum();
+        self.queued_ms() + theirs
+    }
+
     /// Zero unless MPD is playing `[SPEC-MPD-120]`, so the activation rule
     /// needs no special case anywhere else. Measured against MPD's **whole**
     /// queue, not only what this backend put there: a person who queued twenty

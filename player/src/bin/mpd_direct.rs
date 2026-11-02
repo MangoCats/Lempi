@@ -668,12 +668,16 @@ fn main() {
         // `[SPEC-DIR-160]`: the last entry in that order. Unresolvable, there
         // is nothing to flow from, and the pick says so in its record.
         let mut after: Option<i64> = queued.last().copied().flatten();
+        // When the next pick will start: what is left of everything this
+        // program queued, the song on air among them `[SPEC-DIR-186]`.
+        let mut ahead_ms: u64 = ours.values().map(|o| o.span_ms.saturating_sub(o.furthest_ms)).sum();
         for _ in 0..(depth - len) {
+            let starts_at = now() + (ahead_ms / 1000) as i64;
             // With every candidate held by rotation, a repeat is a better
             // answer than silence, as in `Session::refill` `[SPEC-DIR-232]`.
             let Some(decision) = director
-                .decide(now(), &mut rng, &skip, after)
-                .or_else(|| director.decide_relaxed(now(), &mut rng, &skip))
+                .decide(now(), starts_at, &mut rng, &skip, after)
+                .or_else(|| director.decide_relaxed(now(), starts_at, &mut rng, &skip))
             else {
                 println!("  director has nothing eligible to offer, even with rotation set aside");
                 break;
@@ -730,6 +734,7 @@ fn main() {
                     // The next pick follows this one, and cannot be it.
                     after = Some(e.passage_id);
                     skip.push(e.passage_id);
+                    ahead_ms += e.duration_ms();
                     let title = e.title();
                     println!("  + [{:>6}] {}  {}", e.passage_id, title, flavor);
                     ours.insert(

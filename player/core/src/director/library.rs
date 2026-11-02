@@ -111,8 +111,15 @@ pub struct Explanation {
     pub related_damping: f64,
     pub length_bonus: f64,
     pub occasion: f64,
-    /// The programme slot in force `[SPEC-DIR-180]`, if any.
+    /// The programme slot this pick was chosen for `[SPEC-DIR-180]`, if any:
+    /// the slot in force at `starts_at`, not at the moment of choosing
+    /// `[SPEC-DIR-186]`.
     pub slot: Option<String>,
+    /// When this passage is projected to begin, in unix seconds: now, plus
+    /// what is left of the passage on air and every passage queued ahead of
+    /// it, played through without a skip `[SPEC-DIR-186]`. The slot is the
+    /// one in force then.
+    pub starts_at: i64,
     /// Its id, which `selection_decisions.program_id` records `[SPEC-DIR-190]`.
     /// A slot renewed by new seeds has a new one `[SPEC-PGM-125]`, so the id
     /// names the seeds this pick was shaped by, where the name may not.
@@ -687,12 +694,13 @@ impl Director {
         &self.flavor
     }
 
-    /// The seeds shaping the pool right now: the slot in force's, plus
-    /// Like-Taste as an additional seed `[SPEC-DIR-150]`. A seed without
-    /// flavor is passed over before the cap `[SPEC-DIR-142]`.
-    fn seeds_now(&self, now: i64) -> Vec<Seed<'_>> {
+    /// The seeds shaping the pool for a pick that will start at `starts_at`:
+    /// the seeds of the slot in force then `[SPEC-DIR-186]`, plus Like-Taste as
+    /// an additional seed `[SPEC-DIR-150]`. A seed without flavor is passed
+    /// over before the cap `[SPEC-DIR-142]`.
+    fn seeds_at(&self, starts_at: i64) -> Vec<Seed<'_>> {
         let mut out: Vec<Seed<'_>> = Vec::new();
-        if let Some(p) = self.programme.active_slot(now) {
+        if let Some(p) = self.programme.active_slot(starts_at) {
             let usable = |m: &str| self.flavor.get(m).is_some();
             for mbid in self.programme.seeds_for(p.id, &self.artist_of, &self.last_played, usable) {
                 if let Some(f) = self.flavor.get(&mbid) {
@@ -970,15 +978,17 @@ impl Director {
     }
 
     /// One pick with nothing queued and nothing to follow, discarding the
-    /// reasoning: [`Director::decide`] with no skip list and no queue tail.
+    /// reasoning: [`Director::decide`] with no skip list and no queue tail,
+    /// so the pick starts now.
     pub fn choose(&self, now: i64, rng: &mut Rng) -> Option<QueueEntry> {
-        self.decide(now, rng, &[], None).map(|d| d.entry)
+        self.decide(now, now, rng, &[], None).map(|d| d.entry)
     }
 
     /// As [`Director::decide`], discarding the reasoning, with the last of
-    /// `skip` taken as the queue tail.
+    /// `skip` taken as the queue tail. For tests and tools: the pick is taken
+    /// to start now, which a caller with a real queue ahead must not assume.
     pub fn choose_excluding(&self, now: i64, rng: &mut Rng, skip: &[i64]) -> Option<QueueEntry> {
-        self.decide(now, rng, skip, skip.last().copied()).map(|d| d.entry)
+        self.decide(now, now, rng, skip, skip.last().copied()).map(|d| d.entry)
     }
 
     /// One pick through all four stages `[SPEC-DIR-110..165]`, with the
@@ -995,9 +1005,17 @@ impl Director {
     /// than taken as the last of `skip`, because "do not pick these" and "this
     /// is what plays before" are different questions that happen to share a
     /// list today.
+    ///
+    /// **Two times, because they answer two questions** `[SPEC-DIR-186]`.
+    /// `now` is when the choice is made: rotation, rejection windows and the
+    /// season are judged then `[SPEC-DIR-210]`. `starts_at` is when the pick
+    /// will begin -- now, plus what is left of the passage on air and every
+    /// passage queued ahead of it -- and the programme slot is the one in force
+    /// then, so a pick queued at 21:50 to play at 22:05 is the 22:00 slot's.
     pub fn decide(
         &self,
         now: i64,
+        starts_at: i64,
         rng: &mut Rng,
         skip: &[i64],
         after: Option<i64>,
@@ -1007,7 +1025,7 @@ impl Director {
         // Stage B shapes WHICH passages are in the running; it never touches a
         // weight [SPEC-DIR-100]. Survivors carry their Stage-A weights forward
         // unchanged, so frequency and character stay separable in the panel.
-        let seeds = self.seeds_now(now);
+        let seeds = self.seeds_at(starts_at);
         let mut shaping = Shaping::default();
         let candidates: Vec<(i64, Option<&Flavor>)> = weighed
             .iter()
@@ -1081,7 +1099,7 @@ impl Director {
         } else {
             "frequency, shaping; no flow -- nothing queued to follow"
         };
-        self.draw(now, rng, &pool, &shaping, &seeds, stages)
+        self.draw(starts_at, rng, &pool, &shaping, &seeds, stages)
     }
 
     /// Choose when [`Director::decide`] cannot: every candidate is blocked
@@ -1096,7 +1114,15 @@ impl Director {
     /// In rotation's place, the longest unplayed is the likeliest: each weight
     /// is scaled by how long since anything it rotates by last played, and
     /// drawn, so it is not the same passage every time.
-    pub fn decide_relaxed(&self, now: i64, rng: &mut Rng, skip: &[i64]) -> Option<Decision> {
+    ///
+    /// `now` and `starts_at` as in [`Director::decide`] `[SPEC-DIR-186]`.
+    pub fn decide_relaxed(
+        &self,
+        now: i64,
+        starts_at: i64,
+        rng: &mut Rng,
+        skip: &[i64],
+    ) -> Option<Decision> {
         let weighed = self.weigh_all_with(now, true);
         let open: Vec<(&QueueEntry, &Weighing)> = weighed
             .iter()
@@ -1106,7 +1132,7 @@ impl Director {
         if open.is_empty() {
             return None;
         }
-        let seeds = self.seeds_now(now);
+        let seeds = self.seeds_at(starts_at);
         let mut shaping = Shaping::default();
         let candidates: Vec<(i64, Option<&Flavor>)> =
             open.iter().map(|(e, _)| (e.passage_id, self.flavor_of(e.passage_id))).collect();
@@ -1132,7 +1158,7 @@ impl Director {
         let pool: Vec<(&QueueEntry, &Weighing, Option<f64>, f64)> =
             idled.iter().map(|(e, w)| (*e, w, None, w.weight)).collect();
         self.draw(
-            now,
+            starts_at,
             rng,
             &pool,
             &shaping,
@@ -1144,10 +1170,11 @@ impl Director {
 
     /// The roulette over a ranked pool, and the record of why `[SPEC-DIR-165]`,
     /// `[REQ-VIS-100]`. `pool` is (entry, weighing, flow distance, the weight
-    /// actually drawn on).
+    /// actually drawn on); `starts_at` names the slot the pick is for
+    /// `[SPEC-DIR-186]`.
     fn draw(
         &self,
-        now: i64,
+        starts_at: i64,
         rng: &mut Rng,
         pool: &[(&QueueEntry, &Weighing, Option<f64>, f64)],
         shaping: &Shaping,
@@ -1183,7 +1210,7 @@ impl Director {
         rest.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
 
         let pool_size = pool.len();
-        let on_air = self.programme.active_slot(now);
+        let on_air = self.programme.active_slot(starts_at);
         let slot = on_air.map(|p| p.name.clone());
         let slot_id = on_air.map(|p| p.id);
         Some(Decision {
@@ -1206,6 +1233,7 @@ impl Director {
                 pool_size,
                 pool_weight: total,
                 slot: slot.clone(),
+                starts_at,
                 slot_id,
                 program: slot,
                 shaping: shaping.clone(),
@@ -2035,7 +2063,7 @@ mod tests {
     #[test]
     fn a_decision_carries_its_decomposition_and_its_losers() {
         let d = Director::load(&fixture()).unwrap();
-        let dec = d.decide(NOW, &mut Rng::seeded(11), &[], None).unwrap();
+        let dec = d.decide(NOW, NOW, &mut Rng::seeded(11), &[], None).unwrap();
         assert_eq!(dec.why.pool_size, 3);
         assert!((dec.why.pool_weight - 3.0).abs() < 1e-9);
         assert!((dec.why.share_pct - 33.333).abs() < 0.01, "share {}", dec.why.share_pct);
@@ -2051,7 +2079,7 @@ mod tests {
     fn a_decision_names_its_slot_by_id() {
         let c = fixture();
         let d = Director::load(&c).unwrap();
-        let dec = d.decide(NOW, &mut Rng::seeded(3), &[], None).unwrap();
+        let dec = d.decide(NOW, NOW, &mut Rng::seeded(3), &[], None).unwrap();
         assert_eq!((dec.why.slot.as_deref(), dec.why.slot_id), (None, None), "no slot, no id");
         c.execute_batch(
             "CREATE TABLE IF NOT EXISTS listener_programs (program_id INTEGER PRIMARY KEY, name TEXT, start_time TEXT);
@@ -2060,8 +2088,33 @@ mod tests {
         )
         .unwrap();
         let d = Director::load(&c).unwrap();
-        let dec = d.decide(NOW, &mut Rng::seeded(3), &[], None).unwrap();
+        let dec = d.decide(NOW, NOW, &mut Rng::seeded(3), &[], None).unwrap();
         assert_eq!((dec.why.slot.as_deref(), dec.why.slot_id), (Some("Allday"), Some(7)));
+    }
+
+    /// The slot a pick is chosen for is the one in force when it will START,
+    /// not when it is chosen `[SPEC-DIR-186]`: queued at 01:46 behind an hour
+    /// of music, it plays at 02:46, in the slot that began at 02:00. Rotation
+    /// is still judged now, so `now` and `starts_at` are both carried, and the
+    /// record says when the pick was projected to begin.
+    #[test]
+    fn the_slot_is_the_one_in_force_when_the_pick_will_start() {
+        let c = fixture();
+        c.execute_batch(
+            "CREATE TABLE IF NOT EXISTS listener_programs (program_id INTEGER PRIMARY KEY, name TEXT, start_time TEXT);
+             CREATE TABLE IF NOT EXISTS listener_program_seeds (program_id INTEGER, mbid TEXT, position INTEGER);
+             INSERT INTO listener_programs VALUES (8, 'Late', '00:00'), (9, 'Dawn', '02:00');",
+        )
+        .unwrap();
+        let d = Director::load(&c).unwrap();
+        // NOW is 01:46:40 UTC, and the fixture's offset is UTC.
+        let now = d.decide(NOW, NOW, &mut Rng::seeded(3), &[], None).unwrap();
+        assert_eq!((now.why.slot.as_deref(), now.why.starts_at), (Some("Late"), NOW));
+        let later = d.decide(NOW, NOW + 3600, &mut Rng::seeded(3), &[], None).unwrap();
+        assert_eq!((later.why.slot.as_deref(), later.why.slot_id), (Some("Dawn"), Some(9)));
+        assert_eq!(later.why.starts_at, NOW + 3600, "the record says when it was projected to start");
+        let relaxed = d.decide_relaxed(NOW, NOW + 3600, &mut Rng::seeded(3), &[]).unwrap();
+        assert_eq!(relaxed.why.slot.as_deref(), Some("Dawn"), "the relaxed fallback reads the same time");
     }
 
     /// Runners-up are the HEAVIEST losers, not an arbitrary five.
@@ -2073,7 +2126,7 @@ mod tests {
         let d = Director::load(&c).unwrap();
         // rec-c is 10x; whenever it does not win it must head the losers.
         for seed in 0..20 {
-            let dec = d.decide(NOW, &mut Rng::seeded(seed), &[], None).unwrap();
+            let dec = d.decide(NOW, NOW, &mut Rng::seeded(seed), &[], None).unwrap();
             if dec.why.passage_id != 3 {
                 assert_eq!(dec.why.runners_up[0].passage_id, 3,
                            "the heaviest loser must be listed first");
@@ -2239,7 +2292,7 @@ mod tests {
         let d = Director::load(&c).unwrap();
         for seed in 0..30 {
             // passage 1 is the tail: skip it, and follow it
-            let dec = d.decide(NOW, &mut Rng::seeded(seed), &[1], Some(1)).unwrap();
+            let dec = d.decide(NOW, NOW, &mut Rng::seeded(seed), &[1], Some(1)).unwrap();
             match dec.why.passage_id {
                 2 => assert_eq!(dec.why.rank, 0, "rec-b is nearer the tail"),
                 3 => assert_eq!(dec.why.rank, 1, "rec-c is further"),
@@ -2257,7 +2310,7 @@ mod tests {
         with_flavor(&c);
         let d = Director::load(&c).unwrap();
         for seed in 0..30 {
-            let dec = d.decide(NOW, &mut Rng::seeded(seed), &[1], Some(1)).unwrap();
+            let dec = d.decide(NOW, NOW, &mut Rng::seeded(seed), &[1], Some(1)).unwrap();
             let expect = dec.why.weight * RANK_DECAY.powi(dec.why.rank as i32);
             assert!(
                 (dec.why.decayed_weight - expect).abs() < 1e-12,
@@ -2277,7 +2330,7 @@ mod tests {
         with_flavor(&c);
         let d = Director::load(&c).unwrap();
         for seed in 0..30 {
-            let dec = d.decide(NOW, &mut Rng::seeded(seed), &[1], Some(1)).unwrap();
+            let dec = d.decide(NOW, NOW, &mut Rng::seeded(seed), &[1], Some(1)).unwrap();
             let expect = dec.why.decayed_weight / dec.why.pool_weight * 100.0;
             assert!((dec.why.share_pct - expect).abs() < 1e-9, "share {} expected {expect}", dec.why.share_pct);
             assert!(dec.why.share_pct <= 100.0 + 1e-9, "a chance above certainty");
@@ -2294,7 +2347,7 @@ mod tests {
         let d = Director::load(&c).unwrap();
         let mut ranks = std::collections::HashSet::new();
         for seed in 0..200 {
-            let dec = d.decide(NOW, &mut Rng::seeded(seed), &[1], Some(1)).unwrap();
+            let dec = d.decide(NOW, NOW, &mut Rng::seeded(seed), &[1], Some(1)).unwrap();
             ranks.insert(dec.why.rank);
         }
         assert!(ranks.len() > 1, "only rank {:?} ever won", ranks);
@@ -2307,7 +2360,7 @@ mod tests {
         let c = fixture();
         with_flavor(&c);
         let d = Director::load(&c).unwrap();
-        let dec = d.decide(NOW, &mut Rng::seeded(3), &[], None).unwrap();
+        let dec = d.decide(NOW, NOW, &mut Rng::seeded(3), &[], None).unwrap();
         assert!(dec.why.flow_distance.is_none());
         assert_eq!(dec.why.decayed_weight, dec.why.weight, "no rank means no decay");
         assert!(dec.why.stages.contains("no flow"), "the record must say so: {}", dec.why.stages);

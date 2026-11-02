@@ -994,6 +994,11 @@ impl Session {
         // Read once, before the loop: the passage on air does not change while
         // this refill picks, and `engine` is borrowed mutably below.
         let sounding = engine.head_position().map(|(id, _)| id);
+        // When the next pick will start, if what is on air and queued plays
+        // through without a skip -- the moment whose programme slot it is
+        // chosen for `[SPEC-DIR-186]`. Each pick then adds its own length for
+        // the one after it.
+        let mut ahead_ms = engine.ahead_ms();
         let mut starved = false;
         // A fill that found nothing rests before trying again: the answer is
         // a pass over the whole pool, and refill runs on every tick.
@@ -1004,12 +1009,13 @@ impl Session {
                 // The tail is what this passage will follow, so flow is
                 // measured from it [SPEC-DIR-160] -- see `flow_tail`.
                 let tail = flow_tail(&chosen, sounding);
+                let starts_at = now + (ahead_ms / 1000) as i64;
                 // Everything eligible blocked by rotation: a repeat is a better
                 // answer than silence [REQ-PD-100], so rotation and recovery
                 // are set aside, and nothing else is (`decide_relaxed`).
                 let Some(mut decision) = d
-                    .decide(now, &mut self.rng, &skip, tail)
-                    .or_else(|| d.decide_relaxed(now, &mut self.rng, &skip))
+                    .decide(now, starts_at, &mut self.rng, &skip, tail)
+                    .or_else(|| d.decide_relaxed(now, starts_at, &mut self.rng, &skip))
                 else {
                     starved = true;
                     break;
@@ -1020,6 +1026,7 @@ impl Session {
                 }
                 chosen.push(entry.passage_id);
                 skip.push(entry.passage_id);
+                ahead_ms += entry.duration_ms();
 
                 // The Director's own bulk pool load never resolves a real
                 // artist name for every candidate -- the same reasoning
@@ -1625,6 +1632,79 @@ mod tests {
         }
     }
 
+    /// An hour of music already ahead, an empty queue, room for two.
+    struct Behind {
+        ahead_ms: u64,
+        got: Vec<crate::queue::QueueEntry>,
+    }
+
+    impl Playback for Behind {
+        fn capabilities(&self) -> crate::playback::Capabilities {
+            crate::playback::Capabilities::FULL
+        }
+        fn enqueue(&mut self, e: crate::queue::QueueEntry) {
+            self.got.push(e);
+        }
+        fn queued_ids(&self) -> Vec<i64> {
+            self.got.iter().map(|e| e.passage_id).collect()
+        }
+        fn queued_ms(&self) -> u64 {
+            0
+        }
+        fn ahead_ms(&self) -> u64 {
+            self.ahead_ms
+        }
+        fn shortfall(&self) -> usize {
+            2usize.saturating_sub(self.got.len())
+        }
+        fn take_dropped(&mut self) -> Vec<i64> {
+            Vec::new()
+        }
+        fn resume_at(&mut self, _position_ms: u64) {}
+        fn tick(&mut self) -> usize {
+            0
+        }
+        fn is_shutdown(&self) -> bool {
+            false
+        }
+    }
+    impl crate::switch::FadeOut for Behind {
+        fn fade_out(&mut self, _ms: u64) -> crate::switch::Stopped {
+            crate::switch::Stopped::Cut
+        }
+    }
+    impl crate::switch::Publish for Behind {
+        fn publish(&mut self, _p: &crate::switch::Published<'_>) {}
+    }
+    impl crate::switch::Progress for Behind {
+        fn head_position(&self) -> Option<(i64, u64)> {
+            None
+        }
+    }
+
+    /// Each pick is chosen for the slot in force when it will start
+    /// `[SPEC-DIR-186]`: behind what the backend already holds, and behind
+    /// every pick made before it in the same refill.
+    #[test]
+    fn each_pick_starts_behind_what_is_ahead_of_it() {
+        let tmp = director_library_on_disk("ahead");
+        let mut session = Session::open(&tmp, &tmp, 5).unwrap();
+        let lib = crate::db::Library::open_split(&tmp, &tmp).unwrap();
+        session.director = Some(lib.director().unwrap());
+        let mut b = Behind { ahead_ms: 3_600_000, got: Vec::new() };
+        let before = unix_now();
+        session.refill(&mut b, (0, 0));
+        assert_eq!(b.got.len(), 2, "both wanted were filled");
+        let log = session.explanations();
+        let log = log.lock().unwrap();
+        let first = log.get(b.got[0].passage_id).expect("the first pick's record").starts_at;
+        let second = log.get(b.got[1].passage_id).expect("the second pick's record").starts_at;
+        assert!((before + 3600..=unix_now() + 3600).contains(&first), "an hour ahead: {first} from {before}");
+        assert_eq!(second, first + (b.got[0].duration_ms() / 1000) as i64, "and the second behind the first");
+        drop(log);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
     /// The passage on air is out of the queue but must not be picked again
     /// `[SPEC-DIR-107]`. With every passage held by rotation the relaxed
     /// fallback sets rotation aside, and before this it would draw the one
@@ -1992,14 +2072,14 @@ mod tests {
         c.execute("INSERT INTO listener_play_history (played_at, passage_id, mbid)
                    VALUES (?1, 6, 'rec-f')", [now]).unwrap();
         let d = crate::db::Library::open_split(&tmp, &tmp).unwrap().director().unwrap();
-        assert!(d.decide(now, &mut session.rng, &[], None).is_none(),
+        assert!(d.decide(now, now, &mut session.rng, &[], None).is_none(),
                 "everything eligible is blocked, or this proves nothing");
         for _ in 0..30 {
-            let pick = d.decide_relaxed(now, &mut session.rng, &[]).expect("a repeat over silence");
+            let pick = d.decide_relaxed(now, now, &mut session.rng, &[]).expect("a repeat over silence");
             assert!([1, 6].contains(&pick.entry.passage_id), "picked {}", pick.entry.passage_id);
             assert!(pick.why.stages.starts_with("fallback"), "and the panel says so");
         }
-        assert!(d.decide_relaxed(now, &mut session.rng, &[1, 6]).is_none(),
+        assert!(d.decide_relaxed(now, now, &mut session.rng, &[1, 6]).is_none(),
                 "nothing queued twice, and no hard rule relaxed to fill the gap");
         drop(c);
         let _ = std::fs::remove_file(&tmp);

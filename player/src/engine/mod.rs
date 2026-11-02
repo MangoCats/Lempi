@@ -1810,6 +1810,17 @@ impl Engine {
         self.live.first().map(|l| (l.entry.passage_id, self.audible_ms(l)))
     }
 
+    /// What is left to hear of the passage on air, in milliseconds `[SPEC-DIR-186]`.
+    /// The last one admitted: while one fades in over another, the queue
+    /// follows the one fading in, and the one fading out ends inside it.
+    pub fn on_air_left_ms(&self) -> u64 {
+        self.live
+            .last()
+            .filter(|l| l.entry.passage_id > 0)
+            .map(|l| l.entry.duration_ms().saturating_sub(self.audible_ms(l)))
+            .unwrap_or(0)
+    }
+
     /// Every passage admitted to the mixer: the one sounding and any fading
     /// in. Out of the queue, and so out of `queued_ids`, but still not to be
     /// chosen again `[SPEC-DIR-107]`.

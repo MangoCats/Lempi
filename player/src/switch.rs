@@ -359,6 +359,9 @@ impl Playback for Switching {
     fn queued_ms(&self) -> u64 {
         self.live().queued_ms()
     }
+    fn ahead_ms(&self) -> u64 {
+        self.live().ahead_ms()
+    }
     fn shortfall(&self) -> usize {
         self.live().shortfall()
     }

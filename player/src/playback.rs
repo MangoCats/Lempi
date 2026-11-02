@@ -195,6 +195,16 @@ pub trait Playback {
     /// whether the lookahead is deep enough in *time* rather than in count.
     fn queued_ms(&self) -> u64;
 
+    /// How long until everything already handed to this backend has played,
+    /// in milliseconds, if it plays on from here without a skip: what is left
+    /// of the passage on air, and every passage queued after it. A pick
+    /// queued now starts then, and its programme slot is the one in force
+    /// then `[SPEC-DIR-186]`. Defaulted to `queued_ms` for a backend whose
+    /// figure already counts what is on air.
+    fn ahead_ms(&self) -> u64 {
+        self.queued_ms()
+    }
+
     /// How many more passages are wanted to reach the configured depth.
     fn shortfall(&self) -> usize;
 
@@ -265,6 +275,9 @@ impl Playback for crate::engine::Engine {
             .filter(|e| !e.is_shutdown)
             .map(|e| e.end_ms.saturating_sub(e.start_ms))
             .sum()
+    }
+    fn ahead_ms(&self) -> u64 {
+        Engine::on_air_left_ms(self) + Playback::queued_ms(self)
     }
     fn shortfall(&self) -> usize {
         Engine::shortfall(self)
