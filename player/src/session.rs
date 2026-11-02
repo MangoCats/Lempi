@@ -374,7 +374,29 @@ pub struct Session {
     utc_synced: std::time::Instant,
     /// Whether `Controls::utc_offset` has been filled since start.
     utc_published: bool,
+    /// What was heard while a Director was being built -- plays and
+    /// rejections -- replayed into it when it lands `[REQ-PD-112]`. The build
+    /// reads the history once, early; a skip after that read reached only the
+    /// Director it replaced, and the new one would offer the skipped song
+    /// again for the whole of its window. Plays are kept for the same reason.
+    heard: Vec<Heard>,
+    /// Whether what is heard reaches the history, so that a build reads it.
+    /// True for the player. A session that writes nothing -- a follower run
+    /// without `--write` -- keeps everything it hears, since no build will
+    /// ever read it otherwise.
+    history_written: bool,
 }
+
+/// One thing heard, for a Director built since to be told again.
+#[derive(Debug, Clone)]
+enum Heard {
+    Played { passage: i64, at: i64 },
+    Rejected { kind: crate::db::Rejection, mbid: String, at: i64 },
+}
+
+/// The most a session that writes nothing keeps of what it heard: weeks of
+/// listening, and bounded however long it runs.
+const HEARD_MAX: usize = 10_000;
 
 impl Session {
     /// `depth` is how many passages to keep queued ahead. `library` is the
@@ -478,6 +500,8 @@ impl Session {
             // `open` has just synced it, above.
             utc_synced: std::time::Instant::now(),
             utc_published: false,
+            heard: Vec::new(),
+            history_written: true,
         })
     }
 
@@ -637,6 +661,11 @@ impl Session {
             }) {
             Ok(_) => {
                 self.rebuild = Some(rx);
+                // Everything heard before now is in the history the build
+                // reads; only what is heard from here on needs telling again.
+                if self.history_written {
+                    self.heard.clear();
+                }
                 self.say_reload("rebuilding");
                 // Said where another process can read it: `mpd_direct`, steering
                 // by this listener file, rebuilds its own Director too
@@ -685,7 +714,42 @@ impl Session {
         for id in ids {
             self.mark(id, now);
         }
+        // **And what was heard while it was built.** The build read the
+        // history once, near its start; a play or a skip after that reached
+        // only the Director this one replaces. A play is marked and kept, as
+        // one that had been queued is; a rejection opens its window.
+        self.replay_heard();
+        if self.history_written {
+            self.heard.clear();
+        }
         self.publish_pool();
+    }
+
+    /// Tell the running Director again what was heard `[REQ-PD-112]`.
+    fn replay_heard(&mut self) {
+        let Some(d) = self.director.as_mut() else { return };
+        for h in &self.heard {
+            match h {
+                Heard::Played { passage, at } => {
+                    if let Some(note) = d.note_queued(*passage, *at) {
+                        d.settle(note);
+                    }
+                }
+                Heard::Rejected { kind, mbid, at } => d.note_rejection(*kind, mbid, *at),
+            }
+        }
+    }
+
+    /// Keep what was heard, while a build is in flight or when nothing heard
+    /// is written for one to read.
+    fn keep_heard(&mut self, h: Heard) {
+        if self.rebuild.is_none() && self.history_written {
+            return;
+        }
+        if self.heard.len() >= HEARD_MAX {
+            self.heard.remove(0);
+        }
+        self.heard.push(h);
     }
 
     /// Mark a passage as coming, in the running Director `[REQ-PD-112]`.
@@ -721,14 +785,20 @@ impl Session {
         for outcome in engine.take_outcomes() {
             match outcome {
                 Outcome::Queued { passage } => self.mark(passage, now),
-                Outcome::Played { passage } => self.resolve_mark(passage, true),
+                Outcome::Played { passage } => {
+                    self.resolve_mark(passage, true);
+                    self.keep_heard(Heard::Played { passage, at: now });
+                }
                 // A rejection earns no play, so the mark set when it was queued
                 // is taken back, and its window starts now rather than at the
                 // next rebuild `[SPEC-PLAY-050]`, `[SPEC-PLAY-055]`.
                 Outcome::Rejected { passage, kind, mbid, at } => {
                     self.resolve_mark(passage, false);
-                    if let (Some(d), Some(mbid)) = (self.director.as_mut(), mbid) {
-                        d.note_rejection(kind, &mbid, at);
+                    if let Some(mbid) = mbid {
+                        if let Some(d) = self.director.as_mut() {
+                            d.note_rejection(kind, &mbid, at);
+                        }
+                        self.keep_heard(Heard::Rejected { kind, mbid, at });
                     }
                 }
             }
@@ -1893,6 +1963,41 @@ mod tests {
         fn head_position(&self) -> Option<(i64, u64)> {
             None
         }
+    }
+
+    /// What is heard while a Director is built reaches it when it lands
+    /// `[REQ-PD-112]`. The build read the history before the skip and the
+    /// play below were heard -- here, they were never written at all, which
+    /// is the same thing to a Director built from it -- and without the
+    /// replay the new one offered both again at once.
+    #[test]
+    fn what_is_heard_while_a_director_builds_reaches_it() {
+        let tmp = director_library_on_disk("heard");
+        let mut session = Session::open(&tmp, &tmp, 5).unwrap();
+        let lib = crate::db::Library::open_split(&tmp, &tmp).unwrap();
+        session.director = Some(lib.director().unwrap());
+        let now = unix_now();
+        let eligible = |s: &Session, id: i64| {
+            s.director.as_ref().unwrap().weigh_all(now).iter()
+                .any(|(e, w)| e.passage_id == id && w.is_eligible())
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        session.rebuild = Some(rx);
+        let mut b = Scripted::default();
+        b.outcomes.push(Outcome::Rejected {
+            passage: 1, kind: crate::db::Rejection::Skip, mbid: Some("rec-a".into()), at: now,
+        });
+        b.outcomes.push(Outcome::Played { passage: 3 });
+        session.hear_outcomes(&mut b, now);
+
+        // The build lands, from a history that has neither.
+        tx.send(Ok(Box::new(lib.director().unwrap()))).unwrap();
+        session.tend_rebuild(&b);
+        assert!(session.rebuild.is_none(), "it landed");
+        assert!(!eligible(&session, 1), "the skip heard while it built holds the song out");
+        assert!(!eligible(&session, 3), "and the play heard while it built rotates it");
+        assert!(session.heard.is_empty(), "the player writes what it hears, so nothing is kept after");
+        let _ = std::fs::remove_file(&tmp);
     }
 
     /// The running Director hears what becomes of each passage as it happens
