@@ -204,6 +204,11 @@ fn tag_artist_key(tag: &str) -> String {
 
 pub struct Director {
     rows: Vec<Row>,
+    /// passage → its place in `rows`. Every per-candidate lookup goes through
+    /// it: a scan of `rows` per candidate made each pick quadratic in the
+    /// library, measured 34-39 ms a pick on the desktop at 10,850 radio
+    /// passages against 7 ms for all of Stage A (2026-11-01).
+    index: HashMap<i64, usize>,
     policy: Policy,
     recording_tuning: HashMap<String, Tuning>,
     artist_tuning: HashMap<String, Tuning>,
@@ -602,8 +607,10 @@ impl Director {
             ..Default::default()
         };
 
+        let index = rows.iter().enumerate().map(|(i, r)| (r.entry.passage_id, i)).collect();
         Ok(Self {
             rows,
+            index,
             policy,
             last_skipped,
             last_dequeued,
@@ -848,7 +855,7 @@ impl Director {
         // without an MBID still can, and must be. Returning `None` for the
         // unidentified case is what let such a passage repeat freely
         // `[GDE-WRK-055]`.
-        let row = self.rows.iter().find(|r| r.entry.passage_id == passage_id)?;
+        let row = self.row(passage_id)?;
         let mbid = row.mbid.clone();
         let mut keys = vec![MarkKey::Passage(passage_id)];
         for a in self.artist_keys(mbid.as_deref(), passage_id) {
@@ -1225,10 +1232,14 @@ impl Director {
         })
     }
 
+    /// The row a passage is, through the index rather than a scan.
+    fn row(&self, passage_id: i64) -> Option<&Row> {
+        self.index.get(&passage_id).map(|&i| &self.rows[i])
+    }
+
     /// The flavor of whatever recording a passage carries.
     fn flavor_of(&self, passage_id: i64) -> Option<&Flavor> {
-        let row = self.rows.iter().find(|r| r.entry.passage_id == passage_id)?;
-        self.flavor.get(row.mbid.as_deref()?)
+        self.flavor.get(self.row(passage_id)?.mbid.as_deref()?)
     }
 
     /// Distance from the chosen passage to each seed, for the panel
