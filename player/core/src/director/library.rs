@@ -1066,16 +1066,30 @@ impl Director {
         if ranked.is_empty() {
             return None;
         }
-        let flowed = anchor.is_some();
+        // A flow order needs something to measure: a tail with flavor, and a
+        // pool with at least one passage it can be measured against. A pool
+        // of passages without flavor -- the last resort `[SPEC-DIR-147]` --
+        // has no rank, however well the tail is known.
+        let flowed = anchor.is_some() && ranked.iter().any(|x| x.2.is_some());
         if flowed {
-            // Unmeasured passages sort last rather than being dropped: they can
-            // still play, they simply cannot claim to follow well.
+            // One that cannot be measured from the tail sorts last: it can
+            // still play, it simply cannot claim to follow well.
             ranked.sort_by(|a, b| match (a.2, b.2) {
                 (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
                 (Some(_), None) => std::cmp::Ordering::Less,
                 (None, Some(_)) => std::cmp::Ordering::Greater,
                 (None, None) => std::cmp::Ordering::Equal,
             });
+            // **And among those, no order at all.** Left as they sorted, they
+            // kept the order the rows were read in, and the cut to `RAND_POOL`
+            // below then let only the first of them into the draw, decayed by
+            // row position -- the same passages every time.
+            let first_unmeasured = ranked.iter().position(|x| x.2.is_none()).unwrap_or(ranked.len());
+            let tail = &mut ranked[first_unmeasured..];
+            for i in (1..tail.len()).rev() {
+                let j = ((rng.unit() * (i + 1) as f64) as usize).min(i);
+                tail.swap(i, j);
+            }
         }
 
         // --- Stage D: rank decay, then weighted roulette [SPEC-DIR-165] ---
@@ -1096,8 +1110,10 @@ impl Director {
 
         let stages = if flowed {
             "frequency, shaping, flow, rank decay"
+        } else if anchor.is_some() {
+            "frequency, shaping; no flow -- nothing in the pool has flavor to follow by"
         } else {
-            "frequency, shaping; no flow -- nothing queued to follow"
+            "frequency, shaping; no flow -- nothing with flavor queued to follow"
         };
         self.draw(starts_at, rng, &pool, &shaping, &seeds, stages)
     }
@@ -2280,6 +2296,31 @@ mod tests {
                 .unwrap();
             }
         }
+    }
+
+    /// A passage without flavor is the last resort `[SPEC-DIR-147]`, on every
+    /// path the Director has: with a flow order, without one, and relaxed.
+    /// Passage 3 loses its flavor; while 2 is there to choose, 3 never is, and
+    /// when 2 is queued too, 3 is chosen -- with no rank to decay by.
+    #[test]
+    fn a_passage_without_flavor_is_chosen_only_when_nothing_with_it_is_left() {
+        let c = fixture();
+        with_flavor(&c);
+        c.execute_batch("DELETE FROM flavor WHERE subject_id = 'rec-c';").unwrap();
+        let d = Director::load(&c).unwrap();
+        for seed in 0..40 {
+            let rng = &mut Rng::seeded(seed);
+            let flowed = d.decide(NOW, NOW, rng, &[1], Some(1)).unwrap();
+            assert_eq!(flowed.why.passage_id, 2, "seed {seed}: following a passage with flavor");
+            let first = d.decide(NOW, NOW, rng, &[], None).unwrap();
+            assert_ne!(first.why.passage_id, 3, "seed {seed}: the first pick of a start");
+            let relaxed = d.decide_relaxed(NOW, NOW, rng, &[1]).unwrap();
+            assert_eq!(relaxed.why.passage_id, 2, "seed {seed}: rotation set aside");
+        }
+        let last = d.decide(NOW, NOW, &mut Rng::seeded(1), &[1, 2], Some(2)).unwrap();
+        assert_eq!(last.why.passage_id, 3, "nothing with flavor left: the last resort");
+        assert!(last.why.flow_distance.is_none() && last.why.stages.contains("no flow"),
+                "and it is not ranked by a flow it cannot be measured on: {}", last.why.stages);
     }
 
     /// Stage C: the pool is ordered by distance to the passage already queued,

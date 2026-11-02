@@ -81,16 +81,9 @@ Gathering is per seed, not a global top-N, so one seed in a dense region cannot 
 
 **`[SPEC-DIR-147]` A passage without flavor is an unknown quantity, chosen only as a last resort** (the maintainer, 2026-11-01). The player must still play something when too few passages with flavor are available. It must not represent passages without flavor in proportion: one would be chosen only if and when nothing remains but passages with flavor that are known to be wrong or unwanted. Measured 2026-11-01: **37 of 10,850** radio passages on the hub have no flavor, all of them identified recordings flavor was never extracted for. Every tags-only passage on a phone is in this class too `[REQ-AND-310]`.
 
-What the code does today, read 2026-11-01. Two mechanisms put such a passage last, and both apply only where they run: **pruning** (Stage B, with seeds) sorts it after every passage comparable to a seed, so it is cut whenever 1,000 or more are; **flow** (Stage C, with a queue tail that has flavor) sorts it after every passage with a flow distance, so it reaches the top 100 only if fewer than 100 can be measured. A survivor of the prune joins the gathered pool without the per-seed cap.
+**As built, 2026-11-01, on every path.** "Has flavor" is any `flavor` row for the passage's top recording `[SPEC-DIR-112]`. Stage B (`shape`) takes the passages with flavor and passes over the rest whenever one with flavor is left — after Stage A, the skip list and the Dislike filter — with seeds or without; the record counts them as `unmeasured_out`. So a passage without flavor is drawn only when every eligible one with flavor is queued, blocked or disliked, and then the draw is among the passages without, by weight, with no flow order (they have no distance to rank by). It comes before a disliked passage, never before a neutral one. `decide_relaxed` shapes through the same function, so the rule holds with rotation set aside; `fallback_radio`, with no Director, draws every eligible passage with flavor before any without.
 
-| path | with seeds | with no seeds |
-| :--- | :--- | :--- |
-| `decide`, with a flow order | last resort in a full library: pruned, and sorted last by flow | last resort in a full library: sorted last by flow |
-| `decide`, no flow order | last resort in a full library: pruned; in a pool under ~1,000 comparable, a survivor is **drawn at its ordinary weight** | **drawn at its ordinary weight** among every eligible passage |
-| `decide_relaxed` (never a flow order) `[SPEC-DIR-232]` | as the row above | **drawn at its ordinary weight** |
-| `fallback_radio`, no Director `[SPEC-DIR-230]` | flavor is not read: **ordinary weight** | **ordinary weight** |
-
-"No flow order" is a pick with nothing queued and nothing on air — the very first of a fresh start — or one following a passage without flavor. So the intent holds in a full library with seeds and a flow tail, which is the common case, and the bold cells are where it does not yet hold `[SPEC-DIR-212]`.
+A tags-only phone `[REQ-AND-310]` is all last resort, and plays as a library with no flavor always did: by weight.
 
 **`[SPEC-DIR-150]` Taste enters here, and only here** `[GDE-OPN-030]`. Like-Taste and Dislike-Taste are weighted centroids of the flavor of liked and disliked recordings `[MTA-SMPL-020]`, built once per Director from `listener_likes` — **one per library, not per listener**. Who is listening is not modelled at all; per-listener Taste is one of several possible future directions `[SPEC-DIR-220]`.
 
@@ -99,7 +92,7 @@ What the code does today, read 2026-11-01. Two mechanisms put such a passage las
   2. **Gathering** ranks candidates for each seed by their divided distance to *that* seed. Every candidate is divided by the same number, so the order is the order of the raw distances, and each seed — Like-Taste included — takes the same `rand_pool × 2 / seeds`. The weight changes nothing here.
 
   Nothing else sees it: flow (Stage C) measures from the queue tail, the roulette draws on Stage-A weights, and the record's `seed_distances` are the raw distances. At today's 1.0 it has no effect at all; whatever its value, it never changes Like-Taste's share of the gathered pool, a weight, or the flow order.
-- **Dislike-Taste is mostly unimplemented**, and one of several possible future directions. What exists is an exclusion filter: passages within `dislike_radius` of it leave the pool before pruning, the use McRhythm suggested `[LD-LIKE-021]`. It runs only when there are seeds; with none, Stage B is bypassed and a Dislike does nothing.
+- **Dislike-Taste is mostly unimplemented**, and one of several possible future directions. What exists is an exclusion filter: passages within `dislike_radius` of it leave the pool before pruning, the use McRhythm suggested `[LD-LIKE-021]`. It runs only when there are seeds; with none, Stage B is bypassed and a Dislike does nothing. **A Dislike never empties the pool**: where every passage with flavor is disliked, one without flavor is the last resort `[SPEC-DIR-147]`, and with none of those either the Dislike is set aside for that pick (`dislike_set_aside` in the record) — the pick is not sent to the relaxed fallback, which would set rotation aside instead `[SPEC-DIR-155]`.
 
 > **Neither half has ever had data.** Nothing in Lempi writes `listener_likes` — it is empty on the hub (read 2026-11-01) — so both centroids are tested and unexercised, and `dislike_radius` and `like_seed_weight` are **new and unvalidated** `[SPEC-DIR-195]`.
 
@@ -118,7 +111,7 @@ Genesis appears in all three, and a *different* Genesis each time. That is the p
 **`[SPEC-DIR-158]` Cold start: weighted by length and season, ordered by flow, not uniform.** With no history, no Likes, no tuning and no seeds, what actually happens:
 
 - **Stage A** blocks nothing by rotation and ramps nothing — no passage has played — and every restraint is `10^0 = 1.0`. Each weight is then the **length bonus** (×2 at 45 s and under, ×1 at 180 s, ×0.22 at an hour `[SPEC-DIR-125]`) times the **occasion multiplier**, so the children's passages and out-of-season ones still fall below `min_weight` and are out `[SPEC-DIR-136]`. The filters, holds and failed files apply as always.
-- **Stage B** has no seeds and passes every eligible passage through.
+- **Stage B** has no seeds and passes every eligible passage with flavor through `[SPEC-DIR-147]`.
 - **Stages C and D**: the first pick of a fresh start has nothing to follow, so it is drawn from every eligible passage by that weight. Every later pick follows the one before: the pool is sorted by flavor distance to it, the nearest 100 decayed by rank, and drawn — so the station drifts by sound from wherever it began.
 - Each pick then blocks its recording, works and artists by rotation, as at any other time.
 
@@ -128,11 +121,11 @@ A slot with seeds is the minimum for a station with a character of its own.
 
 ## 5. Stages C & D — Flow and Roulette
 
-**`[SPEC-DIR-160]` Flow.** Re-sort the pool by flavor distance to the passage this pick will follow: the last passage already queued, or, with nothing queued, the passage on air. Consecutive passages then blend `[GDE-PD-050]`, and that continuity is what makes a hard slot switch acceptable `[SPEC-DIR-180]`. With no such passage, or one without flavor, there is no flow order.
+**`[SPEC-DIR-160]` Flow.** Re-sort the pool by flavor distance to the passage this pick will follow: the last passage already queued, or, with nothing queued, the passage on air. Consecutive passages then blend `[GDE-PD-050]`, and that continuity is what makes a hard slot switch acceptable `[SPEC-DIR-180]`. With no such passage, or one without flavor, or a pool with nothing that can be measured from it, there is no flow order. A passage in a flow order that cannot itself be measured from the tail sorts after every one that can, in no order among them — not the order the rows were read in, which the cut to the top 100 would turn into the same few every time.
 
 > **Future direction `[SPEC-FD-170]`:** flow matches whole-passage flavor to whole-passage flavor, but a handover is heard as the *end* of one passage against the *start* of the next. Matching `exit → entry` would model the transition rather than the pairing. Not the current target — it roughly triples extraction cost.
 
-**`[SPEC-DIR-165]` Roulette.** With a flow order: take the top `rand_pool` (100), apply rank decay `w × decay^rank`, and draw by the decayed weights. **With no flow order there is no meaningful rank**, so the draw is over the whole shaped pool at undecayed weight, and the record says so: with seeds, up to 200 gathered plus any passage without flavor that survived the prune; with none, every eligible passage. Either way the draw is by weight, not by rank: a lower-ranked passage can win, which is where the surprise lives.
+**`[SPEC-DIR-165]` Roulette.** With a flow order: take the top `rand_pool` (100), apply rank decay `w × decay^rank`, and draw by the decayed weights. **With no flow order there is no meaningful rank**, so the draw is over the whole shaped pool at undecayed weight, and the record says so: with seeds, up to 200 gathered; with none, every eligible passage with flavor. Either way the draw is by weight, not by rank: a lower-ranked passage can win, which is where the surprise lives.
 
 **`[SPEC-DIR-167]` Both measurable.** *(Built 2026-08-10.)* Across eight consecutive picks, mean distance between a passage and the one it followed was **0.432**, against a library median of 1.052 `[SPEC-FD-085]` — **59% closer than random pairs**. Winning ranks: **5, 10, 17, 24, 31, 50, 61, 99** — one from rank 99 at a weight of 0.006. A director that always returned rank 0 would be a bug, not good taste.
 
@@ -197,7 +190,7 @@ The orthogonality of `[SPEC-DIR-100]` is what makes this legible: the panel tell
 ## 9. Open
 
 1. **`[SPEC-DIR-210]` Eligibility is evaluated at selection time**, not projected to estimated play time — MuLibPlay's explicit `TODO`. The slot already is `[SPEC-DIR-186]`; rotation and the season are not. Deferred: `[REQ-PD-110]` requires reproducing MuLibPlay's selections first `[GDE-PHS-030]`.
-2. **`[SPEC-DIR-212]` Passages without flavor as a true last resort** `[SPEC-DIR-147]`: in the bold cells of that table — no flow order, the relaxed fallback, the no-Director fallback — they are still drawn at their ordinary weight.
+2. **`[SPEC-DIR-212]` Passages without flavor as a true last resort** `[SPEC-DIR-147]` — *closed 2026-11-01*: built on every path, at the maintainer's direction.
 3. **`[SPEC-DIR-215]`** Whether Like-Taste should age or cap. Likes accumulate without bound; a handful of curated seeds could be swamped.
 4. **`[SPEC-DIR-220]`** Taste per listener, and a shared queue between listeners — McRhythm's multi-user model is inherited but undecided `[REQ002 §8]`. One of several possible future directions, as is Dislike-Taste beyond its filter `[SPEC-DIR-150]`.
 5. Startup and the fallbacks have their own open items: `[SPEC-DIR-235]`, `[SPEC-DIR-238]` and `[SPEC-DIR-245]` in [SPEC074](SPEC074-when-the-director-cannot-choose.md).

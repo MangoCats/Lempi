@@ -1,8 +1,8 @@
 //! Stage B: pool shaping — *does this fit right now?* `[SPEC-DIR-145]`
 //!
-//! Candidates are shaped by flavor distance in two stages `[REQ-PD-130]`:
-//! pruned against the programme's seeds, then ordered by similarity to the
-//! passage already queued.
+//! Candidates are shaped by flavor distance against the seeds of the slot
+//! the pick is for `[REQ-PD-130]`: pruned, then gathered per seed. Ordering
+//! by similarity to the passage already queued is Stage C's, not this one's.
 //!
 //! Frequency has already said how often each passage may play. This stage says
 //! nothing about frequency and never touches a weight `[SPEC-DIR-100]`: it
@@ -12,6 +12,8 @@
 //!
 //! ```text
 //!   eligible pool
+//!     ├─ measured first .. a passage without flavor only if none with it
+//!     │                    is left [SPEC-DIR-147]
 //!     ├─ dislike filter ... drop what sits too close to Dislike-Taste
 //!     ├─ prune ........... keep the excl_pool nearest to any seed
 //!     └─ gather .......... take the nearest few to each seed, and union them
@@ -52,8 +54,14 @@ pub struct Shaping {
     pub pruned_out: usize,
     pub gathered: usize,
     pub seeds_used: usize,
-    /// No seeds, or no flavor: the pool passes through untouched and selection
-    /// falls back to frequency alone `[SPEC-DIR-158]`.
+    /// Passed over because passages with flavor were there to choose from:
+    /// one without is the last resort `[SPEC-DIR-147]`.
+    pub unmeasured_out: usize,
+    /// The Dislike would have left nothing at all, so it was set aside for
+    /// this pick: Taste never blocks `[SPEC-DIR-155]`.
+    pub dislike_set_aside: bool,
+    /// No seeds, or nothing comparable to one: no pruning or gathering, and
+    /// Stage C and the roulette work on the whole pool `[SPEC-DIR-158]`.
     pub bypassed: bool,
 }
 
@@ -63,12 +71,15 @@ pub struct Shaping {
 /// whatever the caller identifies a passage by. Returns the keys that survive,
 /// in no meaningful order — ordering is Stage C's job `[SPEC-DIR-160]`.
 ///
-/// A candidate with no flavor is an unknown quantity, meant to play only as a
-/// last resort `[SPEC-DIR-147]`. Here that means: pruned first, so a full
-/// library cuts every one of them; admitted beside the gathered pool only if
-/// they survive the prune. With no seeds the pool passes through untouched,
-/// and they are drawn at their ordinary weight -- one of the cases
-/// `[SPEC-DIR-212]` leaves open.
+/// **A candidate with no flavor is the last resort** `[SPEC-DIR-147]`: an
+/// unknown quantity, chosen only when no candidate with flavor is left to
+/// choose -- none eligible, or every one disliked. It is never drawn beside
+/// one with flavor, so it cannot take a share of the roulette in proportion.
+///
+/// **A Dislike never empties the pool** `[SPEC-DIR-155]`. Where it would
+/// leave nothing at all -- no passage with flavor outside it, and none
+/// without -- it is set aside for this pick, and the pool shaped as though
+/// there were none.
 pub fn shape<K: Copy + Eq + std::hash::Hash>(
     schema: &FlavorSchema,
     candidates: &[(K, Option<&Flavor>)],
@@ -79,34 +90,55 @@ pub fn shape<K: Copy + Eq + std::hash::Hash>(
     stats.eligible_in = candidates.len();
     stats.seeds_used = seeds.len();
 
-    if seeds.is_empty() || candidates.is_empty() {
+    let measured: Vec<(K, &Flavor)> =
+        candidates.iter().filter_map(|(k, f)| f.map(|f| (*k, f))).collect();
+    let unmeasured: Vec<K> = candidates.iter().filter(|(_, f)| f.is_none()).map(|(k, _)| *k).collect();
+    // The last resort, taken: nothing with flavor to weigh it against.
+    let last_resort = |stats: &mut Shaping| -> Vec<K> {
         stats.bypassed = true;
-        stats.gathered = candidates.len();
-        return candidates.iter().map(|(k, _)| *k).collect();
+        stats.gathered = unmeasured.len();
+        unmeasured.clone()
+    };
+
+    if measured.is_empty() {
+        return last_resort(stats);
+    }
+    if seeds.is_empty() {
+        stats.bypassed = true;
+        stats.unmeasured_out = unmeasured.len();
+        stats.gathered = measured.len();
+        return measured.iter().map(|(k, _)| *k).collect();
     }
 
     // --- dislike filter, before gathering [SPEC-DIR-150] ---
     // An exclusion, never a weight change: removing a passage from the pool
     // leaves its rotation and restraint untouched, so deleting the Dislike
     // later returns behaviour to baseline with no residue [SPEC-DIR-155].
-    let mut pool: Vec<(K, Option<&Flavor>)> = Vec::with_capacity(candidates.len());
-    for (k, f) in candidates {
-        let too_close = match (dislike, f) {
-            (Some(d), Some(f)) => distance(schema, f, d).is_some_and(|x| x < DISLIKE_RADIUS),
-            _ => false,
-        };
-        if too_close {
-            stats.disliked_out += 1;
-        } else {
-            pool.push((*k, *f));
+    let mut pool: Vec<(K, &Flavor)> = measured
+        .iter()
+        .filter(|(_, f)| {
+            !dislike.is_some_and(|d| distance(schema, f, d).is_some_and(|x| x < DISLIKE_RADIUS))
+        })
+        .copied()
+        .collect();
+    stats.disliked_out = measured.len() - pool.len();
+    if pool.is_empty() {
+        // Everything with flavor is disliked. One without is the last resort,
+        // and comes before a disliked one; with none of those either, the
+        // Dislike is set aside rather than leaving the pool empty.
+        if !unmeasured.is_empty() {
+            return last_resort(stats);
         }
+        stats.dislike_set_aside = true;
+        stats.disliked_out = 0;
+        pool = measured.clone();
     }
+    stats.unmeasured_out = unmeasured.len();
 
     // Distance to the NEAREST seed. "Most unlike every seed" means far from all
     // of them; a passage close to one seed belongs, even if far from the rest —
     // a programme is a handful of exemplars, not a single centre.
-    let nearest = |f: Option<&Flavor>| -> Option<f64> {
-        let f = f?;
+    let nearest = |f: &Flavor| -> Option<f64> {
         seeds
             .iter()
             .filter_map(|s| distance(schema, f, s.flavor).map(|d| d / s.weight.max(f64::EPSILON)))
@@ -114,12 +146,11 @@ pub fn shape<K: Copy + Eq + std::hash::Hash>(
     };
 
     // --- prune: keep the excl_pool closest to any seed ---
-    let mut scored: Vec<(K, Option<&Flavor>, Option<f64>)> =
+    let mut scored: Vec<(K, &Flavor, Option<f64>)> =
         pool.into_iter().map(|(k, f)| (k, f, nearest(f))).collect();
     if scored.len() > EXCL_POOL {
-        // Unmeasured passages sort last, so they are the first cut: whenever
-        // `EXCL_POOL` passages are comparable to a seed, every one of them
-        // goes. An unanalysed library, with fewer than that, still plays.
+        // A passage with flavor that no seed can be measured against sorts
+        // last, and is the first cut.
         scored.sort_by(|a, b| match (a.2, b.2) {
             (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
             (Some(_), None) => std::cmp::Ordering::Less,
@@ -141,10 +172,8 @@ pub fn shape<K: Copy + Eq + std::hash::Hash>(
     for seed in seeds {
         ranked.clear();
         for (i, (_, f, _)) in scored.iter().enumerate() {
-            if let Some(f) = f {
-                if let Some(d) = distance(schema, f, seed.flavor) {
-                    ranked.push((d / seed.weight.max(f64::EPSILON), i));
-                }
+            if let Some(d) = distance(schema, f, seed.flavor) {
+                ranked.push((d / seed.weight.max(f64::EPSILON), i));
             }
         }
         ranked.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -156,17 +185,8 @@ pub fn shape<K: Copy + Eq + std::hash::Hash>(
         }
     }
 
-    // Passages with no flavor cannot be gathered by distance. Those that
-    // survived the prune are admitted beside the gathered ones; Stage C sorts
-    // them after every passage it can measure.
-    for (k, f, _) in &scored {
-        if f.is_none() && chosen.insert(*k) {
-            out.push(*k);
-        }
-    }
-
-    // Everything was pruned or nothing had flavor: fall back to the pruned pool
-    // rather than returning an empty station.
+    // Nothing comparable to any seed: the pruned pool, rather than an empty
+    // station.
     if out.is_empty() {
         stats.bypassed = true;
         out = scored.iter().map(|(k, _, _)| *k).collect();
@@ -218,7 +238,7 @@ mod tests {
             (0..50).map(|i| (key(i), idx.get(&format!("s{i:04}")))).collect();
         let mut st = Shaping::default();
         let out = shape(&idx.schema, &cands, &[], None, &mut st);
-        assert_eq!(out.len(), 50, "cold start is uniform over the eligible pool [SPEC-DIR-158]");
+        assert_eq!(out.len(), 50, "with no seeds, every eligible passage stays in [SPEC-DIR-158]");
         assert!(st.bypassed);
     }
 
@@ -288,18 +308,26 @@ mod tests {
         assert!(base.contains(&0), "and present when there is no Dislike");
     }
 
-    /// A candidate with no flavor is kept. Unmeasured is not unsuitable, and
-    /// dropping them would make a half-scanned library play only half itself.
+    /// A candidate with no flavor is the last resort `[SPEC-DIR-147]`: passed
+    /// over while one with flavor is there to choose, with seeds or without,
+    /// and chosen when none is -- an unanalysed library still plays.
     #[test]
-    fn candidates_without_flavor_are_kept() {
+    fn a_candidate_without_flavor_is_the_last_resort() {
         let idx = library(50);
         let mut cands: Vec<(usize, Option<&Flavor>)> =
             (0..50).map(|i| (key(i), idx.get(&format!("s{i:04}")))).collect();
         cands.push((999, None));
         let seeds = [Seed { flavor: idx.get("s0000").unwrap(), weight: 1.0 }];
+        for seeds in [&seeds[..], &[]] {
+            let mut st = Shaping::default();
+            let out = shape(&idx.schema, &cands, seeds, None, &mut st);
+            assert!(!out.contains(&999), "passed over beside {} with flavor", out.len());
+            assert_eq!(st.unmeasured_out, 1);
+        }
+        let only: Vec<(usize, Option<&Flavor>)> = vec![(998, None), (999, None)];
         let mut st = Shaping::default();
-        let out = shape(&idx.schema, &cands, &seeds, None, &mut st);
-        assert!(out.contains(&999), "an unanalysed passage must still be playable");
+        let out = shape(&idx.schema, &only, &seeds, None, &mut st);
+        assert_eq!(out.len(), 2, "and chosen when nothing with flavor is left");
     }
 
     /// A Taste centroid is an ordinary vector and shapes like any other seed.
@@ -321,16 +349,33 @@ mod tests {
         assert!(worst < 260, "a centroid of the low end gathers the low end, worst {worst}");
     }
 
-    /// Everything disliked must not yield a silent station.
+    /// A Dislike that would leave nothing is set aside for the pick
+    /// `[SPEC-DIR-155]`: the pool is shaped as though there were none, rather
+    /// than going empty -- which sent the pick to the relaxed fallback and
+    /// set rotation aside instead. Until 2026-11-01 this test asserted
+    /// `!out.is_empty() || disliked_out == 30`, which passed in exactly the
+    /// case its name said must not happen.
     #[test]
-    fn a_pool_emptied_by_dislike_falls_back_rather_than_going_silent() {
+    fn a_dislike_that_would_empty_the_pool_is_set_aside() {
         let idx = library(30);
+        // Three neighbours of the disliked passage itself, every one well
+        // inside its radius.
         let cands: Vec<(usize, Option<&Flavor>)> =
-            (0..30).map(|i| (key(i), idx.get(&format!("s{i:04}")))).collect();
-        let seeds = [Seed { flavor: idx.get("s0015").unwrap(), weight: 1.0 }];
-        // a dislike radius wide enough to swallow the library
+            (14..17).map(|i| (key(i), idx.get(&format!("s{i:04}")))).collect();
+        let seeds = [Seed { flavor: idx.get("s0000").unwrap(), weight: 1.0 }];
+        let everything = idx.get("s0015").unwrap();
         let mut st = Shaping::default();
-        let out = shape(&idx.schema, &cands, &seeds, idx.get("s0015"), &mut st);
-        assert!(!out.is_empty() || st.disliked_out == 30);
+        let out = shape(&idx.schema, &cands, &seeds, Some(everything), &mut st);
+        assert!(st.dislike_set_aside, "the Dislike was set aside");
+        assert_eq!(out.len(), 3, "and the pool shaped as though there were none");
+
+        // With a passage without flavor beside them, that is the last resort,
+        // and comes before a disliked one.
+        let mut with: Vec<(usize, Option<&Flavor>)> = cands.clone();
+        with.push((999, None));
+        let mut st = Shaping::default();
+        let out = shape(&idx.schema, &with, &seeds, Some(everything), &mut st);
+        assert_eq!(out, vec![999]);
+        assert!(!st.dislike_set_aside);
     }
 }

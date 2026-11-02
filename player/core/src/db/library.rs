@@ -227,6 +227,10 @@ impl Library {
     /// The listener's per-recording dials wait for the Director, which is
     /// seconds behind. In rotation's place the longest unplayed are the
     /// likeliest, drawn by that weight, so two starts do not queue one list.
+    ///
+    /// **A passage without flavor is the last resort here too**
+    /// `[SPEC-DIR-147]`: drawn only once every eligible passage with flavor
+    /// has been, so in a full library it is never queued by this fill.
     pub fn fallback_radio(
         &self,
         limit: usize,
@@ -244,10 +248,23 @@ impl Library {
             return Ok(Vec::new());
         }
 
+        // Whether the passage's top recording has flavor, as a column of the
+        // same read: an index probe per row inside one query, where listing
+        // every recording with flavor cost 3 s on the desktop alone
+        // (measured 2026-11-01). A catalogue without the table has no
+        // flavor, and every passage is in one tier.
+        let has_flavor = if self.conn.prepare("SELECT 1 FROM __LIB__.flavor LIMIT 1").is_ok() {
+            "EXISTS (SELECT 1 FROM __LIB__.flavor fl WHERE fl.subject_kind = 'recording' \
+               AND fl.subject_id = (SELECT pr.mbid FROM __LIB__.passage_recordings pr \
+                                     WHERE pr.passage_id = p.passage_id \
+                                     ORDER BY pr.weight DESC, pr.mbid LIMIT 1))"
+        } else {
+            "0"
+        };
         // Held passages out, where the catalogue has the column; one that
         // predates it holds nothing `[SPEC-HOLD-055]`.
         let unheld = format!(
-            "SELECT {COLS} {FROM} WHERE p.kind = 'radio' \
+            "SELECT {COLS}, {has_flavor} {FROM} WHERE p.kind = 'radio' \
                AND (p.director_hold IS NULL OR p.director_hold = '')"
         );
         // And a file this player found it cannot play as recorded out too
@@ -257,7 +274,7 @@ impl Library {
                AND c.outcome IN {})",
             crate::db::UNPLAYABLE_SQL
         );
-        let every = format!("SELECT {COLS} {FROM} WHERE p.kind = 'radio'");
+        let every = format!("SELECT {COLS}, {has_flavor} {FROM} WHERE p.kind = 'radio'");
         let mut stmt = match self.conn.prepare(&sound) {
             Ok(s) => s,
             Err(_) => match self.conn.prepare(&unheld) {
@@ -265,8 +282,8 @@ impl Library {
                 Err(_) => self.conn.prepare(&every).map_err(q)?,
             },
         };
-        let rows: Vec<QueueEntry> = stmt
-            .query_map([], row_to_entry)
+        let rows: Vec<(QueueEntry, bool)> = stmt
+            .query_map([], |r| Ok((row_to_entry(r)?, r.get::<_, bool>(14)?)))
             .map_err(q)?
             .collect::<rusqlite::Result<_>>()
             .map_err(q)?;
@@ -318,8 +335,11 @@ impl Library {
         };
         let age = |at: Option<&i64>| at.map(|at| (now - at).max(0) as f64);
 
+        // Two tiers, drawn in order: every passage with flavor first, and one
+        // without only once those run out `[SPEC-DIR-147]`.
         let mut drawn: Vec<(f64, QueueEntry)> = Vec::new();
-        for e in rows {
+        let mut last_resort: Vec<(f64, QueueEntry)> = Vec::new();
+        for (e, measured) in rows {
             if skip.contains(&e.passage_id) {
                 continue;
             }
@@ -355,10 +375,15 @@ impl Library {
             // A weighted draw without replacement: the largest `ln(u) / w`
             // (Efraimidis and Spirakis).
             let key = rng.unit().max(f64::MIN_POSITIVE).ln() / (w.weight * idle);
-            drawn.push((key, e));
+            if measured {
+                drawn.push((key, e));
+            } else {
+                last_resort.push((key, e));
+            }
         }
         drawn.sort_by(|a, b| b.0.total_cmp(&a.0));
-        Ok(drawn.into_iter().take(limit).map(|(_, e)| e).collect())
+        last_resort.sort_by(|a, b| b.0.total_cmp(&a.0));
+        Ok(drawn.into_iter().chain(last_resort).take(limit).map(|(_, e)| e).collect())
     }
 
     /// The file's own tags, if they have been scanned.

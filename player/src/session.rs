@@ -2147,6 +2147,28 @@ mod tests {
         (tmp, session, now)
     }
 
+    /// The no-Director fill keeps a passage without flavor for the last
+    /// resort too `[SPEC-DIR-147]`: 6 has none and has never played, 1 has
+    /// flavor and played just now, and 1 still comes first every time -- the
+    /// longest-unplayed preference ranks within a tier, never across them.
+    #[test]
+    fn the_fallback_draws_a_passage_without_flavor_last() {
+        let (tmp, mut session, now) = every_rule("fallback-flavor");
+        rusqlite::Connection::open(&tmp)
+            .unwrap()
+            .execute_batch("INSERT INTO flavor VALUES ('recording','rec-a','x','hi',0.5,'test',NULL);")
+            .unwrap();
+        let suppress = (crate::SKIP_SUPPRESS_H, crate::DEQUEUE_SUPPRESS_H);
+        for _ in 0..20 {
+            let one = session.lib.fallback_radio(1, now, suppress, &[], &mut session.rng).unwrap();
+            assert_eq!(one[0].passage_id, 1, "the passage with flavor before the one without");
+        }
+        let both = session.lib.fallback_radio(10, now, suppress, &[], &mut session.rng).unwrap();
+        assert_eq!(both.iter().map(|e| e.passage_id).collect::<Vec<_>>(), vec![1, 6],
+                   "and the one without only once the others run out");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
     /// With no Director yet, the library's fill keeps every rule but rotation
     /// (the maintainer, 2026-10-08) -- where `random_radio`, until then,
     /// drew from every radio passage -- and favours the longest unplayed.
