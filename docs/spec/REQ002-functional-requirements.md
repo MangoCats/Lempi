@@ -46,7 +46,7 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 
 > Recorded once the passage has been **heard** — half its span or four minutes, whichever comes first `[SPEC-PLAY-010]` — by the local engine (`player/src/engine/persist.rs`) and the MPD backend alike, through one `scrobble::counts_as_play`; the local engine corrects the row's `heard_ms` when the passage ends `[REQ-VIS-250]`. A passage declined before that is not a play: a skip or a dequeue is written to `listener_rejections`, which holds it out of selection for its own window and does nothing else `[SPEC-PLAY-050]`. From queueing to the threshold the running Director carries a provisional mark, so its next pick sees the passage coming, and a rejection takes the mark back. [SPEC017](SPEC017-what-counts-as-a-play.md) is the whole rule.
 >
-> Stored with `passage_id` **and** `mbid` `[SPEC-SC-095]`: the passage id is the convenience, the MBID is what survives a rescan that renumbers passages. An unidentified passage still records a play with a null MBID — it simply cannot contribute to rotation.
+> Stored with `passage_id` **and** `mbid` `[SPEC-SC-095]`: the passage id is the convenience, the MBID is what survives a rescan that renumbers passages. An unidentified passage still records a play with a null MBID, and rotates on its passage id — and on its file's artist tag, where it has one — though never on a recording or a work `[SPEC-DIR-119]`, `[REQ-AND-315]`.
 >
 > A passage may legally hold a medley of several recordings, so the query selects the heaviest by a scalar subquery rather than a join, which would return that passage twice in every pool.
 >
@@ -62,7 +62,7 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 
 **`[REQ-PD-130]`** Shape candidates by flavor distance `[SPEC-FD-040]` in two stages — prune against programme seeds, then order by similarity to the passage already queued — and apply randomness **last**, over the shaped pool `[GDE-PD-050]`.
 
-**`[REQ-PD-140]`** Express a programme as **a list of exemplar passages**, not tuned parameters `[GDE-PD-040]`. "What should 10 AM sound like?" is answered by naming songs.
+**`[REQ-PD-140]`** Express a programme as **a list of exemplar recordings** `[ENT-SEED-010]`, not tuned parameters `[GDE-PD-040]`. "What should 10 AM sound like?" is answered by naming songs.
 
 **`[REQ-PD-150]`** Honour user Likes and Dislikes as inputs to selection `[GDE-MCR-070]`. *How* Taste combines with seed shaping is open design `[GDE-OPN-030]`.
 

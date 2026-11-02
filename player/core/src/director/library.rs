@@ -475,7 +475,7 @@ impl Director {
         };
         let mut stmt = conn
             .prepare(
-                "SELECT passage_id, MAX(played_at) FROM listener_play_history                  WHERE passage_id IS NOT NULL GROUP BY passage_id",
+                "SELECT passage_id, MAX(played_at) FROM listener_play_history WHERE passage_id IS NOT NULL GROUP BY passage_id",
             )
             .map_err(q)?;
         let by_passage = stmt
@@ -495,7 +495,7 @@ impl Director {
 
         let mut stmt = conn
             .prepare(
-                "SELECT mbid, MAX(played_at) FROM listener_play_history                  WHERE mbid IS NOT NULL GROUP BY mbid",
+                "SELECT mbid, MAX(played_at) FROM listener_play_history WHERE mbid IS NOT NULL GROUP BY mbid",
             )
             .map_err(q)?;
         let by_recording = stmt
@@ -594,7 +594,7 @@ impl Director {
         // "nothing suppressed" because nothing was rejected.
         let rejected = |kind: &str| -> HashMap<String, i64> {
             conn.prepare(
-                "SELECT mbid, MAX(rejected_at) FROM listener_rejections                  WHERE mbid IS NOT NULL AND kind = ?1 GROUP BY mbid",
+                "SELECT mbid, MAX(rejected_at) FROM listener_rejections WHERE mbid IS NOT NULL AND kind = ?1 GROUP BY mbid",
             )
             .and_then(|mut q| {
                 q.query_map([kind], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
@@ -1485,7 +1485,7 @@ pub(crate) fn load_occasions(conn: &QualifyingConn) -> Result<Occasions, DbError
     // `listener_occasions` is not: an installation that has never set a
     // special simply has none to lay over.
     if let Ok(mut stmt) = conn.prepare(
-        "SELECT subject_id, characteristic, class, value FROM listener_characteristics          WHERE subject_kind = 'recording'",
+        "SELECT subject_id, characteristic, class, value FROM listener_characteristics WHERE subject_kind = 'recording'",
     ) {
         if let Ok(rows) = stmt.query_map([], |r| {
             Ok((

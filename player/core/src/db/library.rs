@@ -187,7 +187,7 @@ impl Library {
     pub fn lyrics(&self, passage_id: i64) -> Option<String> {
         self.conn
             .query_row(
-                "SELECT l.text FROM __LIB__.passage_recordings pr                    JOIN lyrics l ON l.mbid = pr.mbid                  WHERE pr.passage_id = ?1                  ORDER BY pr.weight DESC LIMIT 1",
+                "SELECT l.text FROM __LIB__.passage_recordings pr JOIN lyrics l ON l.mbid = pr.mbid WHERE pr.passage_id = ?1 ORDER BY pr.weight DESC LIMIT 1",
                 [passage_id],
                 |r| r.get::<_, String>(0),
             )
@@ -461,7 +461,7 @@ impl Library {
     /// Where a passage's audio lives, for serving its cover art.
     pub fn passage_path(&self, passage_id: i64) -> Result<std::path::PathBuf, DbError> {
         let p: String = self.conn.query_row(
-            "SELECT f.path FROM __LIB__.passages p JOIN __LIB__.files f ON f.file_id = p.file_id              WHERE p.passage_id = ?1",
+            "SELECT f.path FROM __LIB__.passages p JOIN __LIB__.files f ON f.file_id = p.file_id WHERE p.passage_id = ?1",
             [passage_id],
             |r| r.get(0),
         )

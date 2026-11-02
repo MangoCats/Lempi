@@ -285,7 +285,8 @@ pub struct Candidate<'a> {
 /// Never-played is not the same as played-long-ago only in that it skips the
 /// ramp entirely: with no history there is nothing to recover from, so the
 /// weight is the restraint term alone. That is what makes a fresh library
-/// degrade to uniform random rather than to silence `[SPEC-DIR-158]`.
+/// degrade to a draw by length and season rather than to silence
+/// `[SPEC-DIR-158]`.
 pub fn weigh(c: &Candidate<'_>, policy: &Policy) -> Weighing {
     // Passage filters first: they are free, and they are the reason a 90-minute
     // live set does not enter the roulette [SPEC-DIR-125].

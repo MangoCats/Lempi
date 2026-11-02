@@ -42,8 +42,9 @@ pub fn ordinal(month: u32, day: u32) -> u16 {
 /// Civil date from a unix timestamp, by Howard Hinnant's `civil_from_days`.
 ///
 /// Ten lines rather than a date-handling dependency, on a target where every
-/// crate is a memory decision `[REQ-HW-140]`. UTC: a season does not care
-/// which side of midnight a timezone puts it on.
+/// crate is a memory decision `[REQ-HW-140]`. The date of whatever instant it
+/// is given: the Director gives it the listener's local time, so a season
+/// turns at local midnight `[SPEC-DIR-133]`.
 pub fn civil_from_unix(secs: i64) -> (i32, u32, u32) {
     let z = secs.div_euclid(86_400) + 719_468;
     let era = z.div_euclid(146_097);

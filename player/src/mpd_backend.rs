@@ -124,7 +124,7 @@ pub fn cue_uris(
     let root_norm = root.replace('\\', "/").trim_end_matches('/').to_string();
     let mut q = conn
         .prepare(&format!(
-            "SELECT f.path, p.passage_id FROM passages p JOIN files f USING(file_id)              WHERE p.kind = 'radio' AND {} ORDER BY f.path, p.start_ms",
+            "SELECT f.path, p.passage_id FROM passages p JOIN files f USING(file_id) WHERE p.kind = 'radio' AND {} ORDER BY f.path, p.start_ms",
             crate::cue::NOT_SPANNING
         ))
         .map_err(|e| e.to_string())?;

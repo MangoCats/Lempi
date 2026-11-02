@@ -224,7 +224,7 @@ Measured effect in August 2026: eligible passages fell **8,038 → 7,851**, with
 >
 > The general lesson: an occasion multiplier small enough to look like suppression can cross `min_weight` and become exclusion, and the two are not the same thing — an excluded passage cannot be surfaced by any amount of listening.
 
-> **The children's weight deserves a decision rather than a default.** MuLibPlay's shipped `kidSongWeight` is 0.000001, which is not a de-emphasis but an effective ban, and here it removes **149 radio passages — 1.8% of the library — permanently, in every season**. It is transcribed faithfully because that is what ran for six years, but it is a parameter: `--kids 0.5` merely damps them, and the value is a row rather than a constant.
+> **The children's weight deserves a decision rather than a default.** MuLibPlay's shipped `kidSongWeight` is 0.000001, which is not a de-emphasis but an effective ban, and here it removes **150 radio passages — 1.4% of the library, read 2026-11-01; 149 and 1.8% in August — permanently, in every season**. The 151st of `[SPEC-DIR-136]`'s reach carries a hand-set 0.2, and is damped ×0.8 rather than removed. It is transcribed faithfully because that is what ran for six years, but it is a parameter: `--kids 0.5` merely damps them, and the value is a row rather than a constant.
 
 ---
 
