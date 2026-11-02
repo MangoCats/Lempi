@@ -577,10 +577,10 @@ pub(crate) mod tests {
         assert!(check(&req("commit"), "commit", "me", "m", now - FRESH_MS - 1).unwrap_err().contains("stale"));
     }
 
-    /// `[SPEC-STAR-104]`: the journal mode is read from the header, so a catalogue
-    /// in WAL mode is told from one that is not without opening it.
+    /// `[SPEC-STAR-104]`: a catalogue in WAL mode is told from one that is not
+    /// -- asked of SQLite, never by opening the file `[SPEC-STAR-105]`.
     #[test]
-    fn the_journal_mode_is_read_from_the_header() {
+    fn the_journal_mode_is_told_apart() {
         let dir = std::env::temp_dir().join(format!("lempi-star-wal-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();

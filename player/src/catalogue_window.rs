@@ -13,8 +13,35 @@ use std::path::Path;
 #[cfg(all(feature = "appliance", not(test)))]
 use serde_json::Value;
 
-/// Whether `p` can be opened for writing: false on a read-only mount (EROFS).
-/// Opening for write changes nothing; the commit's own connection writes.
+/// Whether `p` can be written: false on a read-only mount (EROFS).
+///
+/// **Asked of the kernel, never by opening the file** `[SPEC-STAR-104]`. A
+/// POSIX advisory lock belongs to the process, and closing *any* descriptor
+/// on a file releases every lock the process holds on it -- SQLite's
+/// included. This was `OpenOptions::new().write(true).open(p)` until
+/// 2026-11-01, called by the tag scan at every start and by every sync's
+/// snapshot, with the player's own connections open on the catalogue. Each
+/// call silently dropped their shared lock, so the next writer to close --
+/// `import_bundle`, a commit -- took itself for the last connection and
+/// deleted the catalogue's `-wal` and `-shm` beneath them. Every connection
+/// this process held, and every one it opened after, then read the
+/// catalogue through the index of a WAL that no longer existed: "database
+/// disk image is malformed", a rebuild refused, the hourly integrity check
+/// unable to run, until a restart. Seen on lempi02w and lp3-wifi that day;
+/// reproduced on lempi02w with two processes and one `open`/`close`, and not
+/// without it.
+#[cfg(unix)]
+pub(crate) fn writable(p: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(path) = std::ffi::CString::new(p.as_os_str().as_bytes()) else { return false };
+    // SAFETY: `path` is a valid NUL-terminated string that outlives the
+    // call, and access(2) only reads it. It opens nothing.
+    unsafe { libc::access(path.as_ptr(), libc::W_OK) == 0 }
+}
+
+/// Windows locks belong to the handle that took them, so opening and closing
+/// another handle costs SQLite nothing there.
+#[cfg(not(unix))]
 pub(crate) fn writable(p: &Path) -> bool {
     std::fs::OpenOptions::new().write(true).open(p).is_ok()
 }
@@ -88,14 +115,82 @@ fn library_rw(library: &Path, on: bool) -> Result<bool, String> {
     Ok(was_ro)
 }
 
-/// Whether a SQLite file is in WAL mode, from its own header: bytes 18 and 19
-/// are the write and read format versions, 1 for a rollback journal and 2 for
-/// WAL. Read from the file rather than asked of a connection, so it needs no
-/// lock the player's own connection holds. `None` when the header cannot be read.
+/// Whether a SQLite file is in WAL mode. `None` when it cannot be asked.
+///
+/// **Asked of SQLite, not read from the file's header** -- see [`writable`]:
+/// reading the header opened a descriptor on a catalogue the player holds
+/// open, and closing it dropped the player's locks. SQLite keeps a
+/// descriptor of its own open until no lock in this process needs it, so a
+/// connection opened and closed here costs the others nothing. Asked only
+/// while the partition is writable, where a WAL catalogue opens.
 pub(crate) fn wal_mode(p: &Path) -> Option<bool> {
-    use std::io::Read;
-    let mut h = [0u8; 20];
-    std::fs::File::open(p).and_then(|mut f| f.read_exact(&mut h)).ok()?;
-    Some(h[18] == 2 || h[19] == 2)
+    // A path that is not a file is answered without opening anything.
+    if !p.is_file() {
+        return None;
+    }
+    let c = rusqlite::Connection::open_with_flags(p, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let mode: String = c.query_row("PRAGMA journal_mode", [], |r| r.get(0)).ok()?;
+    Some(mode.eq_ignore_ascii_case("wal"))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    const WRITER: &str = "LEMPI_TEST_CATALOGUE_WRITER";
+
+    /// The other process, as `import_bundle` is: writes the catalogue, and
+    /// closes. Run by the test below as a child of this test binary; on its
+    /// own it does nothing.
+    #[test]
+    fn writer_helper() {
+        let Ok(lib) = std::env::var(WRITER) else { return };
+        let c = rusqlite::Connection::open(&lib).unwrap();
+        c.execute_batch("BEGIN IMMEDIATE; INSERT INTO t SELECT a + 1000, b FROM t; COMMIT;").unwrap();
+        drop(c);
+    }
+
+    /// **Asking whether the catalogue can be written, or how it journals,
+    /// costs the player's connections nothing** `[SPEC-STAR-104]`. With the
+    /// player's shape -- a listener with the catalogue attached read-only --
+    /// both questions are asked, then another process writes the catalogue
+    /// and closes. Its `-wal` and `-shm` must still be there, and the
+    /// player's view right. When `writable` opened the file, the other
+    /// process's close deleted them under the player (reproduced on lempi02w,
+    /// 2026-11-01), and the next write made its catalogue read malformed.
+    #[test]
+    fn asking_about_the_catalogue_leaves_the_players_locks_alone() {
+        let dir = std::env::temp_dir().join(format!("lempi-window-locks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (lib, lis) = (dir.join("library.db"), dir.join("listener.db"));
+        let c = rusqlite::Connection::open(&lib).unwrap();
+        c.execute_batch(
+            "PRAGMA journal_mode=WAL; CREATE TABLE t (a INTEGER, b TEXT);
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000)
+             INSERT INTO t SELECT i, printf('%0200d', i) FROM n;",
+        )
+        .unwrap();
+        drop(c);
+        let player = rusqlite::Connection::open(&lis).unwrap();
+        crate::db::attach_library(&player, &lis, &lib).unwrap();
+        let rows = |c: &rusqlite::Connection| c.query_row("SELECT COUNT(*) FROM lib.t", [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(rows(&player), 1000);
+
+        assert!(writable(&lib), "a writable catalogue reads as one");
+        assert_eq!(wal_mode(&lib), Some(true));
+
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "catalogue_window::tests::writer_helper", "--test-threads=1"])
+            .env(WRITER, &lib)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "the writer: {}", String::from_utf8_lossy(&out.stdout));
+        let side = |s: &str| dir.join(format!("library.db-{s}")).exists();
+        assert!(side("wal") && side("shm"), "the other process's close took the -wal and -shm from under the player");
+        assert_eq!(rows(&player), 2000, "and the player reads what was written");
+        drop(player);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 

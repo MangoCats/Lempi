@@ -273,3 +273,16 @@ gone.
 [`data/README.md`](data/README.md) has the measured state of every surviving
 copy. Read it before any work that reads or writes the library, and update it
 whenever the primary moves.
+
+## 12. Never open a live database file with plain file I/O
+
+**In a process holding SQLite connections to a file, do not `open` and
+`close` that file any other way** -- not to test if it is writable, not to
+read its header, not to hash it. A POSIX lock belongs to the process, and
+closing any descriptor on a file drops every lock the process holds on it,
+SQLite's included. Another process's close then deletes the `-wal` and
+`-shm` underneath, and this process reads the database as malformed until it
+restarts `[SPEC-STAR-105]`. Ask the kernel (`access(2)`, `stat`) or ask
+SQLite. It cost two nodes their Director rebuilds on 2026-11-01, with both
+files reading `quick_check` ok. Windows locks belong to the handle, which is
+why it never shows on the desktop.
