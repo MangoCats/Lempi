@@ -339,6 +339,25 @@ impl PlayerStore {
     /// then its own (`source = 'node'`), whether the name is kept or new
     /// `[SPEC-PGM-405]`: the hub's copy is never touched from here.
     pub fn save_programme(&self, name: Option<&str>, slots: &[Slot]) -> Result<ProgrammeView, DbError> {
+        let tx = self.immediate()?;
+        self.write_programme(name, slots)?;
+        tx.commit().map_err(q)?;
+        self.programme()
+    }
+
+    /// A write transaction begun at once rather than at its first write.
+    ///
+    /// **Immediate, because a save reads before it writes**: the highest slot
+    /// id, for the next. Deferred, two saves at once -- the page and a seed
+    /// box, each on its own connection -- both read the same highest id, and
+    /// the second then failed on the primary key, or on a snapshot gone stale
+    /// under it. Immediate, the second waits for the first and reads after it.
+    fn immediate(&self) -> Result<rusqlite::Transaction<'_>, DbError> {
+        rusqlite::Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate).map_err(q)
+    }
+
+    /// What a save writes, inside a transaction its caller holds.
+    fn write_programme(&self, name: Option<&str>, slots: &[Slot]) -> Result<(), DbError> {
         let (name, slots) = validate(name, slots).map_err(DbError::Query)?;
         let current = read_slots(&self.conn)?;
         let known: Vec<i64> = current.iter().filter_map(|s| s.id).collect();
@@ -388,7 +407,7 @@ impl PlayerStore {
         let mut next_id = max_of("SELECT MAX(program_id) FROM listener_programs")
             .max(max_of("SELECT MAX(program_id) FROM selection_decisions"))
             + 1;
-        let tx = self.conn.unchecked_transaction().map_err(q)?;
+        let tx = &self.conn;
         for id in known.iter().filter(|id| !keep.contains(id)) {
             tx.execute("DELETE FROM listener_program_seeds WHERE program_id = ?1", [id]).map_err(q)?;
             tx.execute("DELETE FROM listener_programs WHERE program_id = ?1", [id]).map_err(q)?;
@@ -460,8 +479,7 @@ impl PlayerStore {
             rusqlite::params![name, fp],
         )
         .map_err(q)?;
-        tx.commit().map_err(q)?;
-        self.programme()
+        Ok(())
     }
 
     /// Make a recording a seed of one time slot, or stop it being one
@@ -599,7 +617,11 @@ impl PlayerStore {
                 ..s.clone()
             })
             .collect();
-        self.save_programme(Some(&p.name), &slots)?;
+        // One transaction: the slots, the record that they are the hub's, and
+        // the question answered. Three, it was, and a stop between them left
+        // the hub's programme running as the node's own and asked again.
+        let tx = self.immediate()?;
+        self.write_programme(Some(&p.name), &slots)?;
         self.conn
             .execute(
                 "UPDATE listener_programme SET source = 'hub', hub_version = ?1, updated_at = datetime('now')
@@ -608,6 +630,7 @@ impl PlayerStore {
             )
             .map_err(q)?;
         self.conn.execute("DELETE FROM listener_programme_pending", []).map_err(q)?;
+        tx.commit().map_err(q)?;
         self.programme()
     }
 
@@ -792,6 +815,38 @@ mod tests {
         assert!(by_name("New").id.is_some_and(|id| id > 3));
         assert!(v.slots.iter().all(|s| s.name != "Gone"));
         assert_eq!(st.programme().unwrap().fingerprint, v.fingerprint);
+    }
+
+    /// Two saves at once, each on its own connection and each adding a slot,
+    /// both land: the second waits for the first and reads the highest id
+    /// after it. Begun deferred, both read the same id and one failed.
+    #[test]
+    fn two_saves_at_once_both_land() {
+        let f = std::env::temp_dir().join(format!("lempi-programme-race-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&f);
+        drop(PlayerStore::open_split(&f, &f).unwrap());
+        for round in 0..10 {
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let saves: Vec<_> = ["Dawn", "Dusk"]
+                .into_iter()
+                .map(|name| {
+                    let (f, barrier) = (f.clone(), barrier.clone());
+                    std::thread::spawn(move || {
+                        let st = PlayerStore::open_split(&f, &f).unwrap();
+                        // New slots only: neither names a slot the other may
+                        // renew, which is a conflict a save rightly refuses.
+                        let start = if name == "Dawn" { "05:00" } else { "19:00" };
+                        let slots = vec![slot(name, Some(start), &[&format!("{name}-{round}")])];
+                        barrier.wait();
+                        st.save_programme(None, &slots).map(|_| ()).map_err(|e| e.message().to_string())
+                    })
+                })
+                .collect();
+            for s in saves {
+                assert_eq!(s.join().unwrap(), Ok(()), "round {round}: a save was refused");
+            }
+        }
+        let _ = std::fs::remove_file(&f);
     }
 
     /// A change of seeds makes a slot a different slot, with a new id, even
