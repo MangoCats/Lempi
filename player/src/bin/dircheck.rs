@@ -16,6 +16,9 @@
 //!   2. **Peak memory while two exist at once**, which is what a build-then-swap
 //!      costs on a 512 MB appliance holding to ≤150 MB `[GDE-ARC-050]`.
 //!
+//! And a third, about using one rather than building it: **how long a pick
+//! takes**, asked one at a time as a refill asks.
+//!
 //! The command line is `cli::specs::dircheck`; `dircheck --help` prints it.
 
 use std::path::PathBuf;
@@ -23,6 +26,9 @@ use std::time::Instant;
 
 use lempi_player::cli::specs::dircheck as opt;
 use lempi_player::{db::Library, peak_rss_bytes};
+
+/// How many picks are timed: two refills' worth at the default depth.
+const PICKS: usize = 10;
 
 fn mb(b: u64) -> f64 {
     b as f64 / 1_048_576.0
@@ -83,6 +89,33 @@ fn main() {
     let after_one = rss();
     println!("first load     {:>8.0} ms   peak RSS {:>7.1} MB  (+{:.1})",
              cold.as_secs_f64() * 1000.0, mb(after_one), mb(after_one - base));
+
+    // **What one pick costs**, the other half of affording the Director: a
+    // refill asks for one at a time, each following the last and marked as
+    // coming before the next `[SPEC-DIR-107]`, so this asks the same way.
+    // Measured here because it was not anywhere: each pick scanned every row
+    // per candidate until 2026-11-01, and nothing reported what that cost on
+    // the Pi Zero the queue is topped up on.
+    let mut picker = lib.director().expect("a Director to pick with");
+    let mut rng = lempi_player::director::library::Rng::seeded(1);
+    let mut queued: Vec<i64> = Vec::new();
+    let mut took: Vec<f64> = Vec::new();
+    for _ in 0..PICKS {
+        let t = Instant::now();
+        let pick = picker
+            .decide(now, &mut rng, &queued, queued.last().copied())
+            .or_else(|| picker.decide_relaxed(now, &mut rng, &queued));
+        took.push(t.elapsed().as_secs_f64() * 1000.0);
+        let Some(pick) = pick else { break };
+        let _ = picker.note_queued(pick.entry.passage_id, now);
+        queued.push(pick.entry.passage_id);
+    }
+    drop(picker);
+    took.sort_by(f64::total_cmp);
+    if let (Some(fastest), Some(slowest)) = (took.first(), took.last()) {
+        println!("one pick       {:>8.1} ms median   {fastest:.1} fastest, {slowest:.1} slowest, of {}",
+                 took[took.len() / 2], took.len());
+    }
 
     // Hold several at once. Peak RSS only ever rises, so the FIRST load
     // measures the Director plus every one-time cost behind it -- SQLite's page
