@@ -1,9 +1,10 @@
 //! MPD as a backend the session can drive `[SPEC-BK-020]`.
 //!
-//! `mpd_direct` proved this as a program with its own loop. This is the same
-//! behaviour turned inside out: the loop belongs to the session now, and what
+//! `mpd_direct` first proved this as a program with its own loop. This is the
+//! same behaviour turned inside out: the loop belongs to the session, and what
 //! remains is an implementation of [`Playback`] that happens to reach a server
-//! instead of a sound card.
+//! instead of a sound card. Since 2026-11-01 `mpd_direct` is itself a session
+//! over this backend `[SPEC-DIR-109]`.
 //!
 //! **The rate limit lives here, not in the caller.** `tick` is called as often
 //! as the engine thread spins, and MPD must be sampled every few seconds
@@ -172,6 +173,7 @@ fn in_queue_order(
     order: &[(String, String)],
     ours: &HashMap<String, Offered>,
     names: &HashMap<String, Nameable>,
+    stickered: &HashMap<String, Option<i64>>,
 ) -> Vec<i64> {
     order
         .iter()
@@ -182,7 +184,11 @@ fn in_queue_order(
             // is `[SPEC-BK-045]`'s rule, applied where the names actually live.
             None => match names.get(uri) {
                 Some(Some((pid, ..))) => Some(*pid),
-                _ => None,
+                // Ambiguous: refused, never guessed `[SPEC-MPD-060]`.
+                Some(None) => None,
+                // Unknown to the library, but named by this MPD's own sticker
+                // `[SPEC-MPD-065]`.
+                None => stickered.get(id).copied().flatten(),
             },
         })
         .collect()
@@ -277,6 +283,10 @@ pub struct MpdBackend {
     cues: HashMap<i64, String>,
     /// Reported once each, so a log is not a stream of the same complaint.
     unnameable: HashSet<String>,
+    /// song id -> the passage this MPD's `lempi.passage` sticker names, for a
+    /// queued song the library's URI map does not know at all `[SPEC-MPD-065]`.
+    /// Asked once per song id, not on every poll; `None` for no sticker.
+    stickered: HashMap<String, Option<i64>>,
     /// The passage sounding at the last poll and how far into its span
     /// `[SPEC-BK-065]`. Remembered rather than asked for on demand: a
     /// handoff wants it at a moment when a round trip is the wrong thing to
@@ -347,6 +357,7 @@ impl MpdBackend {
             names: HashMap::new(),
             cues: HashMap::new(),
             unnameable: HashSet::new(),
+            stickered: HashMap::new(),
             head: None,
             counted_elsewhere: HashSet::new(),
             lost: false,
@@ -778,6 +789,23 @@ impl MpdBackend {
         let live: HashSet<&str> = order.iter().map(|(id, _)| id.as_str()).collect();
         let gone: Vec<String> =
             self.ours.keys().filter(|id| !live.contains(id.as_str())).cloned().collect();
+        // A queued song the URI map does not know: this MPD may still have
+        // named it, by the sticker set when it was queued `[SPEC-MPD-065]`.
+        // Asked once per song id; kept only while the song is queued.
+        self.stickered.retain(|id, _| live.contains(id.as_str()));
+        for (id, uri) in &order {
+            if self.ours.contains_key(id) || self.names.contains_key(uri) || self.stickered.contains_key(id) {
+                continue;
+            }
+            let pid = self
+                .mpd
+                .cmd(&format!("sticker get song {} lempi.passage", quote(uri)))
+                .ok()
+                .and_then(|l| {
+                    l.iter().find_map(|s| s.strip_prefix("sticker: lempi.passage=")).and_then(|v| v.parse().ok())
+                });
+            self.stickered.insert(id.clone(), pid);
+        }
         self.order = order;
         for id in gone {
             if let Some(o) = self.ours.remove(&id) {
@@ -950,7 +978,7 @@ impl Playback for MpdBackend {
     }
 
     fn queued_ids(&self) -> Vec<i64> {
-        in_queue_order(&self.order, &self.ours, &self.names)
+        in_queue_order(&self.order, &self.ours, &self.names, &self.stickered)
     }
 
     fn queued_ms(&self) -> u64 {
@@ -1516,7 +1544,7 @@ mod tests {
             ("30".to_string(), "c.mp3".to_string()),
         ];
 
-        assert_eq!(in_queue_order(&order, &ours, &HashMap::new()), vec![100, 200, 300]);
+        assert_eq!(in_queue_order(&order, &ours, &HashMap::new(), &HashMap::new()), vec![100, 200, 300]);
     }
 
     /// **The settled rule `[SPEC-BK-045]`: what cannot be named is dropped, and
@@ -1544,10 +1572,28 @@ mod tests {
         ];
 
         assert_eq!(
-            in_queue_order(&order, &ours, &names),
+            in_queue_order(&order, &ours, &names, &HashMap::new()),
             vec![100, 200],
             "ours, then theirs; the ambiguous and the unknown are left behind"
         );
+    }
+
+    /// A song the library's map does not know at all is named by this MPD's
+    /// own sticker `[SPEC-MPD-065]`; an ambiguous one is refused even so, since
+    /// a file's one sticker names whichever of its passages was queued last.
+    #[test]
+    fn a_sticker_names_what_the_map_does_not_know_and_never_what_it_finds_ambiguous() {
+        let names: HashMap<String, Nameable> = [("capture.flac".to_string(), None)].into_iter().collect();
+        let stickered: HashMap<String, Option<i64>> =
+            [("40".to_string(), Some(555)), ("41".to_string(), Some(556)), ("42".to_string(), None)]
+                .into_iter()
+                .collect();
+        let order = [
+            ("40".to_string(), "elsewhere.mp3".to_string()),
+            ("41".to_string(), "capture.flac".to_string()),
+            ("42".to_string(), "unstickered.mp3".to_string()),
+        ];
+        assert_eq!(in_queue_order(&order, &HashMap::new(), &names, &stickered), vec![555]);
     }
 
     /// `playlistinfo` interleaves each song's fields, so the `Id:` after a

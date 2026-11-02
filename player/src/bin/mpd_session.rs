@@ -9,9 +9,10 @@
 //! rotation, its flow and its bookkeeping all reached a backend that is not the
 //! built-in one, through the seam and without knowing they had `[SPEC-BK-022]`.
 //!
-//! `mpd_direct` proved the same behaviour by reimplementing the refill loop.
-//! This proves it by *not* reimplementing it, which is the stronger claim and
-//! the reason this binary exists alongside that one.
+//! `mpd_direct` first proved the same behaviour by reimplementing the refill
+//! loop; this proved it by *not* reimplementing it, and since 2026-11-01
+//! `mpd_direct` does not either `[SPEC-DIR-109]`. What this adds is the
+//! handoff `[SPEC-BK-030]`.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -61,7 +62,10 @@ fn main() {
     let interval: u64 = args.must_int(&opt::INTERVAL);
 
     let loading = Instant::now();
-    let mut session = Session::open(Path::new(&db), Path::new(&library), depth).unwrap_or_else(|e| {
+    // A follower: another process beside the player on its listener file,
+    // which must not overwrite the player's remembered queue with MPD's, nor
+    // answer the player's rebuild stamp itself `[SPEC-DIR-109]`.
+    let mut session = Session::open_follower(Path::new(&db), Path::new(&library), depth, write).unwrap_or_else(|e| {
         eprintln!("session: {e}");
         std::process::exit(1);
     });

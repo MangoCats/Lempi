@@ -393,6 +393,10 @@ pub struct Session {
     /// without `--write` -- keeps everything it hears, since no build will
     /// ever read it otherwise.
     history_written: bool,
+    /// The player's, or a follower's beside it `[SPEC-DIR-109]`.
+    role: Role,
+    /// What a follower last read of the listener file.
+    followed: Followed,
 }
 
 /// One thing heard, for a Director built since to be told again.
@@ -406,11 +410,66 @@ enum Heard {
 /// listening, and bounded however long it runs.
 const HEARD_MAX: usize = 10_000;
 
+/// Whose session this is, which decides what it may write `[SPEC-DIR-109]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// The player: the listener file is its own to keep.
+    Player,
+    /// Another process beside the player on the same listener file --
+    /// `mpd_direct` driving MPD. It follows what the player changes there, and
+    /// leaves alone everything the player keeps: the remembered queue, which
+    /// is the player's queue and not MPD's, and the rebuild stamp, which it
+    /// reads and would otherwise answer itself. With `write`, it records plays,
+    /// rejections and decisions, and keeps the offset in line with the OS as
+    /// the player does; without, it writes nothing it chooses or hears.
+    Follower { write: bool },
+}
+
+impl Role {
+    /// Whether it records what it chooses and what is heard, and asks the OS
+    /// for the offset.
+    fn writes(self) -> bool {
+        matches!(self, Role::Player | Role::Follower { write: true })
+    }
+}
+
+/// How often a follower reads the listener file for what the player changed.
+const FOLLOW_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// What a follower last read of the listener file `[SPEC-DIR-109]`.
+#[derive(Default)]
+struct Followed {
+    at: Option<std::time::Instant>,
+    /// When the player last started a rebuild.
+    rebuilt_at: Option<String>,
+    /// The slots and seeds, as one comparable string.
+    programme: String,
+    /// The suppression windows as the listener has them.
+    windows: Option<(u64, u64)>,
+}
+
 impl Session {
     /// `depth` is how many passages to keep queued ahead. `library` is the
     /// catalog-side file -- equal to `db` only in a single-file test fixture;
     /// every installation is split `[IMPL-DBSPLIT-025]`.
     pub fn open(db: &Path, library: &Path, depth: usize) -> Result<Self, DbError> {
+        Self::open_as(db, library, depth, Role::Player)
+    }
+
+    /// A session beside the player rather than the player's own
+    /// `[SPEC-DIR-109]`: see [`Role::Follower`].
+    pub fn open_follower(db: &Path, library: &Path, depth: usize, write: bool) -> Result<Self, DbError> {
+        let mut s = Self::open_as(db, library, depth, Role::Follower { write })?;
+        // What the player has done before this started is what the first
+        // build reads; only a change after it is one to follow.
+        if let Some(store) = s.decisions.as_ref() {
+            s.followed.rebuilt_at = store.director_rebuilt_at();
+            s.followed.programme = store.programme_signature();
+        }
+        Ok(s)
+    }
+
+    fn open_as(db: &Path, library: &Path, depth: usize, role: Role) -> Result<Self, DbError> {
         // **`[PI3-FOUND-210]` The phases are timed because guessing at them
         // cost a whole evening.** Measured on lempi02w: nineteen seconds pass
         // inside this function before the audio device is even opened, and
@@ -443,8 +502,9 @@ impl Session {
             _ => (None, 0, false),
         };
         // Before the Director reads it, so a corrected offset takes effect on
-        // this same startup rather than the next one `[REQ-VIS-255]`.
-        if let Some(s) = &store {
+        // this same startup rather than the next one `[REQ-VIS-255]`. Not a
+        // follower that writes nothing: it reads the offset as stored.
+        if let (Some(s), true) = (&store, role.writes()) {
             s.sync_utc_offset();
         }
         // Cumulative marks, differenced here, so each line is the cost of one
@@ -517,8 +577,65 @@ impl Session {
             utc_synced: std::time::Instant::now(),
             utc_published: false,
             heard: Vec::new(),
-            history_written: true,
+            history_written: role.writes(),
+            role,
+            followed: Followed::default(),
         })
+    }
+
+    /// Build the Director now, rather than on its own thread at the first
+    /// refill: for a program that has nothing to play until it has one.
+    pub fn build_director_now(&mut self) -> Result<(), DbError> {
+        self.director = Some(self.lib.director()?);
+        if let Ok(mut c) = self.controls.lock() {
+            c.reload_requested = false;
+        }
+        self.publish_pool();
+        Ok(())
+    }
+
+    /// Seed the roulette, so a run can be repeated `[REQ-PD-110]`.
+    pub fn seed_rng(&mut self, seed: u64) {
+        self.rng = Rng::seeded(seed);
+    }
+
+    /// A follower takes what the player changed in the listener file, every
+    /// `FOLLOW_EVERY` `[SPEC-DIR-109]`: a rebuild the player started, a
+    /// programme edit, the slot held by hand, the stored offset, the
+    /// suppression windows. Each reaches it as the player's own controls
+    /// reach the player, through the same cells, so nothing here selects.
+    fn follow(&mut self) {
+        if !matches!(self.role, Role::Follower { .. }) {
+            return;
+        }
+        if self.followed.at.is_some_and(|t| t.elapsed() < FOLLOW_EVERY) {
+            return;
+        }
+        self.followed.at = Some(std::time::Instant::now());
+        let Some(s) = self.decisions.as_ref() else { return };
+        let rebuilt_at = s.director_rebuilt_at();
+        let programme = s.programme_signature();
+        let held = s.load_manual_slot();
+        let offset = s.stored_utc_offset();
+        let windows = s.load_settings().map(|x| (x.skip_suppress_h, x.dequeue_suppress_h));
+        if let Ok(mut c) = self.controls.lock() {
+            // Asked once; a build already in flight takes it when it lands.
+            if rebuilt_at != self.followed.rebuilt_at {
+                c.reload_requested = true;
+            }
+            if programme != self.followed.programme {
+                c.programme_changed = true;
+            }
+            c.manual_slot = held;
+        }
+        self.followed.rebuilt_at = rebuilt_at;
+        self.followed.programme = programme;
+        if windows.is_some() {
+            self.followed.windows = windows;
+        }
+        if let Some(o) = offset {
+            self.give_director_utc_offset(o);
+        }
     }
 
     /// Ask the OS for its UTC offset again, at most every `UTC_RESYNC`
@@ -570,6 +687,11 @@ impl Session {
     /// the Director in hand: a rebuild would read it from the store, but the
     /// running Director read it once, when it was built.
     fn apply_utc_offset(&mut self) {
+        // A follower that writes nothing takes the offset as stored, which
+        // `follow` already does; asking the OS would write it.
+        if !self.role.writes() {
+            return;
+        }
         let Some(offset) = self.decisions.as_ref().and_then(|s| s.sync_utc_offset()) else {
             return;
         };
@@ -688,7 +810,7 @@ impl Session {
                 // `[SPEC-DIR-109]`. Not the first build at start: that is this
                 // player having none yet, not anything having changed, and
                 // `mpd_direct` waits for something that has.
-                if let (Some(s), true) = (&self.decisions, self.director.is_some()) {
+                if let (Some(s), true) = (&self.decisions, self.director.is_some() && self.role == Role::Player) {
                     s.note_director_rebuild();
                 }
             }
@@ -1012,6 +1134,9 @@ impl Session {
     /// windows arrive as an argument because they are the *listener's*
     /// settings, not the backend's: whoever is playing, they are the same.
     pub fn refill(&mut self, engine: &mut dyn crate::switch::Backend, suppress: (u64, u64)) {
+        // A follower's windows are the listener's, read from the file.
+        self.follow();
+        let suppress = self.followed.windows.unwrap_or(suppress);
         // Before anything else, and deliberately before the shortfall check:
         // a rebuild must not start while the queue is short `[IMPL-SUI-075]`.
         self.tend_rebuild(&*engine);
@@ -1147,7 +1272,7 @@ impl Session {
 
                 // Recording the reasoning must never be able to stop the
                 // music, so both sinks are best-effort [SPEC-DIR-190].
-                if let Some(store) = &self.decisions {
+                if let (Some(store), true) = (&self.decisions, self.role.writes()) {
                     match serde_json::to_string(&decision.why) {
                         Ok(json) => {
                             if let Err(e) =
@@ -1291,7 +1416,9 @@ impl Session {
         if ids == self.saved_queue {
             return;
         }
-        let Some(store) = &self.decisions else { return };
+        // The player's queue only: a follower's is MPD's, and writing it here
+        // would overwrite the player's remembered queue with another's.
+        let (Some(store), Role::Player) = (&self.decisions, self.role) else { return };
         if let Err(e) = store.save_queue(&ids) {
             tracing::error!("save queue: {e}");
             return;
@@ -1814,6 +1941,55 @@ mod tests {
             assert_ne!(b.got[0], 3, "seed {seed}: the passage on air was queued to follow itself");
             session.notes.clear();
         }
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A follower beside the player `[SPEC-DIR-109]`: without `write` it
+    /// records nothing it chooses, never the remembered queue, never the
+    /// rebuild stamp; and it follows what the player changes in the file.
+    #[test]
+    fn a_follower_writes_nothing_of_the_players_and_follows_its_changes() {
+        let tmp = director_library_on_disk("follower");
+        // The player has a queue remembered, and has rebuilt once.
+        let player = PlayerStore::open(&tmp).unwrap();
+        player.save_queue(&[9, 8]).unwrap();
+        player.note_director_rebuild();
+        let mut session = Session::open_follower(&tmp, &tmp, 5, false).unwrap();
+        session.build_director_now().unwrap();
+        let mut b = Behind { ahead_ms: 0, got: Vec::new() };
+        session.refill(&mut b, (0, 0));
+        assert_eq!(b.got.len(), 2, "it chose");
+        let decisions: i64 = rusqlite::Connection::open(&tmp)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM selection_decisions", [], |r| r.get(0))
+            .unwrap_or(0);
+        assert_eq!(decisions, 0, "and recorded none of it, without write");
+        assert_eq!(player.load_queue(), vec![9, 8], "the player's remembered queue is the player's");
+
+        // Its own rebuild leaves the stamp alone; the player's starts one here.
+        let stamp = player.director_rebuilt_at();
+        session.controls().lock().unwrap().reload_requested = true;
+        session.followed.at = None;
+        let mut full = Behind { ahead_ms: 0, got: b.got.clone() };
+        session.refill(&mut full, (0, 0));
+        assert!(session.rebuild.is_some(), "a rebuild asked for started");
+        assert_eq!(player.director_rebuilt_at(), stamp, "and wrote no stamp of its own");
+        session.rebuild = None;
+
+        player.note_director_rebuild();
+        rusqlite::Connection::open(&tmp)
+            .unwrap()
+            .execute_batch(
+                "INSERT INTO listener_programs (program_id, name, start_time) VALUES (31, 'Late', '23:00');
+                 INSERT INTO player_settings (key, value, updated_at) VALUES ('manual_program', '31', 'now');",
+            )
+            .unwrap();
+        session.followed.at = None;
+        session.refill(&mut full, (0, 0));
+        assert!(session.rebuild.is_some(), "the player's rebuild is followed");
+        let d = session.director.as_ref().unwrap();
+        assert!(d.programme().slot(31).is_some(), "and its programme edit");
+        assert_eq!(d.programme().manual_slot(), Some(31), "and the slot it holds");
         let _ = std::fs::remove_file(&tmp);
     }
 

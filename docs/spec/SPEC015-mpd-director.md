@@ -109,7 +109,7 @@ Resolution order, narrowest first, in the spirit of `[SPEC-DF-040]`:
 2. **MusicBrainz recording id.** MPD reads and exposes `MUSICBRAINZ_TRACKID` where files carry it; Lempi holds recording MBIDs. Survives different trees, fails on the 164 recordings here that have no MBID at all.
 3. **Ask a person.** Anything unresolved is reported, never guessed. A wrong mapping plays a real song under a real name and nothing downstream can tell — the exact failure `[REQ-LIB-165]` exists to correct.
 
-**`[SPEC-MPD-065]` The resolved mapping is also written into MPD's own sticker database**, as `lempi.passage` on the URI, and **not** into `lempi.db` — the mapping is a property of *that MPD instance*, not the library; a second MPD gets its own without collision; a Lempi user who never touches MPD grows no table they will not fill `[SPEC-SC-015]`. **Corrected 2026-09-02: the shipping backend implements rung 1 only, and writes this sticker without reading it back.** `MpdBackend::nameable_uris` builds the URI map from same-tree path stripping alone, never `MUSICBRAINZ_TRACKID` or MPD's song list, and `MpdBackend::poll` resolves purely from its in-memory map. Rungs 2/3 and the sticker read-back exist only in the offline `mpd_map.rs` tool and the retired `mpd_direct.rs` prototype — diagnostic tooling, not the running Director; `[IMPL004]` measured rung 2 as what resolves 100% of the cross-platform (Linux MPD, foreign tree) case, and `[IMPL005]` §Stage 4 already found the sticker cache "barely one" in practice. Extending `nameable_uris` to the full ladder and the cache read-back remains open.
+**`[SPEC-MPD-065]` The resolved mapping is also written into MPD's own sticker database**, as `lempi.passage` on the URI, and **not** into `lempi.db` — the mapping is a property of *that MPD instance*, not the library; a second MPD gets its own without collision; a Lempi user who never touches MPD grows no table they will not fill `[SPEC-SC-015]`. **Corrected 2026-09-02: the shipping backend implements rung 1 only, and writes this sticker without reading it back.** `MpdBackend::nameable_uris` builds the URI map from same-tree path stripping alone, never `MUSICBRAINZ_TRACKID` or MPD's song list, and `MpdBackend::poll` resolves purely from its in-memory map. Rungs 2/3 exist only in the offline `mpd_map.rs` tool; `[IMPL004]` measured rung 2 as what resolves 100% of the cross-platform (Linux MPD, foreign tree) case. The sticker read-back moved into `MpdBackend` on 2026-11-01, when `mpd_direct` was rebuilt on it `[SPEC-DIR-109]`: a queued song the URI map does not know at all is named by its `lempi.passage` sticker, asked once per song id, and one the map finds ambiguous is refused even so, since a file's one sticker names whichever of its passages was queued last. `[IMPL005]` §Stage 4 found the cache "barely one" in practice. Extending `nameable_uris` to the full ladder remains open.
 
 ---
 
@@ -123,6 +123,9 @@ mpd`, using `std::net` and no new dependency. `player/src/bin/` also carries
 `mpd_direct.rs`, `mpd_fill.rs`, `mpd_map.rs`, `mpd_session.rs` and
 `mpd_watch.rs` — the staged prototype and ops tools from
 [IMPL004](../IMPL004-mpd-prototype.md), not the shipping integration point.
+`mpd_direct` is kept, as the Director driving MPD from a process of its own
+beside the player: since 2026-11-01 a `Session` over this backend rather than
+a loop of its own `[SPEC-DIR-109]`.
 
 The byte-identical claim does not hold as originally stated: `[GDE-BAK-050]`
 `[REQ-HW-140]` promised a build indistinguishable from one without this

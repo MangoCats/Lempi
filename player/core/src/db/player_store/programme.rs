@@ -634,6 +634,23 @@ impl PlayerStore {
         self.programme()
     }
 
+    /// The slots and seeds as one comparable string, for a process that
+    /// follows edits another makes to this file `[SPEC-DIR-109]`. Seeds by MBID,
+    /// not by position: their order is not content `[SPEC-PGM-115]`. Empty when
+    /// it cannot be read, which reads as a change and so as a reload.
+    pub fn programme_signature(&self) -> String {
+        self.conn
+            .query_row(
+                "SELECT IFNULL((SELECT group_concat(program_id || '|' || name || '|' || IFNULL(start_time, ''), ';') \
+                                  FROM (SELECT * FROM listener_programs ORDER BY program_id)), '') || '#' || \
+                        IFNULL((SELECT group_concat(program_id || '|' || mbid, ';') \
+                                  FROM (SELECT * FROM listener_program_seeds ORDER BY program_id, mbid)), '')",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap_or_default()
+    }
+
     /// The time slots as the Director reads them, for a running Director to
     /// take after an edit `[SPEC-PGM-400]`.
     pub fn load_programme(&self) -> Result<crate::director::programme::Programme, DbError> {
@@ -815,6 +832,31 @@ mod tests {
         assert!(by_name("New").id.is_some_and(|id| id > 3));
         assert!(v.slots.iter().all(|s| s.name != "Gone"));
         assert_eq!(st.programme().unwrap().fingerprint, v.fingerprint);
+    }
+
+    /// Every kind of programme edit reads as a change -- a slot added, renamed,
+    /// re-timed, a seed added or removed -- and nothing else does
+    /// `[SPEC-DIR-109]`.
+    #[test]
+    fn the_programme_signature_notices_every_edit() {
+        let st = store();
+        let mut seen = vec![st.programme_signature()];
+        for sql in [
+            "INSERT INTO listener_programs VALUES (1, 'Soft', '04:00')",
+            "INSERT INTO listener_program_seeds VALUES (1, 'a', 1)",
+            "UPDATE listener_programs SET name = 'Gentle' WHERE program_id = 1",
+            "UPDATE listener_programs SET start_time = '05:00' WHERE program_id = 1",
+            "INSERT INTO listener_program_seeds VALUES (1, 'b', 2)",
+            "DELETE FROM listener_program_seeds WHERE mbid = 'a'",
+        ] {
+            st.conn.execute_batch(sql).unwrap();
+            let now = st.programme_signature();
+            assert!(!seen.contains(&now), "{sql}: read as no change");
+            seen.push(now);
+        }
+        assert_eq!(st.programme_signature(), *seen.last().unwrap(), "reading twice is no change");
+        st.conn.execute_batch("UPDATE listener_program_seeds SET position = 9").unwrap();
+        assert_eq!(st.programme_signature(), *seen.last().unwrap(), "nor is a seed's position");
     }
 
     /// Two saves at once, each on its own connection and each adding a slot,

@@ -96,8 +96,8 @@ for explicitly when the feature was built, and it is the same posture
 reconstruct.
 
 **`[SPEC-FREQ-045]` A backend that does not track provenance still records
-the play.** Both MPD paths (`mpd_backend.rs`, `bin/mpd_direct.rs`) pass
-`None`. The play is real and counts; only its attribution is unavailable,
+the play.** The MPD backend (`mpd_backend.rs`, which `bin/mpd_direct.rs`
+drives since 2026-11-01 `[SPEC-DIR-109]`) passes `None`. The play is real and counts; only its attribution is unavailable,
 and §6 holds that open rather than pretending it is closed.
 
 ## 3. The rows, and why *All* is a ceiling
