@@ -1434,7 +1434,7 @@ impl PlayerStore {
 
     /// The largest offset a person may type, either way: 18 hours, the
     /// widest any standard allows. Real zones span -12:00 to +14:00.
-    pub const UTC_OFFSET_MAX_MIN: i64 = 18 * 60;
+    pub const UTC_OFFSET_MAX_MIN: i64 = crate::director::programme::UTC_OFFSET_MAX_MIN;
 
     /// What `listener_settings` holds now, in minutes east of UTC; `None`
     /// when there is no row to read.

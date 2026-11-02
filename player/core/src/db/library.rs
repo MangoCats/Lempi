@@ -305,7 +305,10 @@ impl Library {
             .conn
             .query_row("SELECT utc_offset_minutes FROM listener_settings WHERE id = 1", [], |r| r.get(0))
             .unwrap_or(0)
-            .clamp(-1440, 1440);
+            .clamp(
+                -crate::director::programme::UTC_OFFSET_MAX_MIN,
+                crate::director::programme::UTC_OFFSET_MAX_MIN,
+            );
         let (_, month, day) = civil_from_unix(now + offset_min * 60);
         let today = ordinal(month, day);
         let policy = Policy {

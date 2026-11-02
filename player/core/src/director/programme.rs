@@ -27,6 +27,11 @@ pub const MAX_SEEDS: usize = 5;
 
 const MINUTES_PER_DAY: i64 = 24 * 60;
 
+/// The widest offset from UTC a stored value may hold: 18 hours either way,
+/// the same limit a person may type `[SPEC-DIR-183]`. One number, read by
+/// every place that loads the offset, so the limit cannot differ between them.
+pub const UTC_OFFSET_MAX_MIN: i64 = 18 * 60;
+
 /// One programme slot: a name, a start time, and (in [`Programme`]) its seeds.
 #[derive(Debug, Clone)]
 pub struct ProgrammeSlot {
@@ -245,49 +250,91 @@ impl Programme {
         chosen
     }
 
+    /// The programme as stored. **A table that is absent is a library from
+    /// before programmes**, and reads as none; any other failure is an error
+    /// `[CLAUDE.md §6]`. It read as an empty programme until 2026-11-01, which
+    /// a running Director then took as an edit: a read that failed for a
+    /// moment replaced every slot with nothing, and no seed shaped a pick
+    /// until the next edit.
     pub fn load(conn: &Connection) -> Result<Self, DbError> {
-        let mut slots = Vec::new();
-        if let Ok(mut stmt) =
-            conn.prepare("SELECT program_id, name, start_time FROM listener_programs")
-        {
-            if let Ok(rows) = stmt.query_map([], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
-            }) {
-                for (id, name, start) in rows.flatten() {
-                    match start.as_deref().and_then(parse_hhmm) {
-                        Some(start_minute) => slots.push(ProgrammeSlot { id, name, start_minute }),
-                        // Every slot has a start `[ENT-SLOT-010]`, and the
-                        // page and the hub refuse one without. A row that
-                        // has none anyway -- a tool, an older build -- is
-                        // left out, and said, rather than silently missing.
-                        None => tracing::warn!(
-                            "programme: slot \"{name}\" has no usable start time ({start:?}); \
-                             left out, so it is never on air and cannot be held [ENT-SLOT-010]"
-                        ),
+        // Absent is quiet; anything else is the caller's to hear.
+        fn absent(e: &rusqlite::Error) -> bool {
+            let m = e.to_string();
+            m.contains("no such table") || m.contains("no such column")
+        }
+        let q = |e: rusqlite::Error| DbError::Query(format!("programme: {e}"));
+        // A row whose value will not convert is the row's fault and is left
+        // out, said; a read that fails is the read's, and is an error.
+        fn rows_of<T>(
+            it: impl Iterator<Item = rusqlite::Result<T>>,
+            what: &str,
+        ) -> Result<Vec<T>, rusqlite::Error> {
+            let mut out = Vec::new();
+            for r in it {
+                match r {
+                    Ok(v) => out.push(v),
+                    Err(e @ (rusqlite::Error::InvalidColumnType(..)
+                    | rusqlite::Error::FromSqlConversionFailure(..)
+                    | rusqlite::Error::IntegralValueOutOfRange(..))) => {
+                        tracing::warn!("programme: a {what} row is malformed and left out: {e}")
                     }
+                    Err(e) => return Err(e),
                 }
+            }
+            Ok(out)
+        }
+
+        let mut slots = Vec::new();
+        let rows: Vec<(i64, String, Option<String>)> =
+            match conn.prepare("SELECT program_id, name, start_time FROM listener_programs") {
+                Ok(mut stmt) => rows_of(
+                    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).map_err(q)?,
+                    "slot",
+                )
+                .map_err(q)?,
+                Err(e) if absent(&e) => Vec::new(),
+                Err(e) => return Err(q(e)),
+            };
+        for (id, name, start) in rows {
+            match start.as_deref().and_then(parse_hhmm) {
+                Some(start_minute) => slots.push(ProgrammeSlot { id, name, start_minute }),
+                // Every slot has a start `[ENT-SLOT-010]`, and the page and the
+                // hub refuse one without. A row that has none anyway -- a tool,
+                // an older build -- is left out, and said, rather than
+                // silently missing.
+                None => tracing::warn!(
+                    "programme: slot \"{name}\" has no usable start time ({start:?});                      left out, so it is never on air and cannot be held [ENT-SLOT-010]"
+                ),
             }
         }
 
         let mut seeds: HashMap<i64, Vec<String>> = HashMap::new();
-        if let Ok(mut stmt) = conn
+        let pairs: Vec<(i64, String)> = match conn
             .prepare("SELECT program_id, mbid FROM listener_program_seeds ORDER BY position")
         {
-            if let Ok(rows) = stmt
-                .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
-            {
-                for (id, mbid) in rows.flatten() {
-                    seeds.entry(id).or_default().push(mbid);
-                }
+            Ok(mut stmt) => {
+                rows_of(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).map_err(q)?, "seed")
+                    .map_err(q)?
             }
+            Err(e) if absent(&e) => Vec::new(),
+            Err(e) => return Err(q(e)),
+        };
+        for (id, mbid) in pairs {
+            seeds.entry(id).or_default().push(mbid);
         }
 
-        let utc_offset_minutes = conn
-            .query_row("SELECT utc_offset_minutes FROM listener_settings WHERE id = 1", [], |r| {
-                r.get::<_, i64>(0)
-            })
-            .unwrap_or(0)
-            .clamp(-(MINUTES_PER_DAY), MINUTES_PER_DAY);
+        // No row is a library never set, at the column's own default.
+        let utc_offset_minutes = match conn.query_row(
+            "SELECT utc_offset_minutes FROM listener_settings WHERE id = 1",
+            [],
+            |r| r.get::<_, i64>(0),
+        ) {
+            Ok(m) => m,
+            Err(rusqlite::Error::QueryReturnedNoRows) => 0,
+            Err(e) if absent(&e) => 0,
+            Err(e) => return Err(q(e)),
+        }
+        .clamp(-UTC_OFFSET_MAX_MIN, UTC_OFFSET_MAX_MIN);
 
         Ok(Self { slots, seeds, utc_offset_minutes, manual: None })
     }
@@ -367,6 +414,28 @@ mod tests {
         edited.execute_batch("DELETE FROM listener_programs WHERE program_id = 4").unwrap();
         running.replace_slots(Programme::load(&edited).unwrap());
         assert_eq!(running.manual_slot(), None, "the held slot is gone, and so is the hold");
+    }
+
+    /// A read that fails is an error, never an empty programme a running
+    /// Director would take as an edit; a table that is absent is a library
+    /// from before programmes, and a malformed row is left out.
+    #[test]
+    fn a_failed_read_is_an_error_and_absence_is_not() {
+        let none = QualifyingConn::wrap_unsplit(Connection::open_in_memory().unwrap());
+        assert!(Programme::load(&none).unwrap().is_empty(), "no tables: no programme, quietly");
+
+        let bad = fixture();
+        bad.execute_batch("INSERT INTO listener_programs VALUES ('x', 'Odd', '06:00');").unwrap();
+        let p = Programme::load(&bad).unwrap();
+        assert_eq!(p.len(), 4, "the malformed row is left out and the rest stand");
+
+        // A read that fails while it runs -- here, an overflow SQLite raises
+        // as it steps -- rather than one whose table is absent.
+        let broken = fixture();
+        broken.execute_batch("DROP TABLE listener_program_seeds;
+                              CREATE VIEW listener_program_seeds AS
+                              SELECT 1 AS program_id, 'm' AS mbid, abs(-9223372036854775808) AS position;").unwrap();
+        assert!(Programme::load(&broken).is_err(), "a read that fails is not an empty programme");
     }
 
     fn fixture() -> QualifyingConn {
