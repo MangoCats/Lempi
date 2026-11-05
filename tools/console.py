@@ -1515,7 +1515,7 @@ class Handler(BaseHTTPRequestHandler):
                 job = STATE["jobs"].submit("cd-preview", json.dumps({"folder": folder}))
                 # Staging moved a loose rip into its own folder: its id is now
                 # that folder's CUE, which the page re-keys its open card to.
-                new_id = os.path.relpath(os.path.join(folder, os.path.basename(rid)), import_inbox())
+                new_id = cd_import.staged_id(import_inbox(), folder, rid)
                 return self.send_json({"job_id": job, "folder": folder, "id": new_id})
             if p == "/api/import/add":
                 # [SPEC-CDI-050]: the chosen edition and folder name, relative
@@ -1528,6 +1528,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"error": "not a rip in the inbox"}, code=400)
                 if not root or not name or os.path.isabs(name) or ".." in name.replace("\\", "/").split("/"):
                     return self.send_json({"error": "the album folder must be a name inside the music folder"},
+                                          code=400)
+                # [SPEC-NAM-070]: `makedirs` would make one, and the album would
+                # be filed somewhere nothing else looks.
+                if not os.path.isdir(root):
+                    return self.send_json({"error": f"the music folder {root!r} does not exist -- check the "
+                                           "console's --root and that its drive is connected; nothing was moved"},
                                           code=400)
                 into = os.path.join(root, name)
                 # [SPEC-CDI-096]: the occasions ticked for the whole disc --
@@ -2060,7 +2066,14 @@ def main() -> int:
               file=sys.stderr)
         return 1
     STATE["path"] = os.path.abspath(args.db)
-    STATE["roots"] = [os.path.normpath(r) for r in args.root]
+    # Whatever the shell left of it. A `~/Music` that reached here unexpanded
+    # was a relative folder named `~`: 33 albums filed inside the repository,
+    # and 235 library rows naming them that way, 2026-11-03 to 11-05
+    # [SPEC-NAM-070].
+    STATE["roots"] = [os.path.abspath(os.path.expanduser(r)) for r in args.root]
+    for r in STATE["roots"]:
+        if not os.path.isdir(r):
+            print(f"WARNING: audio root {r} is not a folder; a CD rip will not be added until it is", file=sys.stderr)
     # Beside the library, named after it, exactly as the id-check sidecar is.
     sidecar = os.path.splitext(STATE["path"])[0] + ".console.db"
     STATE["jobs"] = jobmod.Runner(STATE["path"], sidecar, roots=STATE["roots"])

@@ -139,6 +139,10 @@ long track. On the import page, under **Split an album file**:
   of its own inside the inbox the page names.
 - **A card says it is still ripping long after CUERipper finished** -- the rip
   stopped part way. Rip the disc again; delete the unfinished folder.
+- **A card or a preview says a path is too long, or a file "will not fit"** --
+  Windows opens at most 259 characters. A long title is shortened for you, so
+  this means the inbox itself sits too deep: choose one with a shorter path, or
+  shorten the file's name in the inbox.
 - **"Not accurately ripped" on every track** -- the read offset is probably
   wrong (step 2).
 - **CUERipper says "Rip probably contains errors"** -- clean the disc and rip it

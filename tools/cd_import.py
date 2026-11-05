@@ -32,6 +32,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import cd_toc  # noqa: E402
+import ingest_cd  # noqa: E402  -- the names a rip is held to [SPEC-NAM-035]
 
 GUIDE = os.path.join(os.path.dirname(HERE), "docs", "GUIDE037-ripping-a-cd.md")
 
@@ -205,7 +206,10 @@ def _cues(root: str) -> list[str]:
         if name.lower().endswith(".cue") and os.path.isfile(p):
             found.append(p)
         elif os.path.isdir(p):
-            found += [os.path.join(p, n) for n in sorted(os.listdir(p)) if n.lower().endswith(".cue")]
+            try:
+                found += [os.path.join(p, n) for n in sorted(os.listdir(p)) if n.lower().endswith(".cue")]
+            except OSError:
+                found.append(p)                 # its card says so; the rest still show
     return found
 
 
@@ -219,8 +223,8 @@ def verdict(report) -> dict:
     unseen = [t for t in report.tracks if t.ok and "not present" in t.detail.lower()]
     if bad:
         which = ", ".join(str(t.number) for t in bad)
-        return {"level": "bad", "text": f"Track{'s' if len(bad) > 1 else ''} {which} did not match other "
-                "people's rips. Clean the disc and rip it again with Test & Copy. You can still add it; "
+        return {"level": "bad", "text": f"Track{'s' if len(bad) > 1 else ''} {which} had read errors or did not "
+                "match other people's rips. Clean the disc and rip it again with Test & Copy. You can still add it; "
                 "it will be marked."}
     if not report.all_ok:
         return {"level": "bad", "text": "The ripper reported read errors. Clean the disc and rip it again with "
@@ -265,40 +269,73 @@ def _tracks_card(toc, folder: str, log: str | None, now: float) -> dict:
     return {**out, "state": "finished", "verdict": v, "audio_bytes": size}
 
 
+def _too_long(folder: str) -> str | None:
+    """A file in `folder` whose path Windows cannot open. An `isfile` on it
+    answers False rather than failing, so its rip would read as still being
+    ripped for ever `[SPEC-NAM-035]`."""
+    if os.name != "nt":
+        return None
+    base = os.path.abspath(folder)
+    return next((n for n in os.listdir(folder)
+                 if len(os.path.join(base, n)) > ingest_cd.WINDOWS_PATH_MAX), None)
+
+
+def _card(cue: str, root: str, now: float) -> dict:
+    """One rip's card. May raise; `scan` makes that a card too."""
+    folder, stem = os.path.dirname(cue), os.path.splitext(os.path.basename(cue))[0]
+    long = _too_long(folder)
+    if long:
+        return {"id": os.path.relpath(cue, root), "state": "unreadable", "title": stem,
+                "detail": f"{long!r} makes a path of {len(os.path.join(os.path.abspath(folder), long))} characters, "
+                f"and Windows opens at most {ingest_cd.WINDOWS_PATH_MAX}: give the file or its folder a shorter "
+                "name in the inbox."}
+    try:
+        toc = cd_toc.parse_eac_cue(cue)
+    except Exception as e:                                    # noqa: BLE001
+        return {"id": os.path.relpath(cue, root), "state": "unreadable", "title": stem,
+                "detail": f"the CUE sheet could not be read: {e}"}
+    log = os.path.join(folder, stem + ".log")
+    if not os.path.isfile(log):
+        names = os.listdir(folder)
+        logs = [n for n in names if n.lower().endswith(".log")]
+        # By elimination only where this is the folder's one disc: the one log
+        # beside two CUEs is the other disc's. *She Who Dwells*, 2026-11-05: a
+        # disc 1 stopped at track 13, with disc 2's read errors on its card.
+        alone = sum(n.lower().endswith(".cue") for n in names) == 1
+        log = os.path.join(folder, logs[0]) if folder != root and len(logs) == 1 and alone else None
+    card = {"id": os.path.relpath(cue, root), "folder": folder, "staged": folder != root,
+            "title": " - ".join(x for x in (toc.performer, toc.title) if x) or stem,
+            "tracks": len(toc.tracks)}
+    if toc.tracks_mode:
+        card.update(_tracks_card(toc, folder, log, now))
+    else:
+        audio = os.path.join(folder, toc.data_file or "")
+        card["audio"] = os.path.basename(audio)
+        if not toc.data_file or not os.path.isfile(audio):
+            card.update(state="ripping", detail="Still being ripped.")
+        elif log and os.path.isfile(log):
+            card.update(state="finished", verdict=verdict(cd_toc.parse_eac_log(log)),
+                        audio_bytes=os.path.getsize(audio))
+        elif now - os.path.getmtime(audio) < SETTLED_S:
+            card.update(state="ripping", detail="Still being ripped.")
+        else:
+            card.update(state="finished", verdict=verdict(None), audio_bytes=os.path.getsize(audio))
+    return card
+
+
 def scan(root: str, now: float | None = None) -> list[dict]:
-    """The rips in the inbox, as the page's cards `[SPEC-CDI-030]`. Read-only."""
+    """The rips in the inbox, as the page's cards `[SPEC-CDI-030]`. Read-only.
+    A rip that cannot be read is a card that says so: it never takes the other
+    rips, or the page, down with it `[SPEC-NAM-035]`."""
     now = time.time() if now is None else now
     cards = []
     for cue in _cues(root):
-        folder, stem = os.path.dirname(cue), os.path.splitext(os.path.basename(cue))[0]
         try:
-            toc = cd_toc.parse_eac_cue(cue)
-        except Exception as e:                                    # noqa: BLE001
-            cards.append({"id": os.path.relpath(cue, root), "state": "unreadable", "title": stem,
-                          "detail": f"the CUE sheet could not be read: {e}"})
-            continue
-        log = os.path.join(folder, stem + ".log")
-        if not os.path.isfile(log):
-            logs = [n for n in os.listdir(folder) if n.lower().endswith(".log")]
-            log = os.path.join(folder, logs[0]) if folder != root and len(logs) == 1 else None
-        card = {"id": os.path.relpath(cue, root), "folder": folder, "staged": folder != root,
-                "title": " - ".join(x for x in (toc.performer, toc.title) if x) or stem,
-                "tracks": len(toc.tracks)}
-        if toc.tracks_mode:
-            card.update(_tracks_card(toc, folder, log, now))
-        else:
-            audio = os.path.join(folder, toc.data_file or "")
-            card["audio"] = os.path.basename(audio)
-            if not toc.data_file or not os.path.isfile(audio):
-                card.update(state="ripping", detail="Still being ripped.")
-            elif log and os.path.isfile(log):
-                card.update(state="finished", verdict=verdict(cd_toc.parse_eac_log(log)),
-                            audio_bytes=os.path.getsize(audio))
-            elif now - os.path.getmtime(audio) < SETTLED_S:
-                card.update(state="ripping", detail="Still being ripped.")
-            else:
-                card.update(state="finished", verdict=verdict(None), audio_bytes=os.path.getsize(audio))
-        cards.append(card)
+            cards.append(_card(cue, root, now))
+        except Exception as e:                                # noqa: BLE001
+            cards.append({"id": os.path.relpath(cue, root), "state": "unreadable",
+                          "title": os.path.splitext(os.path.basename(cue))[0],
+                          "detail": f"this rip could not be read: {e}"})
     return cards
 
 
@@ -318,16 +355,117 @@ def stage(root: str, card_id: str) -> str:
         return _split_disc(root, folder, cue, others) if others else folder
     stem = os.path.splitext(os.path.basename(cue))[0]
     toc = cd_toc.parse_eac_cue(cue)
-    target, n = os.path.join(root, stem), 2
-    while os.path.exists(target):
-        target, n = os.path.join(root, f"{stem} ({n})"), n + 1
-    os.makedirs(target)
     names = {os.path.basename(cue), stem + ".log", *toc.files}
-    for name in names:
-        p = os.path.join(root, name)
-        if name and os.path.isfile(p):
-            shutil.move(p, os.path.join(target, name))
+    names = [n for n in names if n and os.path.isfile(os.path.join(root, n))]
+    target, renames = _own_folder(root, stem, names)
+    _move_in(root, target, names, renames)
     return target
+
+
+def staged_id(root: str, folder: str, card_id: str) -> str:
+    """A rip's card id once `stage` has run: its CUE in its folder, under the
+    name staging gave it, which a held-short folder changes `[SPEC-NAM-035]`."""
+    name = os.path.basename(card_id)
+    if not os.path.isfile(os.path.join(folder, name)):
+        cues = [n for n in os.listdir(folder) if n.lower().endswith(".cue")]
+        name = cues[0] if len(cues) == 1 else name
+    return os.path.relpath(os.path.join(folder, name), root)
+
+
+# The longest folder Windows creates with `LongPathsEnabled` off: MAX_PATH less
+# the 12 it keeps for a file inside, its NUL among them.
+WINDOWS_DIR_MAX = 247
+
+
+def _own_folder(root: str, stem: str, names: list[str]) -> tuple[str, dict[str, str]]:
+    """The folder a rip is staged into, and the files it renames: `(folder,
+    {old: new})`. Refuses, before anything moves, a rip no name can hold.
+
+    Named after the disc when that holds every file `[SPEC-NAM-035]`. A ripper
+    fills the path it can open, and a folder named after the disc spends the
+    same characters a second time: *She Who Dwells*, 2026-11-05, 254 characters
+    a file in its rip folder and 262 in the one staging made for its second
+    disc. So the name is cut at a word, keeping the disc, and the files named
+    after the disc take the cut name, which is also what keeps them starting
+    with their folder's `[SPEC-NAM-040]`. Track files have names of their own
+    and keep them. +1 for each file: the add may write a FLAC beside a WAV."""
+    base = os.path.abspath(root)
+    named = [n for n in names if stem.startswith(os.path.splitext(n)[0])]
+    rest = [n for n in names if n not in named]
+
+    def final(name: str) -> list[str]:
+        return rest + (named if name == stem else [name + os.path.splitext(n)[1] for n in named])
+
+    def fits(name: str) -> bool:
+        path = os.path.join(base, name)
+        return len(path) <= WINDOWS_DIR_MAX and all(
+            len(path) + 1 + len(f) + 1 <= ingest_cd.WINDOWS_PATH_MAX for f in final(name))
+
+    whole = stem.rstrip(". ") or stem                   # Windows drops these from a folder's name
+    head = ingest_cd._RIPPER_DISC.sub("", whole)
+    disc = whole[len(head):]
+    floor = min(ingest_cd.ALBUM_NAME_RANGE[0], len(head))
+    k = 1
+    while True:
+        tag = f" ({k})" if k > 1 else ""
+        tries = [whole + tag] + [ingest_cd.shorten(head, n) + disc + tag for n in range(len(head) - 1, floor - 1, -1)]
+        name = next((t for t in tries if fits(t)), None)
+        if name is None:
+            longest = max(rest or names, key=len, default=stem)
+            raise ValueError(f"{longest!r} will not fit in a folder of its own in the inbox {root!r}: Windows opens "
+                             f"at most {ingest_cd.WINDOWS_PATH_MAX} characters. Choose an inbox with a shorter path, "
+                             "or shorten that file's name -- nothing was moved")
+        if not os.path.exists(os.path.join(root, name)):
+            break
+        k += 1
+    if len(set(final(name))) < len(names):
+        raise ValueError(f"{stem!r} has two files that would be given one name: nothing was moved")
+    renames = {} if name == stem else {n: name + os.path.splitext(n)[1] for n in named}
+    return os.path.join(root, name), renames
+
+
+def _move_in(source: str, target: str, names: list[str], renames: dict[str, str], covers: list[str] = ()) -> None:
+    """`names` moved from `source` into the new folder `target`, under
+    `renames`, the CUE's `FILE` lines following; `covers` copied. All or nothing
+    `[SPEC-NAM-050]`: a failure puts back what moved and says what failed, naming
+    the file, which Python's own copy leaves out of its message. A file that
+    cannot be put back keeps the folder it is in, and the message says where:
+    that audio may be the only copy."""
+    os.makedirs(target)
+    moved, sheets, doing = [], {}, ""
+    try:
+        for n in sorted(names):
+            doing = n
+            dst = os.path.join(target, renames.get(n, n))
+            shutil.move(os.path.join(source, n), dst)
+            moved.append((n, dst))
+        for n in covers:
+            doing = n
+            shutil.copy2(os.path.join(source, n), os.path.join(target, n))
+        for n, dst in moved:
+            if renames and n.lower().endswith(".cue"):
+                doing = n
+                with open(dst, "rb") as fh:
+                    sheets[dst] = fh.read()
+                ingest_cd.rename_in_cue(dst, renames)
+    except Exception as e:
+        for sheet, data in sheets.items():
+            try:
+                with open(sheet, "wb") as fh:
+                    fh.write(data)
+            except OSError:
+                pass
+        stuck = []
+        for n, dst in reversed(moved):
+            try:
+                shutil.move(dst, os.path.join(source, n))
+            except OSError:
+                stuck.append(dst)
+        if stuck:
+            raise OSError(f"could not move {doing!r} ({e}), and {len(stuck)} file(s) could not be put back: "
+                          f"they are in {target!r}") from e
+        shutil.rmtree(target, ignore_errors=True)
+        raise OSError(f"could not move {doing!r} ({e}) -- the rip is as the ripper left it") from e
 
 
 _COVER_EXT = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
@@ -342,7 +480,7 @@ def _split_disc(root: str, folder: str, cue: str, others: list[str]) -> str:
     disc in it: *The Very Best of Jackson Browne*, 2026-10-15, whose add then
     named both discs' files "(Disc 1)" and was refused. The importer works a
     disc at a time, so every downstream step is unchanged. Returns the new
-    folder; a move that fails puts back what it moved."""
+    folder, named by `_own_folder` and moved into by `_move_in`."""
     stem = os.path.splitext(os.path.basename(cue))[0]
     other_stems = [os.path.splitext(o)[0] for o in others]
     toc = cd_toc.parse_eac_cue(cue)
@@ -351,27 +489,11 @@ def _split_disc(root: str, folder: str, cue: str, others: list[str]) -> str:
         s = os.path.splitext(n)[0]
         if s == stem or (s and stem.startswith(s) and not any(o.startswith(s) for o in other_stems)):
             mine.add(n)
-    target, k = os.path.join(root, stem), 2
-    while os.path.exists(target):
-        target, k = os.path.join(root, f"{stem} ({k})"), k + 1
-    os.makedirs(target)
-    moved = []
-    try:
-        for n in sorted(mine):
-            if os.path.isfile(os.path.join(folder, n)):
-                shutil.move(os.path.join(folder, n), os.path.join(target, n))
-                moved.append(n)
-        for n in os.listdir(folder):
-            if n.lower().endswith(_COVER_EXT) and os.path.isfile(os.path.join(folder, n)):
-                shutil.copy2(os.path.join(folder, n), os.path.join(target, n))
-    except Exception:
-        for n in moved:
-            try:
-                shutil.move(os.path.join(target, n), os.path.join(folder, n))
-            except OSError:
-                pass
-        shutil.rmtree(target, ignore_errors=True)
-        raise
+    names = sorted(n for n in mine if os.path.isfile(os.path.join(folder, n)))
+    covers = [n for n in os.listdir(folder) if n not in mine and n.lower().endswith(_COVER_EXT)
+              and os.path.isfile(os.path.join(folder, n))]
+    target, renames = _own_folder(root, stem, names + covers)
+    _move_in(folder, target, names, renames, covers)
     return target
 
 

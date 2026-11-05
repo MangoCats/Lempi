@@ -1,6 +1,6 @@
 # SPEC063: Album Names Held Short
 
-**Design Specification — Tier 2 · written and built 2026-10-13, at the maintainer's direction · extends [SPEC056](SPEC056-cd-import.md) `[SPEC-CDI-050]`**
+**Design Specification — Tier 2 · written and built 2026-10-13, at the maintainer's direction, staging held to it 2026-11-05 `[SPEC-NAM-035]` · extends [SPEC056](SPEC056-cd-import.md) `[SPEC-CDI-050]`**
 
 A CD rip is filed under `Artist\Album (Year)` and keeps the file names the
 ripper gave it. On 2026-10-13 a disc with a 128-character title could not be
@@ -56,6 +56,25 @@ path and both remedies: a shorter folder name, or a lower setting. Long paths
 are not switched on instead: the player, ffmpeg and every later export would
 each be relying on it.
 
+**`[SPEC-NAM-035]` Staging holds a rip to the same limit, and a rip that cannot
+be read is a card that says so.** A ripper fills the path it can open, so a
+rip's own folder can overflow where the ripper's did not: it spends the disc's
+name a second time. Sinéad O'Connor's *She Who Dwells...* (2026-11-05), both
+discs in one folder `[SPEC-RIP-118]`, had files of 254 characters there and 262
+in the folder its second disc was given, and previewing it answered only
+`[WinError 3] The system cannot find the path specified`. Staging now works the
+paths out first, the 247-character limit on a folder and a FLAC beside a WAV
+included. A name that fits is left exactly as it was. One that does not is cut
+at a word `[SPEC-NAM-020]`, keeping its `(Disc N)`, and the files named after
+the disc take the cut name, so they still start with their folder's
+`[SPEC-NAM-040]`; the CUE's `FILE` lines follow. Track files keep their names.
+A rip no name can hold, in an inbox too deep, is refused in words before
+anything moves, naming the file and the remedy. On the card, a path already too
+long is said plainly -- `isfile` answers False for one, which read as *still
+being ripped* for ever -- and any other failure reading one rip is that rip's
+card, not the whole page's. A log counts as a disc's by elimination only where
+the folder holds one CUE: beside two, the one log is the other disc's.
+
 **`[SPEC-NAM-040]` The rip's files follow the album folder.** A ripper names
 its files after the disc and its inbox folder the same way -- CUERipper
 `Artist - Album` and then `(Disc 1).cue`. A file whose name starts with its rip
@@ -71,7 +90,10 @@ rip's `01. Title.wav` names are not the album's and are left as they are.
 **`[SPEC-NAM-050]` A move is all or nothing.** A move that fails part-way puts
 back what it moved, restores the CUE, removes the folders it made, and removes
 the MP3s it encoded: the rip is in the inbox exactly as the ripper left it, and
-**Add** can simply be pressed again.
+**Add** can simply be pressed again. Staging keeps the same promise, and says
+which file failed. A file that cannot be put back keeps the folder it landed in,
+named in the message: that folder used to be removed regardless, with the only
+copy of that audio in it.
 
 **`[SPEC-NAM-060]` Only the file system's name is shortened.** The album in
 the catalogue is the edition's own title from MusicBrainz, written by
@@ -79,6 +101,17 @@ the catalogue is the edition's own title from MusicBrainz, written by
 carries each file's path relative to the music folder (`payload.bundle_path`),
 so speakers and phones receive the shortened names -- well inside Linux's 255
 bytes a name.
+
+**`[SPEC-NAM-070]` The music folder is a real folder, by its full path.** The
+console expands and makes absolute its `--root` when it starts, says so if that
+is not a folder, and refuses an add while it is not one. A console started with
+an unexpanded `~/Music` from 2026-11-03 to 2026-11-05 took it as a relative
+folder named `~`, which the first add created: 33 albums and 235 library rows
+landed there, inside the repository and ignored by git, findable only from a
+process whose working directory is the repository. All were moved to the music
+folder and their rows rewritten on 2026-11-05, every file's sha256 checked before
+and after, no other row or column changed; the catalogue as it was before is in
+`data/backups/pre-tilde-move-20261105/`.
 
 ## 3. *The Idler Wheel*, filed
 
@@ -102,4 +135,4 @@ characters, inside the limit.
 
 ---
 
-**Traceability:** `[SPEC-NAM-010..060]`, `[SPEC-NAM-900]` · extends `[SPEC-CDI-050]`, `[SPEC-CDI-080]` · beside `[SPEC-CDI-058]`
+**Traceability:** `[SPEC-NAM-010..070]`, `[SPEC-NAM-900]` · extends `[SPEC-CDI-050]`, `[SPEC-CDI-080]` · beside `[SPEC-CDI-058]`

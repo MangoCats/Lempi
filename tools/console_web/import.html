@@ -169,8 +169,9 @@ function ripCard(r) {
   const card = S.el('div', { class: 'rip' });
   const pill = r.state === 'finished' ? S.el('span', { class: 'pill ok', text: 'ready' })
     : S.el('span', { class: 'pill warn', text: r.state === 'ripping' ? 'ripping…' : r.state });
-  card.append(S.el('h3', {}, S.el('span', { text: r.title + '  ' }), pill),
-    S.el('div', { class: 'steps', text: `${r.tracks} tracks · ${r.audio}` +
+  card.append(S.el('h3', {}, S.el('span', { text: r.title + '  ' }), pill));
+  // An unreadable rip has no tracks to count, only its detail below.
+  if (r.tracks) card.append(S.el('div', { class: 'steps', text: `${r.tracks} tracks · ${r.audio}` +
       (r.audio_bytes ? ` · ${(r.audio_bytes / 1048576).toFixed(0)} MB` : '') }));
   if (r.detail) card.append(S.el('div', { class: 'verdict note', text: r.detail }));
   if (r.verdict) card.append(S.el('div', { class: 'verdict ' + r.verdict.level, text: r.verdict.text }));

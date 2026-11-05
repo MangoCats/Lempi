@@ -118,6 +118,11 @@ rebuilt pair:
   records what each node was last sent.
 - `python tools/star_sync.py fleet/star-plan.json status` shows both.
 
+**2026-11-05: 235 rows moved within the primary** `[SPEC-NAM-070]`. Albums added
+from 2026-11-03 to 2026-11-05 had been filed in a folder named `~` in the
+repository; they and their `files.path` rows now name the music folder. The
+catalogue as it was before is in `backups/pre-tilde-move-20261105/library.db`.
+
 `flavor.db`, `flavor-sample.db`, `sample-library.db` and
 `sample-library.console.db` are fixtures and extraction data, not copies of
 the live pair.

@@ -297,6 +297,228 @@ def test_tracks_scan_and_stage():
           f"a loose tracks rip staged with every file it names, and nothing else: {os.listdir(folder)}")
 
 
+def long_set(root, *, tracks=True):
+    """Two discs in one folder, the way CUERipper leaves a title too long for
+    its path -- *She Who Dwells*, 2026-11-05: its names cut so that every CUE
+    comes to exactly 254 characters, whatever the inbox's own length. Returns
+    `(folder name, folder, stem of disc N)`. `tracks`: a file per track, else
+    one image the CUE names."""
+    words = "Artist - She Who Dwells in the Secret Place of the Most High Shall Abide Under the Shadow " * 3
+    size = (254 - len(os.path.abspath(root)) - 2 - len("(Disc 1).cue")) // 2
+    name = words[:size]
+    name = name[:-1] + "x" if name.endswith(" ") else name
+    folder = os.path.join(root, name)
+    os.makedirs(folder)
+    stem = lambda d: f"{name}(Disc {d})"                                 # noqa: E731
+    for d in (1, 2):
+        with open(os.path.join(folder, stem(d) + ".cue"), "w", encoding="utf-8", newline="\r\n") as f:
+            f.write('PERFORMER "Artist"\nTITLE "Album"\n')
+            if tracks:
+                for n in (1, 2):
+                    f.write(f'FILE "0{n}. D{d} Song.wav" WAVE\n  TRACK 0{n} AUDIO\n    INDEX 01 00:00:00\n')
+                    open(os.path.join(folder, f"0{n}. D{d} Song.wav"), "w").close()
+            else:
+                f.write(f'FILE "{stem(d)}.wav" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n'
+                        '  TRACK 02 AUDIO\n    INDEX 01 03:00:00\n')
+                open(os.path.join(folder, stem(d) + ".wav"), "w").close()
+    with open(os.path.join(folder, stem(2) + ".log"), "w", encoding="utf-8") as f:
+        f.write(LOG_OK)
+    open(os.path.join(folder, stem(1)[:-4] + ".accurip"), "w").close()
+    open(os.path.join(folder, "folder.jpg"), "w").close()
+    return name, folder, stem
+
+
+def longest_path(folder):
+    return max(len(os.path.join(os.path.abspath(folder), n)) for n in os.listdir(folder))
+
+
+def test_stage_holds_a_long_name_short():
+    """[SPEC-NAM-035]: a disc whose files fill the path the ripper could open
+    is staged where every file opens, and every later step still reads it. The
+    split used to name the folder after the disc whole: 262 characters and
+    `[WinError 3] The system cannot find the path specified`."""
+    import ingest_cd
+    root = tempfile.mkdtemp()
+    name, folder, stem = long_set(root)
+    check(longest_path(folder) == 254, f"the rip as the ripper left it: {longest_path(folder)}")
+    cid = os.path.join(name, stem(2) + ".cue")
+    two = ci.stage(root, cid)
+    new = os.path.basename(two)
+    check(longest_path(two) <= ingest_cd.WINDOWS_PATH_MAX - 1, f"every file opens, a FLAC beside it too: {longest_path(two)}")
+    check(new.endswith("(Disc 2)"), f"the folder still says which disc: {new}")
+    check(not new[:-len("(Disc 2)")].endswith(" "), f"cut at a word, with nothing trailing: {new!r}")
+    have = sorted(os.listdir(two))
+    check(have == sorted(["01. D2 Song.wav", "02. D2 Song.wav", new + ".cue", new + ".log", "folder.jpg"]),
+          f"disc 2's own files, the track files under their own names: {have}")
+    check("01. D1 Song.wav" in os.listdir(folder) and stem(1) + ".cue" in os.listdir(folder),
+          "disc 1 left as it was")
+    sid = ci.staged_id(root, two, cid)
+    check(os.path.isfile(os.path.join(root, sid)) and sid.endswith(new + ".cue"), f"the page's new id is the CUE: {sid}")
+    check(ingest_cd.find_rip(two)[1].endswith(new + ".cue"), "the importer finds it")
+    check(ingest_cd.find_log(two).endswith(new + ".log"), "and its log")
+    renames = ingest_cd.renamed_files(two, os.path.join(root, "Artist", "Album (2020)"), "Artist", 60)
+    check(renames.get(new + ".cue") == "Artist - Album.cue" and renames.get(new + ".log") == "Artist - Album.log",
+          f"the add still renames them after the album [SPEC-NAM-040]: {renames}")
+    card = next(c for c in ci.scan(root) if c["id"] == sid)
+    check(card["state"] == "finished" and card["audio"] == "2 of 2 track files"
+          and card["verdict"]["level"] == "ok", f"its card reads as before: {card}")
+
+    # The same disc's name again: a second folder, whose files follow it too.
+    root2 = tempfile.mkdtemp()
+    name2, folder2, stem2 = long_set(root2)
+    first = ci.stage(root2, os.path.join(name2, stem2(2) + ".cue"))
+    with open(os.path.join(folder2, stem2(3) + ".cue"), "w", encoding="utf-8") as f:
+        f.write(f'TITLE "Album"\nFILE "{stem2(3)}.wav" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n')
+    open(os.path.join(folder2, stem2(3) + ".wav"), "w").close()
+    os.rename(first, first.replace("(Disc 2)", "(Disc 3)"))
+    third = ci.stage(root2, os.path.join(name2, stem2(3) + ".cue"))
+    tag = os.path.basename(third)
+    check(tag.endswith("(Disc 3) (2)") and tag + ".cue" in os.listdir(third), f"a name in use: {tag!r}")
+    check(longest_path(third) <= ingest_cd.WINDOWS_PATH_MAX - 1, f"and it fits too: {longest_path(third)}")
+
+    # An image rip: the WAV is named after the disc, so the sheet must follow.
+    root = tempfile.mkdtemp()
+    name, folder, stem = long_set(root, tracks=False)
+    two = ci.stage(root, os.path.join(name, stem(2) + ".cue"))
+    new = os.path.basename(two)
+    sheet = open(os.path.join(two, new + ".cue"), encoding="utf-8").read()
+    check(f'FILE "{new}.wav" WAVE' in sheet and os.path.isfile(os.path.join(two, new + ".wav")),
+          f"the sheet names the image's new name: {sheet!r}")
+    check(longest_path(two) <= ingest_cd.WINDOWS_PATH_MAX - 1, f"an image rip fits: {longest_path(two)}")
+
+    # A loose rip takes the same route.
+    root = tempfile.mkdtemp()
+    size = 254 - len(os.path.abspath(root)) - 1 - len(".cue")
+    loose = ("Artist - Album That Goes On " * 20)[:size - 1] + "x"
+    rip(root, loose, LOG_OK)
+    held = ci.stage(root, loose + ".cue")
+    check(longest_path(held) <= ingest_cd.WINDOWS_PATH_MAX - 1 and len(os.listdir(held)) == 3,
+          f"a loose rip fits, with its files: {longest_path(held)}, {len(os.listdir(held))}")
+
+    # A name that fits is left exactly as it was.
+    root = tempfile.mkdtemp()
+    rip(root, "Short", LOG_OK)
+    check(sorted(os.listdir(ci.stage(root, "Short.cue"))) == ["Short.cue", "Short.log", "Short.wav"], "a short rip keeps its names")
+
+
+def test_stage_refuses_what_cannot_fit():
+    """[SPEC-NAM-035]: an inbox too deep for any name is refused in words,
+    before anything moves."""
+    base = tempfile.mkdtemp()
+    deep = os.path.join(base, *["d" * 30] * ((230 - len(base)) // 31))
+    os.makedirs(deep)
+    folder = os.path.join(deep, "Set")
+    os.makedirs(folder)
+    title = "t" * max(1, 259 - len(folder) - 1 - len(".wav"))
+    for d in (1, 2):
+        with open(os.path.join(folder, f"Set(Disc {d}).cue"), "w", encoding="utf-8") as f:
+            f.write(f'TITLE "Set"\nFILE "{title[:-1]}{d}.wav" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n')
+        open(os.path.join(folder, f"{title[:-1]}{d}.wav"), "w").close()
+    before = sorted(os.listdir(folder))
+    try:
+        ci.stage(deep, os.path.join("Set", "Set(Disc 2).cue"))
+        check(False, "a rip no folder name can hold is refused")
+    except ValueError as e:
+        check("shorter path" in str(e) and "nothing was moved" in str(e) and "WinError" not in str(e), f"in words: {e}")
+    check(sorted(os.listdir(folder)) == before and os.listdir(deep) == ["Set"], "and nothing moved")
+
+
+def test_stage_failure_loses_nothing():
+    """[SPEC-NAM-050]: a move that fails puts back what it moved and says which
+    file failed. One that cannot be put back keeps the folder it landed in:
+    removing it, as the split did, deleted the only copy of that audio."""
+    root = tempfile.mkdtemp()
+    name, folder, stem = long_set(root, tracks=False)
+    cid = os.path.join(name, stem(2) + ".cue")
+    with open(os.path.join(folder, stem(2) + ".cue"), "rb") as f:
+        sheet = f.read()
+    before = sorted(os.listdir(folder))
+    real, calls = ci.shutil.move, []
+
+    def fails_on_third(src, dst):
+        calls.append(src)
+        if len(calls) == 3:
+            raise OSError("[WinError 32] The process cannot access the file")
+        return real(src, dst)
+    ci.shutil.move = fails_on_third
+    try:
+        ci.stage(root, cid)
+        check(False, "the failing move raises")
+    except OSError as e:
+        check("WinError 32" in str(e) and "as the ripper left it" in str(e) and "could not move '" in str(e),
+              f"says what failed and that nothing changed: {e}")
+    finally:
+        ci.shutil.move = real
+    check(sorted(os.listdir(folder)) == before, f"every file back: {sorted(os.listdir(folder))}")
+    check(os.listdir(root) == [name], f"and no folder left behind: {os.listdir(root)}")
+    with open(os.path.join(folder, stem(2) + ".cue"), "rb") as f:
+        check(f.read() == sheet, "the sheet byte for byte")
+
+    # Every move back fails too.
+    calls.clear()
+    first = []
+
+    def strands(src, dst):
+        calls.append(src)
+        if len(calls) == 1:
+            first.append(dst)
+            return real(src, dst)
+        raise OSError("[WinError 5] Access is denied")
+    ci.shutil.move = strands
+    try:
+        ci.stage(root, cid)
+        check(False, "the failing move raises")
+    except OSError as e:
+        check("could not be put back" in str(e), f"says so: {e}")
+    finally:
+        ci.shutil.move = real
+    check(first and os.path.isfile(first[0]), "the stranded file is still on disk, not deleted with its folder")
+
+
+def test_scan_survives_a_bad_rip():
+    """[SPEC-NAM-035]: one rip that cannot be read is a card saying so; the
+    others still show. A log that raised used to take the whole page down."""
+    root = tempfile.mkdtemp()
+    rip(root, "Good", LOG_OK)
+    rip(root, "Bad", LOG_OK)
+    real = ci.cd_toc.parse_eac_log
+
+    def fails_on_bad(path):
+        if "Bad" in os.path.basename(path):
+            raise OSError("[Errno 13] Permission denied")
+        return real(path)
+    ci.cd_toc.parse_eac_log = fails_on_bad
+    try:
+        cards = {c["id"]: c for c in ci.scan(root)}
+    finally:
+        ci.cd_toc.parse_eac_log = real
+    check(cards["Bad.cue"]["state"] == "unreadable" and "Permission denied" in cards["Bad.cue"]["detail"],
+          f"the bad one says so: {cards['Bad.cue']}")
+    check(cards["Good.cue"]["state"] == "finished", f"the good one is unaffected: {cards['Good.cue']}")
+
+    # A folder holding a path Windows cannot open: `isfile` says False, which
+    # read as "still being ripped" for ever.
+    if os.name == "nt":
+        root = tempfile.mkdtemp()
+        folder = os.path.join(root, "Rip")
+        tracks_rip(folder, (1, 2, 3))
+        over = "x" * (262 - len(os.path.abspath(folder)) - 1 - len(".wav")) + ".wav"
+        with open("\\\\?\\" + os.path.join(os.path.abspath(folder), over), "w"):
+            pass
+        card = ci.scan(root)[0]
+        check(card["state"] == "unreadable" and "at most 259" in card["detail"], f"said plainly: {card}")
+
+    # One log beside two CUEs is the other disc's [SPEC-RIP-118].
+    root = tempfile.mkdtemp()
+    name, folder, stem = long_set(root)
+    cards = {c["id"]: c for c in ci.scan(root, now=time.time() + 600)}
+    one = cards[os.path.join(name, stem(1) + ".cue")]
+    two = cards[os.path.join(name, stem(2) + ".cue")]
+    check("no log" in one["verdict"]["text"] and one["verdict"]["level"] == "note",
+          f"a disc with no log of its own does not borrow its neighbour's: {one['verdict']}")
+    check(two["verdict"]["level"] == "ok", f"the disc it belongs to reads it: {two['verdict']}")
+
+
 def test_inbox_setting():
     """The inbox is the console's own setting, with a default in the music folder."""
     side = os.path.join(tempfile.mkdtemp(), "console.db")
@@ -320,6 +542,10 @@ def main() -> int:
     test_stage()
     test_stage_splits_a_set()
     test_tracks_scan_and_stage()
+    test_stage_holds_a_long_name_short()
+    test_stage_refuses_what_cannot_fit()
+    test_stage_failure_loses_nothing()
+    test_scan_survives_a_bad_rip()
     test_inbox_setting()
     print()
     if FAILED:
