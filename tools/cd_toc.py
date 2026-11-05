@@ -368,6 +368,9 @@ def parse_eac_log(path: str) -> RipReport:
         words = m.group(2).strip()
         ok = words.lower() in _LOG_AR_FINE
         verdicts[n] = (ok, words)
+    for n, (ok, words) in _per_track_verdicts(text).items():
+        if n not in verdicts or not ok:
+            verdicts[n] = (ok, words)
     for n, where in _suspicious_by_track(text).items():
         ok, words = verdicts.get(n, (True, ""))
         verdicts[n] = (False, f"read errors at {where}" + (f"; {words}" if words else ""))
@@ -426,6 +429,54 @@ def _suspicious_by_track(text: str) -> dict[int, str]:
             if first <= b and a <= last:
                 found.setdefault(n, []).append(label)
     return {n: ", ".join(v) for n, v in found.items()}
+
+
+_LOG_TRACK_HEAD = re.compile(r'^[ \t]*Track[ \t]+(\d+)[ \t]*\r?$', re.MULTILINE)
+_LOG_CRC_LINE = re.compile(r'^(?:Test|Copy) CRC\b', re.IGNORECASE)
+
+
+def _per_track_verdicts(text: str) -> dict[int, tuple[bool, str]]:
+    """A tracks-mode rip's verdicts, read from each track's own section `[SPEC-RIP-119]`:
+
+        Track 11
+             Filename ...\\11. Thank You for Hearing Me.wav
+             Suspicious position 0:00:00 - 0:05:12
+             Track quality 16.9 %
+             Copy CRC EC958F87
+             Cannot be verified as accurate (confidence 143)  [FCFCEFA9], ...
+             Copy OK
+
+    Its AccurateRip word is whatever stands between the CRC and `Copy OK`, so a
+    phrasing nobody has seen reads as a failure rather than vanishing, as in
+    `_LOG_ACCURATERIP`. Read errors mark the track even when AccurateRip matched,
+    as `_suspicious_by_track` does for an image rip. A section with no `Copy OK`
+    did not finish. Only indented lines count: the last section runs on into the
+    report's closing lines, which are not.
+
+    Nothing read these until 2026-11-05: 36 logs on the hub, 17 damaged tracks
+    among their 530 recorded as nothing, and every clean track ranked as having
+    no log `[SPEC-RIP-119]`."""
+    heads = list(_LOG_TRACK_HEAD.finditer(text))
+    out: dict[int, tuple[bool, str]] = {}
+    for i, head in enumerate(heads):
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+        lines = [line.strip() for line in text[head.end():end].splitlines() if line.startswith(("  ", "\t"))]
+        crc = max((k for k, line in enumerate(lines) if _LOG_CRC_LINE.match(line)), default=-1)
+        words = [re.split(r'[(\[,]', line)[0].strip() for line in lines[crc + 1:]] if crc >= 0 else []
+        words = [re.sub(r'^Track\s+(?=not present)', '', w, flags=re.IGNORECASE)
+                 for w in words if w and not _LOG_COPY_OK.fullmatch(w)]
+        where = []
+        for m in _LOG_SUSPICIOUS.finditer("\n".join(lines)):
+            where.append(f"{m.group(1)}:{m.group(2)}:{m.group(3)}"
+                         + (f"-{m.group(4)}:{m.group(5)}:{m.group(6)}" if m.group(4) else ""))
+        word = "; ".join(words)
+        if where:
+            out[int(head.group(1))] = (False, f"read errors at {', '.join(where)}" + (f"; {word}" if word else ""))
+        elif not any(_LOG_COPY_OK.fullmatch(line) for line in lines):
+            out[int(head.group(1))] = (False, word or "the copy did not finish")
+        else:
+            out[int(head.group(1))] = (all(w.lower() in _LOG_AR_FINE for w in words), word)
+    return out
 
 
 def _read_log_text(path: str) -> str:

@@ -224,7 +224,21 @@ importer the shared folder, which took the first CUE's disc for every file and
 refused the add for naming both discs' files "(Disc 1)". Staging now moves the
 disc previewed -- its CUE, the audio it names, the files named after it -- into
 a folder of its own and copies the cover, so each disc keeps one; the importer
-refuses a folder that still holds more than one CUE.
+refuses a folder that still holds more than one CUE. A disc whose name will not
+fit in that folder is held short `[SPEC-NAM-035]`.
+
+**`[SPEC-RIP-119]` A tracks-mode rip's log is read track by track.** Its verdicts
+are not in an AccurateRip summary but in each track's own section, under a bare
+`Track N`: read errors measured from that track's start, then the CRC, then
+AccurateRip's word, then `Copy OK`. Nothing read those sections until
+2026-11-05, so a clean track ranked as having no log, and a damaged one was
+recorded as nothing and never held `[SPEC-RIP-054]`, while the card promised it
+would be marked: 17 of the 530 tracks in the hub's 36 such logs, 8 of them on one
+album. Now the word between the CRC and `Copy OK` is the track's verdict, one
+nobody has seen reading as a failure; a section with no `Copy OK` did not finish.
+Read errors mark a track even when AccurateRip matched, as they do in an image
+rip: 3 of the 17. Those rips already in the library are recorded by
+`tools/backfill_rip_damage.py`.
 
 ---
 

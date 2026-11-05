@@ -408,7 +408,50 @@ def main() -> int:
         with open(log_path, "w", encoding="utf-8") as f:
             f.write("Track  1\n\n     Filename C:\\rip\\01.wav\n\n     Copy OK\n")
         r = cd_toc.parse_eac_log(log_path)
-    check(r.tracks == [], f"a per-track log's bare heading is not an outcome: {r.tracks}")
+    check([(t.number, t.ok, t.detail) for t in r.tracks] == [(1, True, "")],
+          f"a per-track log's bare heading is not an outcome: {r.tracks}")
+
+    # [SPEC-RIP-119]: CUERipper's tracks-mode log, as She Who Dwells' second
+    # disc was ripped 2026-11-04 (lines as written, CRLF, titles invented).
+    print("parse_eac_log: a per-track log, each track judged by its own section")
+    section = lambda n, *body: [f"Track {n:2d}", "", f"     Filename C:\\rip\\{n:02d}. Track 5 Accurately ripped.wav", "",  # noqa: E731
+                                *body, "     Copy OK", ""]
+    per_track = "\r\n".join([
+        "     Track |   Start  |  Length  | Start sector | End sector ",
+        "    ---------------------------------------------------------",
+        *[f"       {n}  |  0:00.00 |  1:00.00 |  {n * 5000}    |    {n * 5000 + 4499}   " for n in range(1, 8)],
+        "", "",
+        *section(1, "     Pre-gap length  0:00:02.00", "", "     Peak level 98.8 %", "     Track quality 100.0 %",
+                 "     Copy CRC 9DB325D3", "     Accurately ripped (confidence 137)  [B43E7FF0]"),
+        *section(2, "     Suspicious position 0:05:31", "     Suspicious position 0:05:34 - 0:05:36", "",
+                 "     Track quality 16.9 %", "     Copy CRC EC958F87",
+                 "     Cannot be verified as accurate (confidence 143)  [FCFCEFA9], AccurateRip returned [5198C584]"),
+        *section(3, "     Suspicious position 0:01:53 - 0:01:56", "", "     Copy CRC 11111111",
+                 "     Accurately ripped (confidence 9)  [22222222]"),
+        *section(4, "     Test CRC 33333333", "     Copy CRC 33333333",
+                 "     Cannot be verified as accurate (confidence 3)  [33333333], AccurateRip returned [44444444]"),
+        *section(5, "     Copy CRC 55555555", "     Track not present in AccurateRip database"),
+        *section(6, "     Copy CRC 66666666", "     some phrasing nobody has seen yet (confidence 1)"),
+        "Track  7", "", "     Filename C:\\rip\\07. Stopped.wav", "",
+        "", " 3 track(s) accurately ripped", "", "Some tracks could not be verified as accurate", "",
+        "There were errors", "", "End of status report", ""])
+    with tempfile.TemporaryDirectory() as d:
+        log_path = os.path.join(d, "rip.log")
+        with open(log_path, "w", encoding="utf-8", newline="") as f:
+            f.write(per_track)
+        r = cd_toc.parse_eac_log(log_path)
+        check(cd_toc.toc_from_log(log_path) is not None, "and its table of contents still reads")
+    got = {t.number: (t.ok, t.detail) for t in r.tracks}
+    check(got.get(1) == (True, "Accurately ripped"), f"a clean track, matched: {got.get(1)}")
+    check(got.get(2) == (False, "read errors at 0:05:31, 0:05:34-0:05:36; Cannot be verified as accurate"),
+          f"read errors and no match, every position kept: {got.get(2)}")
+    check(got.get(3) == (False, "read errors at 0:01:53-0:01:56; Accurately ripped"),
+          f"read errors mark a track even when AccurateRip matched: {got.get(3)}")
+    check(got.get(4) == (False, "Cannot be verified as accurate"), f"no match, Test & Copy's CRCs agreeing: {got.get(4)}")
+    check(got.get(5) == (True, "not present in AccurateRip database"), f"nothing to compare with is no failure: {got.get(5)}")
+    check(got.get(6) == (False, "some phrasing nobody has seen yet"), f"an unknown word is a failure: {got.get(6)}")
+    check(got.get(7) == (False, "the copy did not finish"), f"a section with no Copy OK: {got.get(7)}")
+    check(not r.all_ok, "the rip is not all good")
 
     # [SPEC-CDI-090]: a tracks-mode sheet. Gaps appended -- track 2's TRACK
     # line and INDEX 00 at the end of track 1's file, its INDEX 01 in its own
