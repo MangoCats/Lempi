@@ -268,11 +268,39 @@ def natural_values(name, d, cols, files, passages):
     return out
 
 
+def same_numbering(b, t, kind):
+    """Whether `b` and `t` give every "file" or "passage" they share the same id.
+    A copy the hub built does. An adopted one is numbered by the node
+    [SPEC-STAR-946], and its id 5938 is some other file of the hub's."""
+    i = 0 if kind == "file" else 1
+    theirs, ours = id_maps(b)[i], id_maps(t)[i]
+    named = {json.dumps(v): k for k, v in ours.items()}
+    return all(named.get(json.dumps(v), k) == k for k, v in theirs.items())
+
+
+def pair_moved(old, new):
+    """Passages only one side names, moved under `old`'s name where a file and
+    kind have as many on each side, in order of start: a boundary edited, which
+    stays one change so the node keeps its id [SPEC-NKP-046]."""
+    def groups(rows, others):
+        out = {}
+        for k in sorted((k for k in rows if k not in others), key=lambda k: json.loads(k)[2]):
+            at = json.loads(k)
+            out.setdefault((at[0], at[1]), []).append(k)
+        return out
+    gone, came = groups(old, new), groups(new, old)
+    for where, olds in gone.items():
+        if len(olds) == len(came.get(where, ())):
+            for a, b in zip(olds, came[where]):
+                new[a] = new.pop(b)
+
+
 def natural_entry(b, t, name, skip):
     """The patch entry for one id-bearing table, or None where nothing changed
-    [SPEC-NKP-040]. Rows are paired by the hub's own key, which both catalogues
-    share, so a row whose natural key changed -- a boundary edited, a file
-    re-keyed -- is one change, not a delete and an add [SPEC-NKP-045]."""
+    [SPEC-NKP-040]. Rows are paired by the hub's own key where both catalogues
+    are numbered by the hub, so a row whose natural key changed -- a boundary
+    edited, a file re-keyed -- is one change, not a delete and an add
+    [SPEC-NKP-045]. Where they are not, by what each row is [SPEC-NKP-046]."""
     spec = NATURAL[name]
     if name not in tables_of(t):
         return None
@@ -294,23 +322,29 @@ def natural_entry(b, t, name, skip):
     if any(k not in cols for k in spec["key"]):
         raise NaturalUnsupported(f"{name}: its natural key is not among the columns carried")
     pk = key_of(t, name)
+    by_name = not same_numbering(b, t, "file" if name in ("files", "file_tags") else "passage")
 
     def load(c, have, extra):
         files, passages = id_maps(c)
         rows = {}
         for row in c.execute(f"SELECT {', '.join(have)} FROM {name}"):
             d = dict(zip(have, row), **extra)
-            rows[tuple(d[k] for k in pk)] = (d, natural_values(name, d, cols, files, passages))
+            values = natural_values(name, d, cols, files, passages)
+            named = dict(zip(cols, values))
+            ident = json.dumps([named[k] for k in spec["key"]]) if by_name else tuple(d[k] for k in pk)
+            rows[ident] = (d, values)
         return rows
 
     old, new = load(b, bcols, fill), load(t, full, {})
+    if by_name and name == "passages":
+        pair_moved(old, new)
     rows = []
     for ident in sorted(set(old) | set(new), key=repr):
         bd, bn = old.get(ident, (None, None))
         td, tn = new.get(ident, (None, None))
         carried = [c for c in full if c not in skip]
-        if bd is not None and td is not None and all(bd[c] == td[c] for c in carried):
-            continue                       # the same row in the hub's own terms, whatever it is now called
+        if bd is not None and td is not None and (bn == tn if by_name else all(bd[c] == td[c] for c in carried)):
+            continue                       # the same row, whatever each catalogue calls it
         named = dict(zip(cols, bn if bn is not None else tn))
         rec = {"key": [named[k] for k in spec["key"]], "was": bn, "now": tn}
         if bd is None and skip:

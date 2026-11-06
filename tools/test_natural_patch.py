@@ -256,6 +256,52 @@ def main() -> int:
     again = apply_natural(node, patch)
     check(again == {"applied": 0, "already": got["applied"]}, f"a second apply finds everything already there: {again}")
 
+    # [SPEC-NKP-046]: a baseline adopted from a node holds the node's numbers, so its
+    # id 1 is some other file of the hub's. Paired by id, every file came out as a
+    # change into another's md5 and a real row as an insert: teacherslounge refused
+    # one, passages' UNIQUE, 2026-11-05. Applied, it would have moved each md5 onto
+    # another file's path, which is machine scope and stays where it is.
+    adopted = os.path.join(tmp, "adopted.db")
+    shutil.copyfile(base, adopted)
+    c = sqlite3.connect(adopted)
+    c.execute("PRAGMA foreign_keys=OFF")
+    ids = [r[0] for r in c.execute("SELECT file_id FROM files ORDER BY file_id")]
+    rotated = dict(zip(ids, ids[1:] + ids[:1]))
+    for table in ("passages", "files"):
+        for old_id, new_id in rotated.items():
+            c.execute(f"UPDATE {table} SET file_id = ?1 WHERE file_id = ?2", (new_id + 1000, old_id))
+        c.execute(f"UPDATE {table} SET file_id = file_id - 1000")
+    for table in ("passage_recordings", "passages"):
+        c.execute(f"UPDATE {table} SET passage_id = passage_id + 500")
+    c.commit()
+    c.close()
+    bo, to = sp.open_ro(adopted), sp.open_ro(target)
+    check(not sp.same_numbering(bo, to, "file") and not sp.same_numbering(bo, to, "passage"),
+          "a catalogue numbered by the node is seen as one")
+    check(sp.same_numbering(sp.open_ro(base), to, "file"), "and one the hub built is not")
+    bo.close()
+    to.close()
+    ap = sp.make_values(adopted, target, tables=tables, exclude=MACHINE, natural=True)
+    af = [r for e in ap["tables"] if e["name"] == "files" for r in e["rows"]]
+    check(sorted(r["key"][0] for r in af) == ["C", "C2", "D", "E"],
+          f"only the files that changed, each under its own name: {[r['key'] for r in af]}")
+    check(not any(r["was"] and r["now"] for r in af), f"and none changed into another: {af}")
+    moved = [r for e in ap["tables"] if e["name"] == "passages" for r in e["rows"] if r["key"][:1] == ["B"]]
+    check(len(moved) == 1 and moved[0]["was"] and moved[0]["now"] and moved[0]["key"] == ["B", "radio", 0, 500],
+          f"a passage whose boundary moved is still one change, so the node keeps its id: {moved}")
+    n4 = os.path.join(tmp, "node4.db")
+    build_db(n4, "schema.sql", "node.sql")
+    c = sqlite3.connect(n4)
+    keep = c.execute("SELECT p.passage_id FROM passages p JOIN files f USING (file_id) WHERE f.audio_md5='B'").fetchone()[0]
+    c.close()
+    apply_natural(n4, ap)
+    check(dump(n4) == expected, f"applied, it gives the target all the same: {dump(n4)}")
+    c = sqlite3.connect(n4)
+    still = c.execute("SELECT p.passage_id FROM passages p JOIN files f USING (file_id) WHERE f.audio_md5='B'").fetchone()[0]
+    c.close()
+    check(still == keep, f"and the moved passage kept its id on the node: {keep} -> {still}")
+    check(sp.make_values(target, target, tables=tables, exclude=MACHINE, natural=True)["tables"] == [], "unchanged is still empty")
+
     # Refusal is all or nothing.
     n2 = os.path.join(tmp, "node2.db")
     build_db(n2, "schema.sql", "node.sql")

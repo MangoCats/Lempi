@@ -2107,6 +2107,7 @@ def backup(plan):
 # better -- so 1 MB/s for copies; and sha256sum reads far faster than that.
 MIRROR_SHORT_S = 120
 MIRROR_COPY_BPS = 1_000_000
+MIRROR_PART_STALE_MIN = 30
 MIRROR_HASH_BPS = 20_000_000
 
 
@@ -2150,6 +2151,13 @@ def mirror(plan, keep, wanted):
         return 0
     try:
         sd.must(host, f"mkdir -p {rd}/objects {rd}/days", "reach the mirror", quiet=True, timeout=MIRROR_SHORT_S)
+        # An interrupted copy leaves its partial behind, read-only as the object
+        # it copies, and no later `scp` can write over it: from 2026-10-30 every
+        # run failed on one, and the mirror stayed at 2026-10-16. Only one nothing
+        # has written to for longer than a copy may take: a run by hand can overlap
+        # the task's, and a live copy is not this run's to remove.
+        sd.must(host, f"find {rd}/objects -name '*.db.part' -mmin +{MIRROR_PART_STALE_MIN} -delete",
+                "clear what an interrupted copy left", quiet=True, timeout=MIRROR_SHORT_S)
         there = set(sd.must(host, f"ls -1 {rd}/objects {rd}/days", "list the mirror", quiet=True,
                             timeout=MIRROR_SHORT_S).split())
         for o in sorted(wanted):
@@ -2286,8 +2294,10 @@ def status(plan):
             say(f"  mirror: holds the backup of {held} ({mage.total_seconds() / 3600:.0f} h old), last written "
                 f"{st['mirror_at'][:16].replace('T', ' ')} UTC")
             if mage > mlimit:
-                bad.append(f"the mirror's newest backup is {mage.days} day(s) old -- {m['host']} has not been "
-                           "reachable to take a newer one")
+                # It may be off, or failing: this reads the record, not the host,
+                # so it does not say which. `mirror.log` does.
+                bad.append(f"the mirror's newest backup is {mage.days} day(s) old -- {m['host']} has not taken "
+                           "a newer one: it was off, or the copy is failing (data/backups/mirror.log says which)")
     # [GDE-INT-120]: how recently every kept object was proven whole.
     root = at_root(b["dir"])
     pr = proofs(root)

@@ -125,7 +125,8 @@ def test_mirror_when_reachable():
             st["mirror_newest"] = (utc - dt.timedelta(days=3)).strftime("%Y-%m-%d")
             ss.save_proofs(root, st)
             rc, text = said()
-            check(rc == 1 and "has not been reachable to take a newer one" in text, f"a day missed: STALE: {text}")
+            check(rc == 1 and "has not taken a newer one" in text and "mirror.log" in text,
+                  f"a day missed: STALE, and it names no cause it did not check: {text}")
         finally:
             ss.sd.ssh = real
 
@@ -171,10 +172,11 @@ def test_mirror_limits():
             json.dump({"listener": names[0], "library": names[1], "taken_at": "2026-10-15T07:30:00+00:00"}, fh)
         plan = {"backups": {"dir": root, "keep_daily": 14, "keep_monthly": 12,
                             "mirror": {"host": "x@h", "dir": "/m"}}}
-        seen, copies = [], []
+        seen, copies, commands = [], [], []
 
         def far_end(host, cmd, quiet=False, timeout=None):
             seen.append((cmd.split()[0], timeout))
+            commands.append((cmd, len(copies)))
             if cmd.startswith("sha256sum"):
                 return 0, cmd.split()[-1].rsplit("/", 1)[-1][:-len(".db.part")] + "  x"
             if cmd.startswith("mv"):
@@ -195,6 +197,11 @@ def test_mirror_limits():
         check(rc == 1 and "MIRROR FAILED: place: no answer from x@h within 120 s" in said,
               f"the run ends, failed and said, instead of waiting: {rc} {said}")
         check(all(t is not None for _c, t in seen), f"every ssh step had a limit: {seen}")
+        cleared = [(c, n) for c, n in commands if ".db.part' -mmin" in c]
+        check(len(cleared) == 1 and cleared[0][1] == 0 and "-delete" in cleared[0][0],
+              f"an interrupted copy's partial is cleared, before anything is copied: {commands[:4]}")
+        check(not any(c.startswith("rm ") and ".part" in c for c, _n in commands),
+              f"and only an old one: a live copy's is not this run's to remove: {commands[:4]}")
         size = os.path.getsize(os.path.join(root, "objects", f"{names[0]}.db"))
         check(copies and copies[0][1] == ss.mirror_limit(size, ss.MIRROR_COPY_BPS)
               and copies[0][2] is subprocess.DEVNULL, f"the copy's limit is its size's: {copies}")
