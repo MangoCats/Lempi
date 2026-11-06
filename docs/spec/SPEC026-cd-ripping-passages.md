@@ -233,12 +233,40 @@ are not in an AccurateRip summary but in each track's own section, under a bare
 AccurateRip's word, then `Copy OK`. Nothing read those sections until
 2026-11-05, so a clean track ranked as having no log, and a damaged one was
 recorded as nothing and never held `[SPEC-RIP-054]`, while the card promised it
-would be marked: 17 of the 530 tracks in the hub's 36 such logs, 8 of them on one
+would be marked: 14 of the 530 tracks in the hub's 36 such logs, 8 of them on one
 album. Now the word between the CRC and `Copy OK` is the track's verdict, one
 nobody has seen reading as a failure; a section with no `Copy OK` did not finish.
-Read errors mark a track even when AccurateRip matched, as they do in an image
-rip: 3 of the 17. Those rips already in the library are recorded by
+Those rips already in the library are recorded by
 `tools/backfill_rip_damage.py`.
+
+**`[SPEC-RIP-120]` A track AccurateRip matched is good, whatever the drive said
+on the way.** A read error is the drive's doubt, and a match is the audio itself
+compared with other people's rips: if the errors did damage, the checksum would
+not agree, short of the same damage on every other copy. So a read error marks a
+track only where AccurateRip did not match, in an image rip and a tracks-mode
+rip alike. *Not in AccurateRip's database* forgives nothing: there was no
+comparison. The maintainer's decision, 2026-11-05, reversing the earlier rule
+that a read error marked a track regardless.
+
+Eight tracks on the hub were in this position, at confidence 12 to 381, the
+lowest *Some Girls* track 10 and *Rock Island* track 8 at 12 and 18. Three had been
+recorded as nothing, and stay playing. Five were recorded and held under the
+old rule -- *The Last DJ* 10 and 11, *99.9 F°* 4 and 7, *Tommy Orchestral* 2 --
+and `tools/backfill_rip_damage.py` took them back: the row removed, the hold
+released. A release is `""`, not NULL, so a send carries it `[SPEC-HOLD-080]`.
+The positions stay in the log beside the album.
+
+**`[SPEC-RIP-121]` A file is judged by its own disc's log, or by none.** A set's
+discs share a folder, and a disc can have no log in it. `cd_toc.choose_log`
+takes the log with the file's stem, else the one naming its disc -- `(Disc 2)`,
+or a track file's `2-01.` -- and refuses a lone log naming another. Otherwise
+there is no log, and the track is unverified `[SPEC-CDI-094]`: another disc's log
+is not a nearer answer. Until 2026-11-05 every reader took the first log in the
+folder, so a backfill would have marked two good tracks damaged, by Disc 1's
+verdict on Disc 2's numbers, and merge ranks read the same way. Measured that
+day by length, which the choice does not use: of the 530 track files a log was
+chosen for, 529 fit it within 2.5 s; of the 62 refused, in five folders, no log
+beside them fits. Every one of the 46 damage rows left stands by its own log.
 
 ---
 
@@ -260,7 +288,7 @@ drive/hardware failure modes, the last item there, is now decided too.
 
 ---
 
-**Traceability:** `[SPEC-RIP-090..118]` · derives `[REQ-LIB-255..275]` ·
+**Traceability:** `[SPEC-RIP-090..121]` · derives `[REQ-LIB-255..275]` ·
 extends [SPEC025](SPEC025-cd-ripping.md), `[SPEC008]` §3's
 `release_recordings.disc` and `passages` schema, and
 [SPEC023](SPEC023-domain-vocabulary.md)'s Passage/File definitions.

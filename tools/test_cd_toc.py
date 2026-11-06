@@ -395,10 +395,11 @@ def main() -> int:
     got = {t.number: (t.ok, t.detail) for t in r.tracks}
     check(got.get(1, (True,))[0] is False and "cannot be verified as accurate" in got[1][1]
           and "read errors at 0:02:00-0:02:12" in got[1][1], f"CUERipper's mismatch, with its read errors: {got}")
-    check(got.get(2, (True,))[0] is False and "0:07:18-0:07:20" in got[2][1],
-          f"a read error spanning a boundary marks the track before it, even AccurateRip-matched: {got}")
-    check(got.get(3, (True,))[0] is False and "some phrasing nobody has seen yet" in got[3][1],
-          f"an unknown outcome is a failure, in its own words -- and the boundary's other side: {got}")
+    check(got.get(2) == (True, "accurately ripped"),
+          f"a read error on a track AccurateRip matched is forgiven [SPEC-RIP-120]: {got}")
+    check(got.get(3, (True,))[0] is False and "some phrasing nobody has seen yet" in got[3][1]
+          and "0:07:18-0:07:20" in got[3][1],
+          f"an unknown outcome is a failure, in its own words, with the boundary's read error: {got}")
     check(got.get(4) == (True, "not present in AccurateRip database"),
           f"a line ending in its words, CRLF, still matches: {got}")
     check(not r.all_ok, "the rip is not all good")
@@ -445,13 +446,60 @@ def main() -> int:
     check(got.get(1) == (True, "Accurately ripped"), f"a clean track, matched: {got.get(1)}")
     check(got.get(2) == (False, "read errors at 0:05:31, 0:05:34-0:05:36; Cannot be verified as accurate"),
           f"read errors and no match, every position kept: {got.get(2)}")
-    check(got.get(3) == (False, "read errors at 0:01:53-0:01:56; Accurately ripped"),
-          f"read errors mark a track even when AccurateRip matched: {got.get(3)}")
+    check(got.get(3) == (True, "Accurately ripped"),
+          f"read errors AccurateRip matched are forgiven [SPEC-RIP-120]: {got.get(3)}")
     check(got.get(4) == (False, "Cannot be verified as accurate"), f"no match, Test & Copy's CRCs agreeing: {got.get(4)}")
     check(got.get(5) == (True, "not present in AccurateRip database"), f"nothing to compare with is no failure: {got.get(5)}")
     check(got.get(6) == (False, "some phrasing nobody has seen yet"), f"an unknown word is a failure: {got.get(6)}")
     check(got.get(7) == (False, "the copy did not finish"), f"a section with no Copy OK: {got.get(7)}")
     check(not r.all_ok, "the rip is not all good")
+
+    # [SPEC-RIP-120]: read errors nothing could forgive, each kind of log.
+    print("parse_eac_log: read errors stand without a match, and a whole rip forgiven is a good rip")
+    def read(text):
+        with tempfile.TemporaryDirectory() as d:
+            log_path = os.path.join(d, "rip.log")
+            with open(log_path, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+            return cd_toc.parse_eac_log(log_path)
+    r = read("\r\n".join([*section(1, "     Suspicious position 0:00:01", "     Copy CRC 11111111",
+                                   "     Track not present in AccurateRip database"), ""]))
+    check([(t.ok, t.detail) for t in r.tracks] == [(False, "read errors at 0:00:01; not present in AccurateRip database")],
+          f"nothing to compare with forgives nothing: {r.tracks}")
+    r = read("\r\n".join([*section(1, "     Suspicious position 0:00:01", "     Copy CRC 11111111",
+                                   "     Accurately ripped (confidence 9)  [22222222]"),
+                          *section(2, "     Copy CRC 33333333", "     Accurately ripped (confidence 9)  [44444444]"), ""]))
+    check(r.all_ok and all(t.ok for t in r.tracks), f"a per-track rip whose read errors all matched: {r}")
+    image = ["     Track |   Start  |  Length  | Start sector | End sector ",
+             "        1  |  0:00.00 |  1:00.00 |         0    |     4499   ",
+             "", "Range status and errors", "", "     Suspicious position 0:00:10", "", "     Copy CRC 7C041490",
+             "     Copy OK", "", "AccurateRip summary", "",
+             "Track  1  accurately ripped (confidence 144)  [6872D822]", ""]
+    r = read("\r\n".join(image))
+    check(r.all_ok and [(t.ok, t.detail) for t in r.tracks] == [(True, "accurately ripped")],
+          f"an image rip whose read errors all matched: {r}")
+    r = read("\r\n".join(image[2:]))
+    check(not r.all_ok, f"a read error no table of contents can place still counts against the rip: {r}")
+
+    # [SPEC-RIP-121]: which log is whose, in the shapes the hub's folders hold.
+    print("choose_log: a file takes its own disc's log, or none")
+    disc = lambda n: f"A - B (Disc {n}).log"                                # noqa: E731
+    two = [disc(1), disc(2), "A - B (Disc 1).cue", "folder.jpg"]
+    check(cd_toc.choose_log(two, "A - B (Disc 2).mp3") == disc(2), "an image file, by its stem")
+    check(cd_toc.choose_log(two, "A - B (Disc 1).cue") == disc(1), "a sheet, by its stem")
+    check(cd_toc.choose_log(two, "2-12. The Tide.mp3") == disc(2), "a track file, by its disc")
+    check(cd_toc.choose_log(two, "3-01. Elsewhere.mp3") is None, "a disc with no log in the folder has none")
+    check(cd_toc.choose_log(two, "01. Song.mp3") is None, "a file saying no disc is not guessed at")
+    check(cd_toc.choose_log(two) is None, "nor is no file at all")
+    check(cd_toc.choose_log(["W - M.log", "W - M(Disc 2).log"], "W - M.mp3") == "W - M.log",
+          "the first disc of a set named no disc, by its stem")
+    check(cd_toc.choose_log(["W - M(Disc 2).log", "W - M.log"], "W - M(Disc 2).mp3") == "W - M(Disc 2).log",
+          "and the second beside it, whatever the order")
+    check(cd_toc.choose_log([disc(1)], "01. Song.mp3") == disc(1), "a lone log, the file saying no disc")
+    check(cd_toc.choose_log([disc(1)]) == disc(1), "a lone log, no file named")
+    check(cd_toc.choose_log([disc(1)], "2-01. Song.mp3") is None, "a lone log of another disc is still another disc's")
+    check(cd_toc.choose_log(["x.cue"], "x.mp3") is None, "no log")
+    check(cd_toc.choose_log([disc(1), disc(2)], "1-800-273.mp3") is None, "a title that looks like a number names no disc")
 
     # [SPEC-CDI-090]: a tracks-mode sheet. Gaps appended -- track 2's TRACK
     # line and INDEX 00 at the end of track 1's file, its INDEX 01 in its own

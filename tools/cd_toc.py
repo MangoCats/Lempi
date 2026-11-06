@@ -336,11 +336,14 @@ _LOG_ACCURATERIP = re.compile(
     r'^[ \t]*Track[ \t]+(\d+)[ \t]+([A-Za-z][A-Za-z ]*?)[ \t]*(?:[(\[,].*?)?\r?$', re.MULTILINE)
 # Outcomes that are not evidence of a bad read. "Not present" is no comparison
 # at all -- a rare pressing -- and is judged by the copy's own checks instead.
-_LOG_AR_FINE = ("accurately ripped", "not present in accuraterip database")
+_LOG_AR_MATCHED = "accurately ripped"
+_LOG_AR_FINE = (_LOG_AR_MATCHED, "not present in accuraterip database")
 # A read the drive could not make cleanly, in an image rip's "Range status"
 # section: `Suspicious position 0:37:37 - 0:37:38`, times from the start of
 # the disc. Mapped to tracks through the log's own table of contents, since
-# AccurateRip alone can miss a track it has no entry for.
+# AccurateRip alone can miss a track it has no entry for -- and forgiven where
+# AccurateRip matched: the audio is what other people's rips hold, whatever
+# the drive said on the way `[SPEC-RIP-120]`.
 _LOG_SUSPICIOUS = re.compile(
     r'Suspicious position[ \t]+(\d+):(\d+):(\d+)(?:[ \t]*-[ \t]*(\d+):(\d+):(\d+))?', re.IGNORECASE)
 _LOG_COPY_OK = re.compile(r'Copy\s+OK', re.IGNORECASE)
@@ -348,7 +351,40 @@ _LOG_COPY_OK = re.compile(r'Copy\s+OK', re.IGNORECASE)
 # own all-clear line -- contains "error" as a substring and would otherwise
 # read as a failure it explicitly is not. The word boundary after "Error"
 # also excludes "Errors" from a bare match, for the same reason.
-_LOG_COPY_ERR = re.compile(r'(?:Copy CRC.*differ|\bError\b|Suspicious position)', re.IGNORECASE)
+_LOG_COPY_ERR = re.compile(r'(?:Copy CRC.*differ|\bError\b)', re.IGNORECASE)
+# A disc as a file names it: CUERipper's `... (Disc 2)`, or a track file `2-01. Title`.
+_NAME_DISC_WORD = re.compile(r'\((?:Disc|CD)\s*(\d+)\)\s*$', re.IGNORECASE)
+_NAME_DISC_TRACK = re.compile(r'^(\d{1,2})-\d{2,3}\.\s')
+
+
+def _disc_in_name(name: str) -> int | None:
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    m = _NAME_DISC_WORD.search(stem) or _NAME_DISC_TRACK.match(name)
+    return int(m.group(1)) if m else None
+
+
+def choose_log(names: list[str], name: str | None = None) -> str | None:
+    """Which of a folder's `names` is the log of the file or sheet called `name`
+    `[SPEC-RIP-121]`: the one with its stem, else the one naming its disc. A
+    lone log is taken unless it names another disc. Otherwise `None`, however
+    many there are: a set's discs share a folder, and a disc can have no log
+    in it at all. Another disc's log is not a nearer answer than none. It marked
+    good tracks damaged, and a damaged track good, until 2026-11-05."""
+    logs = sorted(n for n in names if n.lower().endswith(".log"))
+    if len(logs) == 1 and name is None:
+        return logs[0]
+    if not logs or name is None:
+        return None
+    stem = name.rsplit(".", 1)[0].lower()
+    exact = [n for n in logs if n.rsplit(".", 1)[0].lower() == stem]
+    if exact:
+        return exact[0]
+    disc = _disc_in_name(name)
+    if len(logs) == 1:
+        other = _disc_in_name(logs[0])
+        return None if disc is not None and other is not None and other != disc else logs[0]
+    same = [n for n in logs if disc is not None and _disc_in_name(n) == disc]
+    return same[0] if len(same) == 1 else None
 
 
 def parse_eac_log(path: str) -> RipReport:
@@ -373,13 +409,14 @@ def parse_eac_log(path: str) -> RipReport:
             verdicts[n] = (ok, words)
     for n, where in _suspicious_by_track(text).items():
         ok, words = verdicts.get(n, (True, ""))
-        verdicts[n] = (False, f"read errors at {where}" + (f"; {words}" if words else ""))
+        if words.lower() != _LOG_AR_MATCHED:
+            verdicts[n] = (False, f"read errors at {where}" + (f"; {words}" if words else ""))
     # A track AccurateRip never mentions (no DB entry, or the plugin was
     # absent) is judged by "Copy OK" elsewhere in its own range instead --
     # best effort, never silent `[SPEC-RIP-054]`. This module does not
     # attempt to slice the log into per-track ranges for that fallback; the
     # orchestrator applies it only for tracks AccurateRip stayed silent on.
-    all_ok = _LOG_COPY_ERR.search(text) is None and bool(_LOG_COPY_OK.search(text))
+    all_ok = _LOG_COPY_ERR.search(text) is None and bool(_LOG_COPY_OK.search(text)) and _read_errors_on_tracks(text)
     tracks = [TrackRipReport(number=n, ok=ok, detail=detail)
               for n, (ok, detail) in sorted(verdicts.items())]
     return RipReport(tracks=tracks, all_ok=all_ok and all(t.ok for t in tracks))
@@ -435,6 +472,19 @@ _LOG_TRACK_HEAD = re.compile(r'^[ \t]*Track[ \t]+(\d+)[ \t]*\r?$', re.MULTILINE)
 _LOG_CRC_LINE = re.compile(r'^(?:Test|Copy) CRC\b', re.IGNORECASE)
 
 
+def _read_errors_on_tracks(text: str) -> bool:
+    """Whether every read error in the log could be laid on a track, so that a
+    track's verdict has answered for it. One that could not -- an image log with
+    no table of contents -- still counts against the rip as a whole."""
+    first = _LOG_SUSPICIOUS.search(text)
+    if first is None:
+        return True
+    if "Range status" in text:
+        return any(_LOG_TOC_ROW.match(line) for line in text.splitlines())
+    head = _LOG_TRACK_HEAD.search(text)
+    return head is not None and head.start() < first.start()
+
+
 def _per_track_verdicts(text: str) -> dict[int, tuple[bool, str]]:
     """A tracks-mode rip's verdicts, read from each track's own section `[SPEC-RIP-119]`:
 
@@ -448,12 +498,12 @@ def _per_track_verdicts(text: str) -> dict[int, tuple[bool, str]]:
 
     Its AccurateRip word is whatever stands between the CRC and `Copy OK`, so a
     phrasing nobody has seen reads as a failure rather than vanishing, as in
-    `_LOG_ACCURATERIP`. Read errors mark the track even when AccurateRip matched,
-    as `_suspicious_by_track` does for an image rip. A section with no `Copy OK`
-    did not finish. Only indented lines count: the last section runs on into the
-    report's closing lines, which are not.
+    `_LOG_ACCURATERIP`. Read errors mark the track unless AccurateRip matched
+    `[SPEC-RIP-120]`, as for an image rip. A section with no `Copy OK` did not
+    finish. Only indented lines count: the last section runs on into the report's
+    closing lines, which are not.
 
-    Nothing read these until 2026-11-05: 36 logs on the hub, 17 damaged tracks
+    Nothing read these until 2026-11-05: 36 logs on the hub, 14 damaged tracks
     among their 530 recorded as nothing, and every clean track ranked as having
     no log `[SPEC-RIP-119]`."""
     heads = list(_LOG_TRACK_HEAD.finditer(text))
@@ -470,7 +520,7 @@ def _per_track_verdicts(text: str) -> dict[int, tuple[bool, str]]:
             where.append(f"{m.group(1)}:{m.group(2)}:{m.group(3)}"
                          + (f"-{m.group(4)}:{m.group(5)}:{m.group(6)}" if m.group(4) else ""))
         word = "; ".join(words)
-        if where:
+        if where and not (words and all(w.lower() == _LOG_AR_MATCHED for w in words)):
             out[int(head.group(1))] = (False, f"read errors at {', '.join(where)}" + (f"; {word}" if word else ""))
         elif not any(_LOG_COPY_OK.fullmatch(line) for line in lines):
             out[int(head.group(1))] = (False, word or "the copy did not finish")

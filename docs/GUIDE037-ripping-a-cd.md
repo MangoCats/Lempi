@@ -81,11 +81,13 @@ twice and compares, so it takes about twice as long.
 
 Open Vipunen's **import** page. The rip appears as a card on its own, and says:
 
-- **Every track accurately ripped** -- matched other people's rips exactly.
+- **Every track accurately ripped** -- matched other people's rips exactly. That
+  holds even if the drive reported read errors on the way: the audio matched
+  anyway.
 - **Ripped; not in AccurateRip's database** -- read cleanly, but there is
   nothing to compare with. Usually fine.
-- **Track N had read errors** -- clean the disc and rip it again with *Test &
-  Copy*. You can still add it; it is marked as a degraded rip.
+- **Track N had read errors or did not match** -- clean the disc and rip it again
+  with *Test & Copy*. You can still add it; it is marked as a degraded rip.
 
 Open the card: Vipunen shows the album -- artist, title, year and track list.
 If MusicBrainz knows several editions, pick yours. Check the folder name it

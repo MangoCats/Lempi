@@ -1119,6 +1119,19 @@ def test_tracks_end_to_end():
         check([r["keep"] for r in ingest_cd.merge_plan(e, toc3, None, keep_earlier=frozenset())]
               == ["dao", "dao", "dao"], "a person's 'none' is every track from this rip [SPEC-AGN-035]")
 
+        # [SPEC-RIP-121]: a set's discs share a folder, and an earlier rip is
+        # ranked by its own disc's log, not whichever sorts first.
+        shared = tempfile.mkdtemp()
+        for disc, word in ((1, "cannot be verified as accurate"), (2, "accurately ripped")):
+            with open(os.path.join(shared, f"S - T (Disc {disc}).log"), "w", encoding="utf-8") as f:
+                f.write(f"Track  1  {word}\n")
+        one = cd_toc.DiscToc(tracks=[cd_toc.TocTrack(1, 0, 1000, 0, 74, file="a.wav")], leadout_sector=75)
+        said = lambda name: ingest_cd.merge_plan(                               # noqa: E731
+            {"folder": shared, "by_track": {"1": {"path": os.path.join(shared, name)}}}, one, None)[0]["earlier_said"]
+        check(said("2-01. Two.mp3") == "accurately ripped", f"disc 2's file, by disc 2's log: {said('2-01. Two.mp3')}")
+        check(said("1-01. One.mp3") == "ripped damaged", f"disc 1's file, by disc 1's: {said('1-01. One.mp3')}")
+        check(said("3-01. Three.mp3") == "no log", f"a disc with no log has none: {said('3-01. Three.mp3')}")
+
         r3 = ingest_cd.do_ingest(db, dao, commit=True, release="rel-T", into=home, keep_flac=False)
         m = r3.get("merge") or {}
         check(m.get("kept") == [1] and m.get("retired") == ["02. Two.mp3"]

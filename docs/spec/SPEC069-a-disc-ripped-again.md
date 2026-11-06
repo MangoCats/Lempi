@@ -58,10 +58,10 @@ word on each track:
 
 | rank | the log says | |
 | ---: | :--- | :--- |
-| 1 | accurately ripped (AccurateRip, or CTDB) | perfect |
+| 1 | accurately ripped (AccurateRip, or CTDB), read errors or not `[SPEC-RIP-120]` | perfect |
 | 2 | read cleanly, not in AccurateRip's database | |
-| 3 | no log | unverified `[SPEC-CDI-094]` |
-| 4 | read errors, or cannot be verified | held `[SPEC-HOLD-030]` |
+| 3 | no log of its own disc `[SPEC-RIP-121]` | unverified `[SPEC-CDI-094]` |
+| 4 | read errors with no match, or cannot be verified | held `[SPEC-HOLD-030]` |
 | 5 | not ripped | missing |
 
 A tie goes to the DAO, for the disc. A copy that wins on rank 4 is still held,

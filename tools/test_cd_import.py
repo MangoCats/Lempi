@@ -157,6 +157,8 @@ CUE = ('PERFORMER "Artist"\nTITLE "Album"\nFILE "{stem}.wav" WAVE\n'
 LOG_OK = "Copy OK\n\nNo errors occurred\n\nTrack  1  accurately ripped (confidence 5)\nTrack  2  accurately ripped (confidence 5)\n"
 LOG_UNSEEN = "Copy OK\n\nNo errors occurred\n\nTrack  1  not present in AccurateRip database\nTrack  2  not present in AccurateRip database\n"
 LOG_BAD = "Copy OK\n\nNo errors occurred\n\nTrack  1  accurately ripped (confidence 5)\nTrack  2  not ripped accurately (confidence 2)\n"
+LOG_MATCHED = ("Track  1\n\n     Suspicious position 0:00:01\n     Copy CRC 11111111\n     Accurately ripped (confidence 5)  [A]\n"
+               "     Copy OK\n\nTrack  2\n\n     Copy CRC 22222222\n     Accurately ripped (confidence 5)  [B]\n     Copy OK\n")
 
 
 def rip(folder, stem, log=None, audio=True, age=600):
@@ -179,6 +181,7 @@ def test_scan():
     rip(root, "Clean", LOG_OK)
     rip(root, "Rare", LOG_UNSEEN)
     rip(root, "Bad", LOG_BAD)
+    rip(root, "Matched", LOG_MATCHED)
     rip(root, "Writing", age=5)
     rip(root, "NoLog", age=600)
     rip(root, "Started", audio=False)
@@ -192,6 +195,8 @@ def test_scan():
           f"a rare pressing is fine, and says why: {cards['Rare.cue']}")
     check(level("Bad.cue") == "bad" and "Track 2" in cards["Bad.cue"]["verdict"]["text"],
           f"a mismatch is bad, named: {cards['Bad.cue']}")
+    check(level("Matched.cue") == "ok" and "accurately" in cards["Matched.cue"]["verdict"]["text"],
+          f"read errors AccurateRip matched are a good rip [SPEC-RIP-120]: {cards['Matched.cue']}")
     check(cards["Writing.cue"]["state"] == "ripping", "an audio file still moving, with no log: still ripping")
     check(cards["NoLog.cue"]["state"] == "finished" and level("NoLog.cue") == "note",
           "a settled rip with no log: finished, and it says to turn the report on")

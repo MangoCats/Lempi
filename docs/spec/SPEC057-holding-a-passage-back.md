@@ -49,6 +49,10 @@ damaged track not yet decided -- a dry run unless `--commit`. Run on the desk
 library 2026-10-01: the eight radio passages first, their eight album
 passages once the album rule was decided the same day.
 
+A track AccurateRip matched is not damaged, whatever its read errors
+`[SPEC-RIP-120]`. The five held for that alone were released 2026-11-05, as the
+maintainer's decision, and so are empty: `--damaged` will not hold them again.
+
 **`[SPEC-HOLD-040]` A person holds or releases any radio passage from its
 page.** The Vipunen console's passage page shows whether the Director may pick
 it, the reason when it is held, and one button either way -- with an optional

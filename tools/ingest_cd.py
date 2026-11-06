@@ -108,9 +108,11 @@ def find_rip(folder: str) -> tuple[str, str]:
         f"no .cue (EAC) or .toc (cdrdao) file found in {folder!r}")
 
 
-def find_log(folder: str) -> str | None:
-    logs = [f for f in os.listdir(folder) if f.lower().endswith(".log")]
-    return os.path.join(folder, logs[0]) if logs else None
+def find_log(folder: str, name: str | None = None) -> str | None:
+    """The log of the sheet or file called `name` in `folder`, if it has one
+    there `[SPEC-RIP-121]`."""
+    log = cd_toc.choose_log(os.listdir(folder), name)
+    return os.path.join(folder, log) if log else None
 
 
 # ------------------------------------------------------------------- encode
@@ -1188,7 +1190,9 @@ def merge_plan(earlier: dict, toc: cd_toc.DiscToc, report, keep_earlier=None) ->
             raise ValueError(f"the earlier rip has no file for track {', '.join(map(str, stray))}, "
                              "so it cannot be kept -- nothing was encoded or moved")
     folder = earlier.get("folder")
-    log = find_log(folder) if folder and os.path.isdir(folder) else None
+    # A set's discs share a folder: the log is the one for this disc's files.
+    one = os.path.basename(next(iter(by.values()))["path"]) if by else None
+    log = find_log(folder, one) if folder and os.path.isdir(folder) else None
     before = cd_toc.parse_eac_log(log) if log else None
     damaged = set(earlier.get("damaged") or [])
     span = {t.number: t.end_ms - t.start_ms for t in toc.tracks
@@ -1858,7 +1862,7 @@ def open_rip(folder: str):
     if not total_ms:
         raise ValueError(f"could not decode {wav_path!r}")
     cd_toc.finalize_leadout(toc, int(round(total_ms)))
-    log_path = find_log(folder)
+    log_path = find_log(folder, os.path.basename(toc_path))
     rip_report = cd_toc.parse_eac_log(log_path) if fmt == "eac" and log_path else None
     return fmt, toc_path, toc, wav_path, rip_report
 
@@ -1887,7 +1891,7 @@ def open_tracks(folder: str) -> dict:
     end where the audio ends; nothing is encoded or written."""
     _fmt, cue = find_rip(folder)
     toc = cd_toc.parse_eac_cue(cue)
-    log = find_log(folder)
+    log = find_log(folder, os.path.basename(cue))
     present, missing = [], []
     for t in toc.tracks:
         path = os.path.join(folder, t.file or "")
