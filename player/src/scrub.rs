@@ -40,7 +40,7 @@
 //! beside it -- the two together, as in both freezes. On a shared radio it
 //! now waits while any hold is in force, the same way it waits for the music.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Mutex, OnceLock};
@@ -245,6 +245,13 @@ pub fn rate(listener: &Connection) -> u64 {
 /// catalogue's, which an import or a sync holds for longer than any wait is
 /// worth. So a catalogue that stays busy costs the count -- `files` null,
 /// `files_note` saying why -- and never the findings.
+///
+/// Only the catalogue's files are reported: a check outlives a file retired
+/// from it, and nothing reads that file again. Five such rows kept
+/// `teacherslounge` reading *6 not whole* and `status` STALE, and retired rows
+/// had `bose` at *6762 of 6751 read back*, 2026-11-05 `[GDE-INT-146]`. A busy
+/// catalogue cannot say which rows those are, so then every finding is
+/// reported, the safe way to be wrong.
 pub fn summary(listener: &Path, library: &Path) -> Result<serde_json::Value, String> {
     summary_waiting(listener, library, BUSY)
 }
@@ -255,11 +262,14 @@ fn summary_waiting(listener: &Path, library: &Path, busy: Duration) -> Result<se
     l.busy_timeout(busy).map_err(e)?;
     let counted = Connection::open_with_flags(library, OpenFlags::SQLITE_OPEN_READ_ONLY).and_then(|b| {
         b.busy_timeout(busy)?;
-        b.query_row("SELECT COUNT(*) FROM files WHERE sha256 IS NOT NULL AND sha256 <> ''", [], |r| r.get::<_, i64>(0))
+        let n = b.query_row("SELECT COUNT(*) FROM files WHERE sha256 IS NOT NULL AND sha256 <> ''", [], |r| r.get::<_, i64>(0))?;
+        let mut st = b.prepare("SELECT audio_md5 FROM files")?;
+        let held = st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<HashSet<String>>>()?;
+        Ok((n, held))
     });
-    let (files, files_note) = match counted {
-        Ok(n) => (Some(n), None),
-        Err(err) => (None, Some(format!("the catalogue could not be counted: {err}"))),
+    let (files, files_note, held) = match counted {
+        Ok((n, held)) => (Some(n), None, Some(held)),
+        Err(err) => (None, Some(format!("the catalogue could not be counted: {err}")), None),
     };
     let has = l
         .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='file_checks'", [], |_| Ok(()))
@@ -275,29 +285,34 @@ fn summary_waiting(listener: &Path, library: &Path, busy: Duration) -> Result<se
                                      "not_ok": [], "oldest": null, "rate_kib_per_s": rate(&l) / 1024,
                                      "untagged": untagged}));
     }
-    let mut counts = serde_json::Map::new();
-    {
-        let mut st = l.prepare("SELECT outcome, COUNT(*) FROM file_checks GROUP BY outcome").map_err(e)?;
-        for r in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))).map_err(e)? {
-            let (o, n) = r.map_err(e)?;
-            counts.insert(o, n.into());
+    let mut counts: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+    let mut checked: i64 = 0;
+    let mut oldest: Option<String> = None;
+    let mut not_ok: Vec<serde_json::Value> = Vec::new();
+    let mut st = l
+        .prepare("SELECT audio_md5, path, outcome, checked_at, detail FROM file_checks ORDER BY outcome, path")
+        .map_err(e)?;
+    let rows = st
+        .query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?))
+        })
+        .map_err(e)?;
+    for row in rows {
+        let (md5, path, outcome, at, detail) = row.map_err(e)?;
+        if held.as_ref().is_some_and(|h| !h.contains(&md5)) {
+            continue;
+        }
+        checked += 1;
+        *counts.entry(outcome.clone()).or_default() += 1;
+        if oldest.as_ref().is_none_or(|o| at < *o) {
+            oldest = Some(at.clone());
+        }
+        if outcome != "ok" {
+            not_ok.push(serde_json::json!({"audio_md5": md5, "path": path, "outcome": outcome,
+                                           "checked_at": at, "detail": detail}));
         }
     }
-    let checked: i64 = l.query_row("SELECT COUNT(*) FROM file_checks", [], |r| r.get(0)).map_err(e)?;
-    let oldest: Option<String> = l.query_row("SELECT MIN(checked_at) FROM file_checks", [], |r| r.get(0)).map_err(e)?;
-    let mut st = l
-        .prepare("SELECT audio_md5, path, outcome, checked_at, detail FROM file_checks WHERE outcome <> 'ok' \
-                  ORDER BY outcome, path")
-        .map_err(e)?;
-    let not_ok: Vec<serde_json::Value> = st
-        .query_map([], |r| {
-            Ok(serde_json::json!({"audio_md5": r.get::<_, String>(0)?, "path": r.get::<_, Option<String>>(1)?,
-                                  "outcome": r.get::<_, String>(2)?, "checked_at": r.get::<_, String>(3)?,
-                                  "detail": r.get::<_, Option<String>>(4)?}))
-        })
-        .map_err(e)?
-        .collect::<rusqlite::Result<_>>()
-        .map_err(e)?;
     Ok(serde_json::json!({"files": files, "files_note": files_note, "checked": checked, "counts": counts,
                           "not_ok": not_ok, "oldest": oldest, "rate_kib_per_s": rate(&l) / 1024,
                           "untagged": untagged}))
@@ -600,6 +615,51 @@ mod tests {
         let free = summary(&lp, &bp).unwrap();
         assert_eq!(free["files"], serde_json::json!(1));
         assert_eq!(free["files_note"], serde_json::Value::Null);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// `[GDE-INT-146]`: a check outlives a file retired from the catalogue, and
+    /// nothing reads that file again, so it is not reported: not as a finding,
+    /// which would hold `status` STALE for ever, and not in the counts, which
+    /// read *6762 of 6751*. A file still in it is, however it fared.
+    #[test]
+    fn a_file_retired_from_the_catalogue_is_not_reported() {
+        let d = std::env::temp_dir().join(format!("lempi-scrub-retired-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let (lp, bp) = (d.join("listener.db"), d.join("library.db"));
+        for f in [&lp, &bp] {
+            let _ = std::fs::remove_file(f);
+        }
+        let l = Connection::open(&lp).unwrap();
+        l.execute_batch(lempi_core::db::FILE_CHECKS_TABLE).unwrap();
+        l.execute_batch("CREATE TABLE player_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT);")
+            .unwrap();
+        for (m, at, o) in [("kept-ok", "2026-11-05T00:00:00Z", "ok"), ("kept-bad", "2026-11-04T00:00:00Z", "damaged"),
+                           ("gone-bad", "2026-11-01T00:00:00Z", "missing"), ("gone-ok", "2026-10-01T00:00:00Z", "ok")] {
+            l.execute("INSERT INTO file_checks (audio_md5, checked_at, outcome, path) VALUES (?1, ?2, ?3, ?1)", [m, at, o])
+                .unwrap();
+        }
+        drop(l);
+        let b = Connection::open(&bp).unwrap();
+        b.execute_batch("CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT, path TEXT, sha256 TEXT);\
+                         INSERT INTO files VALUES (1, 'kept-ok', 'p', 's'), (2, 'kept-bad', 'q', 't');")
+            .unwrap();
+        drop(b);
+        let s = summary(&lp, &bp).unwrap();
+        assert_eq!(s["files"], serde_json::json!(2));
+        assert_eq!(s["checked"], serde_json::json!(2), "not more read back than there are files");
+        assert_eq!(s["counts"], serde_json::json!({"ok": 1, "damaged": 1}));
+        assert_eq!(s["oldest"], "2026-11-04T00:00:00Z", "the oldest read of a file still held");
+        let names: Vec<&str> = s["not_ok"].as_array().unwrap().iter().map(|x| x["audio_md5"].as_str().unwrap()).collect();
+        assert_eq!(names, ["kept-bad"], "a retired file's finding is gone, a real one is not");
+        // A catalogue that cannot be read cannot say which are retired: all of it, the safe way to be wrong.
+        let w = Connection::open(&bp).unwrap();
+        w.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+        let busy = summary_waiting(&lp, &bp, Duration::from_millis(50)).expect("a report, not an error");
+        w.execute_batch("ROLLBACK;").unwrap();
+        assert_eq!(busy["checked"], serde_json::json!(4));
+        assert_eq!(busy["not_ok"].as_array().unwrap().len(), 2, "every finding, when it cannot tell");
+        drop(w);
         let _ = std::fs::remove_dir_all(&d);
     }
 

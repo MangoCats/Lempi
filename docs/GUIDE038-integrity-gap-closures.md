@@ -162,6 +162,16 @@ a pass in 30 days. A build that does not report is said, not stale: through a
 rollout most nodes run one, and a nightly alarm for that would teach the
 alarm to be ignored.
 
+**`[GDE-INT-146]` Only the catalogue's files are reported.** A check outlives a
+file retired from the catalogue, and nothing reads that file again, so its
+finding could never clear: on 2026-11-05 five retired files kept
+`teacherslounge` at *6 not whole* and `status` STALE, and retired rows had `bose`
+at *6762 of 6751 read back*. The report now leaves those rows out of its findings,
+its counts and its oldest read. A catalogue too busy to read cannot say which
+they are, so then everything is reported. `next_due` and the Director already
+looked only at the catalogue's files. The old rows stay in `file_checks`: a file
+that comes back is read again within the hour.
+
 *Since 2026-10-25* a report that cannot be read says so, as
 `{"error": ...}`, and is stale -- the hub does not know -- rather than
 passing for a build that does not report, which a node holding damaged files
