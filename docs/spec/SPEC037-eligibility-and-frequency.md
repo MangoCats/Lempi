@@ -163,7 +163,7 @@ Tuned medians sit close to the defaults, which is evidence the defaults are well
 w *= 1 + characteristic_value × (curve(today) − 1)
 ```
 
-So `user.christmas.christmasy = 0.9` on 21 December with a curve value of 4.2 yields ×3.9; the same passage in June yields ≈×1. This keeps MuLibPlay's proven seasonal behaviour `[GDE-PD-020]` while removing the hardcoded `[C]`/`[W]`/`[S]`/`[K]` tags, and — critically — stays **legible as a single term** in the Why-this-passage panel. Folding seasonality into the programme target vector was rejected for exactly that reason.
+So `user.christmas.christmasy = 0.9` on 21 December, with the curve at ×2.73, yields ×2.56; the same passage in June, with the curve at ×0.000001, yields ×0.10. This keeps MuLibPlay's proven seasonal behaviour `[GDE-PD-020]` while removing the hardcoded `[C]`/`[W]`/`[S]`/`[K]` tags, and — critically — stays **legible as a single term** in the Why-this-passage panel. Folding seasonality into the programme target vector was rejected for exactly that reason.
 
 Curves are data, not code: a new occasion is a new characteristic plus a curve, with no edit to the engine.
 
