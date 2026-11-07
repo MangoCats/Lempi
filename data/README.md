@@ -123,6 +123,17 @@ from 2026-11-03 to 2026-11-05 had been filed in a folder named `~` in the
 repository; they and their `files.path` rows now name the music folder. The
 catalogue as it was before is in `backups/pre-tilde-move-20261105/library.db`.
 
+**2026-11-06: 358 passages on 179 tracks retimed in the primary** `[SPEC-SA-112]`.
+Each had stopped with loud music still to come. `tools/repair_passage_ends.py
+--only cut` moved them; each change and what it replaced is in `ingest_decisions`,
+stage `passage_ends`. The catalogue as it was before is in
+`backups/pre-passage-ends-20261106/library.db`.
+
+**2026-11-07: 67 more on 39 tracks**, each stopped partway through its fade, by
+`--only fade` at the maintainer's word, making 425 passages on 218 tracks. The
+catalogue as it was before is in `backups/pre-fade-ends-20261107/library.db`.
+Both runs are on this pair only: no node has them until a star sync carries them.
+
 `flavor.db`, `flavor-sample.db`, `sample-library.db` and
 `sample-library.console.db` are fixtures and extraction data, not copies of
 the live pair.

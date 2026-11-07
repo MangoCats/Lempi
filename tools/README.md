@@ -32,6 +32,7 @@ Bringing audio into the library and keeping its schema current.
 | `backfill_album_cuts.py` | Give an old radio-only passage the album twin it never got `[SPEC-SA-110]`. |
 | `backfill_file_tags.py` | Re-read tags for a file whose `file_tags` row came back entirely empty. |
 | `repair_durations.py` | Repair `files.duration_ms` from the decoded length `[REQ-LIB-145]`. |
+| `repair_passage_ends.py` | Repair a passage that stops before the music does: radio ends where the fade gets quiet, album reaches the file's edge or its neighbour `[SPEC-SA-112]`. A rehearsal unless told `--write`. |
 | `audio_duration.py` | A file's real, decoded duration — never a header/bitrate estimate. |
 | `add_fade_columns.py` | Schema migration: add the fade columns to `passages` `[SPEC-SUI-226]`. |
 | `rename_recording_time_scale.py` | Schema migration: rename a `listener_settings` column. |
