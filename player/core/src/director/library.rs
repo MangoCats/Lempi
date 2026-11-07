@@ -1559,7 +1559,7 @@ mod tests {
         let c = QualifyingConn::wrap_unsplit(Connection::open_in_memory().unwrap());
         c.execute_batch(
             "CREATE TABLE files (file_id INTEGER PRIMARY KEY, path TEXT NOT NULL,
-                                 duration_ms INTEGER);
+                                 duration_ms INTEGER, audio_md5 TEXT);
              CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL,
                  kind TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
                  lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL);
@@ -1579,7 +1579,7 @@ mod tests {
                  month INTEGER, day INTEGER, multiplier REAL);
              CREATE TABLE flavor (subject_kind TEXT, subject_id TEXT, characteristic TEXT,
                  class TEXT, value REAL, source TEXT, accuracy REAL);
-             INSERT INTO files VALUES (1, '/m/a.mp3', 600000);
+             INSERT INTO files (file_id, path, duration_ms) VALUES (1, '/m/a.mp3', 600000);
              -- three 180 s radio passages, one album passage that must never appear
              INSERT INTO passages VALUES (1,1,'radio',0,180000,0,0,0.0);
              INSERT INTO passages VALUES (2,1,'radio',0,180000,0,0,0.0);
@@ -1714,8 +1714,7 @@ mod tests {
     fn a_passage_whose_file_failed_its_check_is_never_chosen() {
         let c = fixture();
         c.execute_batch(&format!(
-            "ALTER TABLE files ADD COLUMN audio_md5 TEXT;
-             UPDATE files SET audio_md5 = 'whole' WHERE file_id = 1;
+            "UPDATE files SET audio_md5 = 'whole' WHERE file_id = 1;
              INSERT INTO files (file_id, path, duration_ms, audio_md5) VALUES (2, '/m/b.mp3', 600000, 'rot'),
                                                                           (3, '/m/c.mp3', 600000, 'tags');
              UPDATE passages SET file_id = 2 WHERE passage_id = 2;
@@ -1825,7 +1824,7 @@ mod tests {
     fn with_tags(c: &QualifyingConn) {
         c.execute_batch(
             "CREATE TABLE file_tags (file_id INTEGER PRIMARY KEY, artist TEXT);
-             INSERT INTO files VALUES (2, '/m/b.mp3', 600000), (3, '/m/c.mp3', 600000),
+             INSERT INTO files (file_id, path, duration_ms) VALUES (2, '/m/b.mp3', 600000), (3, '/m/c.mp3', 600000),
                                       (4, '/m/d.mp3', 600000);
              INSERT INTO passages (passage_id, file_id, kind, start_ms, end_ms, lead_in_ms,
                                    lead_out_ms, gain_db)

@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use rusqlite::OpenFlags;
 
-use crate::queue::{Naming, QueueEntry};
+use crate::queue::{Naming, PassageIdentity, QueueEntry};
 
 use super::{BUSY_WAIT, DbError, QualifyingConn, TAG_TABLE};
 
@@ -69,7 +69,7 @@ pub(crate) const COLS: &str = "p.passage_id, f.path, p.start_ms, p.end_ms, f.dur
                                (SELECT pr.mbid FROM __LIB__.passage_recordings pr \
                                 WHERE pr.passage_id = p.passage_id \
                                 ORDER BY pr.weight DESC, pr.mbid LIMIT 1), \
-                               __FILES_GAPLESS__";
+                               __FILES_GAPLESS__, f.audio_md5, p.kind";
 pub(crate) const FROM: &str = "FROM __LIB__.passages p JOIN __LIB__.files f USING (file_id)";
 
 pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEntry> {
@@ -113,6 +113,16 @@ pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEnt
         // real provenance event to report `[REQ-VIS-300]`.
         selected_by: None,
         is_shutdown: false,
+        // `NOT NULL` in the schema `[SPEC-SC-030]`, read as optional so a row
+        // that somehow lacks it costs a follower's lookup and not the whole load.
+        identity: row.get::<_, Option<String>>(14)?.map(|audio_md5| {
+            Ok::<_, rusqlite::Error>(PassageIdentity {
+                audio_md5,
+                kind: row.get(15)?,
+                start_ms: row.get::<_, i64>(2)? as u64,
+                end_ms: row.get::<_, i64>(3)? as u64,
+            })
+        }).transpose()?,
     })
 }
 
@@ -200,6 +210,28 @@ impl Library {
             .map_err(|e| DbError::Query(e.to_string()))
     }
 
+    /// This catalogue's own number for a passage another node named
+    /// `[SPEC-UID-010]`, or `None` where it holds no such passage.
+    ///
+    /// The file, kind and start say which music it is. The end only breaks a
+    /// tie: a sync that has reached one node and not the other leaves the same
+    /// passage ending in two places, and that is still the same passage.
+    pub fn number_of(&self, id: &PassageIdentity) -> Result<Option<i64>, DbError> {
+        let found = self.conn.query_row(
+            &format!(
+                "SELECT p.passage_id {FROM} WHERE f.audio_md5 = ?1 AND p.kind = ?2 AND p.start_ms = ?3 \
+                 ORDER BY p.end_ms = ?4 DESC, p.passage_id LIMIT 1"
+            ),
+            rusqlite::params![id.audio_md5, id.kind, id.start_ms as i64, id.end_ms as i64],
+            |r| r.get::<_, i64>(0),
+        );
+        match found {
+            Ok(n) => Ok(Some(n)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(DbError::Query(e.to_string())),
+        }
+    }
+
     /// Radio passages in uniform random order, radio only per `[REQ-PD-120]`
     /// and nothing more: no holds, rejections, occasions or rotation. Not the
     /// session's fallback, which is [`Library::fallback_radio`]; a plain draw
@@ -283,7 +315,7 @@ impl Library {
             },
         };
         let rows: Vec<(QueueEntry, bool)> = stmt
-            .query_map([], |r| Ok((row_to_entry(r)?, r.get::<_, bool>(14)?)))
+            .query_map([], |r| Ok((row_to_entry(r)?, r.get::<_, bool>(16)?)))
             .map_err(q)?
             .collect::<rusqlite::Result<_>>()
             .map_err(q)?;

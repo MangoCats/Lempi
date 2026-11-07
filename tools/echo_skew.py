@@ -172,6 +172,7 @@ class Node:
     def __init__(self, host: str):
         self.host = host
         self.anchor: dict | None = None
+        self.identity: dict | None = None
         self.voided: str | None = None
         self.status: str = ""
         self.seen = 0
@@ -192,6 +193,15 @@ class Node:
         return at_anchor + (t_ns - a["heard_at"]) / 1e6
 
 
+def same_passage(a: Node, b: Node) -> bool:
+    """Whether two nodes are on the same music. Their numbers cannot say: each is
+    its own catalogue's [SPEC-DF-035], so the same song can differ and another song
+    can match [SPEC-UID-010]. A player too old to name its passage leaves only them."""
+    if a.identity and b.identity:
+        return all(a.identity[k] == b.identity[k] for k in ("audio_md5", "kind", "start_ms"))
+    return a.anchor["passage_id"] == b.anchor["passage_id"]
+
+
 async def follow(node: Node, stop: asyncio.Event) -> None:
     """Keep `node` current until told to stop. Reconnects; never raises."""
     while not stop.is_set():
@@ -202,6 +212,7 @@ async def follow(node: Node, stop: asyncio.Event) -> None:
                     snap = json.loads(raw)
                     echo = snap.get("echo") or {}
                     node.anchor = echo.get("anchor")
+                    node.identity = snap.get("identity")
                     node.voided = echo.get("voided_by")
                     node.status = (snap.get("echo_node") or {}).get("follow_status", "")
                     node.seen += 1
@@ -235,7 +246,7 @@ async def run(a: Node, b: Node, seconds: float, every: float, quiet: bool) -> in
                             why.append(f"{n.host} has no anchor"
                                        + (f" (voided by {n.voided})" if n.voided else ""))
                     print(f"{time.strftime('%H:%M:%S')}  -- {'; '.join(why)}", flush=True)
-            elif a.anchor["passage_id"] != b.anchor["passage_id"]:
+            elif not same_passage(a, b):
                 mismatched += 1
                 if not quiet:
                     print(f"{time.strftime('%H:%M:%S')}  -- different passages "

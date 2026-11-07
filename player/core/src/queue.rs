@@ -96,6 +96,21 @@ pub struct QueueEntry {
     /// Whether this entry is a scheduled appliance shutdown marker
     /// `[SPEC-QSD-030]`.
     pub is_shutdown: bool,
+    /// What this passage is on every node, where `passage_id` is only this
+    /// database's number for it `[SPEC-DF-035]`. `None` for an entry that was
+    /// not read from a catalogue.
+    pub identity: Option<PassageIdentity>,
+}
+
+/// A passage named by what it is rather than by a local number `[SPEC-NKP-030]`,
+/// which is what lets a node say what it is playing to a node that numbers its
+/// catalogue differently `[SPEC-UID-010]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct PassageIdentity {
+    pub audio_md5: String,
+    pub kind: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
 }
 
 /// Names from both sources, kept apart rather than merged on arrival.
@@ -267,6 +282,7 @@ impl QueueEntry {
             },
             selected_by: None,
             is_shutdown: true,
+            identity: None,
         }
     }
 }
@@ -707,6 +723,7 @@ mod tests {
             naming: Default::default(),
             selected_by: None,
             is_shutdown: false,
+            identity: None,
         }
     }
 

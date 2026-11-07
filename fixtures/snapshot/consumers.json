@@ -1,7 +1,10 @@
 {
   "echo-follower": [
     "echo",
+    "identity",
+    "passage_id",
     "queue",
+    "queue[].identity",
     "queue[].passage_id"
   ],
   "fbui": [

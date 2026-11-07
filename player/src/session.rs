@@ -1753,7 +1753,7 @@ mod tests {
         let c = rusqlite::Connection::open(&tmp).unwrap();
         c.execute_batch(
             "CREATE TABLE files (file_id INTEGER PRIMARY KEY, path TEXT NOT NULL,
-                                 duration_ms INTEGER);
+                                 duration_ms INTEGER, audio_md5 TEXT);
              CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL,
                  kind TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
                  lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL);
@@ -1773,7 +1773,7 @@ mod tests {
                  month INTEGER, day INTEGER, multiplier REAL);
              CREATE TABLE flavor (subject_kind TEXT, subject_id TEXT, characteristic TEXT,
                  class TEXT, value REAL, source TEXT, accuracy REAL);
-             INSERT INTO files VALUES (1, '/m/a.mp3', 600000);
+             INSERT INTO files (file_id, path, duration_ms) VALUES (1, '/m/a.mp3', 600000);
              -- three 180 s radio passages, one album passage that must never appear
              INSERT INTO passages VALUES (1,1,'radio',0,180000,0,0,0.0);
              INSERT INTO passages VALUES (2,1,'radio',0,180000,0,0,0.0);

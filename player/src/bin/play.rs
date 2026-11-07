@@ -51,6 +51,7 @@ fn main() {
                 naming: Default::default(),
                 selected_by: None,
                 is_shutdown: false,
+                identity: None,
             });
         };
         // Absent means "to the end of the file", which is what u64::MAX says

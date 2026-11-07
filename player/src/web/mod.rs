@@ -168,6 +168,9 @@ pub struct QueueItem {
     /// because `passage_id` does not distinguish a passage queued twice.
     pub qid: u64,
     pub passage_id: i64,
+    /// What `passage_id` names, for a follower numbered differently
+    /// `[SPEC-UID-010]`.
+    pub identity: Option<crate::queue::PassageIdentity>,
     pub title: String,
     pub artist: Option<String>,
     /// The recording's own mbid, and the credited artist's, so a click on
@@ -211,6 +214,9 @@ pub struct Snapshot {
     pub playing: bool,
     /// The passage on air, for fetching its cover at `/art/{id}`.
     pub passage_id: Option<i64>,
+    /// What `passage_id` names, for a follower numbered differently
+    /// `[SPEC-UID-010]`.
+    pub identity: Option<crate::queue::PassageIdentity>,
     /// MusicBrainz Recording title where there is one, then the file's tag,
     /// then the filename `[REQ-VIS-170]`.
     pub title: Option<String>,
@@ -378,6 +384,7 @@ impl From<&PlayerState> for Snapshot {
         Snapshot {
             playing: s.playing,
             passage_id: s.current.as_ref().map(|e| e.passage_id),
+            identity: s.current.as_ref().and_then(|e| e.identity.clone()),
             title: s.current.as_ref().map(|e| e.title()),
             artist: s.current.as_ref().and_then(|e| e.artist()),
             mbid: s.current.as_ref().and_then(|e| e.mbid.clone()),
@@ -401,6 +408,7 @@ impl From<&PlayerState> for Snapshot {
                 .map(|(i, e)| QueueItem {
                     qid: e.qid,
                     passage_id: e.passage_id,
+                    identity: e.identity.clone(),
                     title: e.title(),
                     artist: e.artist(),
                     mbid: e.mbid.clone(),
@@ -1004,6 +1012,7 @@ mod tests {
             naming: Default::default(),
             selected_by: None,
             is_shutdown: false,
+            identity: None,
         };
         e.naming.mb_title = Some(title.into());
         e

@@ -200,7 +200,8 @@ here are not yet at the hub, *hub name*. Send to the hub."
 **`[SPEC-MTR-070]` A leaf never becomes the hub by accident.** Moving the hub
 is a deliberate act at the old hub. It hands over the mesh key and signs a
 roster naming the new hub. It is later work; until then the hub is where the
-roster says.
+roster says. Moving it when the old hub is gone is `[SPEC-UID-320]`, proposed
+2026-11-07: the roster names successors in advance.
 
 ---
 

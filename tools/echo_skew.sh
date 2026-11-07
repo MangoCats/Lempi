@@ -65,7 +65,9 @@ while [ "$i" -le "$N" ]; do
         # instant as the first.
         want = posa + (tb - ta) * 1000
         skew = want - posb
-        same = (pa == pb) ? "" : sprintf("  [DIFFERENT PASSAGES %d vs %d]", pa, pb)
+        # Each number is its own catalogue'"'"'s [SPEC-DF-035], so a difference here
+        # need not be different music: echo_skew.py compares what they name.
+        same = (pa == pb) ? "" : sprintf("  [NUMBERS DIFFER %d vs %d]", pa, pb)
         printf "%s  passage %-7d  %8.0f ms behind%s\n", strftime("%H:%M:%S"), pa, skew, same
     }'
     i=$((i + 1))
