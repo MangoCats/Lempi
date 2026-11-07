@@ -49,6 +49,7 @@ import subprocess
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+import audio_duration  # noqa: E402  -- a decoded length, not an estimate [REQ-LIB-145]
 import time
 
 # `[AFS-SIL-020]` gives one threshold per source medium, and measurement says
@@ -133,12 +134,15 @@ def silences(path: str, threshold_db: int, min_s: float) -> list[tuple[float, fl
 
 
 def duration(path: str) -> float | None:
-    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                        "-of", "default=nw=1:nk=1", path], capture_output=True, text=True)
-    try:
-        return float(r.stdout.strip())
-    except ValueError:
-        return None
+    """The file's decoded length in seconds, or `None` if it will not decode.
+
+    Was `ffprobe format=duration` until 2026-11-07. The last track's span ends
+    at this figure, and on a VBR MP3 with no valid header that is a bitrate
+    estimate `[REQ-LIB-145]`: an estimate that fell short ended the last song
+    early, with the rest of it in no passage at all `[SPEC-SA-112]`.
+    """
+    ms = audio_duration.probe_duration_ms(path)
+    return ms / 1000.0 if ms else None
 
 
 def audible_spans_from_silences(sils: list[tuple[float, float]], total: float,

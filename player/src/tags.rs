@@ -91,16 +91,24 @@ pub fn read(path: &Path) -> Tags {
 }
 
 /// How long the file is, in ms, from the container -- read, not decoded
-/// `[REQ-AND-270]`. The header's frame count where it states one; otherwise
-/// the packets' own durations summed, which walks the file without decoding
-/// a sample (an MP3 with no Xing header states nothing). `None` for a file
-/// that is not audio this build can open.
+/// `[REQ-AND-270]`. The packets' own durations summed, which walks the file
+/// without decoding a sample, for a format whose stated length may be a guess;
+/// the header's frame count for one whose length is really recorded. `None`
+/// for a file that is not audio this build can open.
+///
+/// **MPEG audio and ADTS AAC have no stated length to trust.** With no Xing or
+/// VBRI header, Symphonia 0.5.5 fills `n_frames` from the average size of the
+/// first few frames, and nothing marks the figure as an estimate. Measured
+/// 2026-11-07 on the 218 MP3s `[SPEC-SA-112]` repaired: 142 read more than 5 s
+/// short of their decoded length and 54 more than 5 s long, by up to 9.4
+/// minutes. The summed packets are what `[REQ-LIB-145]` asks for.
 ///
 /// A header that states **0** frames is not believed: on the Moto G,
 /// 2026-09-26, Fiona Apple's "The First Taste" said 0 and held 10,893
 /// packets. And the track is chosen as the decoder chooses it, the first with
 /// a real codec, so what is measured is what plays.
 pub fn duration_ms(path: &Path) -> Option<u64> {
+    use symphonia::core::codecs::{CODEC_TYPE_AAC, CODEC_TYPE_MP1, CODEC_TYPE_MP2, CODEC_TYPE_MP3};
     let mut probed = open(path)?;
     let track = probed
         .format
@@ -109,8 +117,9 @@ pub fn duration_ms(path: &Path) -> Option<u64> {
         .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)?
         .clone();
     let rate = u64::from(track.codec_params.sample_rate?);
+    let guessed = matches!(track.codec_params.codec, CODEC_TYPE_MP1 | CODEC_TYPE_MP2 | CODEC_TYPE_MP3 | CODEC_TYPE_AAC);
     let frames = match track.codec_params.n_frames {
-        Some(n) if n > 0 => n,
+        Some(n) if n > 0 && !guessed => n,
         _ => {
             let mut sum = 0u64;
             while let Ok(p) = probed.format.next_packet() {
@@ -322,6 +331,47 @@ mod tests {
         perm.set_readonly(false);
         std::fs::set_permissions(&db, perm).unwrap();
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// MPEG-1 Layer III frames at 44.1 kHz with nothing in them, which is all a
+    /// length needs: the reader walks them without decoding a sample.
+    fn silent_frames(kbps_index: u8, count: usize) -> Vec<u8> {
+        let size = match kbps_index {
+            1 => 104,   // 32 kbps
+            14 => 1044, // 320 kbps
+            other => panic!("no size written down for bitrate index {other}"),
+        };
+        let mut frame = vec![0u8; size];
+        frame[..4].copy_from_slice(&[0xFF, 0xFB, kbps_index << 4, 0x00]);
+        frame.repeat(count)
+    }
+
+    /// `[REQ-LIB-145]`: a variable-bitrate MP3 with no header states no length,
+    /// and Symphonia's guess from its first frames is wrong in whichever
+    /// direction those frames mislead. The answer is the frames that are there,
+    /// 500 each way, not what the opening's size implies.
+    #[test]
+    fn a_headerless_mp3_is_as_long_as_its_frames_whatever_its_opening_suggests() {
+        let d = std::env::temp_dir().join(format!("lempi-tags-length-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let want = 500 * 1152 * 1000 / 44100;
+
+        let quiet_opening = d.join("quiet-opening.mp3");
+        std::fs::write(&quiet_opening, [silent_frames(1, 40), silent_frames(14, 460)].concat()).unwrap();
+        assert_eq!(duration_ms(&quiet_opening), Some(want), "a small opening made it read long");
+
+        let loud_opening = d.join("loud-opening.mp3");
+        std::fs::write(&loud_opening, [silent_frames(14, 40), silent_frames(1, 460)].concat()).unwrap();
+        assert_eq!(duration_ms(&loud_opening), Some(want), "a large opening made it read short");
+
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Not audio is `None`, not a length of 0, and a scan reports it as such.
+    #[test]
+    fn a_file_that_is_not_audio_has_no_length() {
+        assert_eq!(duration_ms(Path::new("no-such-file.mp3")), None);
     }
 
     /// Missing metadata must never be an error: a passage with no tags plays

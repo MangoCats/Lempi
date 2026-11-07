@@ -18,10 +18,13 @@ them replaced, not added alongside.
 import json
 import os
 import sqlite3
+import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import audio_duration  # noqa: E402
 import segment_dao  # noqa: E402
 
 FAILED = []
@@ -31,6 +34,43 @@ def check(cond, msg):
     if not cond:
         FAILED.append(msg)
         print(f"  FAIL: {msg}")
+
+
+def test_a_headerless_vbr_file_is_split_at_its_decoded_length():
+    """`[REQ-LIB-145]`: the last track ends where the audio does. A loud opening
+    and a long plain tone, in a VBR MP3 with no Xing header, is the file that
+    makes a bitrate estimate read short. The fixture proves it does, so this
+    cannot pass by the estimate happening to be right."""
+    print("a headerless VBR file's last track ends at its decoded length")
+    if not audio_duration.FFMPEG:
+        FAILED.append("ffmpeg not found, so the decoded-length test could not run")
+        print("  FAIL: ffmpeg not found, so the decoded-length test could not run")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "capture.mp3")
+        subprocess.run(
+            [audio_duration.FFMPEG, "-v", "error", "-nostdin", "-y",
+             "-f", "lavfi", "-i", "anoisesrc=d=25:c=white:a=0.5:r=44100",
+             "-f", "lavfi", "-i", "anullsrc=d=3:r=44100:cl=mono",
+             "-f", "lavfi", "-i", "sine=frequency=440:duration=60:sample_rate=44100",
+             "-filter_complex", "[0][1][2]concat=n=3:v=0:a=1",
+             "-c:a", "libmp3lame", "-q:a", "0", "-write_xing", "0", "-id3v2_version", "0", path],
+            check=True)
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path],
+            capture_output=True, text=True, check=True)
+        estimate = float(probe.stdout.strip())
+        check(estimate < 70, f"the fixture must fool the estimate into reading short, it read {estimate:.1f} s of 88")
+
+        total = segment_dao.duration(path)
+        check(total is not None and abs(total - 88) < 0.5, f"decoded length of about 88 s, got {total}")
+
+        spans = segment_dao.segment(path, min_track_s=5.0, expect=2)
+        check(spans is not None and len(spans) == 2, f"two tracks, got {spans}")
+        if spans:
+            check(abs(spans[-1][1] - total) < 0.01, f"the last track ends at {spans[-1][1]}, the audio at {total}")
+
+        check(segment_dao.duration(os.path.join(tmp, "no-such-file.mp3")) is None, "a missing file has no length")
 
 
 SCHEMA = """
@@ -156,6 +196,8 @@ def main() -> int:
         c.close()
     finally:
         segment_dao.identify_recording = old_identify
+
+    test_a_headerless_vbr_file_is_split_at_its_decoded_length()
 
     print()
     if FAILED:

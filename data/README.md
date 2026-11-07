@@ -132,7 +132,12 @@ stage `passage_ends`. The catalogue as it was before is in
 **2026-11-07: 67 more on 39 tracks**, each stopped partway through its fade, by
 `--only fade` at the maintainer's word, making 425 passages on 218 tracks. The
 catalogue as it was before is in `backups/pre-fade-ends-20261107/library.db`.
-Both runs are on this pair only: no node has them until a star sync carries them.
+
+**2026-11-07: 8 more on 4 tracks**, cut off with 3 to 4 s of sound still to come,
+by `--only cut --min-tail-ms 1000`, also at the maintainer's word, making 433
+passages on 222 tracks. The catalogue as it was before is in
+`backups/pre-small-tails-20261107/library.db`. All three runs are on this pair
+only: no node has them until a star sync carries them.
 
 `flavor.db`, `flavor-sample.db`, `sample-library.db` and
 `sample-library.console.db` are fixtures and extraction data, not copies of
