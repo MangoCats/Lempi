@@ -289,6 +289,10 @@ fn end_stale(state: &Path) {
             tracing::info!("frame: ended the browser (pid {pid}) an earlier player left showing");
         }
     }
+    // Elsewhere -- Android is not `target_os = "linux"` -- there is no way
+    // here to tell whether the process is ours, so it is left alone.
+    #[cfg(not(any(target_os = "linux", windows)))]
+    let _ = pid;
 }
 
 /// Raise the frame's window over a full-screen program, where `xdotool` is

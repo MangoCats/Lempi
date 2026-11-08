@@ -211,6 +211,12 @@ core_boundary() {
 # for its dirty marker and every commit changes that. Run beside
 # `linux_compiles` rather than after it, so the hook pays for the slower of
 # the two, not their sum.
+#
+# `-D warnings`, as CI's check of the player library has: from 2026-10-29
+# (`17fffb3`) `frame.rs` left a variable unused on Android, which is not
+# `target_os = "linux"`. CI refused every push for ten days while this gate,
+# warnings allowed, passed them. Proven 2026-11-08: that fault, put back, is
+# refused here with `unused variable: pid`.
 phone_compiles() {
     echo "== Android aarch64 (the phone's crate, as the app links it) =="
     if ! docker info >/dev/null 2>&1; then
@@ -223,7 +229,7 @@ phone_compiles() {
         return 1
     }
     out=$(mktemp)
-    if MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w lempi-android \
+    if MSYS_NO_PATHCONV=1 docker run --rm -v "$DROOT":/w -w /w -e RUSTFLAGS="-D warnings" lempi-android \
         cargo check --manifest-path player/Cargo.toml -p lempi-android \
         --target aarch64-linux-android --locked \
         --target-dir player/target/gate-android-bindings >"$out" 2>&1
