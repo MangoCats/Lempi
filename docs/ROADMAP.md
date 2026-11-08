@@ -89,6 +89,7 @@ folded into one spec.
 | A profanity tolerance — built 2026-11-08, on the desktop only; not deployed, nor heard | [SPEC077](spec/SPEC077-a-profanity-tolerance.md) | [§4. Open](spec/SPEC077-a-profanity-tolerance.md#4-open) |
 | A node's own occasion policy, beyond profanity (designed, not scheduled) | [GUIDE036](GUIDE036-node-occasion-policies.md) | [§2. The design](GUIDE036-node-occasion-policies.md#2-the-design-a-nodes-own-policy) |
 | Integrity -- every stored hash read again where the file lies, damage withheld and repaired (planned 2026-10-14; built but for the phone's scrub, the databases' weekly check -- waiting on a measurement on `lempi02w` -- and the changed-value tripwire) | [GUIDE038](GUIDE038-integrity-gap-closures.md) | [§7 Order and size](GUIDE038-integrity-gap-closures.md#7-order-and-size) |
+| Library work — the catalogue and its files changed by hand or by a repair tool, each job's backup, and what is left of it (begun 2026-11-08; the hub's retimed passage ends not yet synced) | [LOG014](LOG014-library-work.md) | [§2. Open](LOG014-library-work.md#2-open) |
 | Android requirements (draft) | [REQ007](spec/REQ007-android.md) | [§7. Open](spec/REQ007-android.md#7-open--to-be-settled-before-this-leaves-draft) |
 
 ## 2. Sendspin — a whole directory of "watch, don't build yet"
