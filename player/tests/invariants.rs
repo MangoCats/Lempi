@@ -177,8 +177,11 @@ fn the_cue_sheet_and_the_uris_number_tracks_the_same_way() {
 fn the_numbering_follows_the_music_not_the_database() {
     let dir = Scratch::new("order");
     let conn = library(dir.0.as_path());
-    // A fourth passage, inserted last, belonging second.
-    conn.execute("INSERT INTO passages VALUES (104, 1, 'radio', 150000, 300000)", []).unwrap();
+    // A fourth passage, inserted last, belonging second. It overlaps 101 and
+    // 102 rather than lying inside either: a radio passage another one lies
+    // within is left out of the sheet `[SPEC-RIP-092]`, so a 104 at
+    // 150-300 s would drop 101 and test that rule instead of this one.
+    conn.execute("INSERT INTO passages VALUES (104, 1, 'radio', 150000, 450000)", []).unwrap();
     conn.execute("INSERT INTO passage_recordings VALUES (104, 'mb-104')", []).unwrap();
     conn.execute("INSERT INTO recordings VALUES ('mb-104', 'Late Insert')", []).unwrap();
 
