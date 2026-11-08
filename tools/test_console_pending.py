@@ -43,7 +43,8 @@ def check(cond, msg):
 def main() -> int:
     print("no review tables at all: zero, not a crash")
     bare = sqlite3.connect(":memory:")
-    check(console.pending_counts(bare) == {"id": 0, "boundary": 0, "artist": 0, "total": 0},
+    check(console.pending_counts(bare) == {"id": 0, "boundary": 0, "artist": 0, "total": 0,
+                                           "recorded_only": {}},
           f"got {console.pending_counts(bare)}")
 
     print("a mix of applied and unapplied rows across all three tables")
@@ -57,7 +58,22 @@ def main() -> int:
         INSERT INTO artist_reviews VALUES ('rec-a', 1, 'art-a', 'A Band', 't5', NULL);
     """)
     counts = console.pending_counts(c)
-    check(counts == {"id": 1, "boundary": 2, "artist": 1, "total": 4}, f"got {counts}")
+    check(counts == {"id": 1, "boundary": 2, "artist": 1, "total": 4, "recorded_only": {}},
+          f"got {counts}")
+
+    print("kept and deferred id decisions are named apart, never in the total")
+    c.executescript("""
+        INSERT INTO id_reviews VALUES (4, 'kept', NULL, 't6', NULL);
+        INSERT INTO id_reviews VALUES (5, 'deferred', NULL, 't7', NULL);
+        INSERT INTO id_reviews VALUES (6, 'deferred', NULL, 't8', NULL);
+        INSERT INTO id_reviews VALUES (7, 'reassigned', NULL, 't9', NULL);  -- no id chosen
+    """)
+    counts = console.pending_counts(c)
+    check(counts["id"] == 1 and counts["total"] == 4,
+          f"only a reassignment with a chosen id is pending, got {counts}")
+    check(counts["recorded_only"] == {"kept": 1, "deferred": 2, "reassigned": 1},
+          f"got {counts['recorded_only']}")
+    c.execute("DELETE FROM id_reviews WHERE passage_id >= 4")
 
     print()
     print("_pending_for_passage: only what actually belongs to this passage's own "
@@ -77,7 +93,8 @@ def main() -> int:
     c2.executescript("CREATE TABLE boundary_reviews (passage_id INTEGER PRIMARY KEY, "
                      "start_ms INTEGER, end_ms INTEGER, decided_at TEXT, applied_at TEXT);"
                      "INSERT INTO boundary_reviews VALUES (5, 0, 1000, 't', NULL);")
-    check(console.pending_counts(c2) == {"id": 0, "boundary": 1, "artist": 0, "total": 1},
+    check(console.pending_counts(c2) == {"id": 0, "boundary": 1, "artist": 0, "total": 1,
+                                         "recorded_only": {}},
           f"got {console.pending_counts(c2)}")
     check(console._pending_for_passage(c2, 5, []) == {"boundary": {"decided_at": "t"}},
           f"got {console._pending_for_passage(c2, 5, [])}")

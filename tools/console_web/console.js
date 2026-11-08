@@ -237,16 +237,29 @@ const S = {
   } catch (e) {
     return;   // a console with no library open yet has nothing to count
   }
-  if (!d.total) return;
   // Points at the button that does it, not at a command to type: the flags
   // page grew one `[REQ-LIB-175]`, and a tooltip still naming the CLI sends
   // a person to a terminal for something two clicks away. The tools are
   // still what runs -- the page says so, and says it first.
-  const pill = S.el('a', {
-    class: 'pill warn', href: '/flags#apply',
-    title: 'Saved but not yet applied to the library -- open the flags page '
-      + 'to review them and apply, or run tools/apply_boundary_reviews.py / '
-      + 'tools/apply_reviews.py --commit by hand',
-  }, `⚠ ${S.n(d.total)} pending edit${d.total === 1 ? '' : 's'}`);
-  nav.appendChild(pill);
+  if (d.total) {
+    nav.appendChild(S.el('a', {
+      class: 'pill warn', href: '/flags#apply',
+      title: 'Saved but not yet applied to the library -- open the flags page '
+        + 'to review them and apply, or run tools/apply_boundary_reviews.py / '
+        + 'tools/apply_reviews.py --commit by hand',
+    }, `⚠ ${S.n(d.total)} pending edit${d.total === 1 ? '' : 's'}`));
+  }
+  // Id decisions that rewrite nothing, so no apply clears them: named on
+  // their own and without the warning, since there is nothing to write.
+  // Counted into the pill above until 2026-11-08, which then read 83 over a
+  // list of 11.
+  const only = Object.entries(d.recorded_only || {}).filter(e => e[1] > 0);
+  if (only.length) {
+    nav.appendChild(S.el('a', {
+      class: 'pill', href: '/flags#apply',
+      title: 'Recording-id decisions recorded in Lempi\'s review that change '
+        + 'nothing, so applying never clears them: deferred is "decide later", '
+        + 'still open on Lempi\'s review page; kept is "the id is already right"',
+    }, only.map(([k, n]) => `${S.n(n)} ${k}`).join(' · ')));
+  }
 })();

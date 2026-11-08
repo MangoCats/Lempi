@@ -118,7 +118,8 @@ async function load() {
     const passageCell = r.resolved
       ? r.passages.map((pid, i) => S.el('span', {},
           i > 0 ? ', ' : null,
-          S.el('a', { href: `/profile/${pid}` }, `passage ${pid}`)))
+          S.el('a', { href: `/profile/${pid}` },
+            `${(r.passage_kinds || [])[i] || ''} passage ${pid}`.trim())))
       : [S.el('span', { class: 'pill warn',
             title: 'the library has changed since this was flagged, and nothing this specific survives to open',
             text: 'no longer resolvable' })];
@@ -548,7 +549,7 @@ function renderPending(d) {
       text: 'Not counted above: '
         + Object.entries(only).map(e => e[1] + ' ' + e[0]).join(', ')
         + ' \u2014 decisions that record a judgement and rewrite nothing, so applying'
-        + ' never clears them. They are why the nav pill counts more than this does.' }));
+        + ' never clears them. The nav bar names them beside the pending count, not in it.' }));
   }
 
   box.append(S.el('div', { class: 'caveat' },

@@ -54,7 +54,7 @@ def build():
     c.execute("INSERT INTO files VALUES (1,'md5-a','/m/a.mp3',1,1.0,'mp3',300000,'t','t')")
     c.execute("INSERT INTO files VALUES (2,'md5-b','/m/b.mp3',1,1.0,'mp3',300000,'t','t')")
     c.execute("INSERT INTO passages VALUES (10,1,'radio',0,300000,0,0,0,'src')")
-    c.execute("INSERT INTO passages VALUES (11,1,'radio',0,300000,0,0,0,'src')")  # same recording, 2nd file
+    c.execute("INSERT INTO passages VALUES (11,1,'album',0,300000,0,0,0,'src')")  # same recording, the album's
     c.execute("INSERT INTO passages VALUES (20,2,'radio',0,300000,0,0,0,'src')")  # unidentified
     c.execute("INSERT INTO recordings VALUES ('rec-1','A Song',NULL,'s')")
     c.execute("INSERT INTO artists VALUES ('art-1','A Band',NULL,'s')")
@@ -79,6 +79,7 @@ def main() -> int:
     r = rows[0]
     check(r["title"] == "A Song" and r["artist"] == "A Band", f"got {r}")
     check(sorted(r["passages"]) == [10, 11], f"expected both passages, got {r['passages']}")
+    check(r["passage_kinds"] == ["radio", "album"], f"each passage's kind, in order: {r['passage_kinds']}")
     check(r["resolved"] is True, "a recording with real passages must resolve")
 
     print("a passage-keyed flag on unidentified audio falls back to the file's own tag")
@@ -87,6 +88,7 @@ def main() -> int:
     r = console.flags(c)[0]
     check(r["title"] == "Tag Title" and r["artist"] == "Tag Artist", f"got {r}")
     check(r["passages"] == [20], f"got {r['passages']}")
+    check(r["passage_kinds"] == ["radio"], f"got {r['passage_kinds']}")
     check(r["resolved"] is True, "a passage that still exists must resolve")
 
     print("a passage-keyed flag whose passage no longer exists says so plainly")

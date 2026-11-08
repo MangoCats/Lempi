@@ -343,16 +343,20 @@ def flags(conn) -> list:
     for kind, subject_id, flagged_at in conn.execute(
             "SELECT subject_kind, subject_id, flagged_at FROM listener_flags "
             "ORDER BY flagged_at DESC"):
-        passages, mbid = [], None
+        passages, kinds, mbid = [], [], None
         if kind == "recording":
             mbid = subject_id
-            passages = [r[0] for r in conn.execute(
-                "SELECT passage_id FROM passage_recordings WHERE mbid=? "
-                "ORDER BY weight DESC, passage_id", (mbid,))]
+            for pid, pkind in conn.execute(
+                    "SELECT pr.passage_id, p.kind FROM passage_recordings pr "
+                    "LEFT JOIN passages p USING (passage_id) WHERE pr.mbid=? "
+                    "ORDER BY pr.weight DESC, pr.passage_id", (mbid,)):
+                passages.append(pid)
+                kinds.append(pkind)
         else:
             pid = int(subject_id)
-            if conn.execute("SELECT 1 FROM passages WHERE passage_id=?", (pid,)).fetchone():
-                passages = [pid]
+            row = conn.execute("SELECT kind FROM passages WHERE passage_id=?", (pid,)).fetchone()
+            if row:
+                passages, kinds = [pid], [row[0]]
                 row = conn.execute(
                     "SELECT mbid FROM passage_recordings WHERE passage_id=? "
                     "ORDER BY weight DESC, mbid LIMIT 1", (pid,)).fetchone()
@@ -379,6 +383,9 @@ def flags(conn) -> list:
         out.append({
             "subject_kind": kind, "subject_id": subject_id, "flagged_at": flagged_at,
             "title": title, "artist": artist, "passages": passages,
+            # Beside `passages`, one each: 'radio' or 'album', so a link can
+            # say which it opens -- one recording is usually both.
+            "passage_kinds": kinds,
             # A passage-keyed flag from before a rescan renumbered things
             # resolves to nothing at all -- said plainly, not left blank
             # `[SPEC-DF-035]`.
@@ -395,15 +402,30 @@ def pending_counts(conn) -> dict:
     edit in Lempi's own editor is only the first of two deliberate steps
     before it can even be pushed anywhere `[SPEC021 §2]`. Zero for any table
     this library predates -- absence is "nothing pending," not an error.
+
+    `total` is what applying would write, counted as `pending_detail()`
+    lists it. Until 2026-11-08 it counted every unapplied id review, so the
+    nav pill read 83 over a list of 11: `kept` and `deferred` rewrite
+    nothing, and no apply ever clears them. They are `recorded_only`,
+    outside the total, for the pill to name on their own.
     """
     have = lempi_db.tables(conn)  # both halves, not just `main` [IMPL-DBSPLIT-025]
-    counts = {}
-    for kind, table in (("id", "id_reviews"), ("boundary", "boundary_reviews"),
-                        ("artist", "artist_reviews")):
-        counts[kind] = (conn.execute(
-            f"SELECT COUNT(*) FROM {table} WHERE applied_at IS NULL").fetchone()[0]
-            if table in have else 0)
+    counts = {"id": 0, "boundary": 0, "artist": 0}
+    recorded_only = {}
+    if "id_reviews" in have:
+        counts["id"] = conn.execute(
+            "SELECT COUNT(*) FROM id_reviews WHERE applied_at IS NULL "
+            "   AND decision = 'reassigned' AND chosen_mbid IS NOT NULL").fetchone()[0]
+        recorded_only = {d: n for d, n in conn.execute(
+            "SELECT decision, COUNT(*) FROM id_reviews "
+            " WHERE applied_at IS NULL AND NOT (decision = 'reassigned' "
+            "       AND chosen_mbid IS NOT NULL) GROUP BY decision")}
+    for kind, table in (("boundary", "boundary_reviews"), ("artist", "artist_reviews")):
+        if table in have:
+            counts[kind] = conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE applied_at IS NULL").fetchone()[0]
     counts["total"] = sum(counts.values())
+    counts["recorded_only"] = recorded_only
     return counts
 
 
