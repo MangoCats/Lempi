@@ -60,8 +60,11 @@ def damage_reason(detail: str) -> str:
 
 def damaged(conn: sqlite3.Connection) -> list[dict]:
     """Both passages of every damaged CD track -- its radio passage and its
-    album passage `[SPEC-HOLD-030]` -- not yet decided. A rip's tracks are its
-    passages of each kind in order: the add step writes one of each per track."""
+    album passage `[SPEC-HOLD-030]` -- not yet decided. A failure that says
+    where it lies (`start_ms`, since 2026-11-07) is found by span, as a run of
+    silent tracks needs: one album passage and no radio one for many tracks
+    `[SPEC-SIL-050]`. One that does not is an older add's, whose tracks are its
+    passages of each kind in order: it wrote one of each per track."""
     have = has_column(conn)
     out = []
     rows = conn.execute(
@@ -74,6 +77,22 @@ def damaged(conn: sqlite3.Connection) -> list[dict]:
         # rip, 1 for a tracks-mode rip's own file (`in_file`) [SPEC-CDI-090].
         at = d.get("in_file", n)
         for kind in ("radio", "album"):
+            if kind == "radio" and d.get("silent"):
+                continue    # a silent track has none [SPEC-SIL-020]
+            if isinstance(d.get("start_ms"), int):
+                # The one that starts there, the shortest if several do -- a
+                # hidden intro joined to its track starts where the intro does.
+                found = conn.execute(
+                    f"SELECT passage_id, {COLUMN if have else 'NULL'} FROM passages "
+                    "WHERE file_id = ?1 AND kind = ?2 AND start_ms = ?3 ORDER BY end_ms LIMIT 1",
+                    (file_id, kind, d["start_ms"])).fetchone()
+                if found is None:
+                    out.append({"passage_id": None, "kind": kind, "path": path, "track": n,
+                                "why": f"no {kind} passage for track {n} starts at {d['start_ms']} ms"})
+                elif found[1] is None:
+                    out.append({"passage_id": found[0], "kind": kind, "path": path, "track": n,
+                                "why": damage_reason(d.get("detail", ""))})
+                continue
             passages = conn.execute(
                 f"SELECT passage_id, {COLUMN if have else 'NULL'} FROM passages "
                 "WHERE file_id = ?1 AND kind = ?2 ORDER BY start_ms", (file_id, kind)).fetchall()

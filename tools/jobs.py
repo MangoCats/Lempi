@@ -1392,6 +1392,10 @@ class Runner:
         # The whole disc as one passage, when ticked [SPEC-RIP-114].
         if payload.get("whole_disc") is True:
             argv.append("--whole-disc")
+        # Silent tracks added as tracks, when the person unticked the one
+        # passage of silence [SPEC-SIL-060].
+        if payload.get("silence_as_tracks") is True:
+            argv.append("--silence-as-tracks")
         # Each hidden span ticked to be joined to the track it leads into,
         # by its start [SPEC-RIP-092]. Whole numbers only reach the argv.
         for start in payload.get("fold") or ():

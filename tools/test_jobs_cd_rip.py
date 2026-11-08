@@ -94,7 +94,14 @@ def test_folder_reaches_ingest_cd(tmp: str) -> None:
     check("--folder" in argv and argv[argv.index("--folder") + 1] == "C:/rips/some-disc",
           f"got {argv}")
     check("--commit" in argv and "--json" in argv, f"got {argv}")
+    check("--silence-as-tracks" not in argv, f"silent tracks are one passage unless unticked: {argv}")
     check(j["result"]["disc_outcome"] == "exact", f"got {j['result']}")
+    # [SPEC-SIL-060]: unticked on the page, the silence is added as tracks.
+    seen.clear()
+    j2 = wait_for(runner, runner.submit("cd-rip", json.dumps({"folder": "C:/rips/broken",
+                                                                "silence_as_tracks": True})))
+    check(j2["state"] == "done" and "--silence-as-tracks" in seen[0][1],
+          f"silence as tracks reaches ingest_cd.py: {seen[0][1] if seen else j2}")
     # [REQ-LIB-305]: analysed at once, both stages, on the album's own folder.
     check([s for s, _ in seen] == ["ingest", "flavor", "amplitude"], f"three stages: {[s for s, _ in seen]}")
     for stage, a in seen[1:]:

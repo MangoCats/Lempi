@@ -127,7 +127,9 @@ and does not add one.
 **`[SPEC-ALB-900]`** An album passage with no radio passage is not listed, so
 it is not in a whole-album play: Browse is built on radio passages. On the desk
 library that is one 2.9-second untitled piece. A rip that makes album passages
-alone would need Browse to list them.
+alone would need Browse to list them. **Closed 2026-11-07:** a run of silent
+tracks is such a rip, and an album opened by its identity now lists them
+[SPEC076](SPEC076-silent-tracks.md) `[SPEC-SIL-070]`.
 
 **`[SPEC-ALB-910]`** Not yet listened to across a segue. Each passage keeps its
 own 20 ms fade at each end `[SPEC-SC-046]`; between two album passages of a

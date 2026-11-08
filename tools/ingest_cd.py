@@ -1419,10 +1419,12 @@ def find_hidden(wav_path: str, toc: cd_toc.DiscToc, release: dict | None = None)
     return out
 
 
-def check_fold(hidden: list | tuple, fold: list | tuple, whole_disc: bool = False) -> None:
+def check_fold(hidden: list | tuple, fold: list | tuple, whole_disc: bool = False,
+               silent: list | tuple = ()) -> None:
     """Refuse a join `[SPEC-RIP-092]` that names no hidden span leading into a
     track -- a preview measured on another WAV, a page left open, a hand-typed
-    `--fold` -- rather than add the disc without it and say nothing."""
+    `--fold` -- rather than add the disc without it and say nothing. Nor into
+    a silent track `[SPEC-SIL-030]`: it has no radio passage to join."""
     if not fold:
         return
     if whole_disc:
@@ -1431,6 +1433,154 @@ def check_fold(hidden: list | tuple, fold: list | tuple, whole_disc: bool = Fals
     if stray:
         raise ValueError(f"no hidden audio that leads into a track starts at {', '.join(map(str, stray))} ms; "
                          "nothing to join")
+    quiet = {n for run in silent for n in run["tracks"]}
+    into = sorted({h["leads_into"] for h in hidden if h["start_ms"] in set(fold) and h.get("leads_into") in quiet})
+    if into:
+        raise ValueError(f"track {', '.join(map(str, into))} is silence, added as no radio passage, so there is "
+                         "nothing to join hidden audio to; add the silence as tracks to join it")
+
+
+# -------------------------------------------------------------- silent tracks
+
+# A silent track `[SPEC-SIL-010]`: digital silence, measured, from this far
+# inside its start to this far inside its end. -70 dB takes a pressed disc's
+# zeros (-91 dB) and its dither, and not a tape's hiss (about -60 dB), which
+# is a recording of a room and is left a track. The edges allow for the next
+# track's first sound arriving a little ahead of its index: *Broken*'s track
+# 97 carries the first 20 ms of *Physical*, measured 2026-11-07.
+SILENT_DB = -70
+SILENT_EDGE_MS = 50
+# Shorter than this is not judged at all: a silence under it is a gap.
+SILENT_MIN_MS = 500
+# MusicBrainz's special-purpose title for a silent track. A song may be
+# called "Silence"; only the bracketed form is the title for nothing.
+SILENT_TITLE = "[silence]"
+# What AccurateRip says of a track it has no entry for. Of a track measured
+# as digital silence that is not damage [SPEC-SIL-040]: tracks 7-96 of
+# *Broken* all read it, while the music either side was accurately ripped.
+NOT_IN_ACCURATERIP = "not present in database"
+
+
+def _quiet_spans(wav_path: str, start_ms: int, end_ms: int) -> list[tuple[int, int]]:
+    """The digitally silent spans of `start_ms..end_ms`, on the disc, in one
+    pass; an end ffmpeg does not report is the span's own end."""
+    r = subprocess.run([FFMPEG, "-v", "info", "-nostats", "-ss", f"{start_ms / 1000:.3f}",
+                        "-t", f"{(end_ms - start_ms) / 1000:.3f}", "-i", wav_path, "-af",
+                        f"silencedetect=noise={SILENT_DB}dB:d={(SILENT_MIN_MS - 2 * SILENT_EDGE_MS) / 1000:.3f}",
+                        "-f", "null", "-"], capture_output=True, text=True, timeout=600)
+    if r.returncode != 0:
+        raise RuntimeError(f"could not measure the disc for silence: {(r.stderr or '').strip()[-200:]}")
+    out, begun = [], None
+    for kind, at in _SILENCE.findall(r.stderr or ""):
+        ms = start_ms + round(float(at) * 1000)
+        if kind == "start":
+            begun = ms
+        elif begun is not None:
+            out.append((begun, ms))
+            begun = None
+    if begun is not None:
+        out.append((begun, end_ms))
+    return out
+
+
+def _runs_without(silent: list | tuple, kept) -> list[dict]:
+    """`silent`'s runs less the tracks an earlier rip keeps `[SPEC-AGN-030]`:
+    those have no passage on this file, so a run is split where one was."""
+    out = []
+    for run in silent:
+        part = None
+        for n in run["tracks"]:
+            if n in kept:
+                part = None
+                continue
+            if part is None:
+                part = {**run, "tracks": [], "first": n}
+                out.append(part)
+            part["tracks"].append(n)
+            part["last"] = n
+    return out
+
+
+def _resolve_silent(conn, number: int, run: dict, audio_md5: str, disc_outcome: str,
+                    releases: list[dict], length_ms: int) -> tuple[str, str, str]:
+    """A silent track's recording `[SPEC-SIL-030]`: the one every candidate
+    edition puts at `number`, else one of the run's own titled `[silence]`.
+    Never AcoustID, whose fingerprint of nothing can only match nothing or
+    the wrong thing, and never the review queue: there is no question to ask."""
+    found: dict[str, tuple] = {}
+    if disc_outcome != "none":
+        for rel in releases[:8]:
+            c = _candidate_for(rel, number)
+            if c is not None:
+                found.setdefault(c["mbid"], (c, rel))
+    if len(found) == 1:
+        (c, rel), = found.values()
+        mbid, source = c["mbid"], "musicbrainz"
+        conn.execute("INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) VALUES (?1,?2,?3,?4)",
+                     (mbid, c["title"], length_ms, source))
+        for artist_mbid, name, sort_name in _artists_for(rel, number):
+            conn.execute("INSERT OR IGNORE INTO artists (mbid,name,sort_name,source) VALUES (?1,?2,?3,?4)",
+                         (artist_mbid, name, sort_name, source))
+            artist_sort.record(conn, artist_mbid, sort_name)
+            conn.execute("INSERT OR IGNORE INTO recording_artists (mbid,artist_mbid,weight,source) "
+                         "VALUES (?1,?2,1.0,?3)", (mbid, artist_mbid, source))
+        return "identified", mbid, source
+    mbid, source = f"local:silence:{audio_md5}:{run['start_ms']}", "cd:silence"
+    conn.execute("INSERT OR IGNORE INTO recordings (mbid,title,length_ms,source) VALUES (?1,?2,?3,?4)",
+                 (mbid, SILENT_TITLE, run["end_ms"] - run["start_ms"], source))
+    return "silent", mbid, source
+
+
+def _is_silence_title(title: str | None) -> bool:
+    return (title or "").strip().lower() == SILENT_TITLE
+
+
+def find_silent(wav_path: str, toc: cd_toc.DiscToc, releases: list | tuple = (),
+                hidden: list | tuple = ()) -> dict:
+    """The runs of silent tracks on an image rip `[SPEC-SIL-010]`, each
+    `{"first", "last", "start_ms", "end_ms", "tracks"}`, and the tracks
+    titled `[silence]` that are not silent, as `titled_not_silent`.
+
+    Measured, never taken from a title: a track is silent only if digital
+    silence covers it, all but `SILENT_EDGE_MS` at each end. The title, the
+    sheet's or any candidate edition's, is said beside it, and where it disagrees the
+    track is left a track and the page says so. A run is consecutive silent
+    tracks with no hidden audio `[SPEC-RIP-090]` between them; it spans its
+    first track's start to its last track's end."""
+    out = {"runs": [], "titled_not_silent": []}
+    if not FFMPEG or not toc.tracks:
+        return out
+    titled = {}
+    for t in toc.tracks:
+        titled[t.number] = _is_silence_title(t.title) or any(
+            _is_silence_title((_track_at_position(rel, t.number) or {}).get("title")) for rel in releases[:8])
+    first, last = toc.tracks[0], toc.tracks[-1]
+    quiet = _quiet_spans(wav_path, first.start_ms, last.end_ms)
+
+    def silent(t) -> bool:
+        if t.end_ms is None or t.end_ms - t.start_ms < SILENT_MIN_MS:
+            return False
+        a, b = t.start_ms + SILENT_EDGE_MS, t.end_ms - SILENT_EDGE_MS
+        return any(s <= a and b <= e for s, e in quiet)
+
+    breaks = {h["start_ms"] for h in hidden if h.get("where") == "gap"}
+    run = None
+    for t in toc.tracks:
+        if not silent(t):
+            if titled[t.number]:
+                out["titled_not_silent"].append(t.number)
+            run = None
+            continue
+        if run is not None and not any(run["end_ms"] <= s <= t.start_ms for s in breaks):
+            run.update(last=t.number, end_ms=t.end_ms)
+            run["tracks"].append(t.number)
+        else:
+            run = {"first": t.number, "last": t.number, "start_ms": t.start_ms, "end_ms": t.end_ms,
+                   "tracks": [t.number]}
+            out["runs"].append(run)
+    for r in out["runs"]:
+        r["titled"] = all(titled[n] for n in r["tracks"])
+    return out
 
 
 # -------------------------------------------------------------------- commit
@@ -1575,7 +1725,8 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
                audio_md5: str, disc_outcome: str, releases: list[dict],
                rip_report: "cd_toc.RipReport | None", acoustid_key: str | None,
                chosen: bool = False, occasions: tuple = (), whole_disc: bool = False,
-               hidden: list | tuple = (), fold: list | tuple = (), kept=frozenset()) -> dict:
+               hidden: list | tuple = (), fold: list | tuple = (), kept=frozenset(),
+               silent: list | tuple = ()) -> dict:
     """Register the file, write TOC-exact passages, resolve each track's
     identity, and record every decision -- the CD-ripping analogue of
     `segment_dao.commit_segments()`, same shape, ground-truth boundaries
@@ -1610,8 +1761,14 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
     Each has no passage on this file -- two album passages of one recording
     would make the album two -- though the file still holds its audio, and
     damage the log found in it is still recorded against this file.
+
+    `silent` `[SPEC-SIL-020]`: `find_silent`'s runs. Each is one album passage
+    from its first track's start to its last's end, and no radio passage, so
+    a whole-album play keeps the silence at its length and the Director never
+    picks it. Each track is still identified and linked to the release, and
+    AccurateRip's "not present" for one is not damage `[SPEC-SIL-040]`.
     """
-    check_fold(hidden, fold, whole_disc)
+    check_fold(hidden, fold, whole_disc, silent)
     if kept and any(h.get("leads_into") in kept for h in hidden if h["start_ms"] in set(fold)):
         raise ValueError("hidden audio is joined only to a track this rip plays, not to one the earlier rip keeps")
     st = os.stat(mp3_path)
@@ -1652,6 +1809,9 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
         return radio, album
 
     hidden = [] if whole_disc else list(hidden)
+    silent = [] if whole_disc else _runs_without(silent, kept)
+    run_of = {n: run for run in silent for n in run["tracks"]}
+    quiet: dict[int, dict] = {}     # a run's first track -> its passage, recordings, what was said
     # A hidden track after the last one's silence ends that track there.
     trim = min((h["trims"] for h in hidden if h.get("trims") is not None), default=None)
     # One pair for the whole disc: radio from track 1's own start, album from
@@ -1674,6 +1834,44 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
         start_ms, end_ms = track.start_ms, track.end_ms
         if trim is not None and track is toc.tracks[-1]:
             end_ms = trim
+        run = run_of.get(track.number)
+        if run is not None:
+            # [SPEC-SIL-020]: the run's one album passage, made at its first track.
+            q = quiet.get(run["first"])
+            if q is None:
+                pid = conn.execute(
+                    "INSERT INTO passages (file_id,kind,start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db,boundary_src) "
+                    "VALUES (?1,'album',?2,?3,0,0,0.0,?4)",
+                    (file_id, run["start_ms"], run["end_ms"], boundary_src)).lastrowid
+                q = quiet[run["first"]] = {"pid": pid, "shares": {}, "unverified": [], "hold": None}
+            outcome, mbid, source = _resolve_silent(conn, track.number, run, audio_md5, disc_outcome,
+                                                    releases, end_ms - start_ms)
+            identified += outcome == "identified"
+            mbids.append(mbid)
+            # One recording is often every silent track of a disc -- all 91 of
+            # *Broken*'s -- and a release holds one place for it: the first.
+            if mbid not in q["shares"]:
+                placed.append((track.number, mbid))
+            share = q["shares"].setdefault(mbid, [0, source])
+            share[0] += max(end_ms - start_ms, 1)
+            tr = next((t for t in rip_report.tracks if t.number == track.number), None) if rip_report else None
+            if tr is not None and not tr.ok:
+                if tr.detail == NOT_IN_ACCURATERIP:
+                    # [SPEC-SIL-040]: silence measured; nothing to compare it with.
+                    q["unverified"].append(track.number)
+                else:
+                    conn.execute(
+                        "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,"
+                        "detail,decided_at) VALUES (?1,'rip','verification_failed',NULL,?2,?3)",
+                        (audio_md5, json.dumps({"track": track.number, "detail": tr.detail,
+                                                "start_ms": run["start_ms"], "silent": True}), now))
+                    passage_hold.ensure_column(conn)
+                    if q["hold"] is None:
+                        q["hold"] = passage_hold.damage_reason(tr.detail)
+                        conn.execute(f"UPDATE passages SET {passage_hold.COLUMN} = ?1 WHERE passage_id = ?2",
+                                     (q["hold"], q["pid"]))
+                    failed += 1
+            continue
         radio_pid, album_pid = whole or pair(start_ms, end_ms)
 
         outcome, mbid, source = _resolve_track(
@@ -1703,7 +1901,10 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
                 conn.execute(
                     "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,"
                     "detail,decided_at) VALUES (?1,'rip','verification_failed',NULL,?2,?3)",
-                    (audio_md5, json.dumps({"track": track.number, "detail": tr.detail}), now))
+                    # Where it lies, so a later hold finds its passages by
+                    # span, not by counting them [SPEC-SIL-050].
+                    (audio_md5, json.dumps({"track": track.number, "detail": tr.detail,
+                                            "start_ms": start_ms}), now))
                 # And held at once, both its passages `[SPEC-HOLD-030]`: the
                 # radio one, so the Director never chooses it, and the album
                 # one, so a whole-album play skips or replaces it
@@ -1721,6 +1922,23 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
             for mbid, (n, source) in shares.items():
                 conn.execute("INSERT INTO passage_recordings (passage_id,mbid,weight,source) "
                              "VALUES (?1,?2,?3,?4)", (pid, mbid, round(n / span, 4), source))
+
+    # [SPEC-SIL-020]: each run's passage carries its tracks' recordings by
+    # their share, as One piece does, and is said in the decisions.
+    said_silent = []
+    for run in silent:
+        q = quiet.get(run["first"])
+        if q is None:
+            continue
+        span = sum(n for n, _ in q["shares"].values()) or 1
+        for mbid, (n, source) in q["shares"].items():
+            conn.execute("INSERT INTO passage_recordings (passage_id,mbid,weight,source) VALUES (?1,?2,?3,?4)",
+                         (q["pid"], mbid, round(n / span, 4), source))
+        row = {"first": run["first"], "last": run["last"], "start_ms": run["start_ms"], "end_ms": run["end_ms"],
+               "tracks": len(run["tracks"]), "titled": run.get("titled"), "unverified": q["unverified"]}
+        conn.execute("INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
+                     "VALUES (?1,'rip','silent_run',NULL,?2,?3)", (audio_md5, json.dumps(row), now))
+        said_silent.append({**row, "passage_id": q["pid"], "held": q["hold"]})
 
     found = [_commit_hidden(conn, h, pair, mp3_path, audio_md5, acoustid_key, now) for h in hidden]
     mbids += [m for m, _ in found if not m.startswith("local:")]
@@ -1755,7 +1973,7 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
             "verification_failed": failed, "file_id": file_id, "album_linked": albums,
             "disc_outcome": disc_outcome, "candidates": len(releases), "occasions": marked,
             "whole_disc": bool(whole), "hidden": [dict(h, mbid=m) for h, (m, _) in zip(hidden, found)],
-            "folded": folded}
+            "folded": folded, "silent": said_silent}
 
 
 def _commit_hidden(conn, h: dict, pair, mp3_path: str, audio_md5: str, acoustid_key: str | None,
@@ -2432,8 +2650,11 @@ def preview(db_path: str, folder: str) -> dict:
     # [SPEC-RIP-090]: audio no track holds, measured on the WAV, so the page
     # can say what the add will make of it.
     hidden = find_hidden(wav_path, toc, releases[0] if len(releases) == 1 else None)
+    # [SPEC-SIL-010]: silent tracks, measured the same way, so the page can
+    # say they become one album passage and no radio passage.
+    silent = find_silent(wav_path, toc, releases, hidden)
     return {"dry_run": True, "format": fmt, "album_name_max": limit, "audio": os.path.basename(wav_path),
-            "hidden": hidden,
+            "hidden": hidden, "silent": silent["runs"], "titled_not_silent": silent["titled_not_silent"],
             "audio_bytes": os.path.getsize(wav_path), "tracks": toc.track_count,
             "track_list": [{"number": t.number, "start_ms": t.start_ms, "end_ms": t.end_ms,
                             "title": t.title, "performer": t.performer} for t in toc.tracks],
@@ -2448,11 +2669,13 @@ def preview(db_path: str, folder: str) -> dict:
 def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = None,
               into: str | None = None, keep_flac: bool | None = None, occasions: tuple = (),
               allow_duplicate: bool = False, album_name_max: int | None = None,
-              whole_disc: bool = False, fold: tuple = (), keep_earlier=None) -> dict:
+              whole_disc: bool = False, fold: tuple = (), keep_earlier=None,
+              silence_as_tracks: bool = False) -> dict:
     """Preview a rip, or, with `commit`, add it. `keep_earlier`, for an add
     into the folder of an earlier rip of the disc `[SPEC-AGN-035]`: the tracks
     whose earlier file a person chose to keep; `None` takes the plan's own
-    choice, by the logs."""
+    choice, by the logs. `silence_as_tracks`: silent tracks added as any other
+    track, a pair each, which the page offers by unticking `[SPEC-SIL-060]`."""
     import sqlite3  # noqa: F401  -- the connection below is lempi_db's
 
     if not commit:
@@ -2537,9 +2760,15 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
         hidden = [] if whole_disc else find_hidden(wav_path, toc, releases[0] if len(releases) == 1 else None)
         if hidden:
             say(f"hidden audio: {'; '.join(h['title'] for h in hidden)}")
+        # [SPEC-SIL-010]: silent tracks, measured on the WAV for the same reason.
+        silent = [] if whole_disc or silence_as_tracks else \
+            find_silent(wav_path, toc, releases, hidden)["runs"]
+        for run in silent:
+            say(f"silence: tracks {run['first']}-{run['last']}, one album passage of "
+                f"{(run['end_ms'] - run['start_ms']) / 1000:.1f} s and no radio passage")
         # [SPEC-RIP-092]: measured again here, so a join the preview offered
         # and this measurement does not find is refused before encoding.
-        check_fold(hidden, fold, whole_disc)
+        check_fold(hidden, fold, whole_disc, silent)
         if merge and any(h.get("leads_into") in merge["kept"] for h in hidden if h["start_ms"] in set(fold)):
             raise ValueError("hidden audio is joined only to a track this rip plays, not to one the earlier rip "
                              "keeps -- nothing was encoded or moved")
@@ -2595,7 +2824,7 @@ def do_ingest(db_path: str, folder: str, commit: bool, release: str | None = Non
             result = commit_rip(conn, folder, toc, mp3_path, audio_md5, disc_outcome, releases,
                                 rip_report, secret.acoustid_key(required=False), chosen=bool(release),
                                 occasions=occasions, whole_disc=whole_disc, hidden=hidden, fold=fold,
-                                kept=merge["kept"] if merge else frozenset())
+                                kept=merge["kept"] if merge else frozenset(), silent=silent)
             if merge:
                 certain = bool(release) or (disc_outcome == "exact" and len(releases) == 1)
                 if certain and releases:
@@ -2709,6 +2938,9 @@ def main() -> int:
     ap.add_argument("--fold", type=int, action="append", default=[], metavar="START_MS",
                     help="also join the hidden audio starting at START_MS to the track it leads into, "
                          "as one more radio passage; repeat for each [SPEC-RIP-092]")
+    ap.add_argument("--silence-as-tracks", action="store_true",
+                    help="add silent tracks as any other track, a radio and an album passage each, rather than "
+                         "one album passage for each run of them [SPEC-SIL-060]")
     ap.add_argument("--keep-earlier", metavar="N,N|none",
                     help="added to the folder of an earlier rip of this disc: the tracks to keep playing from "
                          "the earlier rip's files, or 'none'; omitted, the logs decide [SPEC-AGN-035]")
@@ -2722,7 +2954,8 @@ def main() -> int:
                            into=args.into, keep_flac=args.keep_flac,
                            occasions=tuple(args.occasions or ()), allow_duplicate=args.allow_duplicate,
                            album_name_max=args.album_name_max, whole_disc=args.whole_disc,
-                           fold=tuple(args.fold), keep_earlier=keep_earlier_arg(args.keep_earlier))
+                           fold=tuple(args.fold), keep_earlier=keep_earlier_arg(args.keep_earlier),
+                           silence_as_tracks=args.silence_as_tracks)
     except Exception as e:                                    # noqa: BLE001
         if args.json:
             print(json.dumps({"ok": False, "error": str(e)}))
@@ -2744,6 +2977,13 @@ def main() -> int:
                 say(f"  hidden audio: {h['title']}, {h['start_ms']}-{h['end_ms']} ms"
                     + (f" -- --fold {h['start_ms']} also joins it to track {h['leads_into']} [SPEC-RIP-092]"
                        if h.get("leads_into") is not None else ""))
+            for run in result.get("silent") or ():
+                say(f"  silence: tracks {run['first']}-{run['last']}, "
+                    f"{(run['end_ms'] - run['start_ms']) / 1000:.1f} s -- one album passage, no radio passage; "
+                    f"--silence-as-tracks adds them as tracks instead [SPEC-SIL-060]")
+            if result.get("titled_not_silent"):
+                say(f"  titled [silence] but not silent, so left as tracks: "
+                    f"{', '.join(map(str, result['titled_not_silent']))}")
         else:
             say(f"{result['tracks']} track(s): {result['identified']} identified, "
                 f"{result['ambiguous']} ambiguous (in the review queue), "
@@ -2752,6 +2992,11 @@ def main() -> int:
                 f"(disc: {result['disc_outcome']}, {result['candidates']} candidate(s))")
             for f in result.get("folded") or ():
                 say(f"  {f['title']} joined to track {f['track']}: one passage, {f['start_ms']}-{f['end_ms']} ms")
+            for run in result.get("silent") or ():
+                say(f"  silence: tracks {run['first']}-{run['last']} as one album passage, "
+                    f"{run['start_ms']}-{run['end_ms']} ms"
+                    + (f"; {len(run['unverified'])} not in AccurateRip, which is not damage [SPEC-SIL-040]"
+                       if run["unverified"] else "") + (f"; held: {run['held']}" if run["held"] else ""))
             say(f"in {result['folder']}; WAV {'removed' if result.get('wav_removed') else 'kept'}"
                 + (f"; FLAC kept at {result['flac']}" if result.get("flac") else ""))
     return 0

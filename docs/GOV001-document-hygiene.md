@@ -234,6 +234,7 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-MESH-*]` | Mesh sync between Vipunen peers: the diff, its review and conflict resolution, the peer registry — partly built; whether the rest is superseded by star sync is open ([ROADMAP](ROADMAP.md)) | [SPEC035](spec/SPEC035-mesh-library-sync.md), [SPEC040](spec/SPEC040-peer-registry-and-review-ui.md) |
 | `[SPEC-NSH-*]`, `[IMPL-NSH-*]` | The mesh without ssh: signed requests, and the player's half of star sync | [SPEC054-mesh-without-ssh.md](spec/SPEC054-mesh-without-ssh.md), [IMPL017](IMPL017-closing-the-mesh-arc.md) |
 | `[SPEC-NKP-*]` | The catalogue patch named by natural key rather than local id, and sent in parts | [SPEC058-catalogue-patch-by-natural-key.md](spec/SPEC058-catalogue-patch-by-natural-key.md) |
+| `[SPEC-SIL-*]` | Silent tracks: a run of them one album passage, and none for rotation | [SPEC076-silent-tracks.md](spec/SPEC076-silent-tracks.md) |
 | `[SPEC-UID-*]` | Permanent passage identity, one catalogue on every node, and a hub that can move | [SPEC075-permanent-identity-and-a-movable-hub.md](spec/SPEC075-permanent-identity-and-a-movable-hub.md) |
 | `[SPEC-TN-*]` | Trusted networks: discovery and the mesh only on networks the operator chose | [SPEC051-trusted-networks.md](spec/SPEC051-trusted-networks.md) |
 | `[SPEC-WAG-*]` | The web access guard: which HTTP requests the player answers | [SPEC052-web-access-guard.md](spec/SPEC052-web-access-guard.md) |

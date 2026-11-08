@@ -349,6 +349,9 @@
         // is one, and its audio is already in the album passages around it.
         let own = r.passage_id, all = null, says = '';
         if (asAlbum) {
+          // An album passage with no radio one -- a run of silent tracks
+          // [SPEC-SIL-070] -- is its own album passage, and plays only here.
+          if (r.album_only) says = 'album only — rotation never plays it';
           if (r.album_passage == null) {
             says = 'radio cut — not in Select all';
           } else {
@@ -414,8 +417,9 @@
         li.appendChild(info);
         // Make this recording a seed of a time slot [SPEC-PGM-420]: the
         // shared preference panel, opened beneath this row. An unidentified
-        // passage names no recording, and cannot be one.
-        if (r.mbid) {
+        // passage names no recording, and cannot be one; nor can one rotation
+        // never plays [SPEC-SIL-070].
+        if (r.mbid && !r.album_only) {
           const seed = document.createElement('a');
           seed.className = 'info seed';
           seed.href = '#';

@@ -332,6 +332,176 @@ def test_find_hidden():
           "a silent pregap and a two-second gap are not hidden audio")
 
 
+def _silent_disc_release(rid="rel-S"):
+    """A disc shaped like *Broken*: a song, four silent tracks that are one
+    recording, a song."""
+    rec = lambda n, i, t: {"position": n, "title": t, "recording": {  # noqa: E731
+        "id": i, "title": t, "artist-credit": [{"artist": {"id": "art-s", "name": "Artist S"}}]}}
+    return {"id": rid, "title": "Silent", "media": [{"position": 1, "tracks": [
+        rec(1, "rec-s1", "Before"), *(rec(n, "rec-silence", "[silence]") for n in (2, 3, 4, 5)),
+        rec(6, "rec-s6", "After")]}]}
+
+
+SILENT_TRACKS = [cd_toc.TocTrack(number=1, start_ms=0, end_ms=60000, start_sector=0, end_sector=0),
+                 *(cd_toc.TocTrack(number=n, start_ms=60000 + (n - 2) * 1000, end_ms=61000 + (n - 2) * 1000,
+                                   start_sector=0, end_sector=0, title="[silence]") for n in (2, 3, 4, 5)),
+                 cd_toc.TocTrack(number=6, start_ms=64000, end_ms=120000, start_sector=0, end_sector=0)]
+SILENT_RUN = [{"first": 2, "last": 5, "start_ms": 60000, "end_ms": 64000, "tracks": [2, 3, 4, 5], "titled": True}]
+
+
+def test_silent_passages():
+    """[SPEC-SIL-020..050]: a run of silent tracks is one album passage of
+    their whole length and no radio passage; each track is still identified
+    and the release linked, with nothing sent to AcoustID or the review
+    queue; AccurateRip's "not present" for one is not damage, and anything
+    else is, holding the run's passage."""
+    import passage_hold
+    print("commit_rip: a run of silent tracks, one album passage")
+    tmpdir = tempfile.mkdtemp()
+    mp3_path = os.path.join(tmpdir, "dao.mp3")
+    with open(mp3_path, "wb") as f:
+        f.write(b"\0" * 128)
+    toc = cd_toc.DiscToc(tracks=SILENT_TRACKS, leadout_sector=0, source="eac-cue")
+    said = lambda n, ok, d: cd_toc.TrackRipReport(number=n, ok=ok, detail=d)  # noqa: E731
+    # As *Broken*'s log reads: the music verified, most of the silence not in the database.
+    report = cd_toc.RipReport(tracks=[said(1, True, "accurately ripped"),
+                                      said(2, False, "not present in database"),
+                                      said(3, False, "not present in database"),
+                                      said(4, False, "not present in database"),
+                                      said(5, True, "accurately ripped"),
+                                      said(6, True, "accurately ripped")], all_ok=False)
+    old_identify = segment_dao.identify_recording
+
+    def no_acoustid(path, start_s, end_s, key):
+        # The songs either side may be asked about; the silence never.
+        if 60 <= start_s < 64:
+            raise AssertionError("AcoustID must not be asked about silence")
+        return None
+    segment_dao.identify_recording = no_acoustid
+    c = fixture()
+    try:
+        r = ingest_cd.commit_rip(c, "/rip", toc, mp3_path, MD5, "exact", [_silent_disc_release()], report,
+                                 "fake-key", chosen=True, silent=SILENT_RUN)
+        rows = [tuple(x) for x in c.execute("SELECT kind, start_ms, end_ms FROM passages ORDER BY start_ms, kind")]
+        check(rows == [("album", 0, 60000), ("radio", 0, 60000), ("album", 60000, 64000),
+                       ("album", 64000, 120000), ("radio", 64000, 120000)],
+              f"the songs a pair each, the four silent tracks one album passage of all four and no radio: {rows}")
+        quiet = c.execute("SELECT passage_id FROM passages WHERE start_ms = 60000").fetchone()[0]
+        w = [tuple(x) for x in c.execute("SELECT mbid, weight FROM passage_recordings WHERE passage_id = ?",
+                                         (quiet,))]
+        check(w == [("rec-silence", 1.0)], f"one recording for all four, so it carries it whole: {w}")
+        check(r["identified"] == 6 and r["ambiguous"] == 0 and r["unidentified"] == 0,
+              f"every track identified from the release: {r}")
+        check(c.execute("SELECT COUNT(*) FROM id_checks").fetchone()[0] == 0, "nothing waits in review")
+        links = [tuple(x) for x in c.execute("SELECT mbid, position FROM release_recordings ORDER BY position")]
+        check(links == [("rec-s1", 1), ("rec-silence", 2), ("rec-s6", 6)],
+              f"the release linked, the silence at its first place: {links}")
+        check(c.execute("SELECT COUNT(*) FROM ingest_decisions WHERE outcome = 'verification_failed'"
+                        ).fetchone()[0] == 0 and r["verification_failed"] == 0,
+              "not in AccurateRip is not a failure, for a silent track")
+        passage_hold.ensure_column(c)
+        check(c.execute("SELECT COUNT(*) FROM passages WHERE director_hold IS NOT NULL").fetchone()[0] == 0,
+              "and nothing is held")
+        run = r["silent"][0] if r["silent"] else {}
+        check(len(r["silent"]) == 1 and run["tracks"] == 4 and run["unverified"] == [2, 3, 4]
+              and run["passage_id"] == quiet and run["held"] is None, f"said in the result: {r['silent']}")
+        d = json.loads(c.execute("SELECT detail FROM ingest_decisions WHERE outcome = 'silent_run'").fetchone()[0])
+        check((d["first"], d["last"], d["start_ms"], d["end_ms"], d["unverified"]) == (2, 5, 60000, 64000, [2, 3, 4]),
+              f"and in the decisions: {d}")
+    finally:
+        c.close()
+
+    # A real failure in a silent track holds the run's passage, and a later
+    # hold finds it by span -- not as the third album passage it would be by count.
+    report.tracks[2] = said(3, False, "could not be verified")
+    c = fixture()
+    try:
+        r = ingest_cd.commit_rip(c, "/rip", toc, mp3_path, MD5, "exact", [_silent_disc_release()], report,
+                                 None, chosen=True, silent=SILENT_RUN)
+        held = [tuple(x) for x in c.execute("SELECT kind, start_ms, director_hold FROM passages "
+                                             "WHERE director_hold IS NOT NULL")]
+        check(held == [("album", 60000, "damaged rip: could not be verified")] and r["verification_failed"] == 1,
+              f"the run's passage held, saying why: {held}")
+        c.execute("UPDATE passages SET director_hold = NULL")
+        again = passage_hold.damaged(c)
+        check([(x["kind"], x["passage_id"]) for x in again] == [("album", run["passage_id"])],
+              f"found again by span, the album passage alone: {again}")
+    finally:
+        c.close()
+
+    # No edition: the silence is a recording of its own, titled for what it is.
+    c = fixture()
+    try:
+        r = ingest_cd.commit_rip(c, "/rip", toc, mp3_path, MD5, "none", [], None, "fake-key", silent=SILENT_RUN)
+        rec = [tuple(x) for x in c.execute(
+            "SELECT r.mbid, r.title, r.source FROM passage_recordings pr JOIN recordings r USING (mbid) "
+            "JOIN passages p USING (passage_id) WHERE p.start_ms = 60000")]
+        check(rec == [(f"local:silence:{MD5}:60000", "[silence]", "cd:silence")],
+              f"one recording of the run's own, never AcoustID's: {rec}")
+        check(c.execute("SELECT COUNT(*) FROM id_checks WHERE passage_id IN "
+                        "(SELECT passage_id FROM passages WHERE start_ms BETWEEN 60000 AND 63000)").fetchone()[0] == 0,
+              "and nothing about it waits in review")
+    except Exception as e:
+        check(False, f"a silent run with no edition raised {e!r}")
+    finally:
+        segment_dao.identify_recording = old_identify
+        c.close()
+
+    # Hidden audio cannot be joined to a silent track: it has no radio passage.
+    c = fixture()
+    try:
+        ingest_cd.commit_rip(c, "/rip", toc, mp3_path, MD5, "exact", [_silent_disc_release()], None, None,
+                             chosen=True, silent=SILENT_RUN,
+                             hidden=[{"where": "gap", "start_ms": 59000, "end_ms": 60000, "leads_into": 2,
+                                      "title": "x"}], fold=(59000,))
+        check(False, "a join into a silent track must be refused")
+    except ValueError:
+        check(c.execute("SELECT COUNT(*) FROM passages").fetchone()[0] == 0, "refused before anything is written")
+    finally:
+        c.close()
+    # A track an earlier rip keeps splits the run around it [SPEC-AGN-030].
+    parts = ingest_cd._runs_without(SILENT_RUN, {3})
+    check([(p["first"], p["last"], p["tracks"]) for p in parts] == [(2, 2, [2]), (4, 5, [4, 5])],
+          f"split where the kept track was: {parts}")
+
+
+def test_find_silent():
+    """[SPEC-SIL-010], with a real WAV and ffmpeg: digital silence found
+    track by track, a next track's first sound inside the edge allowed, a
+    track titled [silence] that is not silent left a track and said."""
+    import subprocess
+    if not ingest_cd.FFMPEG:
+        check(False, "find_silent needs ffmpeg")
+        return
+    print("find_silent: a run of silent tracks, measured")
+    wav = os.path.join(tempfile.mkdtemp(), "disc.wav")
+    # 10 s of tone, 4.98 s of zeros, 10 s of tone: the second tone arrives
+    # 20 ms before track 6 -- as Physical does in Broken's track 97.
+    subprocess.run([ingest_cd.FFMPEG, "-v", "error", "-y",
+                    "-f", "lavfi", "-i", "sine=frequency=330:duration=10",
+                    "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo:d=4.98",
+                    "-f", "lavfi", "-i", "sine=frequency=440:duration=10.02", "-filter_complex",
+                    "[0]aformat=channel_layouts=stereo:sample_rates=44100[a];"
+                    "[2]aformat=channel_layouts=stereo:sample_rates=44100[c];[a][1][c]concat=n=3:v=0:a=1",
+                    "-ar", "44100", "-ac", "2", wav], check=True)
+    T = lambda n, a, b, t=None: cd_toc.TocTrack(number=n, start_ms=a, end_ms=b, start_sector=0,  # noqa: E731
+                                                end_sector=0, title=t)
+    tracks = [T(1, 0, 10000, "One"), *(T(n, 10000 + (n - 2) * 1000, 11000 + (n - 2) * 1000) for n in (2, 3, 4, 5, 6)),
+              T(7, 15000, 25000, "[silence]")]
+    got = ingest_cd.find_silent(wav, cd_toc.DiscToc(tracks=tracks, leadout_sector=0, source="eac-cue"),
+                                [_silent_disc_release()])
+    check([(r["first"], r["last"], r["start_ms"], r["end_ms"]) for r in got["runs"]] == [(2, 6, 10000, 15000)],
+          f"tracks 2-6 one run, 20 ms of the next track inside the edge allowed: {got}")
+    check(got["runs"] and got["runs"][0]["titled"] is False,
+          f"measured silent, not titled so by the sheet or at 6 by the edition: {got}")
+    check(got["titled_not_silent"] == [7], f"track 7 titled [silence] but sounding, left a track: {got}")
+    # Hidden audio between two silent tracks ends the run there.
+    split = ingest_cd.find_silent(wav, cd_toc.DiscToc(tracks=tracks, leadout_sector=0, source="eac-cue"), [],
+                                  hidden=[{"where": "gap", "start_ms": 12000, "end_ms": 12000}])
+    check([(r["first"], r["last"]) for r in split["runs"]] == [(2, 3), (4, 6)],
+          f"split at the hidden audio: {split['runs']}")
+
+
 def test_record_release():
     """`record_release` links only the release's own recording at each place,
     and moves `chosen` off any other release that recording was on."""
@@ -1677,6 +1847,8 @@ def main() -> int:
     test_hidden_passages()
     test_folded_passage()
     test_find_hidden()
+    test_silent_passages()
+    test_find_silent()
     test_second_disc_end_to_end()
     # `commit_rip` stats the encoded file for the `files` row -- a real,
     # empty file is enough; identification never actually reads it because

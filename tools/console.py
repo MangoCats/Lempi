@@ -1546,6 +1546,8 @@ class Handler(BaseHTTPRequestHandler):
                      "duplicate_ok": b.get("duplicate_ok") is True,
                      # [SPEC-RIP-114]: the whole disc as one passage, when ticked.
                      "whole_disc": b.get("whole_disc") is True,
+                     # [SPEC-SIL-060]: silent tracks as tracks, when unticked.
+                     "silence_as_tracks": b.get("silence_as_tracks") is True,
                      # [SPEC-RIP-092]: each hidden span ticked to be joined to
                      # its track, by its start; whole numbers only.
                      "fold": [s for s in b.get("fold") or [] if isinstance(s, int) and not isinstance(s, bool)],

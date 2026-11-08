@@ -875,6 +875,11 @@ pub struct BrowseTrack {
     /// an equal passage on another file `[SPEC-HOLD-070]`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stand_in: Option<StandIn>,
+    /// An album passage with no radio passage, listed in its opened album
+    /// so a whole-album play keeps it `[SPEC-SIL-070]` -- a run of silent
+    /// tracks, *Broken*'s 91 -- and so never a radio row.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub album_only: bool,
 }
 
 /// An unheld passage of a held album passage's recording, from another file,
@@ -2260,13 +2265,22 @@ impl Library {
     pub fn browse_tracks(&self, f: &BrowseFilter) -> Result<Vec<BrowseTrack>, DbError> {
         // An album opened as itself is its members, by identity
         // `[SPEC-AID-040]`; by name, every album of that name, as before.
-        let members = self.album_members(f)?;
+        let mut members = self.album_members(f)?;
+        // And its album passages that have no radio passage `[SPEC-SIL-070]`,
+        // each in the place of a track on its file. By identity only: an
+        // album opened by name stays its radio passages, as before.
+        let alone = match members.as_mut() {
+            Some(ids) if !ids.is_empty() => self.album_only(ids)?,
+            _ => HashSet::new(),
+        };
         let opened = f.album.is_some() || members.is_some();
         let (scope, by_name) = match &members {
             Some(ids) if ids.is_empty() => return Ok(Vec::new()),
             Some(ids) => {
+                // Named one by one, so the kind needs no saying: the radio
+                // passages `album_members` found, and the album-only ones.
                 let list = ids.keys().map(i64::to_string).collect::<Vec<_>>().join(",");
-                (format!("{NAMED} AND p.passage_id IN ({list})"), String::new())
+                (format!("{} WHERE p.passage_id IN ({list})", named_passages!()), String::new())
             }
             None => (NAMED.to_string(), f.album.clone().unwrap_or_default()),
         };
@@ -2322,6 +2336,7 @@ impl Library {
                         album_passage: None,
                         album_hold: None,
                         stand_in: None,
+                        album_only: false,
                     })
                 },
             )
@@ -2336,10 +2351,49 @@ impl Library {
         if let Some(place) = &members {
             out.sort_by_key(|t| place.get(&t.passage_id).copied().unwrap_or_default());
         }
+        for t in out.iter_mut() {
+            t.album_only = alone.contains(&t.passage_id);
+        }
         if opened {
             self.as_recorded(&mut out)?;
         }
         Ok(out)
+    }
+
+    /// Adds to an opened album's `members` each album passage on one of its
+    /// files that no radio passage covers more than half of -- the pairing
+    /// rule of `[SPEC-ALB-030]`, from the other side -- in the place of a
+    /// member on that file, and returns which they are `[SPEC-SIL-070]`. A
+    /// run of silent tracks is one such `[SPEC-SIL-020]`; until it was, they
+    /// were left out of the album and of a whole-album play `[SPEC-ALB-900]`.
+    /// A hidden intro joined to its track is a radio passage over two album
+    /// passages, each of which still has its own radio passage, so none is
+    /// added for it.
+    fn album_only(&self, members: &mut HashMap<i64, usize>) -> Result<HashSet<i64>, DbError> {
+        let list = members.keys().map(i64::to_string).collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT a.passage_id, MIN(m.passage_id) FROM __LIB__.passages m \
+               JOIN __LIB__.passages a ON a.file_id = m.file_id AND a.kind = 'album' \
+              WHERE m.passage_id IN ({list}) \
+                AND NOT EXISTS (SELECT 1 FROM __LIB__.passages r \
+                                 WHERE r.file_id = a.file_id AND r.kind = 'radio' \
+                                   AND 2 * (MIN(a.end_ms, r.end_ms) - MAX(a.start_ms, r.start_ms)) \
+                                       > a.end_ms - a.start_ms) \
+              GROUP BY a.passage_id"
+        );
+        let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let found = st
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
+            .map_err(|e| DbError::Query(e.to_string()))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        let mut alone = HashSet::new();
+        for (passage, beside) in found {
+            let place = members.get(&beside).copied().unwrap_or_default();
+            members.insert(passage, place);
+            alone.insert(passage);
+        }
+        Ok(alone)
     }
 
     /// An opened album's tracks, each with the album passage a tick queues
@@ -3795,6 +3849,58 @@ mod tests {
         let all = lib.browse_tracks(&BrowseFilter::default()).unwrap();
         assert!(all.iter().all(|t| t.album_passage.is_none() && t.album_hold.is_none()),
                 "only an opened album carries them");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `[SPEC-SIL-070]` A run of silent tracks is one album passage with no
+    /// radio passage `[SPEC-SIL-020]`. Opened by its identity, the album lists
+    /// it in its place -- after the track before, before the track after -- as
+    /// its own album passage, so *Select all* plays the silence at its length.
+    /// No other listing has it: rotation never plays it.
+    #[test]
+    fn an_opened_album_lists_its_silence() {
+        let dir = std::env::temp_dir().join(format!("lempi-silence-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lib.db");
+        let _ = std::fs::remove_file(&path);
+        {
+            let c = rusqlite::Connection::open(&path).unwrap();
+            c.execute_batch(include_str!("../../../../sql/schema.sql")).unwrap();
+            c.execute_batch(
+                "INSERT INTO releases (mbid,title,source) VALUES ('br','Broken','mb');
+                 INSERT INTO recordings (mbid,title,source) VALUES
+                     ('pin','Pinion','mb'), ('sil','[silence]','mb'), ('phy','Physical','mb');
+                 INSERT INTO release_recordings (release_mbid,mbid,position,source,chosen) VALUES
+                     ('br','pin',1,'cd:import',1), ('br','sil',2,'cd:import',1), ('br','phy',6,'cd:import',1);
+                 INSERT INTO files (file_id,audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen)
+                   VALUES (1,'m1','/Broken.mp3',1,1.0,'mp3',120000,'t','t');
+                 INSERT INTO file_releases (audio_md5,release_mbid,source) VALUES ('m1','br','cd:import');
+                 INSERT INTO passages (passage_id,file_id,kind,start_ms,end_ms,boundary_src) VALUES
+                     (1,1,'radio',0,60000,'cd'), (2,1,'album',0,60000,'cd'),
+                     (3,1,'album',60000,64000,'cd'),
+                     (4,1,'radio',64000,120000,'cd'), (5,1,'album',64000,120000,'cd');
+                 INSERT INTO passage_recordings (passage_id,mbid,weight,source) VALUES
+                     (1,'pin',1,'mb'), (2,'pin',1,'mb'), (3,'sil',1,'mb'), (4,'phy',1,'mb'), (5,'phy',1,'mb');",
+            )
+            .unwrap();
+        }
+        let lib = Library::open(&path).unwrap();
+        for f in [BrowseFilter { album_id: Some("r:br".into()), ..Default::default() },
+                  BrowseFilter { album_of: Some(4), ..Default::default() }] {
+            let rows = lib.browse_tracks(&f).unwrap();
+            let got: Vec<_> = rows.iter().map(|t| (t.passage_id, t.album_passage, t.album_only)).collect();
+            assert_eq!(got, [(1, Some(2), false), (3, Some(3), true), (4, Some(5), false)],
+                       "the silence in its place, its own album passage: {f:?}");
+            let json = serde_json::to_value(&rows).unwrap();
+            assert_eq!((json[0].get("album_only"), json[1]["album_only"].as_bool()), (None, Some(true)),
+                       "said only where it is so");
+        }
+        let all = lib.browse_tracks(&BrowseFilter::default()).unwrap();
+        let mut ids: Vec<_> = all.iter().map(|t| t.passage_id).collect();
+        ids.sort();
+        assert_eq!(ids, [1, 4], "never a radio row");
+        let by_name = lib.browse_tracks(&BrowseFilter { album: Some("Broken".into()), ..Default::default() }).unwrap();
+        assert!(by_name.iter().all(|t| t.passage_id != 3), "an album opened by name is its radio passages, as before");
         std::fs::remove_dir_all(&dir).ok();
     }
 

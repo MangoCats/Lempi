@@ -335,7 +335,29 @@ function showPreview(p, folder, area) {
         `${h.title}  (${S.clock(h.start_ms)}–${S.clock(h.end_ms)} in the disc, ${S.clock(h.end_ms - h.start_ms)})` }), join);
     })),
     S.el('div', { class: 'meta', text: 'With "One piece" ticked, it is simply part of the whole disc.' })) : null;
-  whole.onchange = () => folds.forEach(cb => { cb.disabled = whole.checked; });
+  // [SPEC-SIL-010]: tracks measured as digital silence -- Broken's 91 --
+  // become one album passage a run and no radio passage, so a whole-album
+  // play keeps the silence at its length and rotation never plays it. Ticked
+  // for the person, since it is measured; unticked, they are tracks again
+  // [SPEC-SIL-060].
+  const asOne = S.el('input', { type: 'checkbox' });
+  asOne.checked = true;
+  const runs = p.silent || [];
+  const notSilent = p.titled_not_silent || [];
+  const silence = runs.length || notSilent.length ? S.el('div', { class: 'verdict note' },
+    runs.length ? S.el('b', { text: 'Silent tracks on this disc:' }) : null,
+    runs.length ? S.el('ul', {}, ...runs.map(r => S.el('li', { text:
+      `${r.first === r.last ? `Track ${r.first}` : `Tracks ${r.first}–${r.last}`}`
+      + `  (${S.clock(r.start_ms)}–${S.clock(r.end_ms)} in the disc, ${S.clock(r.end_ms - r.start_ms)})`
+      + (r.titled ? '' : ' -- measured silent, though not titled [silence]') }))) : null,
+    runs.length ? S.el('label', { style: 'display:block;margin:.15rem 0' }, asOne,
+      ' Add each run as one album passage, with no radio passage -- the album keeps its silence, rotation never plays it') : null,
+    notSilent.length ? S.el('div', { class: 'meta', text:
+      `Titled [silence] but not silent, so added as tracks: ${notSilent.map(trackName).join(', ')}` }) : null) : null;
+  whole.onchange = () => {
+    folds.forEach(cb => { cb.disabled = whole.checked; });
+    asOne.disabled = whole.checked;
+  };
   const add = S.el('button', { class: 'chip on', text: 'Add to library' });
   if (rels.length === 1) setWarn(rels[0]);
   else if (!rels.length) showPrior(p.earlier);
@@ -352,6 +374,7 @@ function showPreview(p, folder, area) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ folder, release: chosen, into: into.value.trim(), occasions,
         duplicate_ok: duplicate && again.checked, whole_disc: whole.checked, keep_earlier: keepEarlier,
+        silence_as_tracks: runs.length > 0 && !whole.checked && !asOne.checked,
         fold: whole.checked ? [] : folds.filter(cb => cb.checked).map(cb => Number(cb.value)) }) })).json();
     if (r.error) { add.disabled = false; return alert(r.error); }
     // The rip leaves the inbox while it is added, and its card with it: the
@@ -376,7 +399,7 @@ function showPreview(p, folder, area) {
   area.replaceChildren(
     S.el('div', { class: 'steps' }, S.el('span', { text: rels.length > 1
       ? 'MusicBrainz knows several editions of this disc -- choose yours:' : 'This is the disc:' }), help('add')),
-    setBox, gap, prior, planBox, pick, warn, hidden, occ, wholeRow,
+    setBox, gap, prior, planBox, pick, warn, hidden, silence, occ, wholeRow,
     S.el('div', { class: 'controls' }, S.el('span', { style: 'align-self:center;font-size:.88rem',
       text: 'Album folder, in your music folder:' }), into, add),
     // [SPEC-NAM-010..040]: why a long title's folder is shorter than the
