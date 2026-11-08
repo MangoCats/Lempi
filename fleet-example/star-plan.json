@@ -4,6 +4,7 @@
  "keep_runs": 5,
  "prune": {"prefix": "pre-sync-", "keep": 3},
  "backups": {"dir": "data/backups", "keep_daily": 14, "keep_monthly": 12, "max_age_hours": 30,
+             "keep_snapshot_days": 30, "keep_snapshots": 3,
              "mirror": {"host": "someone@workshop", "dir": "/home/someone/lempi-hub-backups"}},
  "nodes": {
   "speaker-a": {"host": "pi@speaker-a", "member": "<the player's mesh fingerprint>"},

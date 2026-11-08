@@ -37,6 +37,10 @@ its mirror.
                                                       `keep_runs`) that nothing still needs; removed
                                                       only with --commit, and by every commit when the
                                                       plan sets `keep_runs` [SPEC-STAR-089]
+    python tools/star_sync.py PLAN prune-snapshots [--commit]
+                                                      the copies tools took before an edit, past the
+                                                      plan's `keep_snapshot_days`; removed only with
+                                                      --commit, and by every backup [SPEC-STAR-084]
     python tools/star_sync.py PLAN adopt NODE --library /path/on/node/library.db [--force] [--tmp DIR]
                                                       a node whose catalogue was seeded by hand: its own
                                                       catalogue, copied on it, becomes the copy last sent,
@@ -246,6 +250,96 @@ def prune_runs(plan, keep, spare=(), commit=True):
         say(f"  {'pruned' if commit else 'would prune'} {d} ({n / 1e9:.1f} GB)")
     say(f"RESULT runs: {len(gone)} {'pruned' if commit else 'to prune'}, {freed / 1e9:.1f} GB"
         + ("" if commit else " -- nothing removed: --commit removes them"))
+    return 0
+
+
+# [SPEC-STAR-084]: the copies a tool takes before an edit of its own --
+# `pre-passage-ends-20261106/`, `before-wywh-swap-2026-11-01/` -- lie in the
+# backups folder beside the daily store, and nothing removed one: on 2026-11-08,
+# 15 of them held 17 GB. A snapshot is a folder there whose name ends in its
+# date; `objects/` and `days/` are the daily store's, pruned by its own rule.
+SNAPSHOT_DATE = re.compile(r"-(\d{4})-?(\d{2})-?(\d{2})(?:T\d{4,6}Z)?$")
+SNAPSHOT_COPY = re.compile(r"\.db(?:-wal|-shm|-journal)?$")
+SNAPSHOT_KEEP = "KEEP"
+NOT_SNAPSHOTS = ("objects", "days")
+
+
+def snapshots_to_prune(plan, today=None):
+    """The snapshots past `keep_snapshot_days` that are not among the newest
+    `keep_snapshots`, and every older one kept, with why. A snapshot holding
+    anything but database copies is kept: `prime-time-original-20260927/` is
+    a song's original file, which no daily backup also holds."""
+    b = plan["backups"]
+    days, newest = b.get("keep_snapshot_days"), b.get("keep_snapshots", 3)
+    root = at_root(b["dir"])
+    if days is None or not os.path.isdir(root):
+        return [], {}
+    cutoff = (today or now().date()) - dt.timedelta(days=days)
+    # A sync's own `pre-sync-` copies have their rule already: the newest
+    # `prune.keep` after each verified commit.
+    theirs = (plan.get("prune") or {}).get("prefix")
+    dated, kept = [], {}
+    for d in sorted(os.listdir(root)):
+        if d in NOT_SNAPSHOTS or not os.path.isdir(os.path.join(root, d)):
+            continue
+        if theirs and d.startswith(theirs):
+            continue
+        m = SNAPSHOT_DATE.search(d)
+        if not m:
+            kept[d] = "its name ends in no date"
+            continue
+        try:
+            dated.append((dt.date(*map(int, m.groups())), d))
+        except ValueError:
+            kept[d] = "the date its name ends in is no date"
+    # The newest few are counted among the copies of the pair alone, so a
+    # snapshot kept for another reason never takes the place of one.
+    plain = []
+    for when, d in sorted(dated):
+        p = os.path.join(root, d)
+        files = [os.path.relpath(os.path.join(w, f), p) for w, _s, fs in os.walk(p) for f in fs]
+        other = [f for f in files if not SNAPSHOT_COPY.search(f)]
+        if when >= cutoff:
+            pass
+        elif SNAPSHOT_KEEP in files:
+            kept[d] = f"a {SNAPSHOT_KEEP} file in it says so"
+            continue
+        elif other:
+            kept[d] = f"it holds more than database copies: {other[0]}" + (f" and {len(other) - 1} more" if len(other) > 1 else "")
+            continue
+        plain.append((when, d))
+    young = {d for _w, d in plain[-newest:]} if newest > 0 else set()
+    gone = []
+    for when, d in plain:
+        if when >= cutoff:
+            continue
+        if d in young:
+            kept[d] = f"one of the newest {newest}"
+        else:
+            gone.append(d)
+    return gone, kept
+
+
+def prune_snapshots(plan, commit=True, today=None):
+    """Remove the snapshots `snapshots_to_prune` names, saying what is kept and why."""
+    b = plan["backups"]
+    if b.get("keep_snapshot_days") is None:
+        say("  snapshots: no `keep_snapshot_days` in the plan, so none is pruned")
+        return 0
+    root = at_root(b["dir"])
+    gone, kept = snapshots_to_prune(plan, today)
+    say(f"  snapshots: those of the last {b['keep_snapshot_days']} days kept, and the newest {b.get('keep_snapshots', 3)}")
+    for d, why in kept.items():
+        say(f"  snapshots: {d} kept -- {why}")
+    freed = 0
+    for d in gone:
+        n = tree_bytes(os.path.join(root, d))
+        if commit:
+            rm(os.path.join(root, d))
+        freed += n
+        say(f"  {'pruned' if commit else 'would prune'} {d} ({n / 1e9:.1f} GB)")
+    say(f"RESULT snapshots: {len(gone)} {'pruned' if commit else 'to prune'}, {freed / 1e9:.1f} GB"
+        + ("" if commit or not gone else " -- nothing removed: --commit removes them"))
     return 0
 
 
@@ -2091,6 +2185,9 @@ def backup(plan):
         if f.endswith(".db") and f[:-3] not in wanted:
             os.chmod(os.path.join(objs, f), 0o644)
             os.remove(os.path.join(objs, f))
+    # [SPEC-STAR-084]: only after today's backup is stored, so a snapshot is
+    # never the newest copy there is.
+    prune_snapshots(plan)
     st = proofs(root)
     prove_local(root, wanted, st)
     save_proofs(root, st)
@@ -2479,6 +2576,9 @@ def main(argv):
         if keep is None:
             raise SystemExit("prune-runs needs --keep N, or `keep_runs` in the plan")
         return prune_runs(plan, keep, commit=go)
+    if cmd == "prune-snapshots":
+        go, rest = take(rest, "--commit", valued=False)
+        return prune_snapshots(plan, commit=go)
     if cmd == "adopt":
         library, rest = take(rest, "--library")
         tmp, rest = take(rest, "--tmp")

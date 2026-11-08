@@ -279,6 +279,75 @@ def test_node_integrity():
               and "STALE: oldbuild" not in said, f"status: {said}")
 
 
+def test_prune_snapshots():
+    """[SPEC-STAR-084]: a snapshot past `keep_snapshot_days` is removed unless it
+    is among the newest few, holds a KEEP file, or holds anything but database
+    copies; one whose name carries no date is never touched, and the daily
+    store's own folders are not snapshots. Without the setting, nothing goes."""
+    import io
+    import contextlib
+    print("snapshots pruned past their days, never one kept for a reason")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as root:
+        made = {
+            "pre-rekey-20260927T0415Z": ["library.db", "listener.db"],
+            "pre-covers-20260927": ["library.db"],
+            "prime-time-original-20260927": ["Prime Time.mp3"],
+            "before-merge-2026-09-30": ["library.db", "KEEP"],
+            "pre-repair-20261018T2158Z": ["library.db"],
+            "pre-sync-20261106T0118Z": ["listener.db"],
+            "pre-fade-ends-20261107": ["library.db", "library.db-wal"],
+            "hand-copy": ["library.db"],
+            "pre-bad-20261399": ["library.db"],
+            "objects": ["a.db"],
+            "days": ["2026-09-01.json"],
+        }
+        for d, files in made.items():
+            os.makedirs(os.path.join(root, d))
+            for f in files:
+                p = os.path.join(root, d, f)
+                open(p, "wb").write(b"x" * 10)
+                ss.seal(p)
+        open(os.path.join(root, "backup.log"), "w").write("a file, not a snapshot")
+        plan = {"backups": {"dir": root, "keep_snapshot_days": 20, "keep_snapshots": 2}}
+        today = dt.date(2026, 11, 8)
+        gone, kept = ss.snapshots_to_prune(plan, today)
+        check(gone == ["pre-covers-20260927", "pre-rekey-20260927T0415Z", "pre-repair-20261018T2158Z"],
+              f"past 20 days and only database copies: {gone}")
+        check("Prime Time.mp3" in kept.get("prime-time-original-20260927", ""), f"a song is kept, said: {kept}")
+        check("KEEP" in kept.get("before-merge-2026-09-30", ""), f"a KEEP file keeps it: {kept}")
+        check("no date" in kept.get("hand-copy", "") and "no date" in kept.get("pre-bad-20261399", ""),
+              f"no date, or none that is real, is never pruned: {kept}")
+        check("objects" not in kept and "days" not in kept and "pre-fade-ends-20261107" not in kept,
+              f"the daily store and the young are not listed: {kept}")
+        plan["backups"]["keep_snapshots"] = 4
+        gone, kept = ss.snapshots_to_prune(plan, today)
+        check(gone == ["pre-covers-20260927"]
+              and kept.get("pre-repair-20261018T2158Z") == "one of the newest 4"
+              and kept.get("pre-rekey-20260927T0415Z") == "one of the newest 4"
+              and "KEEP" in kept.get("before-merge-2026-09-30", ""),
+              f"the newest few copies of the pair are kept whatever their age, and a snapshot kept "
+              f"for another reason takes no place among them: {gone} {kept}")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            ss.prune_snapshots(plan, commit=False, today=today)
+        check(len(os.listdir(root)) == len(made) + 1 and "would prune" in out.getvalue(),
+              "without --commit nothing is removed")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            ss.prune_snapshots(plan, today=today)
+        left = set(os.listdir(root))
+        check(left == set(made) - {"pre-covers-20260927"} | {"backup.log"},
+              f"removed, sealed files and all: {sorted(left)}\n{out.getvalue()}")
+        plan["prune"] = {"prefix": "pre-sync-", "keep": 3}
+        plan["backups"]["keep_snapshots"] = 0
+        gone, kept = ss.snapshots_to_prune(plan, dt.date(2027, 1, 1))
+        check("pre-sync-20261106T0118Z" not in gone + list(kept),
+              f"a sync's own copies are left to the sync's own rule: {gone} {kept}")
+        del plan["backups"]["keep_snapshot_days"]
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            ss.prune_snapshots(plan, today=today)
+        check(ss.snapshots_to_prune(plan, today) == ([], {}) and "none is pruned" in out.getvalue(),
+              f"no setting, no pruning, and it says so: {out.getvalue()}")
+
+
 def test_prune_runs():
     """[SPEC-STAR-089]: the newest `keep` runs kept, and every older one a copy last
     sent lies in, a kept run's baseline names, or the commit has in hand; the rest
@@ -342,7 +411,8 @@ def main() -> int:
     test_mirror_limits()
     test_node_integrity()
     test_prune_runs()
-    days = [f"2026-{m:02d}-{d:02d}" for m in (7, 8, 9) for d in (1, 10, 20, 28)]
+    test_prune_snapshots()
+    days =[f"2026-{m:02d}-{d:02d}" for m in (7, 8, 9) for d in (1, 10, 20, 28)]
     keep = ss.retained(days, 3, 2)
     check({"2026-09-10", "2026-09-20", "2026-09-28"} <= keep, f"the newest 3 days are kept: {sorted(keep)}")
     check("2026-08-01" in keep and "2026-09-01" in keep, "and the first day of each of the 2 newest months")
