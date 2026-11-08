@@ -72,6 +72,11 @@ pub struct Controls {
     /// The programme slot chosen by hand, overriding time of day until
     /// cleared `[SPEC-DIR-185]`.
     pub manual_slot: Option<i64>,
+    /// This player's profanity tolerance `[SPEC-PTL-010]`, the same
+    /// intent-cell pattern: the page writes it, the engine gives it to the
+    /// Director on its next refill. `None` until read from the store, which
+    /// the Director takes as its own default, 1.0.
+    pub profanity_tolerance: Option<crate::director::frequency::ProfanityTolerance>,
     /// The programme's slots as `(id, name, start_time)`, for the browser to
     /// offer.
     pub slots: Vec<(i64, String, String)>,
@@ -544,6 +549,9 @@ impl Session {
             // handles a program that no longer exists, so this is safe to
             // set blind, before the Director that would validate it exists.
             c.manual_slot = store.as_ref().and_then(|s| s.load_manual_slot());
+            // Before the Director, for the same reason: the fill that serves
+            // until it lands obeys the stored value too `[SPEC-PTL-080]`.
+            c.profanity_tolerance = store.as_ref().map(|s| s.load_profanity_tolerance());
             // The slots too, from the store, so one can be held before the
             // Director lands `[SPEC-DIR-185]`: `POST /programme/slot/:id`
             // checks this list, and it was filled only from a Director, so
@@ -616,6 +624,7 @@ impl Session {
         let rebuilt_at = s.director_rebuilt_at();
         let programme = s.programme_signature();
         let held = s.load_manual_slot();
+        let profanity = s.load_profanity_tolerance();
         let offset = s.stored_utc_offset();
         let windows = s.load_settings().map(|x| (x.skip_suppress_h, x.dequeue_suppress_h));
         if let Ok(mut c) = self.controls.lock() {
@@ -627,6 +636,8 @@ impl Session {
                 c.programme_changed = true;
             }
             c.manual_slot = held;
+            // The player's tolerance, as its held slot `[SPEC-PTL-030]`.
+            c.profanity_tolerance = Some(profanity);
         }
         self.followed.rebuilt_at = rebuilt_at;
         self.followed.programme = programme;
@@ -1212,6 +1223,13 @@ impl Session {
             }
             if d.programme().manual_slot() != c.manual_slot {
                 d.programme_mut().set_manual_slot(c.manual_slot);
+            }
+            // Compared every pass, so a rebuilt Director, which loads at the
+            // default, has it again before it chooses `[SPEC-PTL-010]`.
+            if let Some(t) = c.profanity_tolerance {
+                if d.profanity_tolerance() != t {
+                    d.set_profanity_tolerance(t);
+                }
             }
             c.active_slot = d.programme().active_slot(now).map(|p| p.name.clone());
             // The listener's suppression window lives with the other settings
@@ -2059,6 +2077,42 @@ mod tests {
         let d = session.director.as_ref().unwrap();
         assert!(d.programme().slot(31).is_some(), "and its programme edit");
         assert_eq!(d.programme().manual_slot(), Some(31), "and the slot it holds");
+
+        // And the player's profanity tolerance `[SPEC-PTL-030]`.
+        let held = d.profanity_tolerance();
+        assert_eq!(held.get(), 1.0, "none set, none considered");
+        player
+            .save_profanity_tolerance(crate::director::frequency::ProfanityTolerance::new(0.4))
+            .unwrap();
+        session.followed.at = None;
+        session.refill(&mut full, (0, 0));
+        let d = session.director.as_ref().unwrap();
+        assert_eq!(d.profanity_tolerance().get(), 0.4, "the player's, followed");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// The tolerance is read at open and reaches a Director built later, as
+    /// the held slot does `[SPEC-PTL-010]`; a change from the page reaches it
+    /// on the next refill.
+    #[test]
+    fn the_profanity_tolerance_reaches_the_director() {
+        use crate::director::frequency::ProfanityTolerance;
+        let tmp = director_library_on_disk("profanity-tolerance");
+        PlayerStore::open(&tmp).unwrap().save_profanity_tolerance(ProfanityTolerance::new(0.3)).unwrap();
+        let mut session = Session::open(&tmp, &tmp, 5).unwrap();
+        assert_eq!(
+            session.controls().lock().unwrap().profanity_tolerance,
+            Some(ProfanityTolerance::new(0.3)),
+            "read at open, before any Director"
+        );
+        session.build_director_now().unwrap();
+        let mut b = Behind { ahead_ms: 0, got: Vec::new() };
+        session.refill(&mut b, (0, 0));
+        assert_eq!(session.director.as_ref().unwrap().profanity_tolerance().get(), 0.3);
+
+        session.controls().lock().unwrap().profanity_tolerance = Some(ProfanityTolerance::new(0.0));
+        session.refill(&mut b, (0, 0));
+        assert_eq!(session.director.as_ref().unwrap().profanity_tolerance().get(), 0.0, "live");
         let _ = std::fs::remove_file(&tmp);
     }
 

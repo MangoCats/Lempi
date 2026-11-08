@@ -1462,6 +1462,41 @@ const Lempi = (() => {
       return post(passage != null ? `/seek/${passage}/${at}` : `/seek/${at}`);
     },
     restartUnderruns: () => post('/underruns/restart'),
+    // This player's profanity tolerance, 0..1 [SPEC-PTL-010].
+    profanity: v => post(`/director/profanity/${Number(v).toFixed(2)}`),
+    // Wire a range input (0..1) and its readout up as the tolerance
+    // [SPEC-PTL-020]; returns the render to call with each snapshot. Shared for
+    // the reason `seekable` is. Sent on release, not per pixel of a drag, and
+    // left alone while held, as the volume slider is. A follower plays what its
+    // leader chose, so its own value is shown and disabled [SPEC-PTL-040].
+    profanityControl(input, readout) {
+      // Written only when different: a snapshot lands twice a second, and one
+      // where only the clock moved must rewrite only the clock.
+      const say = v => {
+        const text = v >= 1 ? 'any' : v <= 0 ? 'none' : `${Math.round(v * 100)}%`;
+        if (readout && readout.textContent !== text) readout.textContent = text;
+      };
+      let holding = false;
+      input.addEventListener('pointerdown', () => { holding = true; });
+      input.addEventListener('input', () => say(Number(input.value)));
+      input.addEventListener('change', () => {
+        holding = false;
+        Lempi.profanity(input.value);
+      });
+      input.addEventListener('blur', () => { holding = false; });
+      return s => {
+        const leader = s?.echo_node?.follow_host || '';
+        if (input.disabled !== Boolean(leader)) input.disabled = Boolean(leader);
+        const title = leader
+          ? `Following ${leader}: its profanity setting applies here`
+          : 'Profanity the Program Director will choose: any, at the right; none, at the left';
+        if (input.title !== title) input.title = title;
+        if (holding || document.activeElement === input) return;
+        const v = s?.profanity_tolerance ?? 1;
+        if (input.value !== String(v)) input.value = String(v);
+        say(v);
+      };
+    },
     // A unix second to something a person reads. Local time, because the
     // listener is standing in it.
     since(unix) {

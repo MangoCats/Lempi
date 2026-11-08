@@ -26,6 +26,10 @@
     // preference panel `[REQ-VIS-285]`.
     { linkable: true, artistJoin: ' by ' });
 
+  // The Program Director's profanity tolerance, for every programme
+  // [SPEC-PTL-020].
+  const showProfanity = Lempi.profanityControl($('profanity'), $('profanitynum'));
+
   const btnShutdown = $('b-shutdown');
   if (btnShutdown) {
     btnShutdown.onclick = () => {
@@ -213,6 +217,7 @@
       btnShutdown.disabled = Boolean(s.shutdown_queued);
     }
     renderStations(s);
+    showProfanity(s);
     $('why').textContent = s.why
       ? `${(s.why.slot ?? s.why.program) ? (s.why.slot ?? s.why.program) + ': ' : ''}weight ` +
         `${s.why.decayed_weight.toFixed(3)} of ${s.why.pool_weight.toFixed(1)} across ` +

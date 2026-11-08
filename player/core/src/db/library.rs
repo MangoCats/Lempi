@@ -348,6 +348,10 @@ impl Library {
               WHERE mbid IS NOT NULL AND kind = 'dequeue' GROUP BY mbid",
         );
         let occasions = crate::director::library::load_occasions(&self.conn)?;
+        // The tolerance too `[SPEC-PTL-080]`: the first minutes after a start
+        // are this fill's, and a setting that waited for the Director would
+        // not be one.
+        let profanity = crate::director::library::load_profanity(&self.conn);
         // The listener's day, as the Director reads it `[SPEC-DIR-132]`: the
         // same stored offset its programme carries, 0 where none is stored.
         let offset_min: i64 = self
@@ -363,6 +367,7 @@ impl Library {
         let policy = Policy {
             skip_suppress_s: suppress_h.0 as f64 * 3600.0,
             dequeue_suppress_s: suppress_h.1 as f64 * 3600.0,
+            profanity: crate::director::library::load_profanity_tolerance(&self.conn),
             ..Default::default()
         };
         let age = |at: Option<&i64>| at.map(|at| (now - at).max(0) as f64);
@@ -389,6 +394,7 @@ impl Library {
                     dequeue_age_s: mbid.and_then(|m| age(dequeued.get(m))),
                     related: &[],
                     occasion: occasions.multiplier(mbid, today),
+                    profanity: mbid.and_then(|m| profanity.get(m)).copied().unwrap_or(0.0),
                 },
                 &policy,
             );

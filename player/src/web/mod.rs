@@ -278,6 +278,10 @@ pub struct Snapshot {
     /// for clients that have not learned the new ones.
     pub program: Option<String>,
     pub program_manual: bool,
+    /// This player's profanity tolerance, 0.0 to 1.0, 1.0 when never set
+    /// `[SPEC-PTL-020]`. A follower's own is shown and does nothing while it
+    /// follows `[SPEC-PTL-040]`; the skins read `echo_node` for that.
+    pub profanity_tolerance: f64,
     /// What a live Director rebuild is doing, if one has been asked for
     /// `[IMPL-SUI-075]`. `None` until something requests one.
     /// What this server is `[REQ-VIS-200]`. Sent to every skin so a person
@@ -463,6 +467,7 @@ impl From<&PlayerState> for Snapshot {
             utc_offset: None,
             slot_manual: false,
             program_manual: false,
+            profanity_tolerance: 1.0,
             slots: Vec::new(),
             programs: Vec::new(),
             cue_sheets: s.cue_sheets,
@@ -650,6 +655,7 @@ pub fn router(ui: Ui) -> Router {
         // kept for skins, frames and phones not yet updated.
         .route("/programme/slot/:id", post(set_slot))
         .route("/program/:id", post(set_slot))
+        .route("/director/profanity/:value", post(set_profanity_tolerance))
         .route("/library/reload", post(reload_library))
         .route("/backend/:which", post(switch_backend))
         .route("/cue/:on", post(set_cue_sheets))
@@ -858,6 +864,7 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
             snap.slot_manual = c.manual_slot.is_some();
             snap.program = snap.slot.clone();
             snap.program_manual = snap.slot_manual;
+            snap.profanity_tolerance = c.profanity_tolerance.unwrap_or_default().get();
             snap.reload_status = c.reload_status.clone();
             snap.backend = c.backend.clone();
             snap.guest_available = c.guest_available;
@@ -1488,7 +1495,8 @@ mod tests {
             "playing", "passage_id", "title", "artist", "mbid", "artist_mbid", "album", "plays",
             "last_played", "position_ms", "duration_ms", "queue_len", "queue",
             "volume_db", "fader_min_db", "skip", "slot", "slot_manual", "slots",
-            "program", "program_manual", "programs", "underrun_samples", "branch", "commit_date",
+            "program", "program_manual", "programs", "profanity_tolerance", "underrun_samples",
+            "branch", "commit_date",
             "commit_subject", "dirty_files",
         ] {
             assert!(json.contains(&format!("\"{field}\"")), "snapshot lost {field}");

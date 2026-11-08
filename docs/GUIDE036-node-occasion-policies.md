@@ -2,8 +2,11 @@
 
 **Development Guidance — a design recorded for later: how one node may shape the household's occasions for itself, a profanity ceiling first**
 
-Recorded 2026-09-27 from the maintainer's direction. **Designed, not scheduled.**
-Nothing here changes what any node does today. It records how occasions work
+Recorded 2026-09-27 from the maintainer's direction. **Designed, not scheduled**
+— except its first case, profanity, **built 2026-11-08 in a simpler form**:
+[SPEC077](spec/SPEC077-a-profanity-tolerance.md). There the ceiling is one
+slider per player, and the ramp below it is linear to zero rather than to a
+floor. Nothing else here changes what any node does today. It records how occasions work
 now, what is shared and what is not, and the shape a node's own policy would
 take. It is kept for when it is built.
 

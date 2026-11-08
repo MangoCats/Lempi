@@ -19,6 +19,7 @@ largest stage of the pipeline and the one with the most rules of its own.
 | 1 | it is not `kind = 'radio'` | always | `[REQ-PD-120]` |
 | 2 | it is held: `passages.director_hold` is set, or its file failed this player's own check | until cleared | `[SPEC-HOLD-010]`, `[GDE-INT-135]` |
 | 3 | it is shorter than 30 s, longer than 3600 s, or starts more than 10,800 s into its file | always | `[SPEC-DIR-125]` |
+| 3a | its recording's profanity is at or above this player's tolerance, below 1.0 | while the setting is | `[SPEC-PTL-050]` |
 | 4 | its recording was skipped within the skip window (156 h by default) or taken out of the queue unheard within the dequeue window (18 h); the longer remaining one is the reason | the window | `[SPEC-PLAY-050]`, `[SPEC-PLAY-055]`, `[SPEC-PLAY-057]` |
 | 5 | any credited artist — or, for a passage no credit reaches, its file's artist tag — played inside that artist's own rotation | the rotation | `[SPEC-DIR-114]`, `[REQ-AND-315]` |
 | 6 | the same passage, the same recording, or a recording of the same song (work) played inside **this** passage's recording rotation | the rotation | `[SPEC-DIR-119]` |
@@ -30,7 +31,7 @@ Beside Stage A, a passage already in the queue is kept out of the next pick by t
 The weight of a passage that clears them all is, with the default `Damped` coupling `[SPEC-DIR-117]`:
 
 ```
-w = recording restraint × recording ramp × related damping × length bonus × occasion
+w = recording restraint × recording ramp × related damping × length bonus × occasion × profanity
     × Π over credited artists 10^(−restraint) × the least-recovered artist's ramp
 ```
 

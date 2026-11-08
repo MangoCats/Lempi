@@ -57,7 +57,9 @@
     <label id="vol"><input type="range" id="volume" min="0" max="1" step="any" value="1"><span id="volnum">0.0 dB</span></label>
   </div>
   <div id="audio-controls-bar" class="audio-bar" hidden>
-    <button type="button" id="audio-controls-toggle" aria-expanded="false">Audio controls</button>
+    <button type="button" id="audio-controls-toggle" aria-expanded="false" hidden>Audio controls</button>
+    <!-- The Program Director's, for every programme slot [SPEC-PTL-020]. -->
+    <label id="profanity-ctl" class="profanity-ctl">Profanity <input type="range" id="profanity" min="0" max="1" step="0.01" value="1"><span id="profanitynum">any</span></label>
     <span id="warp-badge" class="warp-badge" hidden></span>
   </div>
   <div id="audio-controls-drawer" class="audio-drawer" hidden>

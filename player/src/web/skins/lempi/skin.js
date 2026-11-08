@@ -537,6 +537,8 @@
   const audioBar = $('audio-controls-bar');
   const audioToggle = $('audio-controls-toggle');
   const audioDrawer = $('audio-controls-drawer');
+  // Beside the button, in the same row [SPEC-PTL-020].
+  const showProfanity = Lempi.profanityControl($('profanity'), $('profanitynum'));
   const warpBadge = $('warp-badge');
   const tplSection = $('tpl-section');
   const abLoopSection = $('ab-loop-section');
@@ -943,7 +945,10 @@
     if (!changed('audio-controls', s.can_eq, s.can_tempo_pitch, s.can_ab_loop,
                  s.tempo_milli, s.pitch_cents, s.ab_loop, s.eq, s.duration_ms)) return;
     const anyAudio = Boolean(s.can_eq || s.can_tempo_pitch || s.can_ab_loop);
-    setHidden(audioBar, !anyAudio);
+    // The row carries the profanity slider too, so it shows always and only
+    // the button waits on a backend with audio controls [SPEC-PTL-020].
+    setHidden(audioBar, false);
+    setHidden(audioToggle, !anyAudio);
     setHidden(audioDrawer, !anyAudio || !audioDrawerOpen);
     setHidden(tplSection, !s.can_tempo_pitch);
     setHidden(abLoopSection, !s.can_ab_loop);
@@ -1027,6 +1032,7 @@
     // Offered only where the live backend can honour it [SPEC-BK-040].
     $('bar').classList.toggle('seekable', Boolean(s.can_seek && s.duration_ms));
     renderAudioControls(s);
+    showProfanity(s);
     setText($('state'), s.playing ? 'playing' : 'paused');
     // The ground shifts with it, so the state is legible without reading.
     setHidden($('devmode'), !s.dev_mode);

@@ -2553,15 +2553,18 @@ async function runAudioControls() {
 
   const $ = id => window.document.getElementById(id);
 
-  // SPARSE has can_eq/can_tempo_pitch/can_ab_loop = false: bar and drawer must be hidden.
+  // SPARSE has can_eq/can_tempo_pitch/can_ab_loop = false: the button and drawer
+  // must be hidden. The row itself stays, for the profanity slider in it
+  // `[SPEC-PTL-020]`.
   sock.onopen && sock.onopen();
   sock.onmessage({ data: JSON.stringify(SPARSE) });
-  check($('audio-controls-bar').hidden, 'audio bar must hide when no audio capability is true');
+  check(!$('audio-controls-bar').hidden, 'the row must show for the profanity slider');
+  check($('audio-controls-toggle').hidden, 'audio button must hide when no audio capability is true');
   check($('audio-controls-drawer').hidden, 'audio drawer must hide when no audio capability is true');
 
   // RICH enables all three: bar is shown, drawer starts closed, warp badge hidden at neutral.
   sock.onmessage({ data: JSON.stringify(RICH) });
-  check(!$('audio-controls-bar').hidden, 'audio bar must show when capabilities are true');
+  check(!$('audio-controls-toggle').hidden, 'audio button must show when capabilities are true');
   check($('audio-controls-drawer').hidden, 'audio drawer must start closed');
   check($('warp-badge').hidden, 'warp badge must hide at neutral');
 
@@ -2644,10 +2647,92 @@ async function runAudioControls() {
   if (errors.length) failures++;
 }
 
+// The Program Director's profanity tolerance `[SPEC-PTL-020]`: in MuLibPlay
+// and Lempi, absent from WinAmp. It shows the value the server holds, says it,
+// sends what is set on release, and stands disabled while this node follows
+// another, whose setting is the one that applies `[SPEC-PTL-040]`.
+async function runProfanity(skin) {
+  const shell = fs.readFileSync(path.join(ROOT, 'shell.html'), 'utf8')
+    .replace('<script>Lempi.start();</script>', '');
+  const dom = new JSDOM(shell,
+                        { runScripts: 'dangerously', url: `http://localhost/?skin=${skin}` });
+  const { window } = dom;
+  const errors = [];
+  window.console.error = (...a) => errors.push(a.join(' '));
+  const check = (cond, msg) => { if (!cond) errors.push(msg); };
+  const create = window.document.createElement.bind(window.document);
+  window.document.createElement = tag => {
+    const el = create(tag);
+    if (tag === 'link' || tag === 'script') setTimeout(() => el.onload && el.onload(), 0);
+    return el;
+  };
+  window.HTMLCanvasElement.prototype.getContext = () => null;
+  const posted = [];
+  window.fetch = (url, opts) => {
+    if (opts && opts.method === 'POST') {
+      posted.push(url);
+      return Promise.resolve({ ok: true, status: 204 });
+    }
+    if (url === '/skins') {
+      return Promise.resolve({ json: () => Promise.resolve(skins.map(n => ({ name: n, label: n }))) });
+    }
+    const m = /^\/skin\/([^/]+)\/(.+)$/.exec(url);
+    if (m) return Promise.resolve({ ok: true, text: () => Promise.resolve(fs.readFileSync(path.join(ROOT, 'skins', m[1], m[2]), 'utf8')) });
+    return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}), text: () => Promise.resolve('') });
+  };
+  let sock = null;
+  window.WebSocket = function () { sock = this; this.close = () => {}; };
+  const runScript = src => {
+    const el = create('script');
+    el.textContent = src;
+    window.document.body.appendChild(el);
+  };
+  const why = await startCore(window, runScript);
+  const label = `profanity ${skin}`.padEnd(11);
+  if (why || !sock) {
+    console.log(`${label} FAIL  ${why || 'core never opened its socket'}`);
+    failures++;
+    return;
+  }
+  const $ = id => window.document.getElementById(id);
+  sock.onopen && sock.onopen();
+  sock.onmessage({ data: JSON.stringify(SPARSE) });
+
+  if (skin === 'winamp') {
+    check(!$('profanity'), 'the WinAmp skin shows no profanity control');
+  } else {
+    const input = $('profanity');
+    check(!!input, 'the skin must offer the profanity slider');
+    if (input) {
+      check(input.value === '1' && $('profanitynum').textContent === 'any',
+            `a snapshot without the field reads as any, got ${input.value} "${$('profanitynum').textContent}"`);
+      sock.onmessage({ data: JSON.stringify({ ...SPARSE, profanity_tolerance: 0.5 }) });
+      check(input.value === '0.5' && $('profanitynum').textContent === '50%',
+            `the server's 0.5 must show as 50%, got ${input.value} "${$('profanitynum').textContent}"`);
+      sock.onmessage({ data: JSON.stringify({ ...SPARSE, profanity_tolerance: 0 }) });
+      check($('profanitynum').textContent === 'none', `0 must read as none, got "${$('profanitynum').textContent}"`);
+      check(!input.disabled, 'an independent node may set its own');
+      input.value = '0.25';
+      input.dispatchEvent(new window.Event('change'));
+      check(posted.includes('/director/profanity/0.25'),
+            `releasing the slider must POST it, got ${JSON.stringify(posted)}`);
+      input.blur();
+      sock.onmessage({ data: JSON.stringify({ ...SPARSE, echo_node: { ...(SPARSE.echo_node || {}), follow_host: 'bose' } }) });
+      check(input.disabled && input.title.includes('bose'),
+            `a follower's slider must be disabled and name its leader, got disabled=${input.disabled} "${input.title}"`);
+    }
+  }
+  console.log(`${label} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+              (skin === 'winamp' ? 'no control, as designed' : 'value, readout, release and follower verified'));
+  for (const e of errors) console.log('    ! ' + e);
+  if (errors.length) failures++;
+}
+
 (async () => {
   for (const s of skins) await run(s);
   for (const s of skins) await runEarlySnapshot(s);
   for (const s of skins) await runPreference(s);
+  for (const s of skins) await runProfanity(s);
   await runAudioControls();
   await runBrowse();
   await runReview();

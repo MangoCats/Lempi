@@ -87,6 +87,54 @@ impl Default for TimeScale {
     }
 }
 
+/// How much profanity the Director will choose, 0.0 to 1.0 `[SPEC-PTL-010]`.
+///
+/// One per player, for every programme slot. 1.0, the default, is "not
+/// considered"; 0.0 is "none". A newtype rather than a bare `f64` in `Policy`
+/// so that `Policy::default()` means 1.0 and not a derived 0.0, which would
+/// be the opposite claim.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProfanityTolerance(f64);
+
+impl ProfanityTolerance {
+    /// Clamped to range. Non-finite input is 1.0, the setting nobody chose
+    /// against.
+    pub fn new(v: f64) -> Self {
+        if !v.is_finite() {
+            return Self(1.0);
+        }
+        Self(v.clamp(0.0, 1.0))
+    }
+    pub fn get(self) -> f64 {
+        self.0
+    }
+}
+
+impl Default for ProfanityTolerance {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
+/// The profanity term for a recording valued `p` under `tolerance`
+/// `[SPEC-PTL-050]`; `None` excludes it.
+///
+/// Linear to zero at the tolerance: ×1 at 0, ×0.5 at half of it, excluded at
+/// it and above. At 1.0 nothing is considered at all -- a recording at 0.98
+/// is ×0.01 under 0.99 and ×1 under 1.0, which is the design, not a slip.
+pub fn profanity_term(p: f64, tolerance: ProfanityTolerance) -> Option<f64> {
+    let t = tolerance.get();
+    // Written so a NaN value reads as no value, not as an exclusion.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    if t >= 1.0 || !(p > 0.0) {
+        return Some(1.0);
+    }
+    if p >= t {
+        return None;
+    }
+    Some(1.0 - p / t)
+}
+
 /// Per-subject tuning, for an artist or a recording.
 #[derive(Debug, Clone, Copy)]
 pub struct Tuning {
@@ -155,6 +203,9 @@ pub struct Policy {
     /// `[SPEC-PLAY-055]`. Shorter by default: declining to hear something now
     /// says less than stopping it once it had started.
     pub dequeue_suppress_s: f64,
+    /// This player's profanity tolerance `[SPEC-PTL-010]`. Live, like the
+    /// windows above: the session sets it whenever the control moves.
+    pub profanity: ProfanityTolerance,
 }
 
 /// Another recording that shares this one's rotation `[SPEC-DIR-116]` — a
@@ -184,6 +235,8 @@ pub struct Weighing {
     pub related_damping: f64,
     pub length_bonus: f64,
     pub occasion: f64,
+    /// The profanity term `[SPEC-PTL-070]`, 1.0 where it did nothing.
+    pub profanity: f64,
     pub weight: f64,
     pub excluded: Option<Exclusion>,
 }
@@ -214,6 +267,9 @@ pub enum Exclusion {
     /// by the Director, while a person can still play it on purpose. Unlike
     /// a suppression it does not lapse; it lasts until the mark is cleared.
     Held,
+    /// Its profanity is at or above this player's tolerance `[SPEC-PTL-050]`.
+    /// Apart from `BelowMinWeight` so a pool shrunk by the setting says so.
+    Profanity,
 }
 
 impl Weighing {
@@ -226,6 +282,7 @@ impl Weighing {
             related_damping: 1.0,
             length_bonus: 0.0,
             occasion: 1.0,
+            profanity: 1.0,
             weight: 0.0,
             excluded: Some(reason),
         }
@@ -278,6 +335,10 @@ pub struct Candidate<'a> {
     /// by the occasion curve. Kept as an input so this module stays free of
     /// the clock.
     pub occasion: f64,
+    /// The recording's profanity value, 0.0 where it has none
+    /// `[SPEC-PTL-060]`. The value, not the term: the tolerance is the
+    /// policy's, so the one knob reaches every candidate the same way.
+    pub profanity: f64,
 }
 
 /// The artist pass, then the recording pass `[SPEC-DIR-115]`.
@@ -299,6 +360,11 @@ pub fn weigh(c: &Candidate<'_>, policy: &Policy) -> Weighing {
     if c.depth_s > MAX_DEPTH_S {
         return Weighing::excluded(Exclusion::TooDeep);
     }
+    // Before the rejections: it lasts while the setting does, so it is the
+    // reason worth naming when both apply.
+    let Some(profanity) = profanity_term(c.profanity, policy.profanity) else {
+        return Weighing::excluded(Exclusion::Profanity);
+    };
 
     // A recently rejected recording is out, and that is the whole of its
     // effect `[SPEC-PLAY-050]`. Placed with the passage filters rather than in
@@ -409,8 +475,12 @@ pub fn weigh(c: &Candidate<'_>, policy: &Policy) -> Weighing {
 
     let length_bonus = length_bonus(c.length_s);
 
-    let mut weight =
-        recording_restraint * recording_ramp * related_damping * length_bonus * c.occasion;
+    let mut weight = recording_restraint
+        * recording_ramp
+        * related_damping
+        * length_bonus
+        * c.occasion
+        * profanity;
     if policy.coupling == ArtistCoupling::Damped {
         weight *= artist_weight;
     }
@@ -423,6 +493,7 @@ pub fn weigh(c: &Candidate<'_>, policy: &Policy) -> Weighing {
         related_damping,
         length_bonus,
         occasion: c.occasion,
+        profanity,
         weight,
         excluded: None,
     };
@@ -565,6 +636,7 @@ mod tests {
             dequeue_age_s: None,
             related: &[],
             occasion: 1.0,
+            profanity: 0.0,
         }
     }
 
@@ -917,6 +989,7 @@ mod tests {
             recording_scale: TimeScale::new(1.0),
             skip_suppress_s: 0.0,
             dequeue_suppress_s: 0.0,
+            profanity: ProfanityTolerance::new(1.0),
         };
         assert_eq!(weigh(&c, &Policy::default()), weigh(&c, &explicit));
     }
@@ -959,6 +1032,60 @@ mod tests {
         let w = weigh(&c, &Policy::default());
         assert!((w.weight - 3.9).abs() < 1e-9);
         assert_eq!(w.occasion, 3.9, "the panel needs the term, not just the product");
+    }
+
+    /// The maintainer's own points, 2026-11-08 `[SPEC-PTL-050]`.
+    #[test]
+    fn the_profanity_term_is_linear_to_zero_at_the_tolerance() {
+        let t = ProfanityTolerance::new(0.8);
+        let at = |p: f64| profanity_term(p, t);
+        assert_eq!(at(0.0), Some(1.0), "no profanity is untouched");
+        assert!((at(0.2).unwrap() - 0.75).abs() < 1e-12, "a quarter of the tolerance");
+        assert!((at(0.4).unwrap() - 0.5).abs() < 1e-12, "half");
+        assert!((at(0.6).unwrap() - 0.25).abs() < 1e-12, "three quarters");
+        assert_eq!(at(0.8), None, "at the tolerance is the ramp's zero, and out");
+        assert_eq!(at(0.81), None, "above it is out");
+    }
+
+    #[test]
+    fn a_full_tolerance_ignores_profanity_and_none_excludes_any() {
+        let full = ProfanityTolerance::default();
+        assert_eq!(full.get(), 1.0, "the default is not considered, not none");
+        for p in [0.0, 0.5, 0.98, 1.0] {
+            assert_eq!(profanity_term(p, full), Some(1.0), "p = {p}");
+        }
+        // The one discontinuity, kept on purpose.
+        assert!((profanity_term(0.98, ProfanityTolerance::new(0.99)).unwrap() - 1.0 / 99.0).abs() < 1e-12);
+
+        let none = ProfanityTolerance::new(0.0);
+        assert_eq!(profanity_term(0.0, none), Some(1.0), "zero passes even at zero");
+        assert_eq!(profanity_term(0.001, none), None, "any value above zero is out");
+        assert_eq!(profanity_term(f64::NAN, none), Some(1.0), "not a number is no value");
+    }
+
+    #[test]
+    fn a_tolerance_out_of_range_is_clamped() {
+        assert_eq!(ProfanityTolerance::new(1.7).get(), 1.0);
+        assert_eq!(ProfanityTolerance::new(-0.2).get(), 0.0);
+        assert_eq!(ProfanityTolerance::new(f64::NAN).get(), 1.0);
+    }
+
+    #[test]
+    fn profanity_is_a_term_of_its_own_and_an_exclusion_of_its_own() {
+        let mut c = candidate();
+        c.profanity = 0.25;
+        let half = Policy { profanity: ProfanityTolerance::new(0.5), ..Default::default() };
+        let w = weigh(&c, &half);
+        assert!((w.profanity - 0.5).abs() < 1e-12, "shown as its own line");
+        assert!((w.weight - weigh(&candidate(), &half).weight * 0.5).abs() < 1e-12);
+
+        c.profanity = 0.5;
+        assert_eq!(weigh(&c, &half).excluded, Some(Exclusion::Profanity));
+        // The lasting reason is named over a temporary one.
+        c.skip_age_s = Some(1.0);
+        assert_eq!(weigh(&c, &Policy { skip_suppress_s: SKIP_W, ..half }).excluded, Some(Exclusion::Profanity));
+        // And the default policy leaves it alone.
+        assert!(weigh(&c, &Policy::default()).excluded != Some(Exclusion::Profanity));
     }
 
     #[test]

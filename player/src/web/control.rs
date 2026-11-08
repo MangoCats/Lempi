@@ -328,6 +328,38 @@ pub(super) async fn set_slot(
     StatusCode::NO_CONTENT
 }
 
+/// Set this player's profanity tolerance, 0.0 to 1.0 `[SPEC-PTL-010]`.
+///
+/// For every slot, and this player's alone `[SPEC-PTL-030]`. Taken by the
+/// engine on its next refill, and persisted as the held slot is: a save that
+/// fails costs the value surviving a restart, said in the log, not this
+/// change working.
+pub(super) async fn set_profanity_tolerance(
+    State(ui): State<Ui>,
+    axum::extract::Path(value): axum::extract::Path<String>,
+) -> StatusCode {
+    let Some(t) = value.parse::<f64>().ok().filter(|v| v.is_finite()) else {
+        return StatusCode::BAD_REQUEST;
+    };
+    let t = crate::director::frequency::ProfanityTolerance::new(t);
+    {
+        let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
+        c.profanity_tolerance = Some(t);
+    }
+    let db = ui.db.clone();
+    let library = ui.library.clone();
+    let _ = tokio::task::spawn_blocking(move || match crate::db::PlayerStore::open_split(&db, &library) {
+        Ok(store) => {
+            if let Err(e) = store.save_profanity_tolerance(t) {
+                tracing::error!("save profanity tolerance: {e}");
+            }
+        }
+        Err(e) => tracing::error!("save profanity tolerance: {e}"),
+    })
+    .await;
+    StatusCode::NO_CONTENT
+}
+
 /// Where the audio is actually going `[PI3-API-020]`.
 ///
 /// On demand rather than in the state snapshot: it costs a subprocess, and the

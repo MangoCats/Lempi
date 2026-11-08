@@ -86,7 +86,8 @@ folded into one spec.
 | Catalogue patch by natural key | [SPEC058](spec/SPEC058-catalogue-patch-by-natural-key.md) | [§9. Open](spec/SPEC058-catalogue-patch-by-natural-key.md#9-open) |
 | Silent tracks — built 2026-11-07; not yet used on a real add, nor heard | [SPEC076](spec/SPEC076-silent-tracks.md) | [§5. Open](spec/SPEC076-silent-tracks.md#5-open) |
 | Permanent identity, one catalogue, a movable hub (the echo fix built, the rest proposed) | [SPEC075](spec/SPEC075-permanent-identity-and-a-movable-hub.md) | [§9. Open](spec/SPEC075-permanent-identity-and-a-movable-hub.md#9-open) |
-| A node's own occasion policy, a profanity ceiling first (designed, not scheduled) | [GUIDE036](GUIDE036-node-occasion-policies.md) | [§2. The design](GUIDE036-node-occasion-policies.md#2-the-design-a-nodes-own-policy) |
+| A profanity tolerance — built 2026-11-08, on the desktop only; not deployed, nor heard | [SPEC077](spec/SPEC077-a-profanity-tolerance.md) | [§4. Open](spec/SPEC077-a-profanity-tolerance.md#4-open) |
+| A node's own occasion policy, beyond profanity (designed, not scheduled) | [GUIDE036](GUIDE036-node-occasion-policies.md) | [§2. The design](GUIDE036-node-occasion-policies.md#2-the-design-a-nodes-own-policy) |
 | Integrity -- every stored hash read again where the file lies, damage withheld and repaired (planned 2026-10-14; built but for the phone's scrub, the databases' weekly check -- waiting on a measurement on `lempi02w` -- and the changed-value tripwire) | [GUIDE038](GUIDE038-integrity-gap-closures.md) | [§7 Order and size](GUIDE038-integrity-gap-closures.md#7-order-and-size) |
 | Android requirements (draft) | [REQ007](spec/REQ007-android.md) | [§7. Open](spec/REQ007-android.md#7-open--to-be-settled-before-this-leaves-draft) |
 

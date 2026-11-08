@@ -500,6 +500,13 @@ body:has(#panel-history:not([hidden])) main {
 #audio-controls-toggle[aria-expanded="true"] {
   color: var(--fg); border-color: var(--fg);
 }
+/* The Program Director's profanity tolerance, to the right of the button
+   [SPEC-PTL-020]: dim like the button until used, its readout fixed-width so
+   the row does not shift as it moves. */
+.profanity-ctl { display: inline-flex; align-items: center; gap: .4rem; color: var(--dim); font-size: .75rem; }
+.profanity-ctl input { width: 8rem; margin: 0; }
+.profanity-ctl input:disabled { opacity: .4; }
+#profanitynum { min-width: 2.6em; font-variant-numeric: tabular-nums; }
 .warp-badge:not([hidden]) {
   font-size: .75rem; font-variant-numeric: tabular-nums;
   color: var(--fg); padding: .15rem .5rem;

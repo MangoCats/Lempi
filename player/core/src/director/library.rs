@@ -16,7 +16,8 @@ use serde::Serialize;
 use crate::db::QualifyingConn;
 
 use super::frequency::{
-    weigh, ArtistCredit, Candidate, Exclusion, Policy, Related, TimeScale, Tuning, Weighing,
+    weigh, ArtistCredit, Candidate, Exclusion, Policy, ProfanityTolerance, Related, TimeScale,
+    Tuning, Weighing,
 };
 use super::flavor::{centroid, Flavor, FlavorIndex};
 use super::occasion::{civil_from_unix, ordinal, Curve, Interp, Occasions};
@@ -111,6 +112,8 @@ pub struct Explanation {
     pub related_damping: f64,
     pub length_bonus: f64,
     pub occasion: f64,
+    /// This player's profanity term `[SPEC-PTL-070]`.
+    pub profanity: f64,
     /// The programme slot this pick was chosen for `[SPEC-DIR-180]`, if any:
     /// the slot in force at `starts_at`, not at the moment of choosing
     /// `[SPEC-DIR-186]`.
@@ -259,6 +262,9 @@ pub struct Director {
     next_token: u64,
     relations: HashMap<String, Vec<(String, f64)>>,
     occasions: Occasions,
+    /// Each recording's profanity value, own over inherited `[SPEC-PTL-060]`.
+    /// Only values above zero: an absent one is zero.
+    profanity: HashMap<String, f64>,
     flavor: FlavorIndex,
     programme: Programme,
     /// Centroids of liked and disliked flavor `[SPEC-DIR-150]`. Built once:
@@ -534,6 +540,7 @@ impl Director {
         }
 
         let occasions = load_occasions(conn)?;
+        let profanity = load_profanity(conn);
         let flavor = FlavorIndex::load(conn)?;
         let programme = Programme::load(conn)?;
         // A seed without flavor shapes nothing and is passed over `[SPEC-DIR-142]`;
@@ -636,6 +643,7 @@ impl Director {
             work_last_played,
             relations,
             occasions,
+            profanity,
             flavor,
             programme,
             like,
@@ -667,6 +675,16 @@ impl Director {
         let f = self.flavor.get(mbid)?;
         let s = f.summary(&self.flavor.schema, max_terms);
         (!s.is_empty()).then_some(s)
+    }
+
+    /// Change this player's profanity tolerance `[SPEC-PTL-010]`. Live, as
+    /// the windows are.
+    pub fn set_profanity_tolerance(&mut self, t: ProfanityTolerance) {
+        self.policy.profanity = t;
+    }
+
+    pub fn profanity_tolerance(&self) -> ProfanityTolerance {
+        self.policy.profanity
     }
 
     pub fn policy(&self) -> Policy {
@@ -815,6 +833,7 @@ impl Director {
                     dequeue_age_s: mbid.and_then(|m| self.age(&self.last_dequeued, m, now)),
                     related: &related_buf,
                     occasion: self.occasions.multiplier(mbid, today),
+                    profanity: mbid.and_then(|m| self.profanity.get(m)).copied().unwrap_or(0.0),
                 };
                 let c = if relaxed {
                     Candidate {
@@ -1246,6 +1265,7 @@ impl Director {
                 related_damping: w.related_damping,
                 length_bonus: w.length_bonus,
                 occasion: w.occasion,
+                profanity: w.profanity,
                 pool_size,
                 pool_weight: total,
                 slot: slot.clone(),
@@ -1320,6 +1340,8 @@ impl Director {
                 }
                 // Apart from `filtered` too: the right shape, held by a mark.
                 Some(Exclusion::Held) => c.held += 1,
+                // A setting's doing, not the passage's shape `[SPEC-PTL-070]`.
+                Some(Exclusion::Profanity) => c.profanity += 1,
                 Some(_) => c.filtered += 1,
             }
         }
@@ -1346,6 +1368,8 @@ pub struct Census {
     /// Held back by a mark on the passage `[SPEC-HOLD-010]`: lasting, unlike
     /// `suppressed`, and the right shape, unlike `filtered`.
     pub held: usize,
+    /// At or above this player's profanity tolerance `[SPEC-PTL-070]`.
+    pub profanity: usize,
     pub total_weight: f64,
 }
 
@@ -1369,6 +1393,7 @@ impl Census {
             below_min_weight,
             filtered,
             held,
+            profanity,
             total_weight: _,
         } = self;
         eligible
@@ -1380,6 +1405,7 @@ impl Census {
             + below_min_weight
             + filtered
             + held
+            + profanity
     }
 }
 
@@ -1509,6 +1535,57 @@ pub(crate) fn load_occasions(conn: &QualifyingConn) -> Result<Occasions, DbError
         }
     }
     Ok(Occasions::new(curves, values))
+}
+
+/// Each recording's profanity value, as the specials panel shows it
+/// `[SPEC-PTL-060]`: the listener's own over the inherited, and only those
+/// above zero.
+///
+/// Read whether or not `user.profanity` is a registered occasion -- a node
+/// without the registry still holds the values -- and never an error: a
+/// library from before either table simply has none, and the tolerance then
+/// has nothing to act on.
+pub(crate) fn load_profanity(conn: &QualifyingConn) -> HashMap<String, f64> {
+    let mut out = HashMap::new();
+    for sql in [
+        "SELECT subject_id, value FROM __LIB__.flavor          WHERE subject_kind = 'recording' AND characteristic = 'user.profanity' AND class = 'profane'",
+        // Second, so the listener's own value replaces the inherited one.
+        "SELECT subject_id, value FROM listener_characteristics          WHERE subject_kind = 'recording' AND characteristic = 'user.profanity' AND class = 'profane'",
+    ] {
+        let read = conn.prepare(sql).and_then(|mut stmt| {
+            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
+                .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
+        });
+        match read {
+            Ok(rows) => {
+                for (mbid, v) in rows {
+                    out.insert(mbid, v);
+                }
+            }
+            Err(e) => optional_read("the profanity values", &e),
+        }
+    }
+    out.retain(|_, v| *v > 0.0);
+    out
+}
+
+/// Where this player keeps its profanity tolerance `[SPEC-PTL-030]`.
+pub const PROFANITY_TOLERANCE_KEY: &str = "profanity_tolerance";
+
+/// This player's profanity tolerance, from `player_settings`
+/// `[SPEC-PTL-030]`. Absent or unreadable is the default, 1.0: a player that
+/// never moved the control considers no profanity, which is what it did
+/// before there was one.
+pub fn load_profanity_tolerance(conn: &QualifyingConn) -> ProfanityTolerance {
+    conn.query_row(
+        "SELECT value FROM player_settings WHERE key = ?1",
+        [PROFANITY_TOLERANCE_KEY],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|v| v.trim().parse::<f64>().ok())
+    .map(ProfanityTolerance::new)
+    .unwrap_or_default()
 }
 
 /// Like- and Dislike-Taste centroids `[SPEC-DIR-150]`.
@@ -2200,6 +2277,53 @@ mod tests {
         assert_eq!(a.excluded, Some(Exclusion::BelowMinWeight));
         assert_eq!(b.occasion, 1.0, "a recording with no occasion value is untouched");
         assert!(b.is_eligible());
+    }
+
+    /// The listener's own profanity value replaces the inherited one, a zero
+    /// of their own included, and is read with no occasion registered at all
+    /// `[SPEC-PTL-060]`; the tolerance acts live, and the census says what it
+    /// held out `[SPEC-PTL-070]`.
+    #[test]
+    fn the_profanity_tolerance_reads_the_values_the_panel_shows() {
+        let c = fixture();
+        c.execute_batch(
+            "CREATE TABLE listener_characteristics (subject_kind TEXT, subject_id TEXT,
+                 characteristic TEXT, class TEXT, value REAL, updated_at TEXT);
+             CREATE TABLE player_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);
+             INSERT INTO flavor VALUES
+                 ('recording','rec-a','user.profanity','profane',0.9,'inherited:mulib',NULL),
+                 ('recording','rec-b','user.profanity','profane',0.6,'inherited:mulib',NULL);
+             INSERT INTO listener_characteristics VALUES
+                 ('recording','rec-a','user.profanity','profane',0.25,'now'),
+                 ('recording','rec-b','user.profanity','profane',0.0,'now');",
+        )
+        .unwrap();
+        let mut d = Director::load(&c).unwrap();
+        assert_eq!(d.profanity_tolerance(), ProfanityTolerance::default(), "absent is 1.0");
+        let now = 1_782_000_000;
+        let term = |d: &Director, id: i64| {
+            let w = d.weigh_all(now);
+            w.iter().find(|(e, _)| e.passage_id == id).unwrap().1.clone()
+        };
+        assert_eq!(term(&d, 1).profanity, 1.0, "not considered at the default");
+
+        d.set_profanity_tolerance(ProfanityTolerance::new(0.5));
+        assert!((term(&d, 1).profanity - 0.5).abs() < 1e-12, "the own 0.25, not the inherited 0.9");
+        assert_eq!(term(&d, 2).profanity, 1.0, "an own zero is no profanity");
+
+        d.set_profanity_tolerance(ProfanityTolerance::new(0.0));
+        assert_eq!(term(&d, 1).excluded, Some(Exclusion::Profanity));
+        let census = d.census(now);
+        assert_eq!((census.profanity, census.eligible), (1, 2));
+        assert_eq!(census.total(), 3, "every radio passage in one bucket");
+
+        // And as the player stores it.
+        c.execute("INSERT INTO player_settings VALUES ('profanity_tolerance', '0.3', 'now')", [])
+            .unwrap();
+        assert_eq!(load_profanity_tolerance(&c).get(), 0.3);
+        c.execute("UPDATE player_settings SET value = 'half' WHERE key = 'profanity_tolerance'", [])
+            .unwrap();
+        assert_eq!(load_profanity_tolerance(&c), ProfanityTolerance::default(), "unreadable is 1.0");
     }
 
     /// In season the same recording is boosted, scaled by its value.
