@@ -65,26 +65,27 @@ The list keeps its rank, and Stage D draws on it as ever: weight × 0.96^rank `[
 - **The relaxed draw** `[SPEC-DIR-232]` keeps no reserve: it is the answer to rotation having emptied the pool, and it already sets rotation aside for every passage alike.
 - **The pre-Director fill** `Library::fallback_radio` has no Stage C, so it has no reserve either.
 
-## 6. What it should do on bose
+## 6. What it does on bose
 
-**`[SPEC-XMR-100]` A model, not a measurement.** This is a Monte Carlo of Stage A over bose's 182 Christmas passages, calibrated per slot on its picks of 1–9 November. It takes the roulette's non-Christmas weight at 2.61, measured in eleven picks of the Cool slot, and runs twenty seasons:
+**`[SPEC-XMR-100]` The real Director, run forward.** `seasonsim` loads a Director from a copy of a node's pair and picks from now to the end of December. Each pick is made at its start, settled as a play, and followed by the next at its end, with the last *queue depth* picks kept out. It runs once with the reserve off and once with it on. Nothing is skipped, and every passage plays whole and back to back, so it makes about 335 picks a day where bose made 263. *Run 2026-11-09 on bose's pair, one season each way:*
 
-| day | today | with the reserve |
-| :--- | ---: | ---: |
-| 5 December | 4.6% | 6.9% |
-| 13 December | 5.1% | 11% |
-| 20 December | 5.7% | 33% |
-| 24 December | 7.7% | 72%: 152 of 182 passages, the most-played about 4 times |
-| 25 December | 9.2% | 99%: 167 passages, the most-played about 7 times |
-| December | 4.7% | about 22% |
+| day | reserve off | reserve on | Python model, on |
+| :--- | ---: | ---: | ---: |
+| 5 December | 4.2% | 7.1% | 6.9% |
+| 13 December | 2.1% | 17% | 11% |
+| 20 December | 4.2% | 34% | 33% |
+| 24 December | 3.9% | 68%: 150 of 182 passages, the most-played 4 times | 72% |
+| 25 December | 4.0% | 99%: 169 passages, the most-played 7 times | 99% |
+| 27–29 December | 1.2–2.4% | 0%: every Christmas passage still recovering | — |
+| December | 2.9% | 20.4% | about 22% |
 
-Halving or doubling the weight assumed moves 24 December from 64% to 80%. Flow clustering is not modelled.
+Almost every Christmas play with the reserve on was a filler: Stage C's own list rarely holds a Christmas passage that is eligible. A median pick took 26.5 ms on the desktop with the reserve, against 21.9 ms without. The model of the first estimate was a Monte Carlo of Stage A in Python, calibrated per slot on bose's picks of 1–9 November. It came within a few points of the real Director with the reserve on, and overstated the share with it off.
 
 ## 7. Open
 
-**`[SPEC-XMR-900]` Built and tested on the desktop; not deployed, and not yet heard.** It needs every node running it before 1 December 06:00. The estimate of `[SPEC-XMR-100]` should be checked against the real Director run over a copy of bose's pair with a moving clock, which no tool does yet.
+**`[SPEC-XMR-900]` Built and tested on the desktop; not deployed, and not yet heard.** It needs every node running it before 1 December 06:00. `seasonsim` ran one season each way; more runs would narrow the daily figures, which vary by a few points from day to day.
 
-**`[SPEC-XMR-910]` Christmas Day repeats.** With rotation set aside, the model's most-played Christmas passages come round every three hours or so on 25 December. Nothing limits that. A minimum gap was offered and not asked for.
+**`[SPEC-XMR-910]` Christmas Day repeats.** With rotation set aside, the most-played Christmas passages play seven times on 25 December, about every three hours `[SPEC-XMR-100]`. Nothing limits that. A minimum gap was offered and not asked for.
 
 ---
 

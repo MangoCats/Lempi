@@ -286,6 +286,38 @@ pub mod dircheck {
     };
 }
 
+/// The real Director run forward over a copy of a node's pair, with and
+/// without the Christmas reserve `[SPEC-XMR-100]`.
+pub mod seasonsim {
+    use super::common;
+    use crate::cli::{Cli, Opt};
+
+    pub const LISTENER: Opt = common::LISTENER
+        .saying("the listener database, a copy: nothing is written to it, but use a copy")
+        .needed()
+        .was(0)
+        .bootstrap();
+    pub const LIBRARY: Opt = common::LIBRARY.needed().was(1).short("lib").bootstrap();
+    pub const UNTIL: Opt = Opt::text("--until", "YYYY-MM-DD", "simulate through the end of this local day")
+        .or("2026-12-31")
+        .short("u");
+    pub const RUNS: Opt = Opt::int("--runs", "N", "how many seasons to run each way").or("1").short("n");
+    pub const SEED: Opt = common::SEED;
+    pub const RESERVE: Opt = Opt::text("--reserve", "on|off|both", "which way to run the Director")
+        .or("both")
+        .short("r");
+
+    pub const SPEC: Cli = Cli {
+        program: "seasonsim",
+        summary: "run the real Director forward over a copy of a node's pair, with and without the Christmas reserve",
+        opts: &[LISTENER, LIBRARY, UNTIL, RUNS, SEED, RESERVE],
+        notes: &[
+            "Each pick is taken at its start, played whole, and stamped as a play; nothing is skipped.",
+            "Reports, per local day, how many picks were Christmas passages and how many different ones.",
+        ],
+    };
+}
+
 /// What flavor distance does on a real library `[SPEC-FD-070]`.
 pub mod flavorcheck {
     use super::common;
@@ -704,6 +736,7 @@ pub const ALL: &[&Cli] = &[
     &play::SPEC,
     &memcheck::SPEC,
     &dircheck::SPEC,
+    &seasonsim::SPEC,
     &flavorcheck::SPEC,
     &tagscan::SPEC,
     &relink::SPEC,

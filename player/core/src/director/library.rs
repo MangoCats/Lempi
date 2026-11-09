@@ -747,6 +747,11 @@ impl Director {
         self.christmas_rows.len()
     }
 
+    /// Whether a radio passage counts as Christmas `[SPEC-XMR-015]`.
+    pub fn is_christmas(&self, passage_id: i64) -> bool {
+        self.christmas.contains(&passage_id)
+    }
+
     pub fn policy(&self) -> Policy {
         self.policy
     }
