@@ -2728,11 +2728,132 @@ async function runProfanity(skin) {
   if (errors.length) failures++;
 }
 
+// The Christmas reserve switch `[SPEC-XMR-080]`: beside the profanity slider
+// in MuLibPlay and Lempi, absent from WinAmp. On when the snapshot says
+// nothing, its readout the ramp now; a change posts; a follower's is disabled
+// and names its leader. And "why this passage?" says when a pick came from a
+// Christmas place `[SPEC-XMR-070]`.
+async function runChristmas(skin) {
+  const shell = fs.readFileSync(path.join(ROOT, 'shell.html'), 'utf8')
+    .replace('<script>Lempi.start();</script>', '');
+  const dom = new JSDOM(shell,
+                        { runScripts: 'dangerously', url: `http://localhost/?skin=${skin}` });
+  const { window } = dom;
+  const errors = [];
+  window.console.error = (...a) => errors.push(a.join(' '));
+  const check = (cond, msg) => { if (!cond) errors.push(msg); };
+  const create = window.document.createElement.bind(window.document);
+  window.document.createElement = tag => {
+    const el = create(tag);
+    if (tag === 'link' || tag === 'script') setTimeout(() => el.onload && el.onload(), 0);
+    return el;
+  };
+  window.HTMLCanvasElement.prototype.getContext = () => null;
+  const posted = [];
+  window.fetch = (url, opts) => {
+    if (opts && opts.method === 'POST') {
+      posted.push(url);
+      return Promise.resolve({ ok: true, status: 204 });
+    }
+    if (url === '/skins') {
+      return Promise.resolve({ json: () => Promise.resolve(skins.map(n => ({ name: n, label: n }))) });
+    }
+    const m = /^\/skin\/([^/]+)\/(.+)$/.exec(url);
+    if (m) return Promise.resolve({ ok: true, text: () => Promise.resolve(fs.readFileSync(path.join(ROOT, 'skins', m[1], m[2]), 'utf8')) });
+    return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}), text: () => Promise.resolve('') });
+  };
+  let sock = null;
+  window.WebSocket = function () { sock = this; this.close = () => {}; };
+  const runScript = src => {
+    const el = create('script');
+    el.textContent = src;
+    window.document.body.appendChild(el);
+  };
+  const why = await startCore(window, runScript);
+  const label = `christmas ${skin}`.padEnd(11);
+  if (why || !sock) {
+    console.log(`${label} FAIL  ${why || 'core never opened its socket'}`);
+    failures++;
+    return;
+  }
+  const $ = id => window.document.getElementById(id);
+  sock.onopen && sock.onopen();
+  sock.onmessage({ data: JSON.stringify(SPARSE) });
+
+  // The clause the "why" line gains, from the shared helper every skin uses.
+  // `Lempi` is a script-scope const, not a property of the window.
+  const note = window.eval('Lempi').christmasNote;
+  check(note({ christmas: { reserved: 0 }, place: 'flow' }) === '', 'nothing reserved says nothing');
+  check(/rotation set aside/.test(note({ christmas: { reserved: 96 }, place: 'filler' })),
+        'a filler must say its rotation was set aside');
+  check(/96 of the places/.test(note({ christmas: { reserved: 96 }, place: 'moved_up' })),
+        'a moved-up pick must say how many places were kept');
+
+  const following = (ramp) => ({ ...SPARSE, christmas_ramp: ramp,
+                                 echo_node: { ...(SPARSE.echo_node || {}), follow_host: 'bose' } });
+  // Hidden by its own `hidden` or any ancestor's -- the Settings panel is.
+  const shown = el => { for (let e = el; e; e = e.parentElement) if (e.hidden) return false; return true; };
+
+  if (skin === 'winamp') {
+    check(!$('christmas'), 'the WinAmp skin shows no Christmas control');
+  } else {
+    const input = $('christmas');
+    check(!!input, 'the skin must offer the Christmas switch');
+    if (input) {
+      check(input.checked && $('christmasnum').textContent === 'on',
+            `a snapshot without the fields reads as on, got ${input.checked} "${$('christmasnum').textContent}"`);
+      sock.onmessage({ data: JSON.stringify({ ...SPARSE, christmas_reserve: true, christmas_ramp: 0.37 }) });
+      check($('christmasnum').textContent === '37%', `the ramp must show as 37%, got "${$('christmasnum').textContent}"`);
+      sock.onmessage({ data: JSON.stringify({ ...SPARSE, christmas_reserve: false, christmas_ramp: 0.37 }) });
+      check(!input.checked && $('christmasnum').textContent === 'off',
+            `off must read as off, got ${input.checked} "${$('christmasnum').textContent}"`);
+      input.checked = true;
+      input.dispatchEvent(new window.Event('change'));
+      check(posted.includes('/director/christmas/on'), `checking it must POST on, got ${JSON.stringify(posted)}`);
+      input.checked = false;
+      input.dispatchEvent(new window.Event('change'));
+      check(posted.includes('/director/christmas/off'), `clearing it must POST off, got ${JSON.stringify(posted)}`);
+    }
+    if (input && skin === 'lempi') {
+      // In Settings, always; usable while following, with a note saying it
+      // does nothing then.
+      check($('panel-settings').contains(input), 'the Lempi switch must be on the Settings page');
+      check(!$('audio-controls-bar').contains(input), 'and no longer in the audio row');
+      sock.onmessage({ data: JSON.stringify({ ...SPARSE, christmas_ramp: 0 }) });
+      check($('christmas-row') && !$('christmas-row').hidden, 'shown out of season too');
+      check($('christmasnote').hidden, 'no note while independent');
+      sock.onmessage({ data: JSON.stringify(following(0.37)) });
+      check(!input.disabled, 'a follower may still set its own');
+      check(!$('christmasnote').hidden && /bose/.test($('christmasnote').textContent) &&
+            /no effect while following/.test($('christmasnote').textContent),
+            `a follower must say it has no effect, got hidden=${$('christmasnote').hidden} "${$('christmasnote').textContent}"`);
+    }
+    if (input && skin === 'mulibplay') {
+      // Only in season, and never while following.
+      sock.onmessage({ data: JSON.stringify({ ...SPARSE, christmas_ramp: 0 }) });
+      check(!shown(input), 'hidden while the ramp is zero');
+      sock.onmessage({ data: JSON.stringify({ ...SPARSE, christmas_ramp: 0.01 }) });
+      check(shown(input), 'shown once the ramp is above zero');
+      sock.onmessage({ data: JSON.stringify(following(0.5)) });
+      check(!shown(input), 'hidden on a follower, even in season');
+      sock.onmessage({ data: JSON.stringify({ ...SPARSE, christmas_ramp: 0.5 }) });
+      check(shown(input), 'and back when it stops following');
+    }
+  }
+  console.log(`${label} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+              (skin === 'winamp' ? 'no control, as designed; note verified'
+               : skin === 'lempi' ? 'in Settings: state, readout, change, follower note verified'
+               : 'state, readout, change, in season only, hidden on a follower verified'));
+  for (const e of errors) console.log('    ! ' + e);
+  if (errors.length) failures++;
+}
+
 (async () => {
   for (const s of skins) await run(s);
   for (const s of skins) await runEarlySnapshot(s);
   for (const s of skins) await runPreference(s);
   for (const s of skins) await runProfanity(s);
+  for (const s of skins) await runChristmas(s);
   await runAudioControls();
   await runBrowse();
   await runReview();

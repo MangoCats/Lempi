@@ -341,6 +341,23 @@ pub struct Candidate<'a> {
     pub profanity: f64,
 }
 
+/// Whether a weighing holds a passage to its rotation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Rotation {
+    /// Every rotation blocks, and each recovery ramp starts where its
+    /// rotation ends `[SPEC-DIR-115]`. Every pick but one kind.
+    #[default]
+    Applies,
+    /// No rotation blocks -- artist, recording, work or related -- and each
+    /// recovery ramp starts at the last play instead, so a passage played an
+    /// hour ago weighs `1 h / recovery` rather than nothing. Only for the
+    /// Christmas reserve's fillers `[SPEC-XMR-050]` (the maintainer,
+    /// 2026-11-09). Everything else still applies: the length filters, the
+    /// profanity tolerance, the rejection windows, restraint, the occasion
+    /// and the weight floor.
+    SetAside,
+}
+
 /// The artist pass, then the recording pass `[SPEC-DIR-115]`.
 ///
 /// Never-played is not the same as played-long-ago only in that it skips the
@@ -349,6 +366,14 @@ pub struct Candidate<'a> {
 /// degrade to a draw by length and season rather than to silence
 /// `[SPEC-DIR-158]`.
 pub fn weigh(c: &Candidate<'_>, policy: &Policy) -> Weighing {
+    weigh_under(c, policy, Rotation::Applies)
+}
+
+/// As [`weigh`], with rotation applied or set aside.
+pub fn weigh_under(c: &Candidate<'_>, policy: &Policy, rotation: Rotation) -> Weighing {
+    // A rotation of zero is exactly "set aside": no age is below it, and
+    // `recovery_weight(age, 0, rec)` is the ramp from the last play.
+    let rot = |s: f64| if rotation == Rotation::SetAside { 0.0 } else { s };
     // Passage filters first: they are free, and they are the reason a 90-minute
     // live set does not enter the roulette [SPEC-DIR-125].
     if c.length_s < MIN_LENGTH_S {
@@ -409,7 +434,7 @@ pub fn weigh(c: &Candidate<'_>, policy: &Policy) -> Weighing {
     for a in c.artists {
         artist_restraint *= 10f64.powf(-a.tuning.restraint);
         if let Some(age) = a.age_s {
-            let art_rot = seconds(a.tuning.rotation) * a_scale;
+            let art_rot = rot(seconds(a.tuning.rotation) * a_scale);
             if age < art_rot {
                 return Weighing::excluded(Exclusion::ArtistRotationBlock);
             }
@@ -421,7 +446,7 @@ pub fn weigh(c: &Candidate<'_>, policy: &Policy) -> Weighing {
 
     // --- recording pass ---
     let r_scale = policy.recording_scale.get();
-    let rec_rot = seconds(c.recording.rotation) * r_scale;
+    let rec_rot = rot(seconds(c.recording.rotation) * r_scale);
     let rec_rec = seconds(c.recording.recovery) * r_scale;
     let recording_restraint = 10f64.powf(-c.recording.restraint);
     let mut recording_ramp = 1.0;
@@ -1094,5 +1119,49 @@ mod tests {
         c.recording.restraint = -(MIN_WEIGHT.log10()); // weight lands exactly on 0.001
         let w = weigh(&c, &Policy::default());
         assert_eq!(w.excluded, Some(Exclusion::BelowMinWeight), "weight was {}", w.weight);
+    }
+
+    /// Rotation set aside `[SPEC-XMR-050]`: nothing blocks, every ramp runs
+    /// from the last play, and everything that is not a rotation still holds.
+    #[test]
+    fn rotation_set_aside_ramps_from_the_last_play() {
+        let p = windows();
+        let rec_rec = seconds(DEF_RECOVERY_REC);
+        let art_rec = seconds(DEF_RECOVERY_ART);
+
+        // Played a day ago: blocked as ever, and a day into its ramp set aside.
+        let mut c = candidate();
+        c.recording_age_s = Some(DAY);
+        assert_eq!(weigh(&c, &p).excluded, Some(Exclusion::RecordingRotationBlock));
+        let w = weigh_under(&c, &p, Rotation::SetAside);
+        assert!(w.is_eligible());
+        assert!((w.recording_ramp - DAY / rec_rec).abs() < 1e-12, "ramp {}", w.recording_ramp);
+
+        // The work tier too, and an artist heard two hours ago: its rotation
+        // goes, its recovery stays.
+        let artists = [credit(Some(2.0 * HOUR))];
+        let mut c = candidate();
+        c.work_age_s = Some(3.0 * DAY);
+        c.artists = &artists;
+        assert_eq!(weigh(&c, &p).excluded, Some(Exclusion::ArtistRotationBlock));
+        let w = weigh_under(&c, &p, Rotation::SetAside);
+        assert!((w.artist_weight - 2.0 * HOUR / art_rec).abs() < 1e-12, "artist {}", w.artist_weight);
+        assert!((w.recording_ramp - 3.0 * DAY / rec_rec).abs() < 1e-12);
+
+        // Played this instant: weighs nothing, so the floor keeps it out.
+        let mut c = candidate();
+        c.passage_age_s = Some(0.0);
+        assert_eq!(weigh_under(&c, &p, Rotation::SetAside).excluded, Some(Exclusion::BelowMinWeight));
+
+        // Fully recovered, or never played: no different from `weigh`.
+        let mut c = candidate();
+        c.recording_age_s = Some(60.0 * DAY);
+        assert_eq!(weigh_under(&c, &p, Rotation::SetAside), weigh(&c, &p));
+        assert_eq!(weigh_under(&candidate(), &p, Rotation::SetAside), weigh(&candidate(), &p));
+
+        // A rejection is not a rotation.
+        let mut c = candidate();
+        c.skip_age_s = Some(HOUR);
+        assert_eq!(weigh_under(&c, &p, Rotation::SetAside).excluded, Some(Exclusion::SkipSuppressed));
     }
 }

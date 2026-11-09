@@ -282,6 +282,12 @@ pub struct Snapshot {
     /// `[SPEC-PTL-020]`. A follower's own is shown and does nothing while it
     /// follows `[SPEC-PTL-040]`; the skins read `echo_node` for that.
     pub profanity_tolerance: f64,
+    /// This player's Christmas reserve switch, on when never set, and the
+    /// ramp now on the listener's clock, 0.0 to 1.0 `[SPEC-XMR-080]`. The
+    /// ramp is shown whether or not the switch is on; a follower's own
+    /// switch does nothing while it follows, as its tolerance does not.
+    pub christmas_reserve: bool,
+    pub christmas_ramp: f64,
     /// What a live Director rebuild is doing, if one has been asked for
     /// `[IMPL-SUI-075]`. `None` until something requests one.
     /// What this server is `[REQ-VIS-200]`. Sent to every skin so a person
@@ -468,6 +474,8 @@ impl From<&PlayerState> for Snapshot {
             slot_manual: false,
             program_manual: false,
             profanity_tolerance: 1.0,
+            christmas_reserve: true,
+            christmas_ramp: 0.0,
             slots: Vec::new(),
             programs: Vec::new(),
             cue_sheets: s.cue_sheets,
@@ -656,6 +664,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/programme/slot/:id", post(set_slot))
         .route("/program/:id", post(set_slot))
         .route("/director/profanity/:value", post(set_profanity_tolerance))
+        .route("/director/christmas/:on", post(set_christmas_reserve))
         .route("/library/reload", post(reload_library))
         .route("/backend/:which", post(switch_backend))
         .route("/cue/:on", post(set_cue_sheets))
@@ -865,6 +874,8 @@ async fn push_state(mut socket: WebSocket, ui: Ui) {
             snap.program = snap.slot.clone();
             snap.program_manual = snap.slot_manual;
             snap.profanity_tolerance = c.profanity_tolerance.unwrap_or_default().get();
+            snap.christmas_reserve = c.christmas_reserve.unwrap_or(true);
+            snap.christmas_ramp = c.christmas_ramp;
             snap.reload_status = c.reload_status.clone();
             snap.backend = c.backend.clone();
             snap.guest_available = c.guest_available;
@@ -1495,7 +1506,8 @@ mod tests {
             "playing", "passage_id", "title", "artist", "mbid", "artist_mbid", "album", "plays",
             "last_played", "position_ms", "duration_ms", "queue_len", "queue",
             "volume_db", "fader_min_db", "skip", "slot", "slot_manual", "slots",
-            "program", "program_manual", "programs", "profanity_tolerance", "underrun_samples",
+            "program", "program_manual", "programs", "profanity_tolerance", "christmas_reserve",
+            "christmas_ramp", "underrun_samples",
             "branch", "commit_date",
             "commit_subject", "dirty_files",
         ] {

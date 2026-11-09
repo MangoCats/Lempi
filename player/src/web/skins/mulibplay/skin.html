@@ -58,6 +58,9 @@
       <p class="autoclock"><input type="checkbox" id="autoclock"><label for="autoclock">Autoselect by clock time</label></p>
       <!-- For every programme at once [SPEC-PTL-020]. -->
       <p class="profanity"><label for="profanity">Profanity</label><input type="range" id="profanity" min="0" max="1" step="0.01" value="1"><span id="profanitynum">any</span></p>
+      <!-- The Christmas reserve, on unless turned off [SPEC-XMR-080]: shown
+           only while the ramp is above zero, and never while following. -->
+      <p class="christmas" id="christmas-row" hidden><input type="checkbox" id="christmas" checked><label for="christmas">Christmas</label><span id="christmasnum">on</span></p>
     </div>
   </div>
 

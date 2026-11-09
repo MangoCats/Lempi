@@ -1497,6 +1497,52 @@ const Lempi = (() => {
         say(v);
       };
     },
+    // This player's Christmas reserve, on or off [SPEC-XMR-080].
+    christmas: on => post(`/director/christmas/${on ? 'on' : 'off'}`),
+    // Wire a checkbox and its readout up as the Christmas reserve switch
+    // [SPEC-XMR-080]; returns the render to call with each snapshot. The
+    // readout is how much of the roulette the reserve keeps now -- "on" out
+    // of season, "off" when turned off. A follower plays what its leader
+    // chose, so its own switch does nothing while it follows. Each skin says
+    // so its own way:
+    //   note -- an element shown, saying so, while this node follows (Lempi's
+    //           Settings, where the switch stays and stays usable);
+    //   row  -- an element hidden out of season and while following
+    //           (MuLibPlay, which shows it only when it can matter).
+    christmasControl(input, readout, { note = null, row = null } = {}) {
+      input.addEventListener('change', () => Lempi.christmas(input.checked));
+      return s => {
+        const leader = s?.echo_node?.follow_host || '';
+        const ramp = s?.christmas_ramp ?? 0;
+        if (row) {
+          const hide = Boolean(leader) || !(ramp > 0);
+          if (row.hidden !== hide) row.hidden = hide;
+        }
+        if (note) {
+          const text = leader ? `Following ${leader}: this has no effect while following.` : '';
+          if (note.textContent !== text) note.textContent = text;
+          if (note.hidden !== !leader) note.hidden = !leader;
+        }
+        const title = 'Keep places among the Program Director\'s choices for Christmas music, ' +
+          'from 1 December, rising to Christmas Day';
+        if (input.title !== title) input.title = title;
+        const on = s?.christmas_reserve ?? true;
+        if (input.checked !== on) input.checked = on;
+        const text = !on ? 'off' : ramp > 0 ? `${Math.round(ramp * 100)}%` : 'on';
+        if (readout && readout.textContent !== text) readout.textContent = text;
+      };
+    },
+    // What the Christmas reserve did for this pick, as a clause for "why
+    // this passage?" [SPEC-XMR-070]; '' when it did nothing.
+    christmasNote(why) {
+      const c = why?.christmas;
+      if (!c || !c.reserved) return '';
+      const kept = `${c.reserved} of the places kept for Christmas`;
+      if (why.place === 'filler') return ` From a Christmas place (${kept}), its rotation set aside.`;
+      if (why.place === 'moved_up') return ` From a Christmas place (${kept}), moved up from lower in the flow order.`;
+      if (why.place === 'backfill') return ` From a Christmas place no Christmas passage could fill (${kept}).`;
+      return ` ${kept[0].toUpperCase()}${kept.slice(1)}.`;
+    },
     // A unix second to something a person reads. Local time, because the
     // listener is standing in it.
     since(unix) {

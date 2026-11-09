@@ -26,7 +26,7 @@ largest stage of the pipeline and the one with the most rules of its own.
 | 7 | a related recording played inside that rotation (`recording_relations`, empty today) | the rotation | `[SPEC-DIR-116]` |
 | 8 | its weight, after every multiplier below, is not above `min_weight` (0.001) | while it stays there | `[SPEC-DIR-115]` step 5, `[SPEC-DIR-137]` |
 
-Beside Stage A, a passage already in the queue is kept out of the next pick by the Director's skip list, which is what keeps an unidentified passage from appearing twice `[REQ-AND-310]`. Two consequences of the keys: rows 4 and 6's recording and work tiers need a recording MBID, so an unidentified or tags-only passage is never suppressed by a rejection and rotates on its passage id (and its tag artist) alone `[GDE-WRK-055]`.
+Beside Stage A, a passage already in the queue is kept out of the next pick by the Director's skip list, which is what keeps an unidentified passage from appearing twice `[REQ-AND-310]`. Two consequences of the keys: rows 4 and 6's recording and work tiers need a recording MBID, so an unidentified or tags-only passage is never suppressed by a rejection and rotates on its passage id (and its tag artist) alone `[GDE-WRK-055]`. One kind of candidate is weighed without rows 5–7: a Christmas reserve's filler, whose recovery runs from its last play instead `[SPEC-XMR-050]`.
 
 The weight of a passage that clears them all is, with the default `Damped` coupling `[SPEC-DIR-117]`:
 

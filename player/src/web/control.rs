@@ -360,6 +360,37 @@ pub(super) async fn set_profanity_tolerance(
     StatusCode::NO_CONTENT
 }
 
+/// Turn this player's Christmas reserve on or off `[SPEC-XMR-080]`: `on` or
+/// `off` (or true/false, 1/0).
+///
+/// This player's alone, and persisted as the tolerance is: a save that fails
+/// costs the choice surviving a restart, said in the log, not this change
+/// working.
+pub(super) async fn set_christmas_reserve(
+    State(ui): State<Ui>,
+    axum::extract::Path(value): axum::extract::Path<String>,
+) -> StatusCode {
+    let Some(on) = crate::director::library::parse_switch(&value) else {
+        return StatusCode::BAD_REQUEST;
+    };
+    {
+        let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
+        c.christmas_reserve = Some(on);
+    }
+    let db = ui.db.clone();
+    let library = ui.library.clone();
+    let _ = tokio::task::spawn_blocking(move || match crate::db::PlayerStore::open_split(&db, &library) {
+        Ok(store) => {
+            if let Err(e) = store.save_christmas_reserve(on) {
+                tracing::error!("save Christmas reserve: {e}");
+            }
+        }
+        Err(e) => tracing::error!("save Christmas reserve: {e}"),
+    })
+    .await;
+    StatusCode::NO_CONTENT
+}
+
 /// Where the audio is actually going `[PI3-API-020]`.
 ///
 /// On demand rather than in the state snapshot: it costs a subprocess, and the

@@ -2089,6 +2089,29 @@ impl PlayerStore {
         crate::director::library::load_profanity_tolerance(&self.conn)
     }
 
+    /// This player's Christmas reserve switch, kept beside the tolerance and
+    /// for the same reason: it is this player's alone `[SPEC-XMR-080]`.
+    pub fn save_christmas_reserve(&self, on: bool) -> Result<(), DbError> {
+        self.conn
+            .execute(
+                "INSERT INTO player_settings (key, value, updated_at)
+                 VALUES (?1, ?2, datetime('now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                     value = excluded.value, updated_at = excluded.updated_at",
+                rusqlite::params![
+                    crate::director::library::CHRISTMAS_RESERVE_KEY,
+                    if on { "on" } else { "off" }
+                ],
+            )
+            .map(|_| ())
+            .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// On when never set `[SPEC-XMR-080]`.
+    pub fn load_christmas_reserve(&self) -> bool {
+        crate::director::library::load_christmas_reserve(&self.conn)
+    }
+
     /// `None` both when nothing has ever been chosen and when a stored value
     /// no longer parses -- either way there is nothing to override the clock
     /// with, and `Programme::active_slot`'s own stale-id fallback already handles

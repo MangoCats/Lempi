@@ -59,8 +59,7 @@
   <div id="audio-controls-bar" class="audio-bar" hidden>
     <button type="button" id="audio-controls-toggle" aria-expanded="false" hidden>Audio controls</button>
     <!-- The Program Director's, for every programme slot [SPEC-PTL-020]. -->
-    <label id="profanity-ctl" class="profanity-ctl">Profanity <input type="range" id="profanity" min="0" max="1" step="0.01" value="1"><span id="profanitynum">any</span></label>
-    <span id="warp-badge" class="warp-badge" hidden></span>
+    <label id="profanity-ctl" class="profanity-ctl">Profanity <input type="range" id="profanity" min="0" max="1" step="0.01" value="1"><span id="profanitynum">any</span></label>    <span id="warp-badge" class="warp-badge" hidden></span>
   </div>
   <div id="audio-controls-drawer" class="audio-drawer" hidden>
     <div id="tpl-section" class="audio-section" hidden>
@@ -244,6 +243,16 @@
       <span><input type="number" id="queuedepth" step="1"> passages</span>
       <p>How many passages the Program Director keeps ahead. At or above this
          it adds nothing, so anything you queue yourself simply stands.</p>
+    </div>
+    <!-- This player's own, on unless turned off [SPEC-XMR-080]. -->
+    <div class="setting" id="christmas-row">
+      <label for="christmas">Christmas reserve</label>
+      <span><input type="checkbox" id="christmas" checked> <small id="christmasnum">on</small></span>
+      <p>From 06:00 on 1 December the Program Director keeps a growing share
+         of its choices for Christmas songs: hardly any at first, most of them
+         by Christmas Eve and nearly all of Christmas Day, gone again by 06:00
+         on 26 December. Beside the box, how far into the season it is.</p>
+      <p id="christmasnote" hidden></p>
     </div>
     <div class="setting">
       <label for="utcoffset">Clock offset from UTC</label>

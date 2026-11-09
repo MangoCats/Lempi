@@ -507,6 +507,8 @@ body:has(#panel-history:not([hidden])) main {
 .profanity-ctl input { width: 8rem; margin: 0; }
 .profanity-ctl input:disabled { opacity: .4; }
 #profanitynum { min-width: 2.6em; font-variant-numeric: tabular-nums; }
+/* The Christmas reserve's readout in Settings [SPEC-XMR-080]: the ramp now. */
+#christmasnum { min-width: 2.6em; font-variant-numeric: tabular-nums; }
 .warp-badge:not([hidden]) {
   font-size: .75rem; font-variant-numeric: tabular-nums;
   color: var(--fg); padding: .15rem .5rem;

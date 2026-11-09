@@ -18,6 +18,7 @@
 //! `[SPEC-DIR-232]`; before a Director exists, the library's own
 //! `fallback_radio` fills the queue `[SPEC-DIR-230]` -- both in SPEC074.
 
+pub mod christmas;
 pub mod flavor;
 pub mod frequency;
 pub mod library;

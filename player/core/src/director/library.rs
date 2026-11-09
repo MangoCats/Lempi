@@ -15,16 +15,29 @@ use serde::Serialize;
 
 use crate::db::QualifyingConn;
 
+use super::christmas::{self, Place, Reserve};
 use super::frequency::{
-    weigh, ArtistCredit, Candidate, Exclusion, Policy, ProfanityTolerance, Related, TimeScale,
-    Tuning, Weighing,
+    weigh_under, ArtistCredit, Candidate, Exclusion, Policy, ProfanityTolerance, Related, Rotation,
+    TimeScale, Tuning, Weighing,
 };
 use super::flavor::{centroid, Flavor, FlavorIndex};
 use super::occasion::{civil_from_unix, ordinal, Curve, Interp, Occasions};
 use super::programme::Programme;
-use super::shape::{shape, Seed, Shaping, LIKE_SEED_WEIGHT, RAND_POOL};
+use super::shape::{shape, Seed, Shaping, DISLIKE_RADIUS, LIKE_SEED_WEIGHT, RAND_POOL};
 use crate::db::{row_to_entry, DbError, COLS, FROM};
 use crate::queue::QueueEntry;
+
+/// How a pass of Stage A treats history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Weigh {
+    /// As every ordinary pick.
+    Normal,
+    /// As though nothing had played: the fallback `[SPEC-DIR-232]`.
+    Relaxed,
+    /// History kept, rotation set aside: the Christmas reserve's fillers
+    /// `[SPEC-XMR-050]`.
+    RotationSetAside,
+}
 
 /// A radio passage and the identity Stage A weighs it by.
 struct Row {
@@ -147,6 +160,13 @@ pub struct Explanation {
     /// order to decay over, or whether the relaxed fallback chose it. Stated
     /// in the record so a stored decision says how it was made.
     pub stages: &'static str,
+    /// Where in the roulette list this passage stood: Stage C's own place,
+    /// or one the Christmas reserve kept `[SPEC-XMR-070]`. A `filler` was
+    /// weighed with rotation set aside, which is why it could play while
+    /// its rotation would have held it.
+    pub place: Place,
+    /// What the Christmas reserve did to this pick's list `[SPEC-XMR-070]`.
+    pub christmas: Reserve,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -265,6 +285,14 @@ pub struct Director {
     /// Each recording's profanity value, own over inherited `[SPEC-PTL-060]`.
     /// Only values above zero: an absent one is zero.
     profanity: HashMap<String, f64>,
+    /// The radio passages whose recording has a Christmas value above zero,
+    /// own over inherited `[SPEC-XMR-015]`, as places in `rows`, in `rows`
+    /// order; and the same as passage ids, for the test Stage C's list needs.
+    christmas_rows: Vec<usize>,
+    christmas: HashSet<i64>,
+    /// This player's switch for the Christmas reserve `[SPEC-XMR-080]`. On
+    /// unless the player has turned it off.
+    christmas_on: bool,
     flavor: FlavorIndex,
     programme: Programme,
     /// Centroids of liked and disliked flavor `[SPEC-DIR-150]`. Built once:
@@ -622,6 +650,14 @@ impl Director {
         };
 
         let index = rows.iter().enumerate().map(|(i, r)| (r.entry.passage_id, i)).collect();
+        let christmas_values = load_christmas(conn);
+        let christmas_rows: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.mbid.as_deref().is_some_and(|m| christmas_values.contains_key(m)))
+            .map(|(i, _)| i)
+            .collect();
+        let christmas = christmas_rows.iter().map(|&i| rows[i].entry.passage_id).collect();
         Ok(Self {
             rows,
             index,
@@ -644,6 +680,9 @@ impl Director {
             relations,
             occasions,
             profanity,
+            christmas_rows,
+            christmas,
+            christmas_on: true,
             flavor,
             programme,
             like,
@@ -685,6 +724,27 @@ impl Director {
 
     pub fn profanity_tolerance(&self) -> ProfanityTolerance {
         self.policy.profanity
+    }
+
+    /// Turn this player's Christmas reserve on or off `[SPEC-XMR-080]`. Live,
+    /// as the tolerance is.
+    pub fn set_christmas_reserve(&mut self, on: bool) {
+        self.christmas_on = on;
+    }
+
+    pub fn christmas_reserve(&self) -> bool {
+        self.christmas_on
+    }
+
+    /// The Christmas ramp for a pick projected to start at `starts_at`, on
+    /// the listener's clock `[SPEC-XMR-020]`, whether or not the reserve is on.
+    pub fn christmas_ramp(&self, starts_at: i64) -> f64 {
+        christmas::christmas_ramp(self.programme.local_secs(starts_at))
+    }
+
+    /// How many radio passages the reserve can draw on `[SPEC-XMR-015]`.
+    pub fn christmas_count(&self) -> usize {
+        self.christmas_rows.len()
     }
 
     pub fn policy(&self) -> Policy {
@@ -767,6 +827,19 @@ impl Director {
     /// occasion -- which is the whole of what the fallback may set aside
     /// (the maintainer, 2026-10-08).
     fn weigh_all_with(&self, now: i64, relaxed: bool) -> Vec<(&QueueEntry, Weighing)> {
+        self.weigh_rows(self.rows.iter(), now, if relaxed { Weigh::Relaxed } else { Weigh::Normal })
+    }
+
+    /// Weigh `rows`, which need not be every row: the Christmas reserve's
+    /// fillers weigh only the Christmas passages `[SPEC-XMR-050]`.
+    fn weigh_rows<'a>(
+        &'a self,
+        rows: impl Iterator<Item = &'a Row>,
+        now: i64,
+        mode: Weigh,
+    ) -> Vec<(&'a QueueEntry, Weighing)> {
+        let relaxed = mode == Weigh::Relaxed;
+        let rotation = if mode == Weigh::RotationSetAside { Rotation::SetAside } else { Rotation::Applies };
         let mut related_buf: Vec<Related> = Vec::new();
         let mut artist_buf: Vec<ArtistCredit> = Vec::new();
         // The day is resolved once per pass, not per passage: every candidate is
@@ -776,8 +849,7 @@ impl Director {
         // `[SPEC-DIR-132]`.
         let (_, month, day) = civil_from_unix(self.programme.local_secs(now));
         let today = ordinal(month, day);
-        self.rows
-            .iter()
+        rows
             .map(|row| {
                 if self.held.contains(&row.entry.passage_id) {
                     return (&row.entry, Weighing::excluded(Exclusion::Held));
@@ -845,7 +917,7 @@ impl Director {
                 } else {
                     c
                 };
-                (&row.entry, weigh(&c, &self.policy))
+                (&row.entry, weigh_under(&c, &self.policy, rotation))
             })
             .collect()
     }
@@ -1121,11 +1193,35 @@ impl Director {
         // there is no flow order, so rank would be arbitrary and decay would
         // favour whatever the scan happened to visit first.
         let take = if flowed { RAND_POOL } else { ranked.len() };
-        let pool: Vec<(&QueueEntry, &Weighing, Option<f64>, f64)> = ranked
+
+        // --- the Christmas reserve [SPEC-XMR-040] ---
+        // Some of the `take` places kept for Christmas, the last ones: the
+        // roulette's lowest ranks, so the reserve starts slow and climbs as
+        // the ramp reaches up the rank (the maintainer, 2026-11-09). With
+        // nothing reserved the list is Stage C's first `take`, as it was.
+        let ramp = self.christmas_ramp(starts_at);
+        let reserved = if self.christmas_on { christmas::reserved(ramp, take) } else { 0 };
+        let is_christmas = |x: &(&QueueEntry, &Weighing, Option<f64>)| self.christmas.contains(&x.0.passage_id);
+        // Fillers are weighed only when moving up cannot fill the places:
+        // it costs a pass over every Christmas passage.
+        let moving_up = ranked.iter().skip(take - reserved).filter(|x| is_christmas(x)).count();
+        let filler_store = if moving_up < reserved {
+            let listed: HashSet<i64> = ranked.iter().map(|x| x.0.passage_id).collect();
+            self.christmas_fillers(starts_at, rng, skip, &listed, &seeds, anchor, reserved - moving_up)
+        } else {
+            Vec::new()
+        };
+        let fillers: Vec<(&QueueEntry, &Weighing, Option<f64>)> =
+            filler_store.iter().map(|(e, w, d)| (*e, w, *d)).collect();
+        let (listed, mut tally) = christmas::reserve(&ranked, take, reserved, is_christmas, &fillers);
+        tally.enabled = self.christmas_on;
+        tally.ramp = ramp;
+        let places: Vec<Place> = listed.iter().map(|x| x.1).collect();
+
+        let pool: Vec<(&QueueEntry, &Weighing, Option<f64>, f64)> = listed
             .into_iter()
-            .take(take)
             .enumerate()
-            .map(|(rank, (e, w, d))| {
+            .map(|(rank, ((e, w, d), _))| {
                 let decayed =
                     if flowed { w.weight * RANK_DECAY.powi(rank as i32) } else { w.weight };
                 (e, w, d, decayed)
@@ -1139,7 +1235,75 @@ impl Director {
         } else {
             "frequency, shaping; no flow -- nothing with flavor queued to follow"
         };
-        self.draw(starts_at, rng, &pool, &shaping, &seeds, stages)
+        self.draw(starts_at, rng, &pool, &places, tally, &shaping, &seeds, stages)
+    }
+
+    /// The Christmas reserve's fillers `[SPEC-XMR-050]`: at most `need`
+    /// Christmas passages from outside Stage C's list, nearest the
+    /// programme's seeds first, each weighed with rotation set aside -- its
+    /// recovery measured from its last play.
+    ///
+    /// Not one already listed or queued, and not one Stage A would refuse for
+    /// anything but rotation: a hold, the length filters, the profanity
+    /// tolerance, a rejection window, the weight floor. One too close to
+    /// Dislike-Taste is left out as Stage B would leave it `[SPEC-DIR-150]`.
+    /// One without flavor comes last, in no fixed order, as it does in
+    /// Stage C `[SPEC-DIR-147]`. Each carries its flow distance from the
+    /// queue tail, for the record only: the order is the seeds'.
+    #[allow(clippy::too_many_arguments)]
+    fn christmas_fillers(
+        &self,
+        starts_at: i64,
+        rng: &mut Rng,
+        skip: &[i64],
+        listed: &HashSet<i64>,
+        seeds: &[Seed<'_>],
+        anchor: Option<&Flavor>,
+        need: usize,
+    ) -> Vec<(&QueueEntry, Weighing, Option<f64>)> {
+        let schema = &self.flavor.schema;
+        let rows = self
+            .christmas_rows
+            .iter()
+            .map(|&i| &self.rows[i])
+            .filter(|r| !listed.contains(&r.entry.passage_id) && !skip.contains(&r.entry.passage_id));
+        let mut found: Vec<(&QueueEntry, Weighing, Option<f64>)> = self
+            .weigh_rows(rows, starts_at, Weigh::RotationSetAside)
+            .into_iter()
+            .filter(|(_, w)| w.is_eligible())
+            .filter_map(|(e, w)| {
+                let f = self.flavor_of(e.passage_id);
+                let disliked = self
+                    .dislike
+                    .as_ref()
+                    .zip(f)
+                    .and_then(|(d, f)| super::flavor::distance(schema, f, d))
+                    .is_some_and(|x| x < DISLIKE_RADIUS);
+                (!disliked).then(|| (e, w, f.and_then(|f| super::shape::nearest_seed(schema, f, seeds))))
+            })
+            .collect();
+        // Shuffled before the sort, which is stable: what the seeds cannot
+        // tell apart -- a tie, or no flavor at all -- comes in no fixed order.
+        for i in (1..found.len()).rev() {
+            let j = ((rng.unit() * (i + 1) as f64) as usize).min(i);
+            found.swap(i, j);
+        }
+        found.sort_by(|a, b| match (a.2, b.2) {
+            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        });
+        found.truncate(need);
+        found
+            .into_iter()
+            .map(|(e, w, _)| {
+                let flow = anchor.and_then(|a| {
+                    self.flavor_of(e.passage_id).and_then(|f| super::flavor::distance(schema, f, a))
+                });
+                (e, w, flow)
+            })
+            .collect()
     }
 
     /// Choose when [`Director::decide`] cannot: every candidate is blocked
@@ -1192,10 +1356,15 @@ impl Director {
             .collect();
         let pool: Vec<(&QueueEntry, &Weighing, Option<f64>, f64)> =
             idled.iter().map(|(e, w)| (*e, w, None, w.weight)).collect();
+        // No reserve here: this is the answer to a pool rotation emptied, and
+        // it sets rotation aside for every passage alike `[SPEC-XMR-090]`.
+        let tally = Reserve { enabled: self.christmas_on, ramp: self.christmas_ramp(starts_at), ..Reserve::default() };
         self.draw(
             starts_at,
             rng,
             &pool,
+            &[],
+            tally,
             &shaping,
             &seeds,
             "fallback: every candidate was blocked by rotation; rotation and recovery \
@@ -1206,12 +1375,16 @@ impl Director {
     /// The roulette over a ranked pool, and the record of why `[SPEC-DIR-165]`,
     /// `[REQ-VIS-100]`. `pool` is (entry, weighing, flow distance, the weight
     /// actually drawn on); `starts_at` names the slot the pick is for
-    /// `[SPEC-DIR-186]`.
+    /// `[SPEC-DIR-186]`. `places` says where each came from in the Christmas
+    /// reserve, `Flow` where it is shorter than `pool` `[SPEC-XMR-070]`.
+    #[allow(clippy::too_many_arguments)]
     fn draw(
         &self,
         starts_at: i64,
         rng: &mut Rng,
         pool: &[(&QueueEntry, &Weighing, Option<f64>, f64)],
+        places: &[Place],
+        christmas: Reserve,
         shaping: &Shaping,
         seeds: &[Seed<'_>],
         stages: &'static str,
@@ -1292,6 +1465,8 @@ impl Director {
                     })
                     .collect(),
                 stages,
+                place: places.get(idx).copied().unwrap_or_default(),
+                christmas,
             },
         })
     }
@@ -1588,6 +1763,65 @@ pub fn load_profanity_tolerance(conn: &QualifyingConn) -> ProfanityTolerance {
     .unwrap_or_default()
 }
 
+/// Each recording's Christmas value, as the specials panel shows it
+/// `[SPEC-XMR-015]`: the listener's own over the inherited, and only those
+/// above zero -- "a defined Christmas value greater than 0.0".
+///
+/// The positive class only: `christmasy`. Every inherited recording also
+/// carries `not_christmasy`, at 0.0 where `christmasy` is 1.0
+/// `[SPEC-DIR-134]`, and reading both as one value is how a count of bose's
+/// Christmas plays came out at 1 rather than 41 (2026-11-09). Read whether or
+/// not the occasion is registered, as profanity is.
+pub(crate) fn load_christmas(conn: &QualifyingConn) -> HashMap<String, f64> {
+    let mut out = HashMap::new();
+    for sql in [
+        "SELECT subject_id, value FROM __LIB__.flavor          WHERE subject_kind = 'recording' AND characteristic = 'user.christmas' AND class = 'christmasy'",
+        // Second, so the listener's own value replaces the inherited one.
+        "SELECT subject_id, value FROM listener_characteristics          WHERE subject_kind = 'recording' AND characteristic = 'user.christmas' AND class = 'christmasy'",
+    ] {
+        let read = conn.prepare(sql).and_then(|mut stmt| {
+            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
+                .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
+        });
+        match read {
+            Ok(rows) => {
+                for (mbid, v) in rows {
+                    out.insert(mbid, v);
+                }
+            }
+            Err(e) => optional_read("the Christmas values", &e),
+        }
+    }
+    out.retain(|_, v| *v > 0.0);
+    out
+}
+
+/// Where this player keeps its Christmas reserve switch `[SPEC-XMR-080]`.
+pub const CHRISTMAS_RESERVE_KEY: &str = "christmas_reserve";
+
+/// This player's Christmas reserve switch, from `player_settings`
+/// `[SPEC-XMR-080]`. On unless stored as off: absent, or a value that does not
+/// read, is the default the maintainer chose.
+pub fn load_christmas_reserve(conn: &QualifyingConn) -> bool {
+    conn.query_row(
+        "SELECT value FROM player_settings WHERE key = ?1",
+        [CHRISTMAS_RESERVE_KEY],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|v| parse_switch(&v))
+    .unwrap_or(true)
+}
+
+/// `on`/`off`, and the other spellings a person or a URL might use.
+pub fn parse_switch(v: &str) -> Option<bool> {
+    match v.trim().to_ascii_lowercase().as_str() {
+        "on" | "true" | "1" | "yes" => Some(true),
+        "off" | "false" | "0" | "no" => Some(false),
+        _ => None,
+    }
+}
+
 /// Like- and Dislike-Taste centroids `[SPEC-DIR-150]`.
 ///
 /// Weighted centroids of the flavor of liked and disliked recordings. A
@@ -1837,6 +2071,84 @@ mod tests {
         let cen = d.census(NOW);
         assert_eq!(cen.eligible, 2, "the played recording drops out");
         assert_eq!(cen.artist_blocked + cen.recording_blocked, 1);
+    }
+
+    /// The Christmas reserve end to end `[SPEC-XMR-040]`, `[SPEC-XMR-050]`:
+    /// rec-c is a Christmas recording played a day ago, inside its 4.2-day
+    /// rotation. Out of season, or with the reserve off, it never plays; on
+    /// 24 December it is a filler, weighed from its last play, and it plays
+    /// at about that weight's share.
+    #[test]
+    fn the_christmas_reserve_fills_with_rotation_set_aside() {
+        // 2026-12-24T12:00, read as local time: this fixture stores no offset.
+        const DEC_24_NOON: i64 = 1_796_083_200 + 23 * 86_400 + 12 * 3600;
+        const NOV_9_NOON: i64 = DEC_24_NOON - 45 * 86_400;
+        let c = fixture();
+        // All three carry flavor, so Stage B, which prefers a passage with
+        // flavor to one without `[SPEC-DIR-147]`, keeps both of the others.
+        // rec-b's Christmas value is defined and zero: not a Christmas song.
+        c.execute_batch(
+            "INSERT INTO flavor VALUES ('recording','rec-c','user.christmas','christmasy',1.0,'t',NULL);
+             INSERT INTO flavor VALUES ('recording','rec-c','user.christmas','not_christmasy',0.0,'t',NULL);
+             INSERT INTO flavor VALUES ('recording','rec-b','user.christmas','christmasy',0.0,'t',NULL);
+             INSERT INTO flavor VALUES ('recording','rec-a','user.christmas','not_christmasy',1.0,'t',NULL);",
+        )
+        .unwrap();
+        for at in [DEC_24_NOON, NOV_9_NOON] {
+            c.execute("INSERT INTO listener_play_history (played_at, passage_id, mbid) VALUES (?1, 3, 'rec-c')", [at - 86_400])
+                .unwrap();
+        }
+        let mut d = Director::load(&c).unwrap();
+        assert_eq!(d.christmas_count(), 1, "rec-c, and not rec-b's negative class");
+        assert!(d.christmas_reserve(), "on unless turned off");
+
+        let picks = |d: &Director, at: i64, skip: &[i64]| -> Vec<Decision> {
+            (0..400).filter_map(|s| d.decide(at, &mut Rng::seeded(s), skip, None)).collect()
+        };
+        let threes = |ds: &[Decision]| ds.iter().filter(|x| x.entry.passage_id == 3).count();
+
+        let season = picks(&d, DEC_24_NOON, &[]);
+        let n = threes(&season);
+        // Weighed from its last play: a day of 16.6 days' recovery, ×0.06
+        // against two passages at ×1, one of which it displaced.
+        assert!((5..60).contains(&n), "rec-c played {n} of 400");
+        let why = &season.iter().find(|x| x.entry.passage_id == 3).unwrap().why;
+        assert_eq!(why.place, Place::Filler);
+        assert!((why.recording_ramp - 86_400.0 / super::super::frequency::seconds(2.6)).abs() < 1e-9);
+        // 558 of the rise's 576 hours.
+        assert!((why.christmas.ramp - 558.0 / 576.0).abs() < 1e-12, "ramp {}", why.christmas.ramp);
+        // No flow order here, so the list is Stage C's two: both reserved,
+        // one filled by rec-c and the other backfilled.
+        assert_eq!(
+            (why.christmas.reserved, why.christmas.moved_up, why.christmas.fillers, why.christmas.backfilled),
+            (2, 0, 1, 1)
+        );
+        assert_eq!(why.pool_size, 2);
+
+        assert_eq!(threes(&picks(&d, DEC_24_NOON, &[3])), 0, "a queued passage is never a filler");
+        assert_eq!(threes(&picks(&d, NOV_9_NOON, &[])), 0, "out of season, rotation holds it");
+        let off = picks(&d, NOV_9_NOON, &[]);
+        assert!(off.iter().all(|x| x.why.christmas.reserved == 0 && x.why.place == Place::Flow));
+
+        d.set_christmas_reserve(false);
+        let off = picks(&d, DEC_24_NOON, &[]);
+        assert_eq!(threes(&off), 0, "the reserve turned off");
+        assert!(off.iter().all(|x| !x.why.christmas.enabled && x.why.christmas.reserved == 0));
+    }
+
+    #[test]
+    fn the_christmas_switch_reads_on_unless_stored_off() {
+        let c = fixture();
+        c.execute_batch("CREATE TABLE player_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);")
+            .unwrap();
+        assert!(load_christmas_reserve(&c), "absent is on");
+        c.execute("INSERT INTO player_settings VALUES ('christmas_reserve', 'off', 'now')", []).unwrap();
+        assert!(!load_christmas_reserve(&c));
+        c.execute("UPDATE player_settings SET value = 'ON' WHERE key = 'christmas_reserve'", []).unwrap();
+        assert!(load_christmas_reserve(&c));
+        c.execute("UPDATE player_settings SET value = 'sometimes' WHERE key = 'christmas_reserve'", []).unwrap();
+        assert!(load_christmas_reserve(&c), "unreadable is the default, on");
+        assert!(load_christmas_reserve(&fixture()), "no table at all is on");
     }
 
     /// lempi02w, 2026-10-16, in miniature: art-1 is Prince on a 26.5-hour

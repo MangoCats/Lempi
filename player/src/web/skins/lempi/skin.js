@@ -436,7 +436,7 @@
     $('why').textContent =
       `${prog}weight ${w.decayed_weight.toFixed(3)} of ${w.pool_weight.toFixed(1)} across ` +
       `${w.pool_size.toLocaleString()} candidates — a ` +
-      `${w.share_pct.toFixed(2)}% chance of being picked.`;
+      `${w.share_pct.toFixed(2)}% chance of being picked.` + Lempi.christmasNote(w);
 
     const body = terms.querySelector('tbody');
     body.textContent = '';
@@ -539,6 +539,10 @@
   const audioDrawer = $('audio-controls-drawer');
   // Beside the button, in the same row [SPEC-PTL-020].
   const showProfanity = Lempi.profanityControl($('profanity'), $('profanitynum'));
+  // The Christmas reserve's switch, in Settings, with a note while this node
+  // follows another [SPEC-XMR-080].
+  const showChristmas = Lempi.christmasControl($('christmas'), $('christmasnum'),
+                                               { note: $('christmasnote') });
   const warpBadge = $('warp-badge');
   const tplSection = $('tpl-section');
   const abLoopSection = $('ab-loop-section');
@@ -1033,6 +1037,7 @@
     $('bar').classList.toggle('seekable', Boolean(s.can_seek && s.duration_ms));
     renderAudioControls(s);
     showProfanity(s);
+    showChristmas(s);
     setText($('state'), s.playing ? 'playing' : 'paused');
     // The ground shifts with it, so the state is legible without reading.
     setHidden($('devmode'), !s.dev_mode);

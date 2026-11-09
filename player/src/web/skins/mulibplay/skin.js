@@ -29,6 +29,10 @@
   // The Program Director's profanity tolerance, for every programme
   // [SPEC-PTL-020].
   const showProfanity = Lempi.profanityControl($('profanity'), $('profanitynum'));
+  // And the Christmas reserve's switch under it, shown only in season and
+  // only when this node chooses for itself [SPEC-XMR-080].
+  const showChristmas = Lempi.christmasControl($('christmas'), $('christmasnum'),
+                                               { row: $('christmas-row') });
 
   const btnShutdown = $('b-shutdown');
   if (btnShutdown) {
@@ -218,11 +222,12 @@
     }
     renderStations(s);
     showProfanity(s);
+    showChristmas(s);
     $('why').textContent = s.why
       ? `${(s.why.slot ?? s.why.program) ? (s.why.slot ?? s.why.program) + ': ' : ''}weight ` +
         `${s.why.decayed_weight.toFixed(3)} of ${s.why.pool_weight.toFixed(1)} across ` +
         `${s.why.pool_size.toLocaleString()} candidates — ` +
-        `${s.why.share_pct.toFixed(2)}% chance of being picked.`
+        `${s.why.share_pct.toFixed(2)}% chance of being picked.` + Lempi.christmasNote(s.why)
       : '';
   });
 })();

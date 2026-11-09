@@ -77,6 +77,13 @@ pub struct Controls {
     /// Director on its next refill. `None` until read from the store, which
     /// the Director takes as its own default, 1.0.
     pub profanity_tolerance: Option<crate::director::frequency::ProfanityTolerance>,
+    /// This player's Christmas reserve switch `[SPEC-XMR-080]`, the same
+    /// intent cell. `None` until read from the store; the Director's own
+    /// default is on.
+    pub christmas_reserve: Option<bool>,
+    /// The Christmas ramp now, as the engine last resolved it on the
+    /// listener's clock `[SPEC-XMR-020]`, for the page to show.
+    pub christmas_ramp: f64,
     /// The programme's slots as `(id, name, start_time)`, for the browser to
     /// offer.
     pub slots: Vec<(i64, String, String)>,
@@ -552,6 +559,7 @@ impl Session {
             // Before the Director, for the same reason: the fill that serves
             // until it lands obeys the stored value too `[SPEC-PTL-080]`.
             c.profanity_tolerance = store.as_ref().map(|s| s.load_profanity_tolerance());
+            c.christmas_reserve = store.as_ref().map(|s| s.load_christmas_reserve());
             // The slots too, from the store, so one can be held before the
             // Director lands `[SPEC-DIR-185]`: `POST /programme/slot/:id`
             // checks this list, and it was filled only from a Director, so
@@ -625,6 +633,7 @@ impl Session {
         let programme = s.programme_signature();
         let held = s.load_manual_slot();
         let profanity = s.load_profanity_tolerance();
+        let christmas = s.load_christmas_reserve();
         let offset = s.stored_utc_offset();
         let windows = s.load_settings().map(|x| (x.skip_suppress_h, x.dequeue_suppress_h));
         if let Ok(mut c) = self.controls.lock() {
@@ -638,6 +647,7 @@ impl Session {
             c.manual_slot = held;
             // The player's tolerance, as its held slot `[SPEC-PTL-030]`.
             c.profanity_tolerance = Some(profanity);
+            c.christmas_reserve = Some(christmas);
         }
         self.followed.rebuilt_at = rebuilt_at;
         self.followed.programme = programme;
@@ -1231,6 +1241,13 @@ impl Session {
                     d.set_profanity_tolerance(t);
                 }
             }
+            // The Christmas reserve's switch, by the same rule `[SPEC-XMR-080]`.
+            if let Some(on) = c.christmas_reserve {
+                if d.christmas_reserve() != on {
+                    d.set_christmas_reserve(on);
+                }
+            }
+            c.christmas_ramp = d.christmas_ramp(now);
             c.active_slot = d.programme().active_slot(now).map(|p| p.name.clone());
             // The listener's suppression window lives with the other settings
             // and is persisted by the engine `[REQ-VIS-155]`; the Director is
@@ -2113,6 +2130,28 @@ mod tests {
         session.controls().lock().unwrap().profanity_tolerance = Some(ProfanityTolerance::new(0.0));
         session.refill(&mut b, (0, 0));
         assert_eq!(session.director.as_ref().unwrap().profanity_tolerance().get(), 0.0, "live");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// The Christmas reserve switch is read at open, reaches a Director built
+    /// later, and follows the page `[SPEC-XMR-080]`.
+    #[test]
+    fn the_christmas_reserve_switch_reaches_the_director() {
+        let tmp = director_library_on_disk("christmas-reserve");
+        assert!(PlayerStore::open(&tmp).unwrap().load_christmas_reserve(), "on when never set");
+        PlayerStore::open(&tmp).unwrap().save_christmas_reserve(false).unwrap();
+        let mut session = Session::open(&tmp, &tmp, 5).unwrap();
+        assert_eq!(session.controls().lock().unwrap().christmas_reserve, Some(false), "read at open");
+        session.build_director_now().unwrap();
+        let mut b = Behind { ahead_ms: 0, got: Vec::new() };
+        session.refill(&mut b, (0, 0));
+        assert!(!session.director.as_ref().unwrap().christmas_reserve());
+
+        session.controls().lock().unwrap().christmas_reserve = Some(true);
+        session.refill(&mut b, (0, 0));
+        assert!(session.director.as_ref().unwrap().christmas_reserve(), "live");
+        PlayerStore::open(&tmp).unwrap().save_christmas_reserve(true).unwrap();
+        assert!(PlayerStore::open(&tmp).unwrap().load_christmas_reserve(), "and kept");
         let _ = std::fs::remove_file(&tmp);
     }
 

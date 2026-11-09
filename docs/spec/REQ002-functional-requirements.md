@@ -62,6 +62,8 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 
 **`[REQ-PD-128]` One setting says how much profanity the Program Director may choose, on this player and for every programme slot.** *(Requested 2026-11-08; built 2026-11-08.)* From 0.0, none, to 1.0, not considered, which is the default. A recording rated at or above it is not chosen; one below it is chosen less often the nearer it is, linearly to zero at the setting. It is the player's own, persisted and never shared, and a follower plays what its leader chose. It never stops a person playing anything. Designed in [SPEC077](SPEC077-a-profanity-tolerance.md).
 
+**`[REQ-PD-129]` From 1 December to Christmas Day, a rising share of the Program Director's choices is kept for Christmas music, on every player unless it is turned off there.** *(Requested 2026-11-09; built 2026-11-09.)* The share starts at nothing at 06:00 on 1 December, is everything by 06:00 on Christmas Day, holds until 23:45, and is gone by 06:00 on 26 December. It starts slow and climbs steeply through the week before Christmas. Christmas music kept this way may play inside its usual rotation, at a weight set by how long since it last played. The switch is each player's own, persisted, and on by default. Designed in [SPEC078](SPEC078-a-christmas-reserve.md).
+
 **`[REQ-PD-130]`** Shape candidates by flavor distance `[SPEC-FD-040]` in two stages — prune against programme seeds, then order by similarity to the passage already queued — and apply randomness **last**, over the shaped pool `[GDE-PD-050]`.
 
 **`[REQ-PD-140]`** Express a programme as **a list of exemplar recordings** `[ENT-SEED-010]`, not tuned parameters `[GDE-PD-040]`. "What should 10 AM sound like?" is answered by naming songs.

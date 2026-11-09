@@ -65,6 +65,20 @@ pub struct Shaping {
     pub bypassed: bool,
 }
 
+/// Distance to the **nearest** seed, each seed's distance divided by its
+/// weight; `None` when no seed can be measured against.
+///
+/// "Most unlike every seed" means far from all of them; a passage close to one
+/// seed belongs, even if far from the rest -- a programme is a handful of
+/// exemplars, not a single centre. Public for the Christmas reserve, whose
+/// fillers are the Christmas passages nearest the programme `[SPEC-XMR-050]`.
+pub fn nearest_seed(schema: &FlavorSchema, f: &Flavor, seeds: &[Seed<'_>]) -> Option<f64> {
+    seeds
+        .iter()
+        .filter_map(|s| distance(schema, f, s.flavor).map(|d| d / s.weight.max(f64::EPSILON)))
+        .fold(None, |acc: Option<f64>, d| Some(acc.map_or(d, |a| a.min(d))))
+}
+
 /// Shape a pool of candidates.
 ///
 /// `candidates` is `(key, flavor)` for every *eligible* passage; the key is
@@ -135,15 +149,7 @@ pub fn shape<K: Copy + Eq + std::hash::Hash>(
     }
     stats.unmeasured_out = unmeasured.len();
 
-    // Distance to the NEAREST seed. "Most unlike every seed" means far from all
-    // of them; a passage close to one seed belongs, even if far from the rest —
-    // a programme is a handful of exemplars, not a single centre.
-    let nearest = |f: &Flavor| -> Option<f64> {
-        seeds
-            .iter()
-            .filter_map(|s| distance(schema, f, s.flavor).map(|d| d / s.weight.max(f64::EPSILON)))
-            .fold(None, |acc: Option<f64>, d| Some(acc.map_or(d, |a| a.min(d))))
-    };
+    let nearest = |f: &Flavor| nearest_seed(schema, f, seeds);
 
     // --- prune: keep the excl_pool closest to any seed ---
     let mut scored: Vec<(K, &Flavor, Option<f64>)> =
