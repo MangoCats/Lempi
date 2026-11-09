@@ -650,7 +650,16 @@ impl Director {
         };
 
         let index = rows.iter().enumerate().map(|(i, r)| (r.entry.passage_id, i)).collect();
-        let christmas_values = load_christmas(conn);
+        // From the occasion values already loaded where Christmas is a
+        // registered occasion, as it is on every node; read afresh only
+        // where it is not `[SPEC-XMR-015]`.
+        let christmas_values = match occasions.values_of("user.christmas", "christmasy") {
+            Some(mut v) => {
+                v.retain(|_, x| *x > 0.0);
+                v
+            }
+            None => load_christmas(conn),
+        };
         let christmas_rows: Vec<usize> = rows
             .iter()
             .enumerate()
@@ -2139,6 +2148,33 @@ mod tests {
         let off = picks(&d, DEC_24_NOON, &[]);
         assert_eq!(threes(&off), 0, "the reserve turned off");
         assert!(off.iter().all(|x| !x.why.christmas.enabled && x.why.christmas.reserved == 0));
+    }
+
+    /// With Christmas a registered occasion, the set comes from the values
+    /// the occasions already loaded, and agrees with the direct read
+    /// `[SPEC-XMR-015]`.
+    #[test]
+    fn the_christmas_set_comes_from_the_registered_occasion() {
+        let c = fixture();
+        c.execute_batch(
+            "INSERT INTO flavor VALUES ('recording','rec-c','user.christmas','christmasy',1.0,'t',NULL);
+             INSERT INTO flavor VALUES ('recording','rec-c','user.christmas','not_christmasy',0.0,'t',NULL);
+             INSERT INTO flavor VALUES ('recording','rec-a','user.christmas','christmasy',0.0,'t',NULL);
+             INSERT INTO flavor VALUES ('recording','rec-a','user.christmas','not_christmasy',1.0,'t',NULL);",
+        )
+        .unwrap();
+        let unregistered = Director::load(&c).unwrap();
+        c.execute_batch(
+            "INSERT INTO listener_occasions VALUES ('user.christmas','christmasy','linear');
+             INSERT INTO listener_occasion_points VALUES ('user.christmas','christmasy',12,25,10.0);",
+        )
+        .unwrap();
+        let registered = Director::load(&c).unwrap();
+        for d in [&unregistered, &registered] {
+            assert_eq!(d.christmas_count(), 1);
+            assert!(d.is_christmas(3) && !d.is_christmas(1) && !d.is_christmas(2));
+        }
+        assert_eq!(registered.occasion_count(), 1, "read through the occasion");
     }
 
     #[test]

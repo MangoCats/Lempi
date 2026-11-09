@@ -177,6 +177,24 @@ impl Occasions {
         self.curves.len()
     }
 
+    /// Every subject's value for one occasion -- the inherited value, replaced
+    /// by the listener's own where there is one -- or `None` when no curve is
+    /// registered for it, in which case nothing was loaded for it either.
+    /// The Christmas reserve's set comes from here rather than from a second
+    /// pass over `flavor`, which cost 7.9 s cold on lempi02w (2026-11-09).
+    pub fn values_of(&self, characteristic: &str, class: &str) -> Option<HashMap<String, f64>> {
+        let key: Trait = (characteristic.to_string(), class.to_string());
+        if !self.curves.contains_key(&key) {
+            return None;
+        }
+        Some(
+            self.values
+                .iter()
+                .filter_map(|(m, vs)| vs.iter().find(|(k, _)| *k == key).map(|(_, v)| (m.clone(), *v)))
+                .collect(),
+        )
+    }
+
     /// The combined multiplier for one subject on one day.
     ///
     /// Occasions compose multiplicatively, as MuLibPlay's did: a passage that
