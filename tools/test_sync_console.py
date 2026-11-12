@@ -56,6 +56,19 @@ def test_describe():
     check(not d["resolved"], "a catalogue without the tables does not raise")
     d = sc.describe(c, "listener_occasions", ["user.xmas", "xmasy"])
     check(d["text"] == "occasion user.xmas", f"an occasion: {d}")
+    # [SPEC-LYR-200]: a passage's saved words, named by what the passage is.
+    d = sc.describe(c, "passage_lyrics", ["md5-x", "radio", 0])
+    check(d == {"text": "lyrics of md5-x radio at 0 ms", "resolved": False},
+          f"words for a file the hub's catalogue cannot name say their key, unresolved: {d}")
+    c.executescript("""
+        CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT);
+        CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT, start_ms INTEGER);
+        INSERT INTO files VALUES (1,'md5-x');
+        INSERT INTO passages VALUES (7,1,'radio',0);
+    """)
+    d = sc.describe(c, "passage_lyrics", ["md5-x", "radio", 0])
+    check(d == {"text": "lyrics of “Blue in Green” (radio cut)", "resolved": True},
+          f"a passage's words by its recording and cut: {d}")
 
 
 def test_page():

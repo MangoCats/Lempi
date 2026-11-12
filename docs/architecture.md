@@ -190,7 +190,7 @@ actions. Three skins — `lempi`, `mulibplay`, `winamp` — served from
 edit verbs, the seek arithmetic, art and lyrics fetching, formatting. A skin
 styles and places; it does not decide what a control does. Skins do differ in
 which panels they carry — Settings, Bluetooth, Play History and Restart/Shutdown
-are in `lempi` only, lyrics in `mulibplay` only, and a new browser starts on
+are in `lempi` only, lyrics shown in `mulibplay` only (the link to their editor in both, [SPEC079](spec/SPEC079-editing-lyrics.md)), and a new browser starts on
 `mulibplay` — so a built feature can still be absent from the skin in use. The
 in-app guide's *Advanced Features* page keeps the table.
 

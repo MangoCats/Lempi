@@ -513,6 +513,33 @@ CREATE TABLE IF NOT EXISTS listener_flags (
     PRIMARY KEY (subject_kind, subject_id)
 ) WITHOUT ROWID;
 
+-- Words saved for a passage [SPEC-LYR-140], by a person, in the player's
+-- editor. In the listener half, because the player cannot write the catalogue,
+-- where the imported `lyrics` are. Keyed by what the passage is and never by
+-- its number [SPEC-DF-035]: every node receives every row, whether or not it
+-- holds the file [SPEC-LYR-200].
+--
+-- A passage's own entry is the newest row of its file and kind that is the
+-- same segment as the passage is now [SPEC-LYR-150], so a row under a former
+-- start is superseded, not orphaned. No row is deleted [SPEC-LYR-155]: an
+-- empty `text` with `no_words` 0 is a clearing, and reads as no entry.
+-- `no_words` 1 says the passage has none [SPEC-LYR-130]. `mbid` is the
+-- passage's heaviest recording when saved, for a node without the file
+-- [SPEC-LYR-160]. `origin` is the node it was saved on.
+CREATE TABLE IF NOT EXISTS passage_lyrics (
+    audio_md5   TEXT    NOT NULL,
+    kind        TEXT    NOT NULL,
+    start_ms    INTEGER NOT NULL,
+    end_ms      INTEGER NOT NULL,
+    mbid        TEXT,
+    text        TEXT    NOT NULL,
+    no_words    INTEGER NOT NULL DEFAULT 0,
+    updated_at  TEXT    NOT NULL,
+    origin      TEXT,
+    PRIMARY KEY (audio_md5, kind, start_ms)
+);
+CREATE INDEX IF NOT EXISTS passage_lyrics_mbid ON passage_lyrics(mbid);
+
 -- ================================================================ visibility
 -- Describes process, not music, so never travels [SPEC-SC-100].
 

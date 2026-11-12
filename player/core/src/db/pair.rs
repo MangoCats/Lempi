@@ -41,7 +41,7 @@ pub const LISTENER_TABLES: &[&str] = &[
     "listener_settings", "player_state",
     "player_settings", "id_reviews", "boundary_reviews", "artist_reviews",
     "selection_decisions", "player_queue", "listener_programme", "file_checks",
-    "listener_programme_pending",
+    "listener_programme_pending", "passage_lyrics",
 ];
 
 /// In both halves, as `split_database.py`'s `BOTH`: the schema's own version.

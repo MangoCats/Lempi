@@ -49,29 +49,36 @@ fn sidecar_of(audio: &Path) -> PathBuf {
 
 /// Write one file beside every single-passage audio file that has words.
 ///
+/// **The words are the ones the player shows** `[SPEC-LYR-176]`: the passage's
+/// own, else the nearest by `[SPEC-LYR-100]`, and none for a passage marked as
+/// having none. Until 2026-11-12 they were the recording's imported words
+/// alone. `conn` is the catalogue, with the listener half attached where the
+/// saved words are to be in reach; without it the imported words still are.
+///
 /// Idempotent: a sidecar whose content already matches is left alone, and one
 /// holding anything else is never replaced — a file already there was somebody's,
-/// and this is not the place to overrule them.
+/// and this is not the place to overrule them. That includes a file this wrote
+/// from words since corrected `[SPEC-LYR-900]`: nothing records which are its own.
 pub fn generate(conn: &Connection, dry_run: bool) -> Result<Written, String> {
+    let saved = crate::db::SavedLyrics::load(conn, "main").map_err(|e| e.message().to_string())?;
     let mut q = conn
         .prepare(
-            "SELECT f.path, l.text, \
-                (SELECT COUNT(*) FROM passages x \
-                 WHERE x.file_id = p.file_id AND x.kind = 'radio') \
-             FROM passages p JOIN files f USING(file_id) \
-               JOIN passage_recordings pr ON pr.passage_id = p.passage_id \
-               JOIN lyrics l ON l.mbid = pr.mbid \
-             WHERE p.kind = 'radio'",
+            "SELECT p.passage_id, f.path,                 (SELECT COUNT(*) FROM passages x                  WHERE x.file_id = p.file_id AND x.kind = 'radio')              FROM passages p JOIN files f USING(file_id)              WHERE p.kind = 'radio'",
         )
         .map_err(|e| e.to_string())?;
     let rows = q
         .query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
         })
         .map_err(|e| e.to_string())?;
 
     let mut rep = Written::default();
-    for (path, text, in_file) in rows.flatten() {
+    for (passage_id, path, in_file) in rows.flatten() {
+        let Some(text) = crate::db::shown_lyrics(conn, "main", &saved, passage_id)
+            .map_err(|e| e.message().to_string())?
+        else {
+            continue;
+        };
         // A capture's words belong in the cache, one file per song. A sidecar
         // here would win over them and show all twelve at once.
         if in_file > 1 {
@@ -126,30 +133,38 @@ mod tests {
     fn library(dir: &Path) -> Connection {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch(
-            "CREATE TABLE files (file_id INTEGER PRIMARY KEY, path TEXT);
-             CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT);
-             CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT);
-             CREATE TABLE lyrics (mbid TEXT PRIMARY KEY, text TEXT);",
+            "CREATE TABLE files (file_id INTEGER PRIMARY KEY, path TEXT, audio_md5 TEXT);
+             CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT,
+                                    start_ms INTEGER, end_ms INTEGER);
+             CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL DEFAULT 1.0);
+             CREATE TABLE lyrics (mbid TEXT PRIMARY KEY, text TEXT, source TEXT, fetched_at TEXT);
+             CREATE TABLE passage_lyrics (audio_md5 TEXT, kind TEXT, start_ms INTEGER, end_ms INTEGER,
+                                          mbid TEXT, text TEXT, no_words INTEGER, updated_at TEXT,
+                                          origin TEXT);",
         )
         .unwrap();
         for (id, name) in [(1, "solo.mp3"), (2, "capture.mp3")] {
             c.execute(
-                "INSERT INTO files VALUES (?1, ?2)",
-                rusqlite::params![id, dir.join(name).to_string_lossy()],
+                "INSERT INTO files VALUES (?1, ?2, ?3)",
+                rusqlite::params![id, dir.join(name).to_string_lossy(), format!("md5-{id}")],
             )
             .unwrap();
         }
         // Passage 1 is alone in its file; 2 and 3 share one, which makes it a
         // capture.
-        for (pid, fid) in [(1, 1), (2, 2), (3, 2)] {
-            c.execute("INSERT INTO passages VALUES (?1, ?2, 'radio')", [pid, fid]).unwrap();
+        for (pid, fid, start) in [(1, 1, 0), (2, 2, 0), (3, 2, 100_000)] {
             c.execute(
-                "INSERT INTO passage_recordings VALUES (?1, ?2)",
+                "INSERT INTO passages VALUES (?1, ?2, 'radio', ?3, ?3 + 100000)",
+                [pid, fid, start],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO passage_recordings (passage_id, mbid) VALUES (?1, ?2)",
                 rusqlite::params![pid, format!("mb{pid}")],
             )
             .unwrap();
             c.execute(
-                "INSERT INTO lyrics VALUES (?1, ?2)",
+                "INSERT INTO lyrics VALUES (?1, ?2, 'mulibplay', '2026-01-01')",
                 rusqlite::params![format!("mb{pid}"), format!("words {pid}")],
             )
             .unwrap();
@@ -203,6 +218,29 @@ mod tests {
         let rep = generate(&c, true).unwrap();
         assert_eq!(rep.written, 1);
         assert!(!d.join("solo.lyrics").exists(), "counted, not written");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// `[SPEC-LYR-176]`: the file holds what the player shows -- words saved
+    /// for the passage before the imported ones, and nothing for a passage
+    /// marked as having none.
+    #[test]
+    fn the_words_written_are_the_ones_the_player_shows() {
+        let d = tmp();
+        let c = library(&d);
+        c.execute(
+            "INSERT INTO passage_lyrics VALUES ('md5-1', 'radio', 0, 100000, 'mb1', 'typed for it', 0,                                                '2026-11-12 10:00:00.000', 'here')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(generate(&c, false).unwrap().written, 1);
+        assert_eq!(std::fs::read_to_string(d.join("solo.lyrics")).unwrap(), "typed for it");
+
+        std::fs::remove_file(d.join("solo.lyrics")).unwrap();
+        c.execute("UPDATE passage_lyrics SET no_words = 1", []).unwrap();
+        let rep = generate(&c, false).unwrap();
+        assert_eq!(rep.written, 0, "a marked passage gets no file");
+        assert!(!d.join("solo.lyrics").exists());
         let _ = std::fs::remove_dir_all(&d);
     }
 

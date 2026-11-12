@@ -65,7 +65,7 @@ folded into one spec.
 | Echo phase 4 — measured drift | [LOG012](LOG012-phase-4-drift.md) | [§4. Open](LOG012-phase-4-drift.md#4-open) |
 | Per-node presentation delay | [SPEC043](spec/SPEC043-node-delay-control.md) | [§5. Open](spec/SPEC043-node-delay-control.md#5-open) |
 | Listener preference editing | [SPEC029](spec/SPEC029-listener-preference-editing.md) | [§8. Open](spec/SPEC029-listener-preference-editing.md#8-open) |
-| Editing lyrics, and which words a passage shows (specified 2026-11-12, not built) | [SPEC079](spec/SPEC079-editing-lyrics.md) | [§8. Build order](spec/SPEC079-editing-lyrics.md#8-build-order), [§10. Open](spec/SPEC079-editing-lyrics.md#10-open) |
+| Editing lyrics, and which words a passage shows (built 2026-11-12; a phone's share of the sync, and the search frame in a phone's WebView, are open) | [SPEC079](spec/SPEC079-editing-lyrics.md) | [§10. Open](spec/SPEC079-editing-lyrics.md#10-open) |
 | Play frequency readout | [SPEC031](spec/SPEC031-play-frequency.md) | [§6. Open](spec/SPEC031-play-frequency.md#6-open) |
 | The Android device spike | [LOG013](LOG013-the-android-spike.md) | [§4. Open](LOG013-the-android-spike.md#4-open) |
 | Wi-Fi watchdog — a future feature, decided by how often a link dies (the travel access point of [SPEC061](spec/SPEC061-travel-wifi-failover.md) starts when asked for once the link is lost, and by itself only on a node with no paired speaker `[SPEC-WFO-090]`; a link that stays up while its gateway stops answering is still this row's case) | [FLEET001](../fleet/FLEET001-the-fleet.md) | [§4. Standing issues](../fleet/FLEET001-the-fleet.md#4-standing-issues) `[FLT-ISS-015]` |

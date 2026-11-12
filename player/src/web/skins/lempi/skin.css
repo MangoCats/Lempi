@@ -17,6 +17,8 @@
            overflow-wrap: anywhere; }
   #byline { color: var(--dim); font-size: .9375rem; overflow-wrap: anywhere; }
   #plays { color: var(--dim); font-size: .8125rem; opacity: .8; margin-top: .15rem; }
+  /* The way to the lyric editor [SPEC-LYR-180]: small, under the play count. */
+  .lyrics-link { color: var(--dim); font-size: .8125rem; }
   /* The bar is 4px of ink but a much larger target: padding gives the click
      somewhere to land without changing how the line looks [REQ-VIS-225]. */
   #bar { position: relative; height: 4px; background: var(--line); border-radius: 2px; margin: .9rem 0 .4rem;

@@ -889,6 +889,9 @@ impl PlayerStore {
         conn.execute_batch(FLAGS_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(PREFERENCES_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         conn.execute_batch(CHARACTERISTICS_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+        // Words saved for a passage `[SPEC-LYR-140]`: the listener half's,
+        // since the catalogue is attached read-only.
+        conn.execute_batch(super::lyrics::PASSAGE_LYRICS_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
         ensure_history_columns(&conn);
         ensure_flags_columns(&conn);
         ensure_occasion_columns(&conn);
@@ -2316,6 +2319,19 @@ impl PlayerStore {
             )
             .map(|_| ())
             .map_err(|e| DbError::Query(e.to_string()))
+    }
+
+    /// Save the words of one passage, and of no other `[SPEC-LYR-174]`:
+    /// `Ok(None)` for no such passage, else the passage's own entry as it now
+    /// stands, which is `None` once cleared. `origin` is this node's name.
+    pub fn save_lyrics(
+        &self,
+        passage_id: i64,
+        text: &str,
+        no_words: bool,
+        origin: &str,
+    ) -> Result<Option<Option<super::OwnLyrics>>, DbError> {
+        super::save_passage_lyrics(&self.conn, self.conn.lib_alias(), passage_id, text, no_words, origin)
     }
 
     /// What to head the preference panel with `[SPEC-PREF-090]`: title, the

@@ -101,6 +101,15 @@ TABLES = {
     # [SPEC-PGM-200]: the node's own question, never the merge's.
     "listener_programme_pending": dict(rule=LOCAL),
     "listener_likes": dict(rule=UNION, key=("mbid", "recorded_at")),
+    # Words saved for a passage [SPEC-LYR-200]. Keyed by what the passage is,
+    # with no passage number, so nothing here is translated between a node's
+    # numbering and the hub's, and every node receives every row, whether or
+    # not it holds the file. No row is ever deleted [SPEC-LYR-155], so there
+    # are no removals to find. `newer`: a player from before 2026-11-12
+    # neither sends this table nor accepts a patch that names it, so a node
+    # that sent none is sent none (`star_sync.signed_tables`).
+    "passage_lyrics": dict(rule=LWW, key=("audio_md5", "kind", "start_ms"), stamp="updated_at",
+                           newer=True),
     "id_reviews": dict(rule=UNION, key=("passage_id", "decided_at"), latest=("applied_at",)),
     "boundary_reviews": dict(rule=UNION, key=("passage_id", "decided_at"), latest=("applied_at",)),
     "artist_reviews": dict(rule=UNION, key=("recording_mbid", "decided_at"), latest=("applied_at",)),

@@ -2227,6 +2227,9 @@ async function runPassage() {
   check(/see the selection reasoning/.test(spanText), 'a link to /why must be offered');
   check($('span').querySelector('a').getAttribute('href') === '/why/22',
         'the why-link must name this passage');
+  // The way to the words of a passage that is not playing [SPEC-LYR-181].
+  const links = [...$('span').querySelectorAll('a')].map(a => a.getAttribute('href'));
+  check(links.includes('/lyrics/22/edit'), `the lyric editor must be one link away, got ${JSON.stringify(links)}`);
   check($('file').textContent.includes('/m/song.mp3'), 'file facts must show the path');
   const cards = window.document.querySelectorAll('#recordings .card');
   check(cards.length === 1, `expected 1 recording card, got ${cards.length}`);
@@ -2848,8 +2851,243 @@ async function runChristmas(skin) {
   if (errors.length) failures++;
 }
 
+// The link to the lyric editor [SPEC-LYR-180]: in the Lempi and MuLibPlay
+// skins beside what is playing, pointed at the passage playing, hidden while
+// none is, and absent from WinAmp [SPEC-LYR-910].
+async function runLyricsLink(skin) {
+  const shell = fs.readFileSync(path.join(ROOT, 'shell.html'), 'utf8')
+    .replace('<script>Lempi.start();</script>', '');
+  const dom = new JSDOM(shell,
+                        { runScripts: 'dangerously', url: `http://localhost/?skin=${skin}` });
+  const { window } = dom;
+  const errors = [];
+  window.console.error = (...a) => errors.push(a.join(' '));
+  const check = (cond, msg) => { if (!cond) errors.push(msg); };
+  const create = window.document.createElement.bind(window.document);
+  window.document.createElement = tag => {
+    const el = create(tag);
+    if (tag === 'link' || tag === 'script') setTimeout(() => el.onload && el.onload(), 0);
+    return el;
+  };
+  window.HTMLCanvasElement.prototype.getContext = () => null;
+  window.fetch = (url, opts) => {
+    if (opts && opts.method === 'POST') return Promise.resolve({ ok: true, status: 204 });
+    if (url === '/skins') {
+      return Promise.resolve({ json: () => Promise.resolve(skins.map(n => ({ name: n, label: n }))) });
+    }
+    const m = /^\/skin\/([^/]+)\/(.+)$/.exec(url);
+    if (m) return Promise.resolve({ ok: true, text: () => Promise.resolve(fs.readFileSync(path.join(ROOT, 'skins', m[1], m[2]), 'utf8')) });
+    return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}), text: () => Promise.resolve('') });
+  };
+  let sock = null;
+  window.WebSocket = function () { sock = this; this.close = () => {}; };
+  const runScript = src => {
+    const el = create('script');
+    el.textContent = src;
+    window.document.body.appendChild(el);
+  };
+  const why = await startCore(window, runScript);
+  const label = `lyrics ${skin}`.padEnd(11);
+  if (why || !sock) {
+    console.log(`${label} FAIL  ${why || 'core never opened its socket'}`);
+    failures++;
+    return;
+  }
+  const $ = id => window.document.getElementById(id);
+  sock.onopen && sock.onopen();
+  sock.onmessage({ data: JSON.stringify(SPARSE) });
+  const a = $('lyricslink');
+  if (skin === 'winamp') {
+    check(!a, 'the WinAmp skin has no lyrics link');
+  } else {
+    check(!!a, 'the skin must carry the lyrics link');
+    if (a) {
+      check(a.hidden, 'with no passage playing the link must be hidden');
+      sock.onmessage({ data: JSON.stringify(RICH) });
+      check(!a.hidden && a.getAttribute('href') === `/lyrics/${RICH.passage_id}/edit`,
+            `the link must open the editor for the passage playing, got hidden=${a.hidden} "${a.getAttribute('href')}"`);
+      check(a.textContent.trim() === 'lyrics', `a small link named lyrics, got "${a.textContent}"`);
+      sock.onmessage({ data: JSON.stringify({ ...RICH, passage_id: 77 }) });
+      check(a.getAttribute('href') === '/lyrics/77/edit', 'the link must follow the passage playing');
+      sock.onmessage({ data: JSON.stringify(SPARSE) });
+      check(a.hidden, 'and hide again when nothing plays');
+    }
+  }
+  console.log(`${label} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+              (skin === 'winamp' ? 'no link, as designed' : 'hidden with nothing playing, pointed at the passage playing'));
+  for (const e of errors) console.log('    ! ' + e);
+  if (errors.length) failures++;
+}
+
+// The lyric editor's page [SPEC-LYR-182..192]. What `cargo test` cannot
+// reach: that the server's JSON becomes the editor, the reference box and its
+// drop-down; that Save posts the one passage's words as a JSON body; and that
+// the search is made for the title and the artist.
+async function runLyricsEditor() {
+  const VIEW = {
+    passage_id: 22, kind: 'radio', title: 'King of Pain', artist: 'The Police', album: 'Synchronicity',
+    own: null, shown_tier: 3,
+    sources: [
+      { tier: 2, text: 'the album cut’s words', kind: 'album', title: null, artist: null, album: null,
+        imported: null, updated_at: '2026-11-12 10:00:00.000', origin: 'bose' },
+      { tier: 3, text: 'imported words\nsecond line', kind: null, title: 'King of Pain', artist: 'The Police',
+        album: 'Synchronicity', imported: 'mulibplay', updated_at: null, origin: null },
+    ],
+  };
+  const open = async (url, view) => {
+    const html = fs.readFileSync(path.join(ROOT, 'lyrics.html'), 'utf8');
+    const dom = new JSDOM(html, { runScripts: 'dangerously', url });
+    const { window } = dom;
+    const errors = [];
+    window.console.error = (...a) => errors.push(a.join(' '));
+    const create = window.document.createElement.bind(window.document);
+    window.document.createElement = tag => {
+      const el = create(tag);
+      if (tag === 'link' || tag === 'script') setTimeout(() => el.onload && el.onload(), 0);
+      return el;
+    };
+    const posted = [];
+    let answer = { own: { text: 'typed here', no_words: false, updated_at: 'now', origin: 'here' } };
+    window.fetch = (u, opts) => {
+      if (opts && opts.method === 'POST') {
+        posted.push({ url: u, type: opts.headers && opts.headers['Content-Type'], body: JSON.parse(opts.body) });
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(answer) });
+      }
+      if (u === '/skins') return Promise.resolve({ json: () => Promise.resolve([]) });
+      if (view && u === `/lyrics/${view.passage_id}/sources`) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(view) });
+      }
+      return Promise.resolve({ ok: false, status: 404, text: () => Promise.resolve('') });
+    };
+    let sock = null;
+    window.WebSocket = function () { sock = this; this.close = () => {}; };
+    let asked = 0;
+    window.confirm = () => { asked++; return true; };
+    const runScript = src => {
+      const el = create('script');
+      el.textContent = src;
+      window.document.body.appendChild(el);
+    };
+    runScript(fs.readFileSync(path.join(ROOT, 'core.js'), 'utf8'));
+    runScript(fs.readFileSync(path.join(ROOT, 'lyrics.js'), 'utf8'));
+    await new Promise(r => setTimeout(r, 30));
+    return { window, errors, posted, sock: () => sock, asked: () => asked, setAnswer: a => { answer = a; },
+             $: id => window.document.getElementById(id) };
+  };
+
+  const p = await open('http://localhost/lyrics/22/edit', VIEW);
+  const { $, errors, posted, window } = p;
+  const check = (cond, msg) => { if (!cond) errors.push(msg); };
+  const settle = () => new Promise(r => setTimeout(r, 20));
+
+  check($('heading').textContent === 'King of Pain by The Police from Synchronicity',
+        `the heading names title, artist and album, got "${$('heading').textContent}"`);
+  // Empty when the passage has none of its own, whatever the player shows
+  // for it [SPEC-LYR-184].
+  check($('editor').value === '', `the editor starts empty, got "${$('editor').value}"`);
+  check(!$('nowords').checked && !$('editor').disabled, 'unmarked to begin with');
+
+  // The reference box and its drop-down [SPEC-LYR-186].
+  const options = [...$('source').options].map(o => o.textContent);
+  check(options.length === 3, `two sources and None, got ${JSON.stringify(options)}`);
+  check(/Same audio, the album cut/.test(options[0]) && /bose/.test(options[0]),
+        `the first names the other cut and where it was saved, got "${options[0]}"`);
+  check(/Same recording/.test(options[1]) && /imported from MuLibPlay/.test(options[1]),
+        `the second names the recording and its import, got "${options[1]}"`);
+  check(/^None/.test(options[2]), `None is offered though sources exist, got "${options[2]}"`);
+  check(!$('reference').hidden && $('reference').textContent === VIEW.sources[0].text,
+        'the page opens on the first source');
+  check($('reference').tagName === 'PRE', 'the reference is text to select, not a field to edit');
+  $('source').value = '1';
+  $('source').dispatchEvent(new window.Event('change'));
+  check($('reference').textContent === VIEW.sources[1].text, 'choosing a source shows it');
+  $('source').value = '';
+  $('source').dispatchEvent(new window.Event('change'));
+  check($('reference').hidden && $('copyall').hidden, 'None hides the reference and its Copy button');
+  check(!$('refrow').hidden, 'and leaves the drop-down, to choose again');
+
+  // Copy all, then Save: one passage, a JSON body [SPEC-LYR-174].
+  $('source').value = '1';
+  $('source').dispatchEvent(new window.Event('change'));
+  $('copyall').click();
+  check($('editor').value === VIEW.sources[1].text && p.asked() === 0,
+        'Copy all fills an empty editor without asking');
+  $('copyall').click();
+  check(p.asked() === 1, 'and asks before replacing what is there');
+  $('editor').value = 'typed here';
+  $('save').click();
+  await settle();
+  check(posted.length === 1 && posted[0].url === '/lyrics/22' && posted[0].type === 'application/json'
+        && posted[0].body.text === 'typed here' && posted[0].body.no_words === false,
+        `Save posts this passage's words as JSON, got ${JSON.stringify(posted)}`);
+  check($('status').textContent === 'Saved.', `Save says so, got "${$('status').textContent}"`);
+
+  // The mark: ticked, the editor greys and keeps its text [SPEC-LYR-188].
+  $('nowords').checked = true;
+  $('nowords').dispatchEvent(new window.Event('change'));
+  check($('editor').disabled && $('editor').value === 'typed here', 'the mark greys the editor and keeps the text');
+  p.setAnswer({ own: { text: 'typed here', no_words: true, updated_at: 'now', origin: 'here' } });
+  $('save').click();
+  await settle();
+  check(posted[1] && posted[1].body.no_words === true, 'the mark is saved');
+  check(/no lyrics/.test($('status').textContent), `and said, got "${$('status').textContent}"`);
+
+  // Saving empty clears, and the page says the lower tiers show again.
+  $('nowords').checked = false;
+  $('nowords').dispatchEvent(new window.Event('change'));
+  $('editor').value = '';
+  p.setAnswer({ own: null });
+  $('save').click();
+  await settle();
+  check(posted[2] && posted[2].body.text === '' && /Cleared/.test($('status').textContent),
+        `an empty save clears, got "${$('status').textContent}"`);
+
+  // The search, already made [SPEC-LYR-192].
+  const want = encodeURIComponent('lyrics King of Pain The Police');
+  check($('search').getAttribute('src') === `https://www.google.com/search?igu=1&q=${want}`,
+        `the frame searches for the title and artist, got "${$('search').getAttribute('src')}"`);
+  check($('search').getAttribute('referrerpolicy') === 'no-referrer', 'the search is not told the player’s address');
+  check($('searchlink').getAttribute('href') === `https://www.google.com/search?q=${want}`
+        && $('searchlink').getAttribute('target') === '_blank',
+        'the same search is offered in a new window');
+  check($('about').getAttribute('href') === '/passage/22', 'the passage page is one link away');
+
+  // Another passage starts playing: said, linked, and not followed
+  // [SPEC-LYR-190].
+  const sock = p.sock();
+  check(!!sock, 'the editor opens the socket');
+  if (sock) {
+    sock.onmessage({ data: JSON.stringify({ ...RICH, passage_id: 22 }) });
+    check($('now').hidden, 'nothing is said while this passage is the one playing');
+    sock.onmessage({ data: JSON.stringify(RICH) });
+    check(!$('now').hidden && $('nowlink').getAttribute('href') === `/lyrics/${RICH.passage_id}/edit`,
+          'another passage playing is named, with a link to its own page');
+    check($('heading').textContent.startsWith('King of Pain'), 'and the page stays where it was');
+  }
+
+  // A passage with its own words and no other source; and one that is not here.
+  const q = await open('http://localhost/lyrics/23/edit',
+    { ...VIEW, passage_id: 23, own: { text: 'its own', no_words: false, updated_at: 'x', origin: null }, sources: [] });
+  if (!(q.$('editor').value === 'its own' && q.$('refrow').hidden && q.$('reference').hidden)) {
+    errors.push('own words fill the editor, and with no source there is no reference or drop-down');
+  }
+  errors.push(...q.errors.map(e => '(23) ' + e));
+  const r = await open('http://localhost/lyrics/999/edit', null);
+  if (!(/not found/i.test(r.$('status').textContent) && r.$('save').disabled)) {
+    errors.push(`an unknown passage must say so and offer no Save, got "${r.$('status').textContent}"`);
+  }
+  errors.push(...r.errors.map(e => '(999) ' + e));
+
+  console.log(`${'lyrics page'.padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
+              `editor, reference and drop-down, copy, save, mark and clear, the search, posted=${posted.length}`);
+  for (const e of errors) console.log('    ! ' + e);
+  if (errors.length) failures++;
+}
+
 (async () => {
   for (const s of skins) await run(s);
+  for (const s of skins) await runLyricsLink(s);
+  await runLyricsEditor();
   for (const s of skins) await runEarlySnapshot(s);
   for (const s of skins) await runPreference(s);
   for (const s of skins) await runProfanity(s);

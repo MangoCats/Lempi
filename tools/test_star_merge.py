@@ -324,6 +324,79 @@ def test_translation(tmp):
     check(not os.path.exists(os.path.join(out, "nodes", "desktop")), "the hub's own pair is not repeated")
 
 
+LYRICS = """
+CREATE TABLE passage_lyrics (audio_md5 TEXT NOT NULL, kind TEXT NOT NULL, start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL, mbid TEXT, text TEXT NOT NULL, no_words INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL, origin TEXT, PRIMARY KEY (audio_md5, kind, start_ms));
+CREATE INDEX passage_lyrics_mbid ON passage_lyrics(mbid);
+"""
+
+
+def test_passage_lyrics(tmp):
+    """[SPEC-LYR-200], [SPEC-LYR-205]: words saved for a passage are keyed by
+    what it is, never by its number. So between two nodes that number the same
+    music the other way round they cross untranslated; the latest save wins;
+    every node's copy holds every row, one for a file it lacks included; a
+    cleared row travels as a row; and an older player's listener, which has no
+    such table, neither stops the merge nor loses a row for anyone else."""
+    base, desk, app = (os.path.join(tmp, f"ly-{n}.cat") for n in ("base", "desk", "app"))
+    cat(base)
+    # File A is passage 1 on the desktop and passage 2 on the appliance.
+    for path, files in ((desk, [(1, "A", "C:/a.mp3"), (2, "B", "C:/b.mp3")]),
+                        (app, [(1, "B", "/b.mp3"), (2, "A", "/a.mp3")])):
+        cat(path, *[f"INSERT INTO files VALUES ({i},'{m}','{p}',100)" for i, m, p in files],
+            "INSERT INTO passages VALUES (1,1000,'ingest')", "INSERT INTO passages VALUES (2,1000,'ingest')")
+        c = sqlite3.connect(path)
+        for s in ("ALTER TABLE passages ADD COLUMN file_id INTEGER", "ALTER TABLE passages ADD COLUMN kind TEXT",
+                  "ALTER TABLE passages ADD COLUMN start_ms INTEGER",
+                  "UPDATE passages SET file_id = passage_id, kind = 'radio', start_ms = 0"):
+            c.execute(s)
+        c.commit()
+        c.close()
+    dl, al, ol = (os.path.join(tmp, f"ly-{n}.lis") for n in ("desk", "app", "old"))
+    db(dl)
+    db(al)
+    db(ol)                                              # a player from before the table
+    for path, sql in ((dl, ["INSERT INTO passage_lyrics VALUES ('A','radio',0,1000,'rec-A','typed on the hub',0,"
+                            "'2026-11-12 10:00:00.000','desktop')",
+                            "INSERT INTO passage_lyrics VALUES ('Z','radio',0,1000,'rec-Z','for a file only the hub has',0,"
+                            "'2026-11-12 10:05:00.000','desktop')"]),
+                      (al, ["INSERT INTO passage_lyrics VALUES ('A','radio',0,1000,'rec-A','corrected on the appliance',0,"
+                            "'2026-11-12 11:00:00.250','app')",
+                            "INSERT INTO passage_lyrics VALUES ('B','radio',0,1000,'rec-B','',0,"
+                            "'2026-11-12 11:30:00.000','app')"])):
+        c = sqlite3.connect(path)
+        c.executescript(LYRICS)
+        for s in sql:
+            c.execute(s)
+        c.commit()
+        c.close()
+    out = os.path.join(tmp, "ly-out")
+    rep = sm.build({"hub_state_from": "desktop",
+                    "nodes": [dict(name="desktop", listener=dl),
+                              dict(name="app", listener=al, catalogue=app, files=app),
+                              dict(name="old", listener=ol)],
+                    "catalogue": dict(base=base, machine_from="desktop", nodes=[
+                        dict(name="desktop", library=desk), dict(name="app", library=app, role="receiver")])},
+                   out)
+    q = "SELECT audio_md5, kind, start_ms, text, origin FROM passage_lyrics ORDER BY audio_md5"
+    want = [("A", "radio", 0, "corrected on the appliance", "app"),
+            ("B", "radio", 0, "", "app"),
+            ("Z", "radio", 0, "for a file only the hub has", "desktop")]
+    hub = rows(os.path.join(out, "listener.db"), q)
+    check(hub == want, f"the latest save wins, and a cleared row and a hub-only row are kept: {hub}")
+    check(rep.data["translations"]["app"]["ids"] == [[1, 2], [2, 1]],
+          "the two nodes do number this music the other way round")
+    mine = rows(os.path.join(out, "nodes", "app", "listener.db"), q)
+    check(mine == want, f"the appliance's copy holds every row under the same keys, file Z's included: {mine}")
+    check(not rep.data["copies"]["app"].get("not_on_node"), "and none is left out for naming no passage it holds")
+    older = rows(os.path.join(out, "nodes", "old", "listener.db"), q)
+    check(older == want, f"an older player's copy is what it will hold once it is current: {older}")
+    t = rep.data["tables"]["passage_lyrics"]
+    check(t["rule"] == sm.LWW and t["merged"] == 3 and t["per_node"] == {"app": 2, "desktop": 2, "old": 0},
+          f"reported as a last-write-wins table: {t}")
+
+
 def test_a_review_survives_two_rounds(tmp):
     """[SPEC-STAR-049] both ways. Found 2026-10-18: an id review made once on
     the hub was on eight passages after three syncs, because a node's copy
@@ -572,6 +645,7 @@ def main() -> int:
     test_held_out(tmp)
     test_receivers(tmp)
     test_translation(tmp)
+    test_passage_lyrics(tmp)
     test_a_review_survives_two_rounds(tmp)
     test_one_file_many_passages(tmp)
     test_routine(tmp)

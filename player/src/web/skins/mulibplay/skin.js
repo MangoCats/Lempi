@@ -203,6 +203,7 @@
     prefLink($('artist'), 'artist', s.artist_mbid, s.artist, s.mbid);
     pair('fromword', 'album', s.album);
     $('plays').textContent = Lempi.fmt.plays(s.plays, s.last_played);
+    Lempi.lyricsLink($('lyricslink'), s.passage_id);
     Lempi.showArt($('art'), s.passage_id);
     // The original showed the back of the sleeve beside the front when it
     // had one -- 559 of its 675 albums did. Hidden by itself when absent.

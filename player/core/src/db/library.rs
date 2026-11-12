@@ -188,20 +188,24 @@ impl Library {
         Ok(lib)
     }
 
-    /// The words for a passage, if the library has them `[SPEC-LYR-040]`.
+    /// The words a passage shows, if the library has any `[SPEC-LYR-040]`.
     ///
-    /// **Looked up by recording, not by passage.** Two passages of one
-    /// recording share its words, and a second rip does not get its own
-    /// `[SPEC-LYR-020]`. An absent table is a library that predates the import,
-    /// not a fault — the query is allowed to fail and mean "none".
+    /// **Its own first, then the nearest** `[SPEC-LYR-100]`: words saved for
+    /// the passage, for another passage of the same segment of its file, for
+    /// its recording, for a work its recording performs. Until 2026-11-12 this
+    /// was the recording's imported words alone `[SPEC-LYR-020]`. A failure
+    /// reads as "none": an absent table is a library that predates it, and
+    /// nothing here is worth more than an empty window.
     pub fn lyrics(&self, passage_id: i64) -> Option<String> {
-        self.conn
-            .query_row(
-                "SELECT l.text FROM __LIB__.passage_recordings pr JOIN lyrics l ON l.mbid = pr.mbid WHERE pr.passage_id = ?1 ORDER BY pr.weight DESC LIMIT 1",
-                [passage_id],
-                |r| r.get::<_, String>(0),
-            )
-            .ok()
+        let lib = self.conn.lib_alias();
+        let saved = super::SavedLyrics::load(&self.conn, lib).ok()?;
+        super::shown_lyrics(&self.conn, lib, &saved, passage_id).ok().flatten()
+    }
+
+    /// Everything the lyric editor shows for a passage `[SPEC-LYR-172]`, or
+    /// `None` for no such passage.
+    pub fn lyrics_view(&self, passage_id: i64) -> Result<Option<super::LyricsView>, DbError> {
+        super::lyrics_view(&self.conn, self.conn.lib_alias(), passage_id)
     }
 
     pub fn passage(&self, passage_id: i64) -> Result<QueueEntry, DbError> {

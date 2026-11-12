@@ -1612,6 +1612,23 @@ const Lempi = (() => {
       document.head.appendChild(l);
       catalogue = await skinCatalogue();
     },
+    // A page that is not the player's and still follows it: the skin's look
+    // and the socket, without the player's markup. The lyric editor says
+    // which passage is playing while it stays on its own [SPEC-LYR-190].
+    async startWatching() {
+      connect();
+      await this.startBare();
+    },
+    // Point a link at the lyric editor for a passage, and hide it while none
+    // is playing [SPEC-LYR-180]. Here because a skin builds no URL, and
+    // written only when different, as everything a snapshot touches is.
+    lyricsLink(a, passageId) {
+      if (!a) return;
+      const none = passageId == null;
+      if (a.hidden !== none) a.hidden = none;
+      const href = none ? '' : `/lyrics/${passageId}/edit`;
+      if (!none && a.getAttribute('href') !== href) a.setAttribute('href', href);
+    },
     // Throws rather than resolving to nothing when the query fails, so a
     // broken listing cannot be mistaken for an empty library.
     browse: (kind, filter = {}) => {

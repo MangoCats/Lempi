@@ -71,6 +71,8 @@
     draw();
   }
   $('nowrow').onclick = () => pick(null, null);
+  // A link inside the row: following it must not also pick the row.
+  $('lyricslink').onclick = e => e.stopPropagation();
 
   // The settings screen `[REQ-VIS-160]`. The skip shape and the programme are
   // set once and then left alone, so they no longer sit in the reading path
@@ -1029,6 +1031,7 @@
       : null;
     showByline(s);
     setText($('plays'), Lempi.fmt.plays(s.plays, s.last_played));
+    Lempi.lyricsLink($('lyricslink'), s.passage_id);
     Lempi.showArt($('art'), s.passage_id);
     setText($('time'), `${clock(s.position_ms)} / ${clock(s.duration_ms)}`);
     $('fill').style.width =

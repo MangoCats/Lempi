@@ -1503,18 +1503,36 @@ def write_json(path, obj):
         json.dump(obj, fh, separators=(",", ":"), sort_keys=True)
 
 
+def signed_tables(base):
+    """The shared tables a player's listener patch may name, and those held
+    back from it. A table the merge marks `newer` is one an older player
+    neither sends nor accepts: its own list of allowed tables refuses a patch
+    naming any other, whole. So a node whose snapshot holds no such table is
+    sent none of it, and that is said [SPEC-LYR-200], [GDE-DEP-060]. A current
+    player makes the table when it starts, and always sends it."""
+    c = sp.open_ro(base)
+    try:
+        there = sp.tables_of(c)
+    finally:
+        c.close()
+    held_back = [t for t in SIGNED_TABLES if sm.TABLES[t].get("newer") and t not in there]
+    return [t for t in SIGNED_TABLES if t not in held_back], held_back
+
+
 def values_patch(base, target):
     """A player's listener patch [SPEC-NSH-070]: the shared tables as values,
     proven here -- the member rule applied to a copy of what it sent must give
-    the merge's shared tables -- before it is offered."""
-    p = sp.make_values(base, target, tables=SIGNED_TABLES)
+    the merge's shared tables -- before it is offered. Returns the patch,
+    whether it was proven, and the tables held back from an older player."""
+    tables, held_back = signed_tables(base)
+    p = sp.make_values(base, target, tables=tables)
     with tempfile.TemporaryDirectory() as t:
         copy = os.path.join(t, "proof.db")
         shutil.copyfile(base, copy)
         os.chmod(copy, 0o644)
-        sp.apply_member(copy, p, set(SIGNED_TABLES))
-        good = sp.make_values(copy, target, tables=SIGNED_TABLES)["tables"] == []
-    return p, good
+        sp.apply_member(copy, p, set(tables))
+        good = sp.make_values(copy, target, tables=tables)["tables"] == []
+    return p, good, held_back
 
 
 RETIRE_FILE = "retire.json"
@@ -1600,12 +1618,19 @@ def patch(plan, run):
             members[name] = b["member"]
             say(f"  {name} {line[2:]}")
         elif "signed" in b:
-            lis, good = values_patch(b["listener"], t["listener"])
+            lis, good, held_back = values_patch(b["listener"], t["listener"])
             ok = ok and good
             write_json(os.path.join(pd, "listener.values.json"), lis)
             rows = {e["name"]: len(e["rows"]) for e in lis["tables"]}
             summary.append("- shared edits: " + (", ".join(f"`{k}` {v}" for k, v in sorted(rows.items())) or "nothing to send")
                            + ("" if good else " -- **NOT PROVEN: do not commit**"))
+            if held_back:
+                # [SPEC-LYR-200]: an older player, which would refuse the whole
+                # patch for naming a table it does not know.
+                words = ", ".join(f"`{x}`" for x in held_back)
+                summary.append(f"- **not sent: {words}** -- this node's player is older than the table, "
+                               "and receives it once a current player is deployed there")
+                say(f"  {name}: NOT SENT {', '.join(held_back)}: its player is older than the table")
             cat, unsupported, parts = None, None, None
             for old in os.listdir(pd):                # nothing of an earlier patch lingers
                 if old.startswith("catalogue.") or old == RETIRE_FILE:

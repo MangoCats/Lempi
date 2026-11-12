@@ -2,7 +2,8 @@
 // Vipunen's profile page. Read-only, no editing affordance here: this is
 // "what is this", not "fix this" -- the boundary editor and id review stay
 // where they already are, behind vipunen-support, on the desktop's own
-// co-resident Lempi [SPEC-SUI-138].
+// co-resident Lempi [SPEC-SUI-138]. One link leads out to an editor every
+// build has: the passage's lyrics [SPEC-LYR-181].
 (() => {
   const $ = id => document.getElementById(id);
   Lempi.startBare();
@@ -91,6 +92,16 @@
     why.textContent = 'see the selection reasoning →';
     whyDd.appendChild(why);
     $('span').append(whyDt, whyDd);
+    // The lyric editor for this passage [SPEC-LYR-181]: the way to the words
+    // of one that is not playing. Shown whether or not it has any.
+    const lyDt = document.createElement('dt');
+    lyDt.textContent = 'lyrics';
+    const lyDd = document.createElement('dd');
+    const ly = document.createElement('a');
+    Lempi.lyricsLink(ly, p.passage_id);
+    ly.textContent = 'read or edit this passage’s lyrics →';
+    lyDd.appendChild(ly);
+    $('span').append(lyDt, lyDd);
 
     dl($('file'), [
       ['path', p.path],

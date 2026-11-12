@@ -405,7 +405,59 @@ def test_prune_runs():
             ss.ROOT = real
 
 
+def test_an_older_player_is_sent_no_table_it_would_refuse():
+    """[SPEC-LYR-200]: a player's patch may name only the tables its own list
+    allows, and one naming another is refused whole. So a node whose snapshot
+    holds no `passage_lyrics` -- a player from before the table -- is sent
+    none of it, with its other shared edits, and a current one is sent it."""
+    import sqlite3
+    print("an older player is sent no table it would refuse; a current one is sent it")
+    ddl = ("CREATE TABLE listener_flags (subject_kind TEXT, subject_id TEXT, flagged_at TEXT, origin TEXT, "
+           "PRIMARY KEY (subject_kind, subject_id))")
+    lyrics = ("CREATE TABLE passage_lyrics (audio_md5 TEXT NOT NULL, kind TEXT NOT NULL, start_ms INTEGER NOT NULL, "
+              "end_ms INTEGER NOT NULL, mbid TEXT, text TEXT NOT NULL, no_words INTEGER NOT NULL DEFAULT 0, "
+              "updated_at TEXT NOT NULL, origin TEXT, PRIMARY KEY (audio_md5, kind, start_ms))")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as root:
+        def make(name, with_table, *sql):
+            p = os.path.join(root, name)
+            c = sqlite3.connect(p)
+            c.execute(ddl)
+            if with_table:
+                c.execute(lyrics)
+            for s in sql:
+                c.execute(s)
+            c.commit()
+            c.close()
+            return p
+        flag = "INSERT INTO listener_flags VALUES ('recording','r1','2026-11-12 09:00:00',NULL)"
+        words = ("INSERT INTO passage_lyrics VALUES ('A','radio',0,1000,'rec','typed',0,"
+                 "'2026-11-12 10:00:00.000','hub')")
+        target = make("target.db", True, flag, words)
+        older = make("older.db", False)
+        current = make("current.db", True)
+
+        check("passage_lyrics" in ss.SIGNED_TABLES, "the merge shares the table")
+        tables, held_back = ss.signed_tables(older)
+        check(held_back == ["passage_lyrics"] and "passage_lyrics" not in tables and "listener_flags" in tables,
+              f"held back from a node that sent none: {held_back}")
+        p, good, held_back = ss.values_patch(older, target)
+        named = sorted(e["name"] for e in p["tables"])
+        check(good and named == ["listener_flags"] and held_back == ["passage_lyrics"],
+              f"its patch carries its other edits and never names the table: {named}, proven {good}")
+
+        tables, held_back = ss.signed_tables(current)
+        check(held_back == [] and "passage_lyrics" in tables, f"nothing is held back from a current player: {held_back}")
+        p, good, held_back = ss.values_patch(current, target)
+        named = sorted(e["name"] for e in p["tables"])
+        check(good and named == ["listener_flags", "passage_lyrics"] and held_back == [],
+              f"a current player is sent the words: {named}, proven {good}")
+        sent = [e for e in p["tables"] if e["name"] == "passage_lyrics"][0]
+        check(sent["key"] == ["audio_md5", "kind", "start_ms"] and len(sent["rows"]) == 1 and "create" not in sent,
+              f"by its own key, as rows, the table being there already: {sent.get('key')}")
+
+
 def main() -> int:
+    test_an_older_player_is_sent_no_table_it_would_refuse()
     test_backup_proofs()
     test_mirror_when_reachable()
     test_mirror_limits()

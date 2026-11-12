@@ -89,6 +89,10 @@ LISTENER_TABLES = [
     # A programme the hub sent and the node has not answered [SPEC-PGM-200],
     # 2026-10-17.
     "listener_programme_pending",
+    # Words saved for a passage in the player's editor [SPEC-LYR-140],
+    # 2026-11-12: the listener's, because the player cannot write the
+    # catalogue, where the imported `lyrics` stay.
+    "passage_lyrics",
 ]
 BOTH = ["schema_meta"]
 

@@ -48,16 +48,17 @@ impl Drop for Scratch {
 fn library(dir: &Path) -> Connection {
     let c = Connection::open_in_memory().unwrap();
     c.execute_batch(
-        "CREATE TABLE files (file_id INTEGER PRIMARY KEY, path TEXT, duration_ms INTEGER);
+        "CREATE TABLE files (file_id INTEGER PRIMARY KEY, path TEXT, duration_ms INTEGER,
+                             audio_md5 TEXT);
          CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER,
                                 kind TEXT, start_ms INTEGER, end_ms INTEGER);
-         CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT);
+         CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL DEFAULT 1.0);
          CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);
          CREATE TABLE recording_artists (mbid TEXT, artist_mbid TEXT, weight REAL);
          CREATE TABLE artists (mbid TEXT PRIMARY KEY, name TEXT);
          CREATE TABLE file_tags (file_id INTEGER PRIMARY KEY, title TEXT,
                                  artist TEXT, album TEXT);
-         CREATE TABLE lyrics (mbid TEXT PRIMARY KEY, text TEXT);",
+         CREATE TABLE lyrics (mbid TEXT PRIMARY KEY, text TEXT, source TEXT, fetched_at TEXT);",
     )
     .unwrap();
 
@@ -65,7 +66,7 @@ fn library(dir: &Path) -> Connection {
     // which is the shape everything interesting here is about.
     let capture = dir.join("Live.mp3");
     c.execute(
-        "INSERT INTO files VALUES (1, ?1, 900000)",
+        "INSERT INTO files VALUES (1, ?1, 900000, 'md5-1')",
         rusqlite::params![capture.to_string_lossy()],
     )
     .unwrap();
@@ -83,7 +84,7 @@ fn library(dir: &Path) -> Connection {
         .unwrap();
         let mbid = format!("mb-{pid}");
         c.execute(
-            "INSERT INTO passage_recordings VALUES (?1, ?2)",
+            "INSERT INTO passage_recordings (passage_id, mbid) VALUES (?1, ?2)",
             rusqlite::params![pid, mbid],
         )
         .unwrap();
@@ -100,7 +101,7 @@ fn library(dir: &Path) -> Connection {
         .unwrap();
         c.execute("INSERT INTO artists VALUES (?1, ?2)", rusqlite::params![amb, artist]).unwrap();
         c.execute(
-            "INSERT INTO lyrics VALUES (?1, ?2)",
+            "INSERT INTO lyrics VALUES (?1, ?2, 'mulibplay', '2026-01-01')",
             rusqlite::params![mbid, format!("words for {title}")],
         )
         .unwrap();
@@ -182,7 +183,7 @@ fn the_numbering_follows_the_music_not_the_database() {
     // within is left out of the sheet `[SPEC-RIP-092]`, so a 104 at
     // 150-300 s would drop 101 and test that rule instead of this one.
     conn.execute("INSERT INTO passages VALUES (104, 1, 'radio', 150000, 450000)", []).unwrap();
-    conn.execute("INSERT INTO passage_recordings VALUES (104, 'mb-104')", []).unwrap();
+    conn.execute("INSERT INTO passage_recordings (passage_id, mbid) VALUES (104, 'mb-104')", []).unwrap();
     conn.execute("INSERT INTO recordings VALUES ('mb-104', 'Late Insert')", []).unwrap();
 
     lempi_player::cue::generate(&conn, false).unwrap();
@@ -214,13 +215,13 @@ fn every_folder_writer_is_idempotent() {
     // The sidecar skips this capture on purpose, so give it a file of its own.
     let solo = dir.join("Alone.mp3");
     conn.execute(
-        "INSERT INTO files VALUES (2, ?1, 200000)",
+        "INSERT INTO files VALUES (2, ?1, 200000, 'md5-2')",
         rusqlite::params![solo.to_string_lossy()],
     )
     .unwrap();
     conn.execute("INSERT INTO passages VALUES (201, 2, 'radio', 0, 200000)", []).unwrap();
-    conn.execute("INSERT INTO passage_recordings VALUES (201, 'mb-201')", []).unwrap();
-    conn.execute("INSERT INTO lyrics VALUES ('mb-201', 'the only words')", []).unwrap();
+    conn.execute("INSERT INTO passage_recordings (passage_id, mbid) VALUES (201, 'mb-201')", []).unwrap();
+    conn.execute("INSERT INTO lyrics VALUES ('mb-201', 'the only words', 'mulibplay', '2026-01-01')", []).unwrap();
     std::fs::write(&solo, b"not really audio").unwrap();
 
     let first = lempi_player::lyrics_sidecar::generate(&conn, false).unwrap();

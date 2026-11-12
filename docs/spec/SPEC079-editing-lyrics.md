@@ -1,8 +1,8 @@
 # SPEC079: Editing Lyrics, and Which Words a Passage Shows
 
-**Design Specification — Tier 2 · specified 2026-11-12, from the maintainer's request and answers given that day · not built**
+**Design Specification — Tier 2 · specified 2026-11-12, from the maintainer's request and answers given that day · built the same day, all four steps of §8; a phone's share of the sync is not `[SPEC-LYR-210]`**
 
-Lempi shows the words MuLibPlay collected and has no way to add or correct any. This restores MuLibPlay's two-column lyric page: an editor on the left, a web search for the song on the right. It also changes what the words belong to. They are saved for a passage, and a passage with none of its own shows the nearest words the library has.
+Until 2026-11-12 Lempi showed the words MuLibPlay collected and had no way to add or correct any. This restores MuLibPlay's two-column lyric page: an editor on the left, a web search for the song on the right. It also changes what the words belong to. They are saved for a passage, and a passage with none of its own shows the nearest words the library has.
 
 > **Related:** [SPEC019](SPEC019-lyrics.md) (the imported words, the endpoint, the MuLibPlay skin's window) · [REQ006](REQ006-visibility-words-and-the-rest.md) `[REQ-VIS-330]` to `[REQ-VIS-350]` (what is asked) · [SPEC029](SPEC029-listener-preference-editing.md) (the other editor MuLibPlay had, and the pattern followed here) · [SPEC046](SPEC046-star-sync.md) (how an edit reaches other nodes) · [SPEC075](SPEC075-permanent-identity-and-a-movable-hub.md) (why no passage number is stored) · [GUIDE012](../GUIDE012-work-based-song-blocking.md) (the same three tiers, used for blocking)
 
@@ -20,9 +20,9 @@ Read from its source, 2026-11-12 (`trackController.cpp`, `lyricEditForm` and `ly
 
 2,288 of its 8,116 tracks carried words entered this way `[SPEC-LYR-010]`.
 
-## 2. What Lempi has today
+## 2. What Lempi had
 
-Measured on the hub's pair, 2026-11-12: 24,053 passages (12,027 album, 12,026 radio) on 7,247 files.
+Measured on the hub's pair, 2026-11-12, before any of this was built: 24,053 passages (12,027 album, 12,026 radio) on 7,247 files.
 
 | | |
 | :--- | ---: |
@@ -32,7 +32,7 @@ Measured on the hub's pair, 2026-11-12: 24,053 passages (12,027 album, 12,026 ra
 | recordings with a work, of 11,740 a passage names | 7,472 |
 | works on more than one recording | 534 |
 
-The words are keyed by recording `[SPEC-LYR-020]`, in the catalogue half, which the player attaches read-only `[PI-DB-020]` and never writes `[SPEC-LYR-030]`. Only the MuLibPlay skin shows them `[REQ-VIS-213]`.
+Those words are keyed by recording `[SPEC-LYR-020]`, in the catalogue half, which the player attaches read-only `[PI-DB-020]` and never writes `[SPEC-LYR-030]`. Only the MuLibPlay skin shows words `[REQ-VIS-213]`.
 
 ## 3. Which words a passage shows
 
@@ -87,6 +87,8 @@ CREATE TABLE passage_lyrics (
 
 It is in the listener half because the player cannot write the catalogue on a split node, which is every node, and for the reason `[SPEC-PREF-085]` gives for a listener's own tags: this is a person's edit, backed up and synced with their others. `lyrics` stays as it is, a source the player reads and never writes.
 
+The table is in `sql/schema.sql`, and the player makes it on opening a listener that lacks it. `updated_at` is UTC to the millisecond, so two saves a moment apart on either side of a boundary edit read in their order. The hourly listener backup `[REQ-LIB-160]` takes the table: nothing else can make these words again. The logic is `player/core/src/db/lyrics.rs`.
+
 **`[SPEC-LYR-145]` No passage number is stored.** A number means nothing on another node `[SPEC-DF-035]`, and a new listener column holding one is what `[SPEC-UID-070]` exists to refuse. The key is the name `[SPEC-UID-010]` uses until a passage has a permanent identity: the file's `audio_md5`, the passage's kind and its start. A retired `audio_md5` is followed through `audio_md5_aliases` `[SPEC-RLK-155]`. When `passage_uid` exists `[SPEC-UID-030]`, this table takes it with the other listener tables.
 
 **`[SPEC-LYR-150]` A passage's own entry is found by segment, so a boundary edit does not orphan it.** The own entry is the newest row of the passage's file and kind that is the same segment as the passage is now `[SPEC-LYR-110]`. A passage whose start is moved therefore keeps its words, and its end is not in the key at all. Save writes under the passage's present start and end. An older row left under a former start is the same entry, superseded, and is never shown.
@@ -107,13 +109,13 @@ It is in the listener half because the player cannot write the catalogue on a sp
 
 A text that appears more than once is listed once, at its highest place. Marks and cleared rows are not sources.
 
-**`[SPEC-LYR-174]` `POST /lyrics/:passage_id` saves one passage, and nothing else.** The body is JSON, `{"text": …, "no_words": …}`, not a query string: the longest text held is 5,820 characters. Line ends are stored as `\n`, and a text of only white space is empty. A body over 64 KiB is refused. An unknown passage is a 404. The answer is the entry as stored. The route writes `passage_lyrics` and no other table: words reached through tiers 2 to 4 are read-only, here and on the page.
+**`[SPEC-LYR-174]` `POST /lyrics/:passage_id` saves one passage, and nothing else.** The body is JSON, `{"text": …, "no_words": …}`, not a query string: the longest text held is 5,820 characters. Line ends are stored as `\n`, and a text of only white space is empty. A text over 64 KiB is refused. An unknown passage is a 404. The answer is the entry as stored, `{"own": …}`, with `null` once cleared. Clearing a passage that never had an entry writes nothing. The route writes `passage_lyrics` and no other table: words reached through tiers 2 to 4 are read-only, here and on the page.
 
-**`[SPEC-LYR-176]` The files written for a guest's clients take the same order, for a song that has no file yet.** Decided 2026-11-12. The cache `[SPEC-LYR-070]` and the sidecar `[SPEC-LYR-080]` choose a passage's words by `[SPEC-LYR-100]`, where today they join the imported table. A marked passage gets no file. The cache holds one file for an artist and title, so where two passages share both, the words are the first by `[SPEC-LYR-120]`. Neither writer replaces a file that is already there, which is unchanged `[SPEC-LYR-900]`.
+**`[SPEC-LYR-176]` The files written for a guest's clients take the same order, for a song that has no file yet.** Decided 2026-11-12. The cache `[SPEC-LYR-070]` and the sidecar `[SPEC-LYR-080]` choose a passage's words by `[SPEC-LYR-100]`, where today they join the imported table. A marked passage gets no file. The cache holds one file for an artist and title, so where two passages share both, the words are the first by `[SPEC-LYR-120]`, and of equals the lower-numbered passage's. Neither writer replaces a file that is already there, which is unchanged `[SPEC-LYR-900]`. Each writer opens the catalogue, so the player attaches the listener half beside it, read-only, and says so in its log where it cannot: the files are then written from the imported words alone.
 
 ## 6. The page
 
-**`[SPEC-LYR-180]` A small link, *lyrics*, beside what is playing, in the Lempi and MuLibPlay skins.** It is shown whenever a passage is playing and hidden when none is, whether or not the passage has words. `core.js` sets its target, since a skin builds no URL `[REQ-VIS-160]`. It opens `GET /lyrics/:passage_id/edit` in the same tab. The player is the server's, so the music does not stop.
+**`[SPEC-LYR-180]` A small link, *lyrics*, beside what is playing, in the Lempi and MuLibPlay skins.** It is shown whenever a passage is playing and hidden when none is, whether or not the passage has words. `core.js` sets its target (`Lempi.lyricsLink`), since a skin builds no URL `[REQ-VIS-160]`. It opens `GET /lyrics/:passage_id/edit` in the same tab. The player is the server's, so the music does not stop.
 
 **`[SPEC-LYR-181]` The same link is on Lempi's passage page, `/passage/:id`** `[REQ-VIS-270]`. Decided 2026-11-12. Browse links to that page on every node, so the words of any passage can be edited without playing it.
 
@@ -145,7 +147,7 @@ A text that appears more than once is listed once, at its highest place. Marks a
 - **This passage has no lyrics**, ticked and saved, stores the mark `[SPEC-LYR-130]`. The editor's text is kept under the mark and not shown while it stands, so unticking brings it back.
 - Leaving with unsaved text asks first.
 
-**`[SPEC-LYR-190]` The page stays on the passage it was opened for.** While the passage playing is another one, the page says which, with a link to that passage's page. It does not follow by itself, because the editor may hold unsaved text.
+**`[SPEC-LYR-190]` The page stays on the passage it was opened for.** While the passage playing is another one, the page says which, with a link to that passage's page. It does not follow by itself, because the editor may hold unsaved text. The page takes the skin's look and the player's socket without the player's markup (`Lempi.startWatching`).
 
 **`[SPEC-LYR-192]` The right column is a frame on a web search for `lyrics`, the title and the artist.** The title and artist are the heading's, so unidentified audio is searched by its file tags. The address is MuLibPlay's, `https://www.google.com/search?igu=1&q=…`. Measured 2026-11-12 from the hub: with `igu=1` the answer carries no `X-Frame-Options`, and without it, `SAMEORIGIN`. A headless browser the same day drew Google's page inside the frame, and that page was its check for automated traffic, not results. The maintainer's own browser on the hub, the same day, showed the search's results in the frame of the same test page. So the frame works on a desktop, and a phone's WebView is still to be seen `[SPEC-LYR-915]`. The parameter is undocumented, and a page cannot learn that a frame was refused, so *open this search in a new window* is always shown above the frame. The frame is given `referrerpolicy="no-referrer"`, so the search is not told the player's address.
 
@@ -157,20 +159,22 @@ A text that appears more than once is listed once, at its highest place. Marks a
 
 **`[SPEC-LYR-200]` `passage_lyrics` is a shared table of the star sync, last write wins on `updated_at`** `[SPEC-STAR-040]`, keyed by its primary key. Words are reference data about music and travel `[SPEC-LYR-025]`. Because the key holds no local number, the table needs none of the translation `[SPEC-STAR-049]` and `[SPEC-STAR-051]` do for a node's passage ids. Because no row is deleted, it needs no removal evidence. **Every node receives every row, whether or not it holds the file.** That is what lets tiers 3 and 4 work there `[SPEC-LYR-160]`, and it means the words are already on a node when the audio arrives by bundle. Two nodes that save one passage under different starts, on either side of a boundary edit, leave two rows that are one entry, and each node reads the newer `[SPEC-LYR-150]`.
 
-**`[SPEC-LYR-205]` It joins the numbering test before it ships** `[SPEC-UID-020]`: a row saved on one node must show on another whose passages are numbered differently, and on one that lacks the file.
+**`[SPEC-LYR-202]` A player older than the table is sent none of it, and that is said.** A player applies a listener patch only if every table it names is one the player's own list allows, and refuses the whole patch otherwise. So a node whose snapshot holds no `passage_lyrics` is a player from before 2026-11-12, and its patch leaves the table out and carries the rest (`star_sync.signed_tables`). The run's summary and its log name the table as not sent. A current player makes the table when it starts and always sends it, so the first sync after a node is deployed brings it every row.
 
-**`[SPEC-LYR-210]` A phone receives the table over its own channel** `[REQ-AND-330]`, as it does the other shared tables.
+**`[SPEC-LYR-205]` It is tested over nodes numbered unlike each other** `[SPEC-UID-020]`. In `tools/test_star_merge.py`, two nodes hold the same music under each other's numbers: the latest save wins, a cleared row travels, and each node's copy holds every row under the same key, one for a file it lacks included. In `tools/test_star_sync.py`, an older player's patch never names the table. In `lyrics.rs`, a row for a file the node lacks is shown for its stored recording.
+
+**`[SPEC-LYR-210]` A phone neither sends nor receives the table.** Not built. A phone shares three tables over its own channel `[REQ-AND-330]`, and its patch is limited to them, so nothing reaches it that it would refuse.
 
 ## 8. Build order
 
-Each step can be used alone, in the order the fleet takes any player change: this machine, one node, then the rest.
+Each step can be used alone. All four were built 2026-11-12, and go out in the order the fleet takes any player change: this machine, one node, then the rest.
 
-| step | what | how it is proved |
-| ---: | :--- | :--- |
-| 1 | The order of `[SPEC-LYR-100]` over today's tables: tiers 3 and 4 | `Library::lyrics` tests; 494 more passages show words `[SPEC-LYR-125]` |
-| 2 | `passage_lyrics`, the three routes, the page, the link in two skins and on the passage page | route tests; `build/verify-skins.js` drives the page and reads what Save posts |
-| 3 | The table in the star sync | `[SPEC-LYR-205]`; a row saved on one node read back from another's file |
-| 4 | The cache and the sidecar by the same order `[SPEC-LYR-176]` | their tests, with a saved passage and a marked one |
+| step | what | where | how it is proved |
+| ---: | :--- | :--- | :--- |
+| 1 | The order of `[SPEC-LYR-100]` | `player/core/src/db/lyrics.rs`, behind `Library::lyrics` | its own tests, one per tier and rule |
+| 2 | `passage_lyrics`, the three routes, the page, the link in two skins and on the passage page | `web/lyrics.rs`, `lyrics.html`, `lyrics.js`, `core.js` | a route test over a real split pair; `build/verify-skins.js` drives the page and reads what Save posts |
+| 3 | The table in the star sync | `tools/star_merge.py`, `tools/star_sync.py`, `mesh_sync.rs` | `[SPEC-LYR-205]` |
+| 4 | The cache and the sidecar by the same order `[SPEC-LYR-176]` | `lyrics_cache.rs`, `lyrics_sidecar.rs`, `host.rs` | a test of each, with a saved passage and a marked one |
 
 ## 9. What this does not do
 
@@ -185,7 +189,7 @@ Each decided by the maintainer, 2026-11-12.
 ## 10. Open
 
 1. **`[SPEC-LYR-915]` What the frame shows in a phone's WebView has not been seen.** A desktop browser shows results `[SPEC-LYR-192]`. Whether a phone gets results or a check for automated traffic is known only by looking, and the maintainer put that off on 2026-11-12.
-
+2. **A phone's share of the sync** `[SPEC-LYR-210]`. Words saved on a phone stay on it, and it shows the imported words only.
 ---
 
 **Traceability:** `[SPEC-LYR-100..925]` · derives `[REQ-VIS-330]`, `[REQ-VIS-335]`, `[REQ-VIS-340]`, `[REQ-VIS-345]`, `[REQ-VIS-350]` · extends `[SPEC-LYR-040]` and `[REQ-VIS-213]` · reuses the tiers of `[GDE-WRK-035]` · applies `[SPEC-DF-035]`, `[SPEC-UID-010]`, `[SPEC-STAR-040]`

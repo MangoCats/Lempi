@@ -139,6 +139,9 @@ body { background-color: black; color: #ccc; }
 .nowplaying { font-weight: bold; font-size: 1.15rem; margin: .2rem 0 .2rem; }
 .nowplaying i { font-weight: normal; color: #888; }
 .elapsed { color: #888; }
+/* The way to the lyric editor [SPEC-LYR-180]: MuLibPlay's own was a button
+   on a track's ratings page; here it is a small link beside the clock. */
+.lyrics-link { color: inherit; font-size: .8125rem; }
 /* The volume slider's own width, so the two read as one stack of controls,
    and the same padded hit area the Lempi skin uses so a 6px line is still an
    easy target. `content-box` keeps the padding outside the 100%. */

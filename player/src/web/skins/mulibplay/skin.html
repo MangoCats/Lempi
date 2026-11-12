@@ -23,7 +23,11 @@
     <i id="byword" hidden> by </i><span id="artist"></span>
     <i id="fromword" hidden> from </i><span id="album"></span>
   </div>
-  <div class="elapsed"><span id="plays"></span> &nbsp; <span id="time">0:00 / 0:00</span></div>
+  <!-- The link is to the lyric editor for the passage playing
+       [SPEC-LYR-180], shown whether or not it has words: pointed and hidden
+       by core.js's Lempi.lyricsLink. -->
+  <div class="elapsed"><span id="plays"></span> &nbsp; <span id="time">0:00 / 0:00</span>
+    &nbsp; <a id="lyricslink" class="lyrics-link" hidden>lyrics</a></div>
 
   <!-- Front then back, side by side, both 200px tall and centred -- which
        is how the original emits them: two <img> in sequence for the

@@ -108,10 +108,15 @@ pub fn apply(listener: &Path, patch: &str) -> Result<Applied, String> {
 /// equal. Never the ones it keeps per node or takes from the hub -- plays,
 /// programmes, node state `[SPEC-NSH-050]`. A phone shares [`SHARED`], three of
 /// these; an appliance shares all it holds, as the ssh path carried them.
-pub const MERGED: [&str; 10] = [
+pub const MERGED: [&str; 11] = [
     "artist_reviews", "boundary_reviews", "id_reviews", "listener_characteristics", "listener_flags",
     "listener_likes", "listener_occasion_points", "listener_occasions", "listener_preferences",
     "listener_settings",
+    // Words saved for a passage `[SPEC-LYR-200]`, since 2026-11-12. Keyed by
+    // `audio_md5`, kind and start, never by a passage number, so it travels as
+    // it is. A player from before then neither sends it nor accepts a patch
+    // naming it, and the hub sends such a node none.
+    "passage_lyrics",
 ];
 
 /// Each node's own columns of the catalogue, never merged `[SPEC-DF-030]`:

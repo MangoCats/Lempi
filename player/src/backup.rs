@@ -54,6 +54,9 @@ pub const LISTENER_TABLES: &[&str] = &[
     // Small, and nothing recreates it: it is a person's judgment about
     // their own music, not anything derivable from the audio.
     "listener_characteristics",
+    // Words a person typed for a passage `[SPEC-LYR-140]`. The imported ones
+    // are the catalogue's and come back with it; these come from nowhere else.
+    "passage_lyrics",
     "listener_settings",
     "player_state",
     // The rest of "where you were" `[SPEC-DIR-225]`: `player_state` is the

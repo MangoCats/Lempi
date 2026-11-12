@@ -69,7 +69,8 @@ this table, for the same reason it does not write `recordings`.
 ## 3. Reaching Lempi's own skins
 
 **`[SPEC-LYR-040]` A separate endpoint, not the snapshot.** `GET /lyrics/{passage_id}`
-returns the words for that passage's recording, or 404. The snapshot is
+returns the words that passage shows, or 404: its own, else the nearest by
+SPEC079's four tiers, of which these imported ones are the third. The snapshot is
 published on every tick and read by every skin; 5.8 KB of text in it would be
 sent hundreds of times to say what changes once a song.
 
@@ -221,9 +222,10 @@ mid-song.
   and rejected here more firmly: a re-tag that goes wrong is not recoverable
   from a database backup.
 - **No editing.** Lempi displays what it was given. A correction belongs where
-  the data came from. *Editing, and words saved for a passage rather than a
-  recording, are specified in [SPEC079](SPEC079-editing-lyrics.md) and not
-  built.*
+  the data came from. *That was the rule for the imported words, and still
+  is: the player never writes them. Since 2026-11-12 a passage has words of
+  its own, saved in the player's editor, and shows them before these
+  ([SPEC079](SPEC079-editing-lyrics.md)).*
 
 ---
 

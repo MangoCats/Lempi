@@ -41,6 +41,7 @@ pub mod contract;
 mod control;
 mod edit;
 mod guide;
+mod lyrics;
 mod media;
 mod musicbrainz;
 mod picture_frame;
@@ -62,6 +63,7 @@ use bluetooth::*;
 use browse::*;
 use control::*;
 use guide::*;
+use lyrics::*;
 #[cfg(feature = "vipunen-support")]
 use edit::*;
 use media::*;
@@ -523,7 +525,12 @@ pub fn router(ui: Ui) -> Router {
         .route("/skins", get(skin_list))
         .route("/skin/:name/:file", get(skin_asset))
         .route("/why/:passage_id", get(why_for))
-        .route("/lyrics/:passage_id", get(lyrics))
+        // The words a passage shows, and saving its own [SPEC-LYR-170..174];
+        // then the editor's page, its script and what it shows.
+        .route("/lyrics/:passage_id", get(lyrics).post(save_lyrics))
+        .route("/lyrics/:passage_id/sources", get(lyrics_sources))
+        .route("/lyrics/:passage_id/edit", get(|| async { ([REVALIDATE], Html(LYRICS_HTML)) }))
+        .route("/lyrics.js", get(|| async { js(LYRICS_JS) }))
         .route("/art/:passage_id", get(cover_art))
         .route("/art/:passage_id/back", get(cover_art_back))
         .route("/browse", get(|| async { ([REVALIDATE], Html(BROWSE_HTML)) }))
@@ -947,6 +954,9 @@ const PROGRAMME_HTML: &str = include_str!("programme.html");
 const PROGRAMME_JS: &str = include_str!("programme.js");
 const PASSAGE_HTML: &str = include_str!("passage.html");
 const PASSAGE_JS: &str = include_str!("passage.js");
+/// The lyric editor `[SPEC-LYR-182]`: in every build, as the passage page is.
+const LYRICS_HTML: &str = include_str!("lyrics.html");
+const LYRICS_JS: &str = include_str!("lyrics.js");
 #[cfg(feature = "vipunen-support")]
 const REVIEW_HTML: &str = include_str!("review.html");
 #[cfg(feature = "vipunen-support")]
@@ -1652,6 +1662,7 @@ mod tests {
             ("core.js", CORE),
             ("browse.js", BROWSE_JS),
             ("passage.js", PASSAGE_JS),
+            ("lyrics.js", LYRICS_JS),
             ("guide.js", include_str!("guide.js")),
         ];
         #[cfg(feature = "vipunen-support")]
@@ -2124,6 +2135,126 @@ mod tests {
         let (line, asked) = post(true).await;
         assert!(line.contains(" 202 "), "an allowing host answered {line:?}");
         assert_eq!(asked, Some(true));
+    }
+
+    /// The lyric editor's routes over a real split pair `[SPEC-LYR-170..174]`:
+    /// the text a skin is given follows what a save does to the passage's own
+    /// entry -- saved, cleared back to the imported words, marked as having
+    /// none -- and the catalogue half, attached read-only, is never written.
+    #[tokio::test]
+    async fn the_lyric_routes_save_one_passage_and_show_by_tier() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let d = std::env::temp_dir().join(format!("lempi-lyric-routes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let (lis, lib) = (d.join("listener.db"), d.join("library.db"));
+        crate::db::create_pair_if_absent(&lis, &lib).unwrap();
+        {
+            let c = rusqlite::Connection::open(&lib).unwrap();
+            c.execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 INSERT INTO files (file_id, audio_md5, path, size_bytes, mtime, format, duration_ms,
+                                    first_seen, last_seen)
+                      VALUES (1, 'aaa', '/m/a.mp3', 1, 0, 'mp3', 200000, 't', 't');
+                 INSERT INTO passages (passage_id, file_id, kind, start_ms, end_ms, boundary_src)
+                      VALUES (7, 1, 'radio', 0, 200000, 'test');
+                 INSERT INTO recordings (mbid, title, source) VALUES ('rec', 'The Song', 'test');
+                 INSERT INTO passage_recordings (passage_id, mbid, weight, source)
+                      VALUES (7, 'rec', 1.0, 'test');
+                 INSERT INTO lyrics (mbid, text, source, fetched_at)
+                      VALUES ('rec', 'imported words', 'mulibplay', '2026-01-01');",
+            )
+            .unwrap();
+        }
+        let (_e, h) = crate::engine::Engine::new(crate::path::PathHandle::silent(), 1);
+        let ui = Ui {
+            handle: Arc::new(h),
+            db: lis.clone(),
+            library: lib.clone(),
+            why: Default::default(),
+            controls: Default::default(),
+            capabilities: Default::default(),
+            web_loopback_only: false,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router(ui)).await });
+        // (status line, body)
+        let ask = |method: &'static str, path: &'static str, body: &'static str| async move {
+            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let head = format!("{method} {path} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n\
+                                Content-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+            s.write_all(head.as_bytes()).await.unwrap();
+            s.write_all(body.as_bytes()).await.unwrap();
+            let mut buf = Vec::new();
+            s.read_to_end(&mut buf).await.unwrap();
+            let r = String::from_utf8_lossy(&buf).to_string();
+            let line = r.lines().next().unwrap_or("").to_string();
+            let body = r.find("\r\n\r\n").map(|at| r[at + 4..].to_string()).unwrap_or_default();
+            (line, body)
+        };
+        let json = |body: &str| -> serde_json::Value { serde_json::from_str(body).unwrap() };
+
+        let (line, body) = ask("GET", "/lyrics/7", "").await;
+        assert!(line.contains(" 200 ") && body == "imported words", "{line} {body:?}");
+        let (line, body) = ask("GET", "/lyrics/7/sources", "").await;
+        assert!(line.contains(" 200 "), "{line}");
+        let v = json(&body);
+        assert!(v["own"].is_null(), "nothing of its own yet: {v}");
+        assert_eq!(v["title"], "The Song");
+        assert_eq!((v["sources"][0]["tier"].as_i64(), v["shown_tier"].as_i64()), (Some(3), Some(3)));
+        assert_eq!(v["sources"][0]["imported"], "mulibplay");
+
+        let (line, body) = ask("POST", "/lyrics/7", r#"{"text":"typed\r\nhere"}"#).await;
+        assert!(line.contains(" 200 "), "the save: {line} {body}");
+        assert_eq!(json(&body)["own"]["text"], "typed\nhere");
+        assert_eq!(ask("GET", "/lyrics/7", "").await.1, "typed\nhere");
+
+        let (line, body) = ask("POST", "/lyrics/7", r#"{"text":"","no_words":true}"#).await;
+        assert!(line.contains(" 200 ") && json(&body)["own"]["no_words"] == true, "{line} {body}");
+        assert!(ask("GET", "/lyrics/7", "").await.0.contains(" 404 "), "a marked passage shows nothing");
+
+        let (line, body) = ask("POST", "/lyrics/7", r#"{"text":""}"#).await;
+        assert!(line.contains(" 200 ") && json(&body)["own"].is_null(), "the clearing: {line} {body}");
+        assert_eq!(ask("GET", "/lyrics/7", "").await.1, "imported words", "the lower tier shows again");
+
+        assert!(ask("POST", "/lyrics/999", r#"{"text":"x"}"#).await.0.contains(" 404 "));
+        assert!(ask("GET", "/lyrics/999/sources", "").await.0.contains(" 404 "));
+        let (line, page) = ask("GET", "/lyrics/7/edit", "").await;
+        assert!(line.contains(" 200 ") && page.contains("/lyrics.js"), "{line}");
+
+        // The imported words are the catalogue's, and were not touched.
+        let c = rusqlite::Connection::open(&lib).unwrap();
+        let (n, text): (i64, String) =
+            c.query_row("SELECT COUNT(*), MAX(text) FROM lyrics", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((n, text.as_str()), (1, "imported words"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The link to the editor is in both skins that have it and on the passage
+    /// page, pointed by `core.js` and never by a skin `[SPEC-LYR-180]`,
+    /// `[SPEC-LYR-181]`; and the page is the two columns of `[SPEC-LYR-182]`.
+    #[test]
+    fn the_lyric_editor_is_linked_from_two_skins_and_the_passage_page() {
+        for name in ["lempi", "mulibplay"] {
+            let skin = SKINS.iter().find(|s| s.name == name).unwrap();
+            assert!(skin.html.contains(r#"id="lyricslink""#), "{name} has no lyrics link");
+            assert!(skin.js.contains("Lempi.lyricsLink($('lyricslink'), s.passage_id)"), "{name} never points it");
+            assert!(!skin.js.contains("/lyrics/"), "{name} builds the editor's URL itself");
+        }
+        let winamp = SKINS.iter().find(|s| s.name == "winamp").unwrap();
+        assert!(!winamp.html.contains("lyricslink"), "the WinAmp skin gets neither [SPEC-LYR-910]");
+        assert!(CORE.contains("/lyrics/${passageId}/edit"), "core.js does not name the editor's route");
+        assert!(PASSAGE_JS.contains("Lempi.lyricsLink(ly, p.passage_id)"));
+
+        assert!(LYRICS_HTML.contains("/core.js") && LYRICS_HTML.contains("/lyrics.js"));
+        assert!(LYRICS_JS.contains("startWatching"), "the editor follows the player without being it");
+        for id in ["editor", "nowords", "save", "reference", "source", "copyall", "search", "searchlink"] {
+            assert!(LYRICS_HTML.contains(&format!(r#"id="{id}""#)), "the page has no #{id}");
+            assert!(LYRICS_JS.contains(&format!("$('{id}')")), "the script never touches #{id}");
+        }
+        assert!(LYRICS_HTML.contains(r#"referrerpolicy="no-referrer""#), "[SPEC-LYR-192]");
+        assert!(LYRICS_JS.contains("igu=1"), "the framed search needs its parameter [SPEC-LYR-192]");
     }
 
     /// **A bound the engine enforces is a bound the control must be told.**

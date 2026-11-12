@@ -64,7 +64,7 @@ CREATE TABLE recordings (
 
 Written by `tools/ingest_folder.py`, `tools/ingest_cd.py`, `tools/migrate_mulib.py`, `tools/rekey_identity.py` and `player/core/src/bundle.rs`. The string has one source, `player/src/identity.rs::GENERATOR`: the Python tools ask `hash_audio --generator`, the binary that also computes the hash, so a row cannot name a hasher other than the one that ran.
 
-`file_art` holds a cover for a file with no MusicBrainz release, by its `audio_md5`; `cover_art` holds covers by release. Both are the catalogue's display copies, shown alone `[SPEC-COV-010]`, `[SPEC-COV-040]`. `lyrics` holds a recording's words by its `mbid` — Class C, so they travel `[SPEC-LYR-020]`, `[SPEC-LYR-025]`.
+`file_art` holds a cover for a file with no MusicBrainz release, by its `audio_md5`; `cover_art` holds covers by release. Both are the catalogue's display copies, shown alone `[SPEC-COV-010]`, `[SPEC-COV-040]`. `lyrics` holds a recording's words by its `mbid` — Class C, so they travel `[SPEC-LYR-020]`, `[SPEC-LYR-025]`. Words a person saves for a passage are not here but in the listener half's `passage_lyrics`, keyed by `audio_md5`, kind and start `[SPEC-LYR-140]`.
 
 **`[SPEC-SC-035]` `path` is deliberately not unique and never a key.** MuLibPlay's ability to relocate a moved library came from matching content, not paths `[GDE-BMK-050]`; that property is preserved by keying on `audio_md5`.
 

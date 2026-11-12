@@ -771,7 +771,10 @@ fn engine_thread(setup: EngineSetup, tx: SyncSender<Started>) {
         run_generation(&library, &controls_for_switch, "lyrics sidecar", "files",
             |c| c.sidecar_requested.take().filter(|_| writes_beside_audio),
             |c, s| c.sidecar_status = Some(s),
-            |conn| crate::lyrics_sidecar::generate(conn, false).map(|r| (r, "file")));
+            |conn| {
+                attach_saved_words(conn, &db, &library);
+                crate::lyrics_sidecar::generate(conn, false).map(|r| (r, "file"))
+            });
         // The odd one out: it writes into a client's cache rather than the
         // music folder, so it has somewhere to fail to find.
         run_generation(&library, &controls_for_switch, "lyrics cache", "files",
@@ -780,8 +783,10 @@ fn engine_thread(setup: EngineSetup, tx: SyncSender<Started>) {
                 // Not a failure: a machine the client has never run on has
                 // nothing useful to write there `[SPEC-LYR-075]`.
                 None => Err("no client cache on this machine; nothing written".to_string()),
-                Some(dir) => crate::lyrics_cache::generate(conn, &dir, false)
-                    .map(|r| (r, "song")),
+                Some(dir) => {
+                    attach_saved_words(conn, &db, &library);
+                    crate::lyrics_cache::generate(conn, &dir, false).map(|r| (r, "song"))
+                }
             });
         // A switch asked for by the browser happens here, where the backends
         // are `[SPEC-BK-030]`. Taken before the refill so the incoming side is
@@ -897,6 +902,23 @@ fn engine_thread(setup: EngineSetup, tx: SyncSender<Started>) {
 /// database split too.
 ///
 /// Unsplit, the two paths are the same file and nothing about this changes.
+/// Put the listener half in reach of a file writer's catalogue connection,
+/// read-only, so the words saved for a passage are chosen before the imported
+/// ones `[SPEC-LYR-176]`. Where it cannot be attached the writer goes on with
+/// the imported words, and the log says so rather than the files quietly
+/// lacking what a person typed `[GDE-DEP-060]`.
+fn attach_saved_words(conn: &rusqlite::Connection, listener: &Path, library: &Path) {
+    if listener == library {
+        return; // one file holds both halves: a test fixture's
+    }
+    if let Err(e) = conn.execute("ATTACH DATABASE ?1 AS lis", [crate::db::read_only_uri(listener)]) {
+        tracing::warn!(
+            "lyric files: {} could not be attached ({e}); written from the imported words only",
+            listener.display()
+        );
+    }
+}
+
 fn run_generation(
     db: &Path,
     controls: &SharedControls,

@@ -71,12 +71,18 @@ pub fn cache_dir() -> Option<PathBuf> {
 /// track that is the cue sheet's own `TITLE`/`PERFORMER`, which Lempi wrote from
 /// MusicBrainz; for an ordinary file it is the file's tags. A name taken from
 /// the wrong one of those is a file nothing ever opens.
+///
+/// **The words are the ones the player shows** `[SPEC-LYR-176]`: the passage's
+/// own, else the nearest by `[SPEC-LYR-100]`, and none for a passage marked as
+/// having none. `conn` is the catalogue, with the listener half attached where
+/// the saved words are to be in reach.
 pub fn generate(conn: &Connection, dir: &Path, dry_run: bool) -> Result<Written, String> {
+    let saved = crate::db::SavedLyrics::load(conn, "main").map_err(|e| e.message().to_string())?;
     // A capture's passages are named by the cue sheet; everything else by its
     // own tags. `COALESCE` puts them in that order per row.
     let mut q = conn
         .prepare(
-            "SELECT l.text, \
+            "SELECT p.passage_id, \
                 (SELECT r.title FROM passage_recordings pr JOIN recordings r ON r.mbid = pr.mbid \
                  WHERE pr.passage_id = p.passage_id LIMIT 1) AS mb_title, \
                 (SELECT a.name FROM passage_recordings pr \
@@ -86,16 +92,14 @@ pub fn generate(conn: &Connection, dir: &Path, dry_run: bool) -> Result<Written,
                 t.title, t.artist, \
                 (SELECT COUNT(*) FROM passages x WHERE x.file_id = p.file_id AND x.kind = 'radio') \
              FROM passages p \
-               JOIN passage_recordings pr2 ON pr2.passage_id = p.passage_id \
-               JOIN lyrics l ON l.mbid = pr2.mbid \
                LEFT JOIN file_tags t ON t.file_id = p.file_id \
-             WHERE p.kind = 'radio'",
+             WHERE p.kind = 'radio' ORDER BY p.passage_id",
         )
         .map_err(|e| e.to_string())?;
     let rows = q
         .query_map([], |r| {
             Ok((
-                r.get::<_, String>(0)?,
+                r.get::<_, i64>(0)?,
                 r.get::<_, Option<String>>(1)?,
                 r.get::<_, Option<String>>(2)?,
                 r.get::<_, Option<String>>(3)?,
@@ -106,9 +110,16 @@ pub fn generate(conn: &Connection, dir: &Path, dry_run: bool) -> Result<Written,
         .map_err(|e| e.to_string())?;
 
     // One file per artist+title, not per passage: two passages of one recording
-    // would otherwise write the same path twice and count it twice.
-    let mut want: HashMap<(String, String), String> = HashMap::new();
-    for (text, mb_title, mb_artist, tag_title, tag_artist, in_file) in rows.flatten() {
+    // would otherwise write the same path twice and count it twice. Where two
+    // passages of one name show different words, the file holds the first by
+    // `[SPEC-LYR-120]`, and of equals the lower-numbered passage's.
+    let mut want: HashMap<(String, String), crate::db::ShownLyrics> = HashMap::new();
+    for (passage_id, mb_title, mb_artist, tag_title, tag_artist, in_file) in rows.flatten() {
+        let Some(words) = crate::db::shown_words(conn, "main", &saved, passage_id)
+            .map_err(|e| e.message().to_string())?
+        else {
+            continue;
+        };
         let capture = in_file > 1;
         let title = if capture {
             mb_title.clone()
@@ -126,11 +137,15 @@ pub fn generate(conn: &Connection, dir: &Path, dry_run: bool) -> Result<Written,
         if title.trim().is_empty() || artist.trim().is_empty() {
             continue;
         }
-        want.insert((encode_name(&artist), encode_name(&title)), text);
+        let name = (encode_name(&artist), encode_name(&title));
+        if want.get(&name).is_none_or(|held| words.before(held)) {
+            want.insert(name, words);
+        }
     }
 
     let mut rep = Written::default();
-    for ((artist, title), text) in want {
+    for ((artist, title), words) in want {
+        let text = words.text;
         let folder = dir.join(&artist);
         let path = folder.join(format!("{title}.lyrics"));
         if let Ok(existing) = std::fs::read_to_string(&path) {
@@ -186,6 +201,56 @@ mod tests {
             assert!(d.is_absolute());
             assert!(d.ends_with("lyrics"));
         }
+    }
+
+    /// `[SPEC-LYR-176]`: two passages of one artist and title make one file,
+    /// holding the words a person saved before the imported ones whichever
+    /// passage comes first; and a passage marked as having none gets no file.
+    #[test]
+    fn one_name_is_one_file_of_the_words_the_player_shows() {
+        let d = std::env::temp_dir().join(format!(
+            "lempi_cache_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE files (file_id INTEGER PRIMARY KEY, path TEXT, audio_md5 TEXT);
+             CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT,
+                                    start_ms INTEGER, end_ms INTEGER);
+             CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL DEFAULT 1.0);
+             CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);
+             CREATE TABLE recording_artists (mbid TEXT, artist_mbid TEXT, weight REAL);
+             CREATE TABLE artists (mbid TEXT PRIMARY KEY, name TEXT);
+             CREATE TABLE file_tags (file_id INTEGER PRIMARY KEY, title TEXT, artist TEXT, album TEXT);
+             CREATE TABLE lyrics (mbid TEXT PRIMARY KEY, text TEXT, source TEXT, fetched_at TEXT);
+             CREATE TABLE passage_lyrics (audio_md5 TEXT, kind TEXT, start_ms INTEGER, end_ms INTEGER,
+                                          mbid TEXT, text TEXT, no_words INTEGER, updated_at TEXT,
+                                          origin TEXT);
+             INSERT INTO files VALUES (1, '/m/a.mp3', 'md5-1'), (2, '/m/b.mp3', 'md5-2'), (3, '/m/c.mp3', 'md5-3');
+             INSERT INTO passages VALUES (1, 1, 'radio', 0, 100000), (2, 2, 'radio', 0, 100000),
+                                         (3, 3, 'radio', 0, 100000);
+             INSERT INTO passage_recordings (passage_id, mbid) VALUES (1, 'rec-a'), (2, 'rec-b'), (3, 'rec-c');
+             INSERT INTO file_tags VALUES (1, 'The Song', 'The Band', NULL), (2, 'The Song', 'The Band', NULL),
+                                          (3, 'Quiet One', 'The Band', NULL);
+             INSERT INTO lyrics VALUES ('rec-a', 'imported a', 'mulibplay', '2026-01-01'),
+                                       ('rec-b', 'imported b', 'mulibplay', '2026-01-01'),
+                                       ('rec-c', 'imported c', 'mulibplay', '2026-01-01');
+             INSERT INTO passage_lyrics VALUES
+                 ('md5-2', 'radio', 0, 100000, 'rec-b', 'typed for b', 0, '2026-11-12 10:00:00.000', 'here'),
+                 ('md5-3', 'radio', 0, 100000, 'rec-c', '', 1, '2026-11-12 10:00:00.000', 'here');",
+        )
+        .unwrap();
+        let rep = generate(&c, &d, false).unwrap();
+        assert_eq!(rep.written, 1, "one name, one file; the marked passage none: {}", rep.summary("song"));
+        assert_eq!(
+            std::fs::read_to_string(d.join("The Band").join("The Song.lyrics")).unwrap(),
+            "typed for b",
+            "saved words come before imported ones [SPEC-LYR-120]"
+        );
+        assert!(!d.join("The Band").join("Quiet One.lyrics").exists(), "a marked passage gets no file");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

@@ -26,6 +26,7 @@ The Vipunen primary was lost when this repository was seeded (`data/README.md`),
 | flags | `listener_flags` | union, with removals taken from the evidence in §3 | yes |
 | likes | `listener_likes` | union by (recording, `recorded_at`): a like or dislike is the household's judgment of a song, not listening data -- distinct from plays and skips, though usually given while listening (the maintainer, 2026-10-01) | yes |
 | occasions | `listener_occasions`, `…_occasion_points` | no timestamps: union, with removals from §3 | yes |
+| words saved for a passage | `passage_lyrics` | **last write wins** on `updated_at`; keyed by `audio_md5`, kind and start, so never translated between numberings; no removals, since no row is deleted `[SPEC-LYR-200]` | yes, every row to every node; none to a player older than the table `[SPEC-LYR-202]` |
 | programmes | `listener_programs`, `…_program_seeds` | **never merged** since 2026-09-27: each node's own, copied between a node and the hub only by hand `[SPEC-MTR-040]`; unioned before that | never |
 | catalogue corrections | `id_reviews`, `boundary_reviews`, `artist_reviews` | union by (subject, `decided_at`); the latest `applied_at` is kept | yes, and applied to each catalogue |
 | catalogue (classes A–C) | the library half | three ways against the common ancestor `[SPEC-STAR-047]`; conflicting changes by provenance rank, then recency `[SPEC-DF-070]`; two differing **manual** values: the newer wins by default and is listed for the person `[SPEC-MESH-065]` | yes |

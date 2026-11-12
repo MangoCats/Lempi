@@ -1,0 +1,105 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lempi — Lyrics</title>
+<style>
+  /* The lyric editor [SPEC-LYR-182]: two equal columns, MuLibPlay's page
+     restored. Left, the words of ONE passage, and under them one other source
+     to read and copy from. Right, a web search for the song.
+
+     The left column is filled [SPEC-LYR-182]: the editor and the reference
+     box take its whole width and share whatever height the heading, the
+     controls and the drop-down leave, growing and shrinking with the window.
+     Neither is a box of fixed rows and columns, as MuLibPlay's was -- that
+     left most of the column empty on any screen wider than its 60 columns.
+
+     Built as browse.html and passage.html are: a bare, class-based baseline
+     the chosen skin's own stylesheet then dresses. */
+  html, body { margin: 0; padding: 0; height: 100%; background: #141416; color: #eee;
+               font: 16px/1.5 system-ui, sans-serif; }
+  .lyrics { display: grid; grid-template-columns: 1fr 1fr; height: 100vh; }
+  .lyrics > section { display: flex; flex-direction: column; min-width: 0; min-height: 0;
+                      box-sizing: border-box; }
+  .lyrics .words { padding: .6rem .75rem; gap: .45rem; }
+  .lyrics header { display: flex; align-items: baseline; gap: .75rem; flex-wrap: wrap; }
+  .lyrics h1 { font-size: 1.05rem; margin: 0; flex: 1; min-width: 12rem; overflow-wrap: anywhere; }
+  .lyrics header a { font-size: .8125rem; white-space: nowrap; }
+  .lyrics .now { margin: 0; font-size: .8125rem; opacity: .85; }
+
+  /* `flex: N 1 0` on both, and `min-height: 0` on the column: the two boxes
+     divide the free height three to two, and scroll inside themselves rather
+     than pushing the page past the window. */
+  .lyrics textarea, .lyrics pre { width: 100%; box-sizing: border-box; margin: 0;
+                                  padding: .5rem .6rem; border-radius: 6px;
+                                  border: 1px solid rgba(128,128,128,.4);
+                                  font: .875rem/1.45 ui-monospace, Consolas, monospace; }
+  .lyrics textarea { flex: 3 1 0; min-height: 7rem; resize: none;
+                     background: #1d1d21; color: inherit; }
+  .lyrics textarea:disabled { opacity: .5; }
+  /* Read-only, and selectable on purpose: all or part of it is there to be
+     copied into the editor [SPEC-LYR-186]. */
+  .lyrics pre { flex: 2 1 0; min-height: 5rem; overflow: auto; white-space: pre-wrap;
+                user-select: text; background: rgba(128,128,128,.10); }
+  .lyrics .row { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+                 font-size: .875rem; }
+  .lyrics .row select { flex: 1; min-width: 10rem; max-width: 100%; font: inherit; }
+  .lyrics .row button { font: inherit; padding: .2rem .7rem; }
+  .lyrics #status { opacity: .8; }
+  .lyrics #status.bad { color: #f66; opacity: 1; }
+
+  /* `display: flex` above would otherwise outrank the `hidden` attribute. */
+  .lyrics [hidden] { display: none; }
+
+  .lyrics .search { border-left: 1px solid rgba(128,128,128,.4); }
+  .lyrics .search p { margin: 0; padding: .35rem .75rem; font-size: .8125rem; }
+  .lyrics iframe { flex: 1 1 0; width: 100%; border: 0; background: #fff; }
+
+  /* Too narrow for two columns: they stack, the editor first, each a window
+     tall so neither box collapses. */
+  @media (max-width: 760px) {
+    .lyrics { grid-template-columns: 1fr; height: auto; }
+    .lyrics > section { height: 100vh; }
+    .lyrics .search { border-left: 0; border-top: 1px solid rgba(128,128,128,.4); }
+  }
+</style>
+
+<div class="lyrics">
+  <section class="words">
+    <header>
+      <h1 id="heading">…</h1>
+      <a id="about" href="/browse">about this passage</a>
+      <a href="/">← back to the player</a>
+    </header>
+    <!-- The page stays on the passage it was opened for [SPEC-LYR-190]; this
+         says when another one is playing, and links to its own page. -->
+    <p class="now" id="now" hidden>Now playing: <span id="nowname"></span> —
+      <a id="nowlink">edit its lyrics</a></p>
+
+    <textarea id="editor" spellcheck="false" aria-label="The lyrics of this passage"
+              placeholder="No lyrics are saved for this passage."></textarea>
+    <div class="row">
+      <label><input type="checkbox" id="nowords"> This passage has no lyrics</label>
+      <button type="button" id="save">Save</button>
+      <span id="status" role="status"></span>
+    </div>
+
+    <!-- One other source of words, read-only, chosen below it
+         [SPEC-LYR-186]. Hidden with its row when there is none, and by the
+         drop-down's own "None". -->
+    <pre id="reference" tabindex="0" hidden></pre>
+    <div class="row" id="refrow" hidden>
+      <select id="source" aria-label="Other lyrics available for this passage"></select>
+      <button type="button" id="copyall">Copy all to editor</button>
+    </div>
+  </section>
+
+  <section class="search">
+    <!-- Always shown: a page cannot learn that a frame was refused, and the
+         search's own parameter for framing is undocumented [SPEC-LYR-192]. -->
+    <p><a id="searchlink" target="_blank" rel="noopener noreferrer">open this search in a new window</a></p>
+    <iframe id="search" referrerpolicy="no-referrer" title="A web search for these lyrics"></iframe>
+  </section>
+</div>
+
+<script src="/core.js"></script>
+<script src="/lyrics.js"></script>

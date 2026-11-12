@@ -266,6 +266,15 @@ def describe(conn, table: str, key) -> dict:
     elif table == "artist_reviews":
         s = subject("recording", key[0])
         shown, label = (f"artist review of “{s}”" if s else None), f"{table} {key[0]}"
+    elif table == "passage_lyrics":
+        # [SPEC-LYR-200]: keyed by file, kind and start, so named by the file's
+        # passage of that kind and start, where the hub holds it.
+        s = one("SELECT r.title FROM files f JOIN passages p ON p.file_id = f.file_id "
+                "JOIN passage_recordings pr ON pr.passage_id = p.passage_id "
+                "JOIN recordings r ON r.mbid = pr.mbid "
+                "WHERE f.audio_md5 = ? AND p.kind = ? AND p.start_ms = ? LIMIT 1", *key[:3]) if len(key) >= 3 else None
+        shown = f"lyrics of “{s}” ({key[1]} cut)" if s else None
+        label = f"lyrics of {key[0]} {key[1]} at {key[2]} ms" if len(key) >= 3 else f"{table} {key}"
     elif table in ("listener_occasions", "listener_occasion_points"):
         shown = label = f"occasion {key[0]}" + (f" ({key[2]}-{key[3]})" if table.endswith("points") and len(key) > 3 else "")
     else:

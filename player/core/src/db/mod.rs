@@ -15,10 +15,12 @@
 //! file level too.
 
 mod library;
+mod lyrics;
 mod pair;
 mod player_store;
 
 pub use library::*;
+pub use lyrics::*;
 pub use pair::*;
 pub use player_store::*;
 
