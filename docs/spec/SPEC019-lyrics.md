@@ -6,7 +6,7 @@ MuLibPlay accumulated lyrics for a quarter of the library. This is how they
 reach Lempi, its own skins, and — as far as the protocol allows — a guest's
 clients.
 
-> **Related:** [SPEC016](SPEC016-mpd-protocol-findings.md) for what MPD will and will not carry · [REQ-VIS-213](../spec/REQ002-functional-requirements.md) for the display itself, [REQ-VIS-205], [REQ-VIS-210] for the two settings this follows
+> **Related:** [SPEC079](SPEC079-editing-lyrics.md) for editing, and for which words a passage shows · [SPEC016](SPEC016-mpd-protocol-findings.md) for what MPD will and will not carry · [REQ-VIS-213](../spec/REQ002-functional-requirements.md) for the display itself, [REQ-VIS-205], [REQ-VIS-210] for the two settings this follows
 
 ---
 
@@ -221,7 +221,9 @@ mid-song.
   and rejected here more firmly: a re-tag that goes wrong is not recoverable
   from a database backup.
 - **No editing.** Lempi displays what it was given. A correction belongs where
-  the data came from.
+  the data came from. *Editing, and words saved for a passage rather than a
+  recording, are specified in [SPEC079](SPEC079-editing-lyrics.md) and not
+  built.*
 
 ---
 

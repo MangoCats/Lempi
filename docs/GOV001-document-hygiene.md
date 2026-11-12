@@ -86,7 +86,7 @@ All unique identifiers MUST use one of the following standardized prefixes:
 - `MPD` — MPD integration: the Program Director as a guest in someone else's player
 - `SRC` — Sources of truth: ranking two answers to one question, see [GOV002](GOV002-sources-of-truth.md)
 - `PLAY` — What counts as a play, for every path that writes `listener_play_history`
-- `LYR` — Lyrics: where they live, and how far they travel
+- `LYR` — Lyrics: where they live, and how far they travel ([SPEC019](spec/SPEC019-lyrics.md)); editing them, and which words a passage shows ([SPEC079](spec/SPEC079-editing-lyrics.md))
 - `BK` — Switching playback backends without stopping, see [SPEC018](spec/SPEC018-switching-backends.md) for the seam and [SPEC020](spec/SPEC020-the-handoff.md) for the handoff
 - `VOC` — Domain vocabulary: what file/passage/recording/release/album/artist/track mean and do not mean, see [SPEC023](spec/SPEC023-domain-vocabulary.md)
 - `RIP` — CD ripping via a disc's own table of contents, see [SPEC025](spec/SPEC025-cd-ripping.md) (mechanics), [SPEC026](spec/SPEC026-cd-ripping-passages.md) (hidden-audio and multi-disc passage representation), [SPEC027](spec/SPEC027-cd-ripping-windows-automation.md) (driving a GUI-only Windows tool — open), and [SPEC028](spec/SPEC028-cd-ripping-identification.md) (Disc ID/CD-TEXT/MusicBrainz)
@@ -165,7 +165,7 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-PLAY-*]` | When a play is written to history — one rule, every path | [SPEC017-what-counts-as-a-play.md](spec/SPEC017-what-counts-as-a-play.md) |
 | `[IMPL-MPD-*]` | Prototyping the MPD Director: the plan, and what it measured | [IMPL004](IMPL004-mpd-prototype.md), [IMPL005](IMPL005-mpd-prototype-results.md) |
 | `[SPEC-BK-*]` | Moving a session between Lempi's engine and MPD without stopping | [SPEC018-switching-backends.md](spec/SPEC018-switching-backends.md), [SPEC020-the-handoff.md](spec/SPEC020-the-handoff.md) |
-| `[SPEC-LYR-*]` | Lyrics, and what a guest protocol will not carry | [SPEC019-lyrics.md](spec/SPEC019-lyrics.md) |
+| `[SPEC-LYR-*]` | Lyrics, and what a guest protocol will not carry (010..090); editing them, and which words a passage shows (100..925) — specified 2026-11-12, not built | [SPEC019-lyrics.md](spec/SPEC019-lyrics.md), [SPEC079-editing-lyrics.md](spec/SPEC079-editing-lyrics.md) |
 | `[SPEC-VOC-*]`, `[ENT-FILE-*]`, `[ENT-PASSAGE-*]`, `[ENT-RECORDING-*]`, `[ENT-RELEASE-*]`, `[ENT-ALBUM-*]`, `[ENT-ARTIST-*]`, `[ENT-TRACK-*]` | Domain vocabulary: file/passage/recording/release/album/artist/track, precisely | [SPEC023-domain-vocabulary.md](spec/SPEC023-domain-vocabulary.md) |
 | `[IMPL-ACC-*]`, `[IMPL-AUD-*]`, `[IMPL-BASE-*]`, `[IMPL-BOM-*]`, `[IMPL-OS-*]`, `[IMPL-PROF-*]`, `[IMPL-STOR-*]`, `[IMPL-SVC-*]`, `[IMPL-TRIM-*]` | Pi Zero 2W appliance setup procedure | [IMPL001-appliance-setup.md](../LempiPi/IMPL001-appliance-setup.md) |
 | `[IMPL-DBSPLIT-*]` | Splitting one database into a read-only catalog and a writable listener store: design, plan, review, and what was built | [IMPL002-database-split.md](../LempiPi/IMPL002-database-split.md), [IMPL009-database-split-plan.md](../LempiPi/IMPL009-database-split-plan.md), [IMPL010-database-split-review.md](../LempiPi/IMPL010-database-split-review.md), [IMPL011-database-split-built.md](../LempiPi/IMPL011-database-split-built.md) |
