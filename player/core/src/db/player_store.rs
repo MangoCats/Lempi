@@ -2553,6 +2553,18 @@ impl PlayerStore {
     ///
     /// Best-effort at the call site, like every other write on this path --
     /// failing to remember the queue must never interrupt the music.
+    ///
+    /// **A commit that cannot land is rolled back, and is an error.** SQLite
+    /// leaves a transaction open when its `COMMIT` is refused as busy, and
+    /// until 2026-11-12 that refusal was dropped here. On a listener in
+    /// rollback-journal mode, as the hub's is, a reader that outlasts the busy
+    /// timeout refuses the commit; the transaction then stayed open on the
+    /// session's one connection, holding the lock that shuts every other
+    /// reader out, and each later save failed at `BEGIN`. Found that day on
+    /// the desktop: a start after a long build read the library for 15 s,
+    /// the listener stayed locked to the console and to this player's own
+    /// settings, and the log took 166,000 lines of *cannot start a
+    /// transaction within a transaction* before the player was restarted.
     pub fn save_queue(&self, ids: &[i64]) -> Result<(), DbError> {
         let q = |e: rusqlite::Error| DbError::Query(e.to_string());
         self.conn.execute_batch("BEGIN IMMEDIATE").map_err(q)?;
@@ -2569,8 +2581,10 @@ impl PlayerStore {
             }
             Ok(())
         }();
-        let end = if done.is_ok() { "COMMIT" } else { "ROLLBACK" };
-        let _ = self.conn.execute_batch(end);
+        let done = done.and_then(|()| self.conn.execute_batch("COMMIT").map_err(q));
+        if done.is_err() {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
         done
     }
 
@@ -3291,6 +3305,34 @@ mod tests {
 
         store.save_queue(&[]).unwrap();
         assert!(store.load_queue().is_empty(), "an emptied queue is emptied");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A queue save whose commit a reader refuses is an error that leaves no
+    /// transaction open: the next save works, and other connections are not
+    /// shut out. In rollback-journal mode, which a file opened this way is in
+    /// and the hub's listener is.
+    #[test]
+    fn a_queue_save_that_cannot_commit_is_rolled_back() {
+        let tmp = std::env::temp_dir().join(format!("lempi-queue-busy-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        let store = PlayerStore::open(&tmp).unwrap();
+        store.save_queue(&[1, 2]).unwrap();
+        // The real wait is five seconds; the refusal is the same after 50 ms.
+        store.conn.busy_timeout(std::time::Duration::from_millis(50)).unwrap();
+
+        let reader = rusqlite::Connection::open(&tmp).unwrap();
+        reader.execute_batch("BEGIN").unwrap();
+        let n: i64 = reader.query_row("SELECT COUNT(*) FROM player_queue", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2);
+        // The reader's transaction holds its read lock, as a long query does.
+        assert!(store.save_queue(&[3]).is_err(), "a commit a reader blocks must be reported");
+        reader.execute_batch("COMMIT").unwrap();
+
+        store.save_queue(&[4, 5, 6]).expect("the refused save left no transaction open");
+        assert_eq!(store.load_queue(), vec![4, 5, 6]);
+        let n: i64 = reader.query_row("SELECT COUNT(*) FROM player_queue", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 3, "and another connection reads what was saved");
         let _ = std::fs::remove_file(&tmp);
     }
 
