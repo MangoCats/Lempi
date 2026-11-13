@@ -106,7 +106,10 @@ The usual way to get one is a copy of the hub's catalogue: a new node is sent
 start. **That listener is whole only from a build of 2026-10-29 or later.**
 An older player made just the tables it writes itself, and the first star
 sync to reach such a node fails on the first missing one; a node seeded
-that way is repaired before its first sync `[LRH-SEED-030]`. Every other
+that way is repaired before its first sync `[LRH-SEED-030]`. And it is in
+WAL mode only from a build of 2026-11-13: before that the player left it a
+rollback-journal file, where one long read refuses every write; a player of
+that build sets it at its next start `[SPEC-STAR-107]`. Every other
 step of adding a node is [GUIDE040](docs/GUIDE040-adding-a-node-to-the-fleet.md).
 To build one from nothing instead, `sql/schema.sql` makes a single
 file holding both halves' tables, which is inducted and then split:

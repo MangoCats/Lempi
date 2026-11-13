@@ -360,9 +360,14 @@ def test_passage_lyrics(tmp):
     for path, sql in ((dl, ["INSERT INTO passage_lyrics VALUES ('A','radio',0,1000,'rec-A','typed on the hub',0,"
                             "'2026-11-12 10:00:00.000','desktop')",
                             "INSERT INTO passage_lyrics VALUES ('Z','radio',0,1000,'rec-Z','for a file only the hub has',0,"
-                            "'2026-11-12 10:05:00.000','desktop')"]),
+                            "'2026-11-12 10:05:00.000','desktop')",
+                            # Within one second of the appliance's save of the same passage, and after it.
+                            "INSERT INTO passage_lyrics VALUES ('S','radio',0,1000,'rec-S','the later of two in one second',0,"
+                            "'2026-11-12 12:00:00.900','desktop')"]),
                       (al, ["INSERT INTO passage_lyrics VALUES ('A','radio',0,1000,'rec-A','corrected on the appliance',0,"
                             "'2026-11-12 11:00:00.250','app')",
+                            "INSERT INTO passage_lyrics VALUES ('S','radio',0,1000,'rec-S','the earlier of two in one second',0,"
+                            "'2026-11-12 12:00:00.100','app')",
                             "INSERT INTO passage_lyrics VALUES ('B','radio',0,1000,'rec-B','',0,"
                             "'2026-11-12 11:30:00.000','app')"])):
         c = sqlite3.connect(path)
@@ -382,9 +387,25 @@ def test_passage_lyrics(tmp):
     q = "SELECT audio_md5, kind, start_ms, text, origin FROM passage_lyrics ORDER BY audio_md5"
     want = [("A", "radio", 0, "corrected on the appliance", "app"),
             ("B", "radio", 0, "", "app"),
+            ("S", "radio", 0, "the later of two in one second", "desktop"),
             ("Z", "radio", 0, "for a file only the hub has", "desktop")]
     hub = rows(os.path.join(out, "listener.db"), q)
     check(hub == want, f"the latest save wins, and a cleared row and a hub-only row are kept: {hub}")
+    # [SPEC-LYR-140]: the stamp is to the millisecond, and is compared to it.
+    # Cut to the second this was a tie, kept for `app` as the first by name.
+    within = [i for i in rep.data["items"] if i["table"] == "passage_lyrics" and i["key"][0] == "S"]
+    check([i["kind"] for i in within] == ["conflict"] and within[0]["default"] == "desktop",
+          f"two saves 800 ms apart are a newer and an older, never a tie: {within}")
+    check({c["node"]: c["stamp"] for c in within[0]["candidates"]}
+          == {"app": "2026-11-12 12:00:00.1", "desktop": "2026-11-12 12:00:00.9"} if within else False,
+          f"and the item shows each stamp to its fraction: {within}")
+    for a, b in (("2026-11-12 10:00:00", "2026-11-12 10:00:00.100"), ("2026-11-12 10:00:00.100", "2026-11-12 10:00:00.9"),
+                 ("2026-11-12T10:00:00.900Z", "2026-11-12 10:00:01"), ("2026-11-12 10:00:00.09", "2026-11-12 10:00:00.1")):
+        check(sm.norm_time(a) < sm.norm_time(b), f"{a} reads before {b}: {sm.norm_time(a)!r} {sm.norm_time(b)!r}")
+    check(sm.norm_time("2026-11-12 10:00:00") == sm.norm_time("2026-11-12T10:00:00.000Z") == "2026-11-12 10:00:00",
+          "a whole second is one time however it is written")
+    check(sm.norm_time("2026-11-12T10:00:00+02:00") == "2026-11-12 10:00:00" and sm.norm_time(0) == "1970-01-01 00:00:00",
+          "a zone is dropped and an epoch read, as before")
     check(rep.data["translations"]["app"]["ids"] == [[1, 2], [2, 1]],
           "the two nodes do number this music the other way round")
     mine = rows(os.path.join(out, "nodes", "app", "listener.db"), q)
@@ -393,7 +414,7 @@ def test_passage_lyrics(tmp):
     older = rows(os.path.join(out, "nodes", "old", "listener.db"), q)
     check(older == want, f"an older player's copy is what it will hold once it is current: {older}")
     t = rep.data["tables"]["passage_lyrics"]
-    check(t["rule"] == sm.LWW and t["merged"] == 3 and t["per_node"] == {"app": 2, "desktop": 2, "old": 0},
+    check(t["rule"] == sm.LWW and t["merged"] == 4 and t["per_node"] == {"app": 3, "desktop": 3, "old": 0},
           f"reported as a last-write-wins table: {t}")
 
 

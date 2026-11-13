@@ -77,6 +77,7 @@ visible at its call site rather than discovered later.
 from __future__ import annotations
 
 import os
+import pathlib
 import sqlite3
 import sys
 
@@ -129,6 +130,21 @@ def _tables(conn, schema="main") -> set[str]:
         f"SELECT name FROM {schema}.sqlite_master WHERE type='table'")}
 
 
+def ro_uri(path: str) -> str:
+    """`path` as a read-only SQLite address, escaped.
+
+    Written `f"file:{path}?mode=ro"`, a path holding `#`, `?` or `%` names
+    another file: `#` starts a fragment, `?` a query, `%` an escape. Under a
+    folder named `Music #2` that opened -- and with a writable open would have
+    made -- `Music `, so a pair there read as empty, and `pair_journal.py`
+    read a WAL file as `delete`. Found 2026-11-13; `read_only_uri` in the
+    player's `db/mod.rs` records the same lesson of 2026-10-09. `markers`
+    below and `pair_journal.py` use this. The other addresses in this module
+    and across `tools/` are still written the old way.
+    """
+    return pathlib.Path(path).resolve().as_uri() + "?mode=ro"
+
+
 def markers(path: str) -> tuple[bool, bool]:
     """`(has_any_library_table, has_any_listener_table)` for one file.
 
@@ -141,7 +157,7 @@ def markers(path: str) -> tuple[bool, bool]:
     """
     if not os.path.exists(path):
         return False, False
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    conn = sqlite3.connect(ro_uri(path), uri=True)
     try:
         names = _tables(conn)
     finally:

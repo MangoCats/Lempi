@@ -851,12 +851,28 @@ impl PlayerStore {
         db_path: &std::path::Path,
         library_path: &std::path::Path,
     ) -> Result<Self, DbError> {
+        // A listener this open is about to make: a node seeded with a
+        // catalogue alone `[LRH-SEED-030]`. The single-file form is a test
+        // fixture's, and is left in whatever mode the test gave it.
+        let making = db_path != library_path && !db_path.exists();
         let conn = QualifyingConn::open(
             db_path,
             library_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE,
         )?;
         conn.busy_timeout(BUSY_WAIT).map_err(|e| DbError::Open(e.to_string()))?;
+        if making {
+            // In WAL mode from its first page `[SPEC-STAR-107]`, as
+            // `create_pair_if_absent` makes one. `main`, by name: a pragma
+            // that names no schema is applied to every attached file, and the
+            // catalogue attached here may be on a read-only mount, where WAL
+            // is the outage `[BOS-RUN-092]`. A file already there is the
+            // start's to set (`ensure_listener_wal`), not every open's. Said
+            // and not fatal where it cannot be set: the player still plays.
+            if let Err(e) = conn.pragma_update(Some(rusqlite::DatabaseName::Main), "journal_mode", "WAL") {
+                tracing::warn!("listener: {} was made, and could not be put in WAL mode ({e})", db_path.display());
+            }
+        }
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS player_state (
                  id INTEGER PRIMARY KEY CHECK (id = 1),

@@ -196,10 +196,11 @@ impl Library {
     /// was the recording's imported words alone `[SPEC-LYR-020]`. A failure
     /// reads as "none": an absent table is a library that predates it, and
     /// nothing here is worth more than an empty window.
+    ///
+    /// Asked at every track change, so it reads the saved rows that can bear
+    /// on this passage and no others `[SPEC-LYR-178]`.
     pub fn lyrics(&self, passage_id: i64) -> Option<String> {
-        let lib = self.conn.lib_alias();
-        let saved = super::SavedLyrics::load(&self.conn, lib).ok()?;
-        super::shown_lyrics(&self.conn, lib, &saved, passage_id).ok().flatten()
+        super::passage_shown_lyrics(&self.conn, self.conn.lib_alias(), passage_id).ok().flatten()
     }
 
     /// Everything the lyric editor shows for a passage `[SPEC-LYR-172]`, or

@@ -124,13 +124,21 @@ fn library_rw(library: &Path, on: bool) -> Result<bool, String> {
 /// connection opened and closed here costs the others nothing. Asked only
 /// while the partition is writable, where a WAL catalogue opens.
 pub(crate) fn wal_mode(p: &Path) -> Option<bool> {
+    journal_mode(p).map(|mode| mode == "wal")
+}
+
+/// A SQLite file's journal mode, in lower case -- `wal`, `delete`. `None` when
+/// it cannot be asked: no such file, or a WAL file on a read-only mount, which
+/// does not open. Asked the way [`wal_mode`] says, and for the snapshot too
+/// `[SPEC-STAR-107]`.
+pub(crate) fn journal_mode(p: &Path) -> Option<String> {
     // A path that is not a file is answered without opening anything.
     if !p.is_file() {
         return None;
     }
     let c = rusqlite::Connection::open_with_flags(p, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
     let mode: String = c.query_row("PRAGMA journal_mode", [], |r| r.get(0)).ok()?;
-    Some(mode.eq_ignore_ascii_case("wal"))
+    Some(mode.to_ascii_lowercase())
 }
 
 #[cfg(all(test, unix))]

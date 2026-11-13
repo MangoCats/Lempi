@@ -59,12 +59,25 @@ def open_ro(path: str) -> sqlite3.Connection:
 
 def norm_time(v) -> str:
     """A comparable form of the mixed timestamps the tables hold: epoch
-    seconds, 'YYYY-MM-DD HH:MM:SS' and 'YYYY-MM-DDTHH:MM:SS' all appear."""
+    seconds, 'YYYY-MM-DD HH:MM:SS' and 'YYYY-MM-DDTHH:MM:SS' all appear.
+
+    **And the fraction of a second, where a stamp has one.** `passage_lyrics`
+    is stamped to the millisecond, so that two saves a moment apart read in
+    their order [SPEC-LYR-140]. Until 2026-11-13 this cut every stamp to its
+    second: two nodes saving one passage at 10:00:00.100 and 10:00:00.900 read
+    as a tie, the merge kept the first node by name, and `approve-all` sent the
+    older text everywhere. The fraction is kept without its trailing zeros, so
+    `10:00:00`, `10:00:00.0` and `10:00:00.000` are one time, and the forms
+    compare as text in time order: `…:00` < `…:00.1` < `…:00.9` < `…:01`.
+    Anything after it -- a zone -- is dropped, as it always was."""
     if v is None:
         return ""
     if isinstance(v, (int, float)):
         return dt.datetime.fromtimestamp(v, dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    return str(v).replace("T", " ").rstrip("Z")[:19]
+    s = str(v).replace("T", " ").rstrip("Z")
+    m = re.match(r"\.(\d+)", s[19:])
+    frac = m.group(1).rstrip("0") if m else ""
+    return s[:19] + ("." + frac if frac else "")
 
 
 # ---------------------------------------------------------------- the rules --

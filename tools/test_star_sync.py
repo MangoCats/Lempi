@@ -25,6 +25,23 @@ def check(cond, msg):
         print(f"  FAIL  {msg}")
 
 
+def hub_pair(root):
+    """A hub pair for a plan `status` is asked about: both halves there, and in
+    WAL mode. Since 2026-11-13 `status` is STALE for a half it cannot read
+    [SPEC-STAR-106] -- these plans named a library that was never made and no
+    listener at all, which is the case it used to pass over in silence."""
+    import sqlite3
+    os.makedirs(os.path.join(root, "lib"), exist_ok=True)
+    lib, lis = os.path.join(root, "lib", "library.db"), os.path.join(root, "lib", "listener.db")
+    for path in (lib, lis):
+        c = sqlite3.connect(path)
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("CREATE TABLE t (a)")
+        c.commit()
+        c.close()
+    return {"library": lib, "listener": lis}
+
+
 def test_backup_proofs():
     """[GDE-INT-120], [GDE-INT-115]: each kept backup object re-read and proven
     against its own name, one that is not said and re-read until it is; and
@@ -56,7 +73,7 @@ def test_backup_proofs():
         st["local"][names[0]] = old
         check(names[0] in ss.due(st, "local", set(names)), "a proof older than PROVE_DAYS is due again")
 
-        lib = os.path.join(root, "lib", "library.db")
+        hub = hub_pair(root)
         os.makedirs(os.path.join(root, "lib", "verify"))
         os.makedirs(os.path.join(root, "days"))
         with open(os.path.join(root, "days", "2026-10-15.json"), "w") as fh:
@@ -65,7 +82,7 @@ def test_backup_proofs():
             json.dump({"checked_at": dt.datetime.now().isoformat(timespec="seconds"), "files": 3, "ok": 2,
                        "bytes": 9, "seconds": 1, "unrecorded": 0, "retagged": [], "damaged": [{"path": "x"}],
                        "missing": [], "unreadable": [], "ok_whole": False}, fh)
-        plan = {"backups": {"dir": root, "max_age_hours": 30}, "hub": {"library": lib},
+        plan = {"backups": {"dir": root, "max_age_hours": 30}, "hub": hub,
                 "runs": os.path.join(root, "runs")}
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
@@ -88,7 +105,7 @@ def test_mirror_when_reachable():
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as root:
         os.makedirs(os.path.join(root, "days"))
         os.makedirs(os.path.join(root, "objects"))
-        lib = os.path.join(root, "lib", "library.db")
+        hub = hub_pair(root)
         os.makedirs(os.path.join(root, "lib", "verify"))
         with open(os.path.join(root, "lib", "verify", "v.json"), "w") as fh:
             json.dump({"checked_at": dt.datetime.now().astimezone().isoformat(), "files": 0, "ok": 0, "bytes": 0,
@@ -102,7 +119,7 @@ def test_mirror_when_reachable():
                            "listener": "l" * 64, "library": "b" * 64}, fh)
         plan = {"backups": {"dir": root, "max_age_hours": 30, "keep_daily": 14, "keep_monthly": 12,
                             "mirror": {"host": "x@off", "dir": "/m"}},
-                "hub": {"library": lib}, "runs": os.path.join(root, "runs")}
+                "hub": hub, "runs": os.path.join(root, "runs")}
         real = ss.sd.ssh
         ss.sd.ssh = lambda host, cmd, quiet=False, timeout=None: (255, "ssh: connect to host off: timed out")
         try:
@@ -264,13 +281,13 @@ def test_node_integrity():
         os.makedirs(os.path.join(root, "days"))
         with open(os.path.join(root, "days", "d.json"), "w") as fh:
             json.dump({"taken_at": utc.isoformat()}, fh)
-        lib = os.path.join(root, "lib", "library.db")
+        hub = hub_pair(root)
         os.makedirs(os.path.join(root, "lib", "verify"))
         with open(os.path.join(root, "lib", "verify", "v.json"), "w") as fh:
             json.dump({"checked_at": dt.datetime.now().astimezone().isoformat(), "files": 0, "ok": 0, "bytes": 0,
                        "seconds": 0, "unrecorded": 0, "retagged": [], "damaged": [], "missing": [],
                        "unreadable": [], "ok_whole": True}, fh)
-        plan = {"backups": {"dir": root, "max_age_hours": 30}, "hub": {"library": lib}, "runs": runs}
+        plan = {"backups": {"dir": root, "max_age_hours": 30}, "hub": hub, "runs": runs}
         with contextlib.redirect_stdout(io.StringIO()) as out:
             rc = ss.status(plan)
         said = out.getvalue()

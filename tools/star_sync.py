@@ -1123,6 +1123,12 @@ def snapshot(plan, only=None):
             ic = snap.get("file_checks")
             if ic is not None:
                 say(f"  {name}: {integrity_words(ic)} [GDE-INT-145]")
+            # [SPEC-STAR-107]: the journal mode of each half, as the node reads it.
+            jm = snap.get("journal_mode")
+            for line in journal_stale(name, jm):
+                say(f"  {name}: NOT WAL -- {line}")
+            if jm and not journal_stale(name, jm):
+                say(f"  {name}: {journal_words(jm)} [SPEC-STAR-107]")
             manifest["nodes"].append(dict(
                 name=name, listener=os.path.join(nd, "listener.db"), taken_at=now().isoformat(),
                 sent=sent_path(ns, "listener_sent"),
@@ -1133,6 +1139,7 @@ def snapshot(plan, only=None):
                                "catalogue": cat, "catalogue_as_sent": as_sent, "natural_keys": cap,
                                "retire_files": snap.get("retire_files", 0) or 0,
                                "catalogue_blocked": blocked, "integrity": snap.get("file_checks"),
+                               "journal_mode": snap.get("journal_mode"),
                                "catalogue_in_step": not blocked and (cat["state"] in ("as-sent", "holds-hub-rows")
                                or (cat["state"] == "other-ids" and cap >= NATURAL_KEYS_NEEDED))}
     finally:
@@ -2351,10 +2358,10 @@ def mirror(plan, keep, wanted):
 PASS_DAYS = 30     # [GDE-INT-145]: a node whose oldest read is older has not finished a pass
 
 
-def node_integrity(plan, depth=30):
-    """[GDE-INT-145]: each node's file checks as its newest snapshot carried them,
-    from the newest `depth` runs: {name: (run, the summary or None)}. A node
-    missed by the newest run -- off, or skipped -- is read from the one before."""
+def node_reports(plan, depth=30):
+    """What each node's newest snapshot said of itself, from the newest `depth`
+    runs: {name: (run, its entry in that run's baselines.json)}. A node missed
+    by the newest run -- off, or skipped -- is read from the one before."""
     runs = at_root(plan["runs"])
     found = run_names(runs)[::-1][:depth]
     out = {}
@@ -2364,8 +2371,42 @@ def node_integrity(plan, depth=30):
             continue
         with open(p, encoding="utf-8") as fh:
             for name, b in json.load(fh).items():
-                out.setdefault(name, (d, b.get("integrity")))
+                out.setdefault(name, (d, b))
     return out
+
+
+def node_integrity(plan, depth=30):
+    """[GDE-INT-145]: each node's file checks as its newest snapshot carried
+    them: {name: (run, the summary or None)}."""
+    return {name: (run, b.get("integrity")) for name, (run, b) in node_reports(plan, depth).items()}
+
+
+def journal_words(jm):
+    """[SPEC-STAR-107]: a node's journal modes, as its snapshot gave them."""
+    if not jm:
+        return "does not report its journal modes"
+    said = lambda half: jm.get(half) or "could not be asked"       # noqa: E731
+    return f"journal mode: listener {said('listener')}, catalogue {said('library')}"
+
+
+def journal_stale(name, jm):
+    """What about a node's journal modes makes `status` STALE [SPEC-STAR-107]:
+    a listener that is not WAL, where one long read -- a snapshot, the hourly
+    backup -- refuses every write the player makes [SPEC-STAR-106]; and one that
+    could not be asked, the hub then not knowing. A current player sets its own
+    listener when it starts, so one still not WAL was held by something else at
+    that moment. Never the catalogue: the player only reads it, and on a
+    read-only mount -- bose's -- WAL is the outage [BOS-RUN-092]. A build that
+    reports nothing is said by `journal_words`, not stale."""
+    if not jm:
+        return []
+    mode = jm.get("listener")
+    if mode == "wal":
+        return []
+    if not mode:
+        return [f"{name}'s listener could not be asked its journal mode in its last sync"]
+    return [f"{name}'s listener is not in WAL mode ({mode}): a long read there refuses every write. "
+            f"Its player sets it at its next start, with nothing else holding the file [SPEC-STAR-107]"]
 
 
 def integrity_stale(name, ic, at):
@@ -2432,15 +2473,29 @@ def status(plan):
     # [SPEC-STAR-106]: the pair's journal mode. In anything but WAL a long read
     # shuts every write out, and the reverse; a pair put back from a copy, or
     # promoted from a merge, comes back in rollback-journal mode without a word.
+    #
+    # A half that is not there, or cannot be asked, is STALE and said by name.
+    # Until 2026-11-13 an absent one was passed over, and the result line still
+    # read "the pair in WAL mode", exit 0 -- for a pair nobody had read, which
+    # is how the hub's pair went missing unnoticed on 2026-09-26 (CLAUDE.md
+    # §11): a guard that cannot run says so [GDE-DEP-060].
     import pair_journal
     for half in ("listener", "library"):
-        mode = pair_journal.mode_of(at_root(plan["hub"][half])) if plan["hub"].get(half) else "absent"
-        if mode == "absent":
-            continue                # a plan with no pair yet has other things to say
+        named = plan["hub"].get(half)
+        if not named:
+            say(f"  hub {half}: NOT NAMED in the plan -- its journal mode was not read")
+            bad.append(f"the plan names no hub {half}, so its journal mode was not read")
+            continue
+        mode = pair_journal.mode_of(at_root(named))
         say(f"  hub {half}: journal mode {mode}")
-        if mode != pair_journal.WAL:
+        if mode == "absent":
+            bad.append(f"the hub's {half} is not there ({at_root(named)}): its journal mode was not read. "
+                       "data/README.md says where the pair is kept")
+        elif mode.startswith("unreadable"):
+            bad.append(f"the hub's {half} could not be asked its journal mode ({mode[12:]})")
+        elif mode != pair_journal.WAL:
             bad.append(f"the hub's {half} is not in WAL mode ({mode}): a long read there shuts out every "
-                       f"write. Stop the player, then: python tools/pair_journal.py {plan['hub'][half]} --wal")
+                       f"write. Stop the player, then: python tools/pair_journal.py {named} --wal")
     # [GDE-INT-120]: how recently every kept object was proven whole.
     root = at_root(b["dir"])
     pr = proofs(root)
@@ -2479,6 +2534,15 @@ def status(plan):
             continue
         say(f"  {name}: {integrity_words(ic)} (sync of {when})")
         bad += integrity_stale(name, ic, now())
+    # [SPEC-STAR-107]: each node's journal modes, as its last sync brought
+    # them. A build that does not report them is said and not counted stale,
+    # for the reason above.
+    for name, (run, b) in sorted(node_reports(plan).items()):
+        if "signed" not in b:
+            continue                # a phone uploads its edits and answers no snapshot
+        when = f"{run[:4]}-{run[4:6]}-{run[6:8]} {run[9:11]}:{run[11:13]}Z" if len(run) >= 13 else run
+        say(f"  {name}: {journal_words(b.get('journal_mode'))} (sync of {when})")
+        bad += journal_stale(name, b.get("journal_mode"))
     runs = at_root(plan["runs"])
     if os.path.exists(os.path.join(runs, "state.json")):
         st = load_state(plan)
@@ -2487,6 +2551,8 @@ def status(plan):
             say(f"  {name}: last synced {age.days} day(s) ago")
     for x in bad:
         say(f"  STALE: {x}")
+    # Said only where it was read: both halves were asked above, and anything
+    # but WAL from either is in `bad`.
     say("RESULT status: " + ("STALE -- " + "; ".join(bad) if bad else "backups current, the pair in WAL mode"))
     return 1 if bad else 0
 

@@ -237,9 +237,90 @@ pub(crate) fn complete_listener(conn: &Connection) -> Result<Vec<String>, DbErro
     Ok(made)
 }
 
+/// Put the listener at `listener` in WAL mode, if it is not `[SPEC-STAR-107]`.
+/// Returns the mode it was in and the mode it is in now; `Ok(None)` where
+/// there is no such file yet.
+///
+/// **Once, at the player's start, before anything else holds the file.** In
+/// any other mode a read shuts every commit out for as long as it takes, and
+/// the player gives up after [`super::BUSY_WAIT`]: the hub's listener was
+/// locked for five hours on 2026-11-12 that way `[SPEC-STAR-106]`. The hub's
+/// pair was set by hand. A node's was whatever made it: `split_database.py`
+/// carries the source's mode, `create_pair_if_absent` asks for WAL, and
+/// [`super::PlayerStore`] -- which makes the listener of a node seeded with a
+/// catalogue alone `[LRH-SEED-030]` -- asked for nothing until 2026-11-13, so
+/// that listener was a rollback-journal file and nothing said so.
+///
+/// SQLite changes the mode only while no other connection holds a lock on the
+/// file, which at start none does. Where one does, the mode is left as it was
+/// and comes back as it was: the caller says so, and the next start asks
+/// again. **The listener only.** A catalogue on a read-only mount must not be
+/// WAL -- there it cannot be opened at all `[BOS-RUN-092]` -- and this never
+/// touches one: the pragma names `main`, and nothing is attached.
+///
+/// Asked of SQLite through a connection of its own, never by reading the
+/// file's header: closing a descriptor opened any other way drops every lock
+/// this process holds on the file `[SPEC-STAR-105]`.
+pub fn ensure_listener_wal(listener: &Path) -> Result<Option<(String, String)>, DbError> {
+    if !listener.is_file() {
+        return Ok(None);
+    }
+    let open = |e: rusqlite::Error| DbError::Open(format!("{}: {e}", listener.display()));
+    let conn = Connection::open_with_flags(listener, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(open)?;
+    // Short: this is in the way of the music starting, and a file held now
+    // will be asked about again at the next start.
+    conn.busy_timeout(std::time::Duration::from_secs(2)).map_err(open)?;
+    let was: String = conn.query_row("PRAGMA main.journal_mode", [], |r| r.get(0)).map_err(open)?;
+    let was = was.to_ascii_lowercase();
+    if was == "wal" {
+        return Ok(Some((was.clone(), was)));
+    }
+    let now: String = conn.query_row("PRAGMA main.journal_mode = WAL", [], |r| r.get(0)).map_err(open)?;
+    Ok(Some((was, now.to_ascii_lowercase())))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mode_of(path: &Path) -> String {
+        let c = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        c.query_row("PRAGMA journal_mode", [], |r| r.get::<_, String>(0)).unwrap().to_ascii_lowercase()
+    }
+
+    /// `[SPEC-STAR-107]`: a listener in rollback-journal mode is put in WAL
+    /// mode with its rows as they were; one already WAL is left alone; one a
+    /// reader holds is left exactly as it was, and that is an error to say;
+    /// and a file that is not there is not made.
+    #[test]
+    fn a_listener_is_put_in_wal_mode_and_a_held_one_is_said() {
+        let dir = Scratch::new("wal");
+        let listener = dir.path().join("listener.db");
+        assert_eq!(ensure_listener_wal(&listener).unwrap(), None, "no file yet");
+        assert!(!listener.exists(), "and none is made");
+
+        let c = Connection::open(&listener).unwrap();
+        c.execute_batch("PRAGMA journal_mode = DELETE; CREATE TABLE t (a); INSERT INTO t VALUES (7);").unwrap();
+        // A reader inside a transaction: what a long read is.
+        c.execute_batch("BEGIN").unwrap();
+        let held: i64 = c.query_row("SELECT a FROM t", [], |r| r.get(0)).unwrap();
+        assert_eq!(held, 7);
+        let refused = ensure_listener_wal(&listener);
+        assert!(
+            refused.is_err() || refused.as_ref().unwrap().as_ref().is_some_and(|(_, now)| now != "wal"),
+            "a held file is not reported as WAL: {refused:?}"
+        );
+        c.execute_batch("COMMIT").unwrap();
+        assert_eq!(mode_of(&listener), "delete", "and is left as it was");
+        drop(c);
+
+        assert_eq!(ensure_listener_wal(&listener).unwrap(), Some(("delete".into(), "wal".into())));
+        assert_eq!(mode_of(&listener), "wal");
+        let c = Connection::open(&listener).unwrap();
+        assert_eq!(c.query_row("SELECT a FROM t", [], |r| r.get::<_, i64>(0)).unwrap(), 7, "its rows as they were");
+        drop(c);
+        assert_eq!(ensure_listener_wal(&listener).unwrap(), Some(("wal".into(), "wal".into())), "asked again, left alone");
+    }
 
     /// A directory of its own per test, removed when dropped.
     struct Scratch(PathBuf);
@@ -357,6 +438,9 @@ mod tests {
         assert!(cols("boundary_reviews").contains(&"orig_fade_out_curve".to_string()));
         assert!(cols("artist_reviews").contains(&"origin".to_string()));
         drop(c);
+        // `[SPEC-STAR-107]`: and in WAL mode, as a listener made any other way
+        // is. Until 2026-11-13 this one was a rollback-journal file.
+        assert_eq!(mode_of(&listener), "wal", "the player's own listener is not in WAL mode");
 
         // A second open finds the half whole and makes nothing.
         let c = Connection::open(&listener).unwrap();

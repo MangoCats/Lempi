@@ -202,6 +202,26 @@ impl Player {
                 return Err(StartError::WeakSecret { len: s.len() });
             }
         }
+        // Before anything here opens the listener `[SPEC-STAR-107]`: the mode
+        // changes only while no connection holds the file. Said either way it
+        // changes nothing about whether the player starts.
+        match crate::db::ensure_listener_wal(&cfg.listener) {
+            Ok(Some((was, now))) if now == "wal" => {
+                if was != "wal" {
+                    tracing::info!("listener: journal mode was {was}, now WAL [SPEC-STAR-107]");
+                }
+            }
+            Ok(Some((was, _))) => tracing::warn!(
+                "listener: journal mode is {was} and SQLite would not change it -- something else holds {}. \
+                 A long read there refuses every write until it is WAL [SPEC-STAR-107]",
+                cfg.listener.display()
+            ),
+            Ok(None) => {}
+            Err(e) => tracing::warn!(
+                "listener: its journal mode could not be set to WAL ({e}). \
+                 A long read there refuses every write until it is [SPEC-STAR-107]"
+            ),
+        }
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -761,10 +781,10 @@ fn engine_thread(setup: EngineSetup, tx: SyncSender<Started>) {
         // be asked for. Change either and change both.
         run_generation(&library, &controls_for_switch, "cue sheets", "sheets",
             |c| c.cue_requested.take(), |c, s| c.cue_status = Some(s),
-            |conn| crate::cue::generate(conn, false).map(|r| (r, "cue sheet")));
+            |conn| crate::cue::generate(conn, false).map(|r| (r, "cue sheet", None)));
         run_generation(&library, &controls_for_switch, "cover art", "covers",
             |c| c.covers_requested.take(), |c, s| c.covers_status = Some(s),
-            |conn| crate::covers::generate(conn, false).map(|r| (r, "cover")));
+            |conn| crate::covers::generate(conn, false).map(|r| (r, "cover", None)));
         // The route already refuses where the host forbids it; this is the
         // second lock on the same door `[REQ-AND-200]`, so no other path to
         // the request can write beside a phone's shared music.
@@ -772,8 +792,8 @@ fn engine_thread(setup: EngineSetup, tx: SyncSender<Started>) {
             |c| c.sidecar_requested.take().filter(|_| writes_beside_audio),
             |c, s| c.sidecar_status = Some(s),
             |conn| {
-                attach_saved_words(conn, &db, &library);
-                crate::lyrics_sidecar::generate(conn, false).map(|r| (r, "file"))
+                let note = saved_words_in_reach(conn, &db, &library);
+                crate::lyrics_sidecar::generate(conn, false).map(|r| (r, "file", note))
             });
         // The odd one out: it writes into a client's cache rather than the
         // music folder, so it has somewhere to fail to find.
@@ -784,8 +804,8 @@ fn engine_thread(setup: EngineSetup, tx: SyncSender<Started>) {
                 // nothing useful to write there `[SPEC-LYR-075]`.
                 None => Err("no client cache on this machine; nothing written".to_string()),
                 Some(dir) => {
-                    attach_saved_words(conn, &db, &library);
-                    crate::lyrics_cache::generate(conn, &dir, false).map(|r| (r, "song"))
+                    let note = saved_words_in_reach(conn, &db, &library);
+                    crate::lyrics_cache::generate(conn, &dir, false).map(|r| (r, "song", note))
                 }
             });
         // A switch asked for by the browser happens here, where the backends
@@ -902,23 +922,6 @@ fn engine_thread(setup: EngineSetup, tx: SyncSender<Started>) {
 /// database split too.
 ///
 /// Unsplit, the two paths are the same file and nothing about this changes.
-/// Put the listener half in reach of a file writer's catalogue connection,
-/// read-only, so the words saved for a passage are chosen before the imported
-/// ones `[SPEC-LYR-176]`. Where it cannot be attached the writer goes on with
-/// the imported words, and the log says so rather than the files quietly
-/// lacking what a person typed `[GDE-DEP-060]`.
-fn attach_saved_words(conn: &rusqlite::Connection, listener: &Path, library: &Path) {
-    if listener == library {
-        return; // one file holds both halves: a test fixture's
-    }
-    if let Err(e) = conn.execute("ATTACH DATABASE ?1 AS lis", [crate::db::read_only_uri(listener)]) {
-        tracing::warn!(
-            "lyric files: {} could not be attached ({e}); written from the imported words only",
-            listener.display()
-        );
-    }
-}
-
 fn run_generation(
     db: &Path,
     controls: &SharedControls,
@@ -926,18 +929,23 @@ fn run_generation(
     off_noun: &str,
     take: impl Fn(&mut Controls) -> Option<bool>,
     status: impl Fn(&mut Controls, String),
-    run: impl Fn(&rusqlite::Connection) -> Result<(crate::report::Written, &'static str), String>,
+    run: impl Fn(&rusqlite::Connection) -> Result<(crate::report::Written, &'static str, Option<String>), String>,
 ) {
     let Some(asked) = controls.lock().ok().and_then(|mut c| take(&mut c)) else { return };
     let said = if !asked {
         format!("off; {off_noun} already written are left alone")
     } else {
         match rusqlite::Connection::open(db).map_err(|e| e.to_string()).and_then(|c| run(&c)) {
-            Ok((rep, noun)) => {
+            Ok((rep, noun, note)) => {
                 for f in &rep.failed {
                     tracing::warn!("{label}: {f}");
                 }
-                rep.summary(noun)
+                // What the run could not do, in the sentence the person who
+                // asked for it reads, not only in a log `[GDE-DEP-060]`.
+                match note {
+                    Some(note) => format!("{}; {note}", rep.summary(noun)),
+                    None => rep.summary(noun),
+                }
             }
             Err(e) => e,
         }
@@ -948,9 +956,162 @@ fn run_generation(
     }
 }
 
+/// Put the words saved for passages in reach of a file writer's catalogue
+/// connection, so they are chosen before the imported ones `[SPEC-LYR-176]`.
+/// `None`, or what the run's own sentence must say: where they cannot be read
+/// the writer goes on with the imported words, as `[SPEC-LYR-176]` decides,
+/// and both the log and the setting's line say so rather than the files
+/// quietly lacking what a person typed `[GDE-DEP-060]`.
+///
+/// **Copied, and the listener let go -- not left attached.** Until 2026-11-13
+/// the listener stayed attached for the run. A writer reads saved words while
+/// its walk over every radio passage is still being stepped, and SQLite ends a
+/// connection's read of a file only when no statement of that connection is
+/// active: so the first passage with saved words took a read lock on the
+/// listener that was held to the end of the walk -- some 12,000 passages, and
+/// for the sidecar a file written at each. In WAL mode that costs nothing. On
+/// a rollback-journal listener it refuses every commit the player makes in
+/// that time, each after the five-second wait: the resume row, plays,
+/// preferences, the words being saved. That is the hub's outage of 2026-11-12
+/// `[SPEC-STAR-106]`, on a node, from a checkbox. Reproduced in a rollback-
+/// journal file before the change, and held by the test below since.
+///
+/// Now the table is read once into a temporary one of the writer's own and
+/// the listener is detached before the walk starts, so the lock lasts one
+/// statement whatever the mode. An unqualified `passage_lyrics`, which is how
+/// `lyrics.rs` names it, finds the temporary table first. Every node holds
+/// every row `[SPEC-LYR-200]`; MuLibPlay's 2,288 texts would be about 3 MB.
+fn saved_words_in_reach(conn: &rusqlite::Connection, listener: &Path, library: &Path) -> Option<String> {
+    if listener == library {
+        return None; // one file holds both halves: a test fixture's
+    }
+    let copied = conn
+        .execute("ATTACH DATABASE ?1 AS lis", [crate::db::read_only_uri(listener)])
+        .and_then(|_| {
+            let made = conn.execute_batch(
+                "CREATE TEMP TABLE passage_lyrics AS SELECT * FROM lis.passage_lyrics;
+                 CREATE INDEX temp.passage_lyrics_key ON passage_lyrics(audio_md5, kind, start_ms);",
+            );
+            // Let go whether or not the copy was made.
+            if let Err(e) = conn.execute_batch("DETACH DATABASE lis") {
+                tracing::warn!("lyric files: {} could not be let go of ({e})", listener.display());
+            }
+            made
+        });
+    copied.err().map(|e| {
+        tracing::warn!(
+            "lyric files: the words saved in {} could not be read ({e}); written from the imported words only",
+            listener.display()
+        );
+        format!("the saved words could not be read ({e}), so these are from the imported words only")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `[SPEC-LYR-176]` as the player runs it, which no test did before
+    /// 2026-11-13: the two writers' own tests keep `passage_lyrics` in the one
+    /// in-memory file with the catalogue. Here the pair is split and on disk,
+    /// the catalogue opened as `run_generation` opens it, and the listener a
+    /// rollback-journal file -- the mode in which a lock left on it is an
+    /// outage `[SPEC-STAR-106]`.
+    ///
+    /// The saved words are chosen, a marked passage gets no file, **and a
+    /// commit to the listener lands while the writer's walk is still being
+    /// stepped and has already read saved words.**
+    #[test]
+    fn the_lyric_writers_read_saved_words_and_let_go_of_the_listener() {
+        let dir = std::env::temp_dir().join(format!("lempi-host-words-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (listener, library) = (dir.join("listener.db"), dir.join("library.db"));
+        let lib = rusqlite::Connection::open(&library).unwrap();
+        lib.execute_batch(
+            "CREATE TABLE files (file_id INTEGER PRIMARY KEY, path TEXT, audio_md5 TEXT);
+             CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT,
+                                    start_ms INTEGER, end_ms INTEGER);
+             CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL DEFAULT 1.0);
+             CREATE TABLE lyrics (mbid TEXT PRIMARY KEY, text TEXT, source TEXT, fetched_at TEXT);",
+        )
+        .unwrap();
+        for id in 1..=3 {
+            lib.execute(
+                "INSERT INTO files VALUES (?1, ?2, ?3)",
+                rusqlite::params![id, dir.join(format!("song{id}.mp3")).to_string_lossy(), format!("md5-{id}")],
+            )
+            .unwrap();
+            lib.execute("INSERT INTO passages VALUES (?1, ?1, 'radio', 0, 100000)", [id]).unwrap();
+            lib.execute(
+                "INSERT INTO passage_recordings (passage_id, mbid) VALUES (?1, ?2)",
+                rusqlite::params![id, format!("mb{id}")],
+            )
+            .unwrap();
+            lib.execute(
+                "INSERT INTO lyrics VALUES (?1, ?2, 'mulibplay', '2026-01-01')",
+                rusqlite::params![format!("mb{id}"), format!("imported {id}")],
+            )
+            .unwrap();
+        }
+        drop(lib);
+        let lis = rusqlite::Connection::open(&listener).unwrap();
+        lis.execute_batch(
+            "PRAGMA journal_mode = DELETE;
+             CREATE TABLE passage_lyrics (audio_md5 TEXT NOT NULL, kind TEXT NOT NULL, start_ms INTEGER NOT NULL,
+                 end_ms INTEGER NOT NULL, mbid TEXT, text TEXT NOT NULL, no_words INTEGER NOT NULL DEFAULT 0,
+                 updated_at TEXT NOT NULL, origin TEXT, PRIMARY KEY (audio_md5, kind, start_ms));
+             CREATE TABLE player_state (id INTEGER PRIMARY KEY, position_ms INTEGER);
+             INSERT INTO player_state VALUES (1, 0);
+             INSERT INTO passage_lyrics VALUES
+                 ('md5-1', 'radio', 0, 100000, 'mb1', 'typed for one', 0, '2026-11-12 10:00:00.000', 'here'),
+                 ('md5-2', 'radio', 0, 100000, 'mb2', '', 1, '2026-11-12 10:00:00.000', 'here');",
+        )
+        .unwrap();
+        drop(lis);
+
+        // As `run_generation` opens it: the catalogue, plainly.
+        let conn = rusqlite::Connection::open(&library).unwrap();
+        assert_eq!(saved_words_in_reach(&conn, &listener, &library), None, "the saved words were read");
+
+        // A walk in progress, as each writer's is, that has read saved words.
+        let saved = crate::db::SavedLyrics::load(&conn, "main").unwrap();
+        let mut walk = conn.prepare("SELECT passage_id FROM passages ORDER BY passage_id").unwrap();
+        let mut rows = walk.query([]).unwrap();
+        let first: i64 = rows.next().unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            crate::db::shown_lyrics(&conn, "main", &saved, first).unwrap().as_deref(),
+            Some("typed for one"),
+            "the passage's own words, from the listener half"
+        );
+        // The player's resume row, a moment later, on the same listener.
+        let player = rusqlite::Connection::open(&listener).unwrap();
+        player.busy_timeout(Duration::from_millis(200)).unwrap();
+        player
+            .execute("UPDATE player_state SET position_ms = 1000", [])
+            .expect("a commit to the listener is refused while a lyric writer walks: it kept its read lock");
+        assert!(rows.next().unwrap().is_some(), "and the walk goes on");
+        drop(rows);
+        drop(walk);
+
+        let rep = crate::lyrics_sidecar::generate(&conn, false).unwrap();
+        assert_eq!(rep.written, 2, "{}", rep.summary("file"));
+        assert_eq!(std::fs::read_to_string(dir.join("song1.lyrics")).unwrap(), "typed for one");
+        assert!(!dir.join("song2.lyrics").exists(), "a passage marked as having no words gets no file");
+        assert_eq!(std::fs::read_to_string(dir.join("song3.lyrics")).unwrap(), "imported 3");
+        drop(conn);
+
+        // A listener that cannot be read: said, in words for the setting's
+        // line, and the run goes on with the imported words `[SPEC-LYR-176]`.
+        let conn = rusqlite::Connection::open(&library).unwrap();
+        let note = saved_words_in_reach(&conn, &dir.join("no-such-listener.db"), &library);
+        assert!(note.as_deref().is_some_and(|n| n.contains("imported words only")), "{note:?}");
+        std::fs::remove_file(dir.join("song1.lyrics")).unwrap();
+        assert_eq!(crate::lyrics_sidecar::generate(&conn, false).unwrap().written, 2, "song1 and the marked song2");
+        assert_eq!(std::fs::read_to_string(dir.join("song1.lyrics")).unwrap(), "imported 1");
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// A session that cannot open is returned to the caller, not printed and
     /// lost inside a thread -- and its text is the session's own, so `lempi`

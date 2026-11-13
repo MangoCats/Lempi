@@ -30,7 +30,7 @@ use lempi_core::mesh_sync::{self, Rule};
 
 #[cfg(test)]
 use crate::catalogue_window::{wal_mode, WINDOW_CALLS};
-use crate::catalogue_window::{writable, Window};
+use crate::catalogue_window::{journal_mode, writable, Window};
 use serde_json::{json, Value};
 
 /// How far a request's own time may be from this node's. Appliances keep
@@ -49,7 +49,7 @@ const STAGED_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 3600
 
 /// What a handled step returns: the signed answer, and whether the player
 /// should rebuild what it loads once at start (the catalogue or the
-/// household's preferences changed).
+/// household's preferences changed). Not for words alone `[SPEC-LYR-204]`.
 pub struct Handled {
     pub answer: Value,
     pub reload: bool,
@@ -160,6 +160,11 @@ fn snapshot(listener: &Path, library: &Path) -> Result<Value, String> {
         "catalogue_rows": CATALOGUE_ROWS,
         "retire_files": crate::retire::RETIRE_FILES,
         "library_readonly": library.exists() && !writable(library),
+        // [SPEC-STAR-107]: each half's journal mode, as SQLite says it; null
+        // for one that could not be asked. The hub names a listener that is
+        // not WAL -- there one long read refuses every write -- and until
+        // 2026-11-13 nothing read a node's mode at all.
+        "journal_mode": {"listener": journal_mode(listener), "library": journal_mode(library)},
         // [GDE-INT-145]: what this player found reading its own files back,
         // for the hub to name. A report that cannot be read says so, as
         // `{"error": ...}`: null is what a build without the check sends, and
@@ -347,7 +352,24 @@ fn commit(listener: &Path, library: &Path, req: &Value, run: &str, apply_listene
         result["warning"] = json!(w);
     }
     tracing::info!("star sync: run {run} committed here: {result}");
-    Ok((result, true))
+    Ok((result, has_cat || !to_retire.is_empty() || changes_selection(lis)))
+}
+
+/// The shared tables that change what a page shows and never what plays, so a
+/// commit of these alone asks for no rebuild `[SPEC-LYR-204]`. Words saved for
+/// a passage are read from the file at each request; the Director holds none.
+const SHOWN_ONLY: [&str; 1] = ["passage_lyrics"];
+
+/// Whether a listener patch names a table the Director is built from. Until
+/// 2026-11-13 every commit that wrote a row asked for a rebuild -- 57.9 s to
+/// 73.9 s on `lempi02w` -- and every lyric row goes to every node
+/// `[SPEC-LYR-200]`, so one corrected line rebuilt the fleet. A table this
+/// does not know asks for the rebuild: the mistake that costs a minute, not
+/// the one that leaves a node selecting from preferences it no longer holds.
+fn changes_selection(lis: &Value) -> bool {
+    lis["tables"]
+        .as_array()
+        .is_some_and(|tables| tables.iter().any(|t| !t["name"].as_str().is_some_and(|n| SHOWN_ONLY.contains(&n))))
 }
 
 fn sync_dir(listener: &Path) -> PathBuf {
@@ -665,6 +687,79 @@ pub(crate) mod tests {
         json!({"tables": [{"name": "listener_preferences", "columns": ["subject_kind","subject_id","rotation","updated_at"],
                "key": ["subject_kind","subject_id"],
                "rows": [{"key": ["artist","a1"], "was": ["artist","a1",1.0,"t1"], "now": ["artist","a1",2.0,"t2"]}]}]})
+    }
+
+    /// A listener patch of one lyric row, new here.
+    fn lyric_patch(text: &str, was: Value) -> Value {
+        json!({"tables": [{"name": "passage_lyrics",
+               "columns": ["audio_md5","kind","start_ms","end_ms","mbid","text","no_words","updated_at","origin"],
+               "key": ["audio_md5","kind","start_ms"],
+               "rows": [{"key": ["m1","track",0], "was": was,
+                         "now": ["m1","track",0,1000,"rec-1",text,0,"2026-11-13 09:00:00.250","desktop"]}]}]})
+    }
+
+    /// `[SPEC-LYR-200]`, `[SPEC-LYR-204]`, through `handle` and the player's
+    /// own `apply_with` under `MERGED` -- the hub's tests prove the patch with
+    /// their own applier, which is not what a node runs. A row of words lands
+    /// in the listener the player made, is read back by the passage it is for,
+    /// and asks for no rebuild; the same row beside a preference does.
+    #[test]
+    fn words_land_through_the_players_own_apply_and_rebuild_nothing() {
+        let n = node("lyrics");
+        // The table as the player makes it, on the listener `node` made; and
+        // the one catalogue table more that naming a passage's recording reads.
+        drop(lempi_core::db::PlayerStore::open_split(&n.l, &n.lib).unwrap());
+        rusqlite::Connection::open(&n.lib).unwrap().execute_batch(
+            "CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL);
+             INSERT INTO passage_recordings VALUES (10,'rec-1',1.0);").unwrap();
+        let words = |n: &Node| -> Option<String> {
+            lempi_core::db::Library::open_split(&n.l, &n.lib).unwrap().lyrics(10)
+        };
+        assert_eq!(words(&n), None);
+
+        let first = lyric_patch("typed on the desktop", json!(null));
+        let r = request(&n, "rehearse", "20261113T0900Z", json!(null), first.clone());
+        let got = handle(&n.l, &n.lib, "rehearse", &signed(&n.mesh, &r)).unwrap();
+        assert!(!got.reload);
+        assert_eq!(words(&n), None, "a rehearsal keeps nothing");
+
+        let r = request(&n, "commit", "20261113T0900Z", json!(null), first);
+        let done = handle(&n.l, &n.lib, "commit", &signed(&n.mesh, &r)).unwrap();
+        assert_eq!(answer_of(&done)["listener"]["applied"], 1, "{}", done.answer);
+        assert_eq!(words(&n).as_deref(), Some("typed on the desktop"), "read back by the passage it is for");
+        assert!(!done.reload, "words change what a page shows, not what plays: no rebuild");
+
+        // Corrected at the hub, and sent beside a preference: that one does.
+        let was = json!(["m1","track",0,1000,"rec-1","typed on the desktop",0,"2026-11-13 09:00:00.250","desktop"]);
+        let mut both = lyric_patch("corrected", was);
+        both["tables"].as_array_mut().unwrap().extend(lis_patch()["tables"].as_array().unwrap().iter().cloned());
+        let r = request(&n, "commit", "20261113T0905Z", json!(null), both);
+        let done = handle(&n.l, &n.lib, "commit", &signed(&n.mesh, &r)).unwrap();
+        assert_eq!(answer_of(&done)["listener"]["applied"], 2, "{}", done.answer);
+        assert_eq!(words(&n).as_deref(), Some("corrected"));
+        assert!(done.reload, "a preference changes what plays");
+
+        assert!(changes_selection(&json!({"tables": [{"name": "a_table_from_the_future", "rows": []}]})),
+                "a table this build does not know asks for the rebuild");
+        assert!(!changes_selection(&json!(null)) && !changes_selection(&json!({"tables": []})));
+        let _ = std::fs::remove_dir_all(&n.dir);
+    }
+
+    /// `[SPEC-STAR-107]`: the snapshot says each half's journal mode, as
+    /// SQLite reads it, so the hub can name a listener that is not WAL.
+    #[test]
+    fn the_snapshot_says_each_halfs_journal_mode() {
+        let n = node("journal");
+        let ask = |n: &Node, run: &str| -> Value {
+            let r = request(n, "snapshot", run, json!(null), json!(null));
+            answer_of(&handle(&n.l, &n.lib, "snapshot", &signed(&n.mesh, &r)).unwrap())["journal_mode"].clone()
+        };
+        assert_eq!(ask(&n, "20261113T0900Z"), json!({"listener": "delete", "library": "delete"}),
+                   "as the fixture made them");
+        assert_eq!(lempi_core::db::ensure_listener_wal(&n.l).unwrap(), Some(("delete".into(), "wal".into())));
+        assert_eq!(ask(&n, "20261113T0901Z"), json!({"listener": "wal", "library": "delete"}),
+                   "the listener set at a start, the catalogue left alone");
+        let _ = std::fs::remove_dir_all(&n.dir);
     }
 
     fn format_of(lib: &Path) -> String {

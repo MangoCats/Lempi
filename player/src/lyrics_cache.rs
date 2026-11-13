@@ -111,8 +111,10 @@ pub fn generate(conn: &Connection, dir: &Path, dry_run: bool) -> Result<Written,
 
     // One file per artist+title, not per passage: two passages of one recording
     // would otherwise write the same path twice and count it twice. Where two
-    // passages of one name show different words, the file holds the first by
-    // `[SPEC-LYR-120]`, and of equals the lower-numbered passage's.
+    // passages of one name show different words, the file holds those of the
+    // nearer tier `[SPEC-LYR-100]`, within a tier the first by
+    // `[SPEC-LYR-120]`, and of equals the lower-numbered passage's
+    // (`ShownLyrics::before`).
     let mut want: HashMap<(String, String), crate::db::ShownLyrics> = HashMap::new();
     for (passage_id, mb_title, mb_artist, tag_title, tag_artist, in_file) in rows.flatten() {
         let Some(words) = crate::db::shown_words(conn, "main", &saved, passage_id)
@@ -250,6 +252,72 @@ mod tests {
             "saved words come before imported ones [SPEC-LYR-120]"
         );
         assert!(!d.join("The Band").join("Quiet One.lyrics").exists(), "a marked passage gets no file");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// `[SPEC-LYR-176]`: where two passages share an artist and title, a
+    /// passage's own words are the file's, and never words the other passage
+    /// only borrows through its work -- however much later those were saved,
+    /// and whichever passage is numbered first. Until 2026-11-13 the later
+    /// save won, and a file once written is never replaced `[SPEC-LYR-900]`.
+    #[test]
+    fn a_passages_own_words_are_not_displaced_by_borrowed_ones() {
+        let d = std::env::temp_dir().join(format!(
+            "lempi_cache_tier_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        let c = Connection::open_in_memory().unwrap();
+        // Two songs, each on two files that are different recordings of one
+        // work. In each, one passage has words of its own, saved first; the
+        // other has none, and shows a cover's -- another artist's recording of
+        // the same work, on a file this node lacks -- saved a day later. In
+        // `First` the owner is the lower-numbered passage, in `Second` the
+        // borrower is.
+        c.execute_batch(
+            "CREATE TABLE files (file_id INTEGER PRIMARY KEY, path TEXT, audio_md5 TEXT);
+             CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT,
+                                    start_ms INTEGER, end_ms INTEGER);
+             CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL DEFAULT 1.0);
+             CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);
+             CREATE TABLE recording_artists (mbid TEXT, artist_mbid TEXT, weight REAL);
+             CREATE TABLE artists (mbid TEXT PRIMARY KEY, name TEXT);
+             CREATE TABLE recording_works (mbid TEXT, work_mbid TEXT);
+             CREATE TABLE file_tags (file_id INTEGER PRIMARY KEY, title TEXT, artist TEXT, album TEXT);
+             CREATE TABLE lyrics (mbid TEXT PRIMARY KEY, text TEXT, source TEXT, fetched_at TEXT);
+             CREATE TABLE passage_lyrics (audio_md5 TEXT, kind TEXT, start_ms INTEGER, end_ms INTEGER,
+                                          mbid TEXT, text TEXT, no_words INTEGER, updated_at TEXT,
+                                          origin TEXT);
+             INSERT INTO files VALUES (1, '/m/1.mp3', 'md5-1'), (2, '/m/2.mp3', 'md5-2'),
+                                      (3, '/m/3.mp3', 'md5-3'), (4, '/m/4.mp3', 'md5-4');
+             INSERT INTO passages VALUES (1, 1, 'radio', 0, 100000), (2, 2, 'radio', 0, 100000),
+                                         (3, 3, 'radio', 0, 100000), (4, 4, 'radio', 0, 100000);
+             INSERT INTO passage_recordings (passage_id, mbid) VALUES
+                 (1, 'first-own'), (2, 'first-bare'), (3, 'second-bare'), (4, 'second-own');
+             INSERT INTO file_tags VALUES (1, 'First', 'The Band', NULL), (2, 'First', 'The Band', NULL),
+                                          (3, 'Second', 'The Band', NULL), (4, 'Second', 'The Band', NULL);
+             INSERT INTO recording_works VALUES
+                 ('first-own', 'w1'), ('first-bare', 'w1'), ('first-cover', 'w1'),
+                 ('second-own', 'w2'), ('second-bare', 'w2'), ('second-cover', 'w2');
+             INSERT INTO passage_lyrics VALUES
+                 ('md5-1', 'radio', 0, 100000, 'first-own', 'the band''s own first', 0, '2026-11-12 10:00:00.000', 'here'),
+                 ('md5-4', 'radio', 0, 100000, 'second-own', 'the band''s own second', 0, '2026-11-12 10:00:00.000', 'here'),
+                 ('far-1', 'radio', 0, 100000, 'first-cover', 'a cover of first', 0, '2026-11-13 10:00:00.000', 'elsewhere'),
+                 ('far-2', 'radio', 0, 100000, 'second-cover', 'a cover of second', 0, '2026-11-13 10:00:00.000', 'elsewhere');",
+        )
+        .unwrap();
+        // What sets the case up: each bare passage does show the cover's.
+        let saved = crate::db::SavedLyrics::load(&c, "main").unwrap();
+        for (bare, cover) in [(2, "a cover of first"), (3, "a cover of second")] {
+            let shown = crate::db::shown_words(&c, "main", &saved, bare).unwrap().unwrap();
+            assert_eq!((shown.tier, shown.text.as_str()), (4, cover), "passage {bare} borrows through its work");
+        }
+        let rep = generate(&c, &d, false).unwrap();
+        assert_eq!(rep.written, 2, "one file a name: {}", rep.summary("song"));
+        let held = |title: &str| std::fs::read_to_string(d.join("The Band").join(format!("{title}.lyrics"))).unwrap();
+        assert_eq!(held("First"), "the band's own first", "the owner numbered first");
+        assert_eq!(held("Second"), "the band's own second", "the borrower numbered first");
         let _ = std::fs::remove_dir_all(&d);
     }
 
