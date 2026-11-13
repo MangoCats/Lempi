@@ -62,7 +62,7 @@ Half sits in the empty part. 12,027 of the pairs are an album cut and a radio cu
 
 **`[SPEC-LYR-120]` Within a tier, words a person saved come before imported ones, and newer before older.** A tie is broken by the entry's key, so every node reads the same answer from the same rows. The order matters most in tier 4: 54 works have words on more than one recording, and in 33 of them the texts differ.
 
-**`[SPEC-LYR-125]` Tier 4 reaches 494 passages that show nothing today** (248 radio, 246 album, through 238 recordings), taking the library from 4,739 worded passages to 5,233. This needs no new table, and is the first step of §8.
+**`[SPEC-LYR-125]` Tier 4 reaches 494 passages that show nothing today** (248 radio, 246 album, through 238 recordings), taking the library from 4,739 worded passages to 5,233. This needs no new table, and is the first step of §8. *Measured on the desktop's running player once built, 2026-11-12, every radio passage asked for over `GET /lyrics`:* of 12,100, by then, 2,612 show words, 2,364 by their recording and 248 by a work. One imported row holds only a line break, and its passage now shows nothing where it showed an empty box. A request took 12 ms on average and 51 ms at most.
 
 **`[SPEC-LYR-130]` A passage can be marked as having no words, and the mark is an answer, not an absence.** Found in tier 1 or tier 2 it ends the search and nothing is shown: tier 2 is the same audio, so what is true of one cut is true of the other. A mark is never read in tiers 3 or 4, since another recording of a song may be sung where this one is not. Without it, tier 4 would show a song's words over an instrumental version of it.
 
