@@ -179,9 +179,14 @@ or artist.
 *Built 2026-10-09, all three.* A seed is a recording, so only an identified
 passage offers one; the search finds each recording once, however many
 passages carry it, named as Browse names it, and treats `%` and `_` as text.
-The panel and Browse change one seed at a time (`POST /programme/seed`), so a
-tick does not send the programme back; the page sends its whole edit with Save.
-The panel's boxes go with its own Save, like its other fields.
+The page sends its whole edit with Save.
+
+*Since 2026-11-12 the Programme page is the only one of the three.* At the
+maintainer's word the panel's row of time slots was taken out, wherever the
+panel opens: now playing, the queue, history and Browse. Browse's ☆ still
+opens the panel, for the recording's preferences `[SPEC-PREF-045]`. The route
+the boxes used, `POST /programme/seed`, one seed at a time, is kept and
+tested, and no page calls it.
 
 **`[SPEC-PGM-430]` The picker leads to the page.** Each skin's picker lists the
 time slots of the programme the node runs, under its name. Its empty state,

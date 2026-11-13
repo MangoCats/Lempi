@@ -2283,6 +2283,8 @@ const PREFERENCE = {
   defaults: { rotation: 2.0, recovery: 2.6, restraint: 0.0 },
   subject: { title: 'Fairytale of New York', artist: 'The Pogues',
              album: 'If I Should Fall from Grace with God' },
+  // A passage of the recording, for a caller that named none [SPEC-PREF-055].
+  passage_id: 4711,
   specials: [
     // Tagged by the MuLibPlay migration, never touched by this listener.
     { characteristic: 'user.christmas', class: 'christmasy', label: 'Christmas',
@@ -2387,6 +2389,16 @@ async function runPreference(skin) {
         /from If I Should Fall from Grace with God/.test(subject.textContent),
         `the artist and album must both appear, got "${subject.textContent}"`);
 
+  // The way to the passage's own page [SPEC-PREF-055]: the mark a Browse row
+  // carries. Opened with no passage named, it leads to the one the server
+  // names for the recording.
+  const info = panel.querySelector('.pref-info');
+  check(info && !info.hidden && info.textContent === 'ⓘ' && info.getAttribute('href') === '/passage/4711',
+        `the panel must lead to the recording's passage page, got hidden=${info && info.hidden} "${info && info.getAttribute('href')}"`);
+  // And the programme's time slots are no longer offered here [SPEC-PGM-420].
+  check(!/Seed of/.test(panel.textContent) && !panel.querySelector('.pref-seeds'),
+        'the panel must not offer the programme\'s time slots to seed');
+
   const specials = panel.querySelector('.pref-specials');
   check(!specials.hidden, 'the specials section must be shown when any are registered');
   const rows = [...specials.querySelectorAll('.pref-field')];
@@ -2427,6 +2439,19 @@ async function runPreference(skin) {
     check(!q.has('rotation') && !q.has('recovery') && !q.has('restraint'),
           'a field nobody touched must be absent, not resent');
   }
+  check(posted.every(u => !/^\/programme\//.test(u)), `Save must send nothing to the programme, got ${JSON.stringify(posted)}`);
+
+  // Opened from the title of what is playing, the ⓘ leads to THAT passage,
+  // which the skin hands on, not to whichever the server would name.
+  sock.onmessage({ data: JSON.stringify({ ...RICH, mbid: 'rec-1' }) });
+  window.document.getElementById('title').click();
+  await new Promise(r => setTimeout(r, 30));
+  check(!panel.hidden && !info.hidden && info.getAttribute('href') === `/passage/${RICH.passage_id}`,
+        `from now playing the panel must lead to the passage playing, got "${info.getAttribute('href')}"`);
+  // An artist is no one passage: its panel carries no mark.
+  runScript("Lempi.editPreference('artist', 'art-1', 'Some Performer');");
+  await new Promise(r => setTimeout(r, 30));
+  check(info.hidden && !info.hasAttribute('href'), 'an artist\'s panel must carry no way to a passage');
 
   console.log(`${('pref/' + skin).padEnd(11)} ${errors.length ? 'FAIL' : 'OK  '}  ` +
               `heading="${heading.slice(-34)}"  specials=${rows.length}  ` +

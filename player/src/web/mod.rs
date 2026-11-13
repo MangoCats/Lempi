@@ -1102,14 +1102,20 @@ mod tests {
         assert!(CORE.contains("href = '/programme'"), "the shared picker links to the page");
         let mulibplay = include_str!("skins/mulibplay/skin.js");
         assert!(mulibplay.contains("'/programme'"), "MuLibPlay's own list links to the page");
-        // Seeds: added by search on the page, from the shared panel, and
-        // from Browse; never moved, since their order is never read
-        // `[SPEC-PGM-115]`, `[SPEC-PGM-420]`.
+        // Seeds: added by search on the page, and only there since 2026-11-12,
+        // when the shared panel's boxes were taken out; never moved, since
+        // their order is never read `[SPEC-PGM-115]`, `[SPEC-PGM-420]`.
         assert!(PROGRAMME_JS.contains("/programme/search"), "the page searches for seeds");
         assert!(!PROGRAMME_JS.contains("'↑'") && !PROGRAMME_JS.contains("'↓'"), "seeds are a set: no arrows");
-        assert!(CORE.contains("/programme/seed?slot="), "the panel sends a seed change");
-        assert!(BROWSE_JS.contains("editPreference('recording', r.mbid"), "Browse opens the panel for a seed");
+        assert!(!CORE.contains("/programme/seed") && !CORE.contains("Seed of"),
+                "the shared panel no longer offers or sends a seed");
+        // The panel still opens from Browse, for the recording's preferences,
+        // and leads on to the passage's own page `[SPEC-PREF-055]`.
+        assert!(BROWSE_JS.contains("editPreference('recording', r.mbid, r.title, { passage: r.passage_id })"),
+                "Browse opens the panel, naming the row's passage");
         assert!(BROWSE_HTML.contains("id=\"pref-panel\""), "and carries the panel to open");
+        assert!(CORE.contains(r#"class="pref-info""#) && CORE.contains("`/passage/${pid}`"),
+                "the panel carries the way to the passage's page");
         // The hub's programme is asked about in every skin, from core, and
         // the page shows what it would change `[SPEC-PGM-410]`.
         assert!(CORE.contains("'/programme/pending'") && CORE.contains("'/programme/pending/answer'"));

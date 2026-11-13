@@ -140,11 +140,12 @@
   // `[REQ-VIS-285]`, plain text otherwise -- unidentified audio, or an
   // uncredited artist, the same case that already leaves `artist` unset.
   // `recording` lets an artist link open a panel for each artist the
-  // recording credits [SPEC-DIR-113].
-  const prefLink = (el, kind, id, text, recording) => {
+  // recording credits [SPEC-DIR-113]; `passage` is what the panel's ⓘ leads
+  // to [SPEC-PREF-055].
+  const prefLink = (el, kind, id, text, recording, passage) => {
     if (!el) return;
     el.classList.toggle('pref-link', !!id);
-    el.onclick = id ? () => Lempi.editPreference(kind, id, text, { recording }) : null;
+    el.onclick = id ? () => Lempi.editPreference(kind, id, text, { recording, passage }) : null;
   };
 
   // Reads the same snapshot the display does, so a click can only act on
@@ -198,7 +199,7 @@
   Lempi.subscribe(s => {
     latest = s;
     plain($('title'), s.title ?? '—');
-    prefLink($('title'), 'recording', s.mbid, s.title);
+    prefLink($('title'), 'recording', s.mbid, s.title, undefined, s.passage_id);
     pair('byword', 'artist', s.artist);
     prefLink($('artist'), 'artist', s.artist_mbid, s.artist, s.mbid);
     pair('fromword', 'album', s.album);

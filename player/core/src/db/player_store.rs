@@ -2383,6 +2383,28 @@ impl PlayerStore {
             .ok()
     }
 
+    /// A passage of a recording, for the preference panel's way to a passage's
+    /// own page `[SPEC-PREF-055]` where the surface that opened it had none
+    /// -- a history row names a recording, not a passage. The radio cut
+    /// before the album cut, the one the recording weighs most in, then the
+    /// lowest number, so the same recording leads to the same page each time.
+    /// `None` for a recording no passage names.
+    ///
+    /// `passage_recordings` has no index by recording, so this reads all of
+    /// it: 24,201 small rows on the hub, once per panel a person opens.
+    pub fn recording_passage(&self, mbid: &str) -> Option<i64> {
+        self.conn
+            .query_row(
+                "SELECT pr.passage_id FROM __LIB__.passage_recordings pr \
+                   JOIN __LIB__.passages p ON p.passage_id = pr.passage_id \
+                  WHERE pr.mbid = ?1 \
+                  ORDER BY p.kind = 'radio' DESC, pr.weight DESC, pr.passage_id LIMIT 1",
+                [mbid],
+                |r| r.get(0),
+            )
+            .ok()
+    }
+
     /// Every artist a recording credits, in the order the display names them
     /// (weight, then name) -- so the artist link can open a preference panel
     /// for each, the way the Program Director rotates by each
@@ -4116,6 +4138,25 @@ mod tests {
     fn an_unknown_subject_is_named_by_nothing_rather_than_failing() {
         let store = PlayerStore { conn: QualifyingConn::wrap_unsplit(historyable()) };
         assert_eq!(store.subject_naming("recording", "no-such-mbid").unwrap(), SubjectNaming::default());
+    }
+
+    /// `[SPEC-PREF-055]`: the passage the panel's ⓘ leads to where its caller
+    /// named none -- the recording's radio cut before its album cut, and
+    /// nothing for a recording no passage names.
+    #[test]
+    fn a_recording_leads_to_its_radio_passage() {
+        let c = fixture();
+        // The fixture's passage 2 is the radio cut; give the album cut the
+        // same recording, weighing more, and it must still not be chosen.
+        c.execute(
+            "INSERT INTO passage_recordings VALUES (1,'aaaaaaaa-0000-0000-0000-000000000001',1.0,'s')",
+            [],
+        )
+        .unwrap();
+        let store = PlayerStore { conn: QualifyingConn::wrap_unsplit(c) };
+        assert_eq!(store.recording_passage("aaaaaaaa-0000-0000-0000-000000000001"), Some(2));
+        assert_eq!(store.recording_passage("aaaaaaaa-0000-0000-0000-00000000000f"), Some(2), "a medley's lesser half");
+        assert_eq!(store.recording_passage("no-such-recording"), None);
     }
 
     #[test]

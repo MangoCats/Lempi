@@ -31,6 +31,10 @@ struct PreferenceView {
     /// Title, artist and album, so the panel's own heading names the
     /// recording the same way wherever it was opened from `[SPEC-PREF-090]`.
     subject: crate::db::SubjectNaming,
+    /// A passage of this recording, for the panel's way to a passage's own
+    /// page where the caller had none `[SPEC-PREF-055]`. `null` for an
+    /// artist, and for a recording no passage names.
+    passage_id: Option<i64>,
     /// Every registered special and this subject's own value for it
     /// `[SPEC-PREF-080]`. Always present, empty where the subject is an
     /// artist (specials are per recording) or no occasion is registered.
@@ -75,12 +79,14 @@ pub(super) async fn get_preference(
         // or a library half-populated, should still let a person tune
         // rotation. The heading falls back to whatever the caller passed.
         let subject = store.subject_naming(&kind, &id).unwrap_or_default();
+        let passage_id = if kind == "recording" { store.recording_passage(&id) } else { None };
         Ok::<_, String>(PreferenceView {
             rotation: row.rotation,
             recovery: row.recovery,
             restraint: row.restraint,
             defaults: defaults_for(&kind),
             subject,
+            passage_id,
             specials,
         })
     })

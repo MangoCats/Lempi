@@ -118,6 +118,8 @@ display only; the server remains the sole place a value actually takes
 effect, so a display bug here can misrepresent a number but never change
 what gets stored.
 
+**`[SPEC-PREF-055]` A recording's panel carries the way to a passage's own page: the ⓘ a Browse row carries, at the heading's right.** *(Asked for and built 2026-11-12.)* It leads to `/passage/:id` `[REQ-VIS-270]`, and from there to the passage's lyrics `[SPEC-LYR-181]`. The passage is the one the panel was opened from where its surface has one — what is playing, a queue row, a Browse row. A history row and a runner-up name a recording and no passage, so for those the server names one in the panel's own `GET`: the recording's radio cut before its album cut. An artist's panel carries no mark, an artist being no one passage. The same day the panel lost its row of the programme's time slots to tick `[SPEC-PGM-420]`.
+
 ## 4. The specials — MuLibPlay's other editable per-track values
 
 MuLibPlay's track editor carried more than the three tuning sliders §2
@@ -281,8 +283,6 @@ this edits — [SPEC009 `[SPEC-DIR-130]`](SPEC009-program-director.md) keeps
 seasonality a time layer rather than a flavor dimension on purpose — but it
 does mean these two readings of the same characteristic can disagree, which
 no code currently notices.
-
----
 
 ---
 

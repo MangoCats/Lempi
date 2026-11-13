@@ -700,7 +700,7 @@ const Lempi = (() => {
     const open = (kind, id, label, e) => {
       e.stopPropagation();
       e.preventDefault();
-      Lempi.editPreference(kind, id, label, { recording: item.mbid });
+      Lempi.editPreference(kind, id, label, { recording: item.mbid, passage: item.passage_id });
     };
     const titleEl = document.createElement(item.mbid ? 'a' : 'span');
     titleEl.className = 'pref-link pref-link-title';
@@ -775,7 +775,12 @@ const Lempi = (() => {
     // one it is. `.pref-specials` is filled per subject in
     // `editPreference` below, since which specials exist is a property of
     // the library rather than of this file `[SPEC-PREF-080]`.
+    // `.pref-info` is the way to the passage's own page, as a Browse row's
+    // ⓘ is `[SPEC-PREF-055]`: before the heading in the markup so a skin can
+    // set it at the heading's right, and shown only for a recording whose
+    // passage is known.
     panel.innerHTML = `
+      <a class="pref-info" title="passage details" hidden>ⓘ</a>
       <h2 class="pref-heading"></h2>
       <p class="pref-subject" hidden></p>
       <p class="pref-error" hidden></p>
@@ -783,7 +788,6 @@ const Lempi = (() => {
       ${field('recovery', 'Recovery')}
       ${field('restraint', 'Preference')}
       <div class="pref-specials" hidden></div>
-      <div class="pref-seeds" hidden></div>
       <div class="pref-actions">
         <button type="button" class="pref-cancel">Cancel</button>
         <button type="button" class="pref-save">Save</button>
@@ -1016,46 +1020,6 @@ const Lempi = (() => {
   // Save/Reset. `kind` is `'recording'` or `'artist'`; `id` its mbid.
   // A subject with no mbid (unidentified audio, an uncredited artist) has
   // nothing to open -- callers only invoke this when an id is present.
-  // "Seed of …": one box per time slot of the programme this node runs,
-  // ticked where the recording is already a seed [SPEC-PGM-420]. Returns
-  // what changed, for the panel's Save to send; nothing is sent from here.
-  async function renderSeeds(box, mbid) {
-    const initial = new Map();
-    const boxes = [];
-    const none = { changes: () => [] };
-    let doc;
-    try {
-      const r = await fetch('/programme/current');
-      if (!r.ok) return none;
-      doc = await r.json();
-    } catch { return none; }
-    if (!doc.slots?.length) return none;
-    const heading = document.createElement('h3');
-    heading.className = 'pref-section';
-    heading.textContent = doc.name ? `Seed of ${doc.name}'s time slots` : 'Seed of time slots';
-    const note = document.createElement('p');
-    note.className = 'pref-seeds-note';
-    note.textContent = 'A seed sets a time slot\'s sound: the player chooses music near it.';
-    box.append(heading, note);
-    for (const s of doc.slots) {
-      const on = s.seeds.some(x => x.mbid === mbid);
-      initial.set(s.id, on);
-      const label = document.createElement('label');
-      label.className = 'pref-seed';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox'; cb.checked = on; cb.dataset.slot = s.id;
-      label.append(cb, ` ${s.name}${s.start ? ` (${s.start})` : ''}`);
-      boxes.push(cb);
-      box.appendChild(label);
-    }
-    box.hidden = false;
-    return {
-      changes: () => boxes
-        .filter(cb => cb.checked !== initial.get(Number(cb.dataset.slot)))
-        .map(cb => ({ slot: cb.dataset.slot, on: cb.checked })),
-    };
-  }
-
   // Bumped whenever a new subject opens, so a credits fetch that lands
   // after the listener has moved on adds nothing to the new subject.
   let panelGen = 0;
@@ -1074,7 +1038,11 @@ const Lempi = (() => {
     const panel = prefPanelSlot();
     if (!panel) return; // this skin carries no #pref-panel slot (WinAmp)
     panel.freqPanel = freqPanelSlot();
-    const opened = openSubject(panel, kind, id, label);
+    // `opts.passage`: the passage the link was clicked on, where the caller
+    // has one -- what is playing, a queue row, a Browse row. The panel's ⓘ
+    // then leads to that passage's page; a caller with none (a history row)
+    // gets the one the server names for the recording `[SPEC-PREF-055]`.
+    const opened = openSubject(panel, kind, id, label, opts.passage);
     if (kind === 'artist' && opts.recording) addCoArtistPanels(gen, panel, opts.recording, id);
     return opened;
   }
@@ -1111,18 +1079,22 @@ const Lempi = (() => {
 
   // Fills one panel for one subject, fetches its current tuning, and wires
   // its own Save.
-  async function openSubject(panel, kind, id, label) {
+  async function openSubject(panel, kind, id, label, passage) {
     const err = panel.querySelector('.pref-error');
     const save = panel.querySelector('.pref-save');
     const subject = panel.querySelector('.pref-subject');
     const specialsBox = panel.querySelector('.pref-specials');
-    const seedsBox = panel.querySelector('.pref-seeds');
-    seedsBox.hidden = true;
-    seedsBox.textContent = '';
-    // Which time slots this recording seeds, for a recording only
-    // [SPEC-PGM-420]. Its own fetch, not awaited: the panel must not wait on
-    // the programme to open.
-    const seeds = kind === 'recording' ? renderSeeds(seedsBox, id) : null;
+    // The ⓘ to the passage's own page `[SPEC-PREF-055]`: a recording's panel
+    // only -- an artist is no one passage. Shown at once where the caller
+    // knew the passage, and otherwise when the server has named one below.
+    const info = panel.querySelector('.pref-info');
+    const showInfo = pid => {
+      const known = kind === 'recording' && pid != null;
+      info.hidden = !known;
+      if (known) info.setAttribute('href', `/passage/${pid}`);
+      else info.removeAttribute('href');
+    };
+    showInfo(passage);
     err.hidden = true;
     // Cleared, not left showing the last subject's: the fetch below may
     // fail, and a panel headed by one recording while naming another's
@@ -1164,6 +1136,7 @@ const Lempi = (() => {
       return;
     }
 
+    showInfo(passage ?? current.passage_id);
     const named = current.subject ?? {};
     panel.querySelector('.pref-heading').textContent =
       `${kind === 'artist' ? 'Artist' : 'Recording'} preferences — ${named.title ?? label ?? id}`;
@@ -1232,14 +1205,6 @@ const Lempi = (() => {
         const r = await fetch(`/preference/${kind}/${encodeURIComponent(id)}?${q}`,
           { method: 'POST' });
         if (!r.ok) throw new Error(`the server answered ${r.status}`);
-        // Then the seed boxes that changed, one request each; a refusal
-        // (a slot gone since the panel opened, a full slot) is shown as the
-        // player wrote it.
-        for (const c of (seeds ? (await seeds).changes() : [])) {
-          const s = await fetch(`/programme/seed?slot=${c.slot}&mbid=${encodeURIComponent(id)}&on=${c.on ? 1 : 0}`,
-            { method: 'POST' });
-          if (!s.ok) throw new Error(await s.text() || `the server answered ${s.status}`);
-        }
         closePrefPanel(panel);
       } catch (e) {
         err.textContent = `could not save: ${e.message}`;

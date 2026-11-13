@@ -1027,7 +1027,7 @@
     // below): the two features coexist rather than compete for one click.
     $('title').classList.toggle('pref-link', !!s.mbid);
     $('title').onclick = s.mbid
-      ? e => { e.stopPropagation(); Lempi.editPreference('recording', s.mbid, s.title); }
+      ? e => { e.stopPropagation(); Lempi.editPreference('recording', s.mbid, s.title, { passage: s.passage_id }); }
       : null;
     showByline(s);
     setText($('plays'), Lempi.fmt.plays(s.plays, s.last_played));

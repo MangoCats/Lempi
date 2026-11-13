@@ -415,22 +415,24 @@
         info.title = 'passage details';
         info.onclick = e => e.stopPropagation();
         li.appendChild(info);
-        // Make this recording a seed of a time slot [SPEC-PGM-420]: the
-        // shared preference panel, opened beneath this row. An unidentified
-        // passage names no recording, and cannot be one; nor can one rotation
-        // never plays [SPEC-SIL-070].
+        // This recording's preferences: the shared panel, opened beneath this
+        // row [SPEC-PREF-045]. Until 2026-11-12 the panel also carried the
+        // programme's time slots to tick, and this star was the way to make a
+        // seed from Browse; seeds are the Programme page's now [SPEC-PGM-420].
+        // An unidentified passage names no recording, and has none to tune;
+        // nor has one rotation never plays [SPEC-SIL-070].
         if (r.mbid && !r.album_only) {
           const seed = document.createElement('a');
           seed.className = 'info seed';
           seed.href = '#';
           seed.textContent = '☆';
-          seed.title = 'seed of a time slot, and preferences';
+          seed.title = 'preferences for this recording';
           seed.onclick = e => {
             e.preventDefault();
             e.stopPropagation();
             const panel = document.getElementById('pref-panel');
             if (panel) li.after(panel);
-            Lempi.editPreference('recording', r.mbid, r.title);
+            Lempi.editPreference('recording', r.mbid, r.title, { passage: r.passage_id });
           };
           li.appendChild(seed);
         }

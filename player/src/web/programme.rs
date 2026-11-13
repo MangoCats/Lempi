@@ -128,7 +128,10 @@ pub(super) async fn search_seeds(
 
 /// One seed in or out of one time slot `[SPEC-PGM-420]`:
 /// `?slot=<id>&mbid=<recording>&on=1|0`. What the preference panel and
-/// Browse send, so that ticking one box does not send the programme back.
+/// Browse sent, so that ticking one box did not send the programme back.
+/// No page of the player's sends it since 2026-11-12, when the panel's seed
+/// boxes were taken out at the maintainer's word: the Programme page changes
+/// seeds with its own Save. The route is kept, tested, and without a caller.
 pub(super) async fn set_seed(
     State(ui): State<Ui>,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
