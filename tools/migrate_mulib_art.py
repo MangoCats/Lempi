@@ -75,7 +75,7 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="report what would change; write nothing")
     args = ap.parse_args()
 
-    src = sqlite3.connect(f"file:{args.mulib}?mode=ro&immutable=1", uri=True)
+    src = sqlite3.connect(lempi_db.sqlite_uri(args.mulib, immutable=True), uri=True)
     rows = src.execute(
         "SELECT mbid, coverArt, backCover FROM albums "
         "WHERE mbid IS NOT NULL AND (coverArt IS NOT NULL OR backCover IS NOT NULL)"

@@ -120,5 +120,6 @@ The Gaia/Stage B pipeline — reproducing AcousticBrainz's own extraction chain 
 | `check_docs.py` | Documentation governance checks `[GOV-DOC-010..040]`. |
 | `check_forbidden_names.py` | Fails if a retired project name appears outside the one file allowed to record it `[GOV-FBN-010..020]`. |
 | `echo_skew.py` | How far apart two echo nodes really are, sampled continuously from each node's own anchor `[GDE-ARC-037]`. Replaces `echo_skew.sh` for anything longer than a spot check. `--clocks` asks each node's own chrony what its clock error is, so a reading is never ambiguous about clock-versus-audio `[GDE-ARC-038]`. |
+| `lempi_db.py` | Opens a database whichever shape it is, a whole file or either half of a split pair with the other attached `[IMPL-DBSPLIT-025]`. Its `sqlite_uri` is the one place here a SQLite address is written: a path's `#`, `?` and `%` are escaped, since an address put together by hand names another file where the path holds one. `test_sqlite_uri.py` refuses a new one written by hand. |
 | `load_occasions.py` | Load MuLibPlay's four seasonal curves as data `[SPEC-DIR-134]`. |
 | `secret.py` | Where credentials come from, in one place. |

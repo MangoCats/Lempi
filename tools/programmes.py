@@ -43,6 +43,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import lempi_db  # noqa: E402
 import mesh as meshmod  # noqa: E402
 
 DDL = """
@@ -178,7 +179,7 @@ def store(c: sqlite3.Connection, name: str, slots: list, origin: str) -> dict:
 def read_listener(listener: str) -> tuple[str | None, list]:
     """The programme a listener file runs: its recorded name, if any, and its
     slots with their seeds."""
-    uri = "file:" + os.path.abspath(listener).replace("?", "%3f").replace("#", "%23") + "?mode=ro"
+    uri = lempi_db.ro_uri(os.path.abspath(listener))
     c = sqlite3.connect(uri, uri=True)
     try:
         slots = {pid: {"name": n, "start": t, "seeds": []}
@@ -327,7 +328,7 @@ def unflavored(library: str | None, slots: list) -> list | None:
     if not library:
         return None
     try:
-        lib = sqlite3.connect(f"file:{library}?mode=ro", uri=True, timeout=10)
+        lib = sqlite3.connect(lempi_db.ro_uri(library), uri=True, timeout=10)
     except sqlite3.Error:
         return None
     try:

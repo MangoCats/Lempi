@@ -27,13 +27,15 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import lempi_db  # noqa: E402
 import mesh as meshmod  # noqa: E402
 import split_database  # noqa: E402  -- the listener half's tables
 import star_sync as ss  # noqa: E402
 
 LISTENER_SCRIPT = """
 import sqlite3, sys
-c = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
+# Escaped here, by hand: this runs on the node, where there is no lempi_db.
+c = sqlite3.connect("file:" + sys.argv[1].replace("%", "%25").replace("?", "%3f").replace("#", "%23") + "?mode=ro", uri=True)
 print("\\n".join(r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")))
 """
 
@@ -59,7 +61,7 @@ def registry_row(plan, name):
     sidecar = os.path.splitext(ss.at_root(plan["hub"]["library"]))[0] + ".console.db"
     if not os.path.exists(sidecar):
         return None
-    c = sqlite3.connect(f"file:{sidecar}?mode=ro", uri=True)
+    c = sqlite3.connect(lempi_db.ro_uri(sidecar), uri=True)
     c.row_factory = sqlite3.Row
     try:
         r = c.execute("SELECT * FROM sync_peers WHERE name = ?", (name,)).fetchone()

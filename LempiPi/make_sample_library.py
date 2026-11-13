@@ -25,6 +25,11 @@ import sqlite3
 import subprocess
 import sys
 
+# For `lempi_db.ro_uri`: an address written by hand names another file
+# where the path holds `#`, `?` or `%`.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
+import lempi_db  # noqa: E402
+
 DEST_AUDIO = "/srv/library/audio"
 
 # Taken by DELETING from a copy rather than by building one up: the schema has
@@ -122,7 +127,7 @@ def main():
         return 1
 
     say(f"sample library from {a.src}")
-    src = sqlite3.connect(f"file:{a.src}?mode=ro", uri=True)
+    src = sqlite3.connect(lempi_db.ro_uri(a.src), uri=True)
     keep = select(src, a.albums)
     src.close()
     if not keep:
@@ -153,7 +158,7 @@ def main():
     # rewritten to where the files will live on the Pi, so a re-run that read
     # them would try to copy from /srv/library/audio on this machine and find
     # nothing -- which is exactly what it did before this was fixed.
-    src = sqlite3.connect(f"file:{a.src}?mode=ro", uri=True)
+    src = sqlite3.connect(lempi_db.ro_uri(a.src), uri=True)
     ids = ",".join(str(i) for i in keep)
     paths = [r[0] for r in src.execute(
         f"SELECT path FROM files WHERE file_id IN ({ids})")]

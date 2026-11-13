@@ -19,6 +19,8 @@ import os
 import posixpath
 import sqlite3
 
+import lempi_db
+
 STAGE = "retire"
 # A node's answers that settle a file there: moved, already gone, or someone
 # else's bytes at that path. "still catalogued" and "refused" are asked again.
@@ -75,7 +77,7 @@ def retired_files(conn) -> dict[str, dict]:
 
 
 def _paths(db: str) -> dict[str, str]:
-    c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    c = sqlite3.connect(lempi_db.ro_uri(db), uri=True)
     try:
         return {m: p for m, p in c.execute("SELECT audio_md5, path FROM files") if p}
     except sqlite3.OperationalError:
@@ -95,7 +97,7 @@ def retire_entries(hub_library: str, baseline: str, target: str, settled=frozens
 
     `replacement_here`: whether this patch leaves the node the audio that
     replaced it `[SPEC-RTF-050]`."""
-    hub = sqlite3.connect(f"file:{hub_library}?mode=ro", uri=True)
+    hub = sqlite3.connect(lempi_db.ro_uri(hub_library), uri=True)
     try:
         gone = retired_files(hub)
     finally:

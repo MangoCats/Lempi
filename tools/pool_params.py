@@ -111,7 +111,7 @@ def main() -> int:
     if len(args) > 1:
         # The inherited database is a whole MuLibPlay-era file, not a half
         # of anything -- opened plainly, on purpose.
-        inh = sqlite3.connect(f"file:{args[1]}?mode=ro", uri=True)
+        inh = sqlite3.connect(lempi_db.ro_uri(args[1]), uri=True)
         iv, ic = load(inh, False)
         print(f"inherited: {len(iv)} recordings\n")
         for pid in sorted(seeds_by_prog)[:3]:

@@ -29,6 +29,8 @@ import tarfile
 
 import zstandard
 
+import lempi_db
+
 # highlevel/<xx>/<x>/<mbid>-<submission>.json
 NAME_RE = re.compile(r"^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-(\d+)\.json$")
 
@@ -59,7 +61,7 @@ def library_mbids(db_paths):
         if not os.path.exists(path):
             print(f"  skip (absent): {path}", file=sys.stderr)
             continue
-        conn = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
+        conn = sqlite3.connect(lempi_db.sqlite_uri(path, immutable=True), uri=True)
         before = len(found)
         for q in queries:
             try:

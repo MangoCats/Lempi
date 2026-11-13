@@ -49,6 +49,7 @@ from cryptography.x509.oid import NameOID
 # The player's web port comes from the one place `[GDE-CLI-100]`, not a second
 # literal here -- `tools/cli/tests.rs` refuses a re-written default.
 from lempi_control import LEMPI_DEFAULT_PORT
+import lempi_db
 
 ROLES = ("hub", "leaf-vipunen", "player", "phone")
 MEMBER_PORT = 5732
@@ -555,7 +556,7 @@ def store_upload(mdir: str, fp: str, data: bytes, clock_ms: int | None) -> dict:
     with open(part, "wb") as fh:
         fh.write(data)
     try:
-        c = sqlite3.connect(f"file:{part}?mode=ro", uri=True)
+        c = sqlite3.connect(lempi_db.ro_uri(part), uri=True)
         try:
             if c.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                 raise ValueError("the upload is not an intact database")

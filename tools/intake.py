@@ -53,6 +53,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import lempi_db  # noqa: E402
 import pending as pendingmod  # noqa: E402  -- the decisions a person made [SPEC048]
 import mesh as meshmod  # noqa: E402  -- membership, enrolment and the members' channel [SPEC049]
 import member_updates  # noqa: E402  -- catalogue updates to a member [REQ-AND-330]
@@ -83,7 +84,7 @@ def norm(s) -> str:
 
 
 def open_ro(path: str) -> sqlite3.Connection:
-    return sqlite3.connect(f"file:{os.path.abspath(path)}?mode=ro", uri=True, check_same_thread=False)
+    return sqlite3.connect(lempi_db.ro_uri(os.path.abspath(path)), uri=True, check_same_thread=False)
 
 
 def load(db: str):

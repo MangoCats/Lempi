@@ -41,6 +41,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import lempi_control  # noqa: E402
+import lempi_db  # noqa: E402
 
 
 def say(text: str = "") -> None:
@@ -57,7 +58,7 @@ def when(s: str) -> dt.datetime:
 
 
 def open_ro(path: str) -> sqlite3.Connection:
-    return sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
+    return sqlite3.connect(lempi_db.sqlite_uri(path, immutable=True), uri=True)
 
 
 def daily_backups(root: str) -> list[dict]:
@@ -85,8 +86,8 @@ def title_of(conn, mbid):
 
 
 def plan(library: str, listener: str, backups: list[dict]) -> dict:
-    lib = sqlite3.connect(f"file:{library}?mode=ro", uri=True)
-    lib.execute(f"ATTACH 'file:{listener}?mode=ro' AS l")
+    lib = sqlite3.connect(lempi_db.ro_uri(library), uri=True)
+    lib.execute("ATTACH ? AS l", (lempi_db.ro_uri(listener),))
     groups = lib.execute("SELECT decided_at FROM l.id_reviews GROUP BY decided_at "
                          "HAVING COUNT(*) > 1 ORDER BY decided_at").fetchall()
     out = dict(groups=[], deletes=[], restores=[], unresolved=[], already=[])
@@ -199,7 +200,7 @@ def commit(library: str, listener: str, p: dict, backup_root: str) -> None:
     dest = os.path.join(backup_root, f"pre-repair-{stamp}")
     os.makedirs(dest)
     for src in (library, listener):
-        s = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+        s = sqlite3.connect(lempi_db.ro_uri(src), uri=True)
         d = sqlite3.connect(os.path.join(dest, os.path.basename(src)))
         s.backup(d)
         ok = d.execute("PRAGMA integrity_check").fetchone()[0]

@@ -50,7 +50,7 @@ CREATE INDEX IF NOT EXISTS recording_works_by_work ON recording_works(work_mbid)
 
 def read_cache(path: str):
     """`{recording mbid: [(work mbid, title), ...]}` from the crawl's cache."""
-    cc = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    cc = sqlite3.connect(lempi_db.ro_uri(path), uri=True)
     out, errors = {}, 0
     for mbid, body in cc.execute("SELECT mbid, response FROM work_cache"):
         d = json.loads(body)

@@ -77,7 +77,6 @@ visible at its call site rather than discovered later.
 from __future__ import annotations
 
 import os
-import pathlib
 import sqlite3
 import sys
 
@@ -130,19 +129,42 @@ def _tables(conn, schema="main") -> set[str]:
         f"SELECT name FROM {schema}.sqlite_master WHERE type='table'")}
 
 
-def ro_uri(path: str) -> str:
-    """`path` as a read-only SQLite address, escaped.
+def sqlite_uri(path, *, read_only: bool = True, immutable: bool = False) -> str:
+    """`path` as a SQLite `file:` address, escaped: the one place under
+    `tools/` an address is written.
 
     Written `f"file:{path}?mode=ro"`, a path holding `#`, `?` or `%` names
-    another file: `#` starts a fragment, `?` a query, `%` an escape. Under a
-    folder named `Music #2` that opened -- and with a writable open would have
-    made -- `Music `, so a pair there read as empty, and `pair_journal.py`
-    read a WAL file as `delete`. Found 2026-11-13; `read_only_uri` in the
-    player's `db/mod.rs` records the same lesson of 2026-10-09. `markers`
-    below and `pair_journal.py` use this. The other addresses in this module
-    and across `tools/` are still written the old way.
+    another file: `#` starts a fragment, `?` a query, `%` an escape. Measured
+    2026-11-13, Windows, SQLite 3.50.4, over a folder named `Music #2`: the
+    address named `Music ` instead, and its `?mode=ro`, coming after the `#`,
+    went with the rest of the fragment. So an address meant to be read-only
+    **made that file, empty, without an error**: a pair there read as no pair,
+    and a WAL file as `delete`. Under `pct %41` nothing opened. Forty-odd
+    places wrote the address that way; they call this now, and
+    `test_sqlite_uri.py` refuses a new one.
+
+    Those three characters are escaped, `%` first so the others' escapes are
+    not escaped again, and nothing else is touched -- which is `read_only_uri`
+    in the player's `db/mod.rs`, written for the same fault on 2026-10-09. So
+    the address of every path that worked before is the address it was: a
+    space, `&`, `;`, `+`, a Windows path's own separators and a letter outside
+    ASCII all open as they are, measured the same day, for `connect` and for
+    `ATTACH`, and a relative path stays relative. `pathlib`'s `as_uri()`
+    opens the same files and would have rewritten every address to do it.
+
+    The connection must be opened with `uri=True` for this to be read as an
+    address at all -- for an `ATTACH` too. On one opened without it, SQLite
+    takes `file:b.db` for a file's name, which is what `passage_orphans.py
+    --commit` did; `open_pair` there says what came of it.
     """
-    return pathlib.Path(path).resolve().as_uri() + "?mode=ro"
+    escaped = os.fspath(path).replace("%", "%25").replace("?", "%3f").replace("#", "%23")
+    query = [q for q, on in (("mode=ro", read_only), ("immutable=1", immutable)) if on]
+    return "file:" + escaped + ("?" + "&".join(query) if query else "")
+
+
+def ro_uri(path) -> str:
+    """`path` as a read-only SQLite address: [`sqlite_uri`]'s default."""
+    return sqlite_uri(path)
 
 
 def markers(path: str) -> tuple[bool, bool]:
@@ -322,7 +344,7 @@ def connect(path: str, role: str, *, writable: bool = False,
 
     this = shape(path)
     if this == EMPTY:
-        return sqlite3.connect(path if writable else f"file:{path}?mode=ro",
+        return sqlite3.connect(path if writable else ro_uri(path),
                                uri=not writable, check_same_thread=check_same_thread,
                                **({} if timeout is None else {"timeout": timeout}))
 
@@ -333,7 +355,7 @@ def connect(path: str, role: str, *, writable: bool = False,
         candidate = (find_peer(path, ROLE_LISTENER, peer)
                      or find_peer(path, ROLE_LIBRARY, peer))
         if not candidate or os.path.samefile(candidate, path):
-            return sqlite3.connect(path if writable else f"file:{path}?mode=ro",
+            return sqlite3.connect(path if writable else ro_uri(path),
                                    uri=not writable, check_same_thread=check_same_thread,
                                    **({} if timeout is None else {"timeout": timeout}))
         # A peer exists AND this file carries both markers -- one of them is
@@ -371,7 +393,7 @@ def connect(path: str, role: str, *, writable: bool = False,
             print(f"lempi_db: {path} looks like the {this} half of a split database "
                   f"but no {want} half was found; opening it alone. Pass it "
                   f"explicitly, or set LEMPI_{want.upper()}.", file=sys.stderr)
-        return sqlite3.connect(path if writable else f"file:{path}?mode=ro",
+        return sqlite3.connect(path if writable else ro_uri(path),
                                uri=not writable, check_same_thread=check_same_thread,
                                **({} if timeout is None else {"timeout": timeout}))
 
@@ -400,14 +422,14 @@ def connect(path: str, role: str, *, writable: bool = False,
     attach_writable = peer_writable
 
     conn = sqlite3.connect(
-        f"file:{main_path}" + ("" if main_writable else "?mode=ro"), uri=True,
+        sqlite_uri(main_path, read_only=not main_writable), uri=True,
         check_same_thread=check_same_thread,
         **({} if timeout is None else {"timeout": timeout}))
     other = ROLE_LIBRARY if role == ROLE_LISTENER else ROLE_LISTENER
     alias = ALIAS[other]
     conn.execute(
         "ATTACH DATABASE ? AS " + alias,
-        (f"file:{attach_path}" + ("" if attach_writable else "?mode=ro"),))
+        (sqlite_uri(attach_path, read_only=not attach_writable),))
 
     found = shadows(conn, alias)
     if found:

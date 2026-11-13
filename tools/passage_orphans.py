@@ -49,6 +49,8 @@ import argparse
 import sqlite3
 import sys
 
+import lempi_db
+
 # `(table, column)` for every listener-side reference to `passages`.
 # Ordered as `sqlite_master` reports them, so a diff against the schema
 # reads in the same order.
@@ -94,14 +96,21 @@ def clear(conn, dry_run: bool = False) -> dict[str, int]:
 
 
 def open_pair(listener: str, library: str | None, writable: bool):
-    """A connection that can see both halves, whichever shape this is."""
-    if writable:
-        conn = sqlite3.connect(listener)
-    else:
-        conn = sqlite3.connect(f"file:{listener}?mode=ro", uri=True)
+    """A connection that can see both halves, whichever shape this is.
+
+    **Opened with `uri=True` to write as well as to read.** The catalogue is
+    attached by address, and SQLite reads an address in an `ATTACH` only on a
+    connection opened for addresses. Until 2026-11-13 the writable one was
+    opened plainly, and `ATTACH 'file:library.db'` then named a *file* called
+    that. Measured on Windows that day: given an absolute path it was refused,
+    `unable to open database`; given a relative one an empty database was
+    attached beside a stray file named `file`, no `passages` was in reach,
+    every table was skipped as absent, and `--commit --library` cleared
+    nothing where the dry run before it had counted orphans. Not measured on
+    Linux, where a colon is an ordinary character in a file's name."""
+    conn = sqlite3.connect(lempi_db.sqlite_uri(listener, read_only=not writable), uri=True)
     if library and library != listener:
-        mode = "" if writable else "?mode=ro"
-        conn.execute("ATTACH DATABASE ? AS lib", (f"file:{library}{mode}",))
+        conn.execute("ATTACH DATABASE ? AS lib", (lempi_db.sqlite_uri(library, read_only=not writable),))
     return conn
 
 
@@ -113,9 +122,9 @@ def main() -> int:
     args = ap.parse_args()
 
     conn = open_pair(args.db, args.library, writable=args.commit)
-    # ATTACH needs a URI for read-only, and sqlite3 only honours that with
-    # uri=True on the *connection* -- reopened here rather than silently
-    # attaching read-write.
+    # The catalogue is attached by address, read-only for a dry run, and
+    # sqlite3 honours an address only with uri=True on the *connection* --
+    # which `open_pair` sets for the write as well as the read.
     try:
         found = clear(conn, dry_run=not args.commit)
     except sqlite3.OperationalError as e:

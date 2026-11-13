@@ -37,6 +37,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import lempi_db  # noqa: E402
 import star_merge  # noqa: E402
 
 TABLES = ("id_reviews", "boundary_reviews")
@@ -95,12 +96,12 @@ def mismatches(hub_library: str, node_cat: str, hub_listener: str, unmap: dict) 
     number: the hub's passage and the node's it is written under must be the
     same file, kind and start. `passage_unmap` matches by file and position,
     which a node holding a cut the hub does not would defeat."""
-    h, n = sqlite3.connect(f"file:{hub_library}?mode=ro", uri=True), sqlite3.connect(node_cat)
+    h, n = sqlite3.connect(lempi_db.ro_uri(hub_library), uri=True), sqlite3.connect(node_cat)
     hub, node = natural(h), natural(n)
     alias = star_merge.aliases(hub_library)
     h.close()
     n.close()
-    c = sqlite3.connect(f"file:{hub_listener}?mode=ro", uri=True)
+    c = sqlite3.connect(lempi_db.ro_uri(hub_listener), uri=True)
     bad = []
     for t in TABLES:
         for (pid,) in c.execute(f"SELECT passage_id FROM {t}"):
@@ -116,7 +117,7 @@ def mismatches(hub_library: str, node_cat: str, hub_listener: str, unmap: dict) 
 
 
 def build_sql(hub_listener: str, unmap: dict, node_cols: dict, hub_name: str) -> tuple[str, dict]:
-    c = sqlite3.connect(f"file:{hub_listener}?mode=ro", uri=True)
+    c = sqlite3.connect(lempi_db.ro_uri(hub_listener), uri=True)
     sql = []
     counts = {}
     for t in TABLES:

@@ -77,7 +77,7 @@ def source_ratings(mulib: str) -> list[tuple[str, str, float]]:
     and is returned anyway so the caller can report it rather than quietly
     counting a smaller total.
     """
-    con = sqlite3.connect(f"file:{mulib}?mode=ro&immutable=1", uri=True)
+    con = sqlite3.connect(lempi_db.sqlite_uri(mulib, immutable=True), uri=True)
     rows = con.execute(
         "SELECT mbidRecording, name, profanity FROM tracks "
         "WHERE profanity IS NOT NULL AND profanity <> 0 ORDER BY profanity DESC"

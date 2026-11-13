@@ -1768,7 +1768,7 @@ class Runner:
                if x.get("outcome") in ("damaged", "missing", "unreadable") and x.get("audio_md5")]
         if not bad:
             return []
-        db = sqlite3.connect(f"file:{self.library}?mode=ro", uri=True)
+        db = sqlite3.connect(lempi_db.ro_uri(self.library), uri=True)
         try:
             held = {r[0] for r in db.execute(
                 f"SELECT audio_md5 FROM files WHERE audio_md5 IN ({','.join('?' * len(bad))})", bad)}

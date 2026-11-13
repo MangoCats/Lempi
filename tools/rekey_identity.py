@@ -100,7 +100,7 @@ def backup(conn, dest_dir: str) -> None:
     os.makedirs(dest_dir)
     for schema, path in [(r[1], r[2]) for r in conn.execute("PRAGMA database_list")]:
         dest = os.path.join(dest_dir, os.path.basename(path))
-        src = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        src = sqlite3.connect(lempi_db.ro_uri(path), uri=True)
         out = sqlite3.connect(dest)
         src.backup(out)
         ok = out.execute("PRAGMA integrity_check").fetchone()[0]

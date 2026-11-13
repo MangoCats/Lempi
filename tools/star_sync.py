@@ -77,6 +77,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
+import lempi_db  # noqa: E402  -- the one place an address is written
 import star_distribute as sd  # noqa: E402  -- ssh, for a player's start and stop and the mirror
 import star_merge as sm  # noqa: E402
 import star_patch as sp  # noqa: E402
@@ -540,8 +541,8 @@ def files_to_ask(summary_db, sent_lib, touched):
     them every cover the hub corrected [SPEC-STAR-945]."""
     span = ("SELECT f.audio_md5, p.kind, p.start_ms, p.end_ms "
             "FROM passages p JOIN files f USING (file_id)")
-    s = sqlite3.connect(f"file:{summary_db}?mode=ro", uri=True)
-    b = sqlite3.connect(f"file:{sent_lib}?mode=ro", uri=True)
+    s = sqlite3.connect(lempi_db.ro_uri(summary_db), uri=True)
+    b = sqlite3.connect(lempi_db.ro_uri(sent_lib), uri=True)
     try:
         held = {r[0] for r in s.execute("SELECT audio_md5 FROM files")}
         sent = {r[0] for r in b.execute("SELECT audio_md5 FROM files")}
@@ -557,7 +558,7 @@ def rows_wanted(files, *libs):
     `libs` -- the copy last sent, and the hub -- links to them. The node widens it by
     what it links itself, so the scope covers a row on either side."""
     rec, rel, art = set(), set(), set()
-    conns = [sqlite3.connect(f"file:{p}?mode=ro", uri=True) for p in libs]
+    conns = [sqlite3.connect(lempi_db.ro_uri(p), uri=True) for p in libs]
     try:
         for c in conns:
             fids = _in(c, "SELECT file_id FROM files WHERE audio_md5 IN ({})", files)
@@ -589,7 +590,7 @@ def baseline_from_rows(sent_lib, hub_lib, answer, out):
     scope = {k: set(v) for k, v in answer["scope"].items()}
     node = {t["name"]: t for t in answer["tables"]}
     b = sqlite3.connect(out)
-    h = sqlite3.connect(f"file:{hub_lib}?mode=ro", uri=True)
+    h = sqlite3.connect(lempi_db.ro_uri(hub_lib), uri=True)
     report = {"files": len(scope["files"]), "rows": {}, "blobs_unmatched": 0, "tables_absent": []}
     try:
         def rows_of(t):
@@ -711,7 +712,7 @@ def links_path(run):
 
 def node_music_root(summary_db):
     """The one folder every file a node catalogues lies under [SPEC-LNK-052]."""
-    s = sqlite3.connect(f"file:{summary_db}?mode=ro", uri=True)
+    s = sqlite3.connect(lempi_db.ro_uri(summary_db), uri=True)
     try:
         dirs = [posixpath.dirname(r[0].replace("\\", "/")) for r in s.execute("SELECT path FROM files") if r[0]]
     finally:
@@ -1035,7 +1036,7 @@ def snapshot(plan, only=None):
     baselines = {hub["name"]: {"listener": os.path.join(hd, "listener.db"), "library": os.path.join(hd, "library.db")}}
     say(f"  {hub['name']}: both halves copied here")
     # [SPEC-LNK-040]: what the hub's catalogue names and does not hold, asked of each node below.
-    hc = sqlite3.connect(f"file:{os.path.join(hd, 'library.db')}?mode=ro", uri=True)
+    hc = sqlite3.connect(lempi_db.ro_uri(os.path.join(hd, "library.db")), uri=True)
     try:
         links = ci.find(hc)
     finally:
@@ -2569,7 +2570,8 @@ def status(plan):
 ADOPT_SCRIPT = """
 import hashlib, sqlite3, sys
 src, dst = sys.argv[1], sys.argv[2]
-s = sqlite3.connect("file:" + src + "?mode=ro", uri=True)
+# Escaped here, by hand: this runs on the node, where there is no lempi_db.
+s = sqlite3.connect("file:" + src.replace("%", "%25").replace("?", "%3f").replace("#", "%23") + "?mode=ro", uri=True)
 d = sqlite3.connect(dst)
 s.backup(d)
 ok = d.execute("PRAGMA integrity_check").fetchone()[0]

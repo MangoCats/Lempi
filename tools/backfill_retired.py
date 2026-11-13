@@ -45,7 +45,7 @@ def earlier_rows(before: list[str]) -> dict[str, list[tuple]]:
     """`{album folder: [(name, audio_md5, path, sha256, size_bytes)]}` across every copy."""
     out: dict[str, list[tuple]] = {}
     for p in before:
-        c = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+        c = sqlite3.connect(lempi_db.ro_uri(p), uri=True)
         try:
             have = {r[1] for r in c.execute("PRAGMA table_info(files)")}
             cols = ", ".join(x if x in have else "NULL" for x in ("sha256", "size_bytes"))

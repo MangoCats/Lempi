@@ -184,7 +184,8 @@ def parse_rows(output: str) -> list:
 # which is the posture meant here -- not the `immutable` flag.
 _PY_FALLBACK = (
     "import sqlite3,json,sys;"
-    "c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True);"
+    "c=sqlite3.connect('file:'+sys.argv[1].replace('%','%25').replace('?','%3f').replace('#','%23')"
+    "+'?mode=ro',uri=True);"
     "c.row_factory=sqlite3.Row;"
     "r=[dict(x) for x in c.execute(sys.argv[2])];"
     "print(json.dumps(r) if r else '')"

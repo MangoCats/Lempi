@@ -42,6 +42,7 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import lempi_db  # noqa: E402
 
 AGENT = "Lempi/0.1 (+https://github.com/MangoCats/Lempi)"
 MB = "https://musicbrainz.org/ws/2/recording"
@@ -71,7 +72,7 @@ def pending_dir(db: str) -> str:
 
 
 def open_ro(db: str) -> sqlite3.Connection:
-    return sqlite3.connect(f"file:{os.path.abspath(db)}?mode=ro", uri=True)
+    return sqlite3.connect(lempi_db.ro_uri(os.path.abspath(db)), uri=True)
 
 
 def sha256_file(path: str) -> str:

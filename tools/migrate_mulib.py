@@ -48,6 +48,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # kept its own ffmpeg copy until then.
 import ingest_folder  # noqa: E402
 from ingest_folder import audio_md5  # noqa: E402
+import lempi_db  # noqa: E402
 
 SR = 44100.0
 SRC = "inherited:mulib"
@@ -134,7 +135,7 @@ def main():
         os.remove(args.out)
     out = sqlite3.connect(args.out)
     out.executescript(open(args.schema, encoding="utf-8").read())
-    m = sqlite3.connect(f"file:{args.mulib}?mode=ro&immutable=1", uri=True)
+    m = sqlite3.connect(lempi_db.sqlite_uri(args.mulib, immutable=True), uri=True)
     m.row_factory = sqlite3.Row
 
     print("indexing local audio by SHA3-224 ...", file=sys.stderr)

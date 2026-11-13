@@ -34,6 +34,14 @@ import sqlite3
 import sys
 import tempfile
 
+
+def _ro(path) -> str:
+    """`path` as a read-only SQLite address, its `#`, `?` and `%` escaped:
+    `lempi_db.sqlite_uri`, written out here because this file is run on a node
+    by itself (`python3 /tmp/split_database.py`, BOSE009), where no `lempi_db`
+    lies beside it. `test_sqlite_uri.py` holds the two to one answer."""
+    return "file:" + os.fspath(path).replace("%", "%25").replace("?", "%3f").replace("#", "%23") + "?mode=ro"
+
 # Every table this project's schema actually has, as of the audit that built
 # this list `[IMPL002 §8]` -- read from a real database's own `sqlite_master`,
 # not reconstructed from memory of what `schema.sql` says it should be.
@@ -116,7 +124,7 @@ def unclassified(source_path: str) -> list:
     own `sqlite_*` tables are the file's, not the schema's, and are skipped.
     """
     known = set(LIBRARY_TABLES + LISTENER_TABLES + BOTH)
-    con = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+    con = sqlite3.connect(_ro(source_path), uri=True)
     try:
         names = [r[0] for r in con.execute(
             "SELECT name FROM sqlite_master WHERE type='table' "
@@ -152,7 +160,7 @@ def copy_table(source: sqlite3.Connection, dest: sqlite3.Connection, table: str)
 
 
 def journal_mode_of(path: str) -> str:
-    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    con = sqlite3.connect(_ro(path), uri=True)
     try:
         return con.execute("PRAGMA journal_mode").fetchone()[0]
     finally:
@@ -163,7 +171,7 @@ def build_half(source_path: str, out_path: str, tables: list) -> dict:
     """Builds one output file against `out_path`, returning `{table: rows}`."""
     if os.path.exists(out_path):
         os.remove(out_path)
-    source = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+    source = sqlite3.connect(_ro(source_path), uri=True)
     dest = sqlite3.connect(out_path)
     # Carry the source's journal mode across. A fresh SQLite file is
     # `delete`, and nothing here used to change that -- so splitting a WAL
@@ -199,7 +207,7 @@ def table_counts(source_path: str) -> dict:
     short copy `[IMPL-VP3-140]`.
     """
     counts = {}
-    con = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+    con = sqlite3.connect(_ro(source_path), uri=True)
     try:
         for table in LIBRARY_TABLES + LISTENER_TABLES + BOTH:
             if table_exists(con, table):
@@ -228,9 +236,9 @@ def verify(source_path: str, library_path: str, listener_path: str) -> list:
     clean.
     """
     problems = []
-    source = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+    source = sqlite3.connect(_ro(source_path), uri=True)
     for path, tables in ((library_path, LIBRARY_TABLES + BOTH), (listener_path, LISTENER_TABLES + BOTH)):
-        dest = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        dest = sqlite3.connect(_ro(path), uri=True)
         integrity = dest.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
             problems.append(f"{path}: integrity_check reported {integrity!r}")
