@@ -128,11 +128,20 @@ def quiet_prints(db):
 
 
 def local_backup(src, dst):
-    """The backup API, here: a consistent copy of a file something may be using."""
+    """The backup API, here: a consistent copy of a file something may be using.
+
+    [SPEC-STAR-106]: the copy is in rollback-journal mode whatever the source
+    is in. The hub's pair is WAL since 2026-11-12, and the backup API carries
+    that mode into the copy's header. Every copy this takes is then read
+    `immutable`, hashed as bytes, copied as a file or patched as a proof, by
+    code written while the hub's copies were rollback-journal files; kept so,
+    none of it meets a mode it was not written against. The same source state
+    still gives the same bytes, which is what the daily store's names rest on."""
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     s = sp.open_current(src)
     d = sqlite3.connect(dst)
     s.backup(d)
+    d.execute("PRAGMA journal_mode=DELETE").fetchone()
     ok = d.execute("PRAGMA integrity_check").fetchone()[0]
     d.close()
     s.close()
@@ -2420,6 +2429,18 @@ def status(plan):
                 # so it does not say which. `mirror.log` does.
                 bad.append(f"the mirror's newest backup is {mage.days} day(s) old -- {m['host']} has not taken "
                            "a newer one: it was off, or the copy is failing (data/backups/mirror.log says which)")
+    # [SPEC-STAR-106]: the pair's journal mode. In anything but WAL a long read
+    # shuts every write out, and the reverse; a pair put back from a copy, or
+    # promoted from a merge, comes back in rollback-journal mode without a word.
+    import pair_journal
+    for half in ("listener", "library"):
+        mode = pair_journal.mode_of(at_root(plan["hub"][half])) if plan["hub"].get(half) else "absent"
+        if mode == "absent":
+            continue                # a plan with no pair yet has other things to say
+        say(f"  hub {half}: journal mode {mode}")
+        if mode != pair_journal.WAL:
+            bad.append(f"the hub's {half} is not in WAL mode ({mode}): a long read there shuts out every "
+                       f"write. Stop the player, then: python tools/pair_journal.py {plan['hub'][half]} --wal")
     # [GDE-INT-120]: how recently every kept object was proven whole.
     root = at_root(b["dir"])
     pr = proofs(root)
@@ -2466,7 +2487,7 @@ def status(plan):
             say(f"  {name}: last synced {age.days} day(s) ago")
     for x in bad:
         say(f"  STALE: {x}")
-    say("RESULT status: " + ("STALE -- " + "; ".join(bad) if bad else "backups current"))
+    say("RESULT status: " + ("STALE -- " + "; ".join(bad) if bad else "backups current, the pair in WAL mode"))
     return 1 if bad else 0
 
 

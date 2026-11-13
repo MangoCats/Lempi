@@ -139,6 +139,20 @@ passages on 222 tracks. The catalogue as it was before is in
 `backups/pre-small-tails-20261107/library.db`. All three runs are on this pair
 only: no node has them until a star sync carries them.
 
+**Since 2026-11-12 both halves are in WAL mode** `[SPEC-STAR-106]`, so a
+`library.db-wal`, `library.db-shm`, `listener.db-wal` and `listener.db-shm`
+lie beside them while anything has them open, and are part of them: **never
+copy `library.db` or `listener.db` as a file** -- take a copy through SQLite's
+backup API, as `star_sync.py`'s `local_backup` does. Until that day the pair
+was in rollback-journal mode, as `merge-full-5` was written, where one long
+read locks out every write: it cost the listener five hours that evening.
+`python tools/pair_journal.py data/library.db` says each half's mode, and
+with `--wal`, the player stopped, sets it after backing both up;
+`star_sync.py … status` says it too, and the console's launcher runs that.
+The pair as it was before is in `backups/pre-wal-20261112/` (1.5 GB, goes
+2026-12-12). A pair put back from a backup, or promoted from a merge, is in
+rollback-journal mode again until that command is run.
+
 `flavor.db`, `flavor-sample.db`, `sample-library.db` and
 `sample-library.console.db` are fixtures and extraction data, not copies of
 the live pair.

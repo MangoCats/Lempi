@@ -15,7 +15,8 @@ cd /d "%~dp0.."
 python tools\star_sync.py fleet\star-plan.json status
 if errorlevel 1 (
     echo.
-    echo *** The hub's backup is STALE or its mirror is behind: see above. ***
+    echo *** The hub needs attention: its backup, its mirror, its library's ***
+    echo *** verification, or its pair's journal mode. See STALE above.   ***
     pause
 )
 start "Vipunen Console" python tools\console.py data\library.db --root "C:\Users\Mango Cat\Music"
