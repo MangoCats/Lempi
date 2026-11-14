@@ -272,14 +272,32 @@ const Lempi = (() => {
   // A 404 is the ordinary answer for most of the library and empties the box
   // rather than showing an error: a panel saying "not found" for three tracks
   // out of four is worse than a panel that is simply not there.
+  //
+  // A 503 is the library busy for a moment [SPEC-LYR-170]: the box empties,
+  // as for none, and once `Retry-After` has passed the passage is forgotten,
+  // so the next snapshot asks again. A few times a passage, then left: a file
+  // held for minutes is the log's to say, not a request every two seconds.
   let lastLyrics = null;
+  let lyricsTries = 0;
   function showLyrics(box, passageId) {
     if (!box) return;
     if (passageId == null) { box.textContent = ''; box.hidden = true; lastLyrics = null; return; }
     if (passageId === lastLyrics) return;
+    if (passageId !== showLyrics.retrying) lyricsTries = 0;
+    showLyrics.retrying = null;
     lastLyrics = passageId;
     fetch(`/lyrics/${passageId}`)
-      .then(r => (r.ok ? r.text() : null))
+      .then(r => {
+        if (r.status === 503 && ++lyricsTries < 5) {
+          const wait = Math.max(1, Number(r.headers.get('Retry-After')) || 2);
+          setTimeout(() => {
+            if (lastLyrics !== passageId) return;   // a later track came first
+            showLyrics.retrying = passageId;
+            lastLyrics = null;
+          }, wait * 1000);
+        }
+        return r.ok ? r.text() : null;
+      })
       .then(t => {
         if (passageId !== lastLyrics) return;   // a later track won the race
         box.textContent = t || '';
@@ -808,6 +826,7 @@ const Lempi = (() => {
   // subject builds its own.
   function closePrefPanel(panel) {
     panel.hidden = true;
+    delete panel.dataset.subject; // a fetch still in flight must not refill it
     const freq = panel.freqPanel;
     if (freq) {
       freq.hidden = true;
@@ -1079,7 +1098,18 @@ const Lempi = (() => {
 
   // Fills one panel for one subject, fetches its current tuning, and wires
   // its own Save.
+  //
+  // **Only the newest subject a panel was opened for may fill it.** Each call
+  // writes a fresh token on its panel and goes on past its fetch only if the
+  // panel still carries it. Until 2026-11-14 nothing checked: a recording's
+  // slow answer, landing after an artist link was clicked, rewrote the
+  // shared panel -- heading, specials, the ⓘ to the recording's passage, and
+  // Save wired to the recording. `panelGen` guards only the co-artist panels.
+  let subjectToken = 0;
   async function openSubject(panel, kind, id, label, passage) {
+    const token = String(++subjectToken);
+    panel.dataset.subject = token;
+    const stale = () => panel.dataset.subject !== token;
     const err = panel.querySelector('.pref-error');
     const save = panel.querySelector('.pref-save');
     const subject = panel.querySelector('.pref-subject');
@@ -1131,10 +1161,12 @@ const Lempi = (() => {
       current = doc;
       defaults = doc.defaults;
     } catch (e) {
+      if (stale()) return; // another subject's panel now: its own fetch speaks
       err.textContent = `could not load current preferences: ${e.message}`;
       err.hidden = false;
       return;
     }
+    if (stale()) return; // a later subject, or the panel closed, meanwhile
 
     showInfo(passage ?? current.passage_id);
     const named = current.subject ?? {};
@@ -1501,10 +1533,24 @@ const Lempi = (() => {
     // this passage?" [SPEC-XMR-070]; '' when it did nothing. Places due and
     // none kept, because nothing in the pool had flavor, is said too
     // [SPEC-XMR-045]: a 0 in December is otherwise a question.
+    //
+    // With no flow order (`ranked` false) the places kept are any of a
+    // shuffled pool, sized against all of it: thousands, where the library
+    // holds a few hundred Christmas passages. A backfilled place there holds
+    // one of Stage C's own passages, no lower in any order, so what is said
+    // is how many Christmas passages the reserve gave places to. A record
+    // stored before `ranked` existed lacks it, and reads as before.
     christmasNote(why) {
       const c = why?.christmas;
       if (c?.last_resort) return ' No places kept for Christmas: nothing in the pool has flavor to place them by.';
       if (!c || !c.reserved) return '';
+      if (c.ranked === false) {
+        const n = (c.moved_up ?? 0) + (c.fillers ?? 0);
+        if (!n) return ' No Christmas passage was free to take a place kept for Christmas.';
+        const given = `${n} Christmas passage${n === 1 ? '' : 's'} given places, in a list with no flow order`;
+        if (why.place === 'filler' || why.place === 'moved_up') return ` From a Christmas place (${given}), its rotation set aside.`;
+        return ` ${given}.`;
+      }
       const kept = `${c.reserved} of the places kept for Christmas`;
       if (why.place === 'filler') return ` From a Christmas place (${kept}), its rotation set aside.`;
       if (why.place === 'moved_up') return ` From a Christmas place (${kept}), moved up from lower in the flow order, its rotation set aside.`;

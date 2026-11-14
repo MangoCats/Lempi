@@ -111,10 +111,14 @@ pub struct Ui {
 /// someone else -- the same request a moment later can succeed -- and **500**
 /// for any other failure. Never 400: nothing the client sent was wrong.
 ///
-/// One answer for every route that takes it. The lyric editor's save is the
-/// first (2026-11-13). Ten routes answered 400 for every failure that day;
+/// One answer for every route that takes it. The lyric editor's save was the
+/// first (2026-11-13); `GET /lyrics/:id` and the editor's sources joined it
+/// on 2026-11-14. Ten routes answered 400 for every failure on 2026-11-13;
 /// the rest are to be looked at one by one, since some of their 400s are
 /// refusals made on purpose and some are failures.
+///
+/// Busy is SQLite's result code, kept in the `DbError` (`DbError::is_busy`):
+/// an error a route built from text alone answers 500 here, never 503.
 pub(super) fn db_failure(e: &crate::db::DbError) -> axum::response::Response {
     if e.is_busy() {
         (
@@ -1871,6 +1875,131 @@ mod tests {
         assert!(call(b, "GET", "/rips/keep-lossless").await.contains(" 404 "), "not offered where nothing rips");
         assert!(call(b, "POST", "/rips/keep-lossless/on").await.contains(" 404 "));
         assert!(call(b, "GET", "/rips/album-name-max").await.contains(" 404 "));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A player serving a single-file library at `db`, and the controls it
+    /// shares, for the route tests below.
+    async fn serve_at(db: PathBuf) -> (std::net::SocketAddr, SharedControls) {
+        let (_e, h) = crate::engine::Engine::new(crate::path::PathHandle::silent(), 1);
+        let controls: SharedControls = Default::default();
+        let ui = Ui {
+            handle: Arc::new(h),
+            db: db.clone(),
+            library: db,
+            why: Default::default(),
+            controls: controls.clone(),
+            capabilities: Default::default(),
+            web_loopback_only: false,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router(ui)).await });
+        (addr, controls)
+    }
+
+    /// The whole answer to one request: head and body, as text.
+    async fn ask(addr: std::net::SocketAddr, method: &str, path: &str, json: Option<&str>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let body = json.unwrap_or("");
+        let kind = if json.is_some() { "Content-Type: application/json\r\n" } else { "" };
+        let req = format!(
+            "{method} {path} HTTP/1.1\r\nHost: x\r\n{kind}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut buf = Vec::new();
+        s.read_to_end(&mut buf).await.unwrap();
+        String::from_utf8_lossy(&buf).to_string()
+    }
+
+    /// `POST /director/christmas/:on` `[SPEC-XMR-080]`: a value that is not
+    /// a switch is the request's fault and changes nothing; on and off take
+    /// effect for the next pick and are stored as the player reads them back.
+    #[tokio::test]
+    async fn the_christmas_switch_route_refuses_nonsense_and_keeps_the_choice() {
+        let d = std::env::temp_dir().join(format!("lempi-xmas-route-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let db = d.join("listener.db");
+        let (a, controls) = serve_at(db.clone()).await;
+        let stored = || -> Option<String> {
+            rusqlite::Connection::open(&db)
+                .unwrap()
+                .query_row("SELECT value FROM player_settings WHERE key = 'christmas_reserve'", [], |r| r.get(0))
+                .ok()
+        };
+        let live = || controls.lock().unwrap().christmas_reserve;
+
+        assert!(ask(a, "POST", "/director/christmas/sometimes", None).await.contains(" 400 "));
+        assert_eq!((live(), stored()), (None, None), "a refusal changes nothing");
+
+        assert!(ask(a, "POST", "/director/christmas/off", None).await.contains(" 204 "));
+        assert_eq!((live(), stored().as_deref()), (Some(false), Some("off")));
+        let read = crate::db::PlayerStore::open_split(&db, &db).unwrap().load_christmas_reserve();
+        assert!(!read, "read back as the player reads it at start");
+
+        assert!(ask(a, "POST", "/director/christmas/on", None).await.contains(" 204 "));
+        assert_eq!((live(), stored().as_deref()), (Some(true), Some("on")));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Every lyrics route answers a held listener with 503 and `Retry-After`
+    /// `[SPEC-LYR-170]`, `[SPEC-LYR-174]`: the read a skin makes at a track
+    /// change, the editor's sources, and its save. A rollback-journal file
+    /// mid-commit, which every node's listener was until it is redeployed
+    /// `[SPEC-STAR-107]`, held by a real `BEGIN EXCLUSIVE` -- not a string
+    /// made to look like SQLite's. Released, the same requests succeed, and
+    /// a passage with no words is the ordinary 404 again.
+    ///
+    /// Each held request waits out the connection's busy timeout, so the
+    /// three are asked at once: about five seconds in all.
+    #[tokio::test]
+    async fn a_held_listener_is_503_on_every_lyrics_route() {
+        let d = std::env::temp_dir().join(format!("lempi-lyrics-busy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let db = d.join("listener.db");
+        let holder = rusqlite::Connection::open(&db).unwrap();
+        holder.execute_batch(include_str!("../../../sql/schema.sql")).unwrap();
+        holder
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 INSERT INTO files (file_id, audio_md5, path, size_bytes, mtime, format, duration_ms,
+                                    first_seen, last_seen) VALUES (1, 'aaa', '/m/a.mp3', 1, 0, 'mp3', 200000, 't', 't');
+                 INSERT INTO passages (passage_id, file_id, kind, start_ms, end_ms, boundary_src)
+                     VALUES (1, 1, 'radio', 0, 200000, 'test');
+                 INSERT INTO recordings (mbid, title, source) VALUES ('rec-1', 'Song', 'test');
+                 INSERT INTO passage_recordings (passage_id, mbid, weight, source) VALUES (1, 'rec-1', 1.0, 'test');",
+            )
+            .unwrap();
+        // `schema.sql` makes a file WAL; a listener not yet redeployed is not.
+        let mode: String = holder.query_row("PRAGMA journal_mode = DELETE", [], |r| r.get(0)).unwrap();
+        assert_eq!(mode.to_ascii_lowercase(), "delete", "the test needs a rollback-journal file");
+        let (a, _) = serve_at(db.clone()).await;
+        // Made once, before the hold: what the save's first open would make.
+        drop(crate::db::PlayerStore::open_split(&db, &db).unwrap());
+
+        holder.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+        let (shown, sources, saved) = tokio::join!(
+            ask(a, "GET", "/lyrics/1", None),
+            ask(a, "GET", "/lyrics/1/sources", None),
+            ask(a, "POST", "/lyrics/1", Some(r#"{"text": "typed while held"}"#)),
+        );
+        for (what, answer) in [("GET /lyrics", &shown), ("GET sources", &sources), ("POST /lyrics", &saved)] {
+            let head = answer.to_ascii_lowercase();
+            assert!(head.starts_with("http/1.1 503"), "{what} answered {}", answer.lines().next().unwrap_or(""));
+            assert!(head.contains("retry-after: 2"), "{what} gave no Retry-After");
+        }
+        holder.execute_batch("ROLLBACK;").unwrap();
+
+        assert!(ask(a, "GET", "/lyrics/1", None).await.contains(" 404 "), "none, once released");
+        assert!(ask(a, "GET", "/lyrics/1/sources", None).await.contains(" 200 "));
+        assert!(ask(a, "POST", "/lyrics/1", Some(r#"{"text": "typed after"}"#)).await.contains(" 200 "));
+        let after = ask(a, "GET", "/lyrics/1", None).await;
+        assert!(after.contains(" 200 ") && after.ends_with("typed after"), "{after}");
+        drop(holder);
         let _ = std::fs::remove_dir_all(&d);
     }
 

@@ -99,7 +99,7 @@ The table is in `sql/schema.sql`, and the player makes it on opening a listener 
 
 ## 5. Reading and writing
 
-**`[SPEC-LYR-170]` `GET /lyrics/:passage_id` keeps its shape and takes the new order.** It answers the text `[SPEC-LYR-100]` chooses, or 404 for none and for a mark. No skin changes to follow it `[SPEC-LYR-040]`, and the MuLibPlay skin's scrolling is untouched `[SPEC-LYR-090]`.
+**`[SPEC-LYR-170]` `GET /lyrics/:passage_id` keeps its shape and takes the new order.** It answers the text `[SPEC-LYR-100]` chooses, or 404 for none and for a mark. No skin changes to follow it `[SPEC-LYR-040]`, and the MuLibPlay skin's scrolling is untouched `[SPEC-LYR-090]`. **A failure is not a 404.** A table the library predates reads as none. Any other failure is answered as `[SPEC-LYR-174]` answers one, 503 with `Retry-After` while the listener is busy and 500 otherwise, and is logged. The skins empty the box, as for none, and after a 503 ask again once `Retry-After` has passed, five requests at most for a passage. Until 2026-11-14 every failure was a 404, so a listener held at a track change left that song without its words and said nothing.
 
 **`[SPEC-LYR-172]` `GET /lyrics/:passage_id/sources` answers everything the editor shows:**
 
@@ -107,7 +107,7 @@ The table is in `sql/schema.sql`, and the player makes it on opening a listener 
 - the passage's own entry: its text, whether it is marked, when and where it was saved
 - every other source that has text, in the order of `[SPEC-LYR-100]` and `[SPEC-LYR-120]`, each with its tier, its text, and what names it: the other cut's kind, or the recording's title, artist and release, and either *imported from MuLibPlay* or when and where it was saved
 
-A text that appears more than once is listed once, at its highest place. Marks and cleared rows are not sources.
+A text that appears more than once is listed once, at its highest place. Marks and cleared rows are not sources. A failure is answered as the save answers one `[SPEC-LYR-174]`, and the page says a busy library is busy and asks again. Until 2026-11-14 every failure here was a 500.
 
 **`[SPEC-LYR-174]` `POST /lyrics/:passage_id` saves one passage, and nothing else.** The body is JSON, `{"text": …, "no_words": …}`, not a query string: the longest text held is 5,820 characters. Line ends are stored as `\n`, and a text of only white space is empty. A text over 64 KiB is refused with **413**, before the file is opened: the one refusal that is the request's. An unknown passage is a 404. Any other failure is the server's: **503** with `Retry-After` while the listener is busy, **500** otherwise. Until 2026-11-13 every failure was a 400, so a listener held by a long read told the editor its request was wrong. The answer is the entry as stored, `{"own": …}`, with `null` once cleared. Clearing a passage that never had an entry writes nothing. The route writes `passage_lyrics` and no other table: words reached through tiers 2 to 4 are read-only, here and on the page.
 

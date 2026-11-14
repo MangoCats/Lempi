@@ -26,6 +26,11 @@ use super::{Ui, REVALIDATE};
 /// Plain text, because that is what the words are — a static block, as
 /// MuLibPlay showed them `[SPEC-LYR-045]`. 404 means the library has none, which
 /// is the ordinary case for 72% of passages and not an error worth dressing up.
+///
+/// **A failure is not a 404** `[SPEC-LYR-170]`: 503 with `Retry-After` while
+/// the file is busy, which a skin asks again after, and 500 otherwise -- each
+/// in the log. Until 2026-11-14 every failure answered 404, so a listener held
+/// through a track change left that song without its words, and said nothing.
 pub(super) async fn lyrics(
     State(ui): State<Ui>,
     axum::extract::Path(passage_id): axum::extract::Path<i64>,
@@ -34,13 +39,11 @@ pub(super) async fn lyrics(
     let library = ui.library.clone();
     // The query blocks, so it belongs off the runtime.
     let found = tokio::task::spawn_blocking(move || {
-        crate::db::Library::open_split(&db, &library).ok().and_then(|lib| lib.lyrics(passage_id))
+        crate::db::Library::open_split(&db, &library).and_then(|lib| lib.lyrics(passage_id))
     })
-    .await
-    .ok()
-    .flatten();
+    .await;
     match found {
-        Some(text) => (
+        Ok(Ok(Some(text))) => (
             [
                 (axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8"),
                 REVALIDATE,
@@ -48,7 +51,15 @@ pub(super) async fn lyrics(
             text,
         )
             .into_response(),
-        None => StatusCode::NOT_FOUND.into_response(),
+        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => {
+            tracing::warn!("lyrics for passage {passage_id} could not be read: {e}");
+            super::db_failure(&e)
+        }
+        Err(e) => {
+            tracing::error!("lyrics for passage {passage_id}: the read did not finish ({e})");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
     }
 }
 

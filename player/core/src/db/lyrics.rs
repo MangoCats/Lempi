@@ -49,25 +49,59 @@ pub fn lyrics_refusal(text: &str) -> Option<String> {
 }
 
 fn qe(e: rusqlite::Error) -> DbError {
-    DbError::Query(e.to_string())
+    DbError::query(e)
 }
 
 /// The rows of a query over a table that may not be there. An absent table is
 /// a library that predates it, or a node that holds none, and reads as no
 /// rows; any other failure is a failure.
+///
+/// Prepared through the connection's statement cache, so `sql` must be one
+/// of a fixed few texts; one whose text varies goes to [`rows_once`].
 fn rows<T, P: rusqlite::Params>(
     conn: &Connection,
     sql: &str,
     p: P,
     f: impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
 ) -> Result<Vec<T>, DbError> {
-    let mut st = match conn.prepare_cached(sql) {
-        Ok(st) => st,
-        Err(e) if e.to_string().contains("no such table") => return Ok(Vec::new()),
-        Err(e) => return Err(qe(e)),
-    };
-    let out = st.query_map(p, f).map_err(qe)?.collect::<rusqlite::Result<Vec<T>>>().map_err(qe)?;
-    Ok(out)
+    match conn.prepare_cached(sql) {
+        Ok(mut st) => collect(&mut st, p, f),
+        Err(e) => absent_or(e),
+    }
+}
+
+/// [`rows`], for SQL whose text differs from one call to the next: an
+/// `IN (?, ?, …)` sized by its arguments. Prepared and dropped, because each
+/// text would be an entry of its own in the statement cache, and the cache
+/// -- rusqlite's 16, on a connection the player shares -- would then push
+/// out the fixed statements it is there to keep. Found 2026-11-14.
+fn rows_once<T, P: rusqlite::Params>(
+    conn: &Connection,
+    sql: &str,
+    p: P,
+    f: impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+) -> Result<Vec<T>, DbError> {
+    match conn.prepare(sql) {
+        Ok(mut st) => collect(&mut st, p, f),
+        Err(e) => absent_or(e),
+    }
+}
+
+fn collect<T, P: rusqlite::Params>(
+    st: &mut rusqlite::Statement<'_>,
+    p: P,
+    f: impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+) -> Result<Vec<T>, DbError> {
+    st.query_map(p, f).map_err(qe)?.collect::<rusqlite::Result<Vec<T>>>().map_err(qe)
+}
+
+/// No rows where the table is not there; the failure otherwise.
+fn absent_or<T>(e: rusqlite::Error) -> Result<Vec<T>, DbError> {
+    if e.to_string().contains("no such table") {
+        Ok(Vec::new())
+    } else {
+        Err(qe(e))
+    }
 }
 
 /// Two passages of one file are the same segment when the stretch they share
@@ -460,7 +494,7 @@ impl Reach<'_> {
         };
         let marks = vec!["?"; recordings.len()].join(", ");
         let named = || rusqlite::params_from_iter(recordings.iter());
-        let mut files: HashSet<String> = rows(
+        let mut files: HashSet<String> = rows_once(
             conn,
             &format!("SELECT DISTINCT audio_md5 FROM passage_lyrics WHERE mbid IN ({marks})"),
             named(),
@@ -469,7 +503,7 @@ impl Reach<'_> {
         .into_iter()
         .map(|md5| aliases.get(&md5).cloned().unwrap_or(md5))
         .collect();
-        files.extend(rows(
+        files.extend(rows_once(
             conn,
             &format!(
                 "SELECT DISTINCT f.audio_md5 FROM {lib}.passage_recordings pr \
@@ -714,6 +748,18 @@ pub fn shown_lyrics(
     passage_id: i64,
 ) -> Result<Option<String>, DbError> {
     Ok(shown_words(conn, lib, saved, passage_id)?.map(|s| s.text))
+}
+
+/// Whether `passage_id` shows any words: [`shown_words`] is `Some`, without
+/// reading the saved text it would show. For a file writer that only counts a
+/// passage it writes nothing for -- one inside a capture `[SPEC-LYR-080]`.
+pub fn shows_words(conn: &Connection, lib: &str, saved: &SavedLyrics, passage_id: i64) -> Result<bool, DbError> {
+    let Some(r) = resolve(conn, lib, &Reach::Whole(saved), passage_id, false)? else { return Ok(false) };
+    Ok(match r.shown {
+        None => false,
+        Some((_, None)) => r.own.is_some(),
+        Some((_, Some(_))) => true,
+    })
 }
 
 /// The words one passage shows, reading only the saved rows that can bear on
@@ -1031,6 +1077,9 @@ mod tests {
         let whole = shown_lyrics(c, "main", &saved, passage_id).unwrap();
         let asked = passage_shown_lyrics(c, "main", passage_id).unwrap();
         assert_eq!(asked, whole, "passage {passage_id}: read for one request, and read whole");
+        // And whether there are any, asked without the text, agrees.
+        let any = shows_words(c, "main", &saved, passage_id).unwrap();
+        assert_eq!(any, whole.is_some(), "passage {passage_id}: shows_words");
         whole
     }
 

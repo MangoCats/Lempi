@@ -72,6 +72,11 @@ pub fn ensure_director_hold_column(conn: &rusqlite::Connection) {
 pub enum DbError {
     Open(String),
     Query(String),
+    /// SQLite said the file is held by someone else -- `SQLITE_BUSY` or
+    /// `SQLITE_LOCKED`, extended codes included -- whether opening or
+    /// querying. Decided by SQLite's result code, never its words: made only
+    /// by [`DbError::open`], [`DbError::query`] and `From<rusqlite::Error>`.
+    Busy(String),
 }
 
 impl DbError {
@@ -83,7 +88,34 @@ impl DbError {
     /// the reader nothing and makes a considered refusal look like a crash.
     pub fn message(&self) -> &str {
         match self {
-            DbError::Open(e) | DbError::Query(e) => e,
+            DbError::Open(e) | DbError::Query(e) | DbError::Busy(e) => e,
+        }
+    }
+
+    /// A failure to open, or [`DbError::Busy`] where SQLite's code says so.
+    pub fn open(e: rusqlite::Error) -> Self {
+        if held(&e) {
+            DbError::Busy(e.to_string())
+        } else {
+            DbError::Open(e.to_string())
+        }
+    }
+
+    /// A failed query, or [`DbError::Busy`] where SQLite's code says so.
+    pub fn query(e: rusqlite::Error) -> Self {
+        if held(&e) {
+            DbError::Busy(e.to_string())
+        } else {
+            DbError::Query(e.to_string())
+        }
+    }
+
+    /// The same failure, its message led by what was being done.
+    pub fn during(self, doing: impl std::fmt::Display) -> Self {
+        match self {
+            DbError::Open(e) => DbError::Open(format!("{doing}: {e}")),
+            DbError::Query(e) => DbError::Query(format!("{doing}: {e}")),
+            DbError::Busy(e) => DbError::Busy(format!("{doing}: {e}")),
         }
     }
 
@@ -92,12 +124,28 @@ impl DbError {
     /// The same request a moment later can succeed, which is what a web
     /// route answers 503 for rather than blaming the request `[SPEC-LYR-174]`.
     ///
-    /// Read from the message, because a `DbError` carries text: SQLite's own
-    /// words for `SQLITE_BUSY` and `SQLITE_LOCKED`, which rusqlite passes on
-    /// unchanged. The test below holds them to a real locked file.
+    /// **By SQLite's result code**, kept from the `rusqlite::Error` when the
+    /// `DbError` was made. Until 2026-11-14 this matched SQLite's English
+    /// words in the message, since a `DbError` kept only text; a rewording,
+    /// or a message that did not quote SQLite's, would have sent a busy file
+    /// to a 500. An error made from text alone is never busy, so a route that
+    /// answers by this must reach its database through `DbError::open`,
+    /// `DbError::query` or `?` on a `rusqlite::Error`. The tests below hold
+    /// it to a real held file.
     pub fn is_busy(&self) -> bool {
-        let m = self.message();
-        m.contains("database is locked") || m.contains("database table is locked") || m.contains("database schema is locked")
+        matches!(self, DbError::Busy(_))
+    }
+}
+
+/// Whether SQLite's code for `e` is `SQLITE_BUSY` or `SQLITE_LOCKED`. The
+/// primary code, so `SQLITE_BUSY_SNAPSHOT` and the others are included.
+fn held(e: &rusqlite::Error) -> bool {
+    matches!(e.sqlite_error_code(), Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked))
+}
+
+impl From<rusqlite::Error> for DbError {
+    fn from(e: rusqlite::Error) -> Self {
+        DbError::query(e)
     }
 }
 
@@ -106,6 +154,7 @@ impl std::fmt::Display for DbError {
         match self {
             DbError::Open(e) => write!(f, "open database: {e}"),
             DbError::Query(e) => write!(f, "query: {e}"),
+            DbError::Busy(e) => write!(f, "busy: {e}"),
         }
     }
 }
@@ -165,7 +214,7 @@ pub fn attach_library(
         return Ok("main");
     }
     conn.execute("ATTACH DATABASE ?1 AS lib", [read_only_uri(library_path)])
-        .map_err(|e| DbError::Open(format!("attach library {}: {e}", library_path.display())))?;
+        .map_err(|e| DbError::open(e).during(format_args!("attach library {}", library_path.display())))?;
     Ok("lib")
 }
 
@@ -229,7 +278,7 @@ impl QualifyingConn {
             db_path,
             flags | rusqlite::OpenFlags::SQLITE_OPEN_URI,
         )
-        .map_err(|e| DbError::Open(e.to_string()))?;
+        .map_err(DbError::open)?;
         // Found live, on lempi02w's first real split: rusqlite's *bundled*
         // SQLite defaults `PRAGMA foreign_keys` to ON -- confirmed by
         // asking it directly, not by grepping this crate for an explicit
@@ -248,7 +297,7 @@ impl QualifyingConn {
         // own writes -- only Vipunen's desktop tools do, deliberately and
         // explicitly, on their own connections, not this one.
         conn.execute("PRAGMA foreign_keys = OFF", [])
-            .map_err(|e| DbError::Open(e.to_string()))?;
+            .map_err(DbError::open)?;
         let lib = attach_library(&conn, db_path, library_path)?;
         Ok(Self { conn, lib, gapless: Default::default() })
     }
@@ -367,8 +416,9 @@ mod qualifying_conn_tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// `DbError::is_busy` against SQLite's own words, from a real file held
-    /// by another writer -- not a string this test made up `[SPEC-LYR-174]`.
+    /// `DbError::is_busy` against SQLite's own code, from a real file held
+    /// by another writer -- not a string this test made up `[SPEC-LYR-174]`;
+    /// and kept through `during`, which a message match did not need to be.
     #[test]
     fn a_file_held_by_another_writer_reads_as_busy() {
         use super::DbError;
@@ -378,11 +428,37 @@ mod qualifying_conn_tests {
         holder.execute_batch("CREATE TABLE t (a); BEGIN IMMEDIATE; INSERT INTO t VALUES (1);").unwrap();
         let other = Connection::open_with_flags(&path, RW).unwrap();
         other.busy_timeout(std::time::Duration::ZERO).unwrap();
-        let e = other.execute("INSERT INTO t VALUES (2)", []).unwrap_err();
-        assert!(DbError::Query(e.to_string()).is_busy(), "SQLite said: {e}");
+        let held = || other.execute("INSERT INTO t VALUES (2)", []).unwrap_err();
+        let e = held();
+        assert!(DbError::query(held()).is_busy(), "SQLite said: {e}");
+        assert!(DbError::open(held()).is_busy(), "busy whatever it was doing");
+        assert!(DbError::from(held()).during("saving").is_busy());
+        assert!(DbError::from(held()).during("saving").message().starts_with("saving: "));
+        // A failure that is not the file being held is not busy.
+        let other_failure = other.execute("INSERT INTO nowhere VALUES (1)", []).unwrap_err();
+        assert!(!DbError::query(other_failure).is_busy());
+        // And text alone, whatever it says, never is: only SQLite's code.
+        assert!(!DbError::Query(e.to_string()).is_busy(), "{e}");
         assert!(!DbError::Query("the text is over 65536 bytes".into()).is_busy());
-        assert!(!DbError::Open("unable to open database file".into()).is_busy());
         drop((other, holder));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A read refused by a rollback-journal file mid-commit is busy too: the
+    /// case `GET /lyrics` meets on a node whose listener is not yet WAL
+    /// `[SPEC-STAR-107]`.
+    #[test]
+    fn a_read_shut_out_by_a_commit_reads_as_busy() {
+        use super::DbError;
+        let path = scratch_path("busy-read");
+        let _ = std::fs::remove_file(&path);
+        let holder = Connection::open_with_flags(&path, RW).unwrap();
+        holder.execute_batch("CREATE TABLE t (a); BEGIN EXCLUSIVE; INSERT INTO t VALUES (1);").unwrap();
+        let reader = Connection::open_with_flags(&path, RW).unwrap();
+        reader.busy_timeout(std::time::Duration::ZERO).unwrap();
+        let e = reader.query_row("SELECT COUNT(*) FROM t", [], |r| r.get::<_, i64>(0)).unwrap_err();
+        assert!(DbError::query(e).is_busy());
+        drop((reader, holder));
         let _ = std::fs::remove_file(&path);
     }
 

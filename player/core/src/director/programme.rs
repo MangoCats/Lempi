@@ -262,7 +262,7 @@ impl Programme {
             let m = e.to_string();
             m.contains("no such table") || m.contains("no such column")
         }
-        let q = |e: rusqlite::Error| DbError::Query(format!("programme: {e}"));
+        let q = |e: rusqlite::Error| DbError::query(e).during("programme");
         // A row whose value will not convert is the row's fault and is left
         // out, said; a read that fails is the read's, and is an error.
         fn rows_of<T>(

@@ -147,7 +147,7 @@ fn snapshot_named(db: &Path, prefix: &str, rotate: bool) -> Result<PathBuf, DbEr
     let conn = Connection::open(&part)
         .map_err(|e| DbError::Open(format!("create {}: {e}", part.display())))?;
     conn.busy_timeout(std::time::Duration::from_secs(10))
-        .map_err(|e| DbError::Open(e.to_string()))?;
+        .map_err(DbError::open)?;
     conn.execute("ATTACH DATABASE ?1 AS src", [crate::db::read_only_uri(db).as_str()])
         .map_err(|e| DbError::Query(format!("attach {}: {e}", db.display())))?;
 
@@ -172,7 +172,7 @@ fn snapshot_named(db: &Path, prefix: &str, rotate: bool) -> Result<PathBuf, DbEr
         copied += 1;
     }
     conn.execute_batch("DETACH DATABASE src")
-        .map_err(|e| DbError::Query(e.to_string()))?;
+        .map_err(DbError::query)?;
     drop(conn);
 
     if copied == 0 {
@@ -267,8 +267,8 @@ pub struct Summary {
 
 pub fn inspect(snapshot: &Path) -> Result<Summary, DbError> {
     let c = Connection::open_with_flags(snapshot, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|e| DbError::Open(e.to_string()))?;
-    let q = |e: rusqlite::Error| DbError::Query(e.to_string());
+        .map_err(DbError::open)?;
+    let q = |e: rusqlite::Error| DbError::query(e);
     // A table the snapshot does not hold is a snapshot taken before it existed,
     // and reads as none. A query that FAILS is not "none": it is reported, so a
     // damaged snapshot never passes for an empty one (review O-04).
@@ -336,14 +336,14 @@ pub struct Report {
 /// measured or an error -- never a failed query read as zero (review O-04).
 pub fn restore(snapshot: &Path, listener: &Path, library: &Path, commit: bool)
     -> Result<Report, DbError> {
-    let conn = Connection::open(listener).map_err(|e| DbError::Open(e.to_string()))?;
+    let conn = Connection::open(listener).map_err(DbError::open)?;
     conn.busy_timeout(std::time::Duration::from_secs(10))
-        .map_err(|e| DbError::Open(e.to_string()))?;
+        .map_err(DbError::open)?;
     let lib = crate::db::attach_library(&conn, listener, library)?;
     conn.execute("ATTACH DATABASE ?1 AS snap", [crate::db::read_only_uri(snapshot).as_str()])
         .map_err(|e| DbError::Query(format!("attach {}: {e}", snapshot.display())))?;
 
-    let q = |e: rusqlite::Error| DbError::Query(e.to_string());
+    let q = |e: rusqlite::Error| DbError::query(e);
     let table_in = |schema: &str, table: &str| -> Result<bool, DbError> {
         conn.query_row(
             &format!("SELECT COUNT(*) FROM {schema}.sqlite_master WHERE type='table' AND name=?1"),
@@ -415,7 +415,7 @@ pub fn restore(snapshot: &Path, listener: &Path, library: &Path, commit: bool)
     // One transaction: a restore that half-applied would leave the listening
     // in a state that never existed, which is worse than either version.
     conn.execute_batch("BEGIN IMMEDIATE")
-        .map_err(|e| DbError::Query(e.to_string()))?;
+        .map_err(DbError::query)?;
     let done = || -> Result<usize, DbError> {
         for (table, insert) in &plan {
             conn.execute_batch(&format!("DELETE FROM main.\"{table}\"; {insert};"))
@@ -441,7 +441,7 @@ pub fn restore(snapshot: &Path, listener: &Path, library: &Path, commit: bool)
     match done() {
         Ok(n) => {
             report.tables = n;
-            conn.execute_batch("COMMIT").map_err(|e| DbError::Query(e.to_string()))?;
+            conn.execute_batch("COMMIT").map_err(DbError::query)?;
         }
         Err(e) => {
             let _ = conn.execute_batch("ROLLBACK");

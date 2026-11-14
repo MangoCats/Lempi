@@ -36,11 +36,12 @@ const FALL_FROM: i64 = 24 * DAY + 23 * HOUR + 45 * MIN; // 25 December, 23:45
 const ZERO_FROM: i64 = 25 * DAY + 6 * HOUR; // 26 December, 06:00
 
 /// How much of an artist's rotation still holds it out of a reserved place
-/// `[SPEC-XMR-050]`: a sixth (the maintainer, 2026-11-13). Everything else of
-/// rotation is set aside there, so without this an artist on air could follow
-/// itself. A share of each artist's own rotation, after the artist time scale:
-/// 1 h 40 min on the 10-hour default, 4 h 20 min for an artist held 26 hours.
-pub const ARTIST_GAP_SHARE: f64 = 1.0 / 6.0;
+/// `[SPEC-XMR-050]`: a twelfth (the maintainer, 2026-11-14; a sixth from
+/// 2026-11-13). Everything else of rotation is set aside there, so without
+/// this an artist on air could follow itself. A share of each artist's own
+/// rotation, after the artist time scale: 50 min on the 10-hour default,
+/// 2 h 10 min for an artist held 26 hours.
+pub const ARTIST_GAP_SHARE: f64 = 1.0 / 12.0;
 
 /// How far into the Christmas season `local_secs` is `[SPEC-XMR-020]`.
 ///
@@ -104,6 +105,12 @@ pub struct Reserve {
     pub enabled: bool,
     /// The ramp at the pick's projected start, whether or not it is enabled.
     pub ramp: f64,
+    /// Whether the list had a flow order to rank it `[SPEC-XMR-030]`. Without
+    /// one the places kept are any of the shuffled pool's, and a backfilled
+    /// place holds one of Stage C's own passages, no lower in any order than
+    /// those above the cutoff: what the reserve changed is only the Christmas
+    /// passages it moved up or added.
+    pub ranked: bool,
     /// Places kept for Christmas: 0 when off, out of season, when the
     /// relaxed fallback chose, or when the pool was the last resort.
     pub reserved: usize,
@@ -132,6 +139,9 @@ pub struct Reserve {
 ///
 /// The first two together take at most `reserved` places. With nothing
 /// reserved this is Stage C's first `size`, exactly as before.
+///
+/// Only the first [`fillers_wanted`] of `fillers` can be used; any after
+/// them are ignored.
 pub fn reserve<T: Copy>(
     ranked: &[T],
     size: usize,
@@ -146,7 +156,7 @@ pub fn reserve<T: Copy>(
     if reserved == 0 {
         return (out, tally);
     }
-    let below = ranked.get(keep..).unwrap_or(&[]);
+    let below = below_the_cutoff(ranked, size, reserved);
     let budget = |out: &Vec<(T, Place)>, tally: &Reserve| {
         (tally.moved_up + tally.fillers < reserved) && out.len() < size
     };
@@ -172,6 +182,28 @@ pub fn reserve<T: Copy>(
         tally.backfilled += 1;
     }
     (out, tally)
+}
+
+/// What of `ranked` stands below [`reserve`]'s cutoff: everything after its
+/// first `size − reserved`.
+fn below_the_cutoff<T>(ranked: &[T], size: usize, reserved: usize) -> &[T] {
+    let keep = size - reserved.min(size);
+    ranked.get(keep..).unwrap_or(&[])
+}
+
+/// How many fillers [`reserve`] would place, given these arguments: the
+/// reserved places that the Christmas passages below its cutoff cannot fill
+/// `[SPEC-XMR-050]`. Asked first because fillers cost a pass over every
+/// Christmas passage, and are weighed only when this is above 0.
+///
+/// The cutoff is `reserve`'s own, so the two cannot disagree about it.
+pub fn fillers_wanted<T>(ranked: &[T], size: usize, reserved: usize, is_christmas: impl Fn(&T) -> bool) -> usize {
+    let reserved = reserved.min(size);
+    if reserved == 0 {
+        return 0;
+    }
+    let moving_up = below_the_cutoff(ranked, size, reserved).iter().filter(|t| is_christmas(t)).take(reserved).count();
+    reserved - moving_up
 }
 
 #[cfg(test)]
@@ -286,7 +318,9 @@ mod tests {
     }
 
     /// Fillers never take more than the reserved places, even when Stage C's
-    /// list is shorter than the roulette's.
+    /// list is shorter than the roulette's. Their share of the draw is then
+    /// larger than in a full list, and that is accepted: the shares of
+    /// `[SPEC-XMR-040]` are the full catalogue's `[SPEC-XMR-042]`.
     #[test]
     fn a_short_pool_reserves_no_more_than_asked() {
         let ranked: Vec<u32> = (0..40).map(|n| n * 2).collect();
@@ -294,6 +328,25 @@ mod tests {
         let (out, t) = reserve(&ranked, 100, 10, xmas, &fillers);
         assert_eq!(out.len(), 50, "all 40 of Stage C's, and 10 Christmas");
         assert_eq!((t.moved_up, t.fillers, t.backfilled), (0, 10, 0));
+    }
+
+    /// `fillers_wanted` is the number `reserve` places, given fillers enough,
+    /// over lists longer and shorter than the roulette's and every share of
+    /// it reserved: the one cutoff, asked two ways.
+    #[test]
+    fn fillers_wanted_is_what_reserve_places() {
+        let plenty: Vec<u32> = (0..200).map(|n| 1001 + n * 2).collect();
+        for len in [0usize, 1, 30, 99, 100, 101, 150, 200] {
+            for christmas_every in [1u32, 3, 7, 1000] {
+                let ranked: Vec<u32> =
+                    (0..len as u32).map(|n| if n % christmas_every == 0 { n * 2 + 1 } else { n * 2 }).collect();
+                for reserved in [0usize, 1, 10, 50, 75, 99, 100, 140] {
+                    let want = fillers_wanted(&ranked, 100, reserved, xmas);
+                    let (_, t) = reserve(&ranked, 100, reserved, xmas, &plenty);
+                    assert_eq!(want, t.fillers, "len {len}, every {christmas_every}, reserved {reserved}");
+                }
+            }
+        }
     }
 
     /// Every place reserved: Christmas only, Stage C's best first.

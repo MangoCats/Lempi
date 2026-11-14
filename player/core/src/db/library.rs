@@ -150,7 +150,7 @@ impl Library {
         library_path: &std::path::Path,
     ) -> Result<Self, DbError> {
         let conn = QualifyingConn::open(db_path, library_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        conn.busy_timeout(BUSY_WAIT).map_err(|e| DbError::Open(e.to_string()))?;
+        conn.busy_timeout(BUSY_WAIT).map_err(DbError::open)?;
         Ok(Self { conn })
     }
 
@@ -177,7 +177,7 @@ impl Library {
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
         )?;
-        conn.busy_timeout(BUSY_WAIT).map_err(|e| DbError::Open(e.to_string()))?;
+        conn.busy_timeout(BUSY_WAIT).map_err(DbError::open)?;
         let lib = Self { conn };
         lib.ensure_tag_table()?;
         // Provenance for `audio_md5` `[SPEC-RLK-150]`. Here rather than only in
@@ -193,14 +193,18 @@ impl Library {
     /// **Its own first, then the nearest** `[SPEC-LYR-100]`: words saved for
     /// the passage, for another passage of the same segment of its file, for
     /// its recording, for a work its recording performs. Until 2026-11-12 this
-    /// was the recording's imported words alone `[SPEC-LYR-020]`. A failure
-    /// reads as "none": an absent table is a library that predates it, and
-    /// nothing here is worth more than an empty window.
+    /// was the recording's imported words alone `[SPEC-LYR-020]`.
+    ///
+    /// **An absent table is none; any other failure is the caller's to
+    /// see** `[SPEC-LYR-170]`. A library that predates a table reads as no
+    /// rows of it, in `lyrics.rs`. Until 2026-11-14 every failure read as
+    /// none too, so a listener held busy, or a column a query did not find,
+    /// looked exactly like a passage with no words, and nothing was logged.
     ///
     /// Asked at every track change, so it reads the saved rows that can bear
     /// on this passage and no others `[SPEC-LYR-178]`.
-    pub fn lyrics(&self, passage_id: i64) -> Option<String> {
-        super::passage_shown_lyrics(&self.conn, self.conn.lib_alias(), passage_id).ok().flatten()
+    pub fn lyrics(&self, passage_id: i64) -> Result<Option<String>, DbError> {
+        super::passage_shown_lyrics(&self.conn, self.conn.lib_alias(), passage_id)
     }
 
     /// Everything the lyric editor shows for a passage `[SPEC-LYR-172]`, or
@@ -212,7 +216,7 @@ impl Library {
     pub fn passage(&self, passage_id: i64) -> Result<QueueEntry, DbError> {
         self.conn
             .query_row(&format!("SELECT {COLS} {FROM} WHERE p.passage_id = ?1"), [passage_id], row_to_entry)
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// This catalogue's own number for a passage another node named
@@ -233,7 +237,7 @@ impl Library {
         match found {
             Ok(n) => Ok(Some(n)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(DbError::Query(e.to_string())),
+            Err(e) => Err(DbError::query(e)),
         }
     }
 
@@ -243,11 +247,11 @@ impl Library {
     /// for tests and tools that want one.
     pub fn random_radio(&self, limit: usize) -> Result<Vec<QueueEntry>, DbError> {
         let sql = format!("SELECT {COLS} {FROM} WHERE p.kind = 'radio' ORDER BY RANDOM() LIMIT ?1");
-        let mut stmt = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let mut stmt = self.conn.prepare(&sql).map_err(DbError::query)?;
         let rows = stmt
             .query_map([limit as i64], row_to_entry)
-            .map_err(|e| DbError::Query(e.to_string()))?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(DbError::query)
     }
 
     /// The fill when there is no Director yet `[REQ-PD-100]`, `[SPEC-DIR-230]`:
@@ -280,7 +284,7 @@ impl Library {
         use crate::director::library::{IDLE_FLOOR_S, NEVER_PLAYED_S};
         use crate::director::occasion::{civil_from_unix, ordinal};
         use std::collections::HashMap;
-        let q = |e: rusqlite::Error| DbError::Query(e.to_string());
+        let q = |e: rusqlite::Error| DbError::query(e);
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -508,7 +512,7 @@ impl Library {
             [passage_id],
             |r| r.get(0),
         )
-        .map_err(|e| DbError::Query(e.to_string()))?;
+        .map_err(DbError::query)?;
         Ok(std::path::PathBuf::from(p))
     }
 
@@ -520,7 +524,7 @@ impl Library {
     /// kept. The table is the player's own, created here rather than by the
     /// ingest tools, because it is the player that needs it.
     pub fn ensure_tag_table(&self) -> Result<(), DbError> {
-        self.conn.execute_batch(TAG_TABLE).map_err(|e| DbError::Query(e.to_string()))?;
+        self.conn.execute_batch(TAG_TABLE).map_err(DbError::query)?;
         // An index built before track numbers existed has the rows but not the
         // columns. Adding a column succeeds exactly once; on that run the
         // stored tags are dropped so the background scan reads the numbers in
@@ -575,7 +579,7 @@ impl Library {
                 ],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Throw away the tag index, so a rescan reads every file again.
@@ -584,7 +588,7 @@ impl Library {
         self.conn
             .execute("DELETE FROM __LIB__.file_tags", [])
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Files with no tag row yet. What a resumed or incremental scan works on:
@@ -598,14 +602,14 @@ impl Library {
                    LEFT JOIN __LIB__.file_tags t ON t.file_id = f.file_id \
                   WHERE t.file_id IS NULL ORDER BY f.file_id",
             )
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         let rows = st
             .query_map([], |r| {
                 Ok((r.get::<_, i64>(0)?, std::path::PathBuf::from(r.get::<_, String>(1)?)))
             })
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Every file, for the scanner. Path included so it can be read.
@@ -613,14 +617,14 @@ impl Library {
         let mut st = self
             .conn
             .prepare("SELECT file_id, path FROM __LIB__.files ORDER BY file_id")
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         let rows = st
             .query_map([], |r| {
                 Ok((r.get::<_, i64>(0)?, std::path::PathBuf::from(r.get::<_, String>(1)?)))
             })
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Load the Program Director from this same library `[SPEC009]`.
@@ -651,7 +655,7 @@ impl Library {
     pub fn count_radio(&self) -> Result<i64, DbError> {
         self.conn
             .query_row("SELECT COUNT(*) FROM __LIB__.passages WHERE kind = 'radio'", [], |r| r.get(0))
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 }
 
@@ -1482,7 +1486,7 @@ impl Library {
             artist: Option<String>,
             plays: i64,
         }
-        let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let mut st = self.conn.prepare(&sql).map_err(DbError::query)?;
         let rows: Vec<Row> = st
             .query_map([], |r| {
                 let release = match (r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?) {
@@ -1504,9 +1508,9 @@ impl Library {
                     plays: r.get(12)?,
                 })
             })
-            .map_err(|e| DbError::Query(e.to_string()))?
+            .map_err(DbError::query)?
             .collect::<rusqlite::Result<_>>()
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
 
         // Each file-named release: its first file, which orders the parts of
         // a set as its folders do; the recordings its files hold; its size.
@@ -1623,7 +1627,7 @@ impl Library {
         params: impl rusqlite::Params,
         with_artist: bool,
     ) -> Result<Vec<BrowseGroup>, DbError> {
-        let mut st = self.conn.prepare(sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let mut st = self.conn.prepare(sql).map_err(DbError::query)?;
         let rows = st
             .query_map(params, |r| {
                 Ok(BrowseGroup {
@@ -1639,9 +1643,9 @@ impl Library {
                     year: None,
                 })
             })
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Passages the audio disagrees with, oldest check first `[REQ-LIB-165]`.
@@ -1711,7 +1715,7 @@ impl Library {
                                         AND pr.source = 'local:ingest')) \
               ORDER BY c.score DESC, c.passage_id LIMIT ?1"
         );
-        let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let mut st = self.conn.prepare(&sql).map_err(DbError::query)?;
         let rows = st
             .query_map([limit as i64], |r| {
                 let raw: Option<String> = r.get(3)?;
@@ -1748,10 +1752,10 @@ impl Library {
                     artist_review_applied: artist_review_applied_at.is_some(),
                 })
             })
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         let mut items: Vec<ReviewItem> = rows
             .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         // Worst first. Within a grade the strongest match leads, which is the
         // order the query already produced -- `sort_by_key` is stable, so that
         // ordering survives.
@@ -1862,7 +1866,7 @@ impl Library {
                   WHERE rr.mbid = ?1 \
                   ORDER BY rr.chosen DESC, rel.release_date, rel.title",
             )
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         let rows = st
             .query_map([recording_mbid], |r| {
                 Ok(ReleaseOption {
@@ -1874,9 +1878,9 @@ impl Library {
                     chosen: r.get::<_, i64>(5)? != 0,
                 })
             })
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// The stored cover for a passage's recording `[REQ-VIS-170]`.
@@ -1994,7 +1998,7 @@ impl Library {
     /// One `COUNT(*)`, its failure an error naming the query.
     #[cfg(feature = "vipunen-support")]
     fn count(&self, sql: &str) -> Result<i64, DbError> {
-        self.conn.query_row(sql, [], |r| r.get(0)).map_err(|e| DbError::Query(format!("{sql}: {e}")))
+        self.conn.query_row(sql, [], |r| r.get(0)).map_err(|e| DbError::query(e).during(sql))
     }
 
     /// A recorded-but-not-yet-applied boundary edit, if there is one
@@ -2126,7 +2130,7 @@ impl Library {
                                    AND br.applied_at IS NOT NULL) \
               ORDER BY p.passage_id LIMIT ?1"
         );
-        let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let mut st = self.conn.prepare(&sql).map_err(DbError::query)?;
         let rows = st
             .query_map([limit as i64], |r| {
                 Ok(SegmentQueueItem {
@@ -2144,8 +2148,8 @@ impl Library {
                     decided: r.get::<_, i64>(11)? != 0,
                 })
             })
-            .map_err(|e| DbError::Query(e.to_string()))?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(DbError::query)
     }
 
     /// How much segmentation-cascade confirmation there is to do, and how
@@ -2276,7 +2280,7 @@ impl Library {
                AND (title LIKE ?1 ESCAPE '\\' OR artist LIKE ?1 ESCAPE '\\') \
              GROUP BY mbid ORDER BY title COLLATE NOCASE, artist COLLATE NOCASE LIMIT {limit}"
         );
-        let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let mut st = self.conn.prepare(&sql).map_err(DbError::query)?;
         let rows = st
             .query_map([like], |r| {
                 Ok(SeedCandidate {
@@ -2287,8 +2291,8 @@ impl Library {
                     has_flavor: r.get(4)?,
                 })
             })
-            .map_err(|e| DbError::Query(e.to_string()))?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(DbError::query)
     }
 
     pub fn browse_tracks(&self, f: &BrowseFilter) -> Result<Vec<BrowseTrack>, DbError> {
@@ -2348,7 +2352,7 @@ impl Library {
              {order} LIMIT {limit}",
             limit = crate::BROWSE_LIMIT
         );
-        let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let mut st = self.conn.prepare(&sql).map_err(DbError::query)?;
         let rows = st
             .query_map(
                 rusqlite::params![f.like(), f.artist.clone().unwrap_or_default(), by_name],
@@ -2369,10 +2373,10 @@ impl Library {
                     })
                 },
             )
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         let mut out = rows
             .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         // A set of releases plays part by part, each in its own order: the
         // discs of a set matched to two editions both number from 1, and
         // by number alone they would interleave `[SPEC-AID-025]`. Stable,
@@ -2410,12 +2414,12 @@ impl Library {
                                        > a.end_ms - a.start_ms) \
               GROUP BY a.passage_id"
         );
-        let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let mut st = self.conn.prepare(&sql).map_err(DbError::query)?;
         let found = st
             .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
-            .map_err(|e| DbError::Query(e.to_string()))?
+            .map_err(DbError::query)?
             .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         let mut alone = HashSet::new();
         for (passage, beside) in found {
             let place = members.get(&beside).copied().unwrap_or_default();
@@ -2471,7 +2475,7 @@ impl Library {
                LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id \
               ORDER BY m.kind = 'album' DESC, m.passage_id LIMIT 1"
         );
-        let mut twin = self.conn.prepare(&twin).map_err(|e| DbError::Query(e.to_string()))?;
+        let mut twin = self.conn.prepare(&twin).map_err(DbError::query)?;
         for row in rows.iter_mut() {
             let found = twin
                 .query_map([row.passage_id], |r| {
@@ -2482,9 +2486,9 @@ impl Library {
                         r.get::<_, Option<String>>(3)?,
                     ))
                 })
-                .map_err(|e| DbError::Query(e.to_string()))?
+                .map_err(DbError::query)?
                 .collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(|e| DbError::Query(e.to_string()))?;
+                .map_err(DbError::query)?;
             let (passage, file, held, mbid) = match found.as_slice() {
                 [one] => one.clone(),
                 _ => continue, // none, or a join across two `[SPEC-ALB-040]`
@@ -2549,7 +2553,7 @@ impl Library {
         let mut profile = match row {
             Ok(p) => p,
             Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
-            Err(e) => return Err(DbError::Query(e.to_string())),
+            Err(e) => return Err(DbError::query(e)),
         };
 
         // Every recording this passage names -- a medley legally has more
@@ -2559,7 +2563,7 @@ impl Library {
             "SELECT pr.mbid, pr.weight, pr.source, r.title \
                FROM __LIB__.passage_recordings pr LEFT JOIN __LIB__.recordings r ON r.mbid = pr.mbid \
               WHERE pr.passage_id = ?1 ORDER BY pr.weight DESC, pr.mbid",
-        ).map_err(|e| DbError::Query(e.to_string()))?;
+        ).map_err(DbError::query)?;
         let mut recordings = stmt
             .query_map([passage_id], |r| {
                 Ok(ProfileRecording {
@@ -2570,22 +2574,22 @@ impl Library {
                     artists: Vec::new(),
                 })
             })
-            .map_err(|e| DbError::Query(e.to_string()))?
+            .map_err(DbError::query)?
             .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         for rec in &mut recordings {
             let mut astmt = self.conn.prepare(
                 "SELECT a.name, ra.weight FROM __LIB__.recording_artists ra \
                    JOIN __LIB__.artists a ON a.mbid = ra.artist_mbid \
                   WHERE ra.mbid = ?1 ORDER BY ra.weight DESC, a.name",
-            ).map_err(|e| DbError::Query(e.to_string()))?;
+            ).map_err(DbError::query)?;
             rec.artists = astmt
                 .query_map([&rec.mbid], |r| {
                     Ok(ProfileArtist { name: r.get(0)?, weight: r.get(1)? })
                 })
-                .map_err(|e| DbError::Query(e.to_string()))?
+                .map_err(DbError::query)?
                 .collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(|e| DbError::Query(e.to_string()))?;
+                .map_err(DbError::query)?;
         }
         profile.recordings = recordings;
 
@@ -2600,7 +2604,7 @@ impl Library {
         // design -- its radio cut is independently trimmed at the row level.
         let file_id: i64 = self.conn.query_row(
             "SELECT file_id FROM __LIB__.passages WHERE passage_id = ?1", [passage_id], |r| r.get(0))
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         let mut sibling: Option<(i64, String)> = self.conn.query_row(
             "SELECT passage_id, kind FROM __LIB__.passages \
               WHERE file_id = ?1 AND kind != ?2 AND start_ms = ?3 AND end_ms = ?4",
@@ -2657,7 +2661,7 @@ impl Library {
                        FROM listener_rejections WHERE kind = 'skip') u \
               ORDER BY at DESC LIMIT ?1 OFFSET ?2"
         );
-        let mut st = self.conn.prepare(&sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let mut st = self.conn.prepare(&sql).map_err(DbError::query)?;
         let rows = st
             .query_map(rusqlite::params![limit, offset], |r| {
                 let heard_ms: Option<i64> = r.get(2)?;
@@ -2687,9 +2691,9 @@ impl Library {
                     artist_mbid: r.get(11)?,
                 })
             })
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// How many rows [`play_history`](Self::play_history) has to page through,
@@ -2703,7 +2707,7 @@ impl Library {
                 [],
                 |r| r.get(0),
             )
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 }
 

@@ -50,7 +50,7 @@ pub(super) fn ensure_programme_tables(conn: &Connection) -> Result<(), DbError> 
              answered_at TEXT
          );",
     )
-    .map_err(|e| DbError::Open(e.to_string()))
+    .map_err(DbError::open)
 }
 
 /// One time slot `[ENT-SLOT-010]`, as the page edits it and the fingerprint
@@ -248,7 +248,7 @@ pub fn validate(name: Option<&str>, slots: &[Slot]) -> Result<(Option<String>, V
 }
 
 fn q(e: rusqlite::Error) -> DbError {
-    DbError::Query(e.to_string())
+    DbError::query(e)
 }
 
 fn read_slots(conn: &Connection) -> Result<Vec<Slot>, DbError> {

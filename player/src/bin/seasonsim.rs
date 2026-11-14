@@ -96,6 +96,10 @@ fn main() {
     for on in modes {
         let mut totals: BTreeMap<(i32, u32, u32), Vec<Day>> = BTreeMap::new();
         let mut pick_ms: Vec<f64> = Vec::new();
+        // Each run that found nothing to choose: the run, and the local day
+        // and time it stopped. Said under the table, which a stopped run
+        // otherwise leaves for the days after it without saying so.
+        let mut stopped: Vec<(usize, (i32, u32, u32), i64)> = Vec::new();
         for run in 0..runs {
             let t0 = Instant::now();
             let mut dir: Director = lib.director().unwrap_or_else(|e| {
@@ -136,6 +140,8 @@ fn main() {
                 pick_ms.push(tp.elapsed().as_secs_f64() * 1000.0);
                 let Some(decision) = decision else {
                     eprintln!("nothing to choose at {t}; stopping this run");
+                    let local = dir.programme().local_secs(t);
+                    stopped.push((run, civil_from_unix(local), local.rem_euclid(86_400)));
                     break;
                 };
                 let pid = decision.entry.passage_id;
@@ -165,8 +171,12 @@ fn main() {
             }
         }
 
-        println!("\nreserve {}  --  mean over {runs} run(s)", if on { "ON" } else { "OFF" });
-        println!("date        ramp  picks  xmas   share  distinct  max/song  fillers  relaxed"); // columns
+        // Each day is the mean of the runs that reached it, and `runs` says
+        // how many did: fewer than asked after a run stopped. Until
+        // 2026-11-14 the column was not there, and the table mixed two sample
+        // sizes without a word.
+        println!("\nreserve {}  --  mean over the run(s) that reached each day, of {runs}", if on { "ON" } else { "OFF" });
+        println!("date        ramp  picks  xmas   share  distinct  max/song  fillers  relaxed  runs"); // columns
         let mut dec = (0.0, 0.0);
         for ((yy, mm, dd), v) in &totals {
             let n = v.len() as f64;
@@ -182,7 +192,7 @@ fn main() {
                 continue;
             }
             println!(
-                "{yy:04}-{mm:02}-{dd:02}  {:4.2}  {:5.0}  {:5.1}  {:5.1}%  {:6.1}  {:6.1}  {:6.1}  {:6.1}",
+                "{yy:04}-{mm:02}-{dd:02}  {:4.2}  {:5.0}  {:5.1}  {:5.1}%  {:6.1}  {:6.1}  {:6.1}  {:6.1}  {:4}",
                 mean(&|x| x.ramp),
                 picks,
                 xmas,
@@ -191,10 +201,19 @@ fn main() {
                 mean(&|x| x.per.values().copied().max().unwrap_or(0) as f64),
                 mean(&|x| x.fillers as f64),
                 mean(&|x| x.relaxed as f64),
+                v.len(),
             );
         }
         if dec.0 > 0.0 {
             println!("December: {:.0} Christmas of {:.0} picks = {:.1}%", dec.1, dec.0, 100.0 * dec.1 / dec.0);
+        }
+        for (run, (yy, mm, dd), secs) in &stopped {
+            println!(
+                "STOPPED: run {run} found nothing to choose at {yy:04}-{mm:02}-{dd:02} {:02}:{:02}; \
+                 the days after it are means of fewer runs, as `runs` says",
+                secs / 3600,
+                secs % 3600 / 60
+            );
         }
         pick_ms.sort_by(f64::total_cmp);
         if !pick_ms.is_empty() {

@@ -47,7 +47,7 @@ import sys
 
 import staged
 
-ROOT =os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DENYLIST = os.path.join("fleet", "private-tokens.txt")
 
 SKIP_DIRS = {".git", "node_modules", "target", ".venv", "__pycache__",

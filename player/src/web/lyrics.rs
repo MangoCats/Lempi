@@ -16,6 +16,11 @@ use super::Ui;
 
 /// Everything the editor shows for a passage: its naming, its own entry, and
 /// every other source of words in the order of `[SPEC-LYR-100]`, read-only.
+///
+/// A failure is answered as the save answers one ([`super::db_failure`]):
+/// 503 while the file is busy, 500 otherwise. Until 2026-11-14 this was
+/// always 500, so the page read *could not be read* where the save, a moment
+/// later, said *busy, try again*.
 pub(super) async fn lyrics_sources(
     State(ui): State<Ui>,
     axum::extract::Path(passage_id): axum::extract::Path<i64>,
@@ -23,15 +28,13 @@ pub(super) async fn lyrics_sources(
     let db = ui.db.clone();
     let library = ui.library.clone();
     let got = tokio::task::spawn_blocking(move || {
-        crate::db::Library::open_split(&db, &library)
-            .and_then(|lib| lib.lyrics_view(passage_id))
-            .map_err(|e| e.message().to_string())
+        crate::db::Library::open_split(&db, &library).and_then(|lib| lib.lyrics_view(passage_id))
     })
     .await;
     match got {
         Ok(Ok(Some(view))) => axum::Json(view).into_response(),
         Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
-        Ok(Err(why)) => (StatusCode::INTERNAL_SERVER_ERROR, why).into_response(),
+        Ok(Err(e)) => super::db_failure(&e),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }

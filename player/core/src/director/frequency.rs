@@ -1187,11 +1187,14 @@ mod tests {
         Rotation::SetAside { artist_gap: super::super::christmas::ARTIST_GAP_SHARE }
     }
 
-    /// The artist gap `[SPEC-XMR-050]`: a sixth of the artist's own rotation,
-    /// after the artist time scale. On the 10-hour default that is 1 h 40 min.
+    /// The artist gap `[SPEC-XMR-050]`: a twelfth of the artist's own
+    /// rotation, after the artist time scale. On the 10-hour default that is
+    /// 50 min. The twelve is written here rather than read from the constant,
+    /// so a change to the share is a change to this test too.
     #[test]
     fn rotation_set_aside_still_keeps_an_artist_apart() {
-        let gap = seconds(DEF_ROTATION_ART) / 6.0;
+        let gap = seconds(DEF_ROTATION_ART) / 12.0;
+        assert!((gap - 50.0 * 60.0).abs() < 1e-6, "the default gap is {gap} s");
         let w = |age: f64, p: &Policy| {
             let artists = [credit(Some(age))];
             let mut c = candidate();
@@ -1211,14 +1214,19 @@ mod tests {
         let slow = Policy { artist_scale: TimeScale::new(2.0), ..Default::default() };
         assert_eq!(w(gap + 1.0, &slow).excluded, Some(Exclusion::ArtistRotationBlock));
         assert!(w(2.0 * gap + 1.0, &slow).is_eligible());
-        // And a longer rotation gives a longer gap: Prince's 26 hours.
-        let artists = [ArtistCredit {
-            tuning: Tuning { rotation: (26.0f64).log10(), ..Tuning::artist_defaults() },
-            age_s: Some(3.0 * HOUR),
-        }];
-        let mut c = candidate();
-        c.artists = &artists;
-        assert_eq!(weigh_under(&c, &p, aside()).excluded, Some(Exclusion::ArtistRotationBlock), "26 h / 6 is 4 h 20");
+        // And a longer rotation gives a longer gap: Prince's 26 hours, a
+        // twelfth of which is 2 h 10 min.
+        let prince = |age_s: f64| {
+            let artists = [ArtistCredit {
+                tuning: Tuning { rotation: (26.0f64).log10(), ..Tuning::artist_defaults() },
+                age_s: Some(age_s),
+            }];
+            let mut c = candidate();
+            c.artists = &artists;
+            weigh_under(&c, &p, aside())
+        };
+        assert_eq!(prince(2.0 * HOUR).excluded, Some(Exclusion::ArtistRotationBlock), "26 h / 12 is 2 h 10");
+        assert!(prince(2.5 * HOUR).is_eligible(), "past 2 h 10");
     }
 
     /// The one scale the reserve's places are weighed on `[SPEC-XMR-040]`:

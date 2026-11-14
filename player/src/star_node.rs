@@ -714,7 +714,7 @@ pub(crate) mod tests {
             "CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL);
              INSERT INTO passage_recordings VALUES (10,'rec-1',1.0);").unwrap();
         let words = |n: &Node| -> Option<String> {
-            lempi_core::db::Library::open_split(&n.l, &n.lib).unwrap().lyrics(10)
+            lempi_core::db::Library::open_split(&n.l, &n.lib).unwrap().lyrics(10).unwrap()
         };
         assert_eq!(words(&n), None);
 

@@ -95,7 +95,9 @@
     $('search').src = `https://www.google.com/search?igu=1&q=${q}`;
   }
 
-  async function load() {
+  // A 503 is the library busy for a moment, as the save says it
+  // [SPEC-LYR-174]: said so, and asked again after `Retry-After`, a few times.
+  async function load(tries = 0) {
     if (passageId == null) {
       $('heading').textContent = 'No passage id in the URL.';
       return;
@@ -103,12 +105,21 @@
     const resp = await fetch(`/lyrics/${passageId}/sources`).catch(() => null);
     if (!resp || !resp.ok) {
       $('heading').textContent = `Passage ${passageId}`;
+      $('save').disabled = true;
+      if (resp && resp.status === 503 && tries < 4) {   // five asks in all, as the skins
+        const wait = Math.max(1, Number(resp.headers.get('Retry-After')) || 2);
+        say(`The library is busy; asking again in ${wait} s.`, true);
+        setTimeout(() => load(tries + 1), wait * 1000);
+        return;
+      }
       say(resp && resp.status === 404
         ? 'Not found here — it may belong to another installation, or have been renumbered.'
-        : 'The lyrics could not be read.', true);
-      $('save').disabled = true;
+        : resp && resp.status === 503
+          ? 'The library is still busy. Reload the page to try again.'
+          : 'The lyrics could not be read.', true);
       return;
     }
+    $('save').disabled = false;
     render(await resp.json());
   }
 

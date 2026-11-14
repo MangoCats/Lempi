@@ -84,7 +84,7 @@ pub fn create_pair_if_absent(listener: &Path, library: &Path) -> Result<Pair, Db
             )));
         }
     }
-    let schema = Connection::open_in_memory().map_err(|e| DbError::Open(e.to_string()))?;
+    let schema = Connection::open_in_memory().map_err(DbError::open)?;
     schema.execute_batch(SCHEMA).map_err(|e| DbError::Query(format!("sql/schema.sql: {e}")))?;
 
     let library_new = beside(library);
@@ -109,8 +109,8 @@ fn beside(path: &Path) -> PathBuf {
 }
 
 fn build_half(schema: &Connection, out: &Path, half: Half) -> Result<(), DbError> {
-    let open = |e: rusqlite::Error| DbError::Open(format!("{}: {e}", out.display()));
-    let query = |e: rusqlite::Error| DbError::Query(format!("{}: {e}", out.display()));
+    let open = |e: rusqlite::Error| DbError::open(e).during(out.display());
+    let query = |e: rusqlite::Error| DbError::query(e).during(out.display());
     // Left by a first start that was interrupted.
     for leftover in ["", "-wal", "-shm"] {
         let mut p = out.as_os_str().to_os_string();
@@ -181,7 +181,7 @@ fn build_half(schema: &Connection, out: &Path, half: Half) -> Result<(), DbError
 /// makes them, before this runs. One read of `sqlite_master` when nothing is
 /// missing, which is every open after the first.
 pub(crate) fn complete_listener(conn: &Connection) -> Result<Vec<String>, DbError> {
-    let query = |e: rusqlite::Error| DbError::Query(format!("completing the listener: {e}"));
+    let query = |e: rusqlite::Error| DbError::query(e).during("completing the listener");
     let have: Vec<String> = {
         let mut st = conn
             .prepare("SELECT name FROM main.sqlite_master WHERE type = 'table'")
@@ -198,7 +198,7 @@ pub(crate) fn complete_listener(conn: &Connection) -> Result<Vec<String>, DbErro
     if missing.is_empty() {
         return Ok(Vec::new());
     }
-    let schema = Connection::open_in_memory().map_err(|e| DbError::Open(e.to_string()))?;
+    let schema = Connection::open_in_memory().map_err(DbError::open)?;
     schema.execute_batch(SCHEMA).map_err(|e| DbError::Query(format!("sql/schema.sql: {e}")))?;
     let tx = conn.unchecked_transaction().map_err(query)?;
     let mut made = Vec::new();
@@ -265,7 +265,7 @@ pub fn ensure_listener_wal(listener: &Path) -> Result<Option<(String, String)>, 
     if !listener.is_file() {
         return Ok(None);
     }
-    let open = |e: rusqlite::Error| DbError::Open(format!("{}: {e}", listener.display()));
+    let open = |e: rusqlite::Error| DbError::open(e).during(listener.display());
     let conn = Connection::open_with_flags(listener, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(open)?;
     // Short: this is in the way of the music starting, and a file held now
     // will be asked about again at the next start.

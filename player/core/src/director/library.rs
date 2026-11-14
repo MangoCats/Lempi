@@ -343,7 +343,7 @@ impl Director {
     /// column that is absent is that case, and quiet; any other failure is a
     /// read that did not happen, and is said `[CLAUDE.md §6]`.
     pub fn load(conn: &QualifyingConn) -> Result<Self, DbError> {
-        let q = |e: rusqlite::Error| DbError::Query(e.to_string());
+        let q = |e: rusqlite::Error| DbError::query(e);
 
         let sql = format!("SELECT {COLS} {FROM} WHERE p.kind = 'radio'");
         let mut stmt = conn.prepare(&sql).map_err(q)?;
@@ -1257,11 +1257,12 @@ impl Director {
         }
         let is_christmas = |x: &(&QueueEntry, &Weighing, Option<f64>)| self.christmas.contains(&x.0.passage_id);
         // Fillers are weighed only when moving up cannot fill the places:
-        // it costs a pass over every Christmas passage.
-        let moving_up = ranked.iter().skip(take - reserved).filter(|x| is_christmas(x)).count();
-        let filler_store = if moving_up < reserved {
+        // it costs a pass over every Christmas passage. How many is the
+        // reserve's to say, by its own cutoff.
+        let need = christmas::fillers_wanted(&ranked, take, reserved, is_christmas);
+        let filler_store = if need > 0 {
             let listed: HashSet<i64> = ranked.iter().map(|x| x.0.passage_id).collect();
-            self.christmas_fillers(starts_at, rng, skip, &listed, &seeds, anchor, reserved - moving_up)
+            self.christmas_fillers(starts_at, rng, skip, &listed, &seeds, anchor, need)
         } else {
             Vec::new()
         };
@@ -1270,6 +1271,7 @@ impl Director {
         let (listed, mut tally) = christmas::reserve(&ranked, take, reserved, is_christmas, &fillers);
         tally.enabled = self.christmas_on;
         tally.ramp = ramp;
+        tally.ranked = flowed;
         tally.last_resort = due > 0 && shaping.last_resort;
         let places: Vec<Place> = listed.iter().map(|x| x.1).collect();
 
@@ -1313,8 +1315,8 @@ impl Director {
     /// The Christmas reserve's fillers `[SPEC-XMR-050]`: at most `need`
     /// Christmas passages from outside Stage C's list, nearest the
     /// programme's seeds first, each weighed with rotation set aside -- its
-    /// recovery measured from its last play, and an artist still kept a sixth
-    /// of its rotation apart.
+    /// recovery measured from its last play, and an artist still kept a
+    /// twelfth of its rotation apart.
     ///
     /// Not one already listed or queued, and not one Stage A would refuse for
     /// anything but rotation: a hold, the length filters, the profanity
@@ -2358,6 +2360,7 @@ mod tests {
         let t = r.tally;
         assert_eq!((t.reserved, t.moved_up, t.fillers, t.backfilled), (75, 10, 11, 54));
         assert!(!t.last_resort);
+        assert!(t.ranked, "a flow order ranks the list");
         assert!(r.places[..25].iter().all(|p| *p == Place::Flow));
         let order = |p: &Place| match p {
             Place::Flow => 0,
@@ -2390,6 +2393,9 @@ mod tests {
         for seed in 0..60 {
             let r = d.roulette(DEC_19, &mut Rng::seeded(seed), &[], None).unwrap();
             assert_eq!((r.tally.reserved, r.tally.fillers), (90, 30), "seed {seed}");
+            // Said, so "why this passage?" does not call a backfilled place
+            // lower in an order there is none of `[SPEC-XMR-070]`.
+            assert!(!r.tally.ranked, "seed {seed}");
             let others: Vec<i64> = r.pool.iter().map(|x| x.0.passage_id).filter(|i| *i <= 120).collect();
             assert_eq!((r.pool.len(), others.len()), (120, 90), "seed {seed}");
             ever.extend(others);
@@ -2421,17 +2427,17 @@ mod tests {
         }
     }
 
-    /// A filler keeps a sixth of its artist's rotation apart
+    /// A filler keeps a twelfth of its artist's rotation apart
     /// `[SPEC-XMR-050]`: Christmas passage 160, never heard, shares an artist
     /// with passage 1, the queue tail. Stage A holds it out by that artist's
-    /// ten hours, so it can only be a filler. Heard four minutes ago, the
-    /// artist holds it out there too; two hours ago, past the gap of
-    /// 1 h 40 min, it does not. Until 2026-11-13 it could follow at once: a
-    /// recording fully recovered weighs ×0.0067 by its artist four minutes
-    /// on, over the floor.
+    /// ten hours, so it can only be a filler. Heard four minutes ago, or 40
+    /// minutes, the artist holds it out there too; an hour ago, past the gap
+    /// of 50 min, it does not -- where the sixth of 2026-11-13 still held it.
+    /// Until 2026-11-13 it could follow at once: a recording fully recovered
+    /// weighs ×0.0067 by its artist four minutes on, over the floor.
     #[test]
     fn a_filler_does_not_follow_its_own_artist() {
-        for (ago, kept) in [(240, false), (2 * 3600, true)] {
+        for (ago, kept) in [(240, false), (40 * 60, false), (3600, true)] {
             let c = reserve_library(200, &[160]);
             c.execute("UPDATE recording_artists SET artist_mbid = 'a1' WHERE mbid = 'r160'", []).unwrap();
             played(&c, 1, DEC_19 - ago);

@@ -248,6 +248,63 @@ SELF = "tools/test_sqlite_uri.py"
 WRITTEN = re.compile(r"""file:\{|["']file:["']\s*\+""")
 
 
+def prose_and_comments(source):
+    """Which lines of `source` are prose -- inside a docstring -- and, for each
+    other line, the column its comment starts at: (lines, {line: column}).
+    None where the source does not tokenize.
+
+    Until 2026-11-14 the scan below took any line holding a backtick for
+    prose, so a line of code with a backtick in its trailing comment, or in
+    a string, was never read -- the fault it is there to stop could return in
+    exactly such a line."""
+    import io
+    import tokenize
+    try:
+        toks = [t for t in tokenize.generate_tokens(io.StringIO(source).readline)
+                if t.type not in (tokenize.NL, tokenize.ENCODING)]
+    except (tokenize.TokenError, SyntaxError):
+        return None
+    comment_at = {}
+    for t in toks:
+        if t.type == tokenize.COMMENT:
+            comment_at.setdefault(t.start[0], t.start[1])
+    # A docstring is a string that is a whole statement on its own.
+    sig = [t for t in toks if t.type != tokenize.COMMENT]
+    starts = {tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT}
+    prose = set()
+    for i, t in enumerate(sig):
+        if t.type != tokenize.STRING:
+            continue
+        before = sig[i - 1].type if i else tokenize.NEWLINE
+        after = sig[i + 1].type if i + 1 < len(sig) else tokenize.ENDMARKER
+        if before in starts and after in (tokenize.NEWLINE, tokenize.ENDMARKER):
+            prose.update(range(t.start[0], t.end[0] + 1))
+    return prose, comment_at
+
+
+def code_of(line, n, comment_at):
+    """Line `n` without its comment."""
+    return line[:comment_at[n]] if n in comment_at else line
+
+
+def test_prose_is_told_from_code():
+    """The scan's reading of a file: a docstring and a comment are prose, and
+    a line of code is code whatever its comment says."""
+    print("a docstring and a comment are prose; code is code, backticks or not")
+    src = ('def f(p):\n'
+           '    """Built as `f"file:{p}?mode=ro"`."""\n'
+           '    # `f"file:{p}?mode=ro"`, by hand\n'
+           '    return sqlite3.connect(f"file:{p}?mode=ro", uri=True)  # see `lempi_db`\n'
+           '    x = 1  # f"file:{p}"\n')
+    shape = prose_and_comments(src)
+    check(shape is not None, "the sample did not tokenize")
+    prose, comment_at = shape or (set(), {})
+    lines = src.split("\n")
+    read = [n for n, line in enumerate(lines, 1)
+            if n not in prose and WRITTEN.search(code_of(line, n, comment_at))]
+    check(read == [4], f"the lines read as code writing an address: {read}, where only 4 is")
+
+
 def test_no_address_is_written_by_hand():
     """What keeps the forty from coming back: every tracked Python file is
     read for an address put together in place."""
@@ -265,12 +322,19 @@ def test_no_address_is_written_by_hand():
     used = set()
     for rel in sorted(set(files) - {SELF}):
         with open(os.path.join(ROOT, rel), encoding="utf-8", errors="replace") as fh:
-            for n, line in enumerate(fh, 1):
-                if not WRITTEN.search(line) or "`" in line:             # prose names the old form in backticks
-                    continue
-                allowed = [i for i, (f, text) in enumerate(BY_HAND) if f == rel and text in line]
-                used.update(allowed)
-                check(allowed, f"{rel}:{n} writes an address by hand -- use lempi_db.sqlite_uri: {line.strip()[:110]}")
+            source = fh.read()
+        shape = prose_and_comments(source)
+        if shape is None:
+            print(f"  {rel} does not tokenize: every line of it is read as code")
+            shape = (set(), {})
+        prose, comment_at = shape
+        for n, line in enumerate(source.split("\n"), 1):
+            # Prose -- a docstring, a comment -- names the old form; code is read.
+            if n in prose or not WRITTEN.search(code_of(line, n, comment_at)):
+                continue
+            allowed = [i for i, (f, text) in enumerate(BY_HAND) if f == rel and text in line]
+            used.update(allowed)
+            check(allowed, f"{rel}:{n} writes an address by hand -- use lempi_db.sqlite_uri: {line.strip()[:110]}")
     unused = [BY_HAND[i] for i in range(len(BY_HAND)) if i not in used]
     check(not unused, f"an exception that no longer matches a line: {unused}")
 
@@ -281,6 +345,7 @@ def main() -> int:
     test_a_split_pair_in_such_a_folder()
     test_passage_orphans_clears_what_it_counted()
     test_the_scripts_a_node_runs()
+    test_prose_is_told_from_code()
     test_no_address_is_written_by_hand()
     print()
     if FAILED:

@@ -408,7 +408,7 @@ pub(crate) const REVIEW_COLUMNS: [&str; 4] = [
 /// cannot read. That is not hypothetical: the test fixture did exactly that
 /// and every review test failed on `no such column`.
 pub(crate) fn ensure_review_table(conn: &Connection) -> Result<(), DbError> {
-    conn.execute_batch(REVIEW_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+    conn.execute_batch(REVIEW_TABLE).map_err(DbError::open)?;
     for column in REVIEW_COLUMNS {
         // Already-present columns fail here, which is the expected path on
         // every start after the first.
@@ -472,7 +472,7 @@ pub(crate) const BOUNDARY_REVIEW_FADE_COLUMNS: [&str; 8] = [
 ];
 
 pub(crate) fn ensure_boundary_review_table(conn: &Connection) -> Result<(), DbError> {
-    conn.execute_batch(BOUNDARY_REVIEW_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+    conn.execute_batch(BOUNDARY_REVIEW_TABLE).map_err(DbError::open)?;
     for column in BOUNDARY_REVIEW_COLUMNS {
         let _ = conn.execute(&format!("ALTER TABLE boundary_reviews ADD COLUMN {column}"), []);
     }
@@ -528,7 +528,7 @@ pub(crate) const ARTIST_REVIEW_TABLE: &str = "
 pub(crate) const ARTIST_REVIEW_COLUMNS: [&str; 1] = ["origin TEXT"];
 
 pub(crate) fn ensure_artist_review_table(conn: &Connection) -> Result<(), DbError> {
-    conn.execute_batch(ARTIST_REVIEW_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+    conn.execute_batch(ARTIST_REVIEW_TABLE).map_err(DbError::open)?;
     for column in ARTIST_REVIEW_COLUMNS {
         let _ = conn.execute(&format!("ALTER TABLE artist_reviews ADD COLUMN {column}"), []);
     }
@@ -823,11 +823,11 @@ pub(super) fn ensure_library_tables_if_owned(conn: &QualifyingConn) -> Result<()
     }
     // Browsing joins this table, and an absent one fails the query rather
     // than returning nothing. Filling it is `tagscan`'s job.
-    conn.execute_batch(TAG_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+    conn.execute_batch(TAG_TABLE).map_err(DbError::open)?;
     // Same reasoning as the tag table above: created by whoever holds a
     // writable handle, so the read path never meets a missing table.
     // Filling it is `tools/fetch_cover_art.py`'s job.
-    conn.execute_batch(ART_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+    conn.execute_batch(ART_TABLE).map_err(DbError::open)?;
     for column in ["chosen INTEGER DEFAULT 0", "position INTEGER", "disc INTEGER"] {
         let _ =
             conn.execute(&format!("ALTER TABLE release_recordings ADD COLUMN {column}"), []);
@@ -894,7 +894,7 @@ impl PlayerStore {
             library_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE,
         )?;
-        conn.busy_timeout(BUSY_WAIT).map_err(|e| DbError::Open(e.to_string()))?;
+        conn.busy_timeout(BUSY_WAIT).map_err(DbError::open)?;
         if making {
             // In WAL mode from its first page `[SPEC-STAR-107]`, as
             // `create_pair_if_absent` makes one. `main`, by name: a pragma
@@ -914,7 +914,7 @@ impl PlayerStore {
                  playing INTEGER NOT NULL DEFAULT 0, volume REAL NOT NULL DEFAULT 1.0,
                  updated_at TEXT NOT NULL);",
         )
-        .map_err(|e| DbError::Open(e.to_string()))?;
+        .map_err(DbError::open)?;
         // The queue as it stood, so a restart resumes the listening rather
         // than starting a new one `[SPEC-DIR-225]`. Beside `player_state` and
         // not inside it: that row is the passage *sounding*, this is what is
@@ -932,16 +932,16 @@ impl PlayerStore {
                  passage_id INTEGER NOT NULL,
                  updated_at TEXT NOT NULL);",
         )
-        .map_err(|e| DbError::Open(e.to_string()))?;
-        conn.execute_batch(PLAY_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
-        conn.execute_batch(FILE_CHECKS_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
-        conn.execute_batch(REJECTION_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
-        conn.execute_batch(FLAGS_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
-        conn.execute_batch(PREFERENCES_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
-        conn.execute_batch(CHARACTERISTICS_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+        .map_err(DbError::open)?;
+        conn.execute_batch(PLAY_TABLE).map_err(DbError::open)?;
+        conn.execute_batch(FILE_CHECKS_TABLE).map_err(DbError::open)?;
+        conn.execute_batch(REJECTION_TABLE).map_err(DbError::open)?;
+        conn.execute_batch(FLAGS_TABLE).map_err(DbError::open)?;
+        conn.execute_batch(PREFERENCES_TABLE).map_err(DbError::open)?;
+        conn.execute_batch(CHARACTERISTICS_TABLE).map_err(DbError::open)?;
         // Words saved for a passage `[SPEC-LYR-140]`: the listener half's,
         // since the catalogue is attached read-only.
-        conn.execute_batch(super::lyrics::PASSAGE_LYRICS_TABLE).map_err(|e| DbError::Open(e.to_string()))?;
+        conn.execute_batch(super::lyrics::PASSAGE_LYRICS_TABLE).map_err(DbError::open)?;
         ensure_history_columns(&conn);
         ensure_flags_columns(&conn);
         ensure_occasion_columns(&conn);
@@ -1052,7 +1052,7 @@ impl PlayerStore {
                 rusqlite::params![passage_id, decision, mbid, release, previous],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Withdraw a judgement `[REQ-LIB-165]`.
@@ -1078,7 +1078,7 @@ impl PlayerStore {
         self.conn
             .execute("DELETE FROM id_reviews WHERE passage_id = ?1", [passage_id])
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Record a boundary edit `[REQ-LIB-175]`, `[SPEC021 §2]`.
@@ -1201,7 +1201,7 @@ impl PlayerStore {
                 ],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// "Accept as-is" `[SPEC024 §7]`, `[SPEC-SA-125]`: a passage the
@@ -1354,7 +1354,7 @@ impl PlayerStore {
                 ],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Withdraw an artist correction, the same "recorded, not yet applied"
@@ -1390,7 +1390,7 @@ impl PlayerStore {
         self.conn
             .execute("DELETE FROM artist_reviews WHERE recording_mbid = ?1", [&recording_mbid])
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Save the resume point `[REQ-AUD-140]`.
@@ -1415,7 +1415,7 @@ impl PlayerStore {
                          value = excluded.value, updated_at = excluded.updated_at",
                     rusqlite::params![key, value],
                 )
-                .map_err(|e| DbError::Query(e.to_string()))?;
+                .map_err(DbError::query)?;
         }
         Ok(())
     }
@@ -1506,7 +1506,7 @@ impl PlayerStore {
                 Self::UTC_OFFSET_MAX_MIN / 60
             )));
         }
-        let q = |e: rusqlite::Error| DbError::Query(e.to_string());
+        let q = |e: rusqlite::Error| DbError::query(e);
         let tx = self.conn.unchecked_transaction().map_err(q)?;
         // As `sync_os_utc_offset` writes it: the row may not exist yet, and
         // `updated_at` has no default.
@@ -1562,7 +1562,7 @@ impl PlayerStore {
                 rusqlite::params![address],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Whether this node answers discovery queries `[SPEC-MTR-020]`, `[SPEC050]`:
@@ -1588,7 +1588,7 @@ impl PlayerStore {
                 rusqlite::params![if on { "1" } else { "0" }],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Whether Vipunen keeps a lossless FLAC copy of each CD rip it adds
@@ -1612,7 +1612,7 @@ impl PlayerStore {
                 rusqlite::params![if on { "1" } else { "0" }],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// The picture frame on this machine's own screen `[SPEC-PIC-210]`: on,
@@ -1654,7 +1654,7 @@ impl PlayerStore {
                 rusqlite::params![key, value],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// The longest album name Vipunen gives a CD rip's folder and files
@@ -1685,7 +1685,7 @@ impl PlayerStore {
                 rusqlite::params![n.to_string()],
             )
             .map(|_| true)
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// The NetworkManager connections this node takes part in the mesh on,
@@ -1712,7 +1712,7 @@ impl PlayerStore {
                 rusqlite::params![v],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// How long the mesh pairing window stays open after a button press, in
@@ -1739,7 +1739,7 @@ impl PlayerStore {
                 rusqlite::params![secs.to_string()],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// The speaker last chosen through `use` or `pair`, if any
@@ -1776,7 +1776,7 @@ impl PlayerStore {
                 rusqlite::params![key, clamped.to_string()],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Clear the explicit pinned volume for an output `[REQ-POV-030.3]`, `[IMPL-POV-020]`.
@@ -1785,7 +1785,7 @@ impl PlayerStore {
         self.conn
             .execute("DELETE FROM player_settings WHERE key = ?1", rusqlite::params![key])
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Load pinned and last-used volume records for an output `[SPEC-POV-035]`, `[IMPL-POV-020]`.
@@ -1848,7 +1848,7 @@ impl PlayerStore {
                 rusqlite::params![output],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Bluetooth connection attempt timeout in seconds before DAC fallback `[REQ-POV-040]`, `[SPEC-POV-025]`.
@@ -1874,7 +1874,7 @@ impl PlayerStore {
                 rusqlite::params![clamped.to_string()],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Seconds to wait for the preferred speaker at startup `[PI3-AIM-110]`.
@@ -1902,7 +1902,7 @@ impl PlayerStore {
                 rusqlite::params![clamped.to_string()],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Save an output device's 5-band parametric equalizer configuration
@@ -1921,7 +1921,7 @@ impl PlayerStore {
                 rusqlite::params![key, json],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Load an output device's 5-band parametric equalizer configuration,
@@ -1954,14 +1954,14 @@ impl PlayerStore {
                 "DELETE FROM player_settings WHERE key IN (?1, ?2, ?3)",
                 rusqlite::params![pinned_key, last_key, eq_key],
             )
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         if self.get_active_output() == output {
             if has_dac {
                 self.set_active_output("dac")?;
             } else {
                 self.conn
                     .execute("DELETE FROM player_settings WHERE key = 'active_output'", [])
-                    .map_err(|e| DbError::Query(e.to_string()))?;
+                    .map_err(DbError::query)?;
             }
         }
         Ok(())
@@ -2000,7 +2000,7 @@ impl PlayerStore {
                 rusqlite::params![mode],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Defaults **on** -- the original request, honored directly. A library
@@ -2030,7 +2030,7 @@ impl PlayerStore {
                 rusqlite::params![pct.to_string()],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Defaults to full brightness, matching `load_led_mode`'s own default
@@ -2063,7 +2063,7 @@ impl PlayerStore {
                 rusqlite::params![pct.to_string()],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Defaults to a quarter, the listener's own figure `[PI3-LED-020]`. The
@@ -2100,12 +2100,12 @@ impl PlayerStore {
                     rusqlite::params![id.to_string()],
                 )
                 .map(|_| ())
-                .map_err(|e| DbError::Query(e.to_string())),
+                .map_err(DbError::query),
             None => self
                 .conn
                 .execute("DELETE FROM player_settings WHERE key = 'manual_program'", [])
                 .map(|_| ())
-                .map_err(|e| DbError::Query(e.to_string())),
+                .map_err(DbError::query),
         }
     }
 
@@ -2123,7 +2123,7 @@ impl PlayerStore {
                 rusqlite::params![crate::director::library::PROFANITY_TOLERANCE_KEY, t.get().to_string()],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// 1.0 when never set `[SPEC-PTL-030]`.
@@ -2146,7 +2146,7 @@ impl PlayerStore {
                 ],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// On when never set `[SPEC-XMR-080]`.
@@ -2186,7 +2186,7 @@ impl PlayerStore {
                 )
                 .map(|_| ())
         }
-        .map_err(|e| DbError::Query(e.to_string()))
+        .map_err(DbError::query)
     }
 
     /// A subject's own hand-tuned `rotation`/`recovery`/`restraint`
@@ -2237,7 +2237,7 @@ impl PlayerStore {
                 rusqlite::params![subject_kind, subject_id, rotation, recovery, restraint],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Clear one field back to "use the default" -- the one operation
@@ -2261,7 +2261,7 @@ impl PlayerStore {
                 rusqlite::params![subject_kind, subject_id],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Every registered special, with both values `[SPEC-PREF-080]`.
@@ -2304,8 +2304,8 @@ impl PlayerStore {
                     value: r.get(4)?,
                 })
             })
-            .map_err(|e| DbError::Query(e.to_string()))?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(DbError::query)
     }
 
     /// Set one special on one recording `[SPEC-PREF-085]`.
@@ -2334,7 +2334,7 @@ impl PlayerStore {
                 rusqlite::params![subject_id, characteristic, class, value],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Drop the listener's own value, so the inherited `flavor` one applies
@@ -2352,7 +2352,7 @@ impl PlayerStore {
                 rusqlite::params![subject_id, characteristic, class],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Save the words of one passage, and of no other `[SPEC-LYR-174]`:
@@ -2451,12 +2451,12 @@ impl PlayerStore {
                    JOIN __LIB__.artists a ON a.mbid = ra.artist_mbid \
                   WHERE ra.mbid = ?1 ORDER BY ra.weight DESC, a.name",
             )
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         let rows = st
             .query_map(rusqlite::params![mbid], |r| Ok(Credit { mbid: r.get(0)?, name: r.get(1)? }))
-            .map_err(|e| DbError::Query(e.to_string()))?
+            .map_err(DbError::query)?
             .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         Ok(rows)
     }
 
@@ -2485,12 +2485,12 @@ impl PlayerStore {
         } else {
             "SELECT selected_by, played_at FROM listener_play_history WHERE mbid = ?1"
         };
-        let mut st = self.conn.prepare(sql).map_err(|e| DbError::Query(e.to_string()))?;
+        let mut st = self.conn.prepare(sql).map_err(DbError::query)?;
         let rows: Vec<(Option<String>, i64)> = st
             .query_map(rusqlite::params![id], |r| Ok((r.get(0)?, r.get(1)?)))
-            .map_err(|e| DbError::Query(e.to_string()))?
+            .map_err(DbError::query)?
             .collect::<rusqlite::Result<_>>()
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -2598,7 +2598,7 @@ impl PlayerStore {
                 rusqlite::params![passage_id, position_ms as i64, playing as i64],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Write the queue down, in play order `[SPEC-DIR-225]`.
@@ -2622,7 +2622,7 @@ impl PlayerStore {
     /// settings, and the log took 166,000 lines of *cannot start a
     /// transaction within a transaction* before the player was restarted.
     pub fn save_queue(&self, ids: &[i64]) -> Result<(), DbError> {
-        let q = |e: rusqlite::Error| DbError::Query(e.to_string());
+        let q = |e: rusqlite::Error| DbError::query(e);
         self.conn.execute_batch("BEGIN IMMEDIATE").map_err(q)?;
         let done = || -> Result<(), DbError> {
             self.conn.execute("DELETE FROM player_queue", []).map_err(q)?;
@@ -2728,7 +2728,7 @@ impl PlayerStore {
                 rusqlite::params![at, passage_id, slot_id, detail],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Record that a passage played `[REQ-PD-110]`.
@@ -2765,7 +2765,7 @@ impl PlayerStore {
                  VALUES (strftime('%s','now'), ?1, ?2, ?3, ?4, ?5)",
                 rusqlite::params![passage_id, mbid, heard_ms, span_ms, selected_by],
             )
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         Ok(self.conn.last_insert_rowid())
     }
 
@@ -2778,7 +2778,7 @@ impl PlayerStore {
                 rusqlite::params![heard_ms, play_id],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// Record a rejection, for suppression and nothing else `[SPEC-PLAY-050]`.
@@ -2813,7 +2813,7 @@ impl PlayerStore {
                 rusqlite::params![kind.as_str(), passage_id, mbid, heard_ms, span_ms],
             )
             .map(|_| ())
-            .map_err(|e| DbError::Query(e.to_string()))
+            .map_err(DbError::query)
     }
 
     /// How many plays are on record. For diagnostics, and for anything that
@@ -2843,12 +2843,12 @@ impl PlayerStore {
                 "SELECT mbid, MAX(rejected_at) FROM listener_rejections \
                  WHERE mbid IS NOT NULL AND kind = ?1 GROUP BY mbid",
             )
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         let rows = q
             .query_map([kind.as_str()], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
             })
-            .map_err(|e| DbError::Query(e.to_string()))?;
+            .map_err(DbError::query)?;
         Ok(rows.flatten().collect())
     }
 

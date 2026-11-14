@@ -2376,10 +2376,14 @@ def node_reports(plan, depth=30):
     return out
 
 
-def node_integrity(plan, depth=30):
+def node_integrity(plan, depth=30, reports=None):
     """[GDE-INT-145]: each node's file checks as its newest snapshot carried
-    them: {name: (run, the summary or None)}."""
-    return {name: (run, b.get("integrity")) for name, (run, b) in node_reports(plan, depth).items()}
+    them: {name: (run, the summary or None)}. `reports`, where the caller has
+    already read node_reports, is used rather than read again: each read opens
+    and parses up to `depth` runs' baselines.json."""
+    if reports is None:
+        reports = node_reports(plan, depth)
+    return {name: (run, b.get("integrity")) for name, (run, b) in reports.items()}
 
 
 def journal_words(jm):
@@ -2528,7 +2532,9 @@ def status(plan):
     # [GDE-INT-145]: each speaker's reading of its own files, as its last sync
     # brought it. A build that does not report it is said and not counted
     # stale: during a rollout most nodes are on one, and backup's exit is this.
-    for name, (run, ic) in sorted(node_integrity(plan).items()):
+    # The runs' snapshots are read once for this and the journal modes below.
+    reports = node_reports(plan)
+    for name, (run, ic) in sorted(node_integrity(plan, reports=reports).items()):
         when = f"{run[:4]}-{run[4:6]}-{run[6:8]} {run[9:11]}:{run[11:13]}Z" if len(run) >= 13 else run
         if ic is None:
             say(f"  {name}: does not report reading its files back (sync of {when})")
@@ -2538,7 +2544,7 @@ def status(plan):
     # [SPEC-STAR-107]: each node's journal modes, as its last sync brought
     # them. A build that does not report them is said and not counted stale,
     # for the reason above.
-    for name, (run, b) in sorted(node_reports(plan).items()):
+    for name, (run, b) in sorted(reports.items()):
         if "signed" not in b:
             continue                # a phone uploads its edits and answers no snapshot
         when = f"{run[:4]}-{run[4:6]}-{run[6:8]} {run[9:11]}:{run[11:13]}Z" if len(run) >= 13 else run

@@ -78,17 +78,21 @@ pub fn generate(conn: &Connection, dry_run: bool) -> Result<Written, String> {
 
     let mut rep = Written::default();
     for (passage_id, path, in_file) in rows.flatten() {
+        // A capture's words belong in the cache, one file per song. A sidecar
+        // here would win over them and show all twelve at once. Counted, and
+        // asked only whether it has words: its text is not read to be thrown
+        // away (until 2026-11-14 it was).
+        if in_file > 1 {
+            if crate::db::shows_words(conn, "main", &saved, passage_id).map_err(|e| e.message().to_string())? {
+                rep.passed_over(IN_CAPTURE);
+            }
+            continue;
+        }
         let Some(text) = crate::db::shown_lyrics(conn, "main", &saved, passage_id)
             .map_err(|e| e.message().to_string())?
         else {
             continue;
         };
-        // A capture's words belong in the cache, one file per song. A sidecar
-        // here would win over them and show all twelve at once.
-        if in_file > 1 {
-            rep.passed_over(IN_CAPTURE);
-            continue;
-        }
         let side = sidecar_of(Path::new(&path));
         if let Ok(existing) = std::fs::read_to_string(&side) {
             if existing == text {
