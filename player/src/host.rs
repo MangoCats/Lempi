@@ -203,22 +203,28 @@ impl Player {
             }
         }
         // Before anything here opens the listener `[SPEC-STAR-107]`: the mode
-        // changes only while no connection holds the file. Said either way it
-        // changes nothing about whether the player starts.
+        // changes only while no connection holds the file. **Said whatever it
+        // finds**, and none of it changes whether the player starts. Until
+        // 2026-11-13 a file already WAL, and one not there, said nothing --
+        // so a start that checked looked like a build that does not, and a
+        // mistyped path like a listener in order (CLAUDE.md section 5).
+        let at = cfg.listener.display();
         match crate::db::ensure_listener_wal(&cfg.listener) {
+            Ok(Some((was, now))) if now == "wal" && was == "wal" => {
+                tracing::info!("listener: {at} is in WAL mode [SPEC-STAR-107]");
+            }
             Ok(Some((was, now))) if now == "wal" => {
-                if was != "wal" {
-                    tracing::info!("listener: journal mode was {was}, now WAL [SPEC-STAR-107]");
-                }
+                tracing::info!("listener: {at} was in {was} journal mode, now WAL [SPEC-STAR-107]");
             }
             Ok(Some((was, _))) => tracing::warn!(
-                "listener: journal mode is {was} and SQLite would not change it -- something else holds {}. \
-                 A long read there refuses every write until it is WAL [SPEC-STAR-107]",
-                cfg.listener.display()
+                "listener: {at} is in {was} journal mode and SQLite would not change it -- something else \
+                 holds it. A long read there refuses every write until it is WAL [SPEC-STAR-107]"
             ),
-            Ok(None) => {}
+            Ok(None) => tracing::info!(
+                "listener: no file at {at} yet; the player makes one, in WAL mode [SPEC-STAR-107]"
+            ),
             Err(e) => tracing::warn!(
-                "listener: its journal mode could not be set to WAL ({e}). \
+                "listener: {at}: its journal mode could not be set to WAL ({e}). \
                  A long read there refuses every write until it is [SPEC-STAR-107]"
             ),
         }

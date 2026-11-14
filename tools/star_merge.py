@@ -80,6 +80,21 @@ def norm_time(v) -> str:
     return s[:19] + ("." + frac if frac else "")
 
 
+def edited_since_backup(stamp, seen: str) -> bool:
+    """Whether a row stamped `stamp` was written after the backup of `seen`
+    [SPEC-STAR-050] -- re-added since, so a removal the backup evidences is
+    not applied.
+
+    **To the second, which is all a backup's time is.** `seen` comes from the
+    epoch in a backup's name, `listener-<epoch>.db`, in whole seconds, while
+    `norm_time` keeps a stamp's fraction since 2026-11-13. Compared whole, a
+    row stamped 10:00:00.400 read as newer than a backup named for 10:00:00
+    and taken at 10:00:00.9 -- which held it -- so its removal was skipped and
+    the deleted row came back. Within the backup's own second the backup is
+    taken to hold the row, as it always was before the fraction was kept."""
+    return norm_time(stamp)[:19] > seen[:19]
+
+
 # ---------------------------------------------------------------- the rules --
 # [SPEC-STAR-040]. key: the portable identity. stamp: the column last-write-
 # wins reads, if any. removals: whether a row's absence can be a deletion the
@@ -393,7 +408,7 @@ def merge_table(table: str, spec: dict, nodes: list[Node], hub: str, rep: Report
             for k, seen in removals(n, table, key).items():
                 if k not in merged:
                     continue
-                re_added = stamp and norm_time(merged[k].get(stamp)) > seen
+                re_added = stamp and edited_since_backup(merged[k].get(stamp), seen)
                 # [SPEC-STAR-110]: a removal is only an item where another node
                 # changed the same row, so an edit would be lost with it.
                 editors = {nm: r for nm, r in held.get(k, {}).items() if nm != n.name

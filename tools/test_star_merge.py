@@ -657,9 +657,41 @@ def test_items(tmp):
     check(left == {"F"}, f"a verdict for the edit keeps the flag, and G is still removed: {left}")
 
 
+def test_removal_within_a_backups_second(tmp):
+    """[SPEC-STAR-050]: a backup's time is whole seconds, from its name. A row
+    stamped inside that second is one the backup held, so its removal since is
+    applied -- not read as re-added because its stamp has a fraction. Until
+    2026-11-13 '...:00.400' read as newer than a backup of '...:00', and the
+    deleted row came back."""
+    epoch = 1789000000
+    second = sm.norm_time(epoch)
+    later = sm.norm_time(epoch + 1)
+    check(not sm.edited_since_backup(second + ".400", second), "inside the backup's second: held by it")
+    check(not sm.edited_since_backup(second, second), "the backup's own second")
+    check(sm.edited_since_backup(later + ".000", second), "the next second: written since")
+    check(sm.edited_since_backup(later.replace(" ", "T") + "Z", second), "in any form a stamp takes")
+
+    d = os.path.join(tmp, "subsecond")
+    bk = os.path.join(d, "bk")
+    os.makedirs(bk)
+    a, b = os.path.join(d, "a.db"), os.path.join(d, "b.db")
+    row = f"INSERT INTO listener_flags VALUES ('recording','gone','{second}.400',NULL)"
+    db(a, row)
+    db(b)
+    db(os.path.join(bk, f"listener-{epoch}.db"), row)
+    manifest = dict(nodes=[dict(name="b", listener=b, backups=bk, taken_at="2026-09-26T00:00:00Z"),
+                           dict(name="a", listener=a, taken_at="2026-09-26T00:00:00Z")],
+                    hub_state_from="a")
+    out = os.path.join(d, "out")
+    sm.build(manifest, out)
+    left = rows(os.path.join(out, "listener.db"), "SELECT subject_id FROM listener_flags")
+    check(left == [], f"the removal b's backup evidences is applied: {left}")
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp()
     test_rust_agrees()
+    test_removal_within_a_backups_second(tmp)
     test_items(tmp)
     test_rekeyed(tmp)
     test_catalogue(tmp)
