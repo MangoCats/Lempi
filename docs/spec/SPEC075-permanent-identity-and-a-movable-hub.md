@@ -43,6 +43,7 @@ Translation has been patched at each boundary as it failed: `[SPEC-STAR-049]`, `
 - **The hub is not the only possible writer.** Catastrophic loss of the hub must not cost the fleet its function. In practice one hub may write for long periods, but another node must be able to step up when needed or wanted.
 - **Speakers hold the full catalogue,** including music they do not have.
 - **Ongoing stability comes first.** Migration must be possible and reliable, but the design is judged on usage and on new music arriving at irregular intervals, on some nodes and not others.
+- **The fleet may stop for the migration** (decided 2026-11-14). No node need play while a step is applied, so a step is one window over every node, not a period of mixed formats. Phones still update on their own schedule.
 
 ## 3. Identity
 
@@ -140,7 +141,7 @@ Translation has been patched at each boundary as it failed: `[SPEC-STAR-049]`, `
 
 ## 8. Migration
 
-Each step can be used alone, and reversed. Nothing requires every node to change at once.
+Each step can be used alone, and reversed. Nothing requires every node to change at once. The build plan for steps 1–3, as windows in which the fleet is stopped, is [IMPL023](../IMPL023-permanent-identity.md).
 
 | step | what | how it is proved | how it is undone |
 | :--- | :--- | :--- | :--- |

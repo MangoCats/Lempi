@@ -237,7 +237,7 @@ grep -rn "SPEC-PD" docs/
 | `[SPEC-NKP-*]` | The catalogue patch named by natural key rather than local id, and sent in parts | [SPEC058-catalogue-patch-by-natural-key.md](spec/SPEC058-catalogue-patch-by-natural-key.md) |
 | `[SPEC-SIL-*]` | Silent tracks: a run of them one album passage, and none for rotation | [SPEC076-silent-tracks.md](spec/SPEC076-silent-tracks.md) |
 | `[SPEC-XMR-*]` | The Christmas reserve: roulette places kept for Christmas from 1 December | [SPEC078-a-christmas-reserve.md](spec/SPEC078-a-christmas-reserve.md) |
-| `[SPEC-UID-*]` | Permanent passage identity, one catalogue on every node, and a hub that can move | [SPEC075-permanent-identity-and-a-movable-hub.md](spec/SPEC075-permanent-identity-and-a-movable-hub.md) |
+| `[SPEC-UID-*]`, `[IMPL-UID-*]` | Permanent passage identity, one catalogue on every node, and a hub that can move; and the plan that builds the identity | [SPEC075-permanent-identity-and-a-movable-hub.md](spec/SPEC075-permanent-identity-and-a-movable-hub.md), [IMPL023](IMPL023-permanent-identity.md) |
 | `[SPEC-TN-*]` | Trusted networks: discovery and the mesh only on networks the operator chose | [SPEC051-trusted-networks.md](spec/SPEC051-trusted-networks.md) |
 | `[SPEC-WAG-*]` | The web access guard: which HTTP requests the player answers | [SPEC052-web-access-guard.md](spec/SPEC052-web-access-guard.md) |
 | `[SPEC-SEC-*]` | Security reviews: each finding, its fix, and the test that holds it | [SPEC053-security-hardening.md](spec/SPEC053-security-hardening.md) |
