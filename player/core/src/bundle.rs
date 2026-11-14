@@ -2925,7 +2925,8 @@ mod tests {
         let mtime = meta.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
         crate::db::ensure_sha256_column(c);
         c.execute(
-            "INSERT INTO files (file_id,audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen,sha256)              VALUES (1,?1,?2,?3,?4,'mp3',1000,'t','t',?5)",
+            "INSERT INTO files (file_id,audio_md5,path,size_bytes,mtime,format,duration_ms,first_seen,last_seen,sha256) \
+             VALUES (1,?1,?2,?3,?4,'mp3',1000,'t','t',?5)",
             params![md5, path.to_string_lossy(), meta.len() as i64, mtime, sha_of(bytes)],
         )
         .unwrap();

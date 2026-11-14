@@ -116,6 +116,24 @@ EOF
     exit 1
 fi
 
+# ---- 1c. no string joined across a lost line break: every commit --------
+#
+# Sub-second, and like the exec-bit check it has no escape: a line meant to be
+# in columns says so itself, with a trailing `// columns`. Added 2026-11-13,
+# when a review found fourteen Rust literals holding the indent of a line
+# whose `\` and line end had been deleted -- SQL that still ran, and messages
+# that reached the log with twenty spaces in the middle of a sentence. Only
+# the lines this commit adds are read, from the index.
+if ! "$PY" "$ROOT/tools/check_joined_lines.py" --staged; then
+    cat <<'EOF'
+
+pre-commit: REFUSED -- a staged Rust string holds a run of spaces where a line
+break was. Put the ` \` and the line end back, or end the line with
+`// columns` where the spaces are meant.
+EOF
+    exit 1
+fi
+
 # ---- 2. the Linux gate: only when player/ or sql/ is staged -------------
 #
 # Nothing this gate knows about? Then it has nothing to say. `--diff-filter=d`

@@ -1118,7 +1118,8 @@ impl Session {
             let tries = store.note_resume_attempt(id, at);
             if tries >= 2 {
                 tracing::warn!(
-                    "passage {id} at {:.1}s: the player has stopped there {tries} times in a row without getting                      past it -- dropped rather than replayed [SPEC-DIR-240]",
+                    "passage {id} at {:.1}s: the player has stopped there {tries} times in a row without getting \
+                     past it -- dropped rather than replayed [SPEC-DIR-240]",
                     at as f64 / 1000.0
                 );
                 if self.resume_id == Some(id) {

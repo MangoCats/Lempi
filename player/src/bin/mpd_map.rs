@@ -155,11 +155,11 @@ fn main() {
     println!("resolution ladder `[SPEC-MPD-060]`");
     println!("  1. same-tree prefix   {by_prefix:6}  ({:5.1}%)", pc(by_prefix));
     println!("  2. recording MBID     {by_mbid_hit:6}  ({:5.1}%)", pc(by_mbid_hit));
-    println!("  3. unresolved         {unresolved:6}  ({:5.1}%)", pc(unresolved));
+    println!("  3. unresolved         {unresolved:6}  ({:5.1}%)", pc(unresolved)); // columns
     println!();
     println!("  ambiguous (row -> >1 MPD song)   {ambiguous}");
     println!("  MPD songs carrying a recording MBID {with_mbid} of {}", songs.len());
-    println!("  MPD MBIDs shared by >1 song         {mbid_dupes}");
+    println!("  MPD MBIDs shared by >1 song         {mbid_dupes}"); // columns
     println!();
     println!("private-use paths `[SPEC-RLK-025]`");
     println!("  carrying one   {pua_total}");

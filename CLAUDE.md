@@ -158,12 +158,19 @@ commit messages, documentation, or any payload containing punctuation. Every
 message written to a file this session was correct; every message inlined was
 not.
 
-Three corollaries:
+Four corollaries:
 
 - **Never nest a heredoc inside `sh -c '…'`.** §6's `echo EXIT=$?` marker is for
   *commands*; it is not a wrapper for content.
 - **Prefer Write/Edit over `cat > file <<'EOF'`.** The dedicated tools have no
   quoting layer to get wrong.
+- **Code with a `\` at a line end does not survive an ordinary Python string.**
+  Rust or SQL written into one, for a script to put in a file, loses the
+  backslash and the line end both — Python's own continuation — and the
+  script writes a joined line and reports success. Fourteen such literals were
+  found 2026-11-13, and the repair script added a fifteenth.
+  [`tools/check_joined_lines.py`](tools/check_joined_lines.py) now refuses them
+  at commit. Use Edit, or a raw string.
 - **Read back what landed**, not the exit code: `git log -1 --format=%B` after
   any message that did not come from a file. Use `--` before data that might
   begin with `-`.
@@ -218,11 +225,14 @@ fresh clone has the gate in the tree and switched off — which is the worst of
 both, because the file reads like a guard that is running. One command, and
 `git config core.hooksPath` answers whether it is on.
 
-[`.githooks/pre-commit`](.githooks/pre-commit) runs three checks. On **every**
+[`.githooks/pre-commit`](.githooks/pre-commit) runs four checks. On **every**
 commit, [`tools/check_exec_bits.py`](tools/check_exec_bits.py) refuses a staged
 script that opens with `#!` and is not executable — well under a second, and it
 reads the mode from git's index, so it works on Windows, where `[ -x ]` passes
 for everything. Also on every commit,
+[`tools/check_joined_lines.py`](tools/check_joined_lines.py) `--staged` refuses
+an added Rust string holding a run of spaces where a line break was (§7); a
+line meant to be in columns ends with `// columns`. Also on every commit,
 [`tools/check_fleet_leaks.py`](tools/check_fleet_leaks.py) `--staged` refuses
 an added line that looks like private fleet detail — a LAN address, a MAC, a
 personal path, a `user@host:` — and with `fleet/private-tokens.txt` present,

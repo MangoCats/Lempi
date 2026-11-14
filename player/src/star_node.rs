@@ -511,7 +511,8 @@ fn stage(listener: &Path, req: &Value, run: &str) -> Result<Value, String> {
         let free = free_bytes(&sync_dir(listener))?;
         if free < need {
             return Err(format!(
-                "not enough room to stage: {} MB free on this node's state partition, {} MB needed                  (twice the {} MB staged, and {} MB to spare)",
+                "not enough room to stage: {} MB free on this node's state partition, {} MB needed \
+                 (twice the {} MB staged, and {} MB to spare)",
                 free >> 20, need >> 20, total >> 20, STAGE_MARGIN >> 20));
         }
     }

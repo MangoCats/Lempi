@@ -248,9 +248,9 @@ mod linux {
         println!();
         println!("  over {iters} periods, readings that were nonzero:");
         println!("    snd_pcm_status_get_delay() : {status_nonzero}  <- cpal 0.15.3");
-        println!("    snd_pcm_delay()            : {pcm_delay_nonzero}");
+        println!("    snd_pcm_delay()            : {pcm_delay_nonzero}"); // columns
         println!("    snd_pcm_avail_delay()      : {avail_delay_nonzero}  <- cpal master");
-        println!("    /proc delay                : {proc_nonzero}");
+        println!("    /proc delay                : {proc_nonzero}"); // columns
         Some(status_nonzero > 0)
     }
 

@@ -473,7 +473,7 @@ mod tests {
     /// `[SPEC034]`.
     #[test]
     fn parse_multiline_handles_a_colon_inside_a_value() {
-        let text = "SSID:                    My:Weird:Network\nSIGNAL:                  70\nSECURITY:                WPA2\n";
+        let text = "SSID:                    My:Weird:Network\nSIGNAL:                  70\nSECURITY:                WPA2\n"; // columns
         let rows = parse_multiline(text, &["SSID", "SIGNAL", "SECURITY"]);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["ssid"], "My:Weird:Network");

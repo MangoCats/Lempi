@@ -63,7 +63,11 @@ pub fn generate(conn: &Connection, dry_run: bool) -> Result<Written, String> {
     let saved = crate::db::SavedLyrics::load(conn, "main").map_err(|e| e.message().to_string())?;
     let mut q = conn
         .prepare(
-            "SELECT p.passage_id, f.path,                 (SELECT COUNT(*) FROM passages x                  WHERE x.file_id = p.file_id AND x.kind = 'radio')              FROM passages p JOIN files f USING(file_id)              WHERE p.kind = 'radio'",
+            "SELECT p.passage_id, f.path, \
+                (SELECT COUNT(*) FROM passages x \
+                 WHERE x.file_id = p.file_id AND x.kind = 'radio') \
+             FROM passages p JOIN files f USING(file_id) \
+             WHERE p.kind = 'radio'",
         )
         .map_err(|e| e.to_string())?;
     let rows = q
@@ -229,7 +233,8 @@ mod tests {
         let d = tmp();
         let c = library(&d);
         c.execute(
-            "INSERT INTO passage_lyrics VALUES ('md5-1', 'radio', 0, 100000, 'mb1', 'typed for it', 0,                                                '2026-11-12 10:00:00.000', 'here')",
+            "INSERT INTO passage_lyrics VALUES ('md5-1', 'radio', 0, 100000, 'mb1', 'typed for it', 0, \
+                                               '2026-11-12 10:00:00.000', 'here')",
             [],
         )
         .unwrap();

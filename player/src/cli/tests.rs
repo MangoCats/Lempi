@@ -922,7 +922,8 @@ fn a_shared_long_name_is_one_declaration_not_two() {
     for (i, (name, line)) in built.iter().enumerate() {
         if let Some((_, first)) = built[..i].iter().find(|(m, _)| m == name) {
             dupes.push(format!(
-                "`{name}` is constructed twice, at specs.rs:{first} and specs.rs:{line} --                  share one declaration in `common` instead"
+                "`{name}` is constructed twice, at specs.rs:{first} and specs.rs:{line} -- \
+                 share one declaration in `common` instead"
             ));
         }
     }

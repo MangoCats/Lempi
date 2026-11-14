@@ -303,7 +303,8 @@ impl Programme {
                 // an older build -- is left out, and said, rather than
                 // silently missing.
                 None => tracing::warn!(
-                    "programme: slot \"{name}\" has no usable start time ({start:?});                      left out, so it is never on air and cannot be held [ENT-SLOT-010]"
+                    "programme: slot \"{name}\" has no usable start time ({start:?}); \
+                     left out, so it is never on air and cannot be held [ENT-SLOT-010]"
                 ),
             }
         }

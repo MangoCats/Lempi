@@ -108,6 +108,14 @@ jobs:
       - name: shebang implies +x
         run: python3 tools/check_exec_bits.py
 
+      # A Rust string holding a run of spaces where a `\` line continuation
+      # was: it compiles and runs, and reads wrong. Fourteen were found
+      # 2026-11-13. The same script runs in `.githooks/pre-commit` over the
+      # lines a commit adds; this runs it over every tracked file. Output
+      # meant to be in columns ends its line with `// columns`.
+      - name: no string joined across a lost line break
+        run: python3 tools/check_joined_lines.py
+
   android-core:
     name: lempi-core and the player library compile for Android
     runs-on: ubuntu-latest

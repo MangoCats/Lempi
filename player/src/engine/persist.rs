@@ -210,7 +210,8 @@ impl Engine {
                         // as a skip it was suppressed from selection for the
                         // skip window `[SPEC-TPL-015]`.
                         tracing::info!(
-                            "passage {prev} left after being played with tempo, pitch or a loop:                              neither a play nor a skip"
+                            "passage {prev} left after being played with tempo, pitch or a loop: \
+                             neither a play nor a skip"
                         );
                     } else {
                         // The outgoing passage left without reaching the

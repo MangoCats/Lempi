@@ -213,7 +213,7 @@ fn seed_separation(conn: &rusqlite::Connection, idx: &FlavorIndex) {
     println!("\n  within-slot mean     : {mw:.4}  ({} pairs)", within.len());
     println!("  cross-slot mean      : {mc:.4}  ({} pairs)", cross.len());
     let ratio = mw / mc;
-    println!("  ratio                 : {ratio:.4}");
+    println!("  ratio                 : {ratio:.4}"); // columns
     // A ratio below 1.0 means the listener's groupings are tighter than chance
     // -- the metric agrees with them. Above 1.0 would mean it does not.
     if ratio < 1.0 {
