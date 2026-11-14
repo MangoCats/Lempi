@@ -23,7 +23,7 @@ use super::frequency::{
 use super::flavor::{centroid, Flavor, FlavorIndex};
 use super::occasion::{civil_from_unix, ordinal, Curve, Interp, Occasions};
 use super::programme::Programme;
-use super::shape::{shape, Seed, Shaping, DISLIKE_RADIUS, LIKE_SEED_WEIGHT, RAND_POOL};
+use super::shape::{nearest_first, shape, too_disliked, Seed, Shaping, LIKE_SEED_WEIGHT, RAND_POOL};
 use crate::db::{row_to_entry, DbError, COLS, FROM};
 use crate::queue::QueueEntry;
 
@@ -34,7 +34,8 @@ enum Weigh {
     Normal,
     /// As though nothing had played: the fallback `[SPEC-DIR-232]`.
     Relaxed,
-    /// History kept, rotation set aside: the Christmas reserve's fillers
+    /// History kept, rotation set aside but for the artist gap: every passage
+    /// in one of the Christmas reserve's places `[SPEC-XMR-040]`,
     /// `[SPEC-XMR-050]`.
     RotationSetAside,
 }
@@ -78,6 +79,16 @@ impl Rng {
     pub fn unit(&mut self) -> f64 {
         // 53 bits: the most an f64 can represent exactly.
         (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+    }
+    /// `items` in an order of their own, every order equally likely:
+    /// Fisher-Yates, from the last place down. One copy, for every place a
+    /// pick needs "no fixed order" -- passages a sort cannot tell apart, and
+    /// a pool with no flow order to rank it by.
+    pub fn shuffle<T>(&mut self, items: &mut [T]) {
+        for i in (1..items.len()).rev() {
+            let j = ((self.unit() * (i + 1) as f64) as usize).min(i);
+            items.swap(i, j);
+        }
     }
 }
 
@@ -188,6 +199,21 @@ pub struct RunnerUp {
 pub struct Decision {
     pub entry: QueueEntry,
     pub why: Explanation,
+}
+
+/// The list one ordinary pick draws on, and what made it
+/// ([`Director::decide`]'s first half).
+struct Roulette<'a> {
+    /// In rank order: the passage, its weighing, its flow distance from the
+    /// queue tail, and the weight the roulette draws it on -- decayed by rank
+    /// where there is a flow order `[SPEC-DIR-165]`.
+    pool: Vec<(&'a QueueEntry, Weighing, Option<f64>, f64)>,
+    /// Where each came from `[SPEC-XMR-040]`, one for each of `pool`.
+    places: Vec<Place>,
+    tally: Reserve,
+    shaping: Shaping,
+    seeds: Vec<Seed<'a>>,
+    stages: &'static str,
 }
 
 /// A passage marked as coming, held until it is judged `[REQ-PD-112]`: played
@@ -853,7 +879,11 @@ impl Director {
         mode: Weigh,
     ) -> Vec<(&'a QueueEntry, Weighing)> {
         let relaxed = mode == Weigh::Relaxed;
-        let rotation = if mode == Weigh::RotationSetAside { Rotation::SetAside } else { Rotation::Applies };
+        let rotation = if mode == Weigh::RotationSetAside {
+            Rotation::SetAside { artist_gap: christmas::ARTIST_GAP_SHARE }
+        } else {
+            Rotation::Applies
+        };
         let mut related_buf: Vec<Related> = Vec::new();
         let mut artist_buf: Vec<ArtistCredit> = Vec::new();
         // The day is resolved once per pass, not per passage: every candidate is
@@ -1130,6 +1160,17 @@ impl Director {
         skip: &[i64],
         after: Option<i64>,
     ) -> Option<Decision> {
+        let r = self.roulette(starts_at, rng, skip, after)?;
+        let pool: Vec<(&QueueEntry, &Weighing, Option<f64>, f64)> =
+            r.pool.iter().map(|(e, w, d, x)| (*e, w, *d, *x)).collect();
+        self.draw(starts_at, rng, &pool, &r.places, r.tally, &r.shaping, &r.seeds, r.stages)
+    }
+
+    /// The list [`Director::decide`] draws on: Stages A to C and the
+    /// Christmas reserve, everything short of the draw. Apart so the list
+    /// itself can be looked at -- which passages, in which places, at which
+    /// weights -- where a pick shows only its winner.
+    fn roulette(&self, starts_at: i64, rng: &mut Rng, skip: &[i64], after: Option<i64>) -> Option<Roulette<'_>> {
         let weighed = self.weigh_all(starts_at);
 
         // Stage B shapes WHICH passages are in the running; it never touches a
@@ -1165,13 +1206,7 @@ impl Director {
         let mut ranked: Vec<(&QueueEntry, &Weighing, Option<f64>)> = weighed
             .iter()
             .filter(live)
-            .map(|(e, w)| {
-                let d = anchor.and_then(|a| {
-                    self.flavor_of(e.passage_id)
-                        .and_then(|f| super::flavor::distance(&self.flavor.schema, f, a))
-                });
-                (*e, w, d)
-            })
+            .map(|(e, w)| (*e, w, self.flow_distance(anchor, e.passage_id)))
             .collect();
         if ranked.is_empty() {
             return None;
@@ -1184,22 +1219,13 @@ impl Director {
         if flowed {
             // One that cannot be measured from the tail sorts last: it can
             // still play, it simply cannot claim to follow well.
-            ranked.sort_by(|a, b| match (a.2, b.2) {
-                (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
-            });
+            ranked.sort_by(|a, b| nearest_first(a.2, b.2));
             // **And among those, no order at all.** Left as they sorted, they
             // kept the order the rows were read in, and the cut to `RAND_POOL`
             // below then let only the first of them into the draw, decayed by
             // row position -- the same passages every time.
             let first_unmeasured = ranked.iter().position(|x| x.2.is_none()).unwrap_or(ranked.len());
-            let tail = &mut ranked[first_unmeasured..];
-            for i in (1..tail.len()).rev() {
-                let j = ((rng.unit() * (i + 1) as f64) as usize).min(i);
-                tail.swap(i, j);
-            }
+            rng.shuffle(&mut ranked[first_unmeasured..]);
         }
 
         // --- Stage D: rank decay, then weighted roulette [SPEC-DIR-165] ---
@@ -1214,7 +1240,21 @@ impl Director {
         // the ramp reaches up the rank (the maintainer, 2026-11-09). With
         // nothing reserved the list is Stage C's first `take`, as it was.
         let ramp = self.christmas_ramp(starts_at);
-        let reserved = if self.christmas_on { christmas::reserved(ramp, take) } else { 0 };
+        let due = if self.christmas_on { christmas::reserved(ramp, take) } else { 0 };
+        // **None from the last resort** `[SPEC-XMR-045]`: a pool of passages
+        // without flavor is a station with nothing to place Christmas by, and
+        // a Christmas passage with flavor beside them would be drawn where
+        // `[SPEC-DIR-147]` says none may be (the maintainer, 2026-11-13).
+        let reserved = if shaping.last_resort { 0 } else { due };
+        // **With no flow order the list has no rank**, so the places given up
+        // to Christmas were the last rows read -- the same passages, the
+        // newest imports, out of every such pick all season. Shuffled, the
+        // places given up are any; the draw is the same, with no decay to
+        // favour a position `[SPEC-XMR-030]`. Only when places are kept, so a
+        // pick out of season draws exactly as it did.
+        if reserved > 0 && !flowed {
+            rng.shuffle(&mut ranked);
+        }
         let is_christmas = |x: &(&QueueEntry, &Weighing, Option<f64>)| self.christmas.contains(&x.0.passage_id);
         // Fillers are weighed only when moving up cannot fill the places:
         // it costs a pass over every Christmas passage.
@@ -1230,15 +1270,33 @@ impl Director {
         let (listed, mut tally) = christmas::reserve(&ranked, take, reserved, is_christmas, &fillers);
         tally.enabled = self.christmas_on;
         tally.ramp = ramp;
+        tally.last_resort = due > 0 && shaping.last_resort;
         let places: Vec<Place> = listed.iter().map(|x| x.1).collect();
 
-        let pool: Vec<(&QueueEntry, &Weighing, Option<f64>, f64)> = listed
+        // **Every reserved place on one scale** `[SPEC-XMR-040]`. A passage
+        // moved up is weighed as a filler is, with rotation set aside. Kept at
+        // Stage C's weight, its recovery ran from its rotation's end while a
+        // filler's ran from its last play, and one heard a day ago outweighed
+        // one heard five days ago (found 2026-11-13). Never lighter for it:
+        // setting rotation aside only lengthens a ramp. The places above the
+        // cutoff keep Stage C's weights.
+        let moved: Vec<&Row> =
+            listed.iter().filter(|x| x.1 == Place::MovedUp).filter_map(|x| self.row(x.0 .0.passage_id)).collect();
+        let reweighed: HashMap<i64, Weighing> = self
+            .weigh_rows(moved.into_iter(), starts_at, Weigh::RotationSetAside)
+            .into_iter()
+            .filter(|(_, w)| w.is_eligible())
+            .map(|(e, w)| (e.passage_id, w))
+            .collect();
+
+        let pool: Vec<(&QueueEntry, Weighing, Option<f64>, f64)> = listed
             .into_iter()
             .enumerate()
-            .map(|(rank, ((e, w, d), _))| {
+            .map(|(rank, ((e, w, d), place))| {
+                let w = if place == Place::MovedUp { reweighed.get(&e.passage_id).unwrap_or(w) } else { w };
                 let decayed =
                     if flowed { w.weight * RANK_DECAY.powi(rank as i32) } else { w.weight };
-                (e, w, d, decayed)
+                (e, w.clone(), d, decayed)
             })
             .collect();
 
@@ -1249,21 +1307,30 @@ impl Director {
         } else {
             "frequency, shaping; no flow -- nothing with flavor queued to follow"
         };
-        self.draw(starts_at, rng, &pool, &places, tally, &shaping, &seeds, stages)
+        Some(Roulette { pool, places, tally, shaping, seeds, stages })
     }
 
     /// The Christmas reserve's fillers `[SPEC-XMR-050]`: at most `need`
     /// Christmas passages from outside Stage C's list, nearest the
     /// programme's seeds first, each weighed with rotation set aside -- its
-    /// recovery measured from its last play.
+    /// recovery measured from its last play, and an artist still kept a sixth
+    /// of its rotation apart.
     ///
     /// Not one already listed or queued, and not one Stage A would refuse for
     /// anything but rotation: a hold, the length filters, the profanity
-    /// tolerance, a rejection window, the weight floor. One too close to
-    /// Dislike-Taste is left out as Stage B would leave it `[SPEC-DIR-150]`.
-    /// One without flavor comes last, in no fixed order, as it does in
-    /// Stage C `[SPEC-DIR-147]`. Each carries its flow distance from the
-    /// queue tail, for the record only: the order is the seeds'.
+    /// tolerance, a rejection window, the weight floor.
+    ///
+    /// **Stage B's rules, by Stage B's code.** One too close to Dislike-Taste
+    /// is left out exactly where Stage B leaves one out
+    /// (`shape::too_disliked`, `[SPEC-DIR-222]`). One without flavor is never
+    /// used: the reserve keeps places only in a pool with flavor
+    /// `[SPEC-XMR-045]`, and one without is never drawn beside those
+    /// `[SPEC-DIR-147]`. Until 2026-11-13 it was kept and sorted last, which
+    /// with no seeds was no order at all.
+    ///
+    /// With no seeds to measure by, nearest the queue tail first, as Stage C
+    /// ranks. What neither can tell apart comes in no fixed order. Each
+    /// carries its flow distance from the queue tail, for the record.
     #[allow(clippy::too_many_arguments)]
     fn christmas_fillers(
         &self,
@@ -1281,43 +1348,27 @@ impl Director {
             .iter()
             .map(|&i| &self.rows[i])
             .filter(|r| !listed.contains(&r.entry.passage_id) && !skip.contains(&r.entry.passage_id));
-        let mut found: Vec<(&QueueEntry, Weighing, Option<f64>)> = self
+        // (passage, weighing, flow distance, the distance it is ordered by)
+        let mut found: Vec<(&QueueEntry, Weighing, Option<f64>, Option<f64>)> = self
             .weigh_rows(rows, starts_at, Weigh::RotationSetAside)
             .into_iter()
             .filter(|(_, w)| w.is_eligible())
             .filter_map(|(e, w)| {
-                let f = self.flavor_of(e.passage_id);
-                let disliked = self
-                    .dislike
-                    .as_ref()
-                    .zip(f)
-                    .and_then(|(d, f)| super::flavor::distance(schema, f, d))
-                    .is_some_and(|x| x < DISLIKE_RADIUS);
-                (!disliked).then(|| (e, w, f.and_then(|f| super::shape::nearest_seed(schema, f, seeds))))
+                let f = self.flavor_of(e.passage_id)?;
+                if too_disliked(schema, f, seeds, self.dislike.as_ref()) {
+                    return None;
+                }
+                let flow = self.flow_distance(anchor, e.passage_id);
+                let by = if seeds.is_empty() { flow } else { super::shape::nearest_seed(schema, f, seeds) };
+                Some((e, w, flow, by))
             })
             .collect();
-        // Shuffled before the sort, which is stable: what the seeds cannot
-        // tell apart -- a tie, or no flavor at all -- comes in no fixed order.
-        for i in (1..found.len()).rev() {
-            let j = ((rng.unit() * (i + 1) as f64) as usize).min(i);
-            found.swap(i, j);
-        }
-        found.sort_by(|a, b| match (a.2, b.2) {
-            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        });
+        // Shuffled before the sort, which is stable: a tie comes in no fixed
+        // order.
+        rng.shuffle(&mut found);
+        found.sort_by(|a, b| nearest_first(a.3, b.3));
         found.truncate(need);
-        found
-            .into_iter()
-            .map(|(e, w, _)| {
-                let flow = anchor.and_then(|a| {
-                    self.flavor_of(e.passage_id).and_then(|f| super::flavor::distance(schema, f, a))
-                });
-                (e, w, flow)
-            })
-            .collect()
+        found.into_iter().map(|(e, w, flow, _)| (e, w, flow)).collect()
     }
 
     /// Choose when [`Director::decide`] cannot: every candidate is blocked
@@ -1493,6 +1544,13 @@ impl Director {
     /// The flavor of whatever recording a passage carries.
     fn flavor_of(&self, passage_id: i64) -> Option<&Flavor> {
         self.flavor.get(self.row(passage_id)?.mbid.as_deref()?)
+    }
+
+    /// How far a passage is from `anchor`, the queue tail's flavor: Stage C's
+    /// measure `[SPEC-DIR-160]`, for its order and for the Christmas reserve's
+    /// fillers alike. `None` where either has no flavor.
+    fn flow_distance(&self, anchor: Option<&Flavor>, passage_id: i64) -> Option<f64> {
+        super::flavor::distance(&self.flavor.schema, self.flavor_of(passage_id)?, anchor?)
     }
 
     /// Distance from the chosen passage to each seed, for the panel
@@ -1735,14 +1793,31 @@ pub(crate) fn load_occasions(conn: &QualifyingConn) -> Result<Occasions, DbError
 /// library from before either table simply has none, and the tolerance then
 /// has nothing to act on.
 pub(crate) fn load_profanity(conn: &QualifyingConn) -> HashMap<String, f64> {
+    load_positive_values(conn, "user.profanity", "profane", "the profanity values")
+}
+
+/// Each recording's value in one class of one characteristic, as the
+/// specials panel shows it: the listener's own over the inherited, and only
+/// those above zero. The one reading behind [`load_profanity`] and
+/// [`load_christmas`], which differ only in what they ask for.
+///
+/// Never an error: a library from before either table simply has none, and a
+/// failed read is said as `what` and read as nothing.
+fn load_positive_values(
+    conn: &QualifyingConn,
+    characteristic: &str,
+    class: &str,
+    what: &str,
+) -> HashMap<String, f64> {
     let mut out = HashMap::new();
-    for sql in [
-        "SELECT subject_id, value FROM __LIB__.flavor          WHERE subject_kind = 'recording' AND characteristic = 'user.profanity' AND class = 'profane'",
-        // Second, so the listener's own value replaces the inherited one.
-        "SELECT subject_id, value FROM listener_characteristics          WHERE subject_kind = 'recording' AND characteristic = 'user.profanity' AND class = 'profane'",
-    ] {
-        let read = conn.prepare(sql).and_then(|mut stmt| {
-            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
+    // The listener's second, so its own value replaces the inherited one.
+    for table in ["__LIB__.flavor", "listener_characteristics"] {
+        let sql = format!(
+            "SELECT subject_id, value FROM {table} \
+              WHERE subject_kind = 'recording' AND characteristic = ?1 AND class = ?2"
+        );
+        let read = conn.prepare(&sql).and_then(|mut stmt| {
+            stmt.query_map([characteristic, class], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
                 .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
         });
         match read {
@@ -1751,7 +1826,7 @@ pub(crate) fn load_profanity(conn: &QualifyingConn) -> HashMap<String, f64> {
                     out.insert(mbid, v);
                 }
             }
-            Err(e) => optional_read("the profanity values", &e),
+            Err(e) => optional_read(what, &e),
         }
     }
     out.retain(|_, v| *v > 0.0);
@@ -1787,27 +1862,7 @@ pub fn load_profanity_tolerance(conn: &QualifyingConn) -> ProfanityTolerance {
 /// Christmas plays came out at 1 rather than 41 (2026-11-09). Read whether or
 /// not the occasion is registered, as profanity is.
 pub(crate) fn load_christmas(conn: &QualifyingConn) -> HashMap<String, f64> {
-    let mut out = HashMap::new();
-    for sql in [
-        "SELECT subject_id, value FROM __LIB__.flavor          WHERE subject_kind = 'recording' AND characteristic = 'user.christmas' AND class = 'christmasy'",
-        // Second, so the listener's own value replaces the inherited one.
-        "SELECT subject_id, value FROM listener_characteristics          WHERE subject_kind = 'recording' AND characteristic = 'user.christmas' AND class = 'christmasy'",
-    ] {
-        let read = conn.prepare(sql).and_then(|mut stmt| {
-            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
-                .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
-        });
-        match read {
-            Ok(rows) => {
-                for (mbid, v) in rows {
-                    out.insert(mbid, v);
-                }
-            }
-            Err(e) => optional_read("the Christmas values", &e),
-        }
-    }
-    out.retain(|_, v| *v > 0.0);
-    out
+    load_positive_values(conn, "user.christmas", "christmasy", "the Christmas values")
 }
 
 /// Where this player keeps its Christmas reserve switch `[SPEC-XMR-080]`.
@@ -2175,6 +2230,236 @@ mod tests {
             assert!(d.is_christmas(3) && !d.is_christmas(1) && !d.is_christmas(2));
         }
         assert_eq!(registered.occasion_count(), 1, "read through the occasion");
+    }
+
+    /// 2026-12-19T06:00, read as local time: three quarters up the ramp, so
+    /// 75 of a flow order's 100 places are reserved `[SPEC-XMR-030]`.
+    const DEC_19: i64 = 1_796_083_200 + 18 * DAY + 6 * 3600;
+
+    /// The Christmas reserve at full size `[SPEC-XMR-040]`: `n` radio
+    /// passages spread along one characteristic, so passage 1 is nearest 2
+    /// and furthest from `n`, each its own recording `r{i}` and artist `a{i}`.
+    /// Those in `xmas` are Christmas. No programme, so no seeds.
+    fn reserve_library(n: i64, xmas: &[i64]) -> QualifyingConn {
+        let c = fixture();
+        c.execute_batch("DELETE FROM passages; DELETE FROM passage_recordings; DELETE FROM recording_artists;")
+            .unwrap();
+        for i in 1..=n {
+            let r = format!("r{i}");
+            c.execute(
+                "INSERT INTO passages (passage_id, file_id, kind, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db) \
+                 VALUES (?1, 1, 'radio', 0, 180000, 0, 0, 0.0)",
+                [i],
+            )
+            .unwrap();
+            c.execute("INSERT INTO passage_recordings VALUES (?1, ?2, 1.0)", rusqlite::params![i, r]).unwrap();
+            c.execute("INSERT INTO recording_artists VALUES (?1, ?2)", rusqlite::params![r, format!("a{i}")])
+                .unwrap();
+            let v = i as f64 / n as f64;
+            for (class, val) in [("hi", v), ("lo", 1.0 - v)] {
+                c.execute(
+                    "INSERT INTO flavor VALUES ('recording', ?1, 'x', ?2, ?3, 'test', NULL)",
+                    rusqlite::params![r, class, val],
+                )
+                .unwrap();
+            }
+            if xmas.contains(&i) {
+                c.execute(
+                    "INSERT INTO flavor VALUES ('recording', ?1, 'user.christmas', 'christmasy', 1.0, 'test', NULL)",
+                    [&r],
+                )
+                .unwrap();
+            }
+        }
+        c
+    }
+
+    /// Passage `p` of [`reserve_library`] heard at `at`.
+    fn played(c: &QualifyingConn, p: i64, at: i64) {
+        c.execute(
+            "INSERT INTO listener_play_history (played_at, passage_id, mbid) VALUES (?1, ?2, ?3)",
+            rusqlite::params![at, p, format!("r{p}")],
+        )
+        .unwrap();
+    }
+
+    /// A Christmas value that is the listener's own, on a recording with no
+    /// flavor in the catalogue: a Christmas passage without flavor.
+    fn christmas_by_the_listener(c: &QualifyingConn, recording: &str) {
+        c.execute_batch(
+            "CREATE TABLE IF NOT EXISTS listener_characteristics (subject_kind TEXT, subject_id TEXT,
+                 characteristic TEXT, class TEXT, value REAL, updated_at TEXT);",
+        )
+        .unwrap();
+        c.execute("DELETE FROM flavor WHERE subject_id = ?1", [recording]).unwrap();
+        c.execute(
+            "INSERT INTO listener_characteristics VALUES ('recording', ?1, 'user.christmas', 'christmasy', 1.0, 'now')",
+            [recording],
+        )
+        .unwrap();
+    }
+
+    /// Where passage `id` stands in a roulette list: rank, place, weighing,
+    /// and the weight it is drawn at.
+    fn standing<'a>(r: &'a Roulette<'_>, id: i64) -> Option<(usize, Place, &'a Weighing, f64)> {
+        r.pool
+            .iter()
+            .zip(&r.places)
+            .enumerate()
+            .find(|(_, ((e, ..), _))| e.passage_id == id)
+            .map(|(rank, ((_, w, _, x), p))| (rank, *p, w, *x))
+    }
+
+    /// Every reserved place on one scale `[SPEC-XMR-040]`, in a full flow
+    /// order. Christmas passage 150, heard five days ago, is out of rotation,
+    /// ranked far below the cutoff, and moved up; 160, heard a day ago, is in
+    /// rotation and a filler. Both are weighed from their last play, so the
+    /// one heard longer ago weighs more. Until 2026-11-13 the one moved up
+    /// kept Stage C's ramp from its rotation's end, ×0.05 against the
+    /// filler's ×0.06: the reserve favoured what had played most recently.
+    #[test]
+    fn the_reserved_places_are_weighed_on_one_scale() {
+        use super::super::frequency::{seconds, DEF_RECOVERY_REC};
+        let c = reserve_library(200, &[150, 160]);
+        played(&c, 150, DEC_19 - 5 * DAY);
+        played(&c, 160, DEC_19 - DAY);
+        let d = Director::load(&c).unwrap();
+        let r = d.roulette(DEC_19, &mut Rng::seeded(1), &[1], Some(1)).unwrap();
+        let rec = seconds(DEF_RECOVERY_REC);
+
+        let (rank_x, place_x, x, _) = standing(&r, 150).expect("150 is listed");
+        let (rank_y, place_y, y, _) = standing(&r, 160).expect("160 is listed");
+        assert_eq!((place_x, place_y), (Place::MovedUp, Place::Filler));
+        assert!((x.recording_ramp - 5.0 * DAY as f64 / rec).abs() < 1e-9, "moved up: {}", x.recording_ramp);
+        assert!((y.recording_ramp - DAY as f64 / rec).abs() < 1e-9, "filler: {}", y.recording_ramp);
+        assert!(x.weight > y.weight, "heard five days ago {} under heard yesterday {}", x.weight, y.weight);
+        assert!(rank_x < rank_y, "moved up first, then the fillers");
+        // Stage C's own weighing of 150 is lighter: that is what was replaced.
+        let own = d.weigh_all(DEC_19).into_iter().find(|(e, _)| e.passage_id == 150).unwrap().1;
+        assert!(own.is_eligible() && own.weight < x.weight, "Stage C {} against {}", own.weight, x.weight);
+    }
+
+    /// The list in full `[SPEC-XMR-040]`: 100 places, Stage C's first 25 as
+    /// ranked, then the 75 reserved -- moved up, fillers, backfill, in that
+    /// order -- each drawn at weight × 0.96^rank, so the reserved places are
+    /// the roulette's lowest ranks. Of 21 Christmas passages, the ten never
+    /// heard are ranked below the cutoff and move up; the eleven heard
+    /// yesterday are fillers; the 54 places left are backfilled.
+    #[test]
+    fn the_reserved_places_are_the_lists_last_and_decay_by_rank() {
+        let xmas: Vec<i64> = (100..=200).step_by(5).collect();
+        let c = reserve_library(200, &xmas);
+        for &i in xmas.iter().filter(|i| *i % 10 == 0) {
+            played(&c, i, DEC_19 - DAY);
+        }
+        let d = Director::load(&c).unwrap();
+        let r = d.roulette(DEC_19, &mut Rng::seeded(2), &[1], Some(1)).unwrap();
+        assert_eq!(r.pool.len(), 100);
+        let t = r.tally;
+        assert_eq!((t.reserved, t.moved_up, t.fillers, t.backfilled), (75, 10, 11, 54));
+        assert!(!t.last_resort);
+        assert!(r.places[..25].iter().all(|p| *p == Place::Flow));
+        let order = |p: &Place| match p {
+            Place::Flow => 0,
+            Place::MovedUp => 1,
+            Place::Filler => 2,
+            Place::Backfill => 3,
+        };
+        assert!(r.places[25..].windows(2).all(|w| order(&w[0]) <= order(&w[1])), "{:?}", r.places);
+        assert!(r.places[25..].iter().all(|p| *p != Place::Flow));
+        for (rank, (_, w, _, x)) in r.pool.iter().enumerate() {
+            assert!((x - w.weight * RANK_DECAY.powi(rank as i32)).abs() < 1e-12, "rank {rank}");
+        }
+    }
+
+    /// With no flow order, the places given up are any `[SPEC-XMR-030]`.
+    /// Until 2026-11-13 they were the last rows read, so the same passages --
+    /// the newest imports -- were shut out of every such pick all season. 30
+    /// Christmas passages heard yesterday are fillers for 90 of the 120
+    /// places, and 30 of the 120 others give theirs up: a different 30 each
+    /// time.
+    #[test]
+    fn without_a_flow_order_the_places_given_up_are_any() {
+        let xmas: Vec<i64> = (121..=150).collect();
+        let c = reserve_library(150, &xmas);
+        for &i in &xmas {
+            played(&c, i, DEC_19 - DAY);
+        }
+        let d = Director::load(&c).unwrap();
+        let mut ever: HashSet<i64> = HashSet::new();
+        for seed in 0..60 {
+            let r = d.roulette(DEC_19, &mut Rng::seeded(seed), &[], None).unwrap();
+            assert_eq!((r.tally.reserved, r.tally.fillers), (90, 30), "seed {seed}");
+            let others: Vec<i64> = r.pool.iter().map(|x| x.0.passage_id).filter(|i| *i <= 120).collect();
+            assert_eq!((r.pool.len(), others.len()), (120, 90), "seed {seed}");
+            ever.extend(others);
+        }
+        assert_eq!(ever.len(), 120, "every one of them is in some pick's list");
+        // Out of season nothing is kept, and nothing reordered.
+        let nov = d.roulette(DEC_19 - 30 * DAY, &mut Rng::seeded(0), &[], None).unwrap();
+        assert_eq!(nov.tally.reserved, 0);
+        assert!(nov.places.iter().all(|p| *p == Place::Flow));
+    }
+
+    /// A Christmas passage without flavor is never a filler `[SPEC-XMR-050]`:
+    /// the pool has flavor, and one without is never drawn beside those
+    /// `[SPEC-DIR-147]`. Passage 160 is Christmas by the listener's own value
+    /// alone. Until 2026-11-13 it was a filler, sorted last -- and with no
+    /// seeds, as here, not even last.
+    #[test]
+    fn a_christmas_passage_without_flavor_is_never_a_filler() {
+        let c = reserve_library(200, &[150]);
+        christmas_by_the_listener(&c, "r160");
+        played(&c, 150, DEC_19 - DAY);
+        played(&c, 160, DEC_19 - DAY);
+        let d = Director::load(&c).unwrap();
+        assert!(d.is_christmas(160));
+        for (seed, after) in [(1, Some(1)), (2, None)] {
+            let r = d.roulette(DEC_19, &mut Rng::seeded(seed), &[1], after).unwrap();
+            assert_eq!(standing(&r, 150).map(|s| s.1), Some(Place::Filler), "with flavor, after {after:?}");
+            assert!(standing(&r, 160).is_none(), "without, after {after:?}");
+        }
+    }
+
+    /// A filler keeps a sixth of its artist's rotation apart
+    /// `[SPEC-XMR-050]`: Christmas passage 160, never heard, shares an artist
+    /// with passage 1, the queue tail. Stage A holds it out by that artist's
+    /// ten hours, so it can only be a filler. Heard four minutes ago, the
+    /// artist holds it out there too; two hours ago, past the gap of
+    /// 1 h 40 min, it does not. Until 2026-11-13 it could follow at once: a
+    /// recording fully recovered weighs ×0.0067 by its artist four minutes
+    /// on, over the floor.
+    #[test]
+    fn a_filler_does_not_follow_its_own_artist() {
+        for (ago, kept) in [(240, false), (2 * 3600, true)] {
+            let c = reserve_library(200, &[160]);
+            c.execute("UPDATE recording_artists SET artist_mbid = 'a1' WHERE mbid = 'r160'", []).unwrap();
+            played(&c, 1, DEC_19 - ago);
+            let d = Director::load(&c).unwrap();
+            let r = d.roulette(DEC_19, &mut Rng::seeded(1), &[1], Some(1)).unwrap();
+            assert_eq!(standing(&r, 160).is_some(), kept, "the artist heard {ago} s ago");
+        }
+    }
+
+    /// No reserve from the last resort `[SPEC-XMR-045]`: nothing in the pool
+    /// has flavor, so no places are kept, and the record says why. Out of
+    /// season nothing was due, so there is nothing to explain.
+    #[test]
+    fn a_last_resort_pool_keeps_no_christmas_places() {
+        let c = reserve_library(40, &[]);
+        c.execute_batch("DELETE FROM flavor;").unwrap();
+        christmas_by_the_listener(&c, "r40");
+        played(&c, 40, DEC_19 - DAY);
+        let d = Director::load(&c).unwrap();
+        assert!(d.is_christmas(40));
+        let r = d.roulette(DEC_19, &mut Rng::seeded(1), &[], None).unwrap();
+        assert!(r.shaping.last_resort);
+        assert_eq!(r.tally.reserved, 0);
+        assert!(r.tally.last_resort && r.tally.enabled && r.tally.ramp > 0.7);
+        assert!(r.places.iter().all(|p| *p == Place::Flow));
+        assert!(standing(&r, 40).is_none(), "in rotation, and no filler to set it aside");
+        let nov = d.roulette(DEC_19 - 30 * DAY, &mut Rng::seeded(1), &[], None).unwrap();
+        assert!(nov.shaping.last_resort && !nov.tally.last_resort);
     }
 
     #[test]

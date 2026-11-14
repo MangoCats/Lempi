@@ -1498,13 +1498,16 @@ const Lempi = (() => {
       };
     },
     // What the Christmas reserve did for this pick, as a clause for "why
-    // this passage?" [SPEC-XMR-070]; '' when it did nothing.
+    // this passage?" [SPEC-XMR-070]; '' when it did nothing. Places due and
+    // none kept, because nothing in the pool had flavor, is said too
+    // [SPEC-XMR-045]: a 0 in December is otherwise a question.
     christmasNote(why) {
       const c = why?.christmas;
+      if (c?.last_resort) return ' No places kept for Christmas: nothing in the pool has flavor to place them by.';
       if (!c || !c.reserved) return '';
       const kept = `${c.reserved} of the places kept for Christmas`;
       if (why.place === 'filler') return ` From a Christmas place (${kept}), its rotation set aside.`;
-      if (why.place === 'moved_up') return ` From a Christmas place (${kept}), moved up from lower in the flow order.`;
+      if (why.place === 'moved_up') return ` From a Christmas place (${kept}), moved up from lower in the flow order, its rotation set aside.`;
       if (why.place === 'backfill') return ` From a Christmas place no Christmas passage could fill (${kept}).`;
       return ` ${kept[0].toUpperCase()}${kept.slice(1)}.`;
     },

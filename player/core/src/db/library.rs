@@ -630,6 +630,24 @@ impl Library {
         crate::director::library::Director::load(&self.conn)
     }
 
+    /// This player's settings, read through this read-only connection: what
+    /// the session hands its Director, for a tool that must write nothing
+    /// (`seasonsim`, `[SPEC-XMR-100]`). The same readings [`super::PlayerStore`]
+    /// makes.
+    pub fn load_settings(&self) -> Option<super::Settings> {
+        super::player_store::read_settings(&self.conn)
+    }
+
+    /// As [`Library::load_settings`]: the profanity tolerance `[SPEC-PTL-030]`.
+    pub fn load_profanity_tolerance(&self) -> crate::director::frequency::ProfanityTolerance {
+        crate::director::library::load_profanity_tolerance(&self.conn)
+    }
+
+    /// As [`Library::load_settings`]: the programme slot held by hand.
+    pub fn load_manual_slot(&self) -> Option<i64> {
+        super::player_store::read_manual_slot(&self.conn)
+    }
+
     pub fn count_radio(&self) -> Result<i64, DbError> {
         self.conn
             .query_row("SELECT COUNT(*) FROM __LIB__.passages WHERE kind = 'radio'", [], |r| r.get(0))

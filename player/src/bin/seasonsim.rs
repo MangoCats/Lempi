@@ -13,8 +13,12 @@
 //!   keeps what it holds out of a refill.
 //!
 //! Nothing is skipped, nobody queues anything by hand, and nothing is
-//! written: the Director holds its history in memory once loaded. It still
-//! opens the files through SQLite, so give it copies, not a node's live pair.
+//! written: the Director holds its history in memory once loaded, and the
+//! pair is opened once, read-only, through `Library`. Until 2026-11-13 the
+//! player's settings came through a `PlayerStore`, which opens read-write and
+//! makes its tables on an older listener -- so a run could change the copy it
+//! measured. It still opens the files through SQLite, so give it copies, not a
+//! node's live pair; and a copy made by SQLite's backup, never a file copy.
 //!
 //! The command line is `cli::specs::seasonsim`; `seasonsim --help` prints it.
 
@@ -23,7 +27,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use lempi_player::cli::specs::seasonsim as opt;
-use lempi_player::db::{Library, PlayerStore};
+use lempi_player::db::Library;
 use lempi_player::director::christmas::Place;
 use lempi_player::director::library::{Director, Rng};
 use lempi_player::director::occasion::civil_from_unix;
@@ -79,13 +83,10 @@ fn main() {
     });
     // What the session would hand its Director from the player's own
     // settings: the windows, the tolerance, a held slot, the queue depth.
-    let store = PlayerStore::open_split(&db, &library).unwrap_or_else(|e| {
-        eprintln!("cannot open the player store: {e:?}");
-        std::process::exit(1);
-    });
-    let settings = store.load_settings().unwrap_or_default();
-    let tolerance = store.load_profanity_tolerance();
-    let manual = store.load_manual_slot();
+    // Read through the same read-only connection.
+    let settings = lib.load_settings().unwrap_or_default();
+    let tolerance = lib.load_profanity_tolerance();
+    let manual = lib.load_manual_slot();
     let depth = settings.queue_depth.max(1);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -165,7 +166,7 @@ fn main() {
         }
 
         println!("\nreserve {}  --  mean over {runs} run(s)", if on { "ON" } else { "OFF" });
-        println!("date        ramp  picks  xmas   share  distinct  max/song  fillers  relaxed");
+        println!("date        ramp  picks  xmas   share  distinct  max/song  fillers  relaxed"); // columns
         let mut dec = (0.0, 0.0);
         for ((yy, mm, dd), v) in &totals {
             let n = v.len() as f64;

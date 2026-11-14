@@ -546,6 +546,40 @@ pub struct PlayerStore {
     conn: QualifyingConn,
 }
 
+/// The settings as they were left, through any connection that can see
+/// `player_settings` -- this store's, or the read-only one of
+/// [`crate::db::Library`], which is what `seasonsim` reads them through so it
+/// writes nothing `[SPEC-XMR-100]`. One reading for both.
+///
+/// A key that is absent, or holds something unreadable, falls back to its
+/// **own** default rather than failing the whole read: an absent key is a
+/// setting never touched, which is a first run and not a fault.
+pub(crate) fn read_settings(conn: &QualifyingConn) -> Option<Settings> {
+    let mut out = Settings::default();
+    let mut q = conn.prepare("SELECT key, value FROM player_settings").ok()?;
+    let rows = q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).ok()?;
+    let mut any = false;
+    for (key, value) in rows.flatten() {
+        out.set(&key, &value);
+        any = true;
+    }
+    // **`None` means never saved**, which is what a caller distinguishes a
+    // first run by. Returning the defaults instead would be the same values
+    // wearing a claim that somebody chose them.
+    any.then_some(out)
+}
+
+/// The programme slot held by hand, through either connection, as
+/// [`read_settings`]. `None` both when nothing has ever been chosen and when a
+/// stored value no longer parses.
+pub(crate) fn read_manual_slot(conn: &QualifyingConn) -> Option<i64> {
+    conn.query_row("SELECT value FROM player_settings WHERE key = 'manual_program'", [], |r| {
+        r.get::<_, String>(0)
+    })
+    .ok()
+    .and_then(|v| v.parse::<i64>().ok())
+}
+
 /// Every setting the listener owns `[REQ-VIS-155]`, in one row.
 ///
 /// A struct rather than a tuple because there are eight of them now and a
@@ -1392,18 +1426,7 @@ impl PlayerStore {
     /// **own** default rather than failing the whole read: an absent key is a
     /// setting never touched, which is a first run and not a fault.
     pub fn load_settings(&self) -> Option<Settings> {
-        let mut out = Settings::default();
-        let mut q = self.conn.prepare("SELECT key, value FROM player_settings").ok()?;
-        let rows = q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).ok()?;
-        let mut any = false;
-        for (key, value) in rows.flatten() {
-            out.set(&key, &value);
-            any = true;
-        }
-        // **`None` means never saved**, which is what a caller distinguishes a
-        // first run by. Returning the defaults instead would be the same values
-        // wearing a claim that somebody chose them.
-        any.then_some(out)
+        read_settings(&self.conn)
     }
 
     /// Bring `listener_settings.utc_offset_minutes` into line with what the
@@ -2136,12 +2159,7 @@ impl PlayerStore {
     /// with, and `Programme::active_slot`'s own stale-id fallback already handles
     /// an id that no longer exists.
     pub fn load_manual_slot(&self) -> Option<i64> {
-        self.conn
-            .query_row("SELECT value FROM player_settings WHERE key = 'manual_program'", [], |r| {
-                r.get::<_, String>(0)
-            })
-            .ok()
-            .and_then(|v| v.parse::<i64>().ok())
+        read_manual_slot(&self.conn)
     }
 
     /// Set or clear "flag this for review" on a recording or a passage
@@ -2822,7 +2840,8 @@ impl PlayerStore {
         let mut q = self
             .conn
             .prepare(
-                "SELECT mbid, MAX(rejected_at) FROM listener_rejections                  WHERE mbid IS NOT NULL AND kind = ?1 GROUP BY mbid",
+                "SELECT mbid, MAX(rejected_at) FROM listener_rejections \
+                 WHERE mbid IS NOT NULL AND kind = ?1 GROUP BY mbid",
             )
             .map_err(|e| DbError::Query(e.to_string()))?;
         let rows = q

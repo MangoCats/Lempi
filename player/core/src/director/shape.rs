@@ -63,6 +63,37 @@ pub struct Shaping {
     /// No seeds, or nothing comparable to one: no pruning or gathering, and
     /// Stage C and the roulette work on the whole pool `[SPEC-DIR-158]`.
     pub bypassed: bool,
+    /// The pool is the last resort: passages without flavor, because none
+    /// with flavor was left to choose `[SPEC-DIR-147]`. Said here, by the
+    /// stage that took it, so a later stage asks rather than works it out
+    /// again -- the Christmas reserve keeps no places then `[SPEC-XMR-045]`.
+    pub last_resort: bool,
+}
+
+/// The order every stage sorts a distance in: nearest first, and one that
+/// cannot be measured last `[SPEC-DIR-147]`. Two it cannot tell apart are
+/// equal, so a stable sort leaves them as they came -- which is why a caller
+/// that wants them in no fixed order shuffles first.
+pub fn nearest_first(a: Option<f64>, b: Option<f64>) -> std::cmp::Ordering {
+    match (a, b) {
+        (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+/// Whether Stage B leaves `f` out as too close to Dislike-Taste
+/// `[SPEC-DIR-150]`. One test, for Stage B and for the Christmas reserve's
+/// fillers, which are to be left out exactly as Stage B would leave them
+/// `[SPEC-XMR-050]`.
+///
+/// **Only where the slot has seeds.** With none, Stage B shapes nothing and
+/// the Dislike is not read. Left so on the maintainer's word, 2026-11-13, until
+/// dislikes take shape in the general implementation `[SPEC-DIR-222]`; changing
+/// it here changes it for both.
+pub fn too_disliked(schema: &FlavorSchema, f: &Flavor, seeds: &[Seed<'_>], dislike: Option<&Flavor>) -> bool {
+    !seeds.is_empty() && dislike.is_some_and(|d| distance(schema, f, d).is_some_and(|x| x < DISLIKE_RADIUS))
 }
 
 /// Distance to the **nearest** seed, each seed's distance divided by its
@@ -110,6 +141,7 @@ pub fn shape<K: Copy + Eq + std::hash::Hash>(
     // The last resort, taken: nothing with flavor to weigh it against.
     let last_resort = |stats: &mut Shaping| -> Vec<K> {
         stats.bypassed = true;
+        stats.last_resort = true;
         stats.gathered = unmeasured.len();
         unmeasured.clone()
     };
@@ -128,13 +160,8 @@ pub fn shape<K: Copy + Eq + std::hash::Hash>(
     // An exclusion, never a weight change: removing a passage from the pool
     // leaves its rotation and restraint untouched, so deleting the Dislike
     // later returns behaviour to baseline with no residue [SPEC-DIR-155].
-    let mut pool: Vec<(K, &Flavor)> = measured
-        .iter()
-        .filter(|(_, f)| {
-            !dislike.is_some_and(|d| distance(schema, f, d).is_some_and(|x| x < DISLIKE_RADIUS))
-        })
-        .copied()
-        .collect();
+    let mut pool: Vec<(K, &Flavor)> =
+        measured.iter().filter(|(_, f)| !too_disliked(schema, f, seeds, dislike)).copied().collect();
     stats.disliked_out = measured.len() - pool.len();
     if pool.is_empty() {
         // Everything with flavor is disliked. One without is the last resort,
@@ -157,12 +184,7 @@ pub fn shape<K: Copy + Eq + std::hash::Hash>(
     if scored.len() > EXCL_POOL {
         // A passage with flavor that no seed can be measured against sorts
         // last, and is the first cut.
-        scored.sort_by(|a, b| match (a.2, b.2) {
-            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        });
+        scored.sort_by(|a, b| nearest_first(a.2, b.2));
         stats.pruned_out = scored.len() - EXCL_POOL;
         scored.truncate(EXCL_POOL);
     }
@@ -329,11 +351,29 @@ mod tests {
             let out = shape(&idx.schema, &cands, seeds, None, &mut st);
             assert!(!out.contains(&999), "passed over beside {} with flavor", out.len());
             assert_eq!(st.unmeasured_out, 1);
+            assert!(!st.last_resort, "a pool with flavor is not the last resort");
         }
         let only: Vec<(usize, Option<&Flavor>)> = vec![(998, None), (999, None)];
         let mut st = Shaping::default();
         let out = shape(&idx.schema, &only, &seeds, None, &mut st);
         assert_eq!(out.len(), 2, "and chosen when nothing with flavor is left");
+        assert!(st.last_resort, "and said so, for the Christmas reserve [SPEC-XMR-045]");
+    }
+
+    /// One Dislike test for Stage B and the Christmas reserve's fillers
+    /// `[SPEC-DIR-222]`: near Dislike-Taste is out, far from it is in, and
+    /// with no seeds nothing is out -- Stage B does not read the Dislike then.
+    #[test]
+    fn the_dislike_test_is_stage_bs_and_needs_seeds() {
+        let idx = library(200);
+        let seeds = [Seed { flavor: idx.get("s0100").unwrap(), weight: 1.0 }];
+        let disliked = idx.get("s0000");
+        let near = idx.get("s0001").unwrap();
+        let far = idx.get("s0199").unwrap();
+        assert!(too_disliked(&idx.schema, near, &seeds, disliked));
+        assert!(!too_disliked(&idx.schema, far, &seeds, disliked));
+        assert!(!too_disliked(&idx.schema, near, &[], disliked), "no seeds: not read");
+        assert!(!too_disliked(&idx.schema, near, &seeds, None), "no Dislike: nothing near it");
     }
 
     /// A Taste centroid is an ordinary vector and shapes like any other seed.

@@ -8,12 +8,17 @@
 //!   1.0 `[SPEC-XMR-020]`;
 //! - [`reserved`]: how many of the roulette's places that keeps for Christmas
 //!   `[SPEC-XMR-030]`;
-//! - [`reserve`]: the roulette list with those places filled `[SPEC-XMR-040]`.
+//! - [`reserve`]: the roulette list with those places filled `[SPEC-XMR-040]`;
+//!
+//! and [`ARTIST_GAP_SHARE`], what of an artist's rotation still holds where
+//! the rest of rotation is set aside `[SPEC-XMR-050]`.
 //!
 //! The ramp is in code for this season, on the maintainer's word
 //! (2026-11-09); the curves of `[SPEC-DIR-130]` stay data. What a passage
-//! weighs is still Stage A's: this changes only **which** passages the
-//! roulette draws on, and where in its rank they stand.
+//! weighs is still Stage A's: this changes **which** passages the roulette
+//! draws on and where in its rank they stand, and every passage in a reserved
+//! place is weighed by Stage A with rotation set aside, so all of them are on
+//! one scale `[SPEC-XMR-040]`.
 
 use serde::Serialize;
 
@@ -29,6 +34,13 @@ const RISE_FROM: i64 = 6 * HOUR; // 1 December, 06:00
 const FULL_FROM: i64 = 24 * DAY + 6 * HOUR; // 25 December, 06:00
 const FALL_FROM: i64 = 24 * DAY + 23 * HOUR + 45 * MIN; // 25 December, 23:45
 const ZERO_FROM: i64 = 25 * DAY + 6 * HOUR; // 26 December, 06:00
+
+/// How much of an artist's rotation still holds it out of a reserved place
+/// `[SPEC-XMR-050]`: a sixth (the maintainer, 2026-11-13). Everything else of
+/// rotation is set aside there, so without this an artist on air could follow
+/// itself. A share of each artist's own rotation, after the artist time scale:
+/// 1 h 40 min on the 10-hour default, 4 h 20 min for an artist held 26 hours.
+pub const ARTIST_GAP_SHARE: f64 = 1.0 / 6.0;
 
 /// How far into the Christmas season `local_secs` is `[SPEC-XMR-020]`.
 ///
@@ -92,12 +104,16 @@ pub struct Reserve {
     pub enabled: bool,
     /// The ramp at the pick's projected start, whether or not it is enabled.
     pub ramp: f64,
-    /// Places kept for Christmas: 0 when off, out of season, or when the
-    /// relaxed fallback chose.
+    /// Places kept for Christmas: 0 when off, out of season, when the
+    /// relaxed fallback chose, or when the pool was the last resort.
     pub reserved: usize,
     pub moved_up: usize,
     pub fillers: usize,
     pub backfilled: usize,
+    /// Places were due and none were kept: the pool was Stage B's last
+    /// resort, passages without flavor, and the reserve keeps nothing then
+    /// `[SPEC-XMR-045]`. Said so that a 0 in season is not left unexplained.
+    pub last_resort: bool,
 }
 
 /// The roulette list, with `reserved` of its `size` places kept for

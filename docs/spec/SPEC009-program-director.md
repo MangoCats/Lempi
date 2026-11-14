@@ -193,8 +193,9 @@ The orthogonality of `[SPEC-DIR-100]` is what makes this legible: the panel tell
 2. **`[SPEC-DIR-212]` Passages without flavor as a true last resort** `[SPEC-DIR-147]` — *closed 2026-11-01*: built on every path, at the maintainer's direction.
 3. **`[SPEC-DIR-215]`** Whether Like-Taste should age or cap. Likes accumulate without bound; a handful of curated seeds could be swamped.
 4. **`[SPEC-DIR-220]`** Taste per listener, and a shared queue between listeners — McRhythm's multi-user model is inherited but undecided `[REQ002 §8]`. One of several possible future directions, as is Dislike-Taste beyond its filter `[SPEC-DIR-150]`.
-5. Startup and the fallbacks have their own open items: `[SPEC-DIR-235]`, `[SPEC-DIR-238]` and `[SPEC-DIR-245]` in [SPEC074](SPEC074-when-the-director-cannot-choose.md).
+5. **`[SPEC-DIR-222]` The Dislike filter runs only when the slot has seeds** `[SPEC-DIR-150]`. With none, Stage B is bypassed and a Dislike does nothing. The Christmas reserve's fillers obey the same rule, through the same function (`shape::too_disliked`) `[SPEC-XMR-050]`. *Left as it is on the maintainer's word, 2026-11-13, to revisit once dislikes take shape in the general implementation.* Changing it in that one function changes it for both.
+6. Startup and the fallbacks have their own open items: `[SPEC-DIR-235]`, `[SPEC-DIR-238]` and `[SPEC-DIR-245]` in [SPEC074](SPEC074-when-the-director-cannot-choose.md).
 
 ---
 
-**Traceability:** `[SPEC-DIR-100..220]` · `[SPEC-DIR-225..245]` in [SPEC074](SPEC074-when-the-director-cannot-choose.md) · Stage A `[SPEC-DIR-110..137]` in [SPEC037](SPEC037-eligibility-and-frequency.md) · derived from `[GDE-PD-010..050]`, `[GDE-MCR-070]`, `[SPEC-FD-040]`
+**Traceability:** `[SPEC-DIR-100..222]` · `[SPEC-DIR-225..245]` in [SPEC074](SPEC074-when-the-director-cannot-choose.md) · Stage A `[SPEC-DIR-110..137]` in [SPEC037](SPEC037-eligibility-and-frequency.md) · derived from `[GDE-PD-010..050]`, `[GDE-MCR-070]`, `[SPEC-FD-040]`
