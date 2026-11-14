@@ -26,7 +26,11 @@ MANIFEST.json:
               "mirror": true,   (optional, unused since 2026-10-04 [SPEC-STAR-103]: it receives the hub's listener)
               "sent": "the copy it was last sent",   (optional: its baseline,
                                 [SPEC-STAR-110]; none means in step with the hub)
+              "sent_run": "20261112T2008Z",   (optional: the run that copy is from)
               "taken_at": "2026-09-26T15:32:35Z"}, ...],
+   "newest_sent": {"run": "20261112T2008Z", "listener": "its merge/listener.db"},
+                  (optional: the newest run any node was sent, whole, so a row
+                   removed in a run some node missed stays removed [IMPL-UID-042])
    "verdicts": "path/to/verdicts.json",   (optional) [SPEC-STAR-114]
    "hub_state_from": "desktop",   the node whose own plays, player_* and
                                    selection_decisions the hub keeps
@@ -138,8 +142,12 @@ TABLES = {
     # that sent none is sent none (`star_sync.signed_tables`).
     "passage_lyrics": dict(rule=LWW, key=("audio_md5", "kind", "start_ms"), stamp="updated_at",
                            newer=True),
-    "id_reviews": dict(rule=UNION, key=("passage_id", "decided_at"), latest=("applied_at",)),
-    "boundary_reviews": dict(rule=UNION, key=("passage_id", "decided_at"), latest=("applied_at",)),
+    # A decision withdrawn stays withdrawn [IMPL-UID-042]. Until 2026-11-14
+    # these took no removals, so a review deleted on the hub came back from
+    # every node still holding it -- how 27 copied reviews outlived the
+    # repair of 2026-10-18 [SPEC-STAR-051].
+    "id_reviews": dict(rule=UNION, key=("passage_id", "decided_at"), latest=("applied_at",), removals=True),
+    "boundary_reviews": dict(rule=UNION, key=("passage_id", "decided_at"), latest=("applied_at",), removals=True),
     "artist_reviews": dict(rule=UNION, key=("recording_mbid", "decided_at"), latest=("applied_at",)),
     "listener_play_history": dict(rule=LOCAL),
     "listener_rejections": dict(rule=LOCAL),
@@ -167,6 +175,12 @@ class Node:
         # copy back in its own numbering. None: no catalogue to translate by,
         # so its copy keeps the ids as merged.
         self.unmap: dict | None = None
+        # [SPEC-STAR-049]: its passages the hub cannot match. Kept under their
+        # own numbers, which on the hub can name other music, so a key naming
+        # one is never evidence of a removal [IMPL-UID-042].
+        self.gone: set = set()
+        self.sent_run = spec.get("sent_run")
+        self._gone_keys: dict = {}
         self.aliases: dict = {}        # [SPEC-RLK-155]: a retired audio_md5 -> the hub's
         self.remapped: dict = {}       # table -> rows translated
         self.tables = {r[0] for r in self.db.execute(
@@ -204,6 +218,47 @@ class Node:
         rows = [dict(zip(cols, r)) for r in conn.execute(f"SELECT * FROM {table}")]
         if not translate:
             return rows
+        return self._translate(rows, cols, table, count)
+
+    def _names_gone(self, r: dict) -> bool:
+        """Whether a row, as the node holds it, names one of its passages the hub cannot match."""
+        if not self.gone:
+            return False
+        if r.get("passage_id") is not None:
+            return _int(r["passage_id"]) in self.gone
+        return r.get("subject_kind") == "passage" and _int(r.get("subject_id")) in self.gone
+
+    def keys(self, conn: sqlite3.Connection, table: str, key: tuple) -> set | None:
+        """`table`'s keys in `conn`, read as `rows` reads them -- in the hub's
+        numbering -- without the rows that name a passage the hub cannot match.
+        None where `conn` has no such table.
+
+        [IMPL-UID-042]: until 2026-11-14 removal evidence compared these raw, in
+        the node's own numbering, against the merge's keys in the hub's: a flag
+        a node cleared on its passage 16407 deleted the hub's flag on its own
+        16407, other music, and left the real one standing everywhere."""
+        try:
+            cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+            raw = [dict(zip(cols, r)) for r in conn.execute(f"SELECT * FROM {table}")]
+        except sqlite3.Error:
+            return None
+        if not cols:
+            return None
+        kept = self._translate([r for r in raw if not self._names_gone(r)], cols, table, False)
+        return {tuple(r.get(c) for c in key) for r in kept if all(c in r for c in key)}
+
+    def gone_keys(self, table: str, key: tuple) -> set:
+        """The keys of this node's current rows that name a passage the hub cannot match."""
+        if table not in self._gone_keys:
+            out = set()
+            if self.gone and table in self.tables:
+                for r in self._read(self.db, table, False, translate=False):
+                    if self._names_gone(r) and all(c in r for c in key):
+                        out.add(tuple(r[c] for c in key))
+            self._gone_keys[table] = out
+        return self._gone_keys[table]
+
+    def _translate(self, rows: list[dict], cols: list[str], table: str, count: bool) -> list[dict]:
         if self.aliases and "audio_md5" in cols:
             for r in rows:
                 if r["audio_md5"] in self.aliases:
@@ -264,15 +319,79 @@ def removals(node: Node, table: str, key: tuple) -> dict:
     A node whose copy lacks the table says nothing about it, as elsewhere in
     the merge: its history is not evidence that it removed every row there.
     A phone uploads its shared tables only [REQ-AND-330], and without this
-    every occasion its history held would have read as removed by it."""
-    now = keys_in(node.db, table, key)
+    every occasion its history held would have read as removed by it.
+
+    Every key is read in the hub's numbering, as the merge's are, and one
+    naming a passage the hub cannot match is no evidence [IMPL-UID-042]."""
+    if table not in node.tables:
+        return {}
+    now = node.keys(node.db, table, key)
     if now is None:
         return {}
     last_seen: dict = {}
     for when, conn in node.history:
-        for k in keys_in(conn, table, key) or set():
+        for k in node.keys(conn, table, key) or set():
             last_seen[k] = when
     return {k: t for k, t in last_seen.items() if k not in now}
+
+
+class Newest:
+    """[IMPL-UID-042]: the whole merge of the newest run any node was sent.
+
+    A node that missed the run that removed a row still holds it, unchanged
+    from the copy it was last sent, and its own history -- that copy -- holds
+    it too, so `removals` sees nothing and the union brings it back. Found
+    2026-11-14 as the reason a row removal lasted one run. This copy is what
+    says it went: a row every holder holds unchanged from a copy older than
+    this one, and this one lacks, was removed in a run those holders missed.
+    Read as the hub numbers it, since the hub's own copy is the whole merge."""
+
+    def __init__(self, spec: dict | None):
+        self.run = (spec or {}).get("run")
+        path = (spec or {}).get("listener")
+        self.db = open_ro(path) if self.run and path and os.path.exists(path) else None
+        self.why_not = (None if self.db else
+                        "no newest copy given" if not spec else f"the newest copy {path!r} is not there")
+        self._keys: dict = {}
+
+    def keys(self, table: str, key: tuple) -> set | None:
+        if self.db is None:
+            return None
+        if table not in self._keys:
+            self._keys[table] = keys_in(self.db, table, key)
+        return self._keys[table]
+
+    def close(self) -> None:
+        if self.db is not None:
+            self.db.close()
+
+
+def missed(newest: Newest | None, table: str, key: tuple, held: dict, merged: dict,
+           by_name: dict) -> dict:
+    """[IMPL-UID-042]: key -> the nodes that missed its removal, for each row
+    `newest` lacks that every node holding it holds unchanged from a copy
+    older than `newest`. A row any holder changed or added since its copy,
+    holds with no copy, or holds under a passage the hub cannot match, is
+    not one: an edit or an addition is never undone by this."""
+    have = newest.keys(table, key) if newest is not None else None
+    if have is None:
+        return {}
+    out = {}
+    for k in merged:
+        if k in have:
+            continue
+        holders = held.get(k, {})
+        if not holders:
+            continue
+        for nm, row in holders.items():
+            n = by_name[nm]
+            base = n.base_rows(table, key)
+            if (base is None or k not in base or not _same(row, base[k])
+                    or not n.sent_run or n.sent_run >= newest.run or k in n.gone_keys(table, key)):
+                break
+        else:
+            out[k] = sorted(holders)
+    return out
 
 
 def _jdefault(v):
@@ -350,7 +469,8 @@ def _order(k: tuple) -> tuple:
     return tuple("" if x is None else str(x) for x in k)
 
 
-def merge_table(table: str, spec: dict, nodes: list[Node], hub: str, rep: Report):
+def merge_table(table: str, spec: dict, nodes: list[Node], hub: str, rep: Report,
+                newest_copy: Newest | None = None):
     rule = spec["rule"]
     per_node = {n.name: n.rows(table) for n in nodes}
     counts = {name: len(rows) for name, rows in per_node.items()}
@@ -431,6 +551,11 @@ def merge_table(table: str, spec: dict, nodes: list[Node], hub: str, rep: Report
                     removed += 1
                     rep.decide(table, k, f"removed: {n.name} held it in its backup of "
                                f"{seen} and not since", "SPEC-STAR-050")
+        for k, who in missed(newest_copy, table, key, held, merged, by_name).items():
+            del merged[k]
+            removed += 1
+            rep.decide(table, k, f"removed in run {newest_copy.run}, which {', '.join(who)} missed: "
+                       f"held unchanged since an older copy, and not in that run's", "IMPL-UID-042")
 
     rows = [merged[k] for k in sorted(merged, key=_order)]
     only: dict = {}
@@ -693,20 +818,28 @@ def _int(v):
 
 def build_listener(manifest: dict, out: str, rep: Report, hub_cat: str | None = None):
     nodes = sorted((Node(s) for s in manifest["nodes"]), key=lambda n: n.name)
+    newest = Newest(manifest.get("newest_sent"))
     try:
-        _build_listener(nodes, manifest, out, rep, hub_cat)
+        _build_listener(nodes, manifest, out, rep, hub_cat, newest)
     finally:
         for n in nodes:
             n.close()
+        newest.close()
 
 
-def _build_listener(nodes: list, manifest: dict, out: str, rep: Report, hub_cat: str | None):
+def _build_listener(nodes: list, manifest: dict, out: str, rep: Report, hub_cat: str | None,
+                    newest: Newest):
     rep.data["translations"] = {}
+    # [IMPL-UID-042], said either way: without the newest copy a node that
+    # missed a run brings back what that run removed, and nothing else shows it.
+    rep.data["newest_sent"] = (dict(run=newest.run) if newest.db is not None
+                               else dict(missing=newest.why_not))
     for n in nodes:
         if hub_cat:
             n.aliases = aliases(hub_cat)
         if n.catalogue and hub_cat:
             n.remap, gone = passage_remap(n.catalogue, hub_cat)
+            n.gone = set(gone)
             n.unmap, clashes = passage_unmap(n.catalogue, hub_cat, n.remap)
             rep.data["translations"][n.name] = dict(
                 ids=sorted([a, b] for a, b in n.remap.items()), unmatched=gone,
@@ -719,7 +852,7 @@ def _build_listener(nodes: list, manifest: dict, out: str, rep: Report, hub_cat:
     if unknown:
         raise SystemExit(f"no rule for table(s) {unknown}: [SPEC-STAR-060] a decision "
                          "the report does not name is not made -- add a rule first")
-    rep.data["integrity"] = write_listener(nodes, hub, os.path.join(out, "listener.db"), rep)
+    rep.data["integrity"] = write_listener(nodes, hub, os.path.join(out, "listener.db"), rep, newest=newest)
     rep.data["nodes"] = [dict(name=n.name, taken_at=n.taken_at, backups=len(n.history))
                          for n in nodes]
     for n in nodes:
@@ -742,7 +875,7 @@ def _build_listener(nodes: list, manifest: dict, out: str, rep: Report, hub_cat:
             rep.data["copies"][n.name] = dict(listener="the hub's: a mirror")
             continue
         scratch = Report(rep.verdicts, rep.hub)     # the same verdicts as the hub's own copy
-        ok = write_listener(nodes, n.name, path, scratch, schema_of=n)
+        ok = write_listener(nodes, n.name, path, scratch, schema_of=n, newest=newest)
         own = {t: s["merged"] for t, s in scratch.data["tables"].items()
                if s["rule"] in (LOCAL, HUB)}
         rep.data["copies"][n.name] = dict(listener=f"its own, integrity {ok}", own=own)
@@ -753,7 +886,7 @@ def _build_listener(nodes: list, manifest: dict, out: str, rep: Report, hub_cat:
 
 
 def write_listener(nodes: list[Node], own: str, path: str, rep: Report,
-                   schema_of: Node | None = None) -> str:
+                   schema_of: Node | None = None, newest: Newest | None = None) -> str:
     """One listener database: the household's edits merged, and `own`'s own
     plays and state. `schema_of`: each table as that node defines it, where
     it has the table; otherwise the widest definition any node has."""
@@ -774,7 +907,7 @@ def write_listener(nodes: list[Node], own: str, path: str, rep: Report,
                 (table,)):
             dest.execute(isql)
         cols = src.cols(table)
-        rows = merge_table(table, TABLES[table], nodes, own, rep)
+        rows = merge_table(table, TABLES[table], nodes, own, rep, newest)
         # A node's own copy in its own passage numbers `[SPEC-STAR-049]`: the
         # merge read every row of every node in the hub's. Its own tables go
         # back as it holds them; the shared ones, merged in the hub's numbers,
@@ -1244,6 +1377,10 @@ def listener_section(d: dict) -> list[str]:
          "Read it before promoting this output to `data/` [SPEC-STAR-070].", "",
          "## Inputs", "", "| node | snapshot taken | backups read |", "| :--- | :--- | ---: |"]
     L += [f"| {n['name']} | {n['taken_at']} | {n['backups']} |" for n in d["nodes"]]
+    ns = d.get("newest_sent") or {}
+    L += ["", f"Removals a node missed [IMPL-UID-042]: read against run {ns['run']}'s merge." if ns.get("run") else
+          f"Removals a node missed [IMPL-UID-042]: **NOT CHECKED** -- {ns.get('missing', 'no newest copy')}; "
+          "a node that missed a run brings back what that run removed."]
     names = [n["name"] for n in d["nodes"]]
     L += ["", "## Tables", "", "| table | rule | " + " | ".join(names) + " | merged | removed |",
           "| :--- | :--- | " + " | ".join("---:" for _ in names) + " | ---: | ---: |"]

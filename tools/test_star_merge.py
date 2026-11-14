@@ -464,6 +464,125 @@ def test_a_review_survives_two_rounds(tmp):
           "and the node's copy is unchanged")
 
 
+def opposite(tmp, tag):
+    """Two catalogues numbering files A and B the other way round: the hub's
+    passage 1 is file A, the node's passage 1 is file B."""
+    desk, app = os.path.join(tmp, f"{tag}-desk.cat"), os.path.join(tmp, f"{tag}-app.cat")
+    for path, order in ((desk, ("A", "B")), (app, ("B", "A"))):
+        cat(path, f"INSERT INTO files VALUES (1,'{order[0]}','/{order[0]}.mp3',100)",
+            f"INSERT INTO files VALUES (2,'{order[1]}','/{order[1]}.mp3',100)",
+            "INSERT INTO passages VALUES (1,1000,'ingest')", "INSERT INTO passages VALUES (2,1000,'ingest')")
+        c = sqlite3.connect(path)
+        for s in ("ALTER TABLE passages ADD COLUMN file_id INTEGER", "ALTER TABLE passages ADD COLUMN kind TEXT",
+                  "ALTER TABLE passages ADD COLUMN start_ms INTEGER",
+                  "UPDATE passages SET file_id = passage_id, kind = 'radio', start_ms = 0"):
+            c.execute(s)
+        c.commit()
+        c.close()
+    return desk, app
+
+
+def backup_of(tmp, tag, epoch, *sql):
+    """A history folder holding one copy, named for `epoch`."""
+    d = os.path.join(tmp, f"{tag}-history")
+    os.makedirs(d)
+    db(os.path.join(d, f"listener-{epoch}.db"), *sql)
+    return d
+
+
+def test_a_removal_is_read_in_the_hubs_numbering(tmp):
+    """[IMPL-UID-042]: a node clears its flag on its passage 1, file B. Until
+    2026-11-14 the evidence was compared in the node's numbers against the
+    merge's in the hub's: the hub's flag on ITS passage 1 -- file A, other
+    music -- was deleted everywhere, and file B's flag stayed."""
+    desk, app = opposite(tmp, "rn")
+    # Flagged before the backup of 1789000000 (2026-09-10), so not re-added since.
+    flag = lambda pid, o="NULL": f"INSERT INTO listener_flags VALUES ('passage','{pid}','2026-08-01 00:00:00',{o})"
+    dl, al = os.path.join(tmp, "rn-desk.lis"), os.path.join(tmp, "rn-app.lis")
+    db(dl, flag(1, "'GMKtec'"), flag(2))           # the hub: file A (its 1), file B (its 2)
+    db(al, flag(2))                                # the node now: file A (its 2) only
+    bk = backup_of(tmp, "rn-app", 1789000000, flag(1), flag(2))   # it held file B (its 1) too
+    out = os.path.join(tmp, "rn-out")
+    rep = sm.build({"hub_state_from": "desktop", "hub_library": desk,
+                    "nodes": [dict(name="desktop", listener=dl),
+                              dict(name="app", listener=al, catalogue=app, files=app, backups=bk)]}, out)
+    hub = rows(os.path.join(out, "listener.db"), "SELECT subject_id FROM listener_flags ORDER BY subject_id")
+    check(hub == [("1",)], f"file B's flag is removed and file A's is kept, in the hub's numbers: {hub}")
+    mine = rows(os.path.join(out, "nodes", "app", "listener.db"), "SELECT subject_id FROM listener_flags")
+    check(mine == [("2",)], f"and the node keeps file A's flag under its own number: {mine}")
+    check(any(d["rule"] == "SPEC-STAR-050" and d["key"] == ["passage", "2"] for d in rep.data["decisions"]),
+          f"the removal is reported under the hub's number: {rep.data['decisions']}")
+
+
+def test_a_withdrawn_review_stays_withdrawn(tmp):
+    """[IMPL-UID-042]: an id review withdrawn on the hub. Until 2026-11-14 the
+    review tables took no removals, so the node's copy brought it back at the
+    next merge -- how 27 copied reviews outlived their repair."""
+    desk, app = opposite(tmp, "wr")
+    review = ("CREATE TABLE id_reviews (passage_id INTEGER PRIMARY KEY, decision TEXT, chosen_mbid TEXT, "
+              "decided_at TEXT, applied_at TEXT, origin TEXT)")
+    row = lambda pid: f"INSERT INTO id_reviews VALUES ({pid},'reassigned','rec-A','2026-10-15 00:20:04',NULL,NULL)"
+    dl, al, sent = (os.path.join(tmp, f"wr-{n}.lis") for n in ("desk", "app", "sent"))
+    db(dl, review)                                  # withdrawn on the hub
+    db(al, review, row(2))                          # the node: file A is its 2
+    db(sent, review, row(2))                        # and that is what it was last sent
+    hub_bk = backup_of(tmp, "wr-desk", 1789000000, review, row(1))
+    app_bk = backup_of(tmp, "wr-app", 1789000000, review, row(2))
+    out = os.path.join(tmp, "wr-out")
+    rep = sm.build({"hub_state_from": "desktop", "hub_library": desk,
+                    "nodes": [dict(name="desktop", listener=dl, backups=hub_bk),
+                              dict(name="app", listener=al, catalogue=app, files=app, backups=app_bk, sent=sent)]}, out)
+    check(rows(os.path.join(out, "listener.db"), "SELECT * FROM id_reviews") == [],
+          "the hub's withdrawal holds: the node's copy does not bring the review back")
+    check(rows(os.path.join(out, "nodes", "app", "listener.db"), "SELECT * FROM id_reviews") == [],
+          "and the node's copy loses it")
+    check(rep.data["items"] == [], f"a removal no node edited is no question: {rep.data['items']}")
+
+
+def test_a_node_that_missed_the_run(tmp):
+    """[IMPL-UID-042]: run R1 removed flag F; node b missed R1, and still holds
+    F unchanged from its R0 copy, which its history is. Until 2026-11-14 F came
+    back from b at R2. An edit b made to F since is not undone, and the newest
+    copy is the newest run's merge, not the hub's: a hub left out of R1's
+    commit does not make R1's additions read as removed."""
+    F = lambda o="NULL": f"INSERT INTO listener_flags VALUES ('recording','F','2026-10-01 00:00:00',{o})"
+    G = "INSERT INTO listener_flags VALUES ('recording','G','2026-10-02 00:00:00',NULL)"
+    p = lambda n: os.path.join(tmp, f"mr-{n}.lis")
+    db(p("r0"), F())                                # R0's merge
+    db(p("r1"), G)                                  # R1's: F removed, G added by a
+    db(p("r1-a"), G)                                # what a was sent in R1
+
+    def run(tag, b_now, newest=True, hub_sent=("r1", "R1")):
+        db(p(f"{tag}-desk"))                        # the hub holds neither now
+        db(p(f"{tag}-a"), G)
+        db(p(f"{tag}-b"), *b_now)
+        nodes = [dict(name="desktop", listener=p(f"{tag}-desk"), sent=p(hub_sent[0]), sent_run=hub_sent[1],
+                      backups=backup_of(tmp, f"mr-{tag}-desk", 1789000000)),
+                 dict(name="a", listener=p(f"{tag}-a"), sent=p("r1-a"), sent_run="R1",
+                      backups=backup_of(tmp, f"mr-{tag}-a", 1789000000, G)),
+                 dict(name="b", listener=p(f"{tag}-b"), sent=p("r0"), sent_run="R0",
+                      backups=backup_of(tmp, f"mr-{tag}-b", 1788000000, F()))]
+        m = {"hub_state_from": "desktop", "nodes": nodes}
+        if newest:
+            m["newest_sent"] = {"run": "R1", "listener": p("r1")}
+        out = os.path.join(tmp, f"mr-{tag}-out")
+        rep = sm.build(m, out)
+        return rep, {r[0] for r in rows(os.path.join(out, "listener.db"), "SELECT subject_id FROM listener_flags")}
+
+    rep, left = run("1", [F()])
+    check(left == {"G"}, f"F, removed in the run b missed, stays removed; G stays: {left}")
+    check(any(d["rule"] == "IMPL-UID-042" and d["key"] == ["recording", "F"] for d in rep.data["decisions"]),
+          "and the removal says which node missed it")
+    rep, left = run("2", [F("'edited'")])
+    check(left == {"F", "G"}, f"an edit b made to F since its copy is kept: {left}")
+    rep, left = run("3", [F()], newest=False)
+    check(left == {"F", "G"} and "missing" in rep.data["newest_sent"],
+          f"without the newest copy F comes back, and the report says it could not check: {left}")
+    rep, left = run("4", [F(), G], hub_sent=("r0", "R0"))
+    check("G" in left and "F" not in left,
+          f"a hub whose copy is older than the newest run does not make G read as removed: {left}")
+
+
 def test_one_file_many_passages(tmp):
     """[SPEC-STAR-049] within one file. Found 2026-10-18 on bose: a file
     holding a whole album has several passages, numbered differently on a
@@ -700,6 +819,9 @@ def main() -> int:
     test_translation(tmp)
     test_passage_lyrics(tmp)
     test_a_review_survives_two_rounds(tmp)
+    test_a_removal_is_read_in_the_hubs_numbering(tmp)
+    test_a_withdrawn_review_stays_withdrawn(tmp)
+    test_a_node_that_missed_the_run(tmp)
     test_one_file_many_passages(tmp)
     test_routine(tmp)
     manifest, inputs = fleet(tmp)

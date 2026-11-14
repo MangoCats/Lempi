@@ -994,6 +994,28 @@ def sent_path(entry, key):
     return at_root(p) if p and os.path.exists(at_root(p)) else None
 
 
+def newest_sent(plan, state, run):
+    """[IMPL-UID-042]: the whole merge of the newest run any node was sent, copied
+    into this run, so that a row removed in a run some node missed stays removed.
+    None, and said, when there is no such run or its merge is gone: the merge then
+    reports that it could not check."""
+    entries = [state.get("hub") or {}, *(state.get("nodes") or {}).values()]
+    runs = sorted({e["run"] for e in entries if e.get("run")})
+    if not runs:
+        say("  no run has been sent to any node: no removal can have been missed [IMPL-UID-042]")
+        return None
+    src = os.path.join(at_root(plan["runs"]), runs[-1], "merge", "listener.db")
+    if not os.path.exists(src):
+        say(f"  !!! the newest run's merge is gone ({src}): a node that missed a run will bring "
+            "back what that run removed [IMPL-UID-042]")
+        return None
+    dst = os.path.join(run, "newest-sent.db")
+    shutil.copyfile(src, dst)
+    seal(dst)
+    say(f"  removals a node missed are read against run {runs[-1]}'s merge [IMPL-UID-042]")
+    return {"run": runs[-1], "listener": dst}
+
+
 def chosen(plan, only):
     """[SPEC-STAR-130]: the nodes a run is to take part with, validated; None is all.
     A node not chosen is not contacted, not started and not written to."""
@@ -1031,8 +1053,11 @@ def snapshot(plan, only=None):
     hs = state.get("hub", {})
     manifest = {"hub_library": os.path.join(hd, "library.db"), "hub_state_from": hub["name"],
                 "nodes": [dict(name=hub["name"], listener=os.path.join(hd, "listener.db"),
-                               taken_at=now().isoformat(), sent=sent_path(hs, "listener_sent"),
+                               taken_at=now().isoformat(), sent=sent_path(hs, "listener_sent"), sent_run=hs.get("run"),
                                backups=history_of(hs.get("listener_sent"), hs.get("at", ""), os.path.join(hd, "history")))]}
+    ns_newest = newest_sent(plan, state, run)
+    if ns_newest:
+        manifest["newest_sent"] = ns_newest
     baselines = {hub["name"]: {"listener": os.path.join(hd, "listener.db"), "library": os.path.join(hd, "library.db")}}
     say(f"  {hub['name']}: both halves copied here")
     # [SPEC-LNK-040]: what the hub's catalogue names and does not hold, asked of each node below.
@@ -1132,7 +1157,7 @@ def snapshot(plan, only=None):
                 say(f"  {name}: {journal_words(jm)} [SPEC-STAR-107]")
             manifest["nodes"].append(dict(
                 name=name, listener=os.path.join(nd, "listener.db"), taken_at=now().isoformat(),
-                sent=sent_path(ns, "listener_sent"),
+                sent=sent_path(ns, "listener_sent"), sent_run=ns.get("run"),
                 backups=history_of(ns.get("listener_sent"), ns.get("at", ""), os.path.join(nd, "history")),
                 catalogue=os.path.join(nd, "summary.db"), files=os.path.join(nd, "summary.db")))
             baselines[name] = {"listener": os.path.join(nd, "listener.db"), "signed": n["member"],
@@ -1172,7 +1197,8 @@ def snapshot(plan, only=None):
                 shutil.copyfile(os.path.join(up["uploads"], f), os.path.join(hist, f))
         manifest["nodes"].append(dict(name=name, listener=os.path.join(nd, "listener.db"),
                                       taken_at=up["uploaded_at"], backups=hist,
-                                      sent=sent_path(state["nodes"].get(name), "listener_sent")))
+                                      sent=sent_path(state["nodes"].get(name), "listener_sent"),
+                                      sent_run=(state["nodes"].get(name) or {}).get("run")))
         baselines[name] = {"listener": os.path.join(nd, "listener.db"), "member": fp}
         say(f"  {name} ({m['name'] or 'unnamed'}): its upload of {up['uploaded_at']}, "
             f"clock {up['clock_offset_ms']:+d} ms, {up['rows']}")

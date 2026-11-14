@@ -473,7 +473,49 @@ def test_an_older_player_is_sent_no_table_it_would_refuse():
               f"by its own key, as rows, the table being there already: {sent.get('key')}")
 
 
+def test_the_newest_copy_sent():
+    """[IMPL-UID-042]: the merge is given the whole merge of the newest run any
+    node was sent -- not the hub's, which a commit can leave behind -- copied
+    into the run; and is told nothing, which it then says, when that is gone."""
+    import sqlite3
+    print("the newest run any node was sent is read whole, from a copy in the run")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as root:
+        runs = os.path.join(root, "sync")
+        plan = {"runs": runs}
+        for r in ("20261106T0150Z", "20261112T2008Z"):
+            os.makedirs(os.path.join(runs, r, "merge"))
+            c = sqlite3.connect(os.path.join(runs, r, "merge", "listener.db"))
+            c.execute("CREATE TABLE marker (run TEXT)")
+            c.execute("INSERT INTO marker VALUES (?)", (r,))
+            c.commit()
+            c.close()
+        run = os.path.join(runs, "20261114T1200Z")
+        os.makedirs(run)
+        state = {"hub": {"run": "20261106T0150Z"},
+                 "nodes": {"bose": {"run": "20261112T2008Z"}, "teacherslounge": {"run": "20261106T0150Z"}, "new": {}}}
+        got = ss.newest_sent(plan, state, run)
+        check(got and got["run"] == "20261112T2008Z" and got["listener"] == os.path.join(run, "newest-sent.db"),
+              f"the newest run of any node, the hub's older one notwithstanding: {got}")
+        c = sqlite3.connect(lempi_ro(got["listener"]), uri=True) if got else None
+        check(c is not None and c.execute("SELECT run FROM marker").fetchone() == ("20261112T2008Z",),
+              "and the copy is that run's whole merge")
+        if c:
+            c.close()
+        os.remove(os.path.join(runs, "20261112T2008Z", "merge", "listener.db"))
+        again = os.path.join(runs, "20261114T1300Z")
+        os.makedirs(again)
+        check(ss.newest_sent(plan, state, again) is None and not os.listdir(again),
+              "a newest run whose merge is gone gives nothing, and copies nothing")
+        check(ss.newest_sent(plan, {"hub": {}, "nodes": {}}, again) is None, "nor does a fleet never sent a run")
+
+
+def lempi_ro(path):
+    import lempi_db
+    return lempi_db.ro_uri(path)
+
+
 def main() -> int:
+    test_the_newest_copy_sent()
     test_an_older_player_is_sent_no_table_it_would_refuse()
     test_backup_proofs()
     test_mirror_when_reachable()
