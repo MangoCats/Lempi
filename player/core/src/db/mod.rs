@@ -86,6 +86,19 @@ impl DbError {
             DbError::Open(e) | DbError::Query(e) => e,
         }
     }
+
+    /// Whether this is SQLite saying the file is held by someone else: a
+    /// writer, or on a rollback-journal file a long read `[SPEC-STAR-107]`.
+    /// The same request a moment later can succeed, which is what a web
+    /// route answers 503 for rather than blaming the request `[SPEC-LYR-174]`.
+    ///
+    /// Read from the message, because a `DbError` carries text: SQLite's own
+    /// words for `SQLITE_BUSY` and `SQLITE_LOCKED`, which rusqlite passes on
+    /// unchanged. The test below holds them to a real locked file.
+    pub fn is_busy(&self) -> bool {
+        let m = self.message();
+        m.contains("database is locked") || m.contains("database table is locked") || m.contains("database schema is locked")
+    }
 }
 
 impl std::fmt::Display for DbError {
@@ -351,6 +364,25 @@ mod qualifying_conn_tests {
         q.execute("INSERT INTO __LIB__.recordings VALUES ('x')", []).unwrap();
         let n: i64 = q.query_row("SELECT COUNT(*) FROM __LIB__.recordings", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// `DbError::is_busy` against SQLite's own words, from a real file held
+    /// by another writer -- not a string this test made up `[SPEC-LYR-174]`.
+    #[test]
+    fn a_file_held_by_another_writer_reads_as_busy() {
+        use super::DbError;
+        let path = scratch_path("busy");
+        let _ = std::fs::remove_file(&path);
+        let holder = Connection::open_with_flags(&path, RW).unwrap();
+        holder.execute_batch("CREATE TABLE t (a); BEGIN IMMEDIATE; INSERT INTO t VALUES (1);").unwrap();
+        let other = Connection::open_with_flags(&path, RW).unwrap();
+        other.busy_timeout(std::time::Duration::ZERO).unwrap();
+        let e = other.execute("INSERT INTO t VALUES (2)", []).unwrap_err();
+        assert!(DbError::Query(e.to_string()).is_busy(), "SQLite said: {e}");
+        assert!(!DbError::Query("the text is over 65536 bytes".into()).is_busy());
+        assert!(!DbError::Open("unable to open database file".into()).is_busy());
+        drop((other, holder));
         let _ = std::fs::remove_file(&path);
     }
 

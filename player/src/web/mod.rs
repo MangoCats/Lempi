@@ -106,6 +106,28 @@ pub struct Ui {
     pub web_loopback_only: bool,
 }
 
+/// What a route answers when the database failed it, as opposed to refused it
+/// `[SPEC-LYR-174]`: **503** with `Retry-After` while the file is held by
+/// someone else -- the same request a moment later can succeed -- and **500**
+/// for any other failure. Never 400: nothing the client sent was wrong.
+///
+/// One answer for every route that takes it. The lyric editor's save is the
+/// first (2026-11-13). Ten routes answered 400 for every failure that day;
+/// the rest are to be looked at one by one, since some of their 400s are
+/// refusals made on purpose and some are failures.
+pub(super) fn db_failure(e: &crate::db::DbError) -> axum::response::Response {
+    if e.is_busy() {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(axum::http::header::RETRY_AFTER, "2")],
+            format!("the library is busy ({}); try again in a moment", e.message()),
+        )
+            .into_response()
+    } else {
+        (StatusCode::INTERNAL_SERVER_ERROR, e.message().to_string()).into_response()
+    }
+}
+
 /// How often a connected browser is sent a snapshot. Fast enough that the
 /// position counter moves smoothly, slow enough to cost nothing on a Pi.
 const PUSH_EVERY: Duration = Duration::from_millis(500);
@@ -1461,7 +1483,8 @@ mod tests {
             for state in ["button.acked", "button.failed"] {
                 assert!(
                     skin.css.contains(&format!(".qedit {state}")),
-                    "{} does not style .qedit {state}, so a press it takes looks                      exactly like one it drops",
+                    "{} does not style .qedit {state}, so a press it takes looks \
+                     exactly like one it drops",
                     skin.name
                 );
             }
@@ -1491,7 +1514,8 @@ mod tests {
             let skin = SKINS.iter().find(|s| s.name == name).expect("skin exists");
             assert!(
                 skin.css.contains("[data-cmd].acked"),
-                "{name} flashes its queue verbs but not Skip, so one gesture                  reports itself two ways depending on which control took it"
+                "{name} flashes its queue verbs but not Skip, so one gesture \
+                 reports itself two ways depending on which control took it"
             );
         }
     }

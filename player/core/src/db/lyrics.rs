@@ -40,6 +40,14 @@ pub(crate) const PASSAGE_LYRICS_TABLE: &str = "
 /// on 2026-11-12 was 5,820 characters.
 pub const LYRICS_MAX_BYTES: usize = 64 * 1024;
 
+/// Why a save refuses `text` before reading anything, or `None` where it
+/// does not: over [`LYRICS_MAX_BYTES`] as sent `[SPEC-LYR-174]`. The one
+/// refusal that is the request's fault, so the route answers it 413 before
+/// it opens the file, and the save refuses it too, by this same test.
+pub fn lyrics_refusal(text: &str) -> Option<String> {
+    (text.len() > LYRICS_MAX_BYTES).then(|| format!("the text is over {LYRICS_MAX_BYTES} bytes"))
+}
+
 fn qe(e: rusqlite::Error) -> DbError {
     DbError::Query(e.to_string())
 }
@@ -72,6 +80,11 @@ pub fn same_segment(a: (i64, i64), b: (i64, i64)) -> bool {
     shared > 0 && shared * 2 >= longer
 }
 
+/// The order a passage's recordings are read in, heaviest first
+/// `[SPEC-LYR-115]`: the order `COLS` takes the first of. One text for every
+/// query here that asks it, over `passage_recordings pr`.
+const HEAVIEST_FIRST: &str = "pr.weight DESC, pr.mbid";
+
 /// What a passage is, as far as its words are concerned.
 #[derive(Debug, Clone)]
 struct Facts {
@@ -79,26 +92,49 @@ struct Facts {
     kind: String,
     start_ms: i64,
     end_ms: i64,
-    /// Its heaviest recording `[SPEC-LYR-115]`, as `COLS` chooses it.
-    mbid: Option<String>,
+    /// Every recording it names, heaviest first `[SPEC-LYR-115]`. One passage
+    /// in the library names two (2026-11-12).
+    recordings: Vec<String>,
+}
+
+impl Facts {
+    /// Its heaviest recording: the one its name is taken from, and the one a
+    /// save stores with the row `[SPEC-LYR-160]`.
+    fn heaviest(&self) -> Option<&str> {
+        self.recordings.first().map(String::as_str)
+    }
 }
 
 fn facts(conn: &Connection, lib: &str, passage_id: i64) -> Result<Option<Facts>, DbError> {
     let sql = format!(
-        "SELECT f.audio_md5, p.kind, p.start_ms, p.end_ms, \
-                (SELECT pr.mbid FROM {lib}.passage_recordings pr WHERE pr.passage_id = p.passage_id \
-                  ORDER BY pr.weight DESC, pr.mbid LIMIT 1) \
+        "SELECT f.audio_md5, p.kind, p.start_ms, p.end_ms \
            FROM {lib}.passages p JOIN {lib}.files f ON f.file_id = p.file_id WHERE p.passage_id = ?1"
     );
     let mut st = conn.prepare_cached(&sql).map_err(qe)?;
     let got = st.query_row([passage_id], |r| {
-        Ok(Facts { audio_md5: r.get(0)?, kind: r.get(1)?, start_ms: r.get(2)?, end_ms: r.get(3)?, mbid: r.get(4)? })
+        Ok(Facts {
+            audio_md5: r.get(0)?,
+            kind: r.get(1)?,
+            start_ms: r.get(2)?,
+            end_ms: r.get(3)?,
+            recordings: Vec::new(),
+        })
     });
-    match got {
-        Ok(f) => Ok(Some(f)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(qe(e)),
-    }
+    let mut f = match got {
+        Ok(f) => f,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+        Err(e) => return Err(qe(e)),
+    };
+    f.recordings = rows(
+        conn,
+        &format!(
+            "SELECT pr.mbid FROM {lib}.passage_recordings pr \
+              WHERE pr.passage_id = ?1 AND pr.mbid IS NOT NULL ORDER BY {HEAVIEST_FIRST}"
+        ),
+        [passage_id],
+        |r| r.get::<_, String>(0),
+    )?;
+    Ok(Some(f))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,11 +223,21 @@ fn aliases(conn: &Connection, lib: &str) -> Result<HashMap<String, String>, DbEr
 /// holds every row `[SPEC-LYR-200]`. A request now reads the rows that can bear
 /// on its passage and no others ([`Reach::Asked`], `[SPEC-LYR-178]`).
 pub struct SavedLyrics {
-    /// Newest first, a tie by key, which is the order of `[SPEC-LYR-120]`.
-    entries: Vec<Entry>,
+    /// Every row read, of the file it is of; newest first, a tie by key,
+    /// which is the order of `[SPEC-LYR-120]`. A passage's own entry, and its
+    /// tier 2, are found here, against the passage as it is now.
+    rows: Vec<Entry>,
+    /// The rows that speak for a recording in tiers 3 and 4, in the same
+    /// order: each passage's entry where this node holds its file, and each
+    /// segment's newest row where it does not `[SPEC-LYR-160]`.
+    speaking: Vec<Entry>,
 }
 
 impl SavedLyrics {
+    fn empty() -> Self {
+        Self { rows: Vec::new(), speaking: Vec::new() }
+    }
+
     pub fn load(conn: &Connection, lib: &str) -> Result<Self, DbError> {
         let raw = rows(
             conn,
@@ -200,7 +246,7 @@ impl SavedLyrics {
             raw_row,
         )?;
         if raw.is_empty() {
-            return Ok(Self { entries: Vec::new() });
+            return Ok(Self::empty());
         }
         Self::from_rows(conn, lib, raw, &aliases(conn, lib)?)
     }
@@ -228,7 +274,7 @@ impl SavedLyrics {
             raw.extend(rows(conn, &sql, [md5], raw_row)?);
         }
         if raw.is_empty() {
-            return Ok(Self { entries: Vec::new() });
+            return Ok(Self::empty());
         }
         // The order `load` asks SQLite for; both compare text as bytes.
         raw.sort_by(|a, b| {
@@ -240,30 +286,32 @@ impl SavedLyrics {
     }
 
     /// `raw` newest first, a tie by key; and every row of each file it names.
+    ///
+    /// **Which rows are superseded is decided against the passages as they are
+    /// now** `[SPEC-LYR-150]`, where this node holds the file: a passage's
+    /// entry is the newest row that is the same segment as it, and a row that
+    /// is no passage's entry speaks for nothing. Until 2026-11-13 the rows were
+    /// measured against each other, so after two boundary edits a passage
+    /// could lose its own words: saved at 0-100, saved again at 50-150 -- half
+    /// shared, so the first was superseded -- and moved back to 0-90, which
+    /// the second no longer reaches. Where the file is not here there is no
+    /// passage to measure by, and the rows are measured against each other
+    /// still: each segment's newest speaks, for the recording stored with it
+    /// `[SPEC-LYR-160]`.
     fn from_rows(
         conn: &Connection,
         lib: &str,
         raw: Vec<Raw>,
         aliases: &HashMap<String, String>,
     ) -> Result<Self, DbError> {
-        let mut entries: Vec<Entry> = Vec::new();
-        // (file, kind) -> the entries already taken for it, each newer than
-        // any row still to come.
-        let mut taken: HashMap<(String, String), Vec<usize>> = HashMap::new();
-        for r in raw {
-            let file = aliases.get(&r.audio_md5).cloned().unwrap_or_else(|| r.audio_md5.clone());
-            let heads = taken.entry((file.clone(), r.kind.clone())).or_default();
-            let span = (r.start_ms, r.end_ms);
-            if heads.iter().any(|&i| same_segment((entries[i].start_ms, entries[i].end_ms), span)) {
-                continue; // superseded
-            }
-            heads.push(entries.len());
-            entries.push(Entry {
+        let rows_read: Vec<Entry> = raw
+            .into_iter()
+            .map(|r| Entry {
+                file: aliases.get(&r.audio_md5).cloned().unwrap_or_else(|| r.audio_md5.clone()),
                 audio_md5: r.audio_md5,
                 kind: r.kind,
                 start_ms: r.start_ms,
                 end_ms: r.end_ms,
-                file,
                 recording: r.mbid,
                 state: if r.no_words {
                     State::Mark
@@ -274,44 +322,85 @@ impl SavedLyrics {
                 },
                 updated_at: r.updated_at,
                 origin: r.origin,
+            })
+            .collect();
+        let span = |i: usize| (rows_read[i].start_ms, rows_read[i].end_ms);
+
+        // Each (file, kind)'s rows, newest first, in the order first met.
+        let mut groups: Vec<((String, String), Vec<usize>)> = Vec::new();
+        let mut group_of: HashMap<(String, String), usize> = HashMap::new();
+        for (i, e) in rows_read.iter().enumerate() {
+            let key = (e.file.clone(), e.kind.clone());
+            let g = *group_of.entry(key.clone()).or_insert_with(|| {
+                groups.push((key, Vec::new()));
+                groups.len() - 1
             });
+            groups[g].1.push(i);
         }
 
-        // The present recording of each entry's passage, where the file is here.
+        // The passages of a file and kind as they are now, each with its
+        // heaviest recording.
         let sql = format!(
             "SELECT p.start_ms, p.end_ms, \
                     (SELECT pr.mbid FROM {lib}.passage_recordings pr WHERE pr.passage_id = p.passage_id \
-                      ORDER BY pr.weight DESC, pr.mbid LIMIT 1) \
+                      ORDER BY {HEAVIEST_FIRST} LIMIT 1) \
                FROM {lib}.files f JOIN {lib}.passages p ON p.file_id = f.file_id \
               WHERE f.audio_md5 = ?1 AND p.kind = ?2 ORDER BY p.start_ms"
         );
-        for e in &mut entries {
+        // Row -> the recording it speaks for.
+        let mut speaks: HashMap<usize, Option<String>> = HashMap::new();
+        for ((file, kind), members) in &groups {
             let held: Vec<(i64, i64, Option<String>)> =
-                rows(conn, &sql, params![e.file, e.kind], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
-            let span = (e.start_ms, e.end_ms);
-            let here = held
-                .iter()
-                .filter(|(s, t, _)| same_segment((*s, *t), span))
-                .max_by_key(|(s, _, _)| *s == e.start_ms);
-            if let Some((_, _, Some(mbid))) = here {
-                e.recording = Some(mbid.clone());
+                rows(conn, &sql, params![file, kind], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            if held.is_empty() {
+                let mut heads: Vec<usize> = Vec::new();
+                for &i in members {
+                    if !heads.iter().any(|&h| same_segment(span(h), span(i))) {
+                        heads.push(i);
+                        speaks.insert(i, rows_read[i].recording.clone());
+                    }
+                }
+                continue;
+            }
+            // Which passage a row heading two speaks for: the one at its own
+            // start, else the last -- as before this was measured per passage.
+            let mut at_start: HashSet<usize> = HashSet::new();
+            for (s, t, mbid) in &held {
+                let Some(&i) = members.iter().find(|&&i| same_segment(span(i), (*s, *t))) else { continue };
+                let here = *s == rows_read[i].start_ms;
+                if here || !at_start.contains(&i) {
+                    speaks.insert(i, mbid.clone().or_else(|| rows_read[i].recording.clone()));
+                }
+                if here {
+                    at_start.insert(i);
+                }
             }
         }
-        Ok(Self { entries })
+
+        let speaking = rows_read
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| speaks.get(&i).map(|rec| Entry { recording: rec.clone(), ..e.clone() }))
+            .collect();
+        Ok(Self { rows: rows_read, speaking })
     }
 
-    /// The entries saved for `f`'s own audio: its file, and its segment.
+    /// `f`'s own audio: for each kind, the newest row of its file that is the
+    /// same segment as `f` is now `[SPEC-LYR-150]` -- its own entry under its
+    /// own kind, and tier 2 under the others.
     fn of_passage(&self, f: &Facts) -> Vec<Entry> {
-        self.entries
+        let mut kinds: HashSet<&str> = HashSet::new();
+        self.rows
             .iter()
             .filter(|e| e.file == f.audio_md5 && same_segment((e.start_ms, e.end_ms), (f.start_ms, f.end_ms)))
+            .filter(|e| kinds.insert(e.kind.as_str()))
             .cloned()
             .collect()
     }
 
     /// The entries that speak for one of `recordings` `[SPEC-LYR-160]`.
     fn speaking_for(&self, recordings: &[String]) -> Vec<Entry> {
-        self.entries
+        self.speaking
             .iter()
             .filter(|e| e.recording.as_ref().is_some_and(|r| recordings.contains(r)))
             .cloned()
@@ -416,17 +505,25 @@ fn imported(conn: &Connection, lib: &str, recordings: &[String]) -> Result<Vec<I
     Ok(out)
 }
 
-/// Every other recording of a work `mbid` performs `[SPEC-LYR-100]`, in a
-/// fixed order. A recording of several works matches through any of them.
-fn work_mates(conn: &Connection, lib: &str, mbid: &str) -> Result<Vec<String>, DbError> {
-    let works: Vec<String> =
-        rows(conn, &format!("SELECT work_mbid FROM {lib}.recording_works WHERE mbid = ?1"), [mbid], |r| r.get(0))?;
+/// Every other recording of a work one of `recordings` performs
+/// `[SPEC-LYR-100]`, in a fixed order. A recording of several works matches
+/// through any of them, and none of `recordings` is its own mate.
+fn work_mates(conn: &Connection, lib: &str, recordings: &[String]) -> Result<Vec<String>, DbError> {
+    let mut works: Vec<String> = Vec::new();
+    for m in recordings {
+        works.extend(rows(
+            conn,
+            &format!("SELECT work_mbid FROM {lib}.recording_works WHERE mbid = ?1"),
+            [m],
+            |r| r.get::<_, String>(0),
+        )?);
+    }
     let sql = format!("SELECT mbid FROM {lib}.recording_works WHERE work_mbid = ?1");
     let mut mates: Vec<String> = Vec::new();
     for w in &works {
         mates.extend(rows(conn, &sql, [w], |r| r.get::<_, String>(0))?);
     }
-    mates.retain(|m| m != mbid);
+    mates.retain(|m| !recordings.contains(m));
     mates.sort();
     mates.dedup();
     Ok(mates)
@@ -490,14 +587,24 @@ fn resolve(
     }
 
     let taken: HashSet<(&str, &str, i64)> = mine.iter().map(Entry::key).collect();
-    if let Some(m) = f.mbid.clone().filter(|_| all || shown.is_none()) {
+    if !f.recordings.is_empty() && (all || shown.is_none()) {
         // Tiers 3 and 4. A mark is never read here: another recording of a
         // song may be sung where this one is not.
-        for tier in [3u8, 4] {
+        //
+        // **Tier 3 asks each recording in turn, heaviest first**, and shows the
+        // first that has words `[SPEC-LYR-115]`: what `GET /lyrics` did before
+        // 2026-11-12, by joining the imported table and then taking the
+        // heaviest. Asking the heaviest alone left a passage of two
+        // recordings, the heavier without words, showing nothing.
+        let mut asks: Vec<(u8, Vec<String>)> = f.recordings.iter().map(|m| (3u8, vec![m.clone()])).collect();
+        asks.push((4, Vec::new())); // its works, read only if reached
+        for (tier, mut recordings) in asks {
             if !all && shown.is_some() {
                 break;
             }
-            let recordings = if tier == 3 { vec![m.clone()] } else { work_mates(conn, lib, &m)? };
+            if tier == 4 {
+                recordings = work_mates(conn, lib, &f.recordings)?;
+            }
             if recordings.is_empty() {
                 continue;
             }
@@ -769,7 +876,7 @@ pub fn lyrics_view(conn: &Connection, lib: &str, passage_id: i64) -> Result<Opti
             origin,
         });
     }
-    let (title, artist, album) = passage_naming(conn, lib, passage_id, r.facts.mbid.as_deref());
+    let (title, artist, album) = passage_naming(conn, lib, passage_id, r.facts.heaviest());
     Ok(Some(LyricsView {
         passage_id,
         kind: r.facts.kind.clone(),
@@ -811,8 +918,8 @@ pub fn save_passage_lyrics(
     no_words: bool,
     origin: &str,
 ) -> Result<Option<Option<OwnLyrics>>, DbError> {
-    if text.len() > LYRICS_MAX_BYTES {
-        return Err(DbError::Query(format!("the text is over {LYRICS_MAX_BYTES} bytes")));
+    if let Some(why) = lyrics_refusal(text) {
+        return Err(DbError::Query(why));
     }
     let Some(f) = facts(conn, lib, passage_id)? else { return Ok(None) };
     let text = normalise_lyrics(text);
@@ -829,7 +936,7 @@ pub fn save_passage_lyrics(
          ON CONFLICT(audio_md5, kind, start_ms) DO UPDATE SET \
              end_ms = excluded.end_ms, mbid = excluded.mbid, text = excluded.text, \
              no_words = excluded.no_words, updated_at = excluded.updated_at, origin = excluded.origin",
-        params![f.audio_md5, f.kind, f.start_ms, f.end_ms, f.mbid, text, no_words as i64, origin],
+        params![f.audio_md5, f.kind, f.start_ms, f.end_ms, f.heaviest(), text, no_words as i64, origin],
     )
     .map_err(qe)?;
     let own = conn
@@ -1044,6 +1151,57 @@ mod tests {
         assert_eq!(view.sources.len(), 1, "and is never offered: {:?}", view.sources);
     }
 
+    /// `[SPEC-LYR-150]`: which row is superseded is measured against the
+    /// passage as it is now, not row against row. Passage 41 is saved at
+    /// 0-100 s, moved and saved again at 50-150 s -- exactly half shared --
+    /// and moved back to 0-90 s, which is the first row's segment and not the
+    /// second's. Until 2026-11-13 the second row had superseded the first for
+    /// good, and the passage showed nothing of its own.
+    #[test]
+    fn a_row_is_superseded_against_the_passage_as_it_is_now() {
+        let c = library();
+        save(&c, 41, "A", false);
+        stamp(&c, "ddd", "radio", 0, "2026-11-01 10:00:00.000");
+        c.execute("UPDATE passages SET start_ms = 50000, end_ms = 150000 WHERE passage_id = 41", []).unwrap();
+        save(&c, 41, "B", false);
+        stamp(&c, "ddd", "radio", 50_000, "2026-11-02 10:00:00.000");
+        assert_eq!(shown(&c, 41).as_deref(), Some("B"), "the newer, while both reach it");
+
+        c.execute("UPDATE passages SET start_ms = 0, end_ms = 90000 WHERE passage_id = 41", []).unwrap();
+        assert_eq!(shown(&c, 41).as_deref(), Some("A"), "the newest row of its segment as it is now");
+        let view = lyrics_view(&c, "main", 41).unwrap().unwrap();
+        assert_eq!(view.own.map(|o| o.text).as_deref(), Some("A"), "and the editor holds it");
+        assert!(sources(&c, 41).is_empty(), "a row no passage reaches now is offered nowhere");
+    }
+
+    /// `[SPEC-LYR-115]`: a passage of two recordings shows the words of the
+    /// heaviest that has any, as `GET /lyrics` did before 2026-11-12. Until
+    /// 2026-11-13 only the heaviest was asked, and with no words of its own
+    /// the passage showed nothing.
+    #[test]
+    fn the_heaviest_recording_with_words_is_shown() {
+        let c = library();
+        c.execute("INSERT INTO recordings (mbid, title, source) VALUES ('rec-light', 'Light', 'test')", []).unwrap();
+        c.execute(
+            "INSERT INTO passage_recordings (passage_id, mbid, weight, source) VALUES (41, 'rec-light', 0.5, 'test')",
+            [],
+        )
+        .unwrap();
+        import(&c, "rec-light", "the lighter recording's words");
+        assert_eq!(shown(&c, 41).as_deref(), Some("the lighter recording's words"));
+
+        import(&c, "rec-other", "the heavier recording's words");
+        assert_eq!(shown(&c, 41).as_deref(), Some("the heavier recording's words"), "the heavier first");
+        assert_eq!(
+            sources(&c, 41),
+            vec![(3, "the heavier recording's words".to_string()), (3, "the lighter recording's words".to_string())]
+        );
+        // What a save stores with the row is still the heaviest.
+        save(&c, 41, "typed", false);
+        let stored: Option<String> = c.query_row("SELECT mbid FROM passage_lyrics", [], |r| r.get(0)).unwrap();
+        assert_eq!(stored.as_deref(), Some("rec-other"));
+    }
+
     /// `[SPEC-LYR-160]`: a row for a file this node lacks speaks for the
     /// recording stored with it; where the file is here, for the passage's
     /// present recording.
@@ -1134,9 +1292,9 @@ mod tests {
         let al = aliases(&c, "main").unwrap();
         let of = |files: &[&str]| -> usize {
             let files: HashSet<String> = files.iter().map(|f| f.to_string()).collect();
-            SavedLyrics::of_files(&c, "main", &files, &al).unwrap().entries.len()
+            SavedLyrics::of_files(&c, "main", &files, &al).unwrap().speaking.len()
         };
-        assert_eq!(SavedLyrics::load(&c, "main").unwrap().entries.len(), 404, "every entry, read whole");
+        assert_eq!(SavedLyrics::load(&c, "main").unwrap().speaking.len(), 404, "every entry, read whole");
         assert_eq!(of(&["aaa"]), 2, "its own file's alone: one cut's words and a mark, the old digest's row superseded");
         assert_eq!(of(&["aaa-before"]), 0, "a retired digest is no file of its own");
         let reach = Reach::asked(&c, "main").unwrap();

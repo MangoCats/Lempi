@@ -51,24 +51,32 @@ pub(super) struct LyricsEdit {
 /// An empty text clears them; `no_words` marks the passage as having none
 /// `[SPEC-LYR-188]`. Answers the entry as stored, `null` once cleared. Nothing
 /// is asked of the engine: words change what a page shows, not what plays.
+///
+/// **The one refusal that is the request's is a text over 64 KiB, and it is
+/// 413**, answered before the file is opened. Any other failure is the
+/// server's: 503 while the file is busy, 500 otherwise ([`super::db_failure`]).
+/// Until 2026-11-13 every failure was a 400, so a listener held by a long read
+/// told the editor its request was wrong.
 pub(super) async fn save_lyrics(
     State(ui): State<Ui>,
     axum::extract::Path(passage_id): axum::extract::Path<i64>,
     axum::Json(edit): axum::Json<LyricsEdit>,
 ) -> axum::response::Response {
+    if let Some(why) = crate::db::lyrics_refusal(&edit.text) {
+        return (StatusCode::PAYLOAD_TOO_LARGE, why).into_response();
+    }
     let db = ui.db.clone();
     let library = ui.library.clone();
     let done = tokio::task::spawn_blocking(move || {
         let origin = crate::discovery::host_name();
         crate::db::PlayerStore::open_split(&db, &library)
             .and_then(|store| store.save_lyrics(passage_id, &edit.text, edit.no_words, &origin))
-            .map_err(|e| e.message().to_string())
     })
     .await;
     match done {
         Ok(Ok(Some(own))) => axum::Json(serde_json::json!({ "own": own })).into_response(),
         Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
-        Ok(Err(why)) => (StatusCode::BAD_REQUEST, why).into_response(),
+        Ok(Err(e)) => super::db_failure(&e),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
