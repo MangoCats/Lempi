@@ -36,8 +36,8 @@ fn main() {
             std::process::exit(1);
         }
     };
-    println!("file       : {}", path.display());
-    println!("format     : {} Hz, {} ch", dec.sample_rate, dec.channels);
+    println!("file       : {}", path.display()); // columns
+    println!("format     : {} Hz, {} ch", dec.sample_rate, dec.channels); // columns
     println!("passage    : {start_ms} ms .. {}",
              end_ms.map(|e| format!("{e} ms")).unwrap_or_else(|| "EOF".into()));
 

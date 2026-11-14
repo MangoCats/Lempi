@@ -1,12 +1,17 @@
 #!/bin/sh
-# Refuse a commit that cannot build for the machines this code ships to.
+# Refuse a commit that cannot build for the machines this code ships to, or
+# that adds what should not be published or cannot be read.
 #
-# Two checks, both about the same gap -- what works on the Windows machine the
-# code is written on and not on the Linux ones it runs on: (1) a staged script
-# with a shebang and no executable bit, on every commit; (2) a Linux compile,
-# and since 2026-10-17 an Android compile of the phone's crate beside it,
-# when `player/` or `sql/` is staged. (2) is what this hook was written for;
-# (1) was added after the hook itself shipped without its executable bit.
+# Four checks. Three are fast and run on every commit, over what is staged:
+#   (1)  a script with a shebang and no executable bit -- works on the Windows
+#        machine the code is written on, not on the Linux ones it runs on;
+#   (1b) an added line that looks like private fleet detail;
+#   (1c) an added Rust string holding a run of spaces where a line break was.
+# One is slow and runs only when `player/` or `sql/` is staged:
+#   (2)  a Linux compile, and since 2026-10-17 an Android compile of the
+#        phone's crate beside it -- the same Windows-to-Linux gap as (1).
+# (2) is what this hook was written for; (1) was added after the hook itself
+# shipped without its executable bit.
 #
 # **Written because the fault it catches reached an appliance deploy.** On
 # 2026-09-22 `lempi-core` was committed naming `libc` in `#[cfg(unix)]` code
@@ -36,7 +41,18 @@
 #   `LEMPI_SKIP_LEAKS=1`  -- the fleet-leak scan only (section 1b).
 # The two are separate on purpose `[SecurityReview2 R5]`: skipping the slow
 # compile must not also quietly skip the fast privacy scan. The executable-bit
-# check has no escape -- it is sub-second and never worth skipping.
+# and joined-string checks have none -- both are sub-second, and a run of
+# spaces that is meant is declared in the source itself (section 1c).
+#
+# ----------------------------------------------------------- exit codes ---
+#
+# A fast check exits 1 when it finds something and 2 when it could not look:
+# git failed, the staged diff could not be read back, or the checker stopped
+# on an error (`tools/staged.py`). `fast` below tells the two apart. Until
+# 2026-11-14 any non-zero status printed the check's own REFUSED message, so
+# a checker that had crashed told the user to put back a line break that was
+# never missing. A check that could not look still refuses the commit --
+# nothing was found because nothing was looked at -- but says that instead.
 #
 # ------------------------------------------------------------ enabling ----
 #
@@ -49,12 +65,12 @@ set -u
 
 ROOT=$(git rev-parse --show-toplevel)
 
-# The two fast checks below (executable bits, fleet leaks) run on EVERY commit
-# and are not skipped by `LEMPI_SKIP_VERIFY`. That variable exists to commit
-# past the slow Linux cross-compile (section 2), and coupling the fast privacy
-# scan to the slow-compile escape meant a leak could slip out whenever someone
-# skipped the compile `[SecurityReview2 R5]`. Each fast check now has its own
-# escape, said out loud: `LEMPI_SKIP_LEAKS=1` for the leak scan.
+# The three fast checks below (executable bits, fleet leaks, joined strings)
+# run on EVERY commit and are not skipped by `LEMPI_SKIP_VERIFY`. That
+# variable exists to commit past the slow Linux cross-compile (section 2), and
+# coupling the fast privacy scan to the slow-compile escape meant a leak could
+# slip out whenever someone skipped the compile `[SecurityReview2 R5]`. The
+# leak scan has its own escape, said out loud: `LEMPI_SKIP_LEAKS=1`.
 
 # ---- 1. every staged script is executable: every commit -----------------
 #
@@ -75,11 +91,29 @@ for candidate in python3 python; do
     fi
 done
 if [ -z "$PY" ]; then
-    echo "pre-commit: no working python3 or python, so the executable-bit check DID NOT RUN."
-    echo "pre-commit: that is a failure, not a pass. LEMPI_SKIP_VERIFY=1 commits anyway, out loud."
+    echo "pre-commit: no working python3 or python, so none of the three fast checks --"
+    echo "pre-commit: executable bits, fleet leaks, joined strings -- RAN."
+    echo "pre-commit: that is a failure, not a pass. Put a working Python on PATH and commit again."
     exit 1
 fi
-if ! "$PY" "$ROOT/tools/check_exec_bits.py" --staged; then
+
+# One fast check: 0 passes, 1 is its finding (the caller says what), and any
+# other status is a check that could not look -- refused here, and said so.
+fast() {
+    name=$1
+    shift
+    "$PY" "$@"
+    status=$?
+    if [ "$status" -gt 1 ]; then
+        echo ""
+        echo "pre-commit: REFUSED -- the $name check DID NOT RUN (exit $status); its lines above say why."
+        echo "pre-commit: that is not a finding in what you staged, and it is not a pass."
+        exit 1
+    fi
+    return "$status"
+}
+
+if ! fast "executable-bit" "$ROOT/tools/check_exec_bits.py" --staged; then
     cat <<'EOF'
 
 pre-commit: REFUSED -- a staged script opens with #! and is not executable.
@@ -103,7 +137,7 @@ fi
 if [ "${LEMPI_SKIP_LEAKS:-0}" = "1" ]; then
     echo "pre-commit: fleet-leak scan SKIPPED by LEMPI_SKIP_LEAKS=1 -- this commit's"
     echo "pre-commit: added lines were NOT scanned for private fleet detail."
-elif ! "$PY" "$ROOT/tools/check_fleet_leaks.py" --staged --strict; then
+elif ! fast "fleet-leak" "$ROOT/tools/check_fleet_leaks.py" --staged --strict; then
     cat <<'EOF'
 
 pre-commit: REFUSED -- a staged line looks like private fleet detail.
@@ -118,18 +152,21 @@ fi
 
 # ---- 1c. no string joined across a lost line break: every commit --------
 #
-# Sub-second, and like the exec-bit check it has no escape: a line meant to be
-# in columns says so itself, with a trailing `// columns`. Added 2026-11-13,
-# when a review found fourteen Rust literals holding the indent of a line
-# whose `\` and line end had been deleted -- SQL that still ran, and messages
-# that reached the log with twenty spaces in the middle of a sentence. Only
-# the lines this commit adds are read, from the index.
-if ! "$PY" "$ROOT/tools/check_joined_lines.py" --staged; then
+# Sub-second, and like the exec-bit check it has no escape: spaces that are
+# meant are declared in the source, by a trailing `// columns` on a line laid
+# out in columns, or a run whose first space is spelled `\x20`. Added
+# 2026-11-13, when a review found fourteen Rust literals holding the indent of
+# a line whose `\` and line end had been deleted -- SQL that still ran, and
+# messages that reached the log with twenty spaces in the middle of a
+# sentence. Each staged .rs file is lexed as it is in the index, and only the
+# runs on lines this commit adds are reported.
+if ! fast "joined-string" "$ROOT/tools/check_joined_lines.py" --staged; then
     cat <<'EOF'
 
 pre-commit: REFUSED -- a staged Rust string holds a run of spaces where a line
-break was. Put the ` \` and the line end back, or end the line with
-`// columns` where the spaces are meant.
+break may have been. Put the ` \` and the line end back. Where the spaces are
+meant, end a line laid out in columns with `// columns`, or spell the run's
+first space `\x20`.
 EOF
     exit 1
 fi

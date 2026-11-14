@@ -231,8 +231,8 @@ script that opens with `#!` and is not executable — well under a second, and i
 reads the mode from git's index, so it works on Windows, where `[ -x ]` passes
 for everything. Also on every commit,
 [`tools/check_joined_lines.py`](tools/check_joined_lines.py) `--staged` refuses
-an added Rust string holding a run of spaces where a line break was (§7); a
-line meant to be in columns ends with `// columns`. Also on every commit,
+an added Rust string holding a run of spaces where a line break was (§7); a line
+in columns ends with `// columns`, any other run meant starts `\x20`. Also on every commit,
 [`tools/check_fleet_leaks.py`](tools/check_fleet_leaks.py) `--staged` refuses
 an added line that looks like private fleet detail — a LAN address, a MAC, a
 personal path, a `user@host:` — and with `fleet/private-tokens.txt` present,

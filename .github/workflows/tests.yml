@@ -108,11 +108,22 @@ jobs:
       - name: shebang implies +x
         run: python3 tools/check_exec_bits.py
 
+  joined-lines:
+    name: no Rust string joined across a lost line break
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
       # A Rust string holding a run of spaces where a `\` line continuation
       # was: it compiles and runs, and reads wrong. Fourteen were found
       # 2026-11-13. The same script runs in `.githooks/pre-commit` over the
-      # lines a commit adds; this runs it over every tracked file. Output
-      # meant to be in columns ends its line with `// columns`.
+      # lines a commit adds; this runs it over every tracked file. Spaces
+      # that are meant say so in the source -- `// columns` ending a line
+      # laid out in columns, or a run spelled from `\x20`.
+      #
+      # Its own job, not a step of the one above, since 2026-11-14: a failure
+      # here showed in the check list as "every script with a shebang is
+      # executable", which sends the reader to file modes.
       - name: no string joined across a lost line break
         run: python3 tools/check_joined_lines.py
 

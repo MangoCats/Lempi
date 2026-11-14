@@ -89,6 +89,18 @@ def main() -> int:
     cfl.write_baseline(p, {k, "abc"})
     check(cfl.read_baseline(p) == {k, "abc"}, "the baseline round-trips, its header ignored")
 
+    # The script itself, as the hook runs it, against whatever this checkout
+    # has staged -- nothing, in CI. Whether it finds a leak is not the point;
+    # that it gets as far as an answer is. On 2026-11-14 a local named
+    # `staged` shadowed the module of that name, every run stopped at its
+    # first line, and nothing above calls main() to notice.
+    import subprocess
+    r = subprocess.run([sys.executable, os.path.join(HERE, "check_fleet_leaks.py"), "--staged"],
+                       capture_output=True)
+    said = (r.stdout + r.stderr).decode("utf-8", "replace")
+    check(r.returncode in (0, 1) and "scanning the lines this commit adds" in said,
+          f"--staged runs to an answer, not exit 2: exit {r.returncode} {said[-300:] if r.returncode > 1 else ''}")
+
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")

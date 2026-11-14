@@ -81,7 +81,8 @@ def main() -> int:
 
         print("full scan below its floor: reported as a broken scan, not a clean tree")
         code, out = run(repo, "--min", "50")
-        check(code == 1, f"3 shebang files against a floor of 50 must fail, got {code}")
+        check(code == 2, f"3 shebang files against a floor of 50 is a scan that did not run "
+                         f"(exit 2), not a finding (1), got {code}")
         check("scan is broken" in out, "the floor failure must say what it means")
 
         git(repo, "commit", "-q", "-m", "baseline")

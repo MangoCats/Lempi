@@ -33,24 +33,24 @@ Usage:
 A full scan finding fewer than `--min` shebang files is reported as a broken
 scan, not a clean tree: the job's own floor, kept, because an empty result
 with a zero status is not success (CLAUDE.md §6).
+
+Exit 0 clean, 1 a script not executable, 2 the check could not run -- git
+failed, or a full scan fell below its floor -- as `staged.py` sets out for
+every pre-commit check.
 """
 
 import argparse
-import subprocess
 import sys
 
+import staged
+
+TOOL = "check_exec_bits"
 MARKER = b"Sourced, not run"
 HEADER_LINES = 12
 
 
 def git(*args: str) -> bytes:
-    """Run git, and refuse to continue on its failure rather than read empty
-    output as 'nothing to check'."""
-    r = subprocess.run(["git", *args], capture_output=True)
-    if r.returncode != 0:
-        sys.stderr.write(r.stderr.decode("utf-8", "replace"))
-        sys.exit(f"check_exec_bits: `git {' '.join(args)}` failed -- the check did not run")
-    return r.stdout
+    return staged.git(TOOL, *args)
 
 
 def index_entries() -> dict:
@@ -88,6 +88,7 @@ def exempt(head: bytes) -> bool:
 
 
 def main() -> int:
+    staged.utf8_output()
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--staged", action="store_true",
                     help="check only paths this commit adds or changes, reading staged content")
@@ -126,11 +127,10 @@ def main() -> int:
           f"{skipped} exempt (\"Sourced, not run\"), {bad} not executable")
 
     if not args.staged and shebang < args.min:
-        print(f"check_exec_bits: only {shebang} shebang file(s) found against a floor of "
-              f"{args.min} -- the scan is broken, not the tree")
-        return 1
+        staged.did_not_run(TOOL, f"only {shebang} shebang file(s) found against a floor of "
+                                 f"{args.min}; the scan is broken, not the tree")
     return 1 if bad else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    staged.run(TOOL, main)

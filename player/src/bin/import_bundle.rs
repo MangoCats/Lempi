@@ -107,7 +107,7 @@ fn main() {
     }
     // Always said, zero included: "holds 0" is the answer to whether a
     // bundle's holds reached passages already here `[SPEC-HOLD-080]`.
-    println!("  holds     {}", rep.holds_set);
+    println!("  holds     {}", rep.holds_set); // columns
     // Written only on --apply, so a dry run says 0 here.
     println!("  credits   {}", rep.credits);
     println!("  sort names {}", rep.sort_names);
@@ -185,8 +185,8 @@ fn main() {
         // for a start that could never write them `[REQ-VIS-180]`.
         drop(db);
         match lempi_player::tags::backfill(&db_path, false) {
-            Ok((n, art)) => println!("tags      {n} file(s) read, {art} with cover art"),
-            Err(e) => println!("tags      not read now ({e}); the player reads them at its next scan"),
+            Ok((n, art)) => println!("tags      {n} file(s) read, {art} with cover art"), // columns
+            Err(e) => println!("tags      not read now ({e}); the player reads them at its next scan"), // columns
         }
     }
     // Unverified is a failure too: the audio is here and was not taken, which

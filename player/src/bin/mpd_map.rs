@@ -154,16 +154,16 @@ fn main() {
     let pc = |v: usize| 100.0 * v as f64 / n as f64;
     println!("resolution ladder `[SPEC-MPD-060]`");
     println!("  1. same-tree prefix   {by_prefix:6}  ({:5.1}%)", pc(by_prefix));
-    println!("  2. recording MBID     {by_mbid_hit:6}  ({:5.1}%)", pc(by_mbid_hit));
+    println!("  2. recording MBID     {by_mbid_hit:6}  ({:5.1}%)", pc(by_mbid_hit)); // columns
     println!("  3. unresolved         {unresolved:6}  ({:5.1}%)", pc(unresolved)); // columns
     println!();
-    println!("  ambiguous (row -> >1 MPD song)   {ambiguous}");
+    println!("  ambiguous (row -> >1 MPD song)      {ambiguous}"); // columns
     println!("  MPD songs carrying a recording MBID {with_mbid} of {}", songs.len());
     println!("  MPD MBIDs shared by >1 song         {mbid_dupes}"); // columns
     println!();
     println!("private-use paths `[SPEC-RLK-025]`");
     println!("  carrying one   {pua_total}");
-    println!("  resolved       {pua_resolved}");
+    println!("  resolved       {pua_resolved}"); // columns
     if pua_total > 0 && pua_resolved == pua_total {
         println!("  -> MPD sees the SAME substitution Lempi stored, so the prefix holds here.");
         println!("     This is the same-platform case; a Linux MPD would not.");

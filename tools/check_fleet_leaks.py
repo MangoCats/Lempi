@@ -45,7 +45,9 @@ import re
 import subprocess
 import sys
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import staged
+
+ROOT =os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DENYLIST = os.path.join("fleet", "private-tokens.txt")
 
 SKIP_DIRS = {".git", "node_modules", "target", ".venv", "__pycache__",
@@ -138,17 +140,16 @@ def scan_line(line, deny_pat):
 
 
 def staged_added_lines():
-    """(path, added-line) for every line a staged commit adds. Renames and
-    binary files carry no `+` text lines, so they contribute nothing."""
-    diff = subprocess.run(["git", "diff", "--cached", "--unified=0", "--no-color"],
-                          cwd=ROOT, capture_output=True, text=True, encoding="utf-8").stdout
-    path = None
-    for line in diff.splitlines():
-        if line.startswith("+++ b/"):
-            path = line[6:]
-        elif line.startswith("+") and not line.startswith("+++"):
-            if path and path not in SKIP_SELF:
-                yield path, line[1:]
+    """(path, line number, added line) for every line a staged commit adds.
+    Renames and binary files carry no `+` text lines, so they contribute
+    nothing. Read through `staged.py`, which fixes the diff options a user's
+    config can change and checks what it parsed against git's own count:
+    this read `+++ b/` headers itself until 2026-11-14, so under
+    `diff.mnemonicPrefix` or `diff.noprefix` it named no file, scanned no
+    line, and reported a clean commit."""
+    for path, n, text in staged.added_lines(tool="check_fleet_leaks", cwd=ROOT):
+        if path not in SKIP_SELF:
+            yield path, n, text
 
 
 def tracked_files():
@@ -230,11 +231,12 @@ def arg_after(flag):
 
 
 def main():
+    staged.utf8_output()
     strict = "--strict" in sys.argv
-    staged = "--staged" in sys.argv
+    only_added = "--staged" in sys.argv
     base_path = arg_after("--baseline")
     write_path = arg_after("--write-baseline")
-    if (base_path or write_path) and staged:
+    if (base_path or write_path) and only_added:
         print("check_fleet_leaks: a baseline is for the whole tree, not --staged", file=sys.stderr)
         return 2
 
@@ -253,11 +255,11 @@ def main():
         deny_pat = re.compile("|".join(re.escape(t) for t in tokens), re.I)
 
     hits = []
-    if staged:
+    if only_added:
         print("check_fleet_leaks: scanning the lines this commit adds.")
-        for path, line in staged_added_lines():
+        for path, lineno, line in staged_added_lines():
             for why in scan_line(line, deny_pat):
-                hits.append((path, None, why, line.strip()[:100], None))
+                hits.append((path, lineno, why, line.strip()[:100], None))
     else:
         print("check_fleet_leaks: scanning the whole tree.")
         for rel, lineno, line in walk_tree():
@@ -309,4 +311,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    staged.run("check_fleet_leaks", main)

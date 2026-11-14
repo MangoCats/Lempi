@@ -178,8 +178,8 @@ mod linux {
                 return None;
             }
         };
-        println!("  device      : {device}");
-        println!("  buffer      : {buffer} frames    period: {period} frames");
+        println!("  device      : {device}"); // columns
+        println!("  buffer      : {buffer} frames    period: {period} frames"); // columns
 
         let pid = std::process::id();
         let io = pcm.io_i16().expect("s16 io");
@@ -249,7 +249,7 @@ mod linux {
         println!("  over {iters} periods, readings that were nonzero:");
         println!("    snd_pcm_status_get_delay() : {status_nonzero}  <- cpal 0.15.3");
         println!("    snd_pcm_delay()            : {pcm_delay_nonzero}"); // columns
-        println!("    snd_pcm_avail_delay()      : {avail_delay_nonzero}  <- cpal master");
+        println!("    snd_pcm_avail_delay()      : {avail_delay_nonzero}  <- cpal master"); // columns
         println!("    /proc delay                : {proc_nonzero}"); // columns
         Some(status_nonzero > 0)
     }

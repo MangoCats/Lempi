@@ -368,7 +368,8 @@ pub fn import_bundle(library: String, staging: String, music_root: String) -> Re
     match &r {
         Ok(s) => tracing::info!(
             "import: {} imported, {} already, {} replaced, {} upgraded, {} re-keyed, {} reused, {} corrupt, \
-             {} missing, {} conflicts, {} refused, {} releases, {} covers, {} bad covers, \n             {} passage recordings set, {} file(s) with a credited passage of no span here",
+             {} missing, {} conflicts, {} refused, {} releases, {} covers, {} bad covers, \
+             {} passage recordings set, {} file(s) with a credited passage of no span here",
             s.imported, s.already, s.replaced, s.upgraded, s.rekeyed, s.reused, s.corrupt.len(), s.missing.len(),
             s.conflicts.len(), s.refused.len(), s.releases, s.covers, s.bad_covers.len(),
             s.passage_credits_set, s.passage_credits_unmatched.len()

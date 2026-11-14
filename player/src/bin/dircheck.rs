@@ -87,7 +87,7 @@ fn main() {
         cen.suppressed
     );
     let after_one = rss();
-    println!("first load     {:>8.0} ms   peak RSS {:>7.1} MB  (+{:.1})",
+    println!("first load     {:>8.0} ms   peak RSS {:>7.1} MB  (+{:.1})", // columns
              cold.as_secs_f64() * 1000.0, mb(after_one), mb(after_one - base));
 
     // **What one pick costs**, the other half of affording the Director: a
@@ -113,7 +113,7 @@ fn main() {
     drop(picker);
     took.sort_by(f64::total_cmp);
     if let (Some(fastest), Some(slowest)) = (took.first(), took.last()) {
-        println!("one pick       {:>8.1} ms median   {fastest:.1} fastest, {slowest:.1} slowest, of {}",
+        println!("one pick       {:>8.1} ms median   {fastest:.1} fastest, {slowest:.1} slowest, of {}", // columns
                  took[took.len() / 2], took.len());
     }
 
@@ -133,7 +133,7 @@ fn main() {
             warm = took;
         }
         let now = rss();
-        println!("holding {n}      {:>8.0} ms   peak RSS {:>7.1} MB  (+{:.1} for this one)",
+        println!("holding {n}      {:>8.0} ms   peak RSS {:>7.1} MB  (+{:.1} for this one)", // columns
                  took.as_secs_f64() * 1000.0, mb(now), mb(now.saturating_sub(prev)));
         prev = now;
     }
@@ -141,7 +141,7 @@ fn main() {
     drop(held);
 
     println!();
-    println!("first load     ~{:.1} MB   Director + SQLite cache + query scratch",
+    println!("first load     ~{:.1} MB   Director + SQLite cache + query scratch", // columns
              mb(after_one.saturating_sub(base)));
     println!("each further   ~{:.1} MB   <- what a live swap transiently costs", mb(marginal));
     println!();
