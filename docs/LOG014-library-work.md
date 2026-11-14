@@ -57,8 +57,30 @@ DATE*, linked from here. §2 stays here.
 | 6 | 790 of 2,033 album passages from image rips leave the pregap unplayed | 2026-11-07 | By design `[SPEC-RIP-035]`: an eac-cue track ends at the next track's `INDEX 00`. Not a cut-off, but an album played from them does not keep the disc's own timing. A decision, if anyone wants it changed. |
 | 7 | The two phones missed the 2026-11-05 hold corrections `[LOG-LIBW-210]` | 2026-11-05 | They were left out of that sync. Also, a file the phone had already catalogued keeps its old length until a bundle replaces it (`21586b6`). |
 | 8 | *Ghosts I–IV* whole **on the hub only** `[LOG-LIBW-270]` | 2026-11-11 | No node has the 22 tracks or the alignment until a star sync carries them. The next induct re-fingerprints the 26 tracks; AcoustID has named track 27's and 26's recordings for 21 and 22 before, so a "contradicted" there is AcoustID's, not the tracklist's. Backup goes 2026-12-11. |
+| 9 | The 27 copied reviews are gone from the hub, **not yet from the nodes** `[LOG-LIBW-290]` | 2026-11-14 | Every node still holds them, so no `apply_reviews.py` should run on a node. The next star-sync round removes them. Check each node's `id_reviews` on its own disk afterwards: 179 rows, none sharing a `decided_at`. |
 
 ## 3. Entries, newest first
+
+**`[LOG-LIBW-290]` 2026-11-14: the copied reviews and the orphan reviews
+dropped from the hub.** At the maintainer's word (the decisions of
+`[IMPL-UID-902]` and `[IMPL-UID-906]`), after a rehearsal on a scratch copy of
+the pair and one on the live listener. The command was `python
+tools/drop_review_copies.py data/listener.db --commit --expect-copies 27
+--expect-orphans 4` `[IMPL-UID-044]`.
+- **What went:** the 27 `id_reviews` rows left by `[SPEC-STAR-051]`'s copying.
+  9 were pending, which `apply_reviews.py --commit` would have used to rename
+  nine songs. The other 18 had been applied or deferred on unrelated passages.
+  The 4 orphans went too: genuine decisions of 2026-11-01 on passages 6455–6458,
+  which no longer exist.
+- **No catalogue row changed.**
+- **Measured on the hub's disk afterwards:** 179 reviews where there were 210;
+  none shares a time and none names a missing passage; the 7 originals are
+  kept; nothing is pending for `apply_reviews`; `quick_check` ok.
+- **Where:** the hub only. Every node still holds the 27 copies, under its own
+  numbers, until the next star-sync round removes them as removals the hub's
+  history evidences `[IMPL-UID-042]` (§2).
+- **Backup:** `data/backups/pre-review-copies-20261114T234817Z/`, with every
+  dropped row in `dropped.json`. `--restore` puts them back. It goes 2026-12-14.
 
 **`[LOG-LIBW-280]` 2026-11-12: the hub's pair set to WAL mode.** Both halves
 were in rollback-journal mode, as the merge of 2026-09-26 wrote them. That
