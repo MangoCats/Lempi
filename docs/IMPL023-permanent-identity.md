@@ -44,7 +44,7 @@ Every node numbers the household's music in its own order, and the star sync, ec
 
 **`[IMPL-UID-030]` A `passage_uid` is 32 lowercase hex characters:** the first 128 bits of SHA-256 over the UTF-8 bytes of `lempi-passage-uid/1`, `audio_md5`, `kind`, `start_ms`, `end_ms` and `salt`, joined by `\x1f`, integers in decimal `[SPEC-UID-030]`. It is text rather than a blob because it goes into JSON, URLs and JavaScript unchanged.
 
-**`[IMPL-UID-032]` One function in each language, held equal by a fixture:** `passage_uid` in `lempi-core`'s `db` module and in `tools/lempi_db.py`, both tested against one file of vectors (an ordinary cut, a salted one, an album cut at 0, a span past 2³¹ ms). This is how `fixtures/natural_patch/` already holds the two patch implementations together `[SPEC-NKP-090]`.
+**`[IMPL-UID-032]` One function in each language, held equal by a fixture:** `passage_uid` in `lempi-core`'s `db` module and in `tools/passage_uid.py`, both tested against `fixtures/passage_uid/vectors.json` (an ordinary cut, a salted one, an album cut at 0, a span past 2³¹ ms). This is how `fixtures/natural_patch/` already holds the two patch implementations together `[SPEC-NKP-090]`.
 
 **`[IMPL-UID-034]` Columns.** `passages` gains `passage_uid` and its birth key `birth_md5`, `birth_kind`, `birth_start_ms`, `birth_end_ms` and `birth_salt`, with a unique index `passages_uid`. A new table `passage_lineage(old_uid, new_uid, why, stamp)` records re-cuts `[SPEC-UID-065]`. The player adds all of it on open, beside the other `ensure_*` functions in `player/core/src/db/mod.rs`, and `sql/schema.sql` declares it.
 
@@ -79,17 +79,16 @@ A delete on the hub alone is undone by the next merge, because `star_merge.TABLE
 - The `rows` step, `catalogue_state` and `catalogue_integrity` compare by uid.
 - `flavor` names a passage subject by uid, and `star_merge.hold_out` and the `rows` scope find it by one. Today they miss such rows, and one would withhold a node's whole catalogue patch.
 
-**`[IMPL-UID-052]` The window rests on one precondition: every node in step.** Content-derived uids agree only where spans agree, and a node that has not yet received a boundary edit computes a different one. So the window opens only after a round with the old build finds nothing to send to any node ([GUIDE039](GUIDE039-running-the-star-sync.md)). Then:
+**`[IMPL-UID-052]` The hub alone assigns, and today's patch carries the uids to the nodes** (SPEC075 step 2). No player computes a uid for a passage that already exists. A node then cannot hold a different uid for one passage than the hub does, even one whose boundary edit has not yet reached it, and deploying a build never migrates a catalogue. The window rests on one precondition: every node in step, shown by a round with the old build finding nothing to send ([GUIDE039](GUIDE039-running-the-star-sync.md)). Then:
 
-1. Stop every player and the sync.
-2. Back up the hub pair and every node's catalogue.
-3. Assign uids in the hub's catalogue. Use the same function in every copy last sent (`data/sync/<run>/merge/nodes/*/library.db`, and `adopted/`), so each baseline agrees with its node.
-4. Deploy the new player with `build/deploy-appliance.sh`, which writes both layers on `bose` and `lp3-wifi` `[GDE-DEP-060]`. On open, each node assigns uids from its own spans.
-5. Verify from each node's disk, not its answer: every passage that the hub and the node both hold has one uid on both. A single disagreement stops the window.
-6. Run a round with the new build: nothing to send, and nothing translated in the catalogue half.
-7. Start the players, playing.
+1. Deploy players that read a uid, and keep resolving by span. They change no data. `build/deploy-appliance.sh` writes both layers on `bose` and `lp3-wifi` `[GDE-DEP-060]`.
+2. Stop the sync and back up the hub pair.
+3. Assign uids in the hub's catalogue, with the columns, the index, the triggers and `passage_lineage`. This is one tool, which rehearses by default.
+4. Run an ordinary round. The strict natural patch adds the columns on every node and sets each passage's uid, rehearsed first, with an inverse kept for each node `[SPEC-NKP-040]`.
+5. Verify from each node's disk, not its answer: every passage the node holds has the hub's uid. A single disagreement stops the window.
+6. From the next round, passage references in the patch resolve by uid.
 
-**`[IMPL-UID-054]` Undone by** step 2's backups, the previous player, and dropping the two triggers on any node not restored. The old build ignores columns it does not name, but the first trigger would refuse its inserts.
+**`[IMPL-UID-054]` Undone by** each node's kept inverse (`mesh_sync::undo`), which drops the added columns, and on the hub by step 2's backup.
 
 ## 6. Stage B: the listener names passages by uid
 

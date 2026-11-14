@@ -1,0 +1,77 @@
+{
+ "encoding": "lempi-passage-uid/1",
+ "vectors": [
+  {
+   "case": "an ordinary single track",
+   "audio_md5": "6e1f3c0a9b8d7e6f5a4b3c2d1e0f9a8b",
+   "kind": "radio",
+   "start_ms": 0,
+   "end_ms": 200000,
+   "salt": 0,
+   "uid": "9b84924046c6ad32cb1204415b894dca"
+  },
+  {
+   "case": "the album cut of the same file",
+   "audio_md5": "6e1f3c0a9b8d7e6f5a4b3c2d1e0f9a8b",
+   "kind": "album",
+   "start_ms": 0,
+   "end_ms": 200000,
+   "salt": 0,
+   "uid": "7893c18ef0cb219556f670bcddf4645b"
+  },
+  {
+   "case": "a second passage born on that key",
+   "audio_md5": "6e1f3c0a9b8d7e6f5a4b3c2d1e0f9a8b",
+   "kind": "radio",
+   "start_ms": 0,
+   "end_ms": 200000,
+   "salt": 1,
+   "uid": "97d6284ab3288bf060f0baf50bd3bfde"
+  },
+  {
+   "case": "a cut inside a whole-album file",
+   "audio_md5": "f5500d078a0d9a6c63f41a9205a0402f",
+   "kind": "radio",
+   "start_ms": 4337680,
+   "end_ms": 4602680,
+   "salt": 0,
+   "uid": "d0543c33cfffe8424bee9775ef014e85"
+  },
+  {
+   "case": "a span past 2^31 ms",
+   "audio_md5": "f5500d078a0d9a6c63f41a9205a0402f",
+   "kind": "album",
+   "start_ms": 2147483000,
+   "end_ms": 2147484000,
+   "salt": 0,
+   "uid": "f8864f2104a785a6373fe107a62f24bc"
+  },
+  {
+   "case": "start and end swapped are another key",
+   "audio_md5": "6e1f3c0a9b8d7e6f5a4b3c2d1e0f9a8b",
+   "kind": "radio",
+   "start_ms": 200000,
+   "end_ms": 0,
+   "salt": 0,
+   "uid": "353b48342c379d7ae920a77ac75cc244"
+  },
+  {
+   "case": "digits that would join if unseparated",
+   "audio_md5": "ab",
+   "kind": "radio",
+   "start_ms": 12,
+   "end_ms": 3,
+   "salt": 0,
+   "uid": "73d405f25380d3d211be18d1a3f7f482"
+  },
+  {
+   "case": "the same digits split elsewhere",
+   "audio_md5": "ab",
+   "kind": "radio",
+   "start_ms": 1,
+   "end_ms": 23,
+   "salt": 0,
+   "uid": "8246b592642a1b1d5796cf7eb3525d7c"
+  }
+ ]
+}

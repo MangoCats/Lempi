@@ -18,11 +18,13 @@ mod library;
 mod lyrics;
 mod pair;
 mod player_store;
+mod uid;
 
 pub use library::*;
 pub use lyrics::*;
 pub use pair::*;
 pub use player_store::*;
+pub use uid::passage_uid;
 
 /// Bring a `files` table predating `md5_generator` up to date
 /// `[SPEC-RLK-150]`.
