@@ -418,6 +418,9 @@ fn scan_batch(tx: &rusqlite::Transaction, paths: &[PathBuf], rep: &mut FoundRepo
             params![file_id, duration as i64, TAGS_ONLY],
         )
         .map_err(|e| format!("cannot make a passage for {p}: {e}"))?;
+        // Born here, of a file only this phone has: its uid is made now `[IMPL-UID-038]`.
+        crate::db::stamp_birth(&tx, tx.last_insert_rowid(), &crate::db::Birth::Here)
+            .map_err(|e| format!("cannot name the passage for {p}: {e}"))?;
         rep.tags_only += 1;
     }
     Ok(())

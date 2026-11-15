@@ -232,6 +232,14 @@ def build(conn: sqlite3.Connection, md5s: list[str], roots: str = "", slim=froze
                 # "" released by a person. Undecided is absent, and leaves a
                 # receiver's own value alone `[SPEC-HOLD-080]`.
                 passage["hold"] = p["director_hold"]
+            if "passage_uid" in p.keys() and p["passage_uid"]:
+                # Its permanent identity, with the birth key it was made of, so
+                # the receiver stores the hub's own and can check it: a uid made
+                # there from a span since edited would be another `[IMPL-UID-052]`.
+                passage["passage_uid"] = p["passage_uid"]
+                passage["birth"] = {"audio_md5": p["birth_md5"], "kind": p["birth_kind"],
+                                    "start_ms": p["birth_start_ms"], "end_ms": p["birth_end_ms"],
+                                    "salt": p["birth_salt"]}
             if f["audio_md5"] not in slim:
                 passage["recordings"] = credits
             passages.append(passage)

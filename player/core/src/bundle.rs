@@ -681,6 +681,23 @@ fn import_bound(
             .map_err(|e| e.to_string())?;
             let passage_id = tx.last_insert_rowid();
             rep.rows_written += 1;
+            // The hub's own identity for it, as sent, never one made here for a
+            // passage the hub already has `[IMPL-UID-052]`. A uid without its
+            // birth key cannot be checked, and is refused.
+            let b = p.get("birth");
+            let birth = match (p.get("passage_uid").and_then(|v| v.as_str()), b) {
+                (Some(uid), Some(b)) => crate::db::Birth::Sent {
+                    uid,
+                    audio_md5: b.get("audio_md5").and_then(|v| v.as_str()).unwrap_or(""),
+                    kind: b.get("kind").and_then(|v| v.as_str()).unwrap_or(""),
+                    start_ms: b.get("start_ms").and_then(|v| v.as_i64()).unwrap_or(-1),
+                    end_ms: b.get("end_ms").and_then(|v| v.as_i64()).unwrap_or(-1),
+                    salt: b.get("salt").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                },
+                (Some(uid), None) => return Err(format!("passage uid {uid} came without its birth key: refused")),
+                (None, _) => crate::db::Birth::Unknown,
+            };
+            crate::db::stamp_birth(&tx, passage_id, &birth)?;
 
             for c in p.get("recordings").and_then(|v| v.as_array()).unwrap_or(&empty) {
                 let mbid = str_of(c, "mbid");
@@ -2076,6 +2093,50 @@ mod tests {
         let rep3 = import(&mut c, &second, "body3", &audio_dir, true, Some(TEST_HASHER)).unwrap();
         assert_eq!(rep3.rows_written, 0, "an unchanged value is not rewritten");
 
+        std::fs::remove_dir_all(&audio_dir).ok();
+    }
+
+    /// `[IMPL-UID-052]` A bundle's passage arrives with the hub's own uid, stored as
+    /// sent; one that is not its birth key's refuses the import, writing nothing; and a
+    /// catalogue whose passages carry no uid imports as it always did.
+    #[test]
+    fn a_bundles_passage_uid_is_stored_as_sent_and_a_wrong_one_refused() {
+        let audio_dir = std::env::temp_dir().join(format!("lempi-bundle-uid-{}", std::process::id()));
+        std::fs::create_dir_all(&audio_dir).unwrap();
+        let audio_path = audio_dir.join("a.wav");
+        write_tiny_wav(&audio_path);
+        let md5 = (TEST_HASHER.hash)(&audio_path).unwrap();
+        // Born on the hub at 0-1200, since edited to 0-1000: the sent uid is the birth's.
+        let uid = crate::db::passage_uid(&md5, "radio", 0, 1200, 0).unwrap();
+        let with_uid = |uid: &str| {
+            let mut d = one_encoding_bundle(&md5, "m1", 0.5, "computed:x@1");
+            let p = &mut d["encodings"][0]["passages"][0];
+            p["passage_uid"] = Value::String(uid.into());
+            p["birth"] = serde_json::json!({"audio_md5": md5, "kind": "radio", "start_ms": 0, "end_ms": 1200, "salt": 0});
+            d
+        };
+        let uid_columns = "ALTER TABLE passages ADD COLUMN passage_uid TEXT; ALTER TABLE passages ADD COLUMN birth_md5 TEXT;
+                           ALTER TABLE passages ADD COLUMN birth_kind TEXT; ALTER TABLE passages ADD COLUMN birth_start_ms INTEGER;
+                           ALTER TABLE passages ADD COLUMN birth_end_ms INTEGER; ALTER TABLE passages ADD COLUMN birth_salt INTEGER;";
+
+        let mut c = empty_library();
+        c.execute_batch(uid_columns).unwrap();
+        let rep = import(&mut c, &with_uid(&uid), "u1", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep.outcomes, vec![(md5.clone(), Landed::Imported)]);
+        let got: (String, i64, i64) = c.query_row("SELECT passage_uid, birth_end_ms, end_ms FROM passages", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+        assert_eq!(got, (uid.clone(), 1200, 1000), "the hub's uid and birth key, not one made from the span here");
+
+        let mut c = empty_library();
+        c.execute_batch(uid_columns).unwrap();
+        let wrong = crate::db::passage_uid(&md5, "radio", 0, 1000, 0).unwrap();
+        assert!(import(&mut c, &with_uid(&wrong), "u2", &audio_dir, true, Some(TEST_HASHER)).is_err(),
+                "a uid that is not its birth key's is refused");
+        let files: i64 = c.query_row("SELECT count(*) FROM files", [], |r| r.get(0)).unwrap();
+        assert_eq!(files, 0, "and nothing of the import was written");
+
+        let mut c = empty_library();
+        let rep = import(&mut c, &with_uid(&uid), "u3", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep.outcomes, vec![(md5, Landed::Imported)], "a catalogue with no uids imports as before");
         std::fs::remove_dir_all(&audio_dir).ok();
     }
 

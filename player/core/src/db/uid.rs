@@ -32,10 +32,123 @@ pub fn passage_uid(audio_md5: &str, kind: &str, start_ms: i64, end_ms: i64, salt
     Some(digest[..16].iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// How a passage just written came by its identity `[IMPL-UID-038]`.
+pub enum Birth<'a> {
+    /// The hub sent it, with its uid and birth key: stored as they are, once
+    /// checked against each other. A node never computes a uid for a passage the
+    /// hub already has `[IMPL-UID-052]`.
+    Sent { uid: &'a str, audio_md5: &'a str, kind: &'a str, start_ms: i64, end_ms: i64, salt: u32 },
+    /// Born here, of a file no one else has: computed now, with the lowest salt
+    /// not already born on its key `[SPEC-UID-054]`.
+    Here,
+    /// Sent by a hub that gave it none: left empty, for the hub's patch to fill.
+    Unknown,
+}
+
+/// Whether this catalogue's passages carry a uid yet.
+pub fn has_uids(conn: &rusqlite::Connection) -> rusqlite::Result<bool> {
+    let mut q = conn.prepare("SELECT 1 FROM pragma_table_info('passages') WHERE name = 'passage_uid'")?;
+    q.exists([])
+}
+
+/// Give passage `passage_id`, just written, its identity as `birth` says. Nothing
+/// where the catalogue's passages carry no uid. `Err` for a sent uid that is not
+/// its own birth key's, which is refused by name, never stored.
+pub fn stamp_birth(conn: &rusqlite::Connection, passage_id: i64, birth: &Birth) -> Result<(), String> {
+    if !has_uids(conn).map_err(|e| e.to_string())? {
+        return Ok(());
+    }
+    let (uid, md5, kind, start, end, salt) = match birth {
+        Birth::Unknown => return Ok(()),
+        Birth::Sent { uid, audio_md5, kind, start_ms, end_ms, salt } => {
+            let want = passage_uid(audio_md5, kind, *start_ms, *end_ms, *salt);
+            if want.as_deref() != Some(*uid) {
+                return Err(format!("passage uid {uid} is not its birth key's ({audio_md5}, {kind}, {start_ms}, {end_ms}, \
+                                    salt {salt}): refused, never stored"));
+            }
+            (uid.to_string(), audio_md5.to_string(), kind.to_string(), *start_ms, *end_ms, *salt)
+        }
+        Birth::Here => {
+            let (md5, kind, start, end): (String, String, i64, i64) = conn
+                .query_row("SELECT f.audio_md5, p.kind, p.start_ms, p.end_ms FROM passages p JOIN files f USING (file_id) \
+                            WHERE p.passage_id = ?1", [passage_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+                .map_err(|e| format!("passage {passage_id}: {e}"))?;
+            let mut salt = 0u32;
+            while conn
+                .prepare_cached("SELECT 1 FROM passages WHERE birth_md5 = ?1 AND birth_kind = ?2 AND birth_start_ms = ?3 \
+                                 AND birth_end_ms = ?4 AND birth_salt = ?5 AND passage_id <> ?6")
+                .and_then(|mut q| q.exists(rusqlite::params![md5, kind, start, end, salt, passage_id]))
+                .map_err(|e| e.to_string())?
+            {
+                salt += 1;
+            }
+            let uid = passage_uid(&md5, &kind, start, end, salt).ok_or(format!("passage {passage_id}: no birth key"))?;
+            (uid, md5, kind, start, end, salt)
+        }
+    };
+    conn.execute(
+        "UPDATE passages SET passage_uid = ?2, birth_md5 = ?3, birth_kind = ?4, birth_start_ms = ?5, \
+         birth_end_ms = ?6, birth_salt = ?7 WHERE passage_id = ?1",
+        rusqlite::params![passage_id, uid, md5, kind, start, end, salt],
+    )
+    .map(|_| ())
+    .map_err(|e| format!("passage {passage_id}: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
+
+    fn catalogue(uids: bool) -> rusqlite::Connection {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT);
+                         CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT,
+                             start_ms INTEGER, end_ms INTEGER);
+                         INSERT INTO files VALUES (1, 'abc');
+                         INSERT INTO passages VALUES (10, 1, 'radio', 0, 1000);").unwrap();
+        if uids {
+            c.execute_batch("ALTER TABLE passages ADD COLUMN passage_uid TEXT; ALTER TABLE passages ADD COLUMN birth_md5 TEXT;
+                             ALTER TABLE passages ADD COLUMN birth_kind TEXT; ALTER TABLE passages ADD COLUMN birth_start_ms INTEGER;
+                             ALTER TABLE passages ADD COLUMN birth_end_ms INTEGER; ALTER TABLE passages ADD COLUMN birth_salt INTEGER;").unwrap();
+        }
+        c
+    }
+
+    fn uid_of(c: &rusqlite::Connection, id: i64) -> Option<String> {
+        c.query_row("SELECT passage_uid FROM passages WHERE passage_id = ?1", [id], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn a_catalogue_without_uids_is_left_as_it_is() {
+        let c = catalogue(false);
+        assert!(!has_uids(&c).unwrap());
+        stamp_birth(&c, 10, &Birth::Here).unwrap();
+    }
+
+    #[test]
+    fn a_passage_born_here_is_given_its_uid_and_a_second_birth_is_salted() {
+        let c = catalogue(true);
+        stamp_birth(&c, 10, &Birth::Here).unwrap();
+        assert_eq!(uid_of(&c, 10), passage_uid("abc", "radio", 0, 1000, 0));
+        c.execute_batch("UPDATE passages SET end_ms = 900 WHERE passage_id = 10;
+                         INSERT INTO passages (passage_id, file_id, kind, start_ms, end_ms) VALUES (11, 1, 'radio', 0, 1000);").unwrap();
+        stamp_birth(&c, 11, &Birth::Here).unwrap();
+        assert_eq!(uid_of(&c, 11), passage_uid("abc", "radio", 0, 1000, 1), "born on a key already born on [SPEC-UID-054]");
+    }
+
+    #[test]
+    fn a_sent_uid_is_stored_as_sent_and_one_not_its_keys_is_refused() {
+        let c = catalogue(true);
+        let good = passage_uid("hubmd5", "radio", 5, 900, 0).unwrap();
+        stamp_birth(&c, 10, &Birth::Sent { uid: &good, audio_md5: "hubmd5", kind: "radio", start_ms: 5, end_ms: 900, salt: 0 }).unwrap();
+        assert_eq!(uid_of(&c, 10).as_deref(), Some(good.as_str()), "the hub's uid, born of the hub's key, not this row's span");
+        let err = stamp_birth(&c, 10, &Birth::Sent { uid: "0000", audio_md5: "hubmd5", kind: "radio", start_ms: 5, end_ms: 900, salt: 0 });
+        assert!(err.is_err() && uid_of(&c, 10).as_deref() == Some(good.as_str()), "refused, and nothing changed");
+        let c = catalogue(true);
+        stamp_birth(&c, 10, &Birth::Unknown).unwrap();
+        assert_eq!(uid_of(&c, 10), None, "a hub that sent none leaves it for its patch");
+    }
 
     #[test]
     fn the_shared_vectors_hold_in_rust_as_in_python() {

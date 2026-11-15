@@ -587,7 +587,11 @@ fn apply_tx(tx: &Connection, patch: &Json, allowed: Option<&[&str]>, rule: Rule)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RefKind {
     File,
+    /// By span: `[md5, kind, start, end]`, which a boundary edit changes.
     Passage,
+    /// By the passage's permanent identity `[IMPL-UID-052]`, which nothing
+    /// changes. Sent only to a player that reports `passage_uids`.
+    PassageUid,
 }
 
 /// One reference column; `when` is `flavor`'s way of naming a passage only on
@@ -645,6 +649,7 @@ fn natural_of(name: &str, t: &Json, cols: &[String], have: &[String]) -> Result<
         let kind = match r["kind"].as_str() {
             Some("file") => RefKind::File,
             Some("passage") => RefKind::Passage,
+            Some("passage_uid") => RefKind::PassageUid,
             other => return Err(format!("{name}: {other:?} is not a kind of reference; nothing written")),
         };
         let when = match r["when"].as_array() {
@@ -692,7 +697,19 @@ fn to_local(tx: &Connection, kind: RefKind, nat: &Value) -> Result<Option<i64>, 
             .optional()
             .map_err(es)
         }
+        RefKind::PassageUid => tx
+            .prepare_cached("SELECT passage_id FROM passages WHERE passage_uid = ?1")
+            .map_err(uid_column)?
+            .query_row([text], |r| r.get::<_, i64>(0))
+            .optional()
+            .map_err(es),
     }
+}
+
+/// A catalogue whose passages carry no uid cannot be patched by one: said by
+/// name, not as SQLite's "no such column".
+fn uid_column(e: rusqlite::Error) -> String {
+    format!("a reference by passage_uid, and this catalogue's passages carry none ({e}); nothing written")
 }
 
 /// What this node's local id names, in the patch's own spelling: a file's
@@ -726,6 +743,15 @@ fn to_natural(tx: &Connection, kind: RefKind, local: &Value) -> Result<Option<Va
             .optional()
             .map_err(es)?
             .map(|j| Value::Text(j.to_string())),
+        // A passage with no uid yet names nothing by one: it then equals no `was`.
+        RefKind::PassageUid => tx
+            .prepare_cached("SELECT passage_uid FROM passages WHERE passage_id = ?1")
+            .map_err(uid_column)?
+            .query_row([id], |r| r.get::<_, Option<String>>(0))
+            .optional()
+            .map_err(es)?
+            .flatten()
+            .map(Value::Text),
     })
 }
 
@@ -1053,7 +1079,9 @@ pub fn catalogue_summary(library: &Path) -> Result<Json, String> {
         Ok(serde_json::json!({"name": t, "columns": cols, "key": [cols[0].clone()], "rows": rows(&tx, t, &cols)?}))
     };
     let files = want("files", &["file_id", "audio_md5"], &MACHINE_SCOPE)?;
-    let passages = want("passages", &["passage_id", "file_id", "kind", "start_ms", "end_ms"], &[])?;
+    // Each passage's uid where its catalogue has them `[IMPL-UID-052]`: what
+    // the hub checks every node against after the uids are carried.
+    let passages = want("passages", &["passage_id", "file_id", "kind", "start_ms", "end_ms"], &["passage_uid"])?;
     Ok(serde_json::json!({ "tables": [files, passages] }))
 }
 
@@ -1754,6 +1782,66 @@ mod tests {
         drop(c);
         undo(&db, &out.inverse).unwrap();
         assert_eq!(raw(&db), before, "and the undo takes the column away again");
+    }
+
+    /// `[IMPL-UID-052]` step 4: the patch adds the uid column and sets the hub's uid on
+    /// each passage of a node numbered unlike the hub. The node keeps every one of its
+    /// own ids; a rehearsal writes nothing, and the undo takes the column away again.
+    #[test]
+    fn the_hubs_uids_are_carried_to_a_node_numbered_its_own_way() {
+        let (_d, db) = permuted("uid-carry");
+        let before = raw(&db);
+        let row = |m: &str, end: i64, uid: &str| serde_json::json!(
+            {"key": [m, "radio", 0, end], "was": [m, "radio", 0, end, null], "now": [m, "radio", 0, end, uid]});
+        let mut e = passages_entry(serde_json::json!([row("A", 1000, "u-a"), row("B", 500, "u-b"), row("C", 700, "u-c")]));
+        e["columns"] = serde_json::json!(["file_id", "kind", "start_ms", "end_ms", "passage_uid"]);
+        e["add_columns"] = serde_json::json!(["passage_uid TEXT"]);
+        assert_eq!(apply_n(&db, vec![e.clone()], false).unwrap().counts.applied, 3);
+        assert_eq!(raw(&db), before, "a rehearsal adds no column and writes no row");
+        let out = apply_n(&db, vec![e], true).unwrap();
+        let c = Connection::open(&db).unwrap();
+        let got: Vec<(i64, String)> = c.prepare("SELECT passage_id, passage_uid FROM passages ORDER BY passage_id").unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().filter_map(Result::ok).collect();
+        assert_eq!(got, [(10, "u-a".into()), (11, "u-b".into()), (12, "u-c".into())],
+                   "each of the node's own passages, under its own id, has the hub's uid for that music");
+        drop(c);
+        undo(&db, &out.inverse).unwrap();
+        assert_eq!(raw(&db), before, "and the undo puts the catalogue back as it was");
+    }
+
+    /// Once both sides have uids a reference by one finds the passage whatever its number
+    /// here and whatever its span now: B's boundary edited, its recording still lands on it.
+    #[test]
+    fn a_reference_by_uid_finds_the_passage_whatever_its_number_and_span() {
+        let (_d, db) = permuted("uid-ref");
+        let c = Connection::open(&db).unwrap();
+        c.execute_batch("ALTER TABLE passages ADD COLUMN passage_uid TEXT;
+                         UPDATE passages SET passage_uid = 'u-a' WHERE passage_id = 10;
+                         UPDATE passages SET passage_uid = 'u-b', end_ms = 480 WHERE passage_id = 11;
+                         UPDATE passages SET passage_uid = 'u-c' WHERE passage_id = 12;").unwrap();
+        drop(c);
+        let mut recs = recs_entry(serde_json::json!([{"key": ["u-b", "m-b2"], "was": null, "now": ["u-b", "m-b2", 0.5]}]));
+        recs["natural"]["refs"] = serde_json::json!([{"col": "passage_id", "kind": "passage_uid"}]);
+        let out = apply_n(&db, vec![recs.clone()], true).unwrap();
+        assert_eq!(out.counts.applied, 1, "{:?}", out.counts);
+        let c = Connection::open(&db).unwrap();
+        let on: i64 = c.query_row("SELECT passage_id FROM passage_recordings WHERE mbid = 'm-b2'", [], |r| r.get(0)).unwrap();
+        assert_eq!(on, 11, "on the node's own passage of B, which ends at 480 here");
+        drop(c);
+        let again = apply_n(&db, vec![recs], true).unwrap();
+        assert_eq!((again.counts.applied, again.counts.already), (0, 1), "and read back by uid as already there");
+    }
+
+    /// A catalogue whose passages have no uid is refused a reference by one, by name.
+    #[test]
+    fn a_reference_by_uid_to_a_catalogue_without_uids_writes_nothing() {
+        let (_d, db) = permuted("uid-none");
+        let before = raw(&db);
+        let mut recs = recs_entry(serde_json::json!([{"key": ["u-b", "m-x"], "was": null, "now": ["u-b", "m-x", 1.0]}]));
+        recs["natural"]["refs"] = serde_json::json!([{"col": "passage_id", "kind": "passage_uid"}]);
+        let err = apply_n(&db, vec![recs], true).unwrap_err();
+        assert!(err.contains("passage_uid"), "said by name: {err}");
+        assert_eq!(raw(&db), before, "nothing written");
     }
 
     /// A row the hub removed goes, with its own id; the other rows keep theirs.

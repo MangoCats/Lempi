@@ -139,6 +139,10 @@ pub(crate) fn now_ms() -> i64 {
 /// What this build can apply, so the hub never hands a patch to a player that would
 /// misread it `[SPEC-NKP-075]`. 1 is the catalogue patch by natural key.
 const NATURAL_KEYS: i64 = 1;
+/// `[IMPL-UID-052]`: this build resolves a natural patch's passage reference by
+/// `passage_uid` as well as by span, and stores the uid a bundle carries. A node
+/// that does not report it is never sent a reference by uid.
+const PASSAGE_UIDS: i64 = 1;
 /// `[SPEC-STAR-104]`: this build opens a catalogue on a read-only partition itself, for the
 /// rehearsal as well as the commit, and says whether the catalogue is on one. A node that
 /// does not report it is sent no catalogue patch to a read-only partition: it would refuse it.
@@ -156,6 +160,7 @@ fn snapshot(listener: &Path, library: &Path) -> Result<Value, String> {
         "catalogue": mesh_sync::catalogue_summary(library)?,
         "last_run": last_run(listener),
         "natural_keys": NATURAL_KEYS,
+        "passage_uids": PASSAGE_UIDS,
         "catalogue_window": CATALOGUE_WINDOW,
         "catalogue_rows": CATALOGUE_ROWS,
         "retire_files": crate::retire::RETIRE_FILES,

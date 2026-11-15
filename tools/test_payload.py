@@ -126,6 +126,29 @@ def test_a_decided_hold_travels_and_an_undecided_one_does_not():
     check(got == ["rip damaged", "", "ABSENT"], f"holds in the payload: {got}")
 
 
+def test_a_passages_uid_travels_with_its_birth_key():
+    """`[IMPL-UID-052]` A passage with a uid sends it and the birth key it was made
+    of, so the receiver stores the hub's own and can check it; a catalogue without
+    uids, or a passage not yet given one, sends neither."""
+    import passage_uid as pu
+    conn = make_db(":memory:", SCHEMA)
+    conn.execute("INSERT INTO passages (passage_id,file_id,kind,start_ms,end_ms,boundary_src) VALUES (1,1,'radio',0,9000,'x')")
+    p = pl.build(conn, ["md5"])["encodings"][0]["passages"][0]
+    check("passage_uid" not in p and "birth" not in p, f"no uid from a catalogue without them: {p}")
+    for col in ("passage_uid TEXT", "birth_md5 TEXT", "birth_kind TEXT", "birth_start_ms INTEGER",
+                "birth_end_ms INTEGER", "birth_salt INTEGER"):
+        conn.execute(f"ALTER TABLE passages ADD COLUMN {col}")
+    uid = pu.passage_uid("md5", "radio", 0, 10000, 0)                       # born at 0-10000, edited since
+    conn.execute("UPDATE passages SET passage_uid=?, birth_md5='md5', birth_kind='radio', birth_start_ms=0, "
+                 "birth_end_ms=10000, birth_salt=0", (uid,))
+    conn.execute("INSERT INTO passages (passage_id,file_id,kind,start_ms,end_ms,boundary_src) VALUES (2,1,'album',0,9000,'x')")
+    got = {q["kind"]: q for q in pl.build(conn, ["md5"])["encodings"][0]["passages"]}
+    check(got["radio"].get("passage_uid") == uid and got["radio"].get("birth") ==
+          {"audio_md5": "md5", "kind": "radio", "start_ms": 0, "end_ms": 10000, "salt": 0},
+          f"the uid and its birth key, not the span now: {got['radio']}")
+    check("passage_uid" not in got["album"], f"a passage not yet given one sends none: {got['album']}")
+
+
 def test_a_gapless_file_says_so_and_no_other_does():
     """`[SPEC-AGN-062]` A file the CD import marked carries `"gapless": true`,
     so a receiver trims it as the sender does; NULL, and a library without the
@@ -339,6 +362,7 @@ def main() -> int:
     test_fade_travels_when_the_schema_has_it()
     test_fade_absent_from_a_pre_migration_source()
     test_a_decided_hold_travels_and_an_undecided_one_does_not()
+    test_a_passages_uid_travels_with_its_birth_key()
     test_a_gapless_file_says_so_and_no_other_does()
     test_committed_fixture_09_round_trips()
     test_byte_hash_is_optional_but_must_be_usable()
