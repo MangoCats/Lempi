@@ -161,6 +161,10 @@ fn snapshot(listener: &Path, library: &Path) -> Result<Value, String> {
         "last_run": last_run(listener),
         "natural_keys": NATURAL_KEYS,
         "passage_uids": PASSAGE_UIDS,
+        // `[IMPL-UID-056]`: the indexes its catalogue holds. Reported only by a
+        // build that applies a patch's `add_indexes`, so the report is the
+        // capability: a hub sends an index to no node that did not give one.
+        "catalogue_indexes": mesh_sync::catalogue_indexes(library)?,
         "catalogue_window": CATALOGUE_WINDOW,
         "catalogue_rows": CATALOGUE_ROWS,
         "retire_files": crate::retire::RETIRE_FILES,

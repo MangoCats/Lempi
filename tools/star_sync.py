@@ -800,7 +800,26 @@ def natural_words(cat, span_why):
     """How a catalogue patch names what it changes, for the summary: by natural key,
     and its passages by uid, or by span and why [IMPL-UID-052]. Read from the patch
     itself where it names a passage, so the words cannot say what was not sent;
-    `span_why`, worked out beside the builder, only where it names none."""
+    `span_why`, worked out beside the builder, only where it names none. And any
+    index it makes on a table the node already has [IMPL-UID-056]."""
+    made = [f"`{e['name']}.{n}`" for e in cat["tables"] for n in index_names(e.get("add_indexes") or [])]
+    return (natural_mode(cat, span_why)
+            + (f"; it makes the index(es) {', '.join(made)} the node lacks [IMPL-UID-056]" if made else ""))
+
+
+def index_names(sqls):
+    """The name in each `CREATE [UNIQUE] INDEX name ON ...`."""
+    out = []
+    for s in sqls:
+        w = s.replace("(", " ").split()
+        i = w.index("INDEX") + 1 if "INDEX" in w else 1
+        if w[i:i + 3] == ["IF", "NOT", "EXISTS"]:
+            i += 3
+        out.append(w[i])
+    return out
+
+
+def natural_mode(cat, span_why):
     natural = [e for e in cat["tables"] if "natural" in e]
     if not natural:
         return ""
@@ -854,6 +873,7 @@ def split_catalogue(cat, limit=None):
             if not first:
                 d.pop("add_columns", None)
                 d.pop("create", None)
+                d.pop("add_indexes", None)
             return d
 
         for r in e["rows"]:
@@ -1182,6 +1202,8 @@ def snapshot(plan, only=None):
                                "library": baseline or sent_lib, "library_sent": sent_lib,
                                "catalogue": cat, "catalogue_as_sent": as_sent, "natural_keys": cap,
                                "passage_uids": snap.get("passage_uids", 0) or 0,
+                               # [IMPL-UID-056]: None from a build that cannot take an index
+                               "catalogue_indexes": snap.get("catalogue_indexes"),
                                "retire_files": snap.get("retire_files", 0) or 0,
                                "catalogue_blocked": blocked, "integrity": snap.get("file_checks"),
                                "journal_mode": snap.get("journal_mode"),
@@ -1721,7 +1743,7 @@ def patch(plan, run):
                             else "its player reports no passage_uids" if natural else None)
                 try:
                     cat = sp.make_values(b["library"], t["library"], exclude=SIGNED_EXCLUDE, natural=natural, omit=SIGNED_OMIT,
-                                         own=NODE_OWN, by_uid=by_uid)
+                                         own=NODE_OWN, by_uid=by_uid, node_indexes=b.get("catalogue_indexes"))
                 except sp.NaturalUnsupported as err:
                     unsupported = f"the hub cannot name what changed: {err} [SPEC-NKP-080]"
                 if cat is not None and span_why and by_uid:

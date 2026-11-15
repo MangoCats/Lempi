@@ -89,9 +89,37 @@ def test_values(tmp):
     check(own["tables"] == p["tables"], "and the rest of the patch is unchanged")
 
 
+def test_indexes(tmp):
+    """[IMPL-UID-056]: an index the target declares on a table the node already holds, and
+    the node reports lacking, is made by an entry of its own, last; one it reports holding,
+    and every one for a node that gives no report, is not. A table the node lacks is made
+    whole by `create`, its indexes with it."""
+    base, target = os.path.join(tmp, "ibase.db"), os.path.join(tmp, "itarget.db")
+    db(base, "CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, uid TEXT, kind TEXT)",
+       "CREATE INDEX passages_kind ON passages(kind)", "INSERT INTO passages VALUES (1, 'u1', 'radio')")
+    db(target, "CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, uid TEXT, kind TEXT)",
+       "CREATE INDEX passages_kind ON passages(kind)", "CREATE UNIQUE INDEX passages_uid ON passages(uid)",
+       "CREATE TABLE genres (genre_id INTEGER PRIMARY KEY, name TEXT)", "CREATE INDEX genres_name ON genres(name)",
+       "INSERT INTO passages VALUES (1, 'u1', 'radio')")
+    p = sp.make_values(base, target, node_indexes={"passages_kind": "passages"})
+    made = [e for e in p["tables"] if "add_indexes" in e]
+    check(made == [{"name": "passages", "columns": ["passage_id"], "key": ["passage_id"], "rows": [],
+                    "add_indexes": ["CREATE UNIQUE INDEX passages_uid ON passages(uid)"]}],
+          f"the one the node lacks, on a table it has, in an entry of its own: {made}")
+    check(p["tables"][-1] is made[0], "and last, after every row is written")
+    g = next(e for e in p["tables"] if e["name"] == "genres")
+    check("add_indexes" not in g and any("genres_name" in s for s in g["create"]), "a table made whole brings its own")
+    held = sp.make_values(base, target, node_indexes={"passages_kind": "passages", "passages_uid": "passages"})
+    check(not any("add_indexes" in e for e in held["tables"]), "one the node holds is not sent again")
+    old = sp.make_values(base, target)
+    check(not any("add_indexes" in e for e in old["tables"]), "and a node that reports none is sent none")
+    check([e for e in p["tables"] if "add_indexes" not in e] == old["tables"], "the rest of the patch is the same")
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp()
     test_values(tmp)
+    test_indexes(tmp)
     base, target = os.path.join(tmp, "base.db"), os.path.join(tmp, "target.db")
     db(base, *SCHEMA,
        "INSERT INTO prefs VALUES ('a', 1.0, 't1')", "INSERT INTO prefs VALUES ('gone', 1.0, 't1')",

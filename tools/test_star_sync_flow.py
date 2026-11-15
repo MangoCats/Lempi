@@ -95,6 +95,7 @@ class Fleet:
         self.runs = []
         self.natural = set()        # the players that report natural_keys [SPEC-NKP-075]
         self.uids = set()           # ... and passage_uids [IMPL-UID-052]
+        self.indexes = set()        # ... and their catalogue's indexes [IMPL-UID-056]
         self.readonly = set()       # players whose catalogue is on a read-only partition [SPEC-STAR-104]
         self.window = set()         # ... and which of them can open it themselves
         self.staged = {}            # (node, run) -> {n: (sha256, text)}  [SPEC-NKP-925]
@@ -188,6 +189,11 @@ class Fleet:
                 res["natural_keys"] = 1
             if name in self.uids:
                 res["passage_uids"] = 1
+            if name in self.indexes:
+                c = sqlite3.connect(node["library"])
+                res["catalogue_indexes"] = dict(c.execute("SELECT name, tbl_name FROM sqlite_master "
+                                                           "WHERE type = 'index' AND sql IS NOT NULL"))
+                c.close()
             if name in self.readonly:
                 res["library_readonly"] = True
             if name in self.window:
@@ -557,8 +563,9 @@ def test_catalogue_moved(tmp):
           "a catalogue patch for a, none for b")
 
 
-def give_uids(db):
-    """Every passage its uid from its span, as Stage A's window gave them [IMPL-UID-052]."""
+def give_uids(db, index=False):
+    """Every passage its uid from its span, as Stage A's window gave them [IMPL-UID-052];
+    with `index`, the unique index the hub's tool makes beside them."""
     import assign_passage_uids as apu
     c = sqlite3.connect(db)
     p = apu.plan(c)
@@ -567,6 +574,8 @@ def give_uids(db):
     c.executemany("UPDATE passages SET passage_uid = ?, birth_md5 = ?, birth_kind = ?, birth_start_ms = ?, "
                   "birth_end_ms = ?, birth_salt = 0 WHERE passage_id = ?",
                   [(uid, m, k, s, e, pid) for pid, uid, m, k, s, e in p])
+    if index:
+        c.execute(apu.SCHEMA[0])
     c.commit()
     c.close()
 
@@ -582,6 +591,7 @@ def catalogue_scenario(tmp, b_current, artists=0, uids=None):
         fleet.natural.add("b")
     if uids:
         fleet.uids.add("b")
+        fleet.indexes.add("b")
     new = lambda fid, pid: (f"INSERT INTO files VALUES ({fid},'C','/x/c.mp3',100,1,1)",
                             f"INSERT INTO passages VALUES ({pid},{fid},'radio',0,500)")
     for db, (fid, pid) in ((hub["library"], (9, 20)), (fleet.nodes["a"]["library"], (9, 20)),
@@ -603,7 +613,7 @@ def catalogue_scenario(tmp, b_current, artists=0, uids=None):
     c.commit()
     c.close()
     if uids:
-        give_uids(hub["library"])
+        give_uids(hub["library"], index=True)
         if uids == "all":
             for n in ("a", "b"):
                 give_uids(fleet.nodes[n]["library"])
@@ -650,6 +660,11 @@ def test_catalogue_states(tmp):
     check(ss.catalogue_state(None, cn, cn) == {"state": "no-copy"}, "and with nothing last sent it says so")
 
 
+def apu_schema_index():
+    import assign_passage_uids as apu
+    return apu.SCHEMA[0]
+
+
 def test_catalogue_by_uid(tmp):
     """[IMPL-UID-052] step 6: a player that reports passage_uids, both catalogues carrying them, is sent its
     passages by uid; the same player against a copy without them gets them by span, and is told so."""
@@ -665,6 +680,13 @@ def test_catalogue_by_uid(tmp):
           f"b's new passage is named by the uid the hub gave it: {pe}")
     summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
     check("by natural key, passages by uid" in summary, f"and the summary says so: {summary}")
+    # [IMPL-UID-056]: b reports its catalogue's indexes, and lacks the hub's unique one on uids.
+    ix = [e for e in pb["tables"] if "add_indexes" in e]
+    check([(e["name"], e["add_indexes"]) for e in ix] == [("passages", [apu_schema_index()])],
+          f"b is sent the index it reports lacking: {ix}")
+    check("makes the index(es) `passages.passages_uid` the node lacks" in summary, f"and told so: {summary}")
+    pa = json.load(open(os.path.join(run, "patches", "a", "catalogue.values.json")))
+    check(not any("add_indexes" in e for e in pa["tables"]), "a, which gives no report, is sent none")
     os.makedirs(os.path.join(tmp, "hub"))
     fleet, plan, hub, run, base = catalogue_scenario(os.path.join(tmp, "hub"), b_current=True, uids="hub")
     pb = json.load(open(os.path.join(run, "patches", "b", "catalogue.values.json")))

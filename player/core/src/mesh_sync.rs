@@ -313,6 +313,14 @@ fn dangling_rows(tx: &Connection, t: &Json, which: &str) -> Result<i64, String> 
 
 fn undo_tx(tx: &Connection, inverse: &Json) -> Result<Applied, String> {
     let entries = inverse["tables"].as_array().ok_or("an inverse has tables")?;
+    // The indexes a patch made go first: a unique one would refuse a row it
+    // removed coming back, and one on an added column holds the column.
+    for t in entries {
+        for index in t["drop_indexes"].as_array().into_iter().flatten() {
+            let index = ident(index.as_str().unwrap_or(""))?;
+            tx.execute_batch(&format!("DROP INDEX {index}")).map_err(|e| format!("index {index}: {e}"))?;
+        }
+    }
     let rows: Vec<&Json> = entries.iter().filter(|t| t["drop_table"] != true).collect();
     let counts = apply_tx(tx, &serde_json::json!({ "tables": rows }), None, Rule::Strict)?.counts;
     for t in entries {
@@ -464,6 +472,10 @@ fn apply_tx(tx: &Connection, patch: &Json, allowed: Option<&[&str]>, rule: Rule)
                 inv["drop_columns"] = serde_json::json!(added);
                 have = columns(tx, name)?;
             }
+            let made = add_indexes(tx, name, t)?;
+            if !made.is_empty() {
+                inv["drop_indexes"] = serde_json::json!(made);
+            }
         }
         match rule {
             Rule::Member => {
@@ -560,12 +572,62 @@ fn apply_tx(tx: &Connection, patch: &Json, allowed: Option<&[&str]>, rule: Rule)
         }
         rows_inv.reverse();
         inv["rows"] = Json::Array(rows_inv);
-        if inv["rows"].as_array().is_some_and(|r| !r.is_empty()) || inv.get("drop_table").is_some() || inv.get("drop_columns").is_some() {
+        if inv["rows"].as_array().is_some_and(|r| !r.is_empty())
+            || ["drop_table", "drop_columns", "drop_indexes"].iter().any(|k| inv.get(*k).is_some())
+        {
             inverse.push(inv);
         }
     }
     inverse.reverse();
     Ok(Outcome { counts, inverse: serde_json::json!({ "tables": inverse }) })
+}
+
+/// An entry's `add_indexes` `[IMPL-UID-056]`: each a `CREATE [UNIQUE] INDEX` on
+/// the entry's own table, made here where no index of that name is, and the
+/// names of those made, for the inverse to drop. A table this file already has
+/// gains an index no other way: `create` makes a table, with its indexes, only
+/// where the table is missing. Found 2026-11-15: Stage A's patch gave every
+/// node its passages' uids, and none the unique index the hub holds on them.
+fn add_indexes(tx: &Connection, name: &str, t: &Json) -> Result<Vec<String>, String> {
+    let mut made = Vec::new();
+    for s in t["add_indexes"].as_array().into_iter().flatten() {
+        let sql = creation(s.as_str().unwrap_or(""))?;
+        let (index, on) = index_names(sql)?;
+        if on != name {
+            return Err(format!("{name}: an index for this table is on {on}: {sql}"));
+        }
+        let held = tx
+            .query_row("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1", [&index], |_| Ok(()))
+            .optional()
+            .map_err(es)?
+            .is_some();
+        if !held {
+            tx.execute_batch(sql).map_err(|e| format!("{name}: index {index}: {e}"))?;
+            made.push(index);
+        }
+    }
+    Ok(made)
+}
+
+/// The index's name and its table's, from `CREATE [UNIQUE] INDEX [IF NOT EXISTS]
+/// name ON table (...)`; anything else is refused.
+fn index_names(sql: &str) -> Result<(String, String), String> {
+    let words: Vec<&str> = sql.split(|c: char| c.is_whitespace() || c == '(').filter(|w| !w.is_empty()).collect();
+    let is = |i: usize, w: &str| words.get(i).is_some_and(|x| x.eq_ignore_ascii_case(w));
+    let mut i = if is(1, "UNIQUE") { 2 } else { 1 };
+    if !(is(0, "CREATE") && is(i, "INDEX")) {
+        return Err(format!("not a CREATE INDEX: {sql}"));
+    }
+    i += 1;
+    if is(i, "IF") && is(i + 1, "NOT") && is(i + 2, "EXISTS") {
+        i += 3;
+    }
+    if !is(i + 1, "ON") {
+        return Err(format!("not a CREATE INDEX ... ON a table: {sql}"));
+    }
+    let index = ident(words.get(i).copied().unwrap_or(""))?;
+    let table = ident(words.get(i + 2).copied().unwrap_or(""))?;
+    Ok((index.to_string(), table.to_string()))
 }
 
 // ---------------------------------------------------------------------
@@ -1083,6 +1145,23 @@ pub fn catalogue_summary(library: &Path) -> Result<Json, String> {
     // the hub checks every node against after the uids are carried.
     let passages = want("passages", &["passage_id", "file_id", "kind", "start_ms", "end_ms"], &["passage_uid"])?;
     Ok(serde_json::json!({ "tables": [files, passages] }))
+}
+
+/// Every index this catalogue declares, by name, with its table `[IMPL-UID-056]`:
+/// what the hub reads to send an index it holds and this node lacks. Read here, from
+/// the node's own file, because the copy the hub last sent has every index the hub
+/// had, and so cannot say which never arrived. SQLite's own, for a key, are not
+/// declared and are left out.
+pub fn catalogue_indexes(library: &Path) -> Result<Json, String> {
+    let c = Connection::open_with_flags(library, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("open {}: {e}", library.display()))?;
+    let mut q = c.prepare("SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL").map_err(es)?;
+    let out: serde_json::Map<String, Json> = q
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, Json::String(r.get::<_, String>(1)?))))
+        .map_err(es)?
+        .collect::<Result<_, _>>()
+        .map_err(es)?;
+    Ok(Json::Object(out))
 }
 
 /// `[SPEC-STAR-945]` This node's own catalogue rows about some files, so the hub can
@@ -1807,6 +1886,59 @@ mod tests {
         drop(c);
         undo(&db, &out.inverse).unwrap();
         assert_eq!(raw(&db), before, "and the undo puts the catalogue back as it was");
+    }
+
+    /// `[IMPL-UID-056]`: an index the hub holds on a table the node already has is made by
+    /// an entry's `add_indexes` -- in the transaction, rolled back by a rehearsal, made once,
+    /// and dropped by the undo. A unique one the node's rows break refuses the whole patch.
+    #[test]
+    fn an_entry_may_add_an_index_to_a_table_the_node_has() {
+        let (_d, db) = permuted("add-index");
+        let c = Connection::open(&db).unwrap();
+        c.execute_batch("ALTER TABLE passages ADD COLUMN passage_uid TEXT;
+                         UPDATE passages SET passage_uid = 'u-' || passage_id;").unwrap();
+        drop(c);
+        let indexes = |db: &Path| -> Vec<String> {
+            let c = Connection::open(db).unwrap();
+            let mut q = c.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL ORDER BY name").unwrap();
+            let v = q.query_map([], |r| r.get(0)).unwrap().filter_map(Result::ok).collect();
+            v
+        };
+        let (before, before_rows) = (indexes(&db), raw(&db));
+        assert!(!before.contains(&"passages_uid".to_string()), "{before:?}");
+        let entry = |sql: &str| serde_json::json!({"name": "passages", "columns": ["passage_id"], "key": ["passage_id"],
+                                                   "rows": [], "add_indexes": [sql]});
+        let made = entry("CREATE UNIQUE INDEX passages_uid ON passages(passage_uid)");
+        let patch = serde_json::json!({"tables": [made.clone()]});
+        apply_with(&db, &patch, None, Rule::Strict, false).unwrap();
+        assert_eq!(indexes(&db), before, "a rehearsal makes no index");
+        let out = apply_with(&db, &patch, None, Rule::Strict, true).unwrap();
+        assert!(indexes(&db).contains(&"passages_uid".to_string()), "{:?}", indexes(&db));
+        assert_eq!(out.inverse["tables"][0]["drop_indexes"], serde_json::json!(["passages_uid"]), "{}", out.inverse);
+        let again = apply_with(&db, &patch, None, Rule::Strict, true).unwrap();
+        assert_eq!(again.inverse["tables"], serde_json::json!([]), "one already there is left, and nothing to undo");
+        let c = Connection::open(&db).unwrap();
+        let twin = c.execute("UPDATE passages SET passage_uid = 'u-10' WHERE passage_id = 11", []);
+        assert!(twin.is_err(), "the index holds: two passages cannot share a uid");
+        drop(c);
+        undo(&db, &out.inverse).unwrap();
+        assert_eq!((indexes(&db), raw(&db)), (before.clone(), before_rows.clone()), "and the undo drops it again");
+        // Refused, whole: an index on another table, a statement that is not one, and a
+        // unique index the node's own rows break.
+        for (sql, why) in [
+            ("CREATE INDEX x ON files(audio_md5)", "is on files"),
+            ("CREATE TABLE passages_uid (a)", "not a CREATE INDEX"),
+            ("CREATE INDEX x ON passages(kind); DROP TABLE files", "not a single CREATE"),
+        ] {
+            let err = apply_with(&db, &serde_json::json!({"tables": [entry(sql)]}), None, Rule::Strict, true).unwrap_err();
+            assert!(err.contains(why), "{sql}: {err}");
+        }
+        let c = Connection::open(&db).unwrap();
+        c.execute("UPDATE passages SET passage_uid = 'u-10' WHERE passage_id = 11", []).unwrap();
+        drop(c);
+        let err = apply_with(&db, &patch, None, Rule::Strict, true).unwrap_err();
+        assert!(err.contains("passages_uid") && err.contains("UNIQUE"), "{err}");
+        assert_eq!(indexes(&db), before, "and nothing of any of them is left");
     }
 
     /// Once both sides have uids a reference by one finds the passage whatever its number

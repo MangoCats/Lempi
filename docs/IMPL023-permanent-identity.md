@@ -93,6 +93,13 @@ A delete on the hub alone is undone by the next merge, because `star_merge.TABLE
 
 **`[IMPL-UID-054]` Undone by** each node's kept inverse (`mesh_sync::undo`), which drops the added columns, and on the hub by step 2's backup.
 
+**`[IMPL-UID-056]` The unique index reaches every node.** Found 2026-11-15 on `lempi02w`'s disk: every passage holds its uid, but the node has neither the unique index `passages_uid` nor the hub's two triggers. A patch made a table's indexes only with the table, so step 4 could carry none. Without the index nothing on a node refuses two passages one uid, and Stage B's joins by uid would scan every passage.
+- A patch entry may now carry `add_indexes`: each one a `CREATE [UNIQUE] INDEX` on the entry's own table, made where no index has that name, and dropped by the undo.
+- The node reports its catalogue's indexes (`catalogue_indexes`), read from its own file. The copy last sent holds every index the hub had, so it cannot say which ones never arrived. The report is also the capability: a node that gives none is sent none.
+- The triggers stay on the hub. A node's bundle import writes a passage and then stamps its uid, which `passages_uid_required` would refuse.
+
+Offline against `lempi02w`'s copy last sent and its real list, the patch adds that one index and nothing else of schema. It needs a deploy and then a round, before Stage B relies on it.
+
 ## 6. Stage B: the listener names passages by uid
 
 **`[IMPL-UID-060]` Every listener table that names a passage holds its uid instead of its number:**

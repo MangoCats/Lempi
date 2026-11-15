@@ -406,7 +406,25 @@ def natural_entry(b, t, name, skip, by_uid=False):
     return entry
 
 
-def make_values(baseline, target, tables=None, exclude=None, natural=False, omit=None, own=(), by_uid=False):
+def index_entries(b, t, names, node_indexes):
+    """[IMPL-UID-056]: for each of `names` both catalogues hold, an entry that makes the
+    indexes the target declares and the node, by its own report, lacks. The baseline
+    cannot say: a copy the hub sent holds every index the hub had, and a patch could
+    carry none to a table the node already had until `add_indexes`. A table the
+    baseline lacks is made by `create`, with its indexes, and needs none."""
+    out = []
+    for name in sorted(names & tables_of(b) & tables_of(t)):
+        want = [sql for n, sql in t.execute("SELECT name, sql FROM sqlite_master WHERE type = 'index' "
+                                            "AND tbl_name = ? AND sql IS NOT NULL ORDER BY name", (name,))
+                if n not in node_indexes]
+        if want:
+            key = key_of(t, name)
+            out.append({"name": name, "columns": key, "key": key, "rows": [], "add_indexes": want})
+    return out
+
+
+def make_values(baseline, target, tables=None, exclude=None, natural=False, omit=None, own=(), by_uid=False,
+                node_indexes=None):
     """A patch as values, for the player to apply itself over the signed
     transport [SPEC-NSH-070] -- `lempi_core::mesh_sync::apply_with` reads it.
 
@@ -435,7 +453,11 @@ def make_values(baseline, target, tables=None, exclude=None, natural=False, omit
 
     `by_uid`, for a player that reports `passage_uids`, names passages by their
     uid [IMPL-UID-052] step 6 -- where both catalogues carry one for every
-    passage (`uids_throughout`), and by span otherwise."""
+    passage (`uids_throughout`), and by span otherwise.
+
+    `node_indexes`, the node's own report of the indexes its catalogue holds (by
+    name), adds the target's others to the tables it already has, last
+    [IMPL-UID-056]. None, for a player that gives no report, adds none."""
     exclude = exclude or {}
     omit = omit or {}
     b, t = open_ro(baseline), open_ro(target)
@@ -526,6 +548,8 @@ def make_values(baseline, target, tables=None, exclude=None, natural=False, omit
                 if rest or not gone:
                     writes.append(dict(entry, rows=rest))
             patch["tables"] += list(reversed(removals)) + writes + last
+        if node_indexes is not None:
+            patch["tables"] += index_entries(b, t, tables_of(t) & set(tables or tables_of(t)), set(node_indexes))
     finally:
         b.close()
         t.close()
