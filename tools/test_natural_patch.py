@@ -62,6 +62,8 @@ def to_local(c, kind, nat):
         return None
     if kind == "file":
         r = c.execute("SELECT file_id FROM files WHERE audio_md5 = ?", (nat,)).fetchone()
+    elif kind == "passage_uid":
+        r = c.execute("SELECT passage_id FROM passages WHERE passage_uid = ?", (nat,)).fetchone()
     else:
         md5, k, s, e = json.loads(nat) if isinstance(nat, str) else nat
         r = c.execute("SELECT p.passage_id FROM passages p JOIN files f USING (file_id) "
@@ -72,6 +74,9 @@ def to_local(c, kind, nat):
 def to_natural(c, kind, local):
     if kind == "file":
         r = c.execute("SELECT audio_md5 FROM files WHERE file_id = ?", (local,)).fetchone()
+        return r[0] if r else None
+    if kind == "passage_uid":
+        r = c.execute("SELECT passage_uid FROM passages WHERE passage_id = ?", (local,)).fetchone()
         return r[0] if r else None
     r = c.execute("SELECT f.audio_md5, p.kind, p.start_ms, p.end_ms FROM passages p JOIN files f USING (file_id) "
                   "WHERE p.passage_id = ?", (local,)).fetchone()
@@ -193,6 +198,87 @@ def apply_natural(db, patch):
 # --------------------------------------------------------------------- the test --
 def canon(p):
     return json.dumps(p, indent=1, sort_keys=True) + "\n"
+
+
+UID_COLUMNS = ("passage_uid TEXT", "birth_md5 TEXT", "birth_kind TEXT", "birth_start_ms INTEGER",
+               "birth_end_ms INTEGER", "birth_salt INTEGER")
+
+
+def give_uids(db, born=None):
+    """Every passage its uid, as Stage A's window gave them: from its span now, or,
+    for a passage `born` names by number, the uid it was born with."""
+    import passage_uid as pu
+    c = sqlite3.connect(db)
+    for col in UID_COLUMNS:
+        c.execute(f"ALTER TABLE passages ADD COLUMN {col}")
+    for pid, md5, kind, s, e in c.execute("SELECT p.passage_id, f.audio_md5, p.kind, p.start_ms, p.end_ms "
+                                         "FROM passages p JOIN files f USING (file_id)").fetchall():
+        uid, birth = (born or {}).get(pid) or (pu.passage_uid(md5, kind, s, e), (md5, kind, s, e))
+        c.execute("UPDATE passages SET passage_uid = ?, birth_md5 = ?, birth_kind = ?, birth_start_ms = ?, "
+                  "birth_end_ms = ?, birth_salt = 0 WHERE passage_id = ?", (uid, *birth, pid))
+    c.commit()
+    c.close()
+
+
+def uids_of(db):
+    c = sqlite3.connect(db)
+    try:
+        return {(m, s, e): u for m, s, e, u in c.execute(
+            "SELECT f.audio_md5, p.start_ms, p.end_ms, p.passage_uid FROM passages p JOIN files f USING (file_id)")}
+    finally:
+        c.close()
+
+
+def test_by_uid(tmp, write):
+    """[IMPL-UID-052] step 6: once both catalogues carry uids, a passage is named by
+    its uid. B's boundary, moved from 0-500 to 0-450, is one change keyed by B's uid,
+    which the edit did not change; no positional pairing is needed; and the node, its
+    own numbers kept, reaches the target. Written to `patch_uid.json` for the Rust
+    applier, which gives the node its uids from its spans as the window did."""
+    d = os.path.join(tmp, "uid")
+    os.makedirs(d)
+    base, target, node = (os.path.join(d, n) for n in ("base.db", "target.db", "node.db"))
+    build_db(base, "schema.sql", "baseline.sql")
+    build_db(target, "schema.sql", "target.sql")
+    build_db(node, "schema.sql", "node.sql")
+    give_uids(base)
+    give_uids(node)                       # the node is in step: the same spans, so the same uids
+    c = sqlite3.connect(base)
+    born = {pid: (uid, (m, k, s, e)) for pid, uid, m, k, s, e in c.execute(
+        "SELECT passage_id, passage_uid, birth_md5, birth_kind, birth_start_ms, birth_end_ms FROM passages")}
+    c.close()
+    give_uids(target, born)               # a passage kept since keeps the uid it was born with
+    tables = list(sp.NATURAL)
+    patch = sp.make_values(base, target, tables=tables, exclude=MACHINE, natural=True, by_uid=True)
+    if write:
+        with open(os.path.join(FIX, "patch_uid.json"), "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(canon(patch))
+    with open(os.path.join(FIX, "patch_uid.json"), encoding="utf-8") as fh:
+        held = json.load(fh)
+    check(canon(patch) == canon(held), "the builder's patch by uid is the fixture's patch_uid.json")
+    pas = [e for e in patch["tables"] if e["name"] == "passages"]
+    check(all(e["key"] == ["passage_uid"] for e in pas), f"passages are keyed by uid: {[e['key'] for e in pas]}")
+    b_uid = born[11][0]
+    moved = [r for e in pas for r in e["rows"] if r["key"] == [b_uid]]
+    check(len(moved) == 1 and moved[0]["was"][2:4] == [0, 500] and moved[0]["now"][2:4] == [0, 450],
+          f"B's moved boundary is one change under B's own uid: {moved}")
+    refs = {e["name"]: e["natural"]["refs"] for e in patch["tables"]}
+    check(refs.get("passage_recordings") == [{"col": "passage_id", "kind": "passage_uid"}],
+          f"and its credits name it by uid: {refs.get('passage_recordings')}")
+    got = apply_natural(node, patch)
+    with open(os.path.join(FIX, "expected.json"), encoding="utf-8") as fh:
+        expected = json.load(fh)
+    check(dump(node) == expected, f"applied to a node numbered differently, it gives the target: {dump(node)}")
+    check(uids_of(node) == uids_of(target), f"and every passage there holds the target's uid: {uids_of(node)}")
+    check(apply_natural(node, patch) == {"applied": 0, "already": got["applied"]}, "a second apply finds it all there")
+    # A catalogue with a passage lacking a uid falls back to spans, never half and half.
+    c = sqlite3.connect(target)
+    c.execute("UPDATE passages SET passage_uid = NULL WHERE passage_id = 13")
+    c.commit()
+    c.close()
+    span = sp.make_values(base, target, tables=tables, exclude=MACHINE, natural=True, by_uid=True)
+    check(all(e["key"] != ["passage_uid"] for e in span["tables"] if e["name"] == "passages"),
+          "a catalogue with one passage lacking a uid is patched by span")
 
 
 def main() -> int:
@@ -400,6 +486,8 @@ def main() -> int:
         check("baseline lacks the table" in str(err), f"{err}")
     else:
         check(False, "a catalogue pair the builder cannot name is refused, loudly")
+
+    test_by_uid(tmp, write)
 
     print()
     if FAILED:

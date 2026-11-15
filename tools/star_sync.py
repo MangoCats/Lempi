@@ -369,6 +369,7 @@ SIGNED_OMIT = {"cover_art": ["caa_asked_at"]}
 # adopted catalogue held one, and its first patch was refused for it, 2026-10-30 [SPEC-STAR-946].
 NODE_OWN = ["imported_payloads"]
 NATURAL_KEYS_NEEDED = 1    # [SPEC-NKP-075]: the catalogue patch by natural key
+PASSAGE_UIDS_NEEDED = 1    # [IMPL-UID-052] step 6: a natural patch that names passages by uid
 CATALOGUE_WINDOW_NEEDED = 1  # [SPEC-STAR-104]: a player that opens a read-only catalogue's partition to rehearse a patch too
 RETIRE_FILES_NEEDED = 1  # [SPEC-RTF-060]: a player that moves the files the hub retired to its own _Retired
 CATALOGUE_PATCH_MAX = 16 << 20   # [SPEC-NKP-920]: the most a player is sent in one request, in bytes of JSON
@@ -795,6 +796,23 @@ def node_rows(mdir, player, run, name, snap, sent_lib, nd, hub_copy, hub_library
     return out, line
 
 
+def natural_words(cat, span_why):
+    """How a catalogue patch names what it changes, for the summary: by natural key,
+    and its passages by uid, or by span and why [IMPL-UID-052]. Read from the patch
+    itself where it names a passage, so the words cannot say what was not sent;
+    `span_why`, worked out beside the builder, only where it names none."""
+    natural = [e for e in cat["tables"] if "natural" in e]
+    if not natural:
+        return ""
+    kinds = {r["kind"] for e in natural for r in e["natural"]["refs"]}
+    kinds |= {"passage_uid" for e in natural if e["name"] == "passages" and e["key"] == ["passage_uid"]}
+    kinds |= {"passage" for e in natural if e["name"] == "passages" and e["key"] != ["passage_uid"]}
+    by_uid = ("passage_uid" in kinds) if kinds & {"passage", "passage_uid"} else not span_why
+    if by_uid:
+        return " by natural key, passages by uid"
+    return f" by natural key, passages by span ({span_why or 'the builder gave no reason: a fault, say so'})"
+
+
 def catalogue_words(st):
     """A catalogue state as a person reads it."""
     text = CATALOGUE_STATES[st["state"]]
@@ -1163,6 +1181,7 @@ def snapshot(plan, only=None):
             baselines[name] = {"listener": os.path.join(nd, "listener.db"), "signed": n["member"],
                                "library": baseline or sent_lib, "library_sent": sent_lib,
                                "catalogue": cat, "catalogue_as_sent": as_sent, "natural_keys": cap,
+                               "passage_uids": snap.get("passage_uids", 0) or 0,
                                "retire_files": snap.get("retire_files", 0) or 0,
                                "catalogue_blocked": blocked, "integrity": snap.get("file_checks"),
                                "journal_mode": snap.get("journal_mode"),
@@ -1684,7 +1703,7 @@ def patch(plan, run):
                 summary.append(f"- **not sent: {words}** -- this node's player is older than the table, "
                                "and receives it once a current player is deployed there")
                 say(f"  {name}: NOT SENT {', '.join(held_back)}: its player is older than the table")
-            cat, unsupported, parts = None, None, None
+            cat, unsupported, parts, span_why = None, None, None, None
             for old in os.listdir(pd):                # nothing of an earlier patch lingers
                 if old.startswith("catalogue.") or old == RETIRE_FILE:
                     os.remove(os.path.join(pd, old))
@@ -1694,10 +1713,19 @@ def patch(plan, run):
                 # what identifies them everywhere [SPEC-NKP-075]; any other, the
                 # strict id-keyed patch, which only reaches a catalogue numbered as ours.
                 natural = (b.get("natural_keys", 0) or 0) >= NATURAL_KEYS_NEEDED
+                # [IMPL-UID-052] step 6: passages by their uid where the player can take
+                # that and both catalogues give every passage one; by span otherwise, and
+                # said, so a fallback never reads as the same patch [GOV002].
+                by_uid = natural and (b.get("passage_uids", 0) or 0) >= PASSAGE_UIDS_NEEDED
+                span_why = (sp.uids_missing(b["library"], t["library"]) if by_uid
+                            else "its player reports no passage_uids" if natural else None)
                 try:
-                    cat = sp.make_values(b["library"], t["library"], exclude=SIGNED_EXCLUDE, natural=natural, omit=SIGNED_OMIT, own=NODE_OWN)
+                    cat = sp.make_values(b["library"], t["library"], exclude=SIGNED_EXCLUDE, natural=natural, omit=SIGNED_OMIT,
+                                         own=NODE_OWN, by_uid=by_uid)
                 except sp.NaturalUnsupported as err:
                     unsupported = f"the hub cannot name what changed: {err} [SPEC-NKP-080]"
+                if cat is not None and span_why and by_uid:
+                    say(f"  {name}: passages named BY SPAN, not by uid -- {span_why} [IMPL-UID-052]")
             if cat is not None:
                 size = json_size(cat)
                 if size > CATALOGUE_PATCH_MAX:
@@ -1716,14 +1744,14 @@ def patch(plan, run):
                 man = write_parts(pd, parts)
                 crow = table_rows(cat)
                 summary.append("- catalogue: " + ", ".join(f"`{k}` {v}" for k, v in sorted(crow.items()))
-                               + (" by natural key" if any("natural" in e for e in cat["tables"]) else "")
+                               + natural_words(cat, span_why)
                                + f", {size / 1048576:.0f} MB in {man['of']} parts, staged on the node and committed there in one "
                                  "transaction [SPEC-NKP-920] (proven by the player's own rehearsal, strictly)")
             elif cat is not None:
                 write_json(os.path.join(pd, "catalogue.values.json"), cat)
                 crow = table_rows(cat)
                 summary.append("- catalogue: " + (", ".join(f"`{k}` {v}" for k, v in sorted(crow.items())) or "nothing to send")
-                               + (" by natural key" if any("natural" in e for e in cat["tables"]) else "")
+                               + natural_words(cat, span_why)
                                + " (proven by the player's own rehearsal, strictly)")
             elif unsupported:
                 summary.append(f"- catalogue: **none sent** -- {unsupported}")

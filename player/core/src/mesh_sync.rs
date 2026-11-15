@@ -1877,31 +1877,8 @@ mod tests {
         let patch: Json = serde_json::from_str(&read("patch.json")).unwrap();
         let out = apply_with(&db, &patch, None, Rule::Strict, true).unwrap();
         let expected: Vec<String> = serde_json::from_str(&read("expected.json")).unwrap();
+        assert_eq!(fixture_form(&db), expected, "the same catalogue as the Python reference gives");
         let c = Connection::open(&db).unwrap();
-        let got = {
-            let mut got: Vec<String> = Vec::new();
-            let mut q = c.prepare("SELECT audio_md5 FROM files").unwrap();
-            got.extend(q.query_map([], |r| Ok(format!("file {}", r.get::<_, String>(0)?))).unwrap().filter_map(Result::ok));
-            let mut q = c.prepare("SELECT f.audio_md5, p.start_ms, p.end_ms FROM passages p JOIN files f USING (file_id)").unwrap();
-            got.extend(
-                q.query_map([], |r| Ok(format!("passage {} {}-{}", r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))
-                    .unwrap()
-                    .filter_map(Result::ok),
-            );
-            let mut q = c
-                .prepare("SELECT f.audio_md5, p.start_ms, p.end_ms, r.mbid, r.weight FROM passage_recordings r JOIN passages p USING (passage_id) JOIN files f USING (file_id)")
-                .unwrap();
-            got.extend(
-                q.query_map([], |r| {
-                    Ok(format!("rec {} {}-{} {} {:?}", r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, f64>(4)?))
-                })
-                .unwrap()
-                .filter_map(Result::ok),
-            );
-            got.sort();
-            got
-        };
-        assert_eq!(got, expected, "the same catalogue as the Python reference gives");
         let (d_id, c2_id, b_id): (i64, i64, i64) = (
             c.query_row("SELECT file_id FROM files WHERE audio_md5 = 'D'", [], |r| r.get(0)).unwrap(),
             c.query_row("SELECT file_id FROM files WHERE audio_md5 = 'C2'", [], |r| r.get(0)).unwrap(),
@@ -1915,6 +1892,95 @@ mod tests {
         assert_eq!((again.counts.applied, again.counts.already), (0, applied), "a second apply finds it all already there");
         undo(&db, &out.inverse).unwrap();
         assert_eq!(raw(&db), before, "and the undo of the first puts back every id and value");
+    }
+
+    /// The fixture's catalogue named without ids, weights included, as
+    /// `test_natural_patch.py` dumps it.
+    fn fixture_form(path: &Path) -> Vec<String> {
+        let c = Connection::open(path).unwrap();
+        let mut got: Vec<String> = Vec::new();
+        let mut q = c.prepare("SELECT audio_md5 FROM files").unwrap();
+        got.extend(q.query_map([], |r| Ok(format!("file {}", r.get::<_, String>(0)?))).unwrap().filter_map(Result::ok));
+        let mut q = c.prepare("SELECT f.audio_md5, p.start_ms, p.end_ms FROM passages p JOIN files f USING (file_id)").unwrap();
+        got.extend(
+            q.query_map([], |r| Ok(format!("passage {} {}-{}", r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))
+                .unwrap()
+                .filter_map(Result::ok),
+        );
+        let mut q = c
+            .prepare("SELECT f.audio_md5, p.start_ms, p.end_ms, r.mbid, r.weight FROM passage_recordings r JOIN passages p USING (passage_id) JOIN files f USING (file_id)")
+            .unwrap();
+        got.extend(
+            q.query_map([], |r| {
+                Ok(format!("rec {} {}-{} {} {:?}", r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, f64>(4)?))
+            })
+            .unwrap()
+            .filter_map(Result::ok),
+        );
+        got.sort();
+        got
+    }
+
+    /// `[IMPL-UID-052]` step 6, both languages: the Python builder's patch by uid
+    /// (`patch_uid.json`), applied here to the node given its uids from its spans as
+    /// Stage A's window gave them, reaches the same catalogue as the patch by span. B's
+    /// boundary moved and C's passage changed file, and each kept the uid it was born
+    /// with -- one change apiece, where by span each is a removal and an addition.
+    #[test]
+    fn the_builders_patch_by_uid_applied_here_gives_the_same_catalogue() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/natural_patch");
+        let read = |n: &str| std::fs::read_to_string(dir.join(n)).unwrap_or_else(|e| panic!("{n}: {e}"));
+        let d = tmp("nk-fixture-uid");
+        let db = d.join("library.db");
+        let c = Connection::open(&db).unwrap();
+        c.execute_batch(&read("schema.sql")).unwrap();
+        c.execute_batch(&read("node.sql")).unwrap();
+        c.execute_batch(
+            "ALTER TABLE passages ADD COLUMN passage_uid TEXT; ALTER TABLE passages ADD COLUMN birth_md5 TEXT;
+             ALTER TABLE passages ADD COLUMN birth_kind TEXT; ALTER TABLE passages ADD COLUMN birth_start_ms INTEGER;
+             ALTER TABLE passages ADD COLUMN birth_end_ms INTEGER; ALTER TABLE passages ADD COLUMN birth_salt INTEGER;",
+        )
+        .unwrap();
+        let spans: Vec<(i64, String, String, i64, i64)> = {
+            let mut q = c.prepare("SELECT p.passage_id, f.audio_md5, p.kind, p.start_ms, p.end_ms FROM passages p JOIN files f USING (file_id)").unwrap();
+            q.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).unwrap().filter_map(Result::ok).collect()
+        };
+        for (id, md5, kind, s, e) in &spans {
+            let uid = crate::db::passage_uid(md5, kind, *s, *e, 0).unwrap();
+            c.execute(
+                "UPDATE passages SET passage_uid = ?1, birth_md5 = ?2, birth_kind = ?3, birth_start_ms = ?4, birth_end_ms = ?5, birth_salt = 0 WHERE passage_id = ?6",
+                params![uid, md5, kind, s, e, id],
+            )
+            .unwrap();
+        }
+        drop(c);
+        let before = raw(&db);
+        let patch: Json = serde_json::from_str(&read("patch_uid.json")).unwrap();
+        let out = apply_with(&db, &patch, None, Rule::Strict, true).unwrap();
+        let expected: Vec<String> = serde_json::from_str(&read("expected.json")).unwrap();
+        assert_eq!(fixture_form(&db), expected, "the same catalogue as the patch by span gives");
+        let c = Connection::open(&db).unwrap();
+        let uid_at = |md5: &str, s: i64, e: i64| -> (String, i64) {
+            c.query_row(
+                "SELECT p.passage_uid, p.birth_end_ms FROM passages p JOIN files f USING (file_id) WHERE f.audio_md5 = ?1 AND p.start_ms = ?2 AND p.end_ms = ?3",
+                params![md5, s, e],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+        let born = |md5: &str, s: i64, e: i64| crate::db::passage_uid(md5, "radio", s, e, 0).unwrap();
+        assert_eq!(uid_at("B", 0, 450), (born("B", 0, 500), 500), "B, its boundary moved, keeps the uid it was born with");
+        assert_eq!(uid_at("C2", 0, 700), (born("C", 0, 700), 700), "C's passage, moved to C2, keeps its uid");
+        assert_eq!(uid_at("D", 0, 900), (born("D", 0, 900), 900), "the new passage holds the uid the hub gave it");
+        let b_id: i64 = c.query_row("SELECT passage_id FROM passages WHERE passage_uid = ?1", [born("B", 0, 500)], |r| r.get(0)).unwrap();
+        assert_eq!(b_id, 11, "and under the node's own number");
+        drop(c);
+        let applied = out.counts.applied;
+        assert!(applied > 0 && out.counts.already == 0, "{:?}", out.counts);
+        let again = apply_with(&db, &patch, None, Rule::Strict, true).unwrap();
+        assert_eq!((again.counts.applied, again.counts.already), (0, applied), "a second apply finds it all already there");
+        undo(&db, &out.inverse).unwrap();
+        assert_eq!(raw(&db), before, "and the undo of the first puts back every id, uid and value");
     }
 
     // ---- a patch in parts [SPEC-NKP-920..940] -----------------------------

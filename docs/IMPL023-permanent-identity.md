@@ -1,6 +1,6 @@
 # IMPL023: Building Permanent Identity
 
-**Implementation Specification — Tier 3 · written 2026-11-14 · Stage 0 done 2026-11-15 on the hub and five nodes, `teacherslounge` to follow · Stage A's window run 2026-11-15: every passage on the hub and all six nodes has its uid, each node read row by row (LOG014 `[LOG-LIBW-310]`); step 6, references by uid, not yet built · the build plan for [SPEC075](spec/SPEC075-permanent-identity-and-a-movable-hub.md) §3 and §8 steps 1–3, and for every other place a number one database assigned is read by another**
+**Implementation Specification — Tier 3 · written 2026-11-14 · Stage 0 done 2026-11-15 on the hub and five nodes, `teacherslounge` to follow · Stage A's window run 2026-11-15: every passage on the hub and all six nodes has its uid, each node read row by row (LOG014 `[LOG-LIBW-310]`); step 6, references by uid, built 2026-11-15 and not yet run in a round · the build plan for [SPEC075](spec/SPEC075-permanent-identity-and-a-movable-hub.md) §3 and §8 steps 1–3, and for every other place a number one database assigned is read by another**
 
 Every node numbers the household's music in its own order, and the star sync, echo and the tools translate between those numbers wherever they meet. This plan removes the meeting rather than the translation. Outside its own database a passage is named by its `passage_uid` and a file by its `audio_md5`, and a number a database assigned is never read by another machine, nor by the same machine against another catalogue.
 
@@ -89,7 +89,7 @@ A delete on the hub alone is undone by the next merge, because `star_merge.TABLE
    - the uids add 10.5 MB to the patch, through the ordinary `add_columns`;
    - the natural entries come to 13.7 MB, 43% of the 32 MB first part they must fit in `[SPEC-NKP-930]`.
 5. Verify from each node's disk, not its answer: every passage the node holds has the hub's uid. A single disagreement stops the window.
-6. From the next round, passage references in the patch resolve by uid.
+6. From the next round, passage references in the patch resolve by uid. *Built 2026-11-15* (`star_patch.NATURAL_BY_UID`), for a node that reports `passage_uids` and a pair whose every passage carries its uid; otherwise by span, and the summary and the run's output say why ([GOV002](GOV002-sources-of-truth.md)). By uid, a passage that changes file is one change, so its old file's removal now waits until after the writes: before, the cascade took the passage first, on the fixture `fixtures/natural_patch/patch_uid.json`, which both languages apply.
 
 **`[IMPL-UID-054]` Undone by** each node's kept inverse (`mesh_sync::undo`), which drops the added columns, and on the hub by step 2's backup.
 

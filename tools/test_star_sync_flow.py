@@ -94,6 +94,7 @@ class Fleet:
         self.nodes = {}
         self.runs = []
         self.natural = set()        # the players that report natural_keys [SPEC-NKP-075]
+        self.uids = set()           # ... and passage_uids [IMPL-UID-052]
         self.readonly = set()       # players whose catalogue is on a read-only partition [SPEC-STAR-104]
         self.window = set()         # ... and which of them can open it themselves
         self.staged = {}            # (node, run) -> {n: (sha256, text)}  [SPEC-NKP-925]
@@ -185,6 +186,8 @@ class Fleet:
                    "last_run": None}
             if name in self.natural:
                 res["natural_keys"] = 1
+            if name in self.uids:
+                res["passage_uids"] = 1
             if name in self.readonly:
                 res["library_readonly"] = True
             if name in self.window:
@@ -554,14 +557,31 @@ def test_catalogue_moved(tmp):
           "a catalogue patch for a, none for b")
 
 
-def catalogue_scenario(tmp, b_current, artists=0):
+def give_uids(db):
+    """Every passage its uid from its span, as Stage A's window gave them [IMPL-UID-052]."""
+    import assign_passage_uids as apu
+    c = sqlite3.connect(db)
+    p = apu.plan(c)
+    for col, decl in apu.COLUMNS:
+        c.execute(f"ALTER TABLE passages ADD COLUMN {col} {decl}")
+    c.executemany("UPDATE passages SET passage_uid = ?, birth_md5 = ?, birth_kind = ?, birth_start_ms = ?, "
+                  "birth_end_ms = ?, birth_salt = 0 WHERE passage_id = ?",
+                  [(uid, m, k, s, e, pid) for pid, uid, m, k, s, e in p])
+    c.commit()
+    c.close()
+
+
+def catalogue_scenario(tmp, b_current, artists=0, uids=None):
     """a holds the hub's new music under the hub's ids, b under its own -- the case found on every player on
-    2026-10-05. a's player is old; b's is current if `b_current`."""
+    2026-10-05. a's player is old; b's is current if `b_current`. With `uids`, b's player also reports
+    passage_uids, and the catalogues `uids` names carry them: "all" every one, "hub" the hub's alone."""
     fleet = Fleet(tmp)
     same = [("X", 1, "2026-09-01 00:00:00")]
     plan, hub = build(tmp, fleet, same, {"a": (same, False), "b": (same, False), "c": (same, False)})
     if b_current:
         fleet.natural.add("b")
+    if uids:
+        fleet.uids.add("b")
     new = lambda fid, pid: (f"INSERT INTO files VALUES ({fid},'C','/x/c.mp3',100,1,1)",
                             f"INSERT INTO passages VALUES ({pid},{fid},'radio',0,500)")
     for db, (fid, pid) in ((hub["library"], (9, 20)), (fleet.nodes["a"]["library"], (9, 20)),
@@ -582,13 +602,20 @@ def catalogue_scenario(tmp, b_current, artists=0):
     c.execute("INSERT INTO files VALUES (10,'D','/x/d.mp3',100,1,1)")
     c.commit()
     c.close()
-    with faked(fleet):
+    if uids:
+        give_uids(hub["library"])
+        if uids == "all":
+            for n in ("a", "b"):
+                give_uids(fleet.nodes[n]["library"])
+                give_uids(os.path.join(tmp, "sent", f"{n}.library.db"))
+    with faked(fleet) as out:
         # c has a file the hub lacks, so its own copy cannot be made: leave it out of this merge.
         ss.snapshot(plan, {"a", "b"})
         run = ss.newest_run(plan)
         base = json.load(open(os.path.join(run, "baselines.json")))
         ss.merge(plan, run)
         ss.patch(plan, run)
+    fleet.said = out.getvalue()
     return fleet, plan, hub, run, base
 
 
@@ -621,6 +648,32 @@ def test_catalogue_states(tmp):
     ch = ss.catalogue_state(os.path.join(tmp, "sent", "c.library.db"), cn, os.path.join(run, "desktop", "library.db"))
     check(ch["state"] == "changed" and ch["not_the_hubs"] == 1, f"a file the hub lacks is a real change: {ch}")
     check(ss.catalogue_state(None, cn, cn) == {"state": "no-copy"}, "and with nothing last sent it says so")
+
+
+def test_catalogue_by_uid(tmp):
+    """[IMPL-UID-052] step 6: a player that reports passage_uids, both catalogues carrying them, is sent its
+    passages by uid; the same player against a copy without them gets them by span, and is told so."""
+    os.makedirs(os.path.join(tmp, "all"))
+    fleet, plan, hub, run, base = catalogue_scenario(os.path.join(tmp, "all"), b_current=True, uids="all")
+    check(base["b"]["passage_uids"] == 1 and base["a"]["passage_uids"] == 0, f"each node's report is kept: {base['b']}")
+    pb = json.load(open(os.path.join(run, "patches", "b", "catalogue.values.json")))
+    pe = next(e for e in pb["tables"] if e["name"] == "passages")
+    c = sqlite3.connect(hub["library"])
+    uid = c.execute("SELECT passage_uid FROM passages WHERE passage_id = 20").fetchone()[0]
+    c.close()
+    check(pe["key"] == ["passage_uid"] and [r["key"] for r in pe["rows"]] == [[uid]],
+          f"b's new passage is named by the uid the hub gave it: {pe}")
+    summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
+    check("by natural key, passages by uid" in summary, f"and the summary says so: {summary}")
+    os.makedirs(os.path.join(tmp, "hub"))
+    fleet, plan, hub, run, base = catalogue_scenario(os.path.join(tmp, "hub"), b_current=True, uids="hub")
+    pb = json.load(open(os.path.join(run, "patches", "b", "catalogue.values.json")))
+    pe = next(e for e in pb["tables"] if e["name"] == "passages")
+    check(pe["key"] != ["passage_uid"], f"against a copy last sent without uids, b's passages go by span: {pe['key']}")
+    summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
+    check("passages by span (the copy last sent has a passage without its uid)" in summary,
+          f"and the summary says why, not just that it went: {summary}")
+    check("b: passages named BY SPAN, not by uid" in fleet.said, f"and the run's own output says it too: {fleet.said}")
 
 
 def test_catalogue_old_player(tmp):
@@ -1074,7 +1127,7 @@ def main() -> int:
     test_lost_answer()
     test_split_catalogue()
     for test in (test_quiet, test_conflict, test_hub_edited_during_sync, test_retired_files_moved, test_approve_all, test_on_demand, test_catalogue_moved,
-                 test_catalogue_states, test_catalogue_old_player, test_catalogue_in_parts, test_a_patch_that_cannot_be_cut, test_selection, test_read_only_catalogue,
+                 test_catalogue_states, test_catalogue_by_uid, test_catalogue_old_player,test_catalogue_in_parts, test_a_patch_that_cannot_be_cut, test_selection, test_read_only_catalogue,
                  test_old_players, test_links_removed, test_links_repaired_with_files, test_empty_release_removed):
         tmp = tempfile.mkdtemp()
         try:
