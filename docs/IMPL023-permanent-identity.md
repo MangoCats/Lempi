@@ -1,6 +1,6 @@
 # IMPL023: Building Permanent Identity
 
-**Implementation Specification — Tier 3 · written 2026-11-14 · Stage 0 done 2026-11-15 on the hub and five nodes, `teacherslounge` to follow · Stage A: the uid, the tools' passage helper, the player's half (`passage_uids: 1`) and the hub's `assign_passage_uids.py` built 2026-11-15, none deployed or run · the build plan for [SPEC075](spec/SPEC075-permanent-identity-and-a-movable-hub.md) §3 and §8 steps 1–3, and for every other place a number one database assigned is read by another**
+**Implementation Specification — Tier 3 · written 2026-11-14 · Stage 0 done 2026-11-15 on the hub and five nodes, `teacherslounge` to follow · Stage A's window run 2026-11-15: every passage has its uid on the hub and five nodes, `teacherslounge` to follow (LOG014 `[LOG-LIBW-310]`); step 6, references by uid, not yet built · the build plan for [SPEC075](spec/SPEC075-permanent-identity-and-a-movable-hub.md) §3 and §8 steps 1–3, and for every other place a number one database assigned is read by another**
 
 Every node numbers the household's music in its own order, and the star sync, echo and the tools translate between those numbers wherever they meet. This plan removes the meeting rather than the translation. Outside its own database a passage is named by its `passage_uid` and a file by its `audio_md5`, and a number a database assigned is never read by another machine, nor by the same machine against another catalogue.
 

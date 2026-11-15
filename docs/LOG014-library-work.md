@@ -60,8 +60,35 @@ DATE*, linked from here. §2 stays here.
 | 9 | The 27 copied reviews: **gone from the hub and every node, closed 2026-11-15** `[LOG-LIBW-290]` | 2026-11-14 | Round `20261114T2350Z` removed them from bose, lempi02w, lp3-wifi, lrhtpc and smartboardpc. Round `20261115T1339Z` removed them from `teacherslounge` by the missed-run rule `[IMPL-UID-042]`, the flag cleared on 2026-11-08 with them. Read on each node's own disk: 179 reviews, none sharing a `decided_at`, `quick_check` ok. To be removed from this table at the next tidy. |
 | 10 | Catalogue patches blocked from 2026-11-08 to 2026-11-15: **every node caught up, closed 2026-11-15** `[LOG-LIBW-300]` | 2026-11-11 | Round `20261115T0104Z` committed the withheld catalogue, *Ghosts I–IV* (item 8) among it, to bose, lempi02w, lrhtpc and smartboardpc: about 22,630 rows each, `kept` 0. Round `20261115T0509Z` committed it to `lp3-wifi` (item 11), and `20261115T1339Z` to `teacherslounge`: 83,525 rows, its retimes of 2026-11-06 among them (item 1). Read on each node's own disk: every passage credited, `quick_check` ok; each speaker holds 24,171 passages and 12,000 `id_checks`, the hub's count. |
 | 11 | `lp3-wifi` lacked the credits of 742 files (4,052 passages) and 521 `id_checks`; **repaired 2026-11-15, its cause not found** | 2026-11-15 | Found when its strict rehearsal refused round `20261115T0104Z`; nothing was written there. `bose`, sent the same rounds, lacked none. 680 of the 742 files reached it by bundle sends of 2026-10-14 to 10-29, 60–100% of each; none sent from 2026-11-01 on was affected. The hub's copy last sent held their credits, so no patch had named them. Its library is on its durable ext4 partition, not the overlay root. The runs of that window are pruned, and the node keeps no catalogue backup after September. **Repair, at the maintainer's word:** its catalogue adopted as its baseline (`adopt lp3-wifi --force --tmp /srv/library`, `data/sync/adopted/lp3-wifi-20261115T0423Z/`) `[SPEC-STAR-946]`. Round `20261115T0509Z` then rehearsed CLEAN and committed 27,483 catalogue rows, `kept` 0, the missing credits and checks among them. Its 291 deletions were damage: three credits on *Scarecrow* naming *The One U Wanna C*, *Future Baby Mama* and *Somewhere Here on Earth*, left by `[SPEC-STAR-051]`'s applied copies and repaired on the hub on 2026-10-18 but never here, and four retired placeholder recordings with their 284 flavor values. Read on its disk afterwards: 24,171 passages, every one credited, 12,000 `id_checks`, the same as every other node; `quick_check` ok. |
+| 12 | **`teacherslounge` has no passage uids yet** `[LOG-LIBW-310]` | 2026-11-15 | It rehearsed round `20261115T1348Z` CLEAN, then slept before the commit, twice in one day, so its player did not answer. A round of its own when it is awake carries them. Check afterwards that its 22,765 passages hold the hub's uids. |
 
 ## 3. Entries, newest first
+
+**`[LOG-LIBW-310]` 2026-11-15: every passage given its permanent uid, on the
+hub and five nodes.** Stage A's window `[IMPL-UID-052]`, at the maintainer's
+word. It ran once the fleet was caught up (§2 item 10) and every player
+reported `passage_uids`.
+- **Rehearsed first** on a scratch copy of the hub's catalogue. 24,443
+  passages got 24,443 distinct uids in 8 s, and `lempi02w`'s patch came to
+  10.5 MB, nothing but the uid columns and the empty lineage table.
+- **On the hub:** `python tools/assign_passage_uids.py data/library.db
+  --commit --expect 24443`. That added `passage_uid` and the birth key to
+  every passage, the unique index `passages_uid`, `passage_lineage`, and
+  the two triggers that refuse a passage written without a uid or a uid
+  changed `[IMPL-UID-036]`. Every uid recomputed afterwards from its span
+  agrees; `quick_check` ok.
+- **To the nodes:** round `20261115T1348Z` carried them by the strict natural
+  patch. Each node rehearsed CLEAN and committed its own passages' uids,
+  `kept` 0.
+- **Read on each node's own disk afterwards:** bose, lempi02w, lp3-wifi,
+  lrhtpc and smartboardpc each hold 24,171 passages, every one with the
+  hub's uid for it, none another and none without; `quick_check` ok.
+- **Where:** the hub and those five. `teacherslounge` rehearsed CLEAN but had
+  gone to sleep by the commit (§2 item 12).
+- **No row changed anything else:** no timing, no credit, no number.
+- **Backup:** `data/backups/pre-passage-uids-20261115T134759Z/` (the catalogue
+  as it was, without the columns), for the hub. Each node keeps the inverse
+  of its commit. It goes 2026-12-15.
 
 **`[LOG-LIBW-300]` 2026-11-15: five dangling `id_checks` rows dropped from the
 hub's catalogue.** At the maintainer's word, after a rehearsal on the live
