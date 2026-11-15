@@ -95,12 +95,23 @@ A delete on the hub alone is undone by the next merge, because `star_merge.TABLE
 **`[IMPL-UID-060]` Every listener table that names a passage holds its uid instead of its number:**
 - `listener_flags`, whose `subject_id` is the uid where `subject_kind = 'passage'`;
 - `id_reviews` and `boundary_reviews`, keyed by `passage_uid`;
-- `passage_lyrics`, keyed by `passage_uid`, so a boundary edit no longer moves the words `[IMPL-UID-904]`;
+- `passage_lyrics`, which finds a passage's words by `passage_uid`, so a boundary edit no longer moves them, and keeps every row it holds `[IMPL-UID-063]`;
 - the node's own `listener_play_history`, `listener_rejections`, `selection_decisions`, `player_state` and `player_queue`.
 
 The number column goes, because kept beside the uid it would be a second source for one fact ([GOV002](GOV002-sources-of-truth.md)). Its readers, among the 56 files in the player and the tools that name these tables, join `passages` on `passage_uid`. The engine and the Director still hold the integer in memory, found by that join when they load.
 
-**`[IMPL-UID-062]` Each listener converts against its own catalogue:** a number becomes a uid by an exact join inside one database, which is not a translation between nodes. A row whose number names no passage there keeps a NULL uid and is counted, never guessed. After Stage 0 the hub expects none in its shared tables.
+**`[IMPL-UID-062]` Each listener converts against its own catalogue:** a number becomes a uid by an exact join inside one database, which is not a translation between nodes. A row whose number names no passage there keeps a NULL uid and is counted, never guessed. After Stage 0 the hub expects none in its shared tables. `passage_lyrics` holds no numbers and is not converted this way `[IMPL-UID-063]`.
+
+**`[IMPL-UID-063]` No saved words are lost.** `passage_lyrics` is a history, not a table of numbers:
+- no row is ever deleted `[SPEC-LYR-155]`;
+- every node holds every row, whether or not it holds the file `[SPEC-LYR-200]`;
+- a row whose segment is no passage's now still speaks for its recording `[SPEC-LYR-160]`.
+
+Measured 2026-11-14: the hub holds 111 rows, each the segment of one current passage, and each node holds only 108 of those passages. So:
+- **Each row keeps its key and every value it holds.** It gains a `passage_uid` column, and nothing else about it changes: no row is merged, replaced or dropped. The key stays `(audio_md5, kind, start_ms)`, which names a save, not a passage number. A new key would collapse the history, and a patch cannot carry one.
+- **The hub alone sets the uid,** once. It sets it for each row whose segment is a current passage's, by the same rule the player reads with `[SPEC-LYR-150]`. The merge carries the column to every node's copy, every row included. No node converts its own copy, since none holds every passage.
+- **A row the hub cannot place keeps a NULL uid.** It is listed by name, never guessed and never dropped, and goes on speaking for its recording as it does today.
+- **Words are found by uid.** A passage's words are the newest row with its uid. Only rows without a uid are matched by segment, as today. A new save records the uid of the passage it is saved for.
 
 **`[IMPL-UID-064]` The merge loses its translation.** `star_merge` keys the shared tables by uid. `passage_remap`, `passage_unmap`, `to_node_numbering` and `Node.remap` go, and with them both defects the 2026-11-14 review found: removal evidence read in the wrong numbering, and an unmatched passage read as the hub's. A node's history, the merge and the node's own rows now hold the same value. Merged `listener_likes` rows leave out `like_id`. A node's own tables go back exactly as it holds them, as today.
 
@@ -108,11 +119,17 @@ The number column goes, because kept beside the uid it would be a second source 
 
 **`[IMPL-UID-068]` The window:**
 1. Stop every player.
-2. Back up every listener.
-3. Convert the hub's listener, every node's, and every copy last sent, since the merge reads those as baselines `[SPEC-STAR-110]`.
+2. Back up every listener. On the hub and every node, record what `passage_lyrics` holds: its row count, a digest over its rows, and the words each passage shows.
+3. Convert the hub's listener, every node's, and every copy last sent, since the merge reads those as baselines `[SPEC-STAR-110]`. `passage_lyrics` is set on the hub alone and carried by the merge `[IMPL-UID-063]`.
 4. Verify that each node's shared rows equal the hub's by uid, and that its own tables' row counts are unchanged.
-5. Run a merge round: it reports no translation and raises no item that the round before raised none of.
-6. Start the players, playing.
+5. Verify `passage_lyrics` on the hub and on every node, against what step 2 recorded:
+   - the same number of rows;
+   - the same digest over every column but `passage_uid`;
+   - for every passage that showed words before, the same words now, read through the player's own lookup.
+
+   A single difference stops the window, and step 2's backup restores it.
+6. Run a merge round: it reports no translation and raises no item that the round before raised none of.
+7. Start the players, playing.
 
 ## 7. Stage C: every wire, URL, tool and log
 
@@ -173,7 +190,7 @@ The maintainer, 2026-11-14:
 
 - **`[IMPL-UID-900]` The SPEC006 change and flag tools are converted to uids,** not retired `[IMPL-UID-077]`.
 - **`[IMPL-UID-902]` The four orphan reviews are dropped** (passages 6455–6458, decided 2026-11-01) `[IMPL-UID-044]`.
-- **`[IMPL-UID-904]` `passage_lyrics` is re-keyed by uid** in Stage B, which changes [SPEC079](spec/SPEC079-editing-lyrics.md)'s key when it is built.
+- **`[IMPL-UID-904]` `passage_lyrics` is re-keyed by uid** in Stage B. A passage's words are found by its uid, and no saved row is lost `[IMPL-UID-063]`: each row keeps its own key, so the history stays whole. This changes how [SPEC079](spec/SPEC079-editing-lyrics.md) finds a passage's words, when it is built.
 - **`[IMPL-UID-906]` Withdrawn reviews stop coming back now,** in Stage 0, rather than waiting for Stage B `[IMPL-UID-042]`.
 
 ---
