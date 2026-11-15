@@ -348,6 +348,9 @@ class Newest:
 
     def __init__(self, spec: dict | None):
         self.run = (spec or {}).get("run")
+        # Each node's snapshot that run merged, by when it was taken: a holder
+        # bringing the very same one brings nothing that run had not weighed.
+        self.weighed = {n: norm_time(t) for n, t in ((spec or {}).get("weighed") or {}).items()}
         path = (spec or {}).get("listener")
         self.db = open_ro(path) if self.run and path and os.path.exists(path) else None
         self.why_not = (None if self.db else
@@ -372,7 +375,16 @@ def missed(newest: Newest | None, table: str, key: tuple, held: dict, merged: di
     `newest` lacks that every node holding it holds unchanged from a copy
     older than `newest`. A row any holder changed or added since its copy,
     holds with no copy, or holds under a passage the hub cannot match, is
-    not one: an edit or an addition is never undone by this."""
+    not one: an edit or an addition is never undone by this.
+
+    **A holder bringing the very snapshot `newest` merged is no evidence
+    either way**, and is passed over. Found 2026-11-15 on a phone: its copy
+    is recorded when it is *offered* a patch, not when it applies one, so a
+    phone that never applied the offer still holds a flag its new copy
+    lacks. That read as an addition, and the flag the hub cleared on
+    2026-11-08 would have come back everywhere. Its upload was unchanged
+    since 2026-10-29, and the newest run had already weighed it, and removed
+    the flag."""
     have = newest.keys(table, key) if newest is not None else None
     if have is None:
         return {}
@@ -385,6 +397,8 @@ def missed(newest: Newest | None, table: str, key: tuple, held: dict, merged: di
             continue
         for nm, row in holders.items():
             n = by_name[nm]
+            if newest.weighed.get(nm) and newest.weighed[nm] == n.taken_at:
+                continue                       # the same snapshot the newest run already merged
             base = n.base_rows(table, key)
             if (base is None or k not in base or not _same(row, base[k])
                     or not n.sent_run or n.sent_run >= newest.run or k in n.gone_keys(table, key)):

@@ -1244,10 +1244,20 @@ def void_merge(run):
         rm(os.path.join(run, f))
 
 
+def weighed_in(plan, run_id):
+    """[IMPL-UID-042]: each node's snapshot that run `run_id` merged, by when it was
+    taken. A phone's is its upload, unchanged until it uploads again, so a later run
+    can tell that it brings nothing the newest run had not already weighed."""
+    m = read_json(os.path.join(at_root(plan["runs"]), run_id, "manifest.json")) or {}
+    return {n["name"]: n.get("taken_at") for n in m.get("nodes", []) if n.get("taken_at")}
+
+
 def merge(plan, run):
     with open(os.path.join(run, "manifest.json"), encoding="utf-8") as fh:
         manifest = json.load(fh)
     void_merge(run)
+    if manifest.get("newest_sent"):
+        manifest["newest_sent"]["weighed"] = weighed_in(plan, manifest["newest_sent"]["run"])
     if os.path.exists(verdicts_path(run)):
         manifest["verdicts"] = verdicts_path(run)
     manifest["integrity"] = links_config(plan, run)

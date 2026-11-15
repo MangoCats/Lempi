@@ -501,6 +501,12 @@ def test_the_newest_copy_sent():
               "and the copy is that run's whole merge")
         if c:
             c.close()
+        import json
+        json.dump({"nodes": [{"name": "phone-x", "taken_at": "2026-10-29T18:26:24Z"}, {"name": "bose"}]},
+                  open(os.path.join(runs, "20261112T2008Z", "manifest.json"), "w", encoding="utf-8"))
+        check(ss.weighed_in(plan, "20261112T2008Z") == {"phone-x": "2026-10-29T18:26:24Z"},
+              "and which snapshot that run merged from each node, by when it was taken")
+        check(ss.weighed_in(plan, "20991231T0000Z") == {}, "a run with no manifest says nothing was weighed")
         os.remove(os.path.join(runs, "20261112T2008Z", "merge", "listener.db"))
         again = os.path.join(runs, "20261114T1300Z")
         os.makedirs(again)

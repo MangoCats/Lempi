@@ -583,6 +583,37 @@ def test_a_node_that_missed_the_run(tmp):
           f"a hub whose copy is older than the newest run does not make G read as removed: {left}")
 
 
+def test_a_phone_that_never_applied_its_offer(tmp):
+    """[IMPL-UID-042], found 2026-11-15: R1 removed flag F, and offered phone p a
+    copy without it. p's copy is recorded at the offer, but p never applied it:
+    its upload, unchanged since before R1, still holds F, and F is not in its new
+    copy. That read as an addition, and F came back. The newest run had merged
+    this very upload, so it is passed over. A *new* upload holding F, against a
+    copy without it, is a re-addition, and stays."""
+    F = "INSERT INTO listener_flags VALUES ('recording','F','2026-10-01 00:00:00',NULL)"
+    p = lambda n: os.path.join(tmp, f"ph-{n}.lis")
+    db(p("r1"))                                      # R1's merge: F removed
+    db(p("offer"))                                   # what p was offered in R1: no F
+
+    def run(tag, upload_at):
+        db(p(f"{tag}-desk"))
+        db(p(f"{tag}-phone"), F)                     # p still holds F
+        nodes = [dict(name="desktop", listener=p(f"{tag}-desk"), sent=p("r1"), sent_run="R1",
+                      taken_at="2026-11-15T00:00:00Z", backups=backup_of(tmp, f"ph-{tag}-desk", 1789000000)),
+                 dict(name="phone", listener=p(f"{tag}-phone"), sent=p("offer"), sent_run="R1",
+                      taken_at=upload_at, backups=backup_of(tmp, f"ph-{tag}-phone", 1788000000, F))]
+        m = {"hub_state_from": "desktop", "nodes": nodes,
+             "newest_sent": {"run": "R1", "listener": p("r1"), "weighed": {"phone": "2026-10-29T18:26:24Z"}}}
+        out = os.path.join(tmp, f"ph-{tag}-out")
+        sm.build(m, out)
+        return {r[0] for r in rows(os.path.join(out, "listener.db"), "SELECT subject_id FROM listener_flags")}
+
+    left = run("same", "2026-10-29T18:26:24Z")
+    check(left == set(), f"the same upload the newest run weighed does not bring F back: {left}")
+    left = run("new", "2026-11-14T09:00:00Z")
+    check(left == {"F"}, f"a new upload holding F against a copy without it is a re-addition, and stays: {left}")
+
+
 def test_one_file_many_passages(tmp):
     """[SPEC-STAR-049] within one file. Found 2026-10-18 on bose: a file
     holding a whole album has several passages, numbered differently on a
@@ -822,6 +853,7 @@ def main() -> int:
     test_a_removal_is_read_in_the_hubs_numbering(tmp)
     test_a_withdrawn_review_stays_withdrawn(tmp)
     test_a_node_that_missed_the_run(tmp)
+    test_a_phone_that_never_applied_its_offer(tmp)
     test_one_file_many_passages(tmp)
     test_routine(tmp)
     manifest, inputs = fleet(tmp)
