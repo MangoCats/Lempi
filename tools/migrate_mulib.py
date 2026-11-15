@@ -49,6 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ingest_folder  # noqa: E402
 from ingest_folder import audio_md5  # noqa: E402
 import lempi_db  # noqa: E402
+import passage_uid  # noqa: E402  -- the one place a passage is created [IMPL-UID-038]
 
 SR = 44100.0
 SRC = "inherited:mulib"
@@ -239,11 +240,8 @@ def main():
         g = r["gain"]
         gain_db = round(20.0 * math.log10(g), 3) if g and g > 0 else None
         try:
-            cur = out.execute(
-                "INSERT INTO passages(file_id,kind,start_ms,end_ms,lead_in_ms,"
-                "lead_out_ms,gain_db,boundary_src) VALUES (?,?,?,?,?,?,?,?)",
-                (fid, kind, s_ms, e_ms, lin, lout, gain_db, SRC))
-            pid = cur.lastrowid
+            pid = passage_uid.insert_passage(out, fid, kind, s_ms, e_ms, SRC,
+                                             lead_in_ms=lin, lead_out_ms=lout, gain_db=gain_db)
         except sqlite3.IntegrityError:
             pid = out.execute("SELECT passage_id FROM passages WHERE file_id=? AND kind=? "
                               "AND start_ms=? AND end_ms=?", (fid, kind, s_ms, e_ms)).fetchone()[0]

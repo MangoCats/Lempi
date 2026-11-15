@@ -60,6 +60,7 @@ import urllib.parse
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+import passage_uid  # noqa: E402  -- the one place a passage is created [IMPL-UID-038]
 import audio_duration        # noqa: E402
 import cd_toc                 # noqa: E402
 import artist_sort            # noqa: E402  -- an artist's sort name [REQ-VIS-182]
@@ -1797,15 +1798,10 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
 
     def pair(start_ms, end_ms, album_start_ms=None):
         # Both kinds, one identification `[SPEC-SA-110]`, `[GDE-BMK-030]`.
-        radio = conn.execute(
-            "INSERT INTO passages (file_id,kind,start_ms,end_ms,boundary_src) "
-            "VALUES (?1,'radio',?2,?3,?4)",
-            (file_id, start_ms, end_ms, boundary_src)).lastrowid
-        album = conn.execute(
-            "INSERT INTO passages (file_id,kind,start_ms,end_ms,"
-            "lead_in_ms,lead_out_ms,gain_db,boundary_src) "
-            "VALUES (?1,'album',?2,?3,0,0,0.0,?4)",
-            (file_id, start_ms if album_start_ms is None else album_start_ms, end_ms, boundary_src)).lastrowid
+        radio = passage_uid.insert_passage(conn, file_id, "radio", start_ms, end_ms, boundary_src)
+        album = passage_uid.insert_passage(conn, file_id, "album",
+                                           start_ms if album_start_ms is None else album_start_ms, end_ms,
+                                           boundary_src, lead_in_ms=0, lead_out_ms=0, gain_db=0.0)
         return radio, album
 
     hidden = [] if whole_disc else list(hidden)
@@ -1839,10 +1835,8 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
             # [SPEC-SIL-020]: the run's one album passage, made at its first track.
             q = quiet.get(run["first"])
             if q is None:
-                pid = conn.execute(
-                    "INSERT INTO passages (file_id,kind,start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db,boundary_src) "
-                    "VALUES (?1,'album',?2,?3,0,0,0.0,?4)",
-                    (file_id, run["start_ms"], run["end_ms"], boundary_src)).lastrowid
+                pid = passage_uid.insert_passage(conn, file_id, "album", run["start_ms"], run["end_ms"],
+                                                 boundary_src, lead_in_ms=0, lead_out_ms=0, gain_db=0.0)
                 q = quiet[run["first"]] = {"pid": pid, "shares": {}, "unverified": [], "hold": None}
             outcome, mbid, source = _resolve_silent(conn, track.number, run, audio_md5, disc_outcome,
                                                     releases, end_ms - start_ms)
@@ -2020,8 +2014,7 @@ def _commit_folded(conn, h: dict, hidden_mbid: tuple[str, str], track: dict, fil
     share of the passage, so it is named by the longer and rotates with it; a
     track held as damaged holds this passage too, since it plays that audio."""
     start, end = h["start_ms"], track["end_ms"]
-    pid = conn.execute("INSERT INTO passages (file_id,kind,start_ms,end_ms,boundary_src) "
-                       "VALUES (?1,'radio',?2,?3,?4)", (file_id, start, end, boundary_src)).lastrowid
+    pid = passage_uid.insert_passage(conn, file_id, "radio", start, end, boundary_src)
     span = max(end - start, 1)
     shares: dict[str, list] = {}
     for mbid, source, ms in ((*hidden_mbid, h["end_ms"] - start), (track["mbid"], track["source"],
@@ -2195,12 +2188,9 @@ def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[
              ingest_folder.md5_generator(), sha256_file(mp3_path))).lastrowid
         file_ids.append(file_id)
         radio_start = min(t.index_points.get(1, 0), max(end_ms - 1, 0))
-        radio_pid = conn.execute(
-            "INSERT INTO passages (file_id,kind,start_ms,end_ms,boundary_src) "
-            "VALUES (?1,'radio',?2,?3,'imported:tracks-cue')", (file_id, radio_start, end_ms)).lastrowid
-        album_pid = conn.execute(
-            "INSERT INTO passages (file_id,kind,start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db,boundary_src) "
-            "VALUES (?1,'album',0,?2,0,0,0.0,'imported:tracks-cue')", (file_id, end_ms)).lastrowid
+        radio_pid = passage_uid.insert_passage(conn, file_id, "radio", radio_start, end_ms, "imported:tracks-cue")
+        album_pid = passage_uid.insert_passage(conn, file_id, "album", 0, end_ms, "imported:tracks-cue",
+                                               lead_in_ms=0, lead_out_ms=0, gain_db=0.0)
         outcome, mbid, source = _resolve_track(
             conn, t.number, t.title or toc.title, radio_pid, mp3_path, radio_start, end_ms,
             audio_md5, disc_outcome, releases, chosen, acoustid_key, now, isrc=t.isrc)

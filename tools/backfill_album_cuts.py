@@ -35,16 +35,14 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+import passage_uid  # noqa: E402  -- the one place a passage is created [IMPL-UID-038]
 
 # Fade gets the schema's own default (20ms/exponential) by omission, the
 # same de-click ramp every passage gets regardless of kind `[SPEC-SUI-226]`
 # -- an album cut still plays start-to-end through real speakers and still
-# deserves the click guard, even though it is never itself trimmed.
-_INSERT_ALBUM = """
-    INSERT INTO passages (file_id, kind, start_ms, end_ms,
-                           lead_in_ms, lead_out_ms, gain_db, boundary_src)
-    VALUES (?1, 'album', ?2, ?3, 0, 0, 0.0, ?4)
-"""
+# deserves the click guard, even though it is never itself trimmed. The row
+# is made by `passage_uid.insert_passage`, which leaves out the fade columns
+# for the same reason.
 
 
 def say(text: str) -> None:
@@ -94,8 +92,8 @@ def backfill(conn: sqlite3.Connection, commit: bool) -> tuple[int, int]:
         if not commit:
             added += 1
             continue
-        album_id = conn.execute(_INSERT_ALBUM, (
-            r["file_id"], r["start_ms"], r["end_ms"], boundary_src)).lastrowid
+        album_id = passage_uid.insert_passage(conn, r["file_id"], "album", r["start_ms"], r["end_ms"],
+                                              boundary_src, lead_in_ms=0, lead_out_ms=0, gain_db=0.0)
         added += 1
         for pr in conn.execute(
                 "SELECT mbid, weight, source FROM passage_recordings WHERE passage_id=?1",

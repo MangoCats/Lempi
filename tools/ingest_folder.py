@@ -30,6 +30,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+import passage_uid  # noqa: E402  -- the one place a passage is created [IMPL-UID-038]
 import audio_duration  # noqa: E402
 from byte_hash import ensure_sha256_column, sha256_file  # noqa: E402
 
@@ -328,16 +329,10 @@ def main() -> int:
         pids = {}
         for kind in kinds:
             if kind == "album":
-                pids[kind] = conn.execute(
-                    "INSERT INTO passages "
-                    "(file_id,kind,start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db,boundary_src) "
-                    "VALUES (?1,?2,0,?3,0,0,0.0,'ingest:whole-file')",
-                    (fid, kind, info["duration_ms"])).lastrowid
+                pids[kind] = passage_uid.insert_passage(conn, fid, kind, 0, info["duration_ms"], "ingest:whole-file",
+                                                        lead_in_ms=0, lead_out_ms=0, gain_db=0.0)
             else:
-                pids[kind] = conn.execute(
-                    "INSERT INTO passages (file_id,kind,start_ms,end_ms,boundary_src) "
-                    "VALUES (?1,?2,0,?3,'ingest:whole-file')",
-                    (fid, kind, info["duration_ms"])).lastrowid
+                pids[kind] = passage_uid.insert_passage(conn, fid, kind, 0, info["duration_ms"], "ingest:whole-file")
 
         mbid = LOCAL_PREFIX + md5
         conn.execute(

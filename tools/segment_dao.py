@@ -49,6 +49,7 @@ import subprocess
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+import passage_uid  # noqa: E402  -- the one place a passage is created [IMPL-UID-038]
 import audio_duration  # noqa: E402  -- a decoded length, not an estimate [REQ-LIB-145]
 import time
 
@@ -746,16 +747,10 @@ def commit_segments(conn, file_id: int, audio_md5: str, path: str,
         # `[GDE-BMK-030]`, permanently, not a value awaiting analysis.
         for kind in ("radio", "album"):
             if kind == "album":
-                pid = conn.execute(
-                    "INSERT INTO passages (file_id,kind,start_ms,end_ms,"
-                    "lead_in_ms,lead_out_ms,gain_db,boundary_src) "
-                    "VALUES (?1,?2,?3,?4,0,0,0.0,?5)",
-                    (file_id, kind, start_ms, end_ms, boundary_src)).lastrowid
+                pid = passage_uid.insert_passage(conn, file_id, kind, start_ms, end_ms, boundary_src,
+                                                 lead_in_ms=0, lead_out_ms=0, gain_db=0.0)
             else:
-                pid = conn.execute(
-                    "INSERT INTO passages (file_id,kind,start_ms,end_ms,boundary_src) "
-                    "VALUES (?1,?2,?3,?4,?5)",
-                    (file_id, kind, start_ms, end_ms, boundary_src)).lastrowid
+                pid = passage_uid.insert_passage(conn, file_id, kind, start_ms, end_ms, boundary_src)
             conn.execute(
                 "INSERT INTO passage_recordings (passage_id,mbid,weight,source) "
                 "VALUES (?1,?2,1.0,?3)", (pid, mbid, source))

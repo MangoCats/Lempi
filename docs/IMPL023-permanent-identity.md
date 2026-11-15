@@ -1,6 +1,6 @@
 # IMPL023: Building Permanent Identity
 
-**Implementation Specification — Tier 3 · written 2026-11-14 · Stage 0's code built 2026-11-14, not yet run on the hub · the build plan for [SPEC075](spec/SPEC075-permanent-identity-and-a-movable-hub.md) §3 and §8 steps 1–3, and for every other place a number one database assigned is read by another**
+**Implementation Specification — Tier 3 · written 2026-11-14 · Stage 0 done 2026-11-15 on the hub and five nodes, `teacherslounge` to follow · Stage A: the uid and the tools' passage helper built, the player's half not yet · the build plan for [SPEC075](spec/SPEC075-permanent-identity-and-a-movable-hub.md) §3 and §8 steps 1–3, and for every other place a number one database assigned is read by another**
 
 Every node numbers the household's music in its own order, and the star sync, echo and the tools translate between those numbers wherever they meet. This plan removes the meeting rather than the translation. Outside its own database a passage is named by its `passage_uid` and a file by its `audio_md5`, and a number a database assigned is never read by another machine, nor by the same machine against another catalogue.
 
@@ -50,7 +50,7 @@ Every node numbers the household's music in its own order, and the star sync, ec
 
 **`[IMPL-UID-036]` SQLite enforces it, so no writer can forget.** One trigger refuses a passage inserted without a uid, and another refuses changing a uid that is set. A trigger needs no custom SQL function, so it holds in the `sqlite3` shell and in every tool not yet written. A re-salt `[SPEC-UID-052]` is the one tool that sets the second trigger aside, inside its own transaction, and it writes lineage.
 
-**`[IMPL-UID-038]` One insert per language.** Passages are created in eight files: `player/core/src/bundle.rs`, `player/src/found.rs`, and `segment_dao.py`, `ingest_cd.py` (five statements), `ingest_folder.py`, `backfill_album_cuts.py`, `migrate_mulib.py` and `catalogue_integrity.py` under `tools/`. Each calls one `insert_passage`, which computes the uid. The generic inserts in `mesh_sync::write_natural` and `star_sync.baseline_from_rows` carry the column as data. A test fails on `INSERT INTO passages` outside the helpers.
+**`[IMPL-UID-038]` One insert per language.** In `tools/`, `passage_uid.insert_passage` makes every passage: `segment_dao.py`, `ingest_cd.py` (five statements), `ingest_folder.py`, `backfill_album_cuts.py` and `migrate_mulib.py` call it. Before uids exist it writes exactly the row each statement wrote. In the player, `bundle.rs` and `found.rs` gain the same with Stage A's player build. The generic inserts in `mesh_sync::write_natural`, `star_sync.baseline_from_rows` and `catalogue_integrity._insert` copy a row that already has its uid, and carry the column as data. `test_passage_uid.py` fails on a passage written by hand anywhere else. Its allow-list names each file still doing so and why, and can only shrink.
 
 **`[IMPL-UID-039]` Collisions** `[SPEC-UID-050]`. Within one database a birth key is unique, as `passages_span` is. A uid that arrives from elsewhere (a bundle, a patch, later a proposal) is checked against its birth key, and a mismatch is refused by name. The second audio digest `[SPEC-UID-061]` is not needed to remove numbers and waits for SPEC075 §4.
 
@@ -84,7 +84,10 @@ A delete on the hub alone is undone by the next merge, because `star_merge.TABLE
 1. Deploy players that read a uid, and keep resolving by span. They change no data. `build/deploy-appliance.sh` writes both layers on `bose` and `lp3-wifi` `[GDE-DEP-060]`.
 2. Stop the sync and back up the hub pair.
 3. Assign uids in the hub's catalogue, with the columns, the index, the triggers and `passage_lineage`. This is one tool, which rehearses by default.
-4. Run an ordinary round. The strict natural patch adds the columns on every node and sets each passage's uid, rehearsed first, with an inverse kept for each node `[SPEC-NKP-040]`.
+4. Run an ordinary round. The strict natural patch adds the columns on every node and sets each passage's uid, rehearsed first, with an inverse kept for each node `[SPEC-NKP-040]`. *Measured offline 2026-11-15 on `bose`'s real baseline and target:*
+   - 24,171 passages get 24,171 distinct uids;
+   - the uids add 10.5 MB to the patch, through the ordinary `add_columns`;
+   - the natural entries come to 13.7 MB, 43% of the 32 MB first part they must fit in `[SPEC-NKP-930]`.
 5. Verify from each node's disk, not its answer: every passage the node holds has the hub's uid. A single disagreement stops the window.
 6. From the next round, passage references in the patch resolve by uid.
 

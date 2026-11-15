@@ -45,3 +45,38 @@ def passage_uid(audio_md5: str, kind: str, start_ms: int, end_ms: int, salt: int
     0 unless a collision rule of [SPEC-UID-050] gave it another."""
     text = birth_text(audio_md5, kind, start_ms, end_ms, salt)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
+
+
+def has_uids(conn) -> bool:
+    """Whether this catalogue's passages carry a uid yet [IMPL-UID-034]."""
+    return any(r[1] == "passage_uid" for r in conn.execute("PRAGMA table_info(passages)"))
+
+
+def insert_passage(conn, file_id: int, kind: str, start_ms: int, end_ms: int, boundary_src: str,
+                   **columns) -> int:
+    """Create one passage and return its local number: the one place a tool
+    under `tools/` does [IMPL-UID-038].
+
+    Where the catalogue's passages carry uids, the new one is born with its
+    own: its birth key is the file's `audio_md5`, its kind and its span, and
+    the salt is the lowest not already born on that key here [SPEC-UID-054].
+    A cut made again after its passage was removed finds no living key, and
+    so is born with the uid it had, as [SPEC-UID-056] asks. Where they do not
+    yet, the row is exactly what the tool wrote before this existed.
+
+    `columns` are the rest of the row, `lead_in_ms` and the like."""
+    row = {"file_id": file_id, "kind": kind, "start_ms": start_ms, "end_ms": end_ms,
+           "boundary_src": boundary_src, **columns}
+    if has_uids(conn):
+        f = conn.execute("SELECT audio_md5 FROM files WHERE file_id = ?", (file_id,)).fetchone()
+        if f is None:
+            raise ValueError(f"no file {file_id}: a passage's uid is born of its file's audio_md5")
+        salt = 0
+        while conn.execute("SELECT 1 FROM passages WHERE birth_md5 = ? AND birth_kind = ? AND birth_start_ms = ? "
+                           "AND birth_end_ms = ? AND birth_salt = ?", (f[0], kind, start_ms, end_ms, salt)).fetchone():
+            salt += 1
+        row.update(passage_uid=passage_uid(f[0], kind, start_ms, end_ms, salt), birth_md5=f[0], birth_kind=kind,
+                   birth_start_ms=start_ms, birth_end_ms=end_ms, birth_salt=salt)
+    cols = list(row)
+    return conn.execute(f"INSERT INTO passages ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                        [row[c] for c in cols]).lastrowid
