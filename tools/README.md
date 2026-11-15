@@ -65,6 +65,7 @@ Folding reviewed decisions into the library, and syncing them — and flags — 
 | `apply_reviews.py` | Fold reviewed id decisions into the library `[REQ-LIB-165]`. |
 | `apply_boundary_reviews.py` | Fold reviewed boundary edits into the library `[SPEC021 §5]`. |
 | `drop_review_copies.py` | Drop the review copies of `[SPEC-STAR-051]` and the orphan reviews from the hub; the next sync removes them everywhere `[IMPL-UID-044]`. |
+| `drop_dangling_checks.py` | Drop the `id_checks` rows naming a passage the catalogue no longer holds, one of which withholds every node's catalogue patch `[SPEC-NKP-080]`. Both tools keep what they drop with `row_drop.py`. |
 | `accept_remote_basis.py` | Accept a remote's current value as this library's new local value for one review. |
 | `export_changes.py` / `apply_changes.py` | Export applied edits for a remote installation, and apply them there — the three-way merge core. |
 | `export_flags.py` / `import_flags.py` | Export/land flagged recordings and passages between installations. |

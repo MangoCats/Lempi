@@ -34,15 +34,13 @@ exactly; `--restore DIR` does that), and deletes in one transaction.
 from __future__ import annotations
 
 import argparse
-import datetime as dt
-import json
 import os
-import sqlite3
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import lempi_db  # noqa: E402
+import row_drop  # noqa: E402  -- the backup, the record of what went, and putting it back
 import staged  # noqa: E402  -- utf8_output: a title is not always cp1252
 
 COLS =["passage_id", "decision", "chosen_mbid", "decided_at", "chosen_release_mbid",
@@ -140,13 +138,8 @@ def commit(listener, library, expect_copies, expect_orphans, backups) -> int:
     if not copies and not orphans:
         say("nothing to drop")
         return 0
-    import star_sync  # noqa: E402  -- its backup: the API, integrity-checked [SPEC-STAR-106]
-    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    folder = os.path.join(backups, f"pre-review-copies-{stamp}")
-    star_sync.local_backup(listener, os.path.join(folder, "listener.db"))
     gone = [dict((c, r[c]) for c in COLS) for r in copies + orphans]
-    with open(os.path.join(folder, "dropped.json"), "w", encoding="utf-8", newline="\n") as fh:
-        json.dump({"listener": os.path.abspath(listener), "at": stamp, "rows": gone}, fh, indent=1)
+    folder = row_drop.keep(listener, backups, "pre-review-copies", "id_reviews", gone)
     say(f"backed up to {folder}, with every row to be dropped in dropped.json")
     conn = open_pair(listener, library, writable=True)
     try:
@@ -175,23 +168,12 @@ def commit(listener, library, expect_copies, expect_orphans, backups) -> int:
 
 def restore(listener, library, folder) -> int:
     """Put back exactly the rows a commit dropped, where nothing has taken their place."""
-    with open(os.path.join(folder, "dropped.json"), encoding="utf-8") as fh:
-        rows = json.load(fh)["rows"]
     conn = open_pair(listener, library, writable=True)
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        for r in rows:
-            if conn.execute("SELECT 1 FROM main.id_reviews WHERE passage_id = ?", (r["passage_id"],)).fetchone():
-                raise SystemExit(f"refused: passage {r['passage_id']} has a review again; nothing was written")
-            conn.execute(f"INSERT INTO main.id_reviews ({', '.join(COLS)}) VALUES ({', '.join('?' * len(COLS))})",
-                         [r[c] for c in COLS])
-        conn.execute("COMMIT")
-    except BaseException:
-        if conn.in_transaction:
-            conn.execute("ROLLBACK")
-        raise
-    conn.close()
-    say(f"restored {len(rows)} row(s) from {folder}")
+        n = row_drop.put_back(conn, folder, "id_reviews", ("passage_id",))
+    finally:
+        conn.close()
+    say(f"restored {n} row(s) from {folder}")
     return 0
 
 

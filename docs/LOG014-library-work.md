@@ -57,10 +57,28 @@ DATE*, linked from here. §2 stays here.
 | 6 | 790 of 2,033 album passages from image rips leave the pregap unplayed | 2026-11-07 | By design `[SPEC-RIP-035]`: an eac-cue track ends at the next track's `INDEX 00`. Not a cut-off, but an album played from them does not keep the disc's own timing. A decision, if anyone wants it changed. |
 | 7 | The two phones missed the 2026-11-05 hold corrections `[LOG-LIBW-210]` | 2026-11-05 | They were left out of that sync. Also, a file the phone had already catalogued keeps its old length until a bundle replaces it (`21586b6`). |
 | 8 | *Ghosts I–IV* whole **on the hub only** `[LOG-LIBW-270]` | 2026-11-11 | No node has the 22 tracks or the alignment until a star sync carries them. The next induct re-fingerprints the 26 tracks; AcoustID has named track 27's and 26's recordings for 21 and 22 before, so a "contradicted" there is AcoustID's, not the tracklist's. Backup goes 2026-12-11. |
-| 9 | The 27 copied reviews are gone from the hub, **not yet from the nodes** `[LOG-LIBW-290]` | 2026-11-14 | Every node still holds them, so no `apply_reviews.py` should run on a node. Round `20261114T2350Z` removes them and is rehearsed CLEAN on all five reachable nodes, 27 deletions each; it waits for its commit. Check each node's `id_reviews` on its own disk afterwards: 179 rows, none sharing a `decided_at`. |
-| 10 | **No node has had a catalogue patch since the round of 2026-11-08** | 2026-11-11 | Five `id_checks` rows on the hub name passages 6454–6462. They are the *Wish You Were Here* cuts the swap of 2026-11-01 removed (*Have a Cigar*, both parts of *Shine On*, *Welcome to the Machine*, the title track). The natural patch cannot name them, so every node's whole catalogue patch is withheld `[SPEC-NKP-080]`: `none sent` in the SUMMARY of `20261111T2217Z`, `20261112T2008Z` and `20261114T2350Z`. The Sync page cannot clear it: an `id_checks` row is not removable there `[SPEC-LNK-030]`, and `leave` keeps it blocked. *Ghosts I–IV* (item 8) is among what waits. For the maintainer: delete the five on the hub, or say otherwise. Stage A's window needs catalogue patches flowing `[IMPL-UID-052]`. |
+| 9 | The 27 copied reviews are gone from the hub and from five nodes; **`teacherslounge` still holds them** `[LOG-LIBW-290]` | 2026-11-14 | Round `20261114T2350Z` committed 2026-11-15. Read on each node's own disk: bose, lempi02w, lp3-wifi, lrhtpc and smartboardpc each hold 179 reviews, none sharing a `decided_at`, `quick_check` ok. `teacherslounge` was off; its next round removes them by the missed-run rule `[IMPL-UID-042]`. Until then no `apply_reviews.py` should run there. |
+| 10 | Catalogue patches were blocked from 2026-11-08 to 2026-11-15; **the next round must send them** `[LOG-LIBW-300]` | 2026-11-11 | The five dangling `id_checks` rows that withheld them were dropped on the hub 2026-11-15. The next round's SUMMARY must show a catalogue patch for every node. It carries everything held back since 2026-11-08, *Ghosts I–IV* (item 8) among it. Stage A's window needs it `[IMPL-UID-052]`. |
 
 ## 3. Entries, newest first
+
+**`[LOG-LIBW-300]` 2026-11-15: five dangling `id_checks` rows dropped from the
+hub's catalogue.** At the maintainer's word, after a rehearsal on the live
+catalogue: `python tools/drop_dangling_checks.py data/library.db --commit
+--expect 5`.
+- **What went:** fingerprint checks of 2026-10-15 on passages 6454–6462. These
+  are the *Wish You Were Here* cuts the swap of 2026-11-01 removed: *Have a
+  Cigar*, *Shine On You Crazy Diamond* I–V and VI–IX, *Welcome to the
+  Machine* and *Wish You Were Here*.
+- **Why:** a check of a passage that no longer exists says nothing, and these
+  had withheld every node's catalogue patch since 2026-11-08 (§2 item 10).
+- **Measured on the hub's disk afterwards:** 12,000 `id_checks` where there
+  were 12,005; passages and files unchanged at 24,443 and 7,305; no catalogue
+  row names a missing passage; `quick_check` ok.
+- **Where:** the hub only. The next round carries the catalogue to the nodes.
+- **Backup:** `data/backups/pre-dangling-checks-20261115T002143Z/` (1.5 GB),
+  with the rows in `dropped.json`. `--restore` puts them back. It goes
+  2026-12-15.
 
 **`[LOG-LIBW-290]` 2026-11-14: the copied reviews and the orphan reviews
 dropped from the hub.** At the maintainer's word (the decisions of
