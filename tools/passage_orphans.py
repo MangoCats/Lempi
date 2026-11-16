@@ -82,6 +82,16 @@ def clear(conn, dry_run: bool = False) -> dict[str, int]:
     """
     out: dict[str, int] = {}
     for table, column in ORPHAN_REFS:
+        # [IMPL-UID-060]: a table that names its passage by uid has nothing to
+        # clear. The danger this guards against is a number reused for other
+        # music; a uid is never reused, so one naming a passage that has gone
+        # still says what was played, and is kept.
+        try:
+            cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        except sqlite3.OperationalError:
+            continue
+        if "passage_uid" in cols and column not in cols:
+            continue
         find = (f"SELECT COUNT(*) FROM {table} WHERE {column} IS NOT NULL "
                 f"AND {column} NOT IN (SELECT passage_id FROM passages)")
         try:

@@ -244,8 +244,11 @@ def identify(conn, listener, rip: dict, outcome: str, releases: list[dict], chos
             moved = kept = 0        # no flavor table: nothing measured to move
         flavor_kept += kept
         if listener is not None:
-            plays += listener.execute(f"UPDATE listener_play_history SET mbid = ? WHERE mbid = ? AND passage_id IN ({q})",
-                                      [mbid, old, *pids]).rowcount
+            # A play names its passage by uid [IMPL-UID-060], found here in the catalogue.
+            uids = [r[0] for r in conn.execute(f"SELECT passage_uid FROM passages WHERE passage_id IN ({q})", pids)]
+            plays += listener.execute(
+                f"UPDATE listener_play_history SET mbid = ? WHERE mbid = ? AND passage_uid IN ({','.join('?' * len(uids)) or 'NULL'})",
+                [mbid, old, *uids]).rowcount
         by = "person" if chosen else ("isrc" if ingest_cd.isrc_confirms(releases, t.number, t.isrc) else "single")
         conn.execute("INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
                      "VALUES (?1,?2,'identified',1.0,?3,?4)",

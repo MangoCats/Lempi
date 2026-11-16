@@ -37,7 +37,10 @@ CREATE TABLE passages (passage_id INTEGER PRIMARY KEY,
     file_id INTEGER NOT NULL REFERENCES files(file_id),
     kind TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
     lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL,
-    boundary_src TEXT NOT NULL, CHECK (end_ms > start_ms));
+    boundary_src TEXT NOT NULL,
+    -- The real uid, from the passage's birth key (stamp below): the same music has
+    -- the same one here as on the appliance however each numbers it [SPEC-UID-030].
+    passage_uid TEXT, CHECK (end_ms > start_ms));
 CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
 CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT NOT NULL,
     length_ms INTEGER, source TEXT NOT NULL);
@@ -52,16 +55,16 @@ CREATE TABLE passage_recordings (passage_id INTEGER NOT NULL REFERENCES passages
     source TEXT NOT NULL, PRIMARY KEY (passage_id, mbid)) WITHOUT ROWID;
 CREATE TABLE listener_flags (subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL,
     flagged_at TEXT NOT NULL, origin TEXT, PRIMARY KEY (subject_kind, subject_id)) WITHOUT ROWID;
-CREATE TABLE id_reviews (passage_id INTEGER PRIMARY KEY, decision TEXT NOT NULL,
+CREATE TABLE id_reviews (passage_uid TEXT PRIMARY KEY, decision TEXT NOT NULL,
     chosen_mbid TEXT, decided_at TEXT NOT NULL,
     chosen_release_mbid TEXT, previous_mbid TEXT, applied_at TEXT, origin TEXT);
-CREATE TABLE boundary_reviews (passage_id INTEGER PRIMARY KEY,
+CREATE TABLE boundary_reviews (passage_uid TEXT PRIMARY KEY,
     start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, lead_in_ms INTEGER,
     lead_out_ms INTEGER, gain_db REAL, audio_md5 TEXT, orig_kind TEXT,
     orig_start_ms INTEGER, orig_end_ms INTEGER, orig_lead_in_ms INTEGER,
     orig_lead_out_ms INTEGER, orig_gain_db REAL, decided_at TEXT NOT NULL,
     applied_at TEXT, origin TEXT);
-CREATE TABLE artist_reviews (recording_mbid TEXT PRIMARY KEY, passage_id INTEGER,
+CREATE TABLE artist_reviews (recording_mbid TEXT PRIMARY KEY, passage_uid TEXT,
     artist_mbid TEXT NOT NULL, artist_name TEXT NOT NULL,
     previous_artist_mbid TEXT, previous_artist_name TEXT, previous_artist_weight REAL,
     decided_at TEXT NOT NULL, applied_at TEXT, origin TEXT);
@@ -94,17 +97,18 @@ def lempi02w_db(path: str) -> None:
     c.execute("INSERT INTO files VALUES (1,'md5-a','/srv/a.mp3',1,1.0,'mp3',300000,'t','t')")
     c.execute("INSERT INTO files VALUES (2,'md5-b','/srv/b.mp3',1,1.0,'mp3',300000,'t','t')")
     c.execute("INSERT INTO files VALUES (3,'md5-c','/srv/c.mp3',1,1.0,'mp3',300000,'t','t')")
-    c.execute("INSERT INTO passages VALUES (1,1,'radio',1000,200000,0,900,-1.0,'src')")
-    c.execute("INSERT INTO passages VALUES (2,2,'radio',2000,190000,0,900,-1.0,'src')")
-    c.execute("INSERT INTO passages VALUES (3,3,'radio',3000,180000,0,900,-1.0,'src')")
+    c.execute("INSERT INTO passages VALUES (1,1,'radio',1000,200000,0,900,-1.0,'src',NULL)")
+    c.execute("INSERT INTO passages VALUES (2,2,'radio',2000,190000,0,900,-1.0,'src',NULL)")
+    c.execute("INSERT INTO passages VALUES (3,3,'radio',3000,180000,0,900,-1.0,'src',NULL)")
     c.execute("INSERT INTO recordings VALUES (?,'Song A',NULL,'inherited:mulib')", (SONG_A,))
     c.execute("INSERT INTO passage_recordings VALUES (1,?,1.0,'inherited:mulib')", (SONG_A,))
     # Passage 2 has no recording at all -- exactly the case a passage-kind flag exists for.
     # Passage 3 is not flagged; it exists only so the library isn't trivially empty.
     c.execute("INSERT INTO listener_flags (subject_kind, subject_id, flagged_at) "
               "VALUES ('recording', ?, '2026-08-27 09:00:00')", (SONG_A,))
+    stamp(c)
     c.execute("INSERT INTO listener_flags (subject_kind, subject_id, flagged_at) "
-              "VALUES ('passage', '2', '2026-08-27 09:05:00')")
+              "VALUES ('passage', (SELECT passage_uid FROM passages WHERE passage_id = 2), '2026-08-27 09:05:00')")
     c.commit()
     c.close()
 
@@ -118,14 +122,29 @@ def desktop_db(path: str, *, has_song_b_passage: bool) -> None:
     c = sqlite3.connect(path)
     c.executescript(SCHEMA)
     c.execute("INSERT INTO files VALUES (10,'md5-a','/home/a.mp3',1,1.0,'mp3',300000,'t','t')")
-    c.execute("INSERT INTO passages VALUES (10,10,'radio',1000,200000,0,900,-1.0,'src')")
+    c.execute("INSERT INTO passages VALUES (10,10,'radio',1000,200000,0,900,-1.0,'src',NULL)")
     c.execute("INSERT INTO recordings VALUES (?,'Song A',NULL,'inherited:mulib')", (SONG_A,))
     c.execute("INSERT INTO passage_recordings VALUES (10,?,1.0,'inherited:mulib')", (SONG_A,))
     if has_song_b_passage:
         c.execute("INSERT INTO files VALUES (20,'md5-b','/home/b.mp3',1,1.0,'mp3',300000,'t','t')")
-        c.execute("INSERT INTO passages VALUES (20,20,'radio',2000,190000,0,900,-1.0,'src')")
+        c.execute("INSERT INTO passages VALUES (20,20,'radio',2000,190000,0,900,-1.0,'src',NULL)")
+    stamp(c)
     c.commit()
     c.close()
+
+
+def stamp(c):
+    """Every passage its real uid, from its birth key [SPEC-UID-030]."""
+    import passage_uid as pu
+    for pid, md5, kind, s, e in c.execute(
+            "SELECT p.passage_id, f.audio_md5, p.kind, p.start_ms, p.end_ms FROM passages p "
+            "JOIN files f ON f.file_id = p.file_id").fetchall():
+        c.execute("UPDATE passages SET passage_uid = ?1 WHERE passage_id = ?2", (pu.passage_uid(md5, kind, s, e), pid))
+
+
+def song_b_uid():
+    import passage_uid as pu
+    return pu.passage_uid("md5-b", "radio", 2000, 190000)
 
 
 def flags_here(conn):
@@ -154,7 +173,8 @@ def test_pull(tmp: str) -> None:
     c = sqlite3.connect(desk1)
     got = flags_here(c)
     check(("recording", SONG_A) in got, f"the recording flag must land on its mbid, got {got}")
-    check(("passage", "20") in got, f"the passage flag must resolve to THIS library's own passage_id, got {got}")
+    check(("passage", song_b_uid()) in got,
+          f"the passage flag lands under the passage's uid, the same here as there -- never a number, got {got}")
     check(got[("recording", SONG_A)] == "lempi02w" or got[("recording", SONG_A)],
           f"origin must be stamped, got {got[('recording', SONG_A)]!r}")
     c.close()
@@ -202,7 +222,8 @@ def test_pull(tmp: str) -> None:
         stmt for stmt in SCHEMA.split(";") if "listener_flags" not in stmt)
     c4.executescript(schema_without_flags)
     c4.execute("INSERT INTO files VALUES (10,'md5-a','/home/a.mp3',1,1.0,'mp3',300000,'t','t')")
-    c4.execute("INSERT INTO passages VALUES (10,10,'radio',1000,200000,0,900,-1.0,'src')")
+    c4.execute("INSERT INTO passages VALUES (10,10,'radio',1000,200000,0,900,-1.0,'src',NULL)")
+    stamp(c4)
     c4.execute("INSERT INTO recordings VALUES (?,'Song A',NULL,'inherited:mulib')", (SONG_A,))
     c4.execute("INSERT INTO passage_recordings VALUES (10,?,1.0,'inherited:mulib')", (SONG_A,))
     have = {r[0] for r in c4.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -230,11 +251,13 @@ def test_push_back_emit_sql(tmp: str) -> None:
     new_rec = "33333333-3333-3333-3333-333333333333"
     old_rec = "44444444-4444-4444-4444-444444444444"
     c.execute("INSERT INTO files VALUES (1,'md5-x','/home/x.mp3',1,1.0,'mp3',300000,'t','t')")
-    c.execute("INSERT INTO passages VALUES (1,1,'radio',1000,200000,0,900,-1.0,'src')")
+    c.execute("INSERT INTO passages VALUES (1,1,'radio',1000,200000,0,900,-1.0,'src',NULL)")
+    stamp(c)
     c.execute("INSERT INTO recordings VALUES (?,'The Real Title',NULL,'inherited:mulib')", (new_rec,))
     c.execute("INSERT INTO passage_recordings VALUES (1,?,1.0,'review:acoustid')", (new_rec,))
-    c.execute("INSERT INTO id_reviews (passage_id,decision,chosen_mbid,previous_mbid,decided_at,applied_at) "
-              "VALUES (1,'reassigned',?,?,'2026-08-27 10:00:00','2026-08-27 10:05:00')", (new_rec, old_rec))
+    c.execute("INSERT INTO id_reviews (passage_uid,decision,chosen_mbid,previous_mbid,decided_at,applied_at) "
+              "VALUES ((SELECT passage_uid FROM passages WHERE passage_id = 1),'reassigned',?,?,"
+              "'2026-08-27 10:00:00','2026-08-27 10:05:00')", (new_rec, old_rec))
     c.commit()
     c.close()
 
@@ -247,12 +270,13 @@ def test_push_back_emit_sql(tmp: str) -> None:
         c = sqlite3.connect(path)
         c.executescript(SCHEMA)
         c.execute("INSERT INTO files VALUES (1,'md5-x','/srv/x.mp3',1,1.0,'mp3',300000,'t','t')")
-        c.execute("INSERT INTO passages VALUES (1,1,'radio',1000,200000,0,900,-1.0,'src')")
+        c.execute("INSERT INTO passages VALUES (1,1,'radio',1000,200000,0,900,-1.0,'src',NULL)")
+        stamp(c)
         c.execute("INSERT INTO recordings VALUES (?,'Old Title',NULL,'inherited:mulib')", (old_rec,))
         c.execute("INSERT INTO passage_recordings VALUES (1,?,1.0,'inherited:mulib')", (old_rec,))
         # Flagged on the appliance, by BOTH plausible identities, before the review happened.
         c.execute("INSERT INTO listener_flags (subject_kind, subject_id, flagged_at) "
-                  "VALUES ('passage', '1', '2026-08-26 08:00:00')")
+                  "VALUES ('passage', (SELECT passage_uid FROM passages WHERE passage_id = 1), '2026-08-26 08:00:00')")
         c.execute("INSERT INTO listener_flags (subject_kind, subject_id, flagged_at) "
                   "VALUES ('recording', ?, '2026-08-26 08:00:00')", (old_rec,))
         c.commit()

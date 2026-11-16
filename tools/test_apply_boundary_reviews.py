@@ -32,12 +32,15 @@ CREATE TABLE passages (passage_id INTEGER PRIMARY KEY,
     fade_in_ms INTEGER NOT NULL DEFAULT 20, fade_out_ms INTEGER NOT NULL DEFAULT 20,
     fade_in_curve TEXT NOT NULL DEFAULT 'exponential',
     fade_out_curve TEXT NOT NULL DEFAULT 'exponential',
+    -- A uid for each passage [IMPL-UID-052], from its number for the test alone,
+    -- and generated so a positional insert keeps its shape.
+    passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL,
     CHECK (end_ms > start_ms));
 CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
 CREATE TABLE lowlevel_cache (audio_md5 TEXT NOT NULL, start_ms INTEGER NOT NULL,
     end_ms INTEGER NOT NULL, features BLOB NOT NULL, extractor TEXT NOT NULL,
     extracted_at TEXT NOT NULL, PRIMARY KEY (audio_md5, start_ms, end_ms)) WITHOUT ROWID;
-CREATE TABLE boundary_reviews (passage_id INTEGER PRIMARY KEY,
+CREATE TABLE boundary_reviews (passage_uid TEXT PRIMARY KEY,
     start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, lead_in_ms INTEGER,
     lead_out_ms INTEGER, gain_db REAL, decided_at TEXT NOT NULL, applied_at TEXT,
     fade_in_ms INTEGER, fade_out_ms INTEGER, fade_in_curve TEXT, fade_out_curve TEXT,
@@ -58,12 +61,14 @@ CREATE TABLE passages (passage_id INTEGER PRIMARY KEY,
     file_id INTEGER NOT NULL REFERENCES files(file_id),
     kind TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
     lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL,
-    boundary_src TEXT NOT NULL, CHECK (end_ms > start_ms));
+    boundary_src TEXT NOT NULL,
+    passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL,
+    CHECK (end_ms > start_ms));
 CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
 CREATE TABLE lowlevel_cache (audio_md5 TEXT NOT NULL, start_ms INTEGER NOT NULL,
     end_ms INTEGER NOT NULL, features BLOB NOT NULL, extractor TEXT NOT NULL,
     extracted_at TEXT NOT NULL, PRIMARY KEY (audio_md5, start_ms, end_ms)) WITHOUT ROWID;
-CREATE TABLE boundary_reviews (passage_id INTEGER PRIMARY KEY,
+CREATE TABLE boundary_reviews (passage_uid TEXT PRIMARY KEY,
     start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, lead_in_ms INTEGER,
     lead_out_ms INTEGER, gain_db REAL, decided_at TEXT NOT NULL, applied_at TEXT,
     fade_in_ms INTEGER, fade_out_ms INTEGER, fade_in_curve TEXT, fade_out_curve TEXT,
@@ -94,7 +99,7 @@ def build(tmp: str, extra_passage=None) -> str:
               "'essentia','t')")
     # The boundary edit moves fade off its fixed default too `[SPEC-SUI-226]`.
     c.execute("INSERT INTO boundary_reviews VALUES "
-              "(1,2000,190000,250,1200,-2.0,'t',NULL,15,1500,'linear','cosine',"
+              "(printf('%032x', 1),2000,190000,250,1200,-2.0,'t',NULL,15,1500,'linear','cosine',"
               "20,20,'exponential','exponential')")
     if extra_passage:
         c.execute("INSERT INTO passages VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", extra_passage)
@@ -148,7 +153,7 @@ def main() -> int:
         check(got_fade == (15, 1500, "linear", "cosine"),
               f"fade must land alongside the rest of the boundary edit [SPEC-SUI-226], got {got_fade}")
         c = sqlite3.connect(db)
-        check(c.execute("SELECT applied_at FROM boundary_reviews WHERE passage_id=1")
+        check(c.execute("SELECT applied_at FROM boundary_reviews WHERE passage_uid=printf('%032x', 1)")
                .fetchone()[0] is not None, "applied_at must be stamped")
 
         print("the old span's cache row is dropped, nothing else was touched")
@@ -170,7 +175,7 @@ def main() -> int:
         check(passage(db2) == (1000, 200000, 0, 900, -1.0, "segmentation"),
               "a colliding edit must not be applied")
         c = sqlite3.connect(db2)
-        check(c.execute("SELECT applied_at FROM boundary_reviews WHERE passage_id=1")
+        check(c.execute("SELECT applied_at FROM boundary_reviews WHERE passage_uid=printf('%032x', 1)")
                .fetchone()[0] is None, "a refused edit must not be stamped applied")
         c.close()
 
@@ -203,7 +208,7 @@ def main() -> int:
         c.execute("INSERT INTO files VALUES (1,'md5','/m/a.mp3',1,1.0,'mp3',300000,'t','t')")
         c.execute("INSERT INTO passages VALUES (1,1,'radio',1000,200000,0,900,-1.0,'segmentation')")
         c.execute("INSERT INTO boundary_reviews VALUES "
-                  "(1,2000,190000,250,1200,-2.0,'t',NULL,15,1500,'linear','cosine',"
+                  "(printf('%032x', 1),2000,190000,250,1200,-2.0,'t',NULL,15,1500,'linear','cosine',"
                   "20,20,'exponential','exponential')")
         c.commit()
         c.close()

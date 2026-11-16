@@ -36,7 +36,11 @@ CREATE TABLE passages (passage_id INTEGER PRIMARY KEY,
     file_id INTEGER NOT NULL REFERENCES files(file_id),
     kind TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
     lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL,
-    boundary_src TEXT NOT NULL);
+    boundary_src TEXT NOT NULL,
+    -- A uid for each passage [IMPL-UID-052], made from its number for the test
+    -- alone (a real one never is), and generated so a positional insert keeps
+    -- its shape.
+    passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL);
 CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT NOT NULL,
     length_ms INTEGER, source TEXT NOT NULL);
 CREATE TABLE artists (mbid TEXT PRIMARY KEY, name TEXT NOT NULL,
@@ -63,13 +67,13 @@ CREATE TABLE release_recordings (
 CREATE TABLE identification_cache (audio_md5 TEXT NOT NULL, service TEXT NOT NULL,
     request_key TEXT NOT NULL, response BLOB NOT NULL, fetched_at TEXT NOT NULL,
     PRIMARY KEY (audio_md5, service, request_key)) WITHOUT ROWID;
-CREATE TABLE id_reviews (passage_id INTEGER PRIMARY KEY, decision TEXT NOT NULL,
+CREATE TABLE id_reviews (passage_uid TEXT PRIMARY KEY, decision TEXT NOT NULL,
     chosen_mbid TEXT, decided_at TEXT NOT NULL,
     chosen_release_mbid TEXT, previous_mbid TEXT, applied_at TEXT, origin TEXT);
--- Keyed by recording_mbid, not passage_id: the credit belongs to the
--- recording, and passage_id is kept only as an informational column
--- `[SPEC-SUI-197]`.
-CREATE TABLE artist_reviews (recording_mbid TEXT PRIMARY KEY, passage_id INTEGER,
+-- Keyed by recording_mbid, not by passage: the credit belongs to the
+-- recording, and the passage is kept only as an informational column
+-- `[SPEC-SUI-197]`, by its uid [IMPL-UID-060].
+CREATE TABLE artist_reviews (recording_mbid TEXT PRIMARY KEY, passage_uid TEXT,
     artist_mbid TEXT NOT NULL, artist_name TEXT NOT NULL,
     previous_artist_mbid TEXT, previous_artist_name TEXT, previous_artist_weight REAL,
     decided_at TEXT NOT NULL, applied_at TEXT, origin TEXT);
@@ -117,8 +121,8 @@ def build(tmp: str, *, cached=True, release=None) -> str:
         c.execute("INSERT INTO identification_cache VALUES "
                   "('md5','acoustid','chromaprint:1000-200000:120:base64',?,'t')",
                   (payload,))
-    c.execute("INSERT INTO id_reviews (passage_id,decision,chosen_mbid,"
-              "chosen_release_mbid,previous_mbid,decided_at) VALUES (1,'reassigned',?,?,?,'t')",
+    c.execute("INSERT INTO id_reviews (passage_uid,decision,chosen_mbid,"
+              "chosen_release_mbid,previous_mbid,decided_at) VALUES (printf('%032x', 1),'reassigned',?,?,?,'t')",
               (NEW, release, OLD))
     c.commit()
     c.close()
@@ -184,9 +188,9 @@ def build_artist_case(tmp: str) -> str:
     c.execute("INSERT INTO artists VALUES (?,'Wrong Artist',NULL,'inherited:mulib')", (ART_WRONG,))
     c.execute("INSERT INTO recording_artists VALUES (?,?,1.0,'inherited:mulib')", (OLD, ART_WRONG))
     c.execute(
-        "INSERT INTO artist_reviews (passage_id, recording_mbid, artist_mbid, artist_name, "
+        "INSERT INTO artist_reviews (passage_uid, recording_mbid, artist_mbid, artist_name, "
         "previous_artist_mbid, previous_artist_name, previous_artist_weight, decided_at) "
-        "VALUES (1, ?, ?, 'Right Artist', ?, 'Wrong Artist', 1.0, 't')",
+        "VALUES (printf('%032x', 1), ?, ?, 'Right Artist', ?, 'Wrong Artist', 1.0, 't')",
         (OLD, ART_RIGHT, ART_WRONG))
     c.commit()
     c.close()
@@ -218,7 +222,7 @@ def main() -> int:
         check(rsrc is not None, "recordings.source must be filled")
         check(c.execute("SELECT COUNT(*) FROM recording_artists WHERE mbid=?",
                         (NEW,)).fetchone()[0] == 1, "the artist link was not made")
-        check(c.execute("SELECT applied_at FROM id_reviews WHERE passage_id=1")
+        check(c.execute("SELECT applied_at FROM id_reviews WHERE passage_uid=printf('%032x', 1)")
                .fetchone()[0] is not None, "applied_at must be stamped")
         c.close()
 
@@ -233,7 +237,7 @@ def main() -> int:
         check(r.returncode == 0, f"revert exited {r.returncode}: {r.stderr[:300]}")
         check(linked(db)[0] == OLD, f"after revert the link is {linked(db)[0]}, want {OLD}")
         c = sqlite3.connect(db)
-        check(c.execute("SELECT COUNT(*) FROM id_reviews WHERE passage_id=1")
+        check(c.execute("SELECT COUNT(*) FROM id_reviews WHERE passage_uid=printf('%032x', 1)")
                .fetchone()[0] == 0, "revert must clear the decision so it returns to the queue")
         c.close()
 

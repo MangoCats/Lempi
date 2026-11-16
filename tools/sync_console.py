@@ -247,8 +247,9 @@ def describe(conn, table: str, key) -> dict:
         if kind == "artist":
             return one("SELECT name FROM artists WHERE mbid = ?", ident)
         if kind == "passage":
-            return one("SELECT r.title FROM passage_recordings pr JOIN recordings r USING (mbid) "
-                       "WHERE pr.passage_id = ? LIMIT 1", ident)
+            # A passage is named by its uid [IMPL-UID-060].
+            return one("SELECT r.title FROM passages p JOIN passage_recordings pr ON pr.passage_id = p.passage_id "
+                       "JOIN recordings r ON r.mbid = pr.mbid WHERE p.passage_uid = ? LIMIT 1", ident)
         return None
 
     shown = None

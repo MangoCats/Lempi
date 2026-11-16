@@ -48,8 +48,12 @@ def test_describe():
     check(d == {"text": "recording “Blue in Green — Miles Davis”", "resolved": True}, f"a recording by title and artist: {d}")
     d = sc.describe(c, "listener_flags", ["artist", "a1"])
     check(d["text"] == "artist “Miles Davis”" and d["resolved"], f"an artist by name: {d}")
-    d = sc.describe(c, "listener_preferences", ["passage", 7])
-    check(d["resolved"] and "Blue in Green" in d["text"], f"a passage by its recording: {d}")
+    # A passage is named by its uid [IMPL-UID-060], in a catalogue that holds it.
+    pc = catalogue()
+    pc.executescript("CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, passage_uid TEXT);"
+                     "INSERT INTO passages VALUES (7, printf('%032x', 7));")
+    d = sc.describe(pc, "listener_flags", ["passage", f"{7:032x}"])
+    check(d["resolved"] and "Blue in Green" in d["text"], f"a passage by its uid, named by its recording: {d}")
     d = sc.describe(c, "listener_preferences", ["recording", "nope"])
     check(d == {"text": "recording nope", "resolved": False}, f"a subject the hub lacks says its id, unresolved: {d}")
     d = sc.describe(sqlite3.connect(":memory:"), "listener_preferences", ["recording", "r1"])

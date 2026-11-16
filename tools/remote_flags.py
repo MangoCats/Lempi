@@ -44,7 +44,8 @@ FLAGS_SQL = (
     "fi.audio_md5 AS audio_md5, p.kind AS passage_kind, "
     "p.start_ms AS start_ms, p.end_ms AS end_ms "
     "FROM listener_flags f "
-    "LEFT JOIN passages p ON f.subject_kind='passage' AND p.passage_id = CAST(f.subject_id AS INTEGER) "
+    # A passage is flagged by its uid [IMPL-UID-060], exactly as export_flags reads it.
+    "LEFT JOIN passages p ON f.subject_kind='passage' AND p.passage_uid = f.subject_id "
     "LEFT JOIN files fi ON fi.file_id = p.file_id "
     "ORDER BY f.flagged_at")
 
@@ -123,8 +124,8 @@ def fetch_flags(remote: str, hostname: str, timeout: float = rp.TOTAL_TIMEOUT,
                 # `[SPEC-DF-102]` already applies to a review row missing
                 # its own baseline.
                 continue
-            anchor = {"audio_md5": row["audio_md5"], "passage_kind": row["passage_kind"],
-                      "start_ms": row["start_ms"], "end_ms": row["end_ms"]}
+            anchor = {"passage_uid": row["subject_id"], "audio_md5": row["audio_md5"],
+                      "passage_kind": row["passage_kind"], "start_ms": row["start_ms"], "end_ms": row["end_ms"]}
         flags.append({
             "subject_kind": row["subject_kind"], "anchor": anchor,
             "flagged_at": row["flagged_at"], "origin": row.get("origin") or hostname,

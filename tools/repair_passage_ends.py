@@ -388,11 +388,15 @@ def load(conn, min_tail_ms: int, everything: bool):
         by.setdefault(d["file_id"], []).append(d)
     drafts = set()
     if lempi_db.has_table(conn, "boundary_reviews"):
-        drafts = {r[0] for r in conn.execute("SELECT passage_id FROM boundary_reviews WHERE applied_at IS NULL")}
+        drafts = {r[0] for r in conn.execute(
+            "SELECT p.passage_id FROM boundary_reviews b JOIN passages p ON p.passage_uid = b.passage_uid "
+            " WHERE b.applied_at IS NULL")}
     if lempi_db.has_table(conn, "listener_flags"):
         flagged = {r[0] for r in conn.execute("""SELECT pr.passage_id FROM listener_flags x JOIN passage_recordings pr ON pr.mbid = x.subject_id
                                                   WHERE x.subject_kind = 'recording'""")}
-        flagged |= {int(r[0]) for r in conn.execute("SELECT subject_id FROM listener_flags WHERE subject_kind = 'passage'")}
+        # A passage is flagged by its uid [IMPL-UID-060], found here by it.
+        flagged |= {r[0] for r in conn.execute("SELECT p.passage_id FROM listener_flags x JOIN passages p "
+                                               "ON p.passage_uid = x.subject_id WHERE x.subject_kind = 'passage'")}
         for ps in by.values():
             for p in ps:
                 p["flagged"] = p["passage_id"] in flagged

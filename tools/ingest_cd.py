@@ -2336,6 +2336,11 @@ def retire_rows(conn, file_ids, orphans: bool = True) -> dict:
         return {"files": 0, "passages": 0, "orphans": {}, "left": {}}
     q = ",".join("?" * len(ids))
     pids = [r[0] for r in conn.execute(f"SELECT passage_id FROM passages WHERE file_id IN ({q})", ids)]
+    # Their uids, read before they go: what a listener row names them by [IMPL-UID-060].
+    try:
+        uids = [r[0] for r in conn.execute(f"SELECT passage_uid FROM passages WHERE file_id IN ({q})", ids) if r[0]]
+    except sqlite3.OperationalError:
+        uids = []                    # a catalogue from before uids: its listener names numbers
     md5s = [r[0] for r in conn.execute(f"SELECT audio_md5 FROM files WHERE file_id IN ({q})", ids)]
     pq = ",".join("?" * len(pids)) or "NULL"
     mq = ",".join("?" * len(md5s)) or "NULL"
@@ -2353,9 +2358,14 @@ def retire_rows(conn, file_ids, orphans: bool = True) -> dict:
                 raise
     orphans = passage_orphans.clear(conn) if orphans else {}
     left = {}
+    uq = ",".join("?" * len(uids)) or "NULL"
     for table in ("artist_reviews", "boundary_reviews", "id_reviews", "listener_rejections", "player_queue"):
         try:
-            n = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE passage_id IN ({pq})", pids).fetchone()[0]
+            cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if "passage_uid" in cols:
+                n = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE passage_uid IN ({uq})", uids).fetchone()[0]
+            else:
+                n = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE passage_id IN ({pq})", pids).fetchone()[0]
         except sqlite3.OperationalError:
             continue
         if n:

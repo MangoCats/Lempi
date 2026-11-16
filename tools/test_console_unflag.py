@@ -32,7 +32,9 @@ CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT NOT NULL,
     duration_ms INTEGER, first_seen TEXT, last_seen TEXT);
 CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER,
     kind TEXT, start_ms INTEGER, end_ms INTEGER, lead_in_ms INTEGER,
-    lead_out_ms INTEGER, gain_db REAL, boundary_src TEXT);
+    lead_out_ms INTEGER, gain_db REAL, boundary_src TEXT,
+    -- A uid for each passage [IMPL-UID-052], from its number for the test alone.
+    passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL);
 CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT,
     weight REAL DEFAULT 1.0, source TEXT);
 CREATE TABLE listener_flags (subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL,
@@ -40,6 +42,7 @@ CREATE TABLE listener_flags (subject_kind TEXT NOT NULL, subject_id TEXT NOT NUL
 """
 
 REC = "local:audio:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+U1 = f"{1:032x}"    # passage 1's fixture uid: a passage is flagged by its uid [IMPL-UID-060]
 
 FAILED = []
 
@@ -75,18 +78,18 @@ def test_passage_flag_subjects() -> None:
     print("passage_flag_subjects(): the passage itself, plus every linked recording")
     c = build()
     subjects = console.passage_flag_subjects(c, 1)
-    check(set(subjects) == {("passage", "1"), ("recording", REC)}, f"got {subjects}")
+    check(set(subjects) == {("passage", U1), ("recording", REC)}, f"got {subjects}")
 
 
 def test_local_flag_detection() -> None:
     print("passage_flagged_locally(): either subject shape counts as flagged")
-    check(console.passage_flagged_locally(build(), [("passage", "1"), ("recording", REC)]) is False,
+    check(console.passage_flagged_locally(build(), [("passage", U1), ("recording", REC)]) is False,
           "nothing inserted -- must not be flagged")
     check(console.passage_flagged_locally(build([("recording", REC)]),
-                                           [("passage", "1"), ("recording", REC)]) is True,
+                                           [("passage", U1), ("recording", REC)]) is True,
           "a recording-keyed flag must count")
-    check(console.passage_flagged_locally(build([("passage", "1")]),
-                                           [("passage", "1"), ("recording", REC)]) is True,
+    check(console.passage_flagged_locally(build([("passage", U1)]),
+                                           [("passage", U1), ("recording", REC)]) is True,
           "a passage-keyed flag must count too")
 
 
@@ -152,14 +155,14 @@ def test_unflag_everywhere_no_remote() -> None:
         r = console.unflag_everywhere(build([("recording", REC)]), 1)
     finally:
         lempi_control._lempi_set_flag = real_set
-    check(set(calls) == {("passage", "1", False), ("recording", REC, False)}, f"got {calls}")
+    check(set(calls) == {("passage", U1, False), ("recording", REC, False)}, f"got {calls}")
     check(r["local"] == {"ok": True, "cleared": 2, "of": 2}, f"got {r}")
     check(r["remote"] == {"configured": False}, f"got {r}")
 
 
 def test_unflag_everywhere_translates_passage_id_for_remote() -> None:
-    print("unflag_everywhere(): the passage-keyed subject is translated to the "
-          "remote's OWN local passage_id before being sent there")
+    print("unflag_everywhere(): the passage-keyed subject is the passage's uid, the same "
+          "on the remote, and is sent there as it is -- never this node's number, nor the remote's")
     console.STATE["jobs"] = FakeJobs("pi@lempi02w:/srv/library/library.db")
     real_peek = console._peek
     real_local, real_remote = lempi_control._lempi_set_flag, lempi_control._remote_set_flag
@@ -175,8 +178,8 @@ def test_unflag_everywhere_translates_passage_id_for_remote() -> None:
     finally:
         console._peek = real_peek
         lempi_control._lempi_set_flag, lempi_control._remote_set_flag = real_local, real_remote
-    check(("passage", "999", False) in remote_calls,
-          f"the LOCAL pid (1) must never be sent to the remote as-is, got {remote_calls}")
+    check(("passage", U1, False) in remote_calls and not any(sid in ("1", "999") for _, sid, _ in remote_calls),
+          f"the uid, never a number, is sent to the remote: got {remote_calls}")
     check(("recording", REC, False) in remote_calls, f"got {remote_calls}")
     check(r["remote"] == {"configured": True, "reachable": True, "ok": True, "cleared": 2, "of": 2},
           f"got {r}")
@@ -278,7 +281,7 @@ def test_unflag_subject_everywhere_reports_a_local_failure_honestly() -> None:
     real_set = lempi_control._lempi_set_flag
     lempi_control._lempi_set_flag = lambda *a, **k: False
     try:
-        r = console.unflag_subject_everywhere("passage", "1")
+        r = console.unflag_subject_everywhere("passage", U1)
     finally:
         lempi_control._lempi_set_flag = real_set
     check(r["local"]["ok"] is False, f"got {r}")

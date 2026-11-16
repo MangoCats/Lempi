@@ -127,6 +127,12 @@ def musicbrainz_names(mbid: str) -> dict:
                         for c in doc.get("artist-credit") or [] if (c.get("artist") or {}).get("id")]}
 
 
+def passage_uid_of(conn: sqlite3.Connection, passage_id: int):
+    """The uid this catalogue gives its passage `passage_id`, or None."""
+    row = conn.execute("SELECT passage_uid FROM passages WHERE passage_id = ?1", (passage_id,)).fetchone()
+    return row[0] if row else None
+
+
 def revert(conn: sqlite3.Connection, passage_id: int, commit: bool) -> int:
     """Put back what a reassignment replaced `[REQ-LIB-165]`.
 
@@ -136,9 +142,12 @@ def revert(conn: sqlite3.Connection, passage_id: int, commit: bool) -> int:
     is that other half: restore `previous_mbid`, then clear the record, in one
     transaction so it cannot half-happen.
     """
+    # A review names its passage by uid [IMPL-UID-060]; this catalogue's own
+    # number, given here, finds it.
+    uid = passage_uid_of(conn, passage_id)
     row = conn.execute(
         "SELECT decision, chosen_mbid, previous_mbid, applied_at "
-        "  FROM id_reviews WHERE passage_id = ?1", (passage_id,)).fetchone()
+        "  FROM id_reviews WHERE passage_uid = ?1", (uid,)).fetchone() if uid else None
     if not row:
         say(f"passage {passage_id}: no decision recorded")
         return 1
@@ -164,7 +173,7 @@ def revert(conn: sqlite3.Connection, passage_id: int, commit: bool) -> int:
     conn.execute(
         "INSERT INTO passage_recordings (passage_id, mbid, weight, source) "
         "VALUES (?1, ?2, 1.0, 'inherited:mulib')", (passage_id, previous))
-    conn.execute("DELETE FROM id_reviews WHERE passage_id = ?1", (passage_id,))
+    conn.execute("DELETE FROM id_reviews WHERE passage_uid = ?1", (uid,))
     conn.commit()
     say("reverted; the passage is back in the review queue")
     return 0
@@ -301,13 +310,14 @@ def main() -> int:
         return revert_artist(conn, args.revert_artist, args.commit)
 
     pending = conn.execute(
-        """SELECT r.passage_id, r.chosen_mbid, pr.mbid, r.chosen_release_mbid
+        """SELECT p.passage_id, r.chosen_mbid, pr.mbid, r.chosen_release_mbid
              FROM id_reviews r
-             JOIN passage_recordings pr ON pr.passage_id = r.passage_id
+             JOIN passages p ON p.passage_uid = r.passage_uid
+             JOIN passage_recordings pr ON pr.passage_id = p.passage_id
             WHERE r.decision = 'reassigned' AND r.chosen_mbid IS NOT NULL
               AND r.applied_at IS NULL
               AND pr.mbid <> r.chosen_mbid
-            ORDER BY r.passage_id""").fetchall()
+            ORDER BY p.passage_id""").fetchall()
 
     kept = conn.execute(
         "SELECT COUNT(*) FROM id_reviews WHERE decision = 'kept'").fetchone()[0]
@@ -396,7 +406,8 @@ def main() -> int:
             # Undo on the page refuses once this is set: withdrawing the record
             # would strand the change with nothing saying why it was made.
             conn.execute(
-                "UPDATE id_reviews SET applied_at = datetime('now') WHERE passage_id = ?1",
+                "UPDATE id_reviews SET applied_at = datetime('now') "
+                " WHERE passage_uid = (SELECT passage_uid FROM passages WHERE passage_id = ?1)",
                 (passage_id,))
         applied += 1
         if applied <= 10:

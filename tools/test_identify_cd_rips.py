@@ -49,6 +49,9 @@ def build(tmp):
                     "class TEXT, value REAL, source TEXT, accuracy REAL, "
                     "PRIMARY KEY (subject_kind, subject_id, characteristic, class));")
     c.execute("ALTER TABLE ingest_decisions ADD COLUMN unused TEXT")    # a wider real table changes nothing
+    # Each passage its uid [IMPL-UID-052], from its number for the test alone: a play
+    # names its passage by it [IMPL-UID-060].
+    c.execute("ALTER TABLE passages ADD COLUMN passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL")
     for disc, tracks in DISCS.items():
         sheet = "Paul McCartney - Pure McCartney" + ("(Disc 2)" if disc == 2 else "") + ".cue"
         lines = ['PERFORMER "Paul McCartney"', 'TITLE "Pure McCartney"']
@@ -87,8 +90,9 @@ def build(tmp):
     c.close()
     listener = os.path.join(tmp, "listener.db")
     lc = sqlite3.connect(listener)
-    lc.execute("CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY, passage_id INTEGER, mbid TEXT)")
-    lc.execute("INSERT INTO listener_play_history (passage_id, mbid) VALUES (1, ?1)", ("local:audio:11" + "0" * 30 + ":0",))
+    lc.execute("CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY, passage_uid TEXT, mbid TEXT)")
+    lc.execute("INSERT INTO listener_play_history (passage_uid, mbid) VALUES (printf('%032x', 1), ?1)",
+               ("local:audio:11" + "0" * 30 + ":0",))
     lc.commit()
     lc.close()
     return db, listener, album

@@ -150,7 +150,11 @@ Measured 2026-11-14: the hub holds 111 rows, each the segment of one current pas
 - **An interlock:** until the merge is converted, `star_merge` refuses any listener, or copy last sent, already by uid, and merges nothing. Deployed alone, this player would otherwise have its listener read as numbers.
 - **Step 3 changes:** the copies last sent and the nodes' hourly backups stay as they are. The merge reads an old one through that node's own map from number to uid, its catalogue summary, which is the same exact join inside one node's numbering.
 
-Not yet built: the hub's tools, the merge, `passage_lyrics`. **Not to be deployed before they are.**
+- **The hub's tools** read and write these tables by uid. Among them: the console's review pages and flag list, `apply_reviews`, `apply_boundary_reviews`, the disc relinkers and the MuLibPlay migration.
+- **The SPEC006 tools came forward from Stage C** `[IMPL-UID-077]`, since they share these tables. A record's anchor carries the uid beside its span, and a receiver resolves by the uid. Only a record exported before Stage B, which carries none, resolves by span. A passage's flag travels as its uid, and a remote is never sent a number for one.
+- **A reference to a passage that has gone is kept.** `passage_orphans` cleared numbers because a number is reused for other music; a uid never is. So a play naming one still says what was played, and nothing clears it.
+
+Not yet built: the merge, `passage_lyrics`. **Not to be deployed before they are.**
 
 ## 7. Stage C: every wire, URL, tool and log
 

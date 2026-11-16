@@ -48,7 +48,7 @@ CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEX
     start_ms INTEGER, end_ms INTEGER, lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL,
     fade_in_ms INTEGER NOT NULL DEFAULT 20, fade_out_ms INTEGER NOT NULL DEFAULT 20,
     fade_in_curve TEXT NOT NULL DEFAULT 'exponential', fade_out_curve TEXT NOT NULL DEFAULT 'exponential',
-    boundary_src TEXT);
+    boundary_src TEXT, passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL);
 CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL, source TEXT);
 CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT, length_ms INTEGER, source TEXT);
 CREATE TABLE artists (mbid TEXT PRIMARY KEY, name TEXT, source TEXT);
@@ -101,8 +101,8 @@ def make_remote(path: str) -> None:
     """)
     apply_changes.ensure_review_tables(c)
     c.execute(
-        "INSERT INTO boundary_reviews (passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms, "
-        "gain_db, decided_at, applied_at, origin) VALUES (500, 0, 100000, 50, 50, 0.0, "
+        "INSERT INTO boundary_reviews (passage_uid, start_ms, end_ms, lead_in_ms, lead_out_ms, "
+        "gain_db, decided_at, applied_at, origin) VALUES (printf('%032x', 500), 0, 100000, 50, 50, 0.0, "
         "'2026-08-01T00:00:00', datetime('now'), 'some-other-host')")
     c.commit()
     c.close()
@@ -117,7 +117,7 @@ def make_remote_no_fade(path: str) -> None:
         CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT NOT NULL UNIQUE);
         CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT,
             start_ms INTEGER, end_ms INTEGER, lead_in_ms INTEGER, lead_out_ms INTEGER,
-            gain_db REAL, boundary_src TEXT);
+            gain_db REAL, boundary_src TEXT, passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL);
     """)
     c.execute(f"INSERT INTO files VALUES (1, '{MD5_A}')")
     c.execute("INSERT INTO passages VALUES (600, 1, 'radio', 2000, 180000, 200, 800, -1.5, 'src')")
@@ -356,16 +356,16 @@ def main() -> int:
                 gain_db REAL, fade_in_ms INTEGER NOT NULL DEFAULT 20,
                 fade_out_ms INTEGER NOT NULL DEFAULT 20,
                 fade_in_curve TEXT NOT NULL DEFAULT 'exponential',
-                fade_out_curve TEXT NOT NULL DEFAULT 'exponential', boundary_src TEXT);
+                fade_out_curve TEXT NOT NULL DEFAULT 'exponential', boundary_src TEXT, passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL);
         """)
         c.execute(apply_changes.BOUNDARY_REVIEWS_TABLE)  # bare -- no origin/orig_*/fade_* yet
         c.execute(f"INSERT INTO files VALUES (1, '{MD5_A}')")
         c.execute("INSERT INTO passages VALUES (700, 1, 'radio', 3000, 170000, 50, 50, 0.0, "
                   "20, 20, 'exponential', 'exponential', 'src')")
         # A genuinely pre-origin applied row -- this column does not exist yet.
-        c.execute("INSERT INTO boundary_reviews (passage_id, start_ms, end_ms, lead_in_ms, "
+        c.execute("INSERT INTO boundary_reviews (passage_uid, start_ms, end_ms, lead_in_ms, "
                   "lead_out_ms, gain_db, decided_at, applied_at) VALUES "
-                  "(700, 3000, 170000, 50, 50, 0.0, '2026-07-01T00:00:00', datetime('now'))")
+                  "(printf('%032x', 700), 3000, 170000, 50, 50, 0.0, '2026-07-01T00:00:00', datetime('now'))")
         c.commit()
         c.close()
 

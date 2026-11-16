@@ -141,9 +141,12 @@ def apply(conn, listener, release: dict, medium: dict, fixes: list[dict]) -> int
         except sqlite3.OperationalError:
             pass    # no id_checks table: nothing to correct
         if listener is not None:
+            # A play names its passage by uid [IMPL-UID-060], found here in the catalogue.
+            uids = [r[0] for r in conn.execute(f"SELECT passage_uid FROM passages WHERE passage_id IN ({q})", pids)]
             plays += listener.execute(
-                f"UPDATE listener_play_history SET mbid = ? WHERE mbid = ? AND passage_id IN ({q})",
-                [f["to"], f["from"], *pids]).rowcount
+                f"UPDATE listener_play_history SET mbid = ? WHERE mbid = ? "
+                f"AND passage_uid IN ({','.join('?' * len(uids)) or 'NULL'})",
+                [f["to"], f["from"], *uids]).rowcount
         conn.execute("INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,detail,decided_at) "
                      "VALUES (?1,'relink','disc_corrected',1.0,?2,?3)",
                      (f["md5"], json.dumps({k: f[k] for k in ("track", "from", "from_disc", "to", "disc", "title")}

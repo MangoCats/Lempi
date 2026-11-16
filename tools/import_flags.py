@@ -114,7 +114,9 @@ def main() -> int:
                     f"({anchor['start_ms']}-{anchor['end_ms']})")
                 unmatched += 1
                 continue
-            subject_id = str(passage_id)
+            # Flagged here by its uid, never this receiver's number [IMPL-UID-060].
+            subject_id = conn.execute("SELECT passage_uid FROM passages WHERE passage_id = ?1",
+                                      (passage_id,)).fetchone()[0]
 
         exists = conn.execute(
             "SELECT 1 FROM listener_flags WHERE subject_kind=?1 AND subject_id=?2",

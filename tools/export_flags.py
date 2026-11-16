@@ -60,16 +60,18 @@ def export_flags(conn: sqlite3.Connection, hostname: str) -> list:
         if subject_kind == "recording":
             anchor = {"recording_mbid": subject_id}
         else:
+            # A passage is flagged by its uid [IMPL-UID-060], which travels as it
+            # is; its span beside it, for a person and a receiver before uids.
             row = conn.execute(
                 """SELECT fi.audio_md5, p.kind, p.start_ms, p.end_ms
                      FROM passages p JOIN files fi ON fi.file_id = p.file_id
-                    WHERE p.passage_id = ?1""", (int(subject_id),)).fetchone()
+                    WHERE p.passage_uid = ?1""", (subject_id,)).fetchone()
             if not row:
                 # The passage this flag named no longer exists in this copy --
                 # nothing to anchor it to, the same reasoning `[SPEC-DF-102]`
                 # already applies to a review row missing its own baseline.
                 continue
-            anchor = {"audio_md5": row[0], "passage_kind": row[1],
+            anchor = {"passage_uid": subject_id, "audio_md5": row[0], "passage_kind": row[1],
                       "start_ms": row[2], "end_ms": row[3]}
         out.append({
             "subject_kind": subject_kind,

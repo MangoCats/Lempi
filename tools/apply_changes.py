@@ -74,16 +74,16 @@ def say(text: str) -> None:
 # a real push needs to *capture* and ship to a remote missing them --
 # reused here, not duplicated, so the two can never drift out of sync.
 ID_REVIEWS_TABLE = (
-    "CREATE TABLE IF NOT EXISTS id_reviews (passage_id INTEGER PRIMARY KEY, "
+    "CREATE TABLE IF NOT EXISTS id_reviews (passage_uid TEXT PRIMARY KEY, "
     "decision TEXT NOT NULL, chosen_mbid TEXT, decided_at TEXT NOT NULL, "
     "chosen_release_mbid TEXT, previous_mbid TEXT, applied_at TEXT)")
 BOUNDARY_REVIEWS_TABLE = (
-    "CREATE TABLE IF NOT EXISTS boundary_reviews (passage_id INTEGER PRIMARY KEY, "
+    "CREATE TABLE IF NOT EXISTS boundary_reviews (passage_uid TEXT PRIMARY KEY, "
     "start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, lead_in_ms INTEGER, "
     "lead_out_ms INTEGER, gain_db REAL, decided_at TEXT NOT NULL, applied_at TEXT)")
 ARTIST_REVIEWS_TABLE = (
     "CREATE TABLE IF NOT EXISTS artist_reviews (recording_mbid TEXT PRIMARY KEY, "
-    "passage_id INTEGER, artist_mbid TEXT NOT NULL, artist_name TEXT NOT NULL, "
+    "passage_uid TEXT, artist_mbid TEXT NOT NULL, artist_name TEXT NOT NULL, "
     "previous_artist_mbid TEXT, previous_artist_name TEXT, previous_artist_weight REAL, "
     "decided_at TEXT NOT NULL, applied_at TEXT)")
 
@@ -158,6 +158,13 @@ def ensure_passages_fade_columns(conn: sqlite3.Connection) -> None:
 
 
 def resolve_passage(conn: sqlite3.Connection, anchor: dict):
+    """This receiver's own passage for `anchor`: by its uid where the record
+    carries one, the same here as where it was made [IMPL-UID-077]; by its span
+    only for a record exported before Stage B, which carries none."""
+    if anchor.get("passage_uid"):
+        row = conn.execute("SELECT passage_id FROM passages WHERE passage_uid = ?1",
+                           (anchor["passage_uid"],)).fetchone()
+        return row[0] if row else None
     row = conn.execute(
         """SELECT p.passage_id FROM passages p JOIN files f ON f.file_id = p.file_id
             WHERE f.audio_md5 = ?1 AND p.kind = ?2 AND p.start_ms = ?3 AND p.end_ms = ?4""",
@@ -184,6 +191,16 @@ def resolve_boundary_passage(conn: sqlite3.Connection, change: dict):
     target_anchor = {**change["anchor"], "start_ms": change["target"]["start_ms"],
                       "end_ms": change["target"]["end_ms"]}
     return resolve_passage(conn, target_anchor)
+
+
+def _uid_of(conn: sqlite3.Connection, passage_id: int) -> str:
+    """The uid this receiver gives its passage `passage_id`, what its review rows
+    name it by [IMPL-UID-060]. Read first and written as a value, so a script
+    `--emit-sql` writes holds only writes. A passage without one is refused."""
+    row = conn.execute("SELECT passage_uid FROM passages WHERE passage_id = ?1", (passage_id,)).fetchone()
+    if not row or not row[0]:
+        raise SystemExit(f"passage {passage_id} has no uid here: a review cannot be written for it [IMPL-UID-060]")
+    return row[0]
 
 
 def current_recording(conn: sqlite3.Connection, passage_id: int):
@@ -332,14 +349,14 @@ def apply_id_review(conn: sqlite3.Connection, passage_id: int, change: dict) -> 
         "INSERT INTO passage_recordings (passage_id, mbid, weight, source) VALUES (?1, ?2, 1.0, ?3)",
         (passage_id, mbid, f"{SOURCE_PREFIX}:{change['origin']}"))
     conn.execute(
-        """INSERT INTO id_reviews (passage_id, decision, chosen_mbid, previous_mbid, decided_at,
+        """INSERT INTO id_reviews (passage_uid, decision, chosen_mbid, previous_mbid, decided_at,
                                     applied_at, origin)
            VALUES (?1, 'reassigned', ?2, ?3, ?4, datetime('now'), ?5)
-           ON CONFLICT(passage_id) DO UPDATE SET
+           ON CONFLICT(passage_uid) DO UPDATE SET
                decision='reassigned', chosen_mbid=excluded.chosen_mbid,
                previous_mbid=excluded.previous_mbid, decided_at=excluded.decided_at,
                applied_at=excluded.applied_at, origin=excluded.origin""",
-        (passage_id, mbid, change["baseline"].get("mbid"), change["decided_at"], change["origin"]))
+        (_uid_of(conn, passage_id), mbid, change["baseline"].get("mbid"), change["decided_at"], change["origin"]))
 
 
 def apply_boundary_review(conn: sqlite3.Connection, passage_id: int, change: dict) -> None:
@@ -380,14 +397,14 @@ def apply_boundary_review(conn: sqlite3.Connection, passage_id: int, change: dic
     if has_fade:
         conn.execute(
             """INSERT INTO boundary_reviews
-                   (passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
+                   (passage_uid, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
                     fade_in_ms, fade_out_ms, fade_in_curve, fade_out_curve,
                     audio_md5, orig_kind, orig_start_ms, orig_end_ms, orig_lead_in_ms,
                     orig_lead_out_ms, orig_gain_db, orig_fade_in_ms, orig_fade_out_ms,
                     orig_fade_in_curve, orig_fade_out_curve, decided_at, applied_at, origin)
                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,
                        datetime('now'),?23)
-               ON CONFLICT(passage_id) DO UPDATE SET
+               ON CONFLICT(passage_uid) DO UPDATE SET
                    start_ms=excluded.start_ms, end_ms=excluded.end_ms,
                    lead_in_ms=excluded.lead_in_ms, lead_out_ms=excluded.lead_out_ms,
                    gain_db=excluded.gain_db,
@@ -395,7 +412,7 @@ def apply_boundary_review(conn: sqlite3.Connection, passage_id: int, change: dic
                    fade_in_curve=excluded.fade_in_curve, fade_out_curve=excluded.fade_out_curve,
                    decided_at=excluded.decided_at,
                    applied_at=excluded.applied_at, origin=excluded.origin""",
-            (passage_id, t["start_ms"], t["end_ms"], t["lead_in_ms"], t["lead_out_ms"], t["gain_db"],
+            (_uid_of(conn, passage_id), t["start_ms"], t["end_ms"], t["lead_in_ms"], t["lead_out_ms"], t["gain_db"],
              t["fade_in_ms"], t["fade_out_ms"], t["fade_in_curve"], t["fade_out_curve"],
              anchor["audio_md5"], anchor["passage_kind"], anchor["start_ms"], anchor["end_ms"],
              b["lead_in_ms"], b["lead_out_ms"], b["gain_db"],
@@ -404,16 +421,16 @@ def apply_boundary_review(conn: sqlite3.Connection, passage_id: int, change: dic
     else:
         conn.execute(
             """INSERT INTO boundary_reviews
-                   (passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
+                   (passage_uid, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
                     audio_md5, orig_kind, orig_start_ms, orig_end_ms, orig_lead_in_ms,
                     orig_lead_out_ms, orig_gain_db, decided_at, applied_at, origin)
                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,datetime('now'),?15)
-               ON CONFLICT(passage_id) DO UPDATE SET
+               ON CONFLICT(passage_uid) DO UPDATE SET
                    start_ms=excluded.start_ms, end_ms=excluded.end_ms,
                    lead_in_ms=excluded.lead_in_ms, lead_out_ms=excluded.lead_out_ms,
                    gain_db=excluded.gain_db, decided_at=excluded.decided_at,
                    applied_at=excluded.applied_at, origin=excluded.origin""",
-            (passage_id, t["start_ms"], t["end_ms"], t["lead_in_ms"], t["lead_out_ms"], t["gain_db"],
+            (_uid_of(conn, passage_id), t["start_ms"], t["end_ms"], t["lead_in_ms"], t["lead_out_ms"], t["gain_db"],
              anchor["audio_md5"], anchor["passage_kind"], anchor["start_ms"], anchor["end_ms"],
              b["lead_in_ms"], b["lead_out_ms"], b["gain_db"],
              change["decided_at"], change["origin"]))
@@ -460,7 +477,10 @@ def clear_flags_for(conn: sqlite3.Connection, kind: str, passage_id, change: dic
     """
     subjects = []
     if passage_id is not None:
-        subjects.append(("passage", str(passage_id)))
+        # A passage is flagged by its uid [IMPL-UID-060].
+        row = conn.execute("SELECT passage_uid FROM passages WHERE passage_id = ?1", (passage_id,)).fetchone()
+        if row and row[0]:
+            subjects.append(("passage", row[0]))
     if kind == "id_review":
         # Both ends: a listener most often flags a *misidentification* while
         # it still carries the wrong id, so the baseline -- what it was
@@ -591,7 +611,7 @@ def main() -> int:
             current = {"mbid": current_recording(conn, passage_id)} if passage_id else None
             keys = ["mbid"]
             subject = human(change, anchor["audio_md5"][:12] + "…")
-            history = history_for(conn, "id_reviews", "passage_id=?1", (passage_id,)) if passage_id else None
+            history = history_for(conn, "id_reviews", "passage_uid=(SELECT passage_uid FROM passages WHERE passage_id=?1)", (passage_id,)) if passage_id else None
         elif kind == "boundary_review":
             passage_id = resolve_boundary_passage(conn, change)
             current = current_boundary(conn, passage_id) if passage_id else None
@@ -604,7 +624,7 @@ def main() -> int:
             if "fade_in_ms" in change["target"]:
                 keys += ["fade_in_ms", "fade_out_ms", "fade_in_curve", "fade_out_curve"]
             subject = human(change, anchor["audio_md5"][:12] + "…")
-            history = history_for(conn, "boundary_reviews", "passage_id=?1", (passage_id,)) if passage_id else None
+            history = history_for(conn, "boundary_reviews", "passage_uid=(SELECT passage_uid FROM passages WHERE passage_id=?1)", (passage_id,)) if passage_id else None
         elif kind == "artist_review":
             recording_mbid = anchor["recording_mbid"]
             has_recording = conn.execute(

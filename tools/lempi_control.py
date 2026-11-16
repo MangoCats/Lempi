@@ -275,11 +275,13 @@ def unflag_everywhere(subjects: list, remote: str | None, status: dict | None,
     `passage_flag_subjects(conn, pid)` -- a `("passage", pid)` entry and
     one `("recording", mbid)` entry per linked recording. `status` is
     `flag_sync_status(conn, pid)`, or `None` when no remote is configured at
-    all; when given, its `remote_pid`/`remote_mbids` are what let a
-    `("passage", pid)` subject -- meaningful only locally, since `pid` is
-    not portable `[SPEC-DF-103]` -- be translated to the remote's OWN local
-    passage_id before being sent there, and let a `("recording", mbid)`
+    all; when given, its `remote_pid` says whether the remote holds this
+    passage at all, and its `remote_mbids` let a `("recording", mbid)`
     subject be unioned with whatever the remote *itself* currently links.
+    The `("passage", uid)` subject is sent as it is: a passage is flagged by
+    its uid on every node, the same one here as there `[IMPL-UID-060]`.
+    Until Stage B it was this node's number, and had to be translated to
+    the remote's own `[SPEC-DF-103]`; a Stage B node refuses a number.
 
     That union matters: found live the first time this ran for real, an id
     correction accepted locally but not yet pushed left the remote still
@@ -306,7 +308,7 @@ def unflag_everywhere(subjects: list, remote: str | None, status: dict | None,
     remote_subjects = {("recording", mbid) for mbid in status["remote_mbids"]}
     remote_subjects |= {(k, sid) for k, sid in subjects if k == "recording"}
     if status["remote_pid"] is not None:
-        remote_subjects.add(("passage", str(status["remote_pid"])))
+        remote_subjects |= {(k, sid) for k, sid in subjects if k == "passage"}
     remote_ok = [_remote_set_flag(remote, port, kind, sid, False)
                  for kind, sid in sorted(remote_subjects)]
     result["remote"] = {"configured": True, "reachable": True, "ok": all(remote_ok),

@@ -73,9 +73,10 @@ class Fixture:
         for p in passages:
             src = p[3] if len(p) > 3 else "inherited:mulib"
             hold = p[4] if len(p) > 4 else None
-            cur = self.conn.execute("INSERT INTO passages (file_id,kind,start_ms,end_ms,boundary_src,director_hold,lead_in_ms,lead_out_ms) VALUES (?,?,?,?,?,?,1,1)",
-                                    (fid, p[0], p[1], p[2], src, hold))
-            ids.append(cur.lastrowid)
+            # As every tool writes one: with its uid, from its birth key [IMPL-UID-036].
+            import passage_uid as pu
+            ids.append(pu.insert_passage(self.conn, fid, p[0], p[1], p[2], src,
+                                         director_hold=hold, lead_in_ms=1, lead_out_ms=1))
         self.conn.commit()
         return ids
 
@@ -228,7 +229,9 @@ def end_to_end(tmp):
     only.conn.execute("INSERT INTO recordings (mbid,title,source) VALUES ('m1','t','x')")
     only.conn.execute("INSERT INTO passage_recordings (passage_id,mbid,source) VALUES (?, 'm1', 'x')", (fl_r,))
     only.conn.execute("INSERT INTO listener_flags VALUES ('recording','m1','now',NULL)")
-    only.conn.execute("INSERT INTO listener_flags VALUES ('passage',?,'now',NULL)", (str(fp_a),))
+    # A passage is flagged by its uid [IMPL-UID-060].
+    only.conn.execute("INSERT INTO listener_flags VALUES ('passage',(SELECT passage_uid FROM passages "
+                      "WHERE passage_id = ?),'now',NULL)", (fp_a,))
     only.conn.commit()
     only.conn.close()
     r = run(only.db, "--write", "--only", "cut")

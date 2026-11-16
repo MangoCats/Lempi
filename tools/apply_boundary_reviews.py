@@ -79,7 +79,7 @@ def main() -> int:
     # since it is a required part of the post, not an optional one like
     # lead/gain.
     pending = conn.execute(
-        """SELECT b.passage_id, b.start_ms, b.end_ms, b.lead_in_ms, b.lead_out_ms,
+        """SELECT p.passage_id, b.start_ms, b.end_ms, b.lead_in_ms, b.lead_out_ms,
                   b.gain_db, COALESCE(b.fade_in_ms, p.fade_in_ms),
                   COALESCE(b.fade_out_ms, p.fade_out_ms),
                   COALESCE(b.fade_in_curve, p.fade_in_curve),
@@ -89,10 +89,10 @@ def main() -> int:
                   p.fade_in_ms, p.fade_out_ms, p.fade_in_curve, p.fade_out_curve,
                   f.audio_md5
              FROM boundary_reviews b
-             JOIN passages p ON p.passage_id = b.passage_id
+             JOIN passages p ON p.passage_uid = b.passage_uid   -- by uid [IMPL-UID-060]
              JOIN files f ON f.file_id = p.file_id
             WHERE b.applied_at IS NULL
-            ORDER BY b.passage_id""").fetchall()
+            ORDER BY p.passage_id""").fetchall()
 
     to_stamp: list[int] = []
     say(f"{len(pending)} boundary edit(s) to apply")
@@ -204,9 +204,12 @@ def main() -> int:
         # Unsplit, both commits go to one file and this is simply two
         # transactions where there was one.
         conn.commit()
+        # By uid, which the edit just written did not change: a span moves, a
+        # passage's identity does not [SPEC-UID-030].
         for passage_id in to_stamp:
             conn.execute(
-                "UPDATE boundary_reviews SET applied_at = datetime('now') WHERE passage_id = ?1",
+                "UPDATE boundary_reviews SET applied_at = datetime('now') "
+                " WHERE passage_uid = (SELECT passage_uid FROM passages WHERE passage_id = ?1)",
                 (passage_id,))
         conn.commit()
         say(f"\napplied {applied}; {span_moved} moved a span, "

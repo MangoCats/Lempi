@@ -38,7 +38,8 @@ CREATE TABLE passages (passage_id INTEGER PRIMARY KEY,
     file_id INTEGER NOT NULL REFERENCES files(file_id),
     kind TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
     lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL,
-    boundary_src TEXT NOT NULL, CHECK (end_ms > start_ms));
+    boundary_src TEXT NOT NULL,
+    passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL, CHECK (end_ms > start_ms));
 CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
 CREATE TABLE listener_flags (subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL,
     flagged_at TEXT NOT NULL, origin TEXT, PRIMARY KEY (subject_kind, subject_id)) WITHOUT ROWID;
@@ -73,11 +74,11 @@ def build(path: str) -> None:
     c.execute("INSERT INTO listener_flags (subject_kind, subject_id, flagged_at, origin) "
               "VALUES ('recording', ?, '2026-08-29 09:00:00', NULL)", (SONG_A,))
     c.execute("INSERT INTO listener_flags (subject_kind, subject_id, flagged_at, origin) "
-              "VALUES ('passage', '2', '2026-08-29 09:05:00', 'lempi02w')")
+              "VALUES ('passage', printf('%032x', 2), '2026-08-29 09:05:00', 'lempi02w')")
     # A passage-kind flag whose passage no longer exists -- must be dropped,
     # not fabricated into a broken anchor.
     c.execute("INSERT INTO listener_flags (subject_kind, subject_id, flagged_at, origin) "
-              "VALUES ('passage', '9999', '2026-08-29 09:10:00', NULL)")
+              "VALUES ('passage', printf('%032x', 9999), '2026-08-29 09:10:00', NULL)")
     c.commit()
     c.close()
 
@@ -120,7 +121,7 @@ def test_sql_mirrors_export_flags(tmp: str) -> None:
         check(got[key]["flagged_at"] == want[key]["flagged_at"], f"{key}: flagged_at mismatch")
     check(got[("recording", json.dumps({"recording_mbid": SONG_A}, sort_keys=True))]["origin"] == "desktop",
           "a NULL origin must fall back to the caller's own hostname, exactly as export_flags.py does")
-    check(got[("passage", json.dumps({"audio_md5": "md5-b", "passage_kind": "radio",
+    check(got[("passage", json.dumps({"passage_uid": f"{2:032x}", "audio_md5": "md5-b", "passage_kind": "radio",
                                        "start_ms": 2000, "end_ms": 190000}, sort_keys=True))]["origin"] == "lempi02w",
           "an explicit origin must pass through unchanged")
 

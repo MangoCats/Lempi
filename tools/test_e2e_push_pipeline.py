@@ -54,7 +54,7 @@ CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEX
     start_ms INTEGER, end_ms INTEGER, lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL,
     fade_in_ms INTEGER NOT NULL DEFAULT 20, fade_out_ms INTEGER NOT NULL DEFAULT 20,
     fade_in_curve TEXT NOT NULL DEFAULT 'exponential', fade_out_curve TEXT NOT NULL DEFAULT 'exponential',
-    boundary_src TEXT);
+    boundary_src TEXT, passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL);
 CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL, source TEXT);
 CREATE TABLE lowlevel_cache (audio_md5 TEXT, start_ms INTEGER, end_ms INTEGER);
 """
@@ -123,11 +123,11 @@ def main() -> int:
     desktop = sqlite3.connect(desktop_path)
     apply_changes.ensure_review_tables(desktop)   # the one true schema, reused
     desktop.execute(
-        "INSERT INTO boundary_reviews (passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms, "
+        "INSERT INTO boundary_reviews (passage_uid, start_ms, end_ms, lead_in_ms, lead_out_ms, "
         "gain_db, fade_in_ms, fade_out_ms, fade_in_curve, fade_out_curve, audio_md5, orig_kind, "
         "orig_start_ms, orig_end_ms, orig_lead_in_ms, orig_lead_out_ms, orig_gain_db, "
         "orig_fade_in_ms, orig_fade_out_ms, orig_fade_in_curve, orig_fade_out_curve, decided_at) "
-        "VALUES (1, ?, ?, ?, ?, ?, 20, 20, 'exponential', 'exponential', ?, 'radio', ?, ?, ?, ?, ?, "
+        "VALUES (printf('%032x', 1), ?, ?, ?, ?, ?, 20, 20, 'exponential', 'exponential', ?, 'radio', ?, ?, ?, ?, ?, "
         "20, 20, 'exponential', 'exponential', '2026-08-31T00:00:00')",
         (NEW["start_ms"], NEW["end_ms"], NEW["lead_in_ms"], NEW["lead_out_ms"], NEW["gain_db"],
          AUDIO_MD5, ORIG["start_ms"], ORIG["end_ms"], ORIG["lead_in_ms"], ORIG["lead_out_ms"], ORIG["gain_db"]))
@@ -162,9 +162,9 @@ def main() -> int:
     changes = export_changes.export_boundary_reviews(desktop, "desktop-host")
     check(len(changes) == 1, f"expected 1 exportable change, got {len(changes)}")
     change = changes[0]
-    check(change["anchor"] == {"audio_md5": AUDIO_MD5, "passage_kind": "radio",
+    check(change["anchor"] == {"passage_uid": f"{1:032x}", "audio_md5": AUDIO_MD5, "passage_kind": "radio",
                                "start_ms": ORIG["start_ms"], "end_ms": ORIG["end_ms"]},
-          f"anchor must be the pre-edit span, got {change['anchor']}")
+          f"anchor must be the passage's uid beside its pre-edit span, got {change['anchor']}")
     check(all(change["target"][k] == v for k, v in NEW.items()), f"got {change['target']}")
     desktop.close()
     changes_path = os.path.join(tmp_dir, "changes.json")

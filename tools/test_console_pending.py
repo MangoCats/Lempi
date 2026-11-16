@@ -21,12 +21,19 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import console  # noqa: E402
 
-SCHEMA = """
-CREATE TABLE id_reviews (passage_id INTEGER PRIMARY KEY, decision TEXT,
+# A review names its passage by uid [IMPL-UID-060]; the catalogue beside it gives
+# each passage one, made from its number for the test alone.
+CATALOGUE = """
+CREATE TABLE passages (passage_id INTEGER PRIMARY KEY,
+    passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL);
+INSERT INTO passages (passage_id) VALUES (1), (2), (3), (4), (5), (6), (7), (999), (18069);
+"""
+SCHEMA = CATALOGUE + """
+CREATE TABLE id_reviews (passage_uid TEXT PRIMARY KEY, decision TEXT,
     chosen_mbid TEXT, decided_at TEXT, applied_at TEXT);
-CREATE TABLE boundary_reviews (passage_id INTEGER PRIMARY KEY,
+CREATE TABLE boundary_reviews (passage_uid TEXT PRIMARY KEY,
     start_ms INTEGER, end_ms INTEGER, decided_at TEXT, applied_at TEXT);
-CREATE TABLE artist_reviews (recording_mbid TEXT PRIMARY KEY, passage_id INTEGER,
+CREATE TABLE artist_reviews (recording_mbid TEXT PRIMARY KEY, passage_uid TEXT,
     artist_mbid TEXT, artist_name TEXT, decided_at TEXT, applied_at TEXT);
 """
 
@@ -51,11 +58,11 @@ def main() -> int:
     c = sqlite3.connect(":memory:")
     c.executescript(SCHEMA)
     c.executescript("""
-        INSERT INTO id_reviews VALUES (1, 'reassigned', 'rec-a', 't1', NULL);
-        INSERT INTO id_reviews VALUES (2, 'reassigned', 'rec-b', 't2', 't2');  -- already applied
-        INSERT INTO boundary_reviews VALUES (1, 0, 1000, 't3', NULL);
-        INSERT INTO boundary_reviews VALUES (3, 0, 1000, 't4', NULL);
-        INSERT INTO artist_reviews VALUES ('rec-a', 1, 'art-a', 'A Band', 't5', NULL);
+        INSERT INTO id_reviews VALUES (printf('%032x', 1), 'reassigned', 'rec-a', 't1', NULL);
+        INSERT INTO id_reviews VALUES (printf('%032x', 2), 'reassigned', 'rec-b', 't2', 't2');  -- already applied
+        INSERT INTO boundary_reviews VALUES (printf('%032x', 1), 0, 1000, 't3', NULL);
+        INSERT INTO boundary_reviews VALUES (printf('%032x', 3), 0, 1000, 't4', NULL);
+        INSERT INTO artist_reviews VALUES ('rec-a', printf('%032x', 1), 'art-a', 'A Band', 't5', NULL);
     """)
     counts = console.pending_counts(c)
     check(counts == {"id": 1, "boundary": 2, "artist": 1, "total": 4, "recorded_only": {}},
@@ -63,17 +70,17 @@ def main() -> int:
 
     print("kept and deferred id decisions are named apart, never in the total")
     c.executescript("""
-        INSERT INTO id_reviews VALUES (4, 'kept', NULL, 't6', NULL);
-        INSERT INTO id_reviews VALUES (5, 'deferred', NULL, 't7', NULL);
-        INSERT INTO id_reviews VALUES (6, 'deferred', NULL, 't8', NULL);
-        INSERT INTO id_reviews VALUES (7, 'reassigned', NULL, 't9', NULL);  -- no id chosen
+        INSERT INTO id_reviews VALUES (printf('%032x', 4), 'kept', NULL, 't6', NULL);
+        INSERT INTO id_reviews VALUES (printf('%032x', 5), 'deferred', NULL, 't7', NULL);
+        INSERT INTO id_reviews VALUES (printf('%032x', 6), 'deferred', NULL, 't8', NULL);
+        INSERT INTO id_reviews VALUES (printf('%032x', 7), 'reassigned', NULL, 't9', NULL);  -- no id chosen
     """)
     counts = console.pending_counts(c)
     check(counts["id"] == 1 and counts["total"] == 4,
           f"only a reassignment with a chosen id is pending, got {counts}")
     check(counts["recorded_only"] == {"kept": 1, "deferred": 2, "reassigned": 1},
           f"got {counts['recorded_only']}")
-    c.execute("DELETE FROM id_reviews WHERE passage_id >= 4")
+    c.execute("DELETE FROM id_reviews WHERE decided_at IN ('t6', 't7', 't8', 't9')")
 
     print()
     print("_pending_for_passage: only what actually belongs to this passage's own "
@@ -90,9 +97,9 @@ def main() -> int:
     print()
     print("a library predating some of these tables: the missing one reads as zero, not an error")
     c2 = sqlite3.connect(":memory:")
-    c2.executescript("CREATE TABLE boundary_reviews (passage_id INTEGER PRIMARY KEY, "
+    c2.executescript(CATALOGUE + "CREATE TABLE boundary_reviews (passage_uid TEXT PRIMARY KEY, "
                      "start_ms INTEGER, end_ms INTEGER, decided_at TEXT, applied_at TEXT);"
-                     "INSERT INTO boundary_reviews VALUES (5, 0, 1000, 't', NULL);")
+                     "INSERT INTO boundary_reviews VALUES (printf('%032x', 5), 0, 1000, 't', NULL);")
     check(console.pending_counts(c2) == {"id": 0, "boundary": 1, "artist": 0, "total": 1,
                                          "recorded_only": {}},
           f"got {console.pending_counts(c2)}")
@@ -104,10 +111,10 @@ def main() -> int:
           "[before, after] -- the list the write button is consent to")
     c3 = sqlite3.connect(":memory:")
     c3.row_factory = sqlite3.Row
-    c3.executescript("""
+    c3.executescript(CATALOGUE + """
         CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);
         CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL);
-        CREATE TABLE boundary_reviews (passage_id INTEGER PRIMARY KEY,
+        CREATE TABLE boundary_reviews (passage_uid TEXT PRIMARY KEY,
             start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
             lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL,
             decided_at TEXT NOT NULL, applied_at TEXT,
@@ -119,11 +126,11 @@ def main() -> int:
         INSERT INTO recordings VALUES ('rec-f', 'We Can Funk');
         INSERT INTO passage_recordings VALUES (18069, 'rec-f', 1.0);
         INSERT INTO boundary_reviews
-            (passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db, decided_at,
+            (passage_uid, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db, decided_at,
              orig_start_ms, orig_end_ms, orig_lead_in_ms, orig_lead_out_ms, orig_gain_db,
              fade_in_ms, fade_out_ms, fade_in_curve, fade_out_curve,
              orig_fade_in_ms, orig_fade_out_ms, orig_fade_in_curve, orig_fade_out_curve)
-        VALUES (18069, 1428200, 1756560, 750, 0, -20.0, 't6',
+        VALUES (printf('%032x', 18069), 1428200, 1756560, 750, 0, -20.0, 't6',
                 1428200, 1756560, 0, 0, NULL,
                 1500, 7000, 'exponential', 'cosine',
                 20, 20, 'exponential', 'exponential');

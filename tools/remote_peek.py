@@ -140,7 +140,7 @@ def sql_for(kind: str, anchor: dict) -> str:
         # applies for an `id_review`'s own target+baseline, generalized:
         # ask what the OTHER side currently thinks too, clear the union.
         return (
-            "WITH target AS (SELECT p.passage_id FROM passages p "
+            "WITH target AS (SELECT p.passage_id, p.passage_uid FROM passages p "
             "JOIN files f ON f.file_id = p.file_id "
             f"WHERE f.audio_md5 = {literal(anchor['audio_md5'])} "
             f"AND p.kind = {literal(anchor['passage_kind'])} "
@@ -148,7 +148,7 @@ def sql_for(kind: str, anchor: dict) -> str:
             f"AND p.end_ms = {literal(anchor['end_ms'])}) "
             "SELECT (SELECT passage_id FROM target) AS remote_passage_id, "
             "EXISTS (SELECT 1 FROM listener_flags lf, target t "
-            "WHERE (lf.subject_kind='passage' AND lf.subject_id = CAST(t.passage_id AS TEXT)) "
+            "WHERE (lf.subject_kind='passage' AND lf.subject_id = t.passage_uid) "   # by uid [IMPL-UID-060]
             "OR (lf.subject_kind='recording' AND lf.subject_id IN "
             "(SELECT mbid FROM passage_recordings WHERE passage_id = t.passage_id))) AS flagged, "
             "(SELECT json_group_array(mbid) FROM passage_recordings "

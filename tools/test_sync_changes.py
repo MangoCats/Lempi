@@ -37,6 +37,7 @@ CREATE TABLE passages (passage_id INTEGER PRIMARY KEY,
     fade_in_ms INTEGER NOT NULL DEFAULT 20, fade_out_ms INTEGER NOT NULL DEFAULT 20,
     fade_in_curve TEXT NOT NULL DEFAULT 'exponential',
     fade_out_curve TEXT NOT NULL DEFAULT 'exponential',
+    passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL,
     CHECK (end_ms > start_ms));
 CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
 CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT NOT NULL,
@@ -53,10 +54,10 @@ CREATE TABLE passage_recordings (passage_id INTEGER NOT NULL REFERENCES passages
 CREATE TABLE lowlevel_cache (audio_md5 TEXT NOT NULL, start_ms INTEGER NOT NULL,
     end_ms INTEGER NOT NULL, features BLOB NOT NULL, extractor TEXT NOT NULL,
     extracted_at TEXT NOT NULL, PRIMARY KEY (audio_md5, start_ms, end_ms)) WITHOUT ROWID;
-CREATE TABLE id_reviews (passage_id INTEGER PRIMARY KEY, decision TEXT NOT NULL,
+CREATE TABLE id_reviews (passage_uid TEXT PRIMARY KEY, decision TEXT NOT NULL,
     chosen_mbid TEXT, decided_at TEXT NOT NULL,
     chosen_release_mbid TEXT, previous_mbid TEXT, applied_at TEXT, origin TEXT);
-CREATE TABLE boundary_reviews (passage_id INTEGER PRIMARY KEY,
+CREATE TABLE boundary_reviews (passage_uid TEXT PRIMARY KEY,
     start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, lead_in_ms INTEGER,
     lead_out_ms INTEGER, gain_db REAL, audio_md5 TEXT, orig_kind TEXT,
     orig_start_ms INTEGER, orig_end_ms INTEGER, orig_lead_in_ms INTEGER,
@@ -65,7 +66,7 @@ CREATE TABLE boundary_reviews (passage_id INTEGER PRIMARY KEY,
     fade_in_ms INTEGER, fade_out_ms INTEGER, fade_in_curve TEXT, fade_out_curve TEXT,
     orig_fade_in_ms INTEGER, orig_fade_out_ms INTEGER,
     orig_fade_in_curve TEXT, orig_fade_out_curve TEXT);
-CREATE TABLE artist_reviews (recording_mbid TEXT PRIMARY KEY, passage_id INTEGER,
+CREATE TABLE artist_reviews (recording_mbid TEXT PRIMARY KEY, passage_uid TEXT,
     artist_mbid TEXT NOT NULL, artist_name TEXT NOT NULL,
     previous_artist_mbid TEXT, previous_artist_name TEXT, previous_artist_weight REAL,
     decided_at TEXT NOT NULL, applied_at TEXT, origin TEXT);
@@ -111,24 +112,24 @@ def build_local(path: str) -> None:
 
     # 1. A recording reassignment, applied.
     c.execute(
-        "INSERT INTO id_reviews (passage_id,decision,chosen_mbid,previous_mbid,decided_at,applied_at) "
-        "VALUES (1,'reassigned',?,?,'2026-08-27 10:00:00','2026-08-27 10:05:00')",
+        "INSERT INTO id_reviews (passage_uid,decision,chosen_mbid,previous_mbid,decided_at,applied_at) "
+        "VALUES (printf('%032x', 1),'reassigned',?,?,'2026-08-27 10:00:00','2026-08-27 10:05:00')",
         (NEW_REC, OLD_REC))
     # 2. A boundary edit, applied -- the pre-edit span was 1000-200000, and
     # the fade `[SPEC-SUI-226]` moved off the fixed default too.
     c.execute(
-        "INSERT INTO boundary_reviews (passage_id,start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db,"
+        "INSERT INTO boundary_reviews (passage_uid,start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db,"
         "audio_md5,orig_kind,orig_start_ms,orig_end_ms,orig_lead_in_ms,orig_lead_out_ms,orig_gain_db,"
         "decided_at,applied_at,fade_in_ms,fade_out_ms,fade_in_curve,fade_out_curve,"
         "orig_fade_in_ms,orig_fade_out_ms,orig_fade_in_curve,orig_fade_out_curve) "
-        "VALUES (2,2000,190000,250,1200,-2.0,'md5-b','radio',1000,200000,"
+        "VALUES (printf('%032x', 2),2000,190000,250,1200,-2.0,'md5-b','radio',1000,200000,"
         "0,900,-1.0,'2026-08-27 11:00:00','2026-08-27 11:05:00',"
         "15,1500,'linear','cosine',20,20,'exponential','exponential')")
     # 3. An artist correction, applied.
     c.execute(
-        "INSERT INTO artist_reviews (recording_mbid,passage_id,artist_mbid,artist_name,"
+        "INSERT INTO artist_reviews (recording_mbid,passage_uid,artist_mbid,artist_name,"
         "previous_artist_mbid,previous_artist_name,previous_artist_weight,decided_at,applied_at) "
-        "VALUES (?,2,?,'Right Artist',?,'Wrong Artist',1.0,'2026-08-27 12:00:00','2026-08-27 12:05:00')",
+        "VALUES (?,printf('%032x', 2),?,'Right Artist',?,'Wrong Artist',1.0,'2026-08-27 12:00:00','2026-08-27 12:05:00')",
         (SONG_X, ART_RIGHT, ART_WRONG))
     c.commit()
     c.close()
@@ -253,8 +254,8 @@ def main() -> int:
         third_rec = "77777777-7777-7777-7777-777777777777"
         c3.execute("INSERT INTO recordings VALUES (?,'A Third Recording',NULL,'inherited:mulib')", (third_rec,))
         c3.execute("UPDATE passage_recordings SET mbid=? WHERE passage_id=1", (third_rec,))
-        c3.execute("INSERT INTO id_reviews (passage_id,decision,chosen_mbid,previous_mbid,decided_at,applied_at) "
-                   "VALUES (1,'reassigned',?,?,'2026-08-26 09:15:00','2026-08-26 09:20:00')",
+        c3.execute("INSERT INTO id_reviews (passage_uid,decision,chosen_mbid,previous_mbid,decided_at,applied_at) "
+                   "VALUES (printf('%032x', 1),'reassigned',?,?,'2026-08-26 09:15:00','2026-08-26 09:20:00')",
                    (third_rec, OLD_REC))
         c3.execute("INSERT INTO artists VALUES (?,'A Third Artist',NULL,'inherited:mulib')", (ART_THIRD,))
         c3.execute("DELETE FROM recording_artists WHERE mbid=?", (SONG_X,))
@@ -324,7 +325,8 @@ def main() -> int:
                 file_id INTEGER NOT NULL REFERENCES files(file_id),
                 kind TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
                 lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL,
-                boundary_src TEXT NOT NULL, CHECK (end_ms > start_ms));
+                boundary_src TEXT NOT NULL,
+    passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL, CHECK (end_ms > start_ms));
             CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
             CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT NOT NULL,
                 length_ms INTEGER, source TEXT NOT NULL);
@@ -338,7 +340,7 @@ def main() -> int:
                 mbid TEXT NOT NULL REFERENCES recordings(mbid), weight REAL NOT NULL DEFAULT 1.0,
                 source TEXT NOT NULL, PRIMARY KEY (passage_id, mbid)) WITHOUT ROWID;
             -- The pre-[SPEC-DF-104] shape: no `origin` column at all.
-            CREATE TABLE id_reviews (passage_id INTEGER PRIMARY KEY, decision TEXT NOT NULL,
+            CREATE TABLE id_reviews (passage_uid TEXT PRIMARY KEY, decision TEXT NOT NULL,
                 chosen_mbid TEXT, decided_at TEXT NOT NULL,
                 chosen_release_mbid TEXT, previous_mbid TEXT, applied_at TEXT);
             -- No boundary_reviews or artist_reviews table at all -- a

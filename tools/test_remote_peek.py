@@ -45,6 +45,7 @@ CREATE TABLE passages (passage_id INTEGER PRIMARY KEY,
     fade_in_ms INTEGER NOT NULL DEFAULT 20, fade_out_ms INTEGER NOT NULL DEFAULT 20,
     fade_in_curve TEXT NOT NULL DEFAULT 'exponential',
     fade_out_curve TEXT NOT NULL DEFAULT 'exponential',
+    passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL,
     CHECK (end_ms > start_ms));
 CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
 CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT NOT NULL,
@@ -151,7 +152,7 @@ def test_passage_flag_sql(tmp: str) -> None:
     check(row[:2] == (1, 1), f"a recording-keyed flag must count, got {row}")
 
     conn.execute("DELETE FROM listener_flags")
-    conn.execute("INSERT INTO listener_flags VALUES ('passage', '1', 't', NULL)")
+    conn.execute("INSERT INTO listener_flags VALUES ('passage', printf('%032x', 1), 't', NULL)")
     row = conn.execute(rp.sql_for("passage_flag", anchor)).fetchone()
     check(row[:2] == (1, 1), f"a passage-keyed flag must count too, got {row}")
 

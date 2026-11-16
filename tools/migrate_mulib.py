@@ -266,8 +266,9 @@ def main():
         key = rec_key.get(cut_track.get(r["cutId"]))
         if key is None:
             dangling += 1
-        out.execute("INSERT INTO listener_play_history(played_at,passage_id,mbid) "
-                    "VALUES (?,?,?)", (r["time"], pid, key))
+        # By uid [IMPL-UID-060]: the passage was written by insert_passage, which gave it one.
+        out.execute("INSERT INTO listener_play_history(played_at,passage_uid,mbid) "
+                    "VALUES (?,(SELECT passage_uid FROM passages WHERE passage_id = ?),?)", (r["time"], pid, key))
         n += 1
     report["play_history_dangling"] = dangling
     for r in m.execute("SELECT * FROM programs"):

@@ -353,10 +353,11 @@ def flags(conn) -> list:
                 passages.append(pid)
                 kinds.append(pkind)
         else:
-            pid = int(subject_id)
-            row = conn.execute("SELECT kind FROM passages WHERE passage_id=?", (pid,)).fetchone()
+            # A passage is flagged by its uid [IMPL-UID-060]: found here by it.
+            row = conn.execute("SELECT passage_id, kind FROM passages WHERE passage_uid=?", (subject_id,)).fetchone()
             if row:
-                passages, kinds = [pid], [row[0]]
+                pid = row[0]
+                passages, kinds = [pid], [row[1]]
                 row = conn.execute(
                     "SELECT mbid FROM passage_recordings WHERE passage_id=? "
                     "ORDER BY weight DESC, mbid LIMIT 1", (pid,)).fetchone()
@@ -386,7 +387,7 @@ def flags(conn) -> list:
             # Beside `passages`, one each: 'radio' or 'album', so a link can
             # say which it opens -- one recording is usually both.
             "passage_kinds": kinds,
-            # A passage-keyed flag from before a rescan renumbered things
+            # A passage-keyed flag naming no passage this catalogue holds
             # resolves to nothing at all -- said plainly, not left blank
             # `[SPEC-DF-035]`.
             "resolved": bool(passages),
@@ -448,7 +449,9 @@ def pending_detail(conn) -> dict:
 
     if "boundary_reviews" in have:
         for r in conn.execute(
-                "SELECT br.passage_id, br.orig_start_ms, br.orig_end_ms, br.start_ms, br.end_ms, "
+                # By uid [IMPL-UID-060]; the page is given this catalogue's own
+                # number for its link, which is the hub's, where this runs.
+                "SELECT p.passage_id, br.orig_start_ms, br.orig_end_ms, br.start_ms, br.end_ms, "
                 "       br.orig_lead_in_ms, br.lead_in_ms, "
                 "       br.orig_lead_out_ms, br.lead_out_ms, br.orig_gain_db, br.gain_db, "
                 "       br.orig_fade_in_ms, br.fade_in_ms, br.orig_fade_out_ms, br.fade_out_ms, "
@@ -457,9 +460,10 @@ def pending_detail(conn) -> dict:
                 "       br.decided_at, "
                 "       (SELECT r.title FROM recordings r "
                 "         JOIN passage_recordings pr ON pr.mbid = r.mbid "
-                "        WHERE pr.passage_id = br.passage_id "
+                "        WHERE pr.passage_id = p.passage_id "
                 "        ORDER BY pr.weight DESC LIMIT 1) AS title "
-                "  FROM boundary_reviews br WHERE br.applied_at IS NULL "
+                "  FROM boundary_reviews br LEFT JOIN passages p ON p.passage_uid = br.passage_uid "
+                " WHERE br.applied_at IS NULL "
                 " ORDER BY br.decided_at"):
             out["boundary"].append({
                 "passage_id": r["passage_id"], "title": r["title"],
@@ -490,9 +494,9 @@ def pending_detail(conn) -> dict:
         # promise 99 changes and deliver 40, which is worse than not offering
         # the button at all. They are counted separately and explained.
         for r in conn.execute(
-                "SELECT v.passage_id, v.decision, v.chosen_mbid, v.decided_at, "
+                "SELECT p.passage_id, v.decision, v.chosen_mbid, v.decided_at, "
                 "       (SELECT r.title FROM recordings r WHERE r.mbid = v.chosen_mbid) AS chosen_title "
-                "  FROM id_reviews v "
+                "  FROM id_reviews v LEFT JOIN passages p ON p.passage_uid = v.passage_uid "
                 " WHERE v.applied_at IS NULL AND v.decision = 'reassigned' "
                 "   AND v.chosen_mbid IS NOT NULL "
                 " ORDER BY v.decided_at"):
@@ -583,13 +587,15 @@ def _pending_for_passage(conn, pid: int, mbids: list) -> dict:
     out = {}
     if "id_reviews" in have:
         row = conn.execute(
-            "SELECT decided_at FROM id_reviews WHERE passage_id=?1 AND applied_at IS NULL", (pid,)
+            "SELECT decided_at FROM id_reviews WHERE applied_at IS NULL "
+            " AND passage_uid = (SELECT passage_uid FROM passages WHERE passage_id = ?1)", (pid,)
         ).fetchone()
         if row:
             out["id"] = {"decided_at": row[0]}
     if "boundary_reviews" in have:
         row = conn.execute(
-            "SELECT decided_at FROM boundary_reviews WHERE passage_id=?1 AND applied_at IS NULL", (pid,)
+            "SELECT decided_at FROM boundary_reviews WHERE applied_at IS NULL "
+            " AND passage_uid = (SELECT passage_uid FROM passages WHERE passage_id = ?1)", (pid,)
         ).fetchone()
         if row:
             out["boundary"] = {"decided_at": row[0]}
@@ -678,7 +684,8 @@ def passage_flag_subjects(conn, pid: int) -> list:
     here; shared by the sync-status check and the unflag action below so
     the two can never disagree about what "flagged" means for this passage.
     """
-    subjects = [("passage", str(pid))]
+    row = conn.execute("SELECT passage_uid FROM passages WHERE passage_id=?1", (pid,)).fetchone()
+    subjects = [("passage", row[0])] if row and row[0] else []   # by uid [IMPL-UID-060]
     for row in conn.execute(
             "SELECT DISTINCT mbid FROM passage_recordings WHERE passage_id=?1", (pid,)):
         subjects.append(("recording", row[0]))

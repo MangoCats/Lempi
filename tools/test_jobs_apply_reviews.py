@@ -46,7 +46,9 @@ CREATE TABLE passages (
     start_ms INTEGER, end_ms INTEGER, lead_in_ms INTEGER, lead_out_ms INTEGER,
     gain_db REAL, boundary_src TEXT,
     fade_in_ms INTEGER, fade_out_ms INTEGER,
-    fade_in_curve TEXT, fade_out_curve TEXT);
+    fade_in_curve TEXT, fade_out_curve TEXT,
+    -- Each passage its uid [IMPL-UID-052], from its number for the test alone.
+    passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL);
 CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);
 CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL);
 CREATE TABLE lowlevel_cache (audio_md5 TEXT, start_ms INTEGER, end_ms INTEGER);
@@ -66,11 +68,11 @@ CREATE TABLE listener_flags (subject_kind TEXT, subject_id TEXT);
 CREATE TABLE listener_preferences (subject TEXT, v REAL);
 CREATE TABLE listener_settings (k TEXT, v TEXT);
 CREATE TABLE player_state (
-    id INTEGER PRIMARY KEY CHECK (id = 1), passage_id INTEGER,
+    id INTEGER PRIMARY KEY CHECK (id = 1), passage_uid TEXT,
     position_ms INTEGER NOT NULL DEFAULT 0, playing INTEGER NOT NULL DEFAULT 0,
     volume REAL NOT NULL DEFAULT 1.0, updated_at TEXT NOT NULL);
 CREATE TABLE boundary_reviews (
-    passage_id INTEGER PRIMARY KEY, start_ms INTEGER, end_ms INTEGER,
+    passage_uid TEXT PRIMARY KEY, start_ms INTEGER, end_ms INTEGER,
     lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL,
     decided_at TEXT, applied_at TEXT, audio_md5 TEXT, orig_kind TEXT,
     orig_start_ms INTEGER, orig_end_ms INTEGER, orig_lead_in_ms INTEGER,
@@ -79,7 +81,7 @@ CREATE TABLE boundary_reviews (
     orig_fade_in_ms INTEGER, orig_fade_out_ms INTEGER,
     orig_fade_in_curve TEXT, orig_fade_out_curve TEXT);
 CREATE TABLE id_reviews (
-    passage_id INTEGER PRIMARY KEY, decision TEXT, chosen_mbid TEXT,
+    passage_uid TEXT PRIMARY KEY, decision TEXT, chosen_mbid TEXT,
     chosen_release_mbid TEXT, previous_mbid TEXT, decided_at TEXT,
     applied_at TEXT, origin TEXT);
 """
@@ -95,21 +97,21 @@ def build(tmp: str, playing: int) -> tuple:
     c.close()
     c = sqlite3.connect(lis)
     c.executescript(LISTENER_SQL)
-    c.execute("INSERT INTO player_state VALUES (1, 10, 0, ?1, 1.0, '2026-09-11 00:00:00')",
+    c.execute("INSERT INTO player_state VALUES (1, printf('%032x', 10), 0, ?1, 1.0, '2026-09-11 00:00:00')",
               (playing,))
     # 100-200000 becomes 100-208000, with a real lead-out and fade-out change.
     c.execute("""INSERT INTO boundary_reviews
-                 (passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
+                 (passage_uid, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
                   decided_at, applied_at, audio_md5, orig_kind,
                   orig_start_ms, orig_end_ms, orig_lead_in_ms, orig_lead_out_ms, orig_gain_db,
                   fade_in_ms, fade_out_ms, fade_in_curve, fade_out_curve,
                   orig_fade_in_ms, orig_fade_out_ms, orig_fade_in_curve, orig_fade_out_curve)
-                 VALUES (10, 100, 208000, 0, 900, 0.0,
+                 VALUES (printf('%032x', 10), 100, 208000, 0, 900, 0.0,
                          '2026-09-11 00:00:00', NULL, 'md5aaa', 'album',
                          100, 200000, 0, 0, 0.0,
                          20, 150, 'exponential', 'exponential',
                          20, 20, 'exponential', 'exponential')""")
-    c.execute("INSERT INTO id_reviews VALUES (10, 'reassigned', 'mbid-a', NULL, NULL, "
+    c.execute("INSERT INTO id_reviews VALUES (printf('%032x', 10), 'reassigned', 'mbid-a', NULL, NULL, "
               "'2026-09-11 00:00:00', NULL, NULL)")
     c.commit()
     c.close()
@@ -178,8 +180,8 @@ def test_boundary_applies_and_brackets_the_player(tmp):
           f"the catalogue half must carry the new span, got {row}")
 
     c = sqlite3.connect(lis)
-    stamped = c.execute("SELECT applied_at FROM boundary_reviews WHERE passage_id=10").fetchone()[0]
-    pending_id = c.execute("SELECT applied_at FROM id_reviews WHERE passage_id=10").fetchone()[0]
+    stamped = c.execute("SELECT applied_at FROM boundary_reviews WHERE passage_uid=printf('%032x', 10)").fetchone()[0]
+    pending_id = c.execute("SELECT applied_at FROM id_reviews WHERE passage_uid=printf('%032x', 10)").fetchone()[0]
     c.close()
     check(stamped is not None, "the listener half must be stamped applied_at")
     check(pending_id is None,
@@ -220,7 +222,7 @@ def test_no_kinds_is_refused(tmp):
     _, state, _ = run_job(runner, [])
     check(state == "failed", f"expected failed, got {state!r}")
     c = sqlite3.connect(lis)
-    still = c.execute("SELECT applied_at FROM boundary_reviews WHERE passage_id=10").fetchone()[0]
+    still = c.execute("SELECT applied_at FROM boundary_reviews WHERE passage_uid=printf('%032x', 10)").fetchone()[0]
     c.close()
     check(still is None, "and nothing may have been stamped")
 

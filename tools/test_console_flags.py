@@ -23,7 +23,9 @@ CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT NOT NULL,
     duration_ms INTEGER, first_seen TEXT, last_seen TEXT);
 CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER,
     kind TEXT, start_ms INTEGER, end_ms INTEGER, lead_in_ms INTEGER,
-    lead_out_ms INTEGER, gain_db REAL, boundary_src TEXT);
+    lead_out_ms INTEGER, gain_db REAL, boundary_src TEXT,
+    -- A uid for each passage [IMPL-UID-052], from its number for the test alone.
+    passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL);
 CREATE TABLE file_tags (file_id INTEGER, title TEXT, artist TEXT, album TEXT,
     track_no INTEGER, disc_no INTEGER, has_art INTEGER, scanned_at TEXT);
 CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT NOT NULL,
@@ -82,9 +84,9 @@ def main() -> int:
     check(r["passage_kinds"] == ["radio", "album"], f"each passage's kind, in order: {r['passage_kinds']}")
     check(r["resolved"] is True, "a recording with real passages must resolve")
 
-    print("a passage-keyed flag on unidentified audio falls back to the file's own tag")
+    print("a passage-keyed flag, by the passage's uid, on unidentified audio falls back to the file's own tag")
     c = build()
-    c.execute("INSERT INTO listener_flags VALUES ('passage','20','2026-08-28 00:00:00')")
+    c.execute("INSERT INTO listener_flags VALUES ('passage',printf('%032x', 20),'2026-08-28 00:00:00')")
     r = console.flags(c)[0]
     check(r["title"] == "Tag Title" and r["artist"] == "Tag Artist", f"got {r}")
     check(r["passages"] == [20], f"got {r['passages']}")
@@ -93,7 +95,7 @@ def main() -> int:
 
     print("a passage-keyed flag whose passage no longer exists says so plainly")
     c = build()
-    c.execute("INSERT INTO listener_flags VALUES ('passage','9999','2026-08-28 00:00:00')")
+    c.execute("INSERT INTO listener_flags VALUES ('passage',printf('%032x', 9999),'2026-08-28 00:00:00')")
     r = console.flags(c)[0]
     check(r["resolved"] is False, "a vanished passage must not silently resolve")
     check(r["passages"] == [], f"got {r['passages']}")

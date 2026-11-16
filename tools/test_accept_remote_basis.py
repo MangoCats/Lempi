@@ -40,6 +40,7 @@ CREATE TABLE passages (passage_id INTEGER PRIMARY KEY,
     fade_in_ms INTEGER NOT NULL DEFAULT 20, fade_out_ms INTEGER NOT NULL DEFAULT 20,
     fade_in_curve TEXT NOT NULL DEFAULT 'exponential',
     fade_out_curve TEXT NOT NULL DEFAULT 'exponential',
+    passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL,
     CHECK (end_ms > start_ms));
 CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
 CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT NOT NULL,
@@ -56,10 +57,10 @@ CREATE TABLE passage_recordings (passage_id INTEGER NOT NULL REFERENCES passages
 CREATE TABLE lowlevel_cache (audio_md5 TEXT NOT NULL, start_ms INTEGER NOT NULL,
     end_ms INTEGER NOT NULL, features BLOB NOT NULL, extractor TEXT NOT NULL,
     extracted_at TEXT NOT NULL, PRIMARY KEY (audio_md5, start_ms, end_ms)) WITHOUT ROWID;
-CREATE TABLE id_reviews (passage_id INTEGER PRIMARY KEY, decision TEXT NOT NULL,
+CREATE TABLE id_reviews (passage_uid TEXT PRIMARY KEY, decision TEXT NOT NULL,
     chosen_mbid TEXT, decided_at TEXT NOT NULL,
     chosen_release_mbid TEXT, previous_mbid TEXT, applied_at TEXT, origin TEXT);
-CREATE TABLE boundary_reviews (passage_id INTEGER PRIMARY KEY,
+CREATE TABLE boundary_reviews (passage_uid TEXT PRIMARY KEY,
     start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, lead_in_ms INTEGER,
     lead_out_ms INTEGER, gain_db REAL, audio_md5 TEXT, orig_kind TEXT,
     orig_start_ms INTEGER, orig_end_ms INTEGER, orig_lead_in_ms INTEGER,
@@ -68,7 +69,7 @@ CREATE TABLE boundary_reviews (passage_id INTEGER PRIMARY KEY,
     fade_in_ms INTEGER, fade_out_ms INTEGER, fade_in_curve TEXT, fade_out_curve TEXT,
     orig_fade_in_ms INTEGER, orig_fade_out_ms INTEGER,
     orig_fade_in_curve TEXT, orig_fade_out_curve TEXT);
-CREATE TABLE artist_reviews (recording_mbid TEXT PRIMARY KEY, passage_id INTEGER,
+CREATE TABLE artist_reviews (recording_mbid TEXT PRIMARY KEY, passage_uid TEXT,
     artist_mbid TEXT NOT NULL, artist_name TEXT NOT NULL,
     previous_artist_mbid TEXT, previous_artist_name TEXT, previous_artist_weight REAL,
     decided_at TEXT NOT NULL, applied_at TEXT, origin TEXT);
@@ -242,11 +243,11 @@ def test_closes_the_loop(tmp: str) -> None:
                "lead_out_ms=1100,gain_db=-1.5,fade_in_ms=25,fade_out_ms=1600,"
                "fade_in_curve='cosine',fade_out_curve='exponential' WHERE passage_id=1")
     dc.execute(
-        "INSERT INTO boundary_reviews (passage_id,start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db,"
+        "INSERT INTO boundary_reviews (passage_uid,start_ms,end_ms,lead_in_ms,lead_out_ms,gain_db,"
         "audio_md5,orig_kind,orig_start_ms,orig_end_ms,orig_lead_in_ms,orig_lead_out_ms,orig_gain_db,"
         "decided_at,applied_at,fade_in_ms,fade_out_ms,fade_in_curve,fade_out_curve,"
         "orig_fade_in_ms,orig_fade_out_ms,orig_fade_in_curve,orig_fade_out_curve) "
-        "VALUES (1,2500,190500,300,1100,-1.5,'md5-a','radio',1000,200000,"
+        "VALUES (printf('%032x', 1),2500,190500,300,1100,-1.5,'md5-a','radio',1000,200000,"
         "250,1200,-2.0,'2026-08-29 10:00:00','2026-08-29 10:00:05',"
         "25,1600,'cosine','exponential',15,1500,'linear','cosine')")
     dc.commit()

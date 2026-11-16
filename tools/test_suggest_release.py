@@ -30,7 +30,7 @@ CREATE TABLE file_tags (file_id INTEGER, title TEXT, artist TEXT, album TEXT,
     track_no INTEGER, disc_no INTEGER, has_art INTEGER, scanned_at TEXT);
 CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER,
     kind TEXT, start_ms INTEGER, end_ms INTEGER, lead_in_ms INTEGER,
-    lead_out_ms INTEGER, gain_db REAL, boundary_src TEXT);
+    lead_out_ms INTEGER, gain_db REAL, boundary_src TEXT, passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL);
 CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT NOT NULL,
     length_ms INTEGER, source TEXT NOT NULL);
 CREATE TABLE artists (mbid TEXT PRIMARY KEY, name TEXT NOT NULL,
@@ -341,7 +341,7 @@ def test_accept_clears_stale_flags(tmp: str) -> None:
     c.execute("INSERT INTO listener_flags (subject_kind, subject_id, flagged_at) "
               "VALUES ('recording', ?, '2026-08-29 12:00:00')", (old_mbid,))
     c.execute("INSERT INTO listener_flags (subject_kind, subject_id, flagged_at) "
-              "VALUES ('passage', '10', '2026-08-29 12:00:00')")
+              "VALUES ('passage', printf('%032x', 10), '2026-08-29 12:00:00')")
     c.commit()
     c.close()
 

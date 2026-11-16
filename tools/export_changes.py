@@ -89,6 +89,12 @@ def _label(conn: sqlite3.Connection, mbid: str) -> dict:
     return out
 
 
+def _passage_id_of(conn: sqlite3.Connection, passage_uid):
+    """This catalogue's own number for the passage with `passage_uid`, or None."""
+    row = conn.execute("SELECT passage_id FROM passages WHERE passage_uid = ?1", (passage_uid,)).fetchone()
+    return row[0] if row else None
+
+
 def label_for_passage(conn: sqlite3.Connection, passage_id) -> dict:
     """The same, for a passage: whatever recording it currently points at."""
     if passage_id is None:
@@ -116,12 +122,12 @@ def _passage_label(conn: sqlite3.Connection, passage_id) -> dict:
 def export_id_reviews(conn: sqlite3.Connection, hostname: str) -> list:
     changes = []
     origin_expr = "r.origin" if has_column(conn, "id_reviews", "origin") else "NULL"
-    for (passage_id, chosen_mbid, previous_mbid, decided_at, origin,
+    for (passage_uid, chosen_mbid, previous_mbid, decided_at, origin,
          audio_md5, kind, start_ms, end_ms, title) in conn.execute(
-        f"""SELECT r.passage_id, r.chosen_mbid, r.previous_mbid, r.decided_at, {origin_expr},
+        f"""SELECT r.passage_uid, r.chosen_mbid, r.previous_mbid, r.decided_at, {origin_expr},
                   f.audio_md5, p.kind, p.start_ms, p.end_ms, rec.title
              FROM id_reviews r
-             JOIN passages p ON p.passage_id = r.passage_id
+             JOIN passages p ON p.passage_uid = r.passage_uid
              JOIN files f ON f.file_id = p.file_id
              LEFT JOIN recordings rec ON rec.mbid = r.chosen_mbid
             WHERE r.applied_at IS NOT NULL AND r.decision = 'reassigned'
@@ -134,7 +140,10 @@ def export_id_reviews(conn: sqlite3.Connection, hostname: str) -> list:
         ]
         changes.append({
             "kind": "id_review",
-            "anchor": {"audio_md5": audio_md5, "passage_kind": kind,
+            # The passage by its uid, the same on every installation [IMPL-UID-077];
+            # its span beside it, as a person reads it and as a receiver from
+            # before uids resolved it.
+            "anchor": {"passage_uid": passage_uid, "audio_md5": audio_md5, "passage_kind": kind,
                        "start_ms": start_ms, "end_ms": end_ms},
             "baseline": {"mbid": previous_mbid},
             # `title`/`artists` are carried so a receiver that has never seen
@@ -169,13 +178,13 @@ def export_boundary_reviews(conn: sqlite3.Connection, hostname: str) -> list:
                  if have_fade else "NULL, NULL, NULL, NULL")
     orig_fade_cols = ("orig_fade_in_ms, orig_fade_out_ms, orig_fade_in_curve, orig_fade_out_curve"
                        if have_fade else "NULL, NULL, NULL, NULL")
-    for (passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db, fade_in_ms, fade_out_ms,
+    for (passage_uid, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db, fade_in_ms, fade_out_ms,
          fade_in_curve, fade_out_curve,
          audio_md5, orig_kind, orig_start_ms, orig_end_ms,
          orig_lead_in_ms, orig_lead_out_ms, orig_gain_db,
          orig_fade_in_ms, orig_fade_out_ms, orig_fade_in_curve, orig_fade_out_curve,
          decided_at, origin) in conn.execute(
-        f"""SELECT passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db, {fade_cols},
+        f"""SELECT passage_uid, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db, {fade_cols},
                   audio_md5, orig_kind, orig_start_ms, orig_end_ms,
                   orig_lead_in_ms, orig_lead_out_ms, orig_gain_db, {orig_fade_cols},
                   decided_at, {origin_expr}
@@ -208,13 +217,14 @@ def export_boundary_reviews(conn: sqlite3.Connection, hostname: str) -> list:
                            fade_in_curve=fade_in_curve, fade_out_curve=fade_out_curve)
         changes.append({
             "kind": "boundary_review",
-            "anchor": {"audio_md5": audio_md5, "passage_kind": orig_kind,
+            # By uid [IMPL-UID-077]: the edit moved the span, and the uid it did not.
+            "anchor": {"passage_uid": passage_uid, "audio_md5": audio_md5, "passage_kind": orig_kind,
                        "start_ms": orig_start_ms, "end_ms": orig_end_ms},
             "baseline": baseline,
             "target": target,
             "decided_at": decided_at,
             "origin": origin or hostname,
-            "label": label_for_passage(conn, passage_id),
+            "label": label_for_passage(conn, _passage_id_of(conn, passage_uid)),
         })
     return changes
 

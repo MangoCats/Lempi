@@ -48,7 +48,7 @@ SCHEMA = """
 CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT NOT NULL UNIQUE);
 CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT,
     start_ms INTEGER, end_ms INTEGER, lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL,
-    boundary_src TEXT);
+    boundary_src TEXT, passage_uid TEXT);
 CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL, source TEXT);
 CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT, length_ms INTEGER, source TEXT);
 CREATE TABLE artists (mbid TEXT PRIMARY KEY, name TEXT, source TEXT);
@@ -63,9 +63,15 @@ def say(text: str) -> None:
 
 
 def _passage_row_sql(anchor: dict, extra_cols: str) -> str:
+    """The remote's passage for `anchor`: by its uid where the record carries one
+    [IMPL-UID-077], by its span only for a record from before Stage B."""
     lit = remote_peek.literal
+    if anchor.get("passage_uid"):
+        return (f"SELECT p.passage_id, p.passage_uid, p.start_ms, p.end_ms{extra_cols} "
+                "FROM passages p JOIN files f ON f.file_id = p.file_id "
+                f"WHERE p.passage_uid = {lit(anchor['passage_uid'])}")
     return (
-        f"SELECT p.passage_id, p.start_ms, p.end_ms{extra_cols} "
+        f"SELECT p.passage_id, p.passage_uid, p.start_ms, p.end_ms{extra_cols} "
         "FROM passages p JOIN files f ON f.file_id = p.file_id "
         f"WHERE f.audio_md5 = {lit(anchor['audio_md5'])} "
         f"AND p.kind = {lit(anchor['passage_kind'])} "
@@ -179,7 +185,7 @@ def _id_review_row(remote: str, change: dict, timeout: float, remote_schema: dic
         ", (SELECT pr.mbid FROM passage_recordings pr WHERE pr.passage_id = p.passage_id "
         "    ORDER BY pr.weight DESC, pr.mbid LIMIT 1) AS current_mbid, "
         f"({_exists('recordings', 'mbid', change['target']['mbid'])}) AS target_recording_exists, "
-        + _history_cols("id_reviews", "passage_id", "p.passage_id", remote_schema))
+        + _history_cols("id_reviews", "passage_uid", "p.passage_uid", remote_schema))
     result = remote_peek.run_remote_sql(remote, attach + sql, timeout=timeout)
     if not result["ok"]:
         raise RuntimeError(result["error"])
@@ -209,7 +215,7 @@ def _boundary_row(remote: str, change: dict, timeout: float, remote_schema: dict
     anchor = change["anchor"]
     target_anchor = {**anchor, "start_ms": change["target"]["start_ms"],
                       "end_ms": change["target"]["end_ms"]}
-    hist = _history_cols("boundary_reviews", "passage_id", "p.passage_id", remote_schema)
+    hist = _history_cols("boundary_reviews", "passage_uid", "p.passage_uid", remote_schema)
     fade_cols = (", p.lead_in_ms, p.lead_out_ms, p.gain_db, "
                  "p.fade_in_ms, p.fade_out_ms, p.fade_in_curve, p.fade_out_curve, " + hist)
     no_fade_cols = (", p.lead_in_ms, p.lead_out_ms, p.gain_db, " + hist)
@@ -355,14 +361,15 @@ def build(changes: list[dict], fetched: dict, remote_schema: dict, out_path: str
             continue
         row = entry["row"]
         pid = row.get("passage_id")
+        uid = row.get("passage_uid")     # what its reviews name it by [IMPL-UID-060]
 
         if kind == "id_review":
             if pid is not None:
                 conn.execute(
-                    "INSERT OR IGNORE INTO passages (passage_id, file_id, kind, start_ms, end_ms) "
-                    "VALUES (?1,?2,?3,?4,?5)",
+                    "INSERT OR IGNORE INTO passages (passage_id, file_id, kind, start_ms, end_ms, passage_uid) "
+                    "VALUES (?1,?2,?3,?4,?5,?6)",
                     (pid, file_id_for(change["anchor"]["audio_md5"]),
-                     change["anchor"]["passage_kind"], row["start_ms"], row["end_ms"]))
+                     change["anchor"]["passage_kind"], row["start_ms"], row["end_ms"], uid))
                 if row.get("current_mbid") is not None:
                     conn.execute(
                         "INSERT INTO passage_recordings (passage_id, mbid, weight, source) "
@@ -383,20 +390,20 @@ def build(changes: list[dict], fetched: dict, remote_schema: dict, out_path: str
                 # this insert would otherwise be adding for the first time.
                 if remote_schema.get("id_reviews") and "origin" in remote_schema["id_reviews"]:
                     conn.execute(
-                        "INSERT INTO id_reviews (passage_id, decision, chosen_mbid, decided_at, "
+                        "INSERT INTO id_reviews (passage_uid, decision, chosen_mbid, decided_at, "
                         "applied_at, origin) VALUES (?1,'reassigned',?2,?3,'x',?4)",
-                        (pid, row.get("current_mbid"), row["hist_decided_at"], row.get("hist_origin")))
+                        (uid, row.get("current_mbid"), row["hist_decided_at"], row.get("hist_origin")))
                 else:
                     conn.execute(
-                        "INSERT INTO id_reviews (passage_id, decision, chosen_mbid, decided_at, "
+                        "INSERT INTO id_reviews (passage_uid, decision, chosen_mbid, decided_at, "
                         "applied_at) VALUES (?1,'reassigned',?2,?3,'x')",
-                        (pid, row.get("current_mbid"), row["hist_decided_at"]))
+                        (uid, row.get("current_mbid"), row["hist_decided_at"]))
 
         elif kind == "boundary_review":
             if pid is not None:
-                cols = ["passage_id", "file_id", "kind", "start_ms", "end_ms",
+                cols = ["passage_id", "passage_uid", "file_id", "kind", "start_ms", "end_ms",
                         "lead_in_ms", "lead_out_ms", "gain_db"]
-                vals = [pid, file_id_for(change["anchor"]["audio_md5"]),
+                vals = [pid, uid, file_id_for(change["anchor"]["audio_md5"]),
                         change["anchor"]["passage_kind"], row["start_ms"], row["end_ms"],
                         row.get("lead_in_ms"), row.get("lead_out_ms"), row.get("gain_db")]
                 if entry["has_fade"]:
@@ -411,14 +418,14 @@ def build(changes: list[dict], fetched: dict, remote_schema: dict, out_path: str
                     # above `id_reviews`' own history insert.
                     if remote_schema.get("boundary_reviews") and "origin" in remote_schema["boundary_reviews"]:
                         conn.execute(
-                            "INSERT INTO boundary_reviews (passage_id, start_ms, end_ms, decided_at, "
+                            "INSERT INTO boundary_reviews (passage_uid, start_ms, end_ms, decided_at, "
                             "applied_at, origin) VALUES (?1,?2,?3,?4,'x',?5)",
-                            (pid, row["start_ms"], row["end_ms"], row["hist_decided_at"], row.get("hist_origin")))
+                            (uid, row["start_ms"], row["end_ms"], row["hist_decided_at"], row.get("hist_origin")))
                     else:
                         conn.execute(
-                            "INSERT INTO boundary_reviews (passage_id, start_ms, end_ms, decided_at, "
+                            "INSERT INTO boundary_reviews (passage_uid, start_ms, end_ms, decided_at, "
                             "applied_at) VALUES (?1,?2,?3,?4,'x')",
-                            (pid, row["start_ms"], row["end_ms"], row["hist_decided_at"]))
+                            (uid, row["start_ms"], row["end_ms"], row["hist_decided_at"]))
 
         elif kind == "artist_review":
             rmbid = change["anchor"]["recording_mbid"]
