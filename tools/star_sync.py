@@ -1529,11 +1529,11 @@ def show_items(run):
     for x in rv["items"]:
         v = rv["verdicts"].get(x["id"])
         col = f".{x['column']}" if x.get("column") else ""
-        say(f"  {x['id']} {x['kind']:14} {x['table']} {x['key']}{col}: default {x['default']}"
+        say(f"  {x['id']} {x['kind']:14} {x['table']} {sm.shown(x['key'])}{col}: default {x['default']}"
             + (f" -> {v['verdict']} ({v['by']})" if v else " -- NO VERDICT"))
         for c in x["candidates"]:
             say(f"      {c['node']:15} {c['stamp'] or ''}  "
-                + ("removed" if c["value"] is None else json.dumps(c["value"], default=str)[:160]))
+                + ("removed" if c["value"] is None else json.dumps(sm.shown(c["value"]), default=str)[:160]))
     prop = merge_items(run).get("propagated", {})
     if prop:
         say("  carried without question: " + ", ".join(f"{t} {n}" for t, n in sorted(prop.items())))
@@ -2813,7 +2813,7 @@ def main(argv):
         if len(rest) != 2:
             raise SystemExit("verdict takes an item id and `approved` or `chose:NODE`")
         x = give_verdict(run, rest[0], rest[1], by or "item")
-        say(f"{x['table']} {x['key']}: {rest[1]}")
+        say(f"{x['table']} {sm.shown(x['key'])}: {rest[1]}")
         return 0
     if cmd == "approve-all":
         kinds = approve_all(run, by or "approve-all")

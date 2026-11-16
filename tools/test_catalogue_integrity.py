@@ -337,8 +337,26 @@ def test_decide(tmp):
           and ci.load_decisions(dpath)[f["id"]]["committed"] == "20261031T1600Z", "the commit that carried it is kept")
 
 
+def test_a_passage_is_named_by_title_and_uid():
+    """[IMPL-UID-076]: a finding owned by a passage names it to a person by its
+    title and its uid's first eight characters, never this catalogue's number."""
+    c = sqlite3.connect(":memory:")
+    c.executescript("CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, passage_uid TEXT);"
+                    "CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);"
+                    "CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL);"
+                    "INSERT INTO passages VALUES (21159, 'abcdef01' || printf('%024d', 0));"
+                    "INSERT INTO recordings VALUES ('r1', 'Blue in Green');"
+                    "INSERT INTO passage_recordings VALUES (21159, 'r1', 1.0);")
+    f = {"table": "passage_characteristics", "owner": {"passage_id": 21159}, "parent": "characteristics",
+         "rows": [{}], "missing": ["x"]}
+    f["about"] = ci.describe(c, f)
+    text = ci.words(f)
+    check(text.startswith("passage “Blue in Green” · abcdef01:") and "21159" not in text, text)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        test_a_passage_is_named_by_title_and_uid()
         test_find(tmp)
         test_effect()
         test_remove_and_leave(tmp)

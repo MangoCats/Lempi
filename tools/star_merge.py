@@ -1314,11 +1314,28 @@ def build_catalogue(cat: dict, out: str, rep: Report):
     dest.close()
 
 
+UID_FORM = re.compile(r"[0-9a-f]{32}")
+
+
+def shown(v):
+    """`v` for a person to read: every passage uid in it as its first eight
+    characters [IMPL-UID-076], which is how a person is shown one. The JSON
+    beside a report keeps the whole uid, for a machine."""
+    if isinstance(v, str) and UID_FORM.fullmatch(v):
+        return v[:8]
+    if isinstance(v, (list, tuple)):
+        return [shown(x) for x in v]
+    if isinstance(v, dict):
+        return {k: shown(x) for k, x in v.items()}
+    return v
+
+
 def _show(row) -> str:
-    """A row for a person to read: a blob (cover art) as its size, not its bytes."""
+    """A row for a person to read: a blob (cover art) as its size, not its
+    bytes, and a uid by its first eight characters."""
     if row is None:
         return "none"
-    return "{" + ", ".join(f"{k}: " + (f"<{len(v)} bytes>" if isinstance(v, (bytes, bytearray)) else repr(v))
+    return "{" + ", ".join(f"{k}: " + (f"<{len(v)} bytes>" if isinstance(v, (bytes, bytearray)) else repr(shown(v)))
                            for k, v in row.items()) + "}"
 
 
@@ -1395,9 +1412,9 @@ def items_section(d: dict) -> list[str]:
             col = f" `{x['column']}`" if x.get("column") else ""
             cands = "; ".join(
                 f"{c['node']}: " + ("removed" if c["value"] is None else _show(c["value"]) if isinstance(c["value"], dict)
-                                    else repr(c["value"])) + (f" ({c['stamp']})" if c.get("stamp") else "")
+                                    else repr(shown(c["value"]))) + (f" ({c['stamp']})" if c.get("stamp") else "")
                 for c in x["candidates"])
-            L.append(f"- `{x['id']}` `{x['table']}` {x['key']}{col}: default **{x['default']}** -- {cands}")
+            L.append(f"- `{x['id']}` `{x['table']}` {shown(x['key'])}{col}: default **{x['default']}** -- {cands}")
         if len(xs) > 25:
             L.append(f"- ... and {len(xs) - 25} more in report.json")
     return L
@@ -1430,7 +1447,7 @@ def catalogue_section(c: dict) -> list[str]:
     if not c["conflicts"]:
         L.append("None: wherever two copies changed a row, they changed it the same way.")
     for x in c["conflicts"]:
-        L.append(f"- `{x['table']}` {x['key']}: chose **{x['chose']}** -- " + "; ".join(
+        L.append(f"- `{x['table']}` {shown(x['key'])}: chose **{x['chose']}** -- " + "; ".join(
             f"{n}: {'deleted' if v is None else _show(v)}" for n, v in sorted(x["values"].items())))
     rd = c.get("receiver_differences", [])
     L += ["", "## Receiver differences, for the person", "",
@@ -1445,7 +1462,7 @@ def catalogue_section(c: dict) -> list[str]:
     for (t, n), xs in sorted(by.items()):
         L.append(f"- `{t}` on {n}: {len(xs)} row(s)")
         for x in xs[:25]:
-            L.append(f"  - {x['key']}: {n} has {_show(x['receiver_value'])}; merged "
+            L.append(f"  - {shown(x['key'])}: {n} has {_show(x['receiver_value'])}; merged "
                      f"{'has none' if x['merged_value'] is None else 'has ' + _show(x['merged_value'])}")
         if len(xs) > 25:
             L.append(f"  - ... and {len(xs) - 25} more in report.json")
@@ -1507,7 +1524,7 @@ def listener_section(d: dict) -> list[str]:
     if not d["decisions"]:
         L.append("None: every table agreed wherever nodes overlapped.")
     for x in d["decisions"]:
-        L.append(f"- `{x['table']}` {x['key']}: {x['what']} `[{x['rule']}]`")
+        L.append(f"- `{x['table']}` {shown(x['key'])}: {x['what']} `[{x['rule']}]`")
     return L
 
 

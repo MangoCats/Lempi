@@ -167,6 +167,14 @@ def describe(conn, f) -> dict:
     if "mbid" in owner and _has(conn, "recordings"):
         r = _one(conn, "SELECT title FROM recordings WHERE mbid = ?", owner["mbid"])
         return {"kind": "recording", "mbid": owner["mbid"], "title": r[0] if r else None}
+    if set(owner) == {"passage_id"} and _has(conn, "passages"):
+        # A passage by its uid and its title, never this catalogue's number,
+        # for the person reading the summary [IMPL-UID-076].
+        r = _one(conn, "SELECT p.passage_uid, (SELECT r.title FROM passage_recordings pr JOIN recordings r "
+                       "ON r.mbid = pr.mbid WHERE pr.passage_id = p.passage_id ORDER BY pr.weight DESC LIMIT 1) "
+                       "FROM passages p WHERE p.passage_id = ?", owner["passage_id"])
+        if r and r[0]:
+            return {"kind": "passage", "uid": r[0], "title": r[1]}
     return {"kind": t, "owner": owner}
 
 
@@ -190,6 +198,8 @@ def words(f) -> str:
         return f"{name}: {what}; {left}{files}"
     if a.get("kind") == "recording":
         return f"recording {a['title'] or a['mbid']}: {what}"
+    if a.get("kind") == "passage":
+        return f"passage “{a['title'] or 'untitled'}” · {a['uid'][:8]}: {what}"
     return f"`{f['table']}` {f['owner']}: {what}"
 
 

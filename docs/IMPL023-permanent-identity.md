@@ -175,6 +175,7 @@ The window ran 2026-11-16 with `tools/listener_window.py` recording each listene
 - **The unflag:** it sends the passage's uid and its recordings to the remote with no peek first. A read of the remote, when it works, adds the recordings the remote itself links. A remote without the passage clears nothing by it.
 
 **`[IMPL-UID-076]` To people:** star-sync reports, items and the Sync page show a uid's first eight characters beside the title, never a number.
+- **As built, 2026-11-16.** `star_merge.shown` gives every uid in a key or row its first eight characters, in `report.md` and in `star_sync`'s `items` and `verdict` lines; `report.json` and `items.json` keep the whole uid. The Sync page names a passage's flag or review by its title and those eight. An integrity finding owned by a passage is named the same way, where it once showed the catalogue's number. The player's pages do the same (`Lempi.shortUid`).
 
 **`[IMPL-UID-077]` The SPEC006 change and flag tools name passages by uid** `[IMPL-UID-900]`: `export_changes.py`, `apply_changes.py`, `remote_snapshot.py`, `accept_remote_basis.py`, `export_flags.py` and `import_flags.py`. A record keeps the span it was made against as its baseline, not as the passage's name.
 

@@ -54,6 +54,16 @@ def test_describe():
                      "INSERT INTO passages VALUES (7, printf('%032x', 7));")
     d = sc.describe(pc, "listener_flags", ["passage", f"{7:032x}"])
     check(d["resolved"] and "Blue in Green" in d["text"], f"a passage by its uid, named by its recording: {d}")
+    # Beside its title, the uid's first eight characters, and never a number
+    # [IMPL-UID-076]; a review the hub cannot name says the same eight.
+    uid = "abcdef01" + "0" * 24
+    pc.execute("UPDATE passages SET passage_uid = ? WHERE passage_id = 7", (uid,))
+    d = sc.describe(pc, "listener_flags", ["passage", uid])
+    check(d["text"] == "passage “Blue in Green” · abcdef01", f"the title and the short uid: {d}")
+    d = sc.describe(pc, "boundary_reviews", [uid, "2026-11-16T00:00:00Z"])
+    check(d["text"] == "boundary review of “Blue in Green” · abcdef01", f"a review: {d}")
+    d = sc.describe(pc, "id_reviews", ["fedcba98" + "0" * 24, "2026-11-16T00:00:00Z"])
+    check(d == {"text": "id_reviews passage fedcba98", "resolved": False}, f"one the hub lacks: {d}")
     d = sc.describe(c, "listener_preferences", ["recording", "nope"])
     check(d == {"text": "recording nope", "resolved": False}, f"a subject the hub lacks says its id, unresolved: {d}")
     d = sc.describe(sqlite3.connect(":memory:"), "listener_preferences", ["recording", "r1"])

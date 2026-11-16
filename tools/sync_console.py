@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -226,6 +227,9 @@ def state(plan) -> dict:
 
 
 # ------------------------------------------------------------------ items --
+UID_FORM = re.compile(r"[0-9a-f]{32}")
+
+
 def describe(conn, table: str, key) -> dict:
     """[SPEC-STAR-122]: what an item is, in words, from the hub's catalogue; a
     subject it lacks says its kind and id, marked unresolved [SPEC-STAR-930]."""
@@ -252,18 +256,25 @@ def describe(conn, table: str, key) -> dict:
                        "JOIN recordings r ON r.mbid = pr.mbid WHERE p.passage_uid = ? LIMIT 1", ident)
         return None
 
+    def short(ident):
+        # A passage's uid beside its title, by its first eight characters,
+        # never a number [IMPL-UID-076].
+        return ident[:8] if isinstance(ident, str) and UID_FORM.fullmatch(ident) else ident
+
     shown = None
     if table in ("listener_preferences", "listener_flags", "listener_characteristics") and len(key) >= 2:
         s = subject(key[0], key[1])
         extra = f" · {key[2]}" if table == "listener_characteristics" and len(key) > 2 else ""
-        shown = f"{key[0]} “{s}”{extra}" if s else None
-        label = f"{key[0]} {key[1]}{extra}"
+        uid = f" · {short(key[1])}" if key[0] == "passage" else ""
+        shown = f"{key[0]} “{s}”{uid}{extra}" if s else None
+        label = f"{key[0]} {short(key[1])}{extra}"
     elif table == "listener_likes":
         s = subject("recording", key[0])
         shown, label = (f"like of “{s}”" if s else None), f"like of {key[0]}"
     elif table in ("id_reviews", "boundary_reviews"):
         s = subject("passage", key[0])
-        shown, label = (f"{table.split('_')[0]} review of “{s}”" if s else None), f"{table} passage {key[0]}"
+        shown = f"{table.split('_')[0]} review of “{s}” · {short(key[0])}" if s else None
+        label = f"{table} passage {short(key[0])}"
     elif table == "artist_reviews":
         s = subject("recording", key[0])
         shown, label = (f"artist review of “{s}”" if s else None), f"{table} {key[0]}"

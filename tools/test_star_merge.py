@@ -885,11 +885,34 @@ def test_removal_within_a_backups_second(tmp):
     check(left == [], f"the removal b's backup evidences is applied: {left}")
 
 
+def test_people_see_a_uids_first_eight(tmp):
+    """[IMPL-UID-076]: a report shows a person a passage's uid by its first
+    eight characters, never a number; the JSON beside it keeps the whole uid."""
+    uid = "abcdef01" + "0" * 24
+    check(sm.shown([uid, "2026-11-16T00:00:00Z"]) == ["abcdef01", "2026-11-16T00:00:00Z"], "a key")
+    check(sm.shown({"passage_uid": uid, "n": 3}) == {"passage_uid": "abcdef01", "n": 3}, "a row")
+    check(sm.shown("21159") == "21159" and sm.shown(uid.upper()) == uid.upper(), "nothing else is shortened")
+    item = dict(id="x1", table="boundary_reviews", key=[uid, "2026-11-16T00:00:00Z"], column=None,
+                kind="conflict", rule="lww", default="a", chosen="a",
+                candidates=[dict(node="a", value={"passage_uid": uid, "start_ms": 1}, stamp=None),
+                            dict(node="b", value={"passage_uid": uid, "start_ms": 2}, stamp=None)])
+    text = "\n".join(sm.items_section({"items": [item]}))
+    check("abcdef01" in text and uid not in text, f"the report's item names the passage by eight: {text}")
+    rep = sm.Report()
+    rep.data["items"].append(item)
+    out = os.path.join(tmp, "short-uids")
+    os.makedirs(out)
+    sm.write_report(rep, out)
+    check(uid in open(os.path.join(out, "items.json"), encoding="utf-8").read(), "items.json keeps the uid whole")
+    check(uid not in open(os.path.join(out, "report.md"), encoding="utf-8").read(), "report.md does not")
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp()
     test_rust_agrees()
     test_removal_within_a_backups_second(tmp)
     test_items(tmp)
+    test_people_see_a_uids_first_eight(tmp)
     test_rekeyed(tmp)
     test_catalogue(tmp)
     test_held_out(tmp)
