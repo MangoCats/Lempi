@@ -221,6 +221,25 @@ what remains here is the work that crosses documents.
 7. ~~**CI cannot be read from the hub desktop**~~ *Resolved 2026-10-14: `gh` is authenticated there, and the first read found the docs workflow red since 2026-10-01 -- `check_forbidden_names.py` could not read the committed Essentia binaries, fixed the same night.* Was: `gh` was not authenticated
    there, so a red run was seen only on GitHub; the commit hook does not run this gate.
 
+## 6. Future enhancements, not scheduled
+
+Wanted, with no date: the maintainer has asked for each to be kept here, and
+when each is built is to be decided.
+
+1. **The player reuses its database connections, rather than opening the pair
+   for every request** (the maintainer, 2026-11-16). Every request opens the
+   listener, attaches the catalogue and reads both schemas before its first
+   query. Since Stage C a passage route does that twice, once to find the
+   passage's number by its uid `[IMPL-UID-072]`: on `lempi02w` a passage's info
+   went from 9.0 ms to 14.7 ms, median of 21 (IMPL023 `[IMPL-UID-078]`). Reuse
+   would save the open on every route, not only those. The one-open-per-request
+   design is deliberate. A long-lived connection would have to be squared with
+   the hub's pair patch, which wants the player stopped; with `bose`'s read-only
+   catalogue; with readers holding back a WAL checkpoint; and with the lock
+   lesson of CLAUDE.md §12 `[SPEC-STAR-105]`. **First:** time the open, the
+   thread hand-off and the query apart on `lempi02w`, and write the design down
+   before building it.
+
 ---
 
 **Traceability:** exists to satisfy `[GOV-DOC-050]` · nothing here is a
