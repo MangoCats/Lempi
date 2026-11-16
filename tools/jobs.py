@@ -1305,10 +1305,8 @@ class Runner:
         tools = os.path.dirname(os.path.abspath(__file__))
         anchor = payload["anchor"]
         argv = [sys.executable, os.path.join(tools, "accept_remote_basis.py"), self.library,
-                "--kind", payload["kind"], "--audio-md5", anchor["audio_md5"],
-                "--passage-kind", anchor["passage_kind"], "--start-ms", str(anchor["start_ms"]),
-                "--end-ms", str(anchor["end_ms"]), "--value", json.dumps(payload["value"]),
-                "--commit", "--json"]
+                "--kind", payload["kind"], "--passage-uid", anchor["passage_uid"],
+                "--value", json.dumps(payload["value"]), "--commit", "--json"]
         self._run_single_stage(job_id, "accept", argv)
 
     def _suggest_release(self, job_id: int, target: str):

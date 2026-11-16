@@ -275,13 +275,15 @@ def unflag_everywhere(subjects: list, remote: str | None, status: dict | None,
     `passage_flag_subjects(conn, pid)` -- a `("passage", pid)` entry and
     one `("recording", mbid)` entry per linked recording. `status` is
     `flag_sync_status(conn, pid)`, or `None` when no remote is configured at
-    all; when given, its `remote_pid` says whether the remote holds this
-    passage at all, and its `remote_mbids` let a `("recording", mbid)`
-    subject be unioned with whatever the remote *itself* currently links.
-    The `("passage", uid)` subject is sent as it is: a passage is flagged by
-    its uid on every node, the same one here as there `[IMPL-UID-060]`.
-    Until Stage B it was this node's number, and had to be translated to
-    the remote's own `[SPEC-DF-103]`; a Stage B node refuses a number.
+    all; when it read the remote, its `remote_mbids` let a `("recording",
+    mbid)` subject be unioned with whatever the remote *itself* currently
+    links. The `("passage", uid)` subject is sent as it is: a passage is
+    flagged by its uid on every node, the same one here as there
+    `[IMPL-UID-060]`, so no peek for the remote's own number comes first
+    `[IMPL-UID-074]`. A remote that does not hold the passage clears nothing
+    by it. Until Stage B it was this node's number, and had to be
+    translated to the remote's own `[SPEC-DF-103]`; a Stage B node refuses
+    a number.
 
     That union matters: found live the first time this ran for real, an id
     correction accepted locally but not yet pushed left the remote still
@@ -291,9 +293,8 @@ def unflag_everywhere(subjects: list, remote: str | None, status: dict | None,
     rows is not an error). The same reasoning `[SPEC-DF-112]`'s
     `clear_flags_for()` already applies for an `id_review`'s own
     target+baseline, generalized: ask what the far side currently thinks
-    too, clear the union. A remote passage that does not exist there at all
-    (`status["remote_pid"] is None`) has its passage-keyed subject skipped,
-    not silently dropped -- it is simply not in the union to begin with.
+    too, clear the union. A status that could not read the remote leaves
+    the union as this side's own subjects, which are still sent.
     """
     local_ok = [_lempi_set_flag(port, kind, sid, False) for kind, sid in subjects]
     result = {"local": {"ok": all(local_ok), "cleared": sum(local_ok), "of": len(local_ok)}}
@@ -301,18 +302,14 @@ def unflag_everywhere(subjects: list, remote: str | None, status: dict | None,
     if not remote:
         result["remote"] = {"configured": False}
         return result
-    if status is None or not status["reachable"]:
-        result["remote"] = {"configured": True, "reachable": False}
-        return result
-
-    remote_subjects = {("recording", mbid) for mbid in status["remote_mbids"]}
-    remote_subjects |= {(k, sid) for k, sid in subjects if k == "recording"}
-    if status["remote_pid"] is not None:
-        remote_subjects |= {(k, sid) for k, sid in subjects if k == "passage"}
+    read = bool(status and status["reachable"])
+    remote_subjects = set(subjects)
+    if read:
+        remote_subjects |= {("recording", mbid) for mbid in status["remote_mbids"]}
     remote_ok = [_remote_set_flag(remote, port, kind, sid, False)
                  for kind, sid in sorted(remote_subjects)]
-    result["remote"] = {"configured": True, "reachable": True, "ok": all(remote_ok),
-                         "cleared": sum(remote_ok), "of": len(remote_ok)}
+    result["remote"] = {"configured": True, "reachable": read or any(remote_ok), "read": read,
+                         "ok": all(remote_ok), "cleared": sum(remote_ok), "of": len(remote_ok)}
     return result
 
 
@@ -331,14 +328,12 @@ def unflag_subject_everywhere(kind: str, subject_id: str, remote: str | None,
     listener flags a *recording*, not a specific passage of it, most of
     the time `[REQ-VIS-265]`.
 
-    **Best-effort only for a `passage`-kind flag.** `subject_id` is a
-    *local* passage number, portable to the remote only by coincidence,
-    never guaranteed and never checked here -- `unflag_everywhere` exists
-    precisely because that translation needs the recording(s) a passage
-    currently links to, which this function has no passage to look up at
-    all. Call this for a `passage`-kind subject only once
-    `unflag_everywhere` is confirmed unusable (nothing local resolves it
-    any more), not as a routine substitute for it.
+    **Correct outright for a `passage`-kind flag too**, since Stage B: its
+    `subject_id` is the passage's uid, the same on the remote
+    `[IMPL-UID-060]`, `[IMPL-UID-074]`. Until then it was a local number,
+    portable only by coincidence. `unflag_everywhere` is still the one to
+    call where a passage is at hand, because it also clears the
+    recordings the passage links to on either side.
     """
     local_ok = _lempi_set_flag(port, kind, subject_id, False)
     result = {"local": {"ok": local_ok}}

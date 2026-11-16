@@ -171,6 +171,8 @@ The window ran 2026-11-16 with `tools/listener_window.py` recording each listene
 - **The hub's console:** its edit and review hand-offs into the player pass the uid. Its own pages keep the hub's number.
 
 **`[IMPL-UID-074]` Remote tools:** `lempi_control.py` flags and unflags on a remote by uid, with no peek for the remote's number. The console's `remote_status` and `flag_sync_status` anchor by uid, and `echo_skew.py` compares uids.
+- **As built, 2026-11-16.** `remote_peek.py` names a passage by `--passage-uid` alone, refusing anything else before a query is built. `passage_flag` reports `held`, not the remote's number, and reads the peer's listener beside its catalogue (`[SPEC-DF-124]`, open until now). The remote-basis accept goes by uid end to end: route, job and `accept_remote_basis.py`.
+- **The unflag:** it sends the passage's uid and its recordings to the remote with no peek first. A read of the remote, when it works, adds the recordings the remote itself links. A remote without the passage clears nothing by it.
 
 **`[IMPL-UID-076]` To people:** star-sync reports, items and the Sync page show a uid's first eight characters beside the title, never a number.
 

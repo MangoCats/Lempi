@@ -67,11 +67,15 @@ def build(flag_rows=()):
 
 
 class FakeJobs:
-    def __init__(self, remote):
+    def __init__(self, remote, listener=None):
         self._remote = remote
+        self._listener = listener
 
     def get_remote(self):
         return self._remote
+
+    def get_remote_listener(self):
+        return self._listener
 
 
 def test_passage_flag_subjects() -> None:
@@ -102,7 +106,7 @@ def test_flag_sync_status_no_remote_configured() -> None:
         r = console.flag_sync_status(build([("recording", REC)]), 1)
     finally:
         console._peek = real_peek
-    check(r == {"local": True, "remote": None, "reachable": False, "remote_pid": None, "remote_mbids": []},
+    check(r == {"local": True, "remote": None, "reachable": False, "remote_held": None, "remote_mbids": []},
           f"got {r}")
 
 
@@ -115,7 +119,7 @@ def test_flag_sync_status_unreachable() -> None:
         r = console.flag_sync_status(build(), 1)
     finally:
         console._peek = real_peek
-    check(r == {"local": False, "remote": None, "reachable": False, "remote_pid": None, "remote_mbids": []},
+    check(r == {"local": False, "remote": None, "reachable": False, "remote_held": None, "remote_mbids": []},
           f"got {r}")
 
 
@@ -125,23 +129,40 @@ def test_flag_sync_status_agrees_and_diverges() -> None:
     real_peek = console._peek
 
     console._peek = lambda remote, kind, args, timeout=12.0: {
-        "ok": True, "current": {"remote_passage_id": 42, "flagged": 0, "remote_mbids": json.dumps([REC])}}
+        "ok": True, "current": {"held": 1, "flagged": 0, "remote_mbids": json.dumps([REC])}}
     try:
         r = console.flag_sync_status(build(), 1)
     finally:
         console._peek = real_peek
-    check(r == {"local": False, "remote": False, "reachable": True, "remote_pid": 42,
+    check(r == {"local": False, "remote": False, "reachable": True, "remote_held": True,
                 "remote_mbids": [REC]},
           f"both unflagged must agree, got {r}")
 
     console._peek = lambda remote, kind, args, timeout=12.0: {
-        "ok": True, "current": {"remote_passage_id": 42, "flagged": 1}}
+        "ok": True, "current": {"held": 1, "flagged": 1}}
     try:
         r = console.flag_sync_status(build(), 1)  # local still unflagged
     finally:
         console._peek = real_peek
     check(r["local"] is False and r["remote"] is True,
           f"a remote-only flag must be reported as a genuine divergence, got {r}")
+
+
+def test_flag_sync_status_asks_by_uid_with_the_listener() -> None:
+    print("flag_sync_status(): the remote is asked by the passage's uid, with its listener "
+          "half beside the catalogue [IMPL-UID-074], [SPEC-DF-124]")
+    console.STATE["jobs"] = FakeJobs("pi@speaker-a:/srv/library/library.db", "/var/lempi/listener.db")
+    real_peek = console._peek
+    asked = []
+    console._peek = lambda remote, kind, args, timeout=12.0: asked.append((kind, args)) or {
+        "ok": True, "current": {"held": 0, "flagged": 0, "remote_mbids": "[]"}}
+    try:
+        r = console.flag_sync_status(build(), 1)
+    finally:
+        console._peek = real_peek
+    check(asked == [("passage_flag", ["--passage-uid", U1, "--remote-listener", "/var/lempi/listener.db"])],
+          f"asked {asked}")
+    check(r["remote_held"] is False, f"a remote without it says so: {r}")
 
 
 def test_unflag_everywhere_no_remote() -> None:
@@ -167,7 +188,7 @@ def test_unflag_everywhere_translates_passage_id_for_remote() -> None:
     real_peek = console._peek
     real_local, real_remote = lempi_control._lempi_set_flag, lempi_control._remote_set_flag
     console._peek = lambda remote, kind, args, timeout=12.0: {
-        "ok": True, "current": {"remote_passage_id": 999, "flagged": 1,
+        "ok": True, "current": {"held": 1, "flagged": 1,
                                  "remote_mbids": json.dumps([REC])}}
     lempi_control._lempi_set_flag = lambda *a, **k: True
     remote_calls = []
@@ -181,18 +202,19 @@ def test_unflag_everywhere_translates_passage_id_for_remote() -> None:
     check(("passage", U1, False) in remote_calls and not any(sid in ("1", "999") for _, sid, _ in remote_calls),
           f"the uid, never a number, is sent to the remote: got {remote_calls}")
     check(("recording", REC, False) in remote_calls, f"got {remote_calls}")
-    check(r["remote"] == {"configured": True, "reachable": True, "ok": True, "cleared": 2, "of": 2},
+    check(r["remote"] == {"configured": True, "reachable": True, "read": True, "ok": True,
+                          "cleared": 2, "of": 2},
           f"got {r}")
 
 
 def test_unflag_everywhere_remote_missing_passage() -> None:
-    print("unflag_everywhere(): a remote with no such passage skips only the "
-          "passage-keyed subject, and still clears the recording-keyed one")
+    print("unflag_everywhere(): a remote without the passage is still sent its uid, which "
+          "clears nothing there, and the recording-keyed subject [IMPL-UID-074]")
     console.STATE["jobs"] = FakeJobs("pi@lempi02w:/srv/library/library.db")
     real_peek = console._peek
     real_local, real_remote = lempi_control._lempi_set_flag, lempi_control._remote_set_flag
     console._peek = lambda remote, kind, args, timeout=12.0: {
-        "ok": True, "current": {"remote_passage_id": None, "flagged": 0, "remote_mbids": "[]"}}
+        "ok": True, "current": {"held": 0, "flagged": 0, "remote_mbids": "[]"}}
     lempi_control._lempi_set_flag = lambda *a, **k: True
     remote_calls = []
     lempi_control._remote_set_flag = lambda remote, port, kind, sid, flagged, timeout=8.0: (
@@ -202,9 +224,30 @@ def test_unflag_everywhere_remote_missing_passage() -> None:
     finally:
         console._peek = real_peek
         lempi_control._lempi_set_flag, lempi_control._remote_set_flag = real_local, real_remote
-    check(remote_calls == [("recording", REC, False)],
-          f"only the recording subject can be resolved remotely, got {remote_calls}")
-    check(r["remote"]["of"] == 1, f"got {r}")
+    check(remote_calls == [("passage", U1, False), ("recording", REC, False)],
+          f"the uid needs no resolving there, got {remote_calls}")
+    check(r["remote"]["of"] == 2, f"got {r}")
+
+
+def test_unflag_everywhere_unread_remote_is_still_sent() -> None:
+    print("unflag_everywhere(): a remote whose flags could not be read is still sent this "
+          "side's subjects -- no peek is needed first [IMPL-UID-074]")
+    console.STATE["jobs"] = FakeJobs("pi@speaker-a:/srv/library/library.db")
+    real_peek = console._peek
+    real_local, real_remote = lempi_control._lempi_set_flag, lempi_control._remote_set_flag
+    console._peek = lambda remote, kind, args, timeout=12.0: {"ok": False, "error": "no such table: listener_flags"}
+    lempi_control._lempi_set_flag = lambda *a, **k: True
+    remote_calls = []
+    lempi_control._remote_set_flag = lambda remote, port, kind, sid, flagged, timeout=8.0: (
+        remote_calls.append((kind, sid, flagged)) or True)
+    try:
+        r = console.unflag_everywhere(build(), 1)
+    finally:
+        console._peek = real_peek
+        lempi_control._lempi_set_flag, lempi_control._remote_set_flag = real_local, real_remote
+    check(remote_calls == [("passage", U1, False), ("recording", REC, False)], f"got {remote_calls}")
+    check(r["remote"] == {"configured": True, "reachable": True, "read": False, "ok": True,
+                          "cleared": 2, "of": 2}, f"got {r}")
 
 
 def test_unflag_everywhere_clears_a_stale_remote_recording_too() -> None:
@@ -222,7 +265,7 @@ def test_unflag_everywhere_clears_a_stale_remote_recording_too() -> None:
     real_local, real_remote = lempi_control._lempi_set_flag, lempi_control._remote_set_flag
     old_remote_mbid = "local:audio:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     console._peek = lambda remote, kind, args, timeout=12.0: {
-        "ok": True, "current": {"remote_passage_id": 1, "flagged": 1,
+        "ok": True, "current": {"held": 1, "flagged": 1,
                                  "remote_mbids": json.dumps([old_remote_mbid])}}
     lempi_control._lempi_set_flag = lambda *a, **k: True
     remote_calls = []
@@ -293,9 +336,11 @@ def main() -> int:
     test_flag_sync_status_no_remote_configured()
     test_flag_sync_status_unreachable()
     test_flag_sync_status_agrees_and_diverges()
+    test_flag_sync_status_asks_by_uid_with_the_listener()
     test_unflag_everywhere_no_remote()
     test_unflag_everywhere_translates_passage_id_for_remote()
     test_unflag_everywhere_remote_missing_passage()
+    test_unflag_everywhere_unread_remote_is_still_sent()
     test_unflag_everywhere_clears_a_stale_remote_recording_too()
     test_unflag_subject_everywhere_no_remote()
     test_unflag_subject_everywhere_sends_the_identical_subject_to_the_remote()

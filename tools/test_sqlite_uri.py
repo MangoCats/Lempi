@@ -238,6 +238,7 @@ BY_HAND = [
     ("tools/check_node_ready.py", '"file:" + sys.argv[1].replace("%", "%25")'),
     ("tools/star_sync.py", '"file:" + src.replace("%", "%25")'),
     ("tools/remote_peek.py", "'file:'+sys.argv[1].replace('%','%25')"),
+    ("tools/listener_window.py", 'def uri(p): return "file:" + p.replace("%", "%25")'),
     # A constant, `data/flavor.db`: it holds none of the three characters.
     ("tools/recompute_floor.py", 'f"file:{DB}?mode=ro"'),
     # Not an address: a traceback as a node once printed it, kept as it came.

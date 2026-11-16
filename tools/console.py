@@ -646,14 +646,16 @@ def remote_status(conn, pid: int) -> dict:
         return {"remote": None}   # nothing configured -- nothing to check against
 
     p = conn.execute(
-        "SELECT p.kind, p.start_ms, p.end_ms, p.lead_in_ms, p.lead_out_ms, p.gain_db, f.audio_md5 "
-        "FROM passages p JOIN files f USING(file_id) WHERE p.passage_id = ?1", (pid,)).fetchone()
+        "SELECT p.passage_uid, p.start_ms, p.end_ms, p.lead_in_ms, p.lead_out_ms, p.gain_db "
+        "FROM passages p WHERE p.passage_id = ?1", (pid,)).fetchone()
     if p is None:
         return {"remote": remote, "reachable": False, "error": "no such passage"}
-    anchor = {"audio_md5": p["audio_md5"], "passage_kind": p["kind"],
-              "start_ms": p["start_ms"], "end_ms": p["end_ms"]}
-    anchor_args = ["--audio-md5", p["audio_md5"], "--passage-kind", p["kind"],
-                   "--start-ms", str(p["start_ms"]), "--end-ms", str(p["end_ms"])]
+    if not p["passage_uid"]:
+        return {"remote": remote, "reachable": False, "error": "this passage has no uid yet"}
+    # The remote's copy, by uid, whatever its span there has become
+    # [IMPL-UID-074]; its number is never asked for.
+    anchor = {"passage_uid": p["passage_uid"]}
+    anchor_args = ["--passage-uid", p["passage_uid"]]
     local_mbid = conn.execute(
         "SELECT mbid FROM passage_recordings WHERE passage_id=?1 ORDER BY weight DESC, mbid LIMIT 1",
         (pid,)).fetchone()
@@ -718,19 +720,22 @@ def flag_sync_status(conn, pid: int) -> dict:
     subjects = passage_flag_subjects(conn, pid)
     local = passage_flagged_locally(conn, subjects)
     remote = STATE["jobs"].get_remote()
+    unknown = {"local": local, "remote": None, "reachable": False, "remote_held": None, "remote_mbids": []}
     if not remote:
-        return {"local": local, "remote": None, "reachable": False, "remote_pid": None, "remote_mbids": []}
+        return unknown
 
-    p = conn.execute(
-        "SELECT p.kind, p.start_ms, p.end_ms, f.audio_md5 FROM passages p "
-        "JOIN files f USING(file_id) WHERE p.passage_id=?1", (pid,)).fetchone()
-    if p is None:
-        return {"local": local, "remote": None, "reachable": False, "remote_pid": None, "remote_mbids": []}
-    anchor_args = ["--audio-md5", p["audio_md5"], "--passage-kind", p["kind"],
-                   "--start-ms", str(p["start_ms"]), "--end-ms", str(p["end_ms"])]
+    uid = next((sid for kind, sid in subjects if kind == "passage"), None)
+    if uid is None:
+        return unknown
+    # By uid [IMPL-UID-074], with the listener half beside the catalogue
+    # [SPEC-DF-124]: until both, this read failed against every split peer.
+    anchor_args = ["--passage-uid", uid]
+    listener = STATE["jobs"].get_remote_listener()
+    if listener:
+        anchor_args += ["--remote-listener", listener]
     result = _peek(remote, "passage_flag", anchor_args)
     if not result.get("ok"):
-        return {"local": local, "remote": None, "reachable": False, "remote_pid": None, "remote_mbids": []}
+        return unknown
     current = result.get("current") or {}
     remote_mbids = []
     try:
@@ -738,7 +743,7 @@ def flag_sync_status(conn, pid: int) -> dict:
     except (ValueError, TypeError):
         pass  # malformed reply from an old remote_peek.py -- treated as "none known"
     return {"local": local, "remote": bool(current.get("flagged")), "reachable": True,
-            "remote_pid": current.get("remote_passage_id"), "remote_mbids": remote_mbids}
+            "remote_held": bool(current.get("held")), "remote_mbids": remote_mbids}
 
 
 # ------------------------------------------------------------------ system ---
@@ -1496,12 +1501,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json(
                         {"error": "expected {kind: id_review|boundary_review, value: {...}}"}, code=400)
                 row = self._db().execute(
-                    "SELECT p.kind, p.start_ms, p.end_ms, f.audio_md5 FROM passages p "
-                    "JOIN files f USING(file_id) WHERE p.passage_id=?1", (pid,)).fetchone()
-                if row is None:
-                    return self.send_json({"error": f"no such passage: {pid}"}, code=404)
-                anchor = {"audio_md5": row["audio_md5"], "passage_kind": row["kind"],
-                          "start_ms": row["start_ms"], "end_ms": row["end_ms"]}
+                    "SELECT passage_uid FROM passages WHERE passage_id=?1", (pid,)).fetchone()
+                if row is None or not row["passage_uid"]:
+                    return self.send_json({"error": f"no such passage, or none with a uid: {pid}"}, code=404)
+                anchor = {"passage_uid": row["passage_uid"]}   # by uid [IMPL-UID-074]
                 target = json.dumps({"kind": kind, "anchor": anchor, "value": value})
                 return self.send_json({"job_id": STATE["jobs"].submit("accept-remote", target)})
             if p.startswith("/api/profile/") and p.endswith("/unflag"):

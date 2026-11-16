@@ -123,7 +123,8 @@ def credit(conn, passage_id=1):
         "SELECT mbid, source FROM passage_recordings WHERE passage_id=?", (passage_id,)).fetchone()
 
 
-ANCHOR_ARGS = ["--audio-md5", "md5-a", "--passage-kind", "radio", "--start-ms", "1000", "--end-ms", "200000"]
+# The fixture's passage, by its uid [IMPL-UID-074].
+ANCHOR_ARGS = ["--passage-uid", "%032x" % 1]
 
 
 def test_boundary_accept(tmp: str) -> None:
@@ -179,10 +180,14 @@ def test_unmatched_anchor(tmp: str) -> None:
     print("an anchor nothing here matches is reported, not a crash")
     db = os.path.join(tmp, "unmatched.db")
     build(db)
-    r = run(db, "--kind", "boundary_review", "--audio-md5", "md5-nope", "--passage-kind", "radio",
-            "--start-ms", "0", "--end-ms", "1", "--value", "{}", "--commit", "--json")
+    r = run(db, "--kind", "boundary_review", "--passage-uid", "%032x" % 99,
+            "--value", "{}", "--commit", "--json")
     check(r.returncode == 1, f"expected exit 1, got {r.returncode}")
     check("nothing to accept a basis for" in r.stdout, f"got {r.stdout!r}")
+
+    print("a passage named by number, not uid, is refused before the library is opened [IMPL-UID-074]")
+    r = run(db, "--kind", "boundary_review", "--passage-uid", "1", "--value", "{}", "--commit", "--json")
+    check(r.returncode == 2 and "is not a passage uid" in r.stdout, f"got {r.returncode} {r.stdout!r}")
 
 
 def test_closes_the_loop(tmp: str) -> None:
@@ -198,10 +203,9 @@ def test_closes_the_loop(tmp: str) -> None:
     vc = sqlite3.connect(lempi02w)
     # lempi02w diverged independently -- amplitude was re-analysed there, with
     # no involvement from this desktop at all. The trim points
-    # (start_ms/end_ms) are untouched: that identity is the anchor
-    # `remote_peek.py` finds this row by, same as `apply_changes.py`'s own
-    # `resolve_passage` would locally -- a *moved* trim point is a
-    # different, harder case this targeted read does not claim to solve.
+    # (start_ms/end_ms) are untouched here, though since 2026-11-16 they
+    # need not be: `remote_peek.py` finds the row by its uid, as
+    # `apply_changes.py`'s own `resolve_passage` does locally [IMPL-UID-074].
     # Fade `[SPEC-SUI-226]` diverged there too, off its fixed default.
     vc.execute("UPDATE passages SET lead_in_ms=250,lead_out_ms=1200,gain_db=-2.0,"
                "fade_in_ms=15,fade_out_ms=1500,fade_in_curve='linear',fade_out_curve='cosine' "
@@ -214,7 +218,7 @@ def test_closes_the_loop(tmp: str) -> None:
 
     # What remote_peek.py would have returned, computed with its own SQL
     # against a plain local copy standing in for the ssh round trip.
-    anchor = {"audio_md5": "md5-a", "passage_kind": "radio", "start_ms": 1000, "end_ms": 200000}
+    anchor = {"passage_uid": "%032x" % 1}
     rc = sqlite3.connect(lempi02w)
     row = rc.execute(rp.sql_for("boundary_review", anchor)).fetchone()
     rc.close()

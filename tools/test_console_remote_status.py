@@ -25,7 +25,8 @@ CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT NOT NULL,
     duration_ms INTEGER, first_seen TEXT, last_seen TEXT);
 CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER,
     kind TEXT, start_ms INTEGER, end_ms INTEGER, lead_in_ms INTEGER,
-    lead_out_ms INTEGER, gain_db REAL, boundary_src TEXT);
+    lead_out_ms INTEGER, gain_db REAL, boundary_src TEXT,
+    passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL);
 CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT,
     weight REAL DEFAULT 1.0, source TEXT);
 """
@@ -75,6 +76,13 @@ def main() -> int:
     check(r["remote"] == "pi@lempi02w:/srv/library/library.db", f"got {r}")
     check(r["reachable"] is False, f"expected unreachable, got {r}")
     check(r["checks"] == {}, f"an unreachable remote must offer nothing to accept, got {r}")
+
+    print("the remote is asked by the passage's uid, and never for its own number [IMPL-UID-074]")
+    asked = []
+    console._peek = lambda remote, kind, args, timeout=12.0: asked.append(args) or {"ok": True, "current": None}
+    r = console.remote_status(build(), 1)
+    check(asked == [["--passage-uid", "%032x" % 1]] * 2, f"asked {asked}")
+    check(r["anchor"] == {"passage_uid": "%032x" % 1}, f"got {r}")
 
     print("lempi02w reachable and in agreement: reachable, nothing diverged")
     def agree(remote, kind, args, timeout=12.0):

@@ -13,32 +13,29 @@ an open connection. A handful of bytes, not the ~1.16 GB `[SPEC-DF-114]`
 measured a full copy at.
 
     python tools/remote_peek.py pi@lempi02w:/srv/library/library.db \
-        --kind boundary_review --audio-md5 <md5> --passage-kind radio \
-        --start-ms 1000 --end-ms 200000
+        --kind boundary_review --passage-uid <uid>
 
     python tools/remote_peek.py pi@lempi02w:/srv/library/library.db \
-        --kind id_review --audio-md5 <md5> --passage-kind radio \
-        --start-ms 1000 --end-ms 200000
+        --kind id_review --passage-uid <uid>
 
     python tools/remote_peek.py pi@lempi02w:/srv/library/library.db \
         --kind artist_review --recording-mbid <mbid>
 
     python tools/remote_peek.py pi@lempi02w:/srv/library/library.db \
-        --kind passage_flag --audio-md5 <md5> --passage-kind radio \
-        --start-ms 1000 --end-ms 200000
+        --kind passage_flag --passage-uid <uid> \
+        --remote-listener /var/lempi/listener.db
 
-**`[SPEC-DF-124]` `passage_flag` does not work against a split peer, and
-every installation is now split.** Its query joins `passages`, which lives in
-the catalogue half, with `listener_flags`, which lives in the listener half,
-and one path cannot serve both `[IMPL002 7.4]`. Measured against `pi@lempi02w`
-2026-09-11: pointed at the catalogue it fails on `listener_flags`, pointed at
-the listener half it fails on `passages`. The other three kinds are pure
-catalogue and are unaffected.
+**A passage is named by its uid** `[IMPL-UID-074]`, the same on the remote
+as here. Until 2026-11-16 it was its span, `(audio_md5, kind, start_ms,
+end_ms)`, which a boundary edit on one side and not yet the other made
+name another cut or none. The remote's own number is never asked for.
 
-`remote_flags.py` already solved exactly this, with an `attached()` helper
-that prepends `ATTACH DATABASE <listener> AS lis;` and a `--remote-listener`
-option to name it. This tool needs the same and does not have it yet, so
-`console.py`'s flag peek is the one caller currently affected.
+**`[SPEC-DF-124]` `passage_flag` reads both halves of a split peer**, given
+`--remote-listener`. Its query joins `passages`, in the catalogue half, with
+`listener_flags`, in the listener half, and one path cannot serve both
+`[IMPL002 7.4]`; measured against `pi@lempi02w` 2026-09-11, either path alone
+failed. The listener is attached first, as `remote_flags.py`'s `attached()`
+does. The other three kinds are pure catalogue.
 
 Prints one JSON line: `{"ok": true, "current": {...} | null}` on a
 successful round trip (a `null` current means the remote answered but has
@@ -51,9 +48,12 @@ baseline only" without blocking on it.
 
 import argparse
 import json
+import re
 import shlex
 import subprocess
 import sys
+
+UID = re.compile(r"[0-9a-f]{32}")
 
 CONNECT_TIMEOUT = 5     # seconds given to ssh itself to establish a session
 TOTAL_TIMEOUT = 10.0    # backstop on the whole round trip, ssh included
@@ -81,22 +81,28 @@ def literal(value) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def by_uid(anchor: dict) -> str:
+    """The `WHERE` that names a passage by its uid [IMPL-UID-074], refusing
+    anything not in a uid's form before it is put in a query."""
+    uid = anchor.get("passage_uid") or ""
+    if not UID.fullmatch(uid):
+        raise ValueError(f"not a passage uid: {uid!r}")
+    return f"p.passage_uid = {literal(uid)}"
+
+
 def sql_for(kind: str, anchor: dict) -> str:
     """The identical `SELECT`s `apply_changes.py`'s own `current_recording()`
     / `current_boundary()` / `current_artist()` run locally against an
     already-resolved `passage_id`, rewritten as one query against the anchor
     directly -- there is no local `passage_id` to hand a remote a second
-    query to look up, and no round trip to spare for one.
+    query to look up, and no round trip to spare for one. A passage's
+    anchor is its uid [IMPL-UID-074].
     """
     if kind == "id_review":
         return (
             "SELECT pr.mbid FROM passages p "
-            "JOIN files f ON f.file_id = p.file_id "
             "JOIN passage_recordings pr ON pr.passage_id = p.passage_id "
-            f"WHERE f.audio_md5 = {literal(anchor['audio_md5'])} "
-            f"AND p.kind = {literal(anchor['passage_kind'])} "
-            f"AND p.start_ms = {literal(anchor['start_ms'])} "
-            f"AND p.end_ms = {literal(anchor['end_ms'])} "
+            f"WHERE {by_uid(anchor)} "
             "ORDER BY pr.weight DESC, pr.mbid LIMIT 1")
     if kind in ("boundary_review", "boundary_review_no_fade"):
         # `boundary_review_no_fade` `[SPEC-SUI-226]`: the fallback `peek()`
@@ -108,11 +114,7 @@ def sql_for(kind: str, anchor: dict) -> str:
                      if kind == "boundary_review" else "")
         return (
             f"SELECT p.start_ms, p.end_ms, p.lead_in_ms, p.lead_out_ms, p.gain_db{fade_cols} "
-            "FROM passages p JOIN files f ON f.file_id = p.file_id "
-            f"WHERE f.audio_md5 = {literal(anchor['audio_md5'])} "
-            f"AND p.kind = {literal(anchor['passage_kind'])} "
-            f"AND p.start_ms = {literal(anchor['start_ms'])} "
-            f"AND p.end_ms = {literal(anchor['end_ms'])}")
+            f"FROM passages p WHERE {by_uid(anchor)}")
     if kind == "artist_review":
         return (
             "SELECT a.mbid AS artist_mbid, a.name AS artist_name "
@@ -122,13 +124,13 @@ def sql_for(kind: str, anchor: dict) -> str:
     if kind == "passage_flag":
         # Whether the remote's OWN copy of this passage is flagged, under
         # either shape a flag can take `[SPEC-DF-107]` -- keyed by the
-        # remote's own local passage_id (never portable on its own,
-        # `[SPEC-DF-103]`, which is why it is resolved here rather than
-        # trusted from the caller) or by any recording currently linked to
-        # it. `remote_passage_id` rides along in the same round trip: the
-        # one thing a caller wanting to *clear* that flag needs next, and
-        # NULL, not a second query, is how "the remote has no such passage
-        # at all" is told apart from "it has it, unflagged."
+        # passage's uid, the same there as here [IMPL-UID-060], or by any
+        # recording currently linked to it. `held` rides along in the same
+        # round trip, and is how "the remote has no such passage at all" is
+        # told apart from "it has it, unflagged". Until 2026-11-16 this
+        # carried the remote's own number, which a caller needed to clear a
+        # flag kept by number; a flag is kept by uid now, and the remote's
+        # number is never asked for [IMPL-UID-074].
         #
         # `remote_mbids` rides along too -- found live, not anticipated: an
         # id correction accepted locally but never yet pushed left the
@@ -140,13 +142,8 @@ def sql_for(kind: str, anchor: dict) -> str:
         # applies for an `id_review`'s own target+baseline, generalized:
         # ask what the OTHER side currently thinks too, clear the union.
         return (
-            "WITH target AS (SELECT p.passage_id, p.passage_uid FROM passages p "
-            "JOIN files f ON f.file_id = p.file_id "
-            f"WHERE f.audio_md5 = {literal(anchor['audio_md5'])} "
-            f"AND p.kind = {literal(anchor['passage_kind'])} "
-            f"AND p.start_ms = {literal(anchor['start_ms'])} "
-            f"AND p.end_ms = {literal(anchor['end_ms'])}) "
-            "SELECT (SELECT passage_id FROM target) AS remote_passage_id, "
+            f"WITH target AS (SELECT p.passage_id, p.passage_uid FROM passages p WHERE {by_uid(anchor)}) "
+            "SELECT EXISTS (SELECT 1 FROM target) AS held, "
             "EXISTS (SELECT 1 FROM listener_flags lf, target t "
             "WHERE (lf.subject_kind='passage' AND lf.subject_id = t.passage_uid) "   # by uid [IMPL-UID-060]
             "OR (lf.subject_kind='recording' AND lf.subject_id IN "
@@ -275,7 +272,14 @@ def run_remote_sql(remote: str, sql: str, timeout: float = TOTAL_TIMEOUT) -> dic
     return {"ok": True, "rows": rows}
 
 
-def peek(remote: str, kind: str, anchor: dict, timeout: float = TOTAL_TIMEOUT) -> dict:
+def attached(sql: str, listener: str | None) -> str:
+    """`sql` with the peer's listener half attached in front of it
+    `[SPEC-DF-124]`, as `remote_flags.py`'s own `attached()` does."""
+    return f"ATTACH DATABASE {literal(listener)} AS lis; {sql}" if listener else sql
+
+
+def peek(remote: str, kind: str, anchor: dict, timeout: float = TOTAL_TIMEOUT,
+         listener: str | None = None) -> dict:
     """One anchor in, the row at it (or `None`) out -- `run_remote_sql()`
     plus the one `kind`-specific `SELECT` `sql_for()` builds.
 
@@ -288,7 +292,13 @@ def peek(remote: str, kind: str, anchor: dict, timeout: float = TOTAL_TIMEOUT) -
     remote) still costs the one round trip `[SPEC-DF-116]` promises;
     only this one case costs two.
     """
-    result = run_remote_sql(remote, sql_for(kind, anchor), timeout=timeout)
+    try:
+        sql = sql_for(kind, anchor)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    if kind == "passage_flag":
+        sql = attached(sql, listener)
+    result = run_remote_sql(remote, sql, timeout=timeout)
     if (not result["ok"] and kind == "boundary_review"
             and "fade_in_ms" in (result.get("error") or "")):
         result = run_remote_sql(remote, sql_for("boundary_review_no_fade", anchor), timeout=timeout)
@@ -304,11 +314,10 @@ def main() -> int:
                 help="user@host:/path/to/library.db -- the peer's CATALOGUE half")
     ap.add_argument("--kind", required=True,
                      choices=["id_review", "boundary_review", "artist_review", "passage_flag"])
-    ap.add_argument("--audio-md5")
-    ap.add_argument("--passage-kind")
-    ap.add_argument("--start-ms", type=int)
-    ap.add_argument("--end-ms", type=int)
+    ap.add_argument("--passage-uid", help="the passage, by its uid, the same on every node [IMPL-UID-074]")
     ap.add_argument("--recording-mbid")
+    ap.add_argument("--remote-listener",
+                    help="the peer's listener half, which passage_flag reads beside the catalogue [SPEC-DF-124]")
     ap.add_argument("--timeout", type=float, default=TOTAL_TIMEOUT)
     args = ap.parse_args()
 
@@ -317,15 +326,11 @@ def main() -> int:
             ap.error("--kind artist_review needs --recording-mbid")
         anchor = {"recording_mbid": args.recording_mbid}
     else:
-        needed = [("--audio-md5", args.audio_md5), ("--passage-kind", args.passage_kind),
-                  ("--start-ms", args.start_ms), ("--end-ms", args.end_ms)]
-        missing = [name for name, value in needed if value is None]
-        if missing:
-            ap.error(f"--kind {args.kind} needs {', '.join(missing)}")
-        anchor = {"audio_md5": args.audio_md5, "passage_kind": args.passage_kind,
-                  "start_ms": args.start_ms, "end_ms": args.end_ms}
+        if not args.passage_uid or not UID.fullmatch(args.passage_uid):
+            ap.error(f"--kind {args.kind} needs --passage-uid, 32 lowercase hex characters")
+        anchor = {"passage_uid": args.passage_uid}
 
-    result = peek(args.remote, args.kind, anchor, timeout=args.timeout)
+    result = peek(args.remote, args.kind, anchor, timeout=args.timeout, listener=args.remote_listener)
     say(json.dumps(result))
     return 0 if result["ok"] else 1
 

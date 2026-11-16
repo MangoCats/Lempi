@@ -20,14 +20,16 @@ reused here rather than reimplemented); `--value` is the JSON
 `remote_peek.py` already printed as `current`, passed through unchanged.
 
     python tools/accept_remote_basis.py data/library.db \
-        --kind boundary_review --audio-md5 <md5> --passage-kind radio \
-        --start-ms 1000 --end-ms 200000 \
+        --kind boundary_review --passage-uid <uid> \
         --value '{"start_ms":2000,"end_ms":190000,"lead_in_ms":250,"lead_out_ms":1200,"gain_db":-2.0}' \
         --commit
 
     python tools/accept_remote_basis.py data/library.db \
-        --kind id_review --audio-md5 <md5> --passage-kind radio \
-        --start-ms 1000 --end-ms 200000 --value '{"mbid":"..."}' --commit
+        --kind id_review --passage-uid <uid> --value '{"mbid":"..."}' --commit
+
+The passage is named by its uid, the same here as on the remote it was
+read from [IMPL-UID-074]; until 2026-11-16 by its span, which the boundary
+value being accepted could itself have moved.
 
 Rehearse by default, like every other tool here.
 """
@@ -35,6 +37,7 @@ Rehearse by default, like every other tool here.
 import argparse
 import json
 import os
+import re
 import sqlite3
 import sys
 
@@ -91,10 +94,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("db")
     ap.add_argument("--kind", required=True, choices=["id_review", "boundary_review"])
-    ap.add_argument("--audio-md5", required=True)
-    ap.add_argument("--passage-kind", required=True)
-    ap.add_argument("--start-ms", type=int, required=True)
-    ap.add_argument("--end-ms", type=int, required=True)
+    ap.add_argument("--passage-uid", required=True, help="the passage, by its uid [IMPL-UID-074]")
     ap.add_argument("--value", required=True,
                      help="the remote's current value, exactly as remote_peek.py printed it")
     ap.add_argument("--commit", action="store_true")
@@ -107,8 +107,10 @@ def main() -> int:
         say(f"--value is not valid JSON: {e}")
         return 2
 
-    anchor = {"audio_md5": args.audio_md5, "passage_kind": args.passage_kind,
-              "start_ms": args.start_ms, "end_ms": args.end_ms}
+    if not re.fullmatch(r"[0-9a-f]{32}", args.passage_uid):
+        say(f"--passage-uid {args.passage_uid!r} is not a passage uid")
+        return 2
+    anchor = {"passage_uid": args.passage_uid}
     # Catalogue-only, and it writes -- library half as `main`.
     conn = lempi_db.connect(args.db, lempi_db.ROLE_LIBRARY, writable=True, timeout=60)
     conn.execute("PRAGMA busy_timeout = 60000")
