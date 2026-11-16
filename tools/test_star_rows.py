@@ -21,6 +21,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import bundle_ledger      # noqa: E402
+import passage_uid as pu  # noqa: E402
 import star_patch as sp   # noqa: E402
 import star_sync as ss    # noqa: E402
 
@@ -59,8 +60,15 @@ INSERT INTO release_recordings VALUES ('rel-w', 'rec-1', 1, 1, 1), ('rel-w', 're
 
 
 def db(path, *sql):
+    """A catalogue whose every passage carries the uid its birth key gives it, as
+    every catalogue in the fleet does: the patch names a passage by it alone
+    [IMPL-UID-080]."""
     c = sqlite3.connect(path)
     c.executescript(SCHEMA + "".join(sql))
+    c.create_function("puid", 4, lambda m, k, s, e: pu.passage_uid(m, k, s, e))
+    c.execute("ALTER TABLE passages ADD COLUMN passage_uid TEXT")
+    c.execute("UPDATE passages SET passage_uid = puid((SELECT audio_md5 FROM files f WHERE f.file_id = passages.file_id), "
+              "kind, start_ms, end_ms)")
     c.commit()
     c.close()
     return path
@@ -182,14 +190,18 @@ def test_a_boundary_both_made():
     s.commit()
     s.close()
 
+    # Until Stage D this read "changed" against the copy alone, each side having
+    # numbered the passage it made itself. By uid, how each numbers it does not
+    # enter into it, and it is in step even before its own rows are asked for
+    # [IMPL-UID-080].
     alone = ss.catalogue_state(sent, summary, hub)
-    check(alone["state"] == "changed", f"against the copy alone it reads changed -- the bug this replaces: {alone}")
+    check(alone["state"] == "holds-hub-rows", f"by uid, in step against the copy alone too: {alone}")
     files = ss.files_to_ask(summary, sent, touched=set())
     check(files == ["disc1"], f"the file whose passage moved is asked about, though no bundle touched it: {files}")
     base = os.path.join(d, "baseline.db")
     ss.baseline_from_rows(sent, hub, answer_of(node, ss.rows_wanted(files, sent, hub)), base)
     st = ss.catalogue_state(base, summary, hub)
-    check(st["state"] in ("as-sent", "holds-hub-rows", "other-ids"), f"against the baseline it is in step: {st}")
+    check(st["state"] in ("as-sent", "holds-hub-rows"), f"against the baseline it is in step: {st}")
     patch = sp.make_values(base, hub, exclude=ss.SIGNED_EXCLUDE, natural=True, omit=ss.SIGNED_OMIT)
     check(not rows_of(patch, "passages"), f"and the passage the node already holds is not sent: {rows_of(patch, 'passages')}")
 

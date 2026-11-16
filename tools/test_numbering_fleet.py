@@ -28,6 +28,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import passage_uid  # noqa: E402
 import star_merge  # noqa: E402
 import star_patch  # noqa: E402
 
@@ -36,7 +37,7 @@ FAILED = []
 SCHEMA = """
 CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT NOT NULL UNIQUE, path TEXT, duration_ms INTEGER);
 CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT NOT NULL,
-    start_ms INTEGER, end_ms INTEGER, boundary_src TEXT);
+    start_ms INTEGER, end_ms INTEGER, boundary_src TEXT, passage_uid TEXT UNIQUE);
 CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
 CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL, source TEXT,
     PRIMARY KEY (passage_id, mbid));
@@ -69,7 +70,9 @@ def build(path, rows, number):
             files[md5] = number(i) + 1_000_000
             c.execute("INSERT INTO files VALUES (?,?,?,?)", (files[md5], md5, f"/music/{md5}.mp3", 600_000))
         pid = number(i)
-        c.execute("INSERT INTO passages VALUES (?,?,?,?,?,?)", (pid, files[md5], kind, s, e, "ingest"))
+        # Each passage the uid its birth key gives it, the same on every node [IMPL-UID-030].
+        c.execute("INSERT INTO passages VALUES (?,?,?,?,?,?,?)",
+                  (pid, files[md5], kind, s, e, "ingest", passage_uid.passage_uid(md5, kind, s, e)))
         c.execute("INSERT INTO passage_recordings VALUES (?,?,1.0,'test')", (pid, mbid))
     c.commit()
     c.close()
@@ -137,14 +140,16 @@ def test_a_hub_number_goes_back_as_the_same_music(hub, nodes):
 
 
 def edited(path, out):
-    """`path` with one passage retimed and another added, as the hub's edit would be."""
+    """`path` with one passage retimed, keeping its uid, and another added with its own, as the
+    hub's edit would be."""
     d = sqlite3.connect(path)
     b = sqlite3.connect(out)
     d.backup(b)
     d.close()
     b.execute("UPDATE passages SET end_ms = end_ms + 4321 WHERE file_id = (SELECT file_id FROM files WHERE audio_md5 = 'md503') AND kind = 'radio'")
     fid = b.execute("SELECT file_id FROM files WHERE audio_md5 = 'md504'").fetchone()[0]
-    b.execute("INSERT INTO passages (file_id, kind, start_ms, end_ms, boundary_src) VALUES (?, 'radio', 150000, 190000, 'edit')", (fid,))
+    b.execute("INSERT INTO passages (file_id, kind, start_ms, end_ms, boundary_src, passage_uid) "
+              "VALUES (?, 'radio', 150000, 190000, 'edit', ?)", (fid, passage_uid.passage_uid("md504", "radio", 150000, 190000)))
     b.commit()
     b.close()
 
@@ -164,15 +169,17 @@ def test_a_patch_names_rows_by_what_they_are(hub, nodes, tmp):
     for name in ("shuffled", "distant"):
         entry = patch_rows(nodes[name], target)
         cols = entry["columns"]
-        at = {c: cols.index(c) for c in ("kind", "start_ms", "end_ms")}
+        at = {c: cols.index(c) for c in ("file_id", "kind", "start_ms", "end_ms")}
         changes = [r for r in entry["rows"] if r["was"] and r["now"]]
         adds = [r for r in entry["rows"] if not r["was"]]
         drops = [r for r in entry["rows"] if not r["now"]]
-        moved = [r for r in changes if r["key"][0] == "md503"]
+        moved = [r for r in changes if r["now"][at["file_id"]] == "md503"]
         check(len(moved) == 1 and len(changes) == 1, f"{name}: one retimed passage, got {len(changes)} changes")
         if moved:
             check(moved[0]["now"][at["end_ms"]] - moved[0]["was"][at["end_ms"]] == 4321, f"{name}: the change is the retime")
-        check(len(adds) == 1 and adds[0]["key"][0] == "md504", f"{name}: one new passage, got {len(adds)}")
+            check(entry["key"] == ["passage_uid"] and len(moved[0]["key"][0]) == 32,
+                  f"{name}: under the uid it was born with: {moved[0]['key']}")
+        check(len(adds) == 1 and adds[0]["now"][at["file_id"]] == "md504", f"{name}: one new passage, got {len(adds)}")
         check(not drops, f"{name}: nothing is removed, got {len(drops)}")
         for r in entry["rows"]:
             json.dumps(r)

@@ -3,11 +3,13 @@
 """The catalogue patch by natural key, builder side [SPEC-NKP-040..090].
 
 `fixtures/natural_patch/` holds a hub's catalogue before and after, and a node
-that numbers the same music differently. This builds the patch from the first
-two and holds it to `patch.json`; applies it, by a reference implementation of
-what `lempi-core`'s `mesh_sync.rs` does, to the node; and holds the result to
-`expected.json`. The Rust test reads the same three files, so the builder and
-the applier cannot drift apart.
+that numbers the same music differently. Each is given its passages' uids as
+Stage A's window gave them, a passage kept since keeping the uid it was born
+with. This builds the patch from the first two and holds it to `patch.json`;
+applies it, by a reference implementation of what `lempi-core`'s
+`mesh_sync.rs` does, to the node; and holds the result to `expected.json`. The
+Rust test reads the same files, so the builder and the applier cannot drift
+apart. A passage is named by its uid alone since Stage D [IMPL-UID-080].
 
     python tools/test_natural_patch.py            check
     python tools/test_natural_patch.py --write    regenerate patch.json and expected.json
@@ -65,9 +67,7 @@ def to_local(c, kind, nat):
     elif kind == "passage_uid":
         r = c.execute("SELECT passage_id FROM passages WHERE passage_uid = ?", (nat,)).fetchone()
     else:
-        md5, k, s, e = json.loads(nat) if isinstance(nat, str) else nat
-        r = c.execute("SELECT p.passage_id FROM passages p JOIN files f USING (file_id) "
-                      "WHERE f.audio_md5 = ? AND p.kind = ? AND p.start_ms = ? AND p.end_ms = ?", (md5, k, s, e)).fetchone()
+        raise SystemExit(f"{kind!r} is not a kind of reference: a passage is named by its uid [IMPL-UID-080]")
     return r[0] if r else None
 
 
@@ -78,9 +78,7 @@ def to_natural(c, kind, local):
     if kind == "passage_uid":
         r = c.execute("SELECT passage_uid FROM passages WHERE passage_id = ?", (local,)).fetchone()
         return r[0] if r else None
-    r = c.execute("SELECT f.audio_md5, p.kind, p.start_ms, p.end_ms FROM passages p JOIN files f USING (file_id) "
-                  "WHERE p.passage_id = ?", (local,)).fetchone()
-    return list(r) if r else None
+    raise SystemExit(f"{kind!r} is not a kind of reference: a passage is named by its uid [IMPL-UID-080]")
 
 
 def ref_of(entry, col, row_by_col):
@@ -229,65 +227,30 @@ def uids_of(db):
         c.close()
 
 
-def test_by_uid(tmp, write):
-    """[IMPL-UID-052] step 6: once both catalogues carry uids, a passage is named by
-    its uid. B's boundary, moved from 0-500 to 0-450, is one change keyed by B's uid,
-    which the edit did not change; no positional pairing is needed; and the node, its
-    own numbers kept, reaches the target. Written to `patch_uid.json` for the Rust
-    applier, which gives the node its uids from its spans as the window did."""
-    d = os.path.join(tmp, "uid")
+def catalogues(d):
+    """The fixture's three catalogues, built in `d`, each passage given its uid as
+    Stage A's window gave them: the baseline's and the node's from their spans (the
+    node is in step, so the same uids), the target's the uid each passage kept since
+    it was born, a new one's from its span. Returns (base, target, node, born)."""
     os.makedirs(d)
     base, target, node = (os.path.join(d, n) for n in ("base.db", "target.db", "node.db"))
     build_db(base, "schema.sql", "baseline.sql")
     build_db(target, "schema.sql", "target.sql")
     build_db(node, "schema.sql", "node.sql")
     give_uids(base)
-    give_uids(node)                       # the node is in step: the same spans, so the same uids
+    give_uids(node)
     c = sqlite3.connect(base)
     born = {pid: (uid, (m, k, s, e)) for pid, uid, m, k, s, e in c.execute(
         "SELECT passage_id, passage_uid, birth_md5, birth_kind, birth_start_ms, birth_end_ms FROM passages")}
     c.close()
-    give_uids(target, born)               # a passage kept since keeps the uid it was born with
-    tables = list(sp.NATURAL)
-    patch = sp.make_values(base, target, tables=tables, exclude=MACHINE, natural=True, by_uid=True)
-    if write:
-        with open(os.path.join(FIX, "patch_uid.json"), "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(canon(patch))
-    with open(os.path.join(FIX, "patch_uid.json"), encoding="utf-8") as fh:
-        held = json.load(fh)
-    check(canon(patch) == canon(held), "the builder's patch by uid is the fixture's patch_uid.json")
-    pas = [e for e in patch["tables"] if e["name"] == "passages"]
-    check(all(e["key"] == ["passage_uid"] for e in pas), f"passages are keyed by uid: {[e['key'] for e in pas]}")
-    b_uid = born[11][0]
-    moved = [r for e in pas for r in e["rows"] if r["key"] == [b_uid]]
-    check(len(moved) == 1 and moved[0]["was"][2:4] == [0, 500] and moved[0]["now"][2:4] == [0, 450],
-          f"B's moved boundary is one change under B's own uid: {moved}")
-    refs = {e["name"]: e["natural"]["refs"] for e in patch["tables"]}
-    check(refs.get("passage_recordings") == [{"col": "passage_id", "kind": "passage_uid"}],
-          f"and its credits name it by uid: {refs.get('passage_recordings')}")
-    got = apply_natural(node, patch)
-    with open(os.path.join(FIX, "expected.json"), encoding="utf-8") as fh:
-        expected = json.load(fh)
-    check(dump(node) == expected, f"applied to a node numbered differently, it gives the target: {dump(node)}")
-    check(uids_of(node) == uids_of(target), f"and every passage there holds the target's uid: {uids_of(node)}")
-    check(apply_natural(node, patch) == {"applied": 0, "already": got["applied"]}, "a second apply finds it all there")
-    # A catalogue with a passage lacking a uid falls back to spans, never half and half.
-    c = sqlite3.connect(target)
-    c.execute("UPDATE passages SET passage_uid = NULL WHERE passage_id = 13")
-    c.commit()
-    c.close()
-    span = sp.make_values(base, target, tables=tables, exclude=MACHINE, natural=True, by_uid=True)
-    check(all(e["key"] != ["passage_uid"] for e in span["tables"] if e["name"] == "passages"),
-          "a catalogue with one passage lacking a uid is patched by span")
+    give_uids(target, born)
+    return base, target, node, born
 
 
 def main() -> int:
     write = "--write" in sys.argv
     tmp = tempfile.mkdtemp()
-    base, target, node = (os.path.join(tmp, n) for n in ("base.db", "target.db", "node.db"))
-    build_db(base, "schema.sql", "baseline.sql")
-    build_db(target, "schema.sql", "target.sql")
-    build_db(node, "schema.sql", "node.sql")
+    base, target, node, born = catalogues(os.path.join(tmp, "fixture"))
     tables = list(sp.NATURAL)
     patch = sp.make_values(base, target, tables=tables, exclude=MACHINE, natural=True)
     if write:
@@ -303,50 +266,47 @@ def main() -> int:
         expected = json.load(fh)
     check(dump(target) == expected, "and expected.json is the target, named without ids")
 
-    # Removals first, children before parents, then the rest, parents first: a
-    # node's cascade takes a removed file's passages with it, and a passage
-    # removal after its file's found no row -- the refusal on bose and
-    # smartboardpc, 2026-10-31, which `mesh_sync.rs` reproduces from this fixture.
+    # A passage by its uid, and nothing by its span [IMPL-UID-080].
+    pas = [e for e in patch["tables"] if e["name"] == "passages"]
+    check(all(e["key"] == ["passage_uid"] for e in pas), f"passages are keyed by uid: {[e['key'] for e in pas]}")
+    kinds = {r["kind"] for e in patch["tables"] for r in e["natural"]["refs"]}
+    check(kinds <= {"file", "passage_uid"}, f"no reference names a passage by its span: {kinds}")
+    b_uid = born[11][0]
+    moved = [r for e in pas for r in e["rows"] if r["key"] == [b_uid]]
+    check(len(moved) == 1 and moved[0]["was"][2:4] == [0, 500] and moved[0]["now"][2:4] == [0, 450],
+          f"B's moved boundary is one change under B's own uid: {moved}")
+
+    # Removals first, children before parents, then the rest, parents first -- a
+    # node's cascade takes a removed file's passages with it, the refusal on bose and
+    # smartboardpc, 2026-10-31 -- and a file's removal last of all, after a passage
+    # that moved off it has moved [IMPL-UID-052] step 6.
     names = [(e["name"], all(r["now"] is None for r in e["rows"])) for e in patch["tables"]]
-    check(names == [("passage_recordings", True), ("passages", True), ("files", True),
-                    ("files", False), ("passages", False), ("passage_recordings", False)],
-          f"removals children first, then the rest parents first, only what changed: {names}")
-    gone = [r["key"] for e in patch["tables"] if e["name"] in ("files", "passages") for r in e["rows"] if r["now"] is None]
-    check(gone == [["E", "radio", 0, 800], ["E"]], f"the retired file and its passage, removed: {gone}")
+    check(names == [("passage_recordings", True), ("passages", True), ("files", False), ("passages", False),
+                    ("passage_recordings", False), ("files", True)],
+          f"removals children first, the rest parents first, files' removals last: {names}")
     files = next(e for e in patch["tables"] if e["name"] == "files" and any(r["now"] is not None for r in e["rows"]))
     check(files["columns"] == ["audio_md5"] and "file_id" not in files["columns"],
           f"the surrogate and the machine-scope columns are not carried: {files['columns']}")
     check(not any(r["key"] == ["A"] for r in files["rows"]), "a file whose only change is a machine-scope column is not sent")
-    rekey = next(r for r in files["rows"] if r["key"] == ["C"])
-    check(rekey["was"] == ["C"] and rekey["now"] == ["C2"], f"a re-keyed file is one change, under its old key: {rekey}")
     new = next(r for r in files["rows"] if r["key"] == ["D"])
     check(new["was"] is None and new["also"] == {"path": "/hub/d", "first_seen": "hub-time"},
           f"a new file brings its machine-scope values as `also`: {new}")
-    pas = next(e for e in patch["tables"] if e["name"] == "passages" and any(r["now"] is not None for r in e["rows"]))
-    check([r["key"] for r in pas["rows"]] == [["B", "radio", 0, 500], ["D", "radio", 0, 900]],
-          f"a passage whose boundary moved is sent under its old span, and a child naming only a re-keyed file is not: "
-          f"{[r['key'] for r in pas['rows']]}")
-    kids = [r for e in patch["tables"] if e["name"] == "passage_recordings" for r in e["rows"]]
-    check(len(kids) == 4 and sum(r["now"] is None for r in kids) == 2,
-          "a child's delete, change and insert, and the retired passage's recording")
+    refs = {e["name"]: e["natural"]["refs"] for e in patch["tables"]}
+    check(refs.get("passage_recordings") == [{"col": "passage_id", "kind": "passage_uid"}],
+          f"and its credits name it by uid: {refs.get('passage_recordings')}")
 
     # The reference applier takes the node to the target, whatever the node numbers.
     got = apply_natural(node, patch)
     check(dump(node) == expected, f"applied to a node numbered differently, it gives the target: {dump(node)}")
+    check(uids_of(node) == uids_of(target), f"and every passage there holds the target's uid: {uids_of(node)}")
     check(got["applied"] > 0 and got["already"] == 0, f"{got}")
-    c = sqlite3.connect(node)
-    rows = dict(c.execute("SELECT audio_md5, file_id FROM files"))
-    c.close()
-    check(rows["D"] == 4 and rows["C2"] == 2 and rows["B"] == 3,
-          f"the node numbered the new file itself and kept its own id for the re-keyed one: {rows}")
     again = apply_natural(node, patch)
     check(again == {"applied": 0, "already": got["applied"]}, f"a second apply finds everything already there: {again}")
 
-    # [SPEC-NKP-046]: a baseline adopted from a node holds the node's numbers, so its
-    # id 1 is some other file of the hub's. Paired by id, every file came out as a
-    # change into another's md5 and a real row as an insert: teacherslounge refused
-    # one, passages' UNIQUE, 2026-11-05. Applied, it would have moved each md5 onto
-    # another file's path, which is machine scope and stays where it is.
+    # [SPEC-NKP-046]: a baseline adopted from a node holds the node's numbers. Paired by
+    # id, every file once came out as a change into another's md5: teacherslounge refused
+    # one, 2026-11-05. By what each row is, how the baseline numbers them changes nothing:
+    # the patch is the same one.
     adopted = os.path.join(tmp, "adopted.db")
     shutil.copyfile(base, adopted)
     c = sqlite3.connect(adopted)
@@ -361,39 +321,15 @@ def main() -> int:
         c.execute(f"UPDATE {table} SET passage_id = passage_id + 500")
     c.commit()
     c.close()
-    bo, to = sp.open_ro(adopted), sp.open_ro(target)
-    check(not sp.same_numbering(bo, to, "file") and not sp.same_numbering(bo, to, "passage"),
-          "a catalogue numbered by the node is seen as one")
-    check(sp.same_numbering(sp.open_ro(base), to, "file"), "and one the hub built is not")
-    bo.close()
-    to.close()
     ap = sp.make_values(adopted, target, tables=tables, exclude=MACHINE, natural=True)
-    af = [r for e in ap["tables"] if e["name"] == "files" for r in e["rows"]]
-    check(sorted(r["key"][0] for r in af) == ["C", "C2", "D", "E"],
-          f"only the files that changed, each under its own name: {[r['key'] for r in af]}")
-    check(not any(r["was"] and r["now"] for r in af), f"and none changed into another: {af}")
-    moved = [r for e in ap["tables"] if e["name"] == "passages" for r in e["rows"] if r["key"][:1] == ["B"]]
-    check(len(moved) == 1 and moved[0]["was"] and moved[0]["now"] and moved[0]["key"] == ["B", "radio", 0, 500],
-          f"a passage whose boundary moved is still one change, so the node keeps its id: {moved}")
-    n4 = os.path.join(tmp, "node4.db")
-    build_db(n4, "schema.sql", "node.sql")
-    c = sqlite3.connect(n4)
-    keep = c.execute("SELECT p.passage_id FROM passages p JOIN files f USING (file_id) WHERE f.audio_md5='B'").fetchone()[0]
-    c.close()
-    apply_natural(n4, ap)
-    check(dump(n4) == expected, f"applied, it gives the target all the same: {dump(n4)}")
-    c = sqlite3.connect(n4)
-    still = c.execute("SELECT p.passage_id FROM passages p JOIN files f USING (file_id) WHERE f.audio_md5='B'").fetchone()[0]
-    c.close()
-    check(still == keep, f"and the moved passage kept its id on the node: {keep} -> {still}")
+    check(canon(ap) == canon(patch), "a baseline numbered by the node gives the very same patch")
     check(sp.make_values(target, target, tables=tables, exclude=MACHINE, natural=True)["tables"] == [], "unchanged is still empty")
 
     # Refusal is all or nothing.
-    n2 = os.path.join(tmp, "node2.db")
-    build_db(n2, "schema.sql", "node.sql")
+    n2 = catalogues(os.path.join(tmp, "refusal"))[2]
     before = dump(n2)
     bad = json.loads(canon(patch))
-    next(e for e in bad["tables"] if e["name"] == "passages")["rows"][0]["was"][3] = 499
+    next(e for e in bad["tables"] if e["name"] == "passages" and any(r["was"] for r in e["rows"]))["rows"][0]["was"][3] = 499
     try:
         apply_natural(n2, bad)
         check(False, "a row not as expected must refuse the patch")
@@ -409,15 +345,26 @@ def main() -> int:
     c.commit()
     c.close()
     p2 = sp.make_values(base, wide, tables=tables, exclude=MACHINE, natural=True)
-    pe = next(e for e in p2["tables"] if e["name"] == "passages")
+    pe = next(e for e in p2["tables"] if e["name"] == "passages" and "add_columns" in e)
     check(pe["add_columns"] == ["held INTEGER DEFAULT 0"] and "held" in pe["columns"], f"the new column is declared and carried: {pe['add_columns']}")
-    n3 = os.path.join(tmp, "node3.db")
-    build_db(n3, "schema.sql", "node.sql")
+    n3 = catalogues(os.path.join(tmp, "wide-node"))[2]
     apply_natural(n3, p2)
     c = sqlite3.connect(n3)
     held = dict(c.execute("SELECT f.audio_md5, p.held FROM passages p JOIN files f USING (file_id)"))
     c.close()
     check(held == {"A": 0, "B": 0, "C2": 0, "D": 1} and dump(n3) == expected, f"applied, the column is there with the right values: {held}")
+
+    # A catalogue with a passage that has no uid is refused, never patched by span [IMPL-UID-080].
+    c = sqlite3.connect(wide)
+    c.execute("UPDATE passages SET passage_uid = NULL WHERE passage_id = 13")
+    c.commit()
+    c.close()
+    try:
+        sp.make_values(base, wide, tables=tables, exclude=MACHINE, natural=True)
+    except sp.NaturalUnsupported as err:
+        check("without its uid" in str(err), f"said by name: {err}")
+    else:
+        check(False, "a catalogue with a passage lacking its uid must be refused")
 
     # [SPEC-NKP-082]: a column that is the hub's own bookkeeping travels in neither direction: not as a change, not as
     # a new column, and not as `also` on a row the node lacks. (Found live: a node refused a cover_art row identical to
@@ -448,7 +395,8 @@ def main() -> int:
 
     # [SPEC-NKP-050]: a node's own column. `file_tags.scanned_at` is when this machine's tag scan ran.
     # A row rescanned on the hub, alike in every tag, is not a change; a new row is sent, with the
-    # hub's `scanned_at` as `also`, and the node's own is never compared.
+    # hub's `scanned_at` as `also`, and the node's own is never compared. A patch of files and
+    # their tags names no passage, so passages without uids do not refuse it.
     sa, sb = os.path.join(tmp, "sa.db"), os.path.join(tmp, "sb.db")
     schema = ("CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT, format TEXT);"
               "CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT, start_ms INTEGER, end_ms INTEGER);"
@@ -486,8 +434,6 @@ def main() -> int:
         check("baseline lacks the table" in str(err), f"{err}")
     else:
         check(False, "a catalogue pair the builder cannot name is refused, loudly")
-
-    test_by_uid(tmp, write)
 
     print()
     if FAILED:

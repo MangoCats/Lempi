@@ -89,7 +89,7 @@ A delete on the hub alone is undone by the next merge, because `star_merge.TABLE
    - the uids add 10.5 MB to the patch, through the ordinary `add_columns`;
    - the natural entries come to 13.7 MB, 43% of the 32 MB first part they must fit in `[SPEC-NKP-930]`.
 5. Verify from each node's disk, not its answer: every passage the node holds has the hub's uid. A single disagreement stops the window.
-6. From the next round, passage references in the patch resolve by uid. *Built 2026-11-15* (`star_patch.NATURAL_BY_UID`), for a node that reports `passage_uids` and a pair whose every passage carries its uid; otherwise by span, and the summary and the run's output say why ([GOV002](GOV002-sources-of-truth.md)). By uid, a passage that changes file is one change, so its old file's removal now waits until after the writes: before, the cascade took the passage first, on the fixture `fixtures/natural_patch/patch_uid.json`, which both languages apply.
+6. From the next round, passage references in the patch resolve by uid. *Built 2026-11-15* (`star_patch.NATURAL_BY_UID`), for a node that reports `passage_uids` and a pair whose every passage carries its uid; otherwise by span, and the summary and the run's output say why ([GOV002](GOV002-sources-of-truth.md)). By uid, a passage that changes file is one change, so its old file's removal now waits until after the writes: before, the cascade took the passage first, on the fixture both languages apply, `fixtures/natural_patch/patch.json` since Stage D.
 
 **`[IMPL-UID-054]` Undone by** each node's kept inverse (`mesh_sync::undo`), which drops the added columns, and on the hub by step 2's backup.
 
@@ -193,6 +193,8 @@ The window ran 2026-11-16 with `tools/listener_window.py` recording each listene
 - the report's translation section;
 - echo's fallback to a number;
 - `repair_node_reviews.py` and `repair_review_copies.py`.
+
+- **The patch, as built 2026-11-16.** One vocabulary names a file by `audio_md5` and a passage by its uid, in `star_patch.py` and `mesh_sync.rs` alike. The word `passage`, a span, is refused by name, as is a catalogue pair with a passage lacking its uid. `same_numbering`, `pair_moved` and `other-ids` are gone, and the catalogue state compares summaries by uid. The strict patch by the hub's own ids, for a player older than natural keys, went too: no node runs one, it was a number crossing, and only `other-ids` had kept it safe. On a copy of `bose`'s real catalogue, edited five ways, the new builder's patch is the old one's to the byte, and `fixtures/natural_patch/patch.json` is the old `patch_uid.json`.
 
 That is an estimated 400 lines of translation and the two repair tools (500 lines). The rest of the roughly 1,180 lines that exist because catalogues differ (the `rows` step, the bundle ledger, per-node catalogue copies) exists because bundles write outside the sync, and goes with SPEC075 §4–5.
 

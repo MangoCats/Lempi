@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use rusqlite::types::Value;
-use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
+use rusqlite::{params_from_iter, Connection, OpenFlags, OptionalExtension};
 // `[SPEC-NSH-087]`: every write here takes the write lock as it begins, so the busy timeout
 // covers it. Begun deferred, a transaction that has read is refused its upgrade at once.
 use rusqlite::TransactionBehavior::Immediate;
@@ -649,10 +649,10 @@ fn index_names(sql: &str) -> Result<(String, String), String> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RefKind {
     File,
-    /// By span: `[md5, kind, start, end]`, which a boundary edit changes.
-    Passage,
     /// By the passage's permanent identity `[IMPL-UID-052]`, which nothing
-    /// changes. Sent only to a player that reports `passage_uids`.
+    /// changes. Until Stage D a passage could also be named by its span,
+    /// `[md5, kind, start, end]`, which a boundary edit changes; that word,
+    /// `passage`, is refused now `[IMPL-UID-080]`.
     PassageUid,
 }
 
@@ -710,8 +710,11 @@ fn natural_of(name: &str, t: &Json, cols: &[String], have: &[String]) -> Result<
         }
         let kind = match r["kind"].as_str() {
             Some("file") => RefKind::File,
-            Some("passage") => RefKind::Passage,
             Some("passage_uid") => RefKind::PassageUid,
+            Some("passage") => {
+                return Err(format!("{name}: a passage named by its span; a patch names a passage by its uid \
+                                    alone since Stage D [IMPL-UID-080]; nothing written"))
+            }
             other => return Err(format!("{name}: {other:?} is not a kind of reference; nothing written")),
         };
         let when = match r["when"].as_array() {
@@ -744,21 +747,6 @@ fn to_local(tx: &Connection, kind: RefKind, nat: &Value) -> Result<Option<i64>, 
             .query_row([text], |r| r.get::<_, i64>(0))
             .optional()
             .map_err(es),
-        RefKind::Passage => {
-            let p: Json = serde_json::from_str(text).map_err(|_| format!("not a passage reference: {text}"))?;
-            let a = p.as_array().filter(|a| a.len() == 4).ok_or_else(|| format!("not a passage reference: {text}"))?;
-            tx.prepare_cached(
-                "SELECT p.passage_id FROM passages p JOIN files f ON f.file_id = p.file_id \
-                 WHERE f.audio_md5 = ?1 AND p.kind = ?2 AND p.start_ms = ?3 AND p.end_ms = ?4",
-            )
-            .map_err(es)?
-            .query_row(
-                params![a[0].as_str().unwrap_or(""), a[1].as_str().unwrap_or(""), a[2].as_i64().unwrap_or(-1), a[3].as_i64().unwrap_or(-1)],
-                |r| r.get::<_, i64>(0),
-            )
-            .optional()
-            .map_err(es)
-        }
         RefKind::PassageUid => tx
             .prepare_cached("SELECT passage_id FROM passages WHERE passage_uid = ?1")
             .map_err(uid_column)?
@@ -775,7 +763,7 @@ fn uid_column(e: rusqlite::Error) -> String {
 }
 
 /// What this node's local id names, in the patch's own spelling: a file's
-/// `audio_md5`, a passage's `[md5, kind, start, end]` as compact JSON text.
+/// `audio_md5`, a passage's uid.
 fn to_natural(tx: &Connection, kind: RefKind, local: &Value) -> Result<Option<Value>, String> {
     let id = match local {
         Value::Integer(i) => *i,
@@ -793,18 +781,6 @@ fn to_natural(tx: &Connection, kind: RefKind, local: &Value) -> Result<Option<Va
             .optional()
             .map_err(es)?
             .map(Value::Text),
-        RefKind::Passage => tx
-            .prepare_cached(
-                "SELECT f.audio_md5, p.kind, p.start_ms, p.end_ms FROM passages p JOIN files f ON f.file_id = p.file_id \
-                 WHERE p.passage_id = ?1",
-            )
-            .map_err(es)?
-            .query_row([id], |r| {
-                Ok(serde_json::json!([r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?]))
-            })
-            .optional()
-            .map_err(es)?
-            .map(|j| Value::Text(j.to_string())),
         // A passage with no uid yet names nothing by one: it then equals no `was`.
         RefKind::PassageUid => tx
             .prepare_cached("SELECT passage_uid FROM passages WHERE passage_id = ?1")
@@ -1391,6 +1367,7 @@ fn value_eq(x: &Value, y: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::params;
 
     fn listener(path: &Path) {
         let c = Connection::open(path).unwrap();
@@ -1645,12 +1622,14 @@ mod tests {
 
     /// A catalogue as a node holds it. `files` are (file_id, audio_md5), `passages`
     /// (passage_id, file_id, start, end) -- all radio -- and `recs` (passage_id, mbid).
+    /// Each passage's uid is `u-` and its file's md5 in lower case, which stands in for
+    /// the hub's: a patch names a passage by it alone `[IMPL-UID-080]`.
     fn numbered(path: &Path, files: &[(i64, &str)], passages: &[(i64, i64, i64, i64)], recs: &[(i64, &str)]) {
         let c = Connection::open(path).unwrap();
         c.execute_batch(
             "CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT NOT NULL UNIQUE, path TEXT, first_seen TEXT);
              CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, kind TEXT NOT NULL,
-                 start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, gain REAL);
+                 start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, gain REAL, passage_uid TEXT);
              CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
              CREATE TABLE passage_recordings (passage_id INTEGER NOT NULL, mbid TEXT NOT NULL, weight REAL,
                  PRIMARY KEY (passage_id, mbid));",
@@ -1660,7 +1639,12 @@ mod tests {
             c.execute("INSERT INTO files VALUES (?1, ?2, ?3, 'node-time')", params![id, md5, format!("/node/{md5}")]).unwrap();
         }
         for (id, f, s, e) in passages {
-            c.execute("INSERT INTO passages VALUES (?1, ?2, 'radio', ?3, ?4, NULL)", params![id, f, s, e]).unwrap();
+            c.execute(
+                "INSERT INTO passages VALUES (?1, ?2, 'radio', ?3, ?4, NULL, \
+                 'u-' || lower((SELECT audio_md5 FROM files WHERE file_id = ?2)))",
+                params![id, f, s, e],
+            )
+            .unwrap();
         }
         for (p, m) in recs {
             c.execute("INSERT INTO passage_recordings VALUES (?1, ?2, 1.0)", params![p, m]).unwrap();
@@ -1719,12 +1703,12 @@ mod tests {
 
     fn passages_entry(rows: Json) -> Json {
         serde_json::json!({"name": "passages", "natural": {"surrogate": "passage_id", "refs": [{"col": "file_id", "kind": "file"}]},
-                           "columns": ["file_id", "kind", "start_ms", "end_ms"], "key": ["file_id", "kind", "start_ms", "end_ms"], "rows": rows})
+                           "columns": ["file_id", "kind", "start_ms", "end_ms", "passage_uid"], "key": ["passage_uid"], "rows": rows})
     }
 
     fn recs_entry(rows: Json) -> Json {
         serde_json::json!({"name": "passage_recordings",
-                           "natural": {"surrogate": null, "refs": [{"col": "passage_id", "kind": "passage"}]},
+                           "natural": {"surrogate": null, "refs": [{"col": "passage_id", "kind": "passage_uid"}]},
                            "columns": ["passage_id", "mbid", "weight"], "key": ["passage_id", "mbid"], "rows": rows})
     }
 
@@ -1746,11 +1730,10 @@ mod tests {
     #[test]
     fn a_natural_patch_adds_what_is_new_under_the_nodes_own_ids() {
         let (_d, db) = permuted("nk-add");
-        let span = serde_json::json!(["D", "radio", 0, 900]);
         let out = apply_n(&db, vec![
             files_entry(serde_json::json!([{"key": ["D"], "was": null, "now": ["D", "/hub/d"], "also": {"first_seen": "hub-time"}}])),
-            passages_entry(serde_json::json!([{"key": ["D", "radio", 0, 900], "was": null, "now": ["D", "radio", 0, 900]}])),
-            recs_entry(serde_json::json!([{"key": [span, "m-d"], "was": null, "now": [span, "m-d", 1.0]}])),
+            passages_entry(serde_json::json!([{"key": ["u-d"], "was": null, "now": ["D", "radio", 0, 900, "u-d"]}])),
+            recs_entry(serde_json::json!([{"key": ["u-d", "m-d"], "was": null, "now": ["u-d", "m-d", 1.0]}])),
         ], true).unwrap();
         assert_eq!((out.counts.applied, out.counts.already, out.counts.kept), (3, 0, 0), "{:?}", out.counts);
         let c = Connection::open(&db).unwrap();
@@ -1766,24 +1749,23 @@ mod tests {
     fn rows_the_node_already_holds_under_other_ids_are_already_there() {
         let (_d, db) = permuted("nk-already");
         let before = raw(&db);
-        let b = serde_json::json!(["B", "radio", 0, 500]);
         let out = apply_n(&db, vec![
             files_entry(serde_json::json!([{"key": ["B"], "was": null, "now": ["B", "/node/B"]}])),
-            passages_entry(serde_json::json!([{"key": ["B", "radio", 0, 500], "was": null, "now": ["B", "radio", 0, 500]}])),
-            recs_entry(serde_json::json!([{"key": [b, "m-b"], "was": null, "now": [b, "m-b", 1.0]}])),
+            passages_entry(serde_json::json!([{"key": ["u-b"], "was": null, "now": ["B", "radio", 0, 500, "u-b"]}])),
+            recs_entry(serde_json::json!([{"key": ["u-b", "m-b"], "was": null, "now": ["u-b", "m-b", 1.0]}])),
         ], true).unwrap();
         assert_eq!((out.counts.applied, out.counts.already), (0, 3), "{:?}", out.counts);
         assert_eq!(raw(&db), before, "nothing was written");
     }
 
-    /// A boundary edit changes a passage's natural key. The node updates the row it
+    /// A boundary edit leaves a passage's uid as it was. The node updates the row it
     /// has, so its id, and whatever of its own points at that id, stay.
     #[test]
     fn a_changed_key_is_an_update_in_place_and_undo_puts_it_back() {
         let (_d, db) = permuted("nk-key");
         let before = raw(&db);
         let out = apply_n(&db, vec![passages_entry(serde_json::json!([
-            {"key": ["B", "radio", 0, 500], "was": ["B", "radio", 0, 500], "now": ["B", "radio", 0, 450]}]))], true).unwrap();
+            {"key": ["u-b"], "was": ["B", "radio", 0, 500, "u-b"], "now": ["B", "radio", 0, 450, "u-b"]}]))], true).unwrap();
         assert_eq!(out.counts.applied, 1);
         let c = Connection::open(&db).unwrap();
         let (id, end): (i64, i64) = c.query_row("SELECT passage_id, end_ms FROM passages WHERE file_id = 3", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
@@ -1803,12 +1785,12 @@ mod tests {
         let before = raw(&db);
         let err = apply_n(&db, vec![
             files_entry(serde_json::json!([{"key": ["D"], "was": null, "now": ["D", "/hub/d"]}])),
-            passages_entry(serde_json::json!([{"key": ["A", "radio", 0, 1000], "was": ["A", "radio", 0, 999], "now": ["A", "radio", 0, 800]}])),
+            passages_entry(serde_json::json!([{"key": ["u-a"], "was": ["A", "radio", 0, 999, "u-a"], "now": ["A", "radio", 0, 800, "u-a"]}])),
         ], true).unwrap_err();
         assert!(err.contains("not as the patch expects"), "{err}");
         assert_eq!(raw(&db), before, "nothing written, the earlier insert included");
         let err = apply_n(&db, vec![recs_entry(serde_json::json!([
-            {"key": [["Z", "radio", 0, 1], "m-z"], "was": null, "now": [["Z", "radio", 0, 1], "m-z", 1.0]}]))], true).unwrap_err();
+            {"key": ["u-z", "m-z"], "was": null, "now": ["u-z", "m-z", 1.0]}]))], true).unwrap_err();
         assert!(err.contains("does not hold"), "a child of a passage the node lacks is refused, not guessed: {err}");
         assert_eq!(raw(&db), before);
     }
@@ -1828,8 +1810,13 @@ mod tests {
         let mut bad = passages_entry(serde_json::json!([]));
         bad["natural"]["refs"][0]["kind"] = serde_json::json!("recording");
         assert!(apply_n(&db, vec![bad], true).unwrap_err().contains("not a kind of reference"));
+        // A passage named by its span, as every patch did before Stage D `[IMPL-UID-080]`.
+        let mut by_span = recs_entry(serde_json::json!([]));
+        by_span["natural"]["refs"][0]["kind"] = serde_json::json!("passage");
+        let err = apply_n(&db, vec![by_span], true).unwrap_err();
+        assert!(err.contains("by its span") && err.contains("IMPL-UID-080"), "refused by name: {err}");
         let mut carried = passages_entry(serde_json::json!([]));
-        carried["columns"] = serde_json::json!(["passage_id", "file_id", "kind", "start_ms", "end_ms"]);
+        carried["columns"] = serde_json::json!(["passage_id", "file_id", "kind", "start_ms", "end_ms", "passage_uid"]);
         assert!(apply_n(&db, vec![carried], true).unwrap_err().contains("is carried"));
         let mut creates = files_entry(serde_json::json!([]));
         creates["create"] = serde_json::json!(["CREATE TABLE x (a)"]);
@@ -1847,8 +1834,8 @@ mod tests {
         let (_d, db) = permuted("nk-addcol");
         let before = raw(&db);
         let mut e = passages_entry(serde_json::json!([
-            {"key": ["B", "radio", 0, 500], "was": ["B", "radio", 0, 500, 0], "now": ["B", "radio", 0, 500, 1]}]));
-        e["columns"] = serde_json::json!(["file_id", "kind", "start_ms", "end_ms", "held"]);
+            {"key": ["u-b"], "was": ["B", "radio", 0, 500, "u-b", 0], "now": ["B", "radio", 0, 500, "u-b", 1]}]));
+        e["columns"] = serde_json::json!(["file_id", "kind", "start_ms", "end_ms", "passage_uid", "held"]);
         e["add_columns"] = serde_json::json!(["held INTEGER DEFAULT 0"]);
         let rehearsed = apply_n(&db, vec![e.clone()], false).unwrap();
         assert_eq!(rehearsed.counts.applied, 1);
@@ -1863,31 +1850,6 @@ mod tests {
         assert_eq!(raw(&db), before, "and the undo takes the column away again");
     }
 
-    /// `[IMPL-UID-052]` step 4: the patch adds the uid column and sets the hub's uid on
-    /// each passage of a node numbered unlike the hub. The node keeps every one of its
-    /// own ids; a rehearsal writes nothing, and the undo takes the column away again.
-    #[test]
-    fn the_hubs_uids_are_carried_to_a_node_numbered_its_own_way() {
-        let (_d, db) = permuted("uid-carry");
-        let before = raw(&db);
-        let row = |m: &str, end: i64, uid: &str| serde_json::json!(
-            {"key": [m, "radio", 0, end], "was": [m, "radio", 0, end, null], "now": [m, "radio", 0, end, uid]});
-        let mut e = passages_entry(serde_json::json!([row("A", 1000, "u-a"), row("B", 500, "u-b"), row("C", 700, "u-c")]));
-        e["columns"] = serde_json::json!(["file_id", "kind", "start_ms", "end_ms", "passage_uid"]);
-        e["add_columns"] = serde_json::json!(["passage_uid TEXT"]);
-        assert_eq!(apply_n(&db, vec![e.clone()], false).unwrap().counts.applied, 3);
-        assert_eq!(raw(&db), before, "a rehearsal adds no column and writes no row");
-        let out = apply_n(&db, vec![e], true).unwrap();
-        let c = Connection::open(&db).unwrap();
-        let got: Vec<(i64, String)> = c.prepare("SELECT passage_id, passage_uid FROM passages ORDER BY passage_id").unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().filter_map(Result::ok).collect();
-        assert_eq!(got, [(10, "u-a".into()), (11, "u-b".into()), (12, "u-c".into())],
-                   "each of the node's own passages, under its own id, has the hub's uid for that music");
-        drop(c);
-        undo(&db, &out.inverse).unwrap();
-        assert_eq!(raw(&db), before, "and the undo puts the catalogue back as it was");
-    }
-
     /// `[IMPL-UID-056]`: an index the hub holds on a table the node already has is made by
     /// an entry's `add_indexes` -- in the transaction, rolled back by a rehearsal, made once,
     /// and dropped by the undo. A unique one the node's rows break refuses the whole patch.
@@ -1895,8 +1857,7 @@ mod tests {
     fn an_entry_may_add_an_index_to_a_table_the_node_has() {
         let (_d, db) = permuted("add-index");
         let c = Connection::open(&db).unwrap();
-        c.execute_batch("ALTER TABLE passages ADD COLUMN passage_uid TEXT;
-                         UPDATE passages SET passage_uid = 'u-' || passage_id;").unwrap();
+        c.execute_batch("UPDATE passages SET passage_uid = 'u-' || passage_id;").unwrap();
         drop(c);
         let indexes = |db: &Path| -> Vec<String> {
             let c = Connection::open(db).unwrap();
@@ -1947,13 +1908,11 @@ mod tests {
     fn a_reference_by_uid_finds_the_passage_whatever_its_number_and_span() {
         let (_d, db) = permuted("uid-ref");
         let c = Connection::open(&db).unwrap();
-        c.execute_batch("ALTER TABLE passages ADD COLUMN passage_uid TEXT;
-                         UPDATE passages SET passage_uid = 'u-a' WHERE passage_id = 10;
+        c.execute_batch("UPDATE passages SET passage_uid = 'u-a' WHERE passage_id = 10;
                          UPDATE passages SET passage_uid = 'u-b', end_ms = 480 WHERE passage_id = 11;
                          UPDATE passages SET passage_uid = 'u-c' WHERE passage_id = 12;").unwrap();
         drop(c);
-        let mut recs = recs_entry(serde_json::json!([{"key": ["u-b", "m-b2"], "was": null, "now": ["u-b", "m-b2", 0.5]}]));
-        recs["natural"]["refs"] = serde_json::json!([{"col": "passage_id", "kind": "passage_uid"}]);
+        let recs = recs_entry(serde_json::json!([{"key": ["u-b", "m-b2"], "was": null, "now": ["u-b", "m-b2", 0.5]}]));
         let out = apply_n(&db, vec![recs.clone()], true).unwrap();
         assert_eq!(out.counts.applied, 1, "{:?}", out.counts);
         let c = Connection::open(&db).unwrap();
@@ -1968,9 +1927,9 @@ mod tests {
     #[test]
     fn a_reference_by_uid_to_a_catalogue_without_uids_writes_nothing() {
         let (_d, db) = permuted("uid-none");
+        Connection::open(&db).unwrap().execute_batch("ALTER TABLE passages DROP COLUMN passage_uid;").unwrap();
         let before = raw(&db);
-        let mut recs = recs_entry(serde_json::json!([{"key": ["u-b", "m-x"], "was": null, "now": ["u-b", "m-x", 1.0]}]));
-        recs["natural"]["refs"] = serde_json::json!([{"col": "passage_id", "kind": "passage_uid"}]);
+        let recs = recs_entry(serde_json::json!([{"key": ["u-b", "m-x"], "was": null, "now": ["u-b", "m-x", 1.0]}]));
         let err = apply_n(&db, vec![recs], true).unwrap_err();
         assert!(err.contains("passage_uid"), "said by name: {err}");
         assert_eq!(raw(&db), before, "nothing written");
@@ -1981,8 +1940,8 @@ mod tests {
     fn a_natural_delete_removes_the_nodes_own_row() {
         let (_d, db) = permuted("nk-delete");
         let out = apply_n(&db, vec![
-            recs_entry(serde_json::json!([{"key": [["C", "radio", 0, 700], "m-c"], "was": [["C", "radio", 0, 700], "m-c", 1.0], "now": null}])),
-            passages_entry(serde_json::json!([{"key": ["C", "radio", 0, 700], "was": ["C", "radio", 0, 700], "now": null}])),
+            recs_entry(serde_json::json!([{"key": ["u-c", "m-c"], "was": ["u-c", "m-c", 1.0], "now": null}])),
+            passages_entry(serde_json::json!([{"key": ["u-c"], "was": ["C", "radio", 0, 700, "u-c"], "now": null}])),
         ], true).unwrap();
         assert_eq!(out.counts.applied, 2);
         let n = nform(&db);
@@ -1990,40 +1949,6 @@ mod tests {
         let c = Connection::open(&db).unwrap();
         let left: i64 = c.query_row("SELECT count(*) FROM passages WHERE passage_id = 12", [], |r| r.get(0)).unwrap();
         assert_eq!(left, 0);
-    }
-
-    /// The fixture both languages read: the Python builder's patch, applied by this
-    /// applier to a node numbered differently, gives what the Python reference gave
-    /// `[SPEC-NKP-090]`.
-    #[test]
-    fn the_builders_patch_applied_here_gives_the_same_catalogue() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/natural_patch");
-        let read = |n: &str| std::fs::read_to_string(dir.join(n)).unwrap_or_else(|e| panic!("{n}: {e}"));
-        let d = tmp("nk-fixture");
-        let db = d.join("library.db");
-        let c = Connection::open(&db).unwrap();
-        c.execute_batch(&read("schema.sql")).unwrap();
-        c.execute_batch(&read("node.sql")).unwrap();
-        drop(c);
-        let before = raw(&db);
-        let patch: Json = serde_json::from_str(&read("patch.json")).unwrap();
-        let out = apply_with(&db, &patch, None, Rule::Strict, true).unwrap();
-        let expected: Vec<String> = serde_json::from_str(&read("expected.json")).unwrap();
-        assert_eq!(fixture_form(&db), expected, "the same catalogue as the Python reference gives");
-        let c = Connection::open(&db).unwrap();
-        let (d_id, c2_id, b_id): (i64, i64, i64) = (
-            c.query_row("SELECT file_id FROM files WHERE audio_md5 = 'D'", [], |r| r.get(0)).unwrap(),
-            c.query_row("SELECT file_id FROM files WHERE audio_md5 = 'C2'", [], |r| r.get(0)).unwrap(),
-            c.query_row("SELECT file_id FROM files WHERE audio_md5 = 'B'", [], |r| r.get(0)).unwrap(),
-        );
-        assert_eq!((d_id, c2_id, b_id), (4, 2, 3), "the node numbered the new file itself and kept its ids for the rest");
-        drop(c);
-        let applied = out.counts.applied;
-        assert!(applied > 0 && out.counts.already == 0, "{:?}", out.counts);
-        let again = apply_with(&db, &patch, None, Rule::Strict, true).unwrap();
-        assert_eq!((again.counts.applied, again.counts.already), (0, applied), "a second apply finds it all already there");
-        undo(&db, &out.inverse).unwrap();
-        assert_eq!(raw(&db), before, "and the undo of the first puts back every id and value");
     }
 
     /// The fixture's catalogue named without ids, weights included, as
@@ -2053,13 +1978,14 @@ mod tests {
         got
     }
 
-    /// `[IMPL-UID-052]` step 6, both languages: the Python builder's patch by uid
-    /// (`patch_uid.json`), applied here to the node given its uids from its spans as
-    /// Stage A's window gave them, reaches the same catalogue as the patch by span. B's
-    /// boundary moved and C's passage changed file, and each kept the uid it was born
-    /// with -- one change apiece, where by span each is a removal and an addition.
+    /// The fixture both languages read `[SPEC-NKP-090]`: the Python builder's patch
+    /// (`patch.json`), which names a passage by its uid alone `[IMPL-UID-080]`, applied
+    /// here to a node numbered differently, given its uids from its spans as Stage A's
+    /// window gave them, reaches what the Python reference reaches. B's boundary moved
+    /// and C's passage changed file, and each kept the uid it was born with -- one change
+    /// apiece, where by span, until Stage D, each was a removal and an addition.
     #[test]
-    fn the_builders_patch_by_uid_applied_here_gives_the_same_catalogue() {
+    fn the_builders_patch_applied_here_gives_the_same_catalogue() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/natural_patch");
         let read = |n: &str| std::fs::read_to_string(dir.join(n)).unwrap_or_else(|e| panic!("{n}: {e}"));
         let d = tmp("nk-fixture-uid");
@@ -2087,10 +2013,10 @@ mod tests {
         }
         drop(c);
         let before = raw(&db);
-        let patch: Json = serde_json::from_str(&read("patch_uid.json")).unwrap();
+        let patch: Json = serde_json::from_str(&read("patch.json")).unwrap();
         let out = apply_with(&db, &patch, None, Rule::Strict, true).unwrap();
         let expected: Vec<String> = serde_json::from_str(&read("expected.json")).unwrap();
-        assert_eq!(fixture_form(&db), expected, "the same catalogue as the patch by span gives");
+        assert_eq!(fixture_form(&db), expected, "the same catalogue as the Python reference gives");
         let c = Connection::open(&db).unwrap();
         let uid_at = |md5: &str, s: i64, e: i64| -> (String, i64) {
             c.query_row(
@@ -2118,11 +2044,10 @@ mod tests {
     // ---- a patch in parts [SPEC-NKP-920..940] -----------------------------
 
     fn three_parts() -> Vec<Json> {
-        let span = serde_json::json!(["D", "radio", 0, 900]);
         vec![
             serde_json::json!({"tables": [files_entry(serde_json::json!([{"key": ["D"], "was": null, "now": ["D", "/hub/d"], "also": {"first_seen": "t"}}]))]}),
-            serde_json::json!({"tables": [passages_entry(serde_json::json!([{"key": ["D", "radio", 0, 900], "was": null, "now": ["D", "radio", 0, 900]}]))]}),
-            serde_json::json!({"tables": [recs_entry(serde_json::json!([{"key": [span, "m-d"], "was": null, "now": [span, "m-d", 1.0]}]))]}),
+            serde_json::json!({"tables": [passages_entry(serde_json::json!([{"key": ["u-d"], "was": null, "now": ["D", "radio", 0, 900, "u-d"]}]))]}),
+            serde_json::json!({"tables": [recs_entry(serde_json::json!([{"key": ["u-d", "m-d"], "was": null, "now": ["u-d", "m-d", 1.0]}]))]}),
         ]
     }
 
@@ -2151,8 +2076,8 @@ mod tests {
         let (_d, db) = permuted("nk-parts-bad");
         let before = raw(&db);
         let mut parts = three_parts();
-        parts[2]["tables"][0]["rows"][0]["key"] = serde_json::json!([["Z", "radio", 0, 1], "m-d"]);
-        parts[2]["tables"][0]["rows"][0]["now"] = serde_json::json!([["Z", "radio", 0, 1], "m-d", 1.0]);
+        parts[2]["tables"][0]["rows"][0]["key"] = serde_json::json!(["u-z", "m-d"]);
+        parts[2]["tables"][0]["rows"][0]["now"] = serde_json::json!(["u-z", "m-d", 1.0]);
         let err = run_parts(&db, parts, true, &mut Vec::new()).unwrap_err();
         assert!(err.starts_with("part 3:"), "the part is named: {err}");
         assert_eq!(raw(&db), before, "and the first two parts were rolled back with it");

@@ -90,6 +90,9 @@ def test_page():
     fleet = fl.Fleet(tmp)
     base = [("X", 1, "2026-09-01 00:00:00"), ("Y", 1, "2026-09-01 00:00:00")]
     plan, hub = fl.build(tmp, fleet, base, {"a": (base, False), "b": (base, False), "c": (base, False)})
+    for n in ("a", "b"):                # old players, which report no natural_keys
+        fleet.natural.discard(n)
+        fleet.uids.discard(n)
     for n, (r, t) in (("a", (3, "2026-10-02 00:00:00")), ("b", (5, "2026-10-03 00:00:00"))):
         c = sqlite3.connect(fleet.nodes[n]["listener"])
         c.execute(f"UPDATE listener_preferences SET rotation={r}, recovery={r}, updated_at='{t}'")
@@ -121,7 +124,7 @@ def test_page():
         check(by["a"]["in_run"] == "taken" and by["c"]["in_run"] == "left alone" and r["left_alone"] == ["c"],
               f"the page says who took part and who was left alone: {by['a']['in_run']}, {by['c']['in_run']}")
         check(set(r["old_players"]) == {"a", "b"} and by["a"]["old_player"] and not by["c"]["old_player"],
-              f"and which players are old (the fake ones report no natural_keys): {r['old_players']}")
+              f"and which players are old (a and b report no natural_keys): {r['old_players']}")
         check(r["missing"] == {}, f"a node chosen and reached is not missing [SPEC-STAR-138]: {r['missing']}")
         check(sc.stage_target(plan, run, "rehearse", ["c"])[1].startswith("left alone in this run"),
               "a later stage cannot name a node the run left alone")

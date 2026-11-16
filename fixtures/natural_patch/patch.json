@@ -15,7 +15,7 @@
     "refs": [
      {
       "col": "passage_id",
-      "kind": "passage"
+      "kind": "passage_uid"
      }
     ],
     "surrogate": null
@@ -23,44 +23,24 @@
    "rows": [
     {
      "key": [
-      [
-       "A",
-       "radio",
-       0,
-       1000
-      ],
+      "1b02344f9f4c6aa8c38377d86960e403",
       "m-a"
      ],
      "now": null,
      "was": [
-      [
-       "A",
-       "radio",
-       0,
-       1000
-      ],
+      "1b02344f9f4c6aa8c38377d86960e403",
       "m-a",
       1.0
      ]
     },
     {
      "key": [
-      [
-       "E",
-       "radio",
-       0,
-       800
-      ],
+      "95278625d84ac04aa341d8ab0ca9c731",
       "m-e"
      ],
      "now": null,
      "was": [
-      [
-       "E",
-       "radio",
-       0,
-       800
-      ],
+      "95278625d84ac04aa341d8ab0ca9c731",
       "m-e",
       1.0
      ]
@@ -73,13 +53,16 @@
     "kind",
     "start_ms",
     "end_ms",
-    "gain"
+    "gain",
+    "passage_uid",
+    "birth_md5",
+    "birth_kind",
+    "birth_start_ms",
+    "birth_end_ms",
+    "birth_salt"
    ],
    "key": [
-    "file_id",
-    "kind",
-    "start_ms",
-    "end_ms"
+    "passage_uid"
    ],
    "name": "passages",
    "natural": {
@@ -94,10 +77,7 @@
    "rows": [
     {
      "key": [
-      "E",
-      "radio",
-      0,
-      800
+      "95278625d84ac04aa341d8ab0ca9c731"
      ],
      "now": null,
      "was": [
@@ -105,7 +85,13 @@
       "radio",
       0,
       800,
-      null
+      null,
+      "95278625d84ac04aa341d8ab0ca9c731",
+      "E",
+      "radio",
+      0,
+      800,
+      0
      ]
     }
    ]
@@ -124,39 +110,17 @@
    },
    "rows": [
     {
+     "also": {
+      "first_seen": "hub-time",
+      "path": "/hub/c"
+     },
      "key": [
-      "E"
-     ],
-     "now": null,
-     "was": [
-      "E"
-     ]
-    }
-   ]
-  },
-  {
-   "columns": [
-    "audio_md5"
-   ],
-   "key": [
-    "audio_md5"
-   ],
-   "name": "files",
-   "natural": {
-    "refs": [],
-    "surrogate": "file_id"
-   },
-   "rows": [
-    {
-     "key": [
-      "C"
+      "C2"
      ],
      "now": [
       "C2"
      ],
-     "was": [
-      "C"
-     ]
+     "was": null
     },
     {
      "also": {
@@ -179,13 +143,16 @@
     "kind",
     "start_ms",
     "end_ms",
-    "gain"
+    "gain",
+    "passage_uid",
+    "birth_md5",
+    "birth_kind",
+    "birth_start_ms",
+    "birth_end_ms",
+    "birth_salt"
    ],
    "key": [
-    "file_id",
-    "kind",
-    "start_ms",
-    "end_ms"
+    "passage_uid"
    ],
    "name": "passages",
    "natural": {
@@ -200,41 +167,84 @@
    "rows": [
     {
      "key": [
-      "B",
-      "radio",
-      0,
-      500
-     ],
-     "now": [
-      "B",
-      "radio",
-      0,
-      450,
-      null
-     ],
-     "was": [
-      "B",
-      "radio",
-      0,
-      500,
-      null
-     ]
-    },
-    {
-     "key": [
-      "D",
-      "radio",
-      0,
-      900
+      "1393803717dfc57ebd23d57829773a1a"
      ],
      "now": [
       "D",
       "radio",
       0,
       900,
-      null
+      null,
+      "1393803717dfc57ebd23d57829773a1a",
+      "D",
+      "radio",
+      0,
+      900,
+      0
      ],
      "was": null
+    },
+    {
+     "key": [
+      "13e27045af703c21d32facc98e6240e0"
+     ],
+     "now": [
+      "B",
+      "radio",
+      0,
+      450,
+      null,
+      "13e27045af703c21d32facc98e6240e0",
+      "B",
+      "radio",
+      0,
+      500,
+      0
+     ],
+     "was": [
+      "B",
+      "radio",
+      0,
+      500,
+      null,
+      "13e27045af703c21d32facc98e6240e0",
+      "B",
+      "radio",
+      0,
+      500,
+      0
+     ]
+    },
+    {
+     "key": [
+      "ba21b09db2d146b781b31135809cd44b"
+     ],
+     "now": [
+      "C2",
+      "radio",
+      0,
+      700,
+      null,
+      "ba21b09db2d146b781b31135809cd44b",
+      "C",
+      "radio",
+      0,
+      700,
+      0
+     ],
+     "was": [
+      "C",
+      "radio",
+      0,
+      700,
+      null,
+      "ba21b09db2d146b781b31135809cd44b",
+      "C",
+      "radio",
+      0,
+      700,
+      0
+     ]
     }
    ]
   },
@@ -253,7 +263,7 @@
     "refs": [
      {
       "col": "passage_id",
-      "kind": "passage"
+      "kind": "passage_uid"
      }
     ],
     "surrogate": null
@@ -261,56 +271,64 @@
    "rows": [
     {
      "key": [
-      [
-       "C",
-       "radio",
-       0,
-       700
-      ],
-      "m-c"
-     ],
-     "now": [
-      [
-       "C2",
-       "radio",
-       0,
-       700
-      ],
-      "m-c",
-      0.5
-     ],
-     "was": [
-      [
-       "C",
-       "radio",
-       0,
-       700
-      ],
-      "m-c",
-      1.0
-     ]
-    },
-    {
-     "key": [
-      [
-       "D",
-       "radio",
-       0,
-       900
-      ],
+      "1393803717dfc57ebd23d57829773a1a",
       "m-d"
      ],
      "now": [
-      [
-       "D",
-       "radio",
-       0,
-       900
-      ],
+      "1393803717dfc57ebd23d57829773a1a",
       "m-d",
       1.0
      ],
      "was": null
+    },
+    {
+     "key": [
+      "ba21b09db2d146b781b31135809cd44b",
+      "m-c"
+     ],
+     "now": [
+      "ba21b09db2d146b781b31135809cd44b",
+      "m-c",
+      0.5
+     ],
+     "was": [
+      "ba21b09db2d146b781b31135809cd44b",
+      "m-c",
+      1.0
+     ]
+    }
+   ]
+  },
+  {
+   "columns": [
+    "audio_md5"
+   ],
+   "key": [
+    "audio_md5"
+   ],
+   "name": "files",
+   "natural": {
+    "refs": [],
+    "surrogate": "file_id"
+   },
+   "rows": [
+    {
+     "key": [
+      "C"
+     ],
+     "now": null,
+     "was": [
+      "C"
+     ]
+    },
+    {
+     "key": [
+      "E"
+     ],
+     "now": null,
+     "was": [
+      "E"
+     ]
     }
    ]
   }

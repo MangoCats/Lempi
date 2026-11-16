@@ -217,35 +217,26 @@ def apply_member(db, patch, tables):
 # both read holds the two to the same meaning (`fixtures/natural_patch/`).
 #
 #   surrogate  the table's own id, which a patch never carries
-#   refs       (column, "file" | "passage"[, (when_column, when_value)])
+#   refs       (column, "file" | "passage_uid"[, (when_column, when_value)])
 #   key        what names a row in the patch, as the node finds it
+#
+# A file is its `audio_md5`; a passage is its permanent identity, its uid, which
+# no boundary edit changes [IMPL-UID-052]. Until Stage D a passage could also be
+# named by its span, `[md5, kind, start, end]`, paired by number or by position
+# after an edit (`same_numbering`, `pair_moved`); that went on 2026-11-16, when
+# every node took passages by uid alone [IMPL-UID-080]. The span stays a
+# passage's birth key, never its name in a patch.
 NATURAL = {
     "files": dict(surrogate="file_id", refs=[], key=["audio_md5"]),
-    "passages": dict(surrogate="passage_id", refs=[("file_id", "file")],
-                     key=["file_id", "kind", "start_ms", "end_ms"]),
-    "file_tags": dict(surrogate=None, refs=[("file_id", "file")], key=["file_id"]),
-    "passage_recordings": dict(surrogate=None, refs=[("passage_id", "passage")], key=["passage_id", "mbid"]),
-    "id_checks": dict(surrogate=None, refs=[("passage_id", "passage")], key=["passage_id"]),
-    "flavor": dict(surrogate=None, refs=[("subject_id", "passage", ("subject_kind", "passage"))],
-                   key=["subject_kind", "subject_id", "characteristic", "class"]),
-}
-# Parents before the rows that name them: the node writes in this order.
-NATURAL_ORDER = ["files", "passages", "file_tags", "passage_recordings", "id_checks", "flavor"]
-
-# [IMPL-UID-052] step 6: a passage named by its permanent identity, once both
-# catalogues carry one for every passage and the node reports `passage_uids`.
-# A boundary edit is then a change keyed by what does not change, so the span's
-# pairing by number or by position (`same_numbering`, `pair_moved`) has nothing
-# to do. Files keep their `audio_md5`, which already is one.
-NATURAL_BY_UID = {
-    "files": NATURAL["files"],
     "passages": dict(surrogate="passage_id", refs=[("file_id", "file")], key=["passage_uid"]),
-    "file_tags": NATURAL["file_tags"],
+    "file_tags": dict(surrogate=None, refs=[("file_id", "file")], key=["file_id"]),
     "passage_recordings": dict(surrogate=None, refs=[("passage_id", "passage_uid")], key=["passage_id", "mbid"]),
     "id_checks": dict(surrogate=None, refs=[("passage_id", "passage_uid")], key=["passage_id"]),
     "flavor": dict(surrogate=None, refs=[("subject_id", "passage_uid", ("subject_kind", "passage"))],
                    key=["subject_kind", "subject_id", "characteristic", "class"]),
 }
+# Parents before the rows that name them: the node writes in this order.
+NATURAL_ORDER = ["files", "passages", "file_tags", "passage_recordings", "id_checks", "flavor"]
 
 
 def uids_throughout(c) -> bool:
@@ -255,32 +246,16 @@ def uids_throughout(c) -> bool:
     return c.execute("SELECT count(*) FROM passages WHERE passage_uid IS NULL").fetchone()[0] == 0
 
 
-def uids_missing(baseline, target):
-    """Why a catalogue pair cannot be patched by uid, or None when it can: each
-    must give every passage its uid [IMPL-UID-052]."""
-    for label, path in (("the copy last sent", baseline), ("the hub's catalogue", target)):
-        c = open_ro(path)
-        try:
-            if not uids_throughout(c):
-                return f"{label} has a passage without its uid"
-        finally:
-            c.close()
-    return None
-
-
 class NaturalUnsupported(Exception):
     """A catalogue pair this builder will not make a natural patch for, and why."""
 
 
-def id_maps(c, by_uid=False):
-    """Each local id's natural name: a file's audio_md5; a passage's [md5, kind,
-    start, end], or with `by_uid` its permanent identity."""
+def id_maps(c, passages_named=True):
+    """Each local id's natural name: a file's audio_md5, a passage's uid. Passages
+    only where the table names one (`passages_named`); `make_values` has checked by
+    then that each has its uid."""
     files = {r[0]: r[1] for r in c.execute("SELECT file_id, audio_md5 FROM files")}
-    if by_uid:
-        passages = dict(c.execute("SELECT passage_id, passage_uid FROM passages"))
-    else:
-        passages = {r[0]: [r[1], r[2], r[3], r[4]] for r in c.execute(
-            "SELECT p.passage_id, f.audio_md5, p.kind, p.start_ms, p.end_ms FROM passages p JOIN files f USING (file_id)")}
+    passages = dict(c.execute("SELECT passage_id, passage_uid FROM passages")) if passages_named else {}
     return files, passages
 
 
@@ -307,42 +282,13 @@ def natural_values(name, d, cols, files, passages, spec=None):
     return out
 
 
-def same_numbering(b, t, kind):
-    """Whether `b` and `t` give every "file" or "passage" they share the same id.
-    A copy the hub built does. An adopted one is numbered by the node
-    [SPEC-STAR-946], and its id 5938 is some other file of the hub's."""
-    i = 0 if kind == "file" else 1
-    theirs, ours = id_maps(b)[i], id_maps(t)[i]
-    named = {json.dumps(v): k for k, v in ours.items()}
-    return all(named.get(json.dumps(v), k) == k for k, v in theirs.items())
-
-
-def pair_moved(old, new):
-    """Passages only one side names, moved under `old`'s name where a file and
-    kind have as many on each side, in order of start: a boundary edited, which
-    stays one change so the node keeps its id [SPEC-NKP-046]."""
-    def groups(rows, others):
-        out = {}
-        for k in sorted((k for k in rows if k not in others), key=lambda k: json.loads(k)[2]):
-            at = json.loads(k)
-            out.setdefault((at[0], at[1]), []).append(k)
-        return out
-    gone, came = groups(old, new), groups(new, old)
-    for where, olds in gone.items():
-        if len(olds) == len(came.get(where, ())):
-            for a, b in zip(olds, came[where]):
-                new[a] = new.pop(b)
-
-
-def natural_entry(b, t, name, skip, by_uid=False):
+def natural_entry(b, t, name, skip):
     """The patch entry for one id-bearing table, or None where nothing changed
-    [SPEC-NKP-040]. Rows are paired by the hub's own key where both catalogues
-    are numbered by the hub, so a row whose natural key changed -- a boundary
-    edited, a file re-keyed -- is one change, not a delete and an add
-    [SPEC-NKP-045]. Where they are not, by what each row is [SPEC-NKP-046].
-    With `by_uid`, a passage is what its uid names, which is the same in both
-    and unchanged by an edit, so every row is paired by what it is."""
-    spec = (NATURAL_BY_UID if by_uid else NATURAL)[name]
+    [SPEC-NKP-040]. Every row is paired by what it is, in both catalogues alike:
+    a passage by its uid, which a boundary edit leaves as it was, so the edit is
+    one change [SPEC-NKP-045]; a file by its `audio_md5`. How either catalogue
+    numbers them does not enter into it [IMPL-UID-080]."""
+    spec = NATURAL[name]
     if name not in tables_of(t):
         return None
     if name not in tables_of(b):
@@ -362,29 +308,24 @@ def natural_entry(b, t, name, skip, by_uid=False):
     cols = [c for c in full if c != spec["surrogate"] and c not in skip]
     if any(k not in cols for k in spec["key"]):
         raise NaturalUnsupported(f"{name}: its natural key is not among the columns carried")
-    pk = key_of(t, name)
-    by_name = by_uid or not same_numbering(b, t, "file" if name in ("files", "file_tags") else "passage")
+    names_passage = name == "passages" or any(r[1] == "passage_uid" for r in spec["refs"])
 
     def load(c, have, extra):
-        files, passages = id_maps(c, by_uid)
+        files, passages = id_maps(c, names_passage)
         rows = {}
         for row in c.execute(f"SELECT {', '.join(have)} FROM {name}"):
             d = dict(zip(have, row), **extra)
             values = natural_values(name, d, cols, files, passages, spec)
             named = dict(zip(cols, values))
-            ident = json.dumps([named[k] for k in spec["key"]]) if by_name else tuple(d[k] for k in pk)
-            rows[ident] = (d, values)
+            rows[json.dumps([named[k] for k in spec["key"]])] = (d, values)
         return rows
 
     old, new = load(b, bcols, fill), load(t, full, {})
-    if by_name and name == "passages" and not by_uid:
-        pair_moved(old, new)
     rows = []
     for ident in sorted(set(old) | set(new), key=repr):
         bd, bn = old.get(ident, (None, None))
         td, tn = new.get(ident, (None, None))
-        carried = [c for c in full if c not in skip]
-        if bd is not None and td is not None and (bn == tn if by_name else all(bd[c] == td[c] for c in carried)):
+        if bd is not None and td is not None and bn == tn:
             continue                       # the same row, whatever each catalogue calls it
         named = dict(zip(cols, bn if bn is not None else tn))
         rec = {"key": [named[k] for k in spec["key"]], "was": bn, "now": tn}
@@ -423,7 +364,7 @@ def index_entries(b, t, names, node_indexes):
     return out
 
 
-def make_values(baseline, target, tables=None, exclude=None, natural=False, omit=None, own=(), by_uid=False,
+def make_values(baseline, target, tables=None, exclude=None, natural=False, omit=None, own=(),
                 node_indexes=None):
     """A patch as values, for the player to apply itself over the signed
     transport [SPEC-NSH-070] -- `lempi_core::mesh_sync::apply_with` reads it.
@@ -438,9 +379,10 @@ def make_values(baseline, target, tables=None, exclude=None, natural=False, omit
     `make` makes it.
 
     `natural` names the tables that hold ids by what identifies them on every
-    installation instead, for a player that can apply that `[SPEC-NKP-040]`;
-    they follow the rest, parents first. It raises `NaturalUnsupported` for a
-    pair it will not make one for.
+    installation instead, for a player that can apply that `[SPEC-NKP-040]`:
+    a file by its `audio_md5`, a passage by its uid `[IMPL-UID-080]`. They follow
+    the rest, parents first. It raises `NaturalUnsupported` for a pair it will
+    not make one for, among them one with a passage that has no uid.
 
     `omit` maps a table to columns that are the hub's own bookkeeping: they travel in
     neither direction and, unlike `exclude`, a row the node lacks is not given the
@@ -451,10 +393,6 @@ def make_values(baseline, target, tables=None, exclude=None, natural=False, omit
     node's catalogue adopted as its copy last sent carries them
     `[SPEC-STAR-946]`; one the hub built never did.
 
-    `by_uid`, for a player that reports `passage_uids`, names passages by their
-    uid [IMPL-UID-052] step 6 -- where both catalogues carry one for every
-    passage (`uids_throughout`), and by span otherwise.
-
     `node_indexes`, the node's own report of the indexes its catalogue holds (by
     name), adds the target's others to the tables it already has, last
     [IMPL-UID-056]. None, for a player that gives no report, adds none."""
@@ -463,7 +401,14 @@ def make_values(baseline, target, tables=None, exclude=None, natural=False, omit
     b, t = open_ro(baseline), open_ro(target)
     patch = {"tables": []}
     try:
-        by_uid = natural and by_uid and uids_throughout(b) and uids_throughout(t)
+        # Only where the patch names a passage: a patch of files and their tags names none.
+        names_passages = natural and "passages" in tables_of(t) and (
+            tables is None or set(tables) & {"passages", "passage_recordings", "id_checks", "flavor"})
+        if names_passages:
+            for label, c in (("the copy last sent", b), ("the hub's catalogue", t)):
+                if not uids_throughout(c):
+                    raise NaturalUnsupported(f"{label} has a passage without its uid, and a patch names a "
+                                             "passage by its uid alone [IMPL-UID-080]")
         extra = sorted((tables_of(b) - tables_of(t) - set(own)) & set(tables or tables_of(b)))
         if extra:
             raise SystemExit(f"the target lacks table(s) {extra}: a patch never drops a table")
@@ -516,7 +461,7 @@ def make_values(baseline, target, tables=None, exclude=None, natural=False, omit
             for name in NATURAL_ORDER:
                 if tables is not None and name not in tables:
                     continue
-                entry = natural_entry(b, t, name, set(exclude.get(name, ())), by_uid)
+                entry = natural_entry(b, t, name, set(exclude.get(name, ())))
                 if entry:
                     built.append(entry)
             # Removals first, children before parents; then the rest, parents
@@ -531,7 +476,7 @@ def make_values(baseline, target, tables=None, exclude=None, natural=False, omit
             # twice; each half keeps the table's new columns, added once.
             #
             # By uid, a passage can change file and stay itself -- one change, where
-            # by span it is a removal and an addition. Its old file's removal must
+            # by span it was a removal and an addition. Its old file's removal must
             # then wait until it has moved, or the cascade takes it first and the
             # change finds nothing to change: *passage_recordings: passage_id names
             # a passage_uid this node does not hold*, the reference applier,
@@ -544,7 +489,7 @@ def make_values(baseline, target, tables=None, exclude=None, natural=False, omit
                 gone = [r for r in entry["rows"] if r["now"] is None]
                 rest = [r for r in entry["rows"] if r["now"] is not None]
                 if gone:
-                    (last if by_uid and entry["name"] == "files" else removals).append(dict(entry, rows=gone))
+                    (last if entry["name"] == "files" else removals).append(dict(entry, rows=gone))
                 if rest or not gone:
                     writes.append(dict(entry, rows=rest))
             patch["tables"] += list(reversed(removals)) + writes + last

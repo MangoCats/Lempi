@@ -35,7 +35,7 @@ LIB = """
 CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT, path TEXT, size_bytes INTEGER,
     mtime INTEGER, last_seen INTEGER);
 CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT, start_ms INTEGER,
-    end_ms INTEGER);
+    end_ms INTEGER, passage_uid TEXT);
 CREATE TABLE artists (mbid TEXT PRIMARY KEY, name TEXT, source TEXT);
 """
 
@@ -76,7 +76,7 @@ def summary(db):
     c = sqlite3.connect(db)
     out = []
     for t, cols in (("files", ["file_id", "audio_md5", "path", "size_bytes", "mtime", "last_seen"]),
-                    ("passages", ["passage_id", "file_id", "kind", "start_ms", "end_ms"])):
+                    ("passages", ["passage_id", "file_id", "kind", "start_ms", "end_ms", "passage_uid"])):
         out.append({"name": t, "columns": cols, "key": [cols[0]],
                     "rows": [[sp.enc(v) for v in r] for r in c.execute(f"SELECT {', '.join(cols)} FROM {t}")]})
     c.close()
@@ -94,7 +94,7 @@ class Fleet:
         self.nodes = {}
         self.runs = []
         self.natural = set()        # the players that report natural_keys [SPEC-NKP-075]
-        self.uids = set()           # ... and passage_uids [IMPL-UID-052]
+        self.uids = set()           # ... and passage_uids [IMPL-UID-052]; `add` makes each current
         self.indexes = set()        # ... and their catalogue's indexes [IMPL-UID-056]
         self.readonly = set()       # players whose catalogue is on a read-only partition [SPEC-STAR-104]
         self.window = set()         # ... and which of them can open it themselves
@@ -151,10 +151,13 @@ class Fleet:
         make_db(self.nodes[name]["listener"], tm.SCHEMA, *prefs_sql)
         make_db(self.nodes[name]["library"], LIB,
                 f"INSERT INTO files VALUES (1,'A','/{name}/a.mp3',100,1,1)",
-                "INSERT INTO passages VALUES (1,1,'radio',0,1000)",
+                "INSERT INTO passages VALUES (1,1,'radio',0,1000,'u-A-radio-0-1000')",
                 "INSERT INTO artists VALUES ('x','Ex','manual')")
         if always_up:
             self.up.add(name)
+        # Current, as every node in the fleet is: a test that wants an old one says so.
+        self.natural.add(name)
+        self.uids.add(name)
 
     # -- what the code under test calls ---------------------------------
     def sync_players(self, mdir):
@@ -255,7 +258,7 @@ def build(tmp, fleet, hub_prefs, nodes):
     make_db(hub["listener"], tm.SCHEMA,
             *[f"INSERT INTO listener_preferences VALUES ('artist','{i}',{r},{r},0,'{t}')" for i, r, t in hub_prefs])
     make_db(hub["library"], LIB, "INSERT INTO files VALUES (1,'A','C:/a.mp3',100,1,1)",
-            "INSERT INTO passages VALUES (1,1,'radio',0,1000)", "INSERT INTO artists VALUES ('x','Ex','manual')")
+            "INSERT INTO passages VALUES (1,1,'radio',0,1000,'u-A-radio-0-1000')", "INSERT INTO artists VALUES ('x','Ex','manual')")
     runs = os.path.join(tmp, "runs")
     os.makedirs(os.path.join(tmp, "backups"))
     os.makedirs(runs)
@@ -547,7 +550,7 @@ def test_catalogue_moved(tmp):
     same = [("X", 1, "2026-09-01 00:00:00")]
     plan, hub = build(tmp, fleet, same, {"a": (same, False), "b": (same, False)})
     c = sqlite3.connect(fleet.nodes["b"]["library"])
-    c.execute("INSERT INTO passages VALUES (2,1,'album',0,500)")      # b ingested something on its own
+    c.execute("INSERT INTO passages VALUES (2,1,'album',0,500,'u-A-album-0-500')")   # b ingested something on its own
     c.commit()
     c.close()
     with faked(fleet):
@@ -568,9 +571,12 @@ def give_uids(db, index=False):
     with `index`, the unique index the hub's tool makes beside them."""
     import assign_passage_uids as apu
     c = sqlite3.connect(db)
+    c.execute("UPDATE passages SET passage_uid = NULL")
     p = apu.plan(c)
+    have = {r[1] for r in c.execute("PRAGMA table_info(passages)")}
     for col, decl in apu.COLUMNS:
-        c.execute(f"ALTER TABLE passages ADD COLUMN {col} {decl}")
+        if col not in have:
+            c.execute(f"ALTER TABLE passages ADD COLUMN {col} {decl}")
     c.executemany("UPDATE passages SET passage_uid = ?, birth_md5 = ?, birth_kind = ?, birth_start_ms = ?, "
                   "birth_end_ms = ?, birth_salt = 0 WHERE passage_id = ?",
                   [(uid, m, k, s, e, pid) for pid, uid, m, k, s, e in p])
@@ -582,18 +588,21 @@ def give_uids(db, index=False):
 
 def catalogue_scenario(tmp, b_current, artists=0, uids=None):
     """a holds the hub's new music under the hub's ids, b under its own -- the case found on every player on
-    2026-10-05. a's player is old; b's is current if `b_current`. With `uids`, b's player also reports
-    passage_uids, and the catalogues `uids` names carry them: "all" every one, "hub" the hub's alone."""
+    2026-10-05. a's player is old; b's is current if `b_current`. Every catalogue carries its passages'
+    uids; with `uids`, b reports its indexes too, and the catalogues carry the uids the hub's tool gives:
+    "all" every one, "hub" the hub's alone, the copies last sent none."""
     fleet = Fleet(tmp)
     same = [("X", 1, "2026-09-01 00:00:00")]
     plan, hub = build(tmp, fleet, same, {"a": (same, False), "b": (same, False), "c": (same, False)})
-    if b_current:
-        fleet.natural.add("b")
+    fleet.natural.discard("a")
+    fleet.uids.discard("a")
+    if not b_current:
+        fleet.natural.discard("b")
+        fleet.uids.discard("b")
     if uids:
-        fleet.uids.add("b")
         fleet.indexes.add("b")
     new = lambda fid, pid: (f"INSERT INTO files VALUES ({fid},'C','/x/c.mp3',100,1,1)",
-                            f"INSERT INTO passages VALUES ({pid},{fid},'radio',0,500)")
+                            f"INSERT INTO passages VALUES ({pid},{fid},'radio',0,500,'u-C-radio-0-500')")
     for db, (fid, pid) in ((hub["library"], (9, 20)), (fleet.nodes["a"]["library"], (9, 20)),
                            (fleet.nodes["b"]["library"], (7, 15)), (fleet.nodes["c"]["library"], (9, 20))):
         c = sqlite3.connect(db)
@@ -614,10 +623,15 @@ def catalogue_scenario(tmp, b_current, artists=0, uids=None):
     c.close()
     if uids:
         give_uids(hub["library"], index=True)
-        if uids == "all":
-            for n in ("a", "b"):
-                give_uids(fleet.nodes[n]["library"])
+        for n in ("a", "b"):
+            give_uids(fleet.nodes[n]["library"])
+            if uids == "all":
                 give_uids(os.path.join(tmp, "sent", f"{n}.library.db"))
+            else:
+                c = sqlite3.connect(os.path.join(tmp, "sent", f"{n}.library.db"))
+                c.execute("UPDATE passages SET passage_uid = NULL")
+                c.commit()
+                c.close()
     with faked(fleet) as out:
         # c has a file the hub lacks, so its own copy cannot be made: leave it out of this merge.
         ss.snapshot(plan, {"a", "b"})
@@ -635,20 +649,23 @@ def test_catalogue_states(tmp):
     fleet, plan, hub, run, base = catalogue_scenario(tmp, b_current=True)
     check(base["a"]["catalogue"]["state"] == "holds-hub-rows" and base["a"]["catalogue_in_step"],
           f"a holds the hub's new rows under the hub's ids: patchable, the rehearsal decides: {base['a']['catalogue']}")
-    check(base["b"]["catalogue"] == {"state": "other-ids", "files": 1, "passages": 1} and base["b"]["catalogue_in_step"],
-          f"b holds the same music under its own ids, and its player is current, so it can be patched: {base['b']['catalogue']}")
-    check(ss.catalogue_words(base["b"]["catalogue"]) == "the hub's music under other ids (1 files, 1 passages)", "and says so in words")
-    pa = json.load(open(os.path.join(run, "patches", "a", "catalogue.values.json")))
+    # Until Stage D, b's own numbering made it a state of its own ("other-ids"). By uid it holds
+    # the hub's rows like a, and only the player decides what it is sent [IMPL-UID-080].
+    check(base["b"]["catalogue"] == {"state": "holds-hub-rows"} and base["b"]["catalogue_in_step"],
+          f"b holds the same music under its own ids, and by uid that is in step: {base['b']['catalogue']}")
+    check(ss.catalogue_words(base["b"]["catalogue"]) == "holds the hub's new rows already", "and says so in words")
     pb = json.load(open(os.path.join(run, "patches", "b", "catalogue.values.json")))
-    check(not any("natural" in e for e in pa["tables"]), "an old player is sent the strict patch by id")
+    check(not os.path.exists(os.path.join(run, "patches", "a", "catalogue.values.json")),
+          "an old player is sent no catalogue patch: until Stage D, the strict patch by id")
     check({e["name"] for e in pb["tables"] if "natural" in e} == {"files", "passages"},
           f"a current one is sent the tables that hold ids by natural key: {[e['name'] for e in pb['tables']]}")
     fe = next(e for e in pb["tables"] if e["name"] == "files")
     check("file_id" not in fe["columns"] and fe["rows"][0]["key"] == ["C"] and "also" in fe["rows"][0],
           f"carrying no id, the new file's machine-scope values as `also`: {fe}")
     summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
-    check("by natural key" in summary, f"the summary says so: {summary}")
+    check("by natural key, passages by uid" in summary, f"the summary says so: {summary}")
     check("WARNING -- OLD PLAYER: a" in summary and "OLD PLAYER: b" not in summary, "and warns of a alone, which is old")
+    check("older than the patch that names a passage by its uid" in summary, f"and says why a is sent none: {summary}")
     # And the direct call, for the case the merge could not take.
     ch = ss.catalogue_state(os.path.join(tmp, "sent", "c.library.db"), os.path.join(run, "a", "summary.db"),
                             os.path.join(run, "desktop", "library.db"))
@@ -667,10 +684,11 @@ def apu_schema_index():
 
 def test_catalogue_by_uid(tmp):
     """[IMPL-UID-052] step 6: a player that reports passage_uids, both catalogues carrying them, is sent its
-    passages by uid; the same player against a copy without them gets them by span, and is told so."""
+    passages by uid; against a copy without them it is sent none, and told why -- never by span, which
+    went with Stage D [IMPL-UID-080]."""
     os.makedirs(os.path.join(tmp, "all"))
     fleet, plan, hub, run, base = catalogue_scenario(os.path.join(tmp, "all"), b_current=True, uids="all")
-    check(base["b"]["passage_uids"] == 1 and base["a"]["passage_uids"] == 0, f"each node's report is kept: {base['b']}")
+    check(base["b"]["passage_uids"] == 1 and base["a"]["passage_uids"] == 0, f"each node's report is kept: {base['a']}")
     pb = json.load(open(os.path.join(run, "patches", "b", "catalogue.values.json")))
     pe = next(e for e in pb["tables"] if e["name"] == "passages")
     c = sqlite3.connect(hub["library"])
@@ -685,26 +703,25 @@ def test_catalogue_by_uid(tmp):
     check([(e["name"], e["add_indexes"]) for e in ix] == [("passages", [apu_schema_index()])],
           f"b is sent the index it reports lacking: {ix}")
     check("makes the index(es) `passages.passages_uid` the node lacks" in summary, f"and told so: {summary}")
-    pa = json.load(open(os.path.join(run, "patches", "a", "catalogue.values.json")))
-    check(not any("add_indexes" in e for e in pa["tables"]), "a, which gives no report, is sent none")
+    check(not os.path.exists(os.path.join(run, "patches", "a", "catalogue.values.json")),
+          "a, an old player, is sent no catalogue, and so no index")
     os.makedirs(os.path.join(tmp, "hub"))
     fleet, plan, hub, run, base = catalogue_scenario(os.path.join(tmp, "hub"), b_current=True, uids="hub")
-    pb = json.load(open(os.path.join(run, "patches", "b", "catalogue.values.json")))
-    pe = next(e for e in pb["tables"] if e["name"] == "passages")
-    check(pe["key"] != ["passage_uid"], f"against a copy last sent without uids, b's passages go by span: {pe['key']}")
+    check(not os.path.exists(os.path.join(run, "patches", "b", "catalogue.values.json")),
+          "against a copy last sent without uids, b is sent no catalogue")
     summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
-    check("passages by span (the copy last sent has a passage without its uid)" in summary,
-          f"and the summary says why, not just that it went: {summary}")
-    check("b: passages named BY SPAN, not by uid" in fleet.said, f"and the run's own output says it too: {fleet.said}")
+    check("the copy last sent has a passage without its uid" in summary and "none sent" in summary,
+          f"and the summary says why, not just that none went: {summary}")
+    check("the copy last sent has a passage without its uid" in fleet.said, f"and the run's own output says it too: {fleet.said}")
 
 
 def test_catalogue_old_player(tmp):
     """An old player holding the music under other ids is sent no catalogue patch, and is told so loudly."""
     fleet, plan, hub, run, base = catalogue_scenario(tmp, b_current=False)
-    check(not base["b"]["catalogue_in_step"] and base["b"]["natural_keys"] == 0, f"{base['b']}")
+    check(base["b"]["natural_keys"] == 0, f"{base['b']}")
     check(not os.path.exists(os.path.join(run, "patches", "b", "catalogue.values.json")), "no patch for b")
     summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
-    check("OLD: it cannot take one" in summary and "WARNING -- OLD PLAYERS: a, b" in summary,
+    check("older than the patch that names a passage by its uid" in summary and "WARNING -- OLD PLAYERS: a, b" in summary,
           f"the summary says why, and names both old players: {summary}")
 
 
@@ -870,7 +887,8 @@ def test_old_players(tmp):
     fleet = Fleet(tmp)
     same = [("X", 1, "2026-09-01 00:00:00")]
     plan, hub = build(tmp, fleet, same, {"a": (same, False), "b": (same, False)})
-    fleet.natural.add("b")                     # b is current; a is not
+    fleet.natural.discard("a")                 # b is current; a is not
+    fleet.uids.discard("a")
     with faked(fleet) as out:
         ss.snapshot(plan)
         text = out.getvalue()
@@ -939,7 +957,7 @@ def links_fleet(tmp, b_holds):
         c = sqlite3.connect(fleet.nodes["b"]["library"])
         c.execute("INSERT INTO recordings VALUES ('rec-ghost', 'Ticking', 335000, 'musicbrainz')")
         c.execute("INSERT INTO files VALUES (5, 'G', '/b/Elton John/09 Ticking.mp3', 100, 1, 1)")
-        c.execute("INSERT INTO passages VALUES (50, 5, 'album', 0, 335000)")
+        c.execute("INSERT INTO passages VALUES (50, 5, 'album', 0, 335000, 'u-G-album-0-335000')")
         c.execute("INSERT INTO passage_recordings VALUES (50, 'rec-ghost', 1.0, 'musicbrainz')")
         c.commit()
         c.close()

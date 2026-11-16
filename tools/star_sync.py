@@ -369,7 +369,7 @@ SIGNED_OMIT = {"cover_art": ["caa_asked_at"]}
 # adopted catalogue held one, and its first patch was refused for it, 2026-10-30 [SPEC-STAR-946].
 NODE_OWN = ["imported_payloads"]
 NATURAL_KEYS_NEEDED = 1    # [SPEC-NKP-075]: the catalogue patch by natural key
-PASSAGE_UIDS_NEEDED = 1    # [IMPL-UID-052] step 6: a natural patch that names passages by uid
+PASSAGE_UIDS_NEEDED = 1    # [IMPL-UID-080]: the catalogue patch names passages by uid alone
 CATALOGUE_WINDOW_NEEDED = 1  # [SPEC-STAR-104]: a player that opens a read-only catalogue's partition to rehearse a patch too
 RETIRE_FILES_NEEDED = 1  # [SPEC-RTF-060]: a player that moves the files the hub retired to its own _Retired
 CATALOGUE_PATCH_MAX = 16 << 20   # [SPEC-NKP-920]: the most a player is sent in one request, in bytes of JSON
@@ -400,13 +400,6 @@ def db_of(export, path):
         c.commit()
     finally:
         c.close()
-
-
-# What a node's catalogue summary covers [SPEC-NSH-060]: every file and passage, by
-# the node's own ids and the columns that identify them. The natural keys are the
-# ones that cross installations [SPEC-DF-035]: a file by its `audio_md5`, a passage
-# by (`audio_md5`, kind, start, end).
-SUMMARY_COLS = {"files": ["file_id", "audio_md5"], "passages": ["passage_id", "file_id", "kind", "start_ms", "end_ms"]}
 
 
 def not_whole(ic):
@@ -444,26 +437,12 @@ def integrity_words(ic):
     return head + (f"; {n} without tags (no album name there until its catalogue is next written)" if n else "")
 
 
-def summary_rows(db):
-    """(rows by id, natural keys) of the files and passages a summary or a catalogue holds."""
-    c = sp.open_ro(db)
-    try:
-        by_id = {t: {tuple(r) for r in c.execute(f"SELECT {', '.join(cols)} FROM {t}")}
-                 for t, cols in SUMMARY_COLS.items()}
-        nat = {"files": {r[0] for r in c.execute("SELECT audio_md5 FROM files")},
-               "passages": {tuple(r) for r in c.execute(
-                   "SELECT f.audio_md5, p.kind, p.start_ms, p.end_ms FROM passages p JOIN files f USING (file_id)")}}
-    finally:
-        c.close()
-    return by_id, nat
-
-
 CATALOGUE_STATES = {
     "as-sent": "as last sent",
     "holds-hub-rows": "holds the hub's new rows already",
-    "other-ids": "the hub's music under other ids",
     "changed": "changed on the node",
     "no-copy": "no copy was last sent",
+    "no-uids": "a passage without its uid",
 }
 
 
@@ -471,30 +450,44 @@ def catalogue_state(sent_lib, summary_db, hub_lib):
     """[SPEC-STAR-940]: where a node's catalogue stands against what the hub last
     sent it and what the hub holds now, as far as the summary shows.
 
-    `as-sent` and `holds-hub-rows` can take the strict patch: every row the node
-    has is one the patch expects or one it already makes. `other-ids` cannot, and
-    is the common case (found 2026-10-05): the node holds the hub's own music,
-    which a bundle send imported under the node's own ids. `changed` is a real
-    difference. The player's own rehearsal is the check that decides; this says
-    what to expect, and why."""
+    By what each row is -- a file by its `audio_md5`, a passage by its uid -- so
+    how the node numbers them does not enter into it [IMPL-UID-080]. `as-sent`
+    and `holds-hub-rows` can take the strict patch: every row the node has is
+    one the patch expects or one it already makes. `changed` is a real
+    difference. Until Stage D, a node holding the hub's music under its own
+    numbers (a bundle send imports it so) was a state of its own, `other-ids`;
+    by uid it is simply in step. The player's own rehearsal is the check that
+    decides; this says what to expect, and why."""
     if not sent_lib:
         return {"state": "no-copy"}
-    node_id, node_nat = summary_rows(summary_db)
-    sent_id, sent_nat = summary_rows(sent_lib)
-    if node_id == sent_id:
+    node, sent, hub = summary_rows(summary_db), summary_rows(sent_lib), summary_rows(hub_lib)
+    for which, rows in (("the node's catalogue", node), ("the copy last sent", sent), ("the hub's catalogue", hub)):
+        if rows is None:
+            return {"state": "no-uids", "which": which}
+    if node == sent:
         return {"state": "as-sent"}
-    hub_id, hub_nat = summary_rows(hub_lib)
-    if all(node_id[t] <= sent_id[t] | hub_id[t] for t in SUMMARY_COLS):
+    if all(node[t] <= sent[t] | hub[t] for t in node):
         return {"state": "holds-hub-rows"}
-    added = {t: node_nat[t] - sent_nat[t] for t in node_nat}
-    gone = {t: sent_nat[t] - node_nat[t] for t in node_nat}
-    if all(added[t] <= hub_nat[t] for t in added) and not any(gone.values()):
-        # What differs is how the node numbers music the hub also holds: the rows it holds that neither
-        # the copy last sent nor the hub's own has, by id -- the 49 files and 338 passages of a bundle send.
-        return {"state": "other-ids", **{t: len(node_id[t] - sent_id[t] - hub_id[t]) for t in node_id}}
-    detail = {"files": len(added["files"]), "passages": len(added["passages"])}
-    return {"state": "changed", **detail, "gone_files": len(gone["files"]), "gone_passages": len(gone["passages"]),
-            "not_the_hubs": sum(len(added[t] - hub_nat[t]) for t in added)}
+    added = {t: node[t] - sent[t] for t in node}
+    gone = {t: sent[t] - node[t] for t in node}
+    return {"state": "changed", "files": len(added["files"]), "passages": len(added["passages"]),
+            "gone_files": len(gone["files"]), "gone_passages": len(gone["passages"]),
+            "not_the_hubs": sum(len(added[t] - hub[t]) for t in added)}
+
+
+def summary_rows(db):
+    """What a summary or a catalogue holds, by what each row is: its files by
+    `audio_md5`, its passages by uid with the file each is on [IMPL-UID-080].
+    None for one whose passages carry no uid."""
+    c = sp.open_ro(db)
+    try:
+        if not sp.uids_throughout(c):
+            return None
+        return {"files": {r[0] for r in c.execute("SELECT audio_md5 FROM files")},
+                "passages": {tuple(r) for r in c.execute(
+                    "SELECT p.passage_uid, f.audio_md5 FROM passages p JOIN files f USING (file_id)")}}
+    finally:
+        c.close()
 
 
 # -------------------------------------------- the node's own rows [SPEC-STAR-945] --
@@ -796,15 +789,13 @@ def node_rows(mdir, player, run, name, snap, sent_lib, nd, hub_copy, hub_library
     return out, line
 
 
-def natural_words(cat, span_why):
-    """How a catalogue patch names what it changes, for the summary: by natural key,
-    and its passages by uid, or by span and why [IMPL-UID-052]. Read from the patch
-    itself where it names a passage, so the words cannot say what was not sent;
-    `span_why`, worked out beside the builder, only where it names none. And any
-    index it makes on a table the node already has [IMPL-UID-056]."""
+def natural_words(cat):
+    """How a catalogue patch names what it changes, for the summary: by natural
+    key, its passages by uid [IMPL-UID-080]. And any index it makes on a table
+    the node already has [IMPL-UID-056]."""
     made = [f"`{e['name']}.{n}`" for e in cat["tables"] for n in index_names(e.get("add_indexes") or [])]
-    return (natural_mode(cat, span_why)
-            + (f"; it makes the index(es) {', '.join(made)} the node lacks [IMPL-UID-056]" if made else ""))
+    natural = " by natural key, passages by uid" if any("natural" in e for e in cat["tables"]) else ""
+    return natural + (f"; it makes the index(es) {', '.join(made)} the node lacks [IMPL-UID-056]" if made else "")
 
 
 def index_names(sqls):
@@ -819,24 +810,13 @@ def index_names(sqls):
     return out
 
 
-def natural_mode(cat, span_why):
-    natural = [e for e in cat["tables"] if "natural" in e]
-    if not natural:
-        return ""
-    kinds = {r["kind"] for e in natural for r in e["natural"]["refs"]}
-    kinds |= {"passage_uid" for e in natural if e["name"] == "passages" and e["key"] == ["passage_uid"]}
-    kinds |= {"passage" for e in natural if e["name"] == "passages" and e["key"] != ["passage_uid"]}
-    by_uid = ("passage_uid" in kinds) if kinds & {"passage", "passage_uid"} else not span_why
-    if by_uid:
-        return " by natural key, passages by uid"
-    return f" by natural key, passages by span ({span_why or 'the builder gave no reason: a fault, say so'})"
-
-
 def catalogue_words(st):
     """A catalogue state as a person reads it."""
     text = CATALOGUE_STATES[st["state"]]
-    if st["state"] in ("other-ids", "changed"):
+    if st["state"] == "changed":
         text += f" ({st['files']} files, {st['passages']} passages)"
+    if st["state"] == "no-uids":
+        text = f"{st['which']} has {text}, and a patch names a passage by its uid alone [IMPL-UID-080]"
     return text
 
 
@@ -1149,6 +1129,8 @@ def snapshot(plan, only=None):
             cap = snap.get("natural_keys", 0) or 0
             if cap < NATURAL_KEYS_NEEDED:
                 old[name] = "reports no natural_keys: a build older than the catalogue patch by natural key"
+            elif (snap.get("passage_uids", 0) or 0) < PASSAGE_UIDS_NEEDED:
+                old[name] = "reports no passage_uids: a build older than the patch that names a passage by its uid"
             # [SPEC-STAR-104]: a catalogue on a read-only partition (bose's, by design) is opened by
             # the player itself, for the check and the commit. A build that does not say it can
             # would be sent 14 parts and refuse at the first, so it is said now instead.
@@ -1207,8 +1189,7 @@ def snapshot(plan, only=None):
                                "retire_files": snap.get("retire_files", 0) or 0,
                                "catalogue_blocked": blocked, "integrity": snap.get("file_checks"),
                                "journal_mode": snap.get("journal_mode"),
-                               "catalogue_in_step": not blocked and (cat["state"] in ("as-sent", "holds-hub-rows")
-                               or (cat["state"] == "other-ids" and cap >= NATURAL_KEYS_NEEDED))}
+                               "catalogue_in_step": not blocked and cat["state"] in ("as-sent", "holds-hub-rows")}
     finally:
         stop_started(plan, started)
     # [REQ-AND-330]: enrolled phones, by what each last uploaded over the
@@ -1725,29 +1706,29 @@ def patch(plan, run):
                 summary.append(f"- **not sent: {words}** -- this node's player is older than the table, "
                                "and receives it once a current player is deployed there")
                 say(f"  {name}: NOT SENT {', '.join(held_back)}: its player is older than the table")
-            cat, unsupported, parts, span_why = None, None, None, None
+            cat, unsupported, parts = None, None, None
             for old in os.listdir(pd):                # nothing of an earlier patch lingers
                 if old.startswith("catalogue.") or old == RETIRE_FILE:
                     os.remove(os.path.join(pd, old))
             summary += retire_lines(plan, b, t, name, pd)
             if b.get("catalogue_in_step"):
-                # A player that can apply it gets the tables that hold ids named by
-                # what identifies them everywhere [SPEC-NKP-075]; any other, the
-                # strict id-keyed patch, which only reaches a catalogue numbered as ours.
-                natural = (b.get("natural_keys", 0) or 0) >= NATURAL_KEYS_NEEDED
-                # [IMPL-UID-052] step 6: passages by their uid where the player can take
-                # that and both catalogues give every passage one; by span otherwise, and
-                # said, so a fallback never reads as the same patch [GOV002].
-                by_uid = natural and (b.get("passage_uids", 0) or 0) >= PASSAGE_UIDS_NEEDED
-                span_why = (sp.uids_missing(b["library"], t["library"]) if by_uid
-                            else "its player reports no passage_uids" if natural else None)
-                try:
-                    cat = sp.make_values(b["library"], t["library"], exclude=SIGNED_EXCLUDE, natural=natural, omit=SIGNED_OMIT,
-                                         own=NODE_OWN, by_uid=by_uid, node_indexes=b.get("catalogue_indexes"))
-                except sp.NaturalUnsupported as err:
-                    unsupported = f"the hub cannot name what changed: {err} [SPEC-NKP-080]"
-                if cat is not None and span_why and by_uid:
-                    say(f"  {name}: passages named BY SPAN, not by uid -- {span_why} [IMPL-UID-052]")
+                # The tables that hold ids, named by what identifies them everywhere
+                # [SPEC-NKP-075]: a file by its audio_md5, a passage by its uid alone
+                # [IMPL-UID-080]. A player that cannot take that is sent no catalogue,
+                # and said so. Until Stage D one older than natural keys was sent the
+                # strict patch keyed by the hub's own ids, which reached only a catalogue
+                # numbered as the hub's; and one without passage uids, passages by span.
+                # No node runs either.
+                if ((b.get("natural_keys", 0) or 0) < NATURAL_KEYS_NEEDED
+                        or (b.get("passage_uids", 0) or 0) < PASSAGE_UIDS_NEEDED):
+                    unsupported = ("its player is older than the patch that names a passage by its uid, "
+                                   "and is sent no other: deploy a current build [IMPL-UID-080]")
+                else:
+                    try:
+                        cat = sp.make_values(b["library"], t["library"], exclude=SIGNED_EXCLUDE, natural=True,
+                                             omit=SIGNED_OMIT, own=NODE_OWN, node_indexes=b.get("catalogue_indexes"))
+                    except sp.NaturalUnsupported as err:
+                        unsupported = f"the hub cannot name what changed: {err} [SPEC-NKP-080]"
             if cat is not None:
                 size = json_size(cat)
                 if size > CATALOGUE_PATCH_MAX:
@@ -1766,14 +1747,14 @@ def patch(plan, run):
                 man = write_parts(pd, parts)
                 crow = table_rows(cat)
                 summary.append("- catalogue: " + ", ".join(f"`{k}` {v}" for k, v in sorted(crow.items()))
-                               + natural_words(cat, span_why)
+                               + natural_words(cat)
                                + f", {size / 1048576:.0f} MB in {man['of']} parts, staged on the node and committed there in one "
                                  "transaction [SPEC-NKP-920] (proven by the player's own rehearsal, strictly)")
             elif cat is not None:
                 write_json(os.path.join(pd, "catalogue.values.json"), cat)
                 crow = table_rows(cat)
                 summary.append("- catalogue: " + (", ".join(f"`{k}` {v}" for k, v in sorted(crow.items())) or "nothing to send")
-                               + natural_words(cat, span_why)
+                               + natural_words(cat)
                                + " (proven by the player's own rehearsal, strictly)")
             elif unsupported:
                 summary.append(f"- catalogue: **none sent** -- {unsupported}")
@@ -1781,10 +1762,6 @@ def patch(plan, run):
             else:
                 cs = b.get("catalogue") or {"state": "no-copy"}
                 why = b.get("catalogue_blocked") or catalogue_words(cs)
-                if cs["state"] == "other-ids" and not b.get("catalogue_blocked"):
-                    why += (": the same music as the hub, numbered differently, which only a patch by natural key "
-                            "reaches, and this player is OLD: it cannot take one" if b.get("natural_keys", 0) < NATURAL_KEYS_NEEDED
-                            else ": the same music as the hub, numbered differently")
                 summary.append(f"- catalogue: **none sent** -- {why} [SPEC-STAR-940]")
             say(f"  {name}: {sum(rows.values())} shared row(s), {'proven' if good else 'NOT PROVEN'}")
             signed[name] = b["signed"]
@@ -2648,7 +2625,6 @@ def status(plan):
     # but WAL from either is in `bad`.
     say("RESULT status: " + ("STALE -- " + "; ".join(bad) if bad else "backups current, the pair in WAL mode"))
     return 1 if bad else 0
-
 
 
 # ------------------------------------------------------------------ adopt --
