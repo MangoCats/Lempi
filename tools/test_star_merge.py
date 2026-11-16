@@ -22,8 +22,8 @@ CREATE TABLE listener_flags (subject_kind TEXT, subject_id TEXT, flagged_at TEXT
     PRIMARY KEY (subject_kind, subject_id));
 CREATE TABLE listener_occasions (characteristic TEXT, class TEXT, interp TEXT, label TEXT);
 CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY, played_at INTEGER,
-    passage_id INTEGER, mbid TEXT, heard_ms INTEGER, span_ms INTEGER, selected_by TEXT);
-CREATE TABLE player_state (id INTEGER PRIMARY KEY, passage_id INTEGER, updated_at TEXT);
+    passage_uid TEXT, mbid TEXT, heard_ms INTEGER, span_ms INTEGER, selected_by TEXT);
+CREATE TABLE player_state (id INTEGER PRIMARY KEY, passage_uid TEXT, updated_at TEXT);
 CREATE TABLE listener_programs (program_id INTEGER PRIMARY KEY, name TEXT);
 CREATE TABLE listener_program_seeds (program_id INTEGER, mbid TEXT, PRIMARY KEY (program_id, mbid));
 CREATE TABLE listener_settings (id INTEGER PRIMARY KEY, artist_time_scale REAL,
@@ -275,53 +275,97 @@ def test_routine(tmp):
           "and keeps its own plays")
 
 
-def test_translation(tmp):
-    """[SPEC-STAR-049]: two files inducted in opposite order on the desktop
-    and on an appliance -- the same passage id is different music."""
-    base, desk, app = (os.path.join(tmp, f"t-{n}.cat") for n in ("base", "desk", "app"))
+REVIEW = ("CREATE TABLE id_reviews (passage_uid TEXT PRIMARY KEY, decision TEXT, chosen_mbid TEXT, "
+          "decided_at TEXT, applied_at TEXT, origin TEXT)")
+REVIEW_BY_NUMBER = REVIEW.replace("passage_uid TEXT", "passage_id INTEGER")
+
+
+def opposite_numbered(tmp, tag):
+    """Two catalogues holding the same two files numbered the other way round: on
+    the desktop passage 1 is file A and 2 is B; on the appliance 1 is B and 2 is A.
+    Each passage has its uid, the same on both: `a` thirty-two times for file A, `b` for B [SPEC-UID-030]."""
+    base, desk, app = (os.path.join(tmp, f"{tag}-{n}.cat") for n in ("base", "desk", "app"))
     cat(base)
-    cat(desk, "INSERT INTO files VALUES (1,'A','C:/a.mp3',100)", "INSERT INTO files VALUES (2,'B','C:/b.mp3',100)",
-        "INSERT INTO passages VALUES (1,1000,'ingest')", "INSERT INTO passages VALUES (2,1000,'ingest')")
-    c = sqlite3.connect(desk)
-    c.execute("ALTER TABLE passages ADD COLUMN file_id INTEGER")
-    c.execute("ALTER TABLE passages ADD COLUMN kind TEXT")
-    c.execute("ALTER TABLE passages ADD COLUMN start_ms INTEGER")
-    c.execute("UPDATE passages SET file_id = passage_id, kind = 'radio', start_ms = 0")
-    c.commit()
-    c.close()
-    cat(app, "INSERT INTO files VALUES (1,'B','/b.mp3',100)", "INSERT INTO files VALUES (2,'A','/a.mp3',100)",
-        "INSERT INTO passages VALUES (1,1000,'ingest')", "INSERT INTO passages VALUES (2,1000,'ingest')")
-    c = sqlite3.connect(app)
-    for s in ("ALTER TABLE passages ADD COLUMN file_id INTEGER", "ALTER TABLE passages ADD COLUMN kind TEXT",
-              "ALTER TABLE passages ADD COLUMN start_ms INTEGER",
-              "UPDATE passages SET file_id = passage_id, kind = 'radio', start_ms = 0"):
-        c.execute(s)
-    c.commit()
-    c.close()
-    dl, al = os.path.join(tmp, "t-desk.lis"), os.path.join(tmp, "t-app.lis")
-    db(dl)
-    db(al, "INSERT INTO listener_play_history VALUES (1,5000,1,'rec-B',100,200,'auto')")
+    for path, files in ((desk, [(1, "A", "C:/a.mp3"), (2, "B", "C:/b.mp3")]),
+                        (app, [(1, "B", "/b.mp3"), (2, "A", "/a.mp3")])):
+        cat(path, *[f"INSERT INTO files VALUES ({i},'{m}','{p}',100)" for i, m, p in files],
+            "INSERT INTO passages VALUES (1,1000,'ingest')", "INSERT INTO passages VALUES (2,1000,'ingest')")
+        c = sqlite3.connect(path)
+        for q in ("ALTER TABLE passages ADD COLUMN file_id INTEGER", "ALTER TABLE passages ADD COLUMN kind TEXT",
+                  "ALTER TABLE passages ADD COLUMN start_ms INTEGER", "ALTER TABLE passages ADD COLUMN passage_uid TEXT",
+                  "UPDATE passages SET file_id = passage_id, kind = 'radio', start_ms = 0",
+                  "UPDATE passages SET passage_uid = replace(printf('%32s', ''), ' ', "
+                  "lower((SELECT audio_md5 FROM files f WHERE f.file_id = passages.file_id)))"):
+            c.execute(q)
+        c.commit()
+        c.close()
+    return base, desk, app
+
+
+def test_translation(tmp):
+    """[IMPL-UID-064]: two files inducted in opposite order on the desktop and on an
+    appliance, so the same passage number is different music. By uid nothing is
+    translated: a review of B is one row whichever node made it, the appliance's
+    play stays its own, and its copy last sent, still by number from before Stage B,
+    is read through its own catalogue's map -- its 1 is B -- never the hub's."""
+    base, desk, app = opposite_numbered(tmp, "t")
+    dl, al, sent = (os.path.join(tmp, f"t-{n}.lis") for n in ("desk", "app", "sent"))
+    review = lambda who: f"INSERT INTO id_reviews VALUES ({who},'reassigned','rec-B2','2026-10-15 00:20:04',NULL,NULL)"
+    db(dl, REVIEW)
+    db(al, REVIEW, review("'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'"), "INSERT INTO listener_play_history VALUES (1,5000,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','rec-B',100,200,'auto')")
+    db(sent, REVIEW_BY_NUMBER, review("1"))             # its 1 is B: as it was last sent, by number
     out = os.path.join(tmp, "t-out")
     rep = sm.build({"hub_state_from": "desktop",
                     "nodes": [dict(name="desktop", listener=dl),
-                              dict(name="app", listener=al, catalogue=app, files=app)],
+                              dict(name="app", listener=al, catalogue=app, files=app, sent=sent)],
                     "catalogue": dict(base=base, machine_from="desktop", nodes=[
                         dict(name="desktop", library=desk), dict(name="app", library=app, role="receiver")])},
                    out)
-    hub = rows(os.path.join(out, "listener.db"), "SELECT passage_id, mbid FROM listener_play_history")
+    hub = rows(os.path.join(out, "listener.db"), "SELECT passage_uid, mbid FROM listener_play_history")
     check(hub == [], f"the appliance's plays stay its own, never the hub's [REQ-PD-113]: {hub}")
     mine = os.path.join(out, "nodes", "app")
-    got = rows(os.path.join(mine, "listener.db"), "SELECT passage_id, mbid FROM listener_play_history")
-    # Its own numbering, not the hub's (2026-10-18): the natural-key patch
-    # leaves a node's ids its own [SPEC-NKP-020], so its play of its passage 1
-    # (file B) stays on its passage 1. Under the hub's number it would be a
-    # play of file A there, and the next merge would read it so.
-    check(got == [(1, "rec-B")], f"in its own copy, its play of its passage 1 (file B) stays its passage 1: {got}")
-    check(rep.data["translations"]["app"]["ids"] == [[1, 2], [2, 1]], "and the translation is reported")
+    got = rows(os.path.join(mine, "listener.db"), "SELECT passage_uid, mbid FROM listener_play_history")
+    check(got == [("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "rec-B")], f"in its own copy, its play of B is still B's: {got}")
+    merged = rows(os.path.join(out, "listener.db"), "SELECT passage_uid, chosen_mbid FROM id_reviews")
+    check(merged == [("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "rec-B2")], f"its review of B is the hub's review of B, by uid: {merged}")
+    check(rows(os.path.join(mine, "listener.db"), "SELECT passage_uid FROM id_reviews") == [("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",)],
+          "and goes back to it as it is")
+    check(rep.data["items"] == [], f"its copy by number, read through its own map, is the same review: {rep.data['items']}")
+    check(rep.data["translations"].get("app", {}).get("by_number") == {"id_reviews": 1},
+          f"and the report says one row was read by number: {rep.data['translations']}")
     f = rows(os.path.join(mine, "library.db"), "SELECT file_id, audio_md5, path FROM files ORDER BY file_id")
     check(f == [(1, "A", "/a.mp3"), (2, "B", "/b.mp3")],
           f"its catalogue is the hub's, with its own paths matched by audio_md5, not file id: {f}")
     check(not os.path.exists(os.path.join(out, "nodes", "desktop")), "the hub's own pair is not repeated")
+
+
+def test_a_snapshot_by_number_is_refused(tmp):
+    """[IMPL-UID-064]: a player from before Stage B sends its listener by number,
+    and would be sent a copy it cannot read. The run is refused by its name, and
+    nothing is merged; a phone, which sends no table naming a passage, is not."""
+    base, desk, app = opposite_numbered(tmp, "sn")
+    dl, al = (os.path.join(tmp, f"sn-{n}.lis") for n in ("desk", "app"))
+    db(dl, REVIEW)
+    db(al, REVIEW_BY_NUMBER)
+    out = os.path.join(tmp, "sn-out")
+    try:
+        sm.build({"hub_state_from": "desktop", "hub_library": desk,
+                  "nodes": [dict(name="desktop", listener=dl), dict(name="app", listener=al, catalogue=app, files=app)]},
+                 out)
+        check(False, "a listener by number must be refused")
+    except SystemExit as e:
+        check("app's listener names passages by number (id_reviews)" in str(e) and "[IMPL-UID-064]" in str(e), f"{e}")
+    check(not os.path.exists(os.path.join(out, "listener.db")), "and nothing was merged")
+    phone = os.path.join(tmp, "sn-phone.lis")
+    pc = sqlite3.connect(phone)
+    pc.execute("CREATE TABLE listener_flags (subject_kind TEXT, subject_id TEXT, flagged_at TEXT, origin TEXT, "
+               "PRIMARY KEY (subject_kind, subject_id))")
+    pc.commit()
+    pc.close()
+    sm.build({"hub_state_from": "desktop", "hub_library": desk,
+              "nodes": [dict(name="desktop", listener=dl), dict(name="phone", listener=phone)]},
+             os.path.join(tmp, "sn-out2"))
+    check(os.path.exists(os.path.join(tmp, "sn-out2", "listener.db")), "a phone with no table naming a passage merges")
 
 
 LYRICS = """
@@ -406,8 +450,8 @@ def test_passage_lyrics(tmp):
           "a whole second is one time however it is written")
     check(sm.norm_time("2026-11-12T10:00:00+02:00") == "2026-11-12 10:00:00" and sm.norm_time(0) == "1970-01-01 00:00:00",
           "a zone is dropped and an epoch read, as before")
-    check(rep.data["translations"]["app"]["ids"] == [[1, 2], [2, 1]],
-          "the two nodes do number this music the other way round")
+    check("app" not in rep.data["translations"],
+          "the two nodes number this music the other way round, and nothing is translated [IMPL-UID-064]")
     mine = rows(os.path.join(out, "nodes", "app", "listener.db"), q)
     check(mine == want, f"the appliance's copy holds every row under the same keys, file Z's included: {mine}")
     check(not rep.data["copies"]["app"].get("not_on_node"), "and none is left out for naming no passage it holds")
@@ -418,32 +462,44 @@ def test_passage_lyrics(tmp):
           f"reported as a last-write-wins table: {t}")
 
 
+def test_lyrics_uids_come_from_the_hub(tmp):
+    """[IMPL-UID-063]: the hub alone sets a saved row's `passage_uid`, and changes no
+    save in doing it -- the same stamp, the same words. Its value reaches every node's
+    copy, with no item and no tie, though the node's row lacks it; and a node's new
+    save, which the hub does not hold, keeps the uid it was saved with."""
+    lyr = [x for x in LYRICS.replace("origin TEXT, PRIMARY KEY", "origin TEXT, passage_uid TEXT, PRIMARY KEY")
+           .split(";") if x.strip()]
+    row = lambda md5, uid, at: (f"INSERT INTO passage_lyrics VALUES ('{md5}','radio',0,200000,'rec','words',0,"
+                                f"'{at}','here',{uid})")
+    U, N = "'" + "a" * 32 + "'", "'" + "b" * 32 + "'"
+    dl, al, sent = (os.path.join(tmp, f"lu-{n}.lis") for n in ("desk", "app", "sent"))
+    db(dl, *lyr, row("A", U, "2026-11-12 10:00:00.000"))                        # set by the hub
+    db(al, *lyr, row("A", "NULL", "2026-11-12 10:00:00.000"),                   # as the node was sent it
+       row("B", N, "2026-11-16 09:00:00.000"))                                 # and its own new save
+    db(sent, *lyr, row("A", "NULL", "2026-11-12 10:00:00.000"))
+    out = os.path.join(tmp, "lu-out")
+    rep = sm.build({"hub_state_from": "desktop",
+                    "nodes": [dict(name="desktop", listener=dl), dict(name="app", listener=al, sent=sent)]}, out)
+    q = "SELECT audio_md5, passage_uid FROM passage_lyrics ORDER BY audio_md5"
+    want = [("A", "a" * 32), ("B", "b" * 32)]
+    check(rows(os.path.join(out, "listener.db"), q) == want, f"the hub's: {rows(os.path.join(out, 'listener.db'), q)}")
+    check(rows(os.path.join(out, "nodes", "app", "listener.db"), q) == want, "and the node's copy, the same")
+    check(rep.data["items"] == [], f"no item: {rep.data['items']}")
+    check(not any(d["table"] == "passage_lyrics" and "tie" in d["what"] for d in rep.data["decisions"]),
+          f"and no tie: {rep.data['decisions']}")
+
+
 def test_a_review_survives_two_rounds(tmp):
     """[SPEC-STAR-049] both ways. Found 2026-10-18: an id review made once on
     the hub was on eight passages after three syncs, because a node's copy
-    was written in the hub's numbers and read back as the node's. Two rounds
-    here, the node's copy of the first fed back as its listener in the
-    second: the review stays one row, on the same music, on both sides."""
-    desk, app = os.path.join(tmp, "rr-desk.cat"), os.path.join(tmp, "rr-app.cat")
-    # Opposite order: the hub's passage 1 is file A, the node's is file B.
-    for path, order in ((desk, ("A", "B")), (app, ("B", "A"))):
-        cat(path, f"INSERT INTO files VALUES (1,'{order[0]}','/{order[0]}.mp3',100)",
-            f"INSERT INTO files VALUES (2,'{order[1]}','/{order[1]}.mp3',100)",
-            "INSERT INTO passages VALUES (1,1000,'ingest')", "INSERT INTO passages VALUES (2,1000,'ingest')")
-        c = sqlite3.connect(path)
-        for s in ("ALTER TABLE passages ADD COLUMN file_id INTEGER", "ALTER TABLE passages ADD COLUMN kind TEXT",
-                  "ALTER TABLE passages ADD COLUMN start_ms INTEGER",
-                  "UPDATE passages SET file_id = passage_id, kind = 'radio', start_ms = 0"):
-            c.execute(s)
-        c.commit()
-        c.close()
-    review = ("CREATE TABLE id_reviews (passage_id INTEGER PRIMARY KEY, decision TEXT, chosen_mbid TEXT, "
-              "decided_at TEXT, applied_at TEXT, origin TEXT)")
+    was written in the hub's numbers and read back as the node's. By uid there
+    is no numbering to write it in [IMPL-UID-064]. Two rounds here, the node's
+    copy of the first fed back as its listener in the second: the review stays
+    one row, on the same music, on both sides."""
+    base, desk, app = opposite_numbered(tmp, "rr")     # the hub's 1 is A; the node's 1 is B
     dl, al = os.path.join(tmp, "rr-desk.lis"), os.path.join(tmp, "rr-app.lis")
-    # The hub's review of its passage 1 -- file A.
-    db(dl, review, "INSERT INTO id_reviews VALUES (1,'reassigned','rec-A','2026-10-15 00:20:04',NULL,NULL)")
-    # The node's own play of its passage 1 -- file B.
-    db(al, review, "INSERT INTO listener_play_history VALUES (1,5000,1,'rec-B',100,200,'auto')")
+    db(dl, REVIEW, "INSERT INTO id_reviews VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','reassigned','rec-A','2026-10-15 00:20:04',NULL,NULL)")
+    db(al, REVIEW, "INSERT INTO listener_play_history VALUES (1,5000,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','rec-B',100,200,'auto')")
 
     def merge(tag, node_listener):
         out = os.path.join(tmp, f"rr-out-{tag}")
@@ -453,32 +509,22 @@ def test_a_review_survives_two_rounds(tmp):
         return os.path.join(out, "listener.db"), os.path.join(out, "nodes", "app", "listener.db")
 
     hub1, node1 = merge("1", al)
-    got = rows(node1, "SELECT passage_id, chosen_mbid FROM id_reviews")
-    check(got == [(2, "rec-A")], f"the node's copy names its own passage of file A, its 2: {got}")
-    check(rows(node1, "SELECT passage_id FROM listener_play_history") == [(1,)],
-          "and its own play stays on its own passage 1")
+    got = rows(node1, "SELECT passage_uid, chosen_mbid FROM id_reviews")
+    check(got == [("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "rec-A")], f"the node's copy names file A's passage by its uid: {got}")
+    check(rows(node1, "SELECT passage_uid FROM listener_play_history") == [("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",)],
+          "and its own play stays on its own passage of file B")
     hub2, node2 = merge("2", node1)          # the node now holds what it was sent
-    got = rows(hub2, "SELECT passage_id, chosen_mbid FROM id_reviews")
-    check(got == [(1, "rec-A")], f"a second round leaves one review, on the hub's passage of file A: {got}")
-    check(rows(node2, "SELECT passage_id, chosen_mbid FROM id_reviews") == [(2, "rec-A")],
+    got = rows(hub2, "SELECT passage_uid, chosen_mbid FROM id_reviews")
+    check(got == [("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "rec-A")], f"a second round leaves one review, on file A: {got}")
+    check(rows(node2, "SELECT passage_uid, chosen_mbid FROM id_reviews") == [("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "rec-A")],
           "and the node's copy is unchanged")
 
 
 def opposite(tmp, tag):
     """Two catalogues numbering files A and B the other way round: the hub's
-    passage 1 is file A, the node's passage 1 is file B."""
-    desk, app = os.path.join(tmp, f"{tag}-desk.cat"), os.path.join(tmp, f"{tag}-app.cat")
-    for path, order in ((desk, ("A", "B")), (app, ("B", "A"))):
-        cat(path, f"INSERT INTO files VALUES (1,'{order[0]}','/{order[0]}.mp3',100)",
-            f"INSERT INTO files VALUES (2,'{order[1]}','/{order[1]}.mp3',100)",
-            "INSERT INTO passages VALUES (1,1000,'ingest')", "INSERT INTO passages VALUES (2,1000,'ingest')")
-        c = sqlite3.connect(path)
-        for s in ("ALTER TABLE passages ADD COLUMN file_id INTEGER", "ALTER TABLE passages ADD COLUMN kind TEXT",
-                  "ALTER TABLE passages ADD COLUMN start_ms INTEGER",
-                  "UPDATE passages SET file_id = passage_id, kind = 'radio', start_ms = 0"):
-            c.execute(s)
-        c.commit()
-        c.close()
+    passage 1 is file A, the node's passage 1 is file B. Each passage has the
+    same uid on both, `a` or `b` thirty-two times."""
+    _, desk, app = opposite_numbered(tmp, tag)
     return desk, app
 
 
@@ -491,43 +537,45 @@ def backup_of(tmp, tag, epoch, *sql):
 
 
 def test_a_removal_is_read_in_the_hubs_numbering(tmp):
-    """[IMPL-UID-042]: a node clears its flag on its passage 1, file B. Until
-    2026-11-14 the evidence was compared in the node's numbers against the
-    merge's in the hub's: the hub's flag on ITS passage 1 -- file A, other
-    music -- was deleted everywhere, and file B's flag stayed."""
+    """[IMPL-UID-042]: a node clears its flag on file B. Until 2026-11-14 the
+    evidence was compared in the node's numbers against the merge's in the hub's:
+    the hub's flag on ITS passage 1 -- file A, other music -- was deleted
+    everywhere, and file B's flag stayed. By uid there is one numbering
+    [IMPL-UID-064]; and the node's backup here is from before Stage B, by its
+    own numbers (its 1 is B), read through its own map, never the hub's."""
     desk, app = opposite(tmp, "rn")
     # Flagged before the backup of 1789000000 (2026-09-10), so not re-added since.
-    flag = lambda pid, o="NULL": f"INSERT INTO listener_flags VALUES ('passage','{pid}','2026-08-01 00:00:00',{o})"
+    flag = lambda sid, o="NULL": f"INSERT INTO listener_flags VALUES ('passage','{sid}','2026-08-01 00:00:00',{o})"
     dl, al = os.path.join(tmp, "rn-desk.lis"), os.path.join(tmp, "rn-app.lis")
-    db(dl, flag(1, "'GMKtec'"), flag(2))           # the hub: file A (its 1), file B (its 2)
-    db(al, flag(2))                                # the node now: file A (its 2) only
-    bk = backup_of(tmp, "rn-app", 1789000000, flag(1), flag(2))   # it held file B (its 1) too
+    db(dl, flag("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "'GMKtec'"), flag("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))    # the hub: both
+    db(al, flag("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))                                # the node now: file A only
+    bk = backup_of(tmp, "rn-app", 1789000000, flag(1), flag(2))   # by its own numbers: B and A
     out = os.path.join(tmp, "rn-out")
     rep = sm.build({"hub_state_from": "desktop", "hub_library": desk,
                     "nodes": [dict(name="desktop", listener=dl),
                               dict(name="app", listener=al, catalogue=app, files=app, backups=bk)]}, out)
     hub = rows(os.path.join(out, "listener.db"), "SELECT subject_id FROM listener_flags ORDER BY subject_id")
-    check(hub == [("1",)], f"file B's flag is removed and file A's is kept, in the hub's numbers: {hub}")
+    check(hub == [("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",)], f"file B's flag is removed and file A's is kept: {hub}")
     mine = rows(os.path.join(out, "nodes", "app", "listener.db"), "SELECT subject_id FROM listener_flags")
-    check(mine == [("2",)], f"and the node keeps file A's flag under its own number: {mine}")
-    check(any(d["rule"] == "SPEC-STAR-050" and d["key"] == ["passage", "2"] for d in rep.data["decisions"]),
-          f"the removal is reported under the hub's number: {rep.data['decisions']}")
+    check(mine == [("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",)], f"and the node keeps file A's flag, by the same uid: {mine}")
+    check(any(d["rule"] == "SPEC-STAR-050" and d["key"] == ["passage", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"] for d in rep.data["decisions"]),
+          f"the removal is reported by file B's uid: {rep.data['decisions']}")
 
 
 def test_a_withdrawn_review_stays_withdrawn(tmp):
     """[IMPL-UID-042]: an id review withdrawn on the hub. Until 2026-11-14 the
     review tables took no removals, so the node's copy brought it back at the
-    next merge -- how 27 copied reviews outlived their repair."""
+    next merge -- how 27 copied reviews outlived their repair. The node's copy
+    last sent and its backup are from before Stage B, by its own numbers (file A
+    is its 2), and are read through its own map [IMPL-UID-064]."""
     desk, app = opposite(tmp, "wr")
-    review = ("CREATE TABLE id_reviews (passage_id INTEGER PRIMARY KEY, decision TEXT, chosen_mbid TEXT, "
-              "decided_at TEXT, applied_at TEXT, origin TEXT)")
-    row = lambda pid: f"INSERT INTO id_reviews VALUES ({pid},'reassigned','rec-A','2026-10-15 00:20:04',NULL,NULL)"
+    row = lambda who: f"INSERT INTO id_reviews VALUES ({who},'reassigned','rec-A','2026-10-15 00:20:04',NULL,NULL)"
     dl, al, sent = (os.path.join(tmp, f"wr-{n}.lis") for n in ("desk", "app", "sent"))
-    db(dl, review)                                  # withdrawn on the hub
-    db(al, review, row(2))                          # the node: file A is its 2
-    db(sent, review, row(2))                        # and that is what it was last sent
-    hub_bk = backup_of(tmp, "wr-desk", 1789000000, review, row(1))
-    app_bk = backup_of(tmp, "wr-app", 1789000000, review, row(2))
+    db(dl, REVIEW)                                  # withdrawn on the hub
+    db(al, REVIEW, row("'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"))                  # the node still holds it
+    db(sent, REVIEW_BY_NUMBER, row(2))              # and was last sent it, by its own number
+    hub_bk = backup_of(tmp, "wr-desk", 1789000000, REVIEW_BY_NUMBER, row(1))   # the hub's 1 is A
+    app_bk = backup_of(tmp, "wr-app", 1789000000, REVIEW_BY_NUMBER, row(2))
     out = os.path.join(tmp, "wr-out")
     rep = sm.build({"hub_state_from": "desktop", "hub_library": desk,
                     "nodes": [dict(name="desktop", listener=dl, backups=hub_bk),
@@ -537,32 +585,6 @@ def test_a_withdrawn_review_stays_withdrawn(tmp):
     check(rows(os.path.join(out, "nodes", "app", "listener.db"), "SELECT * FROM id_reviews") == [],
           "and the node's copy loses it")
     check(rep.data["items"] == [], f"a removal no node edited is no question: {rep.data['items']}")
-
-
-def test_a_listener_by_uid_is_refused(tmp):
-    """[IMPL-UID-064]: a player of Stage B converts its listener when it first starts,
-    so its passages are named by uid. This merge still translates numbers; deployed
-    alone, that player's listener would be read as numbers, so the merge refuses it
-    by name, whole, and writes nothing -- the hub's own, a node's, or a copy last sent."""
-    desk, app = opposite(tmp, "bu")
-    old = ("CREATE TABLE id_reviews (passage_id INTEGER PRIMARY KEY, decision TEXT, chosen_mbid TEXT, "
-           "decided_at TEXT, applied_at TEXT, origin TEXT)")
-    new = old.replace("passage_id INTEGER", "passage_uid TEXT")
-    for who in ("desktop", "app", "sent"):
-        p = lambda n: os.path.join(tmp, f"bu-{who}-{n}.lis")
-        db(p("desk"), new if who == "desktop" else old)
-        db(p("app"), new if who == "app" else old)
-        db(p("sent"), new if who == "sent" else old)
-        out = os.path.join(tmp, f"bu-{who}-out")
-        try:
-            sm.build({"hub_state_from": "desktop", "hub_library": desk,
-                      "nodes": [dict(name="desktop", listener=p("desk")),
-                                dict(name="app", listener=p("app"), catalogue=app, files=app, sent=p("sent"))]}, out)
-            check(False, f"a listener by uid ({who}) must be refused")
-        except SystemExit as e:
-            want = "desktop's listener" if who == "desktop" else "app's copy last sent" if who == "sent" else "app's listener"
-            check(want in str(e) and "id_reviews" in str(e) and "[IMPL-UID-064]" in str(e), f"{who}: {e}")
-        check(not os.path.exists(os.path.join(out, "listener.db")), f"{who}: and nothing was merged")
 
 
 def test_a_node_that_missed_the_run(tmp):
@@ -691,7 +713,7 @@ def test_rekeyed(tmp):
     c.close()
     hl, nl = os.path.join(tmp, "k-hub.lis"), os.path.join(tmp, "k-node.lis")
     db(hl)
-    db(nl, "INSERT INTO listener_play_history VALUES (1,5000,1,'m',100,200,'auto')")
+    db(nl, "INSERT INTO listener_play_history VALUES (1,5000,'uid-a','m',100,200,'auto')")
     out = os.path.join(tmp, "k-out")
     rep = sm.build({"hub_state_from": "desktop", "hub_library": hub,
                     "nodes": [dict(name="desktop", listener=hl),
@@ -699,10 +721,9 @@ def test_rekeyed(tmp):
     mine = os.path.join(out, "nodes", "node")
     f = rows(os.path.join(mine, "library.db"), "SELECT audio_md5, path FROM files")
     check(f == [("NEW", "/srv/a.mp3")], f"the node's copy takes the new key, with its own path: {f}")
-    t = rep.data["translations"]["node"]
-    check(t["ids"] == [] and t["unmatched"] == [], f"its passage is the hub's, not gone: {t}")
-    check(rows(os.path.join(mine, "listener.db"), "SELECT passage_id FROM listener_play_history") == [(1,)],
-          "and its play keeps its passage")
+    check("node" not in rep.data["translations"], f"nothing of it read by number: {rep.data['translations']}")
+    check(rows(os.path.join(mine, "listener.db"), "SELECT passage_uid FROM listener_play_history") == [("uid-a",)],
+          "and its play keeps its passage, by uid [IMPL-UID-064]")
 
 
 def test_rust_agrees():
@@ -874,11 +895,12 @@ def main() -> int:
     test_held_out(tmp)
     test_receivers(tmp)
     test_translation(tmp)
+    test_a_snapshot_by_number_is_refused(tmp)
     test_passage_lyrics(tmp)
+    test_lyrics_uids_come_from_the_hub(tmp)
     test_a_review_survives_two_rounds(tmp)
     test_a_removal_is_read_in_the_hubs_numbering(tmp)
     test_a_withdrawn_review_stays_withdrawn(tmp)
-    test_a_listener_by_uid_is_refused(tmp)
     test_a_node_that_missed_the_run(tmp)
     test_a_phone_that_never_applied_its_offer(tmp)
     test_one_file_many_passages(tmp)
@@ -909,12 +931,12 @@ def main() -> int:
     h = rows(L, "SELECT play_id, played_at, heard_ms, selected_by FROM listener_play_history")
     check(h == [(7, 1000, 100, "auto")],
           f"plays are the hub's own, b's neither merged nor shared [REQ-PD-113]: {h}")
-    check(rows(L, "SELECT passage_id FROM player_state") == [(11,)],
+    check(rows(L, "SELECT passage_uid FROM player_state") == [('11',)],
           "node state comes from the hub's own node, not merged")
     B = os.path.join(out, "nodes", "b", "listener.db")
     hb = rows(B, "SELECT play_id, played_at, heard_ms FROM listener_play_history ORDER BY play_id")
     check(hb == [(3, 1000, 150), (4, 2000, 50)], f"b's copy holds b's own plays, unchanged: {hb}")
-    check(rows(B, "SELECT passage_id FROM player_state") == [(22,)], "and b's own player state")
+    check(rows(B, "SELECT passage_uid FROM player_state") == [('22',)], "and b's own player state")
     check(rows(B, "SELECT rotation FROM listener_preferences WHERE subject_id = 'X'") == [(2,)],
           "and the household's edits, merged exactly as the hub's are")
 

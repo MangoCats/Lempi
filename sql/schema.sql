@@ -555,6 +555,10 @@ CREATE TABLE IF NOT EXISTS passage_lyrics (
     no_words    INTEGER NOT NULL DEFAULT 0,
     updated_at  TEXT    NOT NULL,
     origin      TEXT,
+    -- The passage it was saved for, by uid [IMPL-UID-063]: set by the hub for
+    -- a row saved before it existed, and by a save since. A passage's words
+    -- are the newest row with its uid; a row without one, by its segment.
+    passage_uid TEXT,
     PRIMARY KEY (audio_md5, kind, start_ms)
 );
 CREATE INDEX IF NOT EXISTS passage_lyrics_mbid ON passage_lyrics(mbid);

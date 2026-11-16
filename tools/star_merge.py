@@ -140,14 +140,23 @@ TABLES = {
     # are no removals to find. `newer`: a player from before 2026-11-12
     # neither sends this table nor accepts a patch that names it, so a node
     # that sent none is sent none (`star_sync.signed_tables`).
+    #
+    # `hub_sets` [IMPL-UID-063]: each row's `passage_uid`, which the hub alone
+    # sets, once, for a row whose segment is a current passage's, and which
+    # changes no save. Where the hub holds the row its value is the merge's; a
+    # node's never competes and is never a change; a row the hub lacks -- a
+    # node's new save, which records its passage's uid -- keeps its own.
     "passage_lyrics": dict(rule=LWW, key=("audio_md5", "kind", "start_ms"), stamp="updated_at",
-                           newer=True),
+                           newer=True, hub_sets=("passage_uid",)),
     # A decision withdrawn stays withdrawn [IMPL-UID-042]. Until 2026-11-14
     # these took no removals, so a review deleted on the hub came back from
     # every node still holding it -- how 27 copied reviews outlived the
     # repair of 2026-10-18 [SPEC-STAR-051].
-    "id_reviews": dict(rule=UNION, key=("passage_id", "decided_at"), latest=("applied_at",), removals=True),
-    "boundary_reviews": dict(rule=UNION, key=("passage_id", "decided_at"), latest=("applied_at",), removals=True),
+    # Keyed by the passage's uid [IMPL-UID-064]: the same on every node, so a
+    # node's review and the hub's of one passage are one row, and nothing is
+    # translated between numberings.
+    "id_reviews": dict(rule=UNION, key=("passage_uid", "decided_at"), latest=("applied_at",), removals=True),
+    "boundary_reviews": dict(rule=UNION, key=("passage_uid", "decided_at"), latest=("applied_at",), removals=True),
     "artist_reviews": dict(rule=UNION, key=("recording_mbid", "decided_at"), latest=("applied_at",)),
     "listener_play_history": dict(rule=LOCAL),
     "listener_rejections": dict(rule=LOCAL),
@@ -170,19 +179,17 @@ class Node:
         self.db = open_ro(self.path)
         self.mirror = bool(spec.get("mirror"))
         self.catalogue = spec.get("catalogue")
-        self.remap: dict = {}          # [SPEC-STAR-049]: node passage id -> hub's
-        # [SPEC-STAR-051]: hub passage id -> this node's, for writing its own
-        # copy back in its own numbering. None: no catalogue to translate by,
-        # so its copy keeps the ids as merged.
-        self.unmap: dict | None = None
-        # [SPEC-STAR-049]: its passages the hub cannot match. Kept under their
-        # own numbers, which on the hub can name other music, so a key naming
-        # one is never evidence of a removal [IMPL-UID-042].
-        self.gone: set = set()
+        # [IMPL-UID-064]: this node's own passage numbers, each to its uid, from
+        # its own catalogue. A source of its still naming passages by number --
+        # a copy last sent, or a backup, from before Stage B -- is read through
+        # this, an exact join inside its own numbering. Its snapshot never is:
+        # one still by number is refused (`refuse_by_number`).
+        self.uids: dict = {}
         self.sent_run = spec.get("sent_run")
-        self._gone_keys: dict = {}
         self.aliases: dict = {}        # [SPEC-RLK-155]: a retired audio_md5 -> the hub's
-        self.remapped: dict = {}       # table -> rows translated
+        self.by_number: dict = {}      # table -> rows read through `uids`
+        self.unplaced: dict = {}       # table -> rows whose number names no passage of its own
+        self.aliased: dict = {}        # table -> rows whose retired audio_md5 was read as the hub's
         self.tables = {r[0] for r in self.db.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         # The node's own history, oldest first: each hourly backup, then now.
@@ -213,30 +220,26 @@ class Node:
         return [r[1] for r in self.db.execute(f"PRAGMA table_info({table})")]
 
     def _read(self, conn: sqlite3.Connection, table: str, count: bool,
-              translate: bool = True) -> list[dict]:
+              translate: bool = True, tally: bool | None = None) -> list[dict]:
+        """`tally`: whether rows read by number are counted for the report --
+        the snapshot's and the copy last sent's, each read once; by default as
+        `count`."""
         cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
         rows = [dict(zip(cols, r)) for r in conn.execute(f"SELECT * FROM {table}")]
         if not translate:
             return rows
-        return self._translate(rows, cols, table, count)
-
-    def _names_gone(self, r: dict) -> bool:
-        """Whether a row, as the node holds it, names one of its passages the hub cannot match."""
-        if not self.gone:
-            return False
-        if r.get("passage_id") is not None:
-            return _int(r["passage_id"]) in self.gone
-        return r.get("subject_kind") == "passage" and _int(r.get("subject_id")) in self.gone
+        return self._translate(rows, cols, table, count, count if tally is None else tally)
 
     def keys(self, conn: sqlite3.Connection, table: str, key: tuple) -> set | None:
-        """`table`'s keys in `conn`, read as `rows` reads them -- in the hub's
-        numbering -- without the rows that name a passage the hub cannot match.
-        None where `conn` has no such table.
+        """`table`'s keys in `conn`, read as `rows` reads them -- a passage by
+        its uid -- so they compare with the merge's. None where `conn` has no
+        such table.
 
         [IMPL-UID-042]: until 2026-11-14 removal evidence compared these raw, in
         the node's own numbering, against the merge's keys in the hub's: a flag
         a node cleared on its passage 16407 deleted the hub's flag on its own
-        16407, other music, and left the real one standing everywhere."""
+        16407, other music, and left the real one standing everywhere. By uid
+        since Stage B, there is no numbering to confuse [IMPL-UID-064]."""
         try:
             cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
             raw = [dict(zip(cols, r)) for r in conn.execute(f"SELECT * FROM {table}")]
@@ -244,40 +247,19 @@ class Node:
             return None
         if not cols:
             return None
-        kept = self._translate([r for r in raw if not self._names_gone(r)], cols, table, False)
+        kept = self._translate(raw, cols, table, False)
         return {tuple(r.get(c) for c in key) for r in kept if all(c in r for c in key)}
 
-    def gone_keys(self, table: str, key: tuple) -> set:
-        """The keys of this node's current rows that name a passage the hub cannot match."""
-        if table not in self._gone_keys:
-            out = set()
-            if self.gone and table in self.tables:
-                for r in self._read(self.db, table, False, translate=False):
-                    if self._names_gone(r) and all(c in r for c in key):
-                        out.add(tuple(r[c] for c in key))
-            self._gone_keys[table] = out
-        return self._gone_keys[table]
-
-    def _translate(self, rows: list[dict], cols: list[str], table: str, count: bool) -> list[dict]:
+    def _translate(self, rows: list[dict], cols: list[str], table: str, count: bool,
+                   tally: bool = False) -> list[dict]:
         if self.aliases and "audio_md5" in cols:
             for r in rows:
                 if r["audio_md5"] in self.aliases:
                     r["audio_md5"] = self.aliases[r["audio_md5"]]
                     if count:
-                        self.remapped[table] = self.remapped.get(table, 0) + 1
-        if self.remap:
-            for r in rows:
-                if r.get("passage_id") in self.remap:
-                    r["passage_id"] = self.remap[r["passage_id"]]
-                    if count:
-                        self.remapped[table] = self.remapped.get(table, 0) + 1
-                elif (r.get("subject_kind") == "passage"
-                      and _int(r.get("subject_id")) in self.remap):
-                    new = self.remap[_int(r["subject_id"])]
-                    r["subject_id"] = type(r["subject_id"])(new)
-                    if count:
-                        self.remapped[table] = self.remapped.get(table, 0) + 1
-        return rows
+                        self.aliased[table] = self.aliased.get(table, 0) + 1
+        return by_uid(rows, cols, table, self.uids, self.by_number if tally else None,
+                      self.unplaced if tally else None)
 
     def rows(self, table: str) -> list[dict]:
         if table not in self.tables:
@@ -299,7 +281,7 @@ class Node:
             return None
         if table not in self._base_rows:
             self._base_rows[table] = {} if table not in self.base_tables else {
-                tuple(r.get(c) for c in key): r for r in self._read(self.base, table, False)
+                tuple(r.get(c) for c in key): r for r in self._read(self.base, table, False, tally=True)
                 if all(c in r for c in key)}
         return self._base_rows[table]
 
@@ -335,6 +317,69 @@ def removals(node: Node, table: str, key: tuple) -> dict:
     return {k: t for k, t in last_seen.items() if k not in now}
 
 
+def _is_uid(s) -> bool:
+    """A uid's form: 32 lowercase hexadecimal characters [SPEC-UID-030]."""
+    return isinstance(s, str) and len(s) == 32 and all(c in "0123456789abcdef" for c in s)
+
+
+def catalogue_uids(path: str | None) -> dict:
+    """Each passage number of the catalogue at `path` to its uid; empty where it
+    gives passages none, or there is none."""
+    if not path or not os.path.exists(path):
+        return {}
+    c = open_ro(path)
+    try:
+        cols = {r[1] for r in c.execute("PRAGMA table_info(passages)")}
+        if "passage_uid" not in cols:
+            return {}
+        return {pid: uid for pid, uid in c.execute("SELECT passage_id, passage_uid FROM passages") if uid}
+    finally:
+        c.close()
+
+
+def by_uid(rows: list, cols: list, table: str, uids: dict, by_number: dict | None = None,
+           unplaced: dict | None = None) -> list:
+    """[IMPL-UID-064]: rows read as Stage B names a passage -- by its uid. A source
+    still by number (a copy last sent, a backup, a newest copy, from before Stage B)
+    has its `passage_id` replaced by the uid its own catalogue gives that number
+    (`uids`), and a passage flag's subject likewise: an exact join inside one
+    numbering, never a match by span. A number naming no passage there is counted
+    in `unplaced`; where the passage is the row's key -- a review, a flag -- the row
+    is left out, since it names nobody's, and anywhere else it keeps no uid, as the
+    player's own conversion keeps it [IMPL-UID-062]. A source by uid passes as it is."""
+    def note(d, n=1):
+        if d is not None:
+            d[table] = d.get(table, 0) + n
+    if table in BY_UID_TABLES and "passage_id" in cols:
+        keyed = "passage_uid" in TABLES.get(table, {}).get("key", ())
+        out = []
+        for r in rows:
+            pid = r.pop("passage_id", None)
+            uid = uids.get(_int(pid)) if pid is not None else None
+            if pid is not None and uid is None:
+                note(unplaced)
+                if keyed:
+                    continue
+            elif pid is not None:
+                note(by_number)
+            r["passage_uid"] = uid
+            out.append(r)
+        return out
+    if table == "listener_flags":
+        out = []
+        for r in rows:
+            if r.get("subject_kind") == "passage" and not _is_uid(r.get("subject_id")):
+                uid = uids.get(_int(r.get("subject_id")))
+                if uid is None:
+                    note(unplaced)
+                    continue
+                r["subject_id"] = uid
+                note(by_number)
+            out.append(r)
+        return out
+    return rows
+
+
 class Newest:
     """[IMPL-UID-042]: the whole merge of the newest run any node was sent.
 
@@ -356,12 +401,22 @@ class Newest:
         self.why_not = (None if self.db else
                         "no newest copy given" if not spec else f"the newest copy {path!r} is not there")
         self._keys: dict = {}
+        # The hub's numbers to uids: a newest copy from before Stage B is the
+        # merge of a run that named passages by the hub's numbers [IMPL-UID-064].
+        self.uids: dict = {}
 
     def keys(self, table: str, key: tuple) -> set | None:
         if self.db is None:
             return None
         if table not in self._keys:
-            self._keys[table] = keys_in(self.db, table, key)
+            try:
+                cols = [r[1] for r in self.db.execute(f"PRAGMA table_info({table})")]
+                rows = [dict(zip(cols, r)) for r in self.db.execute(f"SELECT * FROM {table}")] if cols else None
+            except sqlite3.Error:
+                rows = None
+            self._keys[table] = None if rows is None else {
+                tuple(r.get(c) for c in key) for r in by_uid(rows, cols, table, self.uids)
+                if all(c in r for c in key)}
         return self._keys[table]
 
     def close(self) -> None:
@@ -401,7 +456,7 @@ def missed(newest: Newest | None, table: str, key: tuple, held: dict, merged: di
                 continue                       # the same snapshot the newest run already merged
             base = n.base_rows(table, key)
             if (base is None or k not in base or not _same(row, base[k])
-                    or not n.sent_run or n.sent_run >= newest.run or k in n.gone_keys(table, key)):
+                    or not n.sent_run or n.sent_run >= newest.run):
                 break
         else:
             out[k] = sorted(holders)
@@ -516,7 +571,8 @@ def merge_table(table: str, spec: dict, nodes: list[Node], hub: str, rep: Report
                     rep.decide(table, k, f"{n.name}'s over {source[k]}'s: newer {spec['stamp']} "
                                f"{row.get(spec['stamp'])}", "SPEC-PREF-105")
                     merged[k], source[k] = dict(row), n.name
-                elif b == a and any(have.get(c) != row.get(c) for c in row if c in have):
+                elif b == a and any(have.get(c) != row.get(c) for c in row
+                                    if c in have and c not in spec.get("hub_sets", ())):
                     rep.decide(table, k, f"tie at {a}, values differ; kept {source[k]}'s, "
                                f"{n.name} disagrees", "SPEC-STAR-030")
             else:  # UNION: field by field
@@ -535,6 +591,11 @@ def merge_table(table: str, spec: dict, nodes: list[Node], hub: str, rep: Report
         _items_lww(table, spec, key, by_name, held, merged, source, rep)
     else:
         _items_union(table, spec, key, by_name, held, merged, source, rep)
+    for c in spec.get("hub_sets", ()):
+        for k, row in merged.items():
+            hub_row = held.get(k, {}).get(rep.hub)
+            if hub_row is not None and c in hub_row:
+                row[c] = hub_row[c]
 
     removed = 0
     if spec.get("removals"):
@@ -586,7 +647,7 @@ def _items_lww(table, spec, key, by_name, held, merged, source, rep):
     """[SPEC-STAR-110] for a last-write-wins table: a row is an item where some
     node changed it to a value the merge does not take."""
     stamp = spec["stamp"]
-    skip = {stamp, *spec.get("own", ())}
+    skip = {stamp, *spec.get("own", ()), *spec.get("hub_sets", ())}
     for k in sorted(held, key=_order):
         rows = held[k]
         changed = {nm: r for nm, r in rows.items()
@@ -703,6 +764,9 @@ def aliases(hub_cat: str) -> dict:
         c.close()
 
 
+# The translation between numberings the merge used until Stage B [SPEC-STAR-049]. The
+# merge no longer calls these [IMPL-UID-064]; `repair_node_reviews.py` does, until
+# Stage D removes it and them [IMPL-UID-080].
 def passage_remap(node_cat: str, hub_cat: str):
     """[SPEC-STAR-049]: node passage id -> hub passage id, for ids whose file
     differs between the two catalogues; and the ids the hub no longer has.
@@ -835,39 +899,33 @@ BY_UID_TABLES = ("listener_play_history", "listener_rejections", "selection_deci
                  "player_queue", "id_reviews", "boundary_reviews", "artist_reviews")
 
 
-def by_uid_tables(conn: sqlite3.Connection) -> list[str]:
-    """The tables of a listener already in Stage B's shape, naming a passage by uid."""
+def by_number_tables(conn: sqlite3.Connection) -> list[str]:
+    """The tables of a listener still naming a passage by its number, as before Stage B."""
     out = []
     for t in BY_UID_TABLES:
         cols = [r[1] for r in conn.execute(f"PRAGMA table_info({t})")]
-        if "passage_uid" in cols and "passage_id" not in cols:
+        if "passage_id" in cols:
             out.append(t)
     return out
 
 
-def refuse_by_uid(manifest: dict) -> None:
-    """[IMPL-UID-064]: this merge still translates passage numbers between nodes. A
-    listener already naming passages by uid -- a player of Stage B deployed before
-    the merge is converted -- would be read as if it held numbers, so it is refused
-    here, whole, before anything is merged. Said by name, never skipped quietly."""
-    for spec in manifest["nodes"]:
-        for what, path in (("listener", spec.get("listener")), ("copy last sent", spec.get("sent"))):
-            if not path or not os.path.exists(path):
-                continue
-            c = open_ro(path)
-            try:
-                found = by_uid_tables(c)
-            finally:
-                c.close()
-            if found:
-                raise SystemExit(
-                    f"{spec['name']}'s {what} names passages by uid ({', '.join(found)}): Stage B's listener, "
-                    "which this merge cannot read yet -- it still translates passage numbers [IMPL-UID-064]. "
-                    "Nothing was merged. Deploy Stage B's tools with its player, never the player alone.")
+def refuse_by_number(nodes: list) -> None:
+    """[IMPL-UID-064]: every snapshot merged names its passages by uid. A player
+    from before Stage B still names them by number, and would be sent a copy in a
+    shape it cannot read, so the run is refused by that node's name and nothing is
+    merged -- deploy Stage B's player there, or leave it out of the run. Its copy
+    last sent and its backups may still be by number; they are read through its
+    own map. A phone that sends no table naming a passage is not refused."""
+    for n in nodes:
+        found = [t for t in by_number_tables(n.db) if t in n.tables]
+        if found:
+            raise SystemExit(
+                f"{n.name}'s listener names passages by number ({', '.join(found)}): its player is from "
+                "before Stage B. Deploy Stage B's player there, or leave it out of this run. "
+                "Nothing was merged [IMPL-UID-064].")
 
 
 def build_listener(manifest: dict, out: str, rep: Report, hub_cat: str | None = None):
-    refuse_by_uid(manifest)
     nodes = sorted((Node(s) for s in manifest["nodes"]), key=lambda n: n.name)
     newest = Newest(manifest.get("newest_sent"))
     try:
@@ -885,19 +943,18 @@ def _build_listener(nodes: list, manifest: dict, out: str, rep: Report, hub_cat:
     # missed a run brings back what that run removed, and nothing else shows it.
     rep.data["newest_sent"] = (dict(run=newest.run) if newest.db is not None
                                else dict(missing=newest.why_not))
-    for n in nodes:
-        if hub_cat:
-            n.aliases = aliases(hub_cat)
-        if n.catalogue and hub_cat:
-            n.remap, gone = passage_remap(n.catalogue, hub_cat)
-            n.gone = set(gone)
-            n.unmap, clashes = passage_unmap(n.catalogue, hub_cat, n.remap)
-            rep.data["translations"][n.name] = dict(
-                ids=sorted([a, b] for a, b in n.remap.items()), unmatched=gone,
-                back_clashes=clashes)
     hub = manifest["hub_state_from"]
     if hub not in {n.name for n in nodes}:
         raise SystemExit(f"hub_state_from names {hub!r}, which is not a node in the manifest")
+    refuse_by_number(nodes)
+    # [IMPL-UID-064]: no translation between numberings. Each node's sources still by
+    # number are read through its own catalogue's map, the hub's through the hub's.
+    hub_uids = catalogue_uids(hub_cat)
+    newest.uids = hub_uids
+    for n in nodes:
+        if hub_cat:
+            n.aliases = aliases(hub_cat)
+        n.uids = hub_uids if n.name == hub else catalogue_uids(n.catalogue)
     every = sorted(set().union(*(n.tables for n in nodes)))
     unknown = [t for t in every if t not in TABLES and not t.startswith("sqlite_")]
     if unknown:
@@ -907,8 +964,9 @@ def _build_listener(nodes: list, manifest: dict, out: str, rep: Report, hub_cat:
     rep.data["nodes"] = [dict(name=n.name, taken_at=n.taken_at, backups=len(n.history))
                          for n in nodes]
     for n in nodes:
-        if n.name in rep.data["translations"]:
-            rep.data["translations"][n.name]["rows"] = dict(n.remapped)
+        if n.by_number or n.unplaced or n.aliased:
+            rep.data["translations"][n.name] = dict(by_number=dict(n.by_number), unplaced=dict(n.unplaced),
+                                                    aliased=dict(n.aliased))
 
     # [SPEC-STAR-080]: each node's own listener -- the household's edits,
     # merged exactly as the hub's are, and that node's own plays and state
@@ -959,17 +1017,11 @@ def write_listener(nodes: list[Node], own: str, path: str, rep: Report,
             dest.execute(isql)
         cols = src.cols(table)
         rows = merge_table(table, TABLES[table], nodes, own, rep, newest)
-        # A node's own copy in its own passage numbers `[SPEC-STAR-049]`: the
-        # merge read every row of every node in the hub's. Its own tables go
-        # back as it holds them; the shared ones, merged in the hub's numbers,
-        # are translated into its.
-        if schema_of is not None and schema_of.unmap is not None:
-            if TABLES[table]["rule"] in (LOCAL, HUB):
-                rows = schema_of.own_rows(table)
-            else:
-                rows, dropped = to_node_numbering(rows, schema_of.unmap)
-                if dropped:
-                    rep.data["tables"][table]["not_on_node"] = dropped
+        # A node's own tables go back as it holds them. The shared ones name a
+        # passage by uid, the same on every node, and go back as merged: no
+        # numbering to translate them into [IMPL-UID-064].
+        if schema_of is not None and schema_of.catalogue and TABLES[table]["rule"] in (LOCAL, HUB):
+            rows = schema_of.own_rows(table)
         dest.executemany(
             f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
             [tuple(r.get(c) for c in cols) for r in rows])
@@ -1442,13 +1494,15 @@ def listener_section(d: dict) -> list[str]:
     for t, s in sorted(d["tables"].items()):
         if s.get("only_on"):
             L.append(f"- `{t}`: " + ", ".join(f"{n} {c}" for n, c in sorted(s["only_on"].items())))
-    tr = {k: v for k, v in d.get("translations", {}).items() if v["ids"] or v["unmatched"]}
+    tr = d.get("translations", {})
     if tr:
-        L += ["", "## Passage ids translated to the hub's [SPEC-STAR-049]", ""]
+        L += ["", "## Read by number, through each node's own map [IMPL-UID-064]", "",
+              "A copy last sent, a backup or a newest copy from before Stage B names passages by "
+              "number; each is read through its own catalogue's uids, not translated between nodes.", ""]
         for n, v in sorted(tr.items()):
-            L.append(f"- {n}: {len(v['ids'])} id(s) translated {v['ids']}; rows translated "
-                     f"{v.get('rows', {})}; {len(v['unmatched'])} id(s) the hub no longer has "
-                     f"(rows naming them keep the id and match nothing)")
+            L.append(f"- {n}: rows read by number {v.get('by_number', {})}; naming no passage of its "
+                     f"own, left out or kept without a uid {v.get('unplaced', {})}; a retired file read as "
+                     f"the hub's {v.get('aliased', {})}")
     L += ["", f"Integrity of the output: **{d['integrity']}**.", "", "## Decisions", ""]
     if not d["decisions"]:
         L.append("None: every table agreed wherever nodes overlapped.")

@@ -220,7 +220,8 @@ mod tests {
         c.execute_batch(
             "CREATE TABLE files (file_id INTEGER PRIMARY KEY, path TEXT, audio_md5 TEXT);
              CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT,
-                                    start_ms INTEGER, end_ms INTEGER);
+                                    start_ms INTEGER, end_ms INTEGER,
+                                    passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL);
              CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL DEFAULT 1.0);
              CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);
              CREATE TABLE recording_artists (mbid TEXT, artist_mbid TEXT, weight REAL);
@@ -229,7 +230,8 @@ mod tests {
              CREATE TABLE lyrics (mbid TEXT PRIMARY KEY, text TEXT, source TEXT, fetched_at TEXT);
              CREATE TABLE passage_lyrics (audio_md5 TEXT, kind TEXT, start_ms INTEGER, end_ms INTEGER,
                                           mbid TEXT, text TEXT, no_words INTEGER, updated_at TEXT,
-                                          origin TEXT);
+                                          origin TEXT,
+                                          passage_uid TEXT GENERATED ALWAYS AS (NULL) VIRTUAL);
              INSERT INTO files VALUES (1, '/m/a.mp3', 'md5-1'), (2, '/m/b.mp3', 'md5-2'), (3, '/m/c.mp3', 'md5-3');
              INSERT INTO passages VALUES (1, 1, 'radio', 0, 100000), (2, 2, 'radio', 0, 100000),
                                          (3, 3, 'radio', 0, 100000);
@@ -278,7 +280,8 @@ mod tests {
         c.execute_batch(
             "CREATE TABLE files (file_id INTEGER PRIMARY KEY, path TEXT, audio_md5 TEXT);
              CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT,
-                                    start_ms INTEGER, end_ms INTEGER);
+                                    start_ms INTEGER, end_ms INTEGER,
+                                    passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL);
              CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL DEFAULT 1.0);
              CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);
              CREATE TABLE recording_artists (mbid TEXT, artist_mbid TEXT, weight REAL);
@@ -288,7 +291,8 @@ mod tests {
              CREATE TABLE lyrics (mbid TEXT PRIMARY KEY, text TEXT, source TEXT, fetched_at TEXT);
              CREATE TABLE passage_lyrics (audio_md5 TEXT, kind TEXT, start_ms INTEGER, end_ms INTEGER,
                                           mbid TEXT, text TEXT, no_words INTEGER, updated_at TEXT,
-                                          origin TEXT);
+                                          origin TEXT,
+                                          passage_uid TEXT GENERATED ALWAYS AS (NULL) VIRTUAL);
              INSERT INTO files VALUES (1, '/m/1.mp3', 'md5-1'), (2, '/m/2.mp3', 'md5-2'),
                                       (3, '/m/3.mp3', 'md5-3'), (4, '/m/4.mp3', 'md5-4');
              INSERT INTO passages VALUES (1, 1, 'radio', 0, 100000), (2, 2, 'radio', 0, 100000),

@@ -660,7 +660,8 @@ pub(crate) mod tests {
              INSERT INTO listener_preferences VALUES ('artist','a1',1.0,'t1');").unwrap();
         rusqlite::Connection::open(&lib).unwrap().execute_batch(
             "CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT, format TEXT, path TEXT);
-             CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT, start_ms INTEGER, end_ms INTEGER);
+             CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT, start_ms INTEGER, end_ms INTEGER,
+                 passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL);
              INSERT INTO files VALUES (1,'m1','flac','/music/a.flac');
              INSERT INTO passages VALUES (10,1,'track',0,1000);").unwrap();
         let mesh = p256::ecdsa::SigningKey::random(&mut rand_core::OsRng);
@@ -702,10 +703,10 @@ pub(crate) mod tests {
     /// A listener patch of one lyric row, new here.
     fn lyric_patch(text: &str, was: Value) -> Value {
         json!({"tables": [{"name": "passage_lyrics",
-               "columns": ["audio_md5","kind","start_ms","end_ms","mbid","text","no_words","updated_at","origin"],
+               "columns": ["audio_md5","kind","start_ms","end_ms","mbid","text","no_words","updated_at","origin","passage_uid"],
                "key": ["audio_md5","kind","start_ms"],
                "rows": [{"key": ["m1","track",0], "was": was,
-                         "now": ["m1","track",0,1000,"rec-1",text,0,"2026-11-13 09:00:00.250","desktop"]}]}]})
+                         "now": ["m1","track",0,1000,"rec-1",text,0,"2026-11-13 09:00:00.250","desktop",null]}]}]})
     }
 
     /// `[SPEC-LYR-200]`, `[SPEC-LYR-204]`, through `handle` and the player's
@@ -740,7 +741,7 @@ pub(crate) mod tests {
         assert!(!done.reload, "words change what a page shows, not what plays: no rebuild");
 
         // Corrected at the hub, and sent beside a preference: that one does.
-        let was = json!(["m1","track",0,1000,"rec-1","typed on the desktop",0,"2026-11-13 09:00:00.250","desktop"]);
+        let was = json!(["m1","track",0,1000,"rec-1","typed on the desktop",0,"2026-11-13 09:00:00.250","desktop",null]);
         let mut both = lyric_patch("corrected", was);
         both["tables"].as_array_mut().unwrap().extend(lis_patch()["tables"].as_array().unwrap().iter().cloned());
         let r = request(&n, "commit", "20261113T0905Z", json!(null), both);

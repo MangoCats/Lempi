@@ -1037,7 +1037,8 @@ mod tests {
         lib.execute_batch(
             "CREATE TABLE files (file_id INTEGER PRIMARY KEY, path TEXT, audio_md5 TEXT);
              CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT,
-                                    start_ms INTEGER, end_ms INTEGER);
+                                    start_ms INTEGER, end_ms INTEGER,
+                                    passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL);
              CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL DEFAULT 1.0);
              CREATE TABLE lyrics (mbid TEXT PRIMARY KEY, text TEXT, source TEXT, fetched_at TEXT);",
         )
@@ -1066,7 +1067,8 @@ mod tests {
             "PRAGMA journal_mode = DELETE;
              CREATE TABLE passage_lyrics (audio_md5 TEXT NOT NULL, kind TEXT NOT NULL, start_ms INTEGER NOT NULL,
                  end_ms INTEGER NOT NULL, mbid TEXT, text TEXT NOT NULL, no_words INTEGER NOT NULL DEFAULT 0,
-                 updated_at TEXT NOT NULL, origin TEXT, PRIMARY KEY (audio_md5, kind, start_ms));
+                 updated_at TEXT NOT NULL, origin TEXT,
+                 passage_uid TEXT GENERATED ALWAYS AS (NULL) VIRTUAL, PRIMARY KEY (audio_md5, kind, start_ms));
              CREATE TABLE player_state (id INTEGER PRIMARY KEY, position_ms INTEGER);
              INSERT INTO player_state VALUES (1, 0);
              INSERT INTO passage_lyrics VALUES

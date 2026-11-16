@@ -154,7 +154,10 @@ Measured 2026-11-14: the hub holds 111 rows, each the segment of one current pas
 - **The SPEC006 tools came forward from Stage C** `[IMPL-UID-077]`, since they share these tables. A record's anchor carries the uid beside its span, and a receiver resolves by the uid. Only a record exported before Stage B, which carries none, resolves by span. A passage's flag travels as its uid, and a remote is never sent a number for one.
 - **A reference to a passage that has gone is kept.** `passage_orphans` cleared numbers because a number is reused for other music; a uid never is. So a play naming one still says what was played, and nothing clears it.
 
-Not yet built: the merge, `passage_lyrics`. **Not to be deployed before they are.**
+- **The merge keys by uid** `[IMPL-UID-064]`. The translation between numberings is gone from it (`passage_remap` stays until Stage D, for `repair_node_reviews`). A node's copy last sent, its backups and the newest run's copy may still be by number from before Stage B. Each is read through its own catalogue's map, the hub's through the hub's: a row naming a review's passage it lacks is left out and counted, and the report says what was read so. A snapshot still by number is refused by its node's name, and nothing is merged. A phone, which sends no table naming a passage, is not refused.
+- **Saved words find their passage by uid** `[IMPL-UID-063]`. Under its own kind, a row with a uid is that passage's whatever its segment has become, and no other passage's; a row without one, and tier 2, by segment. A save records the uid. `tools/set_lyrics_uids.py` sets the old rows' uids, once, on the hub. Rehearsed 2026-11-16 on the hub's 143 rows: all 143 placed, each on one current passage; none left; every passage shows the same row. The merge's `hub_sets` carries the hub's value to every node without an item or a tie, and a node's new save keeps its own.
+
+Not yet built: the window's tooling. **Nothing from 70989cc on is to be deployed before the window.**
 
 ## 7. Stage C: every wire, URL, tool and log
 

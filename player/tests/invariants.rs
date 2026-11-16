@@ -51,7 +51,10 @@ fn library(dir: &Path) -> Connection {
         "CREATE TABLE files (file_id INTEGER PRIMARY KEY, path TEXT, duration_ms INTEGER,
                              audio_md5 TEXT);
          CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER,
-                                kind TEXT, start_ms INTEGER, end_ms INTEGER);
+                                kind TEXT, start_ms INTEGER, end_ms INTEGER,
+                                -- each its uid, as every catalogue's since Stage A; made
+                                -- from its number for the test alone [IMPL-UID-052]
+                                passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL);
          CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL DEFAULT 1.0);
          CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);
          CREATE TABLE recording_artists (mbid TEXT, artist_mbid TEXT, weight REAL);

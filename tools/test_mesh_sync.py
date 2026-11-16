@@ -38,7 +38,7 @@ CREATE TABLE listener_characteristics (subject_kind TEXT, subject_id TEXT, chara
 CREATE TABLE listener_flags (subject_kind TEXT, subject_id TEXT, flagged_at TEXT, origin TEXT,
     PRIMARY KEY (subject_kind, subject_id));
 CREATE TABLE listener_occasions (characteristic TEXT, class TEXT, interp TEXT, label TEXT);
-CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY, played_at INTEGER, passage_id INTEGER,
+CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY, played_at INTEGER, passage_uid TEXT,
     mbid TEXT, heard_ms INTEGER, span_ms INTEGER, selected_by TEXT);
 """
 
@@ -82,7 +82,8 @@ def main() -> int:
     hub_l, hub_c = os.path.join(data, "listener.db"), os.path.join(data, "library.db")
     db(hub_l, "INSERT INTO listener_preferences VALUES ('recording','shared',1,1,0,'2026-09-01 00:00:00')",
        "INSERT INTO listener_flags VALUES ('recording','keep','2026-08-01 00:00:00',NULL)",
-       "INSERT INTO listener_flags VALUES ('passage','17','2026-08-01 00:00:00',NULL)",
+       # The hub's passage flag, by the passage's uid as Stage B keys it [IMPL-UID-060].
+       "INSERT INTO listener_flags VALUES ('passage','cccccccccccccccccccccccccccccccc','2026-08-01 00:00:00',NULL)",
        "INSERT INTO listener_occasions VALUES ('user.xmas','xmasy','linear','Christmas')")
     db(hub_c, schema="CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT, path TEXT);")
     mdir = mesh.mesh_dir(hub_c)
@@ -151,7 +152,7 @@ def main() -> int:
     check(rc == 0 and prefs.get(("recording", "mine")) == 3 and prefs.get(("recording", "shared")) == 9,
           f"the phone's edits reach the household, the newer winning: {prefs}")
     flags = {i for _, i in rows(merged, "SELECT subject_kind, subject_id FROM listener_flags")}
-    check(flags == {"keep", "phoneflag", "17"}, f"its flag joins; its passage flag stays home: {flags}")
+    check(flags == {"keep", "phoneflag", "cccccccccccccccccccccccccccccccc"}, f"its flag joins; its passage flag stays home: {flags}")
     check(not rows(merged, "SELECT count(*) FROM listener_play_history WHERE mbid='mine'")[0][0],
           "and its plays never leave it")
     summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
@@ -164,7 +165,7 @@ def main() -> int:
     check(rows(phone, "SELECT count(*) FROM listener_flags WHERE subject_id='keep'")[0][0] == 1,
           f"applied on the phone, the household's flag arrives: {counts}")
     check(rows(phone, "SELECT count(*) FROM listener_flags WHERE subject_id='3'")[0][0] == 1
-          and rows(phone, "SELECT count(*) FROM listener_flags WHERE subject_id='17'")[0][0] == 0,
+          and rows(phone, "SELECT count(*) FROM listener_flags WHERE subject_id='cccccccccccccccccccccccccccccccc'")[0][0] == 0,
           "the phone's passage flag is untouched, and the hub's never sent")
     check(mesh.outbox_applied(mdir, fp, o["run"], counts) and mesh.outbox(mdir, fp) is None,
           "the phone's word that it applied clears the outbox")
@@ -182,7 +183,7 @@ def main() -> int:
     merged = os.path.join(run, "merge", "listener.db")
     flags = {i for _, i in rows(merged, "SELECT subject_kind, subject_id FROM listener_flags")}
     check("keep" not in flags, f"a flag the phone cleared is removed from the household: {flags}")
-    check("17" in flags, "a passage flag the phone never holds is not read as removed by it")
+    check("cccccccccccccccccccccccccccccccc" in flags, "a passage flag the phone never holds is not read as removed by it")
     check(rows(merged, "SELECT label FROM listener_occasions") == [("Christmas",)],
           "nor are the occasions it never uploads")
 

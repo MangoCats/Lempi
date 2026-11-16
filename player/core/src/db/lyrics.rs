@@ -22,6 +22,12 @@ use super::DbError;
 /// `[SPEC-LYR-140]`. No passage number: a number means nothing on another node
 /// `[SPEC-DF-035]`, and this table goes to every node. The same text is in
 /// `sql/schema.sql`, which is where a listener made from the schema gets it.
+///
+/// `passage_uid` `[IMPL-UID-063]`: the passage a row was saved for, by the uid
+/// that is the same on every node. The hub sets it once on the rows saved before
+/// it existed, where a row's segment is a current passage's; a new save records
+/// it. Nothing else about a row changes for it, and no row is merged, replaced
+/// or dropped: the key is a save's, not a passage's.
 pub(crate) const PASSAGE_LYRICS_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS passage_lyrics (
         audio_md5   TEXT    NOT NULL,
@@ -33,6 +39,7 @@ pub(crate) const PASSAGE_LYRICS_TABLE: &str = "
         no_words    INTEGER NOT NULL DEFAULT 0,
         updated_at  TEXT    NOT NULL,
         origin      TEXT,
+        passage_uid TEXT,
         PRIMARY KEY (audio_md5, kind, start_ms));
     CREATE INDEX IF NOT EXISTS passage_lyrics_mbid ON passage_lyrics(mbid);";
 
@@ -126,6 +133,8 @@ struct Facts {
     kind: String,
     start_ms: i64,
     end_ms: i64,
+    /// Its uid `[IMPL-UID-063]`: a row saved for it is its own entry by this.
+    passage_uid: Option<String>,
     /// Every recording it names, heaviest first `[SPEC-LYR-115]`. One passage
     /// in the library names two (2026-11-12).
     recordings: Vec<String>,
@@ -141,7 +150,7 @@ impl Facts {
 
 fn facts(conn: &Connection, lib: &str, passage_id: i64) -> Result<Option<Facts>, DbError> {
     let sql = format!(
-        "SELECT f.audio_md5, p.kind, p.start_ms, p.end_ms \
+        "SELECT f.audio_md5, p.kind, p.start_ms, p.end_ms, p.passage_uid \
            FROM {lib}.passages p JOIN {lib}.files f ON f.file_id = p.file_id WHERE p.passage_id = ?1"
     );
     let mut st = conn.prepare_cached(&sql).map_err(qe)?;
@@ -151,6 +160,7 @@ fn facts(conn: &Connection, lib: &str, passage_id: i64) -> Result<Option<Facts>,
             kind: r.get(1)?,
             start_ms: r.get(2)?,
             end_ms: r.get(3)?,
+            passage_uid: r.get(4)?,
             recordings: Vec::new(),
         })
     });
@@ -198,6 +208,9 @@ struct Entry {
     state: State,
     updated_at: String,
     origin: Option<String>,
+    /// The passage it was saved for, where the hub or the save has said
+    /// `[IMPL-UID-063]`; `None` for a row known only by its segment.
+    passage_uid: Option<String>,
 }
 
 impl Entry {
@@ -218,10 +231,11 @@ struct Raw {
     empty: bool,
     updated_at: String,
     origin: Option<String>,
+    passage_uid: Option<String>,
 }
 
 const RAW_COLS: &str =
-    "audio_md5, kind, start_ms, end_ms, mbid, no_words, length(trim(text)) = 0, updated_at, origin";
+    "audio_md5, kind, start_ms, end_ms, mbid, no_words, length(trim(text)) = 0, updated_at, origin, passage_uid";
 
 fn raw_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Raw> {
     Ok(Raw {
@@ -234,6 +248,7 @@ fn raw_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Raw> {
         empty: r.get(6)?,
         updated_at: r.get(7)?,
         origin: r.get(8)?,
+        passage_uid: r.get(9)?,
     })
 }
 
@@ -356,6 +371,7 @@ impl SavedLyrics {
                 },
                 updated_at: r.updated_at,
                 origin: r.origin,
+                passage_uid: r.passage_uid,
             })
             .collect();
         let span = |i: usize| (rows_read[i].start_ms, rows_read[i].end_ms);
@@ -377,15 +393,22 @@ impl SavedLyrics {
         let sql = format!(
             "SELECT p.start_ms, p.end_ms, \
                     (SELECT pr.mbid FROM {lib}.passage_recordings pr WHERE pr.passage_id = p.passage_id \
-                      ORDER BY {HEAVIEST_FIRST} LIMIT 1) \
+                      ORDER BY {HEAVIEST_FIRST} LIMIT 1), p.passage_uid \
                FROM {lib}.files f JOIN {lib}.passages p ON p.file_id = f.file_id \
               WHERE f.audio_md5 = ?1 AND p.kind = ?2 ORDER BY p.start_ms"
         );
+        // A row is a passage's when it names that passage's uid, wherever it lies;
+        // one naming none, when it is that passage's segment [IMPL-UID-063], as
+        // `of_passage` reads it.
+        let is_of = |i: usize, s: i64, t: i64, uid: &Option<String>| match (&rows_read[i].passage_uid, uid) {
+            (Some(theirs), Some(mine)) => theirs == mine,
+            _ => same_segment(span(i), (s, t)),
+        };
         // Row -> the recording it speaks for.
         let mut speaks: HashMap<usize, Option<String>> = HashMap::new();
         for ((file, kind), members) in &groups {
-            let held: Vec<(i64, i64, Option<String>)> =
-                rows(conn, &sql, params![file, kind], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            let held: Vec<(i64, i64, Option<String>, Option<String>)> =
+                rows(conn, &sql, params![file, kind], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
             if held.is_empty() {
                 let mut heads: Vec<usize> = Vec::new();
                 for &i in members {
@@ -399,8 +422,8 @@ impl SavedLyrics {
             // Which passage a row heading two speaks for: the one at its own
             // start, else the last -- as before this was measured per passage.
             let mut at_start: HashSet<usize> = HashSet::new();
-            for (s, t, mbid) in &held {
-                let Some(&i) = members.iter().find(|&&i| same_segment(span(i), (*s, *t))) else { continue };
+            for (s, t, mbid, uid) in &held {
+                let Some(&i) = members.iter().find(|&&i| is_of(i, *s, *t, uid)) else { continue };
                 let here = *s == rows_read[i].start_ms;
                 if here || !at_start.contains(&i) {
                     speaks.insert(i, mbid.clone().or_else(|| rows_read[i].recording.clone()));
@@ -422,11 +445,23 @@ impl SavedLyrics {
     /// `f`'s own audio: for each kind, the newest row of its file that is the
     /// same segment as `f` is now `[SPEC-LYR-150]` -- its own entry under its
     /// own kind, and tier 2 under the others.
+    ///
+    /// **Under its own kind, by uid first** `[IMPL-UID-063]`. A row saved for a
+    /// passage names it by uid, and is that passage's entry whatever its segment
+    /// has since become -- a boundary edit no longer moves its words -- and no
+    /// other passage's. A row without one is matched by its segment, as before.
+    /// Under another kind the row is another passage's, and is tier 2 by segment.
     fn of_passage(&self, f: &Facts) -> Vec<Entry> {
         let mut kinds: HashSet<&str> = HashSet::new();
         self.rows
             .iter()
-            .filter(|e| e.file == f.audio_md5 && same_segment((e.start_ms, e.end_ms), (f.start_ms, f.end_ms)))
+            .filter(|e| {
+                let segment = e.file == f.audio_md5 && same_segment((e.start_ms, e.end_ms), (f.start_ms, f.end_ms));
+                match (&e.passage_uid, &f.passage_uid) {
+                    (Some(theirs), Some(mine)) if e.kind == f.kind => theirs == mine,
+                    _ => segment,
+                }
+            })
             .filter(|e| kinds.insert(e.kind.as_str()))
             .cloned()
             .collect()
@@ -977,12 +1012,13 @@ pub fn save_passage_lyrics(
     // boundary edit, are two rows, and the newer has to read as newer.
     conn.execute(
         "INSERT INTO passage_lyrics \
-             (audio_md5, kind, start_ms, end_ms, mbid, text, no_words, updated_at, origin) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, strftime('%Y-%m-%d %H:%M:%f', 'now'), ?8) \
+             (audio_md5, kind, start_ms, end_ms, mbid, text, no_words, updated_at, origin, passage_uid) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, strftime('%Y-%m-%d %H:%M:%f', 'now'), ?8, ?9) \
          ON CONFLICT(audio_md5, kind, start_ms) DO UPDATE SET \
              end_ms = excluded.end_ms, mbid = excluded.mbid, text = excluded.text, \
-             no_words = excluded.no_words, updated_at = excluded.updated_at, origin = excluded.origin",
-        params![f.audio_md5, f.kind, f.start_ms, f.end_ms, f.heaviest(), text, no_words as i64, origin],
+             no_words = excluded.no_words, updated_at = excluded.updated_at, origin = excluded.origin, \
+             passage_uid = excluded.passage_uid",
+        params![f.audio_md5, f.kind, f.start_ms, f.end_ms, f.heaviest(), text, no_words as i64, origin, f.passage_uid],
     )
     .map_err(qe)?;
     let own = conn
@@ -1085,6 +1121,48 @@ mod tests {
 
     fn save(c: &Connection, passage_id: i64, text: &str, no_words: bool) -> Option<OwnLyrics> {
         save_passage_lyrics(c, "main", passage_id, text, no_words, "here").unwrap().expect("a passage")
+    }
+
+    /// `[IMPL-UID-063]`: a save records its passage's uid, and by it the passage keeps
+    /// its words when a boundary edit moves it off the saved segment -- which by
+    /// segment alone it would lose. A row saved for another passage is that one's,
+    /// though it is this one's segment; and a row without a uid still matches by
+    /// segment, as every row saved before uids does.
+    #[test]
+    fn words_follow_their_passage_by_uid() {
+        let c = library();
+        c.execute_batch("UPDATE passages SET passage_uid = printf('%032x', passage_id)").unwrap();
+        save(&c, 12, "the radio cut's words", false);
+        let held: Option<String> = c
+            .query_row("SELECT passage_uid FROM passage_lyrics WHERE kind = 'radio' AND start_ms = 4000", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(held.as_deref(), Some(format!("{:032x}", 12).as_str()), "the save names its passage by uid");
+        // Its start moved from 4.0 s to 120 s: 70 s shared of 186 s is not the same segment.
+        c.execute("UPDATE passages SET start_ms = 120000 WHERE passage_id = 12", []).unwrap();
+        assert_eq!(shown(&c, 12).as_deref(), Some("the radio cut's words"), "its words stay its own, by uid");
+
+        // A row with 14's uid, though at 12's segment, is 14's entry and not 12's.
+        let c = library();
+        c.execute_batch("UPDATE passages SET passage_uid = printf('%032x', passage_id)").unwrap();
+        c.execute(
+            "INSERT INTO passage_lyrics (audio_md5, kind, start_ms, end_ms, mbid, text, no_words, updated_at, origin, passage_uid) \
+             VALUES ('aaa', 'radio', 4000, 190000, 'rec-next', 'saved for 14', 0, '2026-11-16 08:00:00.000', 'here', printf('%032x', 14))",
+            [],
+        )
+        .unwrap();
+        assert_ne!(shown(&c, 12).as_deref(), Some("saved for 14"), "not 12's own, by segment, once it names 14");
+        assert_eq!(shown(&c, 14).as_deref(), Some("saved for 14"), "and 14's own, by uid, wherever it lies");
+
+        // A row from before uids is still found by its segment.
+        let c = library();
+        c.execute_batch("UPDATE passages SET passage_uid = printf('%032x', passage_id)").unwrap();
+        c.execute(
+            "INSERT INTO passage_lyrics (audio_md5, kind, start_ms, end_ms, mbid, text, no_words, updated_at, origin) \
+             VALUES ('aaa', 'radio', 4000, 190000, 'rec-song', 'saved before uids', 0, '2026-11-01 08:00:00.000', 'here')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(shown(&c, 12).as_deref(), Some("saved before uids"), "by segment, where the row names no passage");
     }
 
     /// Give a saved row a stamp of its own choosing, so order does not rest
@@ -1259,7 +1337,7 @@ mod tests {
         let c = library();
         c.execute(
             "INSERT INTO passage_lyrics VALUES ('zzz', 'radio', 0, 200000, 'rec-song', 'from another node', 0, \
-                                               '2026-11-02 08:00:00.000', 'elsewhere')",
+                                               '2026-11-02 08:00:00.000', 'elsewhere', NULL)",
             [],
         )
         .unwrap();
@@ -1302,7 +1380,7 @@ mod tests {
         for i in 0..400 {
             c.execute(
                 "INSERT INTO passage_lyrics VALUES (?1, 'radio', 0, 100000, ?2, 'elsewhere', 0, \
-                                                   '2026-11-01 08:00:00.000', 'elsewhere')",
+                                                   '2026-11-01 08:00:00.000', 'elsewhere', NULL)",
                 params![format!("far-{i}"), format!("rec-far-{i}")],
             )
             .unwrap();
@@ -1318,7 +1396,7 @@ mod tests {
         .unwrap();
         c.execute(
             "INSERT INTO passage_lyrics VALUES ('aaa-before', 'radio', 4000, 190000, 'rec-song', 'under the old digest', 0, \
-                                               '2026-11-02 08:00:00.000', 'here')",
+                                               '2026-11-02 08:00:00.000', 'here', NULL)",
             [],
         )
         .unwrap();
@@ -1330,7 +1408,7 @@ mod tests {
         // as rec-song and identified since as the unrelated rec-other.
         c.execute(
             "INSERT INTO passage_lyrics VALUES ('zzz', 'radio', 0, 240000, 'rec-cover', 'the cover, from another node', 0, \
-                                               '2026-11-04 08:00:00.000', 'elsewhere')",
+                                               '2026-11-04 08:00:00.000', 'elsewhere', NULL)",
             [],
         )
         .unwrap();

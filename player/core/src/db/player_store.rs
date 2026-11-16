@@ -964,6 +964,9 @@ impl PlayerStore {
         // Words saved for a passage `[SPEC-LYR-140]`: the listener half's,
         // since the catalogue is attached read-only.
         conn.execute_batch(super::lyrics::PASSAGE_LYRICS_TABLE).map_err(DbError::open)?;
+        // `[IMPL-UID-063]`: a row's passage by uid, on a table made before it.
+        // Added empty: the hub sets it, and the merge carries it here.
+        let _ = conn.execute("ALTER TABLE passage_lyrics ADD COLUMN passage_uid TEXT", []);
         ensure_history_columns(&conn);
         ensure_flags_columns(&conn);
         ensure_occasion_columns(&conn);
