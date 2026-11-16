@@ -16,6 +16,14 @@ that are deliberately wrong for the others:
     distant     numbers no other node uses, so a stray one finds nothing
     partial     the hub's numbering, less one album, plus a passage of its own
 
+Each passage carries the uid its birth key gives it, the same on every node,
+and every crossing names a passage by it `[IMPL-UID-084]`: a merge with a
+removal, a passage only a node holds, a boundary edit, a remote unflag and a
+member patch, each over `shuffled`, where a stray number still finds a
+passage. A bundle carries no number at all; its import over unlike numbering
+is `bundle.rs`'s `a_bundle_lands_under_the_nodes_own_number_by_its_uid`, and
+echo's is `echo_client.rs`'s `a_followers_number_for_a_song_is_its_own_not_the_leaders`.
+
     python tools/test_numbering_fleet.py
 """
 
@@ -28,8 +36,14 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import console  # noqa: E402
+import lempi_control  # noqa: E402
+import mesh  # noqa: E402
 import passage_uid  # noqa: E402
+import star_merge  # noqa: E402
 import star_patch  # noqa: E402
+import test_natural_patch  # noqa: E402  -- its reference applier
+import test_star_merge as tm  # noqa: E402  -- its listener schema
 
 FAILED = []
 
@@ -164,12 +178,164 @@ def test_no_patch_when_only_the_numbers_differ(hub, nodes):
         check(patch_rows(nodes[name], hub) is None, f"{name}: the same music under other numbers made a patch")
 
 
+def uids(path):
+    """passage number -> (uid, (md5, kind, start))."""
+    c = sqlite3.connect(path)
+    out = {r[0]: (r[1], tuple(r[2:])) for r in c.execute(
+        "SELECT p.passage_id, p.passage_uid, f.audio_md5, p.kind, p.start_ms FROM passages p JOIN files f USING (file_id)")}
+    c.close()
+    return out
+
+
+def crossed(hub, node):
+    """A passage X whose number on `node` is, on the hub, other music Z -- the case a
+    stray number gets wrong without a word. Returns (X's uid, Z's uid, Y's uid) with
+    Y a third passage, and checks the premise holds."""
+    h, n = uids(hub), uids(node)
+    for pid, (uid, what) in sorted(n.items()):
+        if pid in h and h[pid][0] != uid:
+            z = h[pid][0]
+            y = next(u for u, _ in h.values() if u not in (uid, z))
+            return uid, z, y
+    raise AssertionError("the fleet holds no number that is other music on the hub")
+
+
+FLAG = "INSERT INTO listener_flags VALUES ('passage','{}','2026-08-01 00:00:00',NULL)"
+
+
+def flags(path, kind="passage"):
+    return sorted(r[0] for r in tm_rows(path, f"SELECT subject_id FROM listener_flags WHERE subject_kind = '{kind}'"))
+
+
+def tm_rows(path, sql):
+    c = sqlite3.connect(path)
+    try:
+        return c.execute(sql).fetchall()
+    finally:
+        c.close()
+
+
+def test_a_merge_with_a_removal(hub, nodes, tmp):
+    print("a merge with a removal: shuffled clears its flag on X, and only X's goes -- never Z's, "
+          "the hub's passage under the number shuffled gives X [IMPL-UID-042]")
+    x, z, y = crossed(hub, nodes["shuffled"])
+    dl, sl = os.path.join(tmp, "m-hub.lis"), os.path.join(tmp, "m-shuffled.lis")
+    tm.db(dl, *(FLAG.format(u) for u in (x, y, z)))
+    tm.db(sl, *(FLAG.format(u) for u in (y, z)))                       # X cleared since its backup
+    bk = tm.backup_of(tmp, "m-shuffled", 1789000000, *(FLAG.format(u) for u in (x, y, z)))
+    out = os.path.join(tmp, "m-out")
+    rep = star_merge.build({"hub_state_from": "desktop",
+                            "nodes": [dict(name="desktop", listener=dl),
+                                      dict(name="shuffled", listener=sl, backups=bk)]}, out)
+    check(flags(os.path.join(out, "listener.db")) == sorted([y, z]), "the merge removes X's flag and keeps Z's and Y's")
+    check(flags(os.path.join(out, "nodes", "shuffled", "listener.db")) == sorted([y, z]), "and so does shuffled's copy")
+    gone = [d["key"] for d in rep.data["decisions"] if d["rule"] == "SPEC-STAR-050"]
+    check(gone == [["passage", x]], f"the removal is reported as X's, by its uid: {gone}")
+
+
+def test_a_passage_only_a_node_holds(hub, nodes, tmp):
+    print("a passage only partial holds: its flag and its play keep its uid, and name nothing of the hub's")
+    own = next(u for u, what in uids(nodes["partial"]).values() if what[0] == "nodeonly")
+    check(own not in {u for u, _ in uids(hub).values()}, "the premise: the hub does not hold it")
+    dl, pl = os.path.join(tmp, "o-hub.lis"), os.path.join(tmp, "o-partial.lis")
+    tm.db(dl)
+    tm.db(pl, FLAG.format(own), f"INSERT INTO listener_play_history VALUES (1, 1789000000, '{own}', 'nodeonly', 90000, 90000, 'auto')")
+    out = os.path.join(tmp, "o-out")
+    star_merge.build({"hub_state_from": "desktop",
+                      "nodes": [dict(name="desktop", listener=dl), dict(name="partial", listener=pl)]}, out)
+    check(flags(os.path.join(out, "listener.db")) == [own], "its flag reaches the hub under its own uid")
+    mine = os.path.join(out, "nodes", "partial", "listener.db")
+    check(flags(mine) == [own], "and stays on partial under it")
+    check(tm_rows(mine, "SELECT passage_uid FROM listener_play_history") == [(own,)], "its play is its own, unchanged")
+    check(tm_rows(os.path.join(out, "listener.db"), "SELECT count(*) FROM listener_play_history") == [(0,)],
+          "and no play is the hub's")
+
+
+def test_a_boundary_edit(hub, nodes, tmp):
+    print("a boundary edit on the hub reaches shuffled as one change to its own row, by uid, and "
+          "nothing under the hub's number for it there [SPEC-NKP-045]")
+    target = os.path.join(tmp, "b-hub-edited.db")
+    edited(hub, target)
+    h = uids(hub)
+    md503 = [(pid, u) for pid, (u, what) in h.items() if what[0] == "md503" and what[1] == "radio"]
+    hub_pid, uid = md503[0]
+    node = os.path.join(tmp, "b-shuffled.db")
+    src = sqlite3.connect(nodes["shuffled"])
+    dst = sqlite3.connect(node)
+    src.backup(dst)
+    src.close()
+    dst.close()
+    before = uids(node)
+    patch = star_patch.make_values(nodes["shuffled"], target, tables=["files", "passages", "passage_recordings"],
+                                   natural=True)
+    test_natural_patch.apply_natural(node, patch)
+    after = uids(node)
+    mine = next(pid for pid, (u, _) in before.items() if u == uid)
+    check(mine != hub_pid and before.get(hub_pid, (None,))[0] != uid,
+          "the premise: shuffled numbers X otherwise, and the hub's number for X is other music there")
+    end = lambda path, pid: tm_rows(path, f"SELECT end_ms FROM passages WHERE passage_id = {pid}")[0][0]
+    check(end(node, mine) - end(nodes["shuffled"], mine) == 4321 and after[mine][0] == uid,
+          "X's own row on shuffled has the new end and keeps its uid")
+    check(after.get(hub_pid) == before.get(hub_pid), "the music under the hub's number for X is untouched there")
+    added = set(after) - set(before)
+    check(len(added) == 1 and after[added.pop()][1][0] == "md504", "and the new passage arrives under a number of shuffled's own")
+
+
+def test_a_remote_unflag(hub, nodes, tmp):
+    print("a remote unflag clears X's flag on shuffled by its uid, and not the flag under the hub's number for X")
+    x, z, y = crossed(hub, nodes["shuffled"])
+    remote = os.path.join(tmp, "u-shuffled.lis")
+    tm.db(remote, *(FLAG.format(u) for u in (x, z)))
+    conn = sqlite3.connect(hub)
+    conn.row_factory = sqlite3.Row
+    pid = conn.execute("SELECT passage_id FROM passages WHERE passage_uid = ?", (x,)).fetchone()[0]
+    subjects = console.passage_flag_subjects(conn, pid)
+    conn.close()
+    sent = []
+
+    def set_remote(where, port, kind, sid, flagged, timeout=8.0):
+        sent.append((kind, sid))
+        c = sqlite3.connect(remote)
+        c.execute("DELETE FROM listener_flags WHERE subject_kind = ? AND subject_id = ?", (kind, sid))
+        c.commit()
+        c.close()
+        return True
+
+    real = (lempi_control._lempi_set_flag, lempi_control._remote_set_flag)
+    lempi_control._lempi_set_flag = lambda *a, **k: True
+    lempi_control._remote_set_flag = set_remote
+    try:
+        r = lempi_control.unflag_everywhere(subjects, "pi@speaker-a:/srv/library/library.db",
+                                            {"reachable": True, "remote_held": True, "remote_mbids": []})
+    finally:
+        lempi_control._lempi_set_flag, lempi_control._remote_set_flag = real
+    check(("passage", x) in sent and not any(sid.isdigit() for _, sid in sent), f"the remote is sent X's uid, no number: {sent}")
+    check(flags(remote) == [z], f"X's flag goes from the remote and Z's stays: {flags(remote)}")
+    check(r["remote"]["ok"], f"{r}")
+
+
+def test_a_member_patch(hub, nodes, tmp):
+    print("a member patch to a phone, which numbers its own catalogue and has not updated, carries no passage row")
+    x, _, _ = crossed(hub, nodes["shuffled"])
+    base, target = os.path.join(tmp, "p-phone.lis"), os.path.join(tmp, "p-merged.lis")
+    tm.db(base)
+    tm.db(target, FLAG.format(x), "INSERT INTO listener_flags VALUES ('recording','rec3','2026-08-01 00:00:00',NULL)")
+    patch = star_patch.make_member(base, target, mesh.SHARED)
+    sent = [r["key"] for e in patch["tables"] for r in e["rows"]]
+    check(sent == [["recording", "rec3"]], f"the recording's flag goes, X's is held back both ways: {sent}")
+
+
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         hub, nodes = fleet(tmp)
         test_the_fleet_is_numbered_as_this_test_claims(hub, nodes)
         test_a_patch_names_rows_by_what_they_are(hub, nodes, tmp)
         test_no_patch_when_only_the_numbers_differ(hub, nodes)
+        test_a_merge_with_a_removal(hub, nodes, tmp)
+        test_a_passage_only_a_node_holds(hub, nodes, tmp)
+        test_a_boundary_edit(hub, nodes, tmp)
+        test_a_remote_unflag(hub, nodes, tmp)
+        test_a_member_patch(hub, nodes, tmp)
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")

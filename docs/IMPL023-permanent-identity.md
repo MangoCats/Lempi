@@ -215,6 +215,7 @@ Its allow-list can only shrink, and it is empty at the end of Stage C. A Rust `L
 - a boundary edit;
 - a remote unflag;
 - a member patch.
+- **As built, 2026-11-16.** `test_numbering_fleet.py` runs five of them over `shuffled`: a merge with a removal, a passage only `partial` holds, a boundary edit, a remote unflag and a member patch. Each picks a passage whose number on `shuffled` is other music on the hub, and checks that music is untouched. The bundle is `bundle.rs`'s `a_bundle_lands_under_the_nodes_own_number_by_its_uid`: a bundle carries no number, so the passage lands under the node's own. Echo's was built in Stage C. A member patch still holds passage rows back both ways; it carries them once the phones update `[IMPL-UID-066]`.
 
 ## 9. Order
 

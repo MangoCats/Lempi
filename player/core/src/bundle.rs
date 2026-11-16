@@ -2140,6 +2140,53 @@ mod tests {
         std::fs::remove_dir_all(&audio_dir).ok();
     }
 
+    /// `[IMPL-UID-084]`: a bundle over unlike numbering. The node already numbers other
+    /// music 1 and 2, the hub's numbers for this passage among them; a bundle carries no
+    /// number at all, so the passage lands under one of the node's own, with the hub's
+    /// uid, and its credit on that one. What the node held under 1 and 2 is untouched.
+    #[test]
+    fn a_bundle_lands_under_the_nodes_own_number_by_its_uid() {
+        let audio_dir = std::env::temp_dir().join(format!("lempi-bundle-unlike-{}", std::process::id()));
+        std::fs::create_dir_all(&audio_dir).unwrap();
+        let audio_path = audio_dir.join("a.wav");
+        write_tiny_wav(&audio_path);
+        let md5 = (TEST_HASHER.hash)(&audio_path).unwrap();
+        let uid = crate::db::passage_uid(&md5, "radio", 0, 1000, 0).unwrap();
+        let mut d = one_encoding_bundle(&md5, "m1", 0.5, "computed:x@1");
+        let p = &mut d["encodings"][0]["passages"][0];
+        p["passage_uid"] = Value::String(uid.clone());
+        p["birth"] = serde_json::json!({"audio_md5": md5, "kind": "radio", "start_ms": 0, "end_ms": 1000, "salt": 0});
+        let text = d.to_string();
+        assert!(!text.contains("passage_id") && !text.contains("file_id"), "a bundle carries no number: {text}");
+
+        let mut c = empty_library();
+        c.execute_batch(
+            "ALTER TABLE passages ADD COLUMN passage_uid TEXT; ALTER TABLE passages ADD COLUMN birth_md5 TEXT;
+             ALTER TABLE passages ADD COLUMN birth_kind TEXT; ALTER TABLE passages ADD COLUMN birth_start_ms INTEGER;
+             ALTER TABLE passages ADD COLUMN birth_end_ms INTEGER; ALTER TABLE passages ADD COLUMN birth_salt INTEGER;
+             INSERT INTO files VALUES (1, 'other', '/o.mp3', 1, 1.0, 'mp3', 9000, 't', 't');
+             INSERT INTO passages (passage_id, file_id, kind, start_ms, end_ms, boundary_src, passage_uid)
+                 VALUES (1, 1, 'radio', 0, 4000, 'x', 'u-other-1'), (2, 1, 'radio', 4000, 9000, 'x', 'u-other-2');
+             INSERT INTO passage_recordings VALUES (1, 'other-rec', 1.0, 's');",
+        )
+        .unwrap();
+        let before: Vec<(i64, String, i64)> = c.prepare("SELECT passage_id, passage_uid, end_ms FROM passages ORDER BY 1").unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().filter_map(Result::ok).collect();
+        import(&mut c, &d, "u1", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        let here: i64 = c.query_row("SELECT passage_id FROM passages WHERE passage_uid = ?1", [&uid], |r| r.get(0)).unwrap();
+        assert!(here > 2, "under a number of the node's own: {here}");
+        let credit: Vec<String> = c.prepare("SELECT mbid FROM passage_recordings WHERE passage_id = ?1").unwrap()
+            .query_map([here], |r| r.get(0)).unwrap().filter_map(Result::ok).collect();
+        assert_eq!(credit, ["m1"], "its credit on that number");
+        let after: Vec<(i64, String, i64)> = c.prepare("SELECT passage_id, passage_uid, end_ms FROM passages WHERE passage_id <= 2 ORDER BY 1").unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().filter_map(Result::ok).collect();
+        assert_eq!(after, before, "and the node's own passages 1 and 2 are as they were");
+        let theirs: Vec<String> = c.prepare("SELECT mbid FROM passage_recordings WHERE passage_id = 1").unwrap()
+            .query_map([], |r| r.get(0)).unwrap().filter_map(Result::ok).collect();
+        assert_eq!(theirs, ["other-rec"], "with their own credits");
+        std::fs::remove_dir_all(&audio_dir).ok();
+    }
+
     /// `[SPEC-HOLD-080]` A hold travels: onto a passage arriving with it, and
     /// onto one already here, matched by exact span. `empty_library()` has no
     /// `director_hold` -- every speaker's library as of 2026-10-01.
