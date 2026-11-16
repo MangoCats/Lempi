@@ -98,7 +98,7 @@ A delete on the hub alone is undone by the next merge, because `star_merge.TABLE
 - The node reports its catalogue's indexes (`catalogue_indexes`), read from its own file. The copy last sent holds every index the hub had, so it cannot say which ones never arrived. The report is also the capability: a node that gives none is sent none.
 - The triggers stay on the hub. A node's bundle import writes a passage and then stamps its uid, which `passages_uid_required` would refuse.
 
-Offline against `lempi02w`'s copy last sent and its real list, the patch adds that one index and nothing else of schema. It needs a deploy and then a round, before Stage B relies on it.
+Offline against `lempi02w`'s copy last sent and its real list, the patch adds that one index and nothing else of schema. *Done 2026-11-16:* `89c765b` deployed on every node, then round `20261116T0119Z`. Each node's own disk holds `passages_uid` (LOG014 `[LOG-LIBW-320]`). A made index counts as no row, so a rehearsal reads `applied 0` either way, and until that changes the disk is the evidence.
 
 ## 6. Stage B: the listener names passages by uid
 
