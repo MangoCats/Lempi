@@ -225,7 +225,7 @@ fresh clone has the gate in the tree and switched off — which is the worst of
 both, because the file reads like a guard that is running. One command, and
 `git config core.hooksPath` answers whether it is on.
 
-[`.githooks/pre-commit`](.githooks/pre-commit) runs four checks. On **every**
+[`.githooks/pre-commit`](.githooks/pre-commit) runs five checks. On **every**
 commit, [`tools/check_exec_bits.py`](tools/check_exec_bits.py) refuses a staged
 script that opens with `#!` and is not executable — well under a second, and it
 reads the mode from git's index, so it works on Windows, where `[ -x ]` passes
@@ -236,7 +236,9 @@ in columns ends with `// columns`, any other run meant starts `\x20`. Also on ev
 [`tools/check_fleet_leaks.py`](tools/check_fleet_leaks.py) `--staged` refuses
 an added line that looks like private fleet detail — a LAN address, a MAC, a
 personal path, a `user@host:` — and with `fleet/private-tokens.txt` present,
-the real names too `[SPEC-FCP-050]`. On a commit touching `player/` or `sql/`, it also runs
+the real names too `[SPEC-FCP-050]`. Also on every commit, [`tools/check_local_ids.py`](tools/check_local_ids.py)
+`--staged` refuses an added line putting a local passage or file number where it leaves the machine,
+or where a uid belongs `[IMPL-UID-082]`. On a commit touching `player/` or `sql/`, it also runs
 `build/verify-targets.sh --quick` — a Linux `cargo clippy` with every
 feature on, `fbui` included, an Android `cargo check` of the phone's crate
 beside it, and the `lempi-core` boundary; a docs-only commit skips that.

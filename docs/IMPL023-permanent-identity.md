@@ -206,6 +206,7 @@ That is an estimated 400 lines of translation and the two repair tools (500 line
 - an `INSERT INTO passages` outside the helpers.
 
 Its allow-list can only shrink, and it is empty at the end of Stage C. A Rust `LocalPassageId` with no `Serialize` follows, for those modules.
+- **As built, 2026-11-16.** `tools/check_local_ids.py` runs in the hook over the lines a commit adds, and in CI over the tree. Its first full scan, of 366 files, found nothing, so there is no allow-list. A field kept with `#[serde(skip)]` passes; `skip_serializing_if` still sends one, and does not. It reads all of `player/src` and `lempi-core`, not only the modules named above. Test code is outside it: it builds the old shapes on purpose. `HELPERS`, the writers that give a passage its uid, is the one list `test_passage_uid.py` reads too. Its test plants each finding, and breaking any rule in turn fails it. `LocalPassageId` is not built.
 
 **`[IMPL-UID-084]` Every crossing is tested over unlike numbering** `[SPEC-UID-020]`. `tools/test_numbering_fleet.py` and echo's tests gain each of these, run over the `shuffled` catalogue, where a stray number still finds a passage:
 - a merge with a removal;

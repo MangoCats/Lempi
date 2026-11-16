@@ -14,6 +14,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import check_local_ids  # noqa: E402
 import passage_uid as pu  # noqa: E402
 
 VECTORS = os.path.join(os.path.dirname(HERE), "fixtures", "passage_uid", "vectors.json")
@@ -44,15 +45,11 @@ def vectors():
 
 
 REPO = os.path.dirname(HERE)
-# [IMPL-UID-038]: the files that may still write a passage row by hand, and
-# why. This list only shrinks: one that no longer does is taken off it, and a
-# file not on it that does fails the test.
-RAW_INSERTS_ALLOWED = {
-    "tools/passage_uid.py": "the helper itself",
-    "tools/remote_snapshot.py": "a scratch copy of a remote, not a catalogue; Stage C converts it [IMPL-UID-077]",
-    "player/core/src/bundle.rs": "writes the hub's row, then db::stamp_birth stores the uid it was sent",
-    "player/src/found.rs": "writes a phone-born row, then db::stamp_birth gives it its uid",
-}
+# [IMPL-UID-038]: the files that may write a passage row by hand, and why --
+# the writers that give it its uid. One list, `check_local_ids.HELPERS`, which
+# the commit hook reads too [IMPL-UID-082]: one that no longer writes a row is
+# taken off it, and a file not on it that does fails here and in the hook.
+RAW_INSERTS_ALLOWED = check_local_ids.HELPERS
 
 
 def raw_inserts():

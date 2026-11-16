@@ -127,6 +127,19 @@ jobs:
       - name: no string joined across a lost line break
         run: python3 tools/check_joined_lines.py
 
+  local-ids:
+    name: no local passage or file number where a uid belongs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # IMPL023 [IMPL-UID-082]: a serialized passage_id or file_id, a listener
+      # table by number, a passage route taking an integer, or a passage row
+      # written by hand. The hook runs it over the lines a commit adds; this
+      # runs it over every tracked file, as check_joined_lines runs above.
+      - name: no local number where a uid belongs
+        run: python3 tools/check_local_ids.py
+
   android-core:
     name: lempi-core and the player library compile for Android
     runs-on: ubuntu-latest

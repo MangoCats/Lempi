@@ -2,11 +2,13 @@
 # Refuse a commit that cannot build for the machines this code ships to, or
 # that adds what should not be published or cannot be read.
 #
-# Four checks. Three are fast and run on every commit, over what is staged:
+# Five checks. Four are fast and run on every commit, over what is staged:
 #   (1)  a script with a shebang and no executable bit -- works on the Windows
 #        machine the code is written on, not on the Linux ones it runs on;
 #   (1b) an added line that looks like private fleet detail;
-#   (1c) an added Rust string holding a run of spaces where a line break was.
+#   (1c) an added Rust string holding a run of spaces where a line break was;
+#   (1d) an added line putting a local passage or file number where it leaves
+#        the machine, or where a passage's uid belongs.
 # One is slow and runs only when `player/` or `sql/` is staged:
 #   (2)  a Linux compile, and since 2026-10-17 an Android compile of the
 #        phone's crate beside it -- the same Windows-to-Linux gap as (1).
@@ -65,7 +67,7 @@ set -u
 
 ROOT=$(git rev-parse --show-toplevel)
 
-# The three fast checks below (executable bits, fleet leaks, joined strings)
+# The four fast checks below (executable bits, fleet leaks, joined strings, local ids)
 # run on EVERY commit and are not skipped by `LEMPI_SKIP_VERIFY`. That
 # variable exists to commit past the slow Linux cross-compile (section 2), and
 # coupling the fast privacy scan to the slow-compile escape meant a leak could
@@ -91,8 +93,8 @@ for candidate in python3 python; do
     fi
 done
 if [ -z "$PY" ]; then
-    echo "pre-commit: no working python3 or python, so none of the three fast checks --"
-    echo "pre-commit: executable bits, fleet leaks, joined strings -- RAN."
+    echo "pre-commit: no working python3 or python, so none of the four fast checks --"
+    echo "pre-commit: executable bits, fleet leaks, joined strings, local ids -- RAN."
     echo "pre-commit: that is a failure, not a pass. Put a working Python on PATH and commit again."
     exit 1
 fi
@@ -167,6 +169,25 @@ pre-commit: REFUSED -- a staged Rust string holds a run of spaces where a line
 break may have been. Put the ` \` and the line end back. Where the spaces are
 meant, end a line laid out in columns with `// columns`, or spell the run's
 first space `\x20`.
+EOF
+    exit 1
+fi
+
+# ---- 1d. no local number where a uid belongs: every commit -------------
+#
+# Sub-second, and like the joined-string check it has no escape: a finding is
+# a number to replace, or a writer to add to the check's `HELPERS` with its
+# reason. Added 2026-11-16, with Stage D of IMPL023 `[IMPL-UID-082]`: a
+# serialized passage_id or file_id, a listener table by number, a passage route
+# taking an integer, a passage row written by hand. Test code is outside it.
+if ! fast "local-id" "$ROOT/tools/check_local_ids.py" --staged; then
+    cat <<'EOF'
+
+pre-commit: REFUSED -- a staged line puts a local passage or file number where
+it leaves the machine, or where a passage's uid belongs (IMPL023 [IMPL-UID-082]).
+Name the passage by its uid and the file by its audio_md5; keep an engine's
+number with #[serde(skip)]; take a passage in a route through web/passage_ref.rs;
+write a passage through a helper that gives it its uid.
 EOF
     exit 1
 fi
