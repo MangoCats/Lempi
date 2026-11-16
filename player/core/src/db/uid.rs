@@ -38,6 +38,64 @@ pub fn is_uid(s: &str) -> bool {
     s.len() == 32 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+/// A passage's uid as a value, for whatever carries one in memory or on the
+/// wire `[IMPL-UID-070]`.
+///
+/// Sixteen bytes, so a struct holding one can stay `Copy`, as echo's
+/// schedule and anchor are. Written, read, logged and serialized as the 32
+/// lowercase hex characters the catalogue holds, and only text of that form
+/// makes one ([`is_uid`]), so a passage number never becomes a uid.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PassageUid([u8; 16]);
+
+impl PassageUid {
+    /// The uid `s` writes, or `None` for anything not in a uid's form.
+    pub fn parse(s: &str) -> Option<Self> {
+        if !is_uid(s) {
+            return None;
+        }
+        let mut b = [0u8; 16];
+        for (i, pair) in s.as_bytes().chunks(2).enumerate() {
+            let hex = |c: u8| if c.is_ascii_digit() { c - b'0' } else { c - b'a' + 10 };
+            b[i] = hex(pair[0]) << 4 | hex(pair[1]);
+        }
+        Some(Self(b))
+    }
+
+    /// The first eight characters, which is how a person is shown one
+    /// `[IMPL-UID-076]`.
+    pub fn short(&self) -> String {
+        self.0[..4].iter().map(|b| format!("{b:02x}")).collect()
+    }
+}
+
+impl std::fmt::Display for PassageUid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.iter().try_for_each(|b| write!(f, "{b:02x}"))
+    }
+}
+
+impl std::fmt::Debug for PassageUid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PassageUid({self})")
+    }
+}
+
+impl serde::Serialize for PassageUid {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+/// Refuses a value not in a uid's form, rather than reading it as none: what
+/// arrives as a uid and is not one is a fault to see, not a passage to miss.
+impl<'de> serde::Deserialize<'de> for PassageUid {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Self::parse(&s).ok_or_else(|| serde::de::Error::custom(format!("not a passage uid: {s:?}")))
+    }
+}
+
 /// How a passage just written came by its identity `[IMPL-UID-038]`.
 pub enum Birth<'a> {
     /// The hub sent it, with its uid and birth key: stored as they are, once
@@ -185,5 +243,23 @@ mod tests {
         let u = passage_uid("ab", "radio", 0, 1, 0).unwrap();
         assert_eq!(u.len(), 32);
         assert_ne!(Some(u), passage_uid("ab", "radio", 0, 1, 1), "a salt is another identity");
+    }
+
+    /// A uid as a value is the same text going in and coming out, on the wire
+    /// as in the catalogue, and a number or a malformed text is never one.
+    #[test]
+    fn a_uid_value_is_its_text_and_nothing_else_makes_one() {
+        let text = passage_uid("abc", "radio", 0, 1000, 0).unwrap();
+        let u = PassageUid::parse(&text).unwrap();
+        assert_eq!(u.to_string(), text);
+        assert_eq!(u.short(), text[..8]);
+        let wire = serde_json::to_string(&u).unwrap();
+        assert_eq!(wire, format!("\"{text}\""));
+        assert_eq!(serde_json::from_str::<PassageUid>(&wire).unwrap(), u);
+        for not in ["21159", "", &text.to_uppercase(), &text[..31], &format!("{text}0")] {
+            assert!(PassageUid::parse(not).is_none(), "{not:?} is not a uid");
+        }
+        assert!(serde_json::from_str::<PassageUid>("\"21159\"").is_err(), "refused, not read as none");
+        assert!(serde_json::from_str::<PassageUid>("21159").is_err());
     }
 }

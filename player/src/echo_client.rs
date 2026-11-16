@@ -26,7 +26,7 @@ use futures_util::StreamExt;
 
 use crate::echo::{EchoState, Follow, Follower, NodeTiming};
 use crate::engine::{Command, EngineHandle};
-use crate::queue::PassageIdentity;
+use crate::db::PassageUid;
 
 /// Only the field an echo node cares about. Serde ignores the rest of the
 /// snapshot, which is how this rides a socket built for a browser.
@@ -41,105 +41,112 @@ struct Snapshot {
     /// it kept choosing for itself and was overridden one passage at a time.
     #[serde(default)]
     queue: Vec<AnnouncedEntry>,
-    /// The passage on air, and what it is `[SPEC-UID-010]`. Absent from a node
-    /// too old to say.
-    #[serde(default)]
-    passage_id: Option<i64>,
-    #[serde(default)]
-    identity: Option<PassageIdentity>,
 }
 
 #[derive(serde::Deserialize)]
 struct AnnouncedEntry {
+    /// This node's number for it, set from `passage_uid` as the message
+    /// arrives; the followed node's own number is never sent `[IMPL-UID-070]`.
+    #[serde(skip)]
     passage_id: i64,
     #[serde(default)]
-    identity: Option<PassageIdentity>,
+    passage_uid: Option<PassageUid>,
 }
 
-/// Standing in for a number of the followed node's that names nothing here.
+/// Standing in for a passage the followed node named that this node lacks.
 ///
 /// Negative, so no passage has it: it travels through the follower's logic like
 /// any other number, matches nothing, and reaches [`start`] as a passage this
 /// node does not hold, which it already knows how to report `[GDE-ECHO-420]`.
-fn not_here(theirs: i64) -> i64 {
-    -theirs.max(0) - 1
+/// It carries the uid's first eight characters, which is how a person is shown
+/// the passage `[IMPL-UID-076]`; one named without a uid is [`UNNAMED`]. Two
+/// lacking passages that share those characters stand in as one, which costs
+/// nothing: neither is played.
+fn not_here(uid: Option<PassageUid>) -> i64 {
+    match uid.and_then(|u| u32::from_str_radix(&u.short(), 16).ok()) {
+        Some(lead) => -(lead as i64) - 1,
+        None => UNNAMED,
+    }
 }
 
-/// The followed node's number behind a [`not_here`], for saying which it was.
-fn their_number(n: i64) -> i64 {
-    if n < 0 { -(n + 1) } else { n }
+/// A passage the followed node named without its uid.
+const UNNAMED: i64 = i64::MIN;
+
+/// How the passage behind a number is reported: a [`not_here`] by its uid's
+/// first eight characters, this node's own number as itself.
+fn reported(n: i64) -> String {
+    match n {
+        UNNAMED => "one named without its uid".to_string(),
+        n if n < 0 => format!("{:08x}", -(n + 1)),
+        n => n.to_string(),
+    }
 }
 
-/// The followed node's passage numbers, read as this node's `[SPEC-UID-010]`.
+/// The followed node's passages, as this node's numbers `[SPEC-UID-010]`.
 ///
 /// A passage number means nothing outside its own database `[SPEC-DF-035]`. On
 /// 2026-11-07 `bose` and `smartboardpc` both reported passage 21159: Bob Dylan on
 /// the one and Nirvana on the other, since that lookup succeeds whatever it
-/// finds. So every number from the followed node is turned into this node's
-/// when its message arrives, and nothing after that point handles a foreign one.
+/// finds. So the followed node names each passage by its uid, and each is turned
+/// into this node's number when its message arrives; nothing after that point
+/// handles anything else `[IMPL-UID-070]`. Until 2026-11-16 the name was the
+/// passage's file, kind and start, and a leader that sent none was followed by
+/// its numbers, which is the fault itself; a passage without a uid is now not
+/// followed at all.
 #[derive(Default)]
 struct Numbers {
-    /// What each number the followed node has used names.
-    named: HashMap<i64, PassageIdentity>,
-    /// What each of those is called here, `None` where this node lacks it.
-    here: HashMap<PassageIdentity, Option<i64>>,
+    /// This node's number for each uid the followed node has named, `None`
+    /// where this node lacks it.
+    here: HashMap<PassageUid, Option<i64>>,
     /// The queue last seen, which is when `here` is read afresh: a sync may
-    /// have brought or moved a passage, and it costs a few rows per passage.
-    queue: Vec<i64>,
-    /// Whether the followed node names its passages at all. An older player
-    /// sends numbers alone, and those are followed as before, said aloud.
-    names_passages: bool,
+    /// have brought or moved a passage, and it costs a row per passage. It
+    /// also keeps `here` to what is spoken of now, or it would grow for as
+    /// long as the connection lasts, and that can be months.
+    queue: Vec<Option<PassageUid>>,
     warned: bool,
 }
 
 impl Numbers {
-    /// Take in what a message says, and return what is still to be looked up.
-    fn learn(&mut self, snap: &Snapshot) -> Vec<PassageIdentity> {
-        let said = snap.queue.iter().filter_map(|e| Some((e.passage_id, e.identity.clone()?)))
-            .chain(snap.passage_id.zip(snap.identity.clone()));
-        for (number, identity) in said {
-            self.names_passages = true;
-            self.named.insert(number, identity);
-        }
-        let queue: Vec<i64> = snap.queue.iter().map(|e| e.passage_id).collect();
+    /// Take in what a message says, and return the uids still to be looked up.
+    fn learn(&mut self, snap: &Snapshot) -> Vec<PassageUid> {
+        let queue: Vec<Option<PassageUid>> = snap.queue.iter().map(|e| e.passage_uid).collect();
         if queue != self.queue {
             self.queue = queue;
             self.here.clear();
-            // Only what can still be spoken of, or this grows for as long as
-            // the connection lasts, and that can be months.
-            let keep: Vec<i64> = self.queue.iter().copied()
-                .chain(snap.passage_id)
-                .chain(snap.echo.schedule.map(|s| s.passage_id))
-                .chain(snap.echo.anchor.map(|a| a.passage_id))
-                .collect();
-            self.named.retain(|n, _| keep.contains(n));
         }
-        self.named.values().filter(|i| !self.here.contains_key(*i)).cloned().collect()
+        let mut wanted: Vec<PassageUid> = spoken_of(snap).flatten().filter(|u| !self.here.contains_key(u)).collect();
+        wanted.sort();
+        wanted.dedup();
+        wanted
     }
 
-    /// This node's number for one of the followed node's.
-    fn local(&self, theirs: i64) -> i64 {
-        if !self.names_passages {
-            return theirs;
-        }
-        match self.named.get(&theirs).and_then(|i| self.here.get(i)) {
-            Some(Some(mine)) => *mine,
-            _ => not_here(theirs),
+    /// This node's number for a passage the followed node named.
+    fn local(&self, uid: Option<PassageUid>) -> i64 {
+        match uid.and_then(|u| self.here.get(&u).copied().flatten()) {
+            Some(mine) => mine,
+            None => not_here(uid),
         }
     }
 
-    /// Rewrite every number in a message as this node's.
+    /// Give every passage in a message this node's number.
     fn rewrite(&self, snap: &mut Snapshot) {
         if let Some(s) = snap.echo.schedule.as_mut() {
-            s.passage_id = self.local(s.passage_id);
+            s.passage_id = self.local(s.passage_uid);
         }
         if let Some(a) = snap.echo.anchor.as_mut() {
-            a.passage_id = self.local(a.passage_id);
+            a.passage_id = self.local(a.passage_uid);
         }
         for e in &mut snap.queue {
-            e.passage_id = self.local(e.passage_id);
+            e.passage_id = self.local(e.passage_uid);
         }
     }
+}
+
+/// Every passage a message names, by its uid where it gives one.
+fn spoken_of(snap: &Snapshot) -> impl Iterator<Item = Option<PassageUid>> + '_ {
+    snap.queue.iter().map(|e| e.passage_uid)
+        .chain(snap.echo.schedule.map(|s| s.passage_uid))
+        .chain(snap.echo.anchor.map(|a| a.passage_uid))
 }
 
 /// Bring a message into this node's numbers, reading the catalogue only for a
@@ -153,25 +160,21 @@ async fn into_own_numbers(snap: &mut Snapshot, cfg: &Following, fs: &mut FollowS
         let found = tokio::task::spawn_blocking(move || {
             let lib = crate::db::Library::open_split(&db, &library)?;
             wanted.into_iter()
-                .map(|i| Ok((lib.number_of(&i)?, i)))
+                .map(|u| Ok((u, lib.number_of(&u)?)))
                 .collect::<Result<Vec<_>, crate::db::DbError>>()
         })
         .await;
         match found {
-            Ok(Ok(rows)) => {
-                for (mine, identity) in rows {
-                    fs.numbers.here.insert(identity, mine);
-                }
-            }
+            Ok(Ok(rows)) => fs.numbers.here.extend(rows),
             Ok(Err(e)) => note_warn(&mut fs.note, format!("echo-follow: cannot read this node's catalogue: {e}")),
             Err(e) => note_warn(&mut fs.note, format!("echo-follow: catalogue lookup failed: {e}")),
         }
     }
-    if !fs.numbers.names_passages && !fs.numbers.warned && (snap.passage_id.is_some() || !snap.queue.is_empty()) {
+    if !fs.numbers.warned && spoken_of(snap).any(|u| u.is_none()) {
         fs.numbers.warned = true;
-        tracing::warn!("echo-follow: the followed node's player does not name its passages, so they are \
-                        followed by number, which on another node's catalogue can be a different song \
-                        [SPEC-UID-010]; update that node");
+        tracing::warn!("echo-follow: the followed node named a passage without its uid, and that passage is \
+                        not followed [IMPL-UID-070]: a player built before 2026-11-16 names none, so update \
+                        that node; otherwise its catalogue has yet to receive the passage's uid from the hub");
     }
     fs.numbers.rewrite(snap);
 }
@@ -1313,11 +1316,11 @@ async fn start(
         // programme.
         Ok(Err(e)) => {
             set_status(handle, &format!(
-                "That node is playing something this one does not have (its passage {}); playing its own queue instead.",
-                their_number(passage_id)));
+                "That node is playing something this one does not have (passage {}); playing its own queue instead.",
+                reported(passage_id)));
             note(last, format!(
-                "echo-follow: its passage {} is not in this node's library ({e}); staying with its own queue",
-                their_number(passage_id)));
+                "echo-follow: passage {} is not in this node's library ({e}); staying with its own queue",
+                reported(passage_id)));
         }
         Err(e) => note_warn(last, format!("echo-follow: library lookup failed: {e}")),
     }
@@ -1366,8 +1369,16 @@ mod tests {
         assert_eq!(mine, contract::required("echo-follower"));
     }
 
-    /// A catalogue holding these passages under these numbers, on disk.
+    /// A catalogue holding these passages under these numbers, on disk, each
+    /// with the uid its birth key gives it, as every node's passage has.
     fn catalogue(name: &str, rows: &[(i64, &str, &str, i64, i64)]) -> crate::db::Library {
+        let born: Vec<_> = rows.iter().map(|&(n, md5, kind, start, end)| (n, md5, kind, start, end, uid(md5, kind, start, end))).collect();
+        catalogue_as(name, &born)
+    }
+
+    /// The same, with each passage's uid given: a passage retimed since its
+    /// birth keeps the uid it was born with.
+    fn catalogue_as(name: &str, rows: &[(i64, &str, &str, i64, i64, PassageUid)]) -> crate::db::Library {
         let d = std::env::temp_dir().join(format!("lempi-echo-numbers-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
@@ -1377,16 +1388,17 @@ mod tests {
             "CREATE TABLE files (file_id INTEGER PRIMARY KEY, audio_md5 TEXT NOT NULL UNIQUE, path TEXT, duration_ms INTEGER);
              CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT, start_ms INTEGER, end_ms INTEGER,
                  lead_in_ms INTEGER, lead_out_ms INTEGER, gain_db REAL, fade_in_ms INTEGER DEFAULT 20, fade_out_ms INTEGER DEFAULT 20,
-                 fade_in_curve TEXT DEFAULT 'exponential', fade_out_curve TEXT DEFAULT 'exponential');
+                 fade_in_curve TEXT DEFAULT 'exponential', fade_out_curve TEXT DEFAULT 'exponential', passage_uid TEXT);
+             CREATE UNIQUE INDEX passages_uid ON passages(passage_uid);
              CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL);",
         )
         .unwrap();
-        for (number, md5, kind, start, end) in rows {
+        for (number, md5, kind, start, end, uid) in rows {
             c.execute("INSERT OR IGNORE INTO files (audio_md5, path, duration_ms) VALUES (?1, ?1, 600000)", [md5]).unwrap();
             c.execute(
-                "INSERT INTO passages (passage_id, file_id, kind, start_ms, end_ms) \
-                 VALUES (?1, (SELECT file_id FROM files WHERE audio_md5 = ?2), ?3, ?4, ?5)",
-                rusqlite::params![number, md5, kind, start, end],
+                "INSERT INTO passages (passage_id, file_id, kind, start_ms, end_ms, passage_uid) \
+                 VALUES (?1, (SELECT file_id FROM files WHERE audio_md5 = ?2), ?3, ?4, ?5, ?6)",
+                rusqlite::params![number, md5, kind, start, end, uid.to_string()],
             )
             .unwrap();
         }
@@ -1394,29 +1406,29 @@ mod tests {
         crate::db::Library::open(&path).unwrap()
     }
 
-    fn named_as(md5: &str, start: u64, end: u64) -> PassageIdentity {
-        PassageIdentity { audio_md5: md5.into(), kind: "radio".into(), start_ms: start, end_ms: end }
+    /// The uid a passage born as this has, on every node.
+    fn uid(md5: &str, kind: &str, start: i64, end: i64) -> PassageUid {
+        PassageUid::parse(&crate::db::passage_uid(md5, kind, start, end, 0).unwrap()).unwrap()
     }
 
-    fn message(playing: Option<(i64, PassageIdentity)>, queue: Vec<(i64, Option<PassageIdentity>)>) -> Snapshot {
+    /// What a leader sends: the passage it has just scheduled, and its queue.
+    fn message(playing: Option<PassageUid>, queue: Vec<Option<PassageUid>>) -> Snapshot {
         Snapshot {
             echo: EchoState {
-                schedule: playing.as_ref().map(|(n, _)| crate::echo::Schedule {
-                    passage_id: *n, start_sample: 0, sound_at: 1, rate: 44_100,
+                schedule: playing.map(|u| crate::echo::Schedule {
+                    passage_id: 0, passage_uid: Some(u), start_sample: 0, sound_at: 1, rate: 44_100,
                 }),
                 ..Default::default()
             },
-            passage_id: playing.as_ref().map(|(n, _)| *n),
-            identity: playing.map(|(_, i)| i),
-            queue: queue.into_iter().map(|(passage_id, identity)| AnnouncedEntry { passage_id, identity }).collect(),
+            queue: queue.into_iter().map(|passage_uid| AnnouncedEntry { passage_id: 0, passage_uid }).collect(),
         }
     }
 
     /// What `into_own_numbers` does, with the catalogue at hand.
     fn read_through(numbers: &mut Numbers, lib: &crate::db::Library, snap: &mut Snapshot) {
-        for identity in numbers.learn(snap) {
-            let mine = lib.number_of(&identity).unwrap();
-            numbers.here.insert(identity, mine);
+        for u in numbers.learn(snap) {
+            let mine = lib.number_of(&u).unwrap();
+            numbers.here.insert(u, mine);
         }
         numbers.rewrite(snap);
     }
@@ -1428,17 +1440,17 @@ mod tests {
         let leader = catalogue("leader-a", &[(21159, "dylan", "radio", 0, 300_000), (350, "beatles", "radio", 0, 200_000)]);
         let follower = catalogue("follower-a", &[(21159, "nirvana", "radio", 0, 216_000), (777, "dylan", "radio", 0, 300_000),
                                                  (350, "beatles", "radio", 0, 200_000)]);
-        assert_eq!(follower.passage(21159).unwrap().identity.unwrap().audio_md5, "nirvana",
+        assert_eq!(follower.passage(21159).unwrap().passage_uid, Some(uid("nirvana", "radio", 0, 216_000)),
                    "the failure this guards against: the leader's number finds another song here");
 
         let on_air = leader.passage(21159).unwrap();
         let next = leader.passage(350).unwrap();
-        let mut snap = message(Some((21159, on_air.identity.unwrap())), vec![(350, next.identity)]);
+        let mut snap = message(on_air.passage_uid, vec![next.passage_uid]);
         let mut numbers = Numbers::default();
         read_through(&mut numbers, &follower, &mut snap);
 
         assert_eq!(snap.echo.schedule.unwrap().passage_id, 777, "the same song, by this node's number");
-        assert_eq!(snap.queue[0].passage_id, 350, "a number both share still works");
+        assert_eq!(snap.queue[0].passage_id, 350, "a number both share is found by the uid too");
     }
 
     /// A song this node lacks is not here, whatever that number names here, and
@@ -1446,85 +1458,94 @@ mod tests {
     #[test]
     fn a_song_this_node_lacks_is_not_replaced_by_another() {
         let follower = catalogue("follower-b", &[(21159, "nirvana", "radio", 0, 216_000)]);
-        let mut snap = message(Some((21159, named_as("dylan", 0, 300_000))), vec![]);
+        let dylan = uid("dylan", "radio", 0, 300_000);
+        let mut snap = message(Some(dylan), vec![]);
         let mut numbers = Numbers::default();
         read_through(&mut numbers, &follower, &mut snap);
 
         let mine = snap.echo.schedule.unwrap().passage_id;
-        assert_eq!(mine, not_here(21159));
-        assert_eq!(their_number(mine), 21159, "and it can still be reported by the leader's number");
+        assert_eq!(mine, not_here(Some(dylan)));
+        assert_eq!(reported(mine), dylan.short(), "reported by the uid's first eight characters");
         assert!(follower.passage(mine).is_err(), "no passage has it, so the node says so and plays its own queue");
     }
 
-    /// The file, kind and start are the passage. A sync that has reached one
-    /// node and not the other leaves its end in two places; a different start
-    /// is a different cut, and two cuts sharing a start are told apart by end.
+    /// A passage is its uid, whatever its boundaries have become: retimed on
+    /// one node and not yet the other, it is still found; another cut of the
+    /// same file, born with a uid of its own, is not.
     #[test]
-    fn a_passage_is_its_file_kind_and_start_and_the_end_only_breaks_a_tie() {
-        let lib = catalogue("follower-c", &[
-            (1, "dylan", "radio", 0, 300_000),
-            (2, "whole", "radio", 0, 2_000_000),
-            (3, "whole", "radio", 0, 300_000),
-            (4, "dylan", "album", 0, 305_000),
+    fn a_passage_is_found_by_its_uid_whatever_its_boundaries_have_become() {
+        let dylan = uid("dylan", "radio", 0, 300_000);
+        let lib = catalogue_as("follower-c", &[
+            (1, "dylan", "radio", 0, 310_000, dylan),
+            (2, "dylan", "radio", 1_000, 300_000, uid("dylan", "radio", 1_000, 300_000)),
+            (3, "dylan", "album", 0, 300_000, uid("dylan", "album", 0, 300_000)),
         ]);
-        assert_eq!(lib.number_of(&named_as("dylan", 0, 310_000)).unwrap(), Some(1), "retimed on one node only");
-        assert_eq!(lib.number_of(&named_as("dylan", 1_000, 300_000)).unwrap(), None, "another cut of it");
-        assert_eq!(lib.number_of(&named_as("whole", 0, 300_000)).unwrap(), Some(3), "the end decides between two");
-        assert_eq!(lib.number_of(&named_as("whole", 0, 2_000_000)).unwrap(), Some(2));
-        let album = PassageIdentity { kind: "album".into(), ..named_as("dylan", 0, 305_000) };
-        assert_eq!(lib.number_of(&album).unwrap(), Some(4), "the kind is part of it");
+        assert_eq!(lib.number_of(&dylan).unwrap(), Some(1), "retimed here, the same passage");
+        assert_eq!(lib.number_of(&uid("dylan", "radio", 2_000, 300_000)).unwrap(), None, "a cut this node lacks");
+        assert_eq!(lib.number_of(&uid("dylan", "album", 0, 300_000)).unwrap(), Some(3), "the kind is part of its birth");
     }
 
-    /// A node too old to name its passages is followed as before, so a fleet can
-    /// be updated one node at a time and a leader updated last loses nothing.
+    /// A leader too old to name its passages by uid is not followed by its
+    /// numbers, even where this node holds passages under those very numbers:
+    /// that is the fault `[SPEC-UID-010]` describes, and the fallback that
+    /// allowed it is gone `[IMPL-UID-070]`.
     #[test]
-    fn a_leader_that_names_nothing_is_followed_by_number() {
-        let follower = catalogue("follower-d", &[(7, "dylan", "radio", 0, 300_000)]);
-        let mut snap = Snapshot {
-            echo: EchoState {
-                schedule: Some(crate::echo::Schedule { passage_id: 7, start_sample: 0, sound_at: 1, rate: 44_100 }),
-                ..Default::default()
-            },
-            queue: vec![AnnouncedEntry { passage_id: 8, identity: None }],
-            passage_id: Some(7),
-            identity: None,
-        };
+    fn a_leader_that_names_nothing_is_not_followed_by_number() {
+        let follower = catalogue("follower-d", &[(7, "dylan", "radio", 0, 300_000), (8, "beatles", "radio", 0, 200_000)]);
+        let mut snap: Snapshot = serde_json::from_str(
+            r#"{"echo":{"schedule":{"passage_id":7,"start_sample":0,"sound_at":1,"rate":44100}},
+                "queue":[{"passage_id":8,"identity":{"audio_md5":"beatles","kind":"radio","start_ms":0,"end_ms":200000}}],
+                "passage_id":7,"title":"x"}"#,
+        ).unwrap();
         let mut numbers = Numbers::default();
         read_through(&mut numbers, &follower, &mut snap);
-        assert_eq!(snap.echo.schedule.unwrap().passage_id, 7);
-        assert_eq!(snap.queue[0].passage_id, 8);
+        assert_eq!(snap.echo.schedule.unwrap().passage_id, UNNAMED);
+        assert_eq!(snap.queue[0].passage_id, UNNAMED);
+        assert!(follower.passage(UNNAMED).is_err());
+        assert_eq!(reported(UNNAMED), "one named without its uid");
     }
 
-    /// The message an older player sends still parses, and an older follower is
-    /// no worse off for the new fields: serde ignores what it does not ask for.
+    /// The uids are what a follower reads from the wire, and a leader's own
+    /// number is never sent: the schedule and the anchor serialize without one.
     #[test]
-    fn a_message_without_identities_still_parses() {
-        let snap: Snapshot = serde_json::from_str(r#"{"echo":{},"queue":[{"passage_id":9}],"title":"x"}"#).unwrap();
-        assert_eq!(snap.queue[0].passage_id, 9);
-        assert!(snap.queue[0].identity.is_none() && snap.identity.is_none());
+    fn a_leader_sends_uids_and_never_its_numbers() {
+        let dylan = uid("dylan", "radio", 0, 300_000);
+        let st = EchoState {
+            schedule: Some(crate::echo::Schedule { passage_id: 21159, passage_uid: Some(dylan), start_sample: 0, sound_at: 1, rate: 44_100 }),
+            anchor: Some(crate::echo::DriftAnchor { passage_id: 21159, passage_uid: Some(dylan), sample: 0, heard_at: 1, rate: 44_100, ppm: None }),
+            voided_by: None,
+        };
+        let wire = serde_json::to_string(&st).unwrap();
+        assert!(!wire.contains("passage_id") && !wire.contains("21159"), "{wire}");
+        assert_eq!(wire.matches(&dylan.to_string()).count(), 2, "{wire}");
+        let back: EchoState = serde_json::from_str(&wire).unwrap();
+        assert_eq!(back.schedule.unwrap().passage_uid, Some(dylan));
+        assert_eq!(back.anchor.unwrap().passage_uid, Some(dylan));
     }
 
-    /// A passage the queue has moved past stays known while the leader's anchor
-    /// still names it, so the tail of a crossfade is not reported as missing;
-    /// and what nothing names any more is let go.
+    /// A passage the queue has moved past is still found while the leader's
+    /// anchor still names it, so the tail of a crossfade is not reported as
+    /// missing; and what nothing names any more is let go.
     #[test]
     fn what_the_leader_can_still_speak_of_is_kept_and_nothing_else() {
         let follower = catalogue("follower-e", &[(1, "a", "radio", 0, 1_000), (2, "b", "radio", 0, 1_000), (3, "c", "radio", 0, 1_000)]);
+        let [a, b, c] = ["a", "b", "c"].map(|m| uid(m, "radio", 0, 1_000));
         let mut numbers = Numbers::default();
-        let mut first = message(Some((10, named_as("a", 0, 1_000))), vec![(20, Some(named_as("b", 0, 1_000)))]);
+        let mut first = message(Some(a), vec![Some(b)]);
         read_through(&mut numbers, &follower, &mut first);
 
         // `b` is on air now, while the anchor is still `a`'s.
-        let mut second = message(Some((20, named_as("b", 0, 1_000))), vec![(30, Some(named_as("c", 0, 1_000)))]);
+        let mut second = message(Some(b), vec![Some(c)]);
         second.echo.anchor = Some(crate::echo::DriftAnchor {
-            passage_id: 10, sample: 0, heard_at: 1, rate: 44_100, ppm: None,
+            passage_id: 0, passage_uid: Some(a), sample: 0, heard_at: 1, rate: 44_100, ppm: None,
         });
         read_through(&mut numbers, &follower, &mut second);
         assert_eq!(second.echo.anchor.unwrap().passage_id, 1);
 
-        let mut third = message(Some((30, named_as("c", 0, 1_000))), vec![]);
+        let mut third = message(Some(c), vec![]);
         read_through(&mut numbers, &follower, &mut third);
-        assert!(!numbers.named.contains_key(&10), "nothing names it any more");
+        assert!(!numbers.here.contains_key(&a), "nothing names it any more");
+        assert_eq!(third.echo.schedule.unwrap().passage_id, 3);
     }
 
     fn node() -> Arc<EngineHandle> {
@@ -1554,7 +1575,7 @@ mod tests {
             naming: Default::default(),
             selected_by: None,
             is_shutdown: false,
-            identity: None,
+            passage_uid: None,
         }
     }
 
@@ -1578,7 +1599,7 @@ mod tests {
     /// A node, a master anchor and a schedule it cannot possibly meet.
     fn unreachable_schedule(h: &Arc<EngineHandle>, now: u64) -> EchoState {
         let anchor = crate::echo::DriftAnchor {
-            passage_id: 7, sample: 0, heard_at: now, rate: 44_100, ppm: None,
+            passage_id: 7, passage_uid: None, sample: 0, heard_at: now, rate: 44_100, ppm: None,
         };
         if let Ok(mut s) = h.state.lock() {
             // A second of presentation offset, so a schedule sounding in
@@ -1592,7 +1613,7 @@ mod tests {
         EchoState {
             anchor: Some(anchor),
             schedule: Some(crate::echo::Schedule {
-                passage_id: 7, start_sample: 0,
+                passage_id: 7, passage_uid: None, start_sample: 0,
                 sound_at: now + 100_000_000, rate: 44_100,
             }),
             voided_by: None,
@@ -1675,7 +1696,7 @@ mod tests {
         let h = node();
         let now = now_nanos();
         let anchor = crate::echo::DriftAnchor {
-            passage_id: 4, sample: 0, heard_at: now, rate: 44_100, ppm: None,
+            passage_id: 4, passage_uid: None, sample: 0, heard_at: now, rate: 44_100, ppm: None,
         };
         {
             let mut s = h.state.lock().unwrap();
@@ -1695,7 +1716,7 @@ mod tests {
         let st = EchoState {
             anchor: Some(anchor),
             schedule: Some(crate::echo::Schedule {
-                passage_id: 7, start_sample: 0,
+                passage_id: 7, passage_uid: None, start_sample: 0,
                 sound_at: now + 3_000_000_000, rate: 44_100,
             }),
             voided_by: None,
@@ -1740,7 +1761,7 @@ mod tests {
         let h = Arc::new(raw);
         let now = now_nanos();
         let anchor = crate::echo::DriftAnchor {
-            passage_id: 4, sample: 0, heard_at: now, rate: 44_100, ppm: None,
+            passage_id: 4, passage_uid: None, sample: 0, heard_at: now, rate: 44_100, ppm: None,
         };
         {
             let mut s = h.state.lock().unwrap();
@@ -1757,7 +1778,7 @@ mod tests {
         let st = EchoState {
             anchor: Some(anchor),
             schedule: Some(crate::echo::Schedule {
-                passage_id: 7, start_sample: 0,
+                passage_id: 7, passage_uid: None, start_sample: 0,
                 sound_at: now + 3_400_000_000, rate: 44_100,
             }),
             voided_by: None,
@@ -1803,7 +1824,7 @@ lands on the passage after the one it was measured for");
         let h = Arc::new(raw);
         let now = now_nanos();
         let anchor = crate::echo::DriftAnchor {
-            passage_id: 4, sample: 0, heard_at: now, rate: 44_100, ppm: None,
+            passage_id: 4, passage_uid: None, sample: 0, heard_at: now, rate: 44_100, ppm: None,
         };
         // The trim is already working off a debt, exactly as the endgame
         // branch of `correct_offset` leaves it. Established FIRST, because a
@@ -1829,7 +1850,7 @@ lands on the passage after the one it was measured for");
         let st = EchoState {
             anchor: Some(anchor),
             schedule: Some(crate::echo::Schedule {
-                passage_id: 7, start_sample: 0,
+                passage_id: 7, passage_uid: None, start_sample: 0,
                 sound_at: now + 3_030_000_000, rate: 44_100,
             }),
             voided_by: None,
@@ -1852,7 +1873,7 @@ lands on the passage after the one it was measured for");
         let h = node();
         let now = now_nanos();
         let anchor = crate::echo::DriftAnchor {
-            passage_id: 4, sample: 0, heard_at: now, rate: 44_100, ppm: None,
+            passage_id: 4, passage_uid: None, sample: 0, heard_at: now, rate: 44_100, ppm: None,
         };
         {
             let mut s = h.state.lock().unwrap();
@@ -1866,7 +1887,7 @@ lands on the passage after the one it was measured for");
         let st = EchoState {
             anchor: Some(anchor),
             schedule: Some(crate::echo::Schedule {
-                passage_id: 7, start_sample: 0,
+                passage_id: 7, passage_uid: None, start_sample: 0,
                 sound_at: now + 3_000_000_000, rate: 44_100,
             }),
             voided_by: None,
@@ -1913,11 +1934,11 @@ lands on the passage after the one it was measured for");
         let st = EchoState {
             // Still audibly on the old passage...
             anchor: Some(crate::echo::DriftAnchor {
-                passage_id: 5164, sample: 0, heard_at: now, rate: 44_100, ppm: None,
+                passage_id: 5164, passage_uid: None, sample: 0, heard_at: now, rate: 44_100, ppm: None,
             }),
             // ...while having already admitted the new one.
             schedule: Some(crate::echo::Schedule {
-                passage_id: 13796, start_sample: 0,
+                passage_id: 13796, passage_uid: None, start_sample: 0,
                 sound_at: now + 100_000_000, rate: 44_100,
             }),
             voided_by: None,
@@ -1947,13 +1968,13 @@ join cuts the ring and re-imposes the join bias",
         }
         let st = EchoState {
             anchor: Some(crate::echo::DriftAnchor {
-                passage_id: 5164, sample: 44_100 * 30, heard_at: now,
+                passage_id: 5164, passage_uid: None, sample: 44_100 * 30, heard_at: now,
                 rate: 44_100, ppm: None,
             }),
             // The master's last admission was this same passage: it is not in
             // a transition, it is simply playing.
             schedule: Some(crate::echo::Schedule {
-                passage_id: 5164, start_sample: 0,
+                passage_id: 5164, passage_uid: None, start_sample: 0,
                 sound_at: now + 100_000_000, rate: 44_100,
             }),
             voided_by: None,
@@ -1982,7 +2003,7 @@ join cuts the ring and re-imposes the join bias",
         }
         let st = EchoState {
             anchor: Some(crate::echo::DriftAnchor {
-                passage_id: 5164, sample: 0, heard_at: now, rate: 44_100, ppm: None,
+                passage_id: 5164, passage_uid: None, sample: 0, heard_at: now, rate: 44_100, ppm: None,
             }),
             schedule: None,
             voided_by: None,
@@ -2002,7 +2023,7 @@ join cuts the ring and re-imposes the join bias",
     {
         let now = now_nanos();
         let anchor = crate::echo::DriftAnchor {
-            passage_id: 7, sample: 0, heard_at: now, rate: 44_100, ppm: None,
+            passage_id: 7, passage_uid: None, sample: 0, heard_at: now, rate: 44_100, ppm: None,
         };
         if let Ok(mut s) = h.state.lock() {
             s.echo_node.rate = 44_100;
@@ -2233,14 +2254,14 @@ join cuts the ring and re-imposes the join bias",
         // Master returns to neutral on the SAME passage 5164, while follower has join_now = false.
         let neutral_master = EchoState {
             anchor: Some(crate::echo::DriftAnchor {
-                passage_id: 5164,
+                passage_id: 5164, passage_uid: None,
                 sample: 44_100 * 10,
                 heard_at: now,
                 rate: 44_100,
                 ppm: None,
             }),
             schedule: Some(crate::echo::Schedule {
-                passage_id: 5164,
+                passage_id: 5164, passage_uid: None,
                 start_sample: 0,
                 sound_at: now + 100_000_000,
                 rate: 44_100,

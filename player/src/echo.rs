@@ -21,6 +21,8 @@
 
 use std::time::Duration;
 
+use crate::db::PassageUid;
+
 /// Nanoseconds on the chrony-disciplined wall clock, since the epoch.
 ///
 /// The same basis `FrameClock::sample` pairs its frame count with. Deliberately
@@ -56,7 +58,15 @@ impl NodeTiming {
 /// echo node holds the file locally and knows the queue `[GDE-ECHO-420]`.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Schedule {
+    /// This node's own number for the passage, never sent `[SPEC-UID-010]`:
+    /// a follower sets its own from `passage_uid` as the message arrives.
+    #[serde(skip)]
     pub passage_id: i64,
+    /// What the passage is on every node `[IMPL-UID-070]`. `None` from a
+    /// passage whose uid the hub has yet to send, and from a leader too old to
+    /// say, and a follower follows neither.
+    #[serde(default)]
+    pub passage_uid: Option<PassageUid>,
     /// The sample within the passage that reaches the air at `sound_at`.
     ///
     /// Zero for an ordinary passage-to-passage transition, which every node
@@ -88,7 +98,11 @@ pub struct Schedule {
 /// so an anchor must subtract [`NodeTiming::offset`] as well.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DriftAnchor {
+    /// As [`Schedule::passage_id`]: this node's number, never sent.
+    #[serde(skip)]
     pub passage_id: i64,
+    #[serde(default)]
+    pub passage_uid: Option<PassageUid>,
     pub sample: u64,
     pub heard_at: WallNanos,
     pub rate: u32,
@@ -100,6 +114,12 @@ pub struct DriftAnchor {
     /// makes "nobody has computed this" a thing the wire can say. Caught by
     /// the first client that ever read one.
     pub ppm: Option<f64>,
+}
+
+/// A message's uid for a log line: the whole text, so it can be looked up, or
+/// `none` where the message carried none.
+pub fn uid_text(uid: Option<PassageUid>) -> String {
+    uid.map_or_else(|| "none".to_string(), |u| u.to_string())
 }
 
 fn frames_to_duration(frames: u64, rate: u32) -> Duration {
@@ -738,7 +758,7 @@ impl AirPosition {
     /// The backward anchor this position supports.
     pub fn anchor(&self, rate: u32, ppm: Option<f64>) -> DriftAnchor {
         DriftAnchor {
-            passage_id: self.passage_id,
+            passage_id: self.passage_id, passage_uid: None,
             sample: self.position_ms * rate as u64 / 1000,
             heard_at: self.at,
             rate,
@@ -762,7 +782,7 @@ pub fn schedule_for_admission(
     now: WallNanos,
 ) -> Schedule {
     let ahead_ns = (ring_frames + device_delay_frames) * 1_000_000_000 / rate.max(1) as u64;
-    Schedule { passage_id, start_sample, sound_at: now + ahead_ns, rate }
+    Schedule { passage_id, passage_uid: None, start_sample, sound_at: now + ahead_ns, rate }
 }
 
 /// What a master publishes for echo nodes, on the snapshot's own cadence.
@@ -1293,7 +1313,7 @@ mod tests {
     fn the_node_with_the_larger_offset_submits_earlier() {
         // The whole point of `[GDE-ECHO-410]`. A backward-only design would
         // have had lempi02w submitting after bose and never catching up.
-        let sched = Schedule { passage_id: 7, start_sample: 0, sound_at: 100 * SEC, rate: 44100 };
+        let sched = Schedule { passage_id: 7, passage_uid: None, start_sample: 0, sound_at: 100 * SEC, rate: 44100 };
         let now = 80 * SEC;
         let b = submit_at(&sched, BOSE, now).unwrap();
         let v = submit_at(&sched, LEMPIPI, now).unwrap();
@@ -1306,7 +1326,7 @@ mod tests {
     #[test]
     fn the_master_applies_the_same_arithmetic_to_itself() {
         // Symmetry: no node is the reference `[GDE-ECHO-410]`.
-        let sched = Schedule { passage_id: 1, start_sample: 0, sound_at: 50 * SEC, rate: 44100 };
+        let sched = Schedule { passage_id: 1, passage_uid: None, start_sample: 0, sound_at: 50 * SEC, rate: 44100 };
         let submit = submit_at(&sched, BOSE, 0).unwrap();
         assert_eq!(submit, 50 * SEC - BOSE.offset().as_nanos() as u64);
     }
@@ -1315,7 +1335,7 @@ mod tests {
     fn a_schedule_already_past_is_refused_not_rounded_forward() {
         // 100 ms of lead against a 355 ms offset: submission was due 255 ms
         // ago. Returning a past instant would read like an instruction.
-        let sched = Schedule { passage_id: 2, start_sample: 0, sound_at: 10 * SEC + 100_000_000, rate: 44100 };
+        let sched = Schedule { passage_id: 2, passage_uid: None, start_sample: 0, sound_at: 10 * SEC + 100_000_000, rate: 44100 };
         assert!(submit_at(&sched, LEMPIPI, 10 * SEC).is_none());
         // The same schedule is comfortably reachable by the low-offset node.
         assert!(submit_at(&sched, BOSE, 10 * SEC).is_some());
@@ -1325,7 +1345,7 @@ mod tests {
     fn fifteen_seconds_of_lead_clears_every_measured_offset() {
         // `[GDE-ECHO-310]`'s claim, checked rather than asserted.
         let now = 1000 * SEC;
-        let sched = Schedule { passage_id: 3, start_sample: 0, sound_at: now + 15 * SEC, rate: 44100 };
+        let sched = Schedule { passage_id: 3, passage_uid: None, start_sample: 0, sound_at: now + 15 * SEC, rate: 44100 };
         for node in [BOSE, LEMPIPI] {
             assert!(submit_at(&sched, node, now).is_some());
         }
@@ -1337,7 +1357,7 @@ mod tests {
     fn residual_sign_says_late_is_positive() {
         // The master heard its own sample 44100 -- one second in -- at t=5 s.
         let a = DriftAnchor {
-            passage_id: 4, sample: 44100, heard_at: 5 * SEC, rate: 44100, ppm: None,
+            passage_id: 4, passage_uid: None, sample: 44100, heard_at: 5 * SEC, rate: 44100, ppm: None,
         };
         let at_the_same_place = |at: WallNanos| AirPosition {
             passage_id: 4, position_ms: 1_000, at,
@@ -1589,7 +1609,7 @@ mod tests {
         // Master: heard sample 0 (0 ms) at t=10 s. Its snapshot then crossed a
         // network, and this node reads its own position 250 ms later -- by
         // which time it has itself played 250 ms. Perfectly in sync.
-        let m = DriftAnchor { passage_id: 3, sample: 0, heard_at: 10 * SEC,
+        let m = DriftAnchor { passage_id: 3, passage_uid: None, sample: 0, heard_at: 10 * SEC,
                               rate: 44100, ppm: None };
         let local = AirPosition { passage_id: 3, position_ms: 250, at: 10 * SEC + 250_000_000 };
         assert_eq!(local_at_sample(&local, &m) - m.heard_at as i64, 0,
@@ -1983,7 +2003,7 @@ mod tests {
     #[test]
     fn two_nodes_agreeing_on_the_air_have_no_residual() {
         // The property echo is trying to hold: different offsets, same sound.
-        let sched = Schedule { passage_id: 8, start_sample: 0, sound_at: 900 * SEC, rate: 44100 };
+        let sched = Schedule { passage_id: 8, passage_uid: None, start_sample: 0, sound_at: 900 * SEC, rate: 44100 };
         let now = 880 * SEC;
         let b = submit_at(&sched, BOSE, now).unwrap() + BOSE.offset().as_nanos() as u64;
         let v = submit_at(&sched, LEMPIPI, now).unwrap() + LEMPIPI.offset().as_nanos() as u64;
@@ -2006,13 +2026,13 @@ mod tests {
     #[test]
     fn a_seek_re_announces_the_playing_passage_and_is_acted_on() {
         let mut f = follower(BOSE);
-        let playing = Schedule { passage_id: 4, start_sample: 0, sound_at: 100 * SEC, rate: 44100 };
+        let playing = Schedule { passage_id: 4, passage_uid: None, start_sample: 0, sound_at: 100 * SEC, rate: 44100 };
         assert!(matches!(f.on_state(&state_with(Some(playing), None), 80 * SEC),
                          Follow::StartAt { passage_id: 4, start_sample: 0, .. }));
         assert_eq!(f.on_state(&state_with(Some(playing), None), 80 * SEC), Follow::Idle);
 
         // Same passage, three minutes in, sounding much sooner.
-        let seek = Schedule { passage_id: 4, start_sample: 180 * 44100,
+        let seek = Schedule { passage_id: 4, passage_uid: None, start_sample: 180 * 44100,
                               sound_at: 81 * SEC, rate: 44100 };
         match f.on_state(&state_with(Some(seek), None), 80 * SEC) {
             Follow::StartAt { passage_id: 4, start_sample, .. } => {
@@ -2029,8 +2049,8 @@ mod tests {
     #[test]
     fn the_same_offset_announced_again_later_is_a_new_instruction() {
         let mut f = follower(BOSE);
-        let a = Schedule { passage_id: 9, start_sample: 44100, sound_at: 90 * SEC, rate: 44100 };
-        let b = Schedule { passage_id: 9, start_sample: 44100, sound_at: 95 * SEC, rate: 44100 };
+        let a = Schedule { passage_id: 9, passage_uid: None, start_sample: 44100, sound_at: 90 * SEC, rate: 44100 };
+        let b = Schedule { passage_id: 9, passage_uid: None, start_sample: 44100, sound_at: 95 * SEC, rate: 44100 };
         assert!(matches!(f.on_state(&state_with(Some(a), None), 80 * SEC), Follow::StartAt { .. }));
         assert!(matches!(f.on_state(&state_with(Some(b), None), 80 * SEC), Follow::StartAt { .. }));
     }
@@ -2039,7 +2059,7 @@ mod tests {
     fn a_repeated_schedule_is_acted_on_once() {
         // `[GDE-ECHO-320]` repeats every message rather than sequencing them,
         // so the follower has to be the thing that makes it idempotent.
-        let sched = Schedule { passage_id: 4, start_sample: 0, sound_at: 100 * SEC, rate: 44100 };
+        let sched = Schedule { passage_id: 4, passage_uid: None, start_sample: 0, sound_at: 100 * SEC, rate: 44100 };
         let st = state_with(Some(sched), None);
         let mut f = follower(BOSE);
         assert!(matches!(f.on_state(&st, 80 * SEC), Follow::StartAt { passage_id: 4, .. }));
@@ -2051,7 +2071,7 @@ mod tests {
     #[test]
     fn a_high_offset_node_can_miss_what_a_low_offset_node_makes() {
         // 100 ms of lead: bose can still submit, lempi02w needed to 255 ms ago.
-        let sched = Schedule { passage_id: 5, start_sample: 0, sound_at: 10 * SEC + 100_000_000, rate: 44100 };
+        let sched = Schedule { passage_id: 5, passage_uid: None, start_sample: 0, sound_at: 10 * SEC + 100_000_000, rate: 44100 };
         let st = state_with(Some(sched), None);
         assert!(matches!(follower(BOSE).on_state(&st, 10 * SEC),
                          Follow::StartAt { .. }));
@@ -2066,7 +2086,7 @@ mod tests {
         // boundary -- going independent here would desynchronise on purpose.
         let st = EchoState {
             anchor: None,
-            schedule: Some(Schedule { passage_id: 6, start_sample: 0, sound_at: 100 * SEC, rate: 44100 }),
+            schedule: Some(Schedule { passage_id: 6, passage_uid: None, start_sample: 0, sound_at: 100 * SEC, rate: 44100 }),
             voided_by: Some(Voided::Underrun),
         };
         let mut f = follower(BOSE);
@@ -2080,7 +2100,7 @@ mod tests {
         // the positions differ by minutes. Trimming against that would drive
         // the node hard in the wrong direction.
         let anchor = DriftAnchor {
-            passage_id: 7, sample: 0, heard_at: 500 * SEC, rate: 44100, ppm: None,
+            passage_id: 7, passage_uid: None, sample: 0, heard_at: 500 * SEC, rate: 44100, ppm: None,
         };
         let local = AirPosition { passage_id: 6, position_ms: 0, at: 200 * SEC };
         let st = state_with(None, Some(anchor));
@@ -2092,7 +2112,7 @@ mod tests {
     #[test]
     fn a_node_with_no_basis_of_its_own_does_not_trim() {
         let anchor = DriftAnchor {
-            passage_id: 1, sample: 0, heard_at: 100 * SEC, rate: 44100, ppm: None,
+            passage_id: 1, passage_uid: None, sample: 0, heard_at: 100 * SEC, rate: 44100, ppm: None,
         };
         let local = AirPosition { passage_id: 1, position_ms: 0, at: 100 * SEC + 5_000_000 };
         let st = state_with(None, Some(anchor));
@@ -2103,7 +2123,7 @@ mod tests {
     #[test]
     fn a_late_follower_drops_and_then_waits_out_the_interval() {
         let anchor = DriftAnchor {
-            passage_id: 1, sample: 0, heard_at: 100 * SEC, rate: 44100, ppm: None,
+            passage_id: 1, passage_uid: None, sample: 0, heard_at: 100 * SEC, rate: 44100, ppm: None,
         };
         // 5 ms late.
         let local = AirPosition { passage_id: 1, position_ms: 0, at: 100 * SEC + 5_000_000 };
@@ -2120,7 +2140,7 @@ mod tests {
     #[test]
     fn an_early_follower_duplicates() {
         let anchor = DriftAnchor {
-            passage_id: 1, sample: 0, heard_at: 100 * SEC, rate: 44100, ppm: None,
+            passage_id: 1, passage_uid: None, sample: 0, heard_at: 100 * SEC, rate: 44100, ppm: None,
         };
         let local = AirPosition { passage_id: 1, position_ms: 0, at: 100 * SEC - 5_000_000 };
         let st = state_with(None, Some(anchor));

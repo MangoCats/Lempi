@@ -25,6 +25,7 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use lempi_player::cli::specs::echoprobe as opt;
+use lempi_player::db::PassageUid;
 use lempi_player::echo::{EchoState, Follow, Follower, NodeTiming, Trim};
 
 /// Only the field an echo node cares about. Serde ignores the rest of the
@@ -34,6 +35,19 @@ use lempi_player::echo::{EchoState, Follow, Follower, NodeTiming, Trim};
 struct Snapshot {
     #[serde(default)]
     echo: EchoState,
+}
+
+/// The probe holds no catalogue, so a passage's number here is its uid's
+/// first 32 bits: two passages stay two, and each prints as the uid's first
+/// eight characters `[IMPL-UID-076]`. The master's own number is never sent
+/// `[IMPL-UID-070]`; a passage named without a uid is -1.
+fn stand_in(uid: Option<PassageUid>) -> i64 {
+    uid.and_then(|u| u32::from_str_radix(&u.short(), 16).ok()).map_or(-1, i64::from)
+}
+
+/// A stand-in as it is printed.
+fn shown(n: i64) -> String {
+    if n < 0 { "(named without a uid)".to_string() } else { format!("{n:08x}") }
 }
 
 fn now_nanos() -> u64 {
@@ -87,7 +101,7 @@ async fn main() {
                     break;
                 }
             };
-            let snap: Snapshot = match serde_json::from_str(&text) {
+            let mut snap: Snapshot = match serde_json::from_str(&text) {
                 Ok(s) => s,
                 Err(e) => {
                     // A master too old to publish the field is a fact worth
@@ -97,6 +111,12 @@ async fn main() {
                 }
             };
             seen += 1;
+            if let Some(s) = snap.echo.schedule.as_mut() {
+                s.passage_id = stand_in(s.passage_uid);
+            }
+            if let Some(a) = snap.echo.anchor.as_mut() {
+                a.passage_id = stand_in(a.passage_uid);
+            }
             report(&mut follower, &snap.echo, seen, &mut last_report, &mut last_sched);
         }
         eprintln!("echoprobe: disconnected; retrying in 3s");
@@ -137,7 +157,7 @@ fn report(f: &mut Follower, st: &EchoState, seen: u64, last: &mut String,
             };
             println!(
                 "[{seen:>6}] SCHEDULE passage {} {from} -- sound in {lead_ms:.0} ms; this node needs {offset_ms:.0} ms for the device, leaving {:.0} ms for its own ring",
-                sched.passage_id, lead_ms - offset_ms
+                shown(sched.passage_id), lead_ms - offset_ms
             );
         }
     }
@@ -146,14 +166,14 @@ fn report(f: &mut Follower, st: &EchoState, seen: u64, last: &mut String,
         (Follow::Hold(why), _) => format!("HOLD -- master reports {why:?}"),
         (Follow::StartAt { passage_id, start_sample, at }, _) => {
             let lead = (*at as i64 - now as i64) as f64 / 1e9;
-            format!("START passage {passage_id} at sample {start_sample} in {lead:.3}s")
+            format!("START passage {} at sample {start_sample} in {lead:.3}s", shown(*passage_id))
         }
         (Follow::Missed { passage_id }, _) => {
-            format!("MISSED passage {passage_id} -- submission was already due")
+            format!("MISSED passage {} -- submission was already due", shown(*passage_id))
         }
         (Follow::Idle, Some(a)) => format!(
             "following passage {} at sample {} ({:.1}s), master ppm {}",
-            a.passage_id, a.sample, a.sample as f64 / a.rate.max(1) as f64,
+            shown(a.passage_id), a.sample, a.sample as f64 / a.rate.max(1) as f64,
             match a.ppm {
                 Some(p) => format!("{p:+.2}"),
                 None => "not measured".to_string(),

@@ -2031,7 +2031,7 @@ impl Engine {
                 {
                     let _ = (r, d);
                     let depth = self.out_buffered_frames() as u64;
-                    self.publish_schedule(entry.passage_id, origin.unwrap_or(0), depth);
+                    self.publish_schedule(entry.passage_id, entry.passage_uid, origin.unwrap_or(0), depth);
                 }
             }
         }
@@ -2587,7 +2587,7 @@ impl Engine {
         let capacity_frames = self.path.ring.as_ref()
             .map_or(0, |r| r.capacity() as u64 / self.out_channels.max(1) as u64);
         let sched = crate::echo::Schedule {
-            passage_id: 0, start_sample: 0, sound_at, rate: self.out_rate,
+            passage_id: 0, passage_uid: None, start_sample: 0, sound_at, rate: self.out_rate,
         };
         match crate::echo::placement(&sched, timing, capacity_frames, now) {
             crate::echo::Placement::Depth(f) => f,
@@ -2637,7 +2637,8 @@ placing at the ring's own depth, which sounds early",
     /// the schedule came from inside `admit_due`, which `skip` calls *before*
     /// cutting the ring, so the master announced a sound time some fourteen
     /// seconds later than the truth and every follower planned against it.
-    fn publish_schedule(&mut self, passage_id: i64, origin_ms: u64, depth_frames: u64) {
+    fn publish_schedule(&mut self, passage_id: i64, passage_uid: Option<crate::db::PassageUid>,
+                        origin_ms: u64, depth_frames: u64) {
         if self.is_warped() {
             return;
         }
@@ -2648,16 +2649,18 @@ placing at the ring's own depth, which sounds early",
         let Ok(d) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         else { return };
         let rate = r.sample_rate();
-        let s = crate::echo::schedule_for_admission(
+        // The uid is what a follower is told; the number is this node's alone
+        // `[IMPL-UID-070]`.
+        let s = crate::echo::Schedule { passage_uid, ..crate::echo::schedule_for_admission(
             passage_id,
             origin_ms.saturating_mul(rate as u64) / 1000,
             depth_frames,
             r.clock.delay_frames(),
             rate,
             d.as_nanos() as u64,
-        );
-        tracing::info!("echo-schedule: passage={} start_sample={} sound_at={} rate={} depth={}",
-                  s.passage_id, s.start_sample, s.sound_at, s.rate, depth_frames);
+        ) };
+        tracing::info!("echo-schedule: passage={} uid={} start_sample={} sound_at={} rate={} depth={}",
+                  s.passage_id, crate::echo::uid_text(s.passage_uid), s.start_sample, s.sound_at, s.rate, depth_frames);
         self.echo.schedule = Some(s);
     }
 
@@ -2669,7 +2672,7 @@ placing at the ring's own depth, which sounds early",
     fn republish_after_cut(&mut self, lead_samples: usize) {
         let ch = self.out_channels.max(1);
         let rate = self.out_rate.max(1) as u64;
-        if let Some((id, origin)) = self.live.first().map(|l| (l.entry.passage_id, l.origin_ms)) {
+        if let Some((id, uid, origin)) = self.live.first().map(|l| (l.entry.passage_id, l.entry.passage_uid, l.origin_ms)) {
             // Announced a little FURTHER ON than this node's own audio
             // `[GDE-ECHO-355]`. A skip sounds here in `skip_lead_ms` -- half a
             // second -- and no follower can meet that: its own skip costs the
@@ -2684,7 +2687,7 @@ placing at the ring's own depth, which sounds early",
             // every follower has room to arrive.
             let margin = Self::ECHO_SKIP_ANNOUNCE_MARGIN_MS;
             let depth = (lead_samples / ch) as u64 + margin * rate / 1000;
-            self.publish_schedule(id, origin + margin, depth);
+            self.publish_schedule(id, uid, origin + margin, depth);
         }
     }
 
@@ -3354,7 +3357,10 @@ placing at the ring's own depth, which sounds early",
             anchor: if self.echo.basis.is_valid() {
                 // None, not 0.0: nothing here measures the master's own rate
                 // error yet, and saying zero would be a claim `[GOV-SRC-040]`.
-                self.air_position().map(|a| a.anchor(self.out_rate, None))
+                self.air_position().map(|a| crate::echo::DriftAnchor {
+                    passage_uid: self.shown.as_ref().and_then(|(e, _)| e.passage_uid),
+                    ..a.anchor(self.out_rate, None)
+                })
             } else {
                 None
             },
@@ -3982,7 +3988,7 @@ mod tests {
             naming: Default::default(),
             selected_by: None,
             is_shutdown: false,
-            identity: None,
+            passage_uid: None,
         }
     }
 
@@ -4597,6 +4603,41 @@ than one mix block");
         let moved = untrimmed.position_ms as i64 - trimmed.position_ms as i64;
         assert!((moved - 200).abs() <= 1,
                 "the trim moved the reported position by {moved} ms, not 200; the scheduler and the anchor disagree about this node's delay");
+        let _ = std::fs::remove_file(&wav);
+    }
+
+    /// What a leader publishes names its passage by uid `[IMPL-UID-070]`: the
+    /// anchor carries the uid of the passage sounding, and a schedule the uid
+    /// it was given. Its own number stays here; the wire never carries it.
+    #[test]
+    fn a_leader_names_what_it_publishes_by_uid() {
+        let uid = crate::db::PassageUid::parse(&format!("{:032x}", 0xd1a7u32)).unwrap();
+        let ring = crate::output::OutputRing::new(400_000, crate::output::Volume::new(1.0));
+        let (mut e, h) = Engine::new(crate::path::PathHandle::with_ring(ring.clone()), 3);
+        e.out_rate = 44_100;
+        let wav = wav_of(30_000);
+        let mut a = entry(1, wav.to_str().unwrap());
+        (a.end_ms, a.passage_uid) = (30_000, Some(uid));
+        e.enqueue(a);
+        h.send(Command::Play);
+        e.drain_commands();
+        for i in 0..400 {
+            e.tick();
+            let mut st = ring.state.lock().unwrap();
+            let mut sink = vec![0.0f32; st.ring.len()];
+            st.ring.read(&mut sink);
+            drop(st);
+            ring.clock.tick_for_test(2_048, 2_040 + (i % 2));
+        }
+        assert_eq!(ring.clock.timestamps(), crate::output::Timestamps::Hardware, "fixture: a hardware clock");
+        e.publish_schedule(1, Some(uid), 0, 0);
+        e.publish();
+        let echo = h.state.lock().unwrap().echo.clone();
+        let anchor = echo.anchor.expect("a sounding node anchors");
+        assert_eq!((anchor.passage_id, anchor.passage_uid), (1, Some(uid)));
+        assert_eq!(echo.schedule.expect("just scheduled").passage_uid, Some(uid));
+        let wire = serde_json::to_string(&echo).unwrap();
+        assert!(wire.contains(&uid.to_string()) && !wire.contains("passage_id"), "{wire}");
         let _ = std::fs::remove_file(&wav);
     }
 
@@ -6509,7 +6550,7 @@ than one mix block");
         e.drain_commands();
         e.echo.basis.establish();
         e.echo.schedule = Some(crate::echo::Schedule {
-            passage_id: 1,
+            passage_id: 1, passage_uid: None,
             start_sample: 0,
             sound_at: 100,
             rate: 44_100,

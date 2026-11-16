@@ -45,7 +45,7 @@ read_node() {
             -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
             http://127.0.0.1:$port/ws 2>/dev/null \
          | strings \
-         | grep -oE '\"passage_id\":[0-9]+|\"position_ms\":[0-9]+' \
+         | grep -oE '\"passage_uid\":\"[0-9a-f]{32}\"|\"position_ms\":[0-9]+' \
          | head -2 | tr '\n' ' '; \
          echo \"\$T\""
 }
@@ -56,19 +56,20 @@ while [ "$i" -le "$N" ]; do
     rb=$(read_node "$B")
     echo "$ra|$rb" | awk -F'|' '
     function num(s, k,   t) { match(s, k "\":[0-9]+"); t = substr(s, RSTART, RLENGTH); sub(/.*:/, "", t); return t + 0 }
+    function uid(s,   t) { if (!match(s, /passage_uid":"[0-9a-f]+"/)) return "(no uid)"; t = substr(s, RSTART + 14, 8); return t }
     function tm(s,   n) { n = split(s, f, " "); return f[n] + 0 }
     {
-        pa = num($1, "passage_id"); posa = num($1, "position_ms"); ta = tm($1)
-        pb = num($2, "passage_id"); posb = num($2, "position_ms"); tb = tm($2)
+        pa = uid($1); posa = num($1, "position_ms"); ta = tm($1)
+        pb = uid($2); posb = num($2, "position_ms"); tb = tm($2)
         if (ta == 0 || tb == 0) { print "  unreadable -- is the player up?"; next }
         # What the second node SHOULD read, had it been asked at the same
         # instant as the first.
         want = posa + (tb - ta) * 1000
         skew = want - posb
-        # Each number is its own catalogue'"'"'s [SPEC-DF-035], so a difference here
-        # need not be different music: echo_skew.py compares what they name.
-        same = (pa == pb) ? "" : sprintf("  [NUMBERS DIFFER %d vs %d]", pa, pb)
-        printf "%s  passage %-7d  %8.0f ms behind%s\n", strftime("%H:%M:%S"), pa, skew, same
+        # The passage by its uid, the same on every node, shown by its first
+        # eight characters [IMPL-UID-074]; a number is its own catalogue'"'"'s.
+        same = (pa == pb && pa != "(no uid)") ? "" : sprintf("  [DIFFERENT PASSAGES %s vs %s]", pa, pb)
+        printf "%s  passage %s  %8.0f ms behind%s\n", strftime("%H:%M:%S"), pa, skew, same
     }'
     i=$((i + 1))
     [ "$i" -le "$N" ] && sleep "$GAP"

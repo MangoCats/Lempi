@@ -531,7 +531,7 @@ mod tests {
             naming: Default::default(),
             selected_by: None,
             is_shutdown: false,
-            identity: None,
+            passage_uid: None,
         }
     }
 

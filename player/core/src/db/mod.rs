@@ -25,7 +25,7 @@ pub use library::*;
 pub use lyrics::*;
 pub use pair::*;
 pub use player_store::*;
-pub use uid::{has_uids, is_uid, passage_uid, stamp_birth, Birth};
+pub use uid::{has_uids, is_uid, passage_uid, stamp_birth, Birth, PassageUid};
 
 /// Bring a `files` table predating `md5_generator` up to date
 /// `[SPEC-RLK-150]`.

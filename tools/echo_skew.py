@@ -172,7 +172,6 @@ class Node:
     def __init__(self, host: str):
         self.host = host
         self.anchor: dict | None = None
-        self.identity: dict | None = None
         self.voided: str | None = None
         self.status: str = ""
         self.seen = 0
@@ -194,12 +193,19 @@ class Node:
 
 
 def same_passage(a: Node, b: Node) -> bool:
-    """Whether two nodes are on the same music. Their numbers cannot say: each is
-    its own catalogue's [SPEC-DF-035], so the same song can differ and another song
-    can match [SPEC-UID-010]. A player too old to name its passage leaves only them."""
-    if a.identity and b.identity:
-        return all(a.identity[k] == b.identity[k] for k in ("audio_md5", "kind", "start_ms"))
-    return a.anchor["passage_id"] == b.anchor["passage_id"]
+    """Whether two nodes are on the same music: the same passage uid in both
+    anchors [IMPL-UID-074]. A node's number is its own catalogue's and is not
+    sent [SPEC-UID-010]; an anchor without a uid, from a player built before
+    2026-11-16, is the same as nothing."""
+    ua, ub = a.anchor.get("passage_uid"), b.anchor.get("passage_uid")
+    return bool(ua) and ua == ub
+
+
+def shown(anchor: dict) -> str:
+    """An anchor's passage as a person is shown it: the uid's first eight
+    characters [IMPL-UID-076]."""
+    uid = anchor.get("passage_uid")
+    return uid[:8] if uid else "(no uid)"
 
 
 async def follow(node: Node, stop: asyncio.Event) -> None:
@@ -212,7 +218,6 @@ async def follow(node: Node, stop: asyncio.Event) -> None:
                     snap = json.loads(raw)
                     echo = snap.get("echo") or {}
                     node.anchor = echo.get("anchor")
-                    node.identity = snap.get("identity")
                     node.voided = echo.get("voided_by")
                     node.status = (snap.get("echo_node") or {}).get("follow_status", "")
                     node.seen += 1
@@ -250,12 +255,12 @@ async def run(a: Node, b: Node, seconds: float, every: float, quiet: bool) -> in
                 mismatched += 1
                 if not quiet:
                     print(f"{time.strftime('%H:%M:%S')}  -- different passages "
-                          f"({a.anchor['passage_id']} vs {b.anchor['passage_id']})", flush=True)
+                          f"({shown(a.anchor)} vs {shown(b.anchor)})", flush=True)
             else:
                 skew = pa - pb
                 samples.append(skew)
                 if not quiet:
-                    print(f"{time.strftime('%H:%M:%S')}  passage {a.anchor['passage_id']:<7d} "
+                    print(f"{time.strftime('%H:%M:%S')}  passage {shown(a.anchor)} "
                           f"{skew:8.0f} ms behind   [{b.host} says: {b.status or '-'}]",
                           flush=True)
             await asyncio.sleep(every)

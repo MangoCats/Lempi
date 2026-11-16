@@ -12,9 +12,9 @@ use std::path::PathBuf;
 
 use rusqlite::OpenFlags;
 
-use crate::queue::{Naming, PassageIdentity, QueueEntry};
+use crate::queue::{Naming, QueueEntry};
 
-use super::{BUSY_WAIT, DbError, QualifyingConn, TAG_TABLE};
+use super::{BUSY_WAIT, DbError, PassageUid, QualifyingConn, TAG_TABLE};
 
 pub struct Library {
     conn: QualifyingConn,
@@ -69,7 +69,7 @@ pub(crate) const COLS: &str = "p.passage_id, f.path, p.start_ms, p.end_ms, f.dur
                                (SELECT pr.mbid FROM __LIB__.passage_recordings pr \
                                 WHERE pr.passage_id = p.passage_id \
                                 ORDER BY pr.weight DESC, pr.mbid LIMIT 1), \
-                               __FILES_GAPLESS__, f.audio_md5, p.kind";
+                               __FILES_GAPLESS__, p.passage_uid";
 pub(crate) const FROM: &str = "FROM __LIB__.passages p JOIN __LIB__.files f USING (file_id)";
 
 pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEntry> {
@@ -113,16 +113,11 @@ pub(crate) fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueEnt
         // real provenance event to report `[REQ-VIS-300]`.
         selected_by: None,
         is_shutdown: false,
-        // `NOT NULL` in the schema `[SPEC-SC-030]`, read as optional so a row
-        // that somehow lacks it costs a follower's lookup and not the whole load.
-        identity: row.get::<_, Option<String>>(14)?.map(|audio_md5| {
-            Ok::<_, rusqlite::Error>(PassageIdentity {
-                audio_md5,
-                kind: row.get(15)?,
-                start_ms: row.get::<_, i64>(2)? as u64,
-                end_ms: row.get::<_, i64>(3)? as u64,
-            })
-        }).transpose()?,
+        // NULL on a node for a passage the hub has not yet given one
+        // `[IMPL-UID-052]`, and that costs a follower its lookup of this
+        // passage, not the whole load. A value not in a uid's form reads the
+        // same way: no row of the catalogue can be found by it.
+        passage_uid: row.get::<_, Option<String>>(14)?.as_deref().and_then(PassageUid::parse),
     })
 }
 
@@ -222,16 +217,14 @@ impl Library {
     /// This catalogue's own number for a passage another node named
     /// `[SPEC-UID-010]`, or `None` where it holds no such passage.
     ///
-    /// The file, kind and start say which music it is. The end only breaks a
-    /// tie: a sync that has reached one node and not the other leaves the same
-    /// passage ending in two places, and that is still the same passage.
-    pub fn number_of(&self, id: &PassageIdentity) -> Result<Option<i64>, DbError> {
+    /// By its uid alone `[IMPL-UID-070]`, through `passages_uid`. Until
+    /// 2026-11-16 a passage was named by its file, kind and start, with the end
+    /// breaking a tie, and a boundary edit on one node and not yet the other
+    /// could make that name find another cut or none; a uid survives the edit.
+    pub fn number_of(&self, uid: &PassageUid) -> Result<Option<i64>, DbError> {
         let found = self.conn.query_row(
-            &format!(
-                "SELECT p.passage_id {FROM} WHERE f.audio_md5 = ?1 AND p.kind = ?2 AND p.start_ms = ?3 \
-                 ORDER BY p.end_ms = ?4 DESC, p.passage_id LIMIT 1"
-            ),
-            rusqlite::params![id.audio_md5, id.kind, id.start_ms as i64, id.end_ms as i64],
+            "SELECT passage_id FROM __LIB__.passages WHERE passage_uid = ?1",
+            [uid.to_string()],
             |r| r.get::<_, i64>(0),
         );
         match found {
@@ -324,7 +317,7 @@ impl Library {
             },
         };
         let rows: Vec<(QueueEntry, bool)> = stmt
-            .query_map([], |r| Ok((row_to_entry(r)?, r.get::<_, bool>(16)?)))
+            .query_map([], |r| Ok((row_to_entry(r)?, r.get::<_, bool>(15)?)))
             .map_err(q)?
             .collect::<rusqlite::Result<_>>()
             .map_err(q)?;

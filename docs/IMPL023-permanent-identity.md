@@ -162,6 +162,7 @@ The window ran 2026-11-16 with `tools/listener_window.py` recording each listene
 ## 7. Stage C: every wire, URL, tool and log
 
 **`[IMPL-UID-070]` Echo** announces `passage_uid`, and a follower resolves it. The `(audio_md5, kind, start_ms)` name and the fallback to a number go `[SPEC-UID-010]`, since the fleet updates at once.
+- **As built, 2026-11-16.** The schedule, the anchor and each queue entry carry the uid. The leader's number is held for its own logic and never serialized, so an old follower reading a new leader finds no number to misuse. The uid is a 16-byte `PassageUid`, so the schedule and anchor stay `Copy`; it reads and writes as the catalogue's text and refuses any other. A follower finds its number through `passages_uid`. A passage it lacks, or one named without a uid (a player older than this one, or a passage the hub has yet to give one), stands in as a number naming nothing. That number carries the uid's first eight characters for the report. `echoprobe`, `echo_skew.py` and `echo_skew.sh` read the uid.
 
 **`[IMPL-UID-072]` Routes:** the 17 routes and the flag route take a uid, and pages build their links with one. A number in a passage route is refused with 400, so a link carried to another node fails instead of opening another song `[SPEC-UID-035]`.
 
