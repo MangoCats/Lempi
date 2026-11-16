@@ -180,6 +180,10 @@ The window ran 2026-11-16 with `tools/listener_window.py` recording each listene
 **`[IMPL-UID-077]` The SPEC006 change and flag tools name passages by uid** `[IMPL-UID-900]`: `export_changes.py`, `apply_changes.py`, `remote_snapshot.py`, `accept_remote_basis.py`, `export_flags.py` and `import_flags.py`. A record keeps the span it was made against as its baseline, not as the passage's name.
 
 **`[IMPL-UID-078]` Verified on the fleet:** echo follows the same song on `bose` and `smartboardpc`, the pair of `[SPEC-UID-002]`, and a remote unflag clears the remote's flag.
+- **As verified, 2026-11-16 17:20–18:08 UTC**, at the maintainer's word: the desktop, then `lempi02w`, `bose` and `smartboardpc` together, `lp3-wifi`, `lrhtpc` and `teacherslounge`, all on `486ded1` (the player of `b329aa9`), each player put back as it was. Live, 18 or 19 checks per node: no passage number in the snapshot, every route 400 by number and 404 by a missing uid, browse by uid.
+- **Echo:** `smartboardpc` was on `bose`'s song, by uid, within a minute of its restart, and on the next. `echo_skew.py` read 45 samples, none on different passages, with a median skew of 26 ms and a p90 of 59 ms.
+- **The unflag:** on `lempi02w`, a passage flagged nowhere was flagged through its player and read back by the console's peek. The console's own `unflag_everywhere` then cleared it, and it read back clear. The console's saved remote is `teacherslounge`, which runs no player, so the check named `lempi02w` for that run only.
+- **Cost:** `lempi02w`'s passage info went from 9.0 ms by number to 14.7 ms by uid (median of 21). That is one more open of the pair per request, to find the number.
 
 ## 8. Stage D: removed, and made hard to bring back
 
