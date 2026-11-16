@@ -16,8 +16,9 @@ so no tree is needed on it.
 
 What is measured:
   - each of the eight tables that named a passage `[IMPL-UID-060]`: its shape
-    (by number, by uid) and its rows -- the same after, but the queue entries
-    the conversion leaves out for naming nothing;
+    (by number, by uid) and its rows -- the same after, but plays, skips and
+    decisions, which a running player only adds to (none fewer), and the queue,
+    which refills as it plays;
   - the copy of the whole file the conversion takes first (`listener.pre-uid.db`);
   - the shared rows that name a passage -- reviews and flags -- each by its uid,
     a row still by number read through this machine's own catalogue: the same
@@ -41,6 +42,7 @@ sys.path.insert(0, HERE)
 import staged  # noqa: E402  -- utf8_output
 
 PATHS = os.path.join(ROOT, "fleet", "listener-paths.json")
+GROWING = ("listener_play_history", "listener_rejections", "selection_decisions")
 
 # Run on each machine, alone: argv is listener, library. Read-only throughout.
 CENSUS = r'''
@@ -153,9 +155,13 @@ def compare(name: str, before: dict, now: dict, hub_now: dict | None, lyrics_uid
             out.append((n["shape"] in ("absent", "by_uid"), f"{t}: absent before, {n['shape']} now"))
             continue
         out.append((n["shape"] == "by_uid", f"{t}: by uid now (was {b['shape']})"))
-        if t == "player_queue":
-            out.append((n.get("rows", 0) <= b["rows"], f"{t}: {b['rows']} row(s) before, {n.get('rows')} now"))
-        else:
+        # A player keeps playing between the record and its conversion: its plays,
+        # skips and decisions only ever grow, and its queue refills as it plays.
+        # The conversion's own count, row for row in one transaction, is the exact
+        # check; these say nothing was lost around it.
+        if t in GROWING:
+            out.append((n.get("rows", 0) >= b["rows"], f"{t}: {b['rows']} row(s) before, {n.get('rows')} now, none fewer"))
+        elif t != "player_queue":
             out.append((n.get("rows") == b["rows"], f"{t}: {b['rows']} row(s) before, {n.get('rows')} now"))
     out.append((now["pre_uid_copy"], "the whole-file copy taken before converting is there"))
     for t, rows in before["shared"].items():
