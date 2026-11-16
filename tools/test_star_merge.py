@@ -307,7 +307,8 @@ def test_translation(tmp):
     appliance, so the same passage number is different music. By uid nothing is
     translated: a review of B is one row whichever node made it, the appliance's
     play stays its own, and its copy last sent, still by number from before Stage B,
-    is read through its own catalogue's map -- its 1 is B -- never the hub's."""
+    is read through no map at all: its review by number is left out, and counted
+    [IMPL-UID-080]. Until Stage D it was read through its own catalogue's map."""
     base, desk, app = opposite_numbered(tmp, "t")
     dl, al, sent = (os.path.join(tmp, f"t-{n}.lis") for n in ("desk", "app", "sent"))
     review = lambda who: f"INSERT INTO id_reviews VALUES ({who},'reassigned','rec-B2','2026-10-15 00:20:04',NULL,NULL)"
@@ -330,9 +331,12 @@ def test_translation(tmp):
     check(merged == [("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "rec-B2")], f"its review of B is the hub's review of B, by uid: {merged}")
     check(rows(os.path.join(mine, "listener.db"), "SELECT passage_uid FROM id_reviews") == [("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",)],
           "and goes back to it as it is")
-    check(rep.data["items"] == [], f"its copy by number, read through its own map, is the same review: {rep.data['items']}")
+    check(rep.data["items"] == [], f"its copy by number adds no item: {rep.data['items']}")
     check(rep.data["translations"].get("app", {}).get("by_number") == {"id_reviews": 1},
-          f"and the report says one row was read by number: {rep.data['translations']}")
+          f"and the report says one row by number was left out: {rep.data['translations']}")
+    report = open(os.path.join(out, "report.md"), encoding="utf-8").read()
+    check("## Left out, by number" in report and "through its own" not in report,
+          f"in words, and nothing is said to be read through a map: {report}")
     f = rows(os.path.join(mine, "library.db"), "SELECT file_id, audio_md5, path FROM files ORDER BY file_id")
     check(f == [(1, "A", "/a.mp3"), (2, "B", "/b.mp3")],
           f"its catalogue is the hub's, with its own paths matched by audio_md5, not file id: {f}")
@@ -541,15 +545,16 @@ def test_a_removal_is_read_in_the_hubs_numbering(tmp):
     evidence was compared in the node's numbers against the merge's in the hub's:
     the hub's flag on ITS passage 1 -- file A, other music -- was deleted
     everywhere, and file B's flag stayed. By uid there is one numbering
-    [IMPL-UID-064]; and the node's backup here is from before Stage B, by its
-    own numbers (its 1 is B), read through its own map, never the hub's."""
+    [IMPL-UID-064], and the node's backup holds its flags by uid too. Until Stage D
+    a backup from before Stage B, by its own numbers, was read through its own map;
+    one now is left out (`test_a_history_by_number_is_no_evidence`)."""
     desk, app = opposite(tmp, "rn")
     # Flagged before the backup of 1789000000 (2026-09-10), so not re-added since.
     flag = lambda sid, o="NULL": f"INSERT INTO listener_flags VALUES ('passage','{sid}','2026-08-01 00:00:00',{o})"
     dl, al = os.path.join(tmp, "rn-desk.lis"), os.path.join(tmp, "rn-app.lis")
     db(dl, flag("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "'GMKtec'"), flag("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))    # the hub: both
     db(al, flag("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))                                # the node now: file A only
-    bk = backup_of(tmp, "rn-app", 1789000000, flag(1), flag(2))   # by its own numbers: B and A
+    bk = backup_of(tmp, "rn-app", 1789000000, flag("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), flag("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))   # B and A, by uid
     out = os.path.join(tmp, "rn-out")
     rep = sm.build({"hub_state_from": "desktop", "hub_library": desk,
                     "nodes": [dict(name="desktop", listener=dl),
@@ -566,16 +571,15 @@ def test_a_withdrawn_review_stays_withdrawn(tmp):
     """[IMPL-UID-042]: an id review withdrawn on the hub. Until 2026-11-14 the
     review tables took no removals, so the node's copy brought it back at the
     next merge -- how 27 copied reviews outlived their repair. The node's copy
-    last sent and its backup are from before Stage B, by its own numbers (file A
-    is its 2), and are read through its own map [IMPL-UID-064]."""
+    last sent and its backups hold it by uid [IMPL-UID-064]."""
     desk, app = opposite(tmp, "wr")
     row = lambda who: f"INSERT INTO id_reviews VALUES ({who},'reassigned','rec-A','2026-10-15 00:20:04',NULL,NULL)"
     dl, al, sent = (os.path.join(tmp, f"wr-{n}.lis") for n in ("desk", "app", "sent"))
     db(dl, REVIEW)                                  # withdrawn on the hub
     db(al, REVIEW, row("'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"))                  # the node still holds it
-    db(sent, REVIEW_BY_NUMBER, row(2))              # and was last sent it, by its own number
-    hub_bk = backup_of(tmp, "wr-desk", 1789000000, REVIEW_BY_NUMBER, row(1))   # the hub's 1 is A
-    app_bk = backup_of(tmp, "wr-app", 1789000000, REVIEW_BY_NUMBER, row(2))
+    db(sent, REVIEW, row("'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"))                  # and was last sent it
+    hub_bk = backup_of(tmp, "wr-desk", 1789000000, REVIEW, row("'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"))
+    app_bk = backup_of(tmp, "wr-app", 1789000000, REVIEW, row("'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"))
     out = os.path.join(tmp, "wr-out")
     rep = sm.build({"hub_state_from": "desktop", "hub_library": desk,
                     "nodes": [dict(name="desktop", listener=dl, backups=hub_bk),
@@ -585,6 +589,28 @@ def test_a_withdrawn_review_stays_withdrawn(tmp):
     check(rows(os.path.join(out, "nodes", "app", "listener.db"), "SELECT * FROM id_reviews") == [],
           "and the node's copy loses it")
     check(rep.data["items"] == [], f"a removal no node edited is no question: {rep.data['items']}")
+
+
+def test_a_history_by_number_is_no_evidence(tmp):
+    """[IMPL-UID-080]: a backup from before Stage B names its flags by the node's own
+    numbers. Until Stage D it was read through the node's own map from number to uid;
+    now nothing of it is read, so it shows no removal. The node's flag on B, cleared
+    since, then stands: a removal no source by uid evidences is no removal. (A copy
+    last sent by number is counted in the report, `test_translation`; a backup is
+    read once per table and is not.)"""
+    desk, app = opposite(tmp, "hn")
+    flag = lambda sid: f"INSERT INTO listener_flags VALUES ('passage','{sid}','2026-08-01 00:00:00',NULL)"
+    dl, al = os.path.join(tmp, "hn-desk.lis"), os.path.join(tmp, "hn-app.lis")
+    db(dl, flag("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), flag("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+    db(al, flag("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+    bk = backup_of(tmp, "hn-app", 1789000000, flag(1), flag(2))   # by its own numbers
+    out = os.path.join(tmp, "hn-out")
+    rep = sm.build({"hub_state_from": "desktop", "hub_library": desk,
+                    "nodes": [dict(name="desktop", listener=dl),
+                              dict(name="app", listener=al, catalogue=app, files=app, backups=bk)]}, out)
+    hub = rows(os.path.join(out, "listener.db"), "SELECT subject_id FROM listener_flags ORDER BY subject_id")
+    check(hub == [("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",), ("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",)], f"no number reads as a removal of anyone's flag: {hub}")
+    check(not any(d["rule"] == "SPEC-STAR-050" for d in rep.data["decisions"]), f"none is reported: {rep.data['decisions']}")
 
 
 def test_a_node_that_missed_the_run(tmp):
@@ -660,34 +686,6 @@ def test_a_phone_that_never_applied_its_offer(tmp):
     check(left == set(), f"the same upload the newest run weighed does not bring F back: {left}")
     left = run("new", "2026-11-14T09:00:00Z")
     check(left == {"F"}, f"a new upload holding F against a copy without it is a re-addition, and stays: {left}")
-
-
-def test_one_file_many_passages(tmp):
-    """[SPEC-STAR-049] within one file. Found 2026-10-18 on bose: a file
-    holding a whole album has several passages, numbered differently on a
-    node, and "same number, same file" read the node's album cut at 0:00 as
-    the hub's radio cut at a later start -- 95 passages on bose. The same
-    music is the same file, kind and start."""
-    hub, node = os.path.join(tmp, "m-hub.cat"), os.path.join(tmp, "m-node.cat")
-    # One file F. The hub: 1 radio@0, 2 album@0, 3 radio@100.
-    # The node:            1 album@0, 2 radio@0, 3 radio@100, 7 album@100 (a number the hub does not use).
-    for path, cuts in ((hub, ((1, "radio", 0), (2, "album", 0), (3, "radio", 100), (4, "album", 100))),
-                       (node, ((1, "album", 0), (2, "radio", 0), (3, "radio", 100), (7, "album", 100)))):
-        cat(path, "INSERT INTO files VALUES (1,'F','/f.mp3',100)")
-        c = sqlite3.connect(path)
-        for s in ("ALTER TABLE passages ADD COLUMN file_id INTEGER", "ALTER TABLE passages ADD COLUMN kind TEXT",
-                  "ALTER TABLE passages ADD COLUMN start_ms INTEGER"):
-            c.execute(s)
-        c.executemany("INSERT INTO passages (passage_id, end_ms, boundary_src, file_id, kind, start_ms) "
-                      "VALUES (?, 1000, 'cue', 1, ?, ?)", cuts)
-        c.commit()
-        c.close()
-    remap, gone = sm.passage_remap(node, hub)
-    check(remap == {1: 2, 2: 1, 7: 4}, f"each node passage is the hub's of the same kind and start: {remap}")
-    check(gone == [], f"and none is taken for gone: {gone}")
-    unmap, clashes = sm.passage_unmap(node, hub, remap)
-    check(unmap == {1: 2, 2: 1, 3: 3, 4: 7} and clashes == 0,
-          f"and back, one to one: {unmap}, {clashes} clash(es)")
 
 
 def test_rekeyed(tmp):
@@ -924,9 +922,9 @@ def main() -> int:
     test_a_review_survives_two_rounds(tmp)
     test_a_removal_is_read_in_the_hubs_numbering(tmp)
     test_a_withdrawn_review_stays_withdrawn(tmp)
+    test_a_history_by_number_is_no_evidence(tmp)
     test_a_node_that_missed_the_run(tmp)
     test_a_phone_that_never_applied_its_offer(tmp)
-    test_one_file_many_passages(tmp)
     test_routine(tmp)
     manifest, inputs = fleet(tmp)
     before = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in inputs}

@@ -29,7 +29,6 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import passage_uid  # noqa: E402
-import star_merge  # noqa: E402
 import star_patch  # noqa: E402
 
 FAILED = []
@@ -111,34 +110,6 @@ def test_the_fleet_is_numbered_as_this_test_claims(hub, nodes):
     check(not set(names(nodes["distant"])) & set(h), "`distant` must share no number with the hub")
 
 
-def test_a_node_number_reaches_the_hub_as_the_same_music(hub, nodes):
-    print("a node's number, read on the way in, is the same music on the hub [SPEC-STAR-049]")
-    h = names(hub)
-    for name, path in nodes.items():
-        remap, gone = star_merge.passage_remap(path, hub)
-        for pid, what in names(path).items():
-            if pid in gone:
-                check(what[0] not in {v[0] for v in h.values()}, f"{name}: {what} was called gone, and the hub holds it")
-                continue
-            hub_pid = remap.get(pid, pid)
-            check(h.get(hub_pid) == what, f"{name}: {pid} is {what}, read as hub {hub_pid}, {h.get(hub_pid)}")
-
-
-def test_a_hub_number_goes_back_as_the_same_music(hub, nodes):
-    print("a hub number, written into a node's copy, is the same music there, and reads back [SPEC-STAR-051]")
-    h = names(hub)
-    for name, path in nodes.items():
-        n = names(path)
-        remap, _ = star_merge.passage_remap(path, hub)
-        unmap, claimed = star_merge.passage_unmap(path, hub, remap)
-        check(claimed == 0, f"{name}: {claimed} hub numbers were claimed twice")
-        for hub_pid, what in h.items():
-            mine = unmap.get(hub_pid, hub_pid)
-            if what in n.values():
-                check(n.get(mine) == what, f"{name}: hub {hub_pid} is {what}, written as {mine}, {n.get(mine)}")
-                check(remap.get(mine, mine) == hub_pid, f"{name}: hub {hub_pid} does not read back from {mine}")
-
-
 def edited(path, out):
     """`path` with one passage retimed, keeping its uid, and another added with its own, as the
     hub's edit would be."""
@@ -197,8 +168,6 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         hub, nodes = fleet(tmp)
         test_the_fleet_is_numbered_as_this_test_claims(hub, nodes)
-        test_a_node_number_reaches_the_hub_as_the_same_music(hub, nodes)
-        test_a_hub_number_goes_back_as_the_same_music(hub, nodes)
         test_a_patch_names_rows_by_what_they_are(hub, nodes, tmp)
         test_no_patch_when_only_the_numbers_differ(hub, nodes)
     print()

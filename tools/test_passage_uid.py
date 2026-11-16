@@ -50,7 +50,6 @@ REPO = os.path.dirname(HERE)
 RAW_INSERTS_ALLOWED = {
     "tools/passage_uid.py": "the helper itself",
     "tools/remote_snapshot.py": "a scratch copy of a remote, not a catalogue; Stage C converts it [IMPL-UID-077]",
-    "tools/repair_node_reviews.py": "a scratch table in a fixture; retired in Stage D [IMPL-UID-080]",
     "player/core/src/bundle.rs": "writes the hub's row, then db::stamp_birth stores the uid it was sent",
     "player/src/found.rs": "writes a phone-born row, then db::stamp_birth gives it its uid",
 }
