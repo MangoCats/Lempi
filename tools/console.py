@@ -730,9 +730,11 @@ def flag_sync_status(conn, pid: int) -> dict:
     # By uid [IMPL-UID-074], with the listener half beside the catalogue
     # [SPEC-DF-124]: until both, this read failed against every split peer.
     anchor_args = ["--passage-uid", uid]
+    # Recorded as `host:/path`, as the remote is; the peek takes the path, on
+    # the host the remote names -- the remote pull's own reading.
     listener = STATE["jobs"].get_remote_listener()
     if listener:
-        anchor_args += ["--remote-listener", listener]
+        anchor_args += ["--remote-listener", listener.partition(":")[2] or listener]
     result = _peek(remote, "passage_flag", anchor_args)
     if not result.get("ok"):
         return unknown

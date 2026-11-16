@@ -151,7 +151,8 @@ def test_flag_sync_status_agrees_and_diverges() -> None:
 def test_flag_sync_status_asks_by_uid_with_the_listener() -> None:
     print("flag_sync_status(): the remote is asked by the passage's uid, with its listener "
           "half beside the catalogue [IMPL-UID-074], [SPEC-DF-124]")
-    console.STATE["jobs"] = FakeJobs("pi@speaker-a:/srv/library/library.db", "/var/lempi/listener.db")
+    # Recorded as the console records it, `host:/path`; the peek is given the path.
+    console.STATE["jobs"] = FakeJobs("pi@speaker-a:/srv/library/library.db", "pi@speaker-a:/var/lempi/listener.db")
     real_peek = console._peek
     asked = []
     console._peek = lambda remote, kind, args, timeout=12.0: asked.append((kind, args)) or {
