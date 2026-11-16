@@ -66,6 +66,41 @@ pub use lempi_core::{
     SKIP_SUPPRESS_H, SKIP_SUPPRESS_MAX_H, SKIP_SUPPRESS_MIN_H,
 };
 
+/// Test catalogues whose passages have uids, as every real one's have since
+/// Stage A `[IMPL-UID-052]` -- the same helpers `lempi-core`'s own tests use,
+/// which are private to it. A listener names a passage only by the uid its
+/// catalogue gives it `[IMPL-UID-060]`, so a test that writes a play needs one.
+/// **A test's convenience only**: the uid here is made from the passage's
+/// number, `printf('%032x', id)`, which a real uid never is.
+#[cfg(test)]
+pub(crate) mod test_catalogue {
+    /// The uid these helpers give passage `id`.
+    pub(crate) fn uid(id: i64) -> String {
+        format!("{id:032x}")
+    }
+
+    /// A fixture's own `passages` given its uids, as a virtual generated column, so
+    /// a positional `INSERT INTO passages VALUES (...)` keeps its shape.
+    pub(crate) fn give_uids(conn: &rusqlite::Connection) {
+        conn.execute_batch(
+            "ALTER TABLE passages ADD COLUMN passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL",
+        )
+        .unwrap();
+    }
+
+    /// For a store with no catalogue of its own: passages 1 to 5000, each with its uid
+    /// -- every number these tests name.
+    pub(crate) fn passages(conn: &rusqlite::Connection) {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS passages (passage_id INTEGER PRIMARY KEY,
+                 passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL);
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5000)
+             INSERT OR IGNORE INTO passages (passage_id) SELECT i FROM n;",
+        )
+        .unwrap();
+    }
+}
+
 /// Native Bluetooth AVRCP transport control handling `[IMPL-BT-010]`.
 #[cfg(feature = "appliance")]
 pub mod avrcp;

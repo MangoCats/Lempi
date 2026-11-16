@@ -148,10 +148,27 @@ CREATE TABLE IF NOT EXISTS passages (
     -- A person can still play it on purpose. Added to an existing library by
     -- tools/passage_hold.py, and to a speaker's by star_patch.py.
     director_hold  TEXT,
+    -- The passage's permanent identity, the same on every installation
+    -- [SPEC-UID-030]: the first 128 bits of SHA-256 over its birth key, as 32
+    -- hex characters. The birth key is the passage as it was first written,
+    -- and nothing changes it: a boundary edit moves start_ms/end_ms, never
+    -- these. Given by tools/passage_uid.py on the hub and by the player for a
+    -- passage born on a node; never computed for one the hub already has
+    -- [IMPL-UID-052]. The listener names a passage by this and only this
+    -- [IMPL-UID-060]. The hub's catalogue also has two triggers refusing a
+    -- passage without one; a node's has none, since its bundle import writes
+    -- the passage first and its uid after (tools/assign_passage_uids.py).
+    passage_uid    TEXT,
+    birth_md5      TEXT,
+    birth_kind     TEXT,
+    birth_start_ms INTEGER,
+    birth_end_ms   INTEGER,
+    birth_salt     INTEGER,
     CHECK (end_ms > start_ms)
 );
 CREATE INDEX IF NOT EXISTS passages_file ON passages(file_id);
 CREATE UNIQUE INDEX IF NOT EXISTS passages_span ON passages(file_id, kind, start_ms, end_ms);
+CREATE UNIQUE INDEX IF NOT EXISTS passages_uid ON passages(passage_uid);
 
 -- Many-to-many with weights: a passage may hold a medley, a recording may
 -- appear in many files. No rows here == unidentified, which is legal.
@@ -317,7 +334,9 @@ CREATE TABLE IF NOT EXISTS identification_cache (
 CREATE TABLE IF NOT EXISTS listener_play_history (
     play_id     INTEGER PRIMARY KEY,
     played_at   INTEGER NOT NULL,           -- unix seconds
-    passage_id  INTEGER REFERENCES passages(passage_id) ON DELETE SET NULL,
+    -- The passage by its uid, never its number [IMPL-UID-060]: a number is
+    -- its catalogue's own, and this history is read beside other catalogues.
+    passage_uid TEXT,
     -- denormalised on purpose: six years of history must survive a rescan
     -- that renumbers passages [SPEC-SC-095]
     mbid        TEXT,
@@ -355,7 +374,7 @@ CREATE TABLE IF NOT EXISTS listener_rejections (
     rejection_id INTEGER PRIMARY KEY,
     rejected_at  INTEGER NOT NULL,          -- unix seconds
     kind         TEXT NOT NULL,             -- 'skip' | 'dequeue'
-    passage_id   INTEGER REFERENCES passages(passage_id) ON DELETE SET NULL,
+    passage_uid  TEXT,                      -- by uid [IMPL-UID-060]
     -- denormalised for the same reason as listener_play_history [SPEC-SC-095]
     mbid         TEXT,
     -- Set only for 'skip' -- a 'dequeue' never sounded, so it has no
@@ -557,7 +576,7 @@ CREATE INDEX IF NOT EXISTS ingest_decisions_md5 ON ingest_decisions(audio_md5);
 CREATE TABLE IF NOT EXISTS selection_decisions (
     decision_id  INTEGER PRIMARY KEY,
     selected_at  INTEGER NOT NULL,
-    passage_id   INTEGER REFERENCES passages(passage_id) ON DELETE SET NULL,
+    passage_uid  TEXT,                      -- by uid [IMPL-UID-060]
     program_id   INTEGER REFERENCES listener_programs(program_id) ON DELETE SET NULL,
     -- full weight decomposition plus the runners-up that lost [REQ-VIS-100]
     detail       BLOB NOT NULL
@@ -576,7 +595,7 @@ CREATE INDEX IF NOT EXISTS selection_decisions_time ON selection_decisions(selec
 -- "stopped", so `playing` is a boolean rather than an enum.
 CREATE TABLE IF NOT EXISTS player_state (
     id           INTEGER PRIMARY KEY CHECK (id = 1),
-    passage_id   INTEGER REFERENCES passages(passage_id) ON DELETE SET NULL,
+    passage_uid  TEXT,                      -- by uid [IMPL-UID-060]
     position_ms  INTEGER NOT NULL DEFAULT 0,
     playing      INTEGER NOT NULL DEFAULT 0,
     volume       REAL    NOT NULL DEFAULT 1.0,

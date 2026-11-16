@@ -15,6 +15,7 @@
 //! file level too.
 
 mod library;
+pub mod listener_uid;
 mod lyrics;
 mod pair;
 mod player_store;
@@ -24,7 +25,7 @@ pub use library::*;
 pub use lyrics::*;
 pub use pair::*;
 pub use player_store::*;
-pub use uid::{has_uids, passage_uid, stamp_birth, Birth};
+pub use uid::{has_uids, is_uid, passage_uid, stamp_birth, Birth};
 
 /// Bring a `files` table predating `md5_generator` up to date
 /// `[SPEC-RLK-150]`.
@@ -699,6 +700,57 @@ pub(crate) mod test_support {
     use rusqlite::Connection;
     use super::*;
 
+    /// Every passage a test writes has a uid, as every passage in a real
+    /// catalogue does since Stage A `[IMPL-UID-052]`: `printf('%032x', passage_id)`,
+    /// in a uid's form and unique. **A test's convenience only** -- a real uid comes
+    /// from the hub, from the passage's birth key, never from its number.
+    ///
+    /// A fixture without the column gets it as a virtual generated column, which a
+    /// positional `INSERT INTO passages VALUES (...)` skips, so every such insert in
+    /// these tests keeps its shape. One with the column -- `schema.sql`'s -- has
+    /// what is there filled, and what is inserted after stamped.
+    pub(crate) fn give_uids(conn: &Connection) {
+        let has: bool = conn
+            .query_row("SELECT COUNT(*) FROM pragma_table_info('passages') WHERE name = 'passage_uid'", [], |r| r.get::<_, i64>(0))
+            .unwrap()
+            > 0;
+        if !has {
+            conn.execute_batch(
+                "ALTER TABLE passages ADD COLUMN passage_uid TEXT GENERATED ALWAYS AS (printf('%032x', passage_id)) VIRTUAL",
+            )
+            .unwrap();
+            return;
+        }
+        conn.execute_batch(
+            "UPDATE passages SET passage_uid = printf('%032x', passage_id) WHERE passage_uid IS NULL;
+             CREATE TRIGGER IF NOT EXISTS test_passage_uid AFTER INSERT ON passages WHEN NEW.passage_uid IS NULL
+             BEGIN UPDATE passages SET passage_uid = printf('%032x', NEW.passage_id) WHERE passage_id = NEW.passage_id; END;",
+        )
+        .unwrap();
+    }
+
+    /// The uid [`give_uids`] gives passage `id`.
+    pub(crate) fn uid(id: i64) -> String {
+        format!("{id:032x}")
+    }
+
+    /// A catalogue of passages `ids` and nothing else, each with its fixture uid,
+    /// for a store test that writes about a passage and needs no more of one: a
+    /// listener always has its catalogue beside it, and its writes name a passage
+    /// by the uid found there `[IMPL-UID-060]`.
+    pub(crate) fn passages(conn: &Connection, ids: &[i64]) {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL DEFAULT 1,
+                 kind TEXT NOT NULL DEFAULT 'radio', start_ms INTEGER NOT NULL DEFAULT 0,
+                 end_ms INTEGER NOT NULL DEFAULT 1000)",
+        )
+        .unwrap();
+        give_uids(conn);
+        for id in ids {
+            conn.execute("INSERT OR IGNORE INTO passages (passage_id) VALUES (?1)", [id]).unwrap();
+        }
+    }
+
     /// Build the minimum of SPEC008 the player touches, so these tests pin the
     /// column names the queries depend on.
     pub(crate) fn fixture() -> Connection {
@@ -730,6 +782,7 @@ pub(crate) mod test_support {
              ALTER TABLE passages ADD COLUMN fade_out_curve TEXT NOT NULL DEFAULT 'exponential';",
         )
         .unwrap();
+        give_uids(&c);
         c
     }
 
@@ -762,7 +815,7 @@ pub(crate) mod test_support {
              -- creating the table itself -- the same looseness the note above
              -- is about.
              CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
-                 played_at INTEGER NOT NULL DEFAULT 0, passage_id INTEGER, mbid TEXT);
+                 played_at INTEGER NOT NULL DEFAULT 0, passage_uid TEXT, mbid TEXT);
              INSERT INTO recordings VALUES ('aaaaaaaa-0000-0000-0000-000000000001','Wrong Song',NULL,'s');
              CREATE TABLE id_checks (passage_id INTEGER PRIMARY KEY, stored_mbid TEXT NOT NULL,
                  verdict TEXT NOT NULL, score REAL, suggested TEXT, checked_at TEXT NOT NULL);

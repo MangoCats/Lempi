@@ -4994,7 +4994,7 @@ than one mix block");
         assert_ne!(e.head, Some(90), "it departed once the cut was heard");
         let conn = rusqlite::Connection::open(&path).unwrap();
         let heard: i64 = conn
-            .query_row("SELECT heard_ms FROM listener_play_history WHERE passage_id = 90", [], |r| {
+            .query_row("SELECT heard_ms FROM listener_play_history WHERE passage_uid = printf('%032x', 90)", [], |r| {
                 r.get(0)
             })
             .unwrap();
@@ -6147,6 +6147,9 @@ than one mix block");
                 .as_nanos()
         ));
         let _ = std::fs::remove_file(&p);
+        // Its catalogue, beside it in the one file: a play is written by its
+        // passage's uid, found there [IMPL-UID-060].
+        crate::test_catalogue::passages(&rusqlite::Connection::open(&p).unwrap());
         (PlayerStore::open(&p).unwrap(), p)
     }
 

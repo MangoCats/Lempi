@@ -312,7 +312,11 @@ fn settings_written_as_columns_are_carried_over() {
                  skip_suppress_h INTEGER, cue_sheets INTEGER);
              INSERT INTO player_state
                  (id, position_ms, playing, volume, updated_at, skip_suppress_h, cue_sheets)
-                 VALUES (1, 9999, 1, 0.25, datetime('now'), 72, 1);",
+                 VALUES (1, 9999, 1, 0.25, datetime('now'), 72, 1);
+             -- Its catalogue's passages carry uids, as every one's have since
+             -- Stage A [IMPL-UID-052]; the old row is then renamed by one, its
+             -- old columns carried with it [IMPL-UID-060].
+             CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, passage_uid TEXT);",
         )
         .unwrap();
     }

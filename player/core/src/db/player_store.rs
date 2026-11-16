@@ -69,11 +69,16 @@ pub const UNPLAYABLE_SQL: &str = "('damaged', 'missing', 'unreadable')";
 /// having run its schema would have failed every one of them as a log line
 /// nobody reads — losing the only irreplaceable data in the system
 /// `[SPEC-DF-090]` while appearing to work.
+///
+/// A passage is named by its uid, never its number `[IMPL-UID-060]`: a number
+/// is this catalogue's own, and the same history read beside another catalogue
+/// would name other music. Every table here that names a passage does the same,
+/// and `listener_uid` converts a listener made before.
 pub(crate) const PLAY_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS listener_play_history (
         play_id     INTEGER PRIMARY KEY,
         played_at   INTEGER NOT NULL,
-        passage_id  INTEGER,
+        passage_uid TEXT,
         mbid        TEXT,
         -- How much of the passage was heard, and how long it was, in ms
         -- `[REQ-VIS-250]`. Absent on rows written before this column existed --
@@ -95,7 +100,7 @@ pub(crate) const REJECTION_TABLE: &str = "
         rejection_id INTEGER PRIMARY KEY,
         rejected_at  INTEGER NOT NULL,
         kind         TEXT NOT NULL,
-        passage_id   INTEGER,
+        passage_uid  TEXT,
         mbid         TEXT,
         -- Only ever set for 'skip' -- a 'dequeue' never sounded, so it has no
         -- percentage to report `[REQ-VIS-250]`.
@@ -103,6 +108,46 @@ pub(crate) const REJECTION_TABLE: &str = "
         span_ms      INTEGER);
     CREATE INDEX IF NOT EXISTS listener_reject_mbid
         ON listener_rejections(mbid, kind);";
+
+/// The resume point across a restart `[REQ-AUD-140]`: one row, the passage
+/// sounding and where in it.
+pub(crate) const PLAYER_STATE_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS player_state (
+        id          INTEGER PRIMARY KEY CHECK (id = 1),
+        passage_uid TEXT,
+        position_ms INTEGER NOT NULL DEFAULT 0,
+        playing     INTEGER NOT NULL DEFAULT 0,
+        volume      REAL NOT NULL DEFAULT 1.0,
+        updated_at  TEXT NOT NULL);";
+
+/// The queue as it stood, so a restart resumes the listening rather than
+/// starting a new one `[SPEC-DIR-225]`. Beside `player_state` and not inside
+/// it: that row is the passage *sounding*, this is what is *waiting*, and
+/// `hand_over_seamless` already keeps the two apart for the same reason
+/// `[SPEC-BK-030]`.
+///
+/// Passages and their order, and nothing else. A queue entry is rebuilt from
+/// its passage by `Library::passage`, exactly as the backend handoff rebuilds
+/// one on arrival rather than carrying it -- spans, fades and naming all belong
+/// to the passage, not to whoever last held it queued.
+pub(crate) const PLAYER_QUEUE_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS player_queue (
+        position    INTEGER PRIMARY KEY,
+        passage_uid TEXT NOT NULL,
+        updated_at  TEXT NOT NULL);";
+
+/// Why each passage was chosen, with the runners-up that lost `[REQ-VIS-100]`.
+/// Made here, not only by `schema.sql`, so the one shape is this file's: a
+/// listener split from a full database had it from there, and one the player
+/// made for itself from `complete_listener`.
+pub(crate) const SELECTION_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS selection_decisions (
+        decision_id INTEGER PRIMARY KEY,
+        selected_at INTEGER NOT NULL,
+        passage_uid TEXT,
+        program_id  INTEGER REFERENCES listener_programs(program_id) ON DELETE SET NULL,
+        detail      BLOB NOT NULL);
+    CREATE INDEX IF NOT EXISTS selection_decisions_time ON selection_decisions(selected_at);";
 
 /// "Please look at this" from the listener's own chair `[REQ-VIS-265]`, set
 /// and cleared from the play-history page at any time -- a plain flag, not a
@@ -373,7 +418,7 @@ pub(crate) const ART_TABLE: &str = "
 /// sync may still bring it rows decided elsewhere.
 pub(crate) const REVIEW_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS id_reviews (
-        passage_id  INTEGER PRIMARY KEY,
+        passage_uid TEXT PRIMARY KEY,
         -- 'kept': the stored id is right despite the fingerprint.
         -- 'reassigned': chosen_mbid is right.
         -- 'deferred': looked at, not decided; stays out of the queue.
@@ -428,7 +473,7 @@ pub(crate) fn ensure_review_table(conn: &Connection) -> Result<(), DbError> {
 /// of a fact. `orig_*` below exists for a different reason `[SPEC-DF-102]`.
 pub(crate) const BOUNDARY_REVIEW_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS boundary_reviews (
-        passage_id  INTEGER PRIMARY KEY,
+        passage_uid TEXT PRIMARY KEY,
         start_ms    INTEGER NOT NULL,
         end_ms      INTEGER NOT NULL,
         lead_in_ms  INTEGER,
@@ -495,9 +540,9 @@ pub(crate) fn ensure_boundary_review_table(conn: &Connection) -> Result<(), DbEr
 /// same recording each record their own, silently conflicting correction.
 /// It also made a synced correction `[SPEC-DF-103]` impossible to key at all,
 /// since a receiver has no originating passage for a decision it never made.
-/// `passage_id` is kept as a plain, non-unique column -- which card the
+/// The passage is kept as a plain, non-unique column -- which card the
 /// correction happened to be made from, useful for provenance, load-bearing
-/// for nothing.
+/// for nothing -- and by its uid, since the row travels `[IMPL-UID-060]`.
 ///
 /// `artist_name` is stored, not looked up at apply time, because a name
 /// found through live search (`[SPEC-SUI-196]`) exists nowhere in the
@@ -513,7 +558,7 @@ pub(crate) fn ensure_boundary_review_table(conn: &Connection) -> Result<(), DbEr
 pub(crate) const ARTIST_REVIEW_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS artist_reviews (
         recording_mbid         TEXT PRIMARY KEY,
-        passage_id             INTEGER,
+        passage_uid            TEXT,
         artist_mbid            TEXT NOT NULL,
         artist_name            TEXT NOT NULL,
         previous_artist_mbid   TEXT,
@@ -907,32 +952,9 @@ impl PlayerStore {
                 tracing::warn!("listener: {} was made, and could not be put in WAL mode ({e})", db_path.display());
             }
         }
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS player_state (
-                 id INTEGER PRIMARY KEY CHECK (id = 1),
-                 passage_id INTEGER, position_ms INTEGER NOT NULL DEFAULT 0,
-                 playing INTEGER NOT NULL DEFAULT 0, volume REAL NOT NULL DEFAULT 1.0,
-                 updated_at TEXT NOT NULL);",
-        )
-        .map_err(DbError::open)?;
-        // The queue as it stood, so a restart resumes the listening rather
-        // than starting a new one `[SPEC-DIR-225]`. Beside `player_state` and
-        // not inside it: that row is the passage *sounding*, this is what is
-        // *waiting*, and `hand_over_seamless` already keeps the two apart for
-        // the same reason `[SPEC-BK-030]`.
-        //
-        // Passage ids and their order, and nothing else. A queue entry is
-        // rebuilt from its id by `Library::passage`, exactly as the backend
-        // handoff rebuilds one on arrival rather than carrying it -- spans,
-        // fades and naming all belong to the passage, not to whoever last
-        // held it queued.
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS player_queue (
-                 position   INTEGER PRIMARY KEY,
-                 passage_id INTEGER NOT NULL,
-                 updated_at TEXT NOT NULL);",
-        )
-        .map_err(DbError::open)?;
+        conn.execute_batch(PLAYER_STATE_TABLE).map_err(DbError::open)?;
+        conn.execute_batch(PLAYER_QUEUE_TABLE).map_err(DbError::open)?;
+        conn.execute_batch(SELECTION_TABLE).map_err(DbError::open)?;
         conn.execute_batch(PLAY_TABLE).map_err(DbError::open)?;
         conn.execute_batch(FILE_CHECKS_TABLE).map_err(DbError::open)?;
         conn.execute_batch(REJECTION_TABLE).map_err(DbError::open)?;
@@ -948,6 +970,33 @@ impl PlayerStore {
         ensure_review_table(&conn)?;
         ensure_boundary_review_table(&conn)?;
         ensure_artist_review_table(&conn)?;
+        // `[IMPL-UID-060]`: a listener that still names passages by number is
+        // converted here, once, after the steps above have given its tables
+        // every column -- so each is carried -- and after a copy of the whole
+        // file is taken beside it. A single-file fixture takes no copy.
+        let backup = (db_path != library_path).then(|| db_path.with_extension("pre-uid.db"));
+        let converted = super::listener_uid::convert(&conn, backup.as_deref())?;
+        if !converted.is_empty() {
+            let words: Vec<String> = converted
+                .iter()
+                .map(|c| {
+                    let mut w = format!("{} {} row(s)", c.table, c.rows);
+                    if c.without_uid > 0 {
+                        w += &format!(", {} naming no passage here, kept without a uid", c.without_uid);
+                    }
+                    if c.dropped > 0 {
+                        w += &format!(", {} queued naming no passage here, left out", c.dropped);
+                    }
+                    w
+                })
+                .collect();
+            tracing::info!(
+                "listener: converted to passage uids [IMPL-UID-060], {} first copied to {}: {}",
+                db_path.display(),
+                backup.as_deref().map_or("nowhere (a single-file fixture)".into(), |b| b.display().to_string()),
+                words.join("; ")
+            );
+        }
         // Settings live in `player_settings`, one row each `[SPEC-SC-099]`.
         // They used to be columns on `player_state`, added by ALTER as each was
         // invented, and read back by position -- `?11` here, `r.get(10)` there.
@@ -983,6 +1032,22 @@ impl PlayerStore {
         Ok(Self { conn })
     }
 
+    /// The uid this catalogue gives its passage `passage_id`: what every listener
+    /// row names a passage by `[IMPL-UID-060]`. Refused for a number naming no
+    /// passage here, or one without a uid, so a judgement is never written about
+    /// nothing. A play is not refused this way; see `record_play`.
+    pub fn passage_uid_of(&self, passage_id: i64) -> Result<String, DbError> {
+        use rusqlite::OptionalExtension;
+        self.conn
+            .query_row("SELECT passage_uid FROM __LIB__.passages WHERE passage_id = ?1", [passage_id], |r| {
+                r.get::<_, Option<String>>(0)
+            })
+            .optional()
+            .map_err(DbError::query)?
+            .flatten()
+            .ok_or_else(|| DbError::Query(format!("passage {passage_id}: no such passage here, or it has no uid")))
+    }
+
     /// Record a judgement about a questionable id `[REQ-LIB-165]`.
     ///
     /// The decision is validated here rather than trusted from the request:
@@ -1009,14 +1074,15 @@ impl PlayerStore {
             other => return Err(DbError::Query(format!("unknown decision {other:?}"))),
         };
         let release = chosen_release_mbid.filter(|m| !m.is_empty() && decision == "reassigned");
+        let uid = self.passage_uid_of(passage_id)?;
 
         // Changing a judgement that has already been written into the library
         // is not a matter of overwriting a row -- the old id has to be put back
         // first, and only `apply_reviews` may touch `passage_recordings`.
         let applied: Option<String> = self
             .conn
-            .query_row("SELECT applied_at FROM id_reviews WHERE passage_id = ?1",
-                       [passage_id], |r| r.get(0))
+            .query_row("SELECT applied_at FROM id_reviews WHERE passage_uid = ?1",
+                       [&uid], |r| r.get(0))
             .unwrap_or(None);
         if applied.is_some() {
             return Err(DbError::Query(
@@ -1040,16 +1106,16 @@ impl PlayerStore {
         self.conn
             .execute(
                 "INSERT INTO id_reviews
-                     (passage_id, decision, chosen_mbid, chosen_release_mbid,
+                     (passage_uid, decision, chosen_mbid, chosen_release_mbid,
                       previous_mbid, decided_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))
-                 ON CONFLICT(passage_id) DO UPDATE SET
+                 ON CONFLICT(passage_uid) DO UPDATE SET
                      decision = excluded.decision,
                      chosen_mbid = excluded.chosen_mbid,
                      chosen_release_mbid = excluded.chosen_release_mbid,
                      previous_mbid = excluded.previous_mbid,
                      decided_at = excluded.decided_at",
-                rusqlite::params![passage_id, decision, mbid, release, previous],
+                rusqlite::params![uid, decision, mbid, release, previous],
             )
             .map(|_| ())
             .map_err(DbError::query)
@@ -1065,10 +1131,11 @@ impl PlayerStore {
     /// back and clears the row in one transaction.
     #[cfg(feature = "vipunen-support")]
     pub fn clear_review(&self, passage_id: i64) -> Result<(), DbError> {
+        let uid = self.passage_uid_of(passage_id)?;
         let applied: Option<String> = self
             .conn
-            .query_row("SELECT applied_at FROM id_reviews WHERE passage_id = ?1",
-                       [passage_id], |r| r.get(0))
+            .query_row("SELECT applied_at FROM id_reviews WHERE passage_uid = ?1",
+                       [&uid], |r| r.get(0))
             .map_err(|_| DbError::Query("no decision recorded for that passage".into()))?;
         if applied.is_some() {
             return Err(DbError::Query(
@@ -1076,7 +1143,7 @@ impl PlayerStore {
             ));
         }
         self.conn
-            .execute("DELETE FROM id_reviews WHERE passage_id = ?1", [passage_id])
+            .execute("DELETE FROM id_reviews WHERE passage_uid = ?1", [&uid])
             .map(|_| ())
             .map_err(DbError::query)
     }
@@ -1122,11 +1189,12 @@ impl PlayerStore {
         // apply would have captured the *already-applied* values as if they
         // were the original, corrupting the one thing `[SPEC-DF-102]` exists
         // to keep honest.
+        let uid = self.passage_uid_of(passage_id)?;
         let applied: Option<String> = self
             .conn
             .query_row(
-                "SELECT applied_at FROM boundary_reviews WHERE passage_id = ?1",
-                [passage_id],
+                "SELECT applied_at FROM boundary_reviews WHERE passage_uid = ?1",
+                [&uid],
                 |r| r.get(0),
             )
             .unwrap_or(None);
@@ -1161,7 +1229,7 @@ impl PlayerStore {
         self.conn
             .execute(
                 "INSERT INTO boundary_reviews
-                     (passage_id, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
+                     (passage_uid, start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
                       fade_in_ms, fade_out_ms, fade_in_curve, fade_out_curve,
                       audio_md5, orig_kind, orig_start_ms, orig_end_ms,
                       orig_lead_in_ms, orig_lead_out_ms, orig_gain_db,
@@ -1169,7 +1237,7 @@ impl PlayerStore {
                       decided_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
                          ?18, ?19, ?20, ?21, datetime('now'))
-                 ON CONFLICT(passage_id) DO UPDATE SET
+                 ON CONFLICT(passage_uid) DO UPDATE SET
                      start_ms = excluded.start_ms,
                      end_ms = excluded.end_ms,
                      lead_in_ms = excluded.lead_in_ms,
@@ -1192,7 +1260,7 @@ impl PlayerStore {
                      orig_fade_out_curve = excluded.orig_fade_out_curve,
                      decided_at = excluded.decided_at",
                 rusqlite::params![
-                    passage_id, start_ms as i64, end_ms as i64,
+                    uid, start_ms as i64, end_ms as i64,
                     lead_in_ms as i64, lead_out_ms as i64, gain_db,
                     fade_in_ms as i64, fade_out_ms as i64, fade_in_curve, fade_out_curve,
                     audio_md5, orig_kind, orig_start_ms, orig_end_ms,
@@ -1336,12 +1404,13 @@ impl PlayerStore {
         self.conn
             .execute(
                 "INSERT INTO artist_reviews
-                     (recording_mbid, passage_id, artist_mbid, artist_name,
+                     (recording_mbid, passage_uid, artist_mbid, artist_name,
                       previous_artist_mbid, previous_artist_name, previous_artist_weight,
                       decided_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))
+                 VALUES (?1, (SELECT passage_uid FROM __LIB__.passages WHERE passage_id = ?2),
+                         ?3, ?4, ?5, ?6, ?7, datetime('now'))
                  ON CONFLICT(recording_mbid) DO UPDATE SET
-                     passage_id = excluded.passage_id,
+                     passage_uid = excluded.passage_uid,
                      artist_mbid = excluded.artist_mbid,
                      artist_name = excluded.artist_name,
                      previous_artist_mbid = excluded.previous_artist_mbid,
@@ -2167,7 +2236,14 @@ impl PlayerStore {
     /// and its siblings, there is nothing here to apply and nothing to
     /// refuse -- checking and unchecking the box are the same operation with
     /// the state reversed, at any time, by design.
+    ///
+    /// A passage is flagged by its uid `[IMPL-UID-060]`, which the history page
+    /// gives it; anything else for a passage -- a number from a page served
+    /// before Stage B -- is refused, never stored to name other music elsewhere.
     pub fn set_flag(&self, subject_kind: &str, subject_id: &str, flagged: bool) -> Result<(), DbError> {
+        if subject_kind == "passage" && !super::uid::is_uid(subject_id) {
+            return Err(DbError::Query(format!("a passage is flagged by its uid, not {subject_id:?}")));
+        }
         if flagged {
             self.conn
                 .execute(
@@ -2588,10 +2664,10 @@ impl PlayerStore {
     {
         self.conn
             .execute(
-                "INSERT INTO player_state (id, passage_id, position_ms, playing, updated_at)
-                 VALUES (1, ?1, ?2, ?3, datetime('now'))
+                "INSERT INTO player_state (id, passage_uid, position_ms, playing, updated_at)
+                 VALUES (1, (SELECT passage_uid FROM __LIB__.passages WHERE passage_id = ?1), ?2, ?3, datetime('now'))
                  ON CONFLICT(id) DO UPDATE SET
-                     passage_id = excluded.passage_id,
+                     passage_uid = excluded.passage_uid,
                      position_ms = excluded.position_ms,
                      playing = excluded.playing,
                      updated_at = excluded.updated_at",
@@ -2626,11 +2702,14 @@ impl PlayerStore {
         self.conn.execute_batch("BEGIN IMMEDIATE").map_err(q)?;
         let done = || -> Result<(), DbError> {
             self.conn.execute("DELETE FROM player_queue", []).map_err(q)?;
+            // By uid `[IMPL-UID-060]`; a passage without one is not written, since
+            // a queue entry is nothing but its passage.
             for (position, passage_id) in ids.iter().enumerate() {
                 self.conn
                     .execute(
-                        "INSERT INTO player_queue (position, passage_id, updated_at)
-                         VALUES (?1, ?2, datetime('now'))",
+                        "INSERT INTO player_queue (position, passage_uid, updated_at)
+                         SELECT ?1, passage_uid, datetime('now') FROM __LIB__.passages
+                          WHERE passage_id = ?2 AND passage_uid IS NOT NULL",
                         rusqlite::params![position as i64, passage_id],
                     )
                     .map_err(q)?;
@@ -2696,7 +2775,10 @@ impl PlayerStore {
     /// `Result` would buy it nothing it could act on.
     pub fn load_queue(&self) -> Vec<i64> {
         let Ok(mut q) =
-            self.conn.prepare("SELECT passage_id FROM player_queue ORDER BY position")
+            self.conn.prepare(
+                "SELECT p.passage_id FROM player_queue q JOIN __LIB__.passages p ON p.passage_uid = q.passage_uid \
+                  ORDER BY q.position",
+            )
         else {
             return Vec::new();
         };
@@ -2723,8 +2805,8 @@ impl PlayerStore {
     ) -> Result<(), DbError> {
         self.conn
             .execute(
-                "INSERT INTO selection_decisions (selected_at, passage_id, program_id, detail)
-                 VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO selection_decisions (selected_at, passage_uid, program_id, detail)
+                 VALUES (?1, (SELECT passage_uid FROM __LIB__.passages WHERE passage_id = ?2), ?3, ?4)",
                 rusqlite::params![at, passage_id, slot_id, detail],
             )
             .map(|_| ())
@@ -2733,9 +2815,12 @@ impl PlayerStore {
 
     /// Record that a passage played `[REQ-PD-110]`.
     ///
-    /// `mbid` is stored alongside `passage_id` because six years of history
+    /// `mbid` is stored alongside the passage because six years of history
     /// must survive a rescan that renumbers passages `[SPEC-SC-095]`; the
-    /// passage id is the convenience, the MBID is the durable key.
+    /// passage is the convenience, the MBID is the durable key. The passage is
+    /// named by its uid `[IMPL-UID-060]`, and a passage without one leaves it
+    /// NULL: a play is the one record never refused, since an unrecorded play
+    /// leaves its recording as eligible as before it was heard.
     /// Record a play, keyed by recording MBID `[REQ-PD-112]`.
     ///
     /// Rotation is meaningless without it: an unrecorded play leaves a recording
@@ -2761,8 +2846,9 @@ impl PlayerStore {
         self.conn
             .execute(
                 "INSERT INTO listener_play_history \
-                     (played_at, passage_id, mbid, heard_ms, span_ms, selected_by) \
-                 VALUES (strftime('%s','now'), ?1, ?2, ?3, ?4, ?5)",
+                     (played_at, passage_uid, mbid, heard_ms, span_ms, selected_by) \
+                 VALUES (strftime('%s','now'), \
+                         (SELECT passage_uid FROM __LIB__.passages WHERE passage_id = ?1), ?2, ?3, ?4, ?5)",
                 rusqlite::params![passage_id, mbid, heard_ms, span_ms, selected_by],
             )
             .map_err(DbError::query)?;
@@ -2808,8 +2894,9 @@ impl PlayerStore {
         self.conn
             .execute(
                 "INSERT INTO listener_rejections \
-                     (rejected_at, kind, passage_id, mbid, heard_ms, span_ms) \
-                 VALUES (strftime('%s','now'), ?1, ?2, ?3, ?4, ?5)",
+                     (rejected_at, kind, passage_uid, mbid, heard_ms, span_ms) \
+                 VALUES (strftime('%s','now'), ?1, \
+                         (SELECT passage_uid FROM __LIB__.passages WHERE passage_id = ?2), ?3, ?4, ?5)",
                 rusqlite::params![kind.as_str(), passage_id, mbid, heard_ms, span_ms],
             )
             .map(|_| ())
@@ -2857,7 +2944,8 @@ impl PlayerStore {
     pub fn load(&self) -> Result<Option<(Option<i64>, u64, bool)>, DbError> {
         self.conn
             .query_row(
-                "SELECT passage_id, position_ms, playing FROM player_state WHERE id = 1",
+                "SELECT p.passage_id, s.position_ms, s.playing FROM player_state s \
+                   LEFT JOIN __LIB__.passages p ON p.passage_uid = s.passage_uid WHERE s.id = 1",
                 [],
                 |r| {
                     Ok((
@@ -2921,7 +3009,7 @@ mod tests {
         assert_eq!(lib.review_progress().unwrap().decided, 1);
         let (d, m): (String, Option<String>) = store
             .conn
-            .query_row("SELECT decision, chosen_mbid FROM id_reviews WHERE passage_id = 2",
+            .query_row("SELECT decision, chosen_mbid FROM id_reviews WHERE passage_uid = printf('%032x', 2)",
                        [], |r| Ok((r.get(0)?, r.get(1)?)))
             .unwrap();
         assert_eq!(d, "reassigned");
@@ -2952,14 +3040,14 @@ mod tests {
         // applying it overwrites the only other copy.
         let previous: Option<String> = store
             .conn
-            .query_row("SELECT previous_mbid FROM id_reviews WHERE passage_id = 2",
+            .query_row("SELECT previous_mbid FROM id_reviews WHERE passage_uid = printf('%032x', 2)",
                        [], |r| r.get(0))
             .unwrap();
         assert_eq!(previous.as_deref(), Some("aaaaaaaa-0000-0000-0000-000000000001"));
 
         // `apply_reviews` stamps this once the library has been changed.
         store.conn.execute(
-            "UPDATE id_reviews SET applied_at = datetime('now') WHERE passage_id = 2", [])
+            "UPDATE id_reviews SET applied_at = datetime('now') WHERE passage_uid = printf('%032x', 2)", [])
             .unwrap();
 
         assert!(store.clear_review(2).is_err(), "an applied decision must not just vanish");
@@ -3312,7 +3400,7 @@ mod tests {
                 "SELECT audio_md5, orig_kind, orig_start_ms, orig_end_ms, \
                         orig_lead_in_ms, orig_lead_out_ms, orig_gain_db, \
                         orig_fade_in_ms, orig_fade_out_ms, orig_fade_in_curve, orig_fade_out_curve \
-                   FROM boundary_reviews WHERE passage_id = 2",
+                   FROM boundary_reviews WHERE passage_uid = printf('%032x', 2)",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?,
                         r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?)),
@@ -3347,6 +3435,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("lempi-queue-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
         let store = PlayerStore::open(&tmp).unwrap();
+        passages(&store.conn, &[3, 5, 7, 11]);
 
         // Never written is an empty queue, not a failure -- the same posture
         // `load_settings` takes, for a caller whose next step is to fill
@@ -3359,6 +3448,14 @@ mod tests {
 
         store.save_queue(&[5]).unwrap();
         assert_eq!(store.load_queue(), vec![5], "a shorter queue leaves no tail");
+
+        // Stored by uid [IMPL-UID-060]; a passage this catalogue does not hold is
+        // nothing a queue can hold, and is left out.
+        store.save_queue(&[7, 99, 3]).unwrap();
+        assert_eq!(store.load_queue(), vec![7, 3]);
+        let held: Vec<String> = store.conn.prepare("SELECT passage_uid FROM player_queue ORDER BY position").unwrap()
+            .query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        assert_eq!(held, [uid(7), uid(3)]);
 
         store.save_queue(&[]).unwrap();
         assert!(store.load_queue().is_empty(), "an emptied queue is emptied");
@@ -3374,6 +3471,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("lempi-queue-busy-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
         let store = PlayerStore::open(&tmp).unwrap();
+        passages(&store.conn, &[1, 2, 3, 4, 5, 6]);
         store.save_queue(&[1, 2]).unwrap();
         // The real wait is five seconds; the refusal is the same after 50 ms.
         store.conn.busy_timeout(std::time::Duration::from_millis(50)).unwrap();
@@ -3408,7 +3506,7 @@ mod tests {
         store
             .conn
             .execute(
-                "UPDATE boundary_reviews SET applied_at = datetime('now') WHERE passage_id = 2",
+                "UPDATE boundary_reviews SET applied_at = datetime('now') WHERE passage_uid = printf('%032x', 2)",
                 [],
             )
             .unwrap();
@@ -3471,7 +3569,7 @@ mod tests {
 
         let applied_at: Option<String> = store
             .conn
-            .query_row("SELECT applied_at FROM boundary_reviews WHERE passage_id = 30", [], |r| r.get(0))
+            .query_row("SELECT applied_at FROM boundary_reviews WHERE passage_uid = printf('%032x', 30)", [], |r| r.get(0))
             .unwrap();
         assert!(applied_at.is_none(),
                 "the Rust side records; only tools/apply_boundary_reviews.py stamps applied_at");
@@ -3536,7 +3634,7 @@ mod tests {
         store.accept_segment(31).unwrap();
         store
             .conn
-            .execute("UPDATE boundary_reviews SET applied_at = datetime('now') WHERE passage_id = 31", [])
+            .execute("UPDATE boundary_reviews SET applied_at = datetime('now') WHERE passage_uid = printf('%032x', 31)", [])
             .unwrap();
         assert!(store.accept_segment(31).is_err());
         let _ = std::fs::remove_file(&tmp);
@@ -3549,13 +3647,16 @@ mod tests {
         let p = std::env::temp_dir().join(format!("lempi_ph_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let st = PlayerStore::open(&p).unwrap();
+        passages(&st.conn, &[7, 8]);
         // The table is PlayerStore::open's now.
         st.record_play(7, Some("aaaaaaaa-0000-0000-0000-000000000001"), 90_000, 180_000, Some("user"))
             .unwrap();
         st.record_play(8, None, 90_000, 180_000, None).unwrap();
-        let rows: Vec<(i64, Option<String>, Option<String>)> = st
+        // A passage this catalogue does not hold still records the play, by its recording.
+        st.record_play(99, Some("aaaaaaaa-0000-0000-0000-000000000002"), 1, 2, None).unwrap();
+        let rows: Vec<(Option<String>, Option<String>, Option<String>)> = st
             .conn
-            .prepare("SELECT passage_id, mbid, selected_by FROM listener_play_history ORDER BY play_id")
+            .prepare("SELECT passage_uid, mbid, selected_by FROM listener_play_history ORDER BY play_id")
             .unwrap()
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .unwrap()
@@ -3564,11 +3665,12 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                (7, Some("aaaaaaaa-0000-0000-0000-000000000001".into()), Some("user".into())),
-                (8, None, None),
+                (Some(uid(7)), Some("aaaaaaaa-0000-0000-0000-000000000001".into()), Some("user".into())),
+                (Some(uid(8)), None, None),
+                (None, Some("aaaaaaaa-0000-0000-0000-000000000002".into()), None),
             ],
-            "an unidentified passage still records a play, and selected_by round-trips \
-             (or is absent) independently of mbid"
+            "each play names its passage by uid; an unidentified passage still records a play, \
+             and selected_by round-trips (or is absent) independently of mbid"
         );
         let _ = std::fs::remove_file(&p);
     }
@@ -3604,6 +3706,9 @@ mod tests {
                      VALUES (1, 4321, 1, 0.75, datetime('now'));",
             )
             .unwrap();
+            // Its catalogue has uids, as every one has since Stage A [IMPL-UID-052]:
+            // what lets the old row be named by one now [IMPL-UID-060].
+            passages(&c, &[1]);
         }
 
         let store = PlayerStore::open(&tmp).expect("an old library must still open");
@@ -3655,21 +3760,23 @@ mod tests {
                  INSERT INTO listener_play_history VALUES (1, 100, 7, 'm');",
             )
             .unwrap();
+            passages(&c, &[7, 8]);
         }
 
         let store = PlayerStore::open(&tmp).expect("a pre-migration history table must still open");
 
         // The old row survives, unharmed and now reading its new columns as
         // absent rather than missing -- the query naming them no longer fails.
-        let old: (i64, Option<i64>, Option<i64>) = store
+        let old: (String, Option<i64>, Option<i64>) = store
             .conn
             .query_row(
-                "SELECT passage_id, heard_ms, span_ms FROM listener_play_history WHERE play_id = 1",
+                "SELECT passage_uid, heard_ms, span_ms FROM listener_play_history WHERE play_id = 1",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .unwrap();
-        assert_eq!(old, (7, None, None), "an old row keeps its data and gains absent new columns");
+        assert_eq!(old, (uid(7), None, None),
+                   "an old row keeps its data, its passage now by uid, and gains absent new columns");
 
         // And a fresh write goes in with the new columns filled.
         let id = store.record_play(8, Some("n"), 90_000, 180_000, Some("auto")).unwrap();
@@ -3701,6 +3808,7 @@ mod tests {
         let _ = std::fs::remove_file(&tmp);
         // Both tables are PlayerStore::open's now.
         let st = PlayerStore::open(&tmp).unwrap();
+        passages(&st.conn, &[11, 12]);
         let skipped = "aaaaaaaa-0000-0000-0000-000000000009";
         let dropped = "aaaaaaaa-0000-0000-0000-00000000000d";
         st.record_rejection(Rejection::Skip, 11, Some(skipped), Some(10_000), Some(180_000)).unwrap();
@@ -3731,9 +3839,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lempi_ps_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&dir);
         let st = PlayerStore::open(&dir).unwrap();
+        passages(&st.conn, &[42, 43]);
         assert!(st.load().unwrap().is_none(), "first run has no resume point");
         st.save(Some(42), 61_500, true).unwrap();
         assert_eq!(st.load().unwrap(), Some((Some(42), 61_500, true)));
+        let held: String = st.conn.query_row("SELECT passage_uid FROM player_state", [], |r| r.get(0)).unwrap();
+        assert_eq!(held, uid(42), "the passage sounding is stored by its uid [IMPL-UID-060]");
         // saving again must UPDATE, not accumulate rows
         st.save(Some(43), 100, false).unwrap();
         assert_eq!(st.load().unwrap(), Some((Some(43), 100, false)));
@@ -4230,8 +4341,8 @@ mod tests {
     /// on purpose `[REQ-VIS-300]`.
     fn plant(conn: &Connection, mbid: &str, age_secs: i64, selected_by: Option<&str>) {
         conn.execute(
-            "INSERT INTO listener_play_history (played_at, passage_id, mbid, selected_by) \
-             VALUES (?1, 1, ?2, ?3)",
+            "INSERT INTO listener_play_history (played_at, passage_uid, mbid, selected_by) \
+             VALUES (?1, printf('%032x', 1), ?2, ?3)",
             rusqlite::params![now() - age_secs, mbid, selected_by],
         )
         .unwrap();

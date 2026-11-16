@@ -32,6 +32,12 @@ pub fn passage_uid(audio_md5: &str, kind: &str, start_ms: i64, end_ms: i64, salt
     Some(digest[..16].iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// Whether `s` has a uid's form: 32 lowercase hexadecimal characters, as
+/// [`passage_uid`] writes one. A passage number never has it.
+pub fn is_uid(s: &str) -> bool {
+    s.len() == 32 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 /// How a passage just written came by its identity `[IMPL-UID-038]`.
 pub enum Birth<'a> {
     /// The hub sent it, with its uid and birth key: stored as they are, once

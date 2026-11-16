@@ -830,7 +830,44 @@ def _int(v):
         return None
 
 
+#: The listener tables Stage B gives a `passage_uid` in place of a number [IMPL-UID-060].
+BY_UID_TABLES = ("listener_play_history", "listener_rejections", "selection_decisions", "player_state",
+                 "player_queue", "id_reviews", "boundary_reviews", "artist_reviews")
+
+
+def by_uid_tables(conn: sqlite3.Connection) -> list[str]:
+    """The tables of a listener already in Stage B's shape, naming a passage by uid."""
+    out = []
+    for t in BY_UID_TABLES:
+        cols = [r[1] for r in conn.execute(f"PRAGMA table_info({t})")]
+        if "passage_uid" in cols and "passage_id" not in cols:
+            out.append(t)
+    return out
+
+
+def refuse_by_uid(manifest: dict) -> None:
+    """[IMPL-UID-064]: this merge still translates passage numbers between nodes. A
+    listener already naming passages by uid -- a player of Stage B deployed before
+    the merge is converted -- would be read as if it held numbers, so it is refused
+    here, whole, before anything is merged. Said by name, never skipped quietly."""
+    for spec in manifest["nodes"]:
+        for what, path in (("listener", spec.get("listener")), ("copy last sent", spec.get("sent"))):
+            if not path or not os.path.exists(path):
+                continue
+            c = open_ro(path)
+            try:
+                found = by_uid_tables(c)
+            finally:
+                c.close()
+            if found:
+                raise SystemExit(
+                    f"{spec['name']}'s {what} names passages by uid ({', '.join(found)}): Stage B's listener, "
+                    "which this merge cannot read yet -- it still translates passage numbers [IMPL-UID-064]. "
+                    "Nothing was merged. Deploy Stage B's tools with its player, never the player alone.")
+
+
 def build_listener(manifest: dict, out: str, rep: Report, hub_cat: str | None = None):
+    refuse_by_uid(manifest)
     nodes = sorted((Node(s) for s in manifest["nodes"]), key=lambda n: n.name)
     newest = Newest(manifest.get("newest_sent"))
     try:

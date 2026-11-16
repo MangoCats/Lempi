@@ -539,6 +539,32 @@ def test_a_withdrawn_review_stays_withdrawn(tmp):
     check(rep.data["items"] == [], f"a removal no node edited is no question: {rep.data['items']}")
 
 
+def test_a_listener_by_uid_is_refused(tmp):
+    """[IMPL-UID-064]: a player of Stage B converts its listener when it first starts,
+    so its passages are named by uid. This merge still translates numbers; deployed
+    alone, that player's listener would be read as numbers, so the merge refuses it
+    by name, whole, and writes nothing -- the hub's own, a node's, or a copy last sent."""
+    desk, app = opposite(tmp, "bu")
+    old = ("CREATE TABLE id_reviews (passage_id INTEGER PRIMARY KEY, decision TEXT, chosen_mbid TEXT, "
+           "decided_at TEXT, applied_at TEXT, origin TEXT)")
+    new = old.replace("passage_id INTEGER", "passage_uid TEXT")
+    for who in ("desktop", "app", "sent"):
+        p = lambda n: os.path.join(tmp, f"bu-{who}-{n}.lis")
+        db(p("desk"), new if who == "desktop" else old)
+        db(p("app"), new if who == "app" else old)
+        db(p("sent"), new if who == "sent" else old)
+        out = os.path.join(tmp, f"bu-{who}-out")
+        try:
+            sm.build({"hub_state_from": "desktop", "hub_library": desk,
+                      "nodes": [dict(name="desktop", listener=p("desk")),
+                                dict(name="app", listener=p("app"), catalogue=app, files=app, sent=p("sent"))]}, out)
+            check(False, f"a listener by uid ({who}) must be refused")
+        except SystemExit as e:
+            want = "desktop's listener" if who == "desktop" else "app's copy last sent" if who == "sent" else "app's listener"
+            check(want in str(e) and "id_reviews" in str(e) and "[IMPL-UID-064]" in str(e), f"{who}: {e}")
+        check(not os.path.exists(os.path.join(out, "listener.db")), f"{who}: and nothing was merged")
+
+
 def test_a_node_that_missed_the_run(tmp):
     """[IMPL-UID-042]: run R1 removed flag F; node b missed R1, and still holds
     F unchanged from its R0 copy, which its history is. Until 2026-11-14 F came
@@ -852,6 +878,7 @@ def main() -> int:
     test_a_review_survives_two_rounds(tmp)
     test_a_removal_is_read_in_the_hubs_numbering(tmp)
     test_a_withdrawn_review_stays_withdrawn(tmp)
+    test_a_listener_by_uid_is_refused(tmp)
     test_a_node_that_missed_the_run(tmp)
     test_a_phone_that_never_applied_its_offer(tmp)
     test_one_file_many_passages(tmp)

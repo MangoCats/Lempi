@@ -1691,6 +1691,7 @@ mod tests {
             )
             .unwrap();
         }
+        crate::test_catalogue::give_uids(&c);
         drop(c);
         // Opened once so the listener-side tables exist, exactly as they do on
         // a real installation before a session is ever started.
@@ -1801,7 +1802,7 @@ mod tests {
              CREATE TABLE listener_preferences (subject_kind TEXT, subject_id TEXT,
                  rotation REAL, recovery REAL, restraint REAL);
              CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
-                 played_at INTEGER, passage_id INTEGER, mbid TEXT);
+                 played_at INTEGER, passage_uid TEXT, mbid TEXT);
              CREATE TABLE listener_settings (id INTEGER PRIMARY KEY,
                  artist_time_scale REAL, recording_time_scale REAL, updated_at TEXT);
              CREATE TABLE listener_occasions (characteristic TEXT, class TEXT, interp TEXT);
@@ -1830,6 +1831,7 @@ mod tests {
              ALTER TABLE passages ADD COLUMN fade_out_curve TEXT NOT NULL DEFAULT 'exponential';",
         )
         .unwrap();
+        crate::test_catalogue::give_uids(&c);
         drop(c);
         tmp
     }
@@ -2057,7 +2059,8 @@ mod tests {
         let tmp = director_library_on_disk("follower");
         // The player has a queue remembered, and has rebuilt once.
         let player = PlayerStore::open(&tmp).unwrap();
-        player.save_queue(&[9, 8]).unwrap();
+        // Two of its own passages: a queue holds only passages its catalogue has.
+        player.save_queue(&[3, 1]).unwrap();
         player.note_director_rebuild();
         let mut session = Session::open_follower(&tmp, &tmp, 5, false).unwrap();
         session.build_director_now().unwrap();
@@ -2069,7 +2072,7 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM selection_decisions", [], |r| r.get(0))
             .unwrap_or(0);
         assert_eq!(decisions, 0, "and recorded none of it, without write");
-        assert_eq!(player.load_queue(), vec![9, 8], "the player's remembered queue is the player's");
+        assert_eq!(player.load_queue(), vec![3, 1], "the player's remembered queue is the player's");
 
         // Its own rebuild leaves the stamp alone; the player's starts one here.
         let stamp = player.director_rebuilt_at();
@@ -2392,7 +2395,7 @@ mod tests {
              INSERT INTO passage_recordings VALUES (5,'rec-d',1.0);
              INSERT INTO recording_artists VALUES ('rec-d','art-1');
              CREATE TABLE listener_rejections (rejection_id INTEGER PRIMARY KEY,
-                 rejected_at INTEGER, kind TEXT, passage_id INTEGER, mbid TEXT,
+                 rejected_at INTEGER, kind TEXT, passage_uid TEXT, mbid TEXT,
                  heard_ms INTEGER, span_ms INTEGER);",
         )
         .unwrap();
@@ -2434,10 +2437,10 @@ mod tests {
         assert!(session.notes.is_empty());
 
         // What a backend wrote for that session, read by a fresh Director.
-        c.execute("INSERT INTO listener_rejections (rejected_at, kind, passage_id, mbid)
-                   VALUES (?1, 'skip', 1, 'rec-a')", [now]).unwrap();
-        c.execute("INSERT INTO listener_play_history (played_at, passage_id, mbid)
-                   VALUES (?1, 3, 'rec-c')", [now]).unwrap();
+        c.execute("INSERT INTO listener_rejections (rejected_at, kind, passage_uid, mbid)
+                   VALUES (?1, 'skip', printf('%032x', 1), 'rec-a')", [now]).unwrap();
+        c.execute("INSERT INTO listener_play_history (played_at, passage_uid, mbid)
+                   VALUES (?1, printf('%032x', 3), 'rec-c')", [now]).unwrap();
         let rebuilt = lib.director().unwrap();
         let shape = |d: &Director| -> Vec<(i64, bool)> {
             d.weigh_all(now).iter().map(|(e, w)| (e.passage_id, w.is_eligible())).collect()
@@ -2512,15 +2515,15 @@ mod tests {
              INSERT INTO flavor VALUES ('recording','rec-e','user.childrens','childrens',
                  1.0,'inherited:mulib',NULL);
              CREATE TABLE listener_rejections (rejection_id INTEGER PRIMARY KEY,
-                 rejected_at INTEGER, kind TEXT, passage_id INTEGER, mbid TEXT,
+                 rejected_at INTEGER, kind TEXT, passage_uid TEXT, mbid TEXT,
                  heard_ms INTEGER, span_ms INTEGER);",
         )
         .unwrap();
-        c.execute("INSERT INTO listener_rejections (rejected_at, kind, passage_id, mbid)
-                   VALUES (?1, 'skip', 3, 'rec-c')", [now]).unwrap();
+        c.execute("INSERT INTO listener_rejections (rejected_at, kind, passage_uid, mbid)
+                   VALUES (?1, 'skip', printf('%032x', 3), 'rec-c')", [now]).unwrap();
         let session = Session::open(&tmp, &tmp, 5).unwrap();
-        c.execute("INSERT INTO listener_play_history (played_at, passage_id, mbid)
-                   VALUES (?1, 1, 'rec-a')", [now]).unwrap();
+        c.execute("INSERT INTO listener_play_history (played_at, passage_uid, mbid)
+                   VALUES (?1, printf('%032x', 1), 'rec-a')", [now]).unwrap();
         (tmp, session, now)
     }
 
@@ -2573,8 +2576,8 @@ mod tests {
     fn the_director_sets_aside_rotation_and_nothing_else() {
         let (tmp, mut session, now) = every_rule("fallback-dir");
         let c = rusqlite::Connection::open(&tmp).unwrap();
-        c.execute("INSERT INTO listener_play_history (played_at, passage_id, mbid)
-                   VALUES (?1, 6, 'rec-f')", [now]).unwrap();
+        c.execute("INSERT INTO listener_play_history (played_at, passage_uid, mbid)
+                   VALUES (?1, printf('%032x', 6), 'rec-f')", [now]).unwrap();
         let d = crate::db::Library::open_split(&tmp, &tmp).unwrap().director().unwrap();
         assert!(d.decide(now, &mut session.rng, &[], None).is_none(),
                 "everything eligible is blocked, or this proves nothing");

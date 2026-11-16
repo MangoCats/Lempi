@@ -535,7 +535,11 @@ impl Director {
         };
         let mut stmt = conn
             .prepare(
-                "SELECT passage_id, MAX(played_at) FROM listener_play_history WHERE passage_id IS NOT NULL GROUP BY passage_id",
+                // By uid, each found by its number here once `[IMPL-UID-060]`.
+                "SELECT p.passage_id, x.t \
+                   FROM (SELECT passage_uid, MAX(played_at) AS t FROM listener_play_history \
+                          WHERE passage_uid IS NOT NULL GROUP BY passage_uid) x \
+                   JOIN __LIB__.passages p ON p.passage_uid = x.passage_uid",
             )
             .map_err(q)?;
         let by_passage = stmt
@@ -1953,7 +1957,16 @@ mod tests {
              CREATE TABLE listener_preferences (subject_kind TEXT, subject_id TEXT,
                  rotation REAL, recovery REAL, restraint REAL);
              CREATE TABLE listener_play_history (play_id INTEGER PRIMARY KEY,
-                 played_at INTEGER, passage_id INTEGER, mbid TEXT);
+                 played_at INTEGER, passage_uid TEXT, mbid TEXT);
+             -- These tests write a play as `passage N played`; it is stored, as the
+             -- player stores one, under the uid the fixture gives passage N. Here only:
+             -- the store's own tests write plays through the store, and must see
+             -- exactly what it writes.
+             -- (A number arrives as text: the column's affinity is TEXT.)
+             CREATE TRIGGER test_play_by_number AFTER INSERT ON listener_play_history
+                 WHEN length(NEW.passage_uid) < 32 AND NEW.passage_uid NOT GLOB '*[^0-9]*'
+             BEGIN UPDATE listener_play_history SET passage_uid = printf('%032x', CAST(NEW.passage_uid AS INTEGER))
+                    WHERE play_id = NEW.play_id; END;
              CREATE TABLE listener_settings (id INTEGER PRIMARY KEY,
                  artist_time_scale REAL, recording_time_scale REAL, updated_at TEXT);
              CREATE TABLE listener_occasions (characteristic TEXT, class TEXT, interp TEXT);
@@ -1982,6 +1995,7 @@ mod tests {
              ALTER TABLE passages ADD COLUMN fade_out_curve TEXT NOT NULL DEFAULT 'exponential';",
         )
         .unwrap();
+        crate::db::test_support::give_uids(&c);
         c
     }
 
@@ -2166,7 +2180,7 @@ mod tests {
         )
         .unwrap();
         for at in [DEC_24_NOON, NOV_9_NOON] {
-            c.execute("INSERT INTO listener_play_history (played_at, passage_id, mbid) VALUES (?1, 3, 'rec-c')", [at - 86_400])
+            c.execute("INSERT INTO listener_play_history (played_at, passage_uid, mbid) VALUES (?1, 3, 'rec-c')", [at - 86_400])
                 .unwrap();
         }
         let mut d = Director::load(&c).unwrap();
@@ -2279,7 +2293,7 @@ mod tests {
     /// Passage `p` of [`reserve_library`] heard at `at`.
     fn played(c: &QualifyingConn, p: i64, at: i64) {
         c.execute(
-            "INSERT INTO listener_play_history (played_at, passage_id, mbid) VALUES (?1, ?2, ?3)",
+            "INSERT INTO listener_play_history (played_at, passage_uid, mbid) VALUES (?1, ?2, ?3)",
             rusqlite::params![at, p, format!("r{p}")],
         )
         .unwrap();
@@ -2861,7 +2875,7 @@ mod tests {
     fn rotation_and_rejection_are_judged_when_the_pick_will_start() {
         let c = fixture();
         c.execute_batch(&format!(
-            "INSERT INTO listener_play_history (played_at, passage_id, mbid) VALUES ({}, 1, 'rec-a');
+            "INSERT INTO listener_play_history (played_at, passage_uid, mbid) VALUES ({}, 1, 'rec-a');
              CREATE TABLE listener_rejections (rejection_id INTEGER PRIMARY KEY, rejected_at INTEGER,
                  kind TEXT, passage_id INTEGER, mbid TEXT, heard_ms INTEGER, span_ms INTEGER);
              INSERT INTO listener_rejections (rejected_at, kind, passage_id, mbid) VALUES ({}, 'skip', 2, 'rec-b');",

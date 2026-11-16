@@ -344,9 +344,13 @@ impl Library {
             "SELECT mbid, MAX(played_at) FROM listener_play_history \
               WHERE mbid IS NOT NULL GROUP BY mbid",
         );
+        // By uid, found here by its number `[IMPL-UID-060]`: grouped first, so
+        // each passage is looked up once, by the catalogue's `passages_uid`.
         let by_passage = latest(
-            "SELECT CAST(passage_id AS TEXT), MAX(played_at) FROM listener_play_history \
-              WHERE passage_id IS NOT NULL GROUP BY passage_id",
+            "SELECT CAST(p.passage_id AS TEXT), x.t \
+               FROM (SELECT passage_uid, MAX(played_at) AS t FROM listener_play_history \
+                      WHERE passage_uid IS NOT NULL GROUP BY passage_uid) x \
+               JOIN __LIB__.passages p ON p.passage_uid = x.passage_uid",
         );
         let skipped = latest(
             "SELECT mbid, MAX(rejected_at) FROM listener_rejections \
@@ -816,7 +820,7 @@ impl Library {
         if self.has_file_releases() {
             format!(
                 "COALESCE({}, {HIST_ALBUM_EXPR})",
-                file_release_title("(SELECT p2.file_id FROM __LIB__.passages p2 WHERE p2.passage_id = u.passage_id)")
+                file_release_title("(SELECT p2.file_id FROM __LIB__.passages p2 WHERE p2.passage_uid = u.passage_uid)")
             )
         } else {
             HIST_ALBUM_EXPR.to_string()
@@ -1706,7 +1710,8 @@ impl Library {
                FROM __LIB__.id_checks c \
                JOIN ({NAMED}) m ON m.passage_id = c.passage_id \
                LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id \
-               LEFT JOIN id_reviews v ON v.passage_id = c.passage_id \
+               LEFT JOIN __LIB__.passages pu ON pu.passage_id = c.passage_id \
+               LEFT JOIN id_reviews v ON v.passage_uid = pu.passage_uid \
                LEFT JOIN artist_reviews a ON a.recording_mbid = m.mbid \
               WHERE c.verdict IN ('contradicted', 'unmatched') \
                 AND NOT (c.verdict = 'unmatched' \
@@ -1799,7 +1804,8 @@ impl Library {
                FROM ({NAMED_ANY}) m \
                LEFT JOIN __LIB__.file_tags ft ON ft.file_id = m.file_id \
                LEFT JOIN __LIB__.id_checks c ON c.passage_id = m.passage_id \
-               LEFT JOIN id_reviews v ON v.passage_id = m.passage_id \
+               LEFT JOIN __LIB__.passages pu ON pu.passage_id = m.passage_id \
+               LEFT JOIN id_reviews v ON v.passage_uid = pu.passage_uid \
                LEFT JOIN artist_reviews a ON a.recording_mbid = m.mbid \
               WHERE m.passage_id = ?1"
         );
@@ -2019,7 +2025,8 @@ impl Library {
             .query_row(
                 "SELECT start_ms, end_ms, lead_in_ms, lead_out_ms, gain_db,
                         fade_in_ms, fade_out_ms, fade_in_curve, fade_out_curve
-                   FROM boundary_reviews WHERE passage_id = ?1",
+                   FROM boundary_reviews
+                  WHERE passage_uid = (SELECT passage_uid FROM __LIB__.passages WHERE passage_id = ?1)",
                 [passage_id],
                 |r| {
                     Ok(BoundaryReview {
@@ -2115,7 +2122,7 @@ impl Library {
             "SELECT p.passage_id, f.path, p.kind, p.start_ms, p.end_ms, p.boundary_src, \
                     {TITLE_EXPR}, {ARTIST_EXPR}, {album}, \
                     {confidence_expr}, {outcome_expr}, \
-                    EXISTS (SELECT 1 FROM boundary_reviews br2 WHERE br2.passage_id = p.passage_id) \
+                    EXISTS (SELECT 1 FROM boundary_reviews br2 WHERE br2.passage_uid = p.passage_uid) \
                FROM __LIB__.passages p \
                JOIN __LIB__.files f ON f.file_id = p.file_id \
                LEFT JOIN __LIB__.file_tags ft ON ft.file_id = p.file_id \
@@ -2126,7 +2133,7 @@ impl Library {
                             FROM __LIB__.passages p2) m ON m.passage_id = p.passage_id \
               WHERE p.boundary_src LIKE 'computed:segment-cascade%' \
                 AND NOT EXISTS (SELECT 1 FROM boundary_reviews br \
-                                 WHERE br.passage_id = p.passage_id \
+                                 WHERE br.passage_uid = p.passage_uid \
                                    AND br.applied_at IS NOT NULL) \
               ORDER BY p.passage_id LIMIT ?1"
         );
@@ -2180,7 +2187,7 @@ impl Library {
         let confirmed = if self.has_table("boundary_reviews") {
             self.count(
                 "SELECT COUNT(*) FROM __LIB__.passages p \
-                   JOIN boundary_reviews br ON br.passage_id = p.passage_id \
+                   JOIN boundary_reviews br ON br.passage_uid = p.passage_uid \
                   WHERE p.boundary_src LIKE 'computed:segment-cascade%' \
                     AND br.applied_at IS NOT NULL",
             )?
@@ -2638,26 +2645,26 @@ impl Library {
         // `subject_kind`/`subject_id` resolve to a recording when the row has
         // an mbid (survives a rescan `[SPEC-DF-035]`, same reason the naming
         // columns are mbid-first), else to the passage -- often exactly the
-        // unidentified case someone most wants to flag. `passage_id` here is
-        // never a stale one: `ON DELETE SET NULL` already blanks it the
-        // moment the passage it named stops existing.
+        // unidentified case someone most wants to flag. A passage is named by
+        // its uid, as its flag is keyed `[IMPL-UID-060]`; one this catalogue no
+        // longer holds still names nothing here, as the number once did.
         let hist_album = self.hist_album_expr();
         let sql = format!(
             "SELECT at, kind, heard_ms, span_ms, \
                     {HIST_TITLE_EXPR} AS title, {HIST_ARTIST_EXPR} AS artist, \
                     {hist_album} AS album, \
                     CASE WHEN u.mbid IS NOT NULL THEN 'recording' \
-                         WHEN u.passage_id IS NOT NULL THEN 'passage' END AS subject_kind, \
-                    COALESCE(u.mbid, CAST(u.passage_id AS TEXT)) AS subject_id, \
+                         WHEN u.passage_uid IS NOT NULL THEN 'passage' END AS subject_kind, \
+                    COALESCE(u.mbid, u.passage_uid) AS subject_id, \
                     EXISTS (SELECT 1 FROM listener_flags f \
                              WHERE f.subject_kind = CASE WHEN u.mbid IS NOT NULL THEN 'recording' \
                                                           ELSE 'passage' END \
-                               AND f.subject_id = COALESCE(u.mbid, CAST(u.passage_id AS TEXT))) AS flagged, \
+                               AND f.subject_id = COALESCE(u.mbid, u.passage_uid)) AS flagged, \
                     u.mbid, {HIST_ARTIST_MBID_EXPR} AS artist_mbid \
-               FROM (SELECT played_at AS at, 'play' AS kind, mbid, passage_id, heard_ms, span_ms \
+               FROM (SELECT played_at AS at, 'play' AS kind, mbid, passage_uid, heard_ms, span_ms \
                        FROM listener_play_history \
                      UNION ALL \
-                     SELECT rejected_at AS at, 'skip' AS kind, mbid, passage_id, heard_ms, span_ms \
+                     SELECT rejected_at AS at, 'skip' AS kind, mbid, passage_uid, heard_ms, span_ms \
                        FROM listener_rejections WHERE kind = 'skip') u \
               ORDER BY at DESC LIMIT ?1 OFFSET ?2"
         );
@@ -3245,8 +3252,8 @@ mod tests {
                   'computed:segment-cascade@v1',20,20,'exponential','exponential'),
                  (22,1,'radio',125000,185000,NULL,NULL,NULL,
                   'src',20,20,'exponential','exponential');
-             INSERT INTO boundary_reviews (passage_id, start_ms, end_ms, decided_at, applied_at)
-                 VALUES (21, 65000, 125000, 't', 't');
+             INSERT INTO boundary_reviews (passage_uid, start_ms, end_ms, decided_at, applied_at)
+                 VALUES (printf('%032x', 21), 65000, 125000, 't', 't');
              INSERT INTO ingest_decisions (audio_md5, stage, outcome, confidence, decided_at)
                  VALUES ('md5', 'segment', 'grid:82%', 0.82, 't');",
         )
@@ -3283,8 +3290,8 @@ mod tests {
             "INSERT INTO passages VALUES
                  (23,1,'radio',5000,65000,NULL,NULL,NULL,
                   'computed:segment-cascade@v1',20,20,'exponential','exponential');
-             INSERT INTO boundary_reviews (passage_id, start_ms, end_ms, decided_at)
-                 VALUES (23, 5000, 65000, 't');",
+             INSERT INTO boundary_reviews (passage_uid, start_ms, end_ms, decided_at)
+                 VALUES (printf('%032x', 23), 5000, 65000, 't');",
         )
         .unwrap();
         let lib = Library { conn: QualifyingConn::wrap_unsplit(c) };
@@ -3603,9 +3610,10 @@ mod tests {
             .unwrap();
             // A play with no mbid at all -- unidentified, and the case this
             // feature is often most wanted for -- falls back to the passage.
+            passages(&c, &[42]);
             c.execute(
-                "INSERT INTO listener_play_history (played_at, passage_id, heard_ms, span_ms) \
-                 VALUES (150, 42, 150000, 180000)",
+                "INSERT INTO listener_play_history (played_at, passage_uid, heard_ms, span_ms) \
+                 VALUES (150, printf('%032x', 42), 150000, 180000)",
                 [],
             )
             .unwrap();
@@ -3615,12 +3623,14 @@ mod tests {
         let lib = Library::open(&tmp).unwrap();
 
         store.set_flag("recording", "aaaaaaaa-0000-0000-0000-000000000001", true).unwrap();
-        store.set_flag("passage", "42", true).unwrap();
+        // A passage is flagged by its uid [IMPL-UID-060], and never by its number.
+        assert!(store.set_flag("passage", "42", true).is_err(), "a number is refused for a passage");
+        store.set_flag("passage", &uid(42), true).unwrap();
         let rows = lib.play_history(10, 0).unwrap();
         let by_rec = rows.iter().find(|r| r.flag_kind == Some("recording")).unwrap();
         let by_pas = rows.iter().find(|r| r.flag_kind == Some("passage")).unwrap();
         assert!(by_rec.flagged, "the recording flag must be readable back");
-        assert_eq!(by_pas.flag_id.as_deref(), Some("42"));
+        assert_eq!(by_pas.flag_id.as_deref(), Some(uid(42).as_str()));
         assert!(by_pas.flagged, "the passage-keyed flag must be readable back");
 
         store.set_flag("recording", "aaaaaaaa-0000-0000-0000-000000000001", false).unwrap();

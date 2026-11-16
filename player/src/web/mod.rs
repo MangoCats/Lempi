@@ -1225,10 +1225,15 @@ mod tests {
         // The three decisions the page can send, and the only three
         // `PlayerStore::record_review` accepts. One added on either side alone
         // is the bug this is here to catch.
+        // A store with a catalogue beside it: a judgement names its passage by
+        // the uid found there [IMPL-UID-060].
+        let db = std::env::temp_dir().join(format!("lempi-review-routes-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&db);
+        crate::test_catalogue::passages(&rusqlite::Connection::open(&db).unwrap());
         for decision in ["reassigned", "kept", "deferred"] {
             assert!(REVIEW_JS.contains(decision), "page cannot send {decision}");
             assert!(
-                crate::db::PlayerStore::open(&std::path::PathBuf::from(":memory:"))
+                crate::db::PlayerStore::open(&db)
                     .map(|s| s.record_review(1, decision, Some("m"), None).is_ok())
                     .unwrap_or(false),
                 "the store rejects {decision}, which the page can send"
