@@ -64,6 +64,37 @@ DATE*, linked from here. §2 stays here.
 
 ## 3. Entries, newest first
 
+**`[LOG-LIBW-330]` 2026-11-16: every listener names its passages by uid,
+the phones excepted.** Stage B's window `[IMPL-UID-068]`, at the maintainer's
+word to proceed with Stage B and leave the phones for later.
+- **How:** each listener recorded just before its own deploy
+  (`tools/listener_window.py record`), then the build `17e9b1e`, whose player
+  converts its listener when it first opens it, after copying the whole file
+  to `listener.pre-uid.db` beside it. In order: the desktop at 13:08 UTC,
+  `lempi02w` (Director rebuild 56.6 s, 55 MB at 129 s, no error), `bose`,
+  `lp3-wifi`, `smartboardpc`, `teacherslounge` (converted when the round
+  started its player), and `lrhtpc` once its sudo was granted again.
+- **On the hub, the saved words:** `set_lyrics_uids.py --commit --expect 143`
+  placed all 143 rows, each on one current passage. Round `20261116T1340Z`
+  carried those uids to all six nodes, rehearsed CLEAN and committed, `kept` 0.
+  It also carried one settings row that differed only in its stamp.
+- **Read on each machine's own disk afterwards** (`verify --lyrics-uids`):
+  every table by uid; no plays, skips or decisions fewer than recorded; reviews,
+  resume rows and flags exactly as before; reviews and flags the same as the
+  hub's; the lyrics rows, their digest and the row each passage shows
+  unchanged, every placed row with its uid. 24 checks on the hub and 28 on
+  each node, all the same.
+- **Kept without a uid:** plays naming a passage their own catalogue no longer
+  holds, each with its recording: `lempi02w` 47, `bose` 42, `lp3-wifi` 33,
+  `teacherslounge` 24, `smartboardpc` 14, the hub and `lrhtpc` none, with a
+  few skips and decisions like them. No review, and no queue entry, was left
+  without one.
+- **The players** came back as they were. The paused ones were on the same
+  passage and position, and `bose` and `smartboardpc` were playing.
+- **Undone by** each machine's `listener.pre-uid.db`, the hub's also by
+  `data/backups/pre-lyrics-uids-20261116T130929Z/` and
+  `pre-sync-20261116T1340Z/`. They go 2026-12-16.
+
 **`[LOG-LIBW-320]` 2026-11-16: the unique index on passage uids, on every
 node.** Stage A gave every node its passages' uids, and none the unique index
 the hub holds on them `[IMPL-UID-056]`.

@@ -1,6 +1,6 @@
 # IMPL023: Building Permanent Identity
 
-**Implementation Specification — Tier 3 · written 2026-11-14 · Stage 0 done 2026-11-15 on the hub and five nodes, `teacherslounge` to follow · Stage A's window run 2026-11-15: every passage on the hub and all six nodes has its uid, each node read row by row (LOG014 `[LOG-LIBW-310]`); step 6, references by uid, built 2026-11-15 and not yet run in a round · Stage B's player half built 2026-11-16, not deployed (`[IMPL-UID-069]`) · the build plan for [SPEC075](spec/SPEC075-permanent-identity-and-a-movable-hub.md) §3 and §8 steps 1–3, and for every other place a number one database assigned is read by another**
+**Implementation Specification — Tier 3 · written 2026-11-14 · Stage 0 done 2026-11-15 on the hub and five nodes, `teacherslounge` to follow · Stage A's window run 2026-11-15: every passage on the hub and all six nodes has its uid, each node read row by row (LOG014 `[LOG-LIBW-310]`); step 6, references by uid, built 2026-11-15 and not yet run in a round · Stage B's window run 2026-11-16: the hub's listener and all six nodes' by uid, each verified from its own disk, the phones left for later (LOG014 `[LOG-LIBW-330]`) · the build plan for [SPEC075](spec/SPEC075-permanent-identity-and-a-movable-hub.md) §3 and §8 steps 1–3, and for every other place a number one database assigned is read by another**
 
 Every node numbers the household's music in its own order, and the star sync, echo and the tools translate between those numbers wherever they meet. This plan removes the meeting rather than the translation. Outside its own database a passage is named by its `passage_uid` and a file by its `audio_md5`, and a number a database assigned is never read by another machine, nor by the same machine against another catalogue.
 
@@ -141,7 +141,7 @@ Measured 2026-11-14: the hub holds 111 rows, each the segment of one current pas
 6. Run a merge round: it reports no translation and raises no item that the round before raised none of.
 7. Start the players, playing.
 
-**`[IMPL-UID-069]` As built so far, 2026-11-16: the player's half.** Measured first, on the hub and all six nodes: no row names a passage number its own catalogue lacks; no flag names a passage; the table definitions differ from machine to machine; `bose`'s 60,811 plays are the most.
+**`[IMPL-UID-069]` As built, 2026-11-16.** Measured first, on the hub and all six nodes: no review names a passage its own catalogue lacks, and no flag names a passage. Plays, skips and decisions do: 14 to 47 plays a node, none on the hub or `lrhtpc`, each keeping its recording. They were found by the conversion itself; a census that first said none compared an unqualified column inside its own subquery. Also measured: the table definitions differ from machine to machine; `bose`'s 60,811 plays are the most.
 - **Eight tables, not seven.** `artist_reviews` names its passage too, as provenance, and it travels.
 - **The player converts on open** (`db/listener_uid.rs`), so a deploy is step 3 for a node; the phones wait, out of this group, until updated separately. It first copies the whole file to `listener.pre-uid.db` beside it, then rebuilds each table in one transaction. Every column is carried by name, so no column is lost, and every index is kept. A catalogue without uids is refused, changing nothing.
 - **What has no uid:** a play, a skip or a decision keeps NULL and is counted, since a play is never refused. A review is refused. A queue entry is dropped, counted, since it is nothing but its passage.
@@ -157,7 +157,7 @@ Measured 2026-11-14: the hub holds 111 rows, each the segment of one current pas
 - **The merge keys by uid** `[IMPL-UID-064]`. The translation between numberings is gone from it (`passage_remap` stays until Stage D, for `repair_node_reviews`). A node's copy last sent, its backups and the newest run's copy may still be by number from before Stage B. Each is read through its own catalogue's map, the hub's through the hub's: a row naming a review's passage it lacks is left out and counted, and the report says what was read so. A snapshot still by number is refused by its node's name, and nothing is merged. A phone, which sends no table naming a passage, is not refused.
 - **Saved words find their passage by uid** `[IMPL-UID-063]`. Under its own kind, a row with a uid is that passage's whatever its segment has become, and no other passage's; a row without one, and tier 2, by segment. A save records the uid. `tools/set_lyrics_uids.py` sets the old rows' uids, once, on the hub. Rehearsed 2026-11-16 on the hub's 143 rows: all 143 placed, each on one current passage; none left; every passage shows the same row. The merge's `hub_sets` carries the hub's value to every node without an item or a tie, and a node's new save keeps its own.
 
-Not yet built: the window's tooling. **Nothing from 70989cc on is to be deployed before the window.**
+The window ran 2026-11-16 with `tools/listener_window.py` recording each listener before and verifying it after (LOG014 `[LOG-LIBW-330]`).
 
 ## 7. Stage C: every wire, URL, tool and log
 
