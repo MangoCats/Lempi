@@ -46,7 +46,7 @@ pub(super) async fn review_queue(State(ui): State<Ui>) -> axum::response::Respon
 #[cfg(feature = "vipunen-support")]
 pub(super) async fn review_passage(
     State(ui): State<Ui>,
-    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
 ) -> axum::response::Response {
     let db = ui.db.clone();
     let library = ui.library.clone();
@@ -76,7 +76,8 @@ pub(super) async fn review_passage(
 #[cfg(feature = "vipunen-support")]
 pub(super) async fn record_review(
     State(ui): State<Ui>,
-    axum::extract::Path((passage_id, decision)): axum::extract::Path<(i64, String)>,
+    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
+    axum::extract::Path((_, decision)): axum::extract::Path<(String, String)>,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::response::Response {
     let db = ui.db.clone();
@@ -116,7 +117,8 @@ pub(super) async fn record_review(
 #[cfg(feature = "vipunen-support")]
 pub(super) async fn artist_review_verb(
     State(ui): State<Ui>,
-    axum::extract::Path((passage_id, verb)): axum::extract::Path<(i64, String)>,
+    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
+    axum::extract::Path((_, verb)): axum::extract::Path<(String, String)>,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::response::Response {
     let db = ui.db.clone();

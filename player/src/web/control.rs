@@ -84,7 +84,8 @@ pub(super) async fn seek_to(
 /// after this has answered.
 pub(super) async fn seek_passage(
     State(ui): State<Ui>,
-    axum::extract::Path((passage, ms)): axum::extract::Path<(i64, u64)>,
+    super::passage_ref::Passage(passage): super::passage_ref::Passage,
+    axum::extract::Path((_, ms)): axum::extract::Path<(String, u64)>,
 ) -> StatusCode {
     let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
     c.seek_requested = Some((Some(passage), ms));
@@ -205,8 +206,14 @@ pub(super) async fn queue_passage(
         }
         _ => {}
     }
-    let ids: Vec<i64> = passages.split(',').filter_map(|s| s.trim().parse().ok()).collect();
-    if ids.is_empty() {
+    // Added by uid, so a list carried from another node's page adds the same
+    // passages or none `[IMPL-UID-072]`. One that is not a uid refuses the
+    // whole list: it is a link built wrongly, not a passage missing here.
+    let Some(uids) = passages.split(',').map(|s| crate::db::PassageUid::parse(s.trim())).collect::<Option<Vec<_>>>()
+    else {
+        return StatusCode::BAD_REQUEST;
+    };
+    if uids.is_empty() {
         return StatusCode::NOT_FOUND;
     }
     let place = match action.as_str() {
@@ -222,8 +229,8 @@ pub(super) async fn queue_passage(
         // Order is the caller's, and it is the order they were looking at.
         // A passage that cannot be read is dropped rather than failing the
         // batch: nineteen passages queued beats none.
-        let mut out = Vec::with_capacity(ids.len());
-        for id in ids {
+        let mut out = Vec::with_capacity(uids.len());
+        for id in uids.iter().filter_map(|u| lib.number_of(u).ok().flatten()) {
             if let Ok(mut e) = lib.passage(id) {
                 lib.describe(&mut e);
                 if let Some(t) = lib.stored_tags(id) {

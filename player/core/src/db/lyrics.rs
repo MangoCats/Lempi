@@ -837,7 +837,11 @@ pub struct LyricSource {
 /// Everything the lyric editor shows for one passage `[SPEC-LYR-172]`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct LyricsView {
+    /// This node's number, never sent: the editor names the passage by
+    /// `passage_uid` `[IMPL-UID-072]`.
+    #[serde(skip)]
     pub passage_id: i64,
+    pub passage_uid: Option<String>,
     pub kind: String,
     pub title: Option<String>,
     pub artist: Option<String>,
@@ -960,6 +964,7 @@ pub fn lyrics_view(conn: &Connection, lib: &str, passage_id: i64) -> Result<Opti
     let (title, artist, album) = passage_naming(conn, lib, passage_id, r.facts.heaviest());
     Ok(Some(LyricsView {
         passage_id,
+        passage_uid: r.facts.passage_uid.clone(),
         kind: r.facts.kind.clone(),
         title,
         artist,

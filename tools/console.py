@@ -449,9 +449,10 @@ def pending_detail(conn) -> dict:
 
     if "boundary_reviews" in have:
         for r in conn.execute(
-                # By uid [IMPL-UID-060]; the page is given this catalogue's own
-                # number for its link, which is the hub's, where this runs.
-                "SELECT p.passage_id, br.orig_start_ms, br.orig_end_ms, br.start_ms, br.end_ms, "
+                # By uid [IMPL-UID-060]. The console's own pages take this
+                # catalogue's number, the hub's, where this runs; a link into
+                # the player takes the uid [IMPL-UID-072].
+                "SELECT p.passage_id, br.passage_uid, br.orig_start_ms, br.orig_end_ms, br.start_ms, br.end_ms, "
                 "       br.orig_lead_in_ms, br.lead_in_ms, "
                 "       br.orig_lead_out_ms, br.lead_out_ms, br.orig_gain_db, br.gain_db, "
                 "       br.orig_fade_in_ms, br.fade_in_ms, br.orig_fade_out_ms, br.fade_out_ms, "
@@ -466,7 +467,7 @@ def pending_detail(conn) -> dict:
                 " WHERE br.applied_at IS NULL "
                 " ORDER BY br.decided_at"):
             out["boundary"].append({
-                "passage_id": r["passage_id"], "title": r["title"],
+                "passage_id": r["passage_id"], "passage_uid": r["passage_uid"], "title": r["title"],
                 "span": [r["orig_start_ms"], r["orig_end_ms"], r["start_ms"], r["end_ms"]],
                 # Every value `apply_boundary_reviews.py` writes, as [before,
                 # after] -- found 2026-10-18: this listed only the span,
@@ -494,14 +495,14 @@ def pending_detail(conn) -> dict:
         # promise 99 changes and deliver 40, which is worse than not offering
         # the button at all. They are counted separately and explained.
         for r in conn.execute(
-                "SELECT p.passage_id, v.decision, v.chosen_mbid, v.decided_at, "
+                "SELECT p.passage_id, v.passage_uid, v.decision, v.chosen_mbid, v.decided_at, "
                 "       (SELECT r.title FROM recordings r WHERE r.mbid = v.chosen_mbid) AS chosen_title "
                 "  FROM id_reviews v LEFT JOIN passages p ON p.passage_uid = v.passage_uid "
                 " WHERE v.applied_at IS NULL AND v.decision = 'reassigned' "
                 "   AND v.chosen_mbid IS NOT NULL "
                 " ORDER BY v.decided_at"):
             out["id"].append({
-                "passage_id": r["passage_id"], "decision": r["decision"],
+                "passage_id": r["passage_id"], "passage_uid": r["passage_uid"], "decision": r["decision"],
                 "chosen_mbid": r["chosen_mbid"], "chosen_title": r["chosen_title"],
                 "decided_at": r["decided_at"],
             })
@@ -821,10 +822,12 @@ def file_passages(conn, path: str) -> list:
     rows = conn.execute(
         "SELECT p.passage_id, p.start_ms, p.end_ms, "
         "       (SELECT r.title FROM passage_recordings pr JOIN recordings r ON r.mbid = pr.mbid "
-        "        WHERE pr.passage_id = p.passage_id LIMIT 1) "
+        "        WHERE pr.passage_id = p.passage_id LIMIT 1), p.passage_uid "
         "FROM passages p JOIN files f ON f.file_id = p.file_id "
         "WHERE f.path = ?1 AND p.kind = 'radio' ORDER BY p.start_ms", (path,)).fetchall()
-    return [{"passage_id": r[0], "start_ms": r[1], "end_ms": r[2], "title": r[3]} for r in rows]
+    # The uid, for the link into the player's editor [IMPL-UID-072].
+    return [{"passage_id": r[0], "start_ms": r[1], "end_ms": r[2], "title": r[3], "passage_uid": r[4]}
+            for r in rows]
 
 
 def system_status() -> dict:

@@ -41,7 +41,7 @@
     // "Artist - Title" is this idiom's own habit, and it happens to put the
     // more identifying half first when the line has to scroll.
     renderTitle(s.artist ? `${s.artist} - ${s.title}` : (s.title ?? '—'));
-    Lempi.showArt($('art'), s.passage_id);
+    Lempi.showArt($('art'), s.passage_uid);
     $('time').textContent = clock(s.position_ms);
     $('stat').textContent =
       `${clock(s.duration_ms)} · ${s.queue_len ?? 0} queued` +

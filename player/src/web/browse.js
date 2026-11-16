@@ -304,7 +304,7 @@
       for (const [side, alt] of [['', 'front cover'], ['/back', 'back cover']]) {
         const img = document.createElement('img');
         img.alt = alt;
-        img.src = `/art/${rows[0].passage_id}${side}`;
+        img.src = `/art/${rows[0].passage_uid}${side}`;
         img.onerror = () => { img.remove(); if (!sleeves.querySelector('img')) sleeves.remove(); };
         sleeves.appendChild(img);
       }
@@ -347,7 +347,7 @@
         // one falls back to its radio passage and says so [SPEC-ALB-040];
         // Select all leaves it out, since a hidden intro joined to its track
         // is one, and its audio is already in the album passages around it.
-        let own = r.passage_id, all = null, says = '';
+        let own = r.passage_uid, all = null, says = '';
         if (asAlbum) {
           // An album passage with no radio one -- a run of silent tracks
           // [SPEC-SIL-070] -- is its own album passage, and plays only here.
@@ -360,7 +360,7 @@
             // its place, or leaves it out [SPEC-HOLD-070]. By hand, the
             // held passage itself, which a person may still choose.
             if (r.album_hold) {
-              all = r.stand_in ? r.stand_in.passage_id : null;
+              all = r.stand_in ? r.stand_in.passage_uid : null;
               says = r.stand_in
                 ? `held — Select all plays it from ${r.stand_in.album || 'another file'}`
                 : 'held — not in Select all';
@@ -385,7 +385,7 @@
           // [SPEC-AID-040].
           const on = r.album && away(r.album, 'album',
                                      () => narrow('tracks', { artist: filter.artist, album: r.album,
-                                                              album_of: r.passage_id }, true));
+                                                              album_of: r.passage_uid }, true));
           sub = [by, by && on ? ' — ' : '', on];
         }
         const li = row(numbered, sub, r.plays ? `${r.plays}×` : '');
@@ -410,7 +410,7 @@
         // `stopPropagation` reasoning the checkbox above already needs.
         const info = document.createElement('a');
         info.className = 'info';
-        info.href = `/passage/${r.passage_id}`;
+        info.href = `/passage/${r.passage_uid}`;
         info.textContent = 'ⓘ';
         info.title = 'passage details';
         info.onclick = e => e.stopPropagation();
@@ -432,7 +432,7 @@
             e.stopPropagation();
             const panel = document.getElementById('pref-panel');
             if (panel) li.after(panel);
-            Lempi.editPreference('recording', r.mbid, r.title, { passage: r.passage_id });
+            Lempi.editPreference('recording', r.mbid, r.title, { passage: r.passage_uid });
           };
           li.appendChild(seed);
         }

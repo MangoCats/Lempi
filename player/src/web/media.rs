@@ -33,7 +33,7 @@ use super::{Ui, REVALIDATE};
 /// through a track change left that song without its words, and said nothing.
 pub(super) async fn lyrics(
     State(ui): State<Ui>,
-    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
 ) -> axum::response::Response {
     let db = ui.db.clone();
     let library = ui.library.clone();
@@ -65,7 +65,7 @@ pub(super) async fn lyrics(
 
 pub(super) async fn cover_art(
     State(ui): State<Ui>,
-    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
 ) -> axum::response::Response {
     // Both the query and the file read block, so they belong off the runtime.
     art_response(ui, passage_id, false).await
@@ -74,7 +74,7 @@ pub(super) async fn cover_art(
 /// The back of the sleeve `[REQ-VIS-170]`, for skins that show it.
 pub(super) async fn cover_art_back(
     State(ui): State<Ui>,
-    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
 ) -> axum::response::Response {
     art_response(ui, passage_id, true).await
 }

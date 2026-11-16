@@ -132,10 +132,11 @@ struct QueueItem {
 #[derive(serde::Deserialize, Default, Clone, PartialEq)]
 struct ClientSnapshot {
     playing: bool,
-    /// The passage on air, for fetching its cover at `/art/{id}` -- the
-    /// exact same field the real `Snapshot` documents itself as carrying
-    /// for this exact purpose `[SPEC036]` §8 phase 7.
-    passage_id: Option<i64>,
+    /// The passage on air, by uid, for fetching its cover at `/art/{uid}`
+    /// -- the field the real `Snapshot` documents itself as carrying for
+    /// this purpose `[SPEC036]` §8 phase 7. A uid since 2026-11-16, as
+    /// every passage route takes `[IMPL-UID-072]`.
+    passage_uid: Option<String>,
     title: Option<String>,
     artist: Option<String>,
     /// The Release title -- `None` until the release tables are populated
@@ -1281,8 +1282,8 @@ fn decode_and_resize(bytes: &[u8]) -> Option<Vec<Rgb565>> {
 /// both "no art exists for this passage" (a 404, most of this all-radio
 /// sample library) and "art existed but failed to decode" identically --
 /// this UI has nothing more useful to do with either than show no art.
-async fn fetch_art(addr: String, passage_id: i64) -> Option<Vec<Rgb565>> {
-    let bytes = http_get(&addr, &format!("/art/{passage_id}")).await?;
+async fn fetch_art(addr: String, passage_uid: &str) -> Option<Vec<Rgb565>> {
+    let bytes = http_get(&addr, &format!("/art/{passage_uid}")).await?;
     tokio::task::spawn_blocking(move || decode_and_resize(&bytes)).await.ok().flatten()
 }
 
@@ -1787,11 +1788,11 @@ async fn main() {
     let mut last_position_redraw = std::time::Instant::now()
         .checked_sub(std::time::Duration::from_secs(5))
         .unwrap_or_else(std::time::Instant::now);
-    // Keyed by passage_id, not refetched on every push -- `None` inside
+    // Keyed by passage uid, not refetched on every push -- `None` inside
     // the tuple is cached too, so a passage confirmed to have no art (most
     // of this all-radio sample library) is not re-requested on every
     // ~1s snapshot push for as long as it keeps playing.
-    let mut art_cache: Option<(i64, Option<Vec<Rgb565>>)> = None;
+    let mut art_cache: Option<(String, Option<Vec<Rgb565>>)> = None;
     // The last press of the pairing button and what it did, shown beside the
     // button for `PAIR_NOTE_SECS` `[SPEC-NSH-170]`.
     let mut pair_note: Option<(bool, std::time::Instant)> = None;
@@ -1861,11 +1862,11 @@ async fn main() {
                         // spawned+channeled: this only blocks the loop on
                         // the one push where the track actually changed, not
                         // on the far more frequent position-only updates.
-                        if art_cache.as_ref().map(|(id, _)| *id) != snap.passage_id {
-                            art_cache = match snap.passage_id {
+                        if art_cache.as_ref().map(|(id, _)| id) != snap.passage_uid.as_ref() {
+                            art_cache = match snap.passage_uid.clone() {
                                 Some(pid) => {
                                     let started = std::time::Instant::now();
-                                    let art = fetch_art(http_addr.clone(), pid).await;
+                                    let art = fetch_art(http_addr.clone(), &pid).await;
                                     tracing::info!("fbui: art fetch+decode for passage {pid} took {:?} ({})", started.elapsed(), if art.is_some() { "found" } else { "none" });
                                     Some((pid, art))
                                 }
@@ -2000,7 +2001,7 @@ async fn main() {
                                 let ms = (frac * snap.duration_ms as f64).round() as u64;
                                 // Named, so a touch that races a track change
                                 // is refused rather than moving the next one.
-                                let to = match snap.passage_id {
+                                let to = match &snap.passage_uid {
                                     Some(id) => format!("/seek/{id}/{ms}"),
                                     None => format!("/seek/{ms}"),
                                 };

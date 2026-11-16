@@ -43,6 +43,7 @@ mod edit;
 mod guide;
 mod lyrics;
 mod media;
+mod passage_ref;
 mod musicbrainz;
 mod picture_frame;
 mod preference;
@@ -195,9 +196,11 @@ pub struct QueueItem {
     /// The entry's own identity `[REQ-VIS-186]`. What the edit controls name,
     /// because `passage_id` does not distinguish a passage queued twice.
     pub qid: u64,
+    /// This node's number, never sent `[IMPL-UID-072]`.
+    #[serde(skip)]
     pub passage_id: i64,
-    /// This passage on every node, which is how a follower numbered
-    /// differently finds it `[IMPL-UID-070]`.
+    /// This passage on every node: how a follower numbered differently finds
+    /// it `[IMPL-UID-070]`, and how a page names it `[IMPL-UID-072]`.
     pub passage_uid: Option<crate::db::PassageUid>,
     pub title: String,
     pub artist: Option<String>,
@@ -240,9 +243,11 @@ pub struct SlotItem {
 #[derive(Serialize)]
 pub struct Snapshot {
     pub playing: bool,
-    /// The passage on air, for fetching its cover at `/art/{id}`.
+    /// The passage on air, by this node's number, never sent.
+    #[serde(skip)]
     pub passage_id: Option<i64>,
-    /// The passage on air on every node `[IMPL-UID-070]`.
+    /// The passage on air on every node `[IMPL-UID-070]`, and what a page
+    /// fetches its cover by, at `/art/{uid}` `[IMPL-UID-072]`.
     pub passage_uid: Option<crate::db::PassageUid>,
     /// MusicBrainz Recording title where there is one, then the file's tag,
     /// then the filename `[REQ-VIS-170]`.
@@ -554,14 +559,14 @@ pub fn router(ui: Ui) -> Router {
         // then the editor's page, its script and what it shows.
         .route("/lyrics/:passage_id", get(lyrics).post(save_lyrics))
         .route("/lyrics/:passage_id/sources", get(lyrics_sources))
-        .route("/lyrics/:passage_id/edit", get(|| async { ([REVALIDATE], Html(LYRICS_HTML)) }))
+        .route("/lyrics/:passage_id/edit", get(|_: passage_ref::Passage| async { ([REVALIDATE], Html(LYRICS_HTML)) }))
         .route("/lyrics.js", get(|| async { js(LYRICS_JS) }))
         .route("/art/:passage_id", get(cover_art))
         .route("/art/:passage_id/back", get(cover_art_back))
         .route("/browse", get(|| async { ([REVALIDATE], Html(BROWSE_HTML)) }))
         .route("/browse.js", get(|| async { js(BROWSE_JS) }))
         .route("/browse/:kind", get(browse))
-        .route("/passage/:passage_id", get(|| async { ([REVALIDATE], Html(PASSAGE_HTML)) }))
+        .route("/passage/:passage_id", get(|_: passage_ref::Passage| async { ([REVALIDATE], Html(PASSAGE_HTML)) }))
         .route("/passage.js", get(|| async { js(PASSAGE_JS) }))
         .route("/passage/:passage_id/info", get(passage_info))
         .route("/history", get(history))
@@ -601,7 +606,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/review/:passage_id/artist/:verb", post(artist_review_verb))
         .route("/api/musicbrainz/search", get(musicbrainz_search))
         .route("/review/release-tracks/:mbid", get(release_tracks))
-        .route("/edit/:passage_id", get(|| async { ([REVALIDATE], Html(EDIT_HTML)) }))
+        .route("/edit/:passage_id", get(|_: passage_ref::Passage| async { ([REVALIDATE], Html(EDIT_HTML)) }))
         .route("/edit.js", get(|| async { js(EDIT_JS) }))
         .route("/fade.js", get(|| async { js(FADE_JS) }))
         .route("/boundary.js", get(|| async { js(BOUNDARY_JS) }))
@@ -640,7 +645,7 @@ pub fn router(ui: Ui) -> Router {
         .route("/loop/b/:ms", post(set_loop_b))
         .route("/loop/clear", post(clear_loop))
         .route("/seek/:ms", post(seek_to))
-        .route("/seek/:passage/:ms", post(seek_passage))
+        .route("/seek/:passage_id/:ms", post(seek_passage))
         .route("/underruns/restart", post(restart_underruns))
         .route("/skip/fade/:ms", post(set_skip_fade))
         .route("/skip/lead/:ms", post(set_skip_lead))
@@ -841,7 +846,7 @@ async fn integrity(State(ui): State<Ui>) -> axum::response::Response {
 /// existed. That is a real state and the page says so rather than blanking.
 async fn why_for(
     State(ui): State<Ui>,
-    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+    passage_ref::Passage(passage_id): passage_ref::Passage,
 ) -> axum::response::Response {
     let Ok(log) = ui.why.lock() else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -1136,7 +1141,7 @@ mod tests {
                 "the shared panel no longer offers or sends a seed");
         // The panel still opens from Browse, for the recording's preferences,
         // and leads on to the passage's own page `[SPEC-PREF-055]`.
-        assert!(BROWSE_JS.contains("editPreference('recording', r.mbid, r.title, { passage: r.passage_id })"),
+        assert!(BROWSE_JS.contains("editPreference('recording', r.mbid, r.title, { passage: r.passage_uid })"),
                 "Browse opens the panel, naming the row's passage");
         assert!(BROWSE_HTML.contains("id=\"pref-panel\""), "and carries the panel to open");
         assert!(CORE.contains(r#"class="pref-info""#) && CORE.contains("`/passage/${pid}`"),
@@ -1551,7 +1556,7 @@ mod tests {
     fn the_snapshot_keeps_the_field_names_the_skins_read() {
         let json = serde_json::to_string(&Snapshot::from(&state())).unwrap();
         for field in [
-            "playing", "passage_id", "title", "artist", "mbid", "artist_mbid", "album", "plays",
+            "playing", "passage_uid", "title", "artist", "mbid", "artist_mbid", "album", "plays",
             "last_played", "position_ms", "duration_ms", "queue_len", "queue",
             "volume_db", "fader_min_db", "skip", "slot", "slot_manual", "slots",
             "program", "program_manual", "programs", "profanity_tolerance", "christmas_reserve",
@@ -1561,9 +1566,12 @@ mod tests {
         ] {
             assert!(json.contains(&format!("\"{field}\"")), "snapshot lost {field}");
         }
-        for field in ["passage_id", "title", "artist", "mbid", "artist_mbid", "duration_ms", "editable"] {
+        for field in ["passage_uid", "title", "artist", "mbid", "artist_mbid", "duration_ms", "editable"] {
             assert!(json.contains(&format!("\"{field}\"")), "queue item lost {field}");
         }
+        // This node's number goes to no page, the queue's included: a page
+        // names a passage by its uid `[IMPL-UID-072]`.
+        assert!(!json.contains("\"passage_id\""), "a number reached the page: {json}");
     }
 
     /// Every `s.<field>` the skin reads off a snapshot.
@@ -1975,7 +1983,8 @@ mod tests {
                  INSERT INTO passages (passage_id, file_id, kind, start_ms, end_ms, boundary_src)
                      VALUES (1, 1, 'radio', 0, 200000, 'test');
                  INSERT INTO recordings (mbid, title, source) VALUES ('rec-1', 'Song', 'test');
-                 INSERT INTO passage_recordings (passage_id, mbid, weight, source) VALUES (1, 'rec-1', 1.0, 'test');",
+                 INSERT INTO passage_recordings (passage_id, mbid, weight, source) VALUES (1, 'rec-1', 1.0, 'test');
+                 UPDATE passages SET passage_uid = printf('%032x', passage_id);",
             )
             .unwrap();
         // `schema.sql` makes a file WAL; a listener not yet redeployed is not.
@@ -1987,9 +1996,9 @@ mod tests {
 
         holder.execute_batch("BEGIN EXCLUSIVE;").unwrap();
         let (shown, sources, saved) = tokio::join!(
-            ask(a, "GET", "/lyrics/1", None),
-            ask(a, "GET", "/lyrics/1/sources", None),
-            ask(a, "POST", "/lyrics/1", Some(r#"{"text": "typed while held"}"#)),
+            ask(a, "GET", "/lyrics/00000000000000000000000000000001", None),
+            ask(a, "GET", "/lyrics/00000000000000000000000000000001/sources", None),
+            ask(a, "POST", "/lyrics/00000000000000000000000000000001", Some(r#"{"text": "typed while held"}"#)),
         );
         for (what, answer) in [("GET /lyrics", &shown), ("GET sources", &sources), ("POST /lyrics", &saved)] {
             let head = answer.to_ascii_lowercase();
@@ -1998,12 +2007,70 @@ mod tests {
         }
         holder.execute_batch("ROLLBACK;").unwrap();
 
-        assert!(ask(a, "GET", "/lyrics/1", None).await.contains(" 404 "), "none, once released");
-        assert!(ask(a, "GET", "/lyrics/1/sources", None).await.contains(" 200 "));
-        assert!(ask(a, "POST", "/lyrics/1", Some(r#"{"text": "typed after"}"#)).await.contains(" 200 "));
-        let after = ask(a, "GET", "/lyrics/1", None).await;
+        assert!(ask(a, "GET", "/lyrics/00000000000000000000000000000001", None).await.contains(" 404 "), "none, once released");
+        assert!(ask(a, "GET", "/lyrics/00000000000000000000000000000001/sources", None).await.contains(" 200 "));
+        assert!(ask(a, "POST", "/lyrics/00000000000000000000000000000001", Some(r#"{"text": "typed after"}"#)).await.contains(" 200 "));
+        let after = ask(a, "GET", "/lyrics/00000000000000000000000000000001", None).await;
         assert!(after.contains(" 200 ") && after.ends_with("typed after"), "{after}");
         drop(holder);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Every route naming a passage takes its uid `[IMPL-UID-072]`. A number is
+    /// refused with 400 before anything is read or written, so a link carried
+    /// from another node fails rather than opening another song there
+    /// `[SPEC-UID-035]`; a uid this node lacks is 404; and the passage's own
+    /// uid reaches its handler, which answers anything but those two.
+    #[tokio::test]
+    async fn a_passage_route_takes_a_uid_and_refuses_a_number() {
+        let d = std::env::temp_dir().join(format!("lempi-routes-by-uid-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let db = d.join("listener.db");
+        let c = rusqlite::Connection::open(&db).unwrap();
+        c.execute_batch(include_str!("../../../sql/schema.sql")).unwrap();
+        c.execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             INSERT INTO files (file_id, audio_md5, path, size_bytes, mtime, format, duration_ms,
+                                first_seen, last_seen) VALUES (1, 'aaa', '/m/a.mp3', 1, 0, 'mp3', 200000, 't', 't');
+             INSERT INTO passages (passage_id, file_id, kind, start_ms, end_ms, boundary_src)
+                 VALUES (7, 1, 'radio', 0, 200000, 'test');
+             UPDATE passages SET passage_uid = printf('%032x', passage_id);",
+        )
+        .unwrap();
+        drop(c);
+        drop(crate::db::PlayerStore::open_split(&db, &db).unwrap());
+        let (a, _) = serve_at(db.clone()).await;
+        let here = crate::test_catalogue::uid(7);
+        let absent = crate::test_catalogue::uid(999);
+
+        #[allow(unused_mut)]
+        let mut routes = vec![
+            ("GET", "/why/{}"), ("GET", "/lyrics/{}"), ("POST", "/lyrics/{}"), ("GET", "/lyrics/{}/sources"),
+            ("GET", "/lyrics/{}/edit"), ("GET", "/art/{}"), ("GET", "/art/{}/back"), ("GET", "/passage/{}"),
+            ("GET", "/passage/{}/info"), ("POST", "/seek/{}/1000"), ("POST", "/queue/{}/next"),
+            ("GET", "/browse/tracks?album_of={}"),
+        ];
+        #[cfg(feature = "vipunen-support")]
+        routes.extend([
+            ("GET", "/review/passage/{}"), ("POST", "/review/{}/kept"), ("POST", "/review/{}/artist/reopen"),
+            ("GET", "/edit/{}"), ("GET", "/edit/{}/info"), ("GET", "/edit/{}/audio"), ("GET", "/edit/{}/overview"),
+            ("POST", "/edit/{}/review"), ("POST", "/segment/{}/accept"),
+        ]);
+        let line = |answer: &str| answer.lines().next().unwrap_or("").to_string();
+        for (method, route) in routes {
+            let body = (method == "POST").then_some(r#"{"text":"x"}"#);
+            let number = ask(a, method, &route.replace("{}", "7"), body).await;
+            assert!(line(&number).contains(" 400 "), "{method} {route} by number: {}", line(&number));
+            let missing = ask(a, method, &route.replace("{}", &absent), body).await;
+            assert!(line(&missing).contains(" 404 "), "{method} {route} by a uid not here: {}", line(&missing));
+            // Its handler's own answer, whatever that is -- a passage with no
+            // words, cover or explanation is still 404 there -- and not the
+            // refusal of the name.
+            let held = ask(a, method, &route.replace("{}", &here), body).await;
+            assert!(!held.contains("is not a passage uid") && !held.contains("this node holds no passage"),
+                    "{method} {route} by its uid: {held}");
+        }
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -2325,7 +2392,8 @@ mod tests {
                  INSERT INTO passage_recordings (passage_id, mbid, weight, source)
                       VALUES (7, 'rec', 1.0, 'test');
                  INSERT INTO lyrics (mbid, text, source, fetched_at)
-                      VALUES ('rec', 'imported words', 'mulibplay', '2026-01-01');",
+                      VALUES ('rec', 'imported words', 'mulibplay', '2026-01-01');
+                 UPDATE passages SET passage_uid = printf('%032x', passage_id);",
             )
             .unwrap();
         }
@@ -2358,9 +2426,9 @@ mod tests {
         };
         let json = |body: &str| -> serde_json::Value { serde_json::from_str(body).unwrap() };
 
-        let (line, body) = ask("GET", "/lyrics/7", "").await;
+        let (line, body) = ask("GET", "/lyrics/00000000000000000000000000000007", "").await;
         assert!(line.contains(" 200 ") && body == "imported words", "{line} {body:?}");
-        let (line, body) = ask("GET", "/lyrics/7/sources", "").await;
+        let (line, body) = ask("GET", "/lyrics/00000000000000000000000000000007/sources", "").await;
         assert!(line.contains(" 200 "), "{line}");
         let v = json(&body);
         assert!(v["own"].is_null(), "nothing of its own yet: {v}");
@@ -2368,22 +2436,30 @@ mod tests {
         assert_eq!((v["sources"][0]["tier"].as_i64(), v["shown_tier"].as_i64()), (Some(3), Some(3)));
         assert_eq!(v["sources"][0]["imported"], "mulibplay");
 
-        let (line, body) = ask("POST", "/lyrics/7", r#"{"text":"typed\r\nhere"}"#).await;
+        let (line, body) = ask("POST", "/lyrics/00000000000000000000000000000007", r#"{"text":"typed\r\nhere"}"#).await;
         assert!(line.contains(" 200 "), "the save: {line} {body}");
         assert_eq!(json(&body)["own"]["text"], "typed\nhere");
-        assert_eq!(ask("GET", "/lyrics/7", "").await.1, "typed\nhere");
+        assert_eq!(ask("GET", "/lyrics/00000000000000000000000000000007", "").await.1, "typed\nhere");
 
-        let (line, body) = ask("POST", "/lyrics/7", r#"{"text":"","no_words":true}"#).await;
+        let (line, body) = ask("POST", "/lyrics/00000000000000000000000000000007", r#"{"text":"","no_words":true}"#).await;
         assert!(line.contains(" 200 ") && json(&body)["own"]["no_words"] == true, "{line} {body}");
-        assert!(ask("GET", "/lyrics/7", "").await.0.contains(" 404 "), "a marked passage shows nothing");
+        assert!(ask("GET", "/lyrics/00000000000000000000000000000007", "").await.0.contains(" 404 "), "a marked passage shows nothing");
 
-        let (line, body) = ask("POST", "/lyrics/7", r#"{"text":""}"#).await;
+        let (line, body) = ask("POST", "/lyrics/00000000000000000000000000000007", r#"{"text":""}"#).await;
         assert!(line.contains(" 200 ") && json(&body)["own"].is_null(), "the clearing: {line} {body}");
-        assert_eq!(ask("GET", "/lyrics/7", "").await.1, "imported words", "the lower tier shows again");
+        assert_eq!(ask("GET", "/lyrics/00000000000000000000000000000007", "").await.1, "imported words", "the lower tier shows again");
 
-        assert!(ask("POST", "/lyrics/999", r#"{"text":"x"}"#).await.0.contains(" 404 "));
-        assert!(ask("GET", "/lyrics/999/sources", "").await.0.contains(" 404 "));
-        let (line, page) = ask("GET", "/lyrics/7/edit", "").await;
+        assert!(ask("POST", "/lyrics/000000000000000000000000000003e7", r#"{"text":"x"}"#).await.0.contains(" 404 "));
+        assert!(ask("GET", "/lyrics/000000000000000000000000000003e7/sources", "").await.0.contains(" 404 "));
+        let (line, page) = ask("GET", "/lyrics/00000000000000000000000000000007/edit", "").await;
+        assert!(line.contains(" 200 ") && page.contains("/lyrics.js"), "{line}");
+        // A number is no passage's name, and is refused before anything is
+        // read or written `[IMPL-UID-072]`: a page, a read and a save alike.
+        for (method, path) in [("GET", "/lyrics/7/edit"), ("GET", "/lyrics/7"), ("POST", "/lyrics/7")] {
+            let (refused, _) = ask(method, path, r#"{"text":"x"}"#).await;
+            assert!(refused.contains(" 400 "), "{method} {path}: {refused}");
+        }
+        let (line, page) = ask("GET", "/lyrics/00000000000000000000000000000007/edit", "").await;
         assert!(line.contains(" 200 ") && page.contains("/lyrics.js"), "{line}");
 
         // The imported words are the catalogue's, and were not touched.
@@ -2402,13 +2478,13 @@ mod tests {
         for name in ["lempi", "mulibplay"] {
             let skin = SKINS.iter().find(|s| s.name == name).unwrap();
             assert!(skin.html.contains(r#"id="lyricslink""#), "{name} has no lyrics link");
-            assert!(skin.js.contains("Lempi.lyricsLink($('lyricslink'), s.passage_id)"), "{name} never points it");
+            assert!(skin.js.contains("Lempi.lyricsLink($('lyricslink'), s.passage_uid)"), "{name} never points it");
             assert!(!skin.js.contains("/lyrics/"), "{name} builds the editor's URL itself");
         }
         let winamp = SKINS.iter().find(|s| s.name == "winamp").unwrap();
         assert!(!winamp.html.contains("lyricslink"), "the WinAmp skin gets neither [SPEC-LYR-910]");
         assert!(CORE.contains("/lyrics/${passageId}/edit"), "core.js does not name the editor's route");
-        assert!(PASSAGE_JS.contains("Lempi.lyricsLink(ly, p.passage_id)"));
+        assert!(PASSAGE_JS.contains("Lempi.lyricsLink(ly, p.passage_uid)"));
 
         assert!(LYRICS_HTML.contains("/core.js") && LYRICS_HTML.contains("/lyrics.js"));
         assert!(LYRICS_JS.contains("startWatching"), "the editor follows the player without being it");
@@ -2522,7 +2598,7 @@ mod tests {
         assert!(PASSAGE_HTML.contains("/core.js") && PASSAGE_HTML.contains("/passage.js"));
         assert!(PASSAGE_JS.contains("startBare"), "passage takes the skin, not the player");
         assert!(PASSAGE_JS.contains("/passage/${passageId}/info"));
-        assert!(PASSAGE_JS.contains("/why/${p.passage_id}"), "the why-link must name a route /why_for actually serves");
+        assert!(PASSAGE_JS.contains("/why/${p.passage_uid}"), "the why-link must name a route /why_for actually serves");
     }
 
     /// `GET /build`'s body carries what Vipunen's own staleness check needs

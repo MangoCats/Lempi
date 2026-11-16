@@ -21,15 +21,27 @@ pub(super) async fn browse(
 ) -> axum::response::Response {
     let db = ui.db.clone();
     let library = ui.library.clone();
-    let filter = crate::db::BrowseFilter {
+    // The album a passage is on, the passage named by its uid `[IMPL-UID-072]`.
+    let album_of = match q.get("album_of").filter(|s| !s.is_empty()) {
+        Some(text) => match super::passage_ref::uid_or_refuse(text) {
+            Ok(uid) => Some(uid),
+            Err(refused) => return refused,
+        },
+        None => None,
+    };
+    let mut filter = crate::db::BrowseFilter {
         q: q.get("q").filter(|s| !s.is_empty()).cloned(),
         artist: q.get("artist").filter(|s| !s.is_empty()).cloned(),
         album: q.get("album").filter(|s| !s.is_empty()).cloned(),
         album_id: q.get("album_id").filter(|s| !s.is_empty()).cloned(),
-        album_of: q.get("album_of").and_then(|s| s.parse().ok()),
+        album_of: None,
     };
     let out = tokio::task::spawn_blocking(move || {
         let lib = crate::db::Library::open_split(&db, &library).ok()?;
+        if let Some(uid) = album_of {
+            // A passage this node lacks opens nothing, as any other unknown.
+            filter.album_of = Some(lib.number_of(&uid).ok()??);
+        }
         match kind.as_str() {
             "artists" => serde_json::to_value(lib.browse_artists(&filter).ok()?).ok(),
             "albums" => serde_json::to_value(lib.browse_albums(&filter).ok()?).ok(),
@@ -54,7 +66,7 @@ pub(super) async fn browse(
 /// is squarely the latter, and it costs nothing an appliance cannot afford).
 pub(super) async fn passage_info(
     State(ui): State<Ui>,
-    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
 ) -> axum::response::Response {
     let db = ui.db.clone();
     let library = ui.library.clone();

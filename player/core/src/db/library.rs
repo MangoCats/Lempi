@@ -234,6 +234,32 @@ impl Library {
         }
     }
 
+    /// Each passage's uid by this node's number, for an answer that names
+    /// passages to a page `[IMPL-UID-072]`: one read for all of them. A number
+    /// with no uid, or with no passage here, is absent.
+    pub fn uids_of(&self, ids: impl IntoIterator<Item = i64>) -> Result<HashMap<i64, PassageUid>, DbError> {
+        let list: Vec<String> = ids.into_iter().map(|n| n.to_string()).collect();
+        if list.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let sql = format!(
+            "SELECT passage_id, passage_uid FROM __LIB__.passages WHERE passage_id IN ({}) AND passage_uid IS NOT NULL",
+            list.join(",")
+        );
+        let mut st = self.conn.prepare(&sql).map_err(DbError::query)?;
+        let rows = st
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+            .map_err(DbError::query)?;
+        let mut out = HashMap::new();
+        for row in rows {
+            let (n, text) = row.map_err(DbError::query)?;
+            if let Some(u) = PassageUid::parse(&text) {
+                out.insert(n, u);
+            }
+        }
+        Ok(out)
+    }
+
     /// Radio passages in uniform random order, radio only per `[REQ-PD-120]`
     /// and nothing more: no holds, rejections, occasions or rotation. Not the
     /// session's fallback, which is [`Library::fallback_radio`]; a plain draw
@@ -836,8 +862,11 @@ pub struct BrowseGroup {
     /// album's front `[REQ-VIS-184]`: the cover lookup resolves it through
     /// the recording's chosen release, which is what names the album.
     /// Absent for artists.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     pub passage: Option<i64>,
+    /// That passage as the page names it, by uid `[IMPL-UID-072]`.
+    #[serde(rename = "passage", skip_serializing_if = "Option::is_none")]
+    pub passage_uid: Option<PassageUid>,
     /// An album's identity, for opening it as itself rather than as every
     /// album of its name `[SPEC-AID-020]`: `r:` and a release MBID, or `n:`
     /// and the name and credit it was grouped by. Absent for artists.
@@ -882,7 +911,11 @@ pub struct SeedCandidate {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BrowseTrack {
+    /// This node's number, for its own logic. A page names the passage by
+    /// `passage_uid` and is never sent this `[IMPL-UID-072]`.
+    #[serde(skip)]
     pub passage_id: i64,
+    pub passage_uid: Option<PassageUid>,
     /// The recording it is, for Browse's "seed" action `[SPEC-PGM-420]`;
     /// `None` for an unidentified passage, which cannot be a seed.
     pub mbid: Option<String>,
@@ -896,8 +929,11 @@ pub struct BrowseTrack {
     /// In an opened album, the album passage a tick queues in place of this
     /// radio one `[SPEC-ALB-010]`. Absent there for a track with none
     /// `[SPEC-ALB-040]`, and absent from every other listing.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     pub album_passage: Option<i64>,
+    /// That album passage as the page names it, by uid `[IMPL-UID-072]`.
+    #[serde(rename = "album_passage", skip_serializing_if = "Option::is_none")]
+    pub album_passage_uid: Option<PassageUid>,
     /// Why that album passage is held back, when it is `[SPEC-ALB-050]`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub album_hold: Option<String>,
@@ -916,7 +952,11 @@ pub struct BrowseTrack {
 /// and the album it is shown under there `[SPEC-ALB-050]`.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct StandIn {
+    /// This node's number, for its own logic. A page names the passage by
+    /// `passage_uid` and is never sent this `[IMPL-UID-072]`.
+    #[serde(skip)]
     pub passage_id: i64,
+    pub passage_uid: Option<PassageUid>,
     pub album: Option<String>,
 }
 
@@ -927,7 +967,11 @@ pub struct StandIn {
 /// exist, so it shows only what is already sitting in the local database.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PassageProfile {
+    /// This node's number, for its own logic. A page names the passage by
+    /// `passage_uid` and is never sent this `[IMPL-UID-072]`.
+    #[serde(skip)]
     pub passage_id: i64,
+    pub passage_uid: Option<PassageUid>,
     pub path: String,
     pub format: Option<String>,
     pub duration_ms: u64,
@@ -971,7 +1015,11 @@ pub struct ProfileArtist {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ProfileSibling {
+    /// This node's number, for its own logic. A page names the passage by
+    /// `passage_uid` and is never sent this `[IMPL-UID-072]`.
+    #[serde(skip)]
     pub passage_id: i64,
+    pub passage_uid: Option<PassageUid>,
     pub kind: String,
 }
 
@@ -1028,7 +1076,11 @@ pub struct Suggestion {
 #[cfg(feature = "vipunen-support")]
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ReviewItem {
+    /// This node's number, for its own logic. A page names the passage by
+    /// `passage_uid` and is never sent this `[IMPL-UID-072]`.
+    #[serde(skip)]
     pub passage_id: i64,
+    pub passage_uid: Option<PassageUid>,
     pub stored_mbid: String,
     /// When this row's own fingerprint check actually ran -- so the page can
     /// say what kind of check this is and how current it is, rather than
@@ -1253,7 +1305,11 @@ pub struct PassageContext {
 #[cfg(feature = "vipunen-support")]
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SegmentQueueItem {
+    /// This node's number, for its own logic. A page names the passage by
+    /// `passage_uid` and is never sent this `[IMPL-UID-072]`.
+    #[serde(skip)]
     pub passage_id: i64,
+    pub passage_uid: Option<PassageUid>,
     pub path: String,
     /// `radio` or `album` -- the cascade writes both for the same span from
     /// one file `[SPEC024 §1]`, `tools/segment_dao.py`'s own `for kind in
@@ -1382,6 +1438,7 @@ impl Library {
                         plays: a.plays,
                         sort: None,
                         passage: Some(a.passage),
+                        passage_uid: None,
                         id: Some(a.id),
                         year: a.year,
                     });
@@ -1397,6 +1454,10 @@ impl Library {
             (g.name.to_lowercase(), g.artist.as_deref().unwrap_or_default().to_lowercase(), g.year.clone())
         };
         groups.sort_by_cached_key(key);
+        let uids = self.uids_of(groups.iter().filter_map(|g| g.passage))?;
+        for g in &mut groups {
+            g.passage_uid = g.passage.and_then(|n| uids.get(&n).copied());
+        }
         Ok(groups)
     }
 
@@ -1636,6 +1697,7 @@ impl Library {
                     sort: r.get::<_, Option<String>>(4).ok().flatten(),
                     // And only the album listing a sixth.
                     passage: r.get::<_, Option<i64>>(5).ok().flatten(),
+                    passage_uid: None,
                     id: None,
                     year: None,
                 })
@@ -1733,6 +1795,7 @@ impl Library {
                 let checked_at: String = r.get(13)?;
                 Ok(ReviewItem {
                     passage_id: r.get(0)?,
+                    passage_uid: None,
                     stored_mbid,
                     checked_at,
                     score: r.get(2)?,
@@ -1758,6 +1821,10 @@ impl Library {
         // order the query already produced -- `sort_by_key` is stable, so that
         // ordering survives.
         items.sort_by_key(|i| i.rank);
+        let uids = self.uids_of(items.iter().map(|i| i.passage_id))?;
+        for i in &mut items {
+            i.passage_uid = uids.get(&i.passage_id).copied();
+        }
         Ok(items)
     }
 
@@ -1820,6 +1887,7 @@ impl Library {
                 let artist_review_applied_at: Option<String> = r.get(12)?;
                 Ok(ReviewItem {
                     passage_id: r.get(0)?,
+                    passage_uid: None,
                     stored_mbid,
                     checked_at: checked_at.unwrap_or_else(|| "never".to_string()),
                     score: r.get(2)?,
@@ -1838,6 +1906,10 @@ impl Library {
                 })
             })
             .ok()
+            .map(|mut item| {
+                item.passage_uid = self.uids_of([item.passage_id]).ok().and_then(|mut u| u.remove(&item.passage_id));
+                item
+            })
     }
 
     /// Releases this recording appears on, for choosing which album to call it
@@ -2135,6 +2207,7 @@ impl Library {
             .query_map([limit as i64], |r| {
                 Ok(SegmentQueueItem {
                     passage_id: r.get(0)?,
+                    passage_uid: None,
                     path: r.get(1)?,
                     kind: r.get(2)?,
                     start_ms: r.get(3)?,
@@ -2149,7 +2222,12 @@ impl Library {
                 })
             })
             .map_err(DbError::query)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(DbError::query)
+        let mut items = rows.collect::<rusqlite::Result<Vec<_>>>().map_err(DbError::query)?;
+        let uids = self.uids_of(items.iter().map(|i| i.passage_id))?;
+        for i in &mut items {
+            i.passage_uid = uids.get(&i.passage_id).copied();
+        }
+        Ok(items)
     }
 
     /// How much segmentation-cascade confirmation there is to do, and how
@@ -2359,6 +2437,7 @@ impl Library {
                 |r| {
                     Ok(BrowseTrack {
                         passage_id: r.get(0)?,
+                        passage_uid: None,
                         title: r.get(1)?,
                         artist: r.get(2)?,
                         album: r.get(3)?,
@@ -2367,6 +2446,7 @@ impl Library {
                         disc_no: r.get(6)?,
                         mbid: r.get(7)?,
                         album_passage: None,
+                        album_passage_uid: None,
                         album_hold: None,
                         stand_in: None,
                         album_only: false,
@@ -2389,6 +2469,16 @@ impl Library {
         }
         if opened {
             self.as_recorded(&mut out)?;
+        }
+        // Every passage a row names, by uid, for the page `[IMPL-UID-072]`.
+        let named = out.iter().flat_map(|t| [Some(t.passage_id), t.album_passage, t.stand_in.as_ref().map(|s| s.passage_id)]);
+        let uids = self.uids_of(named.flatten().collect::<Vec<_>>())?;
+        for t in out.iter_mut() {
+            t.passage_uid = uids.get(&t.passage_id).copied();
+            t.album_passage_uid = t.album_passage.and_then(|n| uids.get(&n).copied());
+            if let Some(s) = t.stand_in.as_mut() {
+                s.passage_uid = uids.get(&s.passage_id).copied();
+            }
         }
         Ok(out)
     }
@@ -2499,7 +2589,7 @@ impl Library {
                 row.stand_in = self
                     .conn
                     .query_row(&stand_in, rusqlite::params![mbid, file], |r| {
-                        Ok(StandIn { passage_id: r.get(0)?, album: r.get(1)? })
+                        Ok(StandIn { passage_id: r.get(0)?, passage_uid: None, album: r.get(1)? })
                     })
                     .ok();
             }
@@ -2519,7 +2609,7 @@ impl Library {
             "SELECT p.passage_id, f.path, f.format, f.duration_ms, f.audio_md5, \
                     p.kind, p.start_ms, p.end_ms, p.lead_in_ms, p.lead_out_ms, p.gain_db, \
                     p.fade_in_ms, p.fade_out_ms, p.fade_in_curve, p.fade_out_curve, p.boundary_src, \
-                    ft.title, ft.artist, ft.album \
+                    ft.title, ft.artist, ft.album, p.passage_uid \
                FROM __LIB__.passages p JOIN __LIB__.files f ON f.file_id = p.file_id \
                LEFT JOIN __LIB__.file_tags ft ON ft.file_id = f.file_id \
               WHERE p.passage_id = ?1",
@@ -2527,6 +2617,7 @@ impl Library {
             |r| {
                 Ok(PassageProfile {
                     passage_id: r.get(0)?,
+                    passage_uid: r.get::<_, Option<String>>(19)?.as_deref().and_then(PassageUid::parse),
                     path: r.get(1)?,
                     format: r.get(2)?,
                     duration_ms: r.get::<_, Option<i64>>(3)?.unwrap_or(0).max(0) as u64,
@@ -2623,7 +2714,11 @@ impl Library {
                 ).ok();
             }
         }
-        profile.sibling = sibling.map(|(passage_id, kind)| ProfileSibling { passage_id, kind });
+        let sibling_uid = match &sibling {
+            Some((n, _)) => self.uids_of([*n])?.remove(n),
+            None => None,
+        };
+        profile.sibling = sibling.map(|(passage_id, kind)| ProfileSibling { passage_id, passage_uid: sibling_uid, kind });
 
         Ok(Some(profile))
     }
@@ -3873,6 +3968,25 @@ mod tests {
         assert_eq!((held.album_passage, held.album_hold.as_deref()), (Some(7), Some("damaged rip")));
         let s = held.stand_in.as_ref().expect("Best Of carries the same recording, unheld");
         assert_eq!((s.passage_id, s.album.as_deref()), (11, Some("Best Of")), "its album passage, not its radio one");
+
+        // The page is given each of them by uid, and none by number
+        // `[IMPL-UID-072]`: the row, its album passage and its stand-in.
+        drop(lib);
+        rusqlite::Connection::open(&path).unwrap()
+            .execute("UPDATE passages SET passage_uid = printf('%032x', passage_id)", []).unwrap();
+        let lib = Library::open(&path).unwrap();
+        let rec = lib.browse_tracks(&BrowseFilter { album: Some("Rec".into()), ..Default::default() }).unwrap();
+        let held = rec.iter().find(|t| t.passage_id == 8).unwrap();
+        let uid = |n: i64| PassageUid::parse(&format!("{n:032x}"));
+        assert_eq!((held.passage_uid, held.album_passage_uid), (uid(8), uid(7)));
+        assert_eq!(held.stand_in.as_ref().unwrap().passage_uid, uid(11));
+        let sent = serde_json::to_value(held).unwrap();
+        assert_eq!((sent["passage_uid"].as_str(), sent["album_passage"].as_str(), sent["stand_in"]["passage_uid"].as_str()),
+                   (Some(&*format!("{:032x}", 8)), Some(&*format!("{:032x}", 7)), Some(&*format!("{:032x}", 11))));
+        assert!(!sent.to_string().contains("passage_id"), "a number reached the page: {sent}");
+        let albums = lib.browse_albums(&BrowseFilter::default()).unwrap();
+        assert!(albums.iter().all(|g| g.passage_uid.is_some() && g.passage_uid == g.passage.and_then(uid)),
+                "an album's cover is asked for by its passage's uid");
 
         // Hold Best Of's copies too, and there is nothing to stand in.
         drop(lib);

@@ -40,8 +40,9 @@
   Lempi.startBare();
 
   const passageId = (() => {
-    const m = location.pathname.match(/\/edit\/(\d+)/);
-    return m ? Number(m[1]) : null;
+    // By uid, as every passage route is [IMPL-UID-072].
+    const m = location.pathname.match(/\/edit\/([0-9a-f]{32})/);
+    return m ? m[1] : null;
   })();
 
   const fmt = ms => {
@@ -326,7 +327,7 @@
 
     const infoResp = await fetch(`/edit/${passageId}/info`).catch(() => null);
     if (!infoResp || !infoResp.ok) {
-      note(`Passage ${passageId} does not exist, or its info could not be read.`, 'bad');
+      note(`Passage ${Lempi.shortUid(passageId)} does not exist, or its info could not be read.`, 'bad');
       return;
     }
     info = await infoResp.json();

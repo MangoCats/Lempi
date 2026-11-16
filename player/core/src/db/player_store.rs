@@ -2505,10 +2505,13 @@ impl PlayerStore {
     ///
     /// `passage_recordings` has no index by recording, so this reads all of
     /// it: 24,201 small rows on the hub, once per panel a person opens.
-    pub fn recording_passage(&self, mbid: &str) -> Option<i64> {
+    ///
+    /// By its uid, which is how the page names it `[IMPL-UID-072]`; `None` too
+    /// for a passage whose uid the hub has yet to send.
+    pub fn recording_passage(&self, mbid: &str) -> Option<String> {
         self.conn
             .query_row(
-                "SELECT pr.passage_id FROM __LIB__.passage_recordings pr \
+                "SELECT p.passage_uid FROM __LIB__.passage_recordings pr \
                    JOIN __LIB__.passages p ON p.passage_id = pr.passage_id \
                   WHERE pr.mbid = ?1 \
                   ORDER BY p.kind = 'radio' DESC, pr.weight DESC, pr.passage_id LIMIT 1",
@@ -4303,8 +4306,8 @@ mod tests {
         )
         .unwrap();
         let store = PlayerStore { conn: QualifyingConn::wrap_unsplit(c) };
-        assert_eq!(store.recording_passage("aaaaaaaa-0000-0000-0000-000000000001"), Some(2));
-        assert_eq!(store.recording_passage("aaaaaaaa-0000-0000-0000-00000000000f"), Some(2), "a medley's lesser half");
+        assert_eq!(store.recording_passage("aaaaaaaa-0000-0000-0000-000000000001"), Some(crate::db::test_support::uid(2)), "by its uid [IMPL-UID-072]");
+        assert_eq!(store.recording_passage("aaaaaaaa-0000-0000-0000-00000000000f"), Some(crate::db::test_support::uid(2)), "a medley's lesser half");
         assert_eq!(store.recording_passage("no-such-recording"), None);
     }
 

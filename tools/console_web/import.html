@@ -654,7 +654,7 @@ async function splitDone(f, job, out) {
   const parts = await S.get('/api/import/split/passages?file=' + encodeURIComponent(f.path));
   out.append(S.el('p', { class: 'verdict ok', text: `Split into ${parts.length} tracks. Open any in the editor to adjust its cut:` }),
     S.el('div', { class: 'list' }, ...parts.map((t, i) => S.el('div', {},
-      S.el('a', { href: `${PLAYER}/edit/${t.passage_id}`, target: '_blank',
+      S.el('a', { href: `${PLAYER}/edit/${t.passage_uid}`, target: '_blank',
         text: `${String(i + 1).padStart(2)}  ${t.title || 'track ' + (i + 1)}  ${S.clock(t.start_ms)}–${S.clock(t.end_ms)}` })))));
 }
 

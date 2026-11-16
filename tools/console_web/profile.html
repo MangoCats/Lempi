@@ -484,13 +484,15 @@ function releaseSuggestBox(pid, folder) {
     // boundary editing both play the passage, and Vipunen has no audio path to
     // give them [SPEC-SA-100]. This is the handoff, not a reimplementation.
     m.append(S.el('h2', {}, 'Review in Lempi'));
-    m.append(S.handoffBox(pid, `/review?passage=${pid}`, 'review'));
+    // The player is asked by the passage's uid, as every passage route is
+    // [IMPL-UID-072]; this page's own address keeps the hub's number.
+    m.append(S.handoffBox(pid, `/review?passage=${p.passage_uid}`, 'review'));
 
     // The waveform/boundary editor `[SPEC021]` -- the second case
     // `[SPEC-SUI-135]` names, reached the same way `[SPEC-SUI-150]` deep-links
-    // review: by passage_id, valid only for the co-resident player named above.
+    // review: by the passage's uid.
     m.append(S.el('h2', {}, 'Edit boundaries in Lempi'));
-    m.append(S.handoffBox(pid, `/edit/${pid}`, 'edit boundaries'));
+    m.append(S.handoffBox(pid, `/edit/${p.passage_uid}`, 'edit boundaries'));
 
     // The rejected candidates, beside the chosen one. Written by every stage
     // since the migration and read by nothing until now [SPEC-SUI-045].

@@ -179,8 +179,8 @@
   function autoScrollLyrics(s) {
     const box = $('lyrics');
     if (!box || box.hidden) return;
-    if (s.passage_id !== lyricsPassage) {
-      lyricsPassage = s.passage_id;
+    if (s.passage_uid !== lyricsPassage) {
+      lyricsPassage = s.passage_uid;
       lyricsUserScrolled = false;
       lyricsAutoTop = null;
     }
@@ -199,17 +199,17 @@
   Lempi.subscribe(s => {
     latest = s;
     plain($('title'), s.title ?? '—');
-    prefLink($('title'), 'recording', s.mbid, s.title, undefined, s.passage_id);
+    prefLink($('title'), 'recording', s.mbid, s.title, undefined, s.passage_uid);
     pair('byword', 'artist', s.artist);
     prefLink($('artist'), 'artist', s.artist_mbid, s.artist, s.mbid);
     pair('fromword', 'album', s.album);
     $('plays').textContent = Lempi.fmt.plays(s.plays, s.last_played);
-    Lempi.lyricsLink($('lyricslink'), s.passage_id);
-    Lempi.showArt($('art'), s.passage_id);
+    Lempi.lyricsLink($('lyricslink'), s.passage_uid);
+    Lempi.showArt($('art'), s.passage_uid);
     // The original showed the back of the sleeve beside the front when it
     // had one -- 559 of its 675 albums did. Hidden by itself when absent.
-    Lempi.showBackArt($('artback'), s.passage_id);
-    Lempi.showLyrics($('lyrics'), s.passage_id);
+    Lempi.showBackArt($('artback'), s.passage_uid);
+    Lempi.showLyrics($('lyrics'), s.passage_uid);
     autoScrollLyrics(s);
     $('time').textContent = `${clock(s.position_ms)} / ${clock(s.duration_ms)}`;
     $('fill').style.width =

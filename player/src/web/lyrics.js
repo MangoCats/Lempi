@@ -12,8 +12,9 @@
   Lempi.startWatching();
 
   const passageId = (() => {
-    const m = location.pathname.match(/\/lyrics\/(\d+)\/edit/);
-    return m ? Number(m[1]) : null;
+    // By uid, as every passage route is [IMPL-UID-072].
+    const m = location.pathname.match(/\/lyrics\/([0-9a-f]{32})\/edit/);
+    return m ? m[1] : null;
   })();
 
   // What the passage's own entry holds, as last read or saved: leaving with
@@ -31,7 +32,7 @@
 
   // "Title by Artist from Album", as MuLibPlay headed its own page
   // [SPEC-PREF-090]; whichever halves the library knows.
-  const named = v => [v.title || `Passage ${passageId}`,
+  const named = v => [v.title || `Passage ${Lempi.shortUid(passageId)}`,
                       v.artist && `by ${v.artist}`,
                       v.album && `from ${v.album}`].filter(Boolean).join(' ');
 
@@ -68,7 +69,7 @@
 
   function render(view) {
     $('heading').textContent = named(view);
-    document.title = `Lempi — Lyrics — ${view.title || `passage ${passageId}`}`;
+    document.title = `Lempi — Lyrics — ${view.title || `passage ${Lempi.shortUid(passageId)}`}`;
     $('about').href = `/passage/${passageId}`;
 
     // Empty when the passage has none of its own, whatever the player shows
@@ -104,7 +105,7 @@
     }
     const resp = await fetch(`/lyrics/${passageId}/sources`).catch(() => null);
     if (!resp || !resp.ok) {
-      $('heading').textContent = `Passage ${passageId}`;
+      $('heading').textContent = `Passage ${Lempi.shortUid(passageId)}`;
       $('save').disabled = true;
       if (resp && resp.status === 503 && tries < 4) {   // five asks in all, as the skins
         const wait = Math.max(1, Number(resp.headers.get('Retry-After')) || 2);
@@ -168,12 +169,12 @@
   // Says which passage is playing when it is another one, with a link to its
   // own page. It never follows by itself: the editor may hold unsaved text.
   Lempi.subscribe(s => {
-    const other = s && s.passage_id != null && s.passage_id !== passageId;
+    const other = s && s.passage_uid != null && s.passage_uid !== passageId;
     if ($('now').hidden !== !other) $('now').hidden = !other;
     if (!other) return;
     const name = [s.title || 'something', s.artist && `by ${s.artist}`].filter(Boolean).join(' ');
     if ($('nowname').textContent !== name) $('nowname').textContent = name;
-    Lempi.lyricsLink($('nowlink'), s.passage_id);
+    Lempi.lyricsLink($('nowlink'), s.passage_uid);
   });
 
   load();

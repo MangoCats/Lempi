@@ -611,7 +611,7 @@ const Lempi = (() => {
   // idea everywhere `[REQ-VIS-185]`.
   function queueRow(item, label, tag = 'li', opts = {}) {
     const row = document.createElement(tag);
-    row.dataset.passage = item.passage_id;
+    row.dataset.passage = item.passage_uid;
     row.dataset.qid = item.qid;
     if (item.editable === false) row.dataset.locked = '1';
     // A skin may put ONE set of controls beside a selected row instead of a
@@ -718,7 +718,7 @@ const Lempi = (() => {
     const open = (kind, id, label, e) => {
       e.stopPropagation();
       e.preventDefault();
-      Lempi.editPreference(kind, id, label, { recording: item.mbid, passage: item.passage_id });
+      Lempi.editPreference(kind, id, label, { recording: item.mbid, passage: item.passage_uid });
     };
     const titleEl = document.createElement(item.mbid ? 'a' : 'span');
     titleEl.className = 'pref-link pref-link-title';
@@ -1168,7 +1168,7 @@ const Lempi = (() => {
     }
     if (stale()) return; // a later subject, or the panel closed, meanwhile
 
-    showInfo(passage ?? current.passage_id);
+    showInfo(passage ?? current.passage_uid);
     const named = current.subject ?? {};
     panel.querySelector('.pref-heading').textContent =
       `${kind === 'artist' ? 'Artist' : 'Recording'} preferences — ${named.title ?? label ?? id}`;
@@ -1433,6 +1433,9 @@ const Lempi = (() => {
     showArt,
     showLyrics,
     artUrl: id => `/art/${id}`,
+    // A passage's uid as a person is shown it: its first eight characters
+    // [IMPL-UID-076]. Every route takes the whole uid [IMPL-UID-072].
+    shortUid: u => (u ? String(u).slice(0, 8) : ''),
     command: name => post(`/command/${name}`),
     volume: db => post(`/volume/${db}`),
     // Real-time tempo, pitch, A-B loop, and 5-band parametric EQ `[SPEC-EQ-080]`,
@@ -1578,7 +1581,7 @@ const Lempi = (() => {
         // Clamped: a click on the very edge of a padded hit area can land
         // fractionally outside the bar itself.
         const at = Math.min(Math.max((e.clientX - box.left) / box.width, 0), 1);
-        Lempi.seek(at * s.duration_ms, s.passage_id);
+        Lempi.seek(at * s.duration_ms, s.passage_uid);
       });
     },
     // Hold a programme slot by id, or 'auto' for time of day.

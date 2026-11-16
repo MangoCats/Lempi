@@ -9,8 +9,9 @@
   Lempi.startBare();
 
   const passageId = (() => {
-    const m = location.pathname.match(/\/passage\/(\d+)/);
-    return m ? Number(m[1]) : null;
+    // By uid, as every passage route is [IMPL-UID-072].
+    const m = location.pathname.match(/\/passage\/([0-9a-f]{32})/);
+    return m ? m[1] : null;
   })();
 
   // A real MusicBrainz id, or one of this project's own local placeholders
@@ -46,7 +47,7 @@
     }
     const resp = await fetch(`/passage/${passageId}/info`).catch(() => null);
     if (!resp || !resp.ok) {
-      $('title').textContent = `Passage ${passageId}`;
+      $('title').textContent = `Passage ${Lempi.shortUid(passageId)}`;
       $('note').textContent = 'Not found here — it may belong to a different '
         + 'installation, or a rescan has since renumbered it.';
       return;
@@ -62,7 +63,7 @@
 
     if (p.sibling) {
       const a = document.createElement('a');
-      a.href = `/passage/${p.sibling.passage_id}`;
+      a.href = `/passage/${p.sibling.passage_uid}`;
       a.textContent = `→ this file's own ${p.sibling.kind} cut`;
       $('sibling').replaceChildren(a);
       $('sibling').hidden = false;
@@ -88,7 +89,7 @@
     whyDt.textContent = 'why this passage?';
     const whyDd = document.createElement('dd');
     const why = document.createElement('a');
-    why.href = `/why/${p.passage_id}`;
+    why.href = `/why/${p.passage_uid}`;
     why.textContent = 'see the selection reasoning →';
     whyDd.appendChild(why);
     $('span').append(whyDt, whyDd);
@@ -98,7 +99,7 @@
     lyDt.textContent = 'lyrics';
     const lyDd = document.createElement('dd');
     const ly = document.createElement('a');
-    Lempi.lyricsLink(ly, p.passage_id);
+    Lempi.lyricsLink(ly, p.passage_uid);
     ly.textContent = 'read or edit this passage’s lyrics →';
     lyDd.appendChild(ly);
     $('span').append(lyDt, lyDd);

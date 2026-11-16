@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
-use crate::db::QualifyingConn;
+use crate::db::{PassageUid, QualifyingConn};
 
 use super::christmas::{self, Place, Reserve};
 use super::frequency::{
@@ -118,7 +118,11 @@ pub const RANK_DECAY: f64 = 0.96;
 /// argued with, and arguing with it is the point.
 #[derive(Debug, Clone, Serialize)]
 pub struct Explanation {
+    /// This node's number, never sent: a page names the passage by
+    /// `passage_uid` `[IMPL-UID-072]`.
+    #[serde(skip)]
     pub passage_id: i64,
+    pub passage_uid: Option<PassageUid>,
     pub title: String,
     pub weight: f64,
     /// The weight the roulette actually used: `weight × decay^rank`
@@ -182,7 +186,11 @@ pub struct Explanation {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RunnerUp {
+    /// This node's number, never sent: a page names the passage by
+    /// `passage_uid` `[IMPL-UID-072]`.
+    #[serde(skip)]
     pub passage_id: i64,
+    pub passage_uid: Option<PassageUid>,
     pub title: String,
     /// The recording's own mbid, and the credited artist's, so a runner-up
     /// in "It beat" reaches a preference panel the same way a queue row
@@ -1496,6 +1504,7 @@ impl Director {
             entry: (*entry).clone(),
             why: Explanation {
                 passage_id: entry.passage_id,
+                passage_uid: entry.passage_uid,
                 title: entry.title(),
                 weight: w.weight,
                 decayed_weight: decayed,
@@ -1528,6 +1537,7 @@ impl Director {
                     .take(RUNNERS_UP)
                     .map(|x| RunnerUp {
                         passage_id: x.0.passage_id,
+                        passage_uid: x.0.passage_uid,
                         title: x.0.title(),
                         mbid: x.0.mbid.clone(),
                         artist: x.0.artist(),

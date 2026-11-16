@@ -46,7 +46,7 @@
       // One control set beside the picked row instead of a set on every row.
       controls: false,
       selected: () => picked,
-      onPick: (qid, item) => { pick(qid, item.passage_id); },
+      onPick: (qid, item) => { pick(qid, item.passage_uid); },
       // Title/artist become their own clickable spans, reaching the
       // preference panel `[REQ-VIS-285]` -- they stop the click from also
       // firing `onPick` above, so the two features never compete.
@@ -1027,12 +1027,12 @@
     // below): the two features coexist rather than compete for one click.
     $('title').classList.toggle('pref-link', !!s.mbid);
     $('title').onclick = s.mbid
-      ? e => { e.stopPropagation(); Lempi.editPreference('recording', s.mbid, s.title, { passage: s.passage_id }); }
+      ? e => { e.stopPropagation(); Lempi.editPreference('recording', s.mbid, s.title, { passage: s.passage_uid }); }
       : null;
     showByline(s);
     setText($('plays'), Lempi.fmt.plays(s.plays, s.last_played));
-    Lempi.lyricsLink($('lyricslink'), s.passage_id);
-    Lempi.showArt($('art'), s.passage_id);
+    Lempi.lyricsLink($('lyricslink'), s.passage_uid);
+    Lempi.showArt($('art'), s.passage_uid);
     setText($('time'), `${clock(s.position_ms)} / ${clock(s.duration_ms)}`);
     $('fill').style.width =
       s.duration_ms ? `${(s.position_ms / s.duration_ms) * 100}%` : '0';

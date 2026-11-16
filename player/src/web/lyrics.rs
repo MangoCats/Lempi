@@ -23,7 +23,7 @@ use super::Ui;
 /// later, said *busy, try again*.
 pub(super) async fn lyrics_sources(
     State(ui): State<Ui>,
-    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
 ) -> axum::response::Response {
     let db = ui.db.clone();
     let library = ui.library.clone();
@@ -62,7 +62,7 @@ pub(super) struct LyricsEdit {
 /// told the editor its request was wrong.
 pub(super) async fn save_lyrics(
     State(ui): State<Ui>,
-    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
     axum::Json(edit): axum::Json<LyricsEdit>,
 ) -> axum::response::Response {
     if let Some(why) = crate::db::lyrics_refusal(&edit.text) {

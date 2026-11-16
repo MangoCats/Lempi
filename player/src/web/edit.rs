@@ -19,7 +19,7 @@ use super::Ui;
 #[cfg(feature = "vipunen-support")]
 pub(super) async fn edit_info(
     State(ui): State<Ui>,
-    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
 ) -> axum::response::Response {
     let db = ui.db.clone();
     let library = ui.library.clone();
@@ -66,7 +66,7 @@ pub(super) async fn edit_info(
                 ),
             };
             axum::Json(serde_json::json!({
-                "passage_id": entry.passage_id,
+                "passage_uid": entry.passage_uid,
                 "start_ms": start_ms,
                 "end_ms": end_ms,
                 "file_ms": entry.file_ms,
@@ -121,7 +121,7 @@ pub(super) struct BoundaryDraft {
 #[cfg(feature = "vipunen-support")]
 pub(super) async fn edit_review(
     State(ui): State<Ui>,
-    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
     axum::extract::Json(draft): axum::extract::Json<BoundaryDraft>,
 ) -> axum::response::Response {
     let db = ui.db.clone();
@@ -176,7 +176,7 @@ pub(super) async fn edit_review(
 #[cfg(feature = "vipunen-support")]
 pub(super) async fn edit_audio(
     State(ui): State<Ui>,
-    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::response::Response {
     let db = ui.db.clone();
@@ -255,7 +255,7 @@ pub(super) fn decode_window_wav(path: &std::path::Path, gapless: bool, from_ms: 
 #[cfg(feature = "vipunen-support")]
 pub(super) async fn edit_overview(
     State(ui): State<Ui>,
-    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
 ) -> axum::response::Response {
     let db = ui.db.clone();
     let library = ui.library.clone();

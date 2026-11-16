@@ -47,7 +47,7 @@ pub(super) async fn segment_queue(State(ui): State<Ui>) -> axum::response::Respo
 #[cfg(feature = "vipunen-support")]
 pub(super) async fn accept_segment(
     State(ui): State<Ui>,
-    axum::extract::Path(passage_id): axum::extract::Path<i64>,
+    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
 ) -> axum::response::Response {
     let db = ui.db.clone();
     let library = ui.library.clone();

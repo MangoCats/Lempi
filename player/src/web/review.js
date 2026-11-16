@@ -24,13 +24,12 @@
   Lempi.startBare();
 
   // A handoff lands on one passage, not the whole queue `[SPEC-SUI-150]`.
-  // `passage_id` is a Vipunen-issued local sequence number, valid only for the
-  // co-resident player that named it `[SPEC-DF-035]` -- this is the handoff
-  // contract, not a general-purpose bookmark, so it is read once and never
-  // written back to the URL.
+  // Named by its uid, the same on every node, where until 2026-11-16 it was
+  // the co-resident player's own number `[IMPL-UID-072]`. Read once and never
+  // written back to the URL: it is the handoff contract, not a bookmark.
   const wantPassage = (() => {
-    const n = Number(new URLSearchParams(location.search).get('passage'));
-    return Number.isInteger(n) && n > 0 ? n : null;
+    const u = new URLSearchParams(location.search).get('passage') || '';
+    return /^[0-9a-f]{32}$/.test(u) ? u : null;
   })();
 
   const pct = s => (s == null ? '' : `${(s * 100).toFixed(1)}%`);
@@ -86,7 +85,7 @@
   // One card: the two competing claims, then what can be done about it.
   function card(item) {
     const box = el('div', 'card');
-    box.dataset.passage = item.passage_id;
+    box.dataset.passage = item.passage_uid;
 
     const head = el('div', 'head');
     // Very different findings arrive in this queue and they do not deserve the
@@ -99,7 +98,7 @@
     kind.title = GRADE[item.severity].why;
     head.appendChild(kind);
     head.appendChild(el('span', 'score',
-      `passage ${item.passage_id} · fingerprint match ${pct(item.score)}`));
+      `passage ${Lempi.shortUid(item.passage_uid)} · fingerprint match ${pct(item.score)}`));
     box.appendChild(head);
 
     const claims = el('div', 'claims');
@@ -143,9 +142,9 @@
       const li = el('li');
       const input = document.createElement('input');
       input.type = 'radio';
-      input.name = `pick-${item.passage_id}`;
+      input.name = `pick-${item.passage_uid}`;
       input.value = s.mbid;
-      input.id = `pick-${item.passage_id}-${s.mbid}`;
+      input.id = `pick-${item.passage_uid}-${s.mbid}`;
       const label = document.createElement('label');
       label.htmlFor = input.id;
       label.appendChild(el('div', 'name', s.title || '(untitled)'));
@@ -329,7 +328,7 @@
             const undo = el('button', null, 'Undo the correction');
             undo.onclick = async () => {
               undo.disabled = true;
-              const r = await fetch(`/review/${item.passage_id}/artist/reopen`, { method: 'POST' });
+              const r = await fetch(`/review/${item.passage_uid}/artist/reopen`, { method: 'POST' });
               if (r.ok) { delete item.artist_review; renderFix(); }
               else { undo.disabled = false; fix.appendChild(el('p', 'sub', await r.text())); }
             };
@@ -352,7 +351,7 @@
           c.onclick = async () => {
             c.disabled = true;
             const q = new URLSearchParams({ mbid, name });
-            const r = await fetch(`/review/${item.passage_id}/artist/correct?${q}`, { method: 'POST' });
+            const r = await fetch(`/review/${item.passage_uid}/artist/correct?${q}`, { method: 'POST' });
             if (r.ok) { item.artist_review = name; item.artist_review_applied = false; renderFix(); }
             else { c.disabled = false; astatus.textContent = await r.text(); }
           };
@@ -396,7 +395,7 @@
     const play = el('button', null, 'Play now');
     play.title = 'send this passage to the player, to hear which it is';
     play.onclick = () => {
-      Lempi.queue(item.passage_id, 'now');
+      Lempi.queue(item.passage_uid, 'now');
       said.textContent = 'sent to the player';
     };
 
@@ -423,7 +422,7 @@
     use.title = hasCandidates ? 'choose one of the matches above first'
                               : 'nothing to reassign this to';
     const picked = () =>
-      box.querySelector(`input[name="pick-${item.passage_id}"]:checked`);
+      box.querySelector(`input[name="pick-${item.passage_uid}"]:checked`);
 
     const settle = async (decision, mbid, phrase) => {
       for (const b of [use, keep, later]) b.disabled = true;
@@ -432,7 +431,7 @@
       const rel = releaseChoice && releaseChoice();
       if (rel) q.set('release', rel);
       const qs = q.toString() ? `?${q}` : '';
-      const r = await fetch(`/review/${item.passage_id}/${decision}${qs}`,
+      const r = await fetch(`/review/${item.passage_uid}/${decision}${qs}`,
                             { method: 'POST' });
       if (r.ok) {
         // Remembered on the item, not just on the element: toggling a filter
@@ -464,7 +463,7 @@
     reopen.title = 'withdraw this decision and put the card back in the queue';
     reopen.onclick = async () => {
       reopen.disabled = true;
-      const r = await fetch(`/review/${item.passage_id}/reopen`, { method: 'POST' });
+      const r = await fetch(`/review/${item.passage_uid}/reopen`, { method: 'POST' });
       if (r.ok) {
         delete item.decision;
         delete item.decided;
@@ -541,7 +540,7 @@
     // fingerprinted, or simply not what someone wants it to say
     // `[SPEC-SUI-199]`. One extra request, only for the deep-link case, and
     // only when the queue didn't already carry it.
-    if (wantPassage != null && !items.some(i => i.passage_id === wantPassage)) {
+    if (wantPassage != null && !items.some(i => i.passage_uid === wantPassage)) {
       try {
         const r = await fetch(`/review/passage/${wantPassage}`);
         if (r.ok) items.push(await r.json());
@@ -597,17 +596,17 @@
     // none, never the whole queue's worth of unrelated findings.
     if (wantPassage != null) {
       $('filters').hidden = true;
-      const item = items.find(i => i.passage_id === wantPassage);
+      const item = items.find(i => i.passage_uid === wantPassage);
       const note = $('note');
       if (item) {
         cards.appendChild(card(item));
-        note.append(`Showing passage ${wantPassage} only — `);
+        note.append(`Showing passage ${Lempi.shortUid(wantPassage)} only — `);
         const all = el('a', null, 'show the whole queue');
         all.href = location.pathname;
         note.appendChild(all);
       } else {
         note.className = 'note';
-        note.textContent = `Passage ${wantPassage} does not exist in this ` +
+        note.textContent = `Passage ${Lempi.shortUid(wantPassage)} does not exist in this ` +
           'library, or the fingerprint-review tables have not been created yet.';
       }
       return;
@@ -676,10 +675,10 @@
     const box = $('apply');
     const list = el('ul');
     for (const r of d.id || []) {
-      list.append(el('li', null, `passage ${r.passage_id} — recording id to ` +
+      list.append(el('li', null, `passage ${Lempi.shortUid(r.passage_uid)} — recording id to ` +
         (r.chosen_title ? `“${r.chosen_title}” (${r.chosen_mbid})` : r.chosen_mbid)));
     }
-    for (const b of d.boundary || []) list.append(el('li', null, `passage ${b.passage_id} — boundaries`));
+    for (const b of d.boundary || []) list.append(el('li', null, `passage ${Lempi.shortUid(b.passage_uid)} — boundaries`));
     for (const a of d.artist || []) {
       list.append(el('li', null, `recording ${a.recording_mbid} — artist credit to “${a.artist_name}”`));
     }

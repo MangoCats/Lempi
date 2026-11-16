@@ -484,12 +484,12 @@ function pendingTable(d) {
   };
   for (const b of d.boundary) {
     row(b.passage_id, b.title, boundaryChanges(b), b.decided_at,
-        '/edit/' + b.passage_id, 'edit boundaries', 're-edit');
+        '/edit/' + b.passage_uid, 'edit boundaries', 're-edit');
   }
   for (const r of d.id) {
     const to = r.chosen_title ? '\u201c' + r.chosen_title + '\u201d (' + r.chosen_mbid + ')' : r.chosen_mbid;
     row(r.passage_id, null, [['recording id', 'current', to]], r.decided_at,
-        '/review?passage=' + r.passage_id, 'review', 're-review');
+        '/review?passage=' + r.passage_uid, 'review', 're-review');
   }
   return t;
 }
