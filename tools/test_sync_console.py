@@ -189,7 +189,17 @@ def test_phone_patch():
         check(got["waiting"] is None and got["applied"]["run"] == "20261029T1745Z", "an applied patch no longer waits")
 
 
+def test_an_earlier_runs_state():
+    """[IMPL-UID-080]: a run from before Stage D recorded a catalogue state this
+    build no longer makes, and the Sync page still reads that run. Found
+    2026-11-16 on the hub: the page answered KeyError: 'other-ids'."""
+    words = ss.catalogue_words({"state": "other-ids", "files": 49, "passages": 338})
+    check(words == "the hub's music under other ids (49 files, 338 passages)", f"its words are kept: {words}")
+    check(ss.catalogue_words({"state": "unheard-of"}) == "state 'unheard-of'", "and one never known is said as itself")
+
+
 def main() -> int:
+    test_an_earlier_runs_state()
     test_describe()
     test_page()
     test_phone_patch()

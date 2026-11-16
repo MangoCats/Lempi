@@ -444,6 +444,9 @@ CATALOGUE_STATES = {
     "no-copy": "no copy was last sent",
     "no-uids": "a passage without its uid",
 }
+# A state only a run from before Stage D recorded [IMPL-UID-080]: its run is
+# still read, and its words with it.
+EARLIER_STATES = {"other-ids": "the hub's music under other ids"}
 
 
 def catalogue_state(sent_lib, summary_db, hub_lib):
@@ -811,9 +814,10 @@ def index_names(sqls):
 
 
 def catalogue_words(st):
-    """A catalogue state as a person reads it."""
-    text = CATALOGUE_STATES[st["state"]]
-    if st["state"] == "changed":
+    """A catalogue state as a person reads it, a run's from before Stage D
+    included; one this build does not know is said as itself."""
+    text = CATALOGUE_STATES.get(st["state"]) or EARLIER_STATES.get(st["state"]) or f"state {st['state']!r}"
+    if st["state"] in ("changed", "other-ids") and "files" in st:
         text += f" ({st['files']} files, {st['passages']} passages)"
     if st["state"] == "no-uids":
         text = f"{st['which']} has {text}, and a patch names a passage by its uid alone [IMPL-UID-080]"
