@@ -217,6 +217,8 @@ Its allow-list can only shrink, and it is empty at the end of Stage C. A Rust `L
 - a member patch.
 - **As built, 2026-11-16.** `test_numbering_fleet.py` runs five of them over `shuffled`: a merge with a removal, a passage only `partial` holds, a boundary edit, a remote unflag and a member patch. Each picks a passage whose number on `shuffled` is other music on the hub, and checks that music is untouched. The bundle is `bundle.rs`'s `a_bundle_lands_under_the_nodes_own_number_by_its_uid`: a bundle carries no number, so the passage lands under the node's own. Echo's was built in Stage C. A member patch still holds passage rows back both ways; it carries them once the phones update `[IMPL-UID-066]`.
 
+**Stage D on the fleet, 2026-11-16 22:10 UTC.** Round `20261116T2210Z`, rehearsed and not committed, at the maintainer's word. The phones were left out and teacherslounge was held awake. The hub's console ran Stage D's tools: every node's catalogue read *as last sent*, by uid, where the round before under the old code read every one *the hub's music under other ids*. The merge had integrity ok, no decision and no item, and read nothing by number. Every node, both halves, had nothing to send, so no node was asked to apply anything. Every player was left as it was. The players' half of Stage D, the applier refusing the span word, is not deployed: the builder no longer sends one, and the next deploy carries it.
+
 ## 9. Order
 
 **`[IMPL-UID-090]` Each stage goes the same way:**
