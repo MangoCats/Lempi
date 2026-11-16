@@ -22,7 +22,16 @@
 //! the time it was made. It is refused unless every one is right, the time is
 //! within `FRESH_MS` of this node's clock, and -- for a commit -- the run is
 //! newer than the last one committed here, so a captured commit cannot be
-//! replayed to roll the node back `[SPEC-NSH-030]`.
+//! replayed to roll the node back `[SPEC-NSH-030]`. The one exception writes
+//! nothing: the same run's commit asked again, with the same patch, is given
+//! the answer the first one gave, since that answer can be lost on the way
+//! back `[SPEC-NSH-032]`.
+//!
+//! One step at a time: each takes `STEPS` first, so a commit asked again while
+//! the first is still applying waits for it, and is then answered. And before
+//! any step, a commit this node began and never finished -- the player stopped
+//! inside it -- is finished or put back, whichever its two halves show
+//! `[SPEC-NSH-082]`.
 
 use std::path::{Path, PathBuf};
 
@@ -47,6 +56,13 @@ const PART_LIMIT: usize = 32 << 20;
 const STAGE_MARGIN: u64 = 256 << 20;
 const STAGED_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
 
+/// `[SPEC-NSH-032]`: one sync step at a time on this node. Until 2026-11-16 the
+/// route ran each request on its own blocking thread with nothing between them,
+/// so a commit asked again while the first was still applying passed the
+/// last-run check beside it -- and, finding every row already there, kept an
+/// empty inverse over the first one's.
+static STEPS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// What a handled step returns: the signed answer, and whether the player
 /// should rebuild what it loads once at start (the catalogue or the
 /// household's preferences changed). Not for words alone `[SPEC-LYR-204]`.
@@ -67,21 +83,47 @@ pub fn handle(listener: &Path, library: &Path, op: &str, body: &Value) -> Result
     let me = crate::discovery::identity(listener)?.fingerprint;
     check(&req, op, &me, held["mesh_fp"].as_str().unwrap_or(""), now_ms())?;
     let run = req["run"].as_str().unwrap_or_default().to_string();
+    // A step that panicked leaves the lock poisoned; what it guards is on disk,
+    // and `settle` reads that, so the lock is taken all the same.
+    let _turn = STEPS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let settled = settle(listener, library);
+    if let Err(why) = &settled {
+        if matches!(op, "rehearse" | "commit" | "stage") {
+            return Err(why.clone());
+        }
+    }
     let (result, reload) = match op {
-        "snapshot" => (snapshot(listener, library)?, false),
+        "snapshot" => {
+            let mut s = snapshot(listener, library)?;
+            // `[SPEC-NSH-082]`: what was settled before this answer, or why it could not be.
+            match settled {
+                Ok(Some(line)) => s["settled"] = json!(line),
+                Err(why) => s["unsettled"] = json!(why),
+                Ok(None) => {}
+            }
+            (s, false)
+        }
         // `[SPEC-STAR-945]`: read only, like the snapshot it completes.
         "rows" => (mesh_sync::catalogue_rows(library, &req["want"])?, false),
         "rehearse" => (rehearse(listener, library, &req)?, false),
         "stage" => (stage(listener, &req, &run)?, false),
         "staged" => (staged(listener, &run), false),
         _ => {
+            let digest = digest_of(&req);
             let last = last_run(listener);
-            if last.as_deref().is_some_and(|l| run.as_str() <= l) {
+            if last.as_deref() == Some(run.as_str()) {
+                (answered_again(listener, &run, &digest)?, false)
+            } else if last.as_deref().is_some_and(|l| run.as_str() < l) {
                 return Err(format!("run {run} is not newer than {} -- already committed here", last.unwrap_or_default()));
+            } else if journal(listener, &run).is_some_and(|j| j["phase"] == "committed") {
+                // Its answer kept, and the run left unrecorded -- the one write after it
+                // failed. Applied again it would find every row in, and keep an empty
+                // inverse over the real one: recorded now instead, and answered.
+                set_last_run(listener, &run)?;
+                (answered_again(listener, &run, &digest)?, false)
+            } else {
+                commit(listener, library, &req, &run, &digest, &member_apply)?
             }
-            commit(listener, library, &req, &run, &|l, p| {
-                mesh_sync::apply_with(l, p, Some(&mesh_sync::MERGED), Rule::Member, true)
-            })?
         }
     };
     let answer = json!({"op": op, "run": run, "nonce": req["nonce"], "node": me, "result": result}).to_string();
@@ -153,12 +195,17 @@ const CATALOGUE_WINDOW: i64 = 1;
 /// too `[SPEC-LNK-050]`. 3, the same day: asked for tracklists, a release's own
 /// tracklist `[SPEC-LNK-072]`.
 const CATALOGUE_ROWS: i64 = 3;
+/// `[SPEC-NSH-032]`: this build answers a commit asked again with the answer it gave,
+/// and takes one step at a time. A hub asks a node's commit again only when it says so:
+/// asked again, an older build refuses it, or, still applying the first, runs it twice.
+const COMMIT_AGAIN: i64 = 1;
 
 fn snapshot(listener: &Path, library: &Path) -> Result<Value, String> {
     Ok(json!({
         "listener": mesh_sync::export(listener, &mesh_sync::MERGED)?,
         "catalogue": mesh_sync::catalogue_summary(library)?,
         "last_run": last_run(listener),
+        "commit_again": COMMIT_AGAIN,
         "natural_keys": NATURAL_KEYS,
         "passage_uids": PASSAGE_UIDS,
         // `[IMPL-UID-056]`: the indexes its catalogue holds. Reported only by a
@@ -237,90 +284,118 @@ fn rehearse_in(listener: &Path, library: &Path, req: &Value) -> Result<Value, St
 }
 
 /// The listener's half of a commit, apart so a test can make it fail after
-/// the catalogue has landed -- the one failure a rehearsal cannot foresee.
-type ListenerApply<'a> = &'a dyn Fn(&Path, &Value) -> Result<mesh_sync::Outcome, String>;
+/// the catalogue has landed -- the one failure a rehearsal cannot foresee. It is
+/// handed the sink its inverse goes to, before its transaction commits.
+type Sink<'a> = &'a mut dyn FnMut(usize, &Value) -> Result<(), String>;
+type ListenerApply<'a> = &'a dyn Fn(&Path, &Value, Sink) -> Result<mesh_sync::Applied, String>;
 
-/// What a catalogue apply left to undo it with: the inverse itself, or how many parts'
-/// inverses were written to disk `[SPEC-NKP-940]`.
-enum CatInverse {
-    Mem(Value),
-    Parts(usize),
+/// What a commit applied: the catalogue's counts and how many inverse parts it
+/// left on disk, if it had a catalogue half, and the listener's counts and
+/// inverse, if it had that half.
+type Committed = (Option<(mesh_sync::Applied, usize)>, Option<(mesh_sync::Applied, Value)>);
+
+/// A failed commit's reason, and whether this node may hold part of the run
+/// still -- a half it could not put back -- so its record is kept for `settle`.
+type Failed = (String, bool);
+
+/// The listener's half as a commit applies it: the shared tables under the member
+/// rule, its inverse handed to `sink` before the transaction commits.
+fn member_apply(listener: &Path, patch: &Value, sink: Sink) -> Result<mesh_sync::Applied, String> {
+    mesh_sync::apply_parts(listener, &mut std::iter::once(Ok(patch.clone())), Some(&mesh_sync::MERGED), Rule::Member, true, sink)
 }
 
-/// What a commit applied: the catalogue's counts and how to undo them, if it
-/// had a catalogue half, and the listener's outcome, if it had that half.
-type Committed = (Option<(mesh_sync::Applied, CatInverse)>, Option<mesh_sync::Outcome>);
-
-fn commit(listener: &Path, library: &Path, req: &Value, run: &str, apply_listener: ListenerApply)
+fn commit(listener: &Path, library: &Path, req: &Value, run: &str, digest: &str, apply_listener: ListenerApply)
     -> Result<(Value, bool), String> {
     let (cat, lis) = (&req["catalogue_patch"], &req["listener_patch"]);
     let parts = req.get("catalogue_parts").filter(|v| !v.is_null());
     let has_cat = parts.is_some() || has_rows(cat);
     let to_retire = retire_list(req);
     if !has_cat && !has_rows(lis) && to_retire.is_empty() {
+        let result = json!({"catalogue": null, "listener": null});
+        record(listener, run, digest, "committed", Some(&result))?;
         set_last_run(listener, run)?;
-        return Ok((json!({"catalogue": null, "listener": null}), false));
+        return Ok((result, false));
     }
+    // `[SPEC-NSH-082]`: on disk before anything is written, so a player stopped
+    // inside the commit finds, at its next step, that it was.
+    std::fs::create_dir_all(sync_dir(listener)).map_err(|e| e.to_string())?;
+    record(listener, run, digest, "applying", None)?;
     // The root verb only when the file cannot be written where it is -- a
     // read-only partition, as on bose. A catalogue already writable (on the
     // root filesystem, or anywhere a test puts one) never reaches it. The window spans
     // the rehearsal as well as the apply: both write, the first to roll back.
-    let win = Window::open(library, has_cat || !to_retire.is_empty())?;
-    let applied = (|| -> Result<Committed, String> {
+    let win = match Window::open(library, has_cat || !to_retire.is_empty()) {
+        Ok(w) => w,
+        Err(e) => {
+            forget(listener, run);
+            return Err(e);
+        }
+    };
+    let applied = (|| -> Result<Committed, Failed> {
         // Rehearsed first, here, whatever the hub rehearsed before: the files may
         // have moved since.
-        rehearse_in(listener, library, req)?;
-        let c = if let Some(spec) = parts {
-            // One transaction over every part; each part's inverse goes to disk as it is made.
-            let paths = part_paths(listener, run, spec)?;
-            let n = paths.len();
-            let dir = sync_dir(listener);
-            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            let mut it = paths.iter().map(load_part);
-            let done = mesh_sync::apply_parts(library, &mut it, None, Rule::Strict, true, &mut |i, inv| {
-                write_atomic(&dir.join(format!("inverse-{run}-c{}.json", i + 1)), &inv.to_string())
-            });
+        rehearse_in(listener, library, req).map_err(|e| (e, false))?;
+        let dir = sync_dir(listener);
+        // One transaction over every part, a patch sent whole being one part; each
+        // part's inverse goes to disk as it is made, before the transaction commits.
+        // Until 2026-11-16 a whole patch's inverse was kept in memory until both
+        // halves had landed, so a power cut between them left the catalogue switched
+        // with nothing on disk to put it back, or even to say so.
+        let c = if has_cat {
+            let done = (|| {
+                let mut sink = |i: usize, inv: &Value| write_atomic(&dir.join(cat_inverse(run, i + 1)), &inv.to_string());
+                match parts {
+                    Some(spec) => {
+                        let paths = part_paths(listener, run, spec)?;
+                        let mut it = paths.iter().map(load_part);
+                        mesh_sync::apply_parts(library, &mut it, None, Rule::Strict, true, &mut sink).map(|c| (c, paths.len()))
+                    }
+                    None => mesh_sync::apply_parts(library, &mut std::iter::once(Ok(cat.clone())), None, Rule::Strict, true, &mut sink)
+                        .map(|c| (c, 1)),
+                }
+            })();
             match done {
-                Ok(counts) => Some((counts, CatInverse::Parts(n))),
+                Ok(c) => Some(c),
                 Err(e) => {
-                    remove_inverse_parts(listener, run, n);
-                    return Err(format!("catalogue: {e}"));
+                    remove_inverse_parts(listener, run);
+                    return Err((format!("catalogue: {e}"), false));
                 }
             }
-        } else if has_rows(cat) {
-            let o = mesh_sync::apply_with(library, cat, None, Rule::Strict, true).map_err(|e| format!("catalogue: {e}"))?;
-            Some((o.counts, CatInverse::Mem(o.inverse)))
         } else {
             None
         };
+        let n = c.as_ref().map_or(0, |(_, n)| *n);
+        let unwind = |why: String| -> Failed {
+            match put_back(library, listener, run, n) {
+                Ok(()) if n > 0 => (format!("{why}; the catalogue was put back"), false),
+                Ok(()) => (why, false),
+                Err(u) => (format!("{why}; and the catalogue could NOT be put back: {u}"), true),
+            }
+        };
+        // The catalogue's half is settled: in, or there was none.
+        record(listener, run, digest, "catalogue", None).map_err(|e| unwind(format!("the commit's record: {e}")))?;
         let l = if has_rows(lis) {
-            match apply_listener(listener, lis) {
-                Ok(l) => Some(l),
+            let path = dir.join(lis_inverse(run));
+            let mut inverse = None;
+            let out = apply_listener(listener, lis, &mut |_, inv| {
+                write_atomic(&path, &inv.to_string())?;
+                inverse = Some(inv.clone());
+                Ok(())
+            });
+            match out {
+                Ok(counts) => Some((counts, inverse.unwrap_or_else(|| json!({"tables": []})))),
                 Err(e) => {
-                    let put_back = c.as_ref().map(|(_, inv)| match inv {
-                        CatInverse::Mem(i) => mesh_sync::undo(library, i),
-                        CatInverse::Parts(n) => {
-                            let dir = sync_dir(listener);
-                            let mut back = (1..=*n).rev().map(|i| {
-                                std::fs::read_to_string(dir.join(format!("inverse-{run}-c{i}.json")))
-                                    .map_err(|e| e.to_string())
-                                    .and_then(|t| serde_json::from_str::<Value>(&t).map_err(|e| e.to_string()))
-                            });
-                            let r = mesh_sync::undo_parts(library, &mut back);
-                            remove_inverse_parts(listener, run, *n);
-                            r
-                        }
-                    });
-                    return Err(match put_back {
-                        Some(Err(u)) => format!("listener: {e}; and the catalogue could NOT be put back: {u}"),
-                        Some(Ok(_)) => format!("listener: {e}; the catalogue was put back"),
-                        None => format!("listener: {e}"),
-                    });
+                    let _ = std::fs::remove_file(&path);
+                    return Err(unwind(format!("listener: {e}")));
                 }
             }
         } else {
             None
         };
+        // Both halves are in. A record that cannot be written now leaves the one
+        // before it, which `settle` finishes from at the next step.
+        record(listener, run, digest, "landed", None)
+            .map_err(|e| (format!("both halves landed and the commit's record could not say so ({e}): the next step finishes it"), true))?;
         Ok((c, l))
     })();
     // `[SPEC-RTF-025]`: the files the hub retired, moved only once both halves have
@@ -337,21 +412,24 @@ fn commit(listener: &Path, library: &Path, req: &Value, run: &str, apply_listene
     if let Some(w) = &warning {
         tracing::warn!("star sync: {w}");
     }
-    let (c, l) = applied?;
-    let (mem, n_parts) = match c.as_ref().map(|(_, inv)| inv) {
-        Some(CatInverse::Mem(i)) => (Some(i), 0),
-        Some(CatInverse::Parts(n)) => (None, *n),
-        None => (None, 0),
+    let (c, l) = match applied {
+        Ok(done) => done,
+        Err((why, keep)) => {
+            if !keep {
+                forget(listener, run);
+            }
+            return Err(why);
+        }
     };
+    let n_parts = c.as_ref().map_or(0, |(_, n)| *n);
     let moved = retired.as_ref().map(crate::retire::moves);
-    keep_inverse(listener, run, mem, n_parts, l.as_ref().map(|o| &o.inverse), moved.as_ref())?;
-    set_last_run(listener, run)?;
-    if n_parts > 0 {
+    keep_inverse(listener, run, n_parts, l.as_ref().map(|(_, inv)| inv), moved.as_ref())?;
+    if parts.is_some() {
         let _ = std::fs::remove_dir_all(staged_dir(listener, run));       // consumed
     }
     let mut result = json!({"catalogue": c.as_ref().map(|(counts_, _)| counts(counts_)),
-                            "listener": l.as_ref().map(|o| counts(&o.counts))});
-    if n_parts > 0 {
+                            "listener": l.as_ref().map(|(counts_, _)| counts(counts_))});
+    if parts.is_some() {
         result["catalogue_parts"] = json!(n_parts);
     }
     if let Some(r) = retired {
@@ -360,8 +438,230 @@ fn commit(listener: &Path, library: &Path, req: &Value, run: &str, apply_listene
     if let Some(w) = warning {
         result["warning"] = json!(w);
     }
+    // The answer kept before the run is recorded, so a run recorded here always
+    // has one to give again `[SPEC-NSH-032]`.
+    record(listener, run, digest, "committed", Some(&result))?;
+    set_last_run(listener, run)?;
     tracing::info!("star sync: run {run} committed here: {result}");
     Ok((result, has_cat || !to_retire.is_empty() || changes_selection(lis)))
+}
+
+// ---- a commit asked again, and one a stopped player left `[SPEC-NSH-032]`, `[SPEC-NSH-082]` --
+
+/// What a commit was asked to write, by digest: the same run asked again with the
+/// same digest is the same commit. The patches as this node parsed them, so the
+/// digest does not depend on how the hub spaced its text.
+fn digest_of(req: &Value) -> String {
+    let what = json!({"catalogue_patch": req["catalogue_patch"], "listener_patch": req["listener_patch"],
+                      "catalogue_parts": req["catalogue_parts"], "retire": req["retire"]});
+    sha_hex(what.to_string().as_bytes())
+}
+
+fn cat_inverse(run: &str, n: usize) -> String {
+    format!("inverse-{run}-c{n}.json")
+}
+
+fn lis_inverse(run: &str) -> String {
+    format!("inverse-{run}-l.json")
+}
+
+fn journal_path(listener: &Path, run: &str) -> PathBuf {
+    sync_dir(listener).join(format!("commit-{run}.json"))
+}
+
+fn journal(listener: &Path, run: &str) -> Option<Value> {
+    serde_json::from_str(&std::fs::read_to_string(journal_path(listener, run)).ok()?).ok()
+}
+
+/// How far a commit has got, on disk before the next write: `applying` before
+/// anything, `catalogue` once that half is in or there is none, `landed` once
+/// both are, and `committed` with the answer it gave.
+fn record(listener: &Path, run: &str, digest: &str, phase: &str, result: Option<&Value>) -> Result<(), String> {
+    let mut j = json!({"run": run, "digest": digest, "phase": phase, "at_ms": now_ms()});
+    if let Some(r) = result {
+        j["result"] = r.clone();
+    }
+    write_atomic(&journal_path(listener, run), &j.to_string())
+}
+
+/// A run this node holds nothing of: its record and any inverse it left.
+fn forget(listener: &Path, run: &str) {
+    remove_inverse_parts(listener, run);
+    let _ = std::fs::remove_file(sync_dir(listener).join(lis_inverse(run)));
+    let _ = std::fs::remove_file(journal_path(listener, run));
+}
+
+/// The run's catalogue inverses, `inverse-<run>-c1.json` on, as many as there are.
+fn cat_inverses_on_disk(listener: &Path, run: &str) -> usize {
+    (1..).take_while(|i| sync_dir(listener).join(cat_inverse(run, *i)).is_file()).count()
+}
+
+fn read_inverse(path: &Path) -> Result<Value, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The run's catalogue inverses, the last part's first, as an undo wants them.
+fn cat_inverses_back(listener: &Path, run: &str, n: usize) -> impl Iterator<Item = Result<Value, String>> {
+    let (dir, run) = (sync_dir(listener), run.to_string());
+    (1..=n).rev().map(move |i| read_inverse(&dir.join(cat_inverse(&run, i))))
+}
+
+/// The catalogue's half of `run` put back from the inverses on disk, inside the
+/// window a read-only partition needs; then those inverses go. `n` 0 is nothing to do.
+fn put_back(library: &Path, listener: &Path, run: &str, n: usize) -> Result<(), String> {
+    if n == 0 {
+        return Ok(());
+    }
+    let win = Window::open(library, true)?;
+    let r = mesh_sync::undo_parts(library, &mut cat_inverses_back(listener, run, n));
+    if let Some(w) = win.close(library) {
+        tracing::warn!("star sync: after putting a catalogue back: {w}");
+    }
+    r.map(|_| remove_inverse_parts(listener, run))
+}
+
+/// The same run's commit asked again: the answer it gave, if this is the same
+/// commit, marked so; never anything written `[SPEC-NSH-032]`.
+fn answered_again(listener: &Path, run: &str, digest: &str) -> Result<Value, String> {
+    match journal(listener, run) {
+        Some(j) if j["phase"] == "committed" && j["digest"] == digest => {
+            let mut r = j["result"].clone();
+            r["committed_earlier"] = json!(true);
+            tracing::info!("star sync: run {run} asked again; answered as committed earlier");
+            Ok(r)
+        }
+        Some(j) if j["phase"] == "committed" => {
+            Err(format!("run {run} is already committed here, with another patch: nothing written"))
+        }
+        _ => Err(format!("run {run} is already committed here, by a build that kept no answer: nothing written")),
+    }
+}
+
+/// `[SPEC-NSH-082]`: a commit this node began and never finished -- the player
+/// stopped inside it -- settled before anything else is answered: finished where
+/// both halves had landed, put back where only the catalogue had, forgotten where
+/// nothing had. What was done, said; `Err` where it could not be told, and then
+/// every step that writes is refused, saying why, until a person has looked.
+fn settle(listener: &Path, library: &Path) -> Result<Option<String>, String> {
+    let Ok(rd) = std::fs::read_dir(sync_dir(listener)) else { return Ok(None) };
+    let mut open: Vec<(String, Value)> = rd
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter_map(|n| n.strip_prefix("commit-").and_then(|r| r.strip_suffix(".json")).map(str::to_string))
+        .filter_map(|run| journal(listener, &run).map(|j| (run, j)))
+        .filter(|(_, j)| j["phase"] != "committed")
+        .collect();
+    open.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut said = Vec::new();
+    for (run, j) in open {
+        if let Some(why) = j["unsettled"].as_str() {
+            return Err(format!("run {run}'s commit stopped part way, and {why}: nothing will be written here until \
+                                a person has looked (`{}`) [SPEC-NSH-082]", journal_path(listener, &run).display()));
+        }
+        let n = cat_inverses_on_disk(listener, &run);
+        let phase = j["phase"].as_str().unwrap_or("").to_string();
+        let done = match phase.as_str() {
+            "landed" => finish(listener, &run, &j, n),
+            "catalogue" => match listener_landed(listener, &run) {
+                Ok(true) => finish(listener, &run, &j, n),
+                Ok(false) => put_back(library, listener, &run, n).map(|()| {
+                    forget(listener, &run);
+                    let what = if n > 0 {
+                        "its catalogue had landed and its listener had not: the catalogue was put back"
+                    } else {
+                        "nothing of it had landed"
+                    };
+                    what.to_string()
+                }),
+                Err(e) => Err(e),
+            },
+            "applying" if n == 0 => {
+                forget(listener, &run);
+                Ok("nothing of it had landed".to_string())
+            }
+            "applying" => match catalogue_landed(library, listener, &run, n) {
+                Ok(true) => put_back(library, listener, &run, n).map(|()| {
+                    forget(listener, &run);
+                    "its catalogue had landed and its listener had not: the catalogue was put back".to_string()
+                }),
+                Ok(false) => {
+                    forget(listener, &run);
+                    Ok("nothing of it had landed".to_string())
+                }
+                Err(e) => Err(e),
+            },
+            other => Err(format!("its record says `{other}`, which this build does not know")),
+        };
+        match done {
+            Ok(what) => {
+                tracing::warn!("star sync: run {run}'s commit had stopped part way: {what}");
+                said.push(format!("run {run}'s commit had stopped part way: {what}"));
+            }
+            Err(why) => {
+                let mut j = j.clone();
+                j["unsettled"] = json!(why);
+                let _ = write_atomic(&journal_path(listener, &run), &j.to_string());
+                tracing::error!("star sync: run {run}'s commit stopped part way and cannot be settled: {why}");
+                return Err(format!("run {run}'s commit stopped part way, and {why}: nothing will be written here \
+                                    until a person has looked (`{}`) [SPEC-NSH-082]", journal_path(listener, &run).display()));
+            }
+        }
+    }
+    Ok((!said.is_empty()).then(|| said.join("; ")))
+}
+
+/// Both halves were in: what the commit would have kept, kept, and the run recorded.
+/// It stopped before the files it was to retire were moved and the new files' tags
+/// read; the answer says so, and the next run asks about those files again.
+fn finish(listener: &Path, run: &str, j: &Value, n: usize) -> Result<String, String> {
+    let lpath = sync_dir(listener).join(lis_inverse(run));
+    let lis = if lpath.is_file() { Some(read_inverse(&lpath)?) } else { None };
+    keep_inverse(listener, run, n, lis.as_ref(), None)?;
+    let result = json!({"catalogue": null, "listener": null,
+                        "finished": "both halves had landed when the player stopped; files to retire were not moved"});
+    record(listener, run, j["digest"].as_str().unwrap_or(""), "committed", Some(&result))?;
+    if last_run(listener).is_none_or(|l| run > l.as_str()) {
+        set_last_run(listener, run)?;
+    }
+    Ok("both halves had landed: it was finished, and the run recorded".to_string())
+}
+
+/// Whether the listener's half of `run` had landed, read from the listener itself:
+/// its inverse, rehearsed under the member rule, finds a row the patch wrote. None
+/// on disk is a half not begun. A patch that changed no row, landed or not, leaves
+/// the listener as it would be: finished.
+fn listener_landed(listener: &Path, run: &str) -> Result<bool, String> {
+    let path = sync_dir(listener).join(lis_inverse(run));
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let inv = read_inverse(&path)?;
+    let o = mesh_sync::apply_with(listener, &inv, None, Rule::Member, false)
+        .map_err(|e| format!("whether its listener had landed could not be read: {e}"))?;
+    let c = o.counts;
+    if c.applied == 0 && c.already == 0 && c.kept > 0 {
+        return Err(format!("every one of the {} listener row(s) it wrote has changed since, so whether they \
+                            landed cannot be told", c.kept));
+    }
+    Ok(c.applied > 0 || c.already == 0)
+}
+
+/// Whether the catalogue's half of `run` had landed, read from the catalogue itself:
+/// its inverse, rehearsed, finds the rows the patch wrote (landed) or the rows that
+/// were there before it (not). A catalogue is not edited where it is patched, so
+/// anything else is a catalogue this cannot judge, and is said.
+fn catalogue_landed(library: &Path, listener: &Path, run: &str, n: usize) -> Result<bool, String> {
+    let win = Window::open(library, true)?;
+    let r = mesh_sync::rehearse_undo(library, &mut cat_inverses_back(listener, run, n));
+    if let Some(w) = win.close(library) {
+        tracing::warn!("star sync: after reading a catalogue: {w}");
+    }
+    let c = r.map_err(|e| format!("whether its catalogue had landed could not be read: {e}"))?;
+    match (c.applied, c.already) {
+        (0, 0) => Err("its catalogue inverse names no row, so whether it landed cannot be told".to_string()),
+        (applied, _) => Ok(applied > 0),
+    }
 }
 
 /// The shared tables that change what a page shows and never what plays, so a
@@ -393,26 +693,26 @@ fn last_run(listener: &Path) -> Option<String> {
 fn set_last_run(listener: &Path, run: &str) -> Result<(), String> {
     let d = sync_dir(listener);
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
-    let tmp = d.join("state.json.part");
-    std::fs::write(&tmp, json!({"last_run": run}).to_string()).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, d.join("state.json")).map_err(|e| e.to_string())
+    write_atomic(&d.join("state.json"), &json!({"last_run": run}).to_string())
 }
 
 /// What a commit wrote, reversed, as `inverse-<run>.json`; the newest `KEEP` runs
-/// are kept. `mesh_sync::undo` with either half puts that half back. A catalogue sent
-/// in parts has each part's inverse in `inverse-<run>-c<n>.json`, which this file
-/// lists, and which `undo_parts` puts back together `[SPEC-NKP-940]`.
-fn keep_inverse(listener: &Path, run: &str, cat: Option<&Value>, cat_parts: usize, lis: Option<&Value>,
+/// are kept. The catalogue's inverse is in `inverse-<run>-c<n>.json`, one a part --
+/// a patch sent whole is one part -- which this file lists, and which `undo_parts`
+/// puts back together `[SPEC-NKP-940]`. The listener's is in this file itself;
+/// `mesh_sync::undo` with it puts that half back. A commit's record goes with its
+/// inverses; one older than the run just recorded can answer nothing again.
+fn keep_inverse(listener: &Path, run: &str, cat_parts: usize, lis: Option<&Value>,
                 moved: Option<&Value>) -> Result<(), String> {
     let d = sync_dir(listener);
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
-    let names: Vec<String> = (1..=cat_parts).map(|i| format!("inverse-{run}-c{i}.json")).collect();
-    std::fs::write(
-        d.join(format!("inverse-{run}.json")),
+    let names: Vec<String> = (1..=cat_parts).map(|i| cat_inverse(run, i)).collect();
+    write_atomic(
+        &d.join(format!("inverse-{run}.json")),
         // `moved`: the files retired here, `{from, to}`, for `retire::undo` [SPEC-RTF-035].
-        json!({"run": run, "catalogue": cat, "catalogue_parts": names, "listener": lis, "moved": moved}).to_string(),
-    )
-    .map_err(|e| e.to_string())?;
+        &json!({"run": run, "catalogue": null, "catalogue_parts": names, "listener": lis, "moved": moved}).to_string(),
+    )?;
+    let _ = std::fs::remove_file(d.join(lis_inverse(run)));      // now in the file above
     let files: Vec<String> = std::fs::read_dir(&d)
         .map_err(|e| e.to_string())?
         .filter_map(Result::ok)
@@ -426,6 +726,12 @@ fn keep_inverse(listener: &Path, run: &str, cat: Option<&Value>, cat_parts: usiz
     for f in &files {
         if old.iter().any(|r| f["inverse-".len()..].starts_with(r.as_str())) {
             let _ = std::fs::remove_file(d.join(f));
+        }
+    }
+    for f in std::fs::read_dir(&d).map_err(|e| e.to_string())?.flatten() {
+        let name = f.file_name().into_string().unwrap_or_default();
+        if name.strip_prefix("commit-").is_some_and(|r| r.len() >= 14 && &r[..14] < run) {
+            let _ = std::fs::remove_file(f.path());
         }
     }
     Ok(())
@@ -447,15 +753,30 @@ fn part_file(dir: &Path, n: u64) -> PathBuf {
 }
 
 /// A file written whole or not at all: a half-written part is never named as a part.
+/// On disk, not only in the page cache, before this returns `[SPEC-NSH-082]`: an
+/// inverse must outlast a power cut that the catalogue's own commit, which SQLite
+/// syncs, survives -- or the catalogue is switched with nothing to put it back.
 fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
+    use std::io::Write;
     let tmp = path.with_extension("part");
-    std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+    let mut f = std::fs::File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    f.write_all(text.as_bytes()).and_then(|()| f.sync_all()).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    drop(f);
+    std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
+    // The rename itself is durable once its directory is synced. Windows cannot
+    // open a directory as a file, and has no need to.
+    #[cfg(unix)]
+    if let Some(dir) = path.parent().and_then(|d| std::fs::File::open(d).ok()) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
 }
 
-fn remove_inverse_parts(listener: &Path, run: &str, n: usize) {
-    for i in 1..=n {
-        let _ = std::fs::remove_file(sync_dir(listener).join(format!("inverse-{run}-c{i}.json")));
+/// The run's catalogue inverses, as many as were written: they are written in order,
+/// so a commit stopped part way leaves the first few.
+fn remove_inverse_parts(listener: &Path, run: &str) {
+    for i in 1..=cat_inverses_on_disk(listener, run) {
+        let _ = std::fs::remove_file(sync_dir(listener).join(cat_inverse(run, i)));
     }
 }
 
@@ -544,7 +865,9 @@ fn staged(listener: &Path, run: &str) -> Value {
             }
         }
     }
-    json!({"catalogue": have})
+    // `[SPEC-NSH-032]`: a commit consumes what it staged, so a hub trying the same
+    // run's commit again is told it is in, and stages nothing.
+    json!({"catalogue": have, "committed": last_run(listener).as_deref() == Some(run)})
 }
 
 /// Staged parts for a run no newer than the last committed, or a day old, are removed.
@@ -808,8 +1131,26 @@ pub(crate) mod tests {
         assert_eq!(format_of(&n.lib), "opus");
         assert_eq!(last_run(&n.l).as_deref(), Some("20260928T1830Z"));
         assert!(sync_dir(&n.l).join("inverse-20260928T1830Z.json").is_file(), "the inverse is kept");
-        let replay = handle(&n.l, &n.lib, "commit", &signed(&n.mesh, &r)).err().unwrap();
-        assert!(replay.contains("not newer"), "a replayed commit is refused: {replay}");
+        // `[SPEC-NSH-032]`: replayed, the same commit is answered as it was, and nothing is written.
+        let first = answer_of(&done);
+        let kept = std::fs::read_to_string(sync_dir(&n.l).join("inverse-20260928T1830Z.json")).unwrap();
+        let again = handle(&n.l, &n.lib, "commit", &signed(&n.mesh, &r)).unwrap();
+        let a = answer_of(&again);
+        assert_eq!((a["committed_earlier"].clone(), a["catalogue"].clone(), a["listener"].clone()),
+                   (json!(true), first["catalogue"].clone(), first["listener"].clone()), "the first answer, again: {a}");
+        assert!(!again.reload, "and nothing changed, so nothing to reload");
+        assert_eq!(std::fs::read_to_string(sync_dir(&n.l).join("inverse-20260928T1830Z.json")).unwrap(), kept,
+                   "the inverse kept is the first commit's");
+        let other = request(&n, "commit", "20260928T1830Z", cat_patch(), json!(null));
+        let err = handle(&n.l, &n.lib, "commit", &signed(&n.mesh, &other)).err().unwrap();
+        assert!(err.contains("another patch"), "the same run with another patch is refused: {err}");
+        // Its answer kept and the run not recorded -- the last write failed: answered, never applied again.
+        set_last_run(&n.l, "20260927T0000Z").unwrap();
+        let again = answer_of(&handle(&n.l, &n.lib, "commit", &signed(&n.mesh, &r)).unwrap());
+        assert_eq!(again["committed_earlier"], true, "{again}");
+        assert_eq!(last_run(&n.l).as_deref(), Some("20260928T1830Z"), "and the run is recorded now");
+        assert_eq!(std::fs::read_to_string(sync_dir(&n.l).join("inverse-20260928T1830Z.json")).unwrap(), kept,
+                   "with the first commit's inverse, not an empty one");
         let older = request(&n, "commit", "20260927T0000Z", cat_patch(), lis_patch());
         assert!(handle(&n.l, &n.lib, "commit", &signed(&n.mesh, &older)).err().unwrap().contains("not newer"));
         let _ = std::fs::remove_dir_all(&n.dir);
@@ -935,10 +1276,144 @@ pub(crate) mod tests {
     fn a_failed_listener_puts_the_catalogue_back() {
         let n = node("restore");
         let r = request(&n, "commit", "20260928T1830Z", cat_patch(), lis_patch());
-        let err = commit(&n.l, &n.lib, &r, "20260928T1830Z", &|_, _| Err("disk full".into())).err().unwrap();
+        let err = commit(&n.l, &n.lib, &r, "20260928T1830Z", "d", &|_, _, _| Err("disk full".into())).err().unwrap();
         assert!(err.contains("disk full") && err.contains("put back"), "{err}");
         assert_eq!(format_of(&n.lib), "flac", "the catalogue is as it was");
         assert_eq!(last_run(&n.l), None, "and the run can be tried again");
+        assert!(journal(&n.l, "20260928T1830Z").is_none() && cat_inverses_on_disk(&n.l, "20260928T1830Z") == 0,
+                "with no record of it, and no inverse, left behind");
+        let _ = std::fs::remove_dir_all(&n.dir);
+    }
+
+    /// A commit the player stops inside: `apply` stands in for its listener's half, and panics.
+    fn stopped(n: &Node, run: &str, apply: ListenerApply) {
+        let r = request(n, "commit", run, cat_patch(), lis_patch());
+        let d = digest_of(&r);
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| commit(&n.l, &n.lib, &r, run, &d, apply)));
+        assert!(out.is_err(), "the player stopped inside the commit");
+    }
+
+    fn rotation_of(l: &Path) -> f64 {
+        rusqlite::Connection::open(l).unwrap()
+            .query_row("SELECT rotation FROM listener_preferences WHERE subject_id = 'a1'", [], |r| r.get(0)).unwrap()
+    }
+
+    fn snapshot_of(n: &Node, run: &str) -> Value {
+        answer_of(&handle(&n.l, &n.lib, "snapshot", &signed(&n.mesh, &request(n, "snapshot", run, json!(null), json!(null)))).unwrap())
+    }
+
+    /// `[SPEC-NSH-082]`: a player that stops inside a commit is settled at its next step,
+    /// before it answers it: put back where only the catalogue had landed, finished where
+    /// both halves had. Each half's inverse was on disk before that half landed.
+    #[test]
+    fn a_commit_stopped_part_way_is_settled_at_the_next_step() {
+        let n = node("settle");
+        let run = "20261116T2300Z";
+
+        // Stopped before the listener began: the catalogue had landed, alone.
+        stopped(&n, run, &|_, _, _| panic!("the power is cut"));
+        assert_eq!(format_of(&n.lib), "opus", "the catalogue had landed");
+        assert_eq!(journal(&n.l, run).unwrap()["phase"], "catalogue");
+        assert!(sync_dir(&n.l).join(cat_inverse(run, 1)).is_file(), "a whole patch's inverse is on disk, as a part's is");
+        let s = snapshot_of(&n, run);
+        assert!(s["settled"].as_str().unwrap_or("").contains("the catalogue was put back"), "{s}");
+        assert_eq!(format_of(&n.lib), "flac", "put back before the snapshot describes the node");
+        assert!(journal(&n.l, run).is_none() && last_run(&n.l).is_none() && cat_inverses_on_disk(&n.l, run) == 0,
+                "and the run can be committed afresh");
+
+        // Stopped inside the listener's transaction: its inverse on disk, and nothing of it kept.
+        stopped(&n, run, &|l, p, sink| {
+            let _ = mesh_sync::apply_parts(l, &mut std::iter::once(Ok(p.clone())), Some(&mesh_sync::MERGED), Rule::Member, false, sink);
+            panic!("the power is cut")
+        });
+        assert!(sync_dir(&n.l).join(lis_inverse(run)).is_file());
+        assert_eq!((format_of(&n.lib).as_str(), rotation_of(&n.l)), ("opus", 1.0), "the catalogue in, the listener not");
+        let s = snapshot_of(&n, run);
+        assert!(s["settled"].as_str().unwrap_or("").contains("the catalogue was put back"), "the listener says it had not: {s}");
+        assert_eq!(format_of(&n.lib), "flac");
+
+        // Stopped after both halves had landed, before the run was recorded.
+        stopped(&n, run, &|l, p, sink| {
+            let c = member_apply(l, p, sink);
+            panic!("the power is cut after {c:?}")
+        });
+        assert_eq!((format_of(&n.lib).as_str(), rotation_of(&n.l), last_run(&n.l)), ("opus", 2.0, None), "both had landed");
+        let s = snapshot_of(&n, run);
+        assert!(s["settled"].as_str().unwrap_or("").contains("finished"), "{s}");
+        assert_eq!(last_run(&n.l).as_deref(), Some(run), "the run is recorded");
+        let r = request(&n, "commit", run, cat_patch(), lis_patch());
+        let again = answer_of(&handle(&n.l, &n.lib, "commit", &signed(&n.mesh, &r)).unwrap());
+        assert!(again["committed_earlier"] == true && again["finished"].is_string(), "the hub asking again is told: {again}");
+        let kept: Value = serde_json::from_str(&std::fs::read_to_string(sync_dir(&n.l).join(format!("inverse-{run}.json"))).unwrap()).unwrap();
+        assert_eq!(kept["catalogue_parts"], json!([cat_inverse(run, 1)]));
+        assert!(!sync_dir(&n.l).join(lis_inverse(run)).exists(), "the listener's inverse is in the run's file now");
+        mesh_sync::undo_parts(&n.lib, &mut cat_inverses_back(&n.l, run, 1)).unwrap();
+        mesh_sync::undo(&n.l, &kept["listener"]).unwrap();
+        assert_eq!((format_of(&n.lib).as_str(), rotation_of(&n.l)), ("flac", 1.0), "and what was kept puts both back");
+        let _ = std::fs::remove_dir_all(&n.dir);
+    }
+
+    /// `[SPEC-NSH-082]`: stopped between the catalogue's commit and its record -- the record
+    /// still `applying` -- the catalogue itself says whether it had landed. One whose rows hold
+    /// neither what was there nor what the patch wrote is not guessed at: every step that writes
+    /// is refused, saying why, and the snapshot says so, until a person has looked.
+    #[test]
+    fn the_catalogue_says_whether_it_landed_and_one_it_cannot_judge_is_refused() {
+        let n = node("settle-applying");
+        let run = "20261116T2305Z";
+        let applying = |n: &Node| {
+            let mut j = journal(&n.l, run).unwrap();
+            j["phase"] = json!("applying");
+            write_atomic(&journal_path(&n.l, run), &j.to_string()).unwrap();
+        };
+        stopped(&n, run, &|_, _, _| panic!("the power is cut"));
+        applying(&n);
+        let s = snapshot_of(&n, run);
+        assert!(s["settled"].as_str().unwrap_or("").contains("put back"), "it had landed: {s}");
+        assert_eq!(format_of(&n.lib), "flac");
+
+        // Its inverse written inside the transaction, which never committed.
+        let rehearsed = |n: &Node| {
+            let dir = sync_dir(&n.l);
+            mesh_sync::apply_parts(&n.lib, &mut std::iter::once(Ok(cat_patch())), None, Rule::Strict, false,
+                                   &mut |i, inv| write_atomic(&dir.join(cat_inverse(run, i + 1)), &inv.to_string())).unwrap();
+            record(&n.l, run, "d", "applying", None).unwrap();
+        };
+        rehearsed(&n);
+        let s = snapshot_of(&n, run);
+        assert!(s["settled"].as_str().unwrap_or("").contains("nothing of it had landed"), "{s}");
+        assert!(cat_inverses_on_disk(&n.l, run) == 0 && journal(&n.l, run).is_none(), "and nothing of it is left");
+
+        // A catalogue changed since, under the stopped commit: neither.
+        rehearsed(&n);
+        rusqlite::Connection::open(&n.lib).unwrap().execute("UPDATE files SET format = 'wav' WHERE file_id = 1", []).unwrap();
+        let s = snapshot_of(&n, run);
+        assert!(s["unsettled"].as_str().unwrap_or("").contains("could not be read"), "the snapshot says why: {s}");
+        let r = request(&n, "commit", "20261116T2310Z", cat_patch(), lis_patch());
+        let err = handle(&n.l, &n.lib, "commit", &signed(&n.mesh, &r)).err().unwrap();
+        assert!(err.contains("until a person has looked"), "{err}");
+        assert_eq!(format_of(&n.lib), "wav", "and nothing was written");
+        let _ = std::fs::remove_file(journal_path(&n.l, run));     // the person, having looked
+        rusqlite::Connection::open(&n.lib).unwrap().execute("UPDATE files SET format = 'flac' WHERE file_id = 1", []).unwrap();
+        assert!(handle(&n.l, &n.lib, "commit", &signed(&n.mesh, &r)).is_ok(), "then the node takes a commit again");
+        let _ = std::fs::remove_dir_all(&n.dir);
+    }
+
+    /// `[SPEC-NSH-032]`: one step at a time. A commit asked while another step holds the
+    /// node waits for it, rather than running beside it.
+    #[test]
+    fn a_step_waits_for_the_one_before_it() {
+        let n = node("one-at-a-time");
+        let r = signed(&n.mesh, &request(&n, "commit", "20261116T2315Z", cat_patch(), lis_patch()));
+        let held = STEPS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (l, lib) = (n.l.clone(), n.lib.clone());
+        let t = std::thread::spawn(move || handle(&l, &lib, "commit", &r).map(|h| answer_of(&h)));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!t.is_finished(), "the commit waits while another step holds the node");
+        assert_eq!(format_of(&n.lib), "flac", "and has written nothing");
+        drop(held);
+        let a = t.join().unwrap().unwrap();
+        assert_eq!(a["catalogue"]["applied"], 1, "{a}");
         let _ = std::fs::remove_dir_all(&n.dir);
     }
 
@@ -950,7 +1425,7 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&d).unwrap();
         let l = d.join("listener.db");
         for run in ["20260901T0000Z", "20260902T0000Z", "20260903T0000Z", "20260904T0000Z"] {
-            keep_inverse(&l, run, None, 0, Some(&json!({"tables": []})), None).unwrap();
+            keep_inverse(&l, run, 0, Some(&json!({"tables": []})), None).unwrap();
             set_last_run(&l, run).unwrap();
         }
         let mut names: Vec<String> = std::fs::read_dir(sync_dir(&l)).unwrap()
@@ -1173,10 +1648,14 @@ pub(crate) mod tests {
         let mut back = (1..=3).rev().map(|i| {
             serde_json::from_str::<Value>(&std::fs::read_to_string(d.join(format!("inverse-{run}-c{i}.json"))).unwrap()).map_err(|e| e.to_string())
         });
+        // `[SPEC-NSH-032]`: asked again, the node says the run is in, and answers the commit
+        // as it did -- with its parts consumed, and nothing staged or written.
+        let have = answer_of(&handle(&n.l, &n.lib, "staged", &signed(&n.mesh, &request(&n, "staged", run, json!(null), json!(null)))).unwrap());
+        assert_eq!(have, json!({"catalogue": {}, "committed": true}), "staged says the run is committed here");
+        let again = answer_of(&handle(&n.l, &n.lib, "commit", &with_parts(&n, "commit", run, &texts)).unwrap());
+        assert_eq!((again["committed_earlier"].clone(), again["catalogue"]["applied"].clone()), (json!(true), json!(3)), "{again}");
         mesh_sync::undo_parts(&n.lib, &mut back).unwrap();
         assert_eq!((format_of(&n.lib).as_str(), files_in(&n.lib)), ("flac", 1), "the undo is whole");
-        let replay = handle(&n.l, &n.lib, "commit", &with_parts(&n, "commit", run, &texts)).err().unwrap();
-        assert!(replay.contains("not newer"), "a replayed commit is refused: {replay}");
         let _ = std::fs::remove_dir_all(&n.dir);
     }
 

@@ -372,6 +372,26 @@ NATURAL_KEYS_NEEDED = 1    # [SPEC-NKP-075]: the catalogue patch by natural key
 PASSAGE_UIDS_NEEDED = 1    # [IMPL-UID-080]: the catalogue patch names passages by uid alone
 CATALOGUE_WINDOW_NEEDED = 1  # [SPEC-STAR-104]: a player that opens a read-only catalogue's partition to rehearse a patch too
 RETIRE_FILES_NEEDED = 1  # [SPEC-RTF-060]: a player that moves the files the hub retired to its own _Retired
+COMMIT_AGAIN_NEEDED = 1  # [SPEC-NSH-032]: a player that answers a commit asked again, and takes one step at a time
+# [SPEC-NSH-092]: what one node's answer can make go wrong in the hub's handling of it --
+# a refusal, the network, an answer not of the shape asked for, rows the copy's schema
+# refuses. Caught at each node, which is then missing or refused; never the whole stage.
+NODE_FAULTS = (ValueError, OSError, KeyError, TypeError, IndexError, AttributeError, sqlite3.Error)
+
+
+def commit_lost(ns, snap):
+    """[SPEC-NSH-032]: a node whose own last committed run is newer than the one the hub
+    recorded for it took a commit whose answer never came back -- which the hub, hearing
+    nothing, recorded as not sent. Said, with the way to record it; None when it is not."""
+    theirs, ours = snap.get("last_run"), ns.get("run")
+    if not theirs or (ours and theirs <= ours):
+        return None
+    way = (f"commit run {theirs} to it again (`commit --run <runs>/{theirs} NODE`): it answers as it did, "
+           "and the hub records it" if (snap.get("commit_again", 0) or 0) >= COMMIT_AGAIN_NEEDED else
+           "this build cannot answer that commit again, so `adopt` it, or deploy a current build first")
+    return (f"its last committed run is {theirs}, newer than the {ours or 'none'} the hub recorded: that commit's "
+            f"answer was lost on the way back, and the hub still patches it against what it held before. "
+            f"To record it: {way} [SPEC-NSH-032]")
 CATALOGUE_PATCH_MAX = 16 << 20   # [SPEC-NKP-920]: the most a player is sent in one request, in bytes of JSON
 PART_MAX = 8 << 20               # [SPEC-NKP-930]: the most JSON in one part of a patch sent in parts
 NATURAL_PART_MAX = 32 << 20      # the natural entries stay whole in the first part; the player takes no more than this
@@ -778,7 +798,10 @@ def node_rows(mdir, player, run, name, snap, sent_lib, nd, hub_copy, hub_library
         answer = meshmod.sync_step(mdir, player, "rows", stamp_of(run), extra={"want": want}, timeout=600.0)
         out = os.path.join(nd, "library.baseline.db")
         rep = baseline_from_rows(sent_lib, hub_copy, answer, out)
-    except (ValueError, OSError, KeyError) as err:
+    # [SPEC-NSH-092]: rows the node's own schema made that the copy's refuses, and a
+    # baseline that fails its integrity check, are rows this cannot use -- not the end
+    # of the snapshot, as each was until 2026-11-16.
+    except (ValueError, OSError, KeyError, TypeError, sqlite3.Error, SystemExit) as err:
         return None, (f"WARNING: asked for its own rows for {len(files)} file(s) and could not use them ({err}): "
                       "patched against what was last sent [SPEC-STAR-945]")
     seal(out)
@@ -907,9 +930,13 @@ def write_parts(pd, parts):
 
 def stage_parts(plan, run, name, player, manifest, pd):
     """[SPEC-NKP-925]: send the parts the node does not hold, and only those. What a rehearsal
-    staged is on the node still, so the commit sends nothing twice."""
+    staged is on the node still, so the commit sends nothing twice. How many were sent; None
+    when the node says this run is committed there already, which consumed them."""
     mdir = mesh_of(plan)
-    have = (meshmod.sync_step(mdir, player, "staged", stamp_of(run)) or {}).get("catalogue", {})
+    staged = meshmod.sync_step(mdir, player, "staged", stamp_of(run)) or {}
+    if staged.get("committed"):
+        return None         # [SPEC-NSH-032]: the run is in there, and its parts consumed
+    have = staged.get("catalogue", {})
     sent = 0
     for i, meta in enumerate(manifest["parts"], 1):
         if have.get(str(i)) == meta["sha256"]:
@@ -1105,95 +1132,122 @@ def snapshot(plan, only=None):
     names = [n for n in sorted(plan["nodes"]) if only is None or n in only]
     started = {}
     old = {}
+
+    def take(name, player):
+        """One node's part of the snapshot. Its manifest and baseline entries are
+        written last, so a node that fails part way leaves none [SPEC-NSH-092]."""
+        n = plan["nodes"][name]
+        ns = state["nodes"].get(name, {})
+        if not n.get("member"):
+            missing[name] = "no `member` fingerprint in the plan: it is not enrolled"
+        elif player is None:
+            missing[name] = "its player did not answer the members' query"
+        else:
+            try:
+                snap = meshmod.sync_step(mdir, player, "snapshot", stamp_of(run))
+            except (ValueError, OSError) as err:
+                missing[name] = f"snapshot refused: {err} (a player too old for the sync routes answers like this)"
+        if name in missing:
+            say(f"  {name}: MISSING from this run -- {missing[name]}")
+            return
+        nd = os.path.join(run, name)
+        os.makedirs(nd)
+        for part, fname in (("listener", "listener.db"), ("catalogue", "summary.db")):
+            db_of(snap[part], os.path.join(nd, fname))
+            seal(os.path.join(nd, fname))
+        # [SPEC-NSH-082]: a commit the node's player stopped inside, settled before it answered.
+        if snap.get("settled"):
+            say(f"  {name}: {snap['settled']} [SPEC-NSH-082]")
+        if snap.get("unsettled"):
+            say(f"  {name}: UNSETTLED -- {snap['unsettled']}; it refuses every rehearsal and commit until then")
+        lost = commit_lost(ns, snap)
+        if lost:
+            say(f"  {name}: WARNING {lost}")
+        # [SPEC-STAR-940]: the catalogue is patched strictly, against what the
+        # hub last sent. Whether it can be is read from the node's summary.
+        cap = snap.get("natural_keys", 0) or 0
+        if cap < NATURAL_KEYS_NEEDED:
+            old[name] = "reports no natural_keys: a build older than the catalogue patch by natural key"
+        elif (snap.get("passage_uids", 0) or 0) < PASSAGE_UIDS_NEEDED:
+            old[name] = "reports no passage_uids: a build older than the patch that names a passage by its uid"
+        # [SPEC-STAR-104]: a catalogue on a read-only partition (bose's, by design) is opened by
+        # the player itself, for the check and the commit. A build that does not say it can
+        # would be sent 14 parts and refuse at the first, so it is said now instead.
+        blocked = None
+        if snap.get("library_readonly"):
+            if (snap.get("catalogue_window", 0) or 0) < CATALOGUE_WINDOW_NEEDED:
+                blocked = ("its catalogue is on a read-only partition and this build cannot open it to check a patch "
+                           "(it reports no catalogue_window): deploy a current build")
+                old[name] = blocked
+            else:
+                say(f"  {name}: its catalogue is on a read-only partition: the player opens it for the check "
+                    f"and the commit, and closes it again [SPEC-STAR-104]")
+        sent_lib = sent_path(ns, "library_sent")
+        baseline, rows_note = node_rows(mdir, player, run, name, snap, sent_lib, nd,
+                                        os.path.join(hd, "library.db"), at_root(hub["library"]), ns.get("at"))
+        # The state is judged against what the node is patched against: the copy last
+        # sent, corrected by its own rows where it gave them. Judged against the copy
+        # alone, a node that had made the hub's own edits read *changed* and was sent
+        # no catalogue at all, its rows already in hand (found 2026-10-29).
+        as_sent = catalogue_state(sent_lib, os.path.join(nd, "summary.db"), os.path.join(hd, "library.db"))
+        cat = (catalogue_state(baseline, os.path.join(nd, "summary.db"), os.path.join(hd, "library.db"))
+               if baseline else as_sent)
+        say(f"  {name}: {sum(len(t['rows']) for t in snap['listener']['tables'])} shared row(s), "
+            f"catalogue {catalogue_words(cat)}"
+            + (f" (against the copy last sent alone: {catalogue_words(as_sent)})" if cat != as_sent else ""))
+        if rows_note:
+            say(f"  {name}: {rows_note}")
+        if want:
+            got, line = ask_links(mdir, player, run, name, snap, nd, want, n, links)
+            if got:
+                link_answers[name] = got
+            else:
+                not_asked[name] = line
+            say(f"  {name}: {line}")
+        # [GDE-INT-145]: what the node found reading its own files back.
+        ic = snap.get("file_checks")
+        if ic is not None:
+            say(f"  {name}: {integrity_words(ic)} [GDE-INT-145]")
+        # [SPEC-STAR-107]: the journal mode of each half, as the node reads it.
+        jm = snap.get("journal_mode")
+        for line in journal_stale(name, jm):
+            say(f"  {name}: NOT WAL -- {line}")
+        if jm and not journal_stale(name, jm):
+            say(f"  {name}: {journal_words(jm)} [SPEC-STAR-107]")
+        manifest["nodes"].append(dict(
+            name=name, listener=os.path.join(nd, "listener.db"), taken_at=now().isoformat(),
+            sent=sent_path(ns, "listener_sent"), sent_run=ns.get("run"),
+            backups=history_of(ns.get("listener_sent"), ns.get("at", ""), os.path.join(nd, "history")),
+            catalogue=os.path.join(nd, "summary.db"), files=os.path.join(nd, "summary.db")))
+        baselines[name] = {"listener": os.path.join(nd, "listener.db"), "signed": n["member"],
+                           "library": baseline or sent_lib, "library_sent": sent_lib,
+                           "catalogue": cat, "catalogue_as_sent": as_sent, "natural_keys": cap,
+                           "passage_uids": snap.get("passage_uids", 0) or 0,
+                           # [IMPL-UID-056]: None from a build that cannot take an index
+                           "catalogue_indexes": snap.get("catalogue_indexes"),
+                           "retire_files": snap.get("retire_files", 0) or 0,
+                           # [SPEC-NSH-032]: a commit to it may be asked again
+                           "commit_again": snap.get("commit_again", 0) or 0,
+                           "catalogue_blocked": blocked, "integrity": snap.get("file_checks"),
+                           "journal_mode": snap.get("journal_mode"),
+                           "catalogue_in_step": not blocked and cat["state"] in ("as-sent", "holds-hub-rows")}
+
     try:
         up = players_up(plan, names, started)
         for name in names:
-            n = plan["nodes"][name]
-            ns = state["nodes"].get(name, {})
-            player = up.get(name)
-            if not n.get("member"):
-                missing[name] = "no `member` fingerprint in the plan: it is not enrolled"
-            elif player is None:
-                missing[name] = "its player did not answer the members' query"
-            else:
-                try:
-                    snap = meshmod.sync_step(mdir, player, "snapshot", stamp_of(run))
-                except (ValueError, OSError) as err:
-                    missing[name] = f"snapshot refused: {err} (a player too old for the sync routes answers like this)"
-            if name in missing:
-                say(f"  {name}: MISSING from this run -- {missing[name]}")
-                continue
-            nd = os.path.join(run, name)
-            os.makedirs(nd)
-            for part, fname in (("listener", "listener.db"), ("catalogue", "summary.db")):
-                db_of(snap[part], os.path.join(nd, fname))
-                seal(os.path.join(nd, fname))
-            # [SPEC-STAR-940]: the catalogue is patched strictly, against what the
-            # hub last sent. Whether it can be is read from the node's summary.
-            cap = snap.get("natural_keys", 0) or 0
-            if cap < NATURAL_KEYS_NEEDED:
-                old[name] = "reports no natural_keys: a build older than the catalogue patch by natural key"
-            elif (snap.get("passage_uids", 0) or 0) < PASSAGE_UIDS_NEEDED:
-                old[name] = "reports no passage_uids: a build older than the patch that names a passage by its uid"
-            # [SPEC-STAR-104]: a catalogue on a read-only partition (bose's, by design) is opened by
-            # the player itself, for the check and the commit. A build that does not say it can
-            # would be sent 14 parts and refuse at the first, so it is said now instead.
-            blocked = None
-            if snap.get("library_readonly"):
-                if (snap.get("catalogue_window", 0) or 0) < CATALOGUE_WINDOW_NEEDED:
-                    blocked = ("its catalogue is on a read-only partition and this build cannot open it to check a patch "
-                               "(it reports no catalogue_window): deploy a current build")
-                    old[name] = blocked
-                else:
-                    say(f"  {name}: its catalogue is on a read-only partition: the player opens it for the check "
-                        f"and the commit, and closes it again [SPEC-STAR-104]")
-            sent_lib = sent_path(ns, "library_sent")
-            baseline, rows_note = node_rows(mdir, player, run, name, snap, sent_lib, nd,
-                                            os.path.join(hd, "library.db"), at_root(hub["library"]), ns.get("at"))
-            # The state is judged against what the node is patched against: the copy last
-            # sent, corrected by its own rows where it gave them. Judged against the copy
-            # alone, a node that had made the hub's own edits read *changed* and was sent
-            # no catalogue at all, its rows already in hand (found 2026-10-29).
-            as_sent = catalogue_state(sent_lib, os.path.join(nd, "summary.db"), os.path.join(hd, "library.db"))
-            cat = (catalogue_state(baseline, os.path.join(nd, "summary.db"), os.path.join(hd, "library.db"))
-                   if baseline else as_sent)
-            say(f"  {name}: {sum(len(t['rows']) for t in snap['listener']['tables'])} shared row(s), "
-                f"catalogue {catalogue_words(cat)}"
-                + (f" (against the copy last sent alone: {catalogue_words(as_sent)})" if cat != as_sent else ""))
-            if rows_note:
-                say(f"  {name}: {rows_note}")
-            if want:
-                got, line = ask_links(mdir, player, run, name, snap, nd, want, n, links)
-                if got:
-                    link_answers[name] = got
-                else:
-                    not_asked[name] = line
-                say(f"  {name}: {line}")
-            # [GDE-INT-145]: what the node found reading its own files back.
-            ic = snap.get("file_checks")
-            if ic is not None:
-                say(f"  {name}: {integrity_words(ic)} [GDE-INT-145]")
-            # [SPEC-STAR-107]: the journal mode of each half, as the node reads it.
-            jm = snap.get("journal_mode")
-            for line in journal_stale(name, jm):
-                say(f"  {name}: NOT WAL -- {line}")
-            if jm and not journal_stale(name, jm):
-                say(f"  {name}: {journal_words(jm)} [SPEC-STAR-107]")
-            manifest["nodes"].append(dict(
-                name=name, listener=os.path.join(nd, "listener.db"), taken_at=now().isoformat(),
-                sent=sent_path(ns, "listener_sent"), sent_run=ns.get("run"),
-                backups=history_of(ns.get("listener_sent"), ns.get("at", ""), os.path.join(nd, "history")),
-                catalogue=os.path.join(nd, "summary.db"), files=os.path.join(nd, "summary.db")))
-            baselines[name] = {"listener": os.path.join(nd, "listener.db"), "signed": n["member"],
-                               "library": baseline or sent_lib, "library_sent": sent_lib,
-                               "catalogue": cat, "catalogue_as_sent": as_sent, "natural_keys": cap,
-                               "passage_uids": snap.get("passage_uids", 0) or 0,
-                               # [IMPL-UID-056]: None from a build that cannot take an index
-                               "catalogue_indexes": snap.get("catalogue_indexes"),
-                               "retire_files": snap.get("retire_files", 0) or 0,
-                               "catalogue_blocked": blocked, "integrity": snap.get("file_checks"),
-                               "journal_mode": snap.get("journal_mode"),
-                               "catalogue_in_step": not blocked and cat["state"] in ("as-sent", "holds-hub-rows")}
+            # [SPEC-NSH-092]: one node's answer that cannot be used is that node missing, not
+            # the end of the snapshot. Until 2026-11-16 anything but a refusal or a network
+            # error -- a truncated answer, a row its own schema refuses -- ended the whole
+            # snapshot, with no manifest, and every other node's part lost.
+            try:
+                take(name, up.get(name))
+            except NODE_FAULTS as err:
+                missing[name] = f"its snapshot could not be used: {type(err).__name__}: {err}"
+                for got in (old, link_answers, not_asked, baselines):
+                    got.pop(name, None)
+                manifest["nodes"] = [x for x in manifest["nodes"] if x["name"] != name]
+                rm(os.path.join(run, name))
+                say(f"  {name}: MISSING from this run -- {missing[name]} [SPEC-NSH-092]")
     finally:
         stop_started(plan, started)
     # [REQ-AND-330]: enrolled phones, by what each last uploaded over the
@@ -1279,6 +1333,10 @@ def weighed_in(plan, run_id):
 
 
 def merge(plan, run):
+    if not os.path.exists(os.path.join(run, "manifest.json")):
+        # [SPEC-NSH-092]: a snapshot that ended part way is still the newest run.
+        raise SystemExit(f"{run} has no manifest.json: its snapshot did not finish, and there is nothing to "
+                         "merge. Take a new snapshot")
     with open(os.path.join(run, "manifest.json"), encoding="utf-8") as fh:
         manifest = json.load(fh)
     void_merge(run)
@@ -1884,24 +1942,38 @@ def player_step(plan, run, name, player, commit):
     hold = (transfer_hold.held(player["address"], player.get("web_port", transfer_hold.LEMPI_DEFAULT_PORT),
                                say=say, seconds=3600)
             if parts else contextlib.nullcontext())
+    # [SPEC-NSH-032]: a commit whose answer is lost is asked again, of a node that says it
+    # answers one asked again -- given what it answered the first time, or, still applying
+    # it, waiting for it first. Of an older build, never.
+    again = ((read_json(os.path.join(run, "baselines.json")) or {}).get(name, {}).get("commit_again", 0) or 0) \
+        >= COMMIT_AGAIN_NEEDED
     try:
         with hold:
             extra = None
             if parts:
                 sent = stage_parts(plan, run, name, player, parts, pd)
                 extra = {"catalogue_parts": {"of": parts["of"], "sha256": [p["sha256"] for p in parts["parts"]]}}
-                say(f"  {name}: the catalogue's {parts['of']} parts are staged ({sent} sent now, "
-                    f"{parts['of'] - sent} already there)")
+                if sent is None:
+                    say(f"  {name}: this run is committed there already, its parts consumed: nothing staged, "
+                        "and the commit is asked for its answer [SPEC-NSH-032]")
+                else:
+                    say(f"  {name}: the catalogue's {parts['of']} parts are staged ({sent} sent now, "
+                        f"{parts['of'] - sent} already there)")
             if retire:
                 # [SPEC-RTF-020]: moved by the node after its catalogue lands, never sent to a
                 # player that did not say it can (`retire_lines`).
                 extra = dict(extra or {}, retire=retire)
             got = meshmod.sync_step(mdir, player, "commit" if commit else "rehearse", stamp_of(run),
                                     cat if has_rows(cat) else None, lis if has_rows(lis) else None,
-                                    timeout=3600.0 if parts else 600.0, extra=extra)
-    except (ValueError, OSError) as err:
-        say(f"RESULT {name}: REFUSED -- {err}")
+                                    timeout=3600.0 if parts else 600.0, extra=extra, again=commit and again)
+    except NODE_FAULTS as err:
+        say(f"RESULT {name}: REFUSED -- {type(err).__name__}: {err}")
         return 1
+    if got.get("committed_earlier"):
+        say(f"  {name}: this run was committed there earlier, and its answer lost on the way back: "
+            f"the node's own record of it follows [SPEC-NSH-032]")
+    if got.get("finished"):
+        say(f"  {name}: {got['finished']} [SPEC-NSH-082]")
     if retire:
         said = retire_words(got.get("retire"), len(retire))
         say(f"  {name}: retired files: {said}")
@@ -2053,6 +2125,17 @@ def hub_apply(plan, run, commit, excuse=None):
     return 0 if ok else 1
 
 
+def one_node(name, step):
+    """[SPEC-NSH-092]: one node's step in a stage. A fault in handling it is that node
+    refused, said with its kind, and the stage goes on to the next node. Until
+    2026-11-16 an exception from one node's step stopped every node after it."""
+    try:
+        return step()
+    except NODE_FAULTS as err:
+        say(f"RESULT {name}: REFUSED -- {type(err).__name__}: {err} [SPEC-NSH-092]")
+        return 1
+
+
 def distribute(plan, run, names, commit, excuse=None, bulk=False):
     with open(os.path.join(run, "distribute-plan.json"), encoding="utf-8") as fh:
         dplan = json.load(fh)
@@ -2077,18 +2160,28 @@ def distribute(plan, run, names, commit, excuse=None, bulk=False):
     try:
         up = players_up(plan, [n for n in names if n in signed], started) if any(n in signed for n in names) else {}
         for name in names:
-            if name == hub:
+            earlier = None
+            if name == hub and commit and (state.get("hub") or {}).get("run") == stamp_of(run):
+                # [SPEC-NSH-094]: the hub goes first in every commit, so a commit tried again
+                # for the nodes it missed met the hub's own `pre-sync-` backup, refused, and
+                # ended before any node was reached (until 2026-11-16). The hub's state
+                # names this run only once its commit landed and was verified.
+                earlier = state["hub"]
+                say(f"== {hub} (here) -- COMMIT")
+                say(f"RESULT {hub}: COMMITTED earlier in this run, at {earlier.get('at')}; not applied again")
+                rc = 0
+            elif name == hub:
                 rc = hub_apply(plan, run, commit, excuse)
             elif name in members:
-                rc = member_offer(plan, run, name, members[name], commit)
+                rc = one_node(name, lambda n=name: member_offer(plan, run, n, members[n], commit))
             elif name in signed:
-                rc = player_step(plan, run, name, up.get(name), commit)
+                rc = one_node(name, lambda n=name: player_step(plan, run, n, up.get(n), commit))
             else:
                 say(f"RESULT {name}: not in this run")
                 rc = 1
             if not commit:
                 done[name] = rc
-            if commit and rc == 0:
+            if commit and rc == 0 and earlier is None:
                 t = targets(plan, run, name)
                 old = state["nodes"].get(name, {}) if name != hub else state.get("hub", {})
                 lib_sent = old.get("library_sent")

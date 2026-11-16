@@ -41,7 +41,28 @@ client of the hub already `[SPEC-MTR-200]`, keeps its channel unchanged.
 - Every answer from a player is signed by its node key; the hub verifies it
   against that member's certificate in the roster.
 - A player accepts a patch only from a run newer than the last it applied, so a
-  captured request cannot be replayed to roll a node back.
+  captured request cannot be replayed to roll a node back. The same run asked
+  again with the same patch is answered, and writes nothing `[SPEC-NSH-032]`.
+
+**`[SPEC-NSH-032]` A commit asked again is answered again.** A commit's answer
+can be lost on the way back after the commit has landed. Until 2026-11-16 the
+node then refused every retry of that run as *already committed*, and the hub,
+having heard nothing, still recorded the node as holding the run before, so
+its next patch was made against the wrong baseline. Now:
+- the node records how far each commit has got, and keeps the answer it gave
+  before it records the run as committed;
+- the same run asked again with the same patch, by digest, is given that
+  answer, marked `committed_earlier`;
+- the same run with another patch is refused, as is an older run;
+- a node takes one sync step at a time, so a retry that arrives while the first
+  commit is still applying waits for it. Before, both passed the run check
+  together, and the second kept an empty inverse over the first's.
+
+A node reports `commit_again` in its snapshot. Only then does the hub ask its
+commit again on a lost answer `[SPEC-NSH-092]`, since an older build would refuse
+it, or apply it twice. The hub's `staged` request is told when the run is
+already in, so a retry stages nothing. And a snapshot that finds a node's own
+last run newer than the run the hub recorded says so, and says how to record it.
 
 **`[SPEC-NSH-040]` Why signatures and not a channel.** What crosses the LAN here
 -- the household's shared edits and the catalogue -- is what the player's own
@@ -87,11 +108,34 @@ which the shadow runs of IMPL017 Phase 2 exist to find before anything depends
 on it.
 
 **`[SPEC-NSH-080]` The player applies its own patch.** No stop, no ssh, no
-`sqlite3` run as another user. Before applying it backs up what it will change,
-keeping its three most recent, and applies the catalogue before the listener; if
-the second fails the first is restored, so a node never keeps half a switch. A
+`sqlite3` run as another user. It applies the catalogue before the listener, and
+if the second fails the first is restored, so a node never keeps half a switch.
+Each half's inverse is written to disk, and synced there, before that half's
+transaction commits. A catalogue sent whole is one part, as one sent in parts
+is. The node keeps the inverses of its three most recent commits. A
 library partition mounted read-only is remounted by a narrow root verb that takes
 only *on* or *off* and resolves the mount itself, never from a path it is given.
+
+**`[SPEC-NSH-082]` A commit the player stopped inside is settled first.** Before
+2026-11-16, a whole patch's inverse was kept only in memory until both halves had
+landed. A power cut between the halves, an expected event on `bose`, left the
+catalogue switched with nothing on disk to undo it, or even to report it. Now a
+commit's record moves through four phases: `applying` before anything is
+written, `catalogue` once that half is in or there is none, `landed` once both
+are, and `committed`. Each phase is synced to disk before the next write.
+Before any step, the node settles a record left short of `committed`:
+- **Both halves had landed:** the commit is finished. Its inverse is kept and the
+  run recorded, though files it was to retire were not moved, and the answer
+  says so.
+- **Only the catalogue had landed:** the catalogue is put back.
+- **Nothing had landed:** the record is forgotten.
+
+Where the record cannot say which half landed, the database itself is asked. Each
+half's inverse is rehearsed against that half: rows holding what the patch wrote
+mean the half landed, and rows holding what was there before mean it did not.
+Anything else is not guessed at. The snapshot reports it as `unsettled`, and
+the node refuses every rehearsal, commit and staging until a person has looked
+at the record the error names and removed it.
 
 **`[SPEC-NSH-085]` The restore puts back what was there, dangling or not.** The
 forward patch already tolerates references a node had pointing at nothing; the
@@ -116,6 +160,35 @@ to its WAL listener. Found and reproduced in a test 2026-10-31.
 commits. Rehearsal asks each player to check its patch without writing. A player
 that does not answer is missing from the run and receives nothing
 `[SPEC-STAR-075]`.
+
+**`[SPEC-NSH-092]` A step the network failed is asked again, and one node's
+fault is that node's.** A cut-off answer is a network failure like any other:
+the hub's HTTP helper turns it into an `OSError`. Before 2026-11-16 it was
+`http.client.IncompleteRead`, which no caller handled, so one player restarting
+mid-answer ended a whole snapshot.
+
+The steps that can be repeated with no harm are `snapshot`, `rows`, `rehearse`,
+`stage` and `staged`. Each either only reads or writes nothing a repeat would
+not write. One of these that the network fails is asked again, up to three
+times in all, after 2 s and then 6 s, and each attempt is printed. A commit is
+asked again only of a node that reports `commit_again` `[SPEC-NSH-032]`. A
+refusal is the node's answer and is never asked again. A step whose answer never
+arrived in time is not asked again either, except a commit, which a current node
+answers once the first attempt is done.
+
+Whatever a node's answer makes go wrong in the hub's handling of it -- a
+malformed answer, rows the copy's schema refuses, a baseline that fails its
+integrity check -- marks that node *missing* in a snapshot, with its half-made
+folder removed, or *refused* in a commit. The stage goes on to the next node.
+A run whose snapshot ended part way is refused by `merge`, which says so, rather
+than failing on its missing manifest.
+
+**`[SPEC-NSH-094]` A commit tried again does not repeat the hub's step.** The
+hub goes first in every commit and refuses to write over its own `pre-sync-`
+backup. Until 2026-11-16, then, a commit tried again for the nodes the first
+attempt missed ended at the hub, before reaching any of them. When the hub's
+state already names this run, its step is said and skipped. The state names a
+run only once the hub's commit has landed and been verified.
 
 ## 4. What is retired
 
@@ -202,4 +275,4 @@ network. Appliances are built first; the phone follows the choice.
 
 ---
 
-**Traceability:** `[SPEC-NSH-010..195]`, `[SPEC-NSH-900]` · builds `[SPEC-MTR-220]` · closes, when built, `[SPEC-SEC-040]` (ssh links), `[SPEC-SEC-050]` (ssh reads), `[SPEC-SEC-110]` (via SPEC051), `[SPEC-SEC-120]` (keys) · the fourth review's pairing findings in §5
+**Traceability:** `[SPEC-NSH-010..195]`, `[SPEC-NSH-900]` · builds `[SPEC-MTR-220]` · closes, when built, `[SPEC-SEC-040]` (ssh links), `[SPEC-SEC-050]` (ssh reads), `[SPEC-SEC-110]` (via SPEC051), `[SPEC-SEC-120]` (keys) · the fourth review's pairing findings in §5 · `[SPEC-NSH-032]`, `[SPEC-NSH-082]`, `[SPEC-NSH-092]`, `[SPEC-NSH-094]` close findings 3, 9, 6 and 7, and 4 of the star sync review of 2026-11-16

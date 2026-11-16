@@ -105,6 +105,11 @@ class Fleet:
         self.retire_cap = set()     # players that report retire_files [SPEC-RTF-060]
         self.disk = {}              # node -> {path: sha256}: what its music folder holds [SPEC-RTF-025]
         self.retire_asked = []      # (node, op, [audio_md5]) for every step carrying a retire list
+        self.again_asked = []       # (node, op, again) for every step [SPEC-NSH-032]
+        self.lose_answer = set()    # nodes whose next commit lands and whose answer is lost
+        self.answers = {}           # (node, run) -> the answer a commit gave, kept as a current player keeps it
+        self.broken_snapshot = set()  # nodes whose snapshot answer lacks its catalogue [SPEC-NSH-092]
+        self.commit_again = set()   # players that report commit_again
 
     def rows(self, name, want):
         """`mesh_sync::catalogue_rows`, cut to the tables these tests hold."""
@@ -163,8 +168,29 @@ class Fleet:
     def sync_players(self, mdir):
         return {f"fp-{n}": {"fingerprint": f"fp-{n}", "address": n, "web_port": 0} for n in sorted(self.up)}
 
-    def sync_step(self, mdir, player, op, run, catalogue_patch=None, listener_patch=None, timeout=0, extra=None):
+    def sync_step(self, mdir, player, op, run, catalogue_patch=None, listener_patch=None, timeout=0, extra=None,
+                  again=False):
         name = player["address"]
+        self.again_asked.append((name, op, again))
+        current = name in self.commit_again
+        if current and (name, run) in self.answers:
+            # As a current player answers the same run asked again [SPEC-NSH-032]: the
+            # commit as it answered it, and its staged parts consumed.
+            if op == "commit":
+                return dict(self.answers[(name, run)], committed_earlier=True)
+            if op == "staged":
+                return {"catalogue": {}, "committed": True}
+        got = self.step(name, op, run, catalogue_patch, listener_patch, extra)
+        if name in self.broken_snapshot and op == "snapshot":
+            del got["catalogue"]               # an answer not of the shape asked for [SPEC-NSH-092]
+        if op == "commit" and current:
+            self.answers[(name, run)] = got
+        if op == "commit" and name in self.lose_answer:
+            self.lose_answer.discard(name)
+            raise ConnectionResetError("the commit landed, and its answer was lost on the way back")
+        return got
+
+    def step(self, name, op, run, catalogue_patch, listener_patch, extra):
         node = self.nodes[name]
         if op == "stage":
             part = (extra or {})["part"]
@@ -205,6 +231,9 @@ class Fleet:
                 res["catalogue_rows"] = self.rows_cap[name]
             if name in self.retire_cap:
                 res["retire_files"] = 1
+            if name in self.commit_again:
+                res["commit_again"] = 1
+                res["last_run"] = max((r for (n, r) in self.answers if n == name), default=None)
             return res
         if op == "rows":
             self.asked.append((name, (extra or {})["want"]))
@@ -511,6 +540,77 @@ def test_approve_all(tmp):
     check(prefs_of(fleet.nodes["a"]["listener"]) == {"X": 5, "Y": 5}, "each recording took the later change")
 
 
+def test_a_commit_answer_lost(tmp):
+    """[SPEC-NSH-032], [SPEC-NSH-094]: b's commit lands and its answer is lost. The next
+    snapshot says so. The same run's commit tried again for b does not repeat the hub's
+    step -- which met its own backup and ended the run before reaching b -- and b, asked
+    again, answers as it did, and the hub records it."""
+    fleet = Fleet(tmp)
+    base = [("X", 1, "2026-09-01 00:00:00")]
+    plan, hub = build(tmp, fleet, base, {"a": (base, False), "b": (base, False)})
+    fleet.commit_again.add("b")
+    # Edited on the hub, so that both nodes are sent it, and a -- an older build -- commits too.
+    c = sqlite3.connect(hub["listener"])
+    c.execute("UPDATE listener_preferences SET rotation=4, recovery=4, updated_at='2026-10-02 00:00:00' WHERE subject_id='X'")
+    c.commit()
+    c.close()
+    with faked(fleet) as out:
+        ss.snapshot(plan)
+        run = ss.newest_run(plan)
+        ss.merge(plan, run)
+        ss.approve_all(run)
+        ss.patch(plan, run)
+        check(stages(plan) == 0, "rehearsal clean")
+        fleet.lose_answer.add("b")
+        check(stages(plan, commit=True) == 1, "the commit says b was refused: its answer never came")
+        st = ss.load_state(plan)
+        check((st["hub"]["run"], st["nodes"]["a"]["run"], st["nodes"]["b"]["run"])
+              == (ss.stamp_of(run), ss.stamp_of(run), "20261001T0000Z"), f"so the hub recorded b as not sent: {st}")
+        check(prefs_of(fleet.nodes["b"]["listener"])["X"] == 4, "though b holds the run")
+        hub_at = st["hub"]["at"]
+        ss.snapshot(plan)
+        check(f"its last committed run is {ss.stamp_of(run)}, newer than the 20261001T0000Z the hub recorded"
+              in out.getvalue(), "the next snapshot says the answer was lost, and how to record it")
+        before = len(out.getvalue())
+        check(ss.distribute(plan, run, ["b"], True) == 0, "the same run's commit, tried again for b, completes")
+        said = out.getvalue()[before:]
+        check("COMMITTED earlier in this run" in said and "not applied again" in said,
+              f"the hub's own step is not repeated: {said}")
+        check("committed there earlier, and its answer lost" in said, "b answers from its own record, and says so")
+        st = ss.load_state(plan)
+        check(st["nodes"]["b"]["run"] == ss.stamp_of(run), "and the hub records it")
+        check(st["hub"]["at"] == hub_at, "leaving its own record as its commit made it")
+    commits = [(n, again) for n, op, again in fleet.again_asked if op == "commit"]
+    check(("b", True) in commits and ("a", False) in commits and all(again == (n in fleet.commit_again) for n, again in commits)
+          and not any(op != "commit" and again for _n, op, again in fleet.again_asked),
+          f"a commit is asked again only of a node that says it can answer one: {fleet.again_asked}")
+
+
+def test_a_snapshot_answer_unusable(tmp):
+    """[SPEC-NSH-092]: a's snapshot answer is not of the shape asked for. a is missing,
+    its half-made folder gone, and every other node's part is taken; the run merges.
+    And a run whose snapshot ended part way is refused by name, not read."""
+    fleet = Fleet(tmp)
+    same = [("X", 1, "2026-09-01 00:00:00")]
+    plan, hub = build(tmp, fleet, same, {"a": (same, False), "b": (same, False)})
+    fleet.broken_snapshot.add("a")
+    with faked(fleet) as out:
+        rc = ss.snapshot(plan)
+        run = ss.newest_run(plan)
+        check(rc == 3, "the snapshot ends, with a node missing")
+        missing = ss.read_json(os.path.join(run, "missing.json"))
+        check("KeyError" in missing.get("a", ""), f"a is missing, and why is said: {missing}")
+        names = [n["name"] for n in ss.read_json(os.path.join(run, "manifest.json"))["nodes"]]
+        check(names == ["desktop", "b"], f"b's part taken, and nothing of a's: {names}")
+        check(not os.path.exists(os.path.join(run, "a")) and "a" not in ss.read_json(os.path.join(run, "baselines.json")),
+              "a's half-made folder is gone")
+        check(ss.merge(plan, run) == 0, "the run merges without it")
+    part_way = os.path.join(plan["runs"], "20261009T1200Z")
+    os.makedirs(part_way)
+    why = refused(lambda: ss.merge(plan, part_way))
+    check(bool(why) and "did not finish" in why, f"a run whose snapshot ended part way is refused by name: {why}")
+
+
 def test_on_demand(tmp):
     """[SPEC-STAR-101]: a player kept on demand is started for a stage and stopped after it, and only if
     the stage started it."""
@@ -749,13 +849,22 @@ def test_catalogue_in_parts(tmp):
         check(hashlib.sha256(open(os.path.join(pd, m["file"]), "rb").read()).hexdigest() == m["sha256"], f"{m['file']} is as its digest says")
     summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
     check(f"in {man['of']} parts, staged on the node and committed there in one transaction" in summary, f"the summary says so: {summary}")
-    with faked(fleet):
+    fleet.commit_again.add("b")             # a current build, which keeps its commit's answer [SPEC-NSH-032]
+    with faked(fleet) as out:
         stages(plan, "b")
         staged_after_rehearsal = sum(1 for e in fleet.log if e[0] == "b" and e[1] == "stage")
         check(staged_after_rehearsal == man["of"], f"a rehearsal stages every part: {staged_after_rehearsal}")
         check(stages(plan, "b", commit=True) == 0, "the commit succeeds")
         total = sum(1 for e in fleet.log if e[0] == "b" and e[1] == "stage")
         check(total == man["of"], f"and sends none of them again: {total} stage requests in all")
+        # The same run's commit asked again, as after a lost answer: the parts it consumed are
+        # not staged again, and b answers from its own record.
+        before = len(out.getvalue())
+        check(stages(plan, "b", commit=True) == 0, "the same run's commit, asked again, is answered")
+        said = out.getvalue()[before:]
+        check(sum(1 for e in fleet.log if e[0] == "b" and e[1] == "stage") == total
+              and "committed there already, its parts consumed: nothing staged" in said,
+              f"and nothing is staged for it: {said}")
     applied = fleet.parts_applied.get(("b", os.path.basename(run)))
     check(applied is not None and len(applied) == man["of"], "one commit applied every part")
     st = ss.load_state(plan)
@@ -1166,7 +1275,8 @@ def main() -> int:
     test_hub_writers()
     test_lost_answer()
     test_split_catalogue()
-    for test in (test_quiet, test_conflict, test_hub_edited_during_sync, test_retired_files_moved, test_approve_all, test_on_demand, test_catalogue_moved,
+    for test in (test_quiet, test_conflict, test_hub_edited_during_sync, test_retired_files_moved, test_approve_all,
+                 test_a_commit_answer_lost, test_a_snapshot_answer_unusable, test_on_demand, test_catalogue_moved,
                  test_catalogue_states, test_catalogue_by_uid, test_catalogue_old_player,test_catalogue_in_parts, test_a_patch_that_cannot_be_cut, test_selection, test_read_only_catalogue,
                  test_old_players, test_links_removed, test_links_repaired_with_files, test_empty_release_removed):
         tmp = tempfile.mkdtemp()

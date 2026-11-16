@@ -100,6 +100,23 @@ def test_sync_step(tmp):
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            seen["asked"] = seen.get("asked", 0) + 1
+            if mode["v"] == "cut" or (mode["v"] == "drop-first" and seen["asked"] == 1):
+                # [SPEC-NSH-092]: the player restarting mid-answer, or the radio re-associating.
+                if mode["v"] == "cut":
+                    self.send_response(200)
+                    self.send_header("Content-Length", "100000")
+                    self.end_headers()
+                    self.wfile.write(b'{"answer": "')
+                self.close_connection = True
+                return
+            if mode["v"] == "refuse":
+                out = json.dumps({"error": "run 20260928T1830Z is not newer than 20260929T0000Z"}).encode()
+                self.send_response(409)
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+                return
             req = json.loads(body["request"])
             seen["signed"] = mesh.verify(mesh_pub, body["request"].encode(), body["signature"])
             seen["req"] = req
@@ -134,8 +151,46 @@ def test_sync_step(tmp):
             check(False, "sync_step: a node not in the roster is not asked")
         except ValueError:
             check(True, "sync_step: a node not in the roster is not asked")
+        test_asked_again(mdir, where, mode, seen)
     finally:
         srv.shutdown()
+
+
+def test_asked_again(mdir, where, mode, seen):
+    """[SPEC-NSH-092], [SPEC-NSH-032]: a step the network failed is asked again, and said;
+    a refusal never is, nor a commit unless the node says it answers one asked again."""
+    said, slept = [], []
+    real = (mesh.say, mesh.time.sleep)
+    mesh.say, mesh.time.sleep = said.append, slept.append
+
+    def ask(m, op="snapshot", again=False):
+        mode["v"], seen["asked"] = m, 0
+        said.clear()
+        try:
+            return mesh.sync_step(mdir, where, op, "20260928T1830Z", again=again), None
+        except (ValueError, OSError) as err:
+            return None, err
+    try:
+        got, err = ask("cut")
+        check(isinstance(err, ConnectionError) and "cut off" in str(err) and seen["asked"] == mesh.ATTEMPTS,
+              f"an answer cut off is a network failure, asked {mesh.ATTEMPTS} times, then raised: {err!r}")
+        check(len(said) == mesh.ATTEMPTS - 1 and all("asking again" in s for s in said), "and each new attempt is said")
+        got, err = ask("drop-first")
+        check(got == {"ok": 1} and seen["asked"] == 2, f"a connection dropped once costs one more request: {err!r}")
+        check(slept[-1:] == [mesh.BACKOFF_S[0]], "after a pause")
+        got, err = ask("refuse")
+        check(isinstance(err, ValueError) and "not newer" in str(err) and seen["asked"] == 1,
+              "a refusal is the node's answer, and is never asked again")
+        got, err = ask("drop-first", op="commit")
+        check(isinstance(err, OSError) and seen["asked"] == 1,
+              "a commit is not asked again of a node that has not said it answers one asked again")
+        got, err = ask("drop-first", op="commit", again=True)
+        check(got == {"ok": 1} and seen["asked"] == 2, "and is, of one that has")
+        check(mesh.network_failed(TimeoutError("timed out"), "commit") and not mesh.network_failed(TimeoutError(), "rows"),
+              "a step that ran out of time waiting for its answer is not asked again, but a commit is")
+    finally:
+        mesh.say, mesh.time.sleep = real
+        mode["v"] = "good"
 
 
 def main() -> int:

@@ -389,6 +389,13 @@ def _complete(mdir: str, s: dict) -> None:
 
 
 def _http(method: str, url: str, body: dict | None = None, timeout: float = 10.0) -> dict:
+    """The answer to one request. A refusal -- an HTTP error the far end sent --
+    is a ValueError with its words; a failure of the network is an OSError,
+    and that includes an answer cut off part way [SPEC-NSH-092]. Until
+    2026-11-16 that last was `http.client.IncompleteRead`, which is neither,
+    and so passed every caller's handling: one player restarting mid-answer
+    ended a whole snapshot."""
+    import http.client
     import urllib.error
     import urllib.request
     data = None if body is None else json.dumps(body).encode()
@@ -401,6 +408,8 @@ def _http(method: str, url: str, body: dict | None = None, timeout: float = 10.0
             raise ValueError(json.loads(e.read()).get("error") or f"HTTP {e.code}") from e
         except json.JSONDecodeError:
             raise ValueError(f"HTTP {e.code}") from e
+    except http.client.HTTPException as e:
+        raise ConnectionError(f"the answer was cut off ({type(e).__name__}: {e})") from e
 
 
 def invite(mdir: str, address: str, web_port: int = LEMPI_DEFAULT_PORT, wait_s: int = ENROL_TTL_S) -> dict:
@@ -627,6 +636,25 @@ def outbox_applied(mdir: str, fp: str, run: str, counts: dict) -> bool:
 # in the roster. The player's half is `player/src/star_node.rs`.
 
 SYNC_STEPS = ("snapshot", "rows", "rehearse", "commit", "stage", "staged")   # [SPEC-NKP-925], rows [SPEC-STAR-945]
+# [SPEC-NSH-092]: the steps a node can be asked again with no harm -- each reads, or
+# writes only what the same request writes again -- and asked again when the network,
+# not the node, failed them. A commit only for a node that says it answers one asked
+# again [SPEC-NSH-032]; an older build refuses it, or runs it twice.
+REPEATABLE = ("snapshot", "rows", "rehearse", "stage", "staged")
+ATTEMPTS = 3
+BACKOFF_S = (2.0, 6.0)          # before the second attempt, and the third
+
+
+def network_failed(err: BaseException, op: str) -> bool:
+    """Whether `err` is the network failing a step, not the node answering it: an
+    OSError, which `_http` makes of an answer cut off too. A ValueError is the
+    node's refusal, and is never asked again. A step that ran out of time while
+    waiting for its answer is not asked again either -- the node may still be at
+    it, and a second wait as long helps nothing -- except a commit: asked again,
+    a node that can answer waits for the first and gives its answer."""
+    if isinstance(err, TimeoutError):
+        return op == "commit"
+    return isinstance(err, OSError)
 
 
 def sync_players(mdir: str) -> dict:
@@ -640,14 +668,29 @@ def sync_players(mdir: str) -> dict:
 
 
 def sync_step(mdir: str, player: dict, op: str, run: str, catalogue_patch: dict | None = None,
-              listener_patch: dict | None = None, timeout: float = 600.0, extra: dict | None = None) -> dict:
+              listener_patch: dict | None = None, timeout: float = 600.0, extra: dict | None = None,
+              again: bool = False) -> dict:
     """One step on one player; its result, once the answer is proven to be the
-    player's, and to this request."""
+    player's, and to this request. A step in REPEATABLE -- and a commit, with
+    `again`, to a node that says it can answer one asked again -- is asked again,
+    up to ATTEMPTS times, when the network fails it; each attempt is said, and
+    the last failure is the one raised [SPEC-NSH-092]. Each attempt is its own
+    request, with its own nonce and time."""
     if op not in SYNC_STEPS:
         raise ValueError(f"not a step: {op}")
     # `[SPEC-NKP-925]`: a part to stage, or the parts a rehearsal or commit is to apply.
     fields = {"run": run, "catalogue_patch": catalogue_patch, "listener_patch": listener_patch, **(extra or {})}
-    return signed_step(mdir, player, f"/mesh/sync/{op}", op, fields, timeout)
+    repeat = op in REPEATABLE or (op == "commit" and again)
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            return signed_step(mdir, player, f"/mesh/sync/{op}", op, fields, timeout)
+        except OSError as err:
+            if not repeat or attempt == ATTEMPTS or not network_failed(err, op):
+                raise
+            say(f"  {player.get('address')}: {op} failed on the network ({type(err).__name__}: {err}); "
+                f"asking again in {BACKOFF_S[attempt - 1]:.0f} s, attempt {attempt + 1} of {ATTEMPTS} [SPEC-NSH-092]")
+            time.sleep(BACKOFF_S[attempt - 1])
+    raise AssertionError("unreachable")
 
 
 def signed_step(mdir: str, player: dict, path: str, op: str, fields: dict, timeout: float = 10.0) -> dict:

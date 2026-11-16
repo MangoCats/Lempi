@@ -193,6 +193,19 @@ pub fn undo(db: &Path, inverse: &Json) -> Result<Applied, String> {
 /// by a row written since. With the check off, a cascade does not fire either: what is put back
 /// is exactly what the inverse records.
 pub fn undo_parts(db: &Path, inverses: &mut dyn Iterator<Item = Result<Json, String>>) -> Result<Applied, String> {
+    undo_parts_with(db, inverses, true)
+}
+
+/// `[SPEC-NSH-082]`: [`undo_parts`] checked and counted, and rolled back -- what
+/// it would put back. `applied` counts the rows that hold what the patch wrote,
+/// `already` the rows that hold what was there before it. A commit that died
+/// inside its transaction leaves an inverse on disk and nothing written: every
+/// row `already`. One that died after leaves every row it changed `applied`.
+pub fn rehearse_undo(db: &Path, inverses: &mut dyn Iterator<Item = Result<Json, String>>) -> Result<Applied, String> {
+    undo_parts_with(db, inverses, false)
+}
+
+fn undo_parts_with(db: &Path, inverses: &mut dyn Iterator<Item = Result<Json, String>>, commit: bool) -> Result<Applied, String> {
     let mut c = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .map_err(|e| format!("open {}: {e}", db.display()))?;
     c.busy_timeout(std::time::Duration::from_secs(10)).map_err(|e| e.to_string())?;
@@ -231,7 +244,9 @@ pub fn undo_parts(db: &Path, inverses: &mut dyn Iterator<Item = Result<Json, Str
         .map(|(t, n)| (t.clone(), (*n as i64 + restored.get(t).copied().unwrap_or(0)).max(0) as usize))
         .collect();
     fk_after(&tx, &allowed, "the undo")?;
-    tx.commit().map_err(|e| e.to_string())?;
+    if commit {
+        tx.commit().map_err(|e| e.to_string())?;
+    }
     Ok(total)
 }
 
