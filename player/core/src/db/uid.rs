@@ -105,7 +105,11 @@ pub enum Birth<'a> {
     /// Born here, of a file no one else has: computed now, with the lowest salt
     /// not already born on its key `[SPEC-UID-054]`.
     Here,
-    /// Sent by a hub that gave it none: left empty, for the hub's patch to fill.
+    /// Sent by a hub that gave it none -- a bundle made before Stage A, since a
+    /// hub's catalogue refuses a passage without one: left empty. **Nothing
+    /// fills it afterwards** `[IMPL-UID-061]`: star sync sends a catalogue
+    /// holding one no patch at all, and a resend of the file reaches only its
+    /// holds, credits and release. The import names each such file.
     Unknown,
 }
 

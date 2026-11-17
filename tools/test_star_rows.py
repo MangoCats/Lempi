@@ -206,6 +206,66 @@ def test_a_boundary_both_made():
     check(not rows_of(patch, "passages"), f"and the passage the node already holds is not sent: {rows_of(patch, 'passages')}")
 
 
+def test_a_passage_without_its_uid_is_never_filled():
+    """[IMPL-UID-061]: a bundle made from a catalogue before Stage A brought disc 2 to
+    the node, its passage without a uid (`Birth::Unknown`). The hub holds that
+    passage with its uid, and the copy last sent never held the file, as for any
+    bundle. The round does not fill the uid: the node's catalogue reads `no-uids`,
+    is not in step, and is sent no catalogue patch at all -- nor could one be made,
+    from a baseline holding the node's own rows. The control, the same node with the
+    uid, is in step."""
+    print("a node passage without its uid: the round sends it no catalogue, and nothing fills the uid")
+    d = tempfile.mkdtemp()
+    disc2 = """
+        INSERT INTO files VALUES (5776, 'disc2', '/m/d2.mp3', 'mp3');
+        INSERT INTO passages VALUES (17509, 5776, 'radio', 0, 826067);
+        INSERT INTO passage_recordings VALUES (17509, 'rec-soul', 1.0, 'musicbrainz');
+        INSERT INTO recordings VALUES ('rec-soul', 'Soul Sacrifice');"""
+    sent = db(os.path.join(d, "sent.db"), DISC1)
+    hub = db(os.path.join(d, "hub.db"), DISC1, disc2)
+
+    def node_and_summary(tag, uid):
+        node = db(os.path.join(d, f"{tag}-node.db"), DISC1, disc2.replace("17509", "12"))
+        if not uid:
+            c = sqlite3.connect(node)
+            c.execute("UPDATE passages SET passage_uid = NULL WHERE file_id = 5776")
+            c.commit()
+            c.close()
+        summary = db(os.path.join(d, f"{tag}-summary.db"))
+        s = sqlite3.connect(summary)
+        s.execute("ATTACH ? AS n", (node,))
+        s.execute("DELETE FROM passages")
+        s.execute("INSERT INTO files SELECT * FROM n.files")
+        s.execute("INSERT INTO passages SELECT * FROM n.passages")
+        s.commit()
+        s.close()
+        return node, summary
+
+    node, summary = node_and_summary("old-bundle", uid=False)
+    st = ss.catalogue_state(sent, summary, hub)
+    check(st == {"state": "no-uids", "which": "the node's catalogue"}, f"the node's catalogue reads no-uids: {st}")
+    words = ss.catalogue_words(st)
+    check("the node's catalogue has a passage without its uid" in words, f"and the round says so: {words}")
+    check(st["state"] not in ("as-sent", "holds-hub-rows"), "so it is not in step, and no catalogue is sent")
+    base = os.path.join(d, "baseline.db")
+    ss.baseline_from_rows(sent, hub, answer_of(node, ss.rows_wanted(["disc2"], sent, hub)), base)
+    check(ss.catalogue_state(base, summary, hub)["state"] == "no-uids", "against its own rows too")
+    try:
+        sp.make_values(base, hub, exclude=ss.SIGNED_EXCLUDE, natural=True, omit=ss.SIGNED_OMIT)
+    except sp.NaturalUnsupported as err:
+        check("without its uid" in str(err), f"and a patch cannot be made from them: {err}")
+    else:
+        check(False, "a baseline holding the node's uid-less passage must be refused, not patched")
+    c = sqlite3.connect(node)
+    check(c.execute("SELECT passage_uid FROM passages WHERE file_id = 5776").fetchone() == (None,),
+          "the passage is still without its uid: nothing in the round reached it")
+    c.close()
+
+    _, control = node_and_summary("current-bundle", uid=True)
+    st = ss.catalogue_state(sent, control, hub)
+    check(st["state"] == "holds-hub-rows", f"the control, the uid sent with the bundle, is in step: {st}")
+
+
 def test_run_names():
     print("run_names: only a run's stamp is a run")
     d = tempfile.mkdtemp()
@@ -236,6 +296,7 @@ def test_the_ledger():
 def main() -> int:
     test_the_second_disc()
     test_a_boundary_both_made()
+    test_a_passage_without_its_uid_is_never_filled()
     test_run_names()
     test_the_ledger()
     print()
