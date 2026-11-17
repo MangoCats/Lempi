@@ -47,8 +47,9 @@ pub(super) async fn segment_queue(State(ui): State<Ui>) -> axum::response::Respo
 #[cfg(feature = "vipunen-support")]
 pub(super) async fn accept_segment(
     State(ui): State<Ui>,
-    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
+    passage: super::passage_ref::Passage,
 ) -> axum::response::Response {
+    let passage_id = passage.number();
     let db = ui.db.clone();
     let library = ui.library.clone();
     let done = tokio::task::spawn_blocking(move || {

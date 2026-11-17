@@ -101,7 +101,7 @@ def test_an_integer_passage_route():
     ms = src.replace("Path(passage_id): axum::extract::Path<i64>", "Path(ms): axum::extract::Path<u64>")
     check(found("player/src/web/x.rs", ms) == [], "a number that is no passage is not")
     uid = src.replace("axum::extract::Path(passage_id): axum::extract::Path<i64>",
-                      "super::passage_ref::Passage(passage_id): super::passage_ref::Passage")
+                      "passage: super::passage_ref::Passage")
     check(found("player/src/web/x.rs", uid) == [], "the uid extractor is not")
 
 
@@ -125,8 +125,9 @@ def test_the_real_tree():
     check(len(got) == 1 and "serialized passage_id" in got[0], f"the snapshot's number, unskipped, is found: {got}")
     with open(os.path.join(REPO, "player", "src", "web", "browse.rs"), encoding="utf-8") as fh:
         browse = fh.read()
-    back = browse.replace("super::passage_ref::Passage(passage_id): super::passage_ref::Passage",
-                          "axum::extract::Path(passage_id): axum::extract::Path<i64>", 1)
+    taken = "passage_info(passage: super::passage_ref::Passage)"
+    check(taken in browse, "the handler line this test edits is still there")
+    back = browse.replace(taken, "passage_info(axum::extract::Path(passage_id): axum::extract::Path<i64>)", 1)
     check(len(found("player/src/web/browse.rs", back)) == 1, "a passage route by number again is found")
 
 

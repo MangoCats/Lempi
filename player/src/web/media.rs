@@ -1,11 +1,10 @@
 //! Lyrics and cover art, served from the library the same read-only way
 //! everything else here reads it.
 
-use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
-use super::{Ui, REVALIDATE};
+use super::REVALIDATE;
 
 /// The passage's cover art `[REQ-VIS-170]`.
 ///
@@ -31,17 +30,10 @@ use super::{Ui, REVALIDATE};
 /// the file is busy, which a skin asks again after, and 500 otherwise -- each
 /// in the log. Until 2026-11-14 every failure answered 404, so a listener held
 /// through a track change left that song without its words, and said nothing.
-pub(super) async fn lyrics(
-    State(ui): State<Ui>,
-    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
-) -> axum::response::Response {
-    let db = ui.db.clone();
-    let library = ui.library.clone();
+pub(super) async fn lyrics(passage: super::passage_ref::Passage) -> axum::response::Response {
+    let (passage_id, lib) = passage.with_library();
     // The query blocks, so it belongs off the runtime.
-    let found = tokio::task::spawn_blocking(move || {
-        crate::db::Library::open_split(&db, &library).and_then(|lib| lib.lyrics(passage_id))
-    })
-    .await;
+    let found = tokio::task::spawn_blocking(move || lib.lyrics(passage_id)).await;
     match found {
         Ok(Ok(Some(text))) => (
             [
@@ -63,20 +55,16 @@ pub(super) async fn lyrics(
     }
 }
 
-pub(super) async fn cover_art(
-    State(ui): State<Ui>,
-    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
-) -> axum::response::Response {
+pub(super) async fn cover_art(passage: super::passage_ref::Passage) -> axum::response::Response {
     // Both the query and the file read block, so they belong off the runtime.
-    art_response(ui, passage_id, false).await
+    let (passage_id, lib) = passage.with_library();
+    art_response(lib, passage_id, false).await
 }
 
 /// The back of the sleeve `[REQ-VIS-170]`, for skins that show it.
-pub(super) async fn cover_art_back(
-    State(ui): State<Ui>,
-    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
-) -> axum::response::Response {
-    art_response(ui, passage_id, true).await
+pub(super) async fn cover_art_back(passage: super::passage_ref::Passage) -> axum::response::Response {
+    let (passage_id, lib) = passage.with_library();
+    art_response(lib, passage_id, true).await
 }
 
 /// One passage's cover, from the catalogue alone `[SPEC-COV-010]`.
@@ -87,13 +75,10 @@ pub(super) async fn cover_art_back(
 /// keeps pictures out of `Music/` -- could show only the third. Vipunen now
 /// inducts the covers it finds into the catalogue `[SPEC-COV-020]`, and every
 /// host shows the same one.
-pub(super) async fn art_response(ui: Ui, passage_id: i64, back: bool) -> axum::response::Response {
-    let db = ui.db.clone();
-    let library = ui.library.clone();
-    let found = tokio::task::spawn_blocking(move || {
-        crate::db::Library::open_split(&db, &library).ok()?.stored_art(passage_id, back)
-    })
-    .await;
+/// Read through `lib`, the pair the route's passage was found through
+/// `[IMPL-UID-073]`.
+pub(super) async fn art_response(lib: crate::db::Library, passage_id: i64, back: bool) -> axum::response::Response {
+    let found = tokio::task::spawn_blocking(move || lib.stored_art(passage_id, back)).await;
 
     match found {
         Ok(Some(art)) => (

@@ -6,16 +6,42 @@
 //! to number so, which is the fault `[SPEC-UID-010]` found in echo. A number, or
 //! anything else not in a uid's form, is refused with 400. A uid this node does
 //! not hold is 404. The handler behind either never runs.
+//!
+//! **The pair opened to find the number is the handler's too** `[IMPL-UID-073]`.
+//! Until 2026-11-17 the extractor opened it, closed it, and the handler opened it
+//! again: two opens per request where a number in the URL had cost one. The
+//! routes that pay it most are the ones a page asks most, a cover and the words
+//! at every track change, and dozens of covers for an album list. A handler
+//! that reads through a [`Library`](crate::db::Library) takes this one
+//! ([`Passage::with_library`]); one that writes opens its own store, as before,
+//! and closes this first ([`Passage::number`]).
 
 use axum::extract::{FromRequestParts, RawPathParams};
 use axum::http::{request::Parts, StatusCode};
 use axum::response::{IntoResponse, Response};
 
 use super::Ui;
-use crate::db::PassageUid;
+use crate::db::{Library, PassageUid};
 
-/// The passage a route's `:passage_id` names, as this node's own number.
-pub(super) struct Passage(pub i64);
+/// The passage a route's `:passage_id` names, as this node's own number, with
+/// the read-only pair its number was found through.
+pub(super) struct Passage {
+    id: i64,
+    lib: Library,
+}
+
+impl Passage {
+    /// The number, and the pair it was found through, for a handler that reads.
+    pub(super) fn with_library(self) -> (i64, Library) {
+        (self.id, self.lib)
+    }
+
+    /// The number alone, the pair closed now: for a handler that reads nothing
+    /// of the catalogue, or writes through a store of its own.
+    pub(super) fn number(self) -> i64 {
+        self.id
+    }
+}
 
 #[axum::async_trait]
 impl FromRequestParts<Ui> for Passage {
@@ -30,9 +56,20 @@ impl FromRequestParts<Ui> for Passage {
             return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
         };
         let uid = uid_or_refuse(&text)?;
-        match numbers_of(ui, vec![uid]).await?.pop().flatten() {
-            Some(n) => Ok(Passage(n)),
-            None => Err((StatusCode::NOT_FOUND, format!("this node holds no passage {uid}")).into_response()),
+        let (db, library) = (ui.db.clone(), ui.library.clone());
+        let found = tokio::task::spawn_blocking(move || {
+            let lib = Library::open_split(&db, &library)?;
+            lib.number_of(&uid).map(|n| n.map(|id| Passage { id, lib }))
+        })
+        .await;
+        match found {
+            Ok(Ok(Some(p))) => Ok(p),
+            Ok(Ok(None)) => Err((StatusCode::NOT_FOUND, format!("this node holds no passage {uid}")).into_response()),
+            Ok(Err(e)) => Err(super::db_failure(&e)),
+            Err(e) => {
+                tracing::error!("a passage lookup did not finish ({e})");
+                Err(StatusCode::INTERNAL_SERVER_ERROR.into_response())
+            }
         }
     }
 }
@@ -53,21 +90,50 @@ pub(super) fn uid_or_refuse(text: &str) -> Result<PassageUid, Response> {
     })
 }
 
-/// This node's number for each uid, in order, `None` for one it lacks. One
-/// read of the catalogue for all of them, off the runtime.
-pub(super) async fn numbers_of(ui: &Ui, uids: Vec<PassageUid>) -> Result<Vec<Option<i64>>, Response> {
-    let (db, library) = (ui.db.clone(), ui.library.clone());
-    let found = tokio::task::spawn_blocking(move || {
-        let lib = crate::db::Library::open_split(&db, &library)?;
-        uids.iter().map(|u| lib.number_of(u)).collect::<Result<Vec<_>, _>>()
-    })
-    .await;
-    match found {
-        Ok(Ok(numbers)) => Ok(numbers),
-        Ok(Err(e)) => Err(super::db_failure(&e)),
-        Err(e) => {
-            tracing::error!("a passage lookup did not finish ({e})");
-            Err(StatusCode::INTERNAL_SERVER_ERROR.into_response())
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn answer(r: Response) -> (StatusCode, String) {
+        let status = r.status();
+        let bytes = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    /// `[IMPL-UID-073]`: a handler that reads answers through the pair its
+    /// passage was found through. It is handed no `Ui`, so it has no path to open
+    /// a second pair from, and it still answers in full from that one connection:
+    /// the words, their sources and the passage's profile.
+    #[tokio::test]
+    async fn a_reading_handler_answers_through_the_pair_its_passage_was_found_through() {
+        let d = std::env::temp_dir().join(format!("lempi-passage-ref-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let db = d.join("listener.db");
+        let c = rusqlite::Connection::open(&db).unwrap();
+        c.execute_batch(include_str!("../../../sql/schema.sql")).unwrap();
+        c.execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             INSERT INTO files (file_id, audio_md5, path, size_bytes, mtime, format, duration_ms,
+                                first_seen, last_seen) VALUES (1, 'aaa', '/m/a.mp3', 1, 0, 'mp3', 200000, 't', 't');
+             INSERT INTO passages (passage_id, file_id, kind, start_ms, end_ms, boundary_src)
+                 VALUES (7, 1, 'radio', 0, 200000, 'test');
+             UPDATE passages SET passage_uid = printf('%032x', passage_id);",
+        )
+        .unwrap();
+        drop(c);
+        let store = crate::db::PlayerStore::open_split(&db, &db).unwrap();
+        store.save_lyrics(7, "the words", false, "here").unwrap();
+        drop(store);
+        let found = || Passage { id: 7, lib: Library::open_split(&db, &db).unwrap() };
+
+        let (status, text) = answer(super::super::media::lyrics(found()).await).await;
+        assert_eq!((status, text.as_str()), (StatusCode::OK, "the words"), "GET /lyrics");
+        let (status, text) = answer(super::super::lyrics::lyrics_sources(found()).await).await;
+        assert!(status == StatusCode::OK && text.contains("the words"), "GET /lyrics/sources: {status} {text}");
+        let (status, text) = answer(super::super::browse::passage_info(found()).await).await;
+        let uid = crate::test_catalogue::uid(7);
+        assert!(status == StatusCode::OK && text.contains(&uid), "GET /passage/info: {status} {text}");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -64,16 +64,9 @@ pub(super) async fn browse(
 /// decoder, no network, the same boundary `[SPEC-SUI-213]`'s own capability
 /// probe already draws between build capability and application data (this
 /// is squarely the latter, and it costs nothing an appliance cannot afford).
-pub(super) async fn passage_info(
-    State(ui): State<Ui>,
-    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
-) -> axum::response::Response {
-    let db = ui.db.clone();
-    let library = ui.library.clone();
-    let out = tokio::task::spawn_blocking(move || {
-        let lib = crate::db::Library::open_split(&db, &library).ok()?;
-        lib.passage_profile(passage_id).ok().flatten()
-    })
+pub(super) async fn passage_info(passage: super::passage_ref::Passage) -> axum::response::Response {
+    let (passage_id, lib) = passage.with_library();
+    let out = tokio::task::spawn_blocking(move || lib.passage_profile(passage_id).ok().flatten())
     .await;
     match out {
         Ok(Some(profile)) => axum::Json(profile).into_response(),

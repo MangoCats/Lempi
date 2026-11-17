@@ -44,19 +44,9 @@ pub(super) async fn review_queue(State(ui): State<Ui>) -> axum::response::Respon
 /// fingerprinted, or simply not what someone wants it to say. Same shape as
 /// a queue row, so the page renders it with the exact same card.
 #[cfg(feature = "vipunen-support")]
-pub(super) async fn review_passage(
-    State(ui): State<Ui>,
-    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
-) -> axum::response::Response {
-    let db = ui.db.clone();
-    let library = ui.library.clone();
-    let item = tokio::task::spawn_blocking(move || {
-        let lib = crate::db::Library::open_split(&db, &library).ok()?;
-        lib.review_item_for(passage_id)
-    })
-    .await
-    .ok()
-    .flatten();
+pub(super) async fn review_passage(passage: super::passage_ref::Passage) -> axum::response::Response {
+    let (passage_id, lib) = passage.with_library();
+    let item = tokio::task::spawn_blocking(move || lib.review_item_for(passage_id)).await.ok().flatten();
     match item {
         Some(v) => axum::Json(v).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
@@ -76,10 +66,11 @@ pub(super) async fn review_passage(
 #[cfg(feature = "vipunen-support")]
 pub(super) async fn record_review(
     State(ui): State<Ui>,
-    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
+    passage: super::passage_ref::Passage,
     axum::extract::Path((_, decision)): axum::extract::Path<(String, String)>,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::response::Response {
+    let passage_id = passage.number();
     let db = ui.db.clone();
     let library = ui.library.clone();
     let mbid = q.get("mbid").cloned();
@@ -117,10 +108,11 @@ pub(super) async fn record_review(
 #[cfg(feature = "vipunen-support")]
 pub(super) async fn artist_review_verb(
     State(ui): State<Ui>,
-    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
+    passage: super::passage_ref::Passage,
     axum::extract::Path((_, verb)): axum::extract::Path<(String, String)>,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::response::Response {
+    let passage_id = passage.number();
     let db = ui.db.clone();
     let library = ui.library.clone();
     let mbid = q.get("mbid").cloned();

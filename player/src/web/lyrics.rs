@@ -21,16 +21,9 @@ use super::Ui;
 /// 503 while the file is busy, 500 otherwise. Until 2026-11-14 this was
 /// always 500, so the page read *could not be read* where the save, a moment
 /// later, said *busy, try again*.
-pub(super) async fn lyrics_sources(
-    State(ui): State<Ui>,
-    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
-) -> axum::response::Response {
-    let db = ui.db.clone();
-    let library = ui.library.clone();
-    let got = tokio::task::spawn_blocking(move || {
-        crate::db::Library::open_split(&db, &library).and_then(|lib| lib.lyrics_view(passage_id))
-    })
-    .await;
+pub(super) async fn lyrics_sources(passage: super::passage_ref::Passage) -> axum::response::Response {
+    let (passage_id, lib) = passage.with_library();
+    let got = tokio::task::spawn_blocking(move || lib.lyrics_view(passage_id)).await;
     match got {
         Ok(Ok(Some(view))) => axum::Json(view).into_response(),
         Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
@@ -62,9 +55,10 @@ pub(super) struct LyricsEdit {
 /// told the editor its request was wrong.
 pub(super) async fn save_lyrics(
     State(ui): State<Ui>,
-    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
+    passage: super::passage_ref::Passage,
     axum::Json(edit): axum::Json<LyricsEdit>,
 ) -> axum::response::Response {
+    let passage_id = passage.number();
     if let Some(why) = crate::db::lyrics_refusal(&edit.text) {
         return (StatusCode::PAYLOAD_TOO_LARGE, why).into_response();
     }

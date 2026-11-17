@@ -17,14 +17,9 @@ use super::Ui;
 /// compiled in with `include_str!`, and this one fetches its own state the
 /// same way `/review` does `[SPEC021 §3]`.
 #[cfg(feature = "vipunen-support")]
-pub(super) async fn edit_info(
-    State(ui): State<Ui>,
-    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
-) -> axum::response::Response {
-    let db = ui.db.clone();
-    let library = ui.library.clone();
+pub(super) async fn edit_info(passage: super::passage_ref::Passage) -> axum::response::Response {
+    let (passage_id, lib) = passage.with_library();
     let found = tokio::task::spawn_blocking(move || {
-        let lib = crate::db::Library::open_split(&db, &library).ok()?;
         let entry = lib.passage(passage_id).ok()?;
         // A recorded-but-not-yet-applied draft wins over the passage's own
         // values -- reopening the editor after a commit must show the edit
@@ -121,9 +116,10 @@ pub(super) struct BoundaryDraft {
 #[cfg(feature = "vipunen-support")]
 pub(super) async fn edit_review(
     State(ui): State<Ui>,
-    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
+    passage: super::passage_ref::Passage,
     axum::extract::Json(draft): axum::extract::Json<BoundaryDraft>,
 ) -> axum::response::Response {
+    let passage_id = passage.number();
     let db = ui.db.clone();
     let library = ui.library.clone();
     let done = tokio::task::spawn_blocking(move || {
@@ -175,18 +171,18 @@ pub(super) async fn edit_review(
 /// cannot be done reliably by estimate (`[REQ-LIB-145]`).
 #[cfg(feature = "vipunen-support")]
 pub(super) async fn edit_audio(
-    State(ui): State<Ui>,
-    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
+    passage: super::passage_ref::Passage,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::response::Response {
-    let db = ui.db.clone();
-    let library = ui.library.clone();
+    let (passage_id, lib) = passage.with_library();
     let want_from: Option<u64> = q.get("from_ms").and_then(|s| s.parse().ok());
     let want_to: Option<u64> = q.get("to_ms").and_then(|s| s.parse().ok());
 
     let wav = tokio::task::spawn_blocking(move || -> Option<Vec<u8>> {
-        let lib = crate::db::Library::open_split(&db, &library).ok()?;
         let entry = lib.passage(passage_id).ok()?;
+        // Closed before the decode, which can take seconds: nothing after
+        // this reads the catalogue.
+        drop(lib);
         // The client is expected to send both, padded around the passage
         // `[SPEC-SUI-224]`; the passage's own span is the fallback for a
         // request that omits them, not the primary path.
@@ -253,15 +249,12 @@ pub(super) fn decode_window_wav(path: &std::path::Path, gapless: bool, from_ms: 
 /// kept (`OVERVIEW_CACHE`) rather than recomputed for the next passage of the
 /// same file.
 #[cfg(feature = "vipunen-support")]
-pub(super) async fn edit_overview(
-    State(ui): State<Ui>,
-    super::passage_ref::Passage(passage_id): super::passage_ref::Passage,
-) -> axum::response::Response {
-    let db = ui.db.clone();
-    let library = ui.library.clone();
+pub(super) async fn edit_overview(passage: super::passage_ref::Passage) -> axum::response::Response {
+    let (passage_id, lib) = passage.with_library();
     let found = tokio::task::spawn_blocking(move || {
-        let lib = crate::db::Library::open_split(&db, &library).ok()?;
         let entry = lib.passage(passage_id).ok()?;
+        // Closed before a whole file's decode, as `edit_audio`'s is.
+        drop(lib);
         cached_overview(&entry.path, entry.gapless)
     })
     .await

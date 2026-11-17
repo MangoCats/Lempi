@@ -848,8 +848,9 @@ async fn integrity(State(ui): State<Ui>) -> axum::response::Response {
 /// existed. That is a real state and the page says so rather than blanking.
 async fn why_for(
     State(ui): State<Ui>,
-    passage_ref::Passage(passage_id): passage_ref::Passage,
+    passage: passage_ref::Passage,
 ) -> axum::response::Response {
+    let passage_id = passage.number();
     let Ok(log) = ui.why.lock() else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };

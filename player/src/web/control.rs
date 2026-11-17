@@ -84,9 +84,10 @@ pub(super) async fn seek_to(
 /// after this has answered.
 pub(super) async fn seek_passage(
     State(ui): State<Ui>,
-    super::passage_ref::Passage(passage): super::passage_ref::Passage,
+    passage: super::passage_ref::Passage,
     axum::extract::Path((_, ms)): axum::extract::Path<(String, u64)>,
 ) -> StatusCode {
+    let passage = passage.number();
     let Ok(mut c) = ui.controls.lock() else { return StatusCode::INTERNAL_SERVER_ERROR };
     c.seek_requested = Some((Some(passage), ms));
     StatusCode::ACCEPTED
