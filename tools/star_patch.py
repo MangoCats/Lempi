@@ -676,9 +676,33 @@ def check(db, patch_path):
         c.close()
 
 
+def tally(db, patch_path):
+    """What `check` counts, as numbers -- rows `apply`, `already` there and in
+    `conflict` -- read-only, printing nothing. For a caller that must decide on
+    them, as the hub's verification after its commit does: until 2026-11-17 it
+    decided by finding " 0 to apply" in `check`'s printed line, which a check
+    with conflicts printed too [SPEC-STAR-129]."""
+    c = open_current(db)
+    try:
+        with open(patch_path, encoding="utf-8") as fh:
+            return _tally(c, db, json.load(fh))
+    finally:
+        c.close()
+
+
 def _check(c, db, patch_path):
     with open(patch_path, encoding="utf-8") as fh:
         patch = json.load(fh)
+    counts = _tally(c, db, patch, lambda name, k: print(f"  CONFLICT {name} {k}: changed here since the snapshot"))
+    print(f"{db}: {counts['apply']} to apply, {counts['already']} already there, "
+          f"{counts['conflict']} conflict(s)")
+    print("RESULT=" + ("conflict" if counts["conflict"] else "clean") + ": checked read-only, nothing written")
+    return 1 if counts["conflict"] else 0
+
+
+def _tally(c, db, patch, conflict=lambda name, k: None):
+    """Each row a patch names, against `db` as it is: at its target, at its
+    baseline, or neither -- `conflict` told of each of those as it is found."""
     counts = {"apply": 0, "already": 0, "conflict": 0}
     have_tables = set(tables(c))
     for e in patch["tables"]:
@@ -709,11 +733,8 @@ def _check(c, db, patch_path):
                 counts["apply"] += 1
             else:
                 counts["conflict"] += 1
-                print(f"  CONFLICT {name} {k}: changed here since the snapshot")
-    print(f"{db}: {counts['apply']} to apply, {counts['already']} already there, "
-          f"{counts['conflict']} conflict(s)")
-    print("RESULT=" + ("conflict" if counts["conflict"] else "clean") + ": checked read-only, nothing written")
-    return 1 if counts["conflict"] else 0
+                conflict(name, k)
+    return counts
 
 
 def main(argv):

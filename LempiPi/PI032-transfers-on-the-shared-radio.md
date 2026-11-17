@@ -27,7 +27,8 @@ that cannot tell is not paused, after `bose` was, for every upload of its
 2026-10-25 deploy -- and it is playing; the last release plays again, unless
 the listener already did; a hold never released ends on its own. Held: the
 player, fbui and `import_bundle` uploads (`build/lib-defaults.sh`), the star
-sync's catalogue parts, `star_distribute`'s uploads and, since 2026-10-26,
+sync's steps that carry a megabyte or more, in parts or whole (only parts until
+2026-11-17), `star_distribute`'s uploads and, since 2026-10-26,
 the Export page's Send -- `send_bundle.py`'s audio copy, which had held
 nothing (`tools/transfer_hold.py`). A player that restarts under a hold
 forgets it, so the release then asks it to play. How long a hold lasts, who
@@ -77,7 +78,9 @@ with no retry, the next export lost its hold anyway: one renewal never
 arrived, the retry was due four seconds after the hold ended at 21:01:58,
 and the music came back with three minutes of the copy left. A renewal not
 answered is now tried again every 30 s, and said. This is the fallback,
-for a speaker that cannot hold itself.
+for a speaker that cannot hold itself. The star sync's hold is renewed the
+same way, ten minutes at a time, since 2026-11-17; it had been a fixed hour,
+never renewed.
 
 ## 5. The speaker holds itself
 

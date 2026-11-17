@@ -1304,9 +1304,18 @@ def rm(path):
         os.remove(path)
 
 
+VOID_DROPS = "library.db"   # [SPEC-STAR-114]: the catalogue copies, the hub's and each node's
+
+
 def void_merge(run):
     """[SPEC-STAR-114]: a merge made void by a verdict is kept beside the run,
-    and with it goes everything made from it."""
+    and with it goes everything made from it. Kept as what a person reads of
+    it -- its report, items and integrity record, and the listener copies, a
+    few tens of MB -- without its catalogue copies. Until 2026-11-17 each was
+    kept whole: on 2026-11-16 a merge was 10.4 GB, of which every byte but
+    23 MB was the hub's and six nodes' 1,486 MB copies of the catalogue, on a
+    disk at 90%. Nothing reads a void merge's catalogue, and the run's own
+    snapshot of the hub's makes it again."""
     m = os.path.join(run, "merge")
     if os.path.isdir(m):
         vd = os.path.join(run, "void")
@@ -1314,12 +1323,22 @@ def void_merge(run):
         n = 1
         while os.path.exists(os.path.join(vd, f"merge-{n}")):
             n += 1
+        dest = os.path.join(vd, f"merge-{n}")
+        cats = [(os.path.relpath(os.path.join(d, f), m), os.path.getsize(os.path.join(d, f)))
+                for d, _dirs, files in os.walk(m) for f in files if f.startswith(VOID_DROPS)]
         gc.collect()           # Windows will not move a folder holding a file something still has open
         try:
-            os.replace(m, os.path.join(vd, f"merge-{n}"))
+            os.replace(m, dest)
         except PermissionError:
-            shutil.copytree(m, os.path.join(vd, f"merge-{n}"))
+            # Copied without the catalogues, so that a failed move costs no 10 GB copy.
+            shutil.copytree(m, dest, ignore=shutil.ignore_patterns(VOID_DROPS + "*"))
             rm(m)
+        for rel, _size in cats:
+            rm(os.path.join(dest, rel))
+        dropped, freed = len(cats), sum(size for _rel, size in cats)
+        say(f"  the merge made void kept as void/merge-{n}: its report, items and listener copies; "
+            f"{dropped} catalogue cop{'y' if dropped == 1 else 'ies'} dropped, "
+            f"{freed / 1048576:.0f} MB [SPEC-STAR-114]")
     for f in ("patches", "SUMMARY.md", "distribute-plan.json", "proven.json", "rehearsal.json"):
         rm(os.path.join(run, f))
 
@@ -1919,6 +1938,22 @@ def retire_words(answer, sent: int) -> str:
     return words + ("" if told == sent else f" -- {sent} sent, {told} answered")
 
 
+HOLD_BYTES = 1 << 20   # [PI3-AIM-170]: a step carrying this much or more holds the node's playback
+HOLD_SECS = 600        # a hold's own life, renewed while the step runs, as the Export page's Send's is [PI3-AIM-177]
+
+
+def step_bytes(pd, parts):
+    """What one node's rehearsal or commit carries, in bytes of the patches as written:
+    a catalogue in parts by its manifest's total, which a commit may find staged already
+    and so not send -- held all the same, since the step applies it while it runs."""
+    total = (parts or {}).get("total_bytes", 0) or 0
+    for f in ("catalogue.values.json", "listener.values.json"):
+        p = os.path.join(pd, f)
+        if os.path.exists(p):
+            total += os.path.getsize(p)
+    return total
+
+
 def player_step(plan, run, name, player, commit):
     """[SPEC-STAR-100]: one player's rehearsal or commit, by signed request.
     The player applies its own patch, and is not stopped."""
@@ -1935,13 +1970,16 @@ def player_step(plan, run, name, player, commit):
     if not has_rows(lis) and not has_rows(cat) and not parts and not retire:
         say(f"RESULT {name}: nothing to send")
         return 0
-    # The catalogue's parts are the bulk of a sync, megabytes to a part: with
-    # them, the node's playback is held for the step [PI3-AIM-170]. Rows alone
-    # are a few kilobytes, and are sent without.
-    # As long as the step itself may take: its own timeout, below.
+    # [PI3-AIM-170]: a step that carries a megabyte or more holds the node's playback
+    # while it runs, renewed for as long as it takes [PI3-AIM-177]. Rows alone are a few
+    # kilobytes, and are sent without. Until 2026-11-17 only a catalogue in parts was
+    # held, for a fixed hour with no renewal: a whole patch of up to 16 MB went to a
+    # shared radio with no hold at all -- 10.7 MB to every node in run 20261115T1348Z --
+    # and a step longer than the player's one-hour cap lost its hold part way.
+    sending = step_bytes(pd, parts)
     hold = (transfer_hold.held(player["address"], player.get("web_port", transfer_hold.LEMPI_DEFAULT_PORT),
-                               say=say, seconds=3600)
-            if parts else contextlib.nullcontext())
+                               say=say, seconds=HOLD_SECS, renew=True)
+            if sending >= HOLD_BYTES else contextlib.nullcontext())
     # [SPEC-NSH-032]: a commit whose answer is lost is asked again, of a node that says it
     # answers one asked again -- given what it answered the first time, or, still applying
     # it, waiting for it first. Of an older build, never.
@@ -2106,13 +2144,17 @@ def hub_apply(plan, run, commit, excuse=None):
         if bad and h in halves:
             # As on a node: changed here since the snapshot, in rows the
             # patch never named, is kept and reported, not a failure.
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                sp.check(at_root(hub[h]), os.path.join(pd, f"{h}.patch.json"))
-            if " 0 to apply" in buf.getvalue() or ": 0 to apply" in buf.getvalue():
-                say(f"  {h}: every row the patch names holds its target; {bad} changed here "
+            # [SPEC-STAR-129]: decided on the counts themselves. Until 2026-11-17
+            # it was decided by " 0 to apply" in the check's printed line, which a
+            # check that found rows changed since the commit printed too, and the
+            # commit read "verified" with a row not at its target.
+            n = sp.tally(at_root(hub[h]), os.path.join(pd, f"{h}.patch.json"))
+            if n["apply"] == 0 and n["conflict"] == 0:
+                say(f"  {h}: every row the patch names holds its target ({n['already']}); {bad} changed here "
                     "since the snapshot, and were kept")
                 continue
+            say(f"  {h}: of the rows the patch names, {n['apply']} not at their target and {n['conflict']} "
+                f"changed since, read again after the commit -- not verified")
         ok = ok and not bad
         say(f"  {h}: " + ("every governed table identical to the target" if not bad else f"DIFFERS {bad}"))
     if ok and plan.get("prune"):

@@ -996,11 +996,21 @@ def hold_out(dest: sqlite3.Connection, md5s: list[str]) -> dict:
         cols = {r[1] for r in dest.execute(f"PRAGMA table_info({t})")}
         col, vals = next(((c, v) for c, v in (("passage_id", pids), ("file_id", fids), ("audio_md5", md5s))
                           if c in cols), (None, None))
-        if col is None or not vals:
-            continue
         n = 0
-        for part in _chunks(vals):
-            n += dest.execute(f"DELETE FROM {t} WHERE {col} IN ({','.join('?' * len(part))})", part).rowcount
+        if col is not None and vals:
+            for part in _chunks(vals):
+                n += dest.execute(f"DELETE FROM {t} WHERE {col} IN ({','.join('?' * len(part))})", part).rowcount
+        # A table that names its subject by kind and id -- `flavor` -- names a passage
+        # by its number, as text, where the kind is 'passage'. Found by column name
+        # alone, those rows stayed, naming passages the copy no longer held, and the
+        # natural patch, which cannot name such a row, withheld the node's whole
+        # catalogue [SPEC-NKP-080] -- for an album it had simply not been sent yet.
+        # Latent until 2026-11-17, when it was found: the hub's 847,848 flavor rows
+        # are every one about a recording.
+        if {"subject_kind", "subject_id"} <= cols and pids:
+            for part in _chunks([str(p) for p in pids]):
+                n += dest.execute(f"DELETE FROM {t} WHERE subject_kind = 'passage' AND subject_id IN "
+                                  f"({','.join('?' * len(part))})", part).rowcount
         if n:
             removed[t] = n
     return {"files": len(md5s), "albums": sorted(folders), "rows": removed}

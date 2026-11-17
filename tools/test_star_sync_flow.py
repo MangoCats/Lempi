@@ -394,6 +394,15 @@ def test_conflict(tmp):
         check(why and "does not reflect" in why, f"and the gate says so: {why}")
         check(ss.patch(plan, run) == 0, "patch merges again by itself")
         check(os.path.isdir(os.path.join(run, "void", "merge-1")), "the earlier merge is kept beside it, void")
+        vm = os.path.join(run, "void", "merge-1")
+        kept = sorted(os.path.relpath(os.path.join(d, f), vm).replace("\\", "/") for d, _, fs in os.walk(vm) for f in fs)
+        check(os.path.exists(os.path.join(run, "merge", "library.db"))
+              and os.path.exists(os.path.join(run, "merge", "nodes", "a", "library.db"))
+              and {"report.json", "report.md", "listener.db", "nodes/a/listener.db"} <= set(kept)
+              and not any(os.path.basename(k).startswith("library.db") for k in kept),
+              f"[SPEC-STAR-114] kept as its report and listener copies, its catalogue copies -- which every "
+              f"merge makes -- dropped: {kept}")
+        check("catalogue copies dropped" in out.getvalue(), "and the dropping said")
         check(not ss.review(run)["stale"] and not ss.review(run)["pending"], "now the verdict is reflected")
         why = refused(lambda: stages(plan, commit=True))
         check(why and "no clean rehearsal" in why, f"the gate wants a rehearsal after the last merge: {why}")
@@ -538,6 +547,84 @@ def test_approve_all(tmp):
         stages(plan)
         check(stages(plan, commit=True) == 0, "commit after approve-all")
     check(prefs_of(fleet.nodes["a"]["listener"]) == {"X": 5, "Y": 5}, "each recording took the later change")
+
+
+def test_the_hubs_commit_is_verified_by_its_counts(tmp):
+    """[SPEC-STAR-129]: after the hub's commit, a row its patch names that is not at its target fails the
+    verification. Until 2026-11-17 the verification looked for " 0 to apply" in the check's printed line,
+    which a check finding a row changed since printed too: here, a row written again the moment the commit
+    landed, and the commit read "verified"."""
+    fleet = Fleet(tmp)
+    base = [("X", 1, "2026-09-01 00:00:00")]
+    plan, hub = build(tmp, fleet, base, {"a": (base, False)})
+    c = sqlite3.connect(fleet.nodes["a"]["listener"])
+    c.execute("UPDATE listener_preferences SET rotation=4, recovery=4, updated_at='2026-10-02 00:00:00' WHERE subject_id='X'")
+    c.commit()
+    c.close()
+    real = ss.sp.apply
+    mine = os.path.normcase(os.path.abspath(hub["listener"]))
+
+    def apply_then_written(db, patch_path, commit):
+        rc = real(db, patch_path, commit)
+        if commit and os.path.normcase(os.path.abspath(db)) == mine:
+            w = sqlite3.connect(db)
+            w.execute("UPDATE listener_preferences SET rotation=7, recovery=7 WHERE subject_id='X'")
+            w.commit()
+            w.close()
+        return rc
+    with faked(fleet) as out:
+        ss.snapshot(plan)
+        run = ss.newest_run(plan)
+        ss.merge(plan, run)
+        ss.patch(plan, run)
+        check(stages(plan) == 0, "rehearsal clean")
+        ss.sp.apply = apply_then_written
+        try:
+            rc = stages(plan, commit=True)
+        finally:
+            ss.sp.apply = real
+    said = out.getvalue()
+    check(rc == 1 and "1 changed since, read again after the commit -- not verified" in said
+          and "COMMITTED but a table DIFFERS" in said and "COMMITTED and verified" not in said,
+          f"a row the patch named, not at its target after the commit, fails it: {said[-700:]}")
+    check(ss.load_state(plan)["hub"]["run"] != ss.stamp_of(run) and prefs_of(hub["listener"])["X"] == 7,
+          "the hub's state does not name the run, and the later write stands")
+    counts = ss.sp.tally(hub["listener"], os.path.join(run, "patches", "desktop", "listener.patch.json"))
+    check(counts == {"apply": 0, "already": 0, "conflict": 1}, f"tally gives the numbers themselves: {counts}")
+
+
+def test_a_big_step_is_held(tmp):
+    """[PI3-AIM-170], [PI3-AIM-177]: a step carrying a megabyte or more holds the node's playback, renewed
+    while it runs, however the patch is sent; a smaller one is sent without. Until 2026-11-17 only a
+    catalogue in parts was held, for a fixed hour with no renewal, and b's whole patch here went with none."""
+    fleet, plan, hub, run, base = catalogue_scenario(tmp, b_current=True, artists=40)
+    pd = os.path.join(run, "patches", "b")
+    check(os.path.exists(os.path.join(pd, "catalogue.values.json"))
+          and not os.path.exists(os.path.join(pd, "catalogue.parts.json")), "b's catalogue goes whole, not in parts")
+    sent = ss.step_bytes(pd, None)
+    files = [os.path.join(pd, f) for f in ("catalogue.values.json", "listener.values.json")]
+    check(sent == sum(os.path.getsize(p) for p in files if os.path.exists(p)) and sent > 0,
+          f"a step's size is its patches as written: {sent}")
+    check(ss.step_bytes(pd, {"total_bytes": 5 << 20}) == sent + (5 << 20), "and a catalogue in parts by its total")
+    asked = []
+    real = (ss.transfer_hold.held, ss.HOLD_BYTES)
+
+    def held(address, port=None, say=None, seconds=None, renew=False):
+        asked.append((address, seconds, renew))
+        return contextlib.nullcontext()
+    ss.transfer_hold.held = held
+    try:
+        with faked(fleet):
+            ss.HOLD_BYTES = sent              # b's step carries exactly this much: held
+            stages(plan, "b")
+            once = list(asked)
+            ss.HOLD_BYTES = sent + 1          # a byte more than it carries: sent without
+            stages(plan, "b")
+    finally:
+        ss.transfer_hold.held, ss.HOLD_BYTES = real
+    check(once == [("b", ss.HOLD_SECS, True)], f"a whole patch of the size is held, the hold renewed: {once}")
+    check(asked == once, f"and a step under the size is sent without one: {asked}")
+    check((ss.HOLD_BYTES, ss.HOLD_SECS) == (1 << 20, 600), "a megabyte, and ten minutes renewed, as the Send's")
 
 
 def test_a_commit_answer_lost(tmp):
@@ -1276,7 +1363,8 @@ def main() -> int:
     test_lost_answer()
     test_split_catalogue()
     for test in (test_quiet, test_conflict, test_hub_edited_during_sync, test_retired_files_moved, test_approve_all,
-                 test_a_commit_answer_lost, test_a_snapshot_answer_unusable, test_on_demand, test_catalogue_moved,
+                 test_a_commit_answer_lost, test_a_snapshot_answer_unusable, test_the_hubs_commit_is_verified_by_its_counts,
+                 test_a_big_step_is_held, test_on_demand, test_catalogue_moved,
                  test_catalogue_states, test_catalogue_by_uid, test_catalogue_old_player,test_catalogue_in_parts, test_a_patch_that_cannot_be_cut, test_selection, test_read_only_catalogue,
                  test_old_players, test_links_removed, test_links_repaired_with_files, test_empty_release_removed):
         tmp = tempfile.mkdtemp()

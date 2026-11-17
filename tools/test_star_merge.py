@@ -186,6 +186,9 @@ def test_held_out(tmp):
         CREATE TABLE file_tags (file_id INTEGER PRIMARY KEY, title TEXT);
         CREATE TABLE file_releases (audio_md5 TEXT PRIMARY KEY, release_mbid TEXT);
         CREATE TABLE recordings (mbid TEXT PRIMARY KEY, title TEXT);
+        CREATE TABLE flavor (subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL, characteristic TEXT NOT NULL,
+                             class TEXT NOT NULL, value REAL NOT NULL,
+                             PRIMARY KEY (subject_kind, subject_id, characteristic, class)) WITHOUT ROWID;
         INSERT INTO files VALUES (1, 'held', 'C:/Music/A/Old Album/1.mp3', 1, 1, 't', 't'),
                                  (2, 'new', 'C:/Music/J/Time the Conqueror (2008)/1.mp3', 1, 1, 't', 't');
         INSERT INTO passages VALUES (10, 1, 100), (20, 2, 200), (21, 2, 300);
@@ -193,6 +196,9 @@ def test_held_out(tmp):
         INSERT INTO file_tags VALUES (1, 'a'), (2, 'b');
         INSERT INTO file_releases VALUES ('held', 'rel1'), ('new', 'rel2');
         INSERT INTO recordings VALUES ('r1', 'One'), ('r2', 'Two');
+        INSERT INTO flavor VALUES ('passage', '10', 'mood', 'happy', 0.5), ('passage', '20', 'mood', 'happy', 0.5),
+                                  ('passage', '21', 'mood', 'sad', 0.5), ('recording', 'r2', 'mood', 'happy', 0.5),
+                                  ('recording', '20', 'mood', 'happy', 0.5);
     """)
     hub.commit()
     hub.close()
@@ -215,9 +221,13 @@ def test_held_out(tmp):
           and rows(P, "SELECT audio_md5 FROM file_releases") == [("held",)],
           "and nothing that names the file it lacks: passages, credits, tags, its release")
     check(len(rows(P, "SELECT mbid FROM recordings")) == 2, "music's own names stay")
+    check(rows(P, "SELECT subject_kind, subject_id FROM flavor ORDER BY 1, 2")
+          == [("passage", "10"), ("recording", "20"), ("recording", "r2")],
+          "a passage's flavor goes with the passage it names, and a recording's stays, whatever its id spells")
     h = rep.data["copies"]["pi"].get("held_out") or {}
     check(h.get("files") == 1 and h.get("albums") == ["Time the Conqueror (2008)"]
-          and h.get("rows", {}).get("passages") == 2, f"what was left out, by album: {h}")
+          and h.get("rows", {}).get("passages") == 2 and h.get("rows", {}).get("flavor") == 2,
+          f"what was left out, by album: {h}")
     said = "\n".join(sm.copies_section(rep.data["copies"]))
     check("not on pi, so left out of its copy" in said and "Time the Conqueror (2008)" in said
           and "Export page" in said, f"and the report says so, and what to do: {said}")
