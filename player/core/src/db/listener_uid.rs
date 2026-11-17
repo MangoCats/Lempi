@@ -89,6 +89,14 @@ fn create_as(table: &str, make: &str, as_name: &str) -> Result<String, DbError> 
 /// the whole file to `backup` (a copy already there is kept, never written over).
 /// Nothing to do returns an empty list and takes no copy. A catalogue without
 /// uids is refused, loudly: this build writes and reads passages only by uid.
+///
+/// **What to convert is decided under the write lock** `[IMPL-UID-067]`. Two
+/// opens can meet on a listener not yet converted -- two processes, or a web
+/// route opening a store while the engine's first open is still converting --
+/// and both find it by number before either holds the lock. The one that waited
+/// would then rebuild tables the other had already converted, from a
+/// `passage_id` they no longer have, and its open would fail. The look before
+/// the lock only decides whether to take a copy and the lock at all.
 pub(crate) fn convert(conn: &QualifyingConn, backup: Option<&std::path::Path>) -> Result<Vec<Converted>, DbError> {
     let todo = by_number(conn)?;
     if todo.is_empty() {
@@ -109,13 +117,13 @@ pub(crate) fn convert(conn: &QualifyingConn, backup: Option<&std::path::Path>) -
         )));
     }
     if let Some(b) = backup {
-        if !b.exists() {
-            conn.execute("VACUUM main INTO ?1", [b.to_string_lossy().into_owned()])
-                .map_err(|e| DbError::open(e).during(format_args!("copy the listener to {} before converting it", b.display())))?;
-        }
+        copy_before_converting(conn, b)?;
     }
     conn.execute_batch("BEGIN IMMEDIATE").map_err(DbError::open)?;
     let done = (|| {
+        // Asked again, now that no other open can be converting it. Empty when
+        // one did while this one waited: nothing left to do, and no failure.
+        let todo = by_number(conn)?;
         let mut done = Vec::new();
         for t in &todo {
             done.push(rebuild(conn, t)?);
@@ -131,6 +139,25 @@ pub(crate) fn convert(conn: &QualifyingConn, backup: Option<&std::path::Path>) -
             let _ = conn.execute_batch("ROLLBACK");
             Err(e)
         }
+    }
+}
+
+/// The whole listener copied to `b` before it is converted, unless a copy is
+/// there already. `VACUUM INTO` refuses a file that exists, so a second open
+/// racing the first to make it `[IMPL-UID-067]` finds the first one's copy taken
+/// and goes on: that copy is the listener before either converted it, since each
+/// converts only after its copy is made.
+fn copy_before_converting(conn: &QualifyingConn, b: &std::path::Path) -> Result<(), DbError> {
+    if b.exists() {
+        return Ok(());
+    }
+    match conn.execute("VACUUM main INTO ?1", [b.to_string_lossy().into_owned()]) {
+        Ok(_) => Ok(()),
+        Err(e) if b.exists() && e.to_string().contains("already exists") => {
+            tracing::info!("listener: another open took the copy {} first, and it is kept", b.display());
+            Ok(())
+        }
+        Err(e) => Err(DbError::open(e).during(format_args!("copy the listener to {} before converting it", b.display()))),
     }
 }
 
@@ -336,6 +363,66 @@ mod tests {
         std::fs::remove_file(&backup).unwrap();
         assert!(convert(&c, Some(&backup)).unwrap().is_empty());
         assert!(!backup.exists());
+    }
+
+    /// `[IMPL-UID-067]`: two opens meet on a listener by number. The second
+    /// found it so before the first committed, took its copy, and waited for the
+    /// lock; holding it, it finds nothing left to convert, and its open
+    /// succeeds. Until 2026-11-17 it rebuilt from what it found before the lock
+    /// and failed on `o.passage_id`, a column the first had already removed.
+    #[test]
+    fn a_second_open_that_waited_for_the_first_finds_nothing_left_to_convert() {
+        use std::time::{Duration, Instant};
+        let d = tmpdir("race");
+        let (lis, lib) = old_pair(&d);
+        // In WAL mode, as every listener is `[SPEC-STAR-107]`.
+        rusqlite::Connection::open(&lis).unwrap().pragma_update(None, "journal_mode", "WAL").unwrap();
+        let first = open(&lis, &lib);
+        first.busy_timeout(Duration::from_secs(20)).unwrap();
+        first.execute_batch("BEGIN IMMEDIATE").unwrap();
+        for t in by_number(&first).unwrap() {
+            rebuild(&first, t).unwrap();
+        }
+        // Converted and not committed, so the second open reads it by number.
+        let backup = d.join("listener.pre-uid.db");
+        let (l2, c2, b2) = (lis.clone(), lib.clone(), backup.clone());
+        let second = std::thread::spawn(move || {
+            let c = open(&l2, &c2);
+            c.busy_timeout(Duration::from_secs(20)).unwrap();
+            convert(&c, Some(&b2))
+        });
+        // Its copy is made after it has looked and before it waits for the lock.
+        let t0 = Instant::now();
+        while !backup.exists() {
+            assert!(t0.elapsed() < Duration::from_secs(20), "the second open never took its copy");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        first.execute_batch("COMMIT").unwrap();
+        let got = second.join().unwrap();
+        assert_eq!(got.map_err(|e| e.to_string()), Ok(Vec::new()), "the second open converts nothing, and does not fail");
+        assert!(by_number(&first).unwrap().is_empty());
+        assert_eq!(rows(&first, "SELECT passage_uid FROM listener_play_history WHERE play_id = 1"), ["Text(\"u-a\")"]);
+        let b = rusqlite::Connection::open(&backup).unwrap();
+        assert_eq!(rows(&b, "SELECT passage_id FROM listener_play_history WHERE play_id = 1"), ["Integer(10)"],
+                   "and its copy is the listener before either converted it");
+    }
+
+    /// The copy a racing open finds already made is kept `[IMPL-UID-067]`, and
+    /// the refusal that tells the race apart is the one this SQLite gives.
+    #[test]
+    fn a_copy_another_open_made_first_is_kept() {
+        let d = tmpdir("copy-kept");
+        let (lis, lib) = old_pair(&d);
+        let c = open(&lis, &lib);
+        let b = d.join("copy.db");
+        copy_before_converting(&c, &b).unwrap();
+        assert!(b.exists());
+        let err = c.execute("VACUUM main INTO ?1", [b.to_string_lossy().into_owned()]).unwrap_err();
+        assert!(err.to_string().contains("already exists"), "the refusal copy_before_converting reads: {err}");
+        copy_before_converting(&c, &b).unwrap();
+        let k = rusqlite::Connection::open(&b).unwrap();
+        assert_eq!(rows(&k, "SELECT COUNT(*) FROM listener_play_history"), ["Integer(4)"], "the first copy, kept");
     }
 
     /// A catalogue without uids is refused, and the listener left exactly as it was.
