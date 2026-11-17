@@ -369,10 +369,11 @@ pub fn import_bundle(library: String, staging: String, music_root: String) -> Re
         Ok(s) => tracing::info!(
             "import: {} imported, {} already, {} replaced, {} upgraded, {} re-keyed, {} reused, {} corrupt, \
              {} missing, {} conflicts, {} refused, {} releases, {} covers, {} bad covers, \
-             {} passage recordings set, {} file(s) with a credited passage of no span here",
+             {} passage recordings set, {} file(s) with a credited passage of no span here, \
+             {} uid(s) filled, {} file(s) with a passage still without a uid [IMPL-UID-061]",
             s.imported, s.already, s.replaced, s.upgraded, s.rekeyed, s.reused, s.corrupt.len(), s.missing.len(),
             s.conflicts.len(), s.refused.len(), s.releases, s.covers, s.bad_covers.len(),
-            s.passage_credits_set, s.passage_credits_unmatched.len()
+            s.passage_credits_set, s.passage_credits_unmatched.len(), s.uids_filled, s.passages_without_uid.len()
         ),
         Err(e) => tracing::error!("import failed: {e}"),
     }

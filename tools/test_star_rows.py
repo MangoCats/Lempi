@@ -206,15 +206,16 @@ def test_a_boundary_both_made():
     check(not rows_of(patch, "passages"), f"and the passage the node already holds is not sent: {rows_of(patch, 'passages')}")
 
 
-def test_a_passage_without_its_uid_is_never_filled():
+def test_a_passage_without_its_uid_is_named_for_its_resend():
     """[IMPL-UID-061]: a bundle made from a catalogue before Stage A brought disc 2 to
     the node, its passage without a uid (`Birth::Unknown`). The hub holds that
     passage with its uid, and the copy last sent never held the file, as for any
-    bundle. The round does not fill the uid: the node's catalogue reads `no-uids`,
-    is not in step, and is sent no catalogue patch at all -- nor could one be made,
-    from a baseline holding the node's own rows. The control, the same node with the
-    uid, is in step."""
-    print("a node passage without its uid: the round sends it no catalogue, and nothing fills the uid")
+    bundle. The round does not fill the uid itself: the node's catalogue reads
+    `no-uids`, is not in step, and is sent no catalogue patch -- nor could one be
+    made, from a baseline holding the node's own rows. It names the file and the
+    repair, a current bundle of it sent again, which fills the uid on the node
+    (bundle.rs's own test). The node so repaired -- the control -- is in step."""
+    print("a node passage without its uid: no catalogue sent, the file named for a resend, in step once filled")
     d = tempfile.mkdtemp()
     disc2 = """
         INSERT INTO files VALUES (5776, 'disc2', '/m/d2.mp3', 'mp3');
@@ -243,9 +244,12 @@ def test_a_passage_without_its_uid_is_never_filled():
 
     node, summary = node_and_summary("old-bundle", uid=False)
     st = ss.catalogue_state(sent, summary, hub)
-    check(st == {"state": "no-uids", "which": "the node's catalogue"}, f"the node's catalogue reads no-uids: {st}")
+    check(st == {"state": "no-uids", "which": "the node's catalogue", "files": ["disc2"]},
+          f"the node's catalogue reads no-uids, naming the file: {st}")
     words = ss.catalogue_words(st)
     check("the node's catalogue has a passage without its uid" in words, f"and the round says so: {words}")
+    check("send a current bundle" in words and "send_bundle.py" in words and words.endswith("disc2"),
+          f"with the repair, and the file it is for: {words}")
     check(st["state"] not in ("as-sent", "holds-hub-rows"), "so it is not in step, and no catalogue is sent")
     base = os.path.join(d, "baseline.db")
     ss.baseline_from_rows(sent, hub, answer_of(node, ss.rows_wanted(["disc2"], sent, hub)), base)
@@ -261,9 +265,10 @@ def test_a_passage_without_its_uid_is_never_filled():
           "the passage is still without its uid: nothing in the round reached it")
     c.close()
 
-    _, control = node_and_summary("current-bundle", uid=True)
+    _, control = node_and_summary("resent", uid=True)
     st = ss.catalogue_state(sent, control, hub)
-    check(st["state"] == "holds-hub-rows", f"the control, the uid sent with the bundle, is in step: {st}")
+    check(st["state"] == "holds-hub-rows", f"the node once the resend filled its uid is in step: {st}")
+    check(ss.files_without_uids(control) == [], "and names nothing")
 
 
 def test_run_names():
@@ -296,7 +301,7 @@ def test_the_ledger():
 def main() -> int:
     test_the_second_disc()
     test_a_boundary_both_made()
-    test_a_passage_without_its_uid_is_never_filled()
+    test_a_passage_without_its_uid_is_named_for_its_resend()
     test_run_names()
     test_the_ledger()
     print()

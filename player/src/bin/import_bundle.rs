@@ -125,11 +125,14 @@ fn main() {
             println!("    {m}");
         }
     }
-    // [IMPL-UID-061]: a bundle from before passage uids. Nothing fills one later,
-    // and until it has one star sync sends this catalogue no patch.
+    // [IMPL-UID-061]: always said, zero included, as holds are -- the answer to
+    // whether a resend gave the passages an old bundle brought the uid they lacked.
+    println!("  uids filled {}", rep.uids_filled);
+    // Until each has one, star sync sends this catalogue no patch.
     if !rep.passages_without_uid.is_empty() {
-        println!("  WITHOUT UID {} file(s): a bundle made before passage uids; no rotation by passage, \
-                  and no catalogue patch from star sync, until each is given one:",
+        println!("  WITHOUT UID {} file(s): from a bundle made before passage uids; no rotation by passage, \
+                  and no catalogue patch from star sync, until each is given one -- a current bundle of \
+                  the file, sent again, gives it where its span still matches:",
                  rep.passages_without_uid.len());
         for m in &rep.passages_without_uid {
             println!("    {m}");

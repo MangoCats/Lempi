@@ -157,10 +157,13 @@ pub struct Report {
     /// the bundle was made. Left alone, not guessed at, and named so that what
     /// sent the bundle need not take the file as delivered `[SPEC-PL-109]`.
     pub passage_credits_unmatched: Vec<String>,
-    /// Files, by `audio_md5`, with a passage written without a uid: a bundle
-    /// made from a catalogue before Stage A `[IMPL-UID-061]`. Nothing later
-    /// fills one, so each is named, not only counted.
+    /// Files, by `audio_md5`, with a passage without a uid once this import is
+    /// done: written so by a bundle made from a catalogue before Stage A, or held
+    /// so and not filled by this one `[IMPL-UID-061]`. Named, not only counted.
     pub passages_without_uid: Vec<String>,
+    /// Passages already here, without a uid, given the one the payload sends
+    /// for them `[IMPL-UID-061]` -- on a dry run, the ones it would be.
+    pub uids_filled: usize,
 }
 
 impl Report {
@@ -503,10 +506,10 @@ fn import_bound(
             // improvement over what this library already has for the same
             // mbid -- provenance-checked by `upsert_recording` exactly as it
             // is on a fresh import, never a blind overwrite. Passages and
-            // `passage_recordings` are untouched here: the file already has
-            // them, and re-deriving which existing passage a credit belongs
-            // to is a real question `[SPEC-SC-045]` leaves to a future pass,
-            // not one this fix answers by guessing.
+            // `passage_recordings` are not rewritten here: the file already has
+            // them. What does reach a passage here is matched by its exact span
+            // below -- its hold, its recordings, and a uid it lacks -- and is
+            // never guessed at.
             if apply {
                 for p in e.get("passages").and_then(|v| v.as_array()).unwrap_or(&empty) {
                     for c in p.get("recordings").and_then(|v| v.as_array()).unwrap_or(&empty) {
@@ -533,6 +536,23 @@ fn import_bound(
             // correction was recorded as delivered without it.
             for p in e.get("passages").and_then(|v| v.as_array()).unwrap_or(&empty) {
                 set_credits(&tx, held.unwrap_or_default(), &md5, p, apply, &mut rep)?;
+            }
+            // `[IMPL-UID-061]`, `[SPEC-PL-110]`: and the uid of a passage an old
+            // bundle brought without one, which nothing else gives it. A file that still has
+            // one without stays named, a dry run counting what it would fill.
+            if crate::db::has_uids(&tx).map_err(|e| e.to_string())? {
+                let mut filled = 0;
+                for p in e.get("passages").and_then(|v| v.as_array()).unwrap_or(&empty) {
+                    filled += fill_uid(&tx, held.unwrap_or_default(), p, apply)?;
+                }
+                rep.uids_filled += filled;
+                let without: usize = tx
+                    .query_row("SELECT COUNT(*) FROM passages WHERE file_id = ?1 AND passage_uid IS NULL",
+                               [held.unwrap_or_default()], |r| r.get::<_, i64>(0))
+                    .map_err(|e| e.to_string())? as usize;
+                if without > if apply { 0 } else { filled } && rep.passages_without_uid.last() != Some(&md5) {
+                    rep.passages_without_uid.push(md5.clone());
+                }
             }
             if apply {
                 set_file_release(&tx, &md5, e, &mut rep)?;
@@ -747,13 +767,17 @@ fn import_bound(
         }
         tx.commit().map_err(|e| e.to_string())?;
     }
+    if rep.uids_filled > 0 {
+        tracing::info!("bundle: {} passage(s) here {} the uid they lacked [IMPL-UID-061]",
+                       rep.uids_filled, if apply { "given" } else { "would be given" });
+    }
     if !rep.passages_without_uid.is_empty() {
         tracing::warn!(
-            "bundle: {} file(s) {} passages without a uid -- a bundle made before passage uids [IMPL-UID-061]. \
-             Their plays will not count toward a passage's rotation, and star sync sends this catalogue no patch \
-             until they have one: {}",
+            "bundle: {} file(s) {} passages without a uid -- from a bundle made before passage uids [IMPL-UID-061]. \
+             Their plays count toward no passage's rotation, and star sync sends this catalogue no patch until \
+             each has one; a current bundle of the file, sent again, gives it where its span still matches: {}",
             rep.passages_without_uid.len(),
-            if apply { "brought" } else { "would bring" },
+            if apply { "hold" } else { "would hold" },
             rep.passages_without_uid.join(", ")
         );
     }
@@ -804,6 +828,56 @@ fn set_file_release(tx: &rusqlite::Transaction, md5: &str, e: &Value, rep: &mut 
 /// household's decision about a passage -- a damaged rip is damaged on every
 /// speaker -- and it is made on Vipunen, which sends it. A passage with no span
 /// matching exactly is counted, never guessed at; a dry run only counts.
+/// `[IMPL-UID-061]`: the hub's uid, to a passage of a held file that has none --
+/// one an old bundle brought, which nothing else ever fills. 1 where it was
+/// given (or, on a dry run, would be), else 0.
+///
+/// The passage here has no uid to be found by, so it is found by its file,
+/// kind and span: the span the hub holds now, or failing that the span it was
+/// born at, each only where exactly one passage of this file and kind without
+/// a uid has it. Any other case is left as it is, and the file stays named. The
+/// uid is checked against its birth key as a new passage's is, and refused by
+/// name if it is not that key's. One this catalogue already holds is never
+/// given to a second passage.
+fn fill_uid(tx: &rusqlite::Transaction, file_id: i64, p: &Value, apply: bool) -> Result<usize, String> {
+    let (Some(uid), Some(b)) = (p.get("passage_uid").and_then(|v| v.as_str()), p.get("birth")) else { return Ok(0) };
+    let held_already: bool = tx
+        .query_row("SELECT 1 FROM passages WHERE passage_uid = ?1", [uid], |_| Ok(()))
+        .optional()
+        .map_err(|e| e.to_string())?
+        .is_some();
+    if held_already {
+        return Ok(0);
+    }
+    let audio_md5 = b.get("audio_md5").and_then(|v| v.as_str()).unwrap_or("");
+    let birth_kind = b.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+    let start_ms = b.get("start_ms").and_then(|v| v.as_i64()).unwrap_or(-1);
+    let end_ms = b.get("end_ms").and_then(|v| v.as_i64()).unwrap_or(-1);
+    let salt = b.get("salt").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    // Checked here, not only by `stamp_birth`, so a dry run refuses it too.
+    if crate::db::passage_uid(audio_md5, birth_kind, start_ms, end_ms, salt).as_deref() != Some(uid) {
+        return Err(format!("passage uid {uid} is not its birth key's ({audio_md5}, {birth_kind}, {start_ms}, {end_ms}, \
+                            salt {salt}): refused, never stored"));
+    }
+    let birth = crate::db::Birth::Sent { uid, audio_md5, kind: birth_kind, start_ms, end_ms, salt };
+    let kind = str_of(p, "kind");
+    for span in [(num(p, "start_ms"), num(p, "end_ms")), (Some(start_ms), Some(end_ms))] {
+        let (Some(s), Some(e)) = span else { continue };
+        let found: Vec<i64> = tx
+            .prepare_cached("SELECT passage_id FROM passages WHERE file_id = ?1 AND kind = ?2 AND start_ms = ?3 \
+                             AND end_ms = ?4 AND passage_uid IS NULL")
+            .and_then(|mut q| q.query_map(params![file_id, kind, s, e], |r| r.get(0))?.collect())
+            .map_err(|e| e.to_string())?;
+        if let [one] = found[..] {
+            if apply {
+                crate::db::stamp_birth(tx, one, &birth)?;
+            }
+            return Ok(1);
+        }
+    }
+    Ok(0)
+}
+
 fn set_hold(tx: &rusqlite::Transaction, file_id: i64, p: &Value, hold: &str, hold_col: bool, apply: bool,
             rep: &mut Report) -> Result<(), String> {
     let span = params![file_id, str_of(p, "kind"), num(p, "start_ms"), num(p, "end_ms")];
@@ -1108,8 +1182,11 @@ pub struct StagedReport {
     /// Held files with a credited passage whose span is not here, by
     /// `audio_md5`: not corrected, and not to be taken as delivered `[SPEC-PL-109]`.
     pub passage_credits_unmatched: Vec<String>,
-    /// Files with a passage written without a uid, by `audio_md5` `[IMPL-UID-061]`.
+    /// Files with a passage without a uid after the import, by `audio_md5`
+    /// `[IMPL-UID-061]`.
     pub passages_without_uid: Vec<String>,
+    /// Passages already here given the uid they lacked `[IMPL-UID-061]`.
+    pub uids_filled: usize,
 }
 
 /// A replacement the system refused: the phone's copy, the staged file that
@@ -1580,6 +1657,7 @@ pub fn import_staged(
             }
         }
         total.passages_without_uid.extend(r.passages_without_uid);
+        total.uids_filled += r.uids_filled;
     }
     // Counted once each: measured on the Moto G, a 19-part bundle reported
     // 7,813 albums and 9,125 pictures for 1,381 releases and 857 covers.
@@ -1754,6 +1832,7 @@ fn import_one_payload(
     rep.passage_credits_set = r.passage_credits_set;
     rep.passage_credits_unmatched = std::mem::take(&mut r.passage_credits_unmatched);
     rep.passages_without_uid = std::mem::take(&mut r.passages_without_uid);
+    rep.uids_filled = r.uids_filled;
     rep.imported = r.count(|o| *o == Landed::Imported);
     rep.reused = rep.reused.min(rep.imported);
     rep.imported = rep.imported.saturating_sub(rep.reused + rep.upgraded);
@@ -2167,42 +2246,83 @@ mod tests {
     }
 
     /// `[IMPL-UID-061]`: a bundle from before passage uids lands its passage without
-    /// one and names the file in the report, and a resend that does carry the uid
-    /// does not fill it -- a held file's passages are not rewritten. A current
-    /// bundle names nothing.
+    /// one and names the file. A current bundle of the file, sent again, gives it the
+    /// hub's uid and birth key -- found by the span the hub holds now, or else the one
+    /// it was born at -- and a dry run says it would, writing nothing. A span that is
+    /// neither leaves it, still named; a uid not its birth key's is refused; and a
+    /// current bundle names nothing.
     #[test]
-    fn a_passage_without_its_uid_is_named_and_a_resend_does_not_fill_it() {
+    fn a_passage_without_its_uid_is_named_and_a_current_resend_fills_it() {
         let audio_dir = std::env::temp_dir().join(format!("lempi-bundle-no-uid-{}", std::process::id()));
         std::fs::create_dir_all(&audio_dir).unwrap();
         let audio_path = audio_dir.join("a.wav");
         write_tiny_wav(&audio_path);
         let md5 = (TEST_HASHER.hash)(&audio_path).unwrap();
-        let uid = crate::db::passage_uid(&md5, "radio", 0, 1000, 0).unwrap();
         let old = one_encoding_bundle(&md5, "m1", 0.5, "computed:x@1");
-        let mut current = old.clone();
-        let p = &mut current["encodings"][0]["passages"][0];
-        p["passage_uid"] = Value::String(uid.clone());
-        p["birth"] = serde_json::json!({"audio_md5": md5, "kind": "radio", "start_ms": 0, "end_ms": 1000, "salt": 0});
+        // The hub's passage now at `span`, born at `born`, as a current bundle sends it.
+        let current = |span: (i64, i64), born: (i64, i64)| {
+            let mut d = old.clone();
+            let p = &mut d["encodings"][0]["passages"][0];
+            p["start_ms"] = span.0.into();
+            p["end_ms"] = span.1.into();
+            p["passage_uid"] = Value::String(crate::db::passage_uid(&md5, "radio", born.0, born.1, 0).unwrap());
+            p["birth"] = serde_json::json!({"audio_md5": md5, "kind": "radio", "start_ms": born.0, "end_ms": born.1, "salt": 0});
+            d
+        };
         let uid_columns = "ALTER TABLE passages ADD COLUMN passage_uid TEXT; ALTER TABLE passages ADD COLUMN birth_md5 TEXT;
                            ALTER TABLE passages ADD COLUMN birth_kind TEXT; ALTER TABLE passages ADD COLUMN birth_start_ms INTEGER;
                            ALTER TABLE passages ADD COLUMN birth_end_ms INTEGER; ALTER TABLE passages ADD COLUMN birth_salt INTEGER;";
-        let held = |c: &Connection| -> Option<String> { c.query_row("SELECT passage_uid FROM passages", [], |r| r.get(0)).unwrap() };
+        let held = |c: &Connection| -> (Option<String>, Option<i64>) {
+            c.query_row("SELECT passage_uid, birth_end_ms FROM passages", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap()
+        };
+        let landed_old = || {
+            let mut c = empty_library();
+            c.execute_batch(uid_columns).unwrap();
+            let rep = import(&mut c, &old, "u-old", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+            assert_eq!(rep.outcomes, vec![(md5.clone(), Landed::Imported)]);
+            assert_eq!(rep.passages_without_uid, vec![md5.clone()], "an old bundle's file is named");
+            assert_eq!(held(&c), (None, None), "and its passage holds no uid");
+            c
+        };
+        let uid_at = |a, b| crate::db::passage_uid(&md5, "radio", a, b, 0).unwrap();
 
-        let mut c = empty_library();
-        c.execute_batch(uid_columns).unwrap();
-        let rep = import(&mut c, &old, "u1", &audio_dir, true, Some(TEST_HASHER)).unwrap();
-        assert_eq!(rep.outcomes, vec![(md5.clone(), Landed::Imported)]);
-        assert_eq!(rep.passages_without_uid, vec![md5.clone()], "the file is named");
-        assert_eq!(held(&c), None, "and its passage holds no uid");
-        let rep = import(&mut c, &current, "u2", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        // At the span the hub holds now.
+        let mut c = landed_old();
+        let rep = import(&mut c, &current((0, 1000), (0, 1000)), "u1", &audio_dir, false, Some(TEST_HASHER)).unwrap();
+        assert_eq!((rep.uids_filled, rep.passages_without_uid.len()), (1, 0), "a dry run says it would fill it");
+        assert_eq!(held(&c), (None, None), "and writes nothing");
+        let rep = import(&mut c, &current((0, 1000), (0, 1000)), "u2", &audio_dir, true, Some(TEST_HASHER)).unwrap();
         assert_eq!(rep.outcomes, vec![(md5.clone(), Landed::Already)]);
-        assert_eq!(held(&c), None, "a resend carrying the uid does not fill it");
+        assert_eq!((rep.uids_filled, rep.passages_without_uid.len()), (1, 0), "filled, and no longer named");
+        assert_eq!(held(&c), (Some(uid_at(0, 1000)), Some(1000)), "the hub's uid and birth key");
+        let rep = import(&mut c, &current((0, 1000), (0, 1000)), "u3", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep.uids_filled, 0, "a second resend has nothing to fill");
 
+        // The hub has since moved the passage: it is found at the span it was born at.
+        let mut c = landed_old();
+        let rep = import(&mut c, &current((0, 900), (0, 1000)), "u4", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep.uids_filled, 1, "found at its birth span");
+        assert_eq!(held(&c).0, Some(uid_at(0, 1000)));
+
+        // Neither span is this one: left as it is, and still named.
+        let mut c = landed_old();
+        let rep = import(&mut c, &current((0, 900), (0, 950)), "u5", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!((rep.uids_filled, rep.passages_without_uid.clone()), (0, vec![md5.clone()]), "not guessed at, still named");
+        assert_eq!(held(&c), (None, None));
+
+        // A uid that is not its birth key's is refused, writing nothing.
+        let mut c = landed_old();
+        let mut wrong = current((0, 1000), (0, 1000));
+        wrong["encodings"][0]["passages"][0]["passage_uid"] = Value::String(uid_at(0, 999));
+        assert!(import(&mut c, &wrong, "u6", &audio_dir, true, Some(TEST_HASHER)).is_err(), "refused");
+        assert_eq!(held(&c), (None, None), "and nothing written");
+
+        // A current bundle on a library without the file names nothing.
         let mut c = empty_library();
         c.execute_batch(uid_columns).unwrap();
-        let rep = import(&mut c, &current, "u3", &audio_dir, true, Some(TEST_HASHER)).unwrap();
-        assert!(rep.passages_without_uid.is_empty(), "a current bundle names nothing");
-        assert_eq!(held(&c).as_deref(), Some(uid.as_str()));
+        let rep = import(&mut c, &current((0, 1000), (0, 1000)), "u7", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert!(rep.passages_without_uid.is_empty() && rep.uids_filled == 0, "a current bundle names nothing");
+        assert_eq!(held(&c).0, Some(uid_at(0, 1000)));
         std::fs::remove_dir_all(&audio_dir).ok();
     }
 

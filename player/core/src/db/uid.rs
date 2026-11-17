@@ -106,10 +106,10 @@ pub enum Birth<'a> {
     /// not already born on its key `[SPEC-UID-054]`.
     Here,
     /// Sent by a hub that gave it none -- a bundle made before Stage A, since a
-    /// hub's catalogue refuses a passage without one: left empty. **Nothing
-    /// fills it afterwards** `[IMPL-UID-061]`: star sync sends a catalogue
-    /// holding one no patch at all, and a resend of the file reaches only its
-    /// holds, credits and release. The import names each such file.
+    /// hub's catalogue refuses a passage without one: left empty, and the
+    /// import names the file. Star sync never fills it -- a catalogue holding
+    /// one is sent no patch at all -- and a current bundle of the file, sent
+    /// again, does `[IMPL-UID-061]`, `[SPEC-PL-110]`.
     Unknown,
 }
 

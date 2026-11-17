@@ -532,7 +532,11 @@ def catalogue_state(sent_lib, summary_db, hub_lib):
     node, sent, hub = summary_rows(summary_db), summary_rows(sent_lib), summary_rows(hub_lib)
     for which, rows in (("the node's catalogue", node), ("the copy last sent", sent), ("the hub's catalogue", hub)):
         if rows is None:
-            return {"state": "no-uids", "which": which}
+            st = {"state": "no-uids", "which": which}
+            if which == "the node's catalogue":
+                # [IMPL-UID-061]: named, since their repair is by file.
+                st["files"] = files_without_uids(summary_db)
+            return st
     if node == sent:
         return {"state": "as-sent"}
     if all(node[t] <= sent[t] | hub[t] for t in node):
@@ -542,6 +546,21 @@ def catalogue_state(sent_lib, summary_db, hub_lib):
     return {"state": "changed", "files": len(added["files"]), "passages": len(added["passages"]),
             "gone_files": len(gone["files"]), "gone_passages": len(gone["passages"]),
             "not_the_hubs": sum(len(added[t] - hub[t]) for t in added)}
+
+
+def files_without_uids(db):
+    """[IMPL-UID-061]: the files, by `audio_md5`, of a catalogue's passages without
+    a uid -- which only a bundle made before passage uids brings, and which a
+    current bundle of the file, sent again, fills. Empty for a catalogue whose
+    passages have no uid column at all: its player is older than uids."""
+    c = sp.open_ro(db)
+    try:
+        if not any(r[1] == "passage_uid" for r in c.execute("PRAGMA table_info(passages)")):
+            return []
+        return [r[0] for r in c.execute("SELECT DISTINCT f.audio_md5 FROM passages p JOIN files f USING (file_id) "
+                                        "WHERE p.passage_uid IS NULL ORDER BY f.audio_md5")]
+    finally:
+        c.close()
 
 
 def summary_rows(db):
@@ -890,6 +909,11 @@ def catalogue_words(st):
         text += f" ({st['files']} files, {st['passages']} passages)"
     if st["state"] == "no-uids":
         text = f"{st['which']} has {text}, and a patch names a passage by its uid alone [IMPL-UID-080]"
+        files = st.get("files") or []
+        if files:
+            shown = ", ".join(files[:10]) + (f" and {len(files) - 10} more" if len(files) > 10 else "")
+            text += (f"; send a current bundle of each of its {len(files)} file(s) again to give them their uids "
+                     f"(export_bundle.py --md5 for each, then send_bundle.py) [IMPL-UID-061]: {shown}")
     return text
 
 
