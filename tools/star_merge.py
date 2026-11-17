@@ -557,6 +557,8 @@ def merge_table(table: str, spec: dict, nodes: list[Node], hub: str, rep: Report
 
     stamp = spec.get("stamp")
     if rule == LWW:
+        if spec.get("own"):
+            _own_is_no_write(table, spec, key, by_name, held, merged, source, rep)
         _items_lww(table, spec, key, by_name, held, merged, source, rep)
     else:
         _items_union(table, spec, key, by_name, held, merged, source, rep)
@@ -565,6 +567,14 @@ def merge_table(table: str, spec: dict, nodes: list[Node], hub: str, rep: Report
             hub_row = held.get(k, {}).get(rep.hub)
             if hub_row is not None and c in hub_row:
                 row[c] = hub_row[c]
+    # [SPEC-STAR-111]: a node's own column is its own in its own copy. `hub` here is
+    # the node whose copy this is, so the hub keeps its own too. Until 2026-11-17 the
+    # winner's went into every copy: one node's zone offset onto every node.
+    for c in spec.get("own", ()):
+        for k, row in merged.items():
+            mine = held.get(k, {}).get(hub)
+            if mine is not None and c in mine:
+                row[c] = mine[c]
 
     removed = 0
     if spec.get("removals"):
@@ -610,6 +620,41 @@ def merge_table(table: str, spec: dict, nodes: list[Node], hub: str, rep: Report
     rep.data["tables"][table] = dict(rule=rule, per_node=counts, merged=len(rows),
                                      removed=removed, only_on=only)
     return rows
+
+
+def _own_is_no_write(table, spec, key, by_name, held, merged, source, rep):
+    """[SPEC-STAR-111]: a row a node changed since it was last sent only in its own
+    columns -- the zone offset its player keeps in step with the OS -- is no write of
+    the household's, so its newer stamp does not make it the row every node takes.
+    The newest of the nodes that did change the household's columns is taken instead,
+    by the rule the merge takes any row by: the newest stamp, the first node by name
+    at a tie. Where none did, every holder holds what it was last sent, and the row
+    taken is as good as any.
+
+    Until 2026-11-17 the stamp alone decided. A player rewrites its offset whenever the
+    OS's differs from the one stored -- a restart, a clock change, a node carried to
+    another zone; on this fleet about weekly (lp3-wifi's of 2026-11-16 13:00 won every
+    node's row in the next run). Had a time scale been set on the hub in that window,
+    the offset's newer stamp would have taken the old scale back to every node, and the
+    item's default would have been the revert."""
+    stamp = spec["stamp"]
+    skip = {stamp, *spec["own"], *spec.get("hub_sets", ())}
+    for k in sorted(held, key=_order):
+        rows = held[k]
+        win = source[k]
+        if win not in rows:
+            continue
+        wrote = {nm: r for nm, r in rows.items()
+                 if not _same(r, _was(rep, by_name[nm], table, key, k, rows), skip)}
+        if win in wrote or not wrote:
+            continue
+        best = None
+        for nm in sorted(wrote):
+            if best is None or norm_time(wrote[nm].get(stamp)) > norm_time(wrote[best].get(stamp)):
+                best = nm
+        rep.decide(table, k, f"{best}'s over {win}'s: {win} changed none of the household's columns since "
+                   f"it was last sent, only its stamp or its own {', '.join(spec['own'])}", "SPEC-STAR-111")
+        merged[k], source[k] = dict(rows[best]), best
 
 
 def _items_lww(table, spec, key, by_name, held, merged, source, rep):

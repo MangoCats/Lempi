@@ -828,6 +828,33 @@ def test_items(tmp):
         "a": own(-60, "2026-09-09 00:00:00"), "b": own(-240, "2026-09-01 00:00:00")})
     check(rep.data["items"] == [] and rep.data["propagated"] == {},
           "a node's own zone offset is never a change to review")
+    settings = lambda out, who=None: rows(os.path.join(out, "listener.db") if who is None else
+                                          os.path.join(out, "nodes", who, "listener.db"),
+                                          "SELECT artist_time_scale, utc_offset_minutes FROM listener_settings")
+    check(settings(out) == [(1.0, -240)] and settings(out, "a") == [(1.0, -60)] and settings(out, "b") == [(1.0, -240)],
+          f"[SPEC-STAR-111] and each copy keeps its own node's: {settings(out)} {settings(out, 'a')} {settings(out, 'b')}")
+
+    # [SPEC-STAR-111]: the hub sets a time scale; a, later, only rewrites its own offset.
+    scale = lambda s, off, t: (f"INSERT INTO listener_settings VALUES (1,{s},{off},'{t}')",)
+    rep, out = run_items(tmp, "i9b", base, base, base, base, extra={
+        "base": scale(1.0, -300, "2026-09-01 00:00:00"), "desktop": scale(2.0, -300, "2026-09-05 00:00:00"),
+        "a": scale(1.0, -240, "2026-09-09 00:00:00"), "b": scale(1.0, -300, "2026-09-01 00:00:00")})
+    check(rep.data["items"] == [] and rep.data["propagated"] == {"listener_settings": 1},
+          f"an offset rewritten later is no write of the household's: the hub's scale carried, no item: {rep.data['items']}")
+    check(settings(out) == [(2.0, -300)] and settings(out, "a") == [(2.0, -240)] and settings(out, "b") == [(2.0, -300)],
+          f"every node takes the hub's scale, each keeping its own offset: "
+          f"{settings(out)} {settings(out, 'a')} {settings(out, 'b')}")
+    said = [d for d in rep.data["decisions"] if d.get("rule") == "SPEC-STAR-111"]
+    check(len(said) >= 1 and "only its stamp or its own utc_offset_minutes" in said[0]["what"], f"and the report says why: {said}")
+
+    # The same, but a changed the scale too: a real write, newer, so an item, a the default.
+    rep, out = run_items(tmp, "i9c", base, base, base, base, extra={
+        "base": scale(1.0, -300, "2026-09-01 00:00:00"), "desktop": scale(2.0, -300, "2026-09-05 00:00:00"),
+        "a": scale(3.0, -240, "2026-09-09 00:00:00"), "b": scale(1.0, -300, "2026-09-01 00:00:00")})
+    (it,) = rep.data["items"]
+    check(it["kind"] == "conflict" and it["default"] == "a" and settings(out) == [(3.0, -300)]
+          and settings(out, "a") == [(3.0, -240)],
+          f"two real writes are an item as before, the newer the default, each copy its own offset: {it}")
 
     # A removal against an edit is an item; a removal alone is carried.
     flag = lambda n, o: f"INSERT INTO listener_flags VALUES ('recording','{n}','2026-08-01 00:00:00',{o})"

@@ -214,6 +214,12 @@ The merge writes every decision down `[SPEC-STAR-060]`, and a person reads befor
 
 A node with no last-sent copy is taken as having been in step with the hub, so only its differences count.
 
+**`[SPEC-STAR-111]` A node's own column is no write of the household's, and stays its own.** `listener_settings.utc_offset_minutes` is each node's: its player rewrites it whenever the OS's offset differs from the one stored. That happens at a restart, a clock change, or a node carried to another zone; on this fleet about weekly.
+- **Choosing the row:** a row changed since it was last sent only in its stamp or its own columns does not win by its newer stamp. The newest of the nodes that changed the household's columns is taken, as `[SPEC-PREF-105]` takes any row; where none did, the row taken is as good as any. The report says which node was passed over, and why.
+- **Each copy:** every node's copy, the hub's included, keeps that node's own value of the column, whichever row was taken.
+
+*Found in the review of 2026-11-16 (finding 5); fixed 2026-11-17.* Before, the stamp alone decided, and the winner's offset went to every node. On run `20261116T1340Z`'s real data, with a time scale of 2.0 set on the hub at 12:00, lp3-wifi's offset rewrite of 13:00 took the scale back to 1.0 on every node, and the item's default was that revert. Replayed with this rule, every node took 2.0, with no item. A node in another zone sent its offset to every node, for the hour until each resynced, and for good on one whose offset is held by hand `[SPEC-DIR-183]`.
+
 **`[SPEC-STAR-112]` Each item carries its candidates.** `report.json` gives each item an `id` (a digest of its table, key, column where one value of a union row is in question, kind, and each candidate's node and value, **not** the default), the candidates with their node and stamp, the default, and what the merge took.
 
 **`[SPEC-STAR-114]` A verdict is `approved` (take the default) or `chose:<node>` (take that candidate's value, or for a removal against an edit, the removing node or the editing one).** Recorded in `<run>/verdicts.json` with when it was given and `by`: `item`, or `approve-all`. A verdict whose `id` is not in the current merge is void. A verdict that changes an outcome is applied by merging again with the verdicts as input, which is deterministic `[SPEC-STAR-030]`; `patch` does so by itself, keeping the earlier merge beside it as void, and every patch and proof made from it with it.
