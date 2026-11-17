@@ -2506,14 +2506,17 @@ impl PlayerStore {
     /// `passage_recordings` has no index by recording, so this reads all of
     /// it: 24,201 small rows on the hub, once per panel a person opens.
     ///
-    /// By its uid, which is how the page names it `[IMPL-UID-072]`; `None` too
-    /// for a passage whose uid the hub has yet to send.
+    /// By its uid, which is how the page names it `[IMPL-UID-072]`. A passage
+    /// whose uid the hub has yet to send is passed over for the next that has
+    /// one, so `None` only where none has. Until 2026-11-17 the first-ranked
+    /// passage was read whatever it held, and its NULL answered `None` for a
+    /// recording with an album cut to show.
     pub fn recording_passage(&self, mbid: &str) -> Option<String> {
         self.conn
             .query_row(
                 "SELECT p.passage_uid FROM __LIB__.passage_recordings pr \
                    JOIN __LIB__.passages p ON p.passage_id = pr.passage_id \
-                  WHERE pr.mbid = ?1 \
+                  WHERE pr.mbid = ?1 AND p.passage_uid IS NOT NULL \
                   ORDER BY p.kind = 'radio' DESC, pr.weight DESC, pr.passage_id LIMIT 1",
                 [mbid],
                 |r| r.get(0),
@@ -2703,15 +2706,23 @@ impl PlayerStore {
     /// the listener stayed locked to the console and to this player's own
     /// settings, and the log took 166,000 lines of *cannot start a
     /// transaction within a transaction* before the player was restarted.
-    pub fn save_queue(&self, ids: &[i64]) -> Result<(), DbError> {
+    ///
+    /// **What is left out is counted and said** (CLAUDE.md §6). A passage this
+    /// catalogue does not hold, or holds without a uid yet, is no queue entry
+    /// `[IMPL-UID-060]`; the number left out is returned, and logged once per
+    /// save that left any. Until 2026-11-17 they went silently, and a queue
+    /// came back shorter after a restart with nothing to say why.
+    pub fn save_queue(&self, ids: &[i64]) -> Result<usize, DbError> {
         let q = |e: rusqlite::Error| DbError::query(e);
         self.conn.execute_batch("BEGIN IMMEDIATE").map_err(q)?;
-        let done = || -> Result<(), DbError> {
+        let done = || -> Result<usize, DbError> {
             self.conn.execute("DELETE FROM player_queue", []).map_err(q)?;
             // By uid `[IMPL-UID-060]`; a passage without one is not written, since
             // a queue entry is nothing but its passage.
+            let mut left_out = 0;
             for (position, passage_id) in ids.iter().enumerate() {
-                self.conn
+                let written = self
+                    .conn
                     .execute(
                         "INSERT INTO player_queue (position, passage_uid, updated_at)
                          SELECT ?1, passage_uid, datetime('now') FROM __LIB__.passages
@@ -2719,12 +2730,23 @@ impl PlayerStore {
                         rusqlite::params![position as i64, passage_id],
                     )
                     .map_err(q)?;
+                if written == 0 {
+                    left_out += 1;
+                }
             }
-            Ok(())
+            Ok(left_out)
         }();
-        let done = done.and_then(|()| self.conn.execute_batch("COMMIT").map_err(q));
-        if done.is_err() {
-            let _ = self.conn.execute_batch("ROLLBACK");
+        let done = done.and_then(|n| self.conn.execute_batch("COMMIT").map_err(q).map(|()| n));
+        match &done {
+            Ok(n) if *n > 0 => tracing::warn!(
+                "save queue: {n} of {} queued passage(s) left out, naming no passage here or one without its uid yet \
+                 [IMPL-UID-060]; the queue comes back without them",
+                ids.len()
+            ),
+            Ok(_) => {}
+            Err(_) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+            }
         }
         done
     }
@@ -3448,7 +3470,7 @@ mod tests {
         // whatever is short either way.
         assert!(store.load_queue().is_empty());
 
-        store.save_queue(&[7, 3, 11, 3]).unwrap();
+        assert_eq!(store.save_queue(&[7, 3, 11, 3]).unwrap(), 0, "nothing left out");
         assert_eq!(store.load_queue(), vec![7, 3, 11, 3],
                    "play order is the whole of what is stored, and a repeat is legal");
 
@@ -3456,8 +3478,8 @@ mod tests {
         assert_eq!(store.load_queue(), vec![5], "a shorter queue leaves no tail");
 
         // Stored by uid [IMPL-UID-060]; a passage this catalogue does not hold is
-        // nothing a queue can hold, and is left out.
-        store.save_queue(&[7, 99, 3]).unwrap();
+        // nothing a queue can hold, and is left out -- and counted.
+        assert_eq!(store.save_queue(&[7, 99, 3]).unwrap(), 1);
         assert_eq!(store.load_queue(), vec![7, 3]);
         let held: Vec<String> = store.conn.prepare("SELECT passage_uid FROM player_queue ORDER BY position").unwrap()
             .query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
@@ -3465,6 +3487,25 @@ mod tests {
 
         store.save_queue(&[]).unwrap();
         assert!(store.load_queue().is_empty(), "an emptied queue is emptied");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A queued passage the hub has yet to give a uid is left out of the saved
+    /// queue, as one naming no passage is, and both are counted rather than
+    /// dropped in silence.
+    #[test]
+    fn a_queued_passage_without_a_uid_is_left_out_and_counted() {
+        let tmp = std::env::temp_dir().join(format!("lempi-queue-no-uid-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        let store = PlayerStore::open(&tmp).unwrap();
+        store.conn.execute_batch(
+            "CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, passage_uid TEXT);
+             INSERT INTO passages VALUES (1, 'u-one'), (2, NULL);",
+        )
+        .unwrap();
+        assert_eq!(store.save_queue(&[1, 2, 99]).unwrap(), 2, "the uid-less passage and the absent one");
+        assert_eq!(store.load_queue(), vec![1]);
+        drop(store);
         let _ = std::fs::remove_file(&tmp);
     }
 
@@ -4309,6 +4350,24 @@ mod tests {
         assert_eq!(store.recording_passage("aaaaaaaa-0000-0000-0000-000000000001"), Some(crate::db::test_support::uid(2)), "by its uid [IMPL-UID-072]");
         assert_eq!(store.recording_passage("aaaaaaaa-0000-0000-0000-00000000000f"), Some(crate::db::test_support::uid(2)), "a medley's lesser half");
         assert_eq!(store.recording_passage("no-such-recording"), None);
+    }
+
+    /// A radio cut the hub has yet to give a uid is passed over for the album
+    /// cut that has one, rather than leading nowhere; a recording whose every
+    /// passage lacks one leads nowhere.
+    #[test]
+    fn a_recording_whose_radio_cut_has_no_uid_leads_to_its_album_cut() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, kind TEXT, passage_uid TEXT);
+             CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT, weight REAL, source TEXT);
+             INSERT INTO passages VALUES (1, 'album', 'u-album'), (2, 'radio', NULL), (3, 'radio', NULL);
+             INSERT INTO passage_recordings VALUES (1, 'rec', 1.0, 's'), (2, 'rec', 1.0, 's'), (3, 'lone', 1.0, 's');",
+        )
+        .unwrap();
+        let store = PlayerStore { conn: QualifyingConn::wrap_unsplit(c) };
+        assert_eq!(store.recording_passage("rec").as_deref(), Some("u-album"));
+        assert_eq!(store.recording_passage("lone"), None);
     }
 
     #[test]
