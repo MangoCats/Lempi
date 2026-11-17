@@ -16,6 +16,7 @@ identical result `--commit` would have written directly.
     python tools/test_flag_sync.py
 """
 
+import json
 import os
 import sqlite3
 import subprocess
@@ -239,6 +240,34 @@ def test_pull(tmp: str) -> None:
     got = flags_here(c4)
     check(("recording", SONG_A) in got, f"the table must exist and hold the pulled flag, got {got}")
     c4.close()
+
+    # A record from before Stage B names its passage by span alone, and the
+    # passage that span finds here has no uid yet: there is nothing to flag it
+    # by. Until 2026-11-17 it was written with a NULL subject and counted matched.
+    print("a passage found by its span but holding no uid is reported, not flagged by NULL")
+    old_json = os.path.join(tmp, "flags-before-stage-b.json")
+    with open(flags_json, encoding="utf-8") as f:
+        doc = json.load(f)
+    passage_anchors = [e["anchor"] for e in doc["flags"] if e["subject_kind"] == "passage"]
+    check(len(passage_anchors) == 1 and passage_anchors[0].pop("passage_uid", None),
+          "the fixture's one passage flag carried a uid, now taken out")
+    with open(old_json, "w", encoding="utf-8") as f:
+        json.dump(doc, f)
+    desk5 = os.path.join(tmp, "desk5.db")
+    desktop_db(desk5, has_song_b_passage=True)
+    c5 = sqlite3.connect(desk5)
+    c5.execute("UPDATE passages SET passage_uid = NULL WHERE passage_id = 20")
+    c5.commit()
+    c5.close()
+    r = run(IMPORT_FLAGS, desk5, old_json, "--commit")
+    check(r.returncode == 0 and "Traceback" not in r.stderr, f"exited {r.returncode}: {r.stderr[:400]}")
+    check("1 new flag(s), 0 already flagged here, 1 not present here" in r.stdout,
+          f"the recording lands and the passage is counted as not here: {r.stdout!r}")
+    check("has no uid" in r.stdout, f"and it is named, with why: {r.stdout!r}")
+    c5 = sqlite3.connect(desk5)
+    got = flags_here(c5)
+    check(list(got.keys()) == [("recording", SONG_A)], f"no passage flag, NULL or otherwise: {got}")
+    c5.close()
 
 
 def test_push_back_emit_sql(tmp: str) -> None:

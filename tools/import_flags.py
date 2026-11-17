@@ -117,6 +117,15 @@ def main() -> int:
             # Flagged here by its uid, never this receiver's number [IMPL-UID-060].
             subject_id = conn.execute("SELECT passage_uid FROM passages WHERE passage_id = ?1",
                                       (passage_id,)).fetchone()[0]
+            if subject_id is None:
+                # Found by its span (a record from before Stage B), on a passage
+                # the hub has yet to give a uid: nothing to flag it by. Until
+                # 2026-11-17 this wrote a NULL subject, or failed the batch
+                # part-way, and either way was counted as matched.
+                say(f"not flaggable here yet: passage at {anchor['audio_md5'][:12]}… "
+                    f"({anchor['start_ms']}-{anchor['end_ms']}) has no uid")
+                unmatched += 1
+                continue
 
         exists = conn.execute(
             "SELECT 1 FROM listener_flags WHERE subject_kind=?1 AND subject_id=?2",
