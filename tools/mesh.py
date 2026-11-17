@@ -388,6 +388,21 @@ def _complete(mdir: str, s: dict) -> None:
     s["accepted_at"] = now()
 
 
+def _body(r) -> bytes:
+    """A response's body, ungzipped where the far end gzipped it. A body that is
+    not the whole gzip it says it is is a network failure, as a cut-off answer is
+    [SPEC-NSH-092]: `gzip` raises EOFError for a short one, which is no OSError."""
+    import gzip
+    import zlib
+    raw = r.read()
+    if (r.headers.get("Content-Encoding") or "").strip().lower() != "gzip":
+        return raw
+    try:
+        return gzip.decompress(raw)
+    except (OSError, EOFError, zlib.error) as e:
+        raise ConnectionError(f"the answer's gzip is not whole ({type(e).__name__}: {e})") from e
+
+
 def _http(method: str, url: str, body: dict | None = None, timeout: float = 10.0) -> dict:
     """The answer to one request. A refusal -- an HTTP error the far end sent --
     is a ValueError with its words; a failure of the network is an OSError,
@@ -399,14 +414,19 @@ def _http(method: str, url: str, body: dict | None = None, timeout: float = 10.0
     import urllib.error
     import urllib.request
     data = None if body is None else json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
+    # [SPEC-NSH-096]: the answer gzipped, which a player gives anyone who asks for it
+    # [REQ-VIS-164], and which urllib never asked for -- so until 2026-11-17 a snapshot
+    # came back as escaped JSON, uncompressed, over the fleet's slowest links. A far end
+    # that does not compress answers as before.
+    req = urllib.request.Request(url, data=data, method=method,
+                                 headers={"Content-Type": "application/json", "Accept-Encoding": "gzip"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read() or b"{}")
+            return json.loads(_body(r) or b"{}")
     except urllib.error.HTTPError as e:
         try:
-            raise ValueError(json.loads(e.read()).get("error") or f"HTTP {e.code}") from e
-        except json.JSONDecodeError:
+            raise ValueError(json.loads(_body(e)).get("error") or f"HTTP {e.code}") from e
+        except (json.JSONDecodeError, OSError):
             raise ValueError(f"HTTP {e.code}") from e
     except http.client.HTTPException as e:
         raise ConnectionError(f"the answer was cut off ({type(e).__name__}: {e})") from e

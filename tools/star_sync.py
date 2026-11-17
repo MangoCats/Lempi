@@ -404,13 +404,58 @@ def mesh_of(plan):
     return meshmod.mesh_dir(at_root(plan["hub"]["library"]))
 
 
+NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+CREATION = re.compile(r"(?:\s|--[^\n]*\n|/\*.*?\*/)*CREATE\s+(?:TABLE|(?:UNIQUE\s+)?INDEX)\s", re.I | re.S)
+# What a node's snapshot may make the hub do, besides making its own tables and their
+# indexes and filling them [SPEC-NSH-062]: nothing. Each of these is refused outright.
+_REFUSED = {getattr(sqlite3, a) for a in (
+    "SQLITE_ATTACH", "SQLITE_DETACH", "SQLITE_PRAGMA", "SQLITE_ALTER_TABLE", "SQLITE_DELETE",
+    "SQLITE_CREATE_TRIGGER", "SQLITE_CREATE_TEMP_TRIGGER", "SQLITE_CREATE_VIEW", "SQLITE_CREATE_TEMP_VIEW",
+    "SQLITE_CREATE_TEMP_TABLE", "SQLITE_CREATE_TEMP_INDEX", "SQLITE_CREATE_VTABLE",
+    "SQLITE_DROP_TABLE", "SQLITE_DROP_INDEX", "SQLITE_DROP_TRIGGER", "SQLITE_DROP_VIEW", "SQLITE_DROP_VTABLE",
+    "SQLITE_DROP_TEMP_TABLE", "SQLITE_DROP_TEMP_INDEX", "SQLITE_DROP_TEMP_TRIGGER", "SQLITE_DROP_TEMP_VIEW")
+    if hasattr(sqlite3, a)}
+_SCHEMA = {"sqlite_master", "sqlite_schema"}
+
+
 def db_of(export, path):
     """A database from `mesh_sync::export`'s shape. A table the export gives
     no creating statement for -- the catalogue summary's -- is made from its
-    columns, keyed by its first."""
+    columns, keyed by its first.
+
+    [SPEC-NSH-062]: what a node sends is data, never SQL the hub runs as it
+    came. Until 2026-11-17 each `create` statement was executed verbatim and
+    each name spliced into SQL: an answer signed by a member's key, or a bug in
+    one, could have attached the hub's live listener and written it, or left a
+    trigger to fire on the INSERTs below. Now a name is a plain identifier; a
+    statement is one CREATE TABLE or CREATE [UNIQUE] INDEX, which SQLite itself
+    holds to one statement; and an authorizer lets each entry make only its own
+    table and that table's indexes, and write only that table, in this file."""
+    for t in export["tables"]:
+        for n in [t.get("name"), *t.get("columns", []), *t.get("key", [])]:
+            if not isinstance(n, str) or not NAME.match(n):
+                raise ValueError(f"a table or column name in the answer is not a plain name: {n!r} [SPEC-NSH-062]")
+        for s in t.get("create") or []:
+            if not isinstance(s, str) or not CREATION.match(s):
+                raise ValueError(f"{t['name']}: not a CREATE TABLE or INDEX: {str(s)[:80]!r} [SPEC-NSH-062]")
     c = sqlite3.connect(path)
     try:
+        mine = {"table": None}
+
+        def authorize(action, arg1, arg2, dbname, _source):
+            table = mine["table"]
+            if action in _REFUSED or (dbname not in (None, "main") and action != sqlite3.SQLITE_READ):
+                return sqlite3.SQLITE_DENY
+            if action == sqlite3.SQLITE_CREATE_TABLE and arg1 != table:
+                return sqlite3.SQLITE_DENY
+            if action == sqlite3.SQLITE_CREATE_INDEX and arg2 != table:
+                return sqlite3.SQLITE_DENY
+            if action in (sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE) and arg1 not in {table, *_SCHEMA}:
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+        c.set_authorizer(authorize)
         for t in export["tables"]:
+            mine["table"] = t["name"]
             for s in t.get("create") or [f"CREATE TABLE {t['name']} ({', '.join(t['columns'])}, "
                                          f"PRIMARY KEY ({', '.join(t['key'])}))"]:
                 c.execute(s)
@@ -1037,6 +1082,24 @@ def history_of(sent, at, folder):
     return folder
 
 
+def sent_at(entry, who, said=None):
+    """[SPEC-STAR-050]: the moment the copy a node was last sent describes -- when the run
+    took the snapshot it was made from, not when the commit landed. The node held that copy's
+    rows at its snapshot; at the commit it may not have, so a removal is known only to come
+    after the snapshot, and a bundle sent between the two is not yet in the copy. Until
+    2026-11-17 the commit's time was used for both: a send made while the run was being
+    reviewed was not asked about again, and a row re-added on another node during that
+    review lost to the removal. A state written before then has only the commit's time,
+    which is used, and said when `said` is given."""
+    e = entry or {}
+    if e.get("snapshot_at"):
+        return e["snapshot_at"]
+    if e.get("at") and said is not None:
+        said(f"  {who}: the state records when its last commit landed and not its snapshot (written before "
+             "2026-11-17), so that time stands in for it [SPEC-STAR-050]")
+    return e.get("at", "")
+
+
 def sent_path(entry, key):
     """The copy a node was last sent, if the state names one and it is still there."""
     p = (entry or {}).get(key)
@@ -1103,7 +1166,8 @@ def snapshot(plan, only=None):
     manifest = {"hub_library": os.path.join(hd, "library.db"), "hub_state_from": hub["name"],
                 "nodes": [dict(name=hub["name"], listener=os.path.join(hd, "listener.db"),
                                taken_at=now().isoformat(), sent=sent_path(hs, "listener_sent"), sent_run=hs.get("run"),
-                               backups=history_of(hs.get("listener_sent"), hs.get("at", ""), os.path.join(hd, "history")))]}
+                               backups=history_of(hs.get("listener_sent"), sent_at(hs, hub["name"], say),
+                                                  os.path.join(hd, "history")))]}
     ns_newest = newest_sent(plan, state, run)
     if ns_newest:
         manifest["newest_sent"] = ns_newest
@@ -1183,8 +1247,9 @@ def snapshot(plan, only=None):
                 say(f"  {name}: its catalogue is on a read-only partition: the player opens it for the check "
                     f"and the commit, and closes it again [SPEC-STAR-104]")
         sent_lib = sent_path(ns, "library_sent")
+        since = sent_at(ns, name, say)
         baseline, rows_note = node_rows(mdir, player, run, name, snap, sent_lib, nd,
-                                        os.path.join(hd, "library.db"), at_root(hub["library"]), ns.get("at"))
+                                        os.path.join(hd, "library.db"), at_root(hub["library"]), since)
         # The state is judged against what the node is patched against: the copy last
         # sent, corrected by its own rows where it gave them. Judged against the copy
         # alone, a node that had made the hub's own edits read *changed* and was sent
@@ -1217,7 +1282,7 @@ def snapshot(plan, only=None):
         manifest["nodes"].append(dict(
             name=name, listener=os.path.join(nd, "listener.db"), taken_at=now().isoformat(),
             sent=sent_path(ns, "listener_sent"), sent_run=ns.get("run"),
-            backups=history_of(ns.get("listener_sent"), ns.get("at", ""), os.path.join(nd, "history")),
+            backups=history_of(ns.get("listener_sent"), since, os.path.join(nd, "history")),
             catalogue=os.path.join(nd, "summary.db"), files=os.path.join(nd, "summary.db")))
         baselines[name] = {"listener": os.path.join(nd, "listener.db"), "signed": n["member"],
                            "library": baseline or sent_lib, "library_sent": sent_lib,
@@ -2196,6 +2261,7 @@ def distribute(plan, run, names, commit, excuse=None, bulk=False):
         if n:
             say(f"  {n} file(s) a repair brings are on the hub [SPEC-LNK-052]")
     state = load_state(plan) if commit else None
+    taken = {n["name"]: n.get("taken_at") for n in (read_json(os.path.join(run, "manifest.json")) or {}).get("nodes", [])}
     done = read_json(os.path.join(run, "rehearsal.json")) or {}
     started = {}
     worst = 0
@@ -2231,8 +2297,10 @@ def distribute(plan, run, names, commit, excuse=None, bulk=False):
                 if name == hub or (name in signed and (os.path.exists(os.path.join(pdn, "catalogue.values.json"))
                                                        or os.path.exists(os.path.join(pdn, "catalogue.parts.json")))):
                     lib_sent = os.path.relpath(t["library"], ROOT)
+                # [SPEC-STAR-050]: `at` is when the commit landed; `snapshot_at`, when
+                # the run took this node's snapshot -- the moment the copy sent describes.
                 entry = {"listener_sent": os.path.relpath(t["listener"], ROOT), "library_sent": lib_sent,
-                         "at": now().isoformat(), "run": stamp_of(run)}
+                         "at": now().isoformat(), "snapshot_at": taken.get(name), "run": stamp_of(run)}
                 if name == hub:
                     state["hub"] = entry
                     lp = os.path.join(run, "merge", "integrity.json")

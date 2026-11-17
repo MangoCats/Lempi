@@ -520,7 +520,66 @@ def lempi_ro(path):
     return lempi_db.ro_uri(path)
 
 
+def test_a_snapshot_is_data_never_sql_the_hub_runs():
+    """[SPEC-NSH-062]: what a node sends is made into a database by `db_of`, and nothing else is done.
+    Until 2026-11-17 each `create` statement ran as it came: an answer could have attached the hub's
+    live listener and written it, or left a trigger to fire on the rows that followed."""
+    import sqlite3
+    tmp = tempfile.mkdtemp()
+    victim = os.path.join(tmp, "hub-listener.db")
+    v = sqlite3.connect(victim)
+    v.execute("CREATE TABLE listener_preferences (subject_id TEXT, rotation REAL)")
+    v.execute("INSERT INTO listener_preferences VALUES ('X', 1.0)")
+    v.commit()
+    v.close()
+    good = {"name": "listener_flags", "columns": ["subject_kind", "subject_id"], "key": ["subject_kind", "subject_id"],
+            "create": ['CREATE TABLE "listener_flags" (\n  subject_kind TEXT NOT NULL -- what it names; or not\n'
+                       "    CHECK (subject_kind IN ('recording','passage')),\n  subject_id TEXT NOT NULL,\n"
+                       "  PRIMARY KEY (subject_kind, subject_id))",
+                       "/* its index */ CREATE INDEX listener_flags_id ON listener_flags(subject_id)"],
+            "rows": [["recording", "r1"], ["passage", "u1"]]}
+    out = os.path.join(tmp, "ok.db")
+    ss.db_of({"tables": [good]}, out)
+    c = sqlite3.connect(out)
+    check(c.execute("SELECT count(*) FROM listener_flags").fetchone()[0] == 2
+          and c.execute("SELECT count(*) FROM sqlite_master WHERE type='index' AND sql IS NOT NULL").fetchone()[0] == 1,
+          "a node's own table, quoted, commented and checked, and its index, are made and filled")
+    c.close()
+
+    def refused(entry, why):
+        path = os.path.join(tmp, f"bad-{len(os.listdir(tmp))}.db")
+        try:
+            ss.db_of({"tables": entry if isinstance(entry, list) else [entry]}, path)
+            got = None
+        except (ValueError, sqlite3.Error) as e:
+            got = e
+        w = sqlite3.connect(victim)
+        intact = w.execute("SELECT * FROM listener_preferences").fetchall() == [("X", 1.0)] and \
+            w.execute("SELECT count(*) FROM sqlite_master").fetchone()[0] == 1
+        w.close()
+        check(got is not None and intact, f"{why}: refused ({type(got).__name__}: {got}), and the hub's file untouched")
+        return got
+    attach = f"ATTACH DATABASE '{victim}' AS h"
+    refused(dict(good, create=[good["create"][0], attach, "DELETE FROM h.listener_preferences"]),
+            "an ATTACH of the hub's live listener, and a write to it")
+    refused(dict(good, create=[good["create"][0] + "; " + attach]), "an ATTACH after the table, in one string")
+    refused(dict(good, create=[good["create"][0], "CREATE TRIGGER t AFTER INSERT ON listener_flags BEGIN "
+                                                  "DELETE FROM listener_flags; END"]), "a trigger on its own table")
+    refused(dict(good, create=["CREATE TABLE listener_preferences (subject_id TEXT)"]), "another table's name")
+    other = {"name": "listener_likes", "columns": ["mbid"], "key": ["mbid"], "rows": [],
+             "create": ["CREATE TABLE listener_likes (mbid TEXT PRIMARY KEY)",
+                        "CREATE INDEX sneaky ON listener_flags(subject_id)"]}
+    why = refused([good, other], "an index one entry makes on another entry's table")
+    check("not authorized" in str(why), f"and refused by the authorizer itself: {why}")
+    refused(dict(good, create=["CREATE TEMP TABLE listener_flags (subject_kind, subject_id)"]), "a temporary table")
+    refused(dict(good, name="listener_flags (x); DROP TABLE y; --"), "a table name that is not a plain name")
+    refused(dict(good, columns=["subject_kind", "subject_id) VALUES (1,2); --"]), "a column name that is not one")
+    refused(dict(good, create=[], columns=["a"], key=["a"], name="t", rows=[[1]]) | {"create": ["DELETE FROM t"]},
+            "a statement that creates nothing")
+
+
 def main() -> int:
+    test_a_snapshot_is_data_never_sql_the_hub_runs()
     test_the_newest_copy_sent()
     test_an_older_player_is_sent_no_table_it_would_refuse()
     test_backup_proofs()

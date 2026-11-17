@@ -549,6 +549,56 @@ def test_approve_all(tmp):
     check(prefs_of(fleet.nodes["a"]["listener"]) == {"X": 5, "Y": 5}, "each recording took the later change")
 
 
+def test_the_copy_sent_is_dated_by_its_snapshot(tmp):
+    """[SPEC-STAR-050]: the copy a node was last sent describes it at the run's snapshot, so the next run
+    reads it as of then: the bundles sent to it since, and the backup its removals are dated by. Until
+    2026-11-17 the commit's time was used -- a send made while the run was reviewed was never asked about,
+    and a row re-added during the review lost to the removal. A state from before keeps the commit's
+    time, and says so."""
+    fleet = Fleet(tmp)
+    same = [("X", 1, "2026-09-01 00:00:00")]
+    plan, hub = build(tmp, fleet, same, {"a": (same, False)})
+    asked = []
+    real = ss.bundle_ledger.touched_since
+
+    def touched(library, node, since):
+        asked.append((node, since))
+        return set()
+    with faked(fleet) as out:
+        ss.snapshot(plan)
+        run = ss.newest_run(plan)
+        ss.merge(plan, run)
+        ss.patch(plan, run)
+        stages(plan)
+        stages(plan, commit=True)
+        st = ss.load_state(plan)
+        taken = {n["name"]: n["taken_at"] for n in ss.read_json(os.path.join(run, "manifest.json"))["nodes"]}
+        check(st["nodes"]["a"]["snapshot_at"] == taken["a"] and st["hub"]["snapshot_at"] == taken["desktop"]
+              and st["nodes"]["a"]["at"] > taken["a"],
+              f"the state keeps when each snapshot was taken, beside when the commit landed: {st['nodes']['a']}")
+        ss.bundle_ledger.touched_since = touched
+        try:
+            before = len(out.getvalue())
+            ss.snapshot(plan)
+            run2 = ss.newest_run(plan)
+            said = out.getvalue()[before:]
+            # A state from before 2026-11-17: the commit's time stands in, said.
+            st["nodes"]["a"].pop("snapshot_at")
+            ss.save_state(plan, st)
+            before = len(out.getvalue())
+            ss.snapshot(plan)
+            said_old = out.getvalue()[before:]
+        finally:
+            ss.bundle_ledger.touched_since = real
+    epoch = int(ss.dt.datetime.fromisoformat(taken["a"]).timestamp())
+    check(os.listdir(os.path.join(run2, "a", "history")) == [f"listener-{epoch}.db"],
+          f"the copy last sent is a's backup as of its snapshot: {os.listdir(os.path.join(run2, 'a', 'history'))}")
+    check(asked[:1] == [("a", taken["a"])], f"and the sends to it are asked about from then: {asked}")
+    check("stands in for it" not in said and "a: the state records when its last commit landed" in said_old
+          and asked[1:] == [("a", st["nodes"]["a"]["at"])],
+          f"a state with only the commit's time uses it, and says so: {said_old[-400:]}")
+
+
 def test_the_hubs_commit_is_verified_by_its_counts(tmp):
     """[SPEC-STAR-129]: after the hub's commit, a row its patch names that is not at its target fails the
     verification. Until 2026-11-17 the verification looked for " 0 to apply" in the check's printed line,
@@ -1364,6 +1414,7 @@ def main() -> int:
     test_split_catalogue()
     for test in (test_quiet, test_conflict, test_hub_edited_during_sync, test_retired_files_moved, test_approve_all,
                  test_a_commit_answer_lost, test_a_snapshot_answer_unusable, test_the_hubs_commit_is_verified_by_its_counts,
+                 test_the_copy_sent_is_dated_by_its_snapshot,
                  test_a_big_step_is_held, test_on_demand, test_catalogue_moved,
                  test_catalogue_states, test_catalogue_by_uid, test_catalogue_old_player,test_catalogue_in_parts, test_a_patch_that_cannot_be_cut, test_selection, test_read_only_catalogue,
                  test_old_players, test_links_removed, test_links_repaired_with_files, test_empty_release_removed):

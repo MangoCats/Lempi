@@ -8,6 +8,7 @@ itself, proves its own key by signing, and then uses that key as its TLS
 client certificate.
 """
 import base64
+import gzip
 import hashlib
 import http.client
 import json
@@ -110,12 +111,23 @@ def test_sync_step(tmp):
                     self.wfile.write(b'{"answer": "')
                 self.close_connection = True
                 return
-            if mode["v"] == "refuse":
-                out = json.dumps({"error": "run 20260928T1830Z is not newer than 20260929T0000Z"}).encode()
-                self.send_response(409)
+            seen["accept"] = self.headers.get("Accept-Encoding")
+            zipped = mode["v"].endswith("-gz") and "gzip" in (seen["accept"] or "")
+
+            def send(code, out):
+                # [SPEC-NSH-096]: gzipped, as the player's own layer does for a client that asks.
+                if zipped:
+                    out = gzip.compress(out)
+                    if mode["v"] == "cut-gz":
+                        out = out[:len(out) // 2]
+                self.send_response(code)
+                if zipped:
+                    self.send_header("Content-Encoding", "gzip")
                 self.send_header("Content-Length", str(len(out)))
                 self.end_headers()
                 self.wfile.write(out)
+            if mode["v"] in ("refuse", "refuse-gz"):
+                send(409, json.dumps({"error": "run 20260928T1830Z is not newer than 20260929T0000Z"}).encode())
                 return
             req = json.loads(body["request"])
             seen["signed"] = mesh.verify(mesh_pub, body["request"].encode(), body["signature"])
@@ -124,11 +136,7 @@ def test_sync_step(tmp):
             nonce = "0" * 32 if mode["v"] == "nonce" else req["nonce"]
             ans = json.dumps({"op": req["op"], "run": req["run"], "nonce": nonce, "node": req["node"],
                               "result": {"ok": 1}})
-            out = json.dumps({"answer": ans, "signature": who.sign(ans)}).encode()
-            self.send_response(200)
-            self.send_header("Content-Length", str(len(out)))
-            self.end_headers()
-            self.wfile.write(out)
+            send(200, json.dumps({"answer": ans, "signature": who.sign(ans)}).encode())
 
     srv = http.server.HTTPServer(("127.0.0.1", 0), Player)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -188,6 +196,16 @@ def test_asked_again(mdir, where, mode, seen):
         check(got == {"ok": 1} and seen["asked"] == 2, "and is, of one that has")
         check(mesh.network_failed(TimeoutError("timed out"), "commit") and not mesh.network_failed(TimeoutError(), "rows"),
               "a step that ran out of time waiting for its answer is not asked again, but a commit is")
+        # [SPEC-NSH-096]: every request asks for its answer gzipped, and a gzipped one is read.
+        got, err = ask("good-gz")
+        check(got == {"ok": 1} and seen["accept"] == "gzip", f"a gzipped answer is read, and was asked for: {err!r}")
+        got, err = ask("good")
+        check(got == {"ok": 1}, "and an answer not gzipped is read as before")
+        got, err = ask("refuse-gz")
+        check(isinstance(err, ValueError) and "not newer" in str(err), f"a gzipped refusal keeps its words: {err!r}")
+        got, err = ask("cut-gz")
+        check(isinstance(err, ConnectionError) and "gzip is not whole" in str(err) and seen["asked"] == mesh.ATTEMPTS,
+              f"a gzip cut short is a network failure, and asked again: {err!r}")
     finally:
         mesh.say, mesh.time.sleep = real
         mode["v"] = "good"

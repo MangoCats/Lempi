@@ -95,6 +95,16 @@ first and keeps the node's paths with the second -- so the catalogue itself neve
 travels up. It is 1.27 GB on each appliance (measured 2026-09-28), and the ssh
 path copied it whole whenever it had moved.
 
+**`[SPEC-NSH-062]` What a node sends up is data, never SQL the hub runs as it
+came.** Until 2026-11-17 the hub ran a snapshot's creating statements verbatim
+and spliced its names into SQL, so a signed answer -- from a stolen member key,
+or a bug -- could have attached the hub's live listener and written to it, or
+left a trigger to fire on the rows that followed. Now every name is a plain
+identifier, every statement one `CREATE TABLE` or `CREATE [UNIQUE] INDEX` (SQLite
+holds each to one statement), and an authorizer lets each table's entry make only
+that table and its indexes, and write only it. The player holds the hub's patches
+to the same rule (`ident`, `creation` in `mesh_sync.rs`).
+
 **`[SPEC-NSH-070]` Down: values, not digests.** A patch names each changed row
 with its old and new values, as the member patch does (`mesh_sync.rs`), because
 the digest `star_patch.py` uses cannot be reproduced exactly from Rust. The shared
@@ -190,6 +200,14 @@ attempt missed ended at the hub, before reaching any of them. When the hub's
 state already names this run, its step is said and skipped. The state names a
 run only once the hub's commit has landed and been verified.
 
+**`[SPEC-NSH-096]` Answers come back gzipped.** The hub asks for every answer
+gzipped, as the player gives any client that asks `[REQ-VIS-164]`; until
+2026-11-17 it never asked. A node's snapshot is 3.77 MB on the wire and 1.32 MB
+gzipped (measured that day): 3.23 s against 2.81 s on `lempi02w`'s shared radio,
+1.10 s against 1.19 s on `bose`'s faster link, where compressing costs more than
+it saves. The gain is airtime. Patches going down are unchanged: a player reading
+gzipped requests would need a build, and a way to say so.
+
 ## 4. What is retired
 
 **`[SPEC-NSH-100]` The ssh node path in star sync** -- fetching a node's files,
@@ -275,4 +293,4 @@ network. Appliances are built first; the phone follows the choice.
 
 ---
 
-**Traceability:** `[SPEC-NSH-010..195]`, `[SPEC-NSH-900]` · builds `[SPEC-MTR-220]` · closes, when built, `[SPEC-SEC-040]` (ssh links), `[SPEC-SEC-050]` (ssh reads), `[SPEC-SEC-110]` (via SPEC051), `[SPEC-SEC-120]` (keys) · the fourth review's pairing findings in §5 · `[SPEC-NSH-032]`, `[SPEC-NSH-082]`, `[SPEC-NSH-092]`, `[SPEC-NSH-094]` close findings 3, 9, 6 and 7, and 4 of the star sync review of 2026-11-16
+**Traceability:** `[SPEC-NSH-010..195]`, `[SPEC-NSH-900]` · builds `[SPEC-MTR-220]` · closes, when built, `[SPEC-SEC-040]` (ssh links), `[SPEC-SEC-050]` (ssh reads), `[SPEC-SEC-110]` (via SPEC051), `[SPEC-SEC-120]` (keys) · the fourth review's pairing findings in §5 · `[SPEC-NSH-032]`, `[SPEC-NSH-082]`, `[SPEC-NSH-092]`, `[SPEC-NSH-094]` close findings 3, 9, 6 and 7, and 4 of the star sync review of 2026-11-16; `[SPEC-NSH-062]` closes 11, and `[SPEC-NSH-096]` the answers' half of 15
