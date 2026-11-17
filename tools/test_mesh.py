@@ -100,7 +100,11 @@ def test_sync_step(tmp):
             pass
 
         def do_POST(self):
-            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            raw = self.rfile.read(int(self.headers["Content-Length"]))
+            # [SPEC-NSH-096]: a request sent gzipped, read as the player's handler reads it.
+            seen["sent_gz"] = self.headers.get("Content-Encoding") == "gzip"
+            seen["sent_bytes"] = len(raw)
+            body = json.loads(gzip.decompress(raw) if seen["sent_gz"] else raw)
             seen["asked"] = seen.get("asked", 0) + 1
             if mode["v"] == "cut" or (mode["v"] == "drop-first" and seen["asked"] == 1):
                 # [SPEC-NSH-092]: the player restarting mid-answer, or the radio re-associating.
@@ -206,6 +210,17 @@ def test_asked_again(mdir, where, mode, seen):
         got, err = ask("cut-gz")
         check(isinstance(err, ConnectionError) and "gzip is not whole" in str(err) and seen["asked"] == mesh.ATTEMPTS,
               f"a gzip cut short is a network failure, and asked again: {err!r}")
+        # [SPEC-NSH-096]: a request goes gzipped only when asked to, for a node that reads one.
+        mode["v"], seen["asked"] = "good", 0
+        part = {"part": {"text": json.dumps([{"name": "artists", "rows": [["mb%04d" % i, "Artist %d" % i]
+                                                                           for i in range(2000)]}])}}
+        plain = mesh.sync_step(mdir, where, "stage", "20260928T1830Z", extra=part)
+        plain_bytes, plain_gz = seen["sent_bytes"], seen["sent_gz"]
+        zipped = mesh.sync_step(mdir, where, "stage", "20260928T1830Z", extra=part, gz=True)
+        check(plain == zipped == {"ok": 1} and not plain_gz and seen["sent_gz"],
+              "a request goes gzipped with gz, and as it is without")
+        check(seen["sent_bytes"] < plain_bytes / 4,
+              f"and an escaped part is a fraction of itself gzipped: {seen['sent_bytes']} bytes against {plain_bytes}")
     finally:
         mesh.say, mesh.time.sleep = real
         mode["v"] = "good"

@@ -664,9 +664,11 @@ pub fn router(ui: Ui) -> Router {
         // The signed star sync `[SPEC-NSH-020]`. A commit carries the
         // catalogue's patch, so the body may be far past axum's 2 MB default;
         // raised for this route alone, which a signature check guards.
+        // `[SPEC-NSH-096]`: a request may come gzipped; the handler ungzips it, and the
+        // same limit holds of what it ungzips to (`star_node::request_text`).
         .route(
             "/mesh/sync/:op",
-            post(mesh_sync).layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024)),
+            post(mesh_sync).layer(axum::extract::DefaultBodyLimit::max(crate::star_node::SYNC_BODY_MAX)),
         )
         // How long the pairing window stays open `[SecurityReview3 R3]`. Opening
         // it is the local button (SIGUSR1), never a route; this only sets the
@@ -2172,6 +2174,27 @@ mod tests {
         let big = serde_json::json!({"request": "x".repeat(3 * 1024 * 1024), "signature": ""}).to_string();
         let r = post("/mesh/sync/commit", big).await;
         assert!(r.contains(" 409 ") && r.contains("in no mesh"), "a 3 MB request reached the signature check: {r}");
+        // `[SPEC-NSH-096]`: a request gzipped reaches the handler ungzipped, and the
+        // body limit holds of what it ungzips to.
+        let post_gz = |path: &'static str, body: Vec<u8>| async move {
+            use std::io::Write;
+            let mut z = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            z.write_all(&body).unwrap();
+            let gz = z.finish().unwrap();
+            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let head = format!("POST {path} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n\
+                                Content-Encoding: gzip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", gz.len());
+            s.write_all(head.as_bytes()).await.unwrap();
+            s.write_all(&gz).await.unwrap();
+            let mut buf = Vec::new();
+            s.read_to_end(&mut buf).await.unwrap();
+            (gz.len(), String::from_utf8_lossy(&buf).to_string())
+        };
+        let (_, r) = post_gz("/mesh/sync/snapshot", b"{}".to_vec()).await;
+        assert!(r.contains(" 409 ") && r.contains("no request"), "a gzipped request is read ungzipped: {r}");
+        let (n, r) = post_gz("/mesh/sync/commit", vec![b' '; 65 * 1024 * 1024]).await;
+        assert!(n < 1 << 20 && r.contains(" 409 ") && r.contains("ungzips to more than 64 MB"),
+                "{n} bytes of gzip ungzipping past the limit are refused as the body would be: {r}");
         let r = post("/mesh/invite/x/reveal", "{}".into()).await;
         assert!(r.contains(" 409 ") && !r.contains("no request"), "the membership steps still reach mesh_step: {r}");
         // `[SPEC-PGM-310]`: on a node on the network the hub's programme comes

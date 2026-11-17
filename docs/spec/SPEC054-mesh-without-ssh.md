@@ -200,13 +200,15 @@ attempt missed ended at the hub, before reaching any of them. When the hub's
 state already names this run, its step is said and skipped. The state names a
 run only once the hub's commit has landed and been verified.
 
-**`[SPEC-NSH-096]` Answers come back gzipped.** The hub asks for every answer
-gzipped, as the player gives any client that asks `[REQ-VIS-164]`; until
-2026-11-17 it never asked. A node's snapshot is 3.77 MB on the wire and 1.32 MB
-gzipped (measured that day): 3.23 s against 2.81 s on `lempi02w`'s shared radio,
-1.10 s against 1.19 s on `bose`'s faster link, where compressing costs more than
-it saves. The gain is airtime. Patches going down are unchanged: a player reading
-gzipped requests would need a build, and a way to say so.
+**`[SPEC-NSH-096]` Both ways gzipped.** The hub asks for every answer gzipped, as
+the player gives any client that asks `[REQ-VIS-164]`; until 2026-11-17 it never
+asked. A node's snapshot is 3.77 MB on the wire and 1.32 MB gzipped (measured that
+day): 3.23 s against 2.81 s on `lempi02w`'s shared radio, 1.10 s against 1.19 s on
+`bose`'s faster link, where compressing costs more than it saves. The gain is
+airtime. Patches and staged parts go down gzipped to a node whose snapshot reports
+`gzip_requests`, and as they are to one that does not, which would read the gzip
+as JSON; a step of a megabyte or more says which. The player ungzips a request
+itself, and holds what it ungzips to the same 64 MB as one sent as it is.
 
 ## 4. What is retired
 

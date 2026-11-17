@@ -1322,6 +1322,7 @@ dependencies = [
  "base64",
  "cpal",
  "embedded-graphics",
+ "flate2",
  "framebuffer",
  "futures-util",
  "hmac",

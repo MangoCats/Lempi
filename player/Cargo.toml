@@ -134,6 +134,11 @@ axum = { version = "0.7", features = ["ws"] }
 # Wi-Fi moved 0.2-0.4 MB/s: the player page is 66 KB and arrived in
 # 150-390 ms; gzipped it is 22 KB.
 tower-http = { version = "0.6", default-features = false, features = ["compression-gzip"] }
+# A star sync request sent gzipped, ungzipped by its handler `[SPEC-NSH-096]`: the
+# hub's patches and staged parts, escaped JSON that gzips to a fraction -- 3.77 MB
+# to 1.32 MB for a snapshot coming up, measured 2026-11-17. The flate2 the
+# compression above already builds, so no crate is added to the graph.
+flate2 = "1"
 
 # Diagnostics through `tracing` `[GDE-HST-070]`, `[GDE-HST-100]`. `tracing`
 # itself is already in the graph via axum and tower, so naming it here compiles

@@ -403,7 +403,7 @@ def _body(r) -> bytes:
         raise ConnectionError(f"the answer's gzip is not whole ({type(e).__name__}: {e})") from e
 
 
-def _http(method: str, url: str, body: dict | None = None, timeout: float = 10.0) -> dict:
+def _http(method: str, url: str, body: dict | None = None, timeout: float = 10.0, gz: bool = False) -> dict:
     """The answer to one request. A refusal -- an HTTP error the far end sent --
     is a ValueError with its words; a failure of the network is an OSError,
     and that includes an answer cut off part way [SPEC-NSH-092]. Until
@@ -413,13 +413,18 @@ def _http(method: str, url: str, body: dict | None = None, timeout: float = 10.0
     import http.client
     import urllib.error
     import urllib.request
+    import gzip
     data = None if body is None else json.dumps(body).encode()
     # [SPEC-NSH-096]: the answer gzipped, which a player gives anyone who asks for it
     # [REQ-VIS-164], and which urllib never asked for -- so until 2026-11-17 a snapshot
     # came back as escaped JSON, uncompressed, over the fleet's slowest links. A far end
-    # that does not compress answers as before.
-    req = urllib.request.Request(url, data=data, method=method,
-                                 headers={"Content-Type": "application/json", "Accept-Encoding": "gzip"})
+    # that does not compress answers as before. And with `gz`, the request gzipped too,
+    # for a player that has said it reads one: an older build would take the gzip for JSON.
+    headers = {"Content-Type": "application/json", "Accept-Encoding": "gzip"}
+    if gz and data is not None:
+        data = gzip.compress(data, compresslevel=6)
+        headers["Content-Encoding"] = "gzip"
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(_body(r) or b"{}")
@@ -689,13 +694,14 @@ def sync_players(mdir: str) -> dict:
 
 def sync_step(mdir: str, player: dict, op: str, run: str, catalogue_patch: dict | None = None,
               listener_patch: dict | None = None, timeout: float = 600.0, extra: dict | None = None,
-              again: bool = False) -> dict:
+              again: bool = False, gz: bool = False) -> dict:
     """One step on one player; its result, once the answer is proven to be the
     player's, and to this request. A step in REPEATABLE -- and a commit, with
     `again`, to a node that says it can answer one asked again -- is asked again,
     up to ATTEMPTS times, when the network fails it; each attempt is said, and
     the last failure is the one raised [SPEC-NSH-092]. Each attempt is its own
-    request, with its own nonce and time."""
+    request, with its own nonce and time. With `gz`, for a node that says it reads
+    one, the request goes gzipped [SPEC-NSH-096]."""
     if op not in SYNC_STEPS:
         raise ValueError(f"not a step: {op}")
     # `[SPEC-NKP-925]`: a part to stage, or the parts a rehearsal or commit is to apply.
@@ -703,7 +709,7 @@ def sync_step(mdir: str, player: dict, op: str, run: str, catalogue_patch: dict 
     repeat = op in REPEATABLE or (op == "commit" and again)
     for attempt in range(1, ATTEMPTS + 1):
         try:
-            return signed_step(mdir, player, f"/mesh/sync/{op}", op, fields, timeout)
+            return signed_step(mdir, player, f"/mesh/sync/{op}", op, fields, timeout, gz=gz)
         except OSError as err:
             if not repeat or attempt == ATTEMPTS or not network_failed(err, op):
                 raise
@@ -713,7 +719,8 @@ def sync_step(mdir: str, player: dict, op: str, run: str, catalogue_patch: dict 
     raise AssertionError("unreachable")
 
 
-def signed_step(mdir: str, player: dict, path: str, op: str, fields: dict, timeout: float = 10.0) -> dict:
+def signed_step(mdir: str, player: dict, path: str, op: str, fields: dict, timeout: float = 10.0,
+                gz: bool = False) -> dict:
     """A request signed by the mesh key, to one player at `path`; its result,
     once the answer is proven to be the player's, and to this request
     [SPEC-NSH-030]. The request carries `fields` beside what addresses it."""
@@ -727,7 +734,7 @@ def signed_step(mdir: str, player: dict, path: str, op: str, fields: dict, timeo
     text = json.dumps(req, ensure_ascii=False, separators=(",", ":"))
     got = _http("POST", f"http://{player['address']}:{player.get('web_port', LEMPI_DEFAULT_PORT)}{path}",
                 {"request": text, "signature": sign(load_key(os.path.join(mdir, "mesh.key")), text.encode())},
-                timeout=timeout)
+                timeout=timeout, gz=gz)
     pub = cert_from_pem(m["certificate"]).public_key()
     if not verify(pub, str(got.get("answer", "")).encode(), str(got.get("signature", ""))):
         raise ValueError(f"the answer from {player['address']} is not signed by {fp[:8]}")

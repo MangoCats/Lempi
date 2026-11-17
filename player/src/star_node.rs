@@ -199,6 +199,35 @@ const CATALOGUE_ROWS: i64 = 3;
 /// and takes one step at a time. A hub asks a node's commit again only when it says so:
 /// asked again, an older build refuses it, or, still applying the first, runs it twice.
 const COMMIT_AGAIN: i64 = 1;
+/// `[SPEC-NSH-096]`: this build reads a sync request sent gzipped. A hub sends a node
+/// its patches gzipped only when it says so; an older build would read the gzip as JSON.
+const GZIP_REQUESTS: i64 = 1;
+
+/// The most a sync request may be, sent as it is or once ungzipped: a catalogue patch
+/// sent whole is at most 16 MB of JSON, and a part 8 MB, each escaped once more inside
+/// the signed request `[SPEC-NKP-920]`.
+pub const SYNC_BODY_MAX: usize = 64 << 20;
+
+/// A sync request's text, ungzipped where it came gzipped `[SPEC-NSH-096]`. Held to
+/// `SYNC_BODY_MAX` as ungzipped, so a few kilobytes of gzip cannot become a gigabyte
+/// here: axum's own limit can see only the bytes that arrived.
+pub(crate) fn request_text(body: &[u8], gzipped: bool) -> Result<String, String> {
+    let bytes = if gzipped {
+        use std::io::Read;
+        let mut out = Vec::new();
+        flate2::read::GzDecoder::new(body)
+            .take(SYNC_BODY_MAX as u64 + 1)
+            .read_to_end(&mut out)
+            .map_err(|e| format!("the request's gzip could not be read: {e}"))?;
+        if out.len() > SYNC_BODY_MAX {
+            return Err(format!("the request ungzips to more than {} MB: refused", SYNC_BODY_MAX >> 20));
+        }
+        out
+    } else {
+        body.to_vec()
+    };
+    String::from_utf8(bytes).map_err(|e| format!("the request is not text: {e}"))
+}
 
 fn snapshot(listener: &Path, library: &Path) -> Result<Value, String> {
     Ok(json!({
@@ -206,6 +235,7 @@ fn snapshot(listener: &Path, library: &Path) -> Result<Value, String> {
         "catalogue": mesh_sync::catalogue_summary(library)?,
         "last_run": last_run(listener),
         "commit_again": COMMIT_AGAIN,
+        "gzip_requests": GZIP_REQUESTS,
         "natural_keys": NATURAL_KEYS,
         "passage_uids": PASSAGE_UIDS,
         // `[IMPL-UID-056]`: the indexes its catalogue holds. Reported only by a
@@ -1117,6 +1147,8 @@ pub(crate) mod tests {
                 "the answer is signed by this node's key");
         let a: Value = serde_json::from_str(answer).unwrap();
         assert_eq!(a["result"]["natural_keys"], 1, "the build says what it can apply [SPEC-NKP-075]");
+        assert_eq!((a["result"]["commit_again"].clone(), a["result"]["gzip_requests"].clone()), (json!(1), json!(1)),
+                   "and that it answers a commit asked again, and reads a request gzipped [SPEC-NSH-032] [SPEC-NSH-096]");
         assert_eq!(a["result"]["listener"]["tables"][0]["name"], "listener_preferences");
         assert_eq!(a["result"]["catalogue"]["tables"][1]["rows"][0], json!([10, 1, "track", 0, 1000]));
 
@@ -1415,6 +1447,26 @@ pub(crate) mod tests {
         let a = t.join().unwrap().unwrap();
         assert_eq!(a["catalogue"]["applied"], 1, "{a}");
         let _ = std::fs::remove_dir_all(&n.dir);
+    }
+
+    /// `[SPEC-NSH-096]`: a request's text, as sent or gzipped; a gzip that is not whole, or
+    /// that is not text once ungzipped, is refused with why.
+    #[test]
+    fn a_request_is_read_as_sent_or_ungzipped() {
+        use std::io::Write;
+        let gz = |b: &[u8]| {
+            let mut z = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            z.write_all(b).unwrap();
+            z.finish().unwrap()
+        };
+        let text = r#"{"request":"é and more","signature":""}"#;
+        assert_eq!(request_text(text.as_bytes(), false).unwrap(), text);
+        assert_eq!(request_text(&gz(text.as_bytes()), true).unwrap(), text, "ungzipped to the same text");
+        let cut = gz(text.as_bytes());
+        assert!(request_text(&cut[..cut.len() / 2], true).unwrap_err().contains("gzip could not be read"));
+        assert!(request_text(text.as_bytes(), true).unwrap_err().contains("gzip could not be read"),
+                "text said to be gzip and not");
+        assert!(request_text(&gz(&[0xff, 0xfe]), true).unwrap_err().contains("not text"));
     }
 
     /// `[SPEC-NSH-080]`: three inverses kept, the oldest dropped.

@@ -373,6 +373,7 @@ PASSAGE_UIDS_NEEDED = 1    # [IMPL-UID-080]: the catalogue patch names passages 
 CATALOGUE_WINDOW_NEEDED = 1  # [SPEC-STAR-104]: a player that opens a read-only catalogue's partition to rehearse a patch too
 RETIRE_FILES_NEEDED = 1  # [SPEC-RTF-060]: a player that moves the files the hub retired to its own _Retired
 COMMIT_AGAIN_NEEDED = 1  # [SPEC-NSH-032]: a player that answers a commit asked again, and takes one step at a time
+GZIP_REQUESTS_NEEDED = 1  # [SPEC-NSH-096]: a player that reads a sync request sent gzipped
 # [SPEC-NSH-092]: what one node's answer can make go wrong in the hub's handling of it --
 # a refusal, the network, an answer not of the shape asked for, rows the copy's schema
 # refuses. Caught at each node, which is then missing or refused; never the whole stage.
@@ -973,10 +974,12 @@ def write_parts(pd, parts):
     return manifest
 
 
-def stage_parts(plan, run, name, player, manifest, pd):
+def stage_parts(plan, run, name, player, manifest, pd, gz=False):
     """[SPEC-NKP-925]: send the parts the node does not hold, and only those. What a rehearsal
     staged is on the node still, so the commit sends nothing twice. How many were sent; None
-    when the node says this run is committed there already, which consumed them."""
+    when the node says this run is committed there already, which consumed them. With `gz`,
+    each part goes gzipped [SPEC-NSH-096]; the node hashes the part's text as it ungzips it,
+    so a part's digest is the same either way."""
     mdir = mesh_of(plan)
     staged = meshmod.sync_step(mdir, player, "staged", stamp_of(run)) or {}
     if staged.get("committed"):
@@ -989,7 +992,7 @@ def stage_parts(plan, run, name, player, manifest, pd):
         with open(os.path.join(pd, meta["file"]), "rb") as fh:
             text = fh.read().decode("utf-8")
         say(f"  {name}: staging part {i} of {manifest['of']} ({len(text) / 1048576:.1f} MB)")
-        meshmod.sync_step(mdir, player, "stage", stamp_of(run), timeout=1800.0, extra={"part": {
+        meshmod.sync_step(mdir, player, "stage", stamp_of(run), timeout=1800.0, gz=gz, extra={"part": {
             "half": "catalogue", "n": i, "of": manifest["of"], "sha256": meta["sha256"],
             "total_bytes": manifest["total_bytes"], "text": text}})
         sent += 1
@@ -1293,6 +1296,8 @@ def snapshot(plan, only=None):
                            "retire_files": snap.get("retire_files", 0) or 0,
                            # [SPEC-NSH-032]: a commit to it may be asked again
                            "commit_again": snap.get("commit_again", 0) or 0,
+                           # [SPEC-NSH-096]: its patches may go gzipped
+                           "gzip_requests": snap.get("gzip_requests", 0) or 0,
                            "catalogue_blocked": blocked, "integrity": snap.get("file_checks"),
                            "journal_mode": snap.get("journal_mode"),
                            "catalogue_in_step": not blocked and cat["state"] in ("as-sent", "holds-hub-rows")}
@@ -2048,13 +2053,19 @@ def player_step(plan, run, name, player, commit):
     # [SPEC-NSH-032]: a commit whose answer is lost is asked again, of a node that says it
     # answers one asked again -- given what it answered the first time, or, still applying
     # it, waiting for it first. Of an older build, never.
-    again = ((read_json(os.path.join(run, "baselines.json")) or {}).get(name, {}).get("commit_again", 0) or 0) \
-        >= COMMIT_AGAIN_NEEDED
+    said = (read_json(os.path.join(run, "baselines.json")) or {}).get(name, {})
+    again = (said.get("commit_again", 0) or 0) >= COMMIT_AGAIN_NEEDED
+    # [SPEC-NSH-096]: its patches and parts gzipped, to a node that says it reads them so;
+    # to an older build as they are, and said where it matters.
+    gz = (said.get("gzip_requests", 0) or 0) >= GZIP_REQUESTS_NEEDED
+    if sending >= HOLD_BYTES:
+        say(f"  {name}: {sending / 1048576:.1f} MB of patches, sent "
+            + ("gzipped [SPEC-NSH-096]" if gz else "as they are: this build does not say it reads a request gzipped"))
     try:
         with hold:
             extra = None
             if parts:
-                sent = stage_parts(plan, run, name, player, parts, pd)
+                sent = stage_parts(plan, run, name, player, parts, pd, gz=gz)
                 extra = {"catalogue_parts": {"of": parts["of"], "sha256": [p["sha256"] for p in parts["parts"]]}}
                 if sent is None:
                     say(f"  {name}: this run is committed there already, its parts consumed: nothing staged, "
@@ -2068,7 +2079,7 @@ def player_step(plan, run, name, player, commit):
                 extra = dict(extra or {}, retire=retire)
             got = meshmod.sync_step(mdir, player, "commit" if commit else "rehearse", stamp_of(run),
                                     cat if has_rows(cat) else None, lis if has_rows(lis) else None,
-                                    timeout=3600.0 if parts else 600.0, extra=extra, again=commit and again)
+                                    timeout=3600.0 if parts else 600.0, extra=extra, again=commit and again, gz=gz)
     except NODE_FAULTS as err:
         say(f"RESULT {name}: REFUSED -- {type(err).__name__}: {err}")
         return 1

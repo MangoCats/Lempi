@@ -110,6 +110,8 @@ class Fleet:
         self.answers = {}           # (node, run) -> the answer a commit gave, kept as a current player keeps it
         self.broken_snapshot = set()  # nodes whose snapshot answer lacks its catalogue [SPEC-NSH-092]
         self.commit_again = set()   # players that report commit_again
+        self.gzip_cap = set()       # players that report gzip_requests [SPEC-NSH-096]
+        self.gz_asked = []          # (node, op, gz) for every step
 
     def rows(self, name, want):
         """`mesh_sync::catalogue_rows`, cut to the tables these tests hold."""
@@ -169,9 +171,10 @@ class Fleet:
         return {f"fp-{n}": {"fingerprint": f"fp-{n}", "address": n, "web_port": 0} for n in sorted(self.up)}
 
     def sync_step(self, mdir, player, op, run, catalogue_patch=None, listener_patch=None, timeout=0, extra=None,
-                  again=False):
+                  again=False, gz=False):
         name = player["address"]
         self.again_asked.append((name, op, again))
+        self.gz_asked.append((name, op, gz))
         current = name in self.commit_again
         if current and (name, run) in self.answers:
             # As a current player answers the same run asked again [SPEC-NSH-032]: the
@@ -234,6 +237,8 @@ class Fleet:
             if name in self.commit_again:
                 res["commit_again"] = 1
                 res["last_run"] = max((r for (n, r) in self.answers if n == name), default=None)
+            if name in self.gzip_cap:
+                res["gzip_requests"] = 1
             return res
         if op == "rows":
             self.asked.append((name, (extra or {})["want"]))
@@ -643,6 +648,41 @@ def test_the_hubs_commit_is_verified_by_its_counts(tmp):
     check(counts == {"apply": 0, "already": 0, "conflict": 1}, f"tally gives the numbers themselves: {counts}")
 
 
+def test_patches_go_gzipped_to_a_node_that_reads_them(tmp):
+    """[SPEC-NSH-096]: a node's rehearsal and commit go gzipped when its snapshot said it reads a request
+    so, and as they are to one that did not -- an older build would take the gzip for JSON -- and a step
+    big enough to matter says which. Snapshots and the like, a few bytes asked, go as they are."""
+    fleet = Fleet(tmp)
+    base = [("X", 1, "2026-09-01 00:00:00")]
+    plan, hub = build(tmp, fleet, base, {"a": (base, False), "b": (base, False)})
+    fleet.gzip_cap.add("a")
+    c = sqlite3.connect(hub["listener"])
+    c.execute("UPDATE listener_preferences SET rotation=4, recovery=4, updated_at='2026-10-02 00:00:00' WHERE subject_id='X'")
+    c.commit()
+    c.close()
+    real = ss.HOLD_BYTES
+    with faked(fleet) as out:
+        ss.snapshot(plan)
+        run = ss.newest_run(plan)
+        ss.merge(plan, run)
+        ss.patch(plan, run)
+        ss.HOLD_BYTES = 1               # every step "big enough" here, so each says how it was sent
+        try:
+            check(stages(plan) == 0 and stages(plan, commit=True) == 0, "rehearsal and commit, both nodes")
+        finally:
+            ss.HOLD_BYTES = real
+    steps = {(n, op): gz for n, op, gz in fleet.gz_asked if op in ("rehearse", "commit")}
+    check(steps == {("a", "rehearse"): True, ("a", "commit"): True, ("b", "rehearse"): False, ("b", "commit"): False},
+          f"a's patches gzipped, b's as they are: {steps}")
+    check(not any(gz for n, op, gz in fleet.gz_asked if op == "snapshot"), "a snapshot's few bytes go as they are")
+    said = out.getvalue()
+    check("a: " in said and "sent gzipped [SPEC-NSH-096]" in said
+          and "sent as they are: this build does not say it reads a request gzipped" in said,
+          "and each node's step says how its patches went")
+    check(prefs_of(fleet.nodes["a"]["listener"])["X"] == 4 and prefs_of(fleet.nodes["b"]["listener"])["X"] == 4,
+          "and both took the change")
+
+
 def test_a_big_step_is_held(tmp):
     """[PI3-AIM-170], [PI3-AIM-177]: a step carrying a megabyte or more holds the node's playback, renewed
     while it runs, however the patch is sent; a smaller one is sent without. Until 2026-11-17 only a
@@ -987,6 +1027,12 @@ def test_catalogue_in_parts(tmp):
     summary = open(os.path.join(run, "SUMMARY.md"), encoding="utf-8").read()
     check(f"in {man['of']} parts, staged on the node and committed there in one transaction" in summary, f"the summary says so: {summary}")
     fleet.commit_again.add("b")             # a current build, which keeps its commit's answer [SPEC-NSH-032]
+    # ... and reads a request gzipped [SPEC-NSH-096], as its snapshot would have said.
+    bl_path = os.path.join(run, "baselines.json")
+    bl = json.load(open(bl_path))
+    bl["b"]["gzip_requests"] = 1
+    with open(bl_path, "w") as fh:
+        json.dump(bl, fh)
     with faked(fleet) as out:
         stages(plan, "b")
         staged_after_rehearsal = sum(1 for e in fleet.log if e[0] == "b" and e[1] == "stage")
@@ -994,6 +1040,8 @@ def test_catalogue_in_parts(tmp):
         check(stages(plan, "b", commit=True) == 0, "the commit succeeds")
         total = sum(1 for e in fleet.log if e[0] == "b" and e[1] == "stage")
         check(total == man["of"], f"and sends none of them again: {total} stage requests in all")
+        stages_gz = [gz for n, op, gz in fleet.gz_asked if n == "b" and op == "stage"]
+        check(len(stages_gz) == man["of"] and all(stages_gz), f"each part staged gzipped [SPEC-NSH-096]: {stages_gz}")
         # The same run's commit asked again, as after a lost answer: the parts it consumed are
         # not staged again, and b answers from its own record.
         before = len(out.getvalue())
@@ -1414,7 +1462,7 @@ def main() -> int:
     test_split_catalogue()
     for test in (test_quiet, test_conflict, test_hub_edited_during_sync, test_retired_files_moved, test_approve_all,
                  test_a_commit_answer_lost, test_a_snapshot_answer_unusable, test_the_hubs_commit_is_verified_by_its_counts,
-                 test_the_copy_sent_is_dated_by_its_snapshot,
+                 test_the_copy_sent_is_dated_by_its_snapshot, test_patches_go_gzipped_to_a_node_that_reads_them,
                  test_a_big_step_is_held, test_on_demand, test_catalogue_moved,
                  test_catalogue_states, test_catalogue_by_uid, test_catalogue_old_player,test_catalogue_in_parts, test_a_patch_that_cannot_be_cut, test_selection, test_read_only_catalogue,
                  test_old_players, test_links_removed, test_links_repaired_with_files, test_empty_release_removed):

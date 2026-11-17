@@ -237,14 +237,21 @@ pub(super) async fn mesh_step(
 pub(super) async fn mesh_sync(
     State(ui): State<Ui>,
     axum::extract::Path(op): axum::extract::Path<String>,
-    body: String,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     if ui.web_loopback_only {
         return StatusCode::NOT_FOUND.into_response();
     }
     let (db, library) = (ui.db.clone(), ui.library.clone());
+    // `[SPEC-NSH-096]`: the hub sends a node that says it takes them its patches gzipped.
+    let gzipped = headers
+        .get(axum::http::header::CONTENT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("gzip"));
     let out = tokio::task::spawn_blocking(move || {
+        let body = crate::star_node::request_text(&body, gzipped)?;
         let b: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("not JSON: {e}"))?;
         crate::star_node::handle(&db, &library, &op, &b)
     })
