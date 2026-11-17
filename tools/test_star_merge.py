@@ -503,6 +503,35 @@ def test_lyrics_uids_come_from_the_hub(tmp):
           f"and no tie: {rep.data['decisions']}")
 
 
+def test_a_hub_that_set_no_uid_keeps_a_nodes_save_whole(tmp):
+    """[IMPL-UID-065]: the hub holds a row it could not place, its uid NULL, and a
+    node saves newer words under the same key with its passage's uid. The node's
+    save wins, and so does its uid: the hub's NULL is a value never set, not one
+    set to nothing. Until 2026-11-17 the hub's NULL replaced it, so every node was
+    sent the save without the uid that said which passage's it was. Where the hub
+    did set a uid, its value is still the merge's, whatever a node holds."""
+    lyr = [x for x in LYRICS.replace("origin TEXT, PRIMARY KEY", "origin TEXT, passage_uid TEXT, PRIMARY KEY")
+           .split(";") if x.strip()]
+    row = lambda md5, uid, text, at: (f"INSERT INTO passage_lyrics VALUES ('{md5}','radio',0,200000,'rec','{text}',0,"
+                                      f"'{at}','here',{uid})")
+    U, H, N = ("'" + ch * 32 + "'" for ch in "abc")
+    dl, al, sent = (os.path.join(tmp, f"lun-{n}.lis") for n in ("desk", "app", "sent"))
+    db(dl, *lyr, row("A", "NULL", "old", "2026-11-12 10:00:00.000"),          # one the hub could not place
+       row("C", H, "old", "2026-11-12 10:00:00.000"))                        # one it did
+    db(al, *lyr, row("A", U, "new", "2026-11-17 09:00:00.000"),               # the node's newer save
+       row("C", N, "new", "2026-11-17 09:00:00.000"))
+    db(sent, *lyr, row("A", "NULL", "old", "2026-11-12 10:00:00.000"), row("C", H, "old", "2026-11-12 10:00:00.000"))
+    out = os.path.join(tmp, "lun-out")
+    rep = sm.build({"hub_state_from": "desktop",
+                    "nodes": [dict(name="desktop", listener=dl), dict(name="app", listener=al, sent=sent)]}, out)
+    q = "SELECT audio_md5, text, passage_uid FROM passage_lyrics ORDER BY audio_md5"
+    want = [("A", "new", "a" * 32), ("C", "new", "b" * 32)]
+    for where in ("listener.db", os.path.join("nodes", "app", "listener.db")):
+        got = rows(os.path.join(out, where), q)
+        check(got == want, f"{where}: the node's save with its own uid, and the hub's uid where it set one: {got}")
+    check(rep.data["items"] == [], f"no item: {rep.data['items']}")
+
+
 def test_a_review_survives_two_rounds(tmp):
     """[SPEC-STAR-049] both ways. Found 2026-10-18: an id review made once on
     the hub was on eight passages after three syncs, because a node's copy
@@ -956,6 +985,7 @@ def main() -> int:
     test_a_snapshot_by_number_is_refused(tmp)
     test_passage_lyrics(tmp)
     test_lyrics_uids_come_from_the_hub(tmp)
+    test_a_hub_that_set_no_uid_keeps_a_nodes_save_whole(tmp)
     test_a_review_survives_two_rounds(tmp)
     test_a_removal_is_read_in_the_hubs_numbering(tmp)
     test_a_withdrawn_review_stays_withdrawn(tmp)

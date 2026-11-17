@@ -143,9 +143,10 @@ TABLES = {
     #
     # `hub_sets` [IMPL-UID-063]: each row's `passage_uid`, which the hub alone
     # sets, once, for a row whose segment is a current passage's, and which
-    # changes no save. Where the hub holds the row its value is the merge's; a
-    # node's never competes and is never a change; a row the hub lacks -- a
-    # node's new save, which records its passage's uid -- keeps its own.
+    # changes no save. Where the hub holds the row with a value, that value is
+    # the merge's; a node's never competes and is never a change. A row the hub
+    # lacks, or holds with none -- a node's new save, which records its
+    # passage's uid -- keeps the winner's [IMPL-UID-065].
     "passage_lyrics": dict(rule=LWW, key=("audio_md5", "kind", "start_ms"), stamp="updated_at",
                            newer=True, hub_sets=("passage_uid",)),
     # A decision withdrawn stays withdrawn [IMPL-UID-042]. Until 2026-11-14
@@ -562,10 +563,14 @@ def merge_table(table: str, spec: dict, nodes: list[Node], hub: str, rep: Report
         _items_lww(table, spec, key, by_name, held, merged, source, rep)
     else:
         _items_union(table, spec, key, by_name, held, merged, source, rep)
+    # [IMPL-UID-065]: the hub's NULL is a value it never set, not one it set to
+    # nothing, so it is no reason to replace the winner's -- a node's newer save
+    # for a row the hub could not place records its own passage's uid. Until
+    # 2026-11-17 the hub's NULL won, and every node was sent that save without it.
     for c in spec.get("hub_sets", ()):
         for k, row in merged.items():
             hub_row = held.get(k, {}).get(rep.hub)
-            if hub_row is not None and c in hub_row:
+            if hub_row is not None and hub_row.get(c) is not None:
                 row[c] = hub_row[c]
     # [SPEC-STAR-111]: a node's own column is its own in its own copy. `hub` here is
     # the node whose copy this is, so the hub keeps its own too. Until 2026-11-17 the
