@@ -106,7 +106,7 @@ CREATE INDEX passages_file ON passages(file_id);
 CREATE UNIQUE INDEX passages_span ON passages(file_id, kind, start_ms, end_ms);
 ```
 
-**`passages` has grown past this base shape, and `sql/schema.sql` carries the grown form.** `fade_in_ms`/`fade_out_ms` (`INTEGER NOT NULL DEFAULT 20`) and `fade_in_curve`/`fade_out_curve` (`TEXT NOT NULL DEFAULT 'exponential'`) are this passage's own volume envelope `[SPEC-SC-046]`, described below — in the schema since 2026-09-26, and `ALTER`ed into an older library by `tools/add_fade_columns.py`. `director_hold` (`TEXT`; NULL or empty means the Director may pick it) holds a passage back from selection, and says why `[SPEC-HOLD-020]` — `ALTER`ed in by `tools/passage_hold.py`, and on a speaker by `star_patch.py`.
+**`passages` has grown past this base shape, and `sql/schema.sql` carries the grown form.** `fade_in_ms`/`fade_out_ms` (`INTEGER NOT NULL DEFAULT 20`) and `fade_in_curve`/`fade_out_curve` (`TEXT NOT NULL DEFAULT 'exponential'`) are this passage's own volume envelope `[SPEC-SC-046]`, described below — in the schema since 2026-09-26, and `ALTER`ed into an older library by `tools/add_fade_columns.py`. `director_hold` (`TEXT`; NULL or empty means the Director may pick it) holds a passage back from selection, and says why `[SPEC-HOLD-020]` — `ALTER`ed in by `tools/passage_hold.py`, and on a speaker by `star_patch.py`. `passage_uid` is the passage's permanent identity, the same on every node, with the birth key it was made of (`birth_md5`, `birth_kind`, `birth_start_ms`, `birth_end_ms`, `birth_salt`), which a boundary edit never changes `[SPEC-UID-030]`; the unique index `passages_uid` finds a passage by it, and `passage_lineage` records a re-cut `[IMPL-UID-034]`. `passage_id` stays this catalogue's own number, for its own joins: anything that leaves the catalogue, or is read beside another, names the passage by its uid `[SPEC-SC-092]`.
 
 **`[SPEC-SC-043]` Lead durations are normally milliseconds, deliberately.** Across the migrated library the lead-in median is **5 ms** and the lead-out median **946 ms**. **Lead does not itself apply any gain ramp** `[SPEC-SC-046]` — it only times *when* a crossfade with a neighbour is permitted, never *how loud* either side is during it — so these numbers control overlap duration, not loudness shape. Near-zero overlap `[SPEC-DIR-*]` is therefore the intended default, and these values should not be inflated to "enable crossfading": doing so widens the window a crossfade is *allowed* to use, but produces no audible blend on its own. Audible crossfade is the uncommon case, and reaching it needs two things set together, not one: a long-enough `lead_out_ms`/`lead_in_ms` to admit the overlap, *and* a comparably long `fade_out_ms`/`fade_in_ms` `[SPEC-SC-046]` to actually ramp gain across it — every passage's fixed 20 ms fade default will not produce a slow blend even inside a long lead window, since it finishes in the first 20 ms of whatever `lead_out_ms` admits.
 
@@ -161,7 +161,7 @@ CREATE TABLE passage_recordings (
 ```sql
 CREATE TABLE flavor (
     subject_kind    TEXT NOT NULL CHECK (subject_kind IN ('recording','passage')),
-    subject_id      TEXT NOT NULL,          -- recordings.mbid | passages.passage_id
+    subject_id      TEXT NOT NULL,          -- recordings.mbid | passages.passage_id, this catalogue's; a patch sends its uid
     characteristic  TEXT NOT NULL,          -- 'mood_happy', 'genre_dortmund', 'user.christmas'
     class           TEXT NOT NULL,          -- 'happy', 'rock', 'christmasy'
     value           REAL NOT NULL CHECK (value >= 0.0 AND value <= 1.0),
@@ -204,65 +204,9 @@ Keyed by slice because extraction is per-passage `[SPEC-SA-090]` — **provision
 
 ---
 
-## 6. Listener State — Class D
+## 6. Listener State, Player State and Visibility
 
-**`[SPEC-SC-090]`** Segregated by prefix `[SPEC-SC-020]`. This is the **only irreplaceable data in the system** `[SPEC-DF-090]`; everything else re-derives from audio.
-
-```sql
-CREATE TABLE listener_play_history (          -- 37,134 rows in MuLibPlay since 2020
-    play_id     INTEGER PRIMARY KEY,
-    played_at   INTEGER NOT NULL,             -- unix seconds
-    passage_id  INTEGER REFERENCES passages(passage_id) ON DELETE SET NULL,
-    mbid        TEXT,                         -- survives passage deletion
-    heard_ms    INTEGER,                      -- how much was heard [REQ-VIS-250]
-    span_ms     INTEGER,                      -- how long the passage was; both NULL on rows predating the columns
-    selected_by TEXT                          -- who or what chose it [REQ-VIS-300]; added on open by PlayerStore, not schema.sql
-);
-CREATE INDEX listener_play_time ON listener_play_history(played_at);
-CREATE INDEX listener_play_mbid ON listener_play_history(mbid);
-
-CREATE TABLE listener_preferences (           -- MuLibPlay's rotation/recovery/restraint
-    subject_kind TEXT NOT NULL CHECK (subject_kind IN ('recording','artist')),
-    subject_id   TEXT NOT NULL,
-    rotation     REAL,                        -- log scale: 10^v hours [GDE-PD-010]
-    recovery     REAL,
-    restraint    REAL,
-    updated_at   TEXT NOT NULL,
-    PRIMARY KEY (subject_kind, subject_id)
-) WITHOUT ROWID;
-```
-
-`listener_programs` / `listener_program_seeds` hold the time-of-day programs as **seed track lists** `[GDE-PD-040]`; `listener_programme` names the programme those slots make, its fingerprint and whether it is the hub's version or the node's own, and `listener_programme_pending` holds one the hub sent that has not been answered — both made by the player, the second at runtime only `[SPEC-PGM-200]`. `listener_likes` holds weighted Like/Dislike events with their timestamps `[GDE-MCR-070]`.
-
-Six more `listener_`-prefixed tables complete Class D. `listener_rejections` records a skip or dequeue only so the same passage is not re-offered immediately `[SPEC-PLAY-050]`; it feeds no ramp, count or artist damping. `listener_settings` is the single-row home for the artist/recording rotation-scale master multipliers and the appliance's `utc_offset_minutes` for wall-clock programme starts `[SPEC-DIR-118]`. `listener_occasions` and `listener_occasion_points` hold seasonal curves as data, not code — a new occasion is rows here plus `flavor` values, never an engine edit `[SPEC-DIR-130]`; `listener_occasions.label` names it for the listener ("Children's", which `user.childrens` cannot spell), and `listener_characteristics` holds a listener's own hand-set value for one, overriding the `flavor` row the migration left rather than merging with it `[SPEC-PREF-085]`. It is listener-side and not a `flavor` row for a reason that is not stylistic: once split, `library.db` is attached read-only by the player `[PI-DB-020]`, so `flavor` is not writable from there at all. `listener_flags` is a plain "look at this" marker a listener sets from a play-history row, carrying no verdict of its own `[REQ-VIS-265]`.
-
-**`[SPEC-SC-095]` `mbid` is denormalised into play history on purpose.** MuLibPlay did the same, and it means six years of history survives a library rescan that renumbers passages.
-
----
-
-## 6b. Player State
-
-**`[SPEC-SC-098]`** A single row holding the resume point `[REQ-AUD-140]`: passage, position, playing flag, volume.
-
-Deliberately **not** `listener_`-prefixed. It is operational state, not listener history — losing it costs one track position — so it is excluded from the class-D export `[SPEC-DF-090]`, which exists for data that cannot be reconstructed. Mixing it in would dilute the one guarantee that export makes.
-
-`playing` is a boolean because playback has exactly two states `[REQ-AUD-142]`. Pausing halts the consumer only; producers keep filling buffers, so there is no third "stopped" mode to represent.
-
-**`[SPEC-SC-099]` Settings are rows in `player_settings`, not columns beside the resume point.** *(Changed 2026-08-22.)* They began as columns on `player_state`, one added by `ALTER` as each was invented, and read back **by position** — `?11` in the insert, `r.get(10)` in the select. Adding a setting meant renumbering both lists and the `ALTER` list beside them, and getting it wrong loaded the wrong value **silently** rather than failing.
-
-`player_settings(key, value, updated_at)` removes the positions. One list of keys is the source, and a round-trip test asserts that what is written is what is read, so a setting added to the struct and forgotten in the reader fails a test instead of losing itself at the next restart.
-
-The keys keep the old column names, so a database written before this carries over without a translation table — done once, on open, and skipped forever after.
-
-Three more operational tables live in `listener.db` beside `player_state`, created on open by `PlayerStore` rather than by `sql/schema.sql`: `player_settings`; `player_queue`, the saved queue as passage ids in order `[SPEC-DIR-225]`; and `file_checks`, what this machine last found reading each of its own files back `[GDE-INT-130]` — that disk's own, never merged by star sync.
-
----
-
-## 7. Visibility
-
-**`[SPEC-SC-100]`** `ingest_decisions` records what each Vipunen stage decided, at what confidence, and what it rejected — a durable record, not a log line `[SPEC-SA-085]`. `selection_decisions` records the Program Director's weight decomposition per choice, which is what the "Why this passage?" panel reads `[GDE-CHT-030]`.
-
-Both are append-only, intended to be bounded by retention (policy still open, `[SPEC-SC-120]` — no pruning exists yet, so both currently grow unbounded), and are **Lempi-local**: they describe process, not music, so they never travel `[SPEC-DF-050]`.
+**Moved to [SPEC080](SPEC080-the-listener-schema.md)** on 2026-11-17, with their tags: listener state, Class D `[SPEC-SC-090]`, `[SPEC-SC-095]`; player state `[SPEC-SC-098]`, `[SPEC-SC-099]`; and the decision records `[SPEC-SC-100]`. This document had reached its 300-line limit while still describing the listener by passage number. Every listener table naming a passage names it by `passage_uid` `[SPEC-SC-092]`, never by this catalogue's `passage_id`.
 
 ---
 

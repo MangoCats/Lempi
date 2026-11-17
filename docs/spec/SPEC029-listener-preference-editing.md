@@ -5,7 +5,7 @@
 MuLibPlay let a listener hand-tune `rotation`/`recovery`/`restraint` per
 artist and per recording directly — real, used functionality: `[GDE-BMK-020]`
 records that 2,918 of 8,116 tracks (36%) carried a tuned value. Lempi's
-schema (`listener_preferences`, [SPEC008 §6](SPEC008-database-schema.md#6-listener-state--class-d))
+schema (`listener_preferences`, [SPEC080 §1](SPEC080-the-listener-schema.md#1-listener-state--class-d))
 already carries those exact rows forward unchanged from the MuLibPlay
 migration, but until this document nothing reached them except
 `Director::load()` at startup and the one-time migration script — no route,
@@ -30,7 +30,7 @@ profanity slider, inherited the same way and reachable by just as little.
 
 > **Related:** [SPEC031](SPEC031-play-frequency.md) for the play-frequency table
 > that opens underneath this panel — the readout these sliders are set against ·
-> [SPEC008 §6](SPEC008-database-schema.md#6-listener-state--class-d) for
+> [SPEC080 §1](SPEC080-the-listener-schema.md#1-listener-state--class-d) for
 > `listener_preferences`'s own schema · [SPEC009](SPEC009-program-director.md) supplies
 > the log-scale formulas this panel's readouts use (`[SPEC-DIR-110]`/`[SPEC-DIR-115]`)
 > and the master time-scale dials this document does not touch (`[SPEC-DIR-118]`) ·

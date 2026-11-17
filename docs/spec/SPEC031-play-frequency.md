@@ -29,7 +29,7 @@ out by who or what put each play on.
 > panel this sits under and the tuning it informs ·
 > [SPEC017](SPEC017-what-counts-as-a-play.md) for what put a row in
 > `listener_play_history` at all, which §5 does not relitigate ·
-> [SPEC008 §6](SPEC008-database-schema.md#6-listener-state--class-d) for
+> [SPEC080 §1](SPEC080-the-listener-schema.md#1-listener-state--class-d) for
 > that table's own schema · [SPEC009](SPEC009-program-director.md) for the
 > programmes whose names become row labels here
 

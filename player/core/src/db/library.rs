@@ -1325,7 +1325,7 @@ pub struct SegmentQueueItem {
     pub artist: Option<String>,
     pub album: Option<String>,
     /// The cascade's own confidence for this span, from `ingest_decisions`
-    /// (`stage = 'segment'`) `[SPEC-SA-123]`, `[SPEC008 §7]` -- `None` when
+    /// (`stage = 'segment'`) `[SPEC-SA-123]`, `[SPEC080 §4]` -- `None` when
     /// that stage never recorded one for this audio (an older cascade run,
     /// or a library that predates the table).
     pub confidence: Option<f64>,
@@ -2156,7 +2156,7 @@ impl Library {
     /// than finding nothing, and "nothing to review" must not look like a
     /// broken page.
     ///
-    /// `ingest_decisions` `[SPEC008 §7]` is joined for `confidence`/
+    /// `ingest_decisions` `[SPEC080 §4]` is joined for `confidence`/
     /// `outcome` only when the table exists -- it is core schema on any
     /// library `sql/schema.sql` built, but is never required for the queue
     /// itself to work, so an older library that predates it still gets a
@@ -3327,7 +3327,7 @@ mod tests {
     /// confirmed is in; a passage the cascade did not segment, and a cascade
     /// passage already confirmed (an applied `boundary_reviews` row), are
     /// both out. `confidence`/`outcome` are joined in through
-    /// `files.audio_md5 -> ingest_decisions` `[SPEC008 §7]`.
+    /// `files.audio_md5 -> ingest_decisions` `[SPEC080 §4]`.
     #[cfg(feature = "vipunen-support")]
     #[test]
     fn segment_queue_selects_only_unconfirmed_cascade_passages() {

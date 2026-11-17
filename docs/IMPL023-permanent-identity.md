@@ -110,6 +110,12 @@ Offline against `lempi02w`'s copy last sent and its real list, the patch adds th
 
 The number column goes, because kept beside the uid it would be a second source for one fact ([GOV002](GOV002-sources-of-truth.md)). Its readers, among the 56 files in the player and the tools that name these tables, join `passages` on `passage_uid`. The engine and the Director still hold the integer in memory, found by that join when they load.
 
+**`[IMPL-UID-061]` A node passage without a uid stays without one, and costs its node two things.** A hub cannot hold one, its triggers refuse it `[IMPL-UID-036]`, and `payload.py` sends every uid. A bundle made from a catalogue before Stage A can still bring one: `bundle.rs` lands it as `Birth::Unknown`. Found by review 2026-11-17, and traced:
+- **No rotation by passage.** A play of it is written with a NULL uid, and the Director reads a passage's own history only by uid, and its file's artist tag through that history. It is held back by its recording's history alone; an unidentified one, with no recording, has nothing holding it back and can come round again at once.
+- **No catalogue patch for the node.** Its catalogue reads `no-uids`, so star sync judges it out of step and sends it none, until that passage has a uid. The round's summary says *catalogue: none sent -- the node's catalogue has a passage without its uid*. A patch could not be made even from the node's own rows (`NaturalUnsupported`), so nothing in the sync fills the uid.
+- **Nor does a resend.** A current bundle naming the file finds it held, and reaches its holds, credits and release, never its passages.
+- **Said at import, since 2026-11-17.** The report names each such file (`passages_without_uid`, `WITHOUT UID` in `import_bundle`), and the player's log says the same once per import. Nothing repairs one yet: the hub's catalogue holds the uid, and how a node takes it is undecided. `test_star_rows.py` and `bundle.rs`'s tests hold each step.
+
 **`[IMPL-UID-062]` Each listener converts against its own catalogue:** a number becomes a uid by an exact join inside one database, which is not a translation between nodes. A row whose number names no passage there keeps a NULL uid and is counted, never guessed. After Stage 0 the hub expects none in its shared tables. `passage_lyrics` holds no numbers and is not converted this way `[IMPL-UID-063]`.
 
 **`[IMPL-UID-063]` No saved words are lost.** `passage_lyrics` is a history, not a table of numbers:
@@ -125,7 +131,11 @@ Measured 2026-11-14: the hub holds 111 rows, each the segment of one current pas
 
 **`[IMPL-UID-064]` The merge loses its translation.** `star_merge` keys the shared tables by uid. `passage_remap`, `passage_unmap`, `to_node_numbering` and `Node.remap` go, and with them both defects the 2026-11-14 review found: removal evidence read in the wrong numbering, and an unmatched passage read as the hub's. A node's history, the merge and the node's own rows now hold the same value. Merged `listener_likes` rows leave out `like_id`. A node's own tables go back exactly as it holds them, as today.
 
+**`[IMPL-UID-065]` A uid the hub never set does not replace one a node's save recorded.** `passage_lyrics`' `passage_uid` is the hub's to set (`hub_sets`), but a hub row holding NULL is one it could not place, not one it placed nowhere. A node's newer save under that key wins by its stamp and keeps its own uid; a uid the hub did set is still the merge's. Found by review 2026-11-17: the hub's NULL had replaced the node's, so every node was sent that save without the passage it was saved for. `test_star_merge.py` holds both cases.
+
 **`[IMPL-UID-066]` Phones.** A phone app built from this `lempi-core` converts its own listener on open and reports `passage_uids`. Its snapshot stops holding passage rows back, and its member patch carries them. A phone that has not updated sends and is sent no passage rows, which is what every phone does today, so nothing needs translating while it waits `[SPEC-UID-410]`.
+
+**`[IMPL-UID-067]` Two opens convert a listener once.** Whether there is anything to convert is asked again after `BEGIN IMMEDIATE`, with no other open able to be converting. Two opens can meet on a listener still by number: two processes, or a route opening a store while the engine's first open converts. Both found it by number before either held the lock, and the one that waited rebuilt tables already converted and failed its open (`no such column: o.passage_id`). The copy of the whole file is kept from whichever open made it first. Found by review 2026-11-17, after every node had converted, so it waits for a phone's update or a restored listener; `listener_uid.rs`'s race test fails without it.
 
 **`[IMPL-UID-068]` The window:**
 1. Stop every player.
@@ -155,7 +165,7 @@ Measured 2026-11-14: the hub holds 111 rows, each the segment of one current pas
 - **A reference to a passage that has gone is kept.** `passage_orphans` cleared numbers because a number is reused for other music; a uid never is. So a play naming one still says what was played, and nothing clears it.
 
 - **The merge keys by uid** `[IMPL-UID-064]`. The translation between numberings is gone from it (`passage_remap` stayed until Stage D, for `repair_node_reviews`). A node's copy last sent, its backups and the newest run's copy could still be by number from before Stage B. Until Stage D each was read through its own catalogue's map, the hub's through the hub's: a row naming a review's passage it lacks was left out and counted, and the report said what was read so. A snapshot still by number is refused by its node's name, and nothing is merged. A phone, which sends no table naming a passage, is not refused.
-- **Saved words find their passage by uid** `[IMPL-UID-063]`. Under its own kind, a row with a uid is that passage's whatever its segment has become, and no other passage's; a row without one, and tier 2, by segment. A save records the uid. `tools/set_lyrics_uids.py` sets the old rows' uids, once, on the hub. Rehearsed 2026-11-16 on the hub's 143 rows: all 143 placed, each on one current passage; none left; every passage shows the same row. The merge's `hub_sets` carries the hub's value to every node without an item or a tie, and a node's new save keeps its own.
+- **Saved words find their passage by uid** `[IMPL-UID-063]`. Under its own kind, a row with a uid is that passage's whatever its segment has become, and no other passage's; a row without one, and tier 2, by segment. A save records the uid. `tools/set_lyrics_uids.py` sets the old rows' uids, once, on the hub. Rehearsed 2026-11-16 on the hub's 143 rows: all 143 placed, each on one current passage; none left; every passage shows the same row. The merge's `hub_sets` carries the hub's value to every node without an item or a tie, and a node's new save keeps its own, as does one the hub holds with none `[IMPL-UID-065]`.
 
 The window ran 2026-11-16 with `tools/listener_window.py` recording each listener before and verifying it after (LOG014 `[LOG-LIBW-330]`).
 
@@ -170,6 +180,8 @@ The window ran 2026-11-16 with `tools/listener_window.py` recording each listene
 - **The pages:** they read the uid from their address, and show a person its first eight characters. `fbui` fetches covers by it.
 - **The hub's console:** its edit and review hand-offs into the player pass the uid. Its own pages keep the hub's number.
 
+**`[IMPL-UID-073]` One open of the pair per request.** The extractor hands on the read-only pair it found the number through, and a handler that reads takes that one and no `Ui` to open another from: the words, their sources, both covers, the profile, review and the editor's three reads. One that writes (a save, a review, a segment) opens its own store, as before, and closes the extractor's first. Found by review 2026-11-17: each of those routes had opened the pair twice.
+
 **`[IMPL-UID-074]` Remote tools:** `lempi_control.py` flags and unflags on a remote by uid, with no peek for the remote's number. The console's `remote_status` and `flag_sync_status` anchor by uid, and `echo_skew.py` compares uids.
 - **As built, 2026-11-16.** `remote_peek.py` names a passage by `--passage-uid` alone, refusing anything else before a query is built. `passage_flag` reports `held`, not the remote's number, and reads the peer's listener beside its catalogue (`[SPEC-DF-124]`, open until now). The remote-basis accept goes by uid end to end: route, job and `accept_remote_basis.py`.
 - **The unflag:** it sends the passage's uid and its recordings to the remote with no peek first. A read of the remote, when it works, adds the recordings the remote itself links. A remote without the passage clears nothing by it.
@@ -183,7 +195,7 @@ The window ran 2026-11-16 with `tools/listener_window.py` recording each listene
 - **As verified, 2026-11-16 17:20–18:08 UTC**, at the maintainer's word: the desktop, then `lempi02w`, `bose` and `smartboardpc` together, `lp3-wifi`, `lrhtpc` and `teacherslounge`, all on `486ded1` (the player of `b329aa9`), each player put back as it was. Live, 18 or 19 checks per node: no passage number in the snapshot, every route 400 by number and 404 by a missing uid, browse by uid.
 - **Echo:** `smartboardpc` was on `bose`'s song, by uid, within a minute of its restart, and on the next. `echo_skew.py` read 45 samples, none on different passages, with a median skew of 26 ms and a p90 of 59 ms.
 - **The unflag:** on `lempi02w`, a passage flagged nowhere was flagged through its player and read back by the console's peek. The console's own `unflag_everywhere` then cleared it, and it read back clear. The console's saved remote is `teacherslounge`, which runs no player, so the check named `lempi02w` for that run only.
-- **Cost:** `lempi02w`'s passage info went from 9.0 ms by number to 14.7 ms by uid (median of 21). That is one more open of the pair per request, to find the number.
+- **Cost:** `lempi02w`'s passage info went from 9.0 ms by number to 14.7 ms by uid (median of 21). That is one more open of the pair per request, to find the number. Since 2026-11-17 the handler reads through that open `[IMPL-UID-073]`; not yet measured on a node.
 
 ## 8. Stage D: removed, and made hard to bring back
 
