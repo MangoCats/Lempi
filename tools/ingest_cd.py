@@ -1456,10 +1456,10 @@ SILENT_MIN_MS = 500
 # MusicBrainz's special-purpose title for a silent track. A song may be
 # called "Silence"; only the bracketed form is the title for nothing.
 SILENT_TITLE = "[silence]"
-# What AccurateRip says of a track it has no entry for. Of a track measured
-# as digital silence that is not damage [SPEC-SIL-040]: tracks 7-96 of
-# *Broken* all read it, while the music either side was accurately ripped.
-NOT_IN_ACCURATERIP = "not present in database"
+# What AccurateRip says of a track it has no entry for is `cd_toc.unseen`'s,
+# in both of EAC's wordings. Of a track measured as digital silence that is
+# not damage [SPEC-SIL-040]: tracks 7-96 of *Broken* all read it, while the
+# music either side was accurately ripped.
 
 
 def _quiet_spans(wav_path: str, start_ms: int, end_ms: int) -> list[tuple[int, int]]:
@@ -1792,7 +1792,7 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
     file_id = cur.lastrowid
 
     boundary_src = f"imported:{'eac-cue' if toc.source == 'eac-cue' else 'cdrdao-toc'}"
-    identified = ambiguous = unidentified = failed = 0
+    identified = ambiguous = unidentified = failed = unseen = 0
     mbids: list[str] = []
     placed: list[tuple[int, str]] = []
 
@@ -1849,22 +1849,27 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
             share = q["shares"].setdefault(mbid, [0, source])
             share[0] += max(end_ms - start_ms, 1)
             tr = next((t for t in rip_report.tracks if t.number == track.number), None) if rip_report else None
-            if tr is not None and not tr.ok:
-                if tr.detail == NOT_IN_ACCURATERIP:
-                    # [SPEC-SIL-040]: silence measured; nothing to compare it with.
-                    q["unverified"].append(track.number)
-                else:
-                    conn.execute(
-                        "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,"
-                        "detail,decided_at) VALUES (?1,'rip','verification_failed',NULL,?2,?3)",
-                        (audio_md5, json.dumps({"track": track.number, "detail": tr.detail,
-                                                "start_ms": run["start_ms"], "silent": True}), now))
-                    passage_hold.ensure_column(conn)
-                    if q["hold"] is None:
-                        q["hold"] = passage_hold.damage_reason(tr.detail)
-                        conn.execute(f"UPDATE passages SET {passage_hold.COLUMN} = ?1 WHERE passage_id = ?2",
-                                     (q["hold"], q["pid"]))
-                    failed += 1
+            # Asked of the words, not of `ok`: the reader calls a clean unseen
+            # track good since 2026-11-19 [SPEC-HOLD-035], and the run still
+            # says how many of its tracks AccurateRip could not compare. Their
+            # first clause, so an unseen silent track in a log with an error
+            # it cannot place stays unverified, not damaged: the silence was
+            # measured, which is what [SPEC-SIL-040] forgives it for.
+            if tr is not None and cd_toc.unseen((tr.detail or "").split(";")[0]):
+                # [SPEC-SIL-040]: silence measured; nothing to compare it with.
+                q["unverified"].append(track.number)
+            elif tr is not None and not tr.ok:
+                conn.execute(
+                    "INSERT INTO ingest_decisions (audio_md5,stage,outcome,confidence,"
+                    "detail,decided_at) VALUES (?1,'rip','verification_failed',NULL,?2,?3)",
+                    (audio_md5, json.dumps({"track": track.number, "detail": tr.detail,
+                                            "start_ms": run["start_ms"], "silent": True}), now))
+                passage_hold.ensure_column(conn)
+                if q["hold"] is None:
+                    q["hold"] = passage_hold.damage_reason(tr.detail)
+                    conn.execute(f"UPDATE passages SET {passage_hold.COLUMN} = ?1 WHERE passage_id = ?2",
+                                 (q["hold"], q["pid"]))
+                failed += 1
             continue
         radio_pid, album_pid = whole or pair(start_ms, end_ms)
 
@@ -1909,6 +1914,10 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
                 conn.execute(f"UPDATE passages SET {passage_hold.COLUMN} = ?1 WHERE passage_id IN (?2, ?3)",
                              (landed[track.number]["hold"], radio_pid, album_pid))
                 failed += 1
+            elif tr is not None and cd_toc.unseen(tr.detail):
+                # Read cleanly, nothing to compare it with: not held, and
+                # counted, so the summary says so [SPEC-HOLD-035].
+                unseen += 1
 
     if whole:
         span = sum(n for n, _ in shares.values()) or 1
@@ -1964,7 +1973,7 @@ def commit_rip(conn, folder: str, toc: cd_toc.DiscToc, mp3_path: str,
 
     return {"tracks": toc.track_count, "identified": identified,
             "ambiguous": ambiguous, "unidentified": unidentified,
-            "verification_failed": failed, "file_id": file_id, "album_linked": albums,
+            "verification_failed": failed, "unverified": unseen, "file_id": file_id, "album_linked": albums,
             "disc_outcome": disc_outcome, "candidates": len(releases), "occasions": marked,
             "whole_disc": bool(whole), "hidden": [dict(h, mbid=m) for h, (m, _) in zip(hidden, found)],
             "folded": folded, "silent": said_silent}
@@ -2175,7 +2184,7 @@ def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[
     ensure_sha256_column(conn)
     ensure_gapless_column(conn)     # its files decode trimmed [SPEC-AGN-062]
     counts = {"identified": 0, "ambiguous": 0, "unidentified": 0}
-    failed, file_ids, mbids = 0, [], []
+    failed, unseen, file_ids, mbids = 0, 0, [], []
     certain = chosen or (disc_outcome == "exact" and len(releases) == 1)
     for t, mp3_path, audio_md5 in tracks:
         st = os.stat(mp3_path)
@@ -2211,6 +2220,8 @@ def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[
             conn.execute(f"UPDATE passages SET {passage_hold.COLUMN} = ?1 WHERE passage_id IN (?2, ?3)",
                          (passage_hold.damage_reason(tr.detail), radio_pid, album_pid))
             failed += 1
+        elif tr is not None and cd_toc.unseen(tr.detail):
+            unseen += 1     # [SPEC-HOLD-035], as in commit_rip
         detail = {"track": t.number, "tracks_mode": True, "track_count": toc.track_count,
                   "missing": missing, "verified": rip_report is not None, "format": "tracks-cue",
                   "candidates": len(releases), "chosen": releases[0].get("id") if certain and releases else None,
@@ -2230,7 +2241,8 @@ def commit_tracks(conn, toc: cd_toc.DiscToc, tracks: list[tuple], missing: list[
     albums = (record_release(conn, releases[0], [(t.number, m) for (t, _, _), m in zip(tracks, mbids)],
                              [md5 for _, _, md5 in tracks])
               if certain and releases else 0)
-    return {"tracks": len(tracks), **counts, "verification_failed": failed, "missing": missing,
+    return {"tracks": len(tracks), **counts, "verification_failed": failed, "unverified": unseen,
+            "missing": missing,
             "occasions": marked, "album_linked": albums,
             "file_ids": file_ids, "file_id": file_ids[0] if file_ids else None,
             "disc_outcome": disc_outcome, "candidates": len(releases), "mode": "tracks"}
@@ -2989,7 +3001,9 @@ def main() -> int:
                 f"{result['ambiguous']} ambiguous (in the review queue), "
                 f"{result['unidentified']} unidentified, "
                 f"{result['verification_failed']} verification failure(s) "
-                f"(disc: {result['disc_outcome']}, {result['candidates']} candidate(s))")
+                + (f"and {result['unverified']} read cleanly but not in AccurateRip's database, "
+                   f"so not held [SPEC-HOLD-035] " if result.get("unverified") else "")
+                + f"(disc: {result['disc_outcome']}, {result['candidates']} candidate(s))")
             for f in result.get("folded") or ():
                 say(f"  {f['title']} joined to track {f['track']}: one passage, {f['start_ms']}-{f['end_ms']} ms")
             for run in result.get("silent") or ():

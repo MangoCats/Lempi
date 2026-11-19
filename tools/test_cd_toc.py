@@ -481,6 +481,32 @@ def main() -> int:
     r = read("\r\n".join(image[2:]))
     check(not r.all_ok, f"a read error no table of contents can place still counts against the rip: {r}")
 
+    # [SPEC-HOLD-035]: EAC's newer summary wording, as *Christmas Island*'s
+    # log has it. Unknown here until 2026-11-19, so a clean rip read as ten
+    # failures and every track was held.
+    print("parse_eac_log: not in the database, in either wording, is no failure; beside an unplaced error, it is")
+    unseen = ["", "Range status and errors", "", "     Copy CRC 5DB7467B", "     Copy OK", "",
+              "No errors occurred", "", "AccurateRip summary", "",
+              "Track  1  not present in database", "Track  2  not present in AccurateRip database", "",
+              "None of the tracks are present in the AccurateRip database", ""]
+    r = read("\r\n".join(unseen))
+    check([(t.number, t.ok, t.detail) for t in r.tracks]
+          == [(1, True, "not present in database"), (2, True, "not present in AccurateRip database")],
+          f"a clean rip AccurateRip has no entry for: {r.tracks}")
+    check(cd_toc.unseen("Not present in database ") and cd_toc.unseen("not present in AccurateRip database")
+          and not cd_toc.unseen("read errors at 0:00:01; not present in database") and not cd_toc.unseen(None),
+          "unseen() is the verdict alone, not a verdict carrying read errors")
+    r = read("\r\n".join([*unseen[:3], "     Suspicious position 0:00:10", *unseen[3:]]))
+    check([(t.ok, t.detail) for t in r.tracks]
+          == [(False, "not present in database; the log has errors it does not place on a track"),
+              (False, "not present in AccurateRip database; the log has errors it does not place on a track")],
+          f"a read error with no table of contents to place it might be either track's: {r.tracks}")
+    r = read("\r\n".join(image[:2] + unseen[:3] + ["     Suspicious position 0:00:10"] + unseen[3:]
+                         + ["Track  3  not present in database", ""]))
+    check([(t.number, t.ok) for t in r.tracks] == [(1, False), (2, True), (3, True)]
+          and r.tracks[0].detail == "read errors at 0:00:10; not present in database",
+          f"one placed on track 1 marks track 1, and only track 1: {r.tracks}")
+
     # [SPEC-RIP-121]: which log is whose, in the shapes the hub's folders hold.
     print("choose_log: a file takes its own disc's log, or none")
     disc = lambda n: f"A - B (Disc {n}).log"                                # noqa: E731

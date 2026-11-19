@@ -336,8 +336,20 @@ _LOG_ACCURATERIP = re.compile(
     r'^[ \t]*Track[ \t]+(\d+)[ \t]+([A-Za-z][A-Za-z ]*?)[ \t]*(?:[(\[,].*?)?\r?$', re.MULTILINE)
 # Outcomes that are not evidence of a bad read. "Not present" is no comparison
 # at all -- a rare pressing -- and is judged by the copy's own checks instead.
+# EAC says it two ways: "not present in AccurateRip database" in a track's own
+# section and in older summaries, "not present in database" in the summary of
+# the logs it writes now. Only the first was known here until 2026-11-19, so
+# every track of *Christmas Island*, a clean secure rip, was held as damaged
+# `[SPEC-HOLD-035]`.
 _LOG_AR_MATCHED = "accurately ripped"
-_LOG_AR_FINE = (_LOG_AR_MATCHED, "not present in accuraterip database")
+_LOG_AR_UNSEEN = ("not present in accuraterip database", "not present in database")
+_LOG_AR_FINE = (_LOG_AR_MATCHED, *_LOG_AR_UNSEEN)
+
+
+def unseen(detail: str | None) -> bool:
+    """Whether a track's verdict is AccurateRip having no entry for it: no
+    comparison, so neither a match nor damage `[SPEC-HOLD-035]`."""
+    return (detail or "").strip().lower() in _LOG_AR_UNSEEN
 # A read the drive could not make cleanly, in an image rip's "Range status"
 # section: `Suspicious position 0:37:37 - 0:37:38`, times from the start of
 # the disc. Mapped to tracks through the log's own table of contents, since
@@ -411,6 +423,14 @@ def parse_eac_log(path: str) -> RipReport:
         ok, words = verdicts.get(n, (True, ""))
         if words.lower() != _LOG_AR_MATCHED:
             verdicts[n] = (False, f"read errors at {where}" + (f"; {words}" if words else ""))
+    # A track AccurateRip has no entry for has only the copy's own checks to
+    # speak for it `[SPEC-HOLD-035]`. Its own read errors are laid on it above;
+    # an error the log cannot place on any track, or an error line, might be
+    # its, so it is not called good past one.
+    if _LOG_COPY_ERR.search(text) is not None or not _read_errors_on_tracks(text):
+        for n, (ok, words) in verdicts.items():
+            if ok and unseen(words):
+                verdicts[n] = (False, f"{words}; the log has errors it does not place on a track")
     # A track AccurateRip never mentions (no DB entry, or the plugin was
     # absent) is judged by "Copy OK" elsewhere in its own range instead --
     # best effort, never silent `[SPEC-RIP-054]`. This module does not

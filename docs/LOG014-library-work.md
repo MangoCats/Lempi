@@ -61,8 +61,33 @@ DATE*, linked from here. §2 stays here.
 | 10 | Catalogue patches blocked from 2026-11-08 to 2026-11-15: **every node caught up, closed 2026-11-15** `[LOG-LIBW-300]` | 2026-11-11 | Round `20261115T0104Z` committed the withheld catalogue, *Ghosts I–IV* (item 8) among it, to bose, lempi02w, lrhtpc and smartboardpc: about 22,630 rows each, `kept` 0. Round `20261115T0509Z` committed it to `lp3-wifi` (item 11), and `20261115T1339Z` to `teacherslounge`: 83,525 rows, its retimes of 2026-11-06 among them (item 1). Read on each node's own disk: every passage credited, `quick_check` ok; each speaker holds 24,171 passages and 12,000 `id_checks`, the hub's count. |
 | 11 | `lp3-wifi` lacked the credits of 742 files (4,052 passages) and 521 `id_checks`; **repaired 2026-11-15, its cause not found** | 2026-11-15 | Found when its strict rehearsal refused round `20261115T0104Z`; nothing was written there. `bose`, sent the same rounds, lacked none. 680 of the 742 files reached it by bundle sends of 2026-10-14 to 10-29, 60–100% of each; none sent from 2026-11-01 on was affected. The hub's copy last sent held their credits, so no patch had named them. Its library is on its durable ext4 partition, not the overlay root. The runs of that window are pruned, and the node keeps no catalogue backup after September. **Repair, at the maintainer's word:** its catalogue adopted as its baseline (`adopt lp3-wifi --force --tmp /srv/library`, `data/sync/adopted/lp3-wifi-20261115T0423Z/`) `[SPEC-STAR-946]`. Round `20261115T0509Z` then rehearsed CLEAN and committed 27,483 catalogue rows, `kept` 0, the missing credits and checks among them. Its 291 deletions were damage: three credits on *Scarecrow* naming *The One U Wanna C*, *Future Baby Mama* and *Somewhere Here on Earth*, left by `[SPEC-STAR-051]`'s applied copies and repaired on the hub on 2026-10-18 but never here, and four retired placeholder recordings with their 284 flavor values. Read on its disk afterwards: 24,171 passages, every one credited, 12,000 `id_checks`, the same as every other node; `quick_check` ok. |
 | 12 | `teacherslounge`'s passage uids: **carried, closed 2026-11-15** `[LOG-LIBW-310]` | 2026-11-15 | It slept before two commits that day; its journal shows a suspend ending at 09:16 local. Round `20261115T2013Z` ran with an *idle* hold placed for 40 min (`systemd-inhibit --what=idle`; a *sleep* hold is refused over ssh there), rehearsed CLEAN and committed 22,765 passages' uids, `kept` 0. Read on its disk: every passage holds the hub's uid; `quick_check` ok. A future round there wants the same hold. |
+| 13 | *Christmas Island*'s 20 releases **on the hub only** `[LOG-LIBW-340]` | 2026-11-19 | A node that took its holds from the rounds since its import keeps them until the next round carries the release. To be read on each node's own disk then. |
 
 ## 3. Entries, newest first
+
+**`[LOG-LIBW-340]` 2026-11-19: *Christmas Island*'s 20 passages released,
+and its damage records taken back.** Jimmy Buffett's *Christmas Island*
+(1996), added 2026-11-18, had all ten tracks held, radio and album, as
+`damaged rip: not present in database`. That is AccurateRip having no entry
+for the pressing, in words the log reader did not know `[SPEC-HOLD-035]`. Its
+EAC log reads secure mode, `Copy OK`, `No errors occurred`. At the
+maintainer's word.
+- **How:** the reader fixed first, then `python tools/backfill_rip_damage.py
+  data/library.db --commit`. Its dry run named those ten tracks and nothing
+  else in the library, to record or to take back.
+- **What changed:** the ten `verification_failed` rows removed, and the 20
+  holds set to `''`, released, so `--damaged` will not hold them again and a
+  send carries the release `[SPEC-HOLD-080]`. The hidden track after track 10
+  was never held and is untouched. No timing changed.
+- **Read on the hub's disk afterwards:** file 7369's ten radio and ten album
+  passages `''`, its hidden pair NULL, no damage row for it; 25,499 passages,
+  as in the backup; `quick_check` ok. The desktop player reloaded (Director
+  rebuild 1.6 s).
+- **Where:** the hub only. Rounds `20261118T2018Z` and `20261119T1855Z` ran
+  after the import, so the nodes likely hold the 20 holds; not read on any
+  node. The next round carries the release (§2 item 13).
+- **Backup:** `data/backups/pre-unseen-release-20261119T212705Z/` (1.6 GB, the
+  catalogue). It goes 2026-12-19.
 
 **`[LOG-LIBW-330]` 2026-11-16: every listener names its passages by uid,
 the phones excepted.** Stage B's window `[IMPL-UID-068]`, at the maintainer's
@@ -183,55 +208,10 @@ tools/drop_review_copies.py data/listener.db --commit --expect-copies 27
 - **Backup:** `data/backups/pre-review-copies-20261114T234817Z/`, with every
   dropped row in `dropped.json`. `--restore` puts them back. It goes 2026-12-14.
 
-**`[LOG-LIBW-280]` 2026-11-12: the hub's pair set to WAL mode.** Both halves
-were in rollback-journal mode, as the merge of 2026-09-26 wrote them. That
-evening a start after a long build read the library for 15 s, a queue save's
-commit was refused, and the listener stayed locked for five hours
-`[SPEC-STAR-106]`. At the maintainer's word, with the player stopped and the
-console idle: `python tools/pair_journal.py data/library.db --wal`. No row
-changed: 7,264 files, 24,201 passages and 41,367 plays as before, `quick_check` ok
-on both, and the player came back paused on the passage it had left. A read
-transaction held on the listener for 8 s no longer stops the player saving.
-Hub only: every other node's pair is its own. Backup
-`data/backups/pre-wal-20261112/` (1.5 GB, goes 2026-12-12).
-
-**`[LOG-LIBW-270]` 2026-11-11: *Ghosts I–IV* as one album, in one folder.**
-After both folders were inducted, 26 of the 36 tracks were on no release
-and named `local:audio:` placeholders. At the maintainer's word, after a dry
-run: the 18 disc 2 files moved from `Ghosts III-IV` into `Ghosts I–IV (2008)`
-as `2-01.`…`2-18.` `[SPEC-RIP-108]`, its sheet with them as `… (Disc 2).cue`,
-and the empty folder removed. The 26 files got release `0822f7c5…`
-(`file_releases` source `manual`). Their 52 passages, radio and album, now
-name the release's recordings, mapped by disc and position and checked
-against title and length. The 1,846 flavor values were moved to the real
-ids, the 26 placeholders removed, and their stale `id_checks` cleared. One
-`ingest_decisions` row per file, stage `release_alignment`. **Track 18** is
-the digital edition's recording, `1d35585f` (323 s; the file is 317.7 s),
-not the CD's 314 s `74c113dc`: the only one of 36 that differs between the
-editions. The maintainer chose to place it at disc 1 track 18 by a
-tracklist row of source `manual`, which MusicBrainz does not have. The
-desktop player shows one album of 36, 1-1 to 2-18. Hub only. Backup
-`data/backups/pre-ghosts-align-20261111/` (goes 2026-12-11).
-
-**`[LOG-LIBW-260]` 2026-11-11: *Ghosts I–IV* completed on disk from the
-Internet Archive.** Both CD rips of 2026-11-08 had stopped partway: disc 1
-after track 10, disc 2 after track 4, so the hub held 14 of 36. The missing
-22 (11–18, 23–36) are the VBR MP3s of archive.org item
-`nine-inch-nails-ghosts-IV`, copied byte for byte at the maintainer's word:
-each matched the md5 and size IA lists, and decoded with no error. That item
-is a fan upload with no licence of its own, but the album was released under
-CC BY-NC-SA 3.0, which allows a non-commercial copy; its two extra tracks,
-37 and 38, are not on the release and were not taken. Track 22, fetched only
-to compare, measured like the CD's: mean −14.4 dB, peak 0.0 dB. Disc 1's
-cue sheet named the eight absent files by the ripper's names; its `FILE`
-lines now name `1-11.`…`1-18.`, the original in
-`data/backups/pre-ghosts-fill-20261111/` (goes 2026-12-11). **Nothing is
-catalogued yet**: `ingest_folder.py`'s dry run would add 8 and 14, with 10
-and 4 already present. Every other partial or damaged album in the catalogue
-is all rights reserved, so none was fetched.
-
-Entries of 2026-11-08 and before, and what the backups say of the work
-before this log, are in [LOG015](LOG015-library-work-to-2026-11-08.md).
+Entries of 2026-11-11 and 2026-11-12 are in
+[LOG016](LOG016-library-work-to-2026-11-12.md). Those of 2026-11-08 and
+before, and what the backups say of the work before this log, are in
+[LOG015](LOG015-library-work-to-2026-11-08.md).
 
 ---
 

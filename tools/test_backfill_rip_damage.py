@@ -172,6 +172,62 @@ def main() -> int:
         code, out = run(db4, "--commit")
         check("0 taken back" in out and now() == ([4], ["", "my own words", "", hold[4]]), f"a second run changes nothing: {out}")
 
+        # [SPEC-HOLD-035]: *Christmas Island*, 2026-11-19. A clean secure rip
+        # AccurateRip has no entry for, its summary in EAC's newer words,
+        # recorded and held as damage on all ten tracks.
+        print("not in AccurateRip's database, read cleanly: taken back, radio and album; "
+              "beside an error the log cannot place, kept")
+        made = {}
+        for name, errors in (("Clean", []), ("Unplaced", ["     Suspicious position 0:00:30"])):
+            album = os.path.join(tmp, "Unseen", f"{name} (1996)")
+            os.makedirs(album)
+            with open(os.path.join(album, f"{name}.log"), "w", encoding="utf-8", newline="") as f:
+                # The log's own layout, CRLF and all; the unplaced one has no
+                # table of contents to lay its read error on a track by.
+                f.write("\r\n".join(["Read mode               : Secure", "", "Range status and errors", "",
+                                     *errors, "     Copy CRC 5DB7467B", "     Copy OK", "", "No errors occurred", "",
+                                     "AccurateRip summary", "",
+                                     "Track  1  not present in database", "Track  2  not present in database",
+                                     "Track  3  cannot be verified as accurate (confidence 3)  [11111111]", "",
+                                     "None of the tracks are present in the AccurateRip database", ""]))
+            db5 = os.path.join(tmp, f"{name}.db")
+            c = sqlite3.connect(db5)
+            c.executescript(open(SCHEMA, encoding="utf-8").read())
+            c.execute("INSERT INTO files (file_id, audio_md5, path, size_bytes, mtime, format, duration_ms, "
+                      "first_seen, last_seen) VALUES (1, 'md5', ?1, 1, 0, 'mp3', 1, 'x', 'x')",
+                      (os.path.join(album, f"{name}.mp3"),))
+            c.execute("INSERT INTO ingest_decisions (audio_md5, stage, outcome, decided_at) VALUES ('md5', 'rip', 'chosen', 'x')")
+            said = {1: "not present in database", 2: "not present in database", 3: "cannot be verified as accurate"}
+            for n in (1, 2, 3):
+                c.execute("INSERT INTO ingest_decisions (audio_md5, stage, outcome, detail, decided_at) "
+                          "VALUES ('md5', 'rip', 'verification_failed', ?1, 'x')",
+                          (json.dumps({"track": n, "detail": said[n], "start_ms": n * 1000}),))
+                for kind in ("radio", "album"):
+                    c.execute("INSERT INTO passages (file_id, kind, start_ms, end_ms, boundary_src, director_hold) "
+                              "VALUES (1, ?1, ?2, ?3, 'imported:eac-cue', ?4)",
+                              (kind, n * 1000, n * 1000 + 500, f"damaged rip: {said[n]}"))
+            c.commit()
+            c.close()
+            made[name] = db5
+
+        def state(db):
+            c = sqlite3.connect(db)
+            rows = (sorted(json.loads(d)["track"] for (d,) in c.execute(
+                        "SELECT detail FROM ingest_decisions WHERE outcome='verification_failed'")),
+                    [(k, h) for k, h in c.execute("SELECT kind, director_hold FROM passages ORDER BY start_ms, kind")])
+            c.close()
+            return rows
+        code, out = run(made["Clean"], "--commit")
+        check(code == 0 and "2 taken back, 4 passage(s) released" in out, out)
+        check(state(made["Clean"]) == ([3], [("album", ""), ("radio", ""), ("album", ""), ("radio", ""),
+                                             ("album", "damaged rip: cannot be verified as accurate"),
+                                             ("radio", "damaged rip: cannot be verified as accurate")]),
+              f"tracks 1 and 2 released, both passages, to '' not NULL; the mismatch on 3 kept: {state(made['Clean'])}")
+        before = state(made["Unplaced"])
+        code, out = run(made["Unplaced"], "--commit")
+        check(code == 0 and "0 taken back" in out and state(made["Unplaced"]) == before,
+              f"a read error the log cannot place might be any track's, so nothing is taken back: {out}")
+
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")

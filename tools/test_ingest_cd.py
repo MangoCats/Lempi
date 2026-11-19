@@ -465,6 +465,55 @@ def test_silent_passages():
           f"split where the kept track was: {parts}")
 
 
+def test_unseen_is_not_damage():
+    """[SPEC-HOLD-035]: a track AccurateRip has no entry for, in a log with no
+    error against it, is added unheld and counted as unverified; a mismatch
+    beside it is still held. The log is a real file, read by the real reader,
+    in the shape *Christmas Island*'s was when all ten of its tracks were held
+    on 2026-11-19."""
+    import passage_hold
+    print("commit_rip: not in AccurateRip's database, read cleanly, is not held")
+    tmpdir = tempfile.mkdtemp()
+    mp3_path = os.path.join(tmpdir, "rip.mp3")
+    with open(mp3_path, "wb") as f:
+        f.write(b"\0" * 128)
+    log_path = os.path.join(tmpdir, "rip.log")
+    with open(log_path, "w", encoding="utf-8", newline="") as f:
+        f.write("\r\n".join(["Read mode               : Secure", "", "Range status and errors", "",
+                             "Selected range", "", "     Peak level 99.8 %", "     Copy CRC 5DB7467B",
+                             "     Copy OK", "", "No errors occurred", "", "AccurateRip summary", "",
+                             "Track  1  not present in database", "Track  2  not present in database",
+                             "Track  3  cannot be verified as accurate (confidence 3)  [11111111]", "",
+                             "None of the tracks are present in the AccurateRip database", ""]))
+    report = cd_toc.parse_eac_log(log_path)
+    tracks = TRACKS[:3]
+    toc = cd_toc.DiscToc(tracks=[dataclasses.replace(t, title=None) for t in tracks],
+                         leadout_sector=0, source="eac-cue")
+    rel = {"id": "rel-U", "title": "Unseen", "media": [{"tracks": [
+        {"position": n, "recording": {"id": f"rec-u{n}", "title": f"Song {n}",
+                                      "artist-credit": [{"artist": {"id": "art-u", "name": "Artist U"}}]}}
+        for n in (1, 2, 3)]}]}
+    old_identify = segment_dao.identify_recording
+    segment_dao.identify_recording = lambda *a: None
+    c = fixture()
+    try:
+        r = ingest_cd.commit_rip(c, "/rip", toc, mp3_path, MD5, "exact", [rel], report, None, chosen=True)
+        passage_hold.ensure_column(c)
+        held = [tuple(x) for x in c.execute("SELECT kind, start_ms, director_hold FROM passages "
+                                             "WHERE director_hold IS NOT NULL ORDER BY kind")]
+        check(held == [("album", 120000, "damaged rip: cannot be verified as accurate"),
+                       ("radio", 120000, "damaged rip: cannot be verified as accurate")],
+              f"only the mismatch held, both its passages: {held}")
+        failed = [json.loads(d)["track"] for (d,) in c.execute(
+            "SELECT detail FROM ingest_decisions WHERE outcome = 'verification_failed'")]
+        check(failed == [3] and r["verification_failed"] == 1 and r["unverified"] == 2,
+              f"one failure recorded, and the two unseen tracks counted, not lost: {failed} {r}")
+        check(passage_hold.damaged(c) == [], "and nothing is left for --damaged to hold later")
+    finally:
+        segment_dao.identify_recording = old_identify
+        c.close()
+
+
 def test_find_silent():
     """[SPEC-SIL-010], with a real WAV and ffmpeg: digital silence found
     track by track, a next track's first sound inside the edge allowed, a
@@ -1848,6 +1897,7 @@ def main() -> int:
     test_folded_passage()
     test_find_hidden()
     test_silent_passages()
+    test_unseen_is_not_damage()
     test_find_silent()
     test_second_disc_end_to_end()
     # `commit_rip` stats the encoded file for the `files` row -- a real,

@@ -12,9 +12,10 @@ again with the reader as it is now, and adds what is missing. A track already
 recorded is left alone, so running it twice adds nothing.
 
 And it takes back what the reader no longer calls damage: a track recorded only
-for read errors that AccurateRip matched `[SPEC-RIP-120]`, its row removed and
-its hold released. Only where the track's own log still says it matched, and
-only a hold that is still that row's own words: a person's stays.
+for read errors that AccurateRip matched `[SPEC-RIP-120]`, or only for not being
+in AccurateRip's database `[SPEC-HOLD-035]`, its row removed and its hold
+released. Only where the track's own log now reads it as good, and only a hold
+that is still that row's own words: a person's stays.
 
 Dry run unless `--commit`.
 
@@ -83,14 +84,16 @@ def plan(conn) -> list[dict]:
 
 def forgiven(conn) -> list[dict]:
     """Recorded damage the rule no longer calls damage: read errors, and a match
-    `[SPEC-RIP-120]`. Each with the words its hold was given."""
+    `[SPEC-RIP-120]`; or AccurateRip having no entry, in a log with no error
+    against the track `[SPEC-HOLD-035]`. Each with the words its hold was given."""
     out = []
     for decision, file_id, path, detail in conn.execute(
             "SELECT d.decision_id, f.file_id, f.path, d.detail FROM ingest_decisions d JOIN files f USING (audio_md5) "
             "WHERE d.stage = 'rip' AND d.outcome = 'verification_failed' ORDER BY d.decision_id").fetchall():
         d = json.loads(detail or "{}")
         words = d.get("detail") or ""
-        if not (words.startswith("read errors at ") and words.lower().endswith("; accurately ripped")):
+        matched = words.startswith("read errors at ") and words.lower().endswith("; accurately ripped")
+        if not (matched or cd_toc.unseen(words)):
             continue
         report, _why = _report_for(path)
         now = next((t for t in (report.tracks if report else []) if t.number == d.get("track")), None)

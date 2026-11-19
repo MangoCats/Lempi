@@ -53,11 +53,34 @@ A track AccurateRip matched is not damaged, whatever its read errors
 `[SPEC-RIP-120]`. The five held for that alone were released 2026-11-05, as the
 maintainer's decision, and so are empty: `--damaged` will not hold them again.
 
-**`[SPEC-HOLD-040]` A person holds or releases any radio passage from its
-page.** The Vipunen console's passage page shows whether the Director may pick
-it, the reason when it is held, and one button either way -- with an optional
-reason when holding. It runs `passage_hold.py` as a job; the console itself
-never writes the library. `passage_hold.py --list` prints every passage held.
+**`[SPEC-HOLD-035]` Nor is a track AccurateRip has no entry for, read
+cleanly.** *Not present in database* is no comparison at all -- a pressing
+nobody has submitted -- so the log's own checks decide. Its read errors still
+mark it, and so does an error the log cannot place on any track, which might
+be its; otherwise it is added unheld, and the import's summary counts it as
+read cleanly but not in the database. EAC writes this two ways, *not present
+in AccurateRip database* and, in the summary of its newer logs, *not present
+in database*. Only the first was known until 2026-11-19, so *Christmas
+Island*, a secure rip with no errors, was held on all ten tracks; the
+maintainer released them that day, with `backfill_rip_damage.py` taking back
+the recorded damage beside the holds. A silent track is unverified either
+way `[SPEC-SIL-040]`.
+
+**`[SPEC-HOLD-040]` A person holds or releases any passage from its page.**
+The Vipunen console's passage page shows whether the Director may pick a radio
+passage, or a whole-album play include an album one, the reason when it is
+held, and one button either way -- with an optional reason when holding. It
+runs `passage_hold.py` as a job; the console itself never writes the library.
+`passage_hold.py --list` prints every passage held.
+
+**`[SPEC-HOLD-045]` Lempi's passage page links to that page, on the
+desktop.** Lempi's passage page names a passage by uid, and the console's page
+by this library's number, so the link is `/passage/<uid>` on the console, which
+redirects to `/profile/<n>`; a uid the library does not hold is a 404 that says
+so. The link shows only on a `vipunen-support` build, and starts a console if
+none is serving `[REQ-VIS-320]`. Asked for 2026-11-19, when releasing an album
+took ten searches and ten typed numbers: the console's library search lists
+radio passages only.
 
 ## 3. How it reaches a speaker
 
@@ -126,10 +149,11 @@ it is a payload change, not made here.
 ## 6. Open
 
 **`[SPEC-HOLD-900]`** Lempi's own passage page shows no hold and offers no
-control; a listener on a speaker cannot hold a passage there. Whether one
+control; on the desktop it links to the console's `[SPEC-HOLD-045]`, but a
+listener on a speaker cannot hold a passage there. Whether one
 should -- and how a speaker's hold returns to the hub, against the hub-authors
 rule `[SPEC-STAR-085]` -- is left open.
 
 ---
 
-**Traceability:** `[SPEC-HOLD-010..070]`, `[SPEC-HOLD-900]` · for `[REQ-PD-125]`, `[REQ-PD-127]` · builds on `[SPEC-RIP-054]`, `[SPEC-STAR-080]`, `[REQ-PD-120]`
+**Traceability:** `[SPEC-HOLD-010..070]`, `[SPEC-HOLD-900]` · for `[REQ-PD-125]`, `[REQ-PD-127]` · builds on `[SPEC-RIP-054]`, `[SPEC-RIP-120]`, `[SPEC-STAR-080]`, `[REQ-PD-120]`, `[REQ-VIS-320]`
