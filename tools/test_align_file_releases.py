@@ -91,6 +91,13 @@ def main() -> int:
     c.execute("INSERT INTO file_releases VALUES ('f1', 'twelve', 'manual', 't')")
     p = afr.plan(c)
     check("f1" not in p["write"] and p["kept"] == 1, f"kept: {p['kept']} {sorted(p['write'])}")
+
+    # [SPEC-FIN-040]: an edition a person picked for a folder is settled too.
+    print("a person's pick of a folder's edition stands, as a CD add's does")
+    c.execute("DELETE FROM file_releases")
+    c.execute("INSERT INTO file_releases VALUES ('f2', 'twelve', 'folder:chosen', 't')")
+    p = afr.plan(c)
+    check("f2" not in p["write"] and p["kept"] == 1, f"kept: {p['kept']} {sorted(p['write'])}")
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")

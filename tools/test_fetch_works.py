@@ -114,10 +114,47 @@ def test_gives_up_when_nothing_answers():
         os.unlink(p)
 
 
+def test_one_folder_asks_only_for_its_own():
+    """[SPEC-FIN-060]: the console's finishing job asks about one album's
+    recordings, not the library's whole backlog."""
+    print("--folder: only the recordings of the files directly in it")
+    album = os.path.normpath("C:/Music/Traffic/Smiling Phases (1991)")
+    fd, db = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    c = sqlite3.connect(db)
+    c.executescript(
+        "CREATE TABLE files (file_id INTEGER PRIMARY KEY, path TEXT);"
+        "CREATE TABLE passages (passage_id INTEGER PRIMARY KEY, file_id INTEGER, kind TEXT);"
+        "CREATE TABLE passage_recordings (passage_id INTEGER, mbid TEXT);")
+    rows = [(1, os.path.join(album, "1-01. Paper Sun.mp3"), "radio", "rec-here"),
+            (2, os.path.join(album, "1-01. Paper Sun.mp3"), "album", "rec-album-only"),
+            (3, os.path.join(album, "Bonus", "x.mp3"), "radio", "rec-subfolder"),
+            (4, os.path.join(os.path.dirname(album), "Other (1970)", "y.mp3"), "radio", "rec-elsewhere"),
+            (5, os.path.join(album, "1-02. Hole In My Shoe.mp3"), "radio", "local:audio:abc")]
+    for pid, path, kind, mbid in rows:
+        c.execute("INSERT OR IGNORE INTO files (path) VALUES (?)", (path,))
+        fid = c.execute("SELECT file_id FROM files WHERE path = ?", (path,)).fetchone()[0]
+        c.execute("INSERT INTO passages VALUES (?, ?, ?)", (pid, fid, kind))
+        c.execute("INSERT INTO passage_recordings VALUES (?, ?)", (pid, mbid))
+    c.commit()
+    check(fw.targets(c, album) == ["rec-here"], f"one album's radio recordings only: {fw.targets(c, album)}")
+    check(fw.targets(c, album.upper()) == (["rec-here"] if os.name == "nt" else []),
+          "a folder named in other case is the same folder where the file system says so")
+    check(sorted(fw.targets(c)) == ["rec-elsewhere", "rec-here", "rec-subfolder"],
+          f"without --folder, the whole library as before: {fw.targets(c)}")
+    c.close()
+    cache = db + ".cache"
+    _, asked = run(db, cache, {"rec-here": '{"relations": []}'}, "--folder", album)
+    check(asked == ["rec-here"], f"and the run asks about it alone: {asked}")
+    for p in (db, cache):
+        os.unlink(p)
+
+
 def main() -> int:
     test_no_answer_is_not_cached_and_is_asked_again()
     test_a_legacy_unreachable_row_is_asked_again()
     test_gives_up_when_nothing_answers()
+    test_one_folder_asks_only_for_its_own()
     print()
     if FAILED:
         print(f"{len(FAILED)} check(s) failed")

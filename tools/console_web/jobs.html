@@ -110,7 +110,15 @@ function actions(j) {
     };
     out.push(go);
   }
+  // An induct adds the files; the album is finished on its own page
+  // [SPEC-FIN-010]. Offered beside the confirm, and once the induct is done.
+  if ((j.kind === 'propose' || j.kind === 'induct') && j.state === 'done') out.push(finishLink(j.target));
   return out;
+}
+
+function finishLink(folder) {
+  return S.el('a', { class: 'chip', href: '/finish?folder=' + encodeURIComponent(folder),
+                     title: 'pick its edition; the cover, analysis and works follow', text: 'finish this album →' });
 }
 
 // One stream, closed before the next opens. The job outlives the page either
@@ -224,7 +232,10 @@ function showPlan(j) {
       ...(p.skipped || []).map(s => S.el('tr', {},
         S.el('td', {}, S.el('span', { class: 'pill', text: 'skipped' })),
         S.el('td', { text: s.stage }),
-        S.el('td', { style: 'color:var(--dim)', text: s.why }))))));
+        S.el('td', { style: 'color:var(--dim)', text: s.why }))))),
+    // What the skipped stages wait for, and where it is done [SPEC-FIN-010].
+    S.el('p', { style: 'font-size:.9rem' }, 'Once it is inducted, the edition, cover, lead-in and out and works are done on ',
+      finishLink(j.target), ' — the confirm adds the files only.'));
 }
 
 // The BROWSER posts this, not the console's server -- the same allowance the
@@ -268,7 +279,9 @@ async function gaps() {
     S.el('thead', {}, S.el('tr', {}, ...['folder', 'no flavor', 'no amplitude', '']
       .map(h => S.el('th', { text: h })))),
     S.el('tbody', {}, ...d.folders.map(f => S.el('tr', {},
-      S.el('td', {}, S.el('a', { href: `/profile/${f.first}`, title: 'open its first passage',
+      // To the album's own page, where its edition, analysis, cover and
+      // works are finished together [SPEC-FIN-010].
+      S.el('td', {}, S.el('a', { href: '/finish?folder=' + encodeURIComponent(f.folder), title: 'finish this album',
                                  style: 'font:12px var(--mono)', text: f.folder })),
       S.el('td', { class: 'num', text: f.flavor || '' }),
       S.el('td', { class: 'num', text: f.amplitude || '' }),

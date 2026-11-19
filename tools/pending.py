@@ -36,13 +36,13 @@ import re
 import shutil
 import sqlite3
 import sys
-import time
 import urllib.parse
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import lempi_db  # noqa: E402
+import mb_pace  # noqa: E402  -- the machine's one MusicBrainz pace [SPEC-MBP-010]
 
 AGENT = "Lempi/0.1 (+https://github.com/MangoCats/Lempi)"
 MB = "https://musicbrainz.org/ws/2/recording"
@@ -223,11 +223,11 @@ def musicbrainz(tags: dict, ms: int) -> list[dict]:
     found = []
     for alb in ([album, None] if album else [None]):
         query = f"recording:{q(title)} AND artist:{q(artist)}" + (f" AND release:{q(alb)}" if alb else "")
-        req = urllib.request.Request(f"{MB}?fmt=json&limit=15&query=" + urllib.parse.quote(query),
-                                     headers={"User-Agent": AGENT})
+        url = f"{MB}?fmt=json&limit=15&query=" + urllib.parse.quote(query)
+        req = urllib.request.Request(url, headers={"User-Agent": AGENT})
+        mb_pace.wait(url)     # the machine's one MusicBrainz pace [SPEC-MBP-010]
         with urllib.request.urlopen(req, timeout=30) as r:
             found = json.load(r).get("recordings", [])
-        time.sleep(1.1)       # MusicBrainz asks for one request a second
         if found:
             break
     rows = []

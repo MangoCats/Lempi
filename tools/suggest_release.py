@@ -73,12 +73,16 @@ import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 from apply_changes import clear_flags_for  # noqa: E402  -- [SPEC-DF-112], reused not reinvented
 from choose_release import name_match  # noqa: E402  -- reused, not re-derived
 from fetch_releases import get as mb_get, RATE_S, CACHE_DDL  # noqa: E402
+import artist_sort  # noqa: E402  -- an artist's sort name [REQ-VIS-182]
+import ingest_cd  # noqa: E402  -- record_release(), the edition as a CD add records it
+import release_sources  # noqa: E402  -- which editions are settled [SPEC-FIN-040]
 
 SOURCE = "review:folder_release_match"
 # `LEMPI_MUSICBRAINZ_URL` points both elsewhere -- a test's own server.
 SEARCH_BASE = os.environ.get("LEMPI_MUSICBRAINZ_URL", "https://musicbrainz.org").rstrip("/") + "/ws/2/release"
 DETAIL_BASE = SEARCH_BASE
-DETAIL_INC = "media+recordings+artist-credits+release-groups"
+# `labels` since 2026-11-19, so editions of one title can be told apart [SPEC-FIN-030].
+DETAIL_INC = "media+recordings+artist-credits+release-groups+labels"
 MAX_CANDIDATES = 5   # full-detail fetches per discovery run -- each one is a
                       # real, rate-limited MusicBrainz request
 
@@ -120,10 +124,13 @@ def say(text: str) -> None:
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(BASE_DDL)
     conn.executescript(CACHE_DDL)
-    try:
-        conn.execute("ALTER TABLE releases ADD COLUMN artist_credit TEXT")   # [REQ-VIS-183]
-    except sqlite3.OperationalError:
-        pass    # there already
+    for ddl in ("ALTER TABLE releases ADD COLUMN artist_credit TEXT",          # [REQ-VIS-183]
+                "ALTER TABLE release_recordings ADD COLUMN chosen INTEGER DEFAULT 0",
+                "ALTER TABLE release_recordings ADD COLUMN disc INTEGER"):
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError:
+            pass    # there already
 
 
 # ------------------------------------------------------------- folder scope --
@@ -136,18 +143,24 @@ def gather_folder_files(conn: sqlite3.Connection, folder: str) -> list:
     folder_norm = os.path.normpath(folder)
     rows = conn.execute(
         "SELECT f.file_id, f.path, f.duration_ms, f.audio_md5, "
-        "       t.title, t.artist, t.album, t.track_no "
+        "       t.title, t.artist, t.album, t.track_no, t.disc_no "
         "FROM files f LEFT JOIN file_tags t ON t.file_id = f.file_id "
         "WHERE f.path LIKE ?1", (folder + "%",)).fetchall()
     out = []
-    for file_id, path, duration_ms, audio_md5, title, artist, album, track_no in rows:
+    for file_id, path, duration_ms, audio_md5, title, artist, album, track_no, disc_no in rows:
         if os.path.normpath(os.path.dirname(path)) != folder_norm:
             continue
+        # The file's radio passage, and its album passage beside it: one
+        # identification for both, as a CD add gives them [SPEC-SA-110].
+        # Until 2026-11-19 only the radio one was credited, so a whole-album
+        # play kept the placeholder [SPEC-FIN-045].
         passage_ids = [r[0] for r in conn.execute(
-            "SELECT passage_id FROM passages WHERE file_id=?1 AND kind='radio'", (file_id,))]
+            "SELECT passage_id FROM passages WHERE file_id=?1 AND kind IN ('radio','album') "
+            "ORDER BY kind = 'album', start_ms", (file_id,))]
         out.append({"file_id": file_id, "path": path, "duration_ms": duration_ms,
                     "audio_md5": audio_md5, "title": title, "artist": artist,
-                    "album": album, "track_no": track_no, "passage_ids": passage_ids})
+                    "album": album, "track_no": track_no, "disc_no": disc_no,
+                    "passage_ids": passage_ids})
     return out
 
 
@@ -229,13 +242,16 @@ def tracks_from_detail(detail: dict) -> list:
     already known.
     """
     out = []
-    for medium in detail.get("media") or []:
+    for i, medium in enumerate(detail.get("media") or [], 1):
         for t in medium.get("tracks") or []:
             rec = t.get("recording") or {}
             if not rec.get("id"):
                 continue
             credit = rec.get("artist-credit") or t.get("artist-credit") or detail.get("artist-credit") or []
             out.append({
+                # A track is its disc and its place on it: a two-disc set has
+                # two track 1s, and by place alone they were one [SPEC-FIN-035].
+                "disc": medium.get("position") or i,
                 "position": t.get("position"),
                 "title": t.get("title") or rec.get("title"),
                 "length": t.get("length") or rec.get("length"),
@@ -243,8 +259,32 @@ def tracks_from_detail(detail: dict) -> list:
                 "recording_title": rec.get("title") or t.get("title"),
                 "artist_mbid": (credit[0].get("artist") or {}).get("id") if credit else None,
                 "artist_name": artist_credit_name(credit),
+                # Every credited artist, with the sort name Browse sorts by
+                # [REQ-VIS-182], as a CD add records them.
+                "artists": [(a["artist"]["id"], a["artist"].get("name") or "?", a["artist"].get("sort-name"))
+                            for a in credit if isinstance(a.get("artist"), dict) and a["artist"].get("id")],
             })
     return out
+
+
+def edition_facts(detail: dict) -> dict:
+    """What tells one edition of an album from another, for a person choosing
+    between them `[SPEC-FIN-030]`: two pressings of one title, both with the
+    same tracks, differ only here. Each is `None` where MusicBrainz says
+    nothing; `labels` needs `inc=labels`, which a response cached before
+    2026-11-19 was fetched without."""
+    media = detail.get("media") or []
+    formats = [m.get("format") for m in media if m.get("format")]
+    labels = [(li.get("label") or {}).get("name") for li in detail.get("label-info") or []]
+    return {
+        "country": detail.get("country"),
+        "status": detail.get("status"),
+        "barcode": detail.get("barcode") or None,
+        "disambiguation": detail.get("disambiguation") or None,
+        "discs": len(media) or None,
+        "formats": ", ".join(dict.fromkeys(formats)) or None,
+        "labels": ", ".join(dict.fromkeys(n for n in labels if n)) or None,
+    }
 
 
 def store_release_detail(conn: sqlite3.Connection, detail: dict) -> None:
@@ -281,10 +321,17 @@ def store_release_detail(conn: sqlite3.Connection, detail: dict) -> None:
         conn.execute(
             "INSERT OR IGNORE INTO recordings (mbid, title, length_ms, source) VALUES (?1,?2,?3,'musicbrainz')",
             (t["recording_mbid"], t["recording_title"] or t["title"] or t["recording_mbid"], t["length"]))
+        # An upsert, as for the release: a replace reset `chosen` to 0 and
+        # dropped the disc and the source, so a search that merely looked at a
+        # release took back the edition a CD add or a person had settled on
+        # [SPEC-FIN-040] -- and the finishing page searches freely.
         conn.execute(
-            "INSERT OR REPLACE INTO release_recordings (release_mbid, mbid, position, source, track_length_ms) "
-            "VALUES (?1,?2,?3,'musicbrainz',?4)",
-            (mbid, t["recording_mbid"], t["position"], t["length"]))
+            "INSERT INTO release_recordings (release_mbid, mbid, position, source, track_length_ms, disc) "
+            "VALUES (?1,?2,?3,'musicbrainz',?4,?5) ON CONFLICT(release_mbid, mbid) DO UPDATE SET "
+            "position = COALESCE(excluded.position, release_recordings.position), "
+            "track_length_ms = COALESCE(excluded.track_length_ms, release_recordings.track_length_ms), "
+            "disc = COALESCE(excluded.disc, release_recordings.disc)",
+            (mbid, t["recording_mbid"], t["position"], t["length"], t["disc"]))
 
 
 # ------------------------------------------------------------------ scoring --
@@ -297,7 +344,10 @@ def match_files_to_tracks(files: list, tracks: list) -> tuple:
     """
     claimed = set()
     matches = []
-    for track in sorted(tracks, key=lambda t: t.get("position") if t.get("position") is not None else 999):
+    def place(t):
+        return (t.get("disc") or 1, t.get("position") if t.get("position") is not None else 999)
+
+    for track in sorted(tracks, key=place):
         best_i, best_score, best_delta = None, -1.0, None
         for i, f in enumerate(files):
             if i in claimed:
@@ -312,7 +362,10 @@ def match_files_to_tracks(files: list, tracks: list) -> tuple:
             if name_score < NAME_FLOOR:
                 continue
             score = name_score
-            if f.get("track_no") and track.get("position") and f["track_no"] == track["position"]:
+            # The same place on the same disc, where both say which disc: a
+            # track 3 tagged disc 2 is not disc 1's track 3 [SPEC-FIN-035].
+            same_disc = not (f.get("disc_no") and track.get("disc")) or f["disc_no"] == track["disc"]
+            if f.get("track_no") and track.get("position") and f["track_no"] == track["position"] and same_disc:
                 score += TRACK_NO_BONUS
             delta = None
             if f.get("duration_ms") and track.get("length"):
@@ -325,14 +378,16 @@ def match_files_to_tracks(files: list, tracks: list) -> tuple:
             f = files[best_i]
             matches.append({
                 "file": f["path"], "file_id": f["file_id"], "passage_ids": f["passage_ids"],
+                "track_disc": track.get("disc"),
                 "track_position": track.get("position"), "track_title": track.get("title"),
                 "recording_mbid": track.get("recording_mbid"), "recording_title": track.get("recording_title"),
                 "artist_mbid": track.get("artist_mbid"), "artist_name": track.get("artist_name"),
+                "artists": track.get("artists") or [],
                 "similarity": round(min(best_score, 1.0), 3), "duration_delta_ms": best_delta,
             })
     unmatched_files = [f["path"] for i, f in enumerate(files) if i not in claimed]
-    matched_positions = {m["track_position"] for m in matches}
-    unmatched_tracks = [t.get("title") for t in tracks if t.get("position") not in matched_positions]
+    matched = {place({"disc": m["track_disc"], "position": m["track_position"]}) for m in matches}
+    unmatched_tracks = [t.get("title") for t in tracks if place(t) not in matched]
     return matches, unmatched_files, unmatched_tracks
 
 
@@ -396,6 +451,7 @@ def do_discover(conn: sqlite3.Connection, args, files: list) -> int:
             "mbid": mbid, "title": detail.get("title"),
             "artist": artist_credit_name(detail.get("artist-credit")),
             "date": detail.get("date"), "track_count": len(tracks),
+            **edition_facts(detail),
             "score": round(folder_score(files, matches), 3),
             "matches": matches, "unmatched_files": unmatched_files,
             "unmatched_tracks": unmatched_tracks,
@@ -476,14 +532,20 @@ def do_accept(conn: sqlite3.Connection, args, files: list) -> int:
                     conn.execute(
                         "INSERT INTO recordings (mbid, title, source) VALUES (?1,?2,?3)",
                         (mbid, m["recording_title"] or m["track_title"] or "?", SOURCE))
-                if m.get("artist_mbid"):
+                # Every credited artist, with the sort name Browse sorts by, as
+                # a CD add records them [REQ-VIS-182]; the first alone, named
+                # only, until 2026-11-19.
+                credited = m.get("artists") or (
+                    [(m["artist_mbid"], m["artist_name"] or "?", None)] if m.get("artist_mbid") else [])
+                for artist_mbid, name, sort_name in credited:
                     conn.execute(
-                        "INSERT OR IGNORE INTO artists (mbid, name, source) VALUES (?1,?2,?3)",
-                        (m["artist_mbid"], m["artist_name"] or "?", SOURCE))
+                        "INSERT OR IGNORE INTO artists (mbid, name, sort_name, source) VALUES (?1,?2,?3,?4)",
+                        (artist_mbid, name or "?", sort_name, SOURCE))
+                    artist_sort.record(conn, artist_mbid, sort_name)
                     conn.execute(
                         "INSERT OR IGNORE INTO recording_artists (mbid, artist_mbid, weight, source) "
-                        "VALUES (?1,?2,1.0,?3)", (mbid, m["artist_mbid"], SOURCE))
-                for passage_id in m["passage_ids"]:
+                        "VALUES (?1,?2,1.0,?3)", (mbid, artist_mbid, SOURCE))
+                for n, passage_id in enumerate(m["passage_ids"]):
                     # Captured before the reassignment -- `clear_flags_for`
                     # needs the id a flag was plausibly set against, which is
                     # about to stop being this passage's own [SPEC-DF-112].
@@ -495,12 +557,15 @@ def do_accept(conn: sqlite3.Connection, args, files: list) -> int:
                     conn.execute(
                         "INSERT INTO passage_recordings (passage_id, mbid, weight, source) "
                         "VALUES (?1,?2,1.0,?3)", (passage_id, mbid, SOURCE))
-                    conn.execute(
-                        "INSERT INTO ingest_decisions (audio_md5, stage, outcome, confidence, detail, decided_at) "
-                        "VALUES (?1,'folder_release_match',?2,?3,?4,?5)",
-                        (files_by_id[m["file_id"]]["audio_md5"], args.accept, round(score, 3),
-                         json.dumps({"folder": args.folder, "matched": len(matches),
-                                     "total_files": len(files), "match": m}), now))
+                    if n == 0:
+                        # One decision per file: it is the file that was
+                        # matched, whichever of its passages took the id.
+                        conn.execute(
+                            "INSERT INTO ingest_decisions (audio_md5, stage, outcome, confidence, detail, decided_at) "
+                            "VALUES (?1,'folder_release_match',?2,?3,?4,?5)",
+                            (files_by_id[m["file_id"]]["audio_md5"], args.accept, round(score, 3),
+                             json.dumps({"folder": args.folder, "matched": len(matches),
+                                         "total_files": len(files), "match": m}), now))
                     applied += 1
                     if clear_flags_ok:
                         before = conn.total_changes
@@ -510,6 +575,15 @@ def do_accept(conn: sqlite3.Connection, args, files: list) -> int:
                     if clear_checks_ok:
                         rechecked += conn.execute(
                             "DELETE FROM id_checks WHERE passage_id=?1", (passage_id,)).rowcount
+            # The edition, recorded as a CD add records the disc in hand
+            # [SPEC-FIN-040]: the chosen release of each matched recording, at
+            # its place on its disc, and the album each matched file is shown
+            # under -- `folder:chosen`, which the tools that guess leave
+            # standing. An unmatched file is left as it was here too.
+            linked = ingest_cd.record_release(
+                conn, detail, [(m["track_position"], m["recording_mbid"]) for m in matches],
+                files=[files_by_id[m["file_id"]]["audio_md5"] for m in matches],
+                source=release_sources.FOLDER_CHOSEN) if matches else 0
         except sqlite3.Error as e:
             conn.rollback()
             say(f"refused: {e}")
@@ -519,15 +593,17 @@ def do_accept(conn: sqlite3.Connection, args, files: list) -> int:
         conn.commit()
         say(f"committed: {applied} passage(s) updated"
             + (f", {cleared} flag(s) cleared" if clear_flags_ok else "")
-            + (f", {rechecked} stale fingerprint-check row(s) cleared" if clear_checks_ok else ""))
+            + (f", {rechecked} stale fingerprint-check row(s) cleared" if clear_checks_ok else "")
+            + f"; the edition recorded for {len(matches)} file(s), {linked} recording(s) linked to it")
     else:
+        linked = 0
         say("nothing was written. Re-run with --commit to do it.")
 
     if args.json:
         say(json.dumps({"ok": True, "release": args.accept, "matched": len(matches),
                         "rechecked": rechecked,
                         "total_files": len(files), "applied": applied, "cleared": cleared,
-                        "unmatched_files": unmatched_files}))
+                        "linked": linked, "unmatched_files": unmatched_files}))
     return 0
 
 
@@ -545,8 +621,14 @@ def main() -> int:
                           "rather than a person")
     args = ap.parse_args()
 
-    # Catalogue-only, and it writes -- library half as `main`.
-    conn = lempi_db.connect(args.db, lempi_db.ROLE_LIBRARY, writable=True)
+    # The catalogue is `main` and written; the listener half is written too,
+    # because an accept clears the flags set on a passage's old id
+    # [SPEC-DF-112], and those live there [IMPL-DBSPLIT-025]. Attached
+    # read-only, every accept on the hub was refused whole until 2026-11-19
+    # ("attempt to write a readonly database"), since it writes in one
+    # transaction. Discovery writes neither half's flags, and is unchanged.
+    conn = lempi_db.connect(args.db, lempi_db.ROLE_LIBRARY, writable=True,
+                            peer_writable=bool(args.accept and args.commit))
     conn.execute("PRAGMA busy_timeout = 5000")
     ensure_schema(conn)
 

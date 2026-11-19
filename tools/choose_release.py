@@ -39,6 +39,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+import release_sources  # noqa: E402  -- which editions are settled [SPEC-FIN-040]
 import time
 
 # Weights. Deliberately blunt: the name term decides when a tag exists, and the
@@ -284,9 +285,12 @@ def main() -> int:
     now = int(time.time())
     # A recording whose release a CD add recorded is not re-scored: the disc
     # in hand is the record it came from, which is the evidence this whole
-    # tool is approximating `[SPEC-CDI-098]`.
+    # tool is approximating `[SPEC-CDI-098]`. Nor one whose edition a person
+    # picked for its folder `[SPEC-FIN-040]`: the same evidence, said by them.
+    settled = ",".join("?" * len(release_sources.SETTLED))
     from_disc = {m for (m,) in conn.execute(
-        "SELECT mbid FROM release_recordings WHERE chosen = 1 AND source = 'cd:import'")}
+        f"SELECT mbid FROM release_recordings WHERE chosen = 1 AND source IN ({settled})",
+        release_sources.SETTLED)}
     if not args.explain:
         mbids = [m for m in mbids if m not in from_disc]
     for mbid in mbids:

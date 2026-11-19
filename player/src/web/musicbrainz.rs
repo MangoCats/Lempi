@@ -7,17 +7,97 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
 
-/// Serialises MusicBrainz search calls to roughly one per second
-/// `[SPEC-SUI-196]` -- so opening two browser tabs and searching from both
-/// still respects the API's limit, because the discipline lives in this one
-/// process rather than in client behaviour a second tab simply would not
-/// share. Same rate `tools/fetch_releases.py` already uses for the same API.
+/// The least time between two MusicBrainz requests made on this machine
+/// `[SPEC-MBP-020]`: their published one a second, with a fifth to spare --
+/// the margin the maintainer set on 2026-11-19. `tools/mb_pace.py`'s
+/// `MIN_INTERVAL_S`; the two must agree.
+#[cfg(feature = "vipunen-support")]
+pub(super) const MB_MIN_INTERVAL_S: f64 = 1.2;
+
+/// A reservation further ahead than this is a clock that was set back, not a
+/// queue of callers, and is forgotten -- `mb_pace.STALE_AHEAD_S`.
+#[cfg(feature = "vipunen-support")]
+const MB_STALE_AHEAD_S: f64 = 60.0;
+
+/// The file every MusicBrainz caller on this machine paces itself by
+/// `[SPEC-MBP-030]`: the player here and every tool `tools/mb_pace.py`
+/// serves, so a search on the review page while a console job asks
+/// MusicBrainz still keeps the pair 1.2 s apart. The same path that module
+/// computes: `LEMPI_MB_PACE_FILE`, else `%LOCALAPPDATA%\Lempi\` on Windows,
+/// else `$XDG_CACHE_HOME/lempi/` or `~/.cache/lempi/`.
+#[cfg(feature = "vipunen-support")]
+pub(super) fn mb_pace_file() -> std::path::PathBuf {
+    use std::path::PathBuf;
+    if let Some(p) = std::env::var_os("LEMPI_MB_PACE_FILE") {
+        return PathBuf::from(p);
+    }
+    #[cfg(windows)]
+    if let Some(l) = std::env::var_os("LOCALAPPDATA") {
+        return PathBuf::from(l).join("Lempi").join("musicbrainz.pace");
+    }
+    let base = std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("lempi").join("musicbrainz.pace")
+}
+
+/// Take the next free moment in the pace file at `path`, at least `interval`
+/// seconds after the last one taken, record it, and return it -- seconds
+/// since the epoch, as `mb_pace.reserve` does, in the same text. Locked while
+/// read and written, so processes sharing the file take turns.
+#[cfg(feature = "vipunen-support")]
+pub(super) fn mb_reserve_at(path: &std::path::Path, interval: f64, now: f64) -> std::io::Result<f64> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)?;
+    f.lock()?;
+    let taken = (|| -> std::io::Result<f64> {
+        let mut text = String::new();
+        f.seek(SeekFrom::Start(0))?;
+        f.read_to_string(&mut text)?;
+        let last = text.trim().parse::<f64>().ok().filter(|&t| t <= now + MB_STALE_AHEAD_S);
+        let slot = last.map_or(now, |t| (t + interval).max(now));
+        f.seek(SeekFrom::Start(0))?;
+        f.set_len(0)?;
+        write!(f, "{slot:.3}")?;
+        Ok(slot)
+    })();
+    let _ = f.unlock();
+    taken
+}
+
+/// This process's own pace, for when the shared file cannot be used: a
+/// second tab still waits its turn, though a console job no longer does.
 #[cfg(feature = "vipunen-support")]
 pub(super) static MB_LAST_REQUEST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
+/// Wait for this machine's next MusicBrainz turn `[SPEC-SUI-196]`,
+/// `[SPEC-MBP-030]` -- so two browser tabs, or a tab and a console job, still
+/// keep the API's limit, because the discipline lives below every caller
+/// rather than in behaviour a second caller would not share.
 #[cfg(feature = "vipunen-support")]
 pub(super) async fn mb_rate_limit() {
-    use std::time::{Duration, Instant};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    let epoch_now = || SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+    let shared = tokio::task::spawn_blocking(move || {
+        mb_reserve_at(&mb_pace_file(), MB_MIN_INTERVAL_S, epoch_now())
+    }).await;
+    match shared {
+        Ok(Ok(slot)) => {
+            let wait = slot - epoch_now();
+            if wait > 0.0 {
+                tokio::time::sleep(Duration::from_secs_f64(wait)).await;
+            }
+            return;
+        }
+        // Said, never silent: a pace the console's tools do not share is one
+        // that can let the two together past the limit [GDE-DEP-060].
+        Ok(Err(e)) => tracing::warn!("the MusicBrainz pace file {} could not be used ({e}); \
+                                      pacing this process alone", mb_pace_file().display()),
+        Err(e) => tracing::warn!("the MusicBrainz pace could not be taken ({e}); pacing this process alone"),
+    }
     // The slot is reserved while holding the lock, and only the wait itself
     // happens after releasing it -- an `await` under a `std::sync::Mutex`
     // guard would hold it across a suspend point, which is the bug this
@@ -25,7 +105,7 @@ pub(super) async fn mb_rate_limit() {
     let target = {
         let mut last = MB_LAST_REQUEST.lock().unwrap();
         let now = Instant::now();
-        let earliest = last.map(|t| t + Duration::from_secs(1)).unwrap_or(now);
+        let earliest = last.map(|t| t + Duration::from_secs_f64(MB_MIN_INTERVAL_S)).unwrap_or(now);
         let target = earliest.max(now);
         *last = Some(target);
         target
@@ -201,5 +281,57 @@ pub(super) fn parse_mb_results(kind: &str, body: &serde_json::Value) -> Vec<crat
             Some(crate::db::Suggestion { mbid, title, artist, score })
         })
         .collect()
+}
+
+/// The shared pace `[SPEC-MBP-020]`, `[SPEC-MBP-030]`, against a file of each
+/// test's own: the times are given, not read, so no test waits.
+#[cfg(all(test, feature = "vipunen-support"))]
+mod pace_tests {
+    use super::*;
+
+    fn fresh(name: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("lempi-mb-pace-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        p
+    }
+
+    #[test]
+    fn the_interval_is_the_limit_with_a_fifth_to_spare() {
+        assert!((MB_MIN_INTERVAL_S - 1.2).abs() < 1e-9, "tools/mb_pace.py's MIN_INTERVAL_S is 1.2 s");
+    }
+
+    #[test]
+    fn a_request_soon_after_another_waits_the_interval_and_a_late_one_does_not() {
+        let p = fresh("turns");
+        assert_eq!(mb_reserve_at(&p, MB_MIN_INTERVAL_S, 1000.0).unwrap(), 1000.0, "the first asks at once");
+        let b = mb_reserve_at(&p, MB_MIN_INTERVAL_S, 1000.1).unwrap();
+        assert!((b - 1001.2).abs() < 1e-6, "the second, 0.1 s later, waits for 1001.2: {b}");
+        let c = mb_reserve_at(&p, MB_MIN_INTERVAL_S, 1000.2).unwrap();
+        assert!((c - 1002.4).abs() < 1e-6, "a third queues behind the second: {c}");
+        assert_eq!(mb_reserve_at(&p, MB_MIN_INTERVAL_S, 1010.0).unwrap(), 1010.0, "one long after asks at once");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn the_file_reads_as_the_tools_write_it_and_they_read_ours() {
+        let p = fresh("text");
+        // What `mb_pace.reserve` writes: seconds since the epoch, three places.
+        std::fs::write(&p, "2000.500").unwrap();
+        let slot = mb_reserve_at(&p, MB_MIN_INTERVAL_S, 2000.0).unwrap();
+        assert!((slot - 2001.7).abs() < 1e-6, "a tool's request at 2000.5 holds the next until 2001.7: {slot}");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "2001.700", "and the file says so, as the tools read it");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn a_clock_set_back_or_a_damaged_file_does_not_hold_requests_back() {
+        let p = fresh("odd");
+        std::fs::write(&p, "999999.000").unwrap();
+        assert_eq!(mb_reserve_at(&p, MB_MIN_INTERVAL_S, 1000.0).unwrap(), 1000.0,
+                   "a reservation hours ahead is a clock set back, not a queue");
+        std::fs::write(&p, "not a time").unwrap();
+        assert_eq!(mb_reserve_at(&p, MB_MIN_INTERVAL_S, 1000.0).unwrap(), 1000.0, "nor is text that is no time");
+        let _ = std::fs::remove_file(&p);
+    }
 }
 

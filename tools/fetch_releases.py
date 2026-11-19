@@ -31,6 +31,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+import mb_pace  # noqa: E402  -- the machine's one MusicBrainz pace [SPEC-MBP-010]
 import time
 import urllib.error
 import urllib.request
@@ -41,8 +42,10 @@ BASE = "https://musicbrainz.org/ws/2/release"
 
 # MusicBrainz asks for at most one request per second averaged over time. This
 # is the whole reason the run takes hours; going faster gets an IP blocked, and
-# a blocked IP is a worse outcome than a slow scan.
-RATE_S = 1.0
+# a blocked IP is a worse outcome than a slow scan. `get` waits on the
+# machine's one pace, 1.2 s apart whoever asks [SPEC-MBP-010]; this is that
+# interval, for the estimates and the sleeps its callers still make.
+RATE_S = mb_pace.MIN_INTERVAL_S
 
 # Browse pages at 100; a recording on more than that is rare but real.
 PAGE = 100
@@ -88,6 +91,7 @@ def get(url: str, tries: int = 4) -> dict | None:
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     for attempt in range(tries):
         try:
+            mb_pace.wait(url)       # every attempt is a request [SPEC-MBP-010]
             with urllib.request.urlopen(req, timeout=30) as r:
                 return json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError as e:

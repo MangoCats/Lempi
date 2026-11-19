@@ -1,0 +1,229 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Vipunen — finish an album</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/console.css">
+<header>
+  <h1>Vipunen</h1>
+  <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/import">import</a><a href="/export">export</a><a href="/flags">flags</a><a href="/intake">intake</a><a href="/mesh">mesh</a><a href="/programmes">programmes</a><a href="/sync">sync</a><a href="/system">system</a></nav>
+  <span class="ro">library read-only</span>
+</header>
+<main>
+  <h2>Finish an album <small>— added from files, finished as a CD add is</small></h2>
+  <p style="font-size:.9rem;max-width:52rem">
+    An album added as files has its passages and its tags, and nothing more. Pick the edition the
+    files are from, and the rest follows: both passages of each track named, every artist credited,
+    the album each file is shown under, flavor, lead-in and out, the cover, and the songs' works —
+    then the player is asked to rebuild. Each step does only what is not done yet.
+  </p>
+  <div id="main"><p class="empty">loading…</p></div>
+</main>
+<script src="/console.js"></script>
+<script>
+// [SPEC-FIN-010..070]. One folder at /finish?folder=..., or the index of every
+// folder with something left to do at /finish.
+const folder = new URLSearchParams(location.search).get('folder');
+const main = document.getElementById('main');
+const PILL = { done: 'ok', partly: 'warn', 'not done': '', waiting: '' };
+const s = n => n === 1 ? '' : 's';
+
+async function index() {
+  let d;
+  try { d = await S.get('/api/finish/folders'); } catch (e) { return S.fail(main, e); }
+  if (!d.length) return main.replaceChildren(S.el('p', { class: 'empty',
+    text: 'Every folder\'s tracks are named and analyzed. Nothing to finish.' }));
+  main.replaceChildren(
+    S.el('h2', {}, 'Folders with something left ', S.el('small', { text: `— ${d.length}, newest first` })),
+    S.el('table', {},
+      S.el('thead', {}, S.el('tr', {}, ...['folder', 'tracks', 'not yet named', 'not yet analyzed', 'added']
+        .map(h => S.el('th', { class: /tracks|named|analyzed/.test(h) ? 'num' : '', text: h })))),
+      S.el('tbody', {}, ...d.map(f => S.el('tr', {},
+        S.el('td', {}, S.el('a', { href: '/finish?folder=' + encodeURIComponent(f.folder),
+                                   style: 'font:12px var(--mono)', text: f.folder })),
+        S.el('td', { class: 'num', text: f.radio }),
+        S.el('td', { class: 'num', text: f.placeholders || '' }),
+        S.el('td', { class: 'num', text: f.no_analysis || '' }),
+        S.el('td', { style: 'color:var(--dim)', text: (f.newest || '').slice(0, 10) }))))));
+}
+
+function row(label, st, detail) {
+  return S.el('tr', {},
+    S.el('td', { text: label }),
+    S.el('td', {}, S.el('span', { class: 'pill ' + (PILL[st.state] || ''), text: st.state })),
+    S.el('td', { style: 'font-size:.88rem', text: detail }));
+}
+
+function checklist(d) {
+  const st = d.stages, ed = st.edition, rel = ed.release;
+  const named = `radio passages named ${ed.radio_named} of ${ed.radio}, album passages ${ed.album_named} of ${ed.album}`;
+  const shown = rel ? `${ed.files_shown} of ${ed.files} file${s(ed.files)} shown under “${rel.title || rel.mbid}”`
+    + (rel.date || rel.country ? ` (${[rel.date, rel.country].filter(Boolean).join(', ')})` : '')
+    + (rel.others ? `, and ${rel.others} other edition${s(rel.others)}` : '') : 'no edition recorded';
+  const c = st.cover;
+  const own = [c.folder_jpg && 'a folder.jpg beside the files', c.embedded && `${c.embedded} file${s(c.embedded)} with a picture`]
+    .filter(Boolean).join(' and ');
+  const w = st.works;
+  return S.el('table', {}, S.el('tbody', {},
+    row('Edition', ed, `${shown}; ${named}`),
+    row('Flavor', st.flavor, `${st.flavor.done} of ${st.flavor.total} tracks — how each sounds, from Essentia`),
+    row('Lead-in and out', st.amplitude, `${st.amplitude.done} of ${st.amplitude.total} tracks measured`),
+    row('Cover', c, (rel ? `front ${c.front ? 'held' : 'not held'}, back ${c.back ? 'held' : 'not held'}`
+      : 'waits for the edition') + (own ? `; the player also has ${own}` : '')),
+    row('Works', w, w.recordings ? `MusicBrainz asked about ${w.asked} of ${w.recordings} recording${s(w.recordings)}; `
+      + `${w.with_work} perform a known song` : 'waits for the edition')));
+}
+
+function facts(c) {
+  return [c.date, c.country, c.formats, c.discs > 1 ? `${c.discs} discs` : null, c.labels,
+          c.barcode ? `barcode ${c.barcode}` : null, c.disambiguation, c.status !== 'Official' ? c.status : null]
+    .filter(Boolean).join(' · ');
+}
+
+function candidateCard(c, files, onPick) {
+  const matched = c.matches.length;
+  const card = S.el('div', { class: 'card', style: 'margin:.5rem 0;padding:.6rem .8rem;border:1px solid var(--line);border-radius:6px' });
+  const pick = S.el('button', { class: 'chip on', text: 'finish with this edition', disabled: matched ? null : 'disabled',
+                                title: matched ? '' : 'no file matched any of its tracks' });
+  pick.onclick = () => onPick(c);
+  card.append(
+    S.el('div', {}, S.el('b', { text: c.title || '(untitled)' }), ` — ${c.artist || ''} `,
+      S.el('a', { href: `https://musicbrainz.org/release/${c.mbid}`, target: '_blank', rel: 'noopener',
+                  style: 'font-size:.8rem', text: 'on MusicBrainz ↗' })),
+    S.el('div', { style: 'color:var(--dim);font-size:.85rem', text: facts(c) || 'MusicBrainz says nothing more of it' }),
+    S.el('div', { style: 'font-size:.88rem;margin:.25rem 0' },
+      S.el('span', { class: 'pill ' + (matched === files ? 'ok' : matched ? 'warn' : 'bad'),
+                     text: `${matched} of ${files} file${s(files)} matched` }),
+      ` of its ${c.track_count} track${s(c.track_count)}, score ${c.score}`));
+  const det = S.el('details', {}, S.el('summary', { style: 'font-size:.85rem', text: 'which file is which track' }),
+    S.el('div', { class: 'list', style: 'font-size:.82rem' },
+      ...c.matches.map(m => S.el('div', { text:
+        `${m.file.split(/[\\/]/).pop()}  →  ${m.track_disc && c.discs > 1 ? m.track_disc + '-' : ''}${m.track_position}. `
+        + `${m.recording_title || m.track_title}  (similarity ${m.similarity})` })),
+      ...(c.unmatched_files || []).map(f => S.el('div', { style: 'color:var(--warn)',
+        text: `${f.split(/[\\/]/).pop()}  —  no track: left as it is` })),
+      ...(c.unmatched_tracks || []).map(t => S.el('div', { style: 'color:var(--dim)',
+        text: `${t}  —  no file here for this track` }))));
+  card.append(det, S.el('div', { class: 'controls' }, pick));
+  return card;
+}
+
+function editionSearch(d, box, runBox) {
+  const q = S.el('input', { type: 'search', id: 'edition-query', style: 'min-width:26rem',
+    placeholder: 'blank searches by the files\' tags; or paste a musicbrainz.org release URL' });
+  const go = S.el('button', { class: 'chip', text: 'find editions' });
+  const out = S.el('div', {});
+  box.append(S.el('div', { class: 'controls' }, q, go), out);
+  go.onclick = async () => {
+    out.replaceChildren(S.el('p', { class: 'empty', text: 'asking MusicBrainz — a request every 1.2 s, so a few seconds…' }));
+    let r;
+    try {
+      r = await (await fetch('/api/release/suggest', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder: d.folder, query: q.value.trim() || undefined }) })).json();
+    } catch (e) { return S.fail(out, e); }
+    if (r.error) return S.fail(out, new Error(r.error));
+    S.watchJob(r.job_id, out, job => {
+      const res = job.result || {};
+      if (!res.ok) return out.append(S.el('p', { class: 'err', text: res.error || 'the search did not finish' }));
+      if (res.query && !q.value.trim()) q.value = res.query;
+      const cands = res.candidates || [];
+      out.replaceChildren(cands.length
+        ? S.el('div', {}, S.el('p', { style: 'font-size:.88rem', text: `${cands.length} edition${s(cands.length)}, best fit first. `
+            + 'Open “which file is which track” to check before choosing.' }),
+          ...cands.map(c => candidateCard(c, d.files, picked => run(d, picked, runBox))))
+        : S.el('p', { class: 'empty', text: 'Nothing found. Try a different search, or paste the release\'s URL.' }));
+    });
+  };
+}
+
+async function run(d, c, runBox) {
+  const left = d.files - c.matches.length;
+  const what = `“${c.title}”` + (facts(c) ? ` (${facts(c)})` : '');
+  if (!confirm(`Finish this folder as ${what}?\n\n${c.matches.length} of ${d.files} files will be named as its tracks`
+    + (left ? `; ${left} will be left as they are` : '') + '.\n\nThen flavor, lead-in and out, the cover and the works follow, '
+    + 'and the player is asked to rebuild. Each step does only what is missing.')) return;
+  let r;
+  try {
+    r = await (await fetch('/api/finish/run', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder: d.folder, release_mbid: c.mbid }) })).json();
+  } catch (e) { runBox.hidden = false; return S.fail(runBox, e); }
+  if (r.error) { runBox.hidden = false; return S.fail(runBox, new Error(r.error)); }
+  watchRun(r.job_id, runBox);
+}
+
+// A finishing job, watched where the stages are, and its outcome said in
+// words once it ends. Until 2026-11-19 the page was drawn again from scratch
+// at the end, which took the log -- and the job's error with it -- off the
+// page: a job that failed looked like a click that did nothing.
+function watchRun(id, runBox) {
+  runBox.hidden = false;
+  runBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  S.watchJob(id, runBox, job => {
+    runBox.prepend(outcome(job));
+    album(runBox);
+  });
+}
+
+function outcome(job) {
+  const r = job.result || {}, ed = r.edition || {};
+  if (job.state === 'done') return S.el('p', {}, S.el('span', { class: 'pill ok', text: 'finished' }),
+    ed.skipped ? ' — the edition was in place already; the rest is done.'
+               : ` — ${ed.applied ?? '?'} passages named, then the rest done. The stages above are measured afresh.`);
+  const why = ed.ok === false ? `the edition was not applied, and nothing was written: ${ed.error || 'see the log below'}`
+    : (r.failed || []).length ? `these steps failed, the rest were done: ${r.failed.join(', ')} — see the log below`
+    : `the job ${job.state} — see the log below`;
+  return S.el('p', { class: 'err', style: 'font-size:.95rem' }, S.el('span', { class: 'pill bad', text: job.state }), ' ', why);
+}
+
+async function album(keptRun = null) {
+  let d;
+  try { d = await S.get('/api/finish/status?folder=' + encodeURIComponent(folder)); } catch (e) { return S.fail(main, e); }
+  document.title = `Vipunen — finish ${d.album_tag || d.folder}`;
+  if (!d.files) return main.replaceChildren(S.el('p', { class: 'err',
+    text: `No catalogued file lies directly in ${d.folder}. Induct it on the Jobs page first.` }));
+  // A finished job's log is carried into the page drawn after it.
+  const edBox = S.el('div', {}), runBox = keptRun || S.el('div', { id: 'run', hidden: 'hidden' });
+  const rel = d.stages.edition.release;
+  main.replaceChildren(
+    S.el('p', {}, S.el('b', { text: [d.artist, d.album_tag].filter(Boolean).join(' — ') || '(no tags)' }),
+      S.el('br'), S.el('span', { style: 'font:12px var(--mono);color:var(--dim)', text: d.folder }),
+      S.el('br'), S.el('span', { style: 'font-size:.85rem', text: `${d.files} file${s(d.files)}, `
+        + `${d.radio} radio and ${d.album} album passage${s(d.album)}` }),
+      ' ', S.el('a', { href: '/finish', style: 'font-size:.85rem', text: '← every folder left' })),
+    S.el('h2', {}, d.finished ? 'Finished ' : 'Where it stands ',
+      S.el('small', { text: d.finished ? '— every step is done' : `— still to do: ${d.next.join(', ')}` })),
+    checklist(d),
+    runBox,
+    S.el('h2', {}, 'The edition ', S.el('small', { text: '— the one choice; the rest follows from it' })),
+    edBox);
+  if (rel) {
+    const again = S.el('button', { class: 'chip on', text: d.finished ? 'run it again' : 'finish the rest with this edition' });
+    const other = S.el('button', { class: 'chip', text: 'choose a different edition' });
+    edBox.append(S.el('p', { style: 'font-size:.9rem' }, 'Recorded: ', S.el('b', { text: rel.title || rel.mbid }),
+      ` (${[rel.date, rel.country].filter(Boolean).join(', ') || 'no date'}) `,
+      S.el('a', { href: `https://musicbrainz.org/release/${rel.mbid}`, target: '_blank', rel: 'noopener',
+                  style: 'font-size:.8rem', text: 'on MusicBrainz ↗' })),
+      S.el('div', { class: 'controls' }, again, other));
+    again.onclick = async () => {
+      // Partly in place, the edition is applied again, naming every matched
+      // file as its track -- a correction made by hand since included. In
+      // place whole, the job leaves it be [SPEC-FIN-055], so nothing to ask.
+      if (d.stages.edition.state !== 'done' && !confirm('Apply this edition again? Every file it matches is named '
+        + 'as its track once more — a track corrected by hand since included — and then the rest follows.')) return;
+      let r;
+      try {
+        r = await (await fetch('/api/finish/run', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder: d.folder, release_mbid: rel.mbid }) })).json();
+      } catch (e) { runBox.hidden = false; return S.fail(runBox, e); }
+      if (r.error) { runBox.hidden = false; return S.fail(runBox, new Error(r.error)); }
+      watchRun(r.job_id, runBox);
+    };
+    other.onclick = () => { other.disabled = true; editionSearch(d, edBox, runBox); };
+  } else {
+    edBox.append(S.el('p', { style: 'font-size:.9rem', text: 'Find the editions MusicBrainz knows of this album, '
+      + 'see which file matches which track, and choose one.' }));
+    editionSearch(d, edBox, runBox);
+  }
+}
+
+if (folder) album(); else index();
+</script>

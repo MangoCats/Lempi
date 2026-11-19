@@ -18,7 +18,8 @@ FILE; this fills it for the library as it is.
 - **Anything else** -- a folder of mixed albums, recordings with no releases --
   is left to the recording's chosen release, as before.
 
-A file already recorded by a CD add or by hand is not touched. Dry run unless
+A file already recorded by a CD add, by a person's pick of a folder's edition
+`[SPEC-FIN-040]`, or by hand is not touched. Dry run unless
 `--commit`; the dry run lists every album name that would change.
 
     python tools/align_file_releases.py data/library.db [--commit] [--all-changes]
@@ -36,6 +37,7 @@ import unicodedata
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402
+import release_sources  # noqa: E402  -- which editions are settled [SPEC-FIN-040]
 
 SHARE = 0.6
 DDL = ("CREATE TABLE IF NOT EXISTS file_releases (audio_md5 TEXT PRIMARY KEY, release_mbid TEXT NOT NULL, "
@@ -91,7 +93,9 @@ def plan(conn) -> dict:
 
     def decide(fid, rel, source):
         md5, _, recs, tag = files[fid]
-        if kept.get(md5) in ("cd:import", "manual") and source != "cd:import":
+        # A disc's own edition, a person's pick for a folder [SPEC-FIN-040], or
+        # one set by hand, is a decision; a title match is a guess, and yields.
+        if kept.get(md5) in (*release_sources.SETTLED, "manual") and source != "cd:import":
             out["kept"] += 1
             return
         if held.get(md5) == (rel, source):

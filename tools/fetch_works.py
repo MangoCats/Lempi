@@ -16,7 +16,8 @@ is instant where re-fetching is hours `[GDE-WRK-110]`.
 Being a good citizen of a free service is most of the design, exactly as in
 `fetch_releases.py`:
 
-  * one request per second, which is MusicBrainz's published limit;
+  * one request per 1.2 s, MusicBrainz's published limit with a fifth to
+    spare, shared with every other tool on this machine `[SPEC-MBP-010]`;
   * a real User-Agent with a contact address, which they ask for and enforce;
   * resumable, so an interrupted run costs only what it had not yet fetched;
   * every response cached, so a re-run after a policy change asks nothing twice.
@@ -43,12 +44,13 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+import mb_pace  # noqa: E402  -- the machine's one MusicBrainz pace [SPEC-MBP-010]
 
 # They ask for a contact address and will rate-limit or block a generic agent.
 UA = "Lempi-Vipunen/0.1 ( https://github.com/MangoCats/Lempi )"
 BASE = "https://musicbrainz.org/ws/2/recording/"
 INC = "work-rels+artist-credits"
-RATE_S = 1.0
+RATE_S = mb_pace.MIN_INTERVAL_S
 
 CACHE_DDL = """
 CREATE TABLE IF NOT EXISTS work_cache (
@@ -58,18 +60,31 @@ CREATE TABLE IF NOT EXISTS work_cache (
 ) WITHOUT ROWID;"""
 
 
-def targets(conn) -> list[str]:
-    """Every recording reachable from a radio passage, real MBIDs only.
+def targets(conn, folder: str | None = None) -> list[str]:
+    """Every recording reachable from a radio passage, real MBIDs only -- or,
+    given `folder`, those of the files directly in it: one album's, for the
+    console's finishing job `[SPEC-FIN-060]`, which would otherwise take on
+    the library's whole backlog.
 
     `local:audio:...` ids are synthetic stand-ins for unidentified segments
     `[GDE-WRK-015]`; MusicBrainz has nothing to say about them.
     """
+    if folder is None:
+        rows = conn.execute(
+            "SELECT DISTINCT pr.mbid FROM passage_recordings pr "
+            "JOIN passages p ON p.passage_id = pr.passage_id AND p.kind = 'radio' "
+            "WHERE pr.mbid NOT LIKE 'local:%' ORDER BY pr.mbid"
+        ).fetchall()
+        return [r[0] for r in rows]
+    here = os.path.normcase(os.path.normpath(folder))
     rows = conn.execute(
-        "SELECT DISTINCT pr.mbid FROM passage_recordings pr "
+        "SELECT DISTINCT pr.mbid, f.path FROM passage_recordings pr "
         "JOIN passages p ON p.passage_id = pr.passage_id AND p.kind = 'radio' "
+        "JOIN files f ON f.file_id = p.file_id "
         "WHERE pr.mbid NOT LIKE 'local:%' ORDER BY pr.mbid"
     ).fetchall()
-    return [r[0] for r in rows]
+    return list(dict.fromkeys(
+        m for m, path in rows if os.path.normcase(os.path.dirname(os.path.normpath(path))) == here))
 
 
 # What this tool once cached when a request never got an answer. Such a row is
@@ -89,6 +104,7 @@ def fetch(mbid: str) -> str | None:
     url = f"{BASE}{mbid}?inc={INC}&fmt=json"
     for attempt in range(4):
         try:
+            mb_pace.wait(url)       # every attempt is a request [SPEC-MBP-010]
             req = urllib.request.Request(url, headers={"User-Agent": UA})
             return urllib.request.urlopen(req, timeout=40).read().decode()
         except urllib.error.HTTPError as e:
@@ -109,10 +125,11 @@ def main() -> int:
     ap.add_argument("--refresh", action="store_true", help="re-ask for everything")
     ap.add_argument("--give-up-after", type=int, metavar="N",
                     help="stop after N recordings in a row get no answer (network down)")
+    ap.add_argument("--folder", help="only the recordings of the files directly in this folder")
     args = ap.parse_args()
 
     lib = lempi_db.connect(args.db, lempi_db.ROLE_LIBRARY)
-    want = targets(lib)
+    want = targets(lib, args.folder)
     lib.close()     # read once; not held open against the catalogue for hours
 
     cache = sqlite3.connect(args.cache)
@@ -144,7 +161,7 @@ def main() -> int:
     print(f"{len(want)} recording(s) reachable from radio passages, "
           f"{len(want) - outstanding} already cached, {outstanding} outstanding, "
           f"{len(todo)} to fetch this run "
-          f"-- at least {len(todo) * RATE_S / 3600:.1f} h at {RATE_S:.0f} req/s",
+          f"-- at least {len(todo) * RATE_S / 3600:.1f} h at one request per {RATE_S:.1f} s",
           flush=True)
 
     unanswered, in_a_row, gave_up = 0, 0, False

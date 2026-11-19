@@ -410,6 +410,185 @@ def test_accept_clears_stale_id_check(tmp: str) -> None:
     conn.close()
 
 
+# -- finishing an album from files [SPEC-FIN-035..045] -------------------------
+
+REL_2 = "7271f4eb-addb-44f0-a098-62fd9104e920"
+ART_2 = "55555555-5555-5555-5555-555555555555"
+SET = os.path.normpath("C:/Music/Traffic/Smiling Phases (1991)")
+
+
+def two_disc_detail() -> dict:
+    """Two discs, each with a track 1 and a track 2, as *Smiling Phases* has
+    sixteen and ten: by place alone, disc 2's tracks were disc 1's."""
+    credit = [{"name": "Traffic", "joinphrase": " & ", "artist": {"id": ART_1, "name": "Traffic",
+                                                               "sort-name": "Traffic"}},
+              {"name": "Steve Winwood", "joinphrase": "", "artist": {"id": ART_2, "name": "Steve Winwood",
+                                                                    "sort-name": "Winwood, Steve"}}]
+
+    def track(pos, rec, title, length):
+        return {"position": pos, "number": str(pos), "title": title, "length": length,
+                "recording": {"id": rec, "title": title, "length": length, "artist-credit": credit}}
+    return {
+        "id": REL_2, "title": "Smiling Phases", "date": "1991", "status": "Official", "country": "US",
+        "barcode": "731451111111", "disambiguation": "",
+        "label-info": [{"label": {"name": "Island"}}, {"label": {"name": "Island"}}],
+        "artist-credit": credit[:1],
+        "release-group": {"id": "rg-sp", "primary-type": "Album", "secondary-types": ["Compilation"]},
+        "media": [{"position": 1, "format": "CD", "track-count": 2,
+                   "tracks": [track(1, REC_1, "Paper Sun", 257000), track(2, REC_2, "Hole In My Shoe", 184000)]},
+                  {"position": 2, "format": "CD", "track-count": 2,
+                   "tracks": [track(1, REC_3, "Glad", 419000),
+                              track(2, "66666666-6666-6666-6666-666666666666", "Freedom Rider", 329000)]}]}
+
+
+def build_set(path: str) -> None:
+    """Three of the set's four tracks, each file with its radio and album
+    passage, as `ingest_folder.py` leaves them: placeholders, no edition."""
+    c = sqlite3.connect(path)
+    c.executescript(SCHEMA)
+    c.execute("CREATE TABLE ingest_decisions (decision_id INTEGER PRIMARY KEY, audio_md5 TEXT, stage TEXT, "
+              "outcome TEXT, confidence REAL, detail TEXT, decided_at INTEGER)")
+    for fid, name, title, disc, no, ms in ((1, "1-01. Paper Sun.mp3", "Paper Sun", 1, 1, 257750),
+                                           (2, "1-02. Hole In My Shoe.mp3", "Hole In My Shoe", 1, 2, 184033),
+                                           (3, "2-01. Glad.mp3", "Glad", 2, 1, 419265)):
+        c.execute("INSERT INTO files VALUES (?1, ?2, ?3, 1, 1.0, 'mp3', ?4, 't', 't')",
+                  (fid, f"md5-{fid}", os.path.join(SET, name), ms))
+        c.execute("INSERT INTO file_tags VALUES (?1, ?2, 'Traffic', 'Smiling Phases', ?3, ?4, 0, 't')",
+                  (fid, title, no, disc))
+        for kind, pid in (("radio", fid * 10), ("album", fid * 10 + 1)):
+            c.execute("INSERT INTO passages VALUES (?1, ?2, ?3, 0, ?4, NULL, NULL, NULL, 'ingest:whole-file')",
+                      (pid, fid, kind, ms))
+            c.execute("INSERT OR IGNORE INTO recordings VALUES (?1, ?2, NULL, 'local:ingest')",
+                      (f"local:audio:md5-{fid}", title))
+            c.execute("INSERT OR IGNORE INTO passage_recordings VALUES (?1, ?2, 1.0, 'local:ingest')",
+                      (pid, f"local:audio:md5-{fid}"))
+    c.commit()
+    c.close()
+
+
+def test_two_discs_are_told_apart() -> None:
+    print("match_files_to_tracks(): a two-disc set, its tracks by disc and place")
+    files = [{"file_id": 1, "path": "1-01. Paper Sun.mp3", "duration_ms": 257750, "title": "Paper Sun",
+              "track_no": 1, "disc_no": 1, "passage_ids": [10]},
+             {"file_id": 3, "path": "2-01. Glad.mp3", "duration_ms": 419265, "title": "Glad",
+              "track_no": 1, "disc_no": 2, "passage_ids": [30]}]
+    tracks = sr.tracks_from_detail(two_disc_detail())
+    check([(t["disc"], t["position"]) for t in tracks] == [(1, 1), (1, 2), (2, 1), (2, 2)],
+          f"each track carries its disc: {[(t['disc'], t['position']) for t in tracks]}")
+    matches, unmatched_files, unmatched_tracks = sr.match_files_to_tracks(files, tracks)
+    got = {m["file"]: (m["track_disc"], m["track_position"], m["recording_mbid"]) for m in matches}
+    check(got == {"1-01. Paper Sun.mp3": (1, 1, REC_1), "2-01. Glad.mp3": (2, 1, REC_3)},
+          f"each file to its own disc's track: {got}")
+    check(unmatched_tracks == ["Hole In My Shoe", "Freedom Rider"],
+          f"both discs' track 2s are unmatched; by place alone disc 2's read as matched: {unmatched_tracks}")
+    check(sr.tracks_from_detail(two_disc_detail())[0]["artists"]
+          == [(ART_1, "Traffic", "Traffic"), (ART_2, "Steve Winwood", "Winwood, Steve")],
+          "every credited artist, with the sort name")
+
+
+def test_edition_facts() -> None:
+    print("edition_facts(): what tells two editions of one title apart")
+    got = sr.edition_facts(two_disc_detail())
+    check(got == {"country": "US", "status": "Official", "barcode": "731451111111", "disambiguation": None,
+                  "discs": 2, "formats": "CD", "labels": "Island"}, f"got {got}")
+    check(sr.edition_facts({})["discs"] is None and sr.edition_facts({})["labels"] is None,
+          "a response that says nothing says None, not an empty string")
+
+
+def test_accept_finishes_like_a_cd_add(tmp: str) -> None:
+    print("do_accept(): both passages, every artist, one decision per file, and the edition recorded as settled")
+    db = os.path.join(tmp, "set.db")
+    build_set(db)
+    conn = sqlite3.connect(db)
+    sr.ensure_schema(conn)
+    real_get = sr.mb_get
+    sr.mb_get = lambda url: two_disc_detail() if f"/{REL_2}" in url else None
+    try:
+        files = sr.gather_folder_files(conn, SET)
+        check(all(len(f["passage_ids"]) == 2 and f["passage_ids"][0] == f["file_id"] * 10 for f in files),
+              f"each file's radio passage, then its album one: {[f['passage_ids'] for f in files]}")
+        out = []
+        real_say, sr.say = sr.say, out.append
+        try:
+            rc = sr.do_accept(conn, Args(folder=SET, accept=REL_2, commit=True), files)
+        finally:
+            sr.say = real_say
+    finally:
+        sr.mb_get = real_get
+    check(rc == 0, f"exited {rc}: {out[-3:]}")
+    creds = dict(conn.execute("SELECT passage_id, mbid FROM passage_recordings"))
+    check(creds == {10: REC_1, 11: REC_1, 20: REC_2, 21: REC_2, 30: REC_3, 31: REC_3},
+          f"the album passage takes the same recording as its radio twin [SPEC-FIN-045]: {creds}")
+    rr = conn.execute("SELECT mbid, chosen, source, disc, position FROM release_recordings "
+                      "WHERE release_mbid = ?1 AND chosen = 1 ORDER BY disc, position", (REL_2,)).fetchall()
+    check(rr == [(REC_1, 1, "folder:chosen", 1, 1), (REC_2, 1, "folder:chosen", 1, 2),
+                 (REC_3, 1, "folder:chosen", 2, 1)],
+          f"the chosen release of each matched recording, at its disc and place [SPEC-FIN-040]: {rr}")
+    fr = conn.execute("SELECT audio_md5, release_mbid, source FROM file_releases ORDER BY audio_md5").fetchall()
+    check(fr == [(f"md5-{n}", REL_2, "folder:chosen") for n in (1, 2, 3)],
+          f"each file shown under the edition picked: {fr}")
+    sorts = dict(conn.execute("SELECT mbid, sort_name FROM artists"))
+    check(sorts == {ART_1: "Traffic", ART_2: "Winwood, Steve"}, f"every artist, with the sort name: {sorts}")
+    check(conn.execute("SELECT COUNT(*) FROM recording_artists WHERE mbid = ?1", (REC_1,)).fetchone()[0] == 2,
+          "both credited artists linked to the recording")
+    decisions = conn.execute("SELECT COUNT(*), COUNT(DISTINCT audio_md5) FROM ingest_decisions "
+                             "WHERE stage = 'folder_release_match'").fetchone()
+    check(decisions == (3, 3), f"one decision per file, not per passage: {decisions}")
+    result = json.loads(out[-1])
+    check(result["applied"] == 6 and result["linked"] == 3, f"said in the result: {result}")
+
+    # A search afterwards that only looks at the release keeps the choice:
+    # until 2026-11-19 its replace reset `chosen` and dropped the disc.
+    sr.store_release_detail(conn, two_disc_detail())
+    rr2 = conn.execute("SELECT mbid, chosen, source, disc FROM release_recordings "
+                       "WHERE release_mbid = ?1 ORDER BY disc, position", (REL_2,)).fetchall()
+    check([r for r in rr2 if r[1] == 1] == [(m, 1, "folder:chosen", d) for m, d in ((REC_1, 1), (REC_2, 1), (REC_3, 2))],
+          f"a later look at the release takes nothing back: {rr2}")
+    conn.close()
+
+
+def test_accept_on_a_split_pair(tmp: str) -> None:
+    """The hub's library is two files, the catalogue and the listener beside
+    it [IMPL-DBSPLIT-025], and accepting clears listener flags. Opened with the
+    listener read-only, every accept on the hub was refused whole -- "attempt
+    to write a readonly database" -- and nothing was named: found 2026-11-19,
+    finishing *Smiling Phases*. Every test above used one whole file, where
+    the flags table sits in the catalogue's own, and could not see it."""
+    print("main --accept on a split pair: the listener's flags are written too, and the accept lands")
+    root = os.path.join(tmp, "split")
+    os.makedirs(root)
+    lib = os.path.join(root, "library.db")
+    build_set(lib)
+    c = sqlite3.connect(lib)
+    c.execute("DROP TABLE listener_flags")                  # it lives in the listener half
+    c.commit()
+    c.close()
+    lis = sqlite3.connect(os.path.join(root, "listener.db"))
+    lis.execute("CREATE TABLE listener_flags (subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL, "
+                "flagged_at TEXT NOT NULL, origin TEXT, PRIMARY KEY (subject_kind, subject_id)) WITHOUT ROWID")
+    lis.execute("INSERT INTO listener_flags VALUES ('recording', 'local:audio:md5-1', 't', NULL)")
+    lis.commit()
+    lis.close()
+    out = []
+    real = (sr.mb_get, sr.say, sys.argv)
+    sr.mb_get = lambda url: two_disc_detail() if f"/{REL_2}" in url else None
+    sr.say = out.append
+    sys.argv = ["suggest_release.py", lib, SET, "--accept", REL_2, "--commit", "--json"]
+    try:
+        rc = sr.main()
+    finally:
+        sr.mb_get, sr.say, sys.argv = real
+    check(rc == 0 and json.loads(out[-1]).get("ok"), f"the accept lands on a split pair: {rc} {out[-2:]}")
+    c = sqlite3.connect(lib)
+    named = c.execute("SELECT COUNT(*) FROM passage_recordings WHERE mbid NOT LIKE 'local:%'").fetchone()[0]
+    c.close()
+    check(named == 6, f"every passage named: {named}")
+    lis = sqlite3.connect(os.path.join(root, "listener.db"))
+    left = lis.execute("SELECT COUNT(*) FROM listener_flags").fetchone()[0]
+    lis.close()
+    check(left == 0, f"and the flag on the old id cleared, in the listener half: {left} left")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         test_gather_folder_files_exact_scope(tmp)
@@ -420,6 +599,10 @@ def main() -> int:
         test_accept_rehearsal_then_commit(tmp)
         test_accept_clears_stale_flags(tmp)
         test_accept_clears_stale_id_check(tmp)
+        test_two_discs_are_told_apart()
+        test_edition_facts()
+        test_accept_finishes_like_a_cd_add(tmp)
+        test_accept_on_a_split_pair(tmp)
 
     print()
     if FAILED:

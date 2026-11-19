@@ -25,19 +25,21 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+import mb_pace  # noqa: E402  -- the machine's one MusicBrainz pace [SPEC-MBP-010]
 import time
 import urllib.error
 import urllib.request
 
 UA = "Lempi-Vipunen/0.1 ( https://github.com/MangoCats/Lempi )"
 BASE = "https://musicbrainz.org/ws/2/release/"
-RATE_S = 1.0
+RATE_S = mb_pace.MIN_INTERVAL_S
 
 
 def get(url: str, tries: int = 4) -> dict | None:
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     for attempt in range(tries):
         try:
+            mb_pace.wait(url)       # every attempt is a request [SPEC-MBP-010]
             with urllib.request.urlopen(req, timeout=30) as r:
                 return json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError as e:

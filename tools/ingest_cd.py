@@ -69,6 +69,7 @@ import fetch_releases         # noqa: E402  -- get(), UA, rate-limit/backoff
 from choose_release import name_match  # noqa: E402  -- one title comparison, not two
 import ingest_folder          # noqa: E402  -- audio_md5(), LOCAL_PREFIX
 import passage_hold           # noqa: E402  -- a damaged track held back [SPEC-HOLD-010]
+import release_sources        # noqa: E402  -- which editions are settled [SPEC-FIN-040]
 import retired                # noqa: E402  -- what the hub retired [SPEC-RTF-015]
 from byte_hash import ensure_sha256_column, sha256_file  # noqa: E402  -- [REQ-AND-960]
 import secret                 # noqa: E402
@@ -752,7 +753,7 @@ def _candidate_for(release: dict, position: int) -> dict | None:
             "artist": artists or None, "score": 1.0}
 
 
-def record_release(conn, release: dict, tracks, files=()) -> int:
+def record_release(conn, release: dict, tracks, files=(), source: str = release_sources.CD_IMPORT) -> int:
     """The disc in hand is its release `[SPEC-CDI-098]`: `release` (a
     MusicBrainz release, `media[].tracks[]` with recordings) becomes the chosen
     release of each recording in `tracks` -- `(position, mbid)` -- that it
@@ -766,7 +767,11 @@ def record_release(conn, release: dict, tracks, files=()) -> int:
     leaves standing -- knowing which record a rip came from settles it.
     And `files` -- the rip's audio_md5s -- are recorded as taken from it
     `[SPEC-SC-125]`, so each is shown under this disc whatever its
-    recordings' chosen releases are. Returns how many recordings were linked."""
+    recordings' chosen releases are. Returns how many recordings were linked.
+
+    `source` is the record's provenance: a CD add's own, or `folder:chosen`
+    when a person picked the edition a folder of files is from -- the same
+    record, as settled, kept by the tools that guess `[SPEC-FIN-040]`."""
     rid = release.get("id")
     if not rid:
         return 0
@@ -817,22 +822,23 @@ def record_release(conn, release: dict, tracks, files=()) -> int:
         # compilation; thirteen such on 2026-10-01 -- keeps the first disc's
         # choice. Each taking it from the last made the choice depend on
         # order, and a backfill that never settled.
+        settled = ",".join("?" * len(release_sources.SETTLED))
         other_disc = conn.execute(
             "SELECT 1 FROM release_recordings WHERE mbid = ?1 AND release_mbid <> ?2 "
-            "AND chosen = 1 AND source = 'cd:import'", (mbid, rid)).fetchone() is not None
+            f"AND chosen = 1 AND source IN ({settled})", (mbid, rid, *release_sources.SETTLED)).fetchone() is not None
         if not other_disc:
             conn.execute("UPDATE release_recordings SET chosen = 0 WHERE mbid = ?1", (mbid,))
         conn.execute(
             "INSERT INTO release_recordings (release_mbid, mbid, position, source, track_length_ms, chosen, disc) "
-            "VALUES (?1, ?2, ?3, 'cd:import', ?4, ?5, ?6) "
+            "VALUES (?1, ?2, ?3, ?7, ?4, ?5, ?6) "
             # A row already here -- one a release fetch wrote, without its
             # place -- takes the place from the disc in hand: until
             # 2026-10-14 it kept none, and Browse could not order the track.
-            "ON CONFLICT(release_mbid, mbid) DO UPDATE SET chosen = excluded.chosen, source = 'cd:import', "
+            "ON CONFLICT(release_mbid, mbid) DO UPDATE SET chosen = excluded.chosen, source = excluded.source, "
             "position = COALESCE(excluded.position, release_recordings.position), "
             "disc = COALESCE(excluded.disc, release_recordings.disc), "
             "track_length_ms = COALESCE(excluded.track_length_ms, release_recordings.track_length_ms)",
-            (rid, mbid, t.get("position") or position, t.get("length"), 0 if other_disc else 1, disc))
+            (rid, mbid, t.get("position") or position, t.get("length"), 0 if other_disc else 1, disc, source))
         linked += 1
     if files:
         conn.execute("CREATE TABLE IF NOT EXISTS file_releases (audio_md5 TEXT PRIMARY KEY, "
@@ -840,9 +846,9 @@ def record_release(conn, release: dict, tracks, files=()) -> int:
         now = _now()
         for md5 in files:
             conn.execute("INSERT INTO file_releases (audio_md5, release_mbid, source, decided_at) "
-                         "VALUES (?1, ?2, 'cd:import', ?3) ON CONFLICT(audio_md5) DO UPDATE SET "
+                         "VALUES (?1, ?2, ?4, ?3) ON CONFLICT(audio_md5) DO UPDATE SET "
                          "release_mbid = excluded.release_mbid, source = excluded.source, "
-                         "decided_at = excluded.decided_at", (md5, rid, now))
+                         "decided_at = excluded.decided_at", (md5, rid, now, source))
     return linked
 
 

@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 import lempi_control  # noqa: E402  -- pause/resume/reload the co-resident player
 import bundle_ledger  # noqa: E402  -- what a send touched, for the next star sync [SPEC-STAR-945]
+import finish_folder  # noqa: E402  -- how far an album from files has come [SPEC-FIN-020]
 import sync_console  # noqa: E402  -- the Sync page's lock, and the plan [SPEC-STAR-126]
 import threading
 import time
@@ -153,11 +154,13 @@ SKIPPED = [
                 "Built [SPEC024], offered as its own action (\"Segment DAO capture\"), "
                 "never run silently by induct -- it needs an expected track count/"
                 "durations no folder scan can infer on its own"),
-    ("releases", "needs a MusicBrainz id, which ingest does not invent"),
-    ("cover art", "needs a release id; art beside the file is found by the player"),
-    ("amplitude", "built [SPEC-SA-075]; run when a CD rip is added [REQ-LIB-305] and by "
-                  "\"Analyze what's missing\", and offered per folder as \"Analyze amplitude\" -- "
-                  "not yet by induct"),
+    ("releases", "needs the edition the files are from, which ingest does not guess: pick it on the "
+                 "Finish an album page, which does this and the stages below [SPEC-FIN-010]"),
+    ("cover art", "needs the edition; done by Finish an album once it is picked. Art beside the file "
+                  "is found by the player meanwhile"),
+    ("amplitude", "built [SPEC-SA-075]; run when a CD rip is added [REQ-LIB-305], by "
+                  "\"Analyze what's missing\" and by Finish an album, and offered per folder as "
+                  "\"Analyze amplitude\" -- not yet by induct"),
     ("cd-rip", "a physical rip has already happened by the time this runs -- "
                "[SPEC025..028], person-assisted per [SPEC-RIP-088] -- offered as its "
                "own action (\"Ingest a CD rip\"), never run silently by induct"),
@@ -193,7 +196,8 @@ def counts(db: str) -> dict:
 #   atomic: let finish; the job stops after it
 STOP_COOPERATIVE = {("send-bundle", "send"): 600}
 STOP_ATOMIC = {("cd-rip", "ingest"), ("star-sync", None), ("remote-push", None), ("remote-push-all", None),
-               ("apply-reviews", None), ("accept-remote", None), ("accept-release", None)}
+               ("apply-reviews", None), ("accept-remote", None), ("accept-release", None),
+               ("finish-folder", "edition")}
 
 
 def stop_policy(kind, stage) -> tuple[str, int]:
@@ -680,6 +684,9 @@ class Runner:
 
         if kind == "accept-release":
             return self._accept_release(job_id, target)
+
+        if kind == "finish-folder":
+            return self._finish_folder(job_id, target)
 
         if kind == "segment-dao":
             return self._segment_dao(job_id, target)
@@ -1338,6 +1345,100 @@ class Runner:
                 self.library, payload["folder"], "--accept", payload["release_mbid"],
                 "--commit", "--json"]
         self._run_single_stage(job_id, "apply", argv)
+
+    def _finish_folder(self, job_id: int, target: str):
+        """Finish an album added from files `[SPEC-FIN-050]` -- `target` is
+        `{"folder", "release_mbid"}`, the edition a person picked on the
+        *Finish an album* page. That pick is the one decision; the rest
+        follows from it, each step taking only what is not yet done, so a
+        second run after a finished one asks for nothing:
+
+        1. **edition** -- `suggest_release.py --accept`: both passages of each
+           matched file named, every credited artist, the release linked and
+           each file shown under it, as a CD add does `[SPEC-FIN-040]`. Atomic,
+           and the job stops here if it fails or matches nothing, since every
+           later step rests on it. Not applied again when that edition is
+           already in place, every track named `[SPEC-FIN-055]`.
+        2. **flavor** and **amplitude** -- the same analysis a CD add runs.
+        3. **cover** -- the edition's front and back from the Cover Art Archive.
+        4. **works** -- MusicBrainz asked about this album's recordings alone
+           (`fetch_works.py --folder`), then `load_works.py`.
+        5. **reload** -- the player asked to rebuild, so the Director can choose
+           the album; said plainly when no player answers.
+
+        After the edition, a step that fails is said and the rest still run:
+        they are independent, and the job fails if any did."""
+        payload = json.loads(target)
+        folder, release = payload["folder"], payload["release_mbid"]
+        tools = os.path.dirname(os.path.abspath(__file__))
+        py = sys.executable
+        result: dict = {"folder": folder, "release": release}
+        cache = finish_folder.works_cache_for(self.library)
+        self._emit(job_id, "stage", "edition", stage="edition")
+        c = lempi_db.connect(self.library, lempi_db.ROLE_LIBRARY)
+        try:
+            before = finish_folder.status(c, folder, cache)["stages"].get("edition") or {}
+        finally:
+            c.close()
+        rel = before.get("release") or {}
+        if before.get("state") == "done" and rel.get("mbid") == release and not rel.get("others"):
+            # This edition is recorded for every file, and every passage is
+            # named: applied again, it would rename a track a person has
+            # corrected since [SPEC-FIN-055]. The other steps still run.
+            self._emit(job_id, "log", "this edition is recorded already and every track is named -- not applied "
+                       "again, so a correction made since stands", stage="edition")
+            result["edition"] = {"ok": True, "skipped": True}
+        else:
+            code, out = self._spawn(job_id, "edition", [
+                py, os.path.join(tools, "suggest_release.py"), self.library, folder,
+                "--accept", release, "--commit", "--json"])
+            result["edition"] = parse_json_tail(out) or {}
+            self._save_result(job_id, result)
+            if code != 0 or not result["edition"].get("ok"):
+                return self._finish(job_id, "stopped" if code < 0 else "failed")
+            if not result["edition"].get("matched"):
+                self._emit(job_id, "error", "no file in the folder matched a track of that edition -- "
+                           "nothing was named, so nothing else was done", stage="edition")
+                return self._finish(job_id, "failed")
+
+        analysis, failed, stopped = self._analysis(job_id, folder)
+        result["analysis"] = analysis
+        self._save_result(job_id, result)
+        if stopped:
+            return self._finish(job_id, "stopped")
+
+        for stage, argv in (
+                ("cover", [py, os.path.join(tools, "fetch_cover_art.py"), self.library, "--release", release]),
+                ("works", [py, os.path.join(tools, "fetch_works.py"), self.library, "--cache", cache,
+                           "--folder", folder, "--give-up-after", "3"]),
+                ("load-works", [py, os.path.join(tools, "load_works.py"), self.library, "--cache", cache])):
+            if self._stopped(job_id):
+                return self._finish(job_id, "stopped")
+            self._emit(job_id, "stage", stage, stage=stage)
+            code, _out = self._spawn(job_id, stage, argv)
+            if code < 0:
+                return self._finish(job_id, "stopped")
+            if code != 0:
+                # The cover fetch exits 1 when the archive did not answer: the
+                # side is asked again next time, and this run says so.
+                self._emit(job_id, "error", f"{stage} exited {code}" + (
+                    " -- the Cover Art Archive did not answer; finishing again asks again"
+                    if stage == "cover" else ""), stage=stage)
+                failed.append(stage)
+
+        self._emit(job_id, "stage", "reload", stage="reload")
+        reloaded = lempi_control.reload_lempi_library()
+        self._emit(job_id, "log", "the player was asked to rebuild, so the Program Director can choose the album"
+                   if reloaded else "no player answered; the Director sees the album when the player next starts")
+        # The job's last word is the catalogue's, measured after, not its own
+        # account of the steps [GOV-SRC-010].
+        c = lempi_db.connect(self.library, lempi_db.ROLE_LIBRARY)
+        try:
+            result.update(failed=failed, reloaded=reloaded, status=finish_folder.status(c, folder, cache))
+        finally:
+            c.close()
+        self._save_result(job_id, result)
+        self._finish(job_id, "failed" if failed else "done")
 
     def _segment_dao(self, job_id: int, target: str):
         """`[SPEC-SA-115..121]`, `[SPEC024]` -- `target` is

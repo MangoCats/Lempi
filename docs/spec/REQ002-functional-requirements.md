@@ -74,7 +74,7 @@ Derived from six years of MuLibPlay production behaviour `[GDE-BMK-*]` and McRhy
 
 ## 4. Library Building — `LIB` *(Vipunen)*
 
-**`[REQ-LIB-100]`** Induct new music without hand labour — the reason the project exists `[GDE-CHT-020]`.
+**`[REQ-LIB-100]`** Induct new music without hand labour — the reason the project exists `[GDE-CHT-020]`. An album added as files is finished on one console page, its edition the one choice [SPEC081](SPEC081-finishing-an-album-from-files.md).
 
 **`[REQ-LIB-110]`** Segment a multi-track file into passages and identify each against MusicBrainz `[SPEC-SA-070]`.
 

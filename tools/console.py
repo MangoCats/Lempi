@@ -56,6 +56,7 @@ import member_bundles  # noqa: E402  -- music for a phone, fetched by it [REQ-AN
 import sync_console  # noqa: E402  -- the Sync page [SPEC-STAR-120]
 import cd_import  # noqa: E402  -- the CD import page [SPEC056]
 import analysis_gaps  # noqa: E402  -- the Jobs page's Not analysed list [REQ-LIB-305]
+import finish_folder  # noqa: E402  -- the Finish an album page [SPEC-FIN-020]
 
 WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "console_web")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1259,6 +1260,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_file("folder.html", "text/html; charset=utf-8")
             if p.startswith("/profile/"):
                 return self.send_file("profile.html", "text/html; charset=utf-8")
+            if p == "/finish":
+                return self.send_file("finish.html", "text/html; charset=utf-8")
+            if p == "/api/finish/folders":
+                # [SPEC-FIN-020]: every folder with a track still unnamed or
+                # not yet analyzed, newest first.
+                return self.send_json(finish_folder.folders(self._db()))
+            if p == "/api/finish/status":
+                folder = (qs.get("folder") or [""])[0].strip()
+                if not folder:
+                    return self.send_json({"error": "name a folder"}, code=400)
+                return self.send_json(finish_folder.status(
+                    self._db(), folder, finish_folder.works_cache_for(STATE["path"])))
             m = re.fullmatch(r"/passage/([0-9a-f]{32})", p)
             if m:
                 # From Lempi's passage page, by uid [SPEC-HOLD-045]: on to
@@ -1835,6 +1848,21 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"error": "no release_mbid given"}, code=400)
                 target = json.dumps({"folder": folder, "release_mbid": release_mbid})
                 return self.send_json({"job_id": STATE["jobs"].submit("accept-release", target)})
+            if p == "/api/finish/run":
+                # [SPEC-FIN-050]: the edition a person picked, and everything
+                # that follows from it, as one job. The pick is the decision;
+                # the job writes, through the tools, never this process.
+                payload = self.json_body() or {}
+                folder = str(payload.get("folder") or "").strip()
+                release_mbid = str(payload.get("release_mbid") or "").strip().lower()
+                if not folder or not os.path.isdir(folder):
+                    return self.send_json({"error": f"not a folder: {folder}"}, code=400)
+                if not finish_folder.MBID.match(release_mbid):
+                    return self.send_json({"error": "release_mbid must be a MusicBrainz release id"}, code=400)
+                if not finish_folder.status(self._db(), folder)["files"]:
+                    return self.send_json({"error": f"no catalogued file lies directly in {folder}"}, code=400)
+                target = json.dumps({"folder": os.path.normpath(folder), "release_mbid": release_mbid})
+                return self.send_json({"job_id": STATE["jobs"].submit("finish-folder", target)})
             if p.startswith("/api/jobs/") and p.endswith("/stop"):
                 return self.send_json({"stopped": STATE["jobs"].stop(int(p.split("/")[3]))})
             if p == "/api/remote":
