@@ -500,33 +500,7 @@
     .then(() => show(start));
 
   // Vipunen link [REQ-VIS-320]: hidden until the server confirms it is
-  // actually worth showing -- a plain 404 on a build without
-  // --features vipunen-support (`/vipunen/available` does not exist there at
-  // all) fails this fetch exactly the same as any other reason it might
-  // not be available, so no separate check for the feature is needed here.
-  const vipunenLink = $('vipunen-link');
-  fetch('/vipunen/available')
-    .then(r => r.ok ? r.json() : { available: false })
-    .then(body => { vipunenLink.hidden = !body.available; })
-    .catch(() => {}); // stays hidden
-  vipunenLink.onclick = async e => {
-    e.preventDefault();
-    if (vipunenLink.dataset.busy) return;
-    vipunenLink.dataset.busy = '1';
-    const was = vipunenLink.textContent;
-    vipunenLink.textContent = 'starting Vipunen…';
-    try {
-      const body = await (await fetch('/vipunen/ensure', { method: 'POST' })).json();
-      if (body.ok) {
-        window.open(`http://127.0.0.1:${body.port}/`, '_blank');
-      } else {
-        alert(`Could not reach Vipunen: ${body.error}`);
-      }
-    } catch {
-      alert('Could not reach Vipunen.');
-    } finally {
-      vipunenLink.textContent = was;
-      delete vipunenLink.dataset.busy;
-    }
-  };
+  // actually worth showing, which a build without vipunen-support never
+  // does. The same helper the passage page's link uses.
+  Lempi.vipunenLink($('vipunen-link'), '/');
 })();

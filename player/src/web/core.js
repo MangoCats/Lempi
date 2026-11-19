@@ -1646,6 +1646,44 @@ const Lempi = (() => {
       const href = none ? '' : `/lyrics/${passageId}/edit`;
       if (!none && a.getAttribute('href') !== href) a.setAttribute('href', href);
     },
+    // A link into Vipunen's console [REQ-VIS-320]: '/' for its library,
+    // '/passage/<uid>' for one passage's profile [SPEC-HOLD-045]. Hidden
+    // until the server says a console can be reached or started -- on a
+    // build without vipunen-support `/vipunen/available` does not exist, and
+    // its 404 hides the link like any other reason. Resolves to whether it
+    // is shown, for a page with a label beside it to hide too.
+    //
+    // The tab opens on the click itself and is pointed at the console once
+    // one is serving: starting one can take 20 s, longer than a browser lets
+    // a click's permission to open a window last, and opened after the wait
+    // it was a blocked popup.
+    vipunenLink(a, path = '/') {
+      if (!a) return Promise.resolve(false);
+      a.onclick = async e => {
+        e.preventDefault();
+        if (a.dataset.busy) return;
+        a.dataset.busy = '1';
+        const was = a.textContent;
+        a.textContent = 'starting Vipunen…';
+        const tab = window.open('', '_blank');
+        try {
+          const body = await (await fetch('/vipunen/ensure', { method: 'POST' })).json();
+          if (!body.ok) throw new Error(body.error);
+          const url = `http://127.0.0.1:${body.port}${path}`;
+          if (tab) tab.location.href = url; else window.open(url, '_blank');
+        } catch (err) {
+          if (tab) tab.close();
+          alert(err && err.message ? `Could not reach Vipunen: ${err.message}` : 'Could not reach Vipunen.');
+        } finally {
+          a.textContent = was;
+          delete a.dataset.busy;
+        }
+      };
+      return fetch('/vipunen/available')
+        .then(r => r.ok ? r.json() : { available: false })
+        .then(body => { a.hidden = !body.available; return !a.hidden; })
+        .catch(() => { a.hidden = true; return false; });
+    },
     // Throws rather than resolving to nothing when the query fails, so a
     // broken listing cannot be mistaken for an empty library.
     browse: (kind, filter = {}) => {

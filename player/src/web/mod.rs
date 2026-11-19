@@ -1192,17 +1192,22 @@ mod tests {
         assert!(BROWSE_HTML.contains("/review"), "no way to reach the review page");
     }
 
-    /// The Vipunen link `[REQ-VIS-320]` and the routes it asks for -- present
-    /// in `BROWSE_HTML`/`BROWSE_JS` regardless of `vipunen-support`, the same
+    /// The Vipunen links `[REQ-VIS-320]` and the routes they ask for --
+    /// present in the pages regardless of `vipunen-support`, the same
     /// reasoning `the_pages_load_the_runtime` already gives for `/review`
     /// above: the literal markup/JS is compiled in either way, and whether
     /// the routes themselves exist to answer it is `vipunen-support`'s own
-    /// question, checked separately below.
+    /// question, checked separately below. Both pages' links go through
+    /// `core.js`'s one helper since 2026-11-19, the passage page's by uid
+    /// `[SPEC-HOLD-045]`.
     #[test]
     fn the_vipunen_link_reaches_the_routes_it_asks_for() {
         assert!(BROWSE_HTML.contains(r#"id="vipunen-link""#), "browse has no Vipunen link");
-        assert!(BROWSE_JS.contains("/vipunen/available"), "browse.js never probes availability");
-        assert!(BROWSE_JS.contains("/vipunen/ensure"), "browse.js never asks to launch Vipunen");
+        assert!(BROWSE_JS.contains("Lempi.vipunenLink($('vipunen-link'), '/')"), "browse's link is not the helper's");
+        assert!(CORE.contains("fetch('/vipunen/available')"), "the helper never probes availability");
+        assert!(CORE.contains("fetch('/vipunen/ensure', { method: 'POST' })"), "the helper never asks to launch Vipunen");
+        assert!(PASSAGE_JS.contains("Lempi.vipunenLink(vi, `/passage/${p.passage_uid}`)"),
+                "the passage page's link must name the passage by uid, the route the console serves");
     }
 
     /// The review page loads core the same way the others do -- gated with

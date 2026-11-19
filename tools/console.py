@@ -23,6 +23,8 @@ Three views:
   /            library -- what is known, and how it came to be known
   /folder      what is on disk, against what the database claims
   /profile/N   one passage's whole derivation
+               (and /passage/UID, which redirects there by the passage's uid,
+               for Lempi's own passage page)
 
     python tools/console.py data/library.db --root "C:/Users/Mango Cat/Music"
 """
@@ -524,6 +526,19 @@ def pending_detail(conn) -> dict:
     out["counts"] = {k: len(v) for k, v in out.items() if isinstance(v, list)}
     out["total"] = sum(out["counts"].values())
     return out
+
+
+def passage_by_uid(conn, uid: str) -> int | None:
+    """This library's own number for the passage with `uid`, or `None`
+    `[SPEC-HOLD-045]`. Lempi's passage page names a passage by uid
+    `[IMPL-UID-072]`, and this console's profile by number, so the link
+    between them is a uid and the number is found here, on the machine
+    that owns it. A library from before uids has no column, and no answer."""
+    try:
+        row = conn.execute("SELECT passage_id FROM passages WHERE passage_uid = ?1", (uid,)).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return row[0] if row else None
 
 
 def profile(conn, pid: int) -> dict:
@@ -1244,6 +1259,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_file("folder.html", "text/html; charset=utf-8")
             if p.startswith("/profile/"):
                 return self.send_file("profile.html", "text/html; charset=utf-8")
+            m = re.fullmatch(r"/passage/([0-9a-f]{32})", p)
+            if m:
+                # From Lempi's passage page, by uid [SPEC-HOLD-045]: on to
+                # this passage's profile, under the number this library gives it.
+                pid = passage_by_uid(self._db(), m.group(1))
+                if pid is None:
+                    return self.send_error(404, "No passage in this library has that uid")
+                self.send_response(302)
+                self.send_header("Location", f"/profile/{pid}")
+                self.send_header("Content-Length", "0")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
             if p == "/console.css":
                 return self.send_file("console.css", "text/css; charset=utf-8")
             if p == "/console.js":

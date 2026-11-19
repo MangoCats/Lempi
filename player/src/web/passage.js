@@ -103,6 +103,21 @@
     ly.textContent = 'read or edit this passage’s lyrics →';
     lyDd.appendChild(ly);
     $('span').append(lyDt, lyDd);
+    // The same passage on Vipunen's console [SPEC-HOLD-045]: its hold, its
+    // identity, its analysis, and the controls for them, which this page has
+    // none of. By uid; the console finds its own number for it. Only on the
+    // desktop's vipunen-support build, so hidden, label and all, until the
+    // server says a console is there to open.
+    const viDt = document.createElement('dt');
+    viDt.textContent = 'in Vipunen';
+    const viDd = document.createElement('dd');
+    const vi = document.createElement('a');
+    vi.href = '#';
+    vi.textContent = 'open this passage on the console →';
+    viDd.appendChild(vi);
+    viDt.hidden = viDd.hidden = true;
+    $('span').append(viDt, viDd);
+    Lempi.vipunenLink(vi, `/passage/${p.passage_uid}`).then(shown => { viDt.hidden = viDd.hidden = !shown; });
 
     dl($('file'), [
       ['path', p.path],
