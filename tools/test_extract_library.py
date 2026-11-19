@@ -113,6 +113,66 @@ def test_every_passage_failing(tmp: str):
     check("1/1" in out, f"progress counts a failure too: {out}")
 
 
+def test_each_passage_lands_as_it_is_done(tmp: str):
+    """[SPEC-FIN-020]: the console's Finish an album page reads the catalogue
+    while this runs. Committed every tenth passage, it sat still for a minute
+    on *Smiling Phases* (2026-11-19) and looked stalled. Each fake extraction
+    here waits for the passages before it to be readable from another
+    connection, as the page reads them."""
+    print("each passage committed as it lands, and on an album-sized run each reported")
+    import time
+    import extract_library as el
+    import lempi_db
+    db = os.path.join(tmp, "each.db")
+    library(db)
+    c = sqlite3.connect(db)
+    for n in (2, 3, 4):
+        c.execute("INSERT INTO files (file_id, audio_md5, path, size_bytes, mtime, format, duration_ms, "
+                  "first_seen, last_seen) VALUES (?, ?, ?, 1, 0, 'mp3', 200000, 'x', 'x')",
+                  (n, f"md5-{n}", f"C:/nowhere/song{n}.mp3"))
+        c.execute("INSERT INTO passages (passage_id, file_id, kind, start_ms, end_ms, boundary_src) "
+                  "VALUES (?, ?, 'radio', 0, 200000, 'cue')", (n, n))
+        c.execute("INSERT INTO passage_recordings (passage_id, mbid, source) VALUES (?, 'r1', 'test')", (n,))
+    c.commit()
+    c.close()
+    exe = os.path.join(tmp, "exists.exe")
+    Path(exe).write_bytes(b"")
+    seen: list[int] = []
+
+    def fake_extract(path, start_ms=0, end_ms=-1, duration_ms=None):
+        r = sqlite3.connect(lempi_db.ro_uri(db), uri=True)
+        try:
+            deadline = time.time() + 2
+            while True:
+                have = r.execute("SELECT COUNT(*) FROM lowlevel_cache").fetchone()[0]
+                if have >= len(seen) or time.time() > deadline:
+                    break
+                time.sleep(0.02)
+        finally:
+            r.close()
+        seen.append(have)
+        return {"lowlevel": {}}, False
+
+    class Quiet:
+        def classify(self, doc):
+            return {}
+    saved = (el.EXTRACTOR, el.gc.Classifier, el.extract_one, sys.argv)
+    el.EXTRACTOR, el.gc.Classifier, el.extract_one = Path(exe), Quiet, fake_extract
+    sys.argv = ["extract_library.py", db, "--jobs", "1"]
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            code = el.main()
+    finally:
+        el.EXTRACTOR, el.gc.Classifier, el.extract_one, sys.argv = saved
+    out = buf.getvalue()
+    check(code == 0, f"exit {code}: {out[-300:]}")
+    check(seen == [0, 1, 2, 3], f"each extraction found every one before it already committed: {seen}")
+    check(all(f"{i}/4" in out for i in (1, 2, 3, 4)), f"an album-sized run reports each passage: {out}")
+    check(el.eta(40) == "40 s" and el.eta(600) == "10 min" and el.eta(9000) == "2.5 h",
+          "time left in the unit it reads in, not '0 min'")
+
+
 def test_folder_scope(tmp: str):
     print("--folder: only the album's own folder, as analyze_amplitude --folder [REQ-LIB-305]")
     db = os.path.join(tmp, "scope.db")
@@ -178,6 +238,7 @@ def main() -> int:
         test_missing_tools(tmp)
         test_classifier_refuses_partial()
         test_every_passage_failing(tmp)
+        test_each_passage_lands_as_it_is_done(tmp)
         test_folder_scope(tmp)
         test_reflavor_from_cache(tmp)
     print()

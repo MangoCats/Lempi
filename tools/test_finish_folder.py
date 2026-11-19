@@ -96,7 +96,8 @@ def test_as_ingest_leaves_it(c) -> None:
     check(st["artist"] == "Traffic" and st["album_tag"] == "Smiling Phases", f"the tags: {st}")
     s = st["stages"]
     check(s["edition"]["state"] == "not done" and s["edition"]["release"] is None, f"edition: {s['edition']}")
-    check(s["flavor"] == {"state": "not done", "done": 0, "total": 2}, f"flavor: {s['flavor']}")
+    check(s["flavor"] == {"state": "not done", "done": 0, "total": 2, "measured_here": 0, "from_elsewhere": 0},
+          f"flavor: {s['flavor']}")
     check(s["amplitude"]["state"] == "not done", f"amplitude: {s['amplitude']}")
     check(s["cover"]["state"] == "waiting" and s["works"]["state"] == "waiting",
           f"cover and works wait for the edition: {s['cover']} {s['works']}")
@@ -115,6 +116,16 @@ def test_finished(c, cache_path: str) -> None:
           and s["edition"]["release"]["source"] == "folder:chosen"
           and (s["edition"]["radio_named"], s["edition"]["album_named"]) == (2, 2), f"edition: {s['edition']}")
     check(s["flavor"]["done"] == 2 and s["amplitude"]["done"] == 2, f"analysis: {s['flavor']} {s['amplitude']}")
+    check((s["flavor"]["measured_here"], s["flavor"]["from_elsewhere"]) == (2, 0),
+          f"both measured from these files: {s['flavor']}")
+    # A track whose recording already had flavor from another copy -- a CD of
+    # the same song -- counts as done, and says where it came from.
+    c.execute("DELETE FROM lowlevel_cache WHERE audio_md5 = 'md5-2'")
+    fl = ff.status(c, ALBUM, cache_path)["stages"]["flavor"]
+    check((fl["done"], fl["measured_here"], fl["from_elsewhere"]) == (2, 1, 1),
+          f"one measured here, one carried by its recording: {fl}")
+    c.execute("INSERT INTO lowlevel_cache VALUES ('md5-2', 0, 100000)")
+    c.commit()
     check(s["cover"]["state"] == "done" and s["cover"]["front"] and not s["cover"]["back"], f"cover: {s['cover']}")
     check(s["works"] == {"state": "done", "asked": 2, "recordings": 2, "with_work": 1},
           f"works: asked of both, one performs a known song: {s['works']}")

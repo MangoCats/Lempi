@@ -150,8 +150,35 @@ def test_one_folder_asks_only_for_its_own():
         os.unlink(p)
 
 
+def test_the_pace_is_the_only_wait():
+    """[SPEC-MBP-010]: `fetch` waits its turn on the machine's pace, so the run
+    adds no sleep of its own -- one did, and made *Smiling Phases* about 3 s a
+    recording for a pace of 1.2 (2026-11-19)."""
+    print("no sleep of the run's own: with RATE_S at 5 s, three recordings take no time")
+    import time
+    db = library(["a", "b", "c"])
+    cache = db + ".cache"
+    asked = []
+    old = (fw.fetch, fw.RATE_S, sys.argv)
+    fw.fetch = lambda m: asked.append(m) or '{"relations": []}'
+    fw.RATE_S = 5
+    sys.argv = ["fetch_works.py", db, "--cache", cache]
+    t = time.time()
+    try:
+        fw.main()
+    finally:
+        fw.fetch, fw.RATE_S, sys.argv = old
+    took = time.time() - t
+    check(len(asked) == 3 and took < 2, f"three asked in {took:.1f} s, no 5 s sleep between: {asked}")
+    check((fw.span(31), fw.span(240), fw.span(9360)) == ("31 s", "4 min", "2.6 h"),
+          "a run's length in the unit it reads in; one album's read '0.0 h'")
+    for p in (db, cache):
+        os.unlink(p)
+
+
 def main() -> int:
     test_no_answer_is_not_cached_and_is_asked_again()
+    test_the_pace_is_the_only_wait()
     test_a_legacy_unreachable_row_is_asked_again()
     test_gives_up_when_nothing_answers()
     test_one_folder_asks_only_for_its_own()

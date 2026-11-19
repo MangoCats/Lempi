@@ -53,6 +53,25 @@ function row(label, st, detail) {
     S.el('td', { style: 'font-size:.88rem', text: detail }));
 }
 
+// Where the count comes from [SPEC-FIN-020]: measured from these files, or
+// carried by a recording another copy already gave flavor -- a CD of the same
+// song -- which counts as done the moment the edition names the track.
+function flavorText(f) {
+  const parts = [`${f.done} of ${f.total} tracks have flavor — how each sounds, from Essentia`];
+  if (f.measured_here || f.from_elsewhere) {
+    parts.push(`${f.measured_here} measured from these files`
+      + (f.from_elsewhere ? `, ${f.from_elsewhere} from the same recording on another album` : ''));
+  }
+  return parts.join('; ');
+}
+
+// The heading and the table, drawn again as often as asked.
+function standing(d) {
+  return [S.el('h2', {}, d.finished ? 'Finished ' : 'Where it stands ',
+            S.el('small', { text: d.finished ? '— every step is done' : `— still to do: ${d.next.join(', ')}` })),
+          checklist(d)];
+}
+
 function checklist(d) {
   const st = d.stages, ed = st.edition, rel = ed.release;
   const named = `radio passages named ${ed.radio_named} of ${ed.radio}, album passages ${ed.album_named} of ${ed.album}`;
@@ -65,7 +84,7 @@ function checklist(d) {
   const w = st.works;
   return S.el('table', {}, S.el('tbody', {},
     row('Edition', ed, `${shown}; ${named}`),
-    row('Flavor', st.flavor, `${st.flavor.done} of ${st.flavor.total} tracks — how each sounds, from Essentia`),
+    row('Flavor', st.flavor, flavorText(st.flavor)),
     row('Lead-in and out', st.amplitude, `${st.amplitude.done} of ${st.amplitude.total} tracks measured`),
     row('Cover', c, (rel ? `front ${c.front ? 'held' : 'not held'}, back ${c.back ? 'held' : 'not held'}`
       : 'waits for the edition') + (own ? `; the player also has ${own}` : '')),
@@ -154,10 +173,26 @@ async function run(d, c, runBox) {
 // words once it ends. Until 2026-11-19 the page was drawn again from scratch
 // at the end, which took the log -- and the job's error with it -- off the
 // page: a job that failed looked like a click that did nothing.
+// The stages are read again every few seconds while the job runs, so the
+// table moves as each track lands, not only at the end [SPEC-FIN-020]. One
+// read is one catalogue query; a failed one is skipped, and the next tried.
+const LIVE_MS = 5000;
+
 function watchRun(id, runBox) {
   runBox.hidden = false;
   runBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  let busy = false;
+  const live = setInterval(async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      const d = await S.get('/api/finish/status?folder=' + encodeURIComponent(folder));
+      const box = document.getElementById('standing');
+      if (box && d.files) box.replaceChildren(...standing(d));
+    } catch (e) { /* the next tick asks again */ } finally { busy = false; }
+  }, LIVE_MS);
   S.watchJob(id, runBox, job => {
+    clearInterval(live);
     runBox.prepend(outcome(job));
     album(runBox);
   });
@@ -189,9 +224,7 @@ async function album(keptRun = null) {
       S.el('br'), S.el('span', { style: 'font-size:.85rem', text: `${d.files} file${s(d.files)}, `
         + `${d.radio} radio and ${d.album} album passage${s(d.album)}` }),
       ' ', S.el('a', { href: '/finish', style: 'font-size:.85rem', text: '← every folder left' })),
-    S.el('h2', {}, d.finished ? 'Finished ' : 'Where it stands ',
-      S.el('small', { text: d.finished ? '— every step is done' : `— still to do: ${d.next.join(', ')}` })),
-    checklist(d),
+    S.el('div', { id: 'standing' }, ...standing(d)),
     runBox,
     S.el('h2', {}, 'The edition ', S.el('small', { text: '— the one choice; the rest follows from it' })),
     edBox);

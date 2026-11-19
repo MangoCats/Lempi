@@ -21,6 +21,12 @@ since a retry is a request. Until 2026-11-19 each tool slept a second after
 its own requests. That left no margin, and nothing between tools: two tools,
 or two steps of one console job, could ask back to back.
 
+The pace is the only wait. The tools' own sleeps beside a request went the
+same day. Kept on top of it, they made *Smiling Phases*' works fetch about
+3 s a recording for a pace of 1.2. One in `suggest_release.py` slept even
+after a release read from the cache, with no request at all. A tool's
+`RATE_S` remains as the pace, for its time estimates.
+
 **`[SPEC-MBP-020]` The pace is 1.2 s: the limit with a fifth to spare.** The
 maintainer's margin, 2026-11-19, so a request timed at the edge of a second
 never reads to their counter as two in one. `MIN_INTERVAL_S` in

@@ -79,6 +79,16 @@ def probe_duration_ms(path: str) -> float | None:
     return out
 
 
+def eta(seconds: float) -> str:
+    """Time left in the unit it reads in: an album's last minute is "40 s",
+    not "0 min"."""
+    if seconds < 90:
+        return f"{seconds:.0f} s"
+    if seconds < 5400:
+        return f"{seconds / 60:.0f} min"
+    return f"{seconds / 3600:.1f} h"
+
+
 def extract_one(path: str, start_ms: int = 0, end_ms: int = -1,
                 duration_ms: int = 0) -> tuple[dict, bool] | str:
     """Extract lowlevel features for one passage -- or, if it fails, why, in
@@ -285,13 +295,18 @@ def main() -> int:
                             (mbid, ch, cls, val, source),
                         )
                 ok += 1
-            # Every tenth passage, failed or not -- counting only successes is
-            # what kept an all-failing run silent to the end.
-            if i % 10 == 0 or i == len(todo):
+            # Committed as each lands, so what is measured from the catalogue
+            # -- the console's Finish an album page, read while this runs --
+            # moves with it [SPEC-FIN-020]. Committed every tenth until
+            # 2026-11-19, the page sat still for a minute and looked stalled.
+            con.commit()
+            # Said every tenth passage on a long run, and every one on an
+            # album's, failed or not -- counting only successes is what kept
+            # an all-failing run silent to the end.
+            if i % (1 if len(todo) <= 50 else 10) == 0 or i == len(todo):
                 el = time.time() - t0
-                con.commit()
                 print(f"  {i}/{len(todo)}  ok={ok} fail={fail}  "
-                      f"{el/i:.1f}s/passage  eta {(len(todo)-i)*el/i/60:.0f} min", flush=True)
+                      f"{el/i:.1f}s/passage  eta {eta((len(todo)-i)*el/i)}", flush=True)
     con.commit()
     el = time.time() - t0
     print(f"\n{ok} extracted, {fail} failed in {el/60:.1f} min "

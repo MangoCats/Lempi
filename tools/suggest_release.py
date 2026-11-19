@@ -72,7 +72,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 from apply_changes import clear_flags_for  # noqa: E402  -- [SPEC-DF-112], reused not reinvented
 from choose_release import name_match  # noqa: E402  -- reused, not re-derived
-from fetch_releases import get as mb_get, RATE_S, CACHE_DDL  # noqa: E402
+from fetch_releases import get as mb_get, CACHE_DDL  # noqa: E402
 import artist_sort  # noqa: E402  -- an artist's sort name [REQ-VIS-182]
 import ingest_cd  # noqa: E402  -- record_release(), the edition as a CD add records it
 import release_sources  # noqa: E402  -- which editions are settled [SPEC-FIN-040]
@@ -456,7 +456,8 @@ def do_discover(conn: sqlite3.Connection, args, files: list) -> int:
             "matches": matches, "unmatched_files": unmatched_files,
             "unmatched_tracks": unmatched_tracks,
         })
-        time.sleep(RATE_S)
+        # No sleep: a request waits its own turn [SPEC-MBP-010], and a
+        # release read from the cache made none.
     conn.commit()
 
     scored.sort(key=lambda c: -c["score"])

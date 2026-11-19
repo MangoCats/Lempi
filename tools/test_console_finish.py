@@ -109,11 +109,19 @@ def main() -> int:
 
             st, page = req(port, "GET", "/finish")
             check(st == 200 and "Finish an album" in page and "/api/finish/run" in page, f"the page is served: {st}")
+            # While a job runs, the stages are read again and redrawn in place,
+            # not only when it ends; and the job's log is kept when it does.
+            watch = page.split("function watchRun", 1)[-1].split("\nfunction ", 1)[0]
+            check("setInterval" in watch and "/api/finish/status" in watch and "standing" in watch
+                  and "clearInterval" in watch, "the stages are refreshed while a job runs, and the refresh stopped after")
+            check("album(runBox)" in watch and "outcome(job)" in watch, "the log is carried over, its outcome said")
             st, d = req(port, "GET", "/api/finish/folders")
             check(st == 200 and [f["folder"] for f in d] == [album], f"the index lists the album: {d}")
             st, d = req(port, "GET", "/api/finish/status?folder=" + album.replace(" ", "%20"))
             check(st == 200 and d["files"] == 1 and d["next"][0] == "edition" and not d["finished"],
                   f"the album's stages: {d}")
+            check({"measured_here", "from_elsewhere"} <= set(d["stages"]["flavor"]),
+                  f"flavor says where its count comes from: {d['stages']['flavor']}")
             check(req(port, "GET", "/api/finish/status")[0] == 400, "a status with no folder is refused")
 
             for body, why in (({"folder": album, "release_mbid": "Smiling Phases"}, "a release that is no id"),

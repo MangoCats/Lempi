@@ -140,7 +140,7 @@ def fetch(mbid: str) -> dict | None:
         offset += len(page)
         if not page or offset >= total:
             break
-        time.sleep(RATE_S)         # each page is its own request
+        # Each page is its own request, and `get` paces it [SPEC-MBP-010].
     return {"releases": out}
 
 
@@ -264,15 +264,15 @@ def main() -> int:
             except Exception as e:                      # noqa: BLE001 - report and go on
                 failed += 1
                 print(f"  {mbid}: {e}", file=sys.stderr)
-                time.sleep(RATE_S)
                 continue
             # Cache even an empty answer: "this recording has no releases" is
             # worth remembering, and it is what stops a re-run asking again.
+            # No sleep after it: `get` waits its turn before each request
+            # [SPEC-MBP-010], and a sleep here only slowed the run.
             conn.execute(
                 "INSERT OR REPLACE INTO musicbrainz_cache (mbid, kind, response, fetched_at) "
                 "VALUES (?1, 'recording+releases', ?2, ?3)",
                 (mbid, json.dumps(doc or {}), int(time.time())))
-            time.sleep(RATE_S)
 
         if not doc:
             missing += 1

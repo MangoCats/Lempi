@@ -39,6 +39,18 @@ done* or *waiting*, with its counts:
 | cover | the edition's front is held; a `folder.jpg` or embedded picture is said beside it |
 | works | MusicBrainz asked about every named recording; how many perform a known song is said |
 
+Flavor says where its count comes from: measured from these files, or carried
+by a recording another copy already gave flavor. On *Smiling Phases* 20 of 26
+read done the moment the edition named them, with 10 measured, because 11
+songs are also on the hub's Traffic CDs.
+
+While a job runs, the page reads the stages again every 5 s and redraws them
+in place; a read costs a catalogue query of a few milliseconds. Until
+2026-11-19 they were drawn at load and at the end only, and flavor was
+committed every tenth track, so a watched run sat still for a minute.
+`extract_library.py` now commits each track as it lands. On a run of 50 or
+fewer it also reports each one.
+
 A folder whose files only lack an album record is not listed: 33 such folders
 on 2026-11-19 had their albums shown by each recording's chosen release, as
 `align_file_releases.py` leaves them.

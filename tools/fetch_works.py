@@ -93,6 +93,16 @@ def targets(conn, folder: str | None = None) -> list[str]:
 UNREACHABLE = json.dumps({"error": "unreachable"})
 
 
+def span(seconds: float) -> str:
+    """A run's length in the unit it reads in: "31 s", "4 min", "2.6 h". In
+    hours alone, one album's 26 recordings read "0.0 h"."""
+    if seconds < 90:
+        return f"{seconds:.0f} s"
+    if seconds < 5400:
+        return f"{seconds / 60:.0f} min"
+    return f"{seconds / 3600:.1f} h"
+
+
 def fetch(mbid: str) -> str | None:
     """One recording, with backoff. A 404 is an answer, not a failure; no
     answer at all is `None`, and is not cached.
@@ -161,7 +171,7 @@ def main() -> int:
     print(f"{len(want)} recording(s) reachable from radio passages, "
           f"{len(want) - outstanding} already cached, {outstanding} outstanding, "
           f"{len(todo)} to fetch this run "
-          f"-- at least {len(todo) * RATE_S / 3600:.1f} h at one request per {RATE_S:.1f} s",
+          f"-- at least {span(len(todo) * RATE_S)} at one request per {RATE_S:.1f} s",
           flush=True)
 
     unanswered, in_a_row, gave_up = 0, 0, False
@@ -180,7 +190,9 @@ def main() -> int:
             cache.commit()      # committed per row: an interrupt costs one request
         if i % 100 == 0 or i == len(todo):
             print(f"  {i}/{len(todo)}", flush=True)
-        time.sleep(RATE_S)
+        # No sleep here: `fetch` waits its turn before each request
+        # [SPEC-MBP-010]. One here as well made a run about 3 s a recording,
+        # measured on *Smiling Phases* 2026-11-19, for a pace of 1.2.
 
     total = cache.execute("SELECT COUNT(*) FROM work_cache").fetchone()[0]
     if unanswered:

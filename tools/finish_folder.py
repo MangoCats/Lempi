@@ -77,7 +77,7 @@ def status(conn: sqlite3.Connection, folder: str, works_cache: str | None = None
         return out
     marks = ",".join("?" * len(ids))
     psg = conn.execute(
-        f"SELECT p.passage_id, p.file_id, p.kind, p.lead_in_ms, p.boundary_src, pr.mbid "
+        f"SELECT p.passage_id, p.file_id, p.kind, p.lead_in_ms, p.boundary_src, pr.mbid, p.start_ms, p.end_ms "
         f"FROM passages p LEFT JOIN passage_recordings pr ON pr.passage_id = p.passage_id "
         f"WHERE p.file_id IN ({marks}) AND p.kind IN ('radio', 'album')", ids).fetchall()
     radio = {r[0]: r for r in psg if r[2] == "radio"}
@@ -128,7 +128,20 @@ def status(conn: sqlite3.Connection, folder: str, works_cache: str | None = None
             f"SELECT DISTINCT subject_id FROM flavor WHERE subject_kind = 'recording' "
             f"AND subject_id IN ({','.join('?' * len(recs))})", recs)}
     n = sum(1 for r in radio.values() if r[5] in flavored)
-    stages["flavor"] = {"state": _state(n, len(radio)), "done": n, "total": len(radio)}
+    # Which of those were measured from these files, and which carry flavor
+    # their recording already had from another copy -- a CD of the same song.
+    # On 2026-11-19 *Smiling Phases* read 20 of 26 the moment its edition was
+    # named, with 10 measured: right, and easy to misread mid-run.
+    md5_of = {f[0]: f[1] for f in files}
+    cached: set = set()
+    if radio and _has(conn, "lowlevel_cache"):
+        cached = {tuple(x) for x in conn.execute(
+            f"SELECT audio_md5, start_ms, end_ms FROM lowlevel_cache WHERE audio_md5 IN "
+            f"({','.join('?' * len(md5_of))})", list(md5_of.values()))}
+    here = {pid for pid, r in radio.items() if (md5_of[r[1]], r[6], r[7]) in cached}
+    stages["flavor"] = {"state": _state(n, len(radio)), "done": n, "total": len(radio),
+                        "measured_here": len(here),
+                        "from_elsewhere": sum(1 for pid, r in radio.items() if r[5] in flavored and pid not in here)}
 
     # Lead-in and out, measured; a boundary set by hand is never recomputed.
     n = sum(1 for r in radio.values() if r[3] is not None or r[4] == "manual")
@@ -152,7 +165,7 @@ def status(conn: sqlite3.Connection, folder: str, works_cache: str | None = None
     asked: set = set()
     cache = works_cache or None
     if named and cache and os.path.isfile(cache):
-        c = sqlite3.connect(f"file:{cache}?mode=ro", uri=True)
+        c = sqlite3.connect(lempi_db.ro_uri(cache), uri=True)
         try:
             if _has(c, "work_cache"):
                 asked = {m for (m,) in c.execute(

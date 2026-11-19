@@ -102,13 +102,12 @@ def main() -> int:
             except Exception as e:                      # noqa: BLE001
                 failed += 1
                 print(f"  {rid}: {e}", file=sys.stderr)
-                time.sleep(RATE_S)
                 continue
+            # No sleep after it: `get` waits its turn [SPEC-MBP-010].
             conn.execute(
                 "INSERT OR REPLACE INTO musicbrainz_cache (mbid, kind, response, fetched_at)"
                 " VALUES (?1, 'release+recordings', ?2, ?3)",
                 (rid, json.dumps(doc or {}), int(time.time())))
-            time.sleep(RATE_S)
 
         if not doc:
             continue

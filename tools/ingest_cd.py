@@ -497,7 +497,7 @@ def lookup_disc_id(toc: cd_toc.DiscToc) -> tuple[str, list[dict]]:
     if doc is not None:
         return "exact", doc.get("releases", []) or []
 
-    time.sleep(fetch_releases.RATE_S)
+    # `fetch_releases.get` waits its own turn [SPEC-MBP-010]
     doc = fetch_releases.get(_discid_url(disc_id, toc_param))
     if doc is not None and doc.get("releases"):
         return "fuzzy", doc["releases"]
@@ -519,7 +519,7 @@ def lookup_barcode(barcode: str) -> tuple[str, list[dict]]:
     found = [r.get("id") for r in (doc or {}).get("releases") or [] if r.get("id")]
     releases = []
     for rid in found[:5]:
-        time.sleep(fetch_releases.RATE_S)
+        # `fetch_releases.get` waits its own turn [SPEC-MBP-010]
         full = fetch_releases.get(f"{MB_WS}/release/{rid}?fmt=json&inc={MB_INC}")
         if full:
             releases.append(full)
@@ -593,7 +593,7 @@ def lookup_cd_text(toc: cd_toc.DiscToc, disc_id: str | None = None) -> tuple[str
     hits.sort(key=lambda h: not disc_like(h)[1])        # stable: the search's own order otherwise
     found = []
     for h in hits[:CD_TEXT_FETCHES]:
-        time.sleep(fetch_releases.RATE_S)
+        # `fetch_releases.get` waits its own turn [SPEC-MBP-010]
         full = fetch_releases.get(f"{MB_WS}/release/{h['id']}?fmt=json&inc={MB_INC}+discids")
         if full:
             found.append(full)
@@ -649,7 +649,7 @@ def mark_shared_isrcs(toc: cd_toc.DiscToc, releases: list[dict]) -> list[str]:
     for t in toc.tracks:
         if not _agreed_with(releases, t.number, t.isrc):     # not by isrc_confirms: it reads the marks
             continue
-        time.sleep(fetch_releases.RATE_S)
+        # `fetch_releases.get` waits its own turn [SPEC-MBP-010]
         doc = fetch_releases.get(f"{MB_WS}/isrc/{urllib.parse.quote(t.isrc)}?fmt=json")
         if len((doc or {}).get("recordings") or []) != 1:
             shared.append(t.isrc)    # several recordings, or no answer: not this one's alone
