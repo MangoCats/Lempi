@@ -3,6 +3,16 @@
 <title>Vipunen — finish an album</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/console.css">
+<style>
+  .le input[type=text], .le input[type=number] {
+    padding: .3rem .45rem; border: 1px solid var(--line); border-radius: 3px;
+    background: var(--panel); color: var(--fg); font: inherit; box-sizing: border-box; width: 100%; }
+  .le input[type=number] { width: 4.2rem; }
+  .le .fields { display: grid; grid-template-columns: max-content minmax(0, 32rem); gap: .4rem .7rem;
+    align-items: center; margin: .5rem 0 .8rem; font-size: .9rem; }
+  .le table td { vertical-align: middle; }
+  .le .file { font: 11px var(--mono); color: var(--dim); }
+</style>
 <header>
   <h1>Vipunen</h1>
   <nav><a href="/">library</a><a href="/folder">folder</a><a href="/jobs">jobs</a><a href="/import">import</a><a href="/export">export</a><a href="/flags">flags</a><a href="/intake">intake</a><a href="/mesh">mesh</a><a href="/programmes">programmes</a><a href="/sync">sync</a><a href="/system">system</a></nav>
@@ -14,7 +24,9 @@
     An album added as files has its passages and its tags, and nothing more. Pick the edition the
     files are from, and the rest follows: both passages of each track named, every artist credited,
     the album each file is shown under, flavor, lead-in and out, the cover, and the songs' works —
-    then the player is asked to rebuild. Each step does only what is not done yet.
+    then the player is asked to rebuild. Each step does only what is not done yet. An album
+    MusicBrainz does not have — from Jamendo, Bandcamp, archive.org — is named here instead, as a
+    local edition.
   </p>
   <div id="main"><p class="empty">loading…</p></div>
 </main>
@@ -24,7 +36,7 @@
 // folder with something left to do at /finish.
 const folder = new URLSearchParams(location.search).get('folder');
 const main = document.getElementById('main');
-const PILL = { done: 'ok', partly: 'warn', 'not done': '', waiting: '' };
+const PILL = { done: 'ok', partly: 'warn', 'not done': '', waiting: '', 'not needed': 'ok', 'nothing to take': 'ok' };
 const s = n => n === 1 ? '' : 's';
 
 async function index() {
@@ -76,20 +88,29 @@ function checklist(d) {
   const st = d.stages, ed = st.edition, rel = ed.release;
   const named = `radio passages named ${ed.radio_named} of ${ed.radio}, album passages ${ed.album_named} of ${ed.album}`;
   const shown = rel ? `${ed.files_shown} of ${ed.files} file${s(ed.files)} shown under “${rel.title || rel.mbid}”`
+    + (rel.local ? ', a local edition' : '')
     + (rel.date || rel.country ? ` (${[rel.date, rel.country].filter(Boolean).join(', ')})` : '')
     + (rel.others ? `, and ${rel.others} other edition${s(rel.others)}` : '') : 'no edition recorded';
   const c = st.cover;
-  const own = [c.folder_jpg && 'a folder.jpg beside the files', c.embedded && `${c.embedded} file${s(c.embedded)} with a picture`]
+  const own = [c.beside && `a ${c.beside} beside the files`, c.embedded && `${c.embedded} file${s(c.embedded)} with a picture`]
     .filter(Boolean).join(' and ');
   const w = st.works;
+  // A local edition's cover is the one with the files, and its tracks have no
+  // works to ask MusicBrainz about [SPEC-FIN-090], [SPEC-FIN-095].
+  const cover = c.state === 'nothing to take' ? 'no picture beside or in the files, and no archive to ask'
+    : (rel ? `front ${c.front ? 'held' : 'not held'}, back ${c.back ? 'held' : 'not held'}`
+           + (c.local && !c.front ? ' — taken from the files when the edition is recorded' : '')
+      : 'waits for the edition') + (own ? `; the player also has ${own}` : '');
+  const works = w.recordings ? `MusicBrainz asked about ${w.asked} of ${w.recordings} recording${s(w.recordings)}; `
+      + `${w.with_work} perform a known song`
+    : w.state === 'not needed' ? 'a local edition\'s tracks are not MusicBrainz recordings, so there is nothing to ask'
+    : 'waits for the edition';
   return S.el('table', {}, S.el('tbody', {},
     row('Edition', ed, `${shown}; ${named}`),
     row('Flavor', st.flavor, flavorText(st.flavor)),
     row('Lead-in and out', st.amplitude, `${st.amplitude.done} of ${st.amplitude.total} tracks measured`),
-    row('Cover', c, (rel ? `front ${c.front ? 'held' : 'not held'}, back ${c.back ? 'held' : 'not held'}`
-      : 'waits for the edition') + (own ? `; the player also has ${own}` : '')),
-    row('Works', w, w.recordings ? `MusicBrainz asked about ${w.asked} of ${w.recordings} recording${s(w.recordings)}; `
-      + `${w.with_work} perform a known song` : 'waits for the edition')));
+    row('Cover', c, cover),
+    row('Works', w, works)));
 }
 
 function facts(c) {
@@ -202,6 +223,8 @@ function outcome(job) {
   const r = job.result || {}, ed = r.edition || {};
   if (job.state === 'done') return S.el('p', {}, S.el('span', { class: 'pill ok', text: 'finished' }),
     ed.skipped ? ' — the edition was in place already; the rest is done.'
+    : ed.local ? ` — “${ed.title}” recorded as a local edition, ${ed.named} track${s(ed.named)} named, then the rest done.`
+               + ' The stages above are measured afresh.'
                : ` — ${ed.applied ?? '?'} passages named, then the rest done. The stages above are measured afresh.`);
   const why = ed.ok === false ? `the edition was not applied, and nothing was written: ${ed.error || 'see the log below'}`
     : (r.failed || []).length ? `these steps failed, the rest were done: ${r.failed.join(', ')} — see the log below`
@@ -228,7 +251,18 @@ async function album(keptRun = null) {
     runBox,
     S.el('h2', {}, 'The edition ', S.el('small', { text: '— the one choice; the rest follows from it' })),
     edBox);
-  if (rel) {
+  if (rel && rel.local) {
+    // A local edition [SPEC-FIN-080]: corrected and finished again through
+    // its own form, or given up for one MusicBrainz turns out to have.
+    const edit = S.el('button', { class: 'chip on', text: d.finished ? 'correct it and run again' : 'check it and finish the rest' });
+    const other = S.el('button', { class: 'chip', text: 'find it on MusicBrainz instead' });
+    const formBox = S.el('div', {}), searchBox = S.el('div', {});
+    edBox.append(S.el('p', { style: 'font-size:.9rem' }, 'Recorded: ', S.el('b', { text: rel.title || '(untitled)' }),
+      rel.artist ? ` by ${rel.artist}` : '', ` (${rel.date || 'no date'}) — a local edition, not on MusicBrainz`),
+      S.el('div', { class: 'controls' }, edit, other), formBox, searchBox);
+    edit.onclick = () => { edit.disabled = true; localForm(d, formBox, runBox); };
+    other.onclick = () => { other.disabled = true; editionSearch(d, searchBox, runBox); };
+  } else if (rel) {
     const again = S.el('button', { class: 'chip on', text: d.finished ? 'run it again' : 'finish the rest with this edition' });
     const other = S.el('button', { class: 'chip', text: 'choose a different edition' });
     edBox.append(S.el('p', { style: 'font-size:.9rem' }, 'Recorded: ', S.el('b', { text: rel.title || rel.mbid }),
@@ -255,7 +289,82 @@ async function album(keptRun = null) {
     edBox.append(S.el('p', { style: 'font-size:.9rem', text: 'Find the editions MusicBrainz knows of this album, '
       + 'see which file matches which track, and choose one.' }));
     editionSearch(d, edBox, runBox);
+    const open = S.el('button', { class: 'chip', text: 'name it as a local edition' });
+    const formBox = S.el('div', {});
+    edBox.append(S.el('h2', {}, 'Not on MusicBrainz? ', S.el('small', { text: '— name it yourself' })),
+      S.el('p', { style: 'font-size:.9rem;max-width:52rem', text: 'Music published only on Jamendo, Bandcamp or '
+        + 'archive.org has no edition to pick. Name the album, its artist and each track as you know them; they are '
+        + 'recorded as a local edition, with the cover found beside or in the files, and the rest follows as above.' }),
+      S.el('div', { class: 'controls' }, open), formBox);
+    open.onclick = () => { open.disabled = true; localForm(d, formBox, runBox); };
   }
+}
+
+// The local edition's form [SPEC-FIN-085]: the album, and each file's place,
+// title and artists, filled from what is recorded or else from the tags. A
+// file a MusicBrainz recording already names is shown and left as it is.
+async function localForm(d, box, runBox) {
+  box.replaceChildren(S.el('p', { class: 'empty', text: 'reading the files…' }));
+  let t;
+  try { t = await S.get('/api/finish/tracks?folder=' + encodeURIComponent(d.folder)); } catch (e) { return S.fail(box, e); }
+  const ed = t.edition || {};
+  const input = (value, attrs = {}) => S.el('input', { type: 'text', value: value ?? '', ...attrs });
+  const title = input(ed.title || t.album_tag, { 'aria-label': 'album title' });
+  const artist = input(ed.artist || t.artist_tag, { 'aria-label': 'album artist' });
+  const date = input(ed.date, { placeholder: 'YYYY, YYYY-MM or YYYY-MM-DD — optional', 'aria-label': 'release date' });
+  const rows = t.tracks.map(f => {
+    if (!f.placeholder) return { f, tr: S.el('tr', {}, S.el('td', {}), S.el('td', {}), S.el('td', {}),
+      S.el('td', { colspan: 2, style: 'color:var(--dim);font-size:.85rem' },
+        f.recording ? `${f.title || f.tag_title || f.file} — named by MusicBrainz, left as it is` : `${f.file} — no passage to name`)) };
+    const keep = S.el('input', { type: 'checkbox', checked: 'checked', 'aria-label': 'in this edition' });
+    const num = S.el('input', { type: 'number', min: 1, max: 999, value: f.position ?? f.track_no ?? '', 'aria-label': 'track number' });
+    const disc = S.el('input', { type: 'number', min: 1, max: 999, value: f.disc ?? f.disc_no ?? '', 'aria-label': 'disc' });
+    const ttl = input(f.title || f.tag_title, { 'aria-label': 'track title' });
+    const art = input(f.artists.length ? f.artists.join('; ') : f.tag_artist, { 'aria-label': 'track artists' });
+    const tr = S.el('tr', {}, S.el('td', {}, keep), S.el('td', {}, num), S.el('td', {}, disc),
+      S.el('td', {}, ttl, S.el('div', { class: 'file', text: f.file })), S.el('td', {}, art));
+    return { f, tr, keep, num, disc, ttl, art };
+  });
+  const open = rows.filter(r => r.keep);
+  const go = S.el('button', { class: 'chip on', text: 'record this edition and finish', disabled: open.length ? null : 'disabled' });
+  const why = S.el('p', { class: 'err', hidden: 'hidden' });
+  box.replaceChildren(S.el('div', { class: 'le' },
+    S.el('div', { class: 'fields' },
+      S.el('label', { text: 'Album' }), title, S.el('label', { text: 'Artist' }), artist,
+      S.el('label', { text: 'Date' }), date),
+    S.el('p', { style: 'font-size:.85rem;color:var(--dim);max-width:52rem', text: 'Several artists on a track are '
+      + 'separated by “;” — the first is the one shown, the rest credited. A track whose artist is left blank takes '
+      + 'the album\'s. Untick a file to leave it out of the edition.' }),
+    S.el('table', {}, S.el('thead', {}, S.el('tr', {}, ...['', '#', 'disc', 'title', 'artists']
+      .map(h => S.el('th', { text: h })))), S.el('tbody', {}, ...rows.map(r => r.tr))),
+    why, S.el('div', { class: 'controls' }, go)));
+  const n = v => v.value.trim() === '' ? null : Number(v.value);
+  go.onclick = async () => {
+    why.hidden = true;
+    const picked = open.filter(r => r.keep.checked);
+    const local = { title: title.value.trim(), artist: artist.value.trim(), date: date.value.trim(),
+      tracks: picked.map(r => ({ audio_md5: r.f.audio_md5, position: n(r.num), disc: n(r.disc),
+                                 title: r.ttl.value.trim(), artist: r.art.value.trim() })) };
+    const whole = v => v === null || (Number.isInteger(v) && v > 0 && v < 1000);
+    const bad = !local.title ? 'The album needs a title.' : !local.artist ? 'The album needs an artist.'
+      : !picked.length ? 'No file is ticked.'
+      : local.date && !/^\d{4}(-\d{2}(-\d{2})?)?$/.test(local.date) ? 'A date is YYYY, YYYY-MM or YYYY-MM-DD.'
+      : local.tracks.some(x => !whole(x.position) || !whole(x.disc)) ? 'A track or disc number is a whole number from 1 to 999.'
+      : null;
+    if (bad) { why.textContent = bad; why.hidden = false; return; }
+    const left = rows.length - picked.length;
+    if (!confirm(`Record “${local.title}” by ${local.artist}${local.date ? ` (${local.date})` : ''} as a local edition?\n\n`
+      + `${picked.length} file${s(picked.length)} will be named as its tracks, with the titles and artists shown`
+      + (left ? `; ${left} left as they are` : '') + '.\n\nThen flavor and lead-in and out follow, the cover is taken from '
+      + 'the files, and the player is asked to rebuild.')) return;
+    let r;
+    try {
+      r = await (await fetch('/api/finish/run', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder: d.folder, local }) })).json();
+    } catch (e) { runBox.hidden = false; return S.fail(runBox, e); }
+    if (r.error) { why.textContent = r.error; why.hidden = false; return; }
+    watchRun(r.job_id, runBox);
+  };
 }
 
 if (folder) album(); else index();

@@ -168,6 +168,43 @@ def test_an_edition_in_place_is_not_applied_again(tmp: str) -> None:
           f"a different edition is applied: {[s for s, _ in seen]}")
 
 
+def test_a_local_edition(tmp: str) -> None:
+    print("a local edition: its own tool, from a spec file; the cover taken with it, the archive not asked")
+    local = {"title": "Future Sound", "artist": "stellarmusic", "date": "2014",
+             "tracks": [{"audio_md5": "a" * 32, "position": 1, "disc": None, "title": "Big Dreams", "artist": ""}]}
+    applied = json.dumps({"ok": True, "local": True, "release": "local:release:" + "b" * 32, "title": "Future Sound",
+                          "named": 1, "applied": 1, "matched": 1, "cover": "found:folder:cover.jpg"})
+    runner, db = runner_for(tmp, "local")
+    specs = []
+    seen = []
+
+    def spawn(self, job_id, stage, argv):
+        seen.append((stage, argv))
+        if stage == "edition":
+            with open(argv[argv.index("--spec") + 1], encoding="utf-8") as fh:
+                specs.append(json.load(fh))
+            return 0, applied
+        return TOOLS[stage]
+    runner._spawn = spawn.__get__(runner, jobmod.Runner)
+    j = wait_for(runner, runner.submit("finish-folder", json.dumps({"folder": FOLDER, "local": local})))
+    check(j["state"] == "done", f"done: {j['state']} {[e['text'] for e in j['events'] if e['kind'] == 'error']}")
+    check([s for s, _ in seen] == ["edition", "flavor", "amplitude", "works", "load-works"],
+          f"no archive asked, the rest in order: {[s for s, _ in seen]}")
+    ed = dict(seen)["edition"]
+    check("local_edition.py" in ed[1] and ed[2] == db and ed[3] == FOLDER and "--commit" in ed,
+          f"its own tool, committing: {ed}")
+    check(specs == [local], f"the spec as the person sent it: {specs}")
+    check(not os.path.exists(ed[ed.index("--spec") + 1]), "and its file removed after")
+    check(any("taken from the files" in e["text"] for e in j["events"]), "the cover said taken with the edition")
+    check(j["result"]["release"].startswith("local:release:"), f"the release recorded: {j['result'].get('release')}")
+    # Refused by the tool: the job stops there, as for an edition from MusicBrainz.
+    runner, _ = runner_for(tmp, "local-refused")
+    seen = fake(runner, {"edition": (1, '{"ok": false, "error": "two tracks share a place: 2"}'), **TOOLS})
+    j = wait_for(runner, runner.submit("finish-folder", json.dumps({"folder": FOLDER, "local": local})))
+    check(j["state"] == "failed" and [s for s, _ in seen] == ["edition"]
+          and j["result"]["edition"]["error"].startswith("two tracks"), f"refused, stopped: {j['state']} {seen}")
+
+
 def test_the_edition_is_never_cut_short() -> None:
     print("stopping the job lets the edition finish: it writes in one transaction")
     check(jobmod.stop_policy("finish-folder", "edition") == ("atomic", 0), jobmod.stop_policy("finish-folder", "edition"))
@@ -184,6 +221,7 @@ def main() -> int:
             test_the_edition_failing_stops_it(tmp)
             test_a_later_failure_is_said_and_the_rest_run(tmp)
             test_an_edition_in_place_is_not_applied_again(tmp)
+            test_a_local_edition(tmp)
         test_the_edition_is_never_cut_short()
     finally:
         jobmod.lempi_control.reload_lempi_library = old

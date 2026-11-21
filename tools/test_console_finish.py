@@ -134,6 +134,34 @@ def main() -> int:
                         {"Origin": "http://evil.example"})
             check(st == 403, f"a cross-site run is refused: {st}")
 
+            # A local edition [SPEC-FIN-080..085]: the form's files read, its
+            # shape refused here, and its fit refused by the tool, in the job.
+            check("localForm" in page and "/api/finish/tracks" in page, "the page has the local edition's form")
+            st, d = req(port, "GET", "/api/finish/tracks?folder=" + album.replace(" ", "%20"))
+            check(st == 200 and len(d["tracks"]) == 1 and d["tracks"][0]["placeholder"]
+                  and d["tracks"][0]["tag_title"] == "Paper Sun" and d["album_tag"] == "Smiling Phases",
+                  f"the form's files: {d}")
+            check(req(port, "GET", "/api/finish/tracks")[0] == 400, "the form's files with no folder are refused")
+            for local, why in (({"title": "", "artist": "Traffic"}, "no title"),
+                               ({"title": "T", "artist": "Traffic", "date": "1991-ish"}, "a date that is not one"),
+                               ({"title": "T", "artist": "Traffic", "tracks": [{"audio_md5": "x"}]}, "a track naming no file"),
+                               ("Smiling Phases", "an edition that is not an object")):
+                st, d = req(port, "POST", "/api/finish/run", {"folder": album, "local": local})
+                check(st == 400 and "error" in d, f"a local edition with {why} is refused: {st} {d}")
+            st, d = req(port, "POST", "/api/finish/run", {"folder": album, "local": {
+                "title": "Smiling Phases", "artist": "Traffic", "tracks": [{"audio_md5": "f" * 32}]}})
+            check(st == 200 and "job_id" in d, f"a well-formed local edition is a job: {st} {d}")
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                job = req(port, "GET", f"/api/jobs/{d['job_id']}")[1]
+                if job["state"] not in ("queued", "running"):
+                    break
+                time.sleep(0.3)
+            stages = [e["text"] for e in job["events"] if e["kind"] == "stage"]
+            check(job["state"] == "failed" and stages == ["edition"]
+                  and "name no file" in ((job.get("result") or {}).get("edition") or {}).get("error", ""),
+                  f"the tool refuses a track not in the folder, and nothing after runs: {job['state']} {stages} "
+                  f"{job.get('result')}")
             st, jobs_page = req(port, "GET", "/jobs")
             check(st == 200 and "/finish?folder=" in jobs_page and "finish this album" in jobs_page,
                   "the Jobs page links its Not analyzed list and its induct to the page")

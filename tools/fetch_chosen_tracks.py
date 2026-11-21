@@ -19,6 +19,7 @@ not twelve. Run after `choose_release.py`.
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 
@@ -78,9 +79,12 @@ def main() -> int:
     except sqlite3.OperationalError:
         pass                       # already added by an earlier run
 
+    # Never a local edition's: its id is the library's own, no one's to look
+    # up, and its numbering is the person's [SPEC-FIN-090].
     todo = [r[0] for r in conn.execute(
         "SELECT DISTINCT release_mbid FROM release_recordings "
-        " WHERE chosen = 1 AND position IS NULL ORDER BY release_mbid")]
+        " WHERE chosen = 1 AND position IS NULL ORDER BY release_mbid")
+        if not re.match(r"^local:", r[0] or "")]
     if args.limit:
         todo = todo[: args.limit]
     if not todo:

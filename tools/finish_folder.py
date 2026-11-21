@@ -28,10 +28,20 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402
+import release_sources  # noqa: E402  -- folder:local, a local edition's mark [SPEC-FIN-080]
 from fetch_cover_art import MIN_BYTES as MIN_COVER_BYTES  # noqa: E402  -- one floor for a real side
 
 MBID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 STAGES = ("edition", "flavor", "amplitude", "cover", "works")
+# An edition MusicBrainz does not have, as `local_edition.py` records one.
+LOCAL_RELEASE = "local:release:"
+# A stage with nothing to do for this album is not left to do: a local
+# edition's tracks are no MusicBrainz recordings to ask about works, and a
+# folder with no picture beside or in its files has no cover to take.
+SETTLED_STATES = ("done", "not needed", "nothing to take")
+# The names a player takes for a folder's cover: `induct_covers.SIBLING_FRONT`.
+SIBLING_FRONT = ("folder.jpg", "cover.jpg", "front.jpg", "album.jpg",
+                 "folder.png", "cover.png", "front.png", "albumart.jpg")
 
 
 def same_folder(path: str, folder: str) -> bool:
@@ -53,6 +63,16 @@ def works_cache_for(library: str) -> str:
     """Where `fetch_works.py` keeps MusicBrainz's answers: beside the library,
     as the console's induct has always passed it."""
     return os.path.join(os.path.dirname(os.path.abspath(library)), "work_relations.db")
+
+
+def sibling_front(folder: str) -> str | None:
+    """The name of the picture beside the files a player would take for the
+    front, case-insensitively, or None. Asked of the directory listing alone."""
+    try:
+        present = {e.lower(): e for e in os.listdir(folder)}
+    except OSError:
+        return None
+    return next((present[n] for n in SIBLING_FRONT if n in present), None)
 
 
 def _state(done: int, total: int) -> str:
@@ -90,18 +110,21 @@ def status(conn: sqlite3.Connection, folder: str, works_cache: str | None = None
                 if any(f[7] for f in files) else None})
 
     # The edition: the album each file is shown under, and both passages named.
-    held = {}
+    held, local_files = {}, set()
     if _has(conn, "file_releases"):
         md5s = [f[1] for f in files]
-        held = dict(conn.execute(
-            f"SELECT audio_md5, release_mbid FROM file_releases WHERE audio_md5 IN ({','.join('?' * len(md5s))})",
-            md5s).fetchall())
+        for md5, rel, source in conn.execute(
+                f"SELECT audio_md5, release_mbid, source FROM file_releases "
+                f"WHERE audio_md5 IN ({','.join('?' * len(md5s))})", md5s):
+            held[md5] = rel
+            if source == release_sources.FOLDER_LOCAL and rel.startswith(LOCAL_RELEASE):
+                local_files.add(md5)
     count = collections.Counter(held.values())
     edition = None
     if count:
         rel, n = count.most_common(1)[0]
         cols = _cols(conn, "releases") if _has(conn, "releases") else set()
-        want = [c for c in ("title", "release_date", "country") if c in cols]
+        want = [c for c in ("title", "release_date", "country", "artist_credit") if c in cols]
         row = conn.execute(f"SELECT {', '.join(want)} FROM releases WHERE mbid = ?1", (rel,)).fetchone() \
             if want else None
         info = dict(zip(want, row)) if row else {}
@@ -109,9 +132,15 @@ def status(conn: sqlite3.Connection, folder: str, works_cache: str | None = None
                               f"({','.join('?' * len(held))}) LIMIT 1", (rel, *held)).fetchone()
         edition = {"mbid": rel, "title": info.get("title"), "date": info.get("release_date"),
                    "country": info.get("country"), "files": n, "source": source[0] if source else None,
-                   "others": len(count) - 1}
-    named_radio = sum(real(r[5]) for r in radio.values())
-    named_album = sum(real(r[5]) for r in album.values())
+                   "others": len(count) - 1, "local": rel.startswith(LOCAL_RELEASE),
+                   "artist": info.get("artist_credit")}
+    # A passage is named by a MusicBrainz recording, or by the local edition
+    # its file is shown under: a person's naming of a placeholder, which no
+    # database could do for them [SPEC-FIN-080].
+    md5_of = {f[0]: f[1] for f in files}
+    is_named = lambda r: real(r[5]) or (bool(r[5]) and md5_of[r[1]] in local_files)  # noqa: E731
+    named_radio = sum(is_named(r) for r in radio.values())
+    named_album = sum(is_named(r) for r in album.values())
     total = len(files) + len(radio) + len(album)
     done = sum(1 for f in files if f[1] in held) + named_radio + named_album
     stages = {"edition": {"state": _state(done, total), "release": edition,
@@ -132,7 +161,6 @@ def status(conn: sqlite3.Connection, folder: str, works_cache: str | None = None
     # their recording already had from another copy -- a CD of the same song.
     # On 2026-11-19 *Smiling Phases* read 20 of 26 the moment its edition was
     # named, with 10 measured: right, and easy to misread mid-run.
-    md5_of = {f[0]: f[1] for f in files}
     cached: set = set()
     if radio and _has(conn, "lowlevel_cache"):
         cached = {tuple(x) for x in conn.execute(
@@ -154,10 +182,16 @@ def status(conn: sqlite3.Connection, folder: str, works_cache: str | None = None
         row = conn.execute("SELECT COALESCE(LENGTH(front), 0), COALESCE(LENGTH(back), 0) FROM cover_art "
                            "WHERE release_mbid = ?1", (edition["mbid"],)).fetchone()
         front, back = bool(row and row[0] >= MIN_COVER_BYTES), bool(row and row[1] >= MIN_COVER_BYTES)
-    stages["cover"] = {"state": "done" if front else "not done" if edition else "waiting",
-                       "front": front, "back": back,
+    beside = sibling_front(folder)
+    embedded = sum(1 for f in files if f[8])
+    local = bool(edition and edition["local"])
+    # A local edition's cover is the one beside or in the files; with none
+    # there, there is none to take, and no archive to ask [SPEC-FIN-095].
+    state = ("done" if front else "nothing to take" if local and not beside and not embedded
+             else "not done" if edition else "waiting")
+    stages["cover"] = {"state": state, "front": front, "back": back, "local": local,
                        "folder_jpg": os.path.isfile(os.path.join(folder, "folder.jpg")),
-                       "embedded": sum(1 for f in files if f[8])}
+                       "beside": beside, "embedded": embedded}
 
     # Works: which recordings MusicBrainz has been asked about, and which
     # perform one. Asked is the stage; a recording may perform none.
@@ -177,11 +211,12 @@ def status(conn: sqlite3.Connection, folder: str, works_cache: str | None = None
     if named and _has(conn, "recording_works"):
         with_work = conn.execute(f"SELECT COUNT(DISTINCT mbid) FROM recording_works WHERE mbid IN "
                                  f"({','.join('?' * len(named))})", named).fetchone()[0]
-    stages["works"] = {"state": _state(len(asked), len(named)) if named else "waiting",
+    stages["works"] = {"state": _state(len(asked), len(named)) if named
+                       else "not needed" if local else "waiting",
                        "asked": len(asked), "recordings": len(named), "with_work": with_work}
 
     out["stages"] = stages
-    out["next"] = [s for s in STAGES if stages[s]["state"] != "done"]
+    out["next"] = [s for s in STAGES if stages[s]["state"] not in SETTLED_STATES]
     out["finished"] = not out["next"]
     return out
 
@@ -196,7 +231,7 @@ def folders(conn: sqlite3.Connection) -> list[dict]:
     cached = _has(conn, "lowlevel_cache")
     rows = conn.execute(
         "SELECT f.path, f.first_seen, pr.mbid, p.lead_in_ms IS NULL AND COALESCE(p.boundary_src, '') <> 'manual', "
-        + ("EXISTS (SELECT 1 FROM file_releases r WHERE r.audio_md5 = f.audio_md5)" if has_fr else "0") + ", "
+        + ("(SELECT r.source FROM file_releases r WHERE r.audio_md5 = f.audio_md5)" if has_fr else "NULL") + ", "
         + ("EXISTS (SELECT 1 FROM lowlevel_cache c WHERE c.audio_md5 = f.audio_md5 "
            "AND c.start_ms = p.start_ms AND c.end_ms = p.end_ms)" if cached else "0")
         + " FROM passages p JOIN files f ON f.file_id = p.file_id "
@@ -206,13 +241,61 @@ def folders(conn: sqlite3.Connection) -> list[dict]:
         d = by.setdefault(os.path.dirname(os.path.normpath(path)), {
             "radio": 0, "placeholders": 0, "no_album": 0, "no_analysis": 0, "newest": ""})
         d["radio"] += 1
-        d["placeholders"] += not (mbid and MBID.match(mbid))
+        # A placeholder a person named in a local edition is not left to name.
+        d["placeholders"] += not (mbid and MBID.match(mbid)) and shown != release_sources.FOLDER_LOCAL
         d["no_album"] += not shown
         d["no_analysis"] += bool(no_amp or not extracted)
         d["newest"] = max(d["newest"], first_seen or "")
     out = [{"folder": k, **v} for k, v in by.items() if v["placeholders"] or v["no_analysis"]]
     out.sort(key=lambda d: d["newest"], reverse=True)
     return out
+
+
+def tracks(conn: sqlite3.Connection, folder: str) -> dict:
+    """Each file of `folder` as the local-edition form shows it
+    `[SPEC-FIN-085]`: its tags, its recording's title and credits as they
+    stand, its place on a local edition already recorded, and whether it is a
+    placeholder the form may name. Read-only."""
+    folder = os.path.normpath(folder)
+    has = {t: _has(conn, t) for t in ("file_releases", "releases", "release_recordings", "recording_artists",
+                                      "artists")}
+    rows = []
+    for fid, md5, path, t_title, t_artist, t_album, track_no, disc_no in conn.execute(
+            "SELECT f.file_id, f.audio_md5, f.path, t.title, t.artist, t.album, t.track_no, t.disc_no "
+            "FROM files f LEFT JOIN file_tags t ON t.file_id = f.file_id WHERE f.path LIKE ?1 ORDER BY f.path",
+            (folder.rstrip("\\/") + "%",)):
+        if not same_folder(path, folder):
+            continue
+        rec = conn.execute(
+            "SELECT pr.mbid, r.title FROM passages p JOIN passage_recordings pr ON pr.passage_id = p.passage_id "
+            "LEFT JOIN recordings r ON r.mbid = pr.mbid WHERE p.file_id = ?1 AND p.kind IN ('radio', 'album') "
+            "ORDER BY p.kind = 'album', p.start_ms LIMIT 1", (fid,)).fetchone()
+        mbid, rec_title = rec if rec else (None, None)
+        credits = [n for (n,) in conn.execute(
+            "SELECT a.name FROM recording_artists ra JOIN artists a ON a.mbid = ra.artist_mbid "
+            "WHERE ra.mbid = ?1 ORDER BY ra.weight DESC, a.name", (mbid,))] \
+            if mbid and has["recording_artists"] and has["artists"] else []
+        rel = conn.execute("SELECT release_mbid, source FROM file_releases WHERE audio_md5 = ?1",
+                           (md5,)).fetchone() if has["file_releases"] else None
+        place = conn.execute("SELECT position, disc FROM release_recordings WHERE release_mbid = ?1 AND mbid = ?2",
+                             (rel[0], mbid)).fetchone() if rel and mbid and has["release_recordings"] else None
+        rows.append({"audio_md5": md5, "file": os.path.basename(path), "recording": mbid,
+                     "placeholder": bool(mbid) and not MBID.match(mbid),
+                     "title": rec_title, "tag_title": t_title, "tag_artist": t_artist, "tag_album": t_album,
+                     "track_no": track_no, "disc_no": disc_no, "artists": credits,
+                     "release": rel[0] if rel else None, "release_source": rel[1] if rel else None,
+                     "position": place[0] if place else None, "disc": place[1] if place else None})
+    local = collections.Counter(r["release"] for r in rows if r["release"] and r["release"].startswith(LOCAL_RELEASE))
+    edition = None
+    if local and has["releases"]:
+        rid = local.most_common(1)[0][0]
+        row = conn.execute("SELECT title, artist_credit, release_date FROM releases WHERE mbid = ?1",
+                           (rid,)).fetchone()
+        if row:
+            edition = {"mbid": rid, "title": row[0], "artist": row[1], "date": row[2]}
+    tag = lambda k: collections.Counter(r[k] for r in rows if r[k]).most_common(1)  # noqa: E731
+    return {"folder": folder, "edition": edition, "album_tag": (tag("tag_album") or [[None]])[0][0],
+            "artist_tag": (tag("tag_artist") or [[None]])[0][0], "tracks": rows}
 
 
 def main() -> int:

@@ -13,7 +13,7 @@ album was unfinished, and nothing in the browser could finish it.
 > matches) · [SPEC057](SPEC057-holding-a-passage-back.md) (holds, which a file
 > import does not set) · [SPEC082](SPEC082-asking-musicbrainz.md) (the pace every
 > MusicBrainz request here keeps) · `tools/finish_folder.py`,
-> `tools/console_web/finish.html`
+> `tools/local_edition.py`, `tools/console_web/finish.html`
 
 ---
 
@@ -120,7 +120,55 @@ nothing is held for damage `[SPEC-HOLD-030]`. Occasions are not offered, as
 the CD import page offers Christmas. A file the edition does not match is left
 as it is, on its placeholder, and listed.
 
+## 4. An edition MusicBrainz does not have
+
+Added 2026-11-20, for music published only on Jamendo, Bandcamp or
+archive.org: a Jamendo album of 61 MP3s on archive.org with a `cover.jpg`
+beside them, tagged with title, artist, album and track, and with no
+MusicBrainz release to pick. Until then such a folder could not be finished:
+the job stopped at its first step, every track stayed a placeholder, the
+artist was only a tag, and the folder stayed on the index for ever.
+
+**`[SPEC-FIN-080]` The person names the edition, and it is recorded as one
+from MusicBrainz is.** Beside the search, *Not on MusicBrainz?* opens a form;
+recording it runs `finish-folder` with `local` in place of a release id, and
+the edition step is `tools/local_edition.py`. It writes a release, each
+artist, each track's title and credits, the release as each recording's
+chosen one at its place, and each file shown under it, as `folder:local`.
+That source is settled `[SPEC-FIN-040]`: `choose_release.py` and
+`align_file_releases.py` leave it standing. A folder named this way reads
+*done* at the edition stage and drops off the index once analyzed.
+
+**`[SPEC-FIN-085]` The form is filled from what is recorded, else from the
+tags.** It shows the album's title, artist and date, and for each file its
+number, disc, title and artists, all editable (`/api/finish/tracks`). A track
+with several artists separates them with `;`; the first is the one shown
+(weight 1.0), the rest credited (0.5). A blank artist takes the album's. An
+unticked file is left out of the edition, and one already on it leaves it. A
+file whose recording is a MusicBrainz one is shown and left as it is. Two
+tracks at one place, a date not `YYYY[-MM[-DD]]`, or a track naming no file
+in the folder is refused, and nothing is written. Named again, the same
+release is corrected, never a second made.
+
+**`[SPEC-FIN-090]` Its ids are the library's own, and nothing asks about
+them.** The release is `local:release:` and 32 hex digits of the SHA-1 of its
+files' sorted `audio_md5`s, so the same files make the same release on any
+node. An artist is the library's own when exactly one has that name, any
+case, and is otherwise `local:artist:` and the hash of the folded name, so one
+artist across albums is one. Each recording keeps its `local:audio:` id, and
+its passages keep their `local:ingest` links, which is what keeps a
+self-published track AcoustID cannot name out of the review queue. None is
+MusicBrainz-shaped: `fetch_cover_art.py` and `fetch_chosen_tracks.py` pass
+over a `local:` release, and the works stage reads *not needed*. Star sync
+carries these rows by key, as any other.
+
+**`[SPEC-FIN-095]` The cover is the one with the files.** The picture beside
+them, else the first one a file carries, taken as `induct_covers.py` takes one
+`[SPEC-COV-020]` and kept on the release where it has none. With no picture
+anywhere, the cover stage reads *nothing to take*, which counts as finished.
+
 ---
 
-**Traceability:** `[SPEC-FIN-010..070]` · for `[REQ-LIB-100]` · matches
+**Traceability:** `[SPEC-FIN-010..095]` · for `[REQ-LIB-100]` · matches
 `[SPEC-CDI-098]`, `[SPEC-SA-110]`, `[REQ-LIB-305]` · reuses `[SPEC-SUI-215]`
+· `[SPEC-FIN-080]` is for files what `[REQ-LIB-300]` asks for a disc

@@ -7,11 +7,14 @@ Two sources settle it instead, and those tools leave them standing:
 
 - `cd:import` -- a CD add knew the disc in hand `[SPEC-CDI-098]`;
 - `folder:chosen` -- a person picked the edition a folder of files is from, on
-  the console's page for finishing one `[SPEC-FIN-030]`.
+  the console's page for finishing one `[SPEC-FIN-030]`;
+- `folder:local` -- a person named an edition MusicBrainz does not have, on
+  the same page `[SPEC-FIN-080]`.
 
 Named once here, because a second place spelling the list out is how one of
 them would come to be forgotten.
 """
 CD_IMPORT = "cd:import"
 FOLDER_CHOSEN = "folder:chosen"
-SETTLED = (CD_IMPORT, FOLDER_CHOSEN)
+FOLDER_LOCAL = "folder:local"
+SETTLED = (CD_IMPORT, FOLDER_CHOSEN, FOLDER_LOCAL)

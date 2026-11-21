@@ -1367,9 +1367,17 @@ class Runner:
            the album; said plainly when no player answers.
 
         After the edition, a step that fails is said and the rest still run:
-        they are independent, and the job fails if any did."""
+        they are independent, and the job fails if any did.
+
+        `target` may instead carry `local` -- `{title, artist, date, tracks}`,
+        an edition MusicBrainz does not have, as a person named it
+        `[SPEC-FIN-080]`. Then the edition is `local_edition.py`, which takes
+        the cover from beside or in the files as it records the release, so
+        the archive is not asked; and it is applied every time, since what it
+        applies is what the person just confirmed."""
         payload = json.loads(target)
-        folder, release = payload["folder"], payload["release_mbid"]
+        folder, local = payload["folder"], payload.get("local")
+        release = payload.get("release_mbid")
         tools = os.path.dirname(os.path.abspath(__file__))
         py = sys.executable
         result: dict = {"folder": folder, "release": release}
@@ -1381,7 +1389,27 @@ class Runner:
         finally:
             c.close()
         rel = before.get("release") or {}
-        if before.get("state") == "done" and rel.get("mbid") == release and not rel.get("others"):
+        if local is not None:
+            # The spec goes by file: a 61-track album's titles and credits are
+            # not an argument list.
+            fd, spec = tempfile.mkstemp(prefix=f"lempi-local-edition-{job_id}-", suffix=".json")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    json.dump(local, fh, ensure_ascii=False)
+                code, out = self._spawn(job_id, "edition", [
+                    py, os.path.join(tools, "local_edition.py"), self.library, folder,
+                    "--spec", spec, "--commit", "--json"])
+            finally:
+                try:
+                    os.remove(spec)
+                except OSError:
+                    pass
+            result["edition"] = parse_json_tail(out) or {}
+            result["release"] = release = result["edition"].get("release")
+            self._save_result(job_id, result)
+            if code != 0 or not result["edition"].get("ok"):
+                return self._finish(job_id, "stopped" if code < 0 else "failed")
+        elif before.get("state") == "done" and rel.get("mbid") == release and not rel.get("others"):
             # This edition is recorded for every file, and every passage is
             # named: applied again, it would rename a track a person has
             # corrected since [SPEC-FIN-055]. The other steps still run.
@@ -1415,6 +1443,14 @@ class Runner:
             if self._stopped(job_id):
                 return self._finish(job_id, "stopped")
             self._emit(job_id, "stage", stage, stage=stage)
+            if local is not None and stage == "cover":
+                # Taken with the edition, from the files: the archive has
+                # nothing under an id it never issued [SPEC-FIN-095].
+                found = result["edition"].get("cover")
+                self._emit(job_id, "log", f"the cover was taken from the files with the edition ({found})" if found
+                           else "no picture beside or in the files, so no cover; the archive is not asked about "
+                                "a local edition", stage=stage)
+                continue
             code, _out = self._spawn(job_id, stage, argv)
             if code < 0:
                 return self._finish(job_id, "stopped")

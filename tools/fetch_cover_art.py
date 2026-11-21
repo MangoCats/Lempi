@@ -51,6 +51,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
+import re
 import time
 import urllib.error
 import urllib.request
@@ -185,10 +186,19 @@ def prepare(conn) -> None:
     conn.commit()
 
 
+# An id this library issued itself -- a local edition's `local:release:`
+# [SPEC-FIN-090] -- is one the archive never did, so it is not asked about;
+# such a release's cover is the one found with its files.
+LOCAL = re.compile(r"^local:")
+
+
 def wanted(conn, recheck_days: int, releases=None) -> list[tuple[str, bool, bool]]:
     """`(release, lacks_front, lacks_back)` for each album Browse shows that
     lacks a side of its own and was not asked within `recheck_days` -- or,
-    given `releases`, for those alone, however recently asked."""
+    given `releases`, for those alone, however recently asked. Never a
+    release whose id is the library's own."""
+    if releases is not None:
+        releases = [r for r in releases if r and not LOCAL.match(r)]
     have = (f"SELECT rel, COALESCE(LENGTH(a.front), 0) >= {MIN_BYTES}, COALESCE(LENGTH(a.back), 0) >= {MIN_BYTES}, "
             "a.caa_asked_at FROM ({}) LEFT JOIN cover_art a ON a.release_mbid = rel")
     if releases is not None:
@@ -200,7 +210,7 @@ def wanted(conn, recheck_days: int, releases=None) -> list[tuple[str, bool, bool
              "JOIN passages p ON p.passage_id = pr.passage_id WHERE rr.chosen = 1 AND p.kind = 'radio'")
     cutoff = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - recheck_days * 86400))
     return [(r, not f, not b) for r, f, b, asked in conn.execute(have.format(shown) + " ORDER BY rel")
-            if (not f or not b) and (asked is None or asked < cutoff)]
+            if (not f or not b) and (asked is None or asked < cutoff) and not LOCAL.match(r or "")]
 
 
 def fetch_for(conn, todo, say=say) -> dict:
