@@ -65,6 +65,30 @@ DATE*, linked from here. §2 stays here.
 
 ## 3. Entries, newest first
 
+**`[LOG-LIBW-350]` 2026-11-25: both phones' passages given their uids in
+place, and their listeners converted.** At the maintainer's word: the phones
+had stayed on builds from before Stage A, whose catalogues have no
+`passage_uid`. IMPL023 `[IMPL-UID-094]` is the method.
+- **How:** `android/phone-uids.sh pull`, then `commit` with the APK of
+  `1136635`. `tools/phone_uids.py` gave the uids to a copy of each pulled
+  catalogue, which went back before the new app first opened it. The app then
+  converted its own listener, after copying it to `listener.pre-uid.db`.
+- **What changed:** no timing, and no passage number. The Moto G's 16,564
+  passages and the Pixel 7a's 16,893 gained the uid columns, one uid each,
+  and the unique index. Of the Pixel's: 16,310 by span now, 439 the one
+  left, ends from before the 6 Nov fix, and 144 born here (139 files the hub
+  lacks, Merlin and ABBA most of them).
+- **Read on each phone's disk afterwards:** the catalogue is the copy given
+  uids, by hash. On the Moto G, every listener row naming a passage names a
+  uid its catalogue holds; 96 kept none, naming passages it no longer held.
+  On the Pixel, all 215 rows kept theirs, none lost; the player was paused
+  where it had been, and stayed paused.
+- **Backups:** each phone's pair as pulled, and its catalogue before uids, in
+  the hub's `data/phones/motog-20261125/` and `pixel7a-20261125/`; the
+  listener's own copy on each phone, `files/listener.pre-uid.db`. Neither is
+  under the nightly backup's rule, so nothing removes them. They may go by
+  hand from 2026-12-25.
+
 **`[LOG-LIBW-340]` 2026-11-19: *Christmas Island*'s 20 passages released,
 and its damage records taken back.** Jimmy Buffett's *Christmas Island*
 (1996), added 2026-11-18, had all ten tracks held, radio and album, as
