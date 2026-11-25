@@ -164,6 +164,13 @@ pub struct Report {
     /// Passages already here, without a uid, given the one the payload sends
     /// for them `[IMPL-UID-061]` -- on a dry run, the ones it would be.
     pub uids_filled: usize,
+    /// Passages already here, found by their uid, whose timing the payload
+    /// changed `[SPEC-PL-111]` -- on a dry run, the ones it would.
+    pub timings_set: usize,
+    /// Held files, by `audio_md5`, with a passage whose uid the payload sends
+    /// but whose timing could not be taken: another passage here at that span,
+    /// or the uid here on another file or kind. Left alone, and named.
+    pub timings_blocked: Vec<String>,
 }
 
 impl Report {
@@ -520,6 +527,15 @@ fn import_bound(
                     }
                 }
             }
+            // `[SPEC-PL-111]`: first, the timing of a passage here found by its
+            // uid, where the hub has moved it -- so the steps below, which still
+            // find a passage by its exact span, find it where the hub has it.
+            // Until 2026-11-25 nothing carried a boundary edit to a held file.
+            if crate::db::has_uids(&tx).map_err(|e| e.to_string())? {
+                for p in e.get("passages").and_then(|v| v.as_array()).unwrap_or(&empty) {
+                    set_timing(&tx, held.unwrap_or_default(), &md5, p, apply, &mut rep)?;
+                }
+            }
             // A hold is a decision about the passage, so unlike the passage
             // itself it does reach one already here `[SPEC-HOLD-080]`: matched
             // by its exact span, which is the passage's identity across
@@ -771,6 +787,12 @@ fn import_bound(
         tracing::info!("bundle: {} passage(s) here {} the uid they lacked [IMPL-UID-061]",
                        rep.uids_filled, if apply { "given" } else { "would be given" });
     }
+    if rep.timings_set > 0 || !rep.timings_blocked.is_empty() {
+        tracing::info!("bundle: {} passage(s) here, found by uid, {} the hub's timing; {} file(s) left as they \
+                        were, another passage here at its span or its uid on another file [SPEC-PL-111]{}{}",
+                       rep.timings_set, if apply { "given" } else { "would be given" }, rep.timings_blocked.len(),
+                       if rep.timings_blocked.is_empty() { "" } else { ": " }, rep.timings_blocked.join(", "));
+    }
     if !rep.passages_without_uid.is_empty() {
         tracing::warn!(
             "bundle: {} file(s) {} passages without a uid -- from a bundle made before passage uids [IMPL-UID-061]. \
@@ -878,55 +900,166 @@ fn fill_uid(tx: &rusqlite::Transaction, file_id: i64, p: &Value, apply: bool) ->
     Ok(0)
 }
 
+/// The timing columns a payload passage carries, in the order [`set_timing`]
+/// reads and writes them. Start and end are its span; the rest are measured
+/// on that span, so they travel with it.
+const TIMING: [&str; 10] = ["start_ms", "end_ms", "lead_in_ms", "lead_out_ms", "gain_db", "boundary_src",
+                            "fade_in_ms", "fade_out_ms", "fade_in_curve", "fade_out_curve"];
+
+/// `[SPEC-PL-111]`: a payload passage's timing, to the passage here that holds
+/// its uid. A passage keeps its uid through every boundary edit `[SPEC-UID-030]`,
+/// so the uid finds it where the span the edit moved cannot, and the hub's
+/// timing replaces this library's: a boundary is decided on Vipunen, which sends
+/// it, as a hold and a passage's recordings are. Only a column the payload
+/// carries is taken -- a sender that says nothing of fades changes none.
+///
+/// Left as it is, its file named: a passage here at the payload's span already,
+/// which the unique span would refuse and which is not to be guessed away; and
+/// a uid here on another file or kind, which is no boundary edit. A dry run
+/// counts what it would set.
+fn set_timing(tx: &rusqlite::Transaction, file_id: i64, md5: &str, p: &Value, apply: bool,
+              rep: &mut Report) -> Result<(), String> {
+    let Some(uid) = p.get("passage_uid").and_then(|v| v.as_str()) else { return Ok(()) };
+    let found: Option<(i64, i64, String)> = tx
+        .query_row("SELECT passage_id, file_id, kind FROM passages WHERE passage_uid = ?1", [uid],
+                   |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some((pid, here_file, here_kind)) = found else { return Ok(()) };
+    let kind = str_of(p, "kind");
+    let (Some(start), Some(end)) = (num(p, "start_ms"), num(p, "end_ms")) else { return Ok(()) };
+    let name = |rep: &mut Report| {
+        if !rep.timings_blocked.iter().any(|m| m == md5) {
+            rep.timings_blocked.push(md5.to_string());
+        }
+    };
+    if here_file != file_id || here_kind != kind {
+        name(rep);
+        return Ok(());
+    }
+    // As the payload has them, and as they are here, compared as SQL values:
+    // only a column this library has, and NULL only where NULL means "not
+    // analysed" `[SPEC-PL-030]` -- the others are NOT NULL here.
+    let present: Vec<String> = tx
+        .prepare("SELECT name FROM pragma_table_info('passages')")
+        .and_then(|mut q| q.query_map([], |r| r.get(0))?.collect())
+        .map_err(|e| e.to_string())?;
+    let sent: Vec<(&str, rusqlite::types::Value)> = TIMING
+        .iter()
+        .filter(|c| present.iter().any(|h| h == *c))
+        .filter_map(|&c| {
+            let v = p.get(c)?;
+            Some((c, match v {
+                Value::Null if matches!(c, "lead_in_ms" | "lead_out_ms" | "gain_db") => rusqlite::types::Value::Null,
+                Value::Number(n) if n.is_i64() => rusqlite::types::Value::Integer(n.as_i64()?),
+                Value::Number(n) => rusqlite::types::Value::Real(n.as_f64()?),
+                Value::String(s) => rusqlite::types::Value::Text(s.clone()),
+                _ => return None,
+            }))
+        })
+        .collect();
+    let cols: Vec<&str> = sent.iter().map(|(c, _)| *c).collect();
+    let here: Vec<rusqlite::types::Value> = tx
+        .query_row(&format!("SELECT {} FROM passages WHERE passage_id = ?1", cols.join(", ")), [pid],
+                   |r| (0..cols.len()).map(|i| r.get(i)).collect())
+        .map_err(|e| e.to_string())?;
+    let same = |a: &rusqlite::types::Value, b: &rusqlite::types::Value| match (a, b) {
+        // A REAL column holding a whole number reads back as one either way.
+        (rusqlite::types::Value::Integer(x), rusqlite::types::Value::Real(y))
+        | (rusqlite::types::Value::Real(y), rusqlite::types::Value::Integer(x)) => (*x as f64) == *y,
+        _ => a == b,
+    };
+    if sent.iter().zip(&here).all(|((_, s), h)| same(s, h)) {
+        return Ok(());
+    }
+    let taken: bool = tx
+        .query_row("SELECT 1 FROM passages WHERE file_id = ?1 AND kind = ?2 AND start_ms = ?3 AND end_ms = ?4 \
+                    AND passage_id <> ?5", params![file_id, kind, start, end, pid], |_| Ok(()))
+        .optional()
+        .map_err(|e| e.to_string())?
+        .is_some();
+    if taken {
+        name(rep);
+        return Ok(());
+    }
+    rep.timings_set += 1;
+    if apply {
+        let set: Vec<String> = cols.iter().enumerate().map(|(i, c)| format!("{c} = ?{}", i + 2)).collect();
+        let mut values: Vec<rusqlite::types::Value> = vec![rusqlite::types::Value::Integer(pid)];
+        values.extend(sent.into_iter().map(|(_, v)| v));
+        tx.execute(&format!("UPDATE passages SET {} WHERE passage_id = ?1", set.join(", ")),
+                   rusqlite::params_from_iter(values))
+            .map_err(|e| e.to_string())?;
+        rep.rows_written += 1;
+    }
+    Ok(())
+}
+
+/// The passage here a payload passage of a held file speaks for `[SPEC-PL-111]`.
+/// By its uid, where the payload sends one and a passage of this file here holds
+/// it; otherwise by its exact span `[SPEC-DF-030]`. Where the payload names a uid
+/// this file does not hold, only a passage here with no uid of its own is found by
+/// span: one with another uid is another passage, though it has the span, and a
+/// hold or a credit sent for one is never written on the other. A payload from
+/// before uids, or a library without them, finds by span as it always did.
+fn passage_here(tx: &rusqlite::Transaction, file_id: i64, p: &Value) -> Result<Option<i64>, String> {
+    let sent_uid = p.get("passage_uid").and_then(|v| v.as_str());
+    let uids = sent_uid.is_some() && crate::db::has_uids(tx).map_err(|e| e.to_string())?;
+    if let (true, Some(uid)) = (uids, sent_uid) {
+        let by_uid: Option<i64> = tx
+            .query_row("SELECT passage_id FROM passages WHERE passage_uid = ?1 AND file_id = ?2",
+                       params![uid, file_id], |r| r.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if by_uid.is_some() {
+            return Ok(by_uid);
+        }
+    }
+    let unowned = if uids { " AND passage_uid IS NULL" } else { "" };
+    tx.query_row(&format!("SELECT passage_id FROM passages WHERE file_id=?1 AND kind=?2 AND start_ms=?3 \
+                           AND end_ms=?4{unowned}"),
+                 params![file_id, str_of(p, "kind"), num(p, "start_ms"), num(p, "end_ms")], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())
+}
+
 fn set_hold(tx: &rusqlite::Transaction, file_id: i64, p: &Value, hold: &str, hold_col: bool, apply: bool,
             rep: &mut Report) -> Result<(), String> {
-    let span = params![file_id, str_of(p, "kind"), num(p, "start_ms"), num(p, "end_ms")];
-    let current: Option<Option<String>> = if hold_col {
-        tx.query_row("SELECT director_hold FROM passages WHERE file_id=?1 AND kind=?2 AND start_ms=?3 AND end_ms=?4",
-                     span, |r| r.get(0))
-            .map(Some)
-            .or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(e.to_string()) })?
-    } else {
-        // No column yet (a dry run on an old library): the passage's existence
-        // is still worth asking, so an unmatched one is not counted as set.
-        tx.query_row("SELECT 1 FROM passages WHERE file_id=?1 AND kind=?2 AND start_ms=?3 AND end_ms=?4",
-                     span, |_| Ok(()))
-            .map(|_| Some(None))
-            .or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(e.to_string()) })?
+    let Some(pid) = passage_here(tx, file_id, p)? else {
+        rep.holds_unmatched += 1;
+        return Ok(());
     };
-    match current {
-        None => rep.holds_unmatched += 1,
-        Some(now) if now.as_deref() == Some(hold) => {}
-        Some(_) => {
-            rep.holds_set += 1;
-            if apply {
-                tx.execute("UPDATE passages SET director_hold=?5 \
-                            WHERE file_id=?1 AND kind=?2 AND start_ms=?3 AND end_ms=?4",
-                           params![file_id, str_of(p, "kind"), num(p, "start_ms"), num(p, "end_ms"), hold])
-                    .map_err(|e| e.to_string())?;
-                rep.rows_written += 1;
-            }
-        }
+    // No column yet (a dry run on an old library): the passage's existence is
+    // still worth asking, so an unmatched one is not counted as set.
+    let now: Option<String> = if hold_col {
+        tx.query_row("SELECT director_hold FROM passages WHERE passage_id = ?1", [pid], |r| r.get(0))
+            .map_err(|e| e.to_string())?
+    } else {
+        None
+    };
+    if now.as_deref() == Some(hold) {
+        return Ok(());
+    }
+    rep.holds_set += 1;
+    if apply {
+        tx.execute("UPDATE passages SET director_hold = ?2 WHERE passage_id = ?1", params![pid, hold])
+            .map_err(|e| e.to_string())?;
+        rep.rows_written += 1;
     }
     Ok(())
 }
 
 /// One payload passage's recordings on a passage this library already has
-/// `[SPEC-PL-108]`, matched by its exact span as a hold is. The payload's replace
+/// `[SPEC-PL-108]`, found as a hold is, by [`passage_here`]. The payload's replace
 /// this library's: which recording a passage is was decided on Vipunen, which
 /// sends it, as a hold and a file's release are. A passage the payload gives no
-/// `recordings` for says nothing and changes nothing; one with no span matching
+/// `recordings` for says nothing and changes nothing; one not found here
 /// is counted against its file, never guessed at; a dry run only counts. The
 /// recordings themselves are already written, by the caller, before this runs.
 fn set_credits(tx: &rusqlite::Transaction, file_id: i64, md5: &str, p: &Value, apply: bool,
                rep: &mut Report) -> Result<(), String> {
     let Some(credits) = p.get("recordings").and_then(|v| v.as_array()) else { return Ok(()) };
-    let pid: Option<i64> = tx
-        .query_row("SELECT passage_id FROM passages WHERE file_id=?1 AND kind=?2 AND start_ms=?3 AND end_ms=?4",
-                   params![file_id, str_of(p, "kind"), num(p, "start_ms"), num(p, "end_ms")], |r| r.get(0))
-        .optional()
-        .map_err(|e| e.to_string())?;
-    let Some(pid) = pid else {
+    let Some(pid) = passage_here(tx, file_id, p)? else {
         if !rep.passage_credits_unmatched.iter().any(|m| m == md5) {
             rep.passage_credits_unmatched.push(md5.to_string());
         }
@@ -1187,6 +1320,12 @@ pub struct StagedReport {
     pub passages_without_uid: Vec<String>,
     /// Passages already here given the uid they lacked `[IMPL-UID-061]`.
     pub uids_filled: usize,
+    /// Passages already here, found by their uid, given the hub's timing
+    /// `[SPEC-PL-111]`.
+    pub timings_set: usize,
+    /// Held files whose passage's timing could not be taken, by `audio_md5`
+    /// `[SPEC-PL-111]`.
+    pub timings_blocked: Vec<String>,
 }
 
 /// A replacement the system refused: the phone's copy, the staged file that
@@ -1658,6 +1797,12 @@ pub fn import_staged(
         }
         total.passages_without_uid.extend(r.passages_without_uid);
         total.uids_filled += r.uids_filled;
+        total.timings_set += r.timings_set;
+        for m in r.timings_blocked {
+            if !total.timings_blocked.contains(&m) {
+                total.timings_blocked.push(m);
+            }
+        }
     }
     // Counted once each: measured on the Moto G, a 19-part bundle reported
     // 7,813 albums and 9,125 pictures for 1,381 releases and 857 covers.
@@ -1833,6 +1978,8 @@ fn import_one_payload(
     rep.passage_credits_unmatched = std::mem::take(&mut r.passage_credits_unmatched);
     rep.passages_without_uid = std::mem::take(&mut r.passages_without_uid);
     rep.uids_filled = r.uids_filled;
+    rep.timings_set = r.timings_set;
+    rep.timings_blocked = std::mem::take(&mut r.timings_blocked);
     rep.imported = r.count(|o| *o == Landed::Imported);
     rep.reused = rep.reused.min(rep.imported);
     rep.imported = rep.imported.saturating_sub(rep.reused + rep.upgraded);
@@ -2323,6 +2470,100 @@ mod tests {
         let rep = import(&mut c, &current((0, 1000), (0, 1000)), "u7", &audio_dir, true, Some(TEST_HASHER)).unwrap();
         assert!(rep.passages_without_uid.is_empty() && rep.uids_filled == 0, "a current bundle names nothing");
         assert_eq!(held(&c).0, Some(uid_at(0, 1000)));
+        std::fs::remove_dir_all(&audio_dir).ok();
+    }
+
+    /// `[SPEC-PL-111]`: a boundary moved on the hub reaches a file already held. The
+    /// passage here is found by its uid, not its span, and takes the hub's timing,
+    /// so its credit -- matched by span after it -- lands too, where before it was
+    /// named unmatched `[SPEC-PL-109]`. A dry run only counts; a resend changes
+    /// nothing; a column the payload does not carry is left as it is here; and a
+    /// span another passage here already has is left alone, the file named. As the
+    /// Pixel 7a held 439 passages at their ends from before 2026-11-06.
+    #[test]
+    fn a_held_passage_found_by_its_uid_takes_the_hubs_timing() {
+        let audio_dir = std::env::temp_dir().join(format!("lempi-bundle-timing-{}", std::process::id()));
+        std::fs::create_dir_all(&audio_dir).unwrap();
+        let audio_path = audio_dir.join("a.wav");
+        write_tiny_wav(&audio_path);
+        let md5 = (TEST_HASHER.hash)(&audio_path).unwrap();
+        let uid = crate::db::passage_uid(&md5, "radio", 0, 1000, 0).unwrap();
+        // The hub's passage, born at 0-1000, now at `end`, crediting `mbid`.
+        let sent = |end: i64, mbid: &str| {
+            let mut d = one_encoding_bundle(&md5, mbid, 0.5, "computed:x@1");
+            let p = &mut d["encodings"][0]["passages"][0];
+            p["end_ms"] = end.into();
+            p["lead_out_ms"] = 40.into();
+            p["boundary_src"] = "manual".into();
+            p["passage_uid"] = Value::String(uid.clone());
+            p["birth"] = serde_json::json!({"audio_md5": md5, "kind": "radio", "start_ms": 0, "end_ms": 1000, "salt": 0});
+            d
+        };
+        let uid_columns = "ALTER TABLE passages ADD COLUMN passage_uid TEXT; ALTER TABLE passages ADD COLUMN birth_md5 TEXT;
+                           ALTER TABLE passages ADD COLUMN birth_kind TEXT; ALTER TABLE passages ADD COLUMN birth_start_ms INTEGER;
+                           ALTER TABLE passages ADD COLUMN birth_end_ms INTEGER; ALTER TABLE passages ADD COLUMN birth_salt INTEGER;";
+        type Timing = (i64, i64, Option<i64>, String, i64);
+        let timing = |c: &Connection| -> Timing {
+            c.query_row("SELECT start_ms, end_ms, lead_out_ms, boundary_src, fade_in_ms FROM passages WHERE passage_uid = ?1",
+                        [&uid], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).unwrap()
+        };
+        let credit = |c: &Connection| -> Vec<String> {
+            c.prepare("SELECT r.mbid FROM passage_recordings r JOIN passages p USING (passage_id) WHERE p.passage_uid = ?1")
+                .unwrap().query_map([&uid], |r| r.get(0)).unwrap().filter_map(Result::ok).collect()
+        };
+        // Held as the hub had it at its birth, with a fade of this library's own.
+        let held = || {
+            let mut c = empty_library();
+            c.execute_batch(uid_columns).unwrap();
+            let rep = import(&mut c, &sent(1000, "m1"), "u0", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+            assert_eq!(rep.outcomes, vec![(md5.clone(), Landed::Imported)]);
+            c.execute("UPDATE passages SET fade_in_ms = 35, lead_out_ms = NULL, boundary_src = 'x'", []).unwrap();
+            c
+        };
+
+        let mut c = held();
+        let rep = import(&mut c, &sent(900, "m2"), "u1", &audio_dir, false, Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep.timings_set, 1, "a dry run says it would move it");
+        assert_eq!(timing(&c), (0, 1000, None, "x".into(), 35), "and writes nothing");
+
+        let rep = import(&mut c, &sent(900, "m2"), "u2", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep.outcomes, vec![(md5.clone(), Landed::Already)]);
+        assert_eq!((rep.timings_set, rep.timings_blocked.len()), (1, 0));
+        assert_eq!(timing(&c), (0, 900, Some(40), "manual".into(), 35),
+                   "the hub's span and what is measured on it; a fade the payload does not carry stays");
+        assert_eq!((credit(&c), rep.passage_credits_unmatched.len()), (vec!["m2".to_string()], 0),
+                   "its credit, found at the span it now has, lands too");
+        let rep = import(&mut c, &sent(900, "m2"), "u3", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!(rep.timings_set, 0, "a resend has nothing to move");
+
+        // Another passage here already has the span the hub moved this one to.
+        let mut c = held();
+        c.execute("INSERT INTO passages (file_id, kind, start_ms, end_ms, boundary_src, passage_uid) \
+                   VALUES (1, 'radio', 0, 900, 'x', 'u-other')", []).unwrap();
+        let rep = import(&mut c, &sent(900, "m2"), "u4", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        assert_eq!((rep.timings_set, rep.timings_blocked.clone()), (0, vec![md5.clone()]), "left alone, and named");
+        assert_eq!(timing(&c).1, 1000);
+        assert_eq!(credit(&c), ["m2"], "its credit still reaches it, found by its uid");
+        let other: i64 = c.query_row("SELECT count(*) FROM passage_recordings r JOIN passages p USING (passage_id) \
+                                      WHERE p.passage_uid = 'u-other'", [], |r| r.get(0)).unwrap();
+        assert_eq!(other, 0, "and nothing sent for it is written on the passage that has the span");
+
+        // The file here holds no passage of the payload's uid, and one with a uid of
+        // its own -- the phone's own cut -- has the span: another passage. Neither
+        // its credit nor its hold is the payload's, and the file is named unmatched.
+        let mut c = held();
+        c.execute("UPDATE passages SET passage_uid = 'u-phone'", []).unwrap();
+        let mut d = sent(1000, "m2");
+        d["encodings"][0]["passages"][0]["hold"] = "damaged rip".into();
+        let rep = import(&mut c, &d, "u5", &audio_dir, true, Some(TEST_HASHER)).unwrap();
+        let mine: (Vec<String>, Option<String>) = (
+            c.prepare("SELECT mbid FROM passage_recordings").unwrap().query_map([], |r| r.get(0)).unwrap()
+                .filter_map(Result::ok).collect(),
+            c.query_row("SELECT director_hold FROM passages", [], |r| r.get(0)).unwrap(),
+        );
+        assert_eq!(mine, (vec!["m1".to_string()], None), "the passage with another uid keeps its own");
+        assert_eq!((rep.passage_credits_unmatched, rep.holds_unmatched), (vec![md5.clone()], 1),
+                   "and the file is named, so the update is not taken as delivered");
         std::fs::remove_dir_all(&audio_dir).ok();
     }
 

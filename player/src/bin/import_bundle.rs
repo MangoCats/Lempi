@@ -128,6 +128,16 @@ fn main() {
     // [IMPL-UID-061]: always said, zero included, as holds are -- the answer to
     // whether a resend gave the passages an old bundle brought the uid they lacked.
     println!("  uids filled {}", rep.uids_filled);
+    // [SPEC-PL-111]: always said, as uids are -- whether a boundary moved on the
+    // hub reached the passages this library already held.
+    println!("  timings taken by uid {}", rep.timings_set);
+    if !rep.timings_blocked.is_empty() {
+        println!("  timing left alone in {} file(s) (another passage here at its span, or its uid on another file):",
+                 rep.timings_blocked.len());
+        for m in &rep.timings_blocked {
+            println!("    {m}");
+        }
+    }
     // Until each has one, star sync sends this catalogue no patch.
     if !rep.passages_without_uid.is_empty() {
         println!("  WITHOUT UID {} file(s): from a bundle made before passage uids; no rotation by passage, \
