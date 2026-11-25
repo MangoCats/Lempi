@@ -23,7 +23,9 @@
 ADB="${ADB:-adb}"; PY="${PY:-python3}"
 export MSYS_NO_PATHCONV=1
 set -u
-HERE=$(cd "$(dirname "$0")/.." && pwd)
+# `pwd -W` in Git Bash: MSYS_NO_PATHCONV, above, leaves a /c/... path
+# unconverted for a Windows python, which then finds no tools/ (2026-11-25).
+HERE=$(cd "$(dirname "$0")/.." && { pwd -W 2>/dev/null || pwd; })
 PKG=io.github.mangocats.lempi
 STEP="${1:-}"; DEV="${2:-}"; DIR="${3:-}"
 [ -n "$STEP" ] && [ -n "$DEV" ] && [ -n "$DIR" ] || { sed -n 6,7p "$0"; exit 2; }
@@ -74,8 +76,8 @@ for db in ("library.db", "listener.db"):
         sys.exit(1)
 EOF
     echo "== rehearsal"
-    "$PY" "$HERE/tools/phone_uids.py" "$DIR/work/library.db" --listener "$DIR/work/listener.db"
-    echo "EXIT=$?"
+    "$PY" "$HERE/tools/phone_uids.py" "$DIR/work/library.db" --listener "$DIR/work/listener.db" \
+        || die "the rehearsal did not run; the pull in $DIR stands, and the app is left stopped"
     echo "== the app is left stopped; nothing on $DEV was written"
     ;;
 commit)
