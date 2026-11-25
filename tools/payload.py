@@ -36,6 +36,7 @@ import sys
 
 import hashlib
 import os
+import re
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lempi_db  # noqa: E402  -- split-aware open [IMPL-DBSPLIT-025]
 
@@ -135,12 +136,30 @@ def releases_for(conn: sqlite3.Connection, mbids, file_releases=None) -> list[di
     return out
 
 
+# What a cover's file name may hold: what every receiver's file system takes.
+# A local edition's release is `local:release:<hex>` [SPEC-FIN-090], and a `:`
+# is refused by Windows (Errno 22, read as an alternate data stream) and by a
+# phone's or a stick's FAT. The first export holding one failed outright,
+# 2026-11-24, on bose's [SPEC-PL-105].
+UNSAFE_IN_FILE_NAME = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def cover_file_stem(stem: str) -> str:
+    """`stem` as a cover's file name may hold it: each character outside
+    `A-Za-z0-9._-` a `-`. Only the name changes; the payload still names the
+    release by its own id, and a receiver reads the file by `file`, never by
+    rebuilding it from the id `[SPEC-PL-105]`."""
+    return UNSAFE_IN_FILE_NAME.sub("-", stem)
+
+
 def cover_entry(stem: str, row) -> dict | None:
     """A payload `cover` for a (front, back, source, fetched_at) row: each side
-    as `covers/<stem>-<side>.<ext>` with its byte hash. None if it has neither."""
+    as `covers/<stem>-<side>.<ext>` with its byte hash, the stem made safe for
+    a file name. None if it has neither."""
     if row is None or not (row[0] or row[1]):
         return None
     cover = {"source": row[2], "fetched_at": row[3]}
+    stem = cover_file_stem(stem)
     for side, blob in (("front", row[0]), ("back", row[1])):
         if blob:
             ext = "png" if bytes(blob[:4]) == b"\x89PNG" else "jpg"
@@ -151,7 +170,8 @@ def cover_entry(stem: str, row) -> dict | None:
 
 def cover_files(conn: sqlite3.Connection, doc: dict) -> dict[str, bytes]:
     """The image bytes each release's and each encoding's `cover` names, by
-    its `file` path."""
+    its `file` path. Two different images under one name -- two ids the safe
+    stem made one -- is refused, not sent with one of them mislabelled."""
     files = {}
     for table, key, items, id_of in (("cover_art", "release_mbid", doc.get("releases", []), "mbid"),
                                      ("file_art", "audio_md5", doc.get("encodings", []), "audio_md5")):
@@ -161,7 +181,10 @@ def cover_files(conn: sqlite3.Connection, doc: dict) -> dict[str, bytes]:
                 if side in cover:
                     blob = conn.execute(f"SELECT {side} FROM {table} WHERE {key} = ?",
                                         (item[id_of],)).fetchone()[0]
-                    files[cover[side]["file"]] = bytes(blob)
+                    name, blob = cover[side]["file"], bytes(blob)
+                    if files.get(name, blob) != blob:
+                        raise ValueError(f"two covers would travel as one file: {name}")
+                    files[name] = blob
     return files
 
 

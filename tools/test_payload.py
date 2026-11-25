@@ -336,6 +336,66 @@ def test_covers_travel_as_files_named_by_the_payload():
           f"cover files: {sorted(files)}")
 
 
+def test_a_local_editions_cover_travels_under_a_name_every_disk_takes():
+    """`[SPEC-PL-105]`: a local edition's release is `local:release:<hex>`
+    `[SPEC-FIN-090]`, and its cover was named `covers/local:release:...-front.jpg`
+    -- which Windows refuses, so bose's export of 2026-11-24 failed at its
+    first such cover. The payload keeps the release's own id; only the file
+    name is made safe, and it is written to a real folder here, which is what
+    failed. Two ids the safe stem would make one are refused, not mislabelled.
+    """
+    import hashlib
+    import tempfile
+    conn = make_db(":memory:", SCHEMA)
+    conn.execute("INSERT INTO passages VALUES (1,1,'radio',0,10000,NULL,NULL,NULL,'x',"
+                 "20,20,'exponential','exponential')")
+    conn.execute("INSERT INTO recordings VALUES ('m1','t',NULL,'s')")
+    conn.execute("INSERT INTO passage_recordings VALUES (1,'m1',1.0,'s')")
+    local = "local:release:" + "20ad28a75e64fad6b870efb3e2453350"
+    conn.executescript(f"""
+        CREATE TABLE releases (mbid TEXT PRIMARY KEY, title TEXT NOT NULL, release_date TEXT,
+            source TEXT NOT NULL, release_group TEXT, status TEXT, primary_type TEXT,
+            secondary_types TEXT, country TEXT, track_count INTEGER);
+        CREATE TABLE release_recordings (release_mbid TEXT NOT NULL, mbid TEXT NOT NULL,
+            position INTEGER, source TEXT NOT NULL, track_length_ms INTEGER, chosen INTEGER DEFAULT 0,
+            disc INTEGER, PRIMARY KEY (release_mbid, mbid)) WITHOUT ROWID;
+        CREATE TABLE cover_art (release_mbid TEXT PRIMARY KEY, front BLOB, back BLOB,
+            source TEXT NOT NULL, fetched_at TEXT NOT NULL);
+        INSERT INTO releases (mbid,title,source) VALUES ('{local}','Local','local:finish');
+        INSERT INTO release_recordings VALUES ('{local}','m1',1,'local:finish',NULL,1,1);
+    """)
+    jpg = b"\xff\xd8\xff" + b"l" * 600
+    conn.execute("INSERT INTO cover_art VALUES (?, ?, NULL, 'found:folder', 't')", (local, jpg))
+    doc = pl.build(conn, ["md5"])
+    rels = {r["mbid"]: r for r in doc.get("releases", [])}
+    check(local in rels, f"the release travels under its own id: {sorted(rels)}")
+    want = "covers/local-release-20ad28a75e64fad6b870efb3e2453350-front.jpg"
+    check(rels.get(local, {}).get("cover", {}).get("front")
+          == {"file": want, "sha256": hashlib.sha256(jpg).hexdigest()},
+          f"its cover, a safe name: {rels.get(local, {}).get('cover')}")
+    files = pl.cover_files(conn, doc)
+    check(files == {want: jpg}, f"and its bytes: {sorted(files)}")
+    with tempfile.TemporaryDirectory() as out:
+        for name, blob in files.items():
+            dest = os.path.join(out, *name.split("/"))
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "wb") as fh:
+                fh.write(blob)
+            check(os.path.getsize(dest) == len(blob), f"written to disk: {dest}")
+    check(pl.cover_file_stem("2f1f0b6e-6d6c-4a2b-9a3e-0c1d2e3f4a5b") == "2f1f0b6e-6d6c-4a2b-9a3e-0c1d2e3f4a5b"
+          and pl.cover_file_stem("file-md5") == "file-md5", "an MBID's or a file's stem is unchanged")
+    # Two different pictures that the safe stem would put in one file.
+    twin = "local-release-20ad28a75e64fad6b870efb3e2453350"
+    conn.execute("INSERT INTO releases (mbid,title,source) VALUES (?, 'Twin', 'x')", (twin,))
+    conn.execute("INSERT INTO release_recordings VALUES (?,'m1',2,'x',NULL,0,1)", (twin,))
+    conn.execute("INSERT INTO cover_art VALUES (?, ?, NULL, 'x', 't')", (twin, jpg + b"other"))
+    try:
+        pl.cover_files(conn, pl.build(conn, ["md5"]))
+        check(False, "two pictures under one name were sent")
+    except ValueError as e:
+        check("one file" in str(e), f"refused by name: {e}")
+
+
 def test_a_files_own_cover_travels_on_its_encoding():
     """`[SPEC-COV-040]`: a file's own cover, in `file_art`, travels on its
     encoding as a release's does on the release, and nowhere without one."""
@@ -356,6 +416,7 @@ def test_a_files_own_cover_travels_on_its_encoding():
 def main() -> int:
     test_a_files_release_travels_with_it()
     test_covers_travel_as_files_named_by_the_payload()
+    test_a_local_editions_cover_travels_under_a_name_every_disk_takes()
     test_a_files_own_cover_travels_on_its_encoding()
     test_retired_keys_travel_with_every_payload()
     test_lyrics_travel_on_their_recording()
