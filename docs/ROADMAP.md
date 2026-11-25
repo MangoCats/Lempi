@@ -239,6 +239,19 @@ when each is built is to be decided.
    lesson of CLAUDE.md §12 `[SPEC-STAR-105]`. **First:** time the open, the
    thread hand-off and the query apart on `lempi02w`, and write the design down
    before building it.
+2. **A phone's ask for catalogue updates that reaches no hub, said on both
+   ends** (the maintainer, 2026-11-25: **with the next update of the phone's
+   code**). Found that day: the Pixel 7a's *Get catalogue updates from the hub*
+   went unanswered, and its Mesh screen showed nothing to tell. On the hub,
+   nothing was listening on the members' port, 5732. `tools/intake.py` serves it
+   as a process of its own, last started 2026-11-01, and nothing starts it with
+   the console. Started from the Sync page `[SPEC-STAR-139]`, the next ask was
+   answered and imported in about a minute. Two fixes:
+   - **The hub:** start the members' channel whenever the console starts --
+     `restart-local.sh` or the console itself -- and say it on the Sync page if
+     it is not listening.
+   - **The phone:** the Mesh screen says when the hub cannot be reached, naming
+     the address and port it tried, rather than nothing.
 
 ---
 
