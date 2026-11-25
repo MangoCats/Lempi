@@ -84,14 +84,25 @@ commit)
     N="${4:-}"; APK="${5:-}"
     [ -n "$N" ] && [ -f "$APK" ] || die "commit needs the rehearsal's passage count and the apk"
     [ -f "$DIR/work/library.db" ] || die "no $DIR/work/library.db: pull first"
-    "$PY" "$HERE/tools/phone_uids.py" "$DIR/work/library.db" --commit --expect "$N" || die "phone_uids.py refused; nothing on $DEV changed"
+    # Given already, by a commit that stopped later on: its backup beside it
+    # says so, and the tool, which never gives uids twice, is not run again.
+    if [ -f "$DIR/work/library.pre-uids.db" ]; then
+        echo "== $DIR/work/library.db was given its uids by an earlier commit (library.pre-uids.db beside it)"
+    else
+        "$PY" "$HERE/tools/phone_uids.py" "$DIR/work/library.db" --commit --expect "$N" \
+            || die "phone_uids.py refused; nothing on $DEV changed"
+    fi
     local_sha=$(sha256sum "$DIR/work/library.db" | cut -d' ' -f1)
     echo "== stopping the app"
     $A shell am force-stop $PKG </dev/null
     # The phone must not have moved on since the pull: each file of its pair is
     # still the bytes pulled, and none has appeared. Otherwise the app ran.
+    # `adb shell "..."`, never `exec-out ... sh -c "'...'"`: exec-out passes the
+    # quotes on literally, and the phone's sh, taking the whole command for a
+    # file name, answered `sh: ...: inaccessible or not found` with status 0
+    # (the Moto G, 2026-11-25). Each answer is read by its text, not its status.
     for f in library.db library.db-wal listener.db listener.db-wal; do
-        now=$($A exec-out run-as $PKG sh -c "'test -f files/$f && sha256sum files/$f'" </dev/null | cut -d' ' -f1)
+        now=$($A shell "run-as $PKG sh -c 'test -f files/$f && sha256sum files/$f'" </dev/null | tr -d '\r' | cut -d' ' -f1)
         was=$([ -f "$DIR/pulled/$f" ] && sha256sum "$DIR/pulled/$f" | cut -d' ' -f1)
         [ "$now" = "$was" ] || die "the phone's $f changed since the pull (${was:-absent}, now ${now:-absent}): pull again"
     done
@@ -115,7 +126,7 @@ commit)
         | grep -iE 'uid|convert|refus|error|panic|first start' | tail -20 | sed 's/^/   log: /'
     ver=$($A shell dumpsys package $PKG </dev/null | sed -n 's/^ *versionName=//p' | head -1 | tr -d '\r')
     echo "   installed: Lempi $ver"
-    $A exec-out run-as $PKG sh -c "'test -f files/listener.pre-uid.db'" </dev/null \
+    [ "$($A shell "run-as $PKG sh -c 'test -f files/listener.pre-uid.db && echo there'" </dev/null | tr -d '\r')" = there ] \
         || die "no files/listener.pre-uid.db: the listener has not converted (screen locked? read the log above)"
     $A exec-out run-as $PKG cat files/lempi.log </dev/null | grep -q 'converted to passage uids' \
         || die "the log says no conversion, though its copy is there: read the log"

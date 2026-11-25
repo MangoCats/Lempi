@@ -106,7 +106,7 @@ def main() -> int:
     rc, out = run(lib, "--hub", h, "--listener", lis)
     check(rc == 0 and "5 passage(s) on the phone" in out, f"a rehearsal counts them: {out}")
     check("     1  hub, by its span now" in out and "     1  hub, by its birth span" in out
-          and "     1  hub, the one passage" in out and "     1  born here" in out
+          and "     1  hub, the one left" in out and "     1  born here" in out
           and "     1  of a hub file, matching no hub passage" in out,
           f"each passage by how it is found: {out}")
     check("passage 10: D radio 0..499" in out, f"the unmatched one is named: {out}")
@@ -129,7 +129,7 @@ def main() -> int:
           "B, matched by its birth span, takes the hub's uid, not one of its own")
     check(got and got[9] == pu.passage_uid("C", "radio", 0, 700, 0), "C is born here, salt 0")
     check(got and got[12] == pu.passage_uid("E", "radio", 0, 800, 0),
-          "E, the one passage of its file and kind on both, takes the hub's uid though its span moved")
+          "E, the one left of its file and kind on both, takes the hub's uid though its span moved")
     c = sqlite3.connect(lib)
     idx = c.execute("SELECT sql FROM sqlite_master WHERE name = 'passages_uid'").fetchone()
     birth = c.execute("SELECT birth_md5, birth_kind, birth_start_ms, birth_end_ms, birth_salt FROM passages "
@@ -161,8 +161,40 @@ def main() -> int:
     c.commit()
     c.close()
     rc, out = run(lib, "--hub", h)
-    check(rc == 0 and "     0  hub, the one passage" in out and "     2  of a hub file, matching no hub passage" in out,
+    check(rc == 0 and "     0  hub, the one left" in out and "     2  of a hub file, matching no hub passage" in out,
           f"two of a file and kind on the phone are never paired with the hub's one: {out}")
+
+    # D's first passage as the hub has it, its second moved by an edit the phone
+    # never received: the one left on each side is the same passage. As the
+    # Moto G held one passage of a 27-track file, 2026-11-25.
+    lib, _ = phone(os.path.join(tmp, "e"), unmatched=False)
+    c = sqlite3.connect(lib)
+    c.execute("INSERT INTO passages VALUES (14, 4, 'radio', 0, 500), (15, 4, 'radio', 520, 990)")
+    c.commit()
+    c.close()
+    rc, out = run(lib, "--hub", h, "--commit", "--expect", "6")
+    got = uids(lib)
+    check(rc == 0 and got[15] == pu.passage_uid("D", "radio", 500, 1000, 0) and "     2  hub, the one left" in out,
+          f"the one left of a file and kind on both, after the rest pair, is that passage: {out}")
+
+    # The phone's own scan of D, whole, which the hub cut in two: born here,
+    # not left unmatched. The same span cut by hand would be refused.
+    for name, src, ok in (("f", "found:tags", True), ("g", "manual", False)):
+        lib, _ = phone(os.path.join(tmp, name), unmatched=False)
+        c = sqlite3.connect(lib)
+        c.execute("ALTER TABLE passages ADD COLUMN boundary_src TEXT")
+        c.execute("INSERT INTO passages (passage_id, file_id, kind, start_ms, end_ms, boundary_src) "
+                  "VALUES (16, 4, 'radio', 0, 1000, ?)", (src,))
+        c.commit()
+        c.close()
+        rc, out = run(lib, "--hub", h)
+        if ok:
+            check(rc == 0 and "     1  born here (the phone's own scan" in out
+                  and "     0  of a hub file, matching no hub passage" in out,
+                  f"a found: passage of a file the hub cut otherwise is born here: {out}")
+        else:
+            check(rc == 0 and "     1  of a hub file, matching no hub passage" in out,
+                  f"any other unmatched passage of a hub file stays unmatched: {out}")
 
     if FAILED:
         print(f"{len(FAILED)} FAILED")

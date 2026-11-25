@@ -14,20 +14,23 @@ on every node [IMPL-UID-062].
 It works on a **copy** of the phone's catalogue, pulled while the app is
 stopped (`android/phone-uids.sh` pulls it, runs this, and puts it back). Each
 passage, by the rule `bundle.rs`'s `fill_uid` gives a resent bundle
-[SPEC-PL-110], and one more:
+[SPEC-PL-110], and two more:
 - of a file the hub holds (by `audio_md5`), takes the hub's uid and birth key:
   the one hub passage of that file and kind with this span now, or failing
-  that the one born at it, or failing both, where the file has exactly one
-  passage of that kind here and one on the hub, that one -- a boundary edit
-  the phone never received. Measured 2026-11-25 on the hub's catalogue of
-  2026-11-06, a stand-in for a phone that missed that day's retiming: 433 of
-  22,789 passages matched neither span. Each is checked against its birth
-  key, as a bundle's is;
+  that the one born at it. Failing both, where every other passage of that
+  file and kind is paired and one is left on each side, overlapping, that
+  one: a boundary edit the phone never received. Measured 2026-11-25 on the
+  hub's catalogue of 2026-11-06, a stand-in for a phone that missed that
+  day's retiming: 433 of 22,789 passages matched neither span; and on the
+  Moto G, one passage of a 27-track file moved by hand on the hub. Each is
+  checked against its birth key, as a bundle's is;
 - of a file the hub does not hold, is born here: its uid from its own span,
   with the lowest salt not already born on that key, as the phone's scan
-  gives a passage it finds today (`Birth::Here`).
-A passage of a hub file that matches no hub passage is never guessed: it is
-listed, and a commit is refused while there is one.
+  gives a passage it finds today (`Birth::Here`). So is one the phone's own
+  scan cut (`found:`) of a file the hub cut otherwise, as the Moto G holds a
+  whole image rip the hub holds as 8 tracks: no one else has that passage.
+Any other passage of a hub file that matches no hub passage is never guessed:
+it is listed, and a commit is refused while there is one.
 
 The catalogue gains the columns, the uids and the unique index
 `passages_uid` -- what star sync gave the nodes [IMPL-UID-056], and no more:
@@ -61,8 +64,12 @@ import staged  # noqa: E402  -- utf8_output
 COLUMNS = (("passage_uid", "TEXT"), ("birth_md5", "TEXT"), ("birth_kind", "TEXT"),
            ("birth_start_ms", "INTEGER"), ("birth_end_ms", "INTEGER"), ("birth_salt", "INTEGER"))
 INDEX = "CREATE UNIQUE INDEX passages_uid ON passages(passage_uid)"
+NOW = "hub, by its span now"
+BIRTH = "hub, by its birth span"
+LEFT = "hub, the one left of its file and kind on both, its span moved"
+HERE_FILE = "born here (a file the hub lacks)"
+HERE_FOUND = "born here (the phone's own scan of a file the hub cut otherwise)"
 # listener_uid.rs's TABLES: each names a passage by `passage_id` until converted.
-ONLY = "hub, the one passage of its file and kind on both, its span moved"
 LISTENER_TABLES = ("listener_play_history", "listener_rejections", "selection_decisions", "player_state",
                    "player_queue", "id_reviews", "boundary_reviews", "artist_reviews")
 
@@ -86,51 +93,65 @@ def hub_index(hub):
 def plan(phone, hub):
     """Each phone passage's identity. Returns (given, unmatched, counts):
     given is [(passage_id, uid, (md5, kind, start, end, salt), how)]."""
-    rows = phone.execute("SELECT p.passage_id, f.audio_md5, p.kind, p.start_ms, p.end_ms FROM passages p "
+    src = "p.boundary_src" if "boundary_src" in [r[1] for r in phone.execute("PRAGMA table_info(passages)")] \
+        else "NULL"
+    rows = phone.execute(f"SELECT p.passage_id, f.audio_md5, p.kind, p.start_ms, p.end_ms, {src} FROM passages p "
                          "LEFT JOIN files f ON f.file_id = p.file_id ORDER BY p.passage_id").fetchall()
     orphans = [r[0] for r in rows if r[1] is None]
     if orphans:
         raise SystemExit(f"refused: {len(orphans)} passage(s) name no file, so have no birth key: {orphans[:10]}")
-    given, unmatched, born = [], [], set()
-    counts = {"hub, by its span now": 0, "hub, by its birth span": 0, ONLY: 0, "born here (a file the hub lacks)": 0}
-    per_kind = {}
-    for _, md5, kind, _, _ in rows:
-        per_kind[(md5, kind)] = per_kind.get((md5, kind), 0) + 1
-    for pid, md5, kind, s, e in rows:
-        if md5 not in hub:
-            continue
-        found = None
-        for how, pick in (("hub, by its span now", lambda h: (h[1], h[2]) == (s, e)),
-                          ("hub, by its birth span", lambda h: (h[4][2], h[4][3]) == (s, e)),
-                          # A boundary edit the phone never received [SPEC-PL-110] moved
-                          # neither span here; one passage of this file and kind on each
-                          # side is still one passage, as star sync paired a moved one
-                          # before uids [SPEC-NKP-046]. Two or more on either side, never:
-                          # here, by this count; on the hub, as `hits` is then all of them.
-                          (ONLY, lambda h: per_kind[(md5, kind)] == 1)):
-            hits = [h for h in hub[md5] if h[0] == kind and pick(h)]
-            if len(hits) == 1:
-                found = (how, hits[0])
-                break
-        if not found:
-            unmatched.append((pid, md5, kind, s, e))
-            continue
-        how, (_, _, _, uid, birth) = found
+    given, unmatched, here, born, taken = [], [], [], set(), set()
+    counts = {k: 0 for k in (NOW, BIRTH, LEFT, HERE_FILE, HERE_FOUND)}
+
+    def give(pid, h, how):
+        _, _, _, uid, birth = h
         if pu.passage_uid(*birth) != uid:
             raise SystemExit(f"refused: the hub's uid {uid} is not its birth key's {birth} [SPEC-PL-110]")
         given.append((pid, uid, birth, how))
         born.add(birth)
+        taken.add(uid)
         counts[how] += 1
-    for pid, md5, kind, s, e in rows:
-        if md5 in hub:
+
+    left = {}
+    for row in rows:
+        pid, md5, kind, s, e, _ = row
+        if md5 not in hub:
+            here.append((row, HERE_FILE))
             continue
+        for how, pick in ((NOW, lambda h: (h[1], h[2]) == (s, e)),
+                          (BIRTH, lambda h: (h[4][2], h[4][3]) == (s, e))):
+            hits = [h for h in hub[md5] if h[0] == kind and h[3] not in taken and pick(h)]
+            if len(hits) == 1:
+                give(pid, hits[0], how)
+                break
+        else:
+            left.setdefault((md5, kind), []).append(row)
+    for (md5, kind), mine in left.items():
+        theirs = [h for h in hub[md5] if h[0] == kind and h[3] not in taken]
+        # A boundary edit the phone never received [SPEC-PL-110] moved neither
+        # span here. Once every other passage of the file and kind is paired,
+        # one left on each side, overlapping, is still one passage -- as star
+        # sync paired a moved one before uids [SPEC-NKP-046]. Two or more left
+        # on either side, never.
+        if len(mine) == 1 and len(theirs) == 1 and max(mine[0][3], theirs[0][1]) < min(mine[0][4], theirs[0][2]):
+            give(mine[0][0], theirs[0], LEFT)
+            continue
+        for row in mine:
+            # The phone's own scan cut it [REQ-AND-260], and the hub cut those
+            # bytes otherwise: a passage no one else has, so born here.
+            if (row[5] or "").startswith("found:"):
+                here.append((row, HERE_FOUND))
+            else:
+                unmatched.append(row[:5])
+    hub_births = {h[4] for hs in hub.values() for h in hs}
+    for (pid, md5, kind, s, e, _), how in here:
         salt = 0
-        while (md5, kind, s, e, salt) in born:
+        while (md5, kind, s, e, salt) in born or (md5, kind, s, e, salt) in hub_births:
             salt += 1
         birth = (md5, kind, s, e, salt)
         born.add(birth)
-        given.append((pid, pu.passage_uid(*birth), birth, "born here (a file the hub lacks)"))
-        counts["born here (a file the hub lacks)"] += 1
+        given.append((pid, pu.passage_uid(*birth), birth, how))
+        counts[how] += 1
     seen = {}
     for pid, uid, _, _ in given:
         if uid in seen:
