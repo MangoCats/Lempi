@@ -106,6 +106,26 @@ Moto G, which is why the gap stayed hidden until the first phone that never
 had it. The phone's own music is then found by its scan `[REQ-AND-260]`, and
 Vipunen's knowledge of it arrives by bundle, below.
 
+### A phone from before Stage A: uids first, then the app
+
+**Do not simply install a current build over one from before 2026-11-15.**
+The new app refuses the old pair at open, because the catalogue has no
+passage uids. It changes nothing, but it will not play. The hub gives the
+catalogue its uids in place, keeping every passage number, so the app's own
+conversion of the listener is an exact join
+(IMPL023 `[IMPL-UID-094]`):
+
+```
+ADB=<platform-tools>/adb.exe PY=python \
+  sh android/phone-uids.sh pull <device> <work dir>
+ADB=... PY=python sh android/phone-uids.sh commit <device> <work dir> <passages> <apk>
+```
+
+`pull` stops the app and rehearses; nothing on the phone is written.
+`commit` refuses if the phone's pair has changed since the pull. It
+installs the app before putting the catalogue back, and leaves the phone
+unlocked to start it, since a locked screen stops it opening.
+
 ## Music onto the phone: a bundle
 
 Vipunen sends music with everything it knows about it as a **bundle**
